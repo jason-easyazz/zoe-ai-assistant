@@ -632,7 +632,7 @@ canonicalisation, the introduce intent, the voice-session TTL and the presence w
   - corroboration needs a bound panel, a PIN within 900 s or a face score of 0.60 or more (`:331-362`) [src].
   - [branch] #2024 retunes these for ResNet34 (0.342 / anchor 0.45).
 - **ResNet34 switch** [branch, PR #2024 open]:
-  - `ZOE_SPEAKER_MODEL=resemblyzer|dual|resnet34`, with a `model_id` per profile (migration 0049);
+  - `ZOE_SPEAKER_MODEL=resemblyzer|dual|resnet34`, with a `model_id` per profile (migration 0051);
   - thresholds 0.233 / 0.265 at FAR 1 % and 0.309 / 0.351 at FAR 0.1 % (short / long clips);
   - 5-clip enrolment;
   - on the Pi: p50 about 70 ms, p95 about 220 ms, standalone peak 122 MB.

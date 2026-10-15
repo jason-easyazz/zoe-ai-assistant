@@ -984,7 +984,12 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
                                           assistant_response: str) -> bool:
     """True when every memory pass ran cleanly (or there was nothing to capture);
     False when any pass raised — logged here, counted by the wrapper."""
-    if user_id == "guest":
+    # Nobody identified (the guest session or any other sentinel - "guest" only used to be checked): no durable memory pass
+    # runs, for anyone (user_filters.is_unidentified; the same wall as the voice lane and MemoryService.ingest).
+    from user_filters import is_unidentified as _is_unidentified
+
+    if _is_unidentified(user_id):
+        logger.info("GUEST_MEMORY_DISCARD lane=chat passes=all")
         return True
     # A reply the HOLD tier wrote (hold_the_fact: "I've got your dentist appointment down as Friday, and
     # that's what you told me...") means the owner's contradicting claim was NOT accepted this turn: mining

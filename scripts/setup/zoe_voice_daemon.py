@@ -345,6 +345,39 @@ def _attach_stt_stream(payload: dict, wav: bytes, speculation) -> None:
         payload["stt_stream_samples"] = frames
 
 
+def _start_stt_stream(frames) -> "_SttStreamUploader | None":
+    """Open an uploader for a recording and feed it the audio already captured (pre-roll / VAD lookback), in order, so
+    the stream carries exactly the bytes the WAV will. None when the lane is off, latched off, or cannot start - the
+    recording itself must never depend on it."""
+    _pending_stt_stream.clear()
+    if not _stt_stream_available():
+        return None
+    try:
+        uploader = _SttStreamUploader()
+        for _f in frames:
+            uploader.push(_f)
+        return uploader
+    except Exception as exc:
+        log.debug("stt stream could not start (%s) - turn will use batch STT", exc)
+        return None
+
+
+def _finish_stt_stream(uploader: "_SttStreamUploader | None", *, keep: bool = True) -> None:
+    """Join the uploader and, when it covered the whole recording, leave its id for the turn POST (``_attach_stt_stream``).
+    ``keep=False`` (recording discarded / errored) abandons it. Never raises."""
+    if uploader is None:
+        return
+    try:
+        closed = uploader.close()
+        if keep and closed is not None:
+            _pending_stt_stream.update(stream_id=closed[0], samples=closed[1], digest=uploader.digest())
+        else:
+            _pending_stt_stream.clear()
+    except Exception as exc:
+        _pending_stt_stream.clear()
+        log.debug("stt stream close failed (%s) - turn will use batch STT", exc)
+
+
 def _speculation_available() -> bool:
     return ZOE_SPECULATIVE_TURN and VOICE_STREAM_ENABLED and not _speculation_disabled.is_set()
 
@@ -782,6 +815,87 @@ def _get_voice_encoder():
         except Exception as exc:
             log.warning("VoiceEncoder load failed: %s", exc)
     return _voice_encoder
+
+
+# ── Speaker model: WeSpeaker ResNet34 INT8 (FLAG-DARK) ───────────────────────────────────────────────────────────
+# ZOE_SPEAKER_MODEL = resemblyzer (DEFAULT: nothing below runs and the module is not even imported) | dual | resnet34.
+#   dual      embed each turn with BOTH; Resemblyzer ACTS, ResNet34 is scored beside it and both decisions are logged on the
+#             one shadow row (docs/knowledge/speaker-resnet34-switch.md). Enrolment builds BOTH profiles from the same clips.
+#   resnet34  ResNet34 acts (Resemblyzer is not loaded at all). Flip only after a member re-enrolled and the shadow week agreed.
+# Profiles of different models NEVER compare (the model_id on every profile; `zoe_speaker_resnet34.match_profiles`).
+# The embedder pins its file, runs a start-up self-test and REFUSES on drift: then ResNet34 scores nothing and says why on /health.
+_SPEAKER_MODEL_RAW = os.environ.get("ZOE_SPEAKER_MODEL", "").strip().lower()
+SPEAKER_MODEL = _SPEAKER_MODEL_RAW if _SPEAKER_MODEL_RAW in ("dual", "resnet34") else "resemblyzer"
+LEGACY_SPEAKER_MODEL_ID = "resemblyzer"
+_rn34 = None
+if SPEAKER_MODEL != "resemblyzer":
+    try:
+        import zoe_speaker_resnet34 as _rn34
+    except ImportError:
+        log.error("ZOE_SPEAKER_MODEL=%s but zoe_speaker_resnet34.py is not deployed next to the daemon - ResNet34 is OFF "
+                  "(deploy-pi-voice.sh ships it)", SPEAKER_MODEL)
+_rn34_embedder = None
+_rn34_error = ""
+_rn34_lock = threading.Lock()
+
+
+class _Claim(tuple):
+    """A speaker claim ``(user_id, score)`` - it unpacks and truth-tests exactly like the 2-tuple every caller already handles -
+    that also remembers WHICH model scored it and how long the clip was, so ``_speaker_field`` can tell the server (its threshold
+    is per model and per length group)."""
+
+    def __new__(cls, user_id, score, model_id=None, speech_s=None):
+        obj = super().__new__(cls, (user_id, score))
+        obj.model_id, obj.speech_s = model_id, speech_s
+        return obj
+
+
+def _acting_model_id() -> str:
+    return _rn34.MODEL_ID if (SPEAKER_MODEL == "resnet34" and _rn34 is not None) else LEGACY_SPEAKER_MODEL_ID
+
+
+def _get_rn34():
+    """The pinned, self-tested ResNet34 embedder, loaded once; None (reason in ``_rn34_error``) when it cannot be trusted."""
+    global _rn34_embedder, _rn34_error
+    if _rn34 is None:
+        return None
+    if _rn34_embedder is not None:
+        return _rn34_embedder
+    with _rn34_lock:
+        if _rn34_embedder is not None:
+            return _rn34_embedder
+        if _rn34_error:
+            return None                      # refused once: do not retry (and re-pay the load) on every turn
+        try:
+            log.info("Loading ResNet34 speaker embedder (INT8 QDQ, %s)...", _rn34.MODEL_ID)
+            _rn34_embedder = _rn34.Resnet34Embedder.load()
+            log.info("ResNet34 speaker embedder ready (self-test passed).")
+        except _rn34.Unavailable as exc:
+            _rn34_error = str(exc)[:300]
+            log.error("ResNet34 speaker embedder REFUSED - ResNet34 scores nothing: %s", _rn34_error)
+        except Exception as exc:  # noqa: BLE001 - never takes the daemon down
+            _rn34_error = type(exc).__name__ + ": " + str(exc)[:200]
+            log.error("ResNet34 speaker embedder failed to load: %s", _rn34_error)
+    return _rn34_embedder
+
+
+def _rn34_status() -> str:
+    if SPEAKER_MODEL == "resemblyzer":
+        return "off"
+    if _rn34_embedder is not None:
+        return "ready"
+    return ("refused: " + _rn34_error) if _rn34_error else ("not loaded" if _rn34 is not None else "module missing")
+
+
+def _rn34_warmup() -> None:
+    """Load + self-test the embedder in the background at start-up so the first turn does not pay for it."""
+    emb = _get_rn34()
+    if emb is None:
+        return
+    try:
+        emb.embed(_rn34.synthetic_clip(1.0))
+    except Exception as exc:  # noqa: BLE001
+        log.debug("ResNet34 warm-up embed failed: %s", exc)
 
 
 # ── Recording-active flag (B14) ──────────────────────────────────────────────
@@ -2145,11 +2259,7 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
                 log.warning("Mic open failed (%s), retrying in %.2fs [%d/5]...", exc, wait_s, attempt)
                 time.sleep(wait_s)
     frames = list(_PREROLL)  # prepend pre-roll so the start of speech is kept
-    uploader = _SttStreamUploader() if _stt_stream_available() else None
-    _pending_stt_stream.clear()
-    if uploader is not None:
-        for _f in frames:
-            uploader.push(_f)
+    uploader = _start_stt_stream(frames)
     endpointer = _Endpointer()
     stop_reason = "max_duration"
     caps = _record_caps()
@@ -2179,13 +2289,10 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
         duration_s, len(frames), stop_reason, endpointer.mode, endpointer.tail_rule or "-",
         SILENCE_TIMEOUT_S,
     )
-    if uploader is not None:
-        _closed = uploader.close()
-        if _closed is not None:
-            _pending_stt_stream.update(stream_id=_closed[0], samples=_closed[1], digest=uploader.digest())
-    if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
+    too_short = len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE)
+    _finish_stt_stream(uploader, keep=not too_short)
+    if too_short:
         log.info("Command too short, ignoring.")
-        _pending_stt_stream.clear()
         return None
     return _frames_to_wav(pa, frames)
 
@@ -2253,6 +2360,16 @@ def _load_profile_cache_from_disk() -> None:
         log.debug("speaker profile cache load failed: %s", exc)
 
 
+def _sync_request_extras() -> dict:
+    """Extra ``requests.get`` kwargs for the profile sync. Default mode: NONE - the request is byte-identical to what it always was.
+    ``dual`` / ``resnet34``: ``?models=`` names the embedding spaces this panel can match, so the server never hands it a vector
+    from a space it does not know (a panel that names nothing is served Resemblyzer profiles only)."""
+    if SPEAKER_MODEL == "resemblyzer" or _rn34 is None:
+        return dict()
+    wanted = [_rn34.MODEL_ID] if SPEAKER_MODEL == "resnet34" else [LEGACY_SPEAKER_MODEL_ID, _rn34.MODEL_ID]
+    return dict(params=dict(models=",".join(wanted)))
+
+
 def _sync_speaker_profiles(force: bool = False) -> None:
     """Refresh the local profile cache from the server (TTL-gated).
 
@@ -2268,7 +2385,7 @@ def _sync_speaker_profiles(force: bool = False) -> None:
     try:
         r = requests.get(
             f"{ZOE_URL}/api/voice/profiles/sync",
-            headers=_headers, timeout=10, verify=VERIFY_SSL,
+            headers=_headers, timeout=10, verify=VERIFY_SSL, **_sync_request_extras(),
         )
         r.raise_for_status()
         data = r.json()
@@ -2322,6 +2439,8 @@ def _match_speaker_local(embedding) -> tuple[str, float] | None:
         uid = p.get("user_id")
         if not uid:
             continue
+        if (p.get("model_id") or "").strip() not in ("", LEGACY_SPEAKER_MODEL_ID):
+            continue  # another model's space (ResNet34 is 256-d too): never scored against a Resemblyzer embedding
         try:
             ref = _np.frombuffer(_b64.b64decode(p["embedding_base64"]), dtype=_np.float32)
             if ref.shape != _np.shape(embedding):
@@ -2379,6 +2498,66 @@ def _speaker_id_warmup() -> None:
                 pass
 
 
+def _score_resnet34(wav_bytes: bytes) -> dict:
+    """Embed one turn with ResNet34 and match it against the synced ResNet34 profiles. NEVER raises, never touches the claim state.
+
+    ``source``: ``local`` (scored) | ``no_profiles`` (nobody enrolled in this model yet - NOT a verdict) | ``encoder_unavailable``
+    (refused / missing) | ``error``. Scored results carry the length ``group``, its ``threshold`` and the would-be ``accept``
+    (informational on the panel: the server decides every claim), plus ``ms`` - the whole added cost of this model for the turn.
+    ``_vec`` (the centred embedding, for the adaptation offer) is stripped before anything is logged."""
+    out: dict = dict(model_id=getattr(_rn34, "MODEL_ID", "wespeaker_resnet34"), source=None, user_id=None, score=None)
+    try:
+        emb = _get_rn34()
+        if emb is None:
+            out["source"] = "encoder_unavailable"
+            return out
+        t0 = time.perf_counter()
+        vec, seconds = emb.embed_wav(wav_bytes)
+        out["seconds"] = round(float(seconds), 2)
+        if vec is None:
+            out["source"] = "error"
+            return out
+        _sync_speaker_profiles()
+        with _profile_cache_lock:
+            profiles = list(_profile_cache["profiles"])
+        user, score, compared = _rn34.match_profiles(vec, profiles, _rn34.MODEL_ID)
+        out.update(n_compared=compared, ms=round((time.perf_counter() - t0) * 1e3, 1))
+        if user is None:
+            out["source"] = "no_profiles"
+            return out
+        out.update(_rn34.decision(score, seconds))
+        out.update(source="local", user_id=user, score=score, _vec=vec)
+    except Exception as exc:  # noqa: BLE001
+        out["source"] = "error"
+        log.warning("ResNet34 speaker scoring failed: %s", exc)
+    return out
+
+
+def _public_score(result: dict) -> dict:
+    """``_score_resnet34``'s result without the embedding, rounded for the JSONL row (metadata only - never a vector)."""
+    out = dict((k, v) for k, v in result.items() if not k.startswith("_"))
+    if isinstance(out.get("score"), float):
+        out["score"] = round(out["score"], 4)
+    return out
+
+
+def _identify_speaker_resnet34(wav_bytes: bytes):
+    """The ACTING path when ``ZOE_SPEAKER_MODEL=resnet34``: the same contract as ``_identify_speaker_from_wav`` (a claim, or None,
+    with ``_claim_ctx.source`` saying why) but scored in ResNet34 space. No profile of this model cached = ``no_profiles`` = no
+    claim and no verdict (today's behaviour for an unknown speaker), never a 'nobody matched' that would treat a member who has
+    not re-enrolled as a guest."""
+    _claim_ctx.source = None
+    _claim_ctx.rn34 = None
+    r = _score_resnet34(wav_bytes)
+    _claim_ctx.source = r.get("source")
+    _claim_ctx.n_compared = r.get("n_compared")
+    _claim_ctx.rn34 = dict((k, r[k]) for k in ("seconds", "group", "threshold", "accept", "ms") if k in r)
+    if r.get("source") != "local":
+        return None
+    _adapt_offer(r["user_id"], r["score"], r["_vec"], r["seconds"], model_id=r["model_id"])
+    return _Claim(r["user_id"], r["score"], r["model_id"], r["seconds"])
+
+
 def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
     """Compute a resemblyzer embedding and identify the speaker.
 
@@ -2391,6 +2570,8 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
     _claim_ctx.source = None
     if not SPEAKER_ID_ENABLED:
         return None
+    if SPEAKER_MODEL == "resnet34":
+        return _identify_speaker_resnet34(wav_bytes)
     encoder = _get_voice_encoder()
     if encoder is None:
         # NOT a no-match: nothing was scored. Recorded distinctly so a shadow
@@ -2483,23 +2664,23 @@ _adapt_last_sent = 0.0
 _adapt_lock = threading.Lock()
 
 
-def _adapt_should_offer(score: float, speech_s: float, now: float, last_sent: float) -> bool:
-    """Cheap local pre-filter so the panel does not POST an embedding for every turn."""
+def _adapt_should_offer(score: float, speech_s: float, now: float, last_sent: float, min_score: float | None = None) -> bool:
+    """Cheap local pre-filter so the panel does not POST an embedding for every turn. ``min_score`` is the acting model's own
+    bar (ResNet34's cosines live on a different scale from Resemblyzer's 0.85)."""
     return (
-        math.isfinite(score) and score >= SPEAKER_ADAPT_MIN_SCORE
+        math.isfinite(score) and score >= (SPEAKER_ADAPT_MIN_SCORE if min_score is None else min_score)
         and math.isfinite(speech_s) and speech_s >= SPEAKER_ADAPT_MIN_SPEECH_S
         and (now - last_sent) >= SPEAKER_ADAPT_MIN_GAP_S
     )
 
 
-def _adapt_post(user_id: str, score: float, emb_b64: str, speech_s: float) -> None:
+def _adapt_post(user_id: str, score: float, emb_b64: str, speech_s: float, model_id: str | None = None) -> None:
     try:
-        resp = _api_post(
-            "/api/voice/adapt",
-            {"voice_user_id": user_id, "voice_score": round(float(score), 4), "embedding_base64": emb_b64,
-             "speech_s": round(float(speech_s), 2), "corroboration": {}},
-            timeout=5, retries=0,
-        )
+        body = dict(voice_user_id=user_id, voice_score=round(float(score), 4), embedding_base64=emb_b64,
+                    speech_s=round(float(speech_s), 2), corroboration=dict())
+        if model_id and model_id != LEGACY_SPEAKER_MODEL_ID:
+            body["model_id"] = model_id      # the server adapts the profile of THAT model and no other
+        resp = _api_post("/api/voice/adapt", body, timeout=5, retries=0)
         reason = resp.get("reason") if isinstance(resp, dict) else None
         if isinstance(resp, dict) and (resp.get("applied") or resp.get("would_apply")):
             log.info("Speaker adaptation: %s (mode=%s)", reason, resp.get("mode"))
@@ -2509,21 +2690,25 @@ def _adapt_post(user_id: str, score: float, emb_b64: str, speech_s: float) -> No
         log.debug("Speaker adaptation offer failed: %s", exc)
 
 
-def _adapt_offer(user_id: str, score: float, embedding, speech_s: float) -> None:
-    """Offer one locally-matched turn for adaptation. Off-thread, fire-and-forget, never raises."""
+def _adapt_offer(user_id: str, score: float, embedding, speech_s: float, model_id: str | None = None) -> None:
+    """Offer one locally-matched turn for adaptation. Off-thread, fire-and-forget, never raises. Only the ACTING model is ever
+    offered (a ResNet34 shadow score in ``dual`` is never adapted); its pre-filter bar is its own (``SPEAKER_ADAPT_RESNET34_MIN_SCORE``)."""
     global _adapt_last_sent
     if not SPEAKER_ADAPT_SEND:
         return
     try:
         now = time.time()
+        min_score = None
+        if model_id and model_id != LEGACY_SPEAKER_MODEL_ID:
+            min_score = float(os.environ.get("SPEAKER_ADAPT_RESNET34_MIN_SCORE", "") or getattr(_rn34, "ADAPT_MIN_SCORE", 0.342))
         with _adapt_lock:
-            if not _adapt_should_offer(float(score), float(speech_s), now, _adapt_last_sent):
+            if not _adapt_should_offer(float(score), float(speech_s), now, _adapt_last_sent, min_score):
                 return
             _adapt_last_sent = now
         import base64 as _b64, numpy as _np
         emb_b64 = _b64.b64encode(_np.asarray(embedding, dtype=_np.float32).tobytes()).decode()
-        threading.Thread(target=_adapt_post, args=(user_id, score, emb_b64, speech_s),
-                         daemon=True, name="speaker-adapt").start()
+        args = (user_id, score, emb_b64, speech_s) + ((model_id,) if model_id and model_id != LEGACY_SPEAKER_MODEL_ID else ())
+        threading.Thread(target=_adapt_post, args=args, daemon=True, name="speaker-adapt").start()
     except Exception as exc:
         log.debug("Speaker adaptation offer skipped: %s", exc)
 
@@ -2564,7 +2749,7 @@ def _needs_leading_newline(path: str) -> bool:
         return False
 
 
-def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
+def _record_speaker_shadow(claim: tuple[str, float] | None, secondary: dict | None = None, role: str | None = None) -> bool:
     """Append one W5 shadow-week metrics row (JSONL) for FA/FR analysis.
 
     Rows carry {boot, seq, ts, panel_id, user_id, score, n_profiles, source, truth} — metadata ONLY, never audio bytes or embeddings, per
@@ -2610,6 +2795,16 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
                 "source": source,           # "local" | "server" | "encoder_unavailable" | "error" | null (never attempted)
                 "truth": None,  # operator-filled ground truth; null until reviewed
             }
+            if SPEAKER_MODEL != "resemblyzer":
+                # Default mode writes exactly the rows it always did. Otherwise the row names the model that ACTED
+                # (``model_id``) and, in ``dual``, carries the other model's whole decision beside it - one row per turn,
+                # so the operator labels ``truth`` once and compares both models on it.
+                row["model_id"] = _acting_model_id()
+                row.update(getattr(_claim_ctx, "rn34", None) or dict())
+                if secondary:
+                    row["secondary"] = secondary
+                if role:
+                    row["role"] = role
             # Heal a torn tail before appending. If a previous write was cut
             # short (power loss, SIGKILL) the file can end without a newline;
             # appending straight onto it would fuse the partial record and the
@@ -2651,6 +2846,20 @@ _SCORED_SOURCES = frozenset({"local", "server"})
 SCORED_NO_MATCH: tuple = ()
 
 
+def _start_secondary_only(wav_bytes: bytes) -> None:
+    """``dual`` with shadow mode OFF: score ResNet34 on its own daemon thread and append a ``role=secondary`` row."""
+    def _run() -> None:
+        try:
+            _record_speaker_shadow(None, secondary=_public_score(_score_resnet34(wav_bytes)), role="secondary")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Speaker ID (dual): secondary scoring failed: %s", exc)
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="speaker-secondary").start()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Speaker ID (dual): secondary scorer failed to start: %s", exc)
+
+
 def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
     """Identify the speaker for one turn, honouring W5 shadow mode.
 
@@ -2662,9 +2871,18 @@ def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
     if not SPEAKER_ID_ENABLED:
         return None
     claim = _identify_speaker_from_wav(wav_bytes)
+    secondary = None
+    if SPEAKER_MODEL == "dual":
+        if SPEAKER_ID_SHADOW:
+            # This runs on the background scorer thread already, so ResNet34 adds NOTHING to the turn's latency.
+            secondary = _public_score(_score_resnet34(wav_bytes))
+        else:
+            # Acting inline: the claim must exist before the POST, so the shadow model is scored on its OWN thread and logged
+            # as its own row - it never delays the reply.
+            _start_secondary_only(wav_bytes)
     if SPEAKER_ID_SHADOW:
         source = getattr(_claim_ctx, "source", None)
-        logged = _record_speaker_shadow(claim)
+        logged = _record_speaker_shadow(claim, secondary=secondary)
         # NOTHING below may raise. The row is already on disk, and the stream
         # path's `except: pass` would leave voice_claim at the sentinel — so its
         # fallback would re-score and write a SECOND row for one spoken turn,
@@ -2696,6 +2914,10 @@ def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
                 )
             else:
                 log.info("Speaker ID (shadow): no match — %s, not acted on", state)
+            if secondary:
+                log.info("Speaker ID (dual, ResNet34): %s score=%s accept=%s source=%s %sms — not acted on",
+                         secondary.get("user_id"), secondary.get("score"), secondary.get("accept"),
+                         secondary.get("source"), secondary.get("ms"))
         except Exception as exc:  # journal formatting must never cost a row
             log.debug("shadow journal line failed (row already written): %s", exc)
         return None
@@ -2850,7 +3072,16 @@ def _speaker_field(claim: object) -> dict | None:
             return None
         if not member or not math.isfinite(score):
             return None
-        return {"verified": None, "member": str(member), "score": round(score, 4)}
+        block = dict(verified=None, member=str(member), score=round(score, 4))
+        model_id = getattr(claim, "model_id", None)
+        if model_id and model_id != LEGACY_SPEAKER_MODEL_ID:
+            # Which embedding space the score lives in, and the clip length that picks its threshold: the server's gate is per
+            # model and per length group, and refuses a claim made in a space other than the one it acts on.
+            block["model_id"] = model_id
+            speech_s = getattr(claim, "speech_s", None)
+            if isinstance(speech_s, (int, float)) and math.isfinite(speech_s):
+                block["speech_s"] = round(float(speech_s), 2)
+        return block
     return None
 
 
@@ -3464,7 +3695,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
 
 
 def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
-                      hard_cap_s: float | None = None) -> bytes | None:
+                      hard_cap_s: float | None = None, stream_upload: bool = False) -> bytes | None:
     """Listen for speech without wake word for `window_s` (default
     FOLLOW_UP_LISTEN_S) seconds.
 
@@ -3472,9 +3703,16 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
     recording on the SAME stream (no gap where words get lost) and returns
     the WAV bytes. Returns None if silence throughout the window.
     ``hard_cap_s`` raises the recording's hard cap (conversation windows).
+    ``stream_upload`` (ZOE_STT_STREAM_UPLOAD) uploads the recording to the under-speech STT lane exactly as
+    ``record_command`` does - set ONLY for a recording that becomes a turn of its own (follow-up / conversation
+    window). The continuation listens (hard-cap merge, held-turn resume) leave it off: their audio is merged into an
+    earlier clip, so a stream for it could never match the merged WAV and would clobber the earlier clip's id.
     """
     global _last_record_capped
     _last_record_capped = False
+    uploader = None
+    if stream_upload:
+        _pending_stt_stream.clear()  # nothing left over from an earlier recording may name this one
     model, _ = _get_silero_vad()
     if model is None:
         return None
@@ -3536,6 +3774,8 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
         log.info("Recording follow-up command (max %ds, up to %.0fs while still speaking)...",
                  RECORD_SECONDS, caps[1] * _CHUNK_S)
         frames = list(lookback)
+        if stream_upload:
+            uploader = _start_stt_stream(frames)  # same bytes, same order as the WAV below
         # The trigger chunk was already-detected speech — seed the endpointer so
         # the fast VAD tail applies from the first pause.
         endpointer = _Endpointer(spoke=True)
@@ -3545,6 +3785,8 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             frames.append(data)
             n_read += 1
+            if uploader is not None:
+                uploader.push(data)
             if endpointer.push(data, len(frames)):
                 stop_reason = "silence"
                 break
@@ -3560,7 +3802,10 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
             SILENCE_TIMEOUT_S,
         )
 
-        if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
+        too_short = len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE)
+        _finish_stt_stream(uploader, keep=not too_short)
+        uploader = None
+        if too_short:
             log.info("Follow-up too short, ignoring.")
             return None
 
@@ -3574,6 +3819,7 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
 
     except Exception as exc:
         log.warning("Follow-up listen error: %s", exc)
+        _finish_stt_stream(uploader, keep=False)  # the recording is dropped: abandon its upload too
         try:
             stream.stop_stream()
             stream.close()
@@ -3589,15 +3835,17 @@ def _follow_up_source(pa: pyaudio.PyAudio, seed: "bytes | None", *, beep: bool =
     user said over Zoe — no beep, no fresh listen), else beep + listen."""
     if seed is not None:
         log.info("Follow-up seeded by barge-in (%d bytes) — no beep", len(seed))
+        _pending_stt_stream.clear()  # the seed was never uploaded
         _recording_active.set()
         return seed
     threading.Thread(target=_notify_wake_background, daemon=True, name="followup-notify").start()
     if beep:
         play_follow_up_beep()
     _recording_active.set()
+    # This recording is a turn of its own (follow-up / conversation window): it streams to the STT lane like a wake turn.
     if hard_cap_s is None:
-        return _follow_up_listen(pa, window_s=window_s)
-    return _follow_up_listen(pa, window_s=window_s, hard_cap_s=hard_cap_s)
+        return _follow_up_listen(pa, window_s=window_s, stream_upload=True)
+    return _follow_up_listen(pa, window_s=window_s, hard_cap_s=hard_cap_s, stream_upload=True)
 
 
 def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
@@ -3877,6 +4125,23 @@ _enroll_lock = threading.Lock()
 _enroll_request: "dict | None" = None
 _enroll_running = threading.Event()
 _enroll_cancel = threading.Event()
+_enroll_screen_failures = 0
+
+
+def _enroll_screen(state: str, **fields) -> None:
+    """Show the enrolment prompt on THIS panel's talk screen (``POST /api/enrollment/screen``; the server pushes it to the panel this
+    daemon's device token belongs to). Best effort and fast: a short timeout, no retries, and after two failures in a row (an older
+    server without the endpoint, the server down) the rest of the run stops trying - the spoken prompt is the contract and must never wait
+    on the screen. Nothing but the phrase, the step counter and a short line is sent."""
+    global _enroll_screen_failures
+    if _enroll_screen_failures >= 2:
+        return
+    try:
+        resp = _api_post("/api/enrollment/screen", {"state": state, **fields}, timeout=3, retries=0)
+        ok = bool(resp.get("ok"))
+    except Exception:  # noqa: BLE001
+        ok = False
+    _enroll_screen_failures = 0 if ok else _enroll_screen_failures + 1
 
 
 def _enroll_poller_kwargs(logic) -> dict:
@@ -4047,9 +4312,53 @@ def _enroll_record_once(pa) -> "bytes | None":
     return _frames_to_wav(pa, frames)
 
 
+def _enroll_speaker_kwargs(cmd: dict, uid: str, name: str):
+    """What the enrolment run needs to build a ResNet34 profile ON THE PANEL (``{}`` in default mode - the run is then exactly the
+    old one). ``None`` = ResNet34 is the acting model and cannot load. In ``dual`` an unavailable embedder degrades to the legacy
+    enrolment alone (logged), and the profile for the other model is simply still missing.
+
+    The panel embeds each of the 5 captures, drops the one that does not sound like the rest (leave-one-out cosine under 0.30) and
+    asks for it again, then uploads ONE 256-float profile; audio never leaves the panel for this model. ``dual`` also uploads the
+    kept WAVs for the Resemblyzer profile, as always, so both models are enrolled from the same clips."""
+    if SPEAKER_MODEL == "resemblyzer":
+        return dict()
+    if _rn34 is None:
+        if SPEAKER_MODEL == "resnet34":
+            log.error("enrolment refused: ZOE_SPEAKER_MODEL=resnet34 but zoe_speaker_resnet34.py did not import - the acting model "
+                      "could not recognise anyone enrolled now")
+            return None
+        return dict()                    # dual: Resemblyzer acts, so the legacy enrolment alone is honest
+    emb = _get_rn34()
+    if emb is None:
+        if SPEAKER_MODEL == "resnet34":
+            return None
+        log.warning("dual enrolment: ResNet34 unavailable (%s) - enrolling Resemblyzer only", _rn34_error)
+        return dict()
+
+    def embed(wav: bytes):
+        return emb.embed_wav(wav)[0]
+
+    def build(embs: list):
+        built = _rn34.build_profile(embs)
+        return built.vector, list(built.dropped)
+
+    def upload_profile(vec, n_clips: int) -> bool:
+        import numpy as _np
+        resp = _api_post("/api/voice/enroll", dict(
+            embedding_base64=base64.b64encode(_np.asarray(vec, dtype=_np.float32).tobytes()).decode(),
+            model_id=_rn34.MODEL_ID, sample_count=int(n_clips), user_id=uid, display_name=name or uid,
+            panel_id=PANEL_ID, consent=True,    # the person is performing the enrolment
+        ), timeout=60)
+        return bool(resp.get("ok"))
+
+    return dict(clips=max(int(cmd.get("clips") or 0), _rn34.ENROLL_CLIPS), embed=embed, build=build,
+                upload_profile=upload_profile, legacy_upload=(SPEAKER_MODEL == "dual"))
+
+
 def _run_enrollment_mode(pa) -> None:
     """Run the queued enrolment to its end. The caller (the main loop) has closed the wake stream and reopens it afterwards."""
-    global _enroll_request, _ignore_wake_until
+    global _enroll_request, _ignore_wake_until, _enroll_screen_failures
+    _enroll_screen_failures = 0
     with _enroll_lock:
         cmd, _enroll_request = _enroll_request, None
     if not cmd or _enroll_mode is None:
@@ -4070,6 +4379,16 @@ def _run_enrollment_mode(pa) -> None:
         _api_post("/api/enrollment/result", {"status": outcome, "user_id": uid, "samples": samples, "reason": reason},
                   timeout=10, retries=1)
 
+    extra = _enroll_speaker_kwargs(cmd, uid, name)
+    if extra is None:
+        # ResNet34 is the model this panel ACTS on and it will not load (file missing / drift refused): there is nothing it could
+        # store, so say so now rather than recording five clips for nothing.
+        log.error("Enrollment mode refused: the ResNet34 embedder is unavailable (%s)", _rn34_error or "module missing")
+        _enroll_say(str(((cmd.get("script") or dict()).get("store_failed")) or _enroll_mode.DEFAULT_SCRIPT["store_failed"]))
+        report("failed", 0, "encoder_unavailable")
+        return
+    if extra:
+        max_total = max(max_total, 120.0)        # five captures plus any re-asked one take longer than three
     log.info("Enrollment mode START (max %.0fs)", max_total)
     _enroll_running.set()
     _enroll_cancel.clear()
@@ -4080,7 +4399,7 @@ def _run_enrollment_mode(pa) -> None:
         result = _enroll_mode.EnrollmentRun(
             cmd.get("script"), say=_enroll_say, record=lambda: _enroll_record_once(pa), upload=upload, name=name,
             transcribe=stt_on_jetson, report=report,
-            cancelled=_enroll_stop_reason, max_total_s=max_total, log=log.info,
+            cancelled=_enroll_stop_reason, max_total_s=max_total, log=log.info, screen=_enroll_screen, **extra,
         ).run()
     finally:
         _recording_active.clear()
@@ -4127,18 +4446,30 @@ def _activate_request_allowed(host_header: "str | None", origin_header: "str | N
     return bool(want.scheme and want.netloc and (got.scheme, got.netloc.lower()) == (want.scheme, want.netloc.lower()))
 
 
+def _health_payload() -> dict:
+    """The /health body. Default mode: exactly what it always was. Otherwise it names the speaker model and ResNet34's state, and in
+    ``resnet34`` (the ACTING model) a not-ready embedder makes the daemon ``degraded`` - health must not say ``ok`` while the model that
+    identifies speakers cannot run. In ``dual`` ResNet34 is shadow-only, so its state is reported without degrading the daemon.
+    ``deploy-pi-voice.sh`` waits (bounded) for ``speaker_resnet34 == ready`` in ``resnet34`` mode and fails the deploy otherwise."""
+    health = dict(
+        status="ok",
+        service="zoe-voice-daemon",
+        panel_id=PANEL_ID,
+        uptime_s=int(time.time() - _daemon_started_at),
+        wake_phrase=os.environ.get("_ZOE_WAKE_PHRASE_LOG", ""),
+    )
+    if SPEAKER_MODEL != "resemblyzer":
+        state = _rn34_status()
+        health.update(speaker_model=SPEAKER_MODEL, speaker_resnet34=state)
+        if SPEAKER_MODEL == "resnet34" and state != "ready":
+            health["status"] = "degraded"
+    return health
+
+
 class _HealthHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
-            body = json.dumps(
-                {
-                    "status": "ok",
-                    "service": "zoe-voice-daemon",
-                    "panel_id": PANEL_ID,
-                    "uptime_s": int(time.time() - _daemon_started_at),
-                    "wake_phrase": os.environ.get("_ZOE_WAKE_PHRASE_LOG", ""),
-                }
-            ).encode()
+            body = json.dumps(_health_payload()).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -4305,8 +4636,13 @@ def main():
     # Pre-warm resemblyzer end-to-end in background so first command isn't
     # delayed, and pull the speaker-profile cache (disk copy first so a server
     # outage doesn't blind local matching, then a fresh sync).
+    if SPEAKER_MODEL != "resemblyzer":
+        # Loaded (pinned + self-tested) whenever the flag names it - enrolment needs it even with SPEAKER_ID_ENABLED off - so /health
+        # reports a real ready / refused state rather than "not loaded" forever.
+        threading.Thread(target=_rn34_warmup, daemon=True, name="resnet34-warmup").start()
     if SPEAKER_ID_ENABLED:
-        threading.Thread(target=_speaker_id_warmup, daemon=True, name="resemblyzer-warmup").start()
+        if SPEAKER_MODEL != "resnet34":      # resnet34 acts alone: Resemblyzer (torch) is not even loaded then
+            threading.Thread(target=_speaker_id_warmup, daemon=True, name="resemblyzer-warmup").start()
 
         def _profile_warmup() -> None:
             _load_profile_cache_from_disk()

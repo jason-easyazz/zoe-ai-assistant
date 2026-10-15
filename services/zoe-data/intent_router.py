@@ -2457,11 +2457,13 @@ def _extract_simple_calendar_slots(text: str) -> Optional[dict]:
         parsed = _sky._calendar_create_from_text(str(text or ""), None)
         if not parsed:
             return None
-        title, hhmm = parsed
+        title, hhmm, day_offset = parsed
         slots: dict = {"title": title, "time": hhmm}
         rng = _sky._calendar_date_from_text(f" {str(text).lower()} ", _sky._today())
-        if rng:
-            slots["date"] = rng[1].isoformat()
+        if rng or day_offset:        # the small hours of "2 tonight" belong to the NEXT date
+            from datetime import timedelta as _td
+
+            slots["date"] = ((rng[1] if rng else _sky._today()) + _td(days=day_offset)).isoformat()
         return slots
     except Exception as exc:  # noqa: BLE001 - the NLU path still follows
         logger.debug("simple calendar slots unavailable: %s", exc)
@@ -3556,7 +3558,10 @@ _GUEST_GATED_INTENTS = (
 
 def _is_guest_identity(user_id: str | None) -> bool:
     u = (user_id or "").strip()
-    return u in ("", "guest", "voice-guest") or u.startswith("guest-")
+    # every sentinel (user_filters.GUEST_USERS - "anonymous" / "voice-daemon" used to slip through) + per-device guest ids
+    from user_filters import is_unidentified
+
+    return is_unidentified(u) or u.lower().startswith("guest-")
 
 
 async def _speculative_side_effect_barrier(intent_name: str) -> None:

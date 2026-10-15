@@ -186,16 +186,22 @@ def _drive_main(tmp_path, monkeypatch, recall, *extra):
     monkeypatch.setattr(vrp, "cleanup_replay_artifacts", lambda *a, **k: True)
     monkeypatch.setattr(vrp, "service_revision", lambda *_: None)
     monkeypatch.setattr(vrp, "resolve_service_python", lambda x: (sys.executable, "test"))
-    monkeypatch.setattr(vrp, "run_measure", lambda *a, **k: _report(recall))
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    for i in range(4):
+        (corpus / f"{i:06d}_000.wav").write_bytes(b"RIFF" + bytes(i))
+    rows = [dict(file=p.name, stt_ms=100) for p in sorted(corpus.glob("*.wav"))]
+    ran = dict(_report(recall), rows=rows)
+    monkeypatch.setattr(vrp, "run_measure", lambda *a, **k: ran)
     baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({"created_at": "2026-09-01T00:00:00Z",
-                                    "summary": vrp.summarize(_report("ok"))}))
+    pinned = dict(vrp.summarize(_report("ok")), **vrp.clip_set_summary(ran, str(corpus)))
+    baseline.write_text(json.dumps({"created_at": "2026-09-01T00:00:00Z", "summary": pinned}))
     before = baseline.read_text()
     results = tmp_path / "last.json"
     monkeypatch.setattr(sys, "argv", [
         "probe", "--results", str(results), "--baseline", str(baseline),
         "--trend", str(tmp_path / "t.jsonl"), "--service-dir", str(tmp_path),
-        "--no-vad-check", "--no-cleanup", *extra])
+        "--sample-dir", str(corpus), "--no-vad-check", "--no-cleanup", *extra])
     rc = vrp.main()
     return rc, json.loads(results.read_text()), baseline.read_text() != before
 
