@@ -1577,6 +1577,85 @@ frames, no state), so said-vs-did and per-stage speed are unchanged by construct
 (`shadow` first) and the live panel, not from the corpus. Pinned by `services/zoe-data/tests/test_mishear_clarify.py` (`ci_safe`, a
 paired negative control for each behaviour).
 
+## STT snap — one misheard command word, snapped back (`ZOE_STT_SNAP`, default shadow, 2026-10-14)
+
+**The failure.** A device command with ONE word misheard as a sound-alike ("two on the light" for "turn on the light", "turn of
+the lights", "set a time for 5 minutes") matches no deterministic matcher, so it falls through every fast path to the slow brain,
+which may or may not work out what was meant. Moonshine is a rock (never retrained or swapped); this step works on its output.
+`services/zoe-data/stt_snap.py`, called from `routers/voice_tts.voice_command`.
+
+**Where it runs.** Right after the conversation tiers (`fast_tiers.resolve(phase="conversation")`) missed, before the Pi hybrid /
+Skybridge / keyword-intent stages. `stt_snap.decide` returns nothing unless ALL of: no matcher claims the words
+(`classify_skybridge_intent` with the panel's Skybridge context, then `intent_router.detect_intent`); the words are not a question or
+statement ABOUT a write (`command_shapes.asks_or_mentions`); and the domain experts could not act on them
+(`expert_may_claim`: expert mode active + an allow-listed, non-deferred domain over its threshold — a conservative stand-in for the
+Tier-1.5 dispatch that runs later in the lane). So a turn any fast tier owns is never touched.
+
+**How a candidate is made (deterministic, no model).**
+
+* Only the first three words of the command (`command_shapes.command_core`: wake / politeness words off), ONE word swapped. Polarity
+  words (on/off/up/down/start/stop/...), negations and quantifiers are never swapped; a number word only as the FIRST word
+  ("two on ..."), never later (it is a slot there).
+* Targets come from `lexicons_data/stt_snap_vocab.json` — GENERATED from the HA/OVOS phrasing-corpus sentences the voice cascade
+  already claims correctly (the words at each of the first three places, plus the place-to-place word pairs) and the command verbs of
+  `command_shapes` (cancel / change shapes). Drift-pinned: regenerate with
+  `python3 services/zoe-data/tests/stt_snap_eval.py --write-vocab` after a matcher or corpus change.
+* Sound-alike: the same onset, and a cost <= `MAX_COST` (0.45) = the cheaper of character dissimilarity and the distance between
+  consonant skeletons (non-rhotic "r", silent "w" / "h" / final "e" dropped; "sh" / "ch" / "th" kept apart; voicing pairs t/d, p/b,
+  ... cost 0.4). A final "n" / "m" may be heard as the start of a following vowel-initial word ("turn on" -> "two on") for
+  `LIAISON_COST` (0.2). Swapping a word that already opens Zoe's commands at that place costs `IN_VOCAB_PENALTY` (0.3) more. Words
+  whose skeletons are further apart than 0.6 never sound alike, however they are spelled ("front" / "forecast").
+* Context: the swapped-in word must sit next to a neighbour it is seen with in a handled command (the word before, the word after,
+  or the one after that), and the words BEFORE it must already open a handled command (only one word is misheard: "as the front
+  door locked" never becomes "as the forecast door locked"). A swap that makes a command nobody says ("set timer table") is not
+  a candidate.
+
+**When it snaps.** Every candidate goes back through the same two matchers. It snaps only when the claims name exactly ONE command
+(grouped by intent + slots), in a domain the snap may serve (clock, weather, timers, lists, calendar, smart home, music — never
+people, memory, notes, greetings, panels, engineering), the next-best DIFFERENT command costs at least `MARGIN` (0.15) more, and no
+clearly likelier repair anywhere in the words (by `MARGIN`) makes a command Zoe cannot serve ("pours our tv shows": "pause" is the
+likely word, so it never snaps to "play").
+
+**Safety.** `read` (time, weather, a list / timer / calendar read, a delayed command's honest "can't schedule that") and `act` (one
+light on/off, music play/pause/resume, ONE item added to a list, one new timer) continue as the snapped command — its own spoken
+receipt says the command back ("Turned the bedroom light on.", "Your timer is set for 5 minutes."). Everything else asks ONE
+question, never silently: cancel / delete / remove / complete, a timer change, scenes, brightness, volume, calendar writes,
+keyword-intent writes, "all" / "everything", a plural device group ("the lights"), and anything naming a lock, door, gate, garage,
+alarm, camera, thermostat / heating, oven, blinds, vacuum or water. The question is "Did you mean: cancel the timer?" (a pending
+confirmation, 30 s): "yes" makes the snapped words that turn's words, so every gate (PIN / guest policy / speculation / Skybridge's
+router veto, re-run on the snapped words) judges it like any other command; "no" says "Okay, cancelled."; anything else is a new
+request. A speculative turn waits for the daemon's verdict before it asks or acts.
+
+**Flag.** `ZOE_STT_SNAP` = `off` | `shadow` (default) | `on`, read per turn. `shadow` decides, logs and feeds the struggle detector,
+and changes nothing; `on` acts. Flip to `on` only after reading a few days of shadow lines.
+
+**Log + struggle feed.** One line per snap (never for a turn that does not snap):
+`STT_SNAP from=<sha1-12 of the heard words> to=<intent tag> outcome=<shadow_read|shadow_act|shadow_confirm|acted|asked|confirmed> safety=... cost=... pos=... mode=...`;
+a member's line also carries `heard=` / `as=`, a guest's (or a voice the speaker gate rejected) never does. The turn is recorded by the
+struggle detector as `MISHEAR` with fix `stt_snapped` (`struggle_detector.note_snap`, text-free detail: outcome, intent, safety,
+cost, position) — a recurring one is a Moonshine keyterm candidate (`ZOE_MOONSHINE_KEYTERMS`, [moonshine-0-1-5-upgrade.md](moonshine-0-1-5-upgrade.md)).
+
+**Measured on the HA/OVOS corpus** (`stt_snap_eval.py`; synthetic mishears: one of the first three words of every corpus sentence
+swapped for a sound-alike from an independent hand table of STT confusions, 2 draws per sentence, fixed seed 20261014):
+
+| | count |
+|---|---|
+| synthetic mishears | 4,891 (1,749 still claimed by a matcher as heard; the snap never runs on those) |
+| recoverable (unclaimed, and the matchers get the correctly-heard sentence right) | 1,125 |
+| **recovered** | **922 (82.0% of recoverable)** — read 169, act 182, confirm 571 |
+| wrong (not the label's command) | **0** |
+| **wrong write (the gate)** | **0** |
+| inherited (the snap restored the words; the MATCHERS mis-claim the clean sentence, the phrasing ratchet's to own) | 17 wrong, 17 wrong writes — every one a `confirm`, none acts |
+| hard negatives ("two people are coming", "to be honest", "whether or not", ... 40 sentences) | 0 snapped |
+
+Cost: ~5-10 ms per unclaimed turn on the Orin (up to 40 candidates through two regex matchers; the turn was heading to a
+multi-second brain call). Pinned by `tests/test_stt_snap.py` (`ci_safe`: the owner's examples, hard negatives, the safety classes,
+the corpus gate with a planted-greedy negative control, the vocabulary drift pin, the struggle feed) and
+`tests/test_stt_snap_voice_lane.py` (the real `voice_command` through the lane-parity rig: act, ask + "yes", "no", shadow, off).
+
+**Replay gate.** In `shadow` (the default) the lane's behaviour is byte-identical — the step only logs. The replay harness mirrors
+`fast_tiers.resolve`, not `voice_command`, so it cannot see the snap either way; the lane-parity rig test is what covers it.
+
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
 `services/zoe-data/voice_turn.py` wraps pipecat's `smart-turn-v3.2-cpu.onnx`
