@@ -480,10 +480,8 @@ def test_there_is_exactly_one_alembic_head_and_0051_is_on_its_chain():
     cfg.set_main_option("script_location", str(SVC / "alembic"))
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()
-    # the invariant is ONE head; 0051 was it when it landed, a later migration (0053 contacts) now chains onto it
-    assert len(heads) == 1, heads
-    assert "0051" in {r.revision for r in script.walk_revisions()}
-    assert heads == ["0051"] or any(r.down_revision == "0051" for r in script.walk_revisions())
+    assert len(heads) == 1, heads          # 0051 was the head when it landed; 0052 (calendar data model) chains onto it
+    assert "0051" in {rev.revision for rev in script.walk_revisions("base", heads[0])}
 
 
 def test_migration_0051_backfills_is_rerun_safe_and_adds_one_nullable_column(tmp_path):

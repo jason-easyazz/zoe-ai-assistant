@@ -17,6 +17,10 @@ stored anywhere new):
                               names them too, and their synced source cards become content-free tombstones the next sync skips
   * ``voiceprints``         - the voiceprint the member's Omi tagging taught Zoe for that person (``learned_voiceprints``,
                               owner decision 2026-10-14) is DELETED (``contacts_store.forget_voiceprints``)
+  * ``event_attendees``     - on the member's OWN events (alembic 0052): an attendee linked to the forgotten person,
+                              or whose name / email names the entity, loses the link AND the name and email (the row
+                              stays, anonymous, so the event keeps its shape); the desktop calendar's legacy
+                              ``events.metadata.attendees`` entries are dropped the same way. Undo does not relink.
 
 Every step is independent: a missing table or a DB blip in one never blocks the others. A step that fails is retried
 once, and if it still fails it is RECORDED (``CascadeResult.failed``) and logged at ERROR - never swallowed: the caller
@@ -41,6 +45,7 @@ forgotten memories, and not past a restart (the People panel can re-add the cont
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -55,10 +60,11 @@ RETRY_DELAY_S = 0.25   # one retry of a failed step after this pause (a pool bli
 
 #: The cascade's fixed step labels (what ``CascadeResult.failed`` holds and what a pending marker is keyed by). ``database`` is the
 #: connection itself: when it is pending every DB step is.
-DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints"))
+DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
+                      "calendar_attendees"))
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
-              "restraint_mutes", "commitments", "omi_recordings")
+              "calendar_attendees", "restraint_mutes", "commitments", "omi_recordings")
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -74,6 +80,7 @@ class CascadeResult:
     edges: int = 0
     contacts: int = 0       # contact-model rows removed / tombstoned (0053)
     voiceprints: int = 0    # learned voiceprints erased
+    attendees: int = 0
     person_ids: list[str] = field(default_factory=list)
     closed_at: str = ""
     failed: list[str] = field(default_factory=list)   # labels of the stores that could NOT be cleared (after a retry)
@@ -89,7 +96,7 @@ class CascadeResult:
 
     @property
     def touched(self) -> bool:
-        return bool(self.summary_cleared or self.people or self.contacts or self.voiceprints)
+        return bool(self.summary_cleared or self.people or self.contacts or self.voiceprints or self.attendees)
 
 
 def _now_iso() -> str:
@@ -207,8 +214,8 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
         logger.error("FORGET_CASCADE_INCOMPLETE user=%s steps=%s - the forget is not confirmed", user_id, ",".join(res.failed))
         await _mark_pending(user_id, res.failed)
     logger.info("memory_forget_cascade: user=%s portrait=%d card=%d loops=%d candidates=%d people=%d edges=%d contacts=%d "
-                "voiceprints=%d", user_id, res.portrait, res.card, res.loops, res.candidates, res.people, res.edges, res.contacts,
-                res.voiceprints)
+                "voiceprints=%d attendees=%d", user_id, res.portrait, res.card, res.loops, res.candidates, res.people, res.edges,
+                res.contacts, res.voiceprints, res.attendees)
     if res.complete:
         await retry_pending(user_id, db=db)         # an earlier forget's unfinished steps, now that the database answers
     return res
@@ -253,7 +260,7 @@ async def retry_pending(user_id: str, *, db=None) -> Optional[CascadeResult]:
 
         run = set(labels)
         if "people" in run:
-            run.add("edges")             # edges depends on people: never trust the marker set to carry both (an older build wrote one)
+            run.update(("edges", "calendar_attendees"))             # edges depends on people: never trust the marker set to carry both (an older build wrote one)
         await _clear(user_id, rx, mutes, res, db=db, only=frozenset(run), recover_ids=True)
         failed = set(res.failed)
         db_failed = bool(failed.intersection(DB_LABELS))
@@ -370,6 +377,40 @@ async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[froze
 
         return await contacts_store.forget_voiceprints(db, user_id, rx)
 
+    async def attendees() -> int:
+        ids = set(res.person_ids)
+        if not ids and recover_ids:
+            ids = {str(r[0]) for r in await _rows(db, "SELECT id, name FROM people WHERE user_id = ? AND deleted = 1", (user_id,))
+                   if _names(rx, r[1])}
+        now = _now_iso()
+        n = 0
+        for r in await _rows(db, "SELECT id, person_id, display_name, email FROM event_attendees WHERE user_id = ?", (user_id,)):
+            if (r[1] is not None and str(r[1]) in ids) or _names(rx, r[2], r[3]):
+                await db.execute(
+                    "UPDATE event_attendees SET person_id = NULL, person_link_source = NULL, display_name = NULL, "
+                    "email = NULL, updated_at = ? WHERE id = ? AND user_id = ?", (now, r[0], user_id))
+                n += 1
+        # the desktop calendar's legacy attendee list inside events.metadata (JSON text)
+        for r in await _rows(db, "SELECT id, metadata FROM events WHERE user_id = ? AND metadata LIKE ?", (user_id, "%attendees%")):
+            try:
+                meta = json.loads(r[1]) if r[1] else None
+            except (TypeError, ValueError):
+                continue
+            listed = meta.get("attendees") if isinstance(meta, dict) else None
+            if not isinstance(listed, list):
+                continue
+            keep = [a for a in listed if not (isinstance(a, dict) and (
+                (a.get("person_id") is not None and str(a.get("person_id")) in ids)
+                or _names(rx, a.get("name"), a.get("display_name"), a.get("email"))))]
+            if len(keep) != len(listed):
+                meta["attendees"] = keep
+                await db.execute("UPDATE events SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                                 (json.dumps(meta), now, r[0], user_id))
+                n += len(listed) - len(keep)
+        if n:
+            await db.commit()
+        return n
+
     def want(label: str) -> bool:
         return only is None or label in only
 
@@ -389,10 +430,15 @@ async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[froze
         res.contacts = await _step("contacts", contacts, res)
     if want("voiceprints"):
         res.voiceprints = await _step("voiceprints", voiceprints, res)
+    if want("calendar_attendees"):
+        res.attendees = await _step("calendar_attendees", attendees, res)
     if "people" in res.failed and "edges" not in res.failed:
         # edges closes the relationships of the people the people step resolved; with that step failed there were no ids, so edges
         # "succeeded" over nothing. It is pending together with its parent, or the contact's open edges would stay open for good.
         res.failed.append("edges")
+    if "people" in res.failed and want("calendar_attendees") and "calendar_attendees" not in res.failed:
+        # the attendee step unlinks the people ids the people step resolved: same dependency as edges
+        res.failed.append("calendar_attendees")
     if res.person_ids and only is None:       # a retry never arms the contact undo
         _last_cascade[user_id] = (time.monotonic(), list(res.person_ids), res.closed_at)
 
