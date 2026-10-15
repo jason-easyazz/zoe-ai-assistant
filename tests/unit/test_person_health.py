@@ -24,12 +24,15 @@ class TestNextOccurrence:
         result = _next_occurrence(future.month, future.day, ref=today)
         assert result == future
 
-    def test_past_wraps_to_next_year(self):
-        today = date.today()
+    @pytest.mark.parametrize("today", [date(2026, 6, 15), date(2027, 1, 1), date(2026, 12, 31)])
+    def test_past_wraps_to_next_year(self, today):
+        # `today` is pinned, not date.today(): "10 days ago" lands in the PREVIOUS year during Jan 1-10, where the next
+        # occurrence is later this same year, so a real-clock version of this test failed for ten days every January.
         past = today - timedelta(days=10)
         result = _next_occurrence(past.month, past.day, ref=today)
-        assert result.year == today.year + 1 or result == today
-        assert result > today or result == today
+        assert result > today
+        assert (result.month, result.day) == (past.month, past.day)
+        assert (result - today).days <= 366
 
 
 class TestCalcHealthScore:
