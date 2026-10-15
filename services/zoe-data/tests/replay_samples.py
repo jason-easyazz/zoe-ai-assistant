@@ -153,6 +153,25 @@ def _select(sample_dir: str, args) -> list[str]:
     return files
 
 
+def _select_named(sample_dir: str, list_path: str) -> list[str]:
+    """Replay EXACTLY the clips named (basenames, one per line) in list_path, in
+    that order. The voice regression probe pins its baseline's clip set this way so
+    a new recording can never shift the speed bar. Fails loudly (ValueError) when a
+    name is not a top-level WAV of the corpus: a silently shorter set is a different
+    bar. Top-level only, like _select: no path separators, so nothing can reach a
+    quarantine-*/ subdirectory."""
+    with open(list_path, encoding="utf-8") as fh:
+        names = [ln.strip() for ln in fh if ln.strip()]
+    bad = [n for n in names if os.path.basename(n) != n or not n.lower().endswith(".wav")]
+    if bad:
+        raise ValueError(f"--files-from: {len(bad)} entries are not plain top-level .wav basenames")
+    paths = [os.path.join(sample_dir, n) for n in names]
+    missing = [p for p in paths if not os.path.isfile(p)]
+    if missing:
+        raise ValueError(f"--files-from: {len(missing)} of {len(names)} named clips are not in {sample_dir}")
+    return paths
+
+
 # The service's palace guard (memory_service._check_palace_format) raises with
 # this phrase; every recall reader logs it and returns nothing (never raises).
 _MISMATCH_PHRASE = "but the installed client is"
@@ -436,7 +455,14 @@ async def _run(args) -> int:
     user = args.user
     session_id = _run_session_id()
     sample_dir = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
-    files = _select(sample_dir, args)
+    if getattr(args, "files_from", None):
+        try:
+            files = _select_named(sample_dir, args.files_from)
+        except (OSError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    else:
+        files = _select(sample_dir, args)
     if not files:
         print(f"no samples in {sample_dir}", file=sys.stderr)
         return 1
@@ -589,6 +615,10 @@ def main() -> None:
         "recency filter: only samples CAPTURED at or after this local date/time "
         "(YYYY-MM-DD or YYYY-MM-DDTHH:MM). Uses file mtime, consistent with --last."))
     ap.add_argument("--last", type=int, help="only the newest N samples by capture time (mtime)")
+    ap.add_argument("--files-from", help=(
+        "replay EXACTLY the clips named (basenames, one per line) in this file, in order; "
+        "overrides --last/--since/--since-date. Used by the voice regression probe to pin "
+        "its baseline's clip set."))
     ap.add_argument("--user", default="jason", help="user_id to replay as (memory recall)")
     ap.add_argument("--brain", action="store_true", help="run the Gemma brain on fall-through")
     ap.add_argument("--execute", action="store_true", help="actually fulfil writes (mutates DB)")

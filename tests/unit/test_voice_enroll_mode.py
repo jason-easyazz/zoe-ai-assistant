@@ -9,6 +9,8 @@ Groups (each has a break-the-fix control run by editing the module; see the PR):
   retry        a bad capture is retried with spoken guidance; three bad ones end the run with nothing stored
   cancel       the word "stop", an external stop, a timeout: nothing is ever uploaded, and it is said so
   capture      assess_wav judges length, level, clipping and constant noise from the WAV alone
+  screen       every step also goes up on the panel's talk screen (phrase, n of N, recording, tick, re-ask, done) BEFORE Zoe speaks it;
+               every ending that is not a closing line clears it; the spoken prompt is unchanged
   glue         the daemon queues the command, runs it in the main loop, purges a forgotten profile, speaks in Zoe's voice, beeps
 """
 from __future__ import annotations
@@ -324,7 +326,8 @@ def test_the_defaults_cover_a_command_with_no_script_and_match_the_old_flow_phra
 def test_every_script_key_the_server_sends_is_one_the_machine_speaks():
     spoken = {"intro", "prompt", "retry_short", "retry_quiet", "retry_noise", "got", "done", "partial", "cancelled", "timeout", "failed",
               "store_failed", "intro_many", "retry_odd"}     # the last two: the 5-clip (ResNet34) enrolment
-    assert spoken <= set(SCRIPT) and set(SCRIPT) - spoken == {"cancel_words"}
+    screen = {"screen_say", "screen_recording", "screen_odd", "screen_saving", "screen_done", "screen_partial", "screen_failed"}   # the talk screen
+    assert spoken <= set(SCRIPT) and screen <= set(SCRIPT) and set(SCRIPT) - spoken - screen == {"cancel_words"}
 
 
 # ── capture quality ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -523,3 +526,216 @@ def test_a_forget_command_drops_that_members_profile_from_memory_and_disk_at_onc
 
 def test_a_forget_command_without_a_user_does_nothing(daemon, monkeypatch):
     assert daemon._handle_server_command({"command": {"kind": "voice_profile_forget", "user_id": " "}}) is False
+
+
+# ── the talk screen: the phrase is shown as well as spoken ────────────────────────────────────────────────────────────────
+
+def screen_rig(captures=None, **kw):
+    """A Rig whose screen callback lands in the same event list as speech and recording, so ORDER can be asserted."""
+    holder = {}
+    rig = Rig(captures, screen=lambda state, **f: holder["rig"].events.append(("screen", state, f)), **kw)
+    holder["rig"] = rig
+    return rig
+
+
+def screens(rig):
+    return [(e[1], e[2]) for e in rig.events if e[0] == "screen"]
+
+
+def test_each_step_emits_phrase_index_total_and_state():
+    rig = screen_rig()
+    assert rig.run().outcome == em.DONE
+    got = screens(rig)
+    assert [s for s, _ in got] == ["phrase", "recording", "accepted"] * 3 + ["saving", "done"]
+    for n, word in enumerate(("alpha one", "bravo two", "charlie three"), start=1):
+        phrase, recording, accepted = got[3 * (n - 1): 3 * n]
+        assert phrase[1] == {"line": SCRIPT["screen_say"], "phrase": word, "index": n, "total": 3}
+        assert recording[1] == {"line": SCRIPT["screen_recording"], "phrase": word, "index": n, "total": 3}
+        assert accepted[1] == {"phrase": word, "index": n, "total": 3}
+    assert got[-1] == ("done", {"line": SCRIPT["screen_done"]}) and got[-2] == ("saving", {"line": SCRIPT["screen_saving"]})
+
+
+def test_the_phrase_is_on_screen_before_zoe_speaks_it_and_stays_up_while_recording():
+    rig = screen_rig()
+    rig.run()
+    ev = rig.events
+    for n in (1, 2, 3):
+        i_screen = next(i for i, e in enumerate(ev) if e[0] == "screen" and e[1] == "phrase" and e[2]["index"] == n)
+        i_say = next(i for i, e in enumerate(ev) if e[0] == "say" and e[1].startswith(f"Phrase {n}."))
+        i_recshow = next(i for i, e in enumerate(ev) if e[0] == "screen" and e[1] == "recording" and e[2]["index"] == n)
+        i_record = [i for i, e in enumerate(ev) if e[0] == "record"][n - 1]
+        # up BEFORE she starts speaking it; "recording" (same phrase, still on screen) goes up before the mic opens; nothing clears it between
+        assert i_screen < i_say < i_recshow < i_record
+        assert not any(e[0] == "screen" and e[1] == "clear" for e in ev[i_screen:i_record])
+
+
+def test_the_spoken_prompt_is_unchanged_by_the_screen():
+    """The screen is IN ADDITION to Zoe speaking each phrase. Same run with and without a screen: identical speech, identical recordings."""
+    plain, shown = Rig(), screen_rig()
+    plain.run()
+    shown.run()
+    assert shown.said == plain.said and shown.uploaded == plain.uploaded
+    assert [s for s in shown.said if s.startswith("Phrase")] == ["Phrase 1. After the beep, say: alpha one", "Phrase 2. After the beep, say: bravo two",
+                                                                  "Phrase 3. After the beep, say: charlie three"]
+    assert [e[0] for e in shown.events if e[0] != "screen"] == [e[0] for e in plain.events]
+
+
+def test_a_screen_that_cannot_be_reached_never_changes_the_run():
+    rig = Rig(screen=lambda state, **f: (_ for _ in ()).throw(RuntimeError("push down")))
+    res = rig.run()
+    assert (res.outcome, res.samples) == (em.DONE, 3) and len(rig.uploaded) == 3 and rig.said[-1].startswith("That's it")
+
+
+def test_a_retried_capture_shows_the_same_phrase_again_with_no_tick_for_the_bad_one():
+    rig = screen_rig([wav(amp=300), GOOD, GOOD, GOOD])
+    assert rig.run().outcome == em.DONE
+    first = [s for s, f in screens(rig)][:6]
+    assert first == ["phrase", "recording", "phrase", "recording", "accepted", "phrase"]       # no tick between the two tries of phrase 1
+
+
+def test_the_reask_state_is_shown_on_the_phrase_that_sounded_different():
+    state = {"calls": 0}
+
+    def build(embs):
+        state["calls"] += 1
+        return (None, [1]) if state["calls"] == 1 else ("PROFILE", [])
+
+    rig = screen_rig(clips=3, embed=lambda w: [1.0], build=build, upload_profile=lambda p, n: True, legacy_upload=False)
+    res = rig.run()
+    assert res.outcome == em.DONE
+    got = screens(rig)
+    reask = [f for s, f in got if s == "reask"]
+    assert reask and all(f["index"] == 2 and f["phrase"] == "bravo two" and f["total"] == 3 and f["line"] == SCRIPT["screen_odd"] for f in reask)
+    # on screen as she says "that one sounded different", and the next states are the re-captured phrase 2
+    ev = rig.events
+    i_reask = next(i for i, e in enumerate(ev) if e[0] == "screen" and e[1] == "reask")
+    i_say = next(i for i, e in enumerate(ev) if e[0] == "say" and e[1] == SCRIPT["retry_odd"])
+    assert i_reask < i_say
+    after = [s for s, f in got[[s for s, f in got].index("reask"):]]
+    assert after[:4] == ["reask", "reask", "recording", "accepted"] and after[-2:] == ["saving", "done"]
+
+
+@pytest.mark.parametrize("name,rig_kw,transcripts,outcome", [
+    ("said stop", {}, ["stop"], em.CANCELLED),
+    ("external stop", {"cancelled": lambda: "tapped_stop"}, None, em.CANCELLED),
+    ("daemon shutdown", {"cancelled": lambda: "shutdown"}, None, em.CANCELLED),
+    ("timeout", {"max_total_s": 10.0, "tick": 6.0}, None, em.TIMEOUT),
+    ("no voice", {"voice_ok": False}, None, em.FAILED),
+])
+def test_every_ending_that_is_not_a_closing_line_clears_the_screen(name, rig_kw, transcripts, outcome):
+    rig = screen_rig(transcripts=transcripts, **rig_kw)
+    res = rig.run()
+    assert res.outcome == outcome, name
+    got = screens(rig)
+    assert got[-1] == ("clear", {}), (name, got)
+    assert not any(s in ("done", "partial", "failed") for s, _ in got), name
+
+
+def test_a_stop_clears_the_screen_at_once_not_after_her_closing_line():
+    rig = screen_rig(transcripts=["stop"])
+    assert rig.run().outcome == em.CANCELLED
+    ev = rig.events
+    i_clear = next(i for i, e in enumerate(ev) if e[0] == "screen" and e[1] == "clear")
+    i_line = next(i for i, e in enumerate(ev) if e[0] == "say" and e[1] == SCRIPT["cancelled"])
+    assert i_clear < i_line
+    assert [e[1] for e in ev if e[0] == "screen"].count("clear") == 1          # once, not again from the run's safety net
+
+
+def test_a_crash_inside_the_run_still_clears_the_screen():
+    rig = screen_rig()
+    rig.run_obj._record = lambda: (_ for _ in ()).throw(RuntimeError("mic exploded"))
+    res = rig.run()
+    assert (res.outcome, res.reason) == (em.FAILED, "crashed")
+    assert screens(rig)[-1] == ("clear", {})
+
+
+def test_a_failed_run_shows_the_failure_line_and_does_not_also_clear_it():
+    """The closing line is shown WITH the spoken one and the panel expires it itself; a clear right after would remove it unread."""
+    rig = screen_rig(captures=[wav(amp=300)] * 3)
+    assert rig.run().outcome == em.FAILED
+    got = screens(rig)
+    assert got[-1] == ("failed", {"line": SCRIPT["screen_failed"]}) and ("clear", {}) not in got
+
+
+def test_a_partial_save_shows_its_own_closing_line():
+    rig = screen_rig(uploads=[True, True, False])
+    assert rig.run().outcome == em.PARTIAL
+    assert screens(rig)[-1] == ("partial", {"line": SCRIPT["screen_partial"]})
+
+
+def test_the_screen_never_carries_the_members_name_or_audio():
+    rig = screen_rig()
+    rig.run()
+    blob = json.dumps(screens(rig))
+    assert "Ann" not in blob
+    assert not any(isinstance(v, (bytes, bytearray)) for _, f in screens(rig) for v in f.values())
+    # NEGATIVE CONTROL: the check can fail - a script whose screen line used {name} WOULD put the name on the wall
+    leaked = []
+    leaky = Rig(screen=lambda state, **f: leaked.append((state, f)))
+    leaky.run_obj.script["screen_done"] = "Done {name}"
+    leaky.run()
+    assert "Ann" in json.dumps(leaked)
+
+
+def test_a_command_without_screen_lines_still_gets_english_ones():
+    lines = []
+    rig = Rig(screen=lambda state, **f: lines.append(f.get("line")))
+    rig.run_obj.script = em.merge_script({k: v for k, v in rig.run_obj.script.items() if not k.startswith("screen_")})
+    rig.run()
+    assert "Say:" in lines and "Done - I'll recognise your voice" in lines
+
+
+# ── the daemon posts it, to the server, and never lets it slow the run ────────────────────────────────────────────────────
+
+def _run_daemon_enrolment(daemon, monkeypatch, api):
+    monkeypatch.setattr(daemon, "_enroll_say", lambda t: True)
+    monkeypatch.setattr(daemon, "_enroll_record_once", lambda pa: GOOD)
+    monkeypatch.setattr(daemon, "stt_on_jetson", lambda w: "")
+    monkeypatch.setattr(daemon, "_sync_speaker_profiles", lambda force=False: None)
+    monkeypatch.setattr(daemon, "_api_post", api)
+    assert daemon._handle_server_command(_cmd(script={**SCRIPT, "phrases": ["alpha one", "bravo two", "charlie three"]}))
+    daemon._run_enrollment_mode(object())
+
+
+def test_the_daemon_posts_each_step_to_the_screen_endpoint_without_the_members_identity(daemon, monkeypatch):
+    posts = []
+    _run_daemon_enrolment(daemon, monkeypatch,
+                          lambda path, data, timeout=60, retries=None: posts.append((path, data, timeout, retries)) or {"ok": True})
+    screen = [(d["state"], d) for p, d, t, r in posts if p == "/api/enrollment/screen"]
+    assert [s for s, _ in screen] == ["phrase", "recording", "accepted"] * 3 + ["saving", "done"]
+    assert screen[0][1] == {"state": "phrase", "line": "Say:", "phrase": "alpha one", "index": 1, "total": 3}
+    assert all("user_id" not in d and "name" not in d and "panel_id" not in d for _, d in screen)       # the server uses the token's panel
+    assert all(t <= 3 and r == 0 for p, d, t, r in posts if p == "/api/enrollment/screen")              # short, never retried
+    assert len([1 for p, d, t, r in posts if p == "/api/voice/enroll"]) == 3                             # the run itself is unchanged
+
+
+def test_a_server_that_has_no_screen_endpoint_costs_two_failed_posts_not_one_per_step(daemon, monkeypatch):
+    posts = []
+
+    def api(path, data, timeout=60, retries=None):
+        posts.append(path)
+        return {"ok": False, "error": "HTTP 404"} if path == "/api/enrollment/screen" else {"ok": True}
+
+    _run_daemon_enrolment(daemon, monkeypatch, api)
+    assert posts.count("/api/enrollment/screen") == 2                                    # then it stops asking
+    assert posts.count("/api/voice/enroll") == 3 and "/api/enrollment/result" in posts    # the enrolment still completes
+
+
+def test_a_screen_post_that_raises_does_not_break_the_enrolment(daemon, monkeypatch):
+    posts = []
+
+    def api(path, data, timeout=60, retries=None):
+        posts.append(path)
+        if path == "/api/enrollment/screen":
+            raise ConnectionError("down")
+        return {"ok": True}
+
+    _run_daemon_enrolment(daemon, monkeypatch, api)
+    assert posts.count("/api/voice/enroll") == 3 and "/api/enrollment/result" in posts
+
+
+def test_the_failure_counter_is_reset_for_each_run(daemon, monkeypatch):
+    daemon._enroll_screen_failures = 5
+    posts = []
+    _run_daemon_enrolment(daemon, monkeypatch, lambda path, data, timeout=60, retries=None: posts.append(path) or {"ok": True})
+    assert posts.count("/api/enrollment/screen") == 11

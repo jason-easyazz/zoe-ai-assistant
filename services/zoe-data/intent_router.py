@@ -3574,7 +3574,10 @@ _GUEST_HOUSEHOLD_INTENTS = frozenset({"list_add", "list_remove", "list_show"})
 
 def _is_guest_identity(user_id: str | None) -> bool:
     u = (user_id or "").strip()
-    return u in ("", "guest", "voice-guest") or u.startswith("guest-")
+    # every sentinel (user_filters.GUEST_USERS - "anonymous" / "voice-daemon" used to slip through) + per-device guest ids
+    from user_filters import is_unidentified
+
+    return is_unidentified(u) or u.lower().startswith("guest-")
 
 
 async def _speculative_side_effect_barrier(intent_name: str) -> None:
