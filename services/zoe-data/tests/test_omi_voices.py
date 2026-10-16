@@ -2,6 +2,7 @@
 0054). Design ``docs/architecture/memories-space.md`` 2.6 / 3 / 10 (cells V1-V10, T4, T7). Synthetic audio and synthetic 256-d
 embeddings only - no model, no household data. Each guardrail test names the source mutation that turns it red (re-run by Edit):
 
+  V1  suggestions are not tags          count ``suggested_person_id`` as a tag in ``review_segments`` / ``tag``
   V2  my voices are mine                drop ``owner_user_id = ?`` / ``user_id = ?`` from a list / tag / suggestion query
   V3  never auth                        name ``learned_voiceprints`` from ``auth.py`` or ``voice_session.py``
   V4  forget erases everything          skip ``omi_voices.purge_people`` in ``contacts_store.forget_voiceprints``
@@ -323,6 +324,31 @@ def test_tag_creates_my_personal_person_and_starts_a_voiceprint(env, monkeypatch
     assert env.db.q("SELECT COUNT(*) FROM omi_segments WHERE tagged_person_id IS NOT NULL AND tag_source = 'owner'") == [(2,)]
 
 
+def test_a_suggestion_is_not_a_tag_until_the_member_says_yes(env, monkeypatch):
+    cid = _sam_cluster(env, monkeypatch)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, 9, 0.3))))
+    (seg,) = [s for s in run(_segs(rid)) if s["speaker"] == "other"]
+    assert seg["suggested_person_id"] == pid and seg["tagged_person_id"] is None and seg["label"] == "someone_else"
+    review = run(_review(rid))
+    assert all("suggested_person_id" not in r and r["tagged_person_id"] is None for r in review)     # V1: the review never sees it
+    assert env.client.post(f"/api/omi/segments/{seg['id']}/suggestion", json={"answer": "yes"}).status_code == 200
+    (seg,) = [s for s in run(_segs(rid)) if s["speaker"] == "other"]
+    assert (seg["tagged_person_id"], seg["tag_source"], seg["label"]) == (pid, "suggested_confirmed", "person")
+    (vp,) = env.client.get("/api/omi/voices").json()["voices"]
+    assert vp["status"] == "confirmed" and vp["segments"] == 3 and vp["last_confirmed_at"]
+
+
+def test_no_raises_the_bar_and_learns_nothing(env, monkeypatch):
+    cid = _sam_cluster(env, monkeypatch)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, 9, 0.3))))
+    (seg,) = [s for s in run(_segs(rid)) if s["speaker"] == "other"]
+    env.client.post(f"/api/omi/segments/{seg['id']}/suggestion", json={"answer": "no"})
+    assert env.db.q("SELECT rejections, n_segments FROM learned_voiceprints") == [(1, 2)]
+    assert segs_of(env, rid)[1][2:4] == (None, None)
+
+
 async def _segs(rid, uid=A):
     async with db_compat.get_compat_db() as db:
         return await ov.segments_for(db, uid, rid)
@@ -394,6 +420,7 @@ def test_forget_name_erases_the_voice_and_everything_derived(env, monkeypatch):
     cid = _sam_cluster(env, monkeypatch)
     env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
     rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, 9, 0.3))))
+    assert segs_of(env, rid)[1][3] is not None
     n = run(_forget(re.compile(r"\bSam\b", re.I)))
     assert n > 0
     for table in ("learned_voiceprints", "learned_voiceprint_segments"):
@@ -482,7 +509,7 @@ def test_guests_and_panels_cannot_call_the_voice_api(env, monkeypatch):
     env.app.dependency_overrides[auth.get_current_user] = lambda: {"user_id": "guest", "role": "guest"}
     calls = [("get", "/api/omi/voices/unknown", None), ("post", "/api/omi/voices/unknown/x/tag", {"name": "Sam"}),
              ("post", "/api/omi/voices/unknown/x/not-a-person", {"kind": "tv"}), ("post", "/api/omi/segments/x/tag", {"name": "Sam"}),
-             ("patch", "/api/omi/segments/x", {"owner_label": "you"}),
+             ("patch", "/api/omi/segments/x", {"owner_label": "you"}), ("post", "/api/omi/segments/x/suggestion", {"answer": "yes"}),
              ("get", "/api/omi/voices", None), ("put", "/api/omi/voices/settings", {"learning_enabled": False}),
              ("patch", "/api/omi/voices/x", {"learning_enabled": False}), ("delete", "/api/omi/voices/x", None)]
     for method, url, body in calls:

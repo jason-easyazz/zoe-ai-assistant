@@ -12,8 +12,7 @@ THE GUARDRAILS (each pinned by ``tests/test_omi_voices.py``):
      them (two members who tag the same person hold two separate voiceprints). Never exported; the backup skips the data.
   2. Suggestions / attribution in that member's own recordings ONLY. Nothing here is read by auth, sign-in, the voice session,
      presence, ``/api/voice/identify`` or the profile sync - a static allow-list test pins which modules may name the tables.
-  3. Only the member's tag names a person; the day review reads only confirmed tags (``review_segments``). Suggestions
-     (``suggested_person_id``, never a tag) are the follow-up PR; the column and every erase of it are here.
+  3. A suggestion is never a tag until the member says yes; the day review reads only confirmed tags (``review_segments``).
   4. Unconfirmed voiceprints expire (``sweep``), bystander embeddings and unknown-voice clusters expire after 14 days; "forget
      <name>" (``purge_people`` via ``contacts_store.forget_voiceprints``), "forget this voice", "stop learning", deleting a
      recording (``drop_recording``: contributions removed and the mean REBUILT) and erasing the member (``forget_user``) erase.
@@ -40,6 +39,9 @@ EMBED_TTL_DAYS = 14
 PROVISIONAL_DAYS = 30
 IDLE_DAYS = 365
 CLUSTER_MIN = 0.45            # an unknown voice joins a cluster at this cosine to its centroid (calibrated, knowledge doc)
+SUGGEST_MIN = 0.45            # a learned voice is suggested at this cosine ...
+SUGGEST_MARGIN = 0.10         # ... and this far above the runner-up (Omi's own margin rule)
+REJECT_STEP = 0.02            # each "no, that isn't them" raises that voice's margin (capped at 5 steps)
 LOW_MARGIN = 0.10             # an ``unsure`` segment is learnable only this far below the wearer's bar
 MIN_LEARN_MS = 2000
 LOO_TAU = 0.30                # leave-one-out outlier rule of the panel's 5-clip enrolment (#2024)
@@ -189,7 +191,7 @@ def learnable(seg: dict, you_min: float) -> bool:
 
 async def learn(db, user_id: str, ids: list[str], segs: list, *, model_id: str, you_min: float) -> dict:
     """After a recording's segments are stored: keep each learnable segment's embedding (TTL), file it under an unknown voice of
-    THIS member. (Suggesting a learned voice for it is the follow-up PR.) Nothing at all while learning is off for the member."""
+    THIS member, and suggest a learned voice for it. Nothing at all while learning is off for the member."""
     out = {"stored": 0, "clustered": 0, "suggested": 0}
     if not await may_learn(db, user_id):
         return out
@@ -198,6 +200,7 @@ async def learn(db, user_id: str, ids: list[str], segs: list, *, model_id: str, 
     clusters = [dict(id=r[0], c=_vec(r[1]), n=int(r[2]), status=r[3], kind=r[4]) for r in await _all(
         db, "SELECT id, centroid, n_segments, status, not_person_kind FROM omi_voice_clusters WHERE user_id = ? AND model_id = ?",
         (user_id, model_id))]
+    prints = await _voiceprints_for_suggest(db, user_id, model_id)
     cmin = env_float("ZOE_OMI_VOICE_CLUSTER_MIN", CLUSTER_MIN)
     for sid, seg in zip(ids, segs):
         if not learnable(seg, you_min):
@@ -225,8 +228,35 @@ async def learn(db, user_id: str, ids: list[str], segs: list, *, model_id: str, 
         await _run(db, "UPDATE omi_segments SET voice_cluster_id = ? WHERE id = ? AND user_id = ?", (best["id"], sid, user_id))
         out["stored"] += 1
         out["clustered"] += 1
+        hit = suggest(e, prints)
+        if hit:
+            await _run(db, "UPDATE omi_segments SET suggested_person_id = ?, suggested_score = ? WHERE id = ? AND user_id = ?",
+                       (hit[0], round(hit[1], 4), sid, user_id))
+            out["suggested"] += 1
     await db.commit()
     return out
+
+
+# --- suggestions (a suggestion is NEVER a tag) -------------------------------------------------------------------------------
+async def _voiceprints_for_suggest(db, user_id: str, model_id: str) -> list[dict]:
+    rows = await _all(db, "SELECT v.people_id, v.embedding, v.rejections FROM learned_voiceprints v JOIN people p ON p.id = v.people_id "
+                          "WHERE v.owner_user_id = ? AND v.model_id = ? AND v.learning_enabled = 1 AND p.user_id = ? "
+                          "AND (p.deleted = 0 OR p.deleted IS NULL)", (user_id, model_id, user_id))
+    return [dict(person=r[0], v=_unit(_vec(r[1])), rej=int(r[2] or 0)) for r in rows]
+
+
+def suggest(e: np.ndarray, prints: list[dict]) -> Optional[tuple[str, float]]:
+    """The best learned voice for ``e`` if it clears ``ZOE_OMI_SUGGEST_MIN`` AND beats the runner-up by the margin (raised by that
+    voice's rejections). Pure."""
+    if not prints:
+        return None
+    scored = sorted(((float(p["v"] @ e), p) for p in prints), key=lambda t: -t[0])
+    s, p = scored[0]
+    second = scored[1][0] if len(scored) > 1 else -1.0
+    margin = env_float("ZOE_OMI_SUGGEST_MARGIN", SUGGEST_MARGIN) + REJECT_STEP * min(p["rej"], 5)
+    if s >= env_float("ZOE_OMI_SUGGEST_MIN", SUGGEST_MIN) and s - second >= margin:
+        return p["person"], s
+    return None
 
 
 # --- the member's API ----------------------------------------------------------------------------------------------------
@@ -358,6 +388,34 @@ async def tag(db, user_id: str, *, person_id: Optional[str] = None, name: Option
     await db.commit()
     logger.info("OMI_VOICE_TAGGED segments=%d learning=%s created_person=%s", len(seg_ids), learning, person["created"])
     return {"person_id": person["id"], "person_created": person["created"], "segments": len(seg_ids), "learning": learning}
+
+
+async def answer_suggestion(db, user_id: str, segment_id: str, answer: str) -> dict:
+    """"Sounds like Sam?" - ``yes`` makes it a tag (``suggested_confirmed``) and confirms the voice; ``no`` / ``someone_else``
+    clears it and raises that voice's margin. The suggestion is never used as a training clip on a no."""
+    if answer not in ("yes", "no", "someone_else"):
+        raise VoiceError("answer is yes, no or someone_else")
+    rows = await _all(db, "SELECT suggested_person_id FROM omi_segments WHERE id = ? AND user_id = ?", (segment_id, user_id))
+    if not rows or not rows[0][0]:
+        raise VoiceError("no suggestion on that line", 404)
+    pid = rows[0][0]
+    if answer == "yes":
+        out = await tag(db, user_id, person_id=pid, segment_id=segment_id, source="suggested_confirmed")
+        now = _now()
+        for vp, n_seg, n_rec in await _all(db, "SELECT id, n_segments, n_recordings FROM learned_voiceprints WHERE owner_user_id = ? "
+                                               "AND people_id = ?", (user_id, pid)):
+            ok = int(n_seg) >= 3 and int(n_rec) >= 2
+            await _run(db, "UPDATE learned_voiceprints SET last_confirmed_at = ?, status = ?, expires_at = ? WHERE id = ?",
+                       (_iso(now), "confirmed" if ok else "provisional",
+                        _iso(now + timedelta(days=_days(env_int("ZOE_OMI_VOICEPRINT_IDLE_DAYS", IDLE_DAYS)))) if ok else
+                        (await _all(db, "SELECT expires_at FROM learned_voiceprints WHERE id = ?", (vp,)))[0][0], vp))
+        await db.commit()
+        return out
+    await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE id = ? AND user_id = ?",
+               (segment_id, user_id))
+    await _run(db, "UPDATE learned_voiceprints SET rejections = rejections + 1 WHERE owner_user_id = ? AND people_id = ?", (user_id, pid))
+    await db.commit()
+    return {"person_id": None, "segments": 1, "learning": "unchanged"}
 
 
 async def mark_not_a_person(db, user_id: str, *, kind: str, cluster_id: Optional[str] = None, segment_id: Optional[str] = None) -> int:
