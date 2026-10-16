@@ -304,6 +304,7 @@ const CONV_HOLD = 30000;
       state: { panelId: 'zoe-touch-pi', pushWs: null, pushPing: null, pushRetry: null, pushAttempts: 0, unloading: false },
       PUSH_PING_MS: constValue('PUSH_PING_MS'),
       PUSH_RETRY_MAX_MS: constValue('PUSH_RETRY_MAX_MS'),
+      PUSH_STALE_MS: constValue('PUSH_STALE_MS'),
       window: { location: { protocol: 'https:', host: 'zoe.local' } },
       WebSocket: FakeWS,
       setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
@@ -316,7 +317,7 @@ const CONV_HOLD = 30000;
     };
     const names = Object.keys(env);
     const fns = new Function(...names,
-      extract('schedulePushReconnect') + '\n' + extract('connectPushWebSocket') +
+      extract('schedulePushReconnect') + '\n' + extract('pushSocketStale') + '\n' + extract('restartFallbackPushSocket') + '\n' + extract('startPushPing') + '\n' + extract('connectPushWebSocket') +
       '\nreturn { connectPushWebSocket, schedulePushReconnect };')(...names.map((n) => env[n]));
     return { fns, env, clock, intervals, sockets, done };
   }
