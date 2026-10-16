@@ -562,11 +562,31 @@ async def drop_recording(db, rid: str) -> None:
         await _run(db, "DELETE FROM learned_voiceprint_segments WHERE recording_id = ?", (rid,))
         for vp in vps:
             await rebuild(db, vp)
+        clusters = [r[0] for r in await _all(db, "SELECT DISTINCT voice_cluster_id FROM omi_segments WHERE recording_id = ? AND "
+                                                 "voice_cluster_id IS NOT NULL", (rid,))]
         await _run(db, "DELETE FROM omi_segment_embeddings WHERE segment_id IN (SELECT id FROM omi_segments WHERE recording_id = ?)", (rid,))
         await _run(db, "DELETE FROM omi_segments WHERE recording_id = ?", (rid,))
+        for cid in clusters:
+            await rebuild_cluster(db, cid)
     except Exception as exc:  # noqa: BLE001
         if not _missing(exc):
             raise
+
+
+async def rebuild_cluster(db, cid: str) -> bool:
+    """Recompute an unknown voice's centroid from the embeddings still held for it (its recording deleted, its lines expired). An
+    open voice with none left goes - its centroid would otherwise keep a deleted recording's biometric. A "not a person" voice
+    holds no embeddings by design (TV, Zoe) and is kept so later matches are still marked. Returns True if it remains."""
+    rows = await _all(db, "SELECT e.embedding FROM omi_segment_embeddings e JOIN omi_segments s ON s.id = e.segment_id "
+                          "WHERE s.voice_cluster_id = ?", (cid,))
+    if not rows:
+        n = await _run(db, "DELETE FROM omi_voice_clusters WHERE id = ? AND status = 'open'", (cid,))
+        if n:
+            await _run(db, "UPDATE omi_segments SET voice_cluster_id = NULL WHERE voice_cluster_id = ?", (cid,))
+        return not n
+    c = _unit(np.stack([_unit(_vec(r[0])) for r in rows]).mean(axis=0))
+    await _run(db, "UPDATE omi_voice_clusters SET centroid = ?, n_segments = ? WHERE id = ? AND status = 'open'", (_blob(c), len(rows), cid))
+    return True
 
 
 async def redact(db, user_id: str, rx: "re.Pattern[str]", mark: str) -> int:
@@ -598,14 +618,21 @@ async def sweep(db, *, now: Optional[datetime] = None) -> dict:
     soft-deleted person (the backstop for the People panel's delete)."""
     stamp = _iso(now or _now())
     out = {"embeddings": 0, "clusters": 0, "voiceprints": 0, "people": 0}
+    touched = [r[0] for r in await _all(db, "SELECT DISTINCT s.voice_cluster_id FROM omi_segment_embeddings e JOIN omi_segments s "
+                                            "ON s.id = e.segment_id WHERE e.expires_at < ? AND s.voice_cluster_id IS NOT NULL", (stamp,))]
     out["embeddings"] = await _run(db, "DELETE FROM omi_segment_embeddings WHERE expires_at < ?", (stamp,))
+    for cid in touched:
+        if not await rebuild_cluster(db, cid):
+            out["clusters"] += 1
     gone = [r[0] for r in await _all(db, "SELECT id FROM omi_voice_clusters WHERE expires_at < ?", (stamp,))]
     for cid in gone:
         await _run(db, "UPDATE omi_segments SET voice_cluster_id = NULL WHERE voice_cluster_id = ?", (cid,))
         out["clusters"] += await _run(db, "DELETE FROM omi_voice_clusters WHERE id = ?", (cid,))
-    for (vp,) in await _all(db, "SELECT id FROM learned_voiceprints WHERE expires_at < ?", (stamp,)):
+    for vp, owner, pid in await _all(db, "SELECT id, owner_user_id, people_id FROM learned_voiceprints WHERE expires_at < ?", (stamp,)):
         await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp,))
         out["voiceprints"] += await _run(db, "DELETE FROM learned_voiceprints WHERE id = ?", (vp,))
+        await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE user_id = ? "
+                       "AND suggested_person_id = ?", (owner, pid))          # what an expired voice suggested goes with it
     for uid, pid in await _all(db, "SELECT DISTINCT s.user_id, p.id FROM people p JOIN omi_segments s ON (s.tagged_person_id = p.id OR "
                                    "s.suggested_person_id = p.id) WHERE p.deleted = 1 UNION SELECT v.owner_user_id, p.id FROM people p "
                                    "JOIN learned_voiceprints v ON v.people_id = p.id WHERE p.deleted = 1"):

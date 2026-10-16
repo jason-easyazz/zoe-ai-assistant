@@ -69,6 +69,15 @@ async def _contact_tables_present(db) -> bool:
     return bool(rows) and bool(rows[0][0])
 
 
+async def _segments_present(db) -> bool:
+    try:
+        rows = await _fetchall(db, "SELECT to_regclass('omi_segments') IS NOT NULL",
+                               "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table' AND name = 'omi_segments'", ())
+    except Exception:  # noqa: BLE001 - cannot tell: merge without it, as before 0054
+        return False
+    return bool(rows) and bool(rows[0][0])
+
+
 class PersonMergeError(Exception):
     """Merge cannot proceed (missing person, same id, cross-user). Endpoint → 404/400."""
 
@@ -203,6 +212,7 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str, *,
         raise PersonMergeError(f"target person {target_id!r} not found for this user")
 
     contacts_present = await _contact_tables_present(db)
+    segments_present = await _segments_present(db)
 
     async def _apply() -> tuple[dict, int, int]:
         repointed: dict[str, int] = {}
@@ -229,6 +239,14 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str, *,
                 "DELETE FROM learned_voiceprints WHERE people_id=? AND owner_user_id=?",
                 (source_id, user_id),
             )
+
+        # ── 2c. Pendant speaker turns (0054): a tag or suggestion of the duplicate now names the survivor - never cleared by
+        # the later sweep of soft-deleted people, which would silently lose the member's own tags.
+        if segments_present:
+            for col in ("tagged_person_id", "suggested_person_id"):
+                repointed[f"omi_segments.{col}"] = await _exec(
+                    db, f"UPDATE omi_segments SET {col}=$1 WHERE {col}=$2 AND user_id=$3",
+                    f"UPDATE omi_segments SET {col}=? WHERE {col}=? AND user_id=?", (target_id, source_id, user_id))
 
         # ── 2. Re-point satellite tables ─────────────────────────────────────
         for table in _SATELLITE_TABLES:

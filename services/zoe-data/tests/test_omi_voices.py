@@ -488,6 +488,36 @@ def test_deleting_a_recording_unlearns_it_and_rebuilds_the_voice(env, monkeypatc
     assert env.db.q("SELECT COUNT(*) FROM omi_segments WHERE recording_id = ?", (first,)) == [(0,)]
 
 
+def test_deleting_a_recording_rebuilds_or_drops_the_unknown_voice_it_fed(env, monkeypatch):
+    for i in range(2):
+        transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
+    (r0,), (r1,) = env.db.q("SELECT id FROM omi_recordings ORDER BY id")
+    before = env.db.q("SELECT centroid, n_segments FROM omi_voice_clusters")[0]
+    env.client.delete(f"/api/omi/recordings/{r0}")
+    after = env.db.q("SELECT centroid, n_segments FROM omi_voice_clusters")[0]
+    assert after[1] == 1 and after[0] != before[0]                                   # the deleted recording's voice is out of it
+    env.client.delete(f"/api/omi/recordings/{r1}")
+    assert env.db.q("SELECT COUNT(*) FROM omi_voice_clusters") == [(0,)]
+
+
+def test_an_expired_voice_takes_its_suggestions_with_it(env, monkeypatch):
+    cid = _sam_cluster(env, monkeypatch)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    rid = transcribe(env, monkeypatch, turns((0, 6, "other", 0.0, TV)))
+    env.db.conn.execute("UPDATE omi_segments SET suggested_person_id = ? WHERE recording_id = ?", (pid, rid))
+    env.db.conn.commit()
+    run(_sweep(datetime.now(UTC) + timedelta(days=31)))
+    assert env.db.q("SELECT COUNT(*) FROM omi_segments WHERE suggested_person_id IS NOT NULL") == [(0,)]
+
+
+def test_a_segment_store_failure_never_costs_the_transcript(env, monkeypatch):
+    async def boom(*a, **k):
+        raise RuntimeError("db hiccup")
+    monkeypatch.setattr(ov, "store_segments", boom)
+    rid = transcribe(env, monkeypatch, turns((0, 6, "other", 0.0, SAM)))
+    assert env.db.q("SELECT status, transcript, speaker_state FROM omi_recordings WHERE id = ?", (rid,)) == [("done", "said6s", "untaggable")]
+
+
 def test_erasing_the_member_erases_every_voice_row(env, monkeypatch):
     cid = _sam_cluster(env, monkeypatch)
     env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
