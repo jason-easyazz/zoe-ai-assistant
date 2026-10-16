@@ -1151,6 +1151,36 @@ async def forget_user(user_id: str) -> int:
         raise
 
 
+async def forget_recording(user_id: str, rid: str) -> int:
+    """A deleted recording takes its words with it (``omi_recordings.delete_recording`` calls this BEFORE its tombstone, so a failure
+    here leaves the recording in place for a retry). Candidates resting on it are deleted; one already approved (or being approved)
+    keeps only its provenance index (``written_ref``, kind, day) - its quotes and payload are cleared. A table that is not migrated has
+    nothing to clear. Returns the candidates touched."""
+    try:
+        async with _db() as db:
+            rows = await _fetch(db, "SELECT id, status, recording_ids FROM omi_day_candidates WHERE user_id = ? AND recording_ids LIKE ?",
+                                (user_id, f'%"{rid}"%'))
+            n = 0
+            for r in rows:
+                try:
+                    if rid not in json.loads(r["recording_ids"] or "[]"):
+                        continue
+                except ValueError:
+                    pass
+                if r["status"] in ("approved", "approving"):
+                    await db.execute("UPDATE omi_day_candidates SET evidence = '[]', payload = '{}' WHERE id = ?", (r["id"],))
+                else:
+                    await db.execute("DELETE FROM omi_day_candidates WHERE id = ?", (r["id"],))
+                n += 1
+            await db.commit()
+            return n
+    except Exception as exc:  # noqa: BLE001
+        import memory_forget_cascade
+        if memory_forget_cascade._store_missing(exc):
+            return 0
+        raise
+
+
 async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = False) -> int:
     """Forget a name: every candidate of the member whose payload or evidence names it is deleted (an approved one keeps the row it
     wrote - that row follows its own store's forget path - but loses its text here too)."""

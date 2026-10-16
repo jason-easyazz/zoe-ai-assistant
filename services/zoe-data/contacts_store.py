@@ -195,14 +195,13 @@ async def ensure_person(db, user_id: str, name: str, *, relationship: Optional[s
     """``(person_id, created)``: the member's live person whose name folds to ``name``, else a new PERSONAL row in their own layer
     (the pendant day review's approved "person" candidate). A relationship fills an empty one only, never overwrites."""
     key = fold(name)
-    for p in await _live_people(db, user_id):
-        if key and fold(p["name"]) == key:
-            return p["id"], False
-    pid = await _create_person(db, user_id, name, now=now_iso())
-    if relationship:
+    pid, created = next((p["id"] for p in await _live_people(db, user_id) if key and fold(p["name"]) == key), None), False
+    if pid is None:
+        pid, created = await _create_person(db, user_id, name, now=now_iso()), True
+    if relationship:              # an existing person gains an EMPTY relationship too; a set one is never overwritten
         await _run(db, "UPDATE people SET relationship = ? WHERE id = ? AND user_id = ? AND relationship IS NULL",
                    (relationship[:60], pid, user_id))
-    return pid, True
+    return pid, created
 
 
 def names_compatible(a: str, b: str) -> bool:

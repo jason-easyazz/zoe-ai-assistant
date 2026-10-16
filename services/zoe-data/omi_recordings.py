@@ -598,6 +598,8 @@ async def delete_recording(user_id: str, rid: str) -> bool:
             rows = await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
             if not rows or rows[0]["status"] == "deleted":
                 return False
+            import omi_day_review          # FIRST: the day review's quotes of this recording go too (a failure keeps the recording for a retry)
+            await omi_day_review.forget_recording(user_id, rid)
             await _tombstone(db, rows[0], _now())
             await db.commit()
     logger.info("OMI_DELETED id=%s", rid)

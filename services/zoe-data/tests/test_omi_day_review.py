@@ -643,6 +643,39 @@ def test_a_failed_member_erase_is_loud_and_a_missing_table_is_nothing_to_erase(e
     assert run(dr.forget_user(OWNER)) == 0                          # a process with no database at all: nothing to reach
 
 
+def test_deleting_a_recording_takes_its_quotes_out_of_the_day_review(env, monkeypatch):
+    """Codex #2091: a deleted recording's words must not stay readable through the review API. Pending candidates resting on it are
+    deleted; an approved one keeps only its provenance index (written_ref) - no quote, no payload."""
+    import omi_recordings
+    monkeypatch.setenv("ZOE_OMI_SYNC_ENABLED", "1")
+    add_rec(env, "rec1", GOLDEN)
+    add_rec(env, "rec2", "I need to buy bread.", started="2026-10-13T05:00:00Z")
+    dr.set_llm(fake_model(GOLDEN_RULES + [("I need to buy bread", {"kind": "list_item", "fields": {"item": "bread"}})]))
+    review()
+    ev_id = next(c["id"] for c in cands(env) if c["kind"] == "calendar_event")
+    assert run(apply.approve(OWNER, ev_id))["status"] == "approved"
+    assert run(omi_recordings.delete_recording(OWNER, "rec1")) is True
+    left = {c["id"]: c for c in cands(env)}
+    assert set(left) == {ev_id, next(c["id"] for c in left.values() if c["kind"] == "list_item")}
+    assert json.loads(left[ev_id]["evidence"]) == [] and json.loads(left[ev_id]["payload"]) == {} and left[ev_id]["written_ref"]
+    bread = next(c for c in left.values() if c["kind"] == "list_item")
+    assert json.loads(bread["recording_ids"]) == ["rec2"] and json.loads(bread["evidence"])         # another recording's: untouched
+
+
+def test_an_existing_person_gains_an_empty_relationship_and_a_set_one_is_kept(env):
+    """Codex #2091: approving "Priya, my new manager" for a Priya already in the contacts fills an EMPTY relationship only."""
+    import contacts_store
+    env.db.conn.execute("CREATE TABLE people (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, relationship TEXT, email TEXT, phone TEXT, "
+                        "visibility TEXT, is_partial INTEGER DEFAULT 0, deleted INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT)")
+    env.db.conn.execute("INSERT INTO people (id, user_id, name, relationship) VALUES ('p1', ?, 'Priya Raman', NULL), ('p2', ?, 'Sam', 'brother')",
+                        (OWNER, OWNER))
+    env.db.conn.commit()
+    assert run(contacts_store.ensure_person(env.db, OWNER, "priya raman", relationship="my new manager")) == ("p1", False)
+    assert run(contacts_store.ensure_person(env.db, OWNER, "Sam", relationship="friend")) == ("p2", False)
+    rel = {r["id"]: r["relationship"] for r in env.db.rows("SELECT id, relationship FROM people")}
+    assert rel == {"p1": "my new manager", "p2": "brother"}
+
+
 def test_a_user_delete_erases_the_day_review_before_taking_the_memory_lock():
     """Codex #2091 (P1): an approval writes under the erase gate and its ingest needs the memory lock. ``delete_user`` must run the
     day review's erase (which takes the gate) BEFORE the lock: inside it, an approval in flight would deadlock it, and an approval
