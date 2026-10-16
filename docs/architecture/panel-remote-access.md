@@ -38,8 +38,9 @@ builds_on: docs/knowledge/mac-virtual-panel.md (the one remote panel that exists
 - **Not the Cloudflare HTTP proxy** (what the Mac virtual panel uses): Cloudflare terminates TLS at its edge, so
   every voice clip, reply and transcript is plaintext there (research 2.4). **Not WireGuard through a home port
   forward:** the home line shows the signs of carrier-grade NAT (the second hop is in `100.64.0.0/10` and the
-  router's port-mapping reply carries no valid public address) [live, read-only], so nothing at the house can
-  accept inbound connections; Headscale behind that forward is ruled out for the same reason.
+  router's port-mapping reply carries no valid public address) [live, read-only]. Signs, not proof: if the router's
+  own WAN address confirms CGNAT, nothing at the house can accept inbound connections and Headscale behind a home
+  forward is out too. The design does not depend on the answer: the pick needs no inbound connection to the house.
 - **Tailscale 1.104.1 is already installed on both boxes** (active, enabled, never logged in: `NeedsLogin`)
   [live, 2026-10-16], so phase 1 is a control server, a policy file, two logins, one TLS name and a config switch.
 - **Zoe must change in four places:** the panel's URL and TLS name; how the kiosk BROWSER proves it is the panel
@@ -100,7 +101,7 @@ Ranked under the owner's constraint "no new account". Tailscale's hosted service
 | Content privacy | end-to-end WireGuard; relays forward ciphertext | inner TLS end-to-end; Cloudflare sees ciphertext + Access metadata (verified in source) | end-to-end WireGuard | end-to-end WireGuard | end-to-end WireGuard |
 | What leaves the house | device names, keys, endpoints - to OUR server | each connection's timing and size and the service-token identity, to Cloudflare | encrypted packets via our server | nothing | metadata + client connection logs to Tailscale |
 | Path | direct when NAT allows (the home NAT is "easy"); else relayed by our server's DERP (~50 ms each way from the house) or Tailscale's Sydney region | always via Cloudflare's edge | always via our server | direct | direct, else Tailscale relays |
-| Hotel / CGNAT / UDP-blocked networks | works (DERP over 443) | works (outbound 443 only) | only if UDP to the server is allowed | **does not work: the home line looks like CGNAT** | works |
+| Hotel / CGNAT / UDP-blocked networks | works (DERP over 443) | works (outbound 443 only) | only if UDP to the server is allowed | **likely not possible: the home line shows CGNAT signs** (unconfirmed) | works |
 | Zoe can tell the panel by address | yes, by tailnet address - as strong as the control server (section 4.2) | **no**: every caller arrives as the cloudflared container | yes, by tunnel address | yes | yes |
 | HTTPS name for the panel | no `tailscale cert`: a private CA (section 4.1) | today's self-signed cert inside the stream, or the private CA | private CA | private CA | `tailscale cert` |
 | A compromised control server can add nodes | **yes: no Tailnet Lock** (research 2.2) | n/a (Access decides) | n/a (static keys) | n/a | no, with Tailnet Lock |
@@ -112,7 +113,8 @@ end-to-end private, lets the panel and the Jetson talk directly when the network
 NAT), survives hotel and CGNAT networks through its relay, and reuses the Tailscale clients already installed. The
 server exists with root, so the cost is operator time (install, a DNS name, backups, upgrades), not a new box or
 account. Its two gaps are designed around: no Tailnet Lock (section 4.6: the Jetson's own firewall plus the device
-token at the application layer, so a rogue node added by a compromised server still gets nothing), and no
+token at the application layer; the residual is what an anonymous guest reaches, plus, until P3, the panel's
+address-based household-list rights and display name if the server hands a rogue node the panel's address), and no
 `tailscale cert` (section 4.1: a private CA).
 
 **Cloudflare TCP pass-through is second** (section 3.3). It is the fastest to stand up and needs nothing new, but
@@ -120,7 +122,7 @@ all traffic takes the edge detour, connections drop at Cloudflare restarts, and 
 identity signal entirely, which makes the device-token kiosk session (section 4.2) a precondition rather than a
 later polish. Kept as the fallback path for when the server or the control plane is down.
 
-**WireGuard is last.** A home port forward does not work on this line (CGNAT signs); a hub on the owner's server
+**WireGuard is last.** A home port forward is likely impossible on this line (CGNAT signs, unconfirmed); a hub on the owner's server
 works but relays everything through it with hand-managed keys, which Headscale does better on the same box. The
 Jetson has no in-kernel WireGuard; `wireguard-go` (userspace) is packaged for its Ubuntu (research 2.3).
 
@@ -194,9 +196,13 @@ it starts, so the AP is never open.
     `livekit_available` reads client-supplied `cf-connecting-ip` / `X-Forwarded-For` first (cosmetic).
   - **Precondition:** the ingress points at nginx only. A `tcp://` rule to `host.docker.internal:8000` would make the
     cloudflared container zoe-data's direct peer, inside the default trusted proxy range (`172.16.0.0/12`), so a
-    client-supplied `X-Real-IP` would be believed and the caller could claim a registered panel's address. Defence in
-    depth either way: pin `ZOE_TRUSTED_PROXY_NETS` to the nginx container's address (the narrowing
-    `panel_principal.py` already documents).
+    client-supplied `X-Real-IP` would be believed and the caller could claim a registered panel's address. That rule
+    is categorical, not mitigated: pinning `ZOE_TRUSTED_PROXY_NETS` to nginx protects `panel_principal` (it goes
+    through `trusted_client_ip`), but `routers/skybridge.py` reads `x-real-ip` directly and never consults that
+    setting, so its display-identity check would still accept a forged header from a direct peer. The same gap
+    exists today for any LAN caller of zoe-data's `:8000` (ledger line 2026-10-16); skybridge should use
+    `trusted_client_ip`. Pinning the proxy range is still worth doing, through a fixed address for nginx on
+    `zoe-network` rather than whatever Docker assigned (container addresses drift).
 
 ## 4. What Zoe must change
 
@@ -446,7 +452,7 @@ nginx SNI block; `ZOE_ALLOWED_WS_ORIGINS`; the panel firewall; then the live pan
 | W3 | hidden SSID via "Other network" | the same hidden SSID with a one-character name typo fails and the hotspot returns |
 | W4 | captive-portal network detected and explained | a normal network is not flagged as a portal |
 | W5 | hotspot password differs on each start | a capture of an old QR no longer joins |
-| W6 | strict network (UDP blocked): link still comes up via the relay and the status shows "relayed" | on an open network the same test shows "direct" (proves the relay label is real) |
+| W6 | strict network (UDP blocked): link still comes up via the relay and the status shows "relayed" | the same lab network with UDP restored shows "direct" (proves the relay label is real) |
 
 ### P3 - remote polish (each a flag-dark PR)
 
@@ -457,8 +463,9 @@ nginx SNI block; `ZOE_ALLOWED_WS_ORIGINS`; the panel firewall; then the live pan
 - Away mode (section 4.5). Negative: at home, nothing is gated.
 - Voice WAN study, cell **L9**: `tc netem` on the lab node at RTT 50/100/200 ms, uplink 1/5/20 Mbit/s, 1% loss,
   20 turns each; record upload, first-audio and total. Decide (a) under-speech upload vs (b) Opus from this table;
-  either one replay-gated before deploy. Baseline: 0 ms netem reproduces the LAN numbers. Negative control: with
-  netem at 200 ms the budget check in the harness reports a breach (proves the check can fail).
+  either one replay-gated before deploy. Baseline: 0 ms netem reproduces the LAN numbers. Negative control: netem adding
+  500 ms each way (1 s RTT) must make the harness's budget check report a breach, since one extra RTT alone exceeds
+  the +300 ms allowance (proves the check can fail).
 - Cloudflare TCP pass-through as the fallback path (section 3.3), only if the owner wants a second path: the
   device-token kiosk session must land first. Negative: a service-token holder without a device token is not "the
   panel" and cannot reach `:8000` or `:8007`.

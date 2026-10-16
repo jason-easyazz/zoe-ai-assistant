@@ -157,12 +157,12 @@ person must finish on their phone.
 
 - https://github.com/juanfont/headscale - BSD-3-Clause; v0.29.5, 2026-10-13; pre-1.0; unaffiliated, single tailnet;
   maintainers do not support running it behind reverse proxies or in containers [verified: README, release API].
-- Features: ACLs and grants, MagicDNS, embedded DERP, pre-auth keys, tags, OIDC, subnet routers, Serve
-  [verified: https://headscale.net/stable/about/features/]. Not listed: `tailscale cert`, Tailnet Lock, key expiry
-  [verified, absence only]. `tailscale cert` relies on Tailscale publishing DNS records under `ts.net`, which a
+- Features: ACLs and grants, MagicDNS, embedded DERP, pre-auth keys, tags, OIDC, subnet routers
+  [verified: https://headscale.net/stable/about/features/]. Not listed: `tailscale cert`, Tailnet Lock
+  [verified, absence only]; key expiry is a config option (below). `tailscale cert` relies on Tailscale publishing DNS records under `ts.net`, which a
   Headscale server cannot do [secondary].
-- Needs a publicly reachable server (a VPS, or a forwarded port) with a domain and TLS. It moves the metadata to
-  that server; it does not remove it.
+- Needs "a server with a public IP address", TCP 443 and, for its relay, UDP 3478 [verified: headscale
+  `docs/setup/requirements.md`]. It moves the metadata to that server rather than removing it [inference].
 - Clients join with `tailscale up --login-server <url>` [verified: headscale `docs/ref/registration.md`]; the
   changelog says the next release (0.30) requires clients at 1.84.0 or newer [verified] - both boxes run 1.104.1.
 - **Not behind Cloudflare.** "Running Headscale behind a Cloudflare Proxy or Cloudflare Tunnel is not supported and
@@ -202,8 +202,8 @@ person must finish on their phone.
   a drop-in for the kernel interface [verified: https://www.wireguard.com/xplatform/], while its README says to
   prefer the kernel module on Linux because it is faster [verified: https://github.com/WireGuard/wireguard-go].
   Tailscale itself runs a wireguard-go fork in userspace [verified: tailscale `go.mod`].
-- With the home line behind carrier-grade NAT (section 2.8), a home port forward cannot work; WireGuard would need a
-  hub on a public server relaying every packet.
+- If the home line is behind carrier-grade NAT (section 2.8 has the signs; the router's WAN address would confirm),
+  a home port forward cannot work and WireGuard would need a hub on a public server relaying every packet.
 
 ### 2.4 Cloudflare Tunnel + Access
 
