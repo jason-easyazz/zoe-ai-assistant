@@ -4,7 +4,8 @@ title: Panel anywhere - a touch panel linked to its own Zoe from anywhere in the
 date: 2026-10-16
 status: research-only; nothing built, nothing changed on any live system. The design is docs/architecture/panel-anywhere.md.
 description: Research record behind the panel-anywhere design. It covers the Nabu Casa remote-UI pattern read from source (snitun 0.47.0, hass-nabucasa 2.7.0), the adopt candidates for a shared multi-tenant SNI-passthrough relay (frp, snitun, sish, rathole, zrok/OpenZiti, Pangolin/Newt, NetBird, inlets, piko, boringproxy, Cloudflare Tunnel, Headscale per household), certificates (ACME DNS-01 through a narrow relay API, TLS-ALPN-01, Let's Encrypt limits, the Public Suffix List, a private-use name no public CA issues for), pairing and identity on top of the #2082 device-token kiosk credential, the voice WAN budget through a Sydney relay, and why one relay should carry every inbound need.
-builds_on: docs/architecture/panel-remote-access.md + docs/research/panel-remote-access-2026-10.md (PR #2080, owner-only link over Headscale), services/zoe-data/panel_kiosk_credential.py + routers/panel_kiosk.py (#2082), routers/panel_auth.py, routers/panel_provision.py, scripts/setup/remote-access/headscale/ (PR #2083)
+builds_on: docs/architecture/panel-remote-access.md + docs/research/panel-remote-access-2026-10.md (PR #2080, merged; owner-only link over Headscale), services/zoe-data/panel_kiosk_credential.py + routers/panel_kiosk.py (#2082), routers/panel_auth.py, routers/panel_provision.py, routers/ha_control.py
+depends_on: PR #2083 (still open) - scripts/setup/remote-access/headscale/ lands with #2083
 ---
 
 # Panel anywhere: research (2026-10-16)
@@ -265,6 +266,16 @@ What exists [verified: code at origin/main c0c3743ac]:
   `X-Real-IP` equal to a registered `panels.ip_address`; `X-Real-IP` is believed only from a peer inside
   `ZOE_TRUSTED_PROXY_NETS` (default loopback + `172.16.0.0/12`); `lan` scope mode trusts any private address with a
   guest session.
+- `auth.get_current_user`: a request with no session and no valid device token resolves to `guest` (never 401),
+  and `routers/ha_control.py::_require_caller` returns whatever it gets, so `POST /api/ha/control` runs a Home
+  Assistant service for that anonymous guest [verified: `auth.py`, `ha_control.py`]. `require_signed_in` exists for
+  routes that must exclude guests; `ha_control` does not use it.
+- `routers/panel_provision.py` `provision_confirm` inserts a `panel_user_bindings` row (`binding_type='default'`) for
+  the confirming member, and `panel_auth._resolve_device_token_user` then returns that member (`role` "member",
+  `panel_id` set) for the panel's device token. The token's `scopes` column (`chat,voice`) is stored and cached but
+  enforced nowhere, so the token passes every `get_current_user` and `require_signed_in` route as that member
+  [verified: `panel_provision.py`, `panel_auth.py`; `grep scopes`]. Live, read-only count on 2026-10-16: one panel
+  with a `default` binding and an unrevoked, non-expiring token [verified: read-only query; no ids recorded].
 - `auth._is_internal_request`: any loopback TCP peer on zoe-data is an internal caller and passes every
   `require_internal_token` endpoint; asserting another user's identity by header additionally needs the internal token.
 
@@ -360,7 +371,7 @@ RTT + upload bytes / uplink + the first sentence's download.
   shared instance would put every household on one tailnet, and one per household multiplies control servers,
   public names and UDP listeners.
 - It still fits the **operator's own access**: SSH to the operator's boxes and the relay host, an admin path that does
-  not depend on the relay, and the owner's own panel as a stopgap. #2083's bundle is lab-proven (65/65 cells,
+  not depend on the relay, and the owner's own panel as a stopgap. #2083's bundle (still open; it lands with #2083) is lab-proven (65/65 cells,
   v0.29.4 pinned) and only needs deploying [verified: PR #2083 description].
 
 ## 8. One relay for every inbound need

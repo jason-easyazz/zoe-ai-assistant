@@ -4,7 +4,8 @@ title: Panel anywhere - any household pairs a touch panel to its own Zoe and tak
 date: 2026-10-16
 status: design only; nothing built, nothing changed on any live system. Every phase is lab-proven in a hermetic lab first, and each Zoe-side code change ships flag-dark.
 evidence: docs/research/panel-anywhere-2026-10.md (sources tagged verified/secondary/unverified; snitun 0.47.0, hass-nabucasa 2.7.0 and frp v0.71.0 read in source)
-builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link, Wi-Fi onboarding, away mode, panel firewall), services/zoe-data/panel_kiosk_credential.py + routers/panel_kiosk.py (#2082), routers/panel_provision.py + routers/panel_auth.py (pairing, device tokens), scripts/setup/remote-access/headscale/ (PR #2083)
+builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link, Wi-Fi onboarding, away mode, panel firewall), services/zoe-data/panel_kiosk_credential.py + routers/panel_kiosk.py (#2082), routers/panel_provision.py + routers/panel_auth.py (pairing, device tokens), routers/ha_control.py + auth.get_current_user (the guest fallback this design must not inherit)
+depends_on: PR #2083 (still open) - the Headscale bundle scripts/setup/remote-access/headscale/ (the trip stopgap and the lab-harness pattern) lands with #2083; every reference to it below is marked so. #2080 is merged: panel-remote-access.md and its research are on main.
 ---
 
 # Panel anywhere
@@ -47,10 +48,20 @@ builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link,
   get `<hid>.<relay-domain>` through ACME DNS-01: the key is generated on the box, and the TXT record is set by a
   narrow session-master API that can write only the caller's own record (Nabu Casa's method, verified). That
   name has a deliberately narrow surface. It comes later (phase R5), behind its own owner decision.
+- **Client authentication is mandatory from the first live phase (R1), before zoe-data.** The box's relay listener
+  requires a client certificate from the household CA (`ssl_verify_client on`), so a stranger who learns `<hid>` never
+  completes the TLS handshake. Behind it, **relay ingress never maps to `guest`**: a relayed request with no valid
+  device credential is refused (401), never downgraded to the anonymous guest that `auth.get_current_user` hands out
+  on the LAN today (verified: with no credential it returns `guest`, and `routers/ha_control.py::_require_caller`
+  accepts that guest for `POST /api/ha/control`).
+- **A device token never carries a member over the relay.** Today `provision_confirm` binds the confirming member as
+  the panel's `default` user and `_resolve_device_token_user` resolves the token AS that member (verified). Over the
+  relay the token resolves only to the panel principal (guest-class + `panel_id`); anything personal or member-scoped
+  needs fresh member auth at the panel (a voice-verified session or PIN, the owner's "voice is a password" rule).
 - **Identity never comes from an address.**
   - Relayed requests arrive at nginx from the relay client's private Docker address. So the box's nginx marks them
     `X-Zoe-Ingress: relay`, and zoe-data treats them as "no address": the panel proves itself with the #2082 device
-    token or kiosk credential and, from R3, a client certificate (mTLS) on the relay listener.
+    token or kiosk credential, always together with a client certificate (mTLS) on the relay listener.
   - The relay client's local target is the relay nginx listener, **never zoe-data's `127.0.0.1:8000`**. A loopback
     peer passes `_is_internal_request` and so reaches every `require_internal_token` endpoint (header impersonation
     still needs the internal token; research 4).
@@ -61,9 +72,9 @@ builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link,
   ~320 ms and New York ~270 ms (research 6.1). The biggest cheap fix is a keep-alive HTTP session in the voice
   daemon: today every turn pays a new TCP connection plus a TLS handshake, about 2 round trips. Head-of-line
   blocking across the multiplexer is tail latency, not breakage; frp's QUIC transport removes it on the box leg.
-- **The trip: finish Headscale (#2083) for the owner's panel now and build frp in parallel** (section 11). The
+- **The trip: finish Headscale (#2083, still open; the bundle lands with it) for the owner's panel now and build frp in parallel** (section 11). The
   Headscale bundle is lab-proven and needs no Zoe code or change to the server's port 443. It is not throwaway,
-  because it stays as the operator's admin path. The frp fast path (F0, about 2-3 days) is a true subset of this
+  because it stays as the operator's admin path. The frp fast path (F0 + R1, about 3-4 days now that mTLS and the never-guest rule are in R1) is a true subset of this
   design and should follow right behind it.
 
 ## 1. Rules that shape the design
@@ -84,7 +95,7 @@ builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link,
 5. **Never trust loopback, Cloudflare or relay-hop addresses as identity** (#2080 3.3, #2082). The device proves
    itself.
 6. **Never expose zoe-data directly.** The internet reaches only nginx's relay listener. That listener requires a
-   client certificate once R3 lands, and the public name exposes only webhook and OAuth paths.
+   client certificate from R1 (never open, never `guest`), and the public name exposes only webhook and OAuth paths.
 
 ## 2. The stack
 
@@ -94,7 +105,7 @@ builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link,
  kiosk Chromium ─┐                         :443  stream front (ssl_preread, per-IP limits)   frpc (systemd, outbound)
  voice daemon  ──┼─ TLS, SNI <hid>.zoe.internal ──►  frps https vhost (SNI only) ══ mux ══►   │  TLS still encrypted
  kiosk gate    ──┘   (household CA leaf,          ▲   (QUIC or TLS-over-TCP, box leg)          ▼
-                      client cert from R3)        │                                         nginx relay listener (loopback port,
+                      client cert, from R1)       │                                         nginx relay listener (loopback port,
                                                   └── session master plugin (Login,          PROXY-protocol in): TLS ends HERE,
                                                       NewProxy, NewUserConn) = the           X-Zoe-Ingress: relay, client cert
                                                       device registry API                    ──► zoe-data (same app, same rules)
@@ -129,7 +140,7 @@ builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link,
   rotatable (rotation = new name + panels re-learn it through their device-token-authenticated config call).
 - **The household CA** (box-local, created when the relay is enabled) issues:
   - the box's leaf for `<hid>.zoe.internal`, also served on the LAN listener so the home path is identical;
-  - from R3, the panels' client certificates.
+  - the panels' client certificates (signed by hand from the panel's CSR in R1, by the pairing extension from R3).
 
   This is the private CA #2080 4.1 already planned, so the design does not grow a second one. The leaf is
   short-lived and renewed on a timer on the box.
@@ -189,8 +200,9 @@ only by re-enrolling, so no second relay ever claims its `<hid>`.
 1. **A relay listener in the zoe-ui nginx.** It is a separate `server` block on a port published to loopback only,
    taking PROXY protocol from frpc. It:
    - serves the household-CA leaf for `<hid>.zoe.internal`;
-   - sets `X-Zoe-Ingress: relay` absolutely, and `X-Zoe-Client-Cert-Fp $ssl_client_fingerprint` from R3;
-   - uses `ssl_verify_client optional` until R3, then `on`.
+   - requires a client certificate from the household CA (`ssl_verify_client on`) **from R1; there is no optional
+     phase**, so nothing without a panel's certificate reaches zoe-data through the relay;
+   - sets `X-Zoe-Ingress: relay` and `X-Zoe-Client-Cert-Fp $ssl_client_fingerprint` absolutely.
 
    The LAN server blocks clear both headers (`proxy_set_header X-Zoe-Ingress ""`), so a client cannot claim either
    ingress. The LAN listener also serves the same `<hid>.zoe.internal` leaf, so the home path verifies identically.
@@ -199,11 +211,19 @@ only by re-enrolling, so no second relay ever claims its `<hid>`.
      - is never matched against `panels.ip_address`;
      - never satisfies `ZOE_HOUSEHOLD_LISTS_PANEL_SCOPE=lan`;
      - reports `livekit_available` false.
-   - Device token and kiosk credential work unchanged. Unlike Cloudflare, the relay path is end-to-end, so the #2082
-     credential is allowed here, and the docstring rule changes from "never over a public tunnel" to "never over
-     Cloudflare".
-   - From R3, a relayed panel request must also carry a client-certificate fingerprint bound to the same `panel_id`
-     as its token or credential.
+   - **Never `guest`.** A relayed request that carries no valid device token or kiosk credential gets 401. The
+     anonymous-guest fallback in `auth.get_current_user` (and the `ZOE_UNAUTHENTICATED_ROLE` override) never applies
+     to relay ingress. A degraded auth (zoe-auth outage) is also refused over the relay rather than downgraded.
+   - **The device credential resolves to the panel principal only:** guest-class with `panel_id`, whatever
+     `panel_user_bindings` says. A `default` member binding is ignored on relay ingress, so the token cannot act as
+     that member.
+   - **Member-scoped or personal routes need fresh member auth at the panel:** a voice-verified short session or a
+     PIN session. Home control over the relay (`/api/ha/control`, intents that act on the house) needs that verified
+     member too, which is #2080's away-mode D6 enforced at the server.
+   - The kiosk credential is allowed here. Unlike Cloudflare, the relay path is end-to-end, so its docstring rule
+     changes from "never over a public tunnel" to "never over Cloudflare".
+   - Every relayed panel request must carry a client-certificate fingerprint bound to the same `panel_id` as its token
+     or credential.
 3. **Origins.** `https://<hid>.zoe.internal` joins the allowed browser and push-socket origins, derived from
    `ZOE_RELAY_HOSTNAME` rather than hand-edited. Without it the push socket refuses the kiosk (the 2026-07-03
    incident class; lab cell T5 proves it is load-bearing).
@@ -219,12 +239,17 @@ only by re-enrolling, so no second relay ever claims its `<hid>`.
 
 ### 6.1 Pairing (at home, extended)
 
+**Before the pairing extension ships (R1, the owner's own panel):** the operator issues the panel's client
+certificate by hand. The panel generates its key and CSR locally, the operator signs the CSR with the household CA on
+the box, and only the certificate goes back to the panel. The relay listener's mTLS is therefore in force from R1;
+the extension below automates the same step for every household.
+
 Today's flow (`/api/panels/provision/*`) is trust on first use: Zoe generates the 6-character code and hands it to the
 panel over the same unauthenticated LAN channel (`/request` returns it), with certificate checks off, so the code
 proves nothing against a device in the middle (research 4). The extension authenticates the pairing through a channel
 that attacker cannot see, the member's phone camera, and needs no typing and no tap on the panel:
 
-1. **The panel generates, locally:** an ECDSA P-256 key pair (its client-certificate key from R3), a 128-bit random
+1. **The panel generates, locally:** an ECDSA P-256 key pair (its client-certificate key), a 128-bit random
    pairing secret `s`, and a pairing id. Neither the secret nor anything derived from it, other than the MAC check in
    step 5, ever crosses the panel's network channel.
 2. **The panel sends** `/request` with the pairing id and its public key only, and shows a QR encoding
@@ -234,7 +259,7 @@ that attacker cannot see, the member's phone camera, and needs no typing and no 
    fragment and posts `id`, `s` and `fp` to `/confirm`, under the existing rule that confirmation needs a real member
    session.
 4. **Zoe checks** that the public key received in step 2 hashes to `fp`. A mismatch means the panel's channel was
-   tampered with: the attempt is burned and the phone says so. Zoe then signs the panel's client certificate (R3) and
+   tampered with: the attempt is burned and the phone says so. Zoe then signs the panel's client certificate and
    assembles the bundle: device token, household CA root, client certificate, `<hid>.zoe.internal`, relay address name.
 5. **Zoe authenticates the bundle to the panel.** The poll response carries the bundle plus
    `HMAC-SHA256(key = HKDF(s, "zoe.pair.v1"), "zoe->panel" || pairing id || panel public key || bundle)`. The panel
@@ -259,10 +284,11 @@ phone path (R5 public name or the Zoe app); it is not in the first phases.
 
 | Caller | Proof over the relay | Grants |
 |---|---|---|
-| voice daemon | `X-Device-Token` + client certificate (R3) | the panel (guest + `panel_id`), as today |
-| kiosk browser | #2082 kiosk credential (cookie minted from the device token by the loopback gate) + client certificate (R3) | the panel (guest + `panel_id`) |
-| a member at the panel | voice identity / PIN, as at home | that member, under the existing rules |
-| anyone else who knows `<hid>` | nothing: from R3 the TLS handshake fails; before R3 an anonymous guest | before R3, what an anonymous LAN guest reaches today |
+| voice daemon | client certificate + `X-Device-Token` | the panel principal only (guest-class + `panel_id`), even if the panel has a `default` member binding |
+| kiosk browser | client certificate + #2082 kiosk credential (cookie minted from the device token by the loopback gate) | the panel principal only |
+| a member at the panel | client certificate + device credential + a fresh voice-verified session or PIN | that member, for that short session, under the existing rules |
+| a client certificate with no device credential, or a credential with no matching certificate | refused (401) | nothing; never `guest` |
+| anyone else who knows `<hid>` | no client certificate | nothing: the TLS handshake fails (from R1) |
 
 ### 6.3 Revocation and a stolen panel
 
@@ -272,9 +298,12 @@ phone path (R5 public name or the Zoe app); it is not in the first phases.
   2. revoke the client certificate (zoe-data refuses its fingerprint at once, and the short-lived certificate is not
      renewed);
   3. set `panels.is_active = 0`.
-- The panel's disk holds a device token, a client key, the household CA root and `<hid>`. Once revoked, none of them
-  opens anything. No member credential lives on the panel, the CA private key never does, and knowing `<hid>` gets
-  no further than the TLS handshake. If the owner wants the name gone too, rotating `<hid>` is one call.
+- The panel's disk holds a device token, a client key, the household CA root and `<hid>`. Over the relay those
+  give at most the panel principal (guest-class), never a member, because the relay ingress ignores the token's
+  member binding (section 5). That matters: on the home LAN today a device token with a `default` binding IS a member
+  credential (verified; ledger line 2026-10-16), so a panel provisioned the current way carries one. Once revoked,
+  none of them opens anything. The CA private key never lives on the panel, and knowing `<hid>` gets no further than
+  the TLS handshake. If the owner wants the name gone too, rotating `<hid>` is one call.
 - **Household-level revocation** is the session master's job: it suspends the box, and the next `Login` fails. The
   relay knows nothing about panels by design, so it cannot revoke one, and it does not need to.
 - Device tokens get an `expires_at` and client certificates a short life; both are renewed by the panel through a
@@ -321,10 +350,10 @@ Captive portals, WPA2-Enterprise and away mode are unchanged from #2080 5.4 and 
 | Party | Sees | Can do | Cannot |
 |---|---|---|---|
 | Passive relay operator | `<hid>`, public addresses, timing, byte counts | nothing to content | read audio, transcripts or pages (TLS ends on the box) |
-| Malicious relay operator | the same | deny service; route `<hid>` to itself; mint a public certificate for `<hid>.<relay-domain>` (R5 only) | (given an authentic pairing and an untampered panel trust store) present a certificate the panel accepts for `<hid>.zoe.internal`; past R3, complete mTLS as the panel; reach anything on the public name but webhook and OAuth paths (and the box's CT watch reports a foreign certificate) |
+| Malicious relay operator | the same | deny service; route `<hid>` to itself; mint a public certificate for `<hid>.<relay-domain>` (R5 only) | (given an authentic pairing and an untampered panel trust store) present a certificate the panel accepts for `<hid>.zoe.internal`; complete mTLS as the panel; reach anything on the public name but webhook and OAuth paths (and the box's CT watch reports a foreign certificate) |
 | Another household | its own `<hid>` | nothing to yours | claim your name (the plugin assigns names; `ErrRouterConfigConflict` on a live name) |
-| Someone who knows your `<hid>` | that it exists | open a TLS connection | get past the handshake (R3); before R3, more than an anonymous guest |
-| Thief with the panel | until revoked, a guest-level panel | what the panel could do in the house as a guest | anything after revocation; any member action without the member's voice or PIN |
+| Someone who knows your `<hid>` | that it exists | open a TCP connection to the relay | complete the TLS handshake (mTLS from R1); reach zoe-data at all |
+| Thief with the panel | until revoked, the panel principal over the relay (guest-class) | what a guest at the panel may do: household lists, guest chat, no home control | act as any member (the relay ignores the token's member binding; member routes need fresh voice or PIN); home control; anything after revocation |
 
 ## 9. One relay for every inbound need
 
@@ -342,7 +371,7 @@ scope for this record.
 
 Every cell has a negative control that must fail, and a cell that only proves rejection also has a positive control
 that must succeed. "Baseline" marks an extra comparison; it is never the only control in a cell. The
-lab is hermetic and follows #2083's harness: Docker on an internal network, with a `MemAvailable` gate before starting
+lab is hermetic and follows #2083's harness (lands with #2083): Docker on an internal network, with a `MemAvailable` gate before starting
 and teardown asserted.
 
 ### F0 / R0 - the relay in the lab (two fake households)
@@ -363,20 +392,33 @@ The lab runs:
 | T6 | the frpc config test passes for the generated config | the fixture pointing at `127.0.0.1:8000` fails the test |
 | T7 | box offline: the gate shows "home offline" (`unrecognized_name`) | relay offline: it shows "can't reach the relay"; both up: green |
 | T9 | frpc with `trustedCaFile` refuses a relay presenting a wrong certificate | without `trustedCaFile` it connects (the setting is load-bearing) |
+| T10 | with a client certificate and the device token, a relayed request is the panel principal (positive control) | no client certificate: the TLS handshake fails; a certificate but no device credential: 401, and `POST /api/ha/control` is refused, never run as `guest` (the same credential-less request on the LAN listener is accepted today, which proves the probe reaches the route) |
+| T11 | a device token whose panel has a `default` member binding resolves, over the relay, to the panel principal only; a fresh voice-verified or PIN session then reaches that member's routes | the same token on the LAN listener resolves as the member today (proves the binding is real in the fixture); over the relay a member route without the fresh session gets 401/403 |
 | A1 | the plugin-imposed bandwidth cap holds when frpc asks for more | with the plugin's overwrite disabled, the client's own limit applies (the overwrite is what enforces it) |
 
 ### R1 - the owner's household live (the fast path, section 11)
+
+Prerequisite cell, moved here from R3 because mTLS is mandatory from R1:
+
+| Cell | Test | Negative control |
+|---|---|---|
+| C3 | kiosk Chromium presents its client certificate with no prompt (`AutoSelectCertificateForUrls`) | with the policy removed, the handshake fails, so `ssl_verify_client on` is load-bearing |
+
+If C3 fails, R1 waits for the alternative: a loopback forwarder on the panel (the kiosk gate's process) that presents
+the certificate for the kiosk's connections. R1 never ships with the relay listener open.
 
 Steps:
 
 1. recreate the drifted containers;
 2. add the stream front or a second address on the relay host;
 3. deploy frps + a single-household plugin (one relay secret);
-4. create the household CA, the nginx relay listener and frpc on the box;
-5. on the panel: hosts switch, CA root, URLs, `VERIFY_SSL=true`;
+4. create the household CA, the nginx relay listener (`ssl_verify_client on`) and frpc on the box;
+5. on the panel: hosts switch, CA root, URLs, `VERIFY_SSL=true`, and a client certificate signed by hand from the
+   panel's own CSR (section 6.1);
 6. set the kiosk credential flag on, `ZOE_RELAY_INGRESS` on, and `ZOE_RELAY_HOSTNAME`.
 
-Cells: T1-T7 and T9 re-run against the live relay host on a lab "panel" before the real one. Then L6 from #2080, the
+Cells: T1-T7, T9, T10, T11 and C3 run against the live relay host on a lab "panel" before the real one. R1 does
+not go live without T10, T11 and C3 passing. Then L6 from #2080, the
 time-to-first-audio comparison against the LAN baseline, plus the replay gate.
 
 ### R2 - many households
@@ -388,13 +430,12 @@ time-to-first-audio comparison against the LAN baseline, plus the replay gate.
   exactly those ten as failed (it counts real sessions, not attempts). Baseline: frps memory with zero clients.
 - Isolation cell: T1 against a registry of 500 households.
 
-### R3 - pairing extension + mTLS
+### R3 - pairing extension (automated client certificates for every household)
 
 | Cell | Test | Negative control |
 |---|---|---|
 | P1 | pairing returns CA root + client certificate; relayed requests carry a fingerprint bound to the panel | a valid client certificate from household A presented with household B's device token is refused |
 | P2 | through a transparent lab proxy that forwards every pairing message unchanged, pairing completes (positive control: the proxy itself breaks nothing) | the same proxy made active at BOTH ends - it replaces the panel's public key in `/request`, the CA root, the client certificate and the device token in the bundle, and replays a bundle from an earlier run - and every variant fails: Zoe refuses the key whose hash is not the QR's `fp`, the panel refuses every bundle whose MAC does not verify, and nothing is stored on either side |
-| C3 | kiosk Chromium presents its client certificate with no prompt (`AutoSelectCertificateForUrls`) | with the policy removed, the handshake fails, so `ssl_verify_client on` is load-bearing |
 | T8 | revoke the token: daemon 401, kiosk credential dead next request; revoke the certificate: handshake or fingerprint refused | before revocation the same calls succeed |
 
 ### R4 - voice
@@ -421,13 +462,13 @@ registration is accepted, which proves the check is what refuses it.
 
 ## 11. The owner's trip: fast path vs Headscale
 
-| | Headscale stopgap (#2083) | frp fast path (F0 then R1) |
+| | Headscale stopgap (#2083, lands with #2083) | frp fast path (F0 then R1) |
 |---|---|---|
 | Ready | bundle lab-proven 65/65, pinned v0.29.4, clients already installed on both boxes | to build: the lab (F0), the nginx relay listener (a zoe-ui config PR), the `ZOE_RELAY_INGRESS` flag (a small zoe-data PR), frpc unit, the household CA |
 | Touches the relay host's 443 | no (one grey-cloud DNS name, UDP 3478) | yes (stream front), or a second public address |
 | Zoe code | none; the panel's tailnet address is registered (#2080 P1 interim) | two flag-dark PRs; the kiosk credential (#2082) turned on |
 | Part of the product | no; it stays as the operator's admin path (SSH, an access path independent of the relay) | yes: every piece is R1 of this design; only the single-household plugin secret is replaced in R2 |
-| Days | about 1 (operator steps) | about 2-3 including the lab and both PRs |
+| Days | about 1 (operator steps) | about 3-4 including the lab, both PRs, the hand-signed client certificate and cells T10, T11, C3 |
 | Shared work that carries over either way | recreate the drifted containers; apply the #2082 panel firewall (and narrow it on `tailscale0`) and the kiosk gate; the household/private CA; the panel's `/etc/hosts` home/away switch | the same |
 
 **Recommendation:**
@@ -453,7 +494,8 @@ stream front, which changes how that server's existing sites are reached.
 | D6 | One relay for every inbound need | **yes**: one device registry = session master; every interactive path to a household's box goes through the SNI relay with TLS to the box; no second relay with its own encryption (section 9) |
 | D7 | The trip | **Headscale now** (shared work first), frp F0 the same week, the panel moves to the relay after R1's cells pass |
 | D8 | Household CA custody | box-local intermediate for issuing; root generated on the box and exported once to the owner's offline backup, then removed (R3) |
-| D9 | mTLS on the relay listener | **required** once cell C3 passes; until then `optional` plus the device credential |
+| D9 | mTLS on the relay listener | **required from R1**, no optional phase; relay ingress never maps to `guest`; if C3 fails, R1 waits for the loopback forwarder |
+| D11 | A device token's member binding | **ignored over the relay** (panel principal only; members re-authenticate by voice or PIN). Whether to drop it on the LAN too is the ledger line of 2026-10-16 |
 | D10 | Per-household limits | start at 20 Mbit/s and 64 concurrent connections per household; revisit from R2's load cell |
 
 ## 13. Risks and what this does not decide
