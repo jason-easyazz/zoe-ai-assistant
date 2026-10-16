@@ -6,6 +6,7 @@ import logging
 import os
 from fastapi import Request, APIRouter, Depends
 
+import panel_kiosk_credential
 import panel_principal
 from auth import get_current_user
 from database import get_db
@@ -46,20 +47,26 @@ async def get_skybridge_status(
         try:
             from db_pool import get_db_ctx  # lazy: only bound-panel lookups touch the pool
 
-            # Device check (anti-enumeration): the display identity is only served
-            # to the machine REGISTERED at this panel's IP — a guest elsewhere on
-            # the LAN can't walk panel_ids to learn household names.
-            # X-Real-IP is set ABSOLUTELY by nginx ($remote_addr) — trustworthy.
-            # X-Forwarded-For is APPENDED to, so its leftmost value is client-
-            # supplied and spoofable; never use it for this check.
-            client_ip = str(request.headers.get("x-real-ip", "") or "").strip()                 or (request.client.host if request.client else "")
+            # Device check (anti-enumeration): the display identity is only served to the PANEL ITSELF, so a guest elsewhere
+            # on the LAN can't walk panel_ids to learn household names. The panel is (a) the browser holding this panel's kiosk
+            # credential (panel_kiosk_credential, flag-dark: survives an address change - private link, another Wi-Fi), or
+            # (b) the machine at the panel's REGISTERED address. The address is nginx's X-Real-IP, trusted only from a proxy of
+            # ours (panel_principal.trusted_client_ip): :8000 answers on the LAN, where a caller can write X-Real-IP itself.
+            # X-Forwarded-For is APPENDED to (client-supplied leftmost value) and is never used. A request that crossed the
+            # Cloudflare tunnel is never the panel by address. Only ``is_active`` is checked here, not ``allow_guest``: this
+            # is DISPLAY identity for the panel itself (unchanged from before the credential), while ``allow_guest`` gates
+            # what a guest may DO (panel_principal.is_panel_guest).
+            via_tunnel = panel_principal._via_public_tunnel(request)
+            client_ip = "" if via_tunnel else panel_principal.trusted_client_ip(request)
+            kiosk_panel = panel_kiosk_credential.credential_panel_id(request)
             async with get_db_ctx() as db:
                 panel = await db.fetchrow(
                     "SELECT ip_address, is_active FROM panels WHERE panel_id = $1",
                     panel_id,
                 )
                 row = None
-                if panel and panel["is_active"] and panel["ip_address"] and client_ip == str(panel["ip_address"]):
+                at_address = bool(panel and panel["ip_address"] and client_ip and client_ip == str(panel["ip_address"]))
+                if panel and panel["is_active"] and (kiosk_panel == panel_id or at_address):
                     row = await db.fetchrow(
                         "SELECT b.user_id, u.name FROM panel_user_bindings b "
                         "LEFT JOIN users u ON u.id = b.user_id "
