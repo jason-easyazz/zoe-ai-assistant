@@ -254,7 +254,8 @@ def test_no_admin_override_for_reading_another_members_recordings(env):
     register(env, DEV_A, "ann")
     ra = upload(env, DEV_A, key="a1").json()["id"]
     env.as_(ADM)
-    assert env.client.get("/api/omi/recordings").json() == {"recordings": [], "empty_transcript_held": 0}
+    body = env.client.get("/api/omi/recordings").json()
+    assert body["recordings"] == [] and body["empty_transcript_held"] == 0 and body["transcription"]["backlog"] == 0
     for r in (env.client.get(f"/api/omi/recordings/{ra}"), env.client.patch(f"/api/omi/recordings/{ra}", json={"keep_audio": True}),
               env.client.delete(f"/api/omi/recordings/{ra}")):
         assert r.status_code == 404
