@@ -146,7 +146,9 @@ def server():
         if os.environ.get("CI"):
             raise
         pytest.skip("no loopback in this sandbox: %s" % exc)
-    g = _gate(http=FakeHttp())
+    http = FakeHttp(health=0)
+    g = _gate(http=http)
+    g.http = http
     srv = gate_mod.serve(g, 0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield g, srv.server_address[1]
@@ -182,12 +184,23 @@ def test_server_answers_only_as_itself(server):
 
 def test_server_go_waits_for_zoe_then_hands_off(server):
     g, port = server
-    assert _get(port, "/go")[:1] == (303,) and _get(port, "/go")[1]["Location"] == "/"     # not ready: back to the status page
+    status, headers, _ = _get(port, "/go")
+    assert (status, headers["Location"]) == (303, "/")              # Zoe down: back to the status page
+    g.http.health = 200
     g.refresh()
-    snap = json.loads(_get(port, "/status")[2])
-    assert snap["ready"] is True
+    assert json.loads(_get(port, "/status")[2])["ready"] is True
     status, headers, _ = _get(port, "/go")
     assert (status, headers["Location"]) == (303, KIOSK_URL)
+
+
+def test_server_go_never_hands_off_on_a_stale_ready(server):
+    g, port = server
+    g.http.health = 200
+    g.refresh()
+    g._snapshot["checked_at"] = 0                                   # "ready", but long ago...
+    g.http.health = 0                                               # ...and Zoe has gone since
+    status, headers, _ = _get(port, "/go")
+    assert (status, headers["Location"]) == (303, "/")
 
 
 # ---- the launcher ---------------------------------------------------------------------------------------------------------------

@@ -46,6 +46,7 @@ log = logging.getLogger("zoe-kiosk-gate")
 
 DEFAULT_CONFIG = "/opt/TouchKio/config.json"
 PROBE_INTERVAL_S = 3.0
+READY_INTERVAL_S = 30.0
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
 
 SENTENCES = dict(
@@ -193,11 +194,14 @@ class Gate:
 
     def run_probes_forever(self) -> None:
         while True:
+            ready = False
             try:
-                self.refresh()
+                ready = bool(self.refresh().get("ready"))
             except Exception as exc:  # noqa: BLE001 - the loop must outlive any one probe
                 log.warning("probe failed: %s", type(exc).__name__)
-            time.sleep(PROBE_INTERVAL_S)
+            # Every few seconds while something is wrong; slowly once Zoe answers (the browser is with Zoe by then, and
+            # /go re-probes a snapshot older than PROBE_INTERVAL_S before it hands off, so it never acts on a stale "ready").
+            time.sleep(READY_INTERVAL_S if ready else PROBE_INTERVAL_S)
 
     # -- hand-off -----------------------------------------------------------------------------------------------------------
     def handoff(self) -> tuple[int, dict, bytes]:
@@ -322,6 +326,8 @@ def make_handler(gate: Gate, port: int):
             if path == "/status":
                 return self._send(200, dict([("Content-Type", "application/json")]), json.dumps(gate.snapshot()).encode())
             if path == "/go":
+                if time.time() - gate.snapshot().get("checked_at", 0) > PROBE_INTERVAL_S:
+                    gate.refresh()
                 if not gate.snapshot().get("ready"):
                     return self._send(303, dict(Location="/"), b"")
                 status, headers, body = gate.handoff()
