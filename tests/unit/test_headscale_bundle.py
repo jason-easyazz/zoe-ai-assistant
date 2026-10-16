@@ -11,7 +11,7 @@ Negative controls (each turned this file red, then reverted):
   - the HTTP publish changed from 127.0.0.1:18080 to 0.0.0.0:18080
   - a second auto-approved route, or the /32 widened to a /24
   - `derp.urls` given Tailscale's public map, `magic_dns: true`
-  - a panel rule that adds a port beyond 443/8007
+  - a panel rule that adds a port beyond 443 (8007 was dropped deliberately)
   - `http2 on;` or the bare `$connection_upgrade` name in the nginx file
   - a public-looking IPv4, a hosting-provider/region/co-tenancy detail / a hskey- or tskey- token in any bundle file
 """
@@ -131,7 +131,7 @@ def test_acl_intent_is_exactly_this():
         "action": "accept",
         "proto": "tcp",
         "src": ["tag:zoe-panel"],
-        "dst": ["192.168.1.218:443,8007"],
+        "dst": ["192.168.1.218:443"],
     }
     assert ssh == {
         "action": "accept",
@@ -146,7 +146,8 @@ def test_acl_intent_is_exactly_this():
 def test_acl_tests_block_denies_the_extra_ports():
     acl = _hujson(ACL)
     first = next(t for t in acl["tests"] if t["src"] == "tag:zoe-panel")
-    assert first["accept"] == ["192.168.1.218:443", "192.168.1.218:8007"]
+    assert first["accept"] == ["192.168.1.218:443"]
+    assert "192.168.1.218:8007" in first["deny"]  # no 8007 grant
     assert "192.168.1.218:9999" in first["deny"]  # the lab's extra port
 
 

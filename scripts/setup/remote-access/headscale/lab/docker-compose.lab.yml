@@ -77,8 +77,8 @@ services:
         aliases:
           - hs.lab.test
 
-  # Stands in for the Zoe box's LAN address (192.168.1.218): 443 and 8007 are the
-  # allowed ports, 9999 is the extra port the ACL must NOT open.
+  # Stands in for the Zoe box's LAN address (192.168.1.218): 443 is the
+  # only allowed port; 8007 and 9999 are alive but must NOT be reachable from the panel.
   dummy:
     image: docker.io/library/alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
     command:

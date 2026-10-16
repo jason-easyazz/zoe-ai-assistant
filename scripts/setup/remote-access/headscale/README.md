@@ -248,7 +248,7 @@ tailscale netcheck                            # UDP: true (STUN via UDP 3478), N
 The refusals (each must hang or fail within a few seconds):
 
 ```bash
-nc -zv -w 5 192.168.1.218 22                  # not 443/8007: refused by the ACL
+nc -zv -w 5 192.168.1.218 22                  # not 443: refused by the ACL (so is 8007)
 nc -zv -w 5 $(tailscale ip -4 zoe-box) 443    # the box's own tailnet address: refused
 ```
 
@@ -261,7 +261,7 @@ Default deny. `config/acl.hujson`:
 
 | from | to | ports |
 |---|---|---|
-| `tag:zoe-panel` | `192.168.1.218` (via the box's route) | tcp 443, 8007 |
+| `tag:zoe-panel` | `192.168.1.218` (via the box's route) | tcp 443 only |
 | `tag:zoe-box`, `group:owner` | `tag:zoe-panel` | tcp 22 (the panel's own sshd; Tailscale SSH is not enabled) |
 
 Route auto-approval: `192.168.1.218/32`, only from `tag:zoe-box`. An approver
@@ -297,9 +297,11 @@ onto a policy whose tests fail only logs a warning and serves it, which is exact
 the check must pass before the file is swapped in.) Do **not** edit
 `config/acl.hujson` in place and send `SIGHUP`; use the flow above.
 
-The `8007` rule assumes the Jetson's 8007 listener answers on its LAN address. It
-does today (`ss -ltn` shows 443 and 8007 on `0.0.0.0`); if 8007 is ever re-bound to
-loopback, the panel loses it over the tailnet exactly as it would on the LAN.
+There is deliberately no `8007` grant. The Home Assistant bridge on 8007 is published only
+on the box's loopback (`127.0.0.1:8007`) in production, and the panel never uses it (its
+voice route is direct), so granting it would open a port the panel has no use for. The
+lab keeps an 8007 listener alive on the dummy purely as a negative control: the panel is
+refused there.
 
 ## Trust model
 
@@ -319,7 +321,7 @@ controls the tailnet. Mitigations, in order of value:
    keep their own authentication; keep TLS verification on in the panel (ideally
    pin the box's certificate) so a route hijack yields nothing. On the Jetson, add
    a host firewall rule that only accepts `tailscale0` traffic from the panel's
-   tailnet address to tcp 443/8007 and drops the rest of `tailscale0`.
+   tailnet address to tcp 443 and drops the rest of `tailscale0`.
 2. **No open registration; short single-use keys.** Keys are tagged, single-use,
    1 h. Revoke leftovers: `hs preauthkeys list`, `hs preauthkeys expire --id <ID>`.
 3. **Watch the node list.** `hs nodes list` should show exactly: zoe-box,
@@ -407,7 +409,8 @@ It refuses to start below 1500 MB `MemAvailable`, aborts if that falls under 600
 and tears down containers, network and volume afterwards (and asserts they are
 gone). What it proves, with a positive control beside every refusal:
 
-- the panel reaches the dummy on **443 and 8007** through the box's subnet route,
+- the panel reaches the dummy on **443** through the box's subnet route, and is refused on
+  8007 (alive on the dummy, not granted),
   with every peer path forced through the embedded DERP over nginx;
 - the panel is **refused** on an extra port (9999) and on direct access to the box
   and the owner laptop; box and owner reach the panel on 22 only; and the refusal is

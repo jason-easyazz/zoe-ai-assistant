@@ -43,7 +43,7 @@ import uuid
 import wave
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import user_erase_gate as erase_gate
 from typed_env import env_bool, env_int, env_str
@@ -60,7 +60,10 @@ SILENCE_PEAK = 300                # int16 peak under this = room noise: not sent
 MAX_ATTEMPTS = 3
 STALE_CLAIM_S = 30 * 60
 POLL_S = 60.0
-VOICE_BUSY_S = 45.0
+VOICE_BUSY_S = 45.0              # a voice turn this recent = "in flight": it aborts/holds a running job
+HOLD_MAX_S = 300.0               # a RUNNING job waits out a transient closure (voice turn / low RAM) this long before it gives up
+HOLD_POLL_S = 5.0
+DEFERRED_LOG_EVERY_S = 600.0     # OMI_TRANSCRIBE_DEFERRED is logged at most once per reason per 10 minutes
 NIGHT_START, NIGHT_END = (2, 30), (4, 30)      # household-local; matches the 12B night window
 
 DEFAULT_RETENTION_DAYS = 7
@@ -98,8 +101,26 @@ def keep_audio_default() -> bool:
     return env_bool("ZOE_OMI_KEEP_AUDIO", default=False)
 
 
+#: Default RAM floor for STARTING a recording, MB of ``MemAvailable``. See ``docs/architecture/omi-integration-plan.md`` section 4
+#: ("The RAM floor") for the measurement this number comes from.
+DEFAULT_MIN_MEM_MB = 800
+
+
 def min_mem_mb() -> int:
-    return max(0, env_int("ZOE_OMI_MIN_MEM_MB", 1500))
+    """``ZOE_OMI_MIN_MEM_MB`` - the MemAvailable a NEW recording needs before it is claimed. A job already running only yields below
+    HALF of this (``continue_floor_mb``): the incremental cost of a chunk is already inside the process, so a dip between the two
+    levels must not throw away the chunks transcribed so far."""
+    return max(0, env_int("ZOE_OMI_MIN_MEM_MB", DEFAULT_MIN_MEM_MB))
+
+
+def continue_floor_mb() -> int:
+    return min_mem_mb() // 2
+
+
+def idle_s() -> float:
+    """``ZOE_OMI_IDLE_S`` - a NEW recording is only claimed once the panels have had no voice turn for this long (default 120 s), so the
+    ~2-3 minute job starts in a quiet spell. A running job only yields to a turn in the last ``VOICE_BUSY_S``."""
+    return float(max(0, env_int("ZOE_OMI_IDLE_S", 120)))
 
 
 def _iso(dt: datetime) -> str:
@@ -137,30 +158,117 @@ def mem_available_mb() -> Optional[float]:
     return None
 
 
-def voice_busy(now_mono: Optional[float] = None) -> bool:
-    """A panel voice turn happened in the last ``VOICE_BUSY_S`` seconds. Reads the voice router's session table WITHOUT importing it."""
+def last_voice_age_s(now_mono: Optional[float] = None) -> Optional[float]:
+    """Seconds since the newest panel voice turn, or None when there has been none. Reads the voice router's session table WITHOUT
+    importing it."""
     mod = sys.modules.get("routers.voice_tts")
     sessions = getattr(mod, "_VOICE_SESSIONS", None) if mod else None
     if not sessions:
-        return False
+        return None
     t = time.monotonic() if now_mono is None else now_mono
     try:
-        return any((t - float(e.get("last_at", -1e9))) < VOICE_BUSY_S for e in list(sessions.values()))
+        return min(t - float(e.get("last_at", -1e9)) for e in list(sessions.values()))
     except Exception:  # noqa: BLE001
-        return False
+        return None
 
 
-def may_transcribe_now(now: Optional[datetime] = None) -> tuple[bool, str]:
+def voice_busy(now_mono: Optional[float] = None) -> bool:
+    """A panel voice turn happened in the last ``VOICE_BUSY_S`` seconds."""
+    age = last_voice_age_s(now_mono)
+    return age is not None and age < VOICE_BUSY_S
+
+
+# Gate reasons: the human string ``may_transcribe_now`` returns, and the stable code the log line / API use.
+WHY_VOICE = "voice turn in flight"
+WHY_NOT_IDLE = "panel not idle"
+WHY_MEM_PREFIX = "MemAvailable"
+
+
+def reason_code(why: str) -> str:
+    if why.startswith(WHY_MEM_PREFIX):
+        return "low_memory"
+    if why == WHY_VOICE:
+        return "voice_active"
+    if why == WHY_NOT_IDLE:
+        return "panel_not_idle"
+    if why == "night window":
+        return "night_window"
+    if why == "flag off":
+        return "flag_off"
+    return "other"
+
+
+def is_transient(why: str) -> bool:
+    """A closure a RUNNING job should wait out (a voice turn ends, RAM comes back) rather than abort on. The flag and the night
+    window are decisions, not weather: they end the job at once."""
+    return reason_code(why) in ("low_memory", "voice_active", "panel_not_idle")
+
+
+def may_transcribe_now(now: Optional[datetime] = None, *, continuing: bool = False) -> tuple[bool, str]:
+    """Is it OK to run Moonshine on a chunk right now? ``continuing=False`` is the START gate (claiming a new recording): full RAM
+    floor and a panel that has been idle for ``ZOE_OMI_IDLE_S``. ``continuing=True`` is the per-chunk gate of a job already running:
+    half the floor and only the 45 s voice-turn window, so a brief dip does not discard the chunks already transcribed."""
     if not enabled():
         return False, "flag off"
     if night_window(now):
         return False, "night window"
     if voice_busy():
-        return False, "voice turn in flight"
+        return False, WHY_VOICE
+    if not continuing:
+        age = last_voice_age_s()
+        if age is not None and age < idle_s():
+            return False, WHY_NOT_IDLE
+    floor = continue_floor_mb() if continuing else min_mem_mb()
     mem = mem_available_mb()
-    if mem is not None and mem < min_mem_mb():
-        return False, f"MemAvailable {mem:.0f} MB < {min_mem_mb()} MB"
+    if mem is not None and mem < floor:
+        return False, f"{WHY_MEM_PREFIX} {mem:.0f} MB < {floor} MB"
     return True, ""
+
+
+# --- deferral visibility ------------------------------------------------------------------------------------------
+# One process, one loop: module state is the truth for "is transcription waiting, and why". Counts + codes only - never content.
+_deferred: dict[str, Any] = {"reason": None, "since": None}
+_deferred_logged: dict[str, float] = {}
+
+
+def deferred_state() -> dict:
+    return {"deferred": _deferred["reason"] is not None, "reason": _deferred["reason"], "since": _deferred["since"],
+            "mem_available_mb": None if (m := mem_available_mb()) is None else int(m), "mem_floor_mb": min_mem_mb()}
+
+
+def _clear_deferred() -> None:
+    _deferred["reason"], _deferred["since"] = None, None
+
+
+async def note_deferred(why: str, *, now_mono: Optional[float] = None) -> None:
+    """Record that the gate is closed (``/api/omi/recordings`` shows it) and log it at INFO - at most once per reason per
+    ``DEFERRED_LOG_EVERY_S``. Silent when nothing is waiting: a closed gate with an empty backlog is not news. The expected daily
+    closures (night window, flag off) are state only, never log noise."""
+    code = reason_code(why)
+    if code == "flag_off":
+        _clear_deferred()                            # the feature is off: nothing is "waiting", so no stale reason may linger
+        return
+    if code == "other":
+        return
+    try:
+        n = await backlog_count()
+    except Exception:  # noqa: BLE001 - diagnostics must never break the loop
+        return
+    if n <= 0:
+        _clear_deferred()
+        return
+    if _deferred["reason"] != code:
+        _deferred["reason"], _deferred["since"] = code, _iso(_now())
+    if code == "night_window":
+        return
+    t = time.monotonic() if now_mono is None else now_mono
+    last = _deferred_logged.get(code)
+    if last is not None and t - last < DEFERRED_LOG_EVERY_S:
+        return
+    _deferred_logged[code] = t
+    mem = mem_available_mb()
+    logger.info("OMI_TRANSCRIBE_DEFERRED reason=%s avail=%s floor=%d backlog=%d", code,
+                "unknown" if mem is None else int(mem), min_mem_mb(), n)
 
 
 # --- WAV / chunking (pure) --------------------------------------------------------------------------------------
@@ -198,10 +306,24 @@ def _samples(pcm: bytes) -> "array.array":
     return a
 
 
+def _quietest_cut(a: "array.array", pos: int, end: int, search: int, win: int) -> int:
+    """The sample index in the last ``search`` samples before ``end`` (not before ``pos + win``) that centres the quietest ``win`` window."""
+    lo = max(pos + win, end - search)
+    best, best_e = end, None
+    i = lo
+    while i + win <= end:
+        e = sum(abs(v) for v in a[i:i + win])
+        if best_e is None or e < best_e:
+            best, best_e = i + win // 2, e
+        i += win
+    return best
+
+
 def chunk_pcm(pcm: bytes, *, rate: int = SAMPLE_RATE, target_s: float = CHUNK_S, search_s: float = SPLIT_SEARCH_S,
               win_ms: int = 100) -> list[tuple[int, int]]:
     """Cut PCM16 into ``(start_byte, end_byte)`` chunks of about ``target_s``, each cut placed at the QUIETEST 100 ms window within the
-    last ``search_s`` of the chunk so a word is not sliced in half. Contiguous, covering, never empty."""
+    last ``search_s`` of the chunk so a word is not sliced in half. Contiguous, covering, never empty. (The whole-buffer form, for tests
+    and short audio; ``iter_wave_chunks`` is the streaming equivalent the transcriber uses - same cuts.)"""
     a = _samples(pcm)
     n = len(a)
     target = int(target_s * rate)
@@ -214,18 +336,40 @@ def chunk_pcm(pcm: bytes, *, rate: int = SAMPLE_RATE, target_s: float = CHUNK_S,
         if end >= n:
             end = n
         else:
-            lo = max(pos + win, end - search)
-            best, best_e = end, None
-            i = lo
-            while i + win <= end:
-                e = sum(abs(v) for v in a[i:i + win])
-                if best_e is None or e < best_e:
-                    best, best_e = i + win // 2, e
-                i += win
-            end = best
+            end = _quietest_cut(a, pos, end, search, win)
         out.append((pos * 2, end * 2))
         pos = end
     return out
+
+
+def iter_wave_chunks(w: Any, *, target_s: float = CHUNK_S, search_s: float = SPLIT_SEARCH_S, win_ms: int = 100) -> Iterator[bytes]:
+    """The same chunks as ``chunk_pcm`` but STREAMED from an open ``wave`` reader: never more than one chunk (~640 KB) plus the leftover
+    tail (<= ``search_s``) is held, so a 10-minute recording costs the same RAM as a 20-second one (the old path held the file, a
+    copy of its PCM and an array of it: ~60 MB transient per 600 s recording). ``w`` needs ``getframerate/getnframes/readframes``."""
+    rate = w.getframerate()
+    total = w.getnframes()
+    target = int(target_s * rate)
+    search = int(search_s * rate)
+    win = max(1, int(rate * win_ms / 1000))
+    buf = b""
+    consumed = 0
+    while True:
+        want = target - len(buf) // 2
+        if want > 0 and consumed < total:
+            got = w.readframes(min(want, total - consumed))
+            if not got:                                   # header promised more than the file holds: treat what we have as the end
+                total = consumed
+            consumed += len(got) // 2
+            buf += got
+        have = len(buf) // 2
+        if have == 0:
+            return
+        if consumed >= total and have <= target:
+            yield buf
+            return
+        cut = _quietest_cut(_samples(buf[:target * 2]), 0, target, search, win)
+        yield buf[:cut * 2]
+        buf = buf[cut * 2:]
 
 
 def peak(pcm: bytes) -> int:
@@ -233,19 +377,43 @@ def peak(pcm: bytes) -> int:
     return max(map(abs, a)) if len(a) else 0
 
 
+def _measure_reader(w: Any) -> dict:
+    rate, ch, width, n = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()
+    pk, sumsq, count = 0, 0, 0
+    if width == 2:
+        left = n
+        while left > 0:                                    # one second at a time: never the whole file
+            a = _samples(w.readframes(min(left, max(rate, 1))))
+            if not len(a):
+                break
+            left -= len(a)
+            count += len(a)
+            pk = max(pk, max(map(abs, a)))
+            sumsq += sum(v * v for v in a)
+    rms = (sumsq / count) ** 0.5 if count else 0.0
+    return {"seconds": round(n / rate, 1) if rate else 0.0, "peak": int(pk), "rms": round(rms, 1), "rate": rate, "channels": ch, "width": width}
+
+
+_UNREADABLE = {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0}
+
+
 def measure_wav(wav: bytes) -> dict:
     """What the audio actually is, for the empty-transcript WARNING: ``{"seconds", "peak", "rms", "rate", "channels", "width"}``.
     Never raises (an unreadable WAV measures as zeros) - it is diagnostics, not a gate. Peak/RMS are int16 units (full scale 32768)."""
     try:
         with wave.open(io.BytesIO(wav)) as w:
-            rate, ch, width, n = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()
-            pcm = w.readframes(n)
+            return _measure_reader(w)
     except (wave.Error, EOFError):
-        return {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0}
-    a = _samples(pcm) if width == 2 else array.array("h")
-    pk = max(map(abs, a)) if len(a) else 0
-    rms = (sum(v * v for v in a) / len(a)) ** 0.5 if len(a) else 0.0
-    return {"seconds": round(n / rate, 1) if rate else 0.0, "peak": int(pk), "rms": round(rms, 1), "rate": rate, "channels": ch, "width": width}
+        return dict(_UNREADABLE)
+
+
+def measure_wav_file(path: str) -> dict:
+    """``measure_wav`` over a file on disk, streamed (the empty-transcript path must not load a 19 MB recording to say it was quiet)."""
+    try:
+        with wave.open(path) as w:
+            return _measure_reader(w)
+    except (wave.Error, EOFError, OSError):
+        return dict(_UNREADABLE)
 
 
 # --- rows -----------------------------------------------------------------------------------------------------------
@@ -546,23 +714,23 @@ def _chunk_wav(pcm: bytes, tmpdir: str, idx: int) -> str:
     return p
 
 
-async def transcribe_audio_bytes(wav: bytes, *, gate=None, pause_s: float = 0.4, stats: Optional[dict] = None) -> str:
-    """Moonshine over a long WAV in ~20 s chunks cut at the quietest point. Silent chunks are skipped. ``gate()`` is asked before every
-    chunk (night window / voice turn / RAM) and aborts the job by raising ``GateClosed``; the caller leaves the recording pending.
-    ``stats`` (optional) is filled with ``chunks`` (total) and ``voiced`` (sent to Moonshine, i.e. peak >= ``SILENCE_PEAK``)."""
-    with wave.open(io.BytesIO(wav)) as w:
-        pcm = w.readframes(w.getnframes())
+async def transcribe_wave(w: Any, *, gate=None, pause_s: float = 0.4, stats: Optional[dict] = None) -> str:
+    """Moonshine over an open ``wave`` reader in ~20 s chunks cut at the quietest point, STREAMED (``iter_wave_chunks``). Silent chunks
+    are skipped. ``gate()`` (sync or async) is asked before every chunk and aborts the job by raising ``GateClosed``; the caller leaves
+    the recording pending. ``stats`` (optional) is filled with ``chunks`` (total) and ``voiced`` (sent to Moonshine, peak >= ``SILENCE_PEAK``)."""
     parts: list[str] = []
     st = stats if stats is not None else {}
     st["chunks"], st["voiced"] = 0, 0
     with tempfile.TemporaryDirectory(prefix="zoe-omi-") as tmp:
-        for i, (a, b) in enumerate(chunk_pcm(pcm)):
+        for i, piece in enumerate(iter_wave_chunks(w)):
             st["chunks"] += 1
             if gate is not None:
-                ok, why = gate()
+                verdict = gate()
+                if asyncio.iscoroutine(verdict):
+                    verdict = await verdict
+                ok, why = verdict
                 if not ok:
                     raise GateClosed(why)
-            piece = pcm[a:b]
             if peak(piece) < SILENCE_PEAK:
                 continue
             st["voiced"] += 1
@@ -571,6 +739,50 @@ async def transcribe_audio_bytes(wav: bytes, *, gate=None, pause_s: float = 0.4,
                 parts.append(text)
             await asyncio.sleep(pause_s)           # a waiting voice turn gets the Moonshine lock between chunks
     return " ".join(parts)
+
+
+async def transcribe_audio_file(path: str, **kw: Any) -> str:
+    """``transcribe_wave`` over a WAV on disk - the production path (the file is never read whole)."""
+    with wave.open(path) as w:
+        return await transcribe_wave(w, **kw)
+
+
+async def transcribe_audio_bytes(wav: bytes, **kw: Any) -> str:
+    """``transcribe_wave`` over WAV bytes already in memory (tests, short audio)."""
+    with wave.open(io.BytesIO(wav)) as w:
+        return await transcribe_wave(w, **kw)
+
+
+async def _patient_gate(now: Optional[datetime]) -> tuple[bool, str]:
+    """The per-chunk gate of a RUNNING job. A transient closure (a voice turn, RAM dipping under half the floor) is WAITED OUT for up to
+    ``HOLD_MAX_S`` - throwing the job away would re-transcribe every earlier chunk from zero, which is what stalled a 600 s backlog when
+    MemAvailable floated around the floor. A decision (night window, flag off) ends the job at once. Moonshine is not held while waiting."""
+    deadline = time.monotonic() + HOLD_MAX_S
+    while True:
+        ok, why = may_transcribe_now(now, continuing=True)
+        if ok or not is_transient(why) or time.monotonic() >= deadline:
+            return ok, why
+        await asyncio.sleep(HOLD_POLL_S)
+
+
+async def backlog_count(user_id: Optional[str] = None) -> int:
+    """Recordings waiting for a transcript (``pending``, not yet out of attempts). One member's, or everyone's when ``user_id`` is None."""
+    from db_compat import get_compat_db
+    sql, params = "SELECT COUNT(*) AS n FROM omi_recordings WHERE status = 'pending' AND attempts < ?", [MAX_ATTEMPTS]
+    if user_id is not None:
+        sql, params = sql + " AND user_id = ?", params + [user_id]
+    async with get_compat_db() as db:
+        rows = await _fetch(db, sql, tuple(params))
+    return int(rows[0]["n"]) if rows else 0
+
+
+async def transcription_status(user_id: str) -> dict:
+    """What the owner's list shows about the transcriber: counts and a reason code, never content."""
+    from db_compat import get_compat_db
+    async with get_compat_db() as db:
+        rows = await _fetch(db, "SELECT COUNT(*) AS n FROM omi_recordings WHERE user_id = ? AND status = 'transcribing'", (user_id,))
+    st = deferred_state()
+    return {"backlog": await backlog_count(user_id), "transcribing": int(rows[0]["n"]) if rows else 0, **st}
 
 
 async def transcribe_pending(*, limit: int = 1, now: Optional[datetime] = None, pause_s: float = 0.4) -> int:
@@ -587,8 +799,9 @@ async def transcribe_pending(*, limit: int = 1, now: Optional[datetime] = None, 
         for _ in range(limit):
             ok, why = may_transcribe_now(now)
             if not ok:
-                logger.debug("omi_recordings: transcription deferred (%s)", why)
+                await note_deferred(why)
                 break
+            _clear_deferred()
             async with get_compat_db() as db:
                 rows = await _fetch(db, "SELECT id, user_id, audio_path FROM omi_recordings WHERE status = 'pending' AND attempts < ? "
                                         "ORDER BY created_at LIMIT 1", (MAX_ATTEMPTS,))
@@ -614,13 +827,13 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
     seen_chunks: dict = {}
     level: dict = {}
     try:
-        wav = Path(path).read_bytes()
-        text = await transcribe_audio_bytes(wav, gate=lambda: may_transcribe_now(now), pause_s=pause_s, stats=seen_chunks)
+        text = await transcribe_audio_file(path, gate=lambda: _patient_gate(now), pause_s=pause_s, stats=seen_chunks)
         text = await _redact_forgotten(uid, text)
         if not text.strip():                    # diagnostics for the WARNING below; off the event loop (a 10-minute WAV is ~10M samples)
-            level = await asyncio.to_thread(measure_wav, wav)
+            level = await asyncio.to_thread(measure_wav_file, path)
     except GateClosed as exc:                   # the gate closed mid-job: not a failure, try again later
         err = f"deferred:{exc}"
+        await note_deferred(str(exc))
     except Exception as exc:  # noqa: BLE001
         err = f"failed:{type(exc).__name__}"
     keep = False

@@ -159,6 +159,8 @@ aider_env/
 !scripts/setup/remote-access/headscale/*.sh
 !scripts/setup/lib/*.sh
 !scripts/setup/jetson/*.sh
+!scripts/setup/touchscreen/*.sh
+!scripts/setup/touchscreen/firewall/*.sh
 !scripts/train/*.sh
 !scripts/perf/zmb/*.sh
 !labs/needle-benchmark/setup.sh

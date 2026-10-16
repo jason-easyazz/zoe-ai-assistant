@@ -10,7 +10,8 @@
 #              hostname and the stand-in IP are substituted; checked below)
 #   proxy      nginx rendering the SHIPPED nginx-hs.the411.life.conf (TLS from a
 #              throwaway CA; production uses Let's Encrypt on the host nginx)
-#   dummy      stands in for the Zoe box LAN address: 443, 8007 and an extra 9999
+#   dummy      stands in for the Zoe box LAN address: 443 (allowed), 8007 and 9999 (both
+#              alive but NOT in the ACL: negative controls)
 #   box/panel/owner   tailscale 1.104.1 in --tun=userspace-networking, so the
 #              host tailscaled, interfaces, routes and DNS are never touched
 #
@@ -320,7 +321,9 @@ tsc owner set --advertise-routes=
 # ------------------------------------------------------------------ data path --
 step "Data path: the panel reaches the dummy through the box subnet route"
 expect "panel -> dummy:443 over the tailnet" yes eventually 90 reachable panel "$STANDIN_IP" 443 dummy-443
-expect "panel -> dummy:8007 over the tailnet" yes eventually 30 reachable panel "$STANDIN_IP" 8007 dummy-8007
+expect "control: dummy:8007 is alive (plain connect from the box on the lab bridge)" yes direct box "$STANDIN_IP" 8007 dummy-8007
+expect "NEGATIVE: panel -> dummy:8007 is refused (8007 is not granted: the HA bridge is loopback-only in production)" no \
+  reachable panel "$STANDIN_IP" 8007 dummy-8007
 expect "the path is the embedded DERP (tailscale ping: via DERP(headscale))" yes \
   grep -q "DERP(headscale)" <<< "$(tsc panel ping --c=3 --timeout=5s "$BOX_TS" 2>&1 || true)"
 
@@ -369,7 +372,7 @@ expect "...and headscale is healthy again (tunnels kept working across the resta
 
 # (a) widened policy that contradicts the tests block: the check MUST fail (negative
 # control that the tests block is executed, not skipped) and nothing is applied.
-sed "s#:443,8007\"#:443,8007,$EXTRA_PORT\"#" "$WORK/acl.orig" > "$CAND"
+sed "s#\(\"dst\": *\[\".*:443\)\"#\1,$EXTRA_PORT\"#" "$WORK/acl.orig" > "$CAND"
 rc=0; OUT="$(apply "$CAND")" || rc=$?
 expect "NEGATIVE: a policy violating its tests block fails the offline check" yes test "$rc" -ne 0
 expect "...with the tests failure in the output (the tests were executed)" yes grep -q 'test(s) failed' <<< "$OUT"
@@ -379,7 +382,7 @@ expect "...and headscale was restarted on the unchanged policy: dummy:$EXTRA_POR
 expect "...while 443 still works" yes eventually 60 reachable panel "$STANDIN_IP" 443 dummy-443
 
 # (b) the same widening WITHOUT the tests block passes the check and is applied: the port opens.
-sed "s#:443,8007\"#:443,8007,$EXTRA_PORT\"#" "$WORK/acl.orig" | sed '/^  "tests": \[/,/^  \],$/d' > "$CAND"
+sed "s#\(\"dst\": *\[\".*:443\)\"#\1,$EXTRA_PORT\"#" "$WORK/acl.orig" | sed '/^  "tests": \[/,/^  \],$/d' > "$CAND"
 rc=0; OUT="$(apply "$CAND")" || rc=$?
 expect "a widened policy WITHOUT a conflicting test passes the check and is applied" yes test "$rc" -eq 0
 expect "POSITIVE CONTROL: with the ACL widened, panel -> dummy:$EXTRA_PORT now works" yes \
@@ -391,8 +394,8 @@ rc=0; OUT="$(apply "$CAND")" || rc=$?
 expect "restoring the shipped policy passes the check and is applied" yes test "$rc" -eq 0
 expect "restored policy closes dummy:$EXTRA_PORT again" yes \
   until_fails 90 reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
-expect "...while 443 and 8007 keep working" yes eventually 60 reachable panel "$STANDIN_IP" 443 dummy-443
-expect "...and 8007" yes reachable panel "$STANDIN_IP" 8007 dummy-8007
+expect "...while 443 keeps working" yes eventually 60 reachable panel "$STANDIN_IP" 443 dummy-443
+expect "...and 8007 is still refused" no reachable panel "$STANDIN_IP" 8007 dummy-8007
 
 # ------------------------------------------- rejected-policy hazard (#3501) --
 step "Rejected-policy hazard: v0.29.5 keeps the old policy live, v0.29.4 leaks"
@@ -402,7 +405,7 @@ step "Rejected-policy hazard: v0.29.5 keeps the old policy live, v0.29.4 leaks"
 hsc users create dup > /dev/null
 hsc users create dupb --email dup > /dev/null
 HAZ="$WORK/acl.hazard"
-sed "s#:443,8007\"#:443,8007,$EXTRA_PORT\"#" "$WORK/acl.orig" | sed '/^  "tests": \[/,/^  \],$/d' \
+sed "s#\(\"dst\": *\[\".*:443\)\"#\1,$EXTRA_PORT\"#" "$WORK/acl.orig" | sed '/^  "tests": \[/,/^  \],$/d' \
   | sed 's#^  "acls": \[#  "nodeAttrs": [ {"target": ["dup@"], "attr": ["randomize-client-port"]} ],\n  "acls": [#' > "$HAZ"
 HS_IMAGE_REF() { docker inspect -f '{{.Config.Image}}' "$("${DC[@]}" ps -q headscale)"; }
 expect "headscale runs the pinned v0.29.5 image (tag + digest)" yes \
@@ -462,8 +465,9 @@ expect "v0.29.4 CONTROL: the same rejected policy LEAKS (dummy:$EXTRA_PORT reach
 restore_shipped
 expect "back on the shipped v0.29.5 image" yes grep -q 'headscale:v0.29.5@sha256:780ed2f9' <<< "$(HS_IMAGE_REF)"
 tsc box set --advertise-routes="$STANDIN_IP/32"
-expect "shipped policy restored: dummy:$EXTRA_PORT closed again, 443 and 8007 work" yes \
-  eventually 90 reachable panel "$STANDIN_IP" 8007 dummy-8007
+expect "shipped policy restored: 443 works again" yes \
+  eventually 90 reachable panel "$STANDIN_IP" 443 dummy-443
+expect "...and 8007 is refused" no reachable panel "$STANDIN_IP" 8007 dummy-8007
 expect "...dummy:$EXTRA_PORT refused" no reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
 
 # ------------------------------------------------- DERP / STUN / websocket --

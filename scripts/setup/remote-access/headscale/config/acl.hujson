@@ -7,7 +7,8 @@
 // offline-check-then-restart as defence in depth.)
 //
 // Default is deny: there is no rule not listed below. Intent:
-//   - the panel may reach ONLY the Zoe box LAN address, tcp 443 and 8007;
+//   - the panel may reach ONLY the Zoe box LAN address, tcp 443 (the 8007 HA bridge
+//     is loopback-only on the box and the panel never uses it: direct voice route);
 //   - the box and the owner devices may ssh to the panel;
 //   - nothing else, in any direction.
 {
@@ -41,7 +42,7 @@
       "action": "accept",
       "proto":  "tcp",
       "src":    ["tag:zoe-panel"],
-      "dst":    ["192.168.1.218:443,8007"],
+      "dst":    ["192.168.1.218:443"],
     },
     // Box and owner devices -> panel, plain OpenSSH over the tailnet (the panel's
     // own sshd; Tailscale SSH is not enabled and there is no "ssh" section).
@@ -61,8 +62,8 @@
     {
       "src":    "tag:zoe-panel",
       "proto":  "tcp",
-      "accept": ["192.168.1.218:443", "192.168.1.218:8007"],
-      "deny":   ["192.168.1.218:22", "192.168.1.218:80", "192.168.1.218:9999", "192.168.1.1:443"],
+      "accept": ["192.168.1.218:443"],
+      "deny":   ["192.168.1.218:8007", "192.168.1.218:22", "192.168.1.218:80", "192.168.1.218:9999", "192.168.1.1:443"],
     },
     {
       "src":    "tag:zoe-box",
