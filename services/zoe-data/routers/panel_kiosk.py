@@ -35,6 +35,19 @@ def _require_enabled(request: Request) -> None:
         raise HTTPException(status_code=403, detail="The panel kiosk credential is never issued over the public tunnel")
 
 
+async def _read_small_body(request: Request) -> bytes:
+    """The form body, refused (413) past ``_MAX_FORM_BYTES`` without ever buffering more than that."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > _MAX_FORM_BYTES:
+        raise HTTPException(status_code=413, detail="Request body too large")
+    body = b""
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > _MAX_FORM_BYTES:
+            raise HTTPException(status_code=413, detail="Request body too large")
+    return body
+
+
 async def _panel_is_active(db, panel_id: str) -> bool:
     cur = await db.execute("SELECT 1 FROM panels WHERE panel_id = ? AND is_active = 1 LIMIT 1", (panel_id,))
     return await cur.fetchone() is not None
@@ -60,7 +73,7 @@ async def kiosk_enter(request: Request, db=Depends(get_db)):
     """The browser's half: spend the ticket, set the credential, go to the estate. A bad ticket still lands on the estate (as a
     plain guest kiosk, exactly today's behaviour) so a slow boot never strands the screen on an error page; the refusal is logged."""
     _require_enabled(request)
-    body = (await request.body())[:_MAX_FORM_BYTES].decode("utf-8", "replace")
+    body = (await _read_small_body(request)).decode("utf-8", "replace")
     form = parse_qs(body, keep_blank_values=False)
     ticket = (form.get("ticket") or [""])[0]
     claims = kiosk.redeem_ticket(ticket) if ticket else None

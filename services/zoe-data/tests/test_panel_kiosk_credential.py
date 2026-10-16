@@ -271,3 +271,11 @@ def test_the_credential_is_not_a_widening_of_internal_trust():
     assert "cookie" not in src.lower() and "kiosk" not in src.lower()
     req = _req(peer="100.101.102.103", cookie=kiosk.mint_credential("kitchen-panel", _hash(RAW_TOKEN)))
     assert auth._is_internal_request(req) is False
+
+
+def test_enter_refuses_an_oversized_body_without_buffering_it(db, on):
+    client = _client(db)
+    big = "ticket=" + "x" * 5000
+    resp = client.post("/api/panels/kiosk-enter", content=big,
+                       headers=dict([("Content-Type", "application/x-www-form-urlencoded")]))
+    assert resp.status_code == 413 and "set-cookie" not in resp.headers

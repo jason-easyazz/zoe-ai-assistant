@@ -53,7 +53,9 @@ async def get_skybridge_status(
             # (b) the machine at the panel's REGISTERED address. The address is nginx's X-Real-IP, trusted only from a proxy of
             # ours (panel_principal.trusted_client_ip): :8000 answers on the LAN, where a caller can write X-Real-IP itself.
             # X-Forwarded-For is APPENDED to (client-supplied leftmost value) and is never used. A request that crossed the
-            # Cloudflare tunnel is never the panel by address.
+            # Cloudflare tunnel is never the panel by address. Only ``is_active`` is checked here, not ``allow_guest``: this
+            # is DISPLAY identity for the panel itself (unchanged from before the credential), while ``allow_guest`` gates
+            # what a guest may DO (panel_principal.is_panel_guest).
             via_tunnel = panel_principal._via_public_tunnel(request)
             client_ip = "" if via_tunnel else panel_principal.trusted_client_ip(request)
             kiosk_panel = panel_kiosk_credential.credential_panel_id(request)
