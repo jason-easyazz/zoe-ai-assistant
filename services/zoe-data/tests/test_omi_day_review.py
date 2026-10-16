@@ -5,9 +5,11 @@ SYNTHETIC transcripts only (invented people, invented days); the model is a fake
 every test exercises the REAL pack / verify / dedup / store / approve code. Negative controls were run by hand-mutating the code and
 watching the named test go red (re-run them after touching the rule):
   * the other-person fact      -> drop the ``_REPORTED`` / ``someone_else`` / ``about`` terms of the owner_fact rule in ``verify``
-  * the TV / radio line        -> drop ``media_windows`` from ``pack``; drop the ``not_first_person`` rule; drop the ``media`` rule
+  * the TV / radio line        -> drop ``media_windows`` from ``pack`` (broadcast test); drop the ``media`` rule (quoted TV line test)
+  * the action-shape floor     -> drop the ``not_first_person`` rule (third-person line test); drop the ``no_intent`` rule (no-intent test)
   * dedup across recordings    -> return ``list(cands)`` from ``merge``
-  * idempotency                -> drop ``AND day_review_id IS NULL`` from ``review_day``'s read; drop ``ON CONFLICT ... DO NOTHING``
+  * idempotency                -> drop ``AND day_review_id IS NULL`` from ``review_day``'s read (rerun test); drop ``ON CONFLICT ... DO
+                                  NOTHING`` (the database-refuses-a-duplicate test, every read-side guard bypassed)
   * approval provenance        -> drop ``metadata=`` from ``write_owner_fact`` / ``write_calendar_event``; mark ``approved`` on a None ingest
   * guest / cross-member       -> make ``_require_member`` return the user unchecked; drop ``AND user_id = ?`` from ``get_candidate``
 """
@@ -232,6 +234,44 @@ def test_a_quoted_tv_line_inside_a_conversation_is_never_a_task(env):
                            ("I'll call Mum tonight", {"kind": "reminder", "heard_from": "media", "fields": {"title": "Call Mum", "when": "tonight"}})]))
     res = review()
     assert cands(env) == [] and res["stored"] == 0                      # no first person in the advert; the model's own "media" is final
+
+
+def test_a_third_person_line_is_never_a_task_even_when_heard_in_conversation(env):
+    """The FIRST-PERSON floor on its own: no broadcast cue, heard_from=conversation, an event shape - but nobody here said it was
+    theirs ("the council meeting is on Thursday at 7pm" is about the town, not the wearer's diary)."""
+    add_rec(env, "rec1", "The council meeting is on Thursday at 7pm. Buy one get one free on bread this week.")
+    llm = fake_model([("The council meeting is on Thursday at 7pm", {"kind": "calendar_event", "fields": {"title": "Council meeting", "date": "Thursday", "time": "7pm"}}),
+                      ("Buy one get one free on bread this week", {"kind": "list_item", "fields": {"item": "bread"}})])
+    dr.set_llm(llm)
+    res = review()
+    assert llm.seen and "council meeting" in llm.seen[0]                 # the media filter was NOT what stopped it
+    assert cands(env) == [] and res["counts"]["drop_not_first_person"] == 2
+
+
+def test_a_first_person_line_with_no_intent_is_never_a_task(env):
+    """The INTENT floor on its own: first person, conversation, no media - but "I saw the bins go out on Tuesday" asks nothing of anyone."""
+    add_rec(env, "rec1", "I saw the bins go out on Friday last week. I loved the bread at that little cafe near the beach.")
+    llm = fake_model([("I saw the bins go out on Friday", {"kind": "reminder", "fields": {"title": "Bins out", "when": "Friday"}}),
+                      ("I loved the bread at that little cafe", {"kind": "list_item", "fields": {"item": "bread"}})])
+    dr.set_llm(llm)
+    res = review()
+    assert llm.seen and cands(env) == [] and res["counts"]["drop_no_intent"] == 2
+
+
+def test_the_database_itself_refuses_a_duplicate_candidate(env, monkeypatch):
+    """ON CONFLICT on its own: with every read-side guard bypassed (the analysed mark AND the pending-elsewhere check), a second
+    pass over the same day inserts nothing and raises nothing - the UNIQUE (user, day, dedup_key) key is the last line."""
+    add_rec(env, "rec1", GOLDEN)
+    dr.set_llm(fake_model(GOLDEN_RULES))
+    assert review()["stored"] == 5
+
+    async def nothing_known(db, user_id, day):
+        return set(), set(), set()
+    monkeypatch.setattr(dr, "_known", nothing_known)
+    env.db.conn.execute("UPDATE omi_recordings SET day_review_id = NULL")
+    env.db.conn.commit()
+    res = review()
+    assert res["status"] == "ok" and res["kept"] == 5 and res["stored"] == 0 and len(cands(env)) == 5
 
 
 def test_a_vague_plan_is_never_a_calendar_event(env):
