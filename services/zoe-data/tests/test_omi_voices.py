@@ -1,5 +1,5 @@
 """Speaker turns + learned voices in pendant recordings (``omi_diarize.py``, ``omi_voices.py``, ``routers/omi_voices.py``, migration
-0054). Design ``docs/architecture/memories-space.md`` 2.6 / 3 / 10 (cells V1-V10, T4, T7). Synthetic audio and synthetic 256-d
+0055). Design ``docs/architecture/memories-space.md`` 2.6 / 3 / 10 (cells V1-V10, T4, T7). Synthetic audio and synthetic 256-d
 embeddings only - no model, no household data. Each guardrail test names the source mutation that turns it red (re-run by Edit):
 
   V1  suggestions are not tags          count ``suggested_person_id`` as a tag in ``review_segments`` / ``tag``
@@ -127,7 +127,7 @@ def env(monkeypatch, tmp_path):
     db = _Sqlite(path)
     db.conn.executescript(BASE)
     engine = sa.create_engine(f"sqlite:///{path}")
-    for f in ("0045_omi_recordings.py", "0053_contacts_data_model.py", "0054_omi_segments_voices.py"):
+    for f in ("0045_omi_recordings.py", "0053_contacts_data_model.py", "0055_omi_segments_voices.py"):
         _migrate(engine, f)
 
     @contextlib.asynccontextmanager
@@ -577,13 +577,13 @@ def test_the_nightly_backup_holds_no_biometric_row_data():
     assert '--exclude-table-data=$t' in s and '"${exclude_args[@]}"' in s
 
 
-def test_migration_0054_round_trips_on_sqlite(env):
-    _migrate(env.engine, "0054_omi_segments_voices.py", down=True)
+def test_migration_0055_round_trips_on_sqlite(env):
+    _migrate(env.engine, "0055_omi_segments_voices.py", down=True)
     names = {r[0] for r in env.db.q("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert not names & {"omi_segments", "omi_segment_embeddings", "omi_voice_clusters", "learned_voiceprint_segments"}
     assert "rejections" not in {r[1] for r in env.db.q("PRAGMA table_info(learned_voiceprints)")}
-    _migrate(env.engine, "0054_omi_segments_voices.py")
-    _migrate(env.engine, "0054_omi_segments_voices.py")                                # rerun-safe
+    _migrate(env.engine, "0055_omi_segments_voices.py")
+    _migrate(env.engine, "0055_omi_segments_voices.py")                                # rerun-safe
     assert "rejections" in {r[1] for r in env.db.q("PRAGMA table_info(learned_voiceprints)")}
 
 

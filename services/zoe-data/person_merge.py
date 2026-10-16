@@ -73,7 +73,7 @@ async def _segments_present(db) -> bool:
     try:
         rows = await _fetchall(db, "SELECT to_regclass('omi_segments') IS NOT NULL",
                                "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table' AND name = 'omi_segments'", ())
-    except Exception:  # noqa: BLE001 - cannot tell: merge without it, as before 0054
+    except Exception:  # noqa: BLE001 - cannot tell: merge without it, as before 0055
         return False
     return bool(rows) and bool(rows[0][0])
 
@@ -240,7 +240,7 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str, *,
                 (source_id, user_id),
             )
 
-        # ── 2c. Pendant speaker turns (0054): a tag or suggestion of the duplicate now names the survivor - never cleared by
+        # ── 2c. Pendant speaker turns (0055): a tag or suggestion of the duplicate now names the survivor - never cleared by
         # the later sweep of soft-deleted people, which would silently lose the member's own tags.
         if segments_present:
             for col in ("tagged_person_id", "suggested_person_id"):

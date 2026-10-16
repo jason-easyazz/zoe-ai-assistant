@@ -849,7 +849,7 @@ omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_con
 ## 9. Phases (F): minimum useful product first
 
 **Build status (2026-10-17): the P4 / P4b BACKEND is built, flag-dark** (`omi_diarize.py`, `omi_voices.py`,
-`routers/omi_voices.py`, migration 0054; record [omi-voice-tagging.md](../knowledge/omi-voice-tagging.md)). Differences from the
+`routers/omi_voices.py`, migration 0055, which follows the day review's 0054 (#2091); record [omi-voice-tagging.md](../knowledge/omi-voice-tagging.md)). Differences from the
 text above, each deliberate:
 
 - Turns, not windows-then-forced-cuts: the recording is cut into speaker turns (VAD + ResNet34 windows + centroid linkage) and
