@@ -457,6 +457,18 @@ def test_restraint_classes_are_not_proposed(env):
     assert [c["kind"] for c in cands(env)] == ["list_item"] and res["counts"]["drop_sensitive"] == 1
 
 
+def test_restraint_is_checked_again_at_write_an_edit_cannot_bring_in_a_sensitive_class(env):
+    add_rec(env, "rec1", GOLDEN)
+    dr.set_llm(fake_model(GOLDEN_RULES))
+    review()
+    rid = next(c["id"] for c in cands(env) if c["kind"] == "reminder")
+    with pytest.raises(apply.ApplyError) as exc:
+        run(apply.approve(OWNER, rid, fields={"title": "Ring the dentist about my tooth"}))
+    assert exc.value.code == "sensitive"
+    row = env.db.rows("SELECT status, write_error FROM omi_day_candidates WHERE id = ?", (rid,))[0]
+    assert row == {"status": "pending", "write_error": "sensitive"}
+
+
 def test_trust_order_a_pendant_fact_never_stands_against_what_the_owner_said(env, monkeypatch):
     import memory_authority
     assert memory_authority.writer_class("omi_review") == memory_authority.USER_CONFIRMED      # approval = confirmed, never user_stated

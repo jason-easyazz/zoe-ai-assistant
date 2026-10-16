@@ -205,6 +205,10 @@ async def _floors(user_id: str, c: dict) -> None:
     text = _candidate_text(c)
     if dr._distress(text):
         raise ApplyError("distress", 409)
+    # restraint again at WRITE: the owner's edit at approval can bring in what the analysis never saw (cross-review B1, #2091)
+    sensitive = dr._SENSITIVE_FACT if c.get("kind") == "owner_fact" else dr._SENSITIVE_ALL
+    if dr._restraint(text) & sensitive:
+        raise ApplyError("sensitive", 409)
     try:
         import memory_forgotten as mf
         hit = bool(await mf.spans(user_id, text))
