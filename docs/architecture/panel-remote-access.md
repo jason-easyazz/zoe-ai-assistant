@@ -51,7 +51,8 @@ builds_on: docs/knowledge/mac-virtual-panel.md (the one remote panel that exists
   the panel listens on every interface with no firewall (SSH with password login on, the voice daemon's
   `/activate` with no checks, the wake agent, AirPlay) [live]. On a friend's or hotel Wi-Fi, any device on that
   network could start a recording that the daemon then sends to Zoe with the panel's device token. Phase 1 closes
-  this with a host firewall that admits only the tailnet and loopback.
+  this with a host firewall (loopback, SSH from owner devices over the tailnet, AirPlay from the home subnet at
+  home) and loopback-only helpers; #2082 shipped a first version that is still too wide on the tailnet (section 4.6).
 
 ## 1. Rules that shape the design
 
@@ -198,10 +199,8 @@ it starts, so the AP is never open.
     cloudflared container zoe-data's direct peer, inside the default trusted proxy range (`172.16.0.0/12`), so a
     client-supplied `X-Real-IP` would be believed and the caller could claim a registered panel's address. That rule
     is categorical, not mitigated: pinning `ZOE_TRUSTED_PROXY_NETS` to nginx protects `panel_principal` (it goes
-    through `trusted_client_ip`), but `routers/skybridge.py` reads `x-real-ip` directly and never consults that
-    setting, so its display-identity check would still accept a forged header from a direct peer. The same gap
-    exists today for any LAN caller of zoe-data's `:8000` (ledger line 2026-10-16); skybridge should use
-    `trusted_client_ip`. Pinning the proxy range is still worth doing, through a fixed address for nginx on
+    through `trusted_client_ip`), and since #2082 so does `routers/skybridge.py`'s display-identity check, but a
+    direct peer inside the trusted range is believed by design. Pinning the proxy range is still worth doing, through a fixed address for nginx on
     `zoe-network` rather than whatever Docker assigned (container addresses drift).
 
 ## 4. What Zoe must change
@@ -216,8 +215,11 @@ it starts, so the AP is never open.
   hook it needs; research 2.2), so a small private certificate authority does it: one root key kept offline by the
   operator, its root certificate installed on the panel (Chromium's NSS store for the kiosk; `REQUESTS_CA_BUNDLE`
   or the system store for the daemon), and a leaf certificate for `<zoe-host>.<tailnet-domain>` (the MagicDNS
-  name) served by the zoe-ui nginx as a second `server` block selected by SNI. The self-signed default block stays
-  for `<home-LAN-IP>` and anything else. Renewal is a yearly operator step with a reminder, or short-lived leaves
+  name) served by the zoe-ui nginx as a second `server` block selected by SNI. The **LAN endpoint gets a leaf from
+  the same CA** with `<home-LAN-IP>` as an IP subject-alternative name (an IP SAN is ordinary X.509; the Jetson's LAN
+  address must be a DHCP reservation so the certificate stays true), so the home fallback (section 8) keeps working
+  once `VERIFY_SSL=true` and the kiosk's certificate bypass are gone. The self-signed block stays only as the
+  default for names nobody should use. Renewal is a yearly operator step with a reminder, or short-lived leaves
   from an intermediate key kept on the Jetson, on a timer. Nothing is published: a private CA writes no Certificate Transparency entry.
   **With hosted Tailscale (reference)**, `tailscale cert` issues a Let's Encrypt certificate for the `.ts.net` name
   instead, renewed by a timer; that name is published in Certificate Transparency logs (research 2.1, decision D5).
@@ -250,7 +252,8 @@ that nginx's `X-Real-IP` really is the tailnet address (Docker's published port 
 non-loopback traffic; if the Jetson's Docker uses the userland proxy for this path, every client would appear as the
 bridge gateway and P1 stops until that is fixed).
 
-**Target (P3): a kiosk session minted from the device token.** The address stops mattering:
+**Target: a kiosk credential minted from the device token** (built flag-dark in #2082 as a single-use ticket the
+loopback gate trades for an HttpOnly cookie; `docs/knowledge/panel-away-p1.md`). The design it implements:
 
 1. A loopback helper on the panel holds the device token; the browser never sees it. The natural home is the voice
    daemon's own HTTP server (port 7777, which already holds `DEVICE_TOKEN` and serves `/activate` to the kiosk page),
@@ -277,21 +280,34 @@ The voice path is unchanged code; only the network under it changes. What change
 | Reply stream (NDJSON, one base64 WAV per sentence) | negligible | + one RTT before the first sentence; later sentences overlap playback | daemon `_do_single_turn_stream` |
 | Push socket text (`voice:transcript` etc.) | negligible | + one RTT; 30 s ping already survives idle NAT | `touch-ui-executor.js` `PUSH_PING_MS` |
 
-Budget: conversational guidance puts one-way delay under ~150 ms for interactive speech (research 3). Zoe's
-time-to-first-audio is already ~2 s on the LAN, so the network budget we set is **at most +300 ms median
-time-to-first-audio at 100 ms RTT and a 5 Mbit/s uplink**; beyond that the panel says it is on a slow link.
+Budget, stated honestly. Conversational guidance puts one-way delay under ~150 ms (research 3); Zoe's
+time-to-first-audio is already ~2 s on the LAN. With today's full-WAV upload the added time is roughly
+**one RTT + 0.34 s x (clip seconds / uplink Mbit/s) + the first sentence's download**, so the upload alone breaks a
++300 ms target on ordinary links (a 5 s clip at 5 Mbit/s is ~341 ms before any RTT). So there are two budgets:
 
-The upload is the leg that scales with the network. Two options, decided by measurement (P3, cell L9), not now:
-(a) turn on the existing flag-dark under-speech upload (`ZOE_STT_STREAM_UPLOAD`, 0.32 s batches while the person
-speaks), which hides most of the upload inside the speech itself; (b) Opus at ~24 kbit/s for the upload, about a
-tenth of raw PCM (research 3). (a) is code we already have; (b) changes what Moonshine receives and needs the
-replay gate on the owner's real-voice corpus before any use. Both are voice-path changes: replay-gated, flag-dark.
+| Stage | Budget (median added time-to-first-audio) | Worked numbers, 4 s clip |
+|---|---|---|
+| **Interim: travel after P1 + P2, full-WAV upload** | **<= +0.5 s** on >= 5 Mbit/s uplink; **<= +1 s** on 2 Mbit/s or when relayed | direct, 50 ms RTT, 5 Mbit/s: ~+0.33 s; relayed through the owner's server (~+100 ms RTT): ~+0.43 s; hotel 2 Mbit/s, relayed: ~+0.85 s |
+| **Target: after P3's upload change** | **<= +300 ms** at 100 ms RTT and 5 Mbit/s | Opus at 24 kbit/s makes the 4 s clip ~12 KB (~20 ms at 5 Mbit/s), so the RTT dominates |
+
+The owner travels before P3, so the interim budget is the accepted one: noticeably slower on a poor link, not
+broken. The worked numbers are arithmetic, not measurements; P1 cell L6 and P3 cell L9 replace them with measured ones.
+
+The upload change is P3, decided by measurement (cell L9). (a) The existing flag-dark under-speech upload
+(`ZOE_STT_STREAM_UPLOAD`, 0.32 s batches while the person speaks) is **not** an upload saving on a WAN as built: the
+full WAV is still sent with the turn as the fallback, so it adds bytes and saves only server STT time; it would need
+a change to skip the WAV when the stream is complete. (b) Opus at ~24 kbit/s for the upload, about a tenth of raw
+PCM (research 3), changes what Moonshine receives and needs the replay gate on the owner's real-voice corpus before
+any use. Either is a voice-path change: replay-gated, flag-dark, and neither is cheap enough to pull ahead of travel.
 
 ### 4.4 "Can't reach Zoe" on the panel
 
-Replace the boot loop (section 2) with a local status screen the kiosk shows whenever Zoe does not answer:
+Replace the boot loop (section 2) with a local status screen the kiosk shows whenever Zoe does not answer. **Built
+flag-dark in #2082:** `scripts/setup/touchscreen/zoe-kiosk-gate.py`, bound to `127.0.0.1:7781`, renders with no
+network and no Zoe, and also hands the browser its device-token credential (record:
+`docs/knowledge/panel-away-p1.md`). P2 adds the hotspot QR to it; the spoken line is still to do.
 
-- Served on loopback by the same panel-side helper (no network needed). It shows three lights, in order: **Wi-Fi**
+- Served on loopback (no network needed). It shows three lights, in order: **Wi-Fi**
   (NetworkManager state), **link home** (`tailscale status --json`: `BackendState`, whether the Jetson peer is online),
   **Zoe** (`/health` over the tailnet).
 - Each red light has a plain sentence and one action: "No Wi-Fi - scan this with your phone" (the hotspot QR);
@@ -356,11 +372,19 @@ when its current Wi-Fi is not one of the home networks NetworkManager has marked
   loopback proxy). `auth._is_internal_request` trusts any loopback TCP peer on zoe-data: a loopback proxy pointed at
   `127.0.0.1:8000` would make every tailnet caller an internal service that may assert any identity. Pointed at
   nginx it would hide the panel's address behind the Docker gateway. nginx terminates the tailnet TLS itself.
-- **Panel host firewall (P1, before the panel travels).** nftables on the Pi: accept loopback, established
-  traffic, `tailscale0`, DHCP and the onboarding hotspot while it is up; drop all other inbound. That closes
-  22/7000/7777/8765 to whatever network the panel is on. SSH then works only over the tailnet; turn off password
-  login. At home the AirPlay port needs the home LAN, so the home profile allows 7000 + mDNS + nqptp from the home
-  subnet only (the same `location_mode` switch).
+- **Panel host firewall (P1, before the panel travels), narrow on the tailnet too.** The tailnet is not a trusted
+  network: without Tailnet Lock a compromised control server can add a node and push a policy that lets it reach the
+  panel, and the panel's own rules are the one thing it cannot rewrite. nftables on the Pi: accept loopback,
+  established/related traffic, DHCP and the onboarding hotspot while it is up; on `tailscale0` accept **only TCP 22
+  from the owner devices' tailnet addresses** (pinned in the ruleset, not taken from the policy) and nothing else -
+  the panel is a client, so the Jetson never opens a connection to it (announcements are polled, the push socket is
+  outbound). Drop all other inbound. At home the AirPlay port needs the home LAN, so the home profile allows 7000 +
+  mDNS + nqptp from the home subnet only (the same `location_mode` switch). SSH is key-only.
+- **Local helpers bind to loopback.** The voice daemon's `/health` + `/activate` (7777) and the screen-wake agent
+  (8765) are reached only by the kiosk browser on the same Pi, so they bind `127.0.0.1` (the kiosk gate already
+  does, 7781), and `/activate` takes the Mac build's `Host`/`Origin` guard. Then even an over-wide rule exposes
+  nothing that can start a recording. **#2082's merged firewall accepts all of `iifname "tailscale0"`**; narrowing it
+  to the rule above is a ledger follow-up (2026-10-16).
 - **Lost or stolen panel (runbook, P1):** delete the node on the control server (link gone at once), revoke its
   device token (`DELETE /api/panels/{id}/token/{token_id}`; the voice daemon gets 401 at once), set
   `panels.is_active = 0` (address path off). With P3, also revoke its kiosk sessions. The panel's disk holds a device
@@ -434,7 +458,7 @@ nginx SNI block; `ZOE_ALLOWED_WS_ORIGINS`; the panel firewall; then the live pan
 | L1 | lab node reaches `https://<zoe-host>.<tailnet-domain>/health` with verification ON | the same node to `:8000`, `:8007`, `:8123`, `:5432`, `:22` times out (policy) |
 | L1b | the Jetson's local nftables hold on their own | with the policy temporarily widened to allow all, `:8000` from the lab node still times out |
 | L2 | an owner device reaches 443 and SSH | an untagged node registered to another user reaches nothing |
-| L3 | the certificate validates for the MagicDNS name with only the private CA trusted | the same `curl` without the CA root fails; `curl` to the LAN IP with verification ON still fails (default block unchanged) |
+| L3 | the certificate validates for the MagicDNS name AND for `https://<home-LAN-IP>` (IP SAN) with only the private CA trusted | the same two `curl`s without the CA root fail; a name on no leaf gets the self-signed default and fails |
 | L4 | nginx log `X-Real-IP` = the node's tailnet address; `is_panel_guest` true for the registered panel | the owner laptop on the tailnet is NOT the panel; a request with a `CF-Ray` header is still refused |
 | L4b | spoofing: from a second lab node, send packets to the Jetson with the panel's tailnet address as source | they are dropped (none reach nginx); the same node's own address is accepted (the probe works) |
 | L5 | push socket connects from the MagicDNS origin | without the `ZOE_ALLOWED_WS_ORIGINS` entry it is refused (proves the entry is load-bearing) |
@@ -444,6 +468,10 @@ nginx SNI block; `ZOE_ALLOWED_WS_ORIGINS`; the panel firewall; then the live pan
 | L10 | control server down (stop Headscale): existing panel-Jetson link keeps working for the test window | a NEW node cannot join while it is down (proves the server was really down) |
 
 ### P2 - Wi-Fi onboarding (wifi-connect on the panel image)
+
+**Prerequisite: the local status screen.** The hotspot QR has to appear when there is no network and no Zoe, so it
+lives on the loopback kiosk gate (`scripts/setup/touchscreen/zoe-kiosk-gate.py`, `127.0.0.1:7781`, built in #2082),
+not on any Zoe page. P2 starts only once the gate is the kiosk's start page on the lab image; W1 cannot pass without it.
 
 | Cell | Test | Negative control |
 |---|---|---|
@@ -456,8 +484,11 @@ nginx SNI block; `ZOE_ALLOWED_WS_ORIGINS`; the panel firewall; then the live pan
 
 ### P3 - remote polish (each a flag-dark PR)
 
-- Status screen + spoken line (section 4.4). Test: unplug the Jetson's network: the panel shows "can't reach home"
-  within 30 s and recovers on its own. Negative: no message while Zoe is up.
+- Status screen: built in #2082 (the P2 prerequisite above). P3 adds the spoken line and mid-session drops (today a
+  drop after boot shows the estate's banner, then Chromium's error page on reload). Test: unplug the Jetson's network:
+  the panel shows "can't reach home" within 30 s and recovers on its own. Negative: no message while Zoe is up.
+- Panel listeners: 7777 and 8765 bound to loopback, `/activate` guarded. Negative: from a tailnet node allowed by a
+  deliberately wide policy, `:7777/activate` and `:8765` time out.
 - Kiosk session from the device token (section 4.2) + the loopback helper endpoint. Negative: a page from another
   origin calling the helper gets 403; a revoked device token cannot mint.
 - Away mode (section 4.5). Negative: at home, nothing is gated.
@@ -480,15 +511,16 @@ nginx SNI block; `ZOE_ALLOWED_WS_ORIGINS`; the panel firewall; then the live pan
 | D4 | How the panel knows it is at home: a list of home Wi-Fi networks (kept on the panel, never in the repo) or "Zoe's LAN address answers directly" | the home-network list; the direct-answer check as a cross-check |
 | D5 | The MagicDNS domain and node names | neutral names, no family name (with a private CA nothing is published; with hosted Tailscale the name lands in Certificate Transparency logs) |
 | D6 | What an away panel may do: voice + chat + lists + memory (yes); home control (ask "at home?" / off); announcements and the brief (off unless asked); AirPlay (not possible) | as listed |
-| D7 | Remote voice quality floor: accept the network budget (+300 ms at 100 ms RTT) or require P3's upload work before the panel travels | travel after P1+P2; P3 measured on real trips |
+| D7 | Remote voice quality before P3: accept the interim budget (<= +0.5 s on >= 5 Mbit/s, <= +1 s on 2 Mbit/s or relayed; section 4.3) or hold travel until P3's upload change (target +300 ms) | travel after P1+P2 on the interim budget; P3 measured on real trips |
 | D8 | The server as front door: webhooks and OAuth redirects reach the Jetson over the tailnet (server as `tag:front-door`, one narrow listener on the Jetson with its own request verification), or through the planned device relay | over the tailnet, when the first connector needs it; the device relay for devices that are not tailnet members. Do not build both paths for the same traffic |
 
 ## 8. What this does not decide, and the risks
 
 - **The tailnet is a dependency for the panel at home too.** If `tailscaled` breaks, the panel loses Zoe at home.
   Mitigation: the status screen offers the LAN URL as a fallback when the panel is on a home network (D4) and the
-  tailnet link is down; the self-signed LAN block stays. A control-server outage should leave established links up
-  (cell L10 measures it rather than assuming it).
+  tailnet link is down; the LAN endpoint carries a private-CA certificate with the LAN address as an IP SAN, so
+  the fallback verifies like the tailnet path (section 4.1). A control-server outage should leave
+  established links up (cell L10 measures it rather than assuming it).
 - **The owner's server becomes security-relevant.** It holds the tailnet's membership; without Tailnet Lock its
   compromise lets an attacker add nodes. Section 4.6 limits what a rogue node can reach; hardening the server is
   part of P1, not an afterthought.
