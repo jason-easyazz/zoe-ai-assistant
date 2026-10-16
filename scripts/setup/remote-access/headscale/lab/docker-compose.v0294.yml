@@ -1,0 +1,7 @@
+# Hazard CONTROL only (lab_test.sh): the previous release, layered over the shipped
+# service so the lab can show the v0.29.4 behaviour that v0.29.5 fixed (a rejected,
+# hot-reloaded policy left its packet filter live; upstream PR #3501). Same database
+# (no schema change between the two releases), so the lab switches the image in place.
+services:
+  headscale:
+    image: docker.io/headscale/headscale:v0.29.4@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f

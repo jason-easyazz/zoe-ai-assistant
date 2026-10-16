@@ -345,37 +345,126 @@ expect "NEGATIVE: owner laptop -> panel:443 refused" no reachable owner "$PANEL_
 expect "NEGATIVE: owner laptop -> box tailnet address :22 refused" no reachable owner "$BOX_TS" 22 box-22
 mem_guard
 
-# ---------------------------------------------------------- ACL experiment --
-step "ACL control experiment: the refusal of dummy:$EXTRA_PORT is the ACL, nothing else"
-ACL="$WORK/config/acl.hujson"
-cp "$ACL" "$WORK/acl.orig"
 log_since() { local o; o="$("${DC[@]}" logs --no-log-prefix --since "${3}s" "$1" 2> /dev/null || true)"; grep -Eq "$2" <<< "$o"; }
-reload()    { "${DC[@]}" kill -s HUP headscale > /dev/null; }
 
-# (a) widen the policy but leave the tests block in: the reload must be REJECTED.
-sed "s#:443,8007\"#:443,8007,$EXTRA_PORT\"#" "$WORK/acl.orig" > "$ACL"
-reload
-sleep 6
-expect "widened policy is rejected at reload by the tests block (log: test(s) failed)" yes \
-  log_since headscale 'test\(s\) failed' 15
-expect "...and the old policy is still enforced: panel -> dummy:$EXTRA_PORT refused" no \
+# ----------------------------------------------------- policy change flow --
+# The supported flow (README "Changing the policy"): policy_apply.sh checks the
+# candidate OFFLINE against the real users and nodes (--bypass-grpc-and-access-
+# database-directly, the only mode that runs the tests block), applies it only if it
+# passed, and RESTARTS headscale. The hazard cell below separately proves what a
+# rejected hot reload does on the pinned v0.29.5 (old policy stays live) and shows the
+# v0.29.4 leak it fixed (upstream PR #3501).
+step "Policy change flow: the refusal of dummy:$EXTRA_PORT is the ACL, nothing else"
+ACL="$WORK/config/acl.hujson"
+CAND="$WORK/config/acl.hujson.new"
+cp "$ACL" "$WORK/acl.orig"
+apply() { HS_COMPOSE="${DC[*]}" HS_CONFIG_DIR="$WORK/config" "$BUNDLE/policy_apply.sh" "$@" 2>&1; }
+
+# (0) the shipped policy: the offline check really RUNS the tests block and passes.
+rc=0; OUT="$(apply --check)" || rc=$?
+expect "shipped policy passes the offline check (Policy is valid, headscale back up)" yes test "$rc" -eq 0
+expect "...and the check did not warn that the tests were skipped" no grep -qi skip <<< "$OUT"
+expect "...and headscale is healthy again (tunnels kept working across the restart)" yes \
+  eventually 60 reachable panel "$STANDIN_IP" 443 dummy-443
+
+# (a) widened policy that contradicts the tests block: the check MUST fail (negative
+# control that the tests block is executed, not skipped) and nothing is applied.
+sed "s#:443,8007\"#:443,8007,$EXTRA_PORT\"#" "$WORK/acl.orig" > "$CAND"
+rc=0; OUT="$(apply "$CAND")" || rc=$?
+expect "NEGATIVE: a policy violating its tests block fails the offline check" yes test "$rc" -ne 0
+expect "...with the tests failure in the output (the tests were executed)" yes grep -q 'test(s) failed' <<< "$OUT"
+expect "...and it was NOT applied (live policy file unchanged)" yes cmp -s "$ACL" "$WORK/acl.orig"
+expect "...and headscale was restarted on the unchanged policy: dummy:$EXTRA_PORT still refused" no \
   reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
+expect "...while 443 still works" yes eventually 60 reachable panel "$STANDIN_IP" 443 dummy-443
 
-# (b) widen it AND drop the tests block: the reload is accepted and the port opens.
-sed "s#:443,8007\"#:443,8007,$EXTRA_PORT\"#" "$WORK/acl.orig" | sed '/^  "tests": \[/,/^  \],$/d' > "$ACL"
-reload
+# (b) the same widening WITHOUT the tests block passes the check and is applied: the port opens.
+sed "s#:443,8007\"#:443,8007,$EXTRA_PORT\"#" "$WORK/acl.orig" | sed '/^  "tests": \[/,/^  \],$/d' > "$CAND"
+rc=0; OUT="$(apply "$CAND")" || rc=$?
+expect "a widened policy WITHOUT a conflicting test passes the check and is applied" yes test "$rc" -eq 0
 expect "POSITIVE CONTROL: with the ACL widened, panel -> dummy:$EXTRA_PORT now works" yes \
-  eventually 40 reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
+  eventually 90 reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
 
-# (c) restore the shipped policy: the port closes again, 443 is untouched.
-cp "$WORK/acl.orig" "$ACL"
-reload
+# (c) restore the shipped policy through the same flow: the port closes again.
+cp "$WORK/acl.orig" "$CAND"
+rc=0; OUT="$(apply "$CAND")" || rc=$?
+expect "restoring the shipped policy passes the check and is applied" yes test "$rc" -eq 0
 expect "restored policy closes dummy:$EXTRA_PORT again" yes \
-  until_fails 60 reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
-expect "...while 443 and 8007 keep working" yes reachable panel "$STANDIN_IP" 443 dummy-443
+  until_fails 90 reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
+expect "...while 443 and 8007 keep working" yes eventually 60 reachable panel "$STANDIN_IP" 443 dummy-443
 expect "...and 8007" yes reachable panel "$STANDIN_IP" 8007 dummy-8007
-expect "shipped tests block passes against the live tailnet (policy check)" yes \
-  "${DC[@]}" exec -T headscale headscale policy check -f /etc/headscale/acl.hujson
+
+# ------------------------------------------- rejected-policy hazard (#3501) --
+step "Rejected-policy hazard: v0.29.5 keeps the old policy live, v0.29.4 leaks"
+# A policy that passes its (absent) tests and the user-reference check but fails to
+# COMPILE: a nodeAttrs target naming an ambiguous user ("dup@" matches user dup by
+# name and user dupb by email). It also widens the ACL by one port.
+hsc users create dup > /dev/null
+hsc users create dupb --email dup > /dev/null
+HAZ="$WORK/acl.hazard"
+sed "s#:443,8007\"#:443,8007,$EXTRA_PORT\"#" "$WORK/acl.orig" | sed '/^  "tests": \[/,/^  \],$/d' \
+  | sed 's#^  "acls": \[#  "nodeAttrs": [ {"target": ["dup@"], "attr": ["randomize-client-port"]} ],\n  "acls": [#' > "$HAZ"
+HS_IMAGE_REF() { docker inspect -f '{{.Config.Image}}' "$("${DC[@]}" ps -q headscale)"; }
+expect "headscale runs the pinned v0.29.5 image (tag + digest)" yes \
+  grep -q 'headscale:v0.29.5@sha256:780ed2f9' <<< "$(HS_IMAGE_REF)"
+
+# The safe flow rejects it before it is ever applied, on any version.
+cp "$HAZ" "$CAND"
+rc=0; OUT="$(apply "$CAND")" || rc=$?
+expect "policy_apply.sh REJECTS the compile-failing policy (offline check)" yes test "$rc" -ne 0
+expect "...and it was not applied (live policy file unchanged)" yes cmp -s "$ACL" "$WORK/acl.orig"
+rm -f "$CAND"
+
+# Hot-reload it anyway (what an operator should NOT do). On v0.29.4 the rejected policy
+# is left compiled in memory but the per-node filter CACHE is not cleared on that error
+# path, so the leak shows up the moment a node-set change invalidates the box's cache.
+# The lab causes exactly that: the box advertises a second route and the admin approves
+# it, then both nodes reconnect to take full maps. Then: did dummy:9999 open?
+BOX_ID="$(node_id lab-box)"
+BOX_ROUTES="$STANDIN_IP/32,10.99.99.0/24"
+tsc box set --advertise-routes="$BOX_ROUTES"
+eventually 30 route_is lab-box '(.available_routes // []) | index("10.99.99.0/24") != null' true || true
+hot_reload_hazard() {
+  cp "$HAZ" "$ACL"
+  "${DC[@]}" kill -s HUP headscale > /dev/null
+  sleep 6
+  hsc nodes approve-routes -i "$BOX_ID" -r "$BOX_ROUTES" > /dev/null || true
+  sleep 4
+  tsc box down > /dev/null 2>&1 || true
+  tsc box up --login-server=https://hs.lab.test --hostname=lab-box --advertise-routes="$BOX_ROUTES" --accept-dns=false --timeout=60s > /dev/null 2>&1 || true
+  tsc panel down > /dev/null 2>&1 || true
+  tsc panel up --login-server=https://hs.lab.test --hostname=lab-panel --accept-routes --accept-dns=false --timeout=60s > /dev/null 2>&1 || true
+}
+restore_shipped() {
+  cp "$WORK/acl.orig" "$ACL"
+  "${DC[@]}" up -d --force-recreate --wait --wait-timeout 90 headscale > /dev/null 2>&1
+  hsc nodes approve-routes -i "$BOX_ID" -r "$STANDIN_IP/32" > /dev/null || true
+}
+
+hot_reload_hazard
+expect "v0.29.5: the panel is back on the tailnet (443 works)" yes eventually 90 reachable panel "$STANDIN_IP" 443 dummy-443
+expect "v0.29.5: the REJECTED widening is NOT live after HUP + reconnect: dummy:$EXTRA_PORT refused" no \
+  reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
+restore_shipped
+
+# CONTROL: the same experiment on v0.29.4 (image swapped in place; same database).
+DC_OLD=("${DC[@]}" -f "$BUNDLE/lab/docker-compose.v0294.yml")
+"${DC_OLD[@]}" up -d --wait --wait-timeout 90 headscale > /dev/null 2>&1
+expect "control image is v0.29.4" yes grep -q 'headscale:v0.29.4@sha256:8833f828' <<< "$(HS_IMAGE_REF)"
+expect "v0.29.4 baseline: panel on the tailnet, dummy:$EXTRA_PORT still refused under the shipped policy" yes \
+  eventually 90 reachable panel "$STANDIN_IP" 443 dummy-443
+expect "...refused" no reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
+hot_reload_hazard
+expect "v0.29.4 CONTROL: the same rejected policy LEAKS (dummy:$EXTRA_PORT reachable after HUP + reconnect)" yes \
+  eventually 60 reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
+
+# Back to the shipped image and policy.
+restore_shipped
+expect "back on the shipped v0.29.5 image" yes grep -q 'headscale:v0.29.5@sha256:780ed2f9' <<< "$(HS_IMAGE_REF)"
+tsc box set --advertise-routes="$STANDIN_IP/32"
+expect "shipped policy restored: dummy:$EXTRA_PORT closed again, 443 and 8007 work" yes \
+  eventually 90 reachable panel "$STANDIN_IP" 8007 dummy-8007
+expect "...dummy:$EXTRA_PORT refused" no reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
 
 # ------------------------------------------------- DERP / STUN / websocket --
 step "Embedded DERP, STUN and the nginx websocket upgrade"

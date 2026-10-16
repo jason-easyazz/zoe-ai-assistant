@@ -21,17 +21,24 @@ panel ("zoe-panel") keep using their stock Tailscale clients and point them at
 
 | item | value |
 |---|---|
-| Headscale | `v0.29.4` (published 2026-09-23), pinned by tag **and** multi-arch digest in `docker-compose.yml` |
+| Headscale | `v0.29.5` (published 2026-10-13), pinned by tag **and** multi-arch digest in `docker-compose.yml`; see the age-rule exception below |
 | Tailscale clients | `1.104.1` on the box and the panel (the lab uses `tailscale/tailscale:v1.104.1`) |
 | Control plane | `hs.the411.life`, DNS-only (grey cloud) → host nginx :443 → container `127.0.0.1:18080` |
 | Embedded DERP | same :443 (`/derp`), STUN on **UDP 3478** |
 | Tailscale public relays | **not used** (`derp.urls: []`, reasoning in `config/config.yaml`) |
 | MagicDNS | **off** (reasoning in `config/config.yaml`) |
 
-Version choice: v0.29.5 was published 2026-10-13 (3 days old), so v0.29.4 is the
-newest release past the 14-day rule. Every configuration key and CLI flag below
-was read from the v0.29.4 source (`opensrc path juanfont/headscale@v0.29.4`), not
-from memory.
+Version choice and **age-rule exception.** The repo rule is "no dependency under 14 days
+old". v0.29.5 was published 2026-10-13, so it is under that. **The owner approved an
+exception for this release on 2026-10-16** ("you can use the new version of Headscale"),
+scoped to v0.29.5 only: v0.29.4 has a policy bug fixed upstream in v0.29.5 (PR
+[#3501](https://github.com/juanfont/headscale/pull/3501), "a rejected policy left its
+packet filter active"), so a rejected policy could stay live in memory. Nothing else in
+v0.29.5 changed any configuration key or CLI flag this bundle uses (diffed against
+v0.29.4; the config, `policy check` and registration commands are identical). Every key
+and flag below was read from the v0.29.5 source (`opensrc path juanfont/headscale@v0.29.5`),
+not from memory. `lab_test.sh` proves the fix (a rejected hot reload leaves the old
+policy enforced) and runs the same experiment on v0.29.4 to show the leak.
 
 ## What is in this directory
 
@@ -42,6 +49,7 @@ from memory.
 | `config/acl.hujson` | the access policy, including an executable `tests` block |
 | `nginx-hs.the411.life.acme.conf` | nginx stage 1: HTTP only, to obtain the first certificate |
 | `nginx-hs.the411.life.conf` | nginx stage 2: the final reverse proxy (websocket upgrade, DERP) |
+| `policy_apply.sh` | the only supported way to change or re-check the policy: offline check, apply only if it passed, restart |
 | `lab_test.sh`, `lab/` | the local lab proof (not deployed) |
 
 Nothing in the bundle contains a secret, a key, or the server's address. The
@@ -200,10 +208,12 @@ is only Available, the tag did not apply; check `hs nodes list` shows
 `tag:zoe-box` before approving anything by hand. (Manual fallback:
 `hs nodes approve-routes --identifier <ID> --routes 192.168.1.218/32`.)
 
-Both nodes now exist, so the policy's `tests` block can resolve. Run it:
+Both nodes now exist, so the policy's `tests` block can resolve. Run it against the
+real users and nodes (this stops Headscale for a few seconds and restarts it;
+connected nodes keep working):
 
 ```bash
-hs policy check -f /etc/headscale/acl.hujson          # "Policy is valid"
+cd /opt/headscale && ./policy_apply.sh --check        # must end "Policy is valid" and "headscale restarted and healthy"
 ```
 
 ### 10. Owner devices (phone, laptop)
@@ -259,12 +269,33 @@ covers its own prefix and anything inside it, never a wider prefix or another
 /32; no exit-node auto-approver exists. Everything else a node advertises waits
 for `hs nodes approve-routes`.
 
-Policy edits: change `config/acl.hujson`, then `docker compose kill -s HUP
-headscale`. Headscale runs the `tests` block at that reload and **rejects** the
-new policy (keeping the old one enforced) if an assertion fails. Add your own
-assertions when you widen anything. If a reload is rejected only because a node
-was deleted (so a test's tag no longer resolves), re-register the node or edit
-that test.
+### Changing the policy (offline check, then restart; never hot-reload)
+
+```bash
+cd /opt/headscale
+cp config/acl.hujson config/acl.hujson.new && $EDITOR config/acl.hujson.new
+./policy_apply.sh config/acl.hujson.new
+```
+
+`policy_apply.sh` stops Headscale (connected nodes keep working: they hold their last
+network map), runs `headscale policy check --bypass-grpc-and-access-database-directly`
+against the candidate, **applies it only if it printed "Policy is valid" and ran the
+`tests` block**, then restarts Headscale. A failing candidate is left in
+`config/acl.hujson.new`, the live policy is untouched, and Headscale is restarted on it.
+`config/acl.hujson.prev` keeps the previous policy for rollback. Add your own `tests`
+assertions when you widen anything. If a test fails only because a node was deleted
+(its tag no longer resolves), re-register the node or edit that test.
+
+Why check-then-restart instead of edit-and-`SIGHUP`: on v0.29.4 a **rejected** hot
+reload could leave the rejected policy's packet filter live (upstream #3501, fixed in
+v0.29.5, which is the pinned version). The lab shows both: on v0.29.5 a rejected
+reload leaves the old policy enforced, on v0.29.4 the same reload leaks. The offline
+flow does not depend on that fix: only a policy that already passed is ever on disk,
+and the plain `headscale policy check` (without the bypass flag) is not used because
+the v0.29.4 changelog says it does not run the tests against the real data. (A restart
+onto a policy whose tests fail only logs a warning and serves it, which is exactly why
+the check must pass before the file is swapped in.) Do **not** edit
+`config/acl.hujson` in place and send `SIGHUP`; use the flow above.
 
 The `8007` rule assumes the Jetson's 8007 listener answers on its LAN address. It
 does today (`ss -ltn` shows 443 and 8007 on `0.0.0.0`); if 8007 is ever re-bound to
@@ -380,8 +411,15 @@ gone). What it proves, with a positive control beside every refusal:
   with every peer path forced through the embedded DERP over nginx;
 - the panel is **refused** on an extra port (9999) and on direct access to the box
   and the owner laptop; box and owner reach the panel on 22 only; and the refusal is
-  the ACL: widening the policy opens the port, and a widened policy that
-  contradicts the `tests` block is rejected at reload;
+  the ACL: a widened policy that contradicts the `tests` block FAILS the offline check
+  and is never applied, the same widening without the conflicting test is applied and
+  opens the port, and restoring the shipped policy closes it again (all through
+  `policy_apply.sh`);
+- the **v0.29.5 fix**: a policy that passes its tests but fails to compile (a
+  `nodeAttrs` target naming an ambiguous user) is rejected by `policy_apply.sh`'s
+  check, and when it is hot-reloaded anyway the old policy stays enforced after a
+  client reconnect on v0.29.5, while the identical experiment on v0.29.4 leaks the
+  widened access (the lab swaps the image in place on the same database);
 - route auto-approval covers **only** the /32: a wider /24, an unrelated /24, a
   different /32 and an exit node are all advertised but left unapproved, and an
   untagged node advertising the same /32 is not approved;

@@ -1,6 +1,6 @@
-# Headscale v0.29.4 configuration for Zoe remote access.
+# Headscale v0.29.5 configuration for Zoe remote access.
 # Every key below was checked against config-example.yaml and
-# hscontrol/types/config.go at the v0.29.4 tag (opensrc: juanfont/headscale@v0.29.4).
+# hscontrol/types/config.go at the v0.29.5 tag (opensrc: juanfont/headscale@v0.29.5; no key changed from 0.29.4).
 # Mounted read-only at /etc/headscale (see docker-compose.yml).
 #
 # Owner-specific values: server_url (and the nginx file) name hs.the411.life.
@@ -109,8 +109,10 @@ log:
   level: info
   format: text
 
-# ACL policy, loaded from the config directory. Edits need a reload:
-#   docker compose kill -s HUP headscale
+# ACL policy, loaded from the config directory at start-up. Change it ONLY with
+# ./policy_apply.sh (offline database-aware check, applied only if it passed, then
+# restart). v0.29.4 could leave a rejected hot-reloaded policy live in memory (fixed
+# in v0.29.5, PR #3501); the flow is kept as defence in depth.
 policy:
   mode: file
   path: /etc/headscale/acl.hujson

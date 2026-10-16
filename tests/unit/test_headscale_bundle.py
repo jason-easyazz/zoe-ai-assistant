@@ -70,7 +70,7 @@ def test_headscale_image_is_pinned_by_tag_and_digest():
     assert re.fullmatch(
         r"docker\.io/headscale/headscale:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}", svc["image"]
     ), svc["image"]
-    assert svc["image"].startswith("docker.io/headscale/headscale:v0.29.4@sha256:")
+    assert svc["image"].startswith("docker.io/headscale/headscale:v0.29.5@sha256:")
 
 
 def test_compose_ports_are_loopback_http_and_public_stun_only():
@@ -181,6 +181,36 @@ def test_acl_ip_matches_between_policy_and_readme_commands():
     assert "--accept-routes --accept-dns=false" in readme
     assert "--login-server https://hs.the411.life" in readme
     assert "udp" in readme.lower() and "3478" in readme
+
+
+def test_policy_changes_never_rely_on_hot_reload_rejection():
+    """v0.29.4 could leave a rejected hot-reloaded policy live (upstream #3501, fixed in
+    v0.29.5, the pin). The documented flow stays offline check (DB-aware) then restart."""
+    script = BUNDLE / "policy_apply.sh"
+    assert script.stat().st_mode & 0o111
+    assert subprocess.run(["bash", "-n", str(script)]).returncode == 0
+    body = _code(script)
+    assert "--bypass-grpc-and-access-database-directly" in body
+    assert "Policy is valid" in body and "skip" in body  # fails closed on a skip warning
+    assert "HUP" not in body
+    readme = README.read_text()
+    # README mentions hot reload only in the "do not do this" paragraph, with the dated bump.
+    assert "Do **not** edit" in readme and "SIGHUP" in readme
+    assert "age-rule exception" in readme and "2026-10-16" in readme and "#3501" in readme
+    assert "kill -s HUP" not in _code(CONFIG) and "SIGHUP" not in _code(CONFIG)
+    # The lab sends HUP in exactly one place: the hazard cell that shows what a rejected
+    # hot reload does (old policy kept on v0.29.5, leak on the v0.29.4 control).
+    lab_code = _code(LAB)
+    assert lab_code.count("kill -s HUP") == 1
+    assert "hot_reload_hazard() {" in lab_code
+    assert (BUNDLE / "lab/docker-compose.v0294.yml").is_file()
+    assert "headscale:v0.29.4@sha256:" in (BUNDLE / "lab/docker-compose.v0294.yml").read_text()
+    assert "--bypass-grpc-and-access-database-directly" in README.read_text()
+    assert "--check" in README.read_text()
+    # the lab runs the real script, with a failing-tests negative control
+    lab = LAB.read_text()
+    assert "policy_apply.sh" in lab and "test(s) failed" in lab and "skip" in lab
+    assert "LEAKS" in lab and "NOT live after HUP" in lab  # the #3501 cell + its control
 
 
 def test_lab_pins_the_client_version_and_is_internal():
