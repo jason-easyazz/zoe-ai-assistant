@@ -401,7 +401,7 @@ Sub-options inside (A) — the receiver:
 - The voice path is untouched: no `VOICE_PATH_PATTERNS` file changes, so the replay gate does not front this PR.
 - **Held recordings can be transcribed again** inside their retention: `POST /api/omi/recordings/retranscribe` (all of the
   caller's `empty_transcript` / `failed` rows whose WAV is still on disk) and `POST /api/omi/recordings/{id}/retranscribe`
-  put them back to `pending` with `attempts = 0`; the retention expiry is NOT extended and a tombstone is never resurrected.
+  put them back to `pending` with `attempts = 0`; the retention expiry is NOT extended (a row already past it is never requeued, even while its WAV awaits the purge) and a tombstone is never resurrected.
   The same requeue runs **once per `omi_recordings.TRANSCRIBE_PIPELINE` value** from the loop (marker
   `<ZOE_OMI_AUDIO_DIR>/.transcribe-pipeline`, claimed durably BEFORE the requeue so it can never loop; unwritable = nothing requeued, a failed requeue restores it), so a transcription change reaches the
   audio still held; bump the constant with any change to transcription or its diagnostics.

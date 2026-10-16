@@ -933,17 +933,21 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
 _REQUEUE_STATUSES = ("empty_transcript", "failed")
 
 
-async def requeue_held(user_id: Optional[str] = None, *, rid: Optional[str] = None) -> int:
+async def requeue_held(user_id: Optional[str] = None, *, rid: Optional[str] = None, now: Optional[datetime] = None) -> int:
     """Put held recordings back in the transcription queue: rows that ended ``empty_transcript`` or ``failed`` and whose WAV is
     still on disk go back to ``pending`` with ``attempts = 0``. ``user_id`` scopes it to one member (the owner routes); ``None``
     is every member (the one-shot after a pipeline change). ``rid`` narrows it to one recording. Returns how many were requeued.
 
-    Nothing here extends the retention: a requeued recording still loses its WAV at ``audio_expires_at``. A row whose file is gone
-    is left as it is (there is nothing to transcribe). An erase landing meanwhile wins: the transcription pass re-checks the gate."""
+    Nothing here extends the retention: a requeued recording still loses its WAV at ``audio_expires_at``, and a row whose retention
+    has ALREADY passed is never requeued, even while its WAV still waits for ``purge_expired_audio`` - in the SELECT and again in the
+    guarded UPDATE (the expiry is always set while a WAV is held - ``store_recording`` sets it, ``keep_audio`` does not clear it - so
+    a NULL expiry is not "kept forever" and is not requeued either). A row whose file is gone is left as it is (nothing to
+    transcribe). An erase landing meanwhile wins: the transcription pass re-checks the gate."""
     from db_compat import get_compat_db
+    stamp = _iso(now or _now())
     sql = (f"SELECT id, audio_path FROM omi_recordings WHERE status IN ({', '.join('?' for _ in _REQUEUE_STATUSES)}) "
-           "AND audio_path != ''")
-    params: list = list(_REQUEUE_STATUSES)
+           "AND audio_path != '' AND audio_expires_at IS NOT NULL AND audio_expires_at > ?")
+    params: list = [*_REQUEUE_STATUSES, stamp]
     if user_id is not None:
         sql += " AND user_id = ?"
         params.append(user_id)
@@ -957,7 +961,8 @@ async def requeue_held(user_id: Optional[str] = None, *, rid: Optional[str] = No
                 continue
             cur = await db.execute(
                 f"UPDATE omi_recordings SET status = 'pending', attempts = 0, claimed_at = NULL, transcribed_at = NULL "
-                f"WHERE id = ? AND status IN ({', '.join('?' for _ in _REQUEUE_STATUSES)})", (r["id"], *_REQUEUE_STATUSES))
+                f"WHERE id = ? AND status IN ({', '.join('?' for _ in _REQUEUE_STATUSES)}) "
+                "AND audio_path != '' AND audio_expires_at IS NOT NULL AND audio_expires_at > ?", (r["id"], *_REQUEUE_STATUSES, stamp))
             n += 1 if getattr(cur, "rowcount", 1) else 0
         if n:
             await db.commit()

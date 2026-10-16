@@ -715,6 +715,39 @@ def test_the_marker_write_fsyncs_its_directory(env, monkeypatch):
     assert (True, dir_ino) in synced and not marker.exists()
 
 
+def test_a_row_past_its_retention_is_never_requeued_even_while_its_wav_waits_for_the_purge(env, monkeypatch):
+    """Negative control for retention: between ``audio_expires_at`` and the next purge pass the WAV is still on disk. Requeueing it
+    then would transcribe past retention (or leave a pending row whose audio the purge removes). Neither route nor the automatic pass
+    may pick it up; the live row beside it still requeues (so the filter is not just 'requeue nothing')."""
+    live, expired = _held(env, monkeypatch)
+    past = (datetime.now(UTC) - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    env.db.conn.execute("UPDATE omi_recordings SET audio_expires_at = ? WHERE id = ?", (past, expired))
+    env.db.conn.commit()
+    exp_path = env.db.rows("SELECT audio_path FROM omi_recordings WHERE id = ?", (expired,))[0]["audio_path"]
+    assert Path(exp_path).exists()                                                        # the WAV is still there: only the clock says no
+    assert env.client.post(f"/api/omi/recordings/{expired}/retranscribe").status_code == 404
+    assert env.client.post("/api/omi/recordings/retranscribe").json()["queued"] == 1
+    assert _status(env) == {live: "pending", expired: "empty_transcript"}
+    env.db.conn.execute("UPDATE omi_recordings SET status = 'empty_transcript' WHERE id = ?", (live,))
+    env.db.conn.commit()
+    assert run(omi.requeue_after_pipeline_change()) == 1
+    assert _status(env) == {live: "pending", expired: "empty_transcript"}
+    # the guarded UPDATE re-checks it too: a row that expires between the SELECT and the UPDATE stays held
+    env.db.conn.execute("UPDATE omi_recordings SET status = 'empty_transcript' WHERE id = ?", (live,))
+    env.db.conn.commit()
+    later = datetime.now(UTC) + timedelta(days=30)                                        # every row is past retention by then
+    real_fetch = omi._fetch
+
+    async def select_ignoring_expiry(db, sql, params=()):
+        if sql.startswith("SELECT id, audio_path FROM omi_recordings WHERE status IN"):
+            return await real_fetch(db, "SELECT id, audio_path FROM omi_recordings WHERE audio_path != ''")
+        return await real_fetch(db, sql, params)
+
+    monkeypatch.setattr(omi, "_fetch", select_ignoring_expiry)
+    assert run(omi.requeue_held(None, now=later)) == 0
+    assert set(_status(env).values()) == {"empty_transcript"}
+
+
 def test_an_expired_held_recording_is_purged_not_requeued(env, monkeypatch):
     _held(env, monkeypatch, n=1)
     assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1
