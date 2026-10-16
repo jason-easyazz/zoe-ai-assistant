@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-647 flags; 645 not documented in `.env.example`.
+652 flags; 650 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -233,7 +233,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_IDLE_CONSOLIDATION_MIN_TURNS` | `2` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
 | `ZOE_INTENT_DISPATCH_REQUIRE_TOKEN` | `''` | no | NO | `services/zoe-data/auth.py` |
 | `ZOE_INTENT_ROUTER_GATE` | `'1'` | no | NO | `services/zoe-data/fast_tiers.py` |
-| `ZOE_INTERNAL_TOKEN` | `''`, `-` | yes | NO | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/maintenance/zoe-nightly-dreaming.py`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/auth_handoff.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/zoe_core_client.py` |
+| `ZOE_INTERNAL_TOKEN` | `''`, `-` | yes | NO | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/maintenance/zoe-nightly-dreaming.py`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/auth_handoff.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/panel_kiosk_credential.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_KANBAN_BACKEND` | `'executor'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_BOARD` | `'default'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET` | `'2'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
@@ -255,6 +255,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE` | `'3'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `ZOE_KANBAN_SKIP_SCOUT` | `''` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_TERMINAL_TOOL_GRACE` | `dynamic` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
+| `ZOE_KIOSK_GATE_PORT` | `'7781'` | no | NO | `scripts/setup/touchscreen/zoe-kiosk-gate.py` |
 | `ZOE_KOKORO_BRAIN_HEALTH_URL` | `'http://127.0.0.1:11434/health'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_BRAIN_POLL_S` | `'2'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_BRAIN_WAIT_S` | `'180'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
@@ -401,6 +402,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PANEL_AGENT_PORT` | `'8765'` | no | NO | `services/zoe-data/auth_handoff.py`<br>`services/zoe-data/routers/system.py` |
 | `ZOE_PANEL_ALLOWED_HOSTS` | `''` | no | NO | `services/zoe-data/agent_safety.py` |
 | `ZOE_PANEL_ID` | `'post-merge-probe'`, `'zoe-touch-pi'` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_PANEL_KIOSK_CREDENTIAL` | `''` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
+| `ZOE_PANEL_KIOSK_CREDENTIAL_TTL_S` | `dynamic` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
+| `ZOE_PANEL_KIOSK_SECRET` | `-` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
+| `ZOE_PANEL_KIOSK_TICKET_TTL_S` | `60` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PERF` | `-` | no | NO | `scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_PERSONALISATION_HOP` | `True` | yes | NO | `services/zoe-data/personalisation_hop.py` |
