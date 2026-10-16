@@ -142,6 +142,8 @@ def env(monkeypatch, tmp_path):
     midday = datetime(2026, 10, 10, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     monkeypatch.setattr(omi, "night_window", lambda now=None: real_night_window(now or midday))
     erase_gate.reset()
+    omi._deferred_logged.clear()
+    omi._clear_deferred()
 
     calls: list[str] = []
     texts = {"n": 0}
@@ -502,7 +504,7 @@ def test_the_gate_closing_mid_job_puts_the_recording_back_untouched(env, monkeyp
     state = {"n": 0}
     real = omi.may_transcribe_now
 
-    def gate(now=None):
+    def gate(now=None, **_kw):
         state["n"] += 1
         return (True, "") if state["n"] <= 3 else (False, "night window")        # open for the pre-check + 2 chunks, then closes
 
@@ -670,3 +672,297 @@ def test_migration_is_reversible_and_rerunnable(env):
     _migrate(env.engine)                                      # IF NOT EXISTS: a rerun is safe
     _migrate(env.engine, down=True)
     assert env.db.rows("SELECT name FROM sqlite_master WHERE name = 'omi_recordings'") == []
+
+
+# === the RAM floor, deferral visibility, streamed reads (fix/omi-transcribe-floor) =======================================================
+# Live failure this pins: MemAvailable floats around the floor, the per-chunk gate aborted a running job on the first dip, and the
+# job restarted from chunk 0 each time - 34 of ~86 recordings in 2 h. Mutations worth re-running by Edit: make the mid-job gate use the
+# START floor; drop the hold in ``_patient_gate``; make ``note_deferred`` log every call; read the file whole in ``_transcribe_one``.
+import logging
+import random
+import tracemalloc
+from array import array
+
+
+def tone_wav_file(path: Path, seconds: int, amp: int = 6000) -> Path:
+    one = struct.pack("<16000h", *[int(amp * ((i % 73) / 73.0 - 0.5)) for i in range(16000)])
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        for _ in range(seconds):
+            w.writeframes(one)
+    return path
+
+
+def noise_wav_bytes(seconds: float, seed: int = 7) -> bytes:
+    rng = random.Random(seed)
+    a = array("h", (rng.randint(-8000, 8000) for _ in range(int(16000 * seconds))))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(a.tobytes())
+    return buf.getvalue()
+
+
+def test_the_default_floor_is_the_measured_one_and_the_boundary_is_inclusive(env, monkeypatch):
+    monkeypatch.delenv("ZOE_OMI_MIN_MEM_MB")
+    assert omi.min_mem_mb() == omi.DEFAULT_MIN_MEM_MB and omi.continue_floor_mb() == omi.DEFAULT_MIN_MEM_MB // 2
+    floor = omi.min_mem_mb()
+    monkeypatch.setattr(omi, "mem_available_mb", lambda: float(floor - 1))
+    ok, why = omi.may_transcribe_now()
+    assert not ok and omi.reason_code(why) == "low_memory"
+    monkeypatch.setattr(omi, "mem_available_mb", lambda: float(floor))            # control: exactly the floor is enough
+    assert omi.may_transcribe_now() == (True, "")
+
+
+def test_a_running_job_yields_only_below_half_the_floor_but_a_new_one_needs_all_of_it(env, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_MIN_MEM_MB", "1000")
+    monkeypatch.setattr(omi, "mem_available_mb", lambda: 700.0)
+    assert omi.may_transcribe_now()[0] is False                                    # start: 700 < 1000
+    assert omi.may_transcribe_now(continuing=True) == (True, "")                  # continue: 700 >= 500 - the dip does not kill the job
+    monkeypatch.setattr(omi, "mem_available_mb", lambda: 499.0)
+    assert omi.may_transcribe_now(continuing=True)[0] is False                    # negative control: a real shortage still stops it
+
+
+def test_a_new_recording_waits_for_an_idle_panel_but_a_running_one_only_for_a_live_turn(env, monkeypatch):
+    monkeypatch.delenv("ZOE_OMI_IDLE_S", raising=False)
+    monkeypatch.setattr(omi, "last_voice_age_s", lambda now_mono=None: 60.0)      # a turn a minute ago: not live (45 s), not idle (120 s)
+    ok, why = omi.may_transcribe_now()
+    assert not ok and omi.reason_code(why) == "panel_not_idle"
+    assert omi.may_transcribe_now(continuing=True) == (True, "")
+    monkeypatch.setattr(omi, "last_voice_age_s", lambda now_mono=None: 121.0)     # control: idle long enough
+    assert omi.may_transcribe_now() == (True, "")
+    monkeypatch.setattr(omi, "last_voice_age_s", lambda now_mono=None: None)      # no turn since boot
+    assert omi.may_transcribe_now() == (True, "")
+
+
+def test_last_voice_age_reads_the_session_table_without_importing_it(monkeypatch):
+    fake = type("M", (), {"_VOICE_SESSIONS": {"a": {"last_at": 90.0}, "b": {"last_at": 40.0}}})
+    monkeypatch.setitem(sys.modules, "routers.voice_tts", fake)
+    assert omi.last_voice_age_s(now_mono=100.0) == 10.0                            # the NEWEST session
+    assert omi.voice_busy(now_mono=100.0) is True and omi.voice_busy(now_mono=200.0) is False
+    monkeypatch.setitem(sys.modules, "routers.voice_tts", type("M", (), {"_VOICE_SESSIONS": {}}))
+    assert omi.last_voice_age_s(now_mono=100.0) is None
+
+
+def _deferred_lines(caplog):
+    return [r.getMessage() for r in caplog.records if "OMI_TRANSCRIBE_DEFERRED" in r.getMessage()]
+
+
+def test_deferral_is_logged_at_info_once_per_ten_minutes_per_reason(env, monkeypatch, caplog):
+    upload(env, make_wav(3.0))
+    upload(env, make_wav(3.0), key="r1.0-40")
+    monkeypatch.setenv("ZOE_OMI_MIN_MEM_MB", "1500")
+    monkeypatch.setattr(omi, "mem_available_mb", lambda: 1208.4)
+    why = "MemAvailable 1208 MB < 1500 MB"
+    with caplog.at_level(logging.INFO, logger="omi_recordings"):
+        for t in (0.0, 30.0, 599.0):
+            run(omi.note_deferred(why, now_mono=t))
+        assert _deferred_lines(caplog) == ["OMI_TRANSCRIBE_DEFERRED reason=low_memory avail=1208 floor=1500 backlog=2"]
+        run(omi.note_deferred(why, now_mono=600.0))                                 # control: the window elapses, it speaks again
+        run(omi.note_deferred(omi.WHY_VOICE, now_mono=601.0))                       # a different reason has its own clock
+    lines = _deferred_lines(caplog)
+    assert len(lines) == 3 and lines[1].startswith("OMI_TRANSCRIBE_DEFERRED reason=low_memory") and "reason=voice_active" in lines[2]
+    assert all(r.levelno == logging.INFO for r in caplog.records if "OMI_TRANSCRIBE_DEFERRED" in r.getMessage())
+
+
+def test_deferral_is_silent_with_an_empty_backlog_and_for_the_expected_closures(env, monkeypatch, caplog):
+    monkeypatch.setattr(omi, "mem_available_mb", lambda: 900.0)
+    with caplog.at_level(logging.INFO, logger="omi_recordings"):
+        run(omi.note_deferred("MemAvailable 900 MB < 1500 MB", now_mono=0.0))      # nothing waiting: not news
+        upload(env, make_wav(3.0))
+        run(omi.note_deferred("night window", now_mono=0.0))                        # state, never log noise
+        assert omi.deferred_state()["reason"] == "night_window"
+        run(omi.note_deferred("flag off", now_mono=0.0))
+        assert not _deferred_lines(caplog)
+        run(omi.note_deferred("MemAvailable 900 MB < 1500 MB", now_mono=0.0))      # control: with a backlog, memory does log
+        assert len(_deferred_lines(caplog)) == 1
+
+
+def test_a_gate_closed_pass_logs_and_the_list_shows_counts_and_the_reason_only(env, monkeypatch):
+    upload(env, make_wav(3.0))
+    upload(env, make_wav(3.0), key="r1.0-40")
+    body = env.client.get("/api/omi/recordings").json()
+    assert body["transcription"]["backlog"] == 2 and body["transcription"]["transcribing"] == 0
+    assert body["transcription"]["deferred"] is False and body["transcription"]["reason"] is None
+    monkeypatch.setenv("ZOE_OMI_MIN_MEM_MB", "1500")
+    monkeypatch.setattr(omi, "mem_available_mb", lambda: 1100.0)
+    assert run(omi.transcribe_pending(limit=3, pause_s=0)) == 0
+    t = env.client.get("/api/omi/recordings").json()["transcription"]
+    assert t["backlog"] == 2 and t["deferred"] is True and t["reason"] == "low_memory" and t["since"]
+    assert t["mem_available_mb"] == 1100 and t["mem_floor_mb"] == 1500
+    assert set(t) == {"backlog", "transcribing", "deferred", "reason", "since", "mem_available_mb", "mem_floor_mb"}      # counts, no content
+    monkeypatch.setattr(omi, "mem_available_mb", lambda: 4000.0)                      # control: the gate opens, the state clears, work drains
+    assert run(omi.transcribe_pending(limit=3, pause_s=0)) == 2
+    t = env.client.get("/api/omi/recordings").json()["transcription"]
+    assert t["backlog"] == 0 and t["deferred"] is False
+
+
+def test_backlog_counts_pending_only_for_that_member_and_not_exhausted_rows(env):
+    upload(env, make_wav(3.0))
+    upload(env, make_wav(3.0), key="r1.0-40")
+    assert run(omi.backlog_count(OWNER)) == 2 and run(omi.backlog_count(OTHER)) == 0 and run(omi.backlog_count()) == 2
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert run(omi.backlog_count(OWNER)) == 1                                        # done is not backlog
+    env.db.conn.execute("UPDATE omi_recordings SET attempts = ? WHERE status = 'pending'", (omi.MAX_ATTEMPTS,))
+    assert run(omi.backlog_count(OWNER)) == 0                                        # out of attempts is not waiting either
+
+
+def test_a_transient_dip_mid_job_is_waited_out_not_restarted_from_zero(env, monkeypatch):
+    upload(env, make_wav(45.0), duration=45.0)                                       # three chunks
+    monkeypatch.setattr(omi, "HOLD_POLL_S", 0.0)
+    monkeypatch.setenv("ZOE_OMI_MIN_MEM_MB", "1500")
+    seen = {"n": 0}
+
+    def mem():
+        seen["n"] += 1
+        return 100.0 if 3 <= seen["n"] <= 5 else 4000.0                              # open to start, then a short dip below HALF the floor
+
+    monkeypatch.setattr(omi, "mem_available_mb", mem)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    (row,) = rows(env)
+    assert row["status"] == "done" and row["transcript"] == "words1 words2 words3" and len(env.stt) == 3   # each chunk transcribed ONCE
+    assert seen["n"] > 5                                                              # the dip was really observed and polled through
+
+
+def test_the_hold_is_bounded_and_the_recording_goes_back_untouched(env, monkeypatch):
+    upload(env, make_wav(45.0), duration=45.0)
+    monkeypatch.setattr(omi, "HOLD_POLL_S", 0.0)
+    monkeypatch.setattr(omi, "HOLD_MAX_S", 0.0)
+    state = {"open": True}
+    monkeypatch.setattr(omi, "mem_available_mb", lambda: 4000.0 if state["open"] else 10.0)
+    monkeypatch.setenv("ZOE_OMI_MIN_MEM_MB", "1500")
+    orig = omi._transcribe_file
+
+    async def close_after_first(path):
+        state["open"] = False                                                         # RAM collapses for good after chunk 1
+        return await orig(path)
+
+    monkeypatch.setattr(omi, "_transcribe_file", close_after_first)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0
+    (row,) = rows(env)
+    assert row["status"] == "pending" and row["attempts"] == 0 and Path(row["audio_path"]).exists() and row["transcript"] == ""
+
+
+def test_a_decision_closure_mid_job_aborts_at_once_and_never_waits(env, monkeypatch):
+    upload(env, make_wav(45.0), duration=45.0)
+    monkeypatch.setattr(omi, "HOLD_POLL_S", 5.0)
+    monkeypatch.setattr(omi, "HOLD_MAX_S", 3600.0)                                    # if the night window were waited on, this would time out
+    flips = {"n": 0}
+
+    def night(now=None):
+        flips["n"] += 1
+        return flips["n"] > 2
+
+    monkeypatch.setattr(omi, "night_window", night)
+    assert run(asyncio.wait_for(omi.transcribe_pending(limit=1, pause_s=0), timeout=10)) == 0
+    assert rows(env)[0]["status"] == "pending"
+
+
+# --- streamed reads ---------------------------------------------------------------------------------------------------------
+class _Spy:
+    """A wave reader that records the biggest read it was ever asked for."""
+    def __init__(self, w):
+        self.w, self.max_frames = w, 0
+
+    def getframerate(self):
+        return self.w.getframerate()
+
+    def getnframes(self):
+        return self.w.getnframes()
+
+    def readframes(self, n):
+        self.max_frames = max(self.max_frames, n)
+        return self.w.readframes(n)
+
+
+@pytest.mark.parametrize("seconds", [0.5, 19.9, 20.0, 20.1, 41.0, 65.3])
+def test_the_streamed_chunks_are_exactly_the_whole_buffer_chunks(seconds):
+    wav = noise_wav_bytes(seconds)
+    with wave.open(io.BytesIO(wav)) as w:
+        pcm = w.readframes(w.getnframes())
+    expect = [pcm[a:b] for a, b in omi.chunk_pcm(pcm)]
+    with wave.open(io.BytesIO(wav)) as w:
+        got = list(omi.iter_wave_chunks(w))
+    assert got == expect and b"".join(got) == pcm
+
+
+def test_the_reader_never_asks_for_more_than_one_chunk(tmp_path):
+    p = tone_wav_file(tmp_path / "long.wav", 120)
+    with wave.open(str(p)) as w:
+        spy = _Spy(w)
+        n = sum(1 for _ in omi.iter_wave_chunks(spy))
+        total = w.getnframes()
+    assert n >= 6 and 0 < spy.max_frames <= int(omi.CHUNK_S * 16000)               # 120 s file, never more than 20 s requested at once
+    assert total > 5 * spy.max_frames                                                # control: the file really is much bigger than one read
+
+
+def test_a_wav_shorter_than_its_header_claims_terminates(tmp_path):
+    p = tone_wav_file(tmp_path / "t.wav", 30)
+    p.write_bytes(p.read_bytes()[:-400_000])                                         # header still promises 30 s
+    with wave.open(str(p)) as w:
+        got = b"".join(omi.iter_wave_chunks(w))
+    assert 0 < len(got) < 30 * 32000
+
+
+def test_transcribing_a_five_minute_recording_holds_no_whole_file_in_python(env, tmp_path):
+    """tracemalloc over the PRODUCTION path (claim -> stream -> Moonshine seam -> write): the old path peaked at ~3x the file."""
+    wav = tone_wav_file(tmp_path / "five.wav", 300).read_bytes()                     # 9.6 MB
+    upload(env, wav, duration=300.0)
+    tracemalloc.start()
+    try:
+        assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(env.stt) >= 15 and rows(env)[0]["status"] == "done"
+    assert peak_bytes < len(wav) // 3, f"peak {peak_bytes} B for a {len(wav)} B file: something holds the whole recording"
+
+
+def test_negative_control_the_whole_file_read_does_trip_the_memory_bound(tmp_path):
+    """The instrument above must be able to fail: the OLD read-everything-then-chunk shape peaks at several times the file."""
+    p = tone_wav_file(tmp_path / "five.wav", 300)
+    size = p.stat().st_size
+    tracemalloc.start()
+    try:
+        wav = p.read_bytes()
+        with wave.open(io.BytesIO(wav)) as w:
+            pcm = w.readframes(w.getnframes())
+        _ = [pcm[a:b] for a, b in omi.chunk_pcm(pcm)]
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak_bytes > size
+
+
+def test_measure_wav_file_equals_measure_wav_and_never_raises(tmp_path):
+    wav = noise_wav_bytes(3.5)
+    p = tmp_path / "m.wav"
+    p.write_bytes(wav)
+    assert omi.measure_wav_file(str(p)) == omi.measure_wav(wav)
+    assert omi.measure_wav_file(str(tmp_path / "missing.wav"))["seconds"] == 0.0
+
+
+def test_a_flag_flip_clears_a_stale_deferred_state_and_ends_a_running_job(env, monkeypatch):
+    upload(env, make_wav(45.0), duration=45.0)
+    monkeypatch.setattr(omi, "night_window", lambda now=None: True)
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert omi.deferred_state()["reason"] == "night_window"
+    monkeypatch.delenv("ZOE_OMI_SYNC_ENABLED")
+    run(omi.note_deferred("flag off"))
+    assert omi.deferred_state()["deferred"] is False                                 # control: the night-window state above was real
+    monkeypatch.setenv("ZOE_OMI_SYNC_ENABLED", "1")
+    monkeypatch.setattr(omi, "night_window", lambda now=None: False)
+    monkeypatch.setattr(omi, "HOLD_MAX_S", 3600.0)
+    orig = omi._transcribe_file
+
+    async def flip_after_first(path):
+        monkeypatch.delenv("ZOE_OMI_SYNC_ENABLED")                                    # the flag goes off mid-job: ends it, no waiting
+        return await orig(path)
+
+    monkeypatch.setattr(omi, "_transcribe_file", flip_after_first)
+    assert run(asyncio.wait_for(omi.transcribe_pending(limit=1, pause_s=0), timeout=10)) == 0
+    assert rows(env)[0]["status"] == "pending" and rows(env)[0]["attempts"] == 0

@@ -3767,6 +3767,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_IDLE_S": {
+        "defaults": [
+          "120"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMI_KEEP_AUDIO": {
         "defaults": [
           "False"
@@ -3779,7 +3789,7 @@
       },
       "ZOE_OMI_MIN_MEM_MB": {
         "defaults": [
-          "1500"
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [

@@ -4,7 +4,7 @@
   "cells": [
     {
       "id": "B1.date_day_first",
-      "title": "'my birthday is <d>/<m>/<y>' is stored day-first (7/8/1991 is 7 August), never read month-first",
+      "title": "'my birthday is <d>/<m>/<y>' is stored day-first (7/8/2008 is 7 August), never read month-first",
       "tier": "store",
       "kind": "script",
       "controls": ["extractor"],
@@ -151,7 +151,7 @@
     },
     {
       "id": "B.third_party_date",
-      "title": "'my friend X's birthday is 7/8/1991' is stored day-first for X",
+      "title": "'my friend X's birthday is 7/8/2008' is stored day-first for X",
       "tier": "full",
       "skip_reason": "no deterministic template reads a third person's date; the turn-digest MODEL does (needs the brain): samantha_bar S20",
       "controls": [],

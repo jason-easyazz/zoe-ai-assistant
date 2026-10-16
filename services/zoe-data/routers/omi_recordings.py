@@ -6,7 +6,9 @@
                                     the audio on the pendant.
   POST   /api/omi/sync-notice       ``{"count": N, "device": <id>}`` from the Pi after a session: one short bell notice to THAT pendant's
                                     owner. Device token.
-  GET    /api/omi/recordings        the caller's recordings, newest first (no transcript text in the list)
+  GET    /api/omi/recordings        the caller's recordings, newest first (no transcript text in the list) + ``transcription``: counts
+                                    (``backlog`` waiting, ``transcribing``) and whether the transcriber is ``deferred`` and why
+                                    (``reason`` code, ``since``, MemAvailable vs the floor) - never content
   GET    /api/omi/recordings/{id}   one recording with its transcript
   PATCH  /api/omi/recordings/{id}   ``{"keep_audio"?, "reviewed"?}``
   DELETE /api/omi/recordings/{id}   delete (audio, transcript, times); a content-free tombstone stays
@@ -213,7 +215,8 @@ async def unassign_device(device_id: str, admin: dict = Depends(_require_human_a
 @router.get("/recordings")
 async def list_my_recordings(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), user: dict = Depends(_require_owner)):
     return {"recordings": await omi.list_recordings(user["user_id"], limit=limit, offset=offset),
-            "empty_transcript_held": await omi.count_empty_transcripts(user["user_id"])}
+            "empty_transcript_held": await omi.count_empty_transcripts(user["user_id"]),
+            "transcription": await omi.transcription_status(user["user_id"])}
 
 
 @router.get("/recordings/{rid}")
