@@ -1143,7 +1143,9 @@ async def forget_user(user_id: str) -> int:
                 return int(getattr(cur, "rowcount", 0) or 0)
     except Exception as exc:  # noqa: BLE001
         import memory_forget_cascade
-        if memory_forget_cascade._store_missing(exc):
+        # nothing to reach: the table not migrated, or a process with no database pool at all (a memory-only tool, a unit lane) -
+        # it cannot reach the rows, and neither could anything it ran have written them
+        if memory_forget_cascade._store_missing(exc) or (isinstance(exc, RuntimeError) and "not initialised" in str(exc)):
             return 0
         logger.error("omi_day_review: candidates NOT erased for a forgotten user (%s)", type(exc).__name__)
         raise

@@ -635,6 +635,13 @@ def test_a_failed_member_erase_is_loud_and_a_missing_table_is_nothing_to_erase(e
     env.db.conn.commit()
     assert run(dr.forget_user(OWNER)) == 0
 
+    @contextlib.asynccontextmanager
+    async def no_pool():
+        raise RuntimeError("db_pool not initialised — call init_pool() first")
+        yield
+    monkeypatch.setattr(db_compat, "get_compat_db", no_pool)
+    assert run(dr.forget_user(OWNER)) == 0                          # a process with no database at all: nothing to reach
+
 
 def test_a_user_delete_erases_the_day_review_before_taking_the_memory_lock():
     """Codex #2091 (P1): an approval writes under the erase gate and its ingest needs the memory lock. ``delete_user`` must run the
