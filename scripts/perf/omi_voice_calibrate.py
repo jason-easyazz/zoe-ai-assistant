@@ -40,24 +40,39 @@ PEAK_RSS_MB = 100            # measured 2026-10-17: ORT + numpy + the INT8 sessi
 VOICE_LOG_RX = re.compile(r"(turn_stream|VOICE_TURN|voice turn|/api/voice/)")
 
 
-def preflight(headroom_mb: int, log: Path) -> None:
-    now = datetime.now()
+def preflight(headroom_mb: int, log: Path, *, now: datetime | None = None, mem_mb: int | None = None) -> None:
+    """Refuse (``SystemExit``) unless every gate is positively open. FAIL CLOSED: a missing or unreadable app log, or a voice line
+    whose time cannot be read, is a refusal - "I could not tell" never means "nobody is talking"."""
+    now = now or datetime.now().astimezone()
     if (1, 50) <= (now.hour, now.minute) < (4, 55):
         sys.exit("refused: 01:50-04:55 belongs to the night jobs")
-    mem = next(int(line.split()[1]) // 1024 for line in open("/proc/meminfo") if line.startswith("MemAvailable"))
+    mem = mem_mb if mem_mb is not None else next(
+        int(line.split()[1]) // 1024 for line in open("/proc/meminfo") if line.startswith("MemAvailable"))
     if mem < PEAK_RSS_MB + headroom_mb:
         sys.exit(f"refused: MemAvailable {mem} MB < {PEAK_RSS_MB} + {headroom_mb} MB")
-    if log.exists():
+    try:
         tail = log.read_text(errors="replace").splitlines()[-3000:]
-        for line in reversed(tail):
-            if VOICE_LOG_RX.search(line):
-                try:
-                    t = datetime.fromisoformat(line[:24].replace("+0800", "+08:00"))
-                    if (datetime.now(t.tzinfo) - t).total_seconds() < 300:
-                        sys.exit("refused: a voice turn in the last 5 minutes")
-                except ValueError:
-                    pass
-                break
+    except OSError:
+        sys.exit(f"refused: cannot read {log.name} to rule out a recent voice turn")
+    for line in reversed(tail):
+        if VOICE_LOG_RX.search(line):
+            try:
+                t = datetime.fromisoformat(re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", line[:24]))
+            except ValueError:
+                sys.exit("refused: the newest voice line has no readable time")
+            if t.tzinfo is None or (now - t).total_seconds() < 300:
+                sys.exit("refused: a voice turn in the last 5 minutes")
+            break
+
+
+def report_path(raw: str, sections: str, *, today: datetime | None = None) -> str:
+    """The private report path: default ``~/.zoe/reports/``; anything inside the repository is refused."""
+    d = today or datetime.now()
+    path = os.path.realpath(raw or os.path.expanduser(f"~/.zoe/reports/omi-voice-tagging-{d:%Y-%m-%d}"
+                                                       + ("" if sections.upper() == "ABCD" else "-" + sections.upper()) + ".md"))
+    if path == str(REPO) or path.startswith(str(REPO.resolve()) + os.sep):
+        sys.exit("refused: the report must live outside the repository (it is about household audio)")
+    return path
 
 
 def read(path: str) -> np.ndarray:
@@ -173,8 +188,7 @@ async def main() -> None:
     ap.add_argument("--headroom-mb", type=int, default=600)
     ap.add_argument("--sections", default="ABCD", help="any of A B C D (B needs A: the wearer profile)")
     a = ap.parse_args()
-    a.report = a.report or os.path.expanduser(f"~/.zoe/reports/omi-voice-tagging-{datetime.now():%Y-%m-%d}"
-                                              + ("" if a.sections.upper() == "ABCD" else "-" + a.sections.upper()) + ".md")
+    a.report = report_path(a.report, a.sections)
     preflight(a.headroom_mb, Path.home() / ".zoe-logs" / "zoe-data.app.log")
     from threadpoolctl import threadpool_limits
     threadpool_limits(1)
@@ -248,7 +262,12 @@ async def main() -> None:
             "| link_min | you_min | time correctly labelled | you precision | you recall |", "|---|---|---|---|---|"]
     out += [f"| {r[0]:.2f} | {r[1]:.3f} | {r[2]:.1%} | {r[3]:.1%} | {r[4]:.1%} |" for r in conv]
     os.makedirs(os.path.dirname(a.report), mode=0o700, exist_ok=True)
+    try:
+        os.chmod(os.path.dirname(a.report), 0o700)        # tighten a pre-existing directory too (one we own)
+    except OSError:
+        pass
     fd = os.open(a.report, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write("\n".join(out) + "\n")
     print("\n".join(out))

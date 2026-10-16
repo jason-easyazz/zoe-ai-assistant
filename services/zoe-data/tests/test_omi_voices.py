@@ -585,3 +585,45 @@ def test_migration_0054_round_trips_on_sqlite(env):
     _migrate(env.engine, "0054_omi_segments_voices.py")
     _migrate(env.engine, "0054_omi_segments_voices.py")                                # rerun-safe
     assert "rejections" in {r[1] for r in env.db.q("PRAGMA table_info(learned_voiceprints)")}
+
+
+def _calibrate_module():
+    spec = importlib.util.spec_from_file_location("omi_voice_calibrate", REPO / "scripts/perf/omi_voice_calibrate.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_calibration_refuses_unless_every_gate_is_positively_open(tmp_path):
+    """Fail closed: a missing log, an unreadable voice-line time, a recent turn, the night window, low RAM - each refuses."""
+    cal = _calibrate_module()
+    day = datetime(2026, 10, 17, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    log = tmp_path / "app.log"
+    with pytest.raises(SystemExit):
+        cal.preflight(0, log, now=day, mem_mb=5000)                                     # no log: cannot rule out a voice turn
+    log.write_text("2026-10-17T11:59:00+0800 INFO routers.voice_tts: turn_stream start\n")
+    with pytest.raises(SystemExit):
+        cal.preflight(0, log, now=day, mem_mb=5000)                                     # a turn one minute ago
+    log.write_text("garbled turn_stream line\n")
+    with pytest.raises(SystemExit):
+        cal.preflight(0, log, now=day, mem_mb=5000)                                     # unreadable time
+    log.write_text("2026-10-17T11:00:00+0800 INFO routers.voice_tts: turn_stream start\n")
+    cal.preflight(0, log, now=day, mem_mb=5000)                                         # an hour ago: open
+    with pytest.raises(SystemExit):
+        cal.preflight(0, log, now=day.replace(hour=2), mem_mb=5000)                     # the night jobs' window
+    with pytest.raises(SystemExit):
+        cal.preflight(600, log, now=day, mem_mb=500)                                    # not enough RAM
+    with pytest.raises(SystemExit):
+        cal.report_path(str(REPO / "docs" / "x.md"), "ABCD")                            # never inside the public repo
+    assert cal.report_path(str(tmp_path / "r.md"), "ABCD").endswith("r.md")
+
+
+def test_someone_else_clears_the_suggestion_and_learns_nothing(env, monkeypatch):
+    cid = _sam_cluster(env, monkeypatch)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, 9, 0.3))))
+    (seg,) = [s for s in run(_segs(rid)) if s["speaker"] == "other"]
+    assert env.client.post(f"/api/omi/segments/{seg['id']}/suggestion", json={"answer": "maybe"}).status_code == 400
+    assert env.client.post(f"/api/omi/segments/{seg['id']}/suggestion", json={"answer": "someone_else"}).status_code == 200
+    assert env.db.q("SELECT rejections, n_segments FROM learned_voiceprints") == [(1, 2)]
+    assert segs_of(env, rid)[1][2:4] == (None, None)
