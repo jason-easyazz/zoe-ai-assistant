@@ -19,7 +19,12 @@ import types
 import pytest
 
 import push as push_mod
-from push import DEAF_PANEL_WARN_INTERVAL_S, PushBroadcaster
+from push import (
+    DEAF_PANEL_ERROR_AFTER_S,
+    DEAF_PANEL_ERROR_INTERVAL_S,
+    DEAF_PANEL_WARN_INTERVAL_S,
+    PushBroadcaster,
+)
 
 pytestmark = pytest.mark.ci_safe
 
@@ -43,12 +48,15 @@ def _deaf_records(caplog):
 async def test_status_follows_connect_and_disconnect():
     b = PushBroadcaster()
     s = b.panel_push_status("zoe-touch-pi")
-    assert s == {"panel_id": "zoe-touch-pi", "subscribers": 0, "last_connect_at": None, "last_disconnect_at": None}
+    assert s["panel_id"] == "zoe-touch-pi" and s["subscribers"] == 0
+    assert s["last_connect_at"] is None and s["last_disconnect_at"] is None
+    assert s["deaf_turns"] == 0 and s["deaf_alert"] is False
 
     ws = _FakeWS()
     await b.connect_panel(ws, "zoe-touch-pi")
     s = b.panel_push_status("zoe-touch-pi")
     assert s["subscribers"] == 1 and s["last_connect_at"] is not None and s["last_disconnect_at"] is None
+    assert s["deaf_for_s"] is None and s["deaf_alert"] is False, "a connected panel is never deaf"
     assert b.panel_subscriber_count("another-panel") == 0, "another panel's channel is separate"
 
     b.disconnect(ws)
@@ -162,6 +170,60 @@ async def test_a_real_voice_turn_warns_exactly_once(monkeypatch, caplog):
         )
         [_ async for _ in resp.body_iterator]
     assert not _deaf_records(caplog)
+
+
+# ── a panel deaf for minutes while turns keep arriving: ERROR + counter ────────
+
+def _error_records(caplog):
+    return [r for r in caplog.records if r.levelno == logging.ERROR and "PANEL DEAF" in r.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_long_deafness_logs_a_rate_limited_error_and_counts_turns(caplog):
+    """The 2026-10-14 incident: hours of deaf voice turns, one WARNING each, nobody looked."""
+    b = PushBroadcaster()
+    ws = _FakeWS()
+    await b.connect_panel(ws, "zoe-touch-pi")
+    b.disconnect(ws)
+    gone = b.panel_push_status("zoe-touch-pi")["last_disconnect_at"]
+    with caplog.at_level(logging.WARNING, logger="push"):
+        # a blip (page reload / deploy restart): warning only
+        assert b.warn_if_panel_deaf("zoe-touch-pi", now=1000.0, wall_now=gone + 20) is True
+        assert not _error_records(caplog), "a 20 s blip is not an ERROR"
+        assert b.panel_push_status("zoe-touch-pi")["deaf_alert"] is False
+        # past the threshold: ERROR once
+        t0 = 1000.0 + DEAF_PANEL_WARN_INTERVAL_S + 1
+        assert b.warn_if_panel_deaf("zoe-touch-pi", now=t0, wall_now=gone + DEAF_PANEL_ERROR_AFTER_S + 5) is True
+        errs = _error_records(caplog)
+        assert len(errs) == 1 and "zoe-touch-pi" in errs[0].getMessage() and "push-status" in errs[0].getMessage()
+        assert "5 min" in errs[0].getMessage() and "2 voice turn" in errs[0].getMessage(), errs[0].getMessage()
+        st = b.panel_push_status("zoe-touch-pi", wall_now=gone + DEAF_PANEL_ERROR_AFTER_S + 5)
+        assert st["deaf_turns"] == 2 and st["deaf_alert"] is True and st["deaf_for_s"] >= DEAF_PANEL_ERROR_AFTER_S
+        # next turn inside the error interval: still a warning + counted, but NO second ERROR
+        t1 = t0 + DEAF_PANEL_WARN_INTERVAL_S + 1
+        assert b.warn_if_panel_deaf("zoe-touch-pi", now=t1, wall_now=gone + DEAF_PANEL_ERROR_AFTER_S + 40) is True
+        assert len(_error_records(caplog)) == 1, "the ERROR is rate-limited"
+        assert b.panel_push_status("zoe-touch-pi")["deaf_turns"] == 3
+        # after the interval: ERROR again
+        t2 = t0 + DEAF_PANEL_ERROR_INTERVAL_S + 1
+        b.warn_if_panel_deaf("zoe-touch-pi", now=t2, wall_now=gone + DEAF_PANEL_ERROR_AFTER_S + DEAF_PANEL_ERROR_INTERVAL_S)
+        assert len(_error_records(caplog)) == 2
+    # reconnect clears the alert and the counter
+    await b.connect_panel(_FakeWS(), "zoe-touch-pi")
+    st = b.panel_push_status("zoe-touch-pi")
+    assert st["deaf_turns"] == 0 and st["deaf_alert"] is False and st["deaf_for_s"] is None
+
+
+@pytest.mark.asyncio
+async def test_never_connected_panel_is_deaf_since_process_start(caplog):
+    """last_connect_at null (the live signature): the clock starts at process start."""
+    b = PushBroadcaster()
+    with caplog.at_level(logging.WARNING, logger="push"):
+        b.warn_if_panel_deaf("zoe-touch-pi", now=1.0, wall_now=b._started_at + 10)
+        assert not _error_records(caplog)
+        b.warn_if_panel_deaf("zoe-touch-pi", now=100.0, wall_now=b._started_at + DEAF_PANEL_ERROR_AFTER_S + 1)
+        assert len(_error_records(caplog)) == 1
+    assert b.panel_push_status("zoe-touch-pi", wall_now=b._started_at + DEAF_PANEL_ERROR_AFTER_S + 1)["deaf_alert"] is True
 
 
 # ── panel_live: gate every "check the panel / tap Done" line ──────────────────

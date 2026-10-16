@@ -26,6 +26,10 @@ class ZoeWebSocketSync {
         this.reconnectTimeout = null;
         this.pingInterval = null;
         this.isConnected = false;
+        // Heartbeat watchdog (opt-in, the push channel sets it): an OPEN socket that has received
+        // no frame for this long is dead whatever readyState says, so it is replaced. 0 = off.
+        this.staleAfterMs = 0;
+        this.lastRxAt = 0;
     }
     
     connect() {
@@ -49,9 +53,11 @@ class ZoeWebSocketSync {
         console.log(`🔌 Connecting WebSocket: ${this.endpoint}`);
         
         try {
-            this.ws = new WebSocket(wsUrl);
+            const ws = new WebSocket(wsUrl);
+            this.ws = ws;
             
-            this.ws.onopen = () => {
+            ws.onopen = () => {
+                if (this.ws !== ws) return;
                 console.log(`✅ WebSocket connected: ${this.endpoint}`);
                 this.isConnected = true;
                 this.reconnectAttempts = 0;
@@ -65,7 +71,9 @@ class ZoeWebSocketSync {
                 }
             };
             
-            this.ws.onmessage = (event) => {
+            ws.onmessage = (event) => {
+                if (this.ws !== ws) return;
+                this.lastRxAt = Date.now();
                 try {
                     const data = JSON.parse(event.data);
                     this.handleMessage(data);
@@ -74,14 +82,16 @@ class ZoeWebSocketSync {
                 }
             };
             
-            this.ws.onclose = () => {
+            ws.onclose = () => {
+                if (this.ws !== ws) return;   // a superseded socket's late close must not touch the live one
                 console.log(`❌ WebSocket closed: ${this.endpoint}`);
                 this.isConnected = false;
                 this.stopPingInterval();
                 this.reconnect();
             };
             
-            this.ws.onerror = (error) => {
+            ws.onerror = (error) => {
+                if (this.ws !== ws) return;
                 console.error(`⚠️ WebSocket error: ${this.endpoint}`, error);
                 this.isConnected = false;
             };
@@ -123,9 +133,31 @@ class ZoeWebSocketSync {
     
     startPingInterval() {
         // Send ping every 30 seconds to keep connection alive
+        this.lastRxAt = Date.now();
+        this.stopPingInterval();
         this.pingInterval = setInterval(() => {
+            if (this.staleAfterMs && this.ws && this.ws.readyState === WebSocket.OPEN
+                && Date.now() - this.lastRxAt > this.staleAfterMs) {
+                this.replaceSilentSocket();
+                return;
+            }
             this.send('ping');
         }, 30000);
+    }
+
+    /** The socket is OPEN but the server stopped answering: detach it (its late close must not
+     *  schedule a second reconnect), close it and reconnect from a reset backoff. */
+    replaceSilentSocket() {
+        console.warn(`[ZoeWS] ${this.endpoint} silent for ${this.staleAfterMs} ms; replacing the socket`);
+        this.stopPingInterval();
+        const old = this.ws;
+        this.ws = null;
+        this.isConnected = false;
+        if (old) {
+            try { old.onopen = null; old.onmessage = null; old.onclose = null; old.onerror = null; old.close(); } catch (_) { /* already closed */ }
+        }
+        this.reconnectAttempts = 0;
+        this.reconnect();
     }
     
     stopPingInterval() {
@@ -322,6 +354,26 @@ window.ZoeWebSockets = {
     //   voice:*     → drive orb state machine automatically
     //   pin_request → show PIN pad
     push: null,
+    _pushNudgesBound: false,
+
+    /** Network back / page visible: if the push socket is not open, reconnect now rather than
+     *  waiting out a backoff. Never overrides a deliberate disconnect(). */
+    _bindPushNudges() {
+        if (this._pushNudgesBound) return;
+        this._pushNudgesBound = true;
+        const nudge = () => {
+            const p = this.push;
+            if (!p || p.stopped) return;
+            // The panel executor owns the page lifecycle: no nudge while it is unloading / stopped on purpose.
+            if (typeof window._zoePushNudgeAllowed === 'function' && !window._zoePushNudgeAllowed()) return;
+            if (p.ws && p.ws.readyState <= WebSocket.OPEN) return;   // connecting or open
+            if (p.reconnectTimeout) { clearTimeout(p.reconnectTimeout); p.reconnectTimeout = null; }
+            p.reconnectAttempts = 0;
+            p.connect();
+        };
+        window.addEventListener('online', nudge);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) nudge(); });
+    },
 
     initPush(panelId, sessionId) {
         // Connect directly to /ws/push with the session query expected by the
@@ -338,27 +390,52 @@ window.ZoeWebSockets = {
         const pushUrl = `${protocol}//${window.location.host}/ws/push?${params.toString()}`;
         this.push = new ZoeWebSocketSync('/ws/push', 'all');
         window.zoePushWs = this.push;
+        // The push channel is the only way voice text and cards reach the panel: it never gives up
+        // (whatever ZOE_WS_MAX_RECONNECT_ATTEMPTS says for the data sockets; backoff caps at 30 s)
+        // and it replaces a socket that goes silent.
+        this.push.maxReconnectAttempts = 0;
+        this.push.staleAfterMs = 75000;
+        this._bindPushNudges();
         // Override the connect method to use the correct URL with query param.
         this.push.connect = function() {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+            if (this.ws) {
+                const rs = this.ws.readyState;
+                if (rs === WebSocket.OPEN) return;
+                // Idempotent while a handshake is in flight (the reconnect timer, the executor watchdog
+                // and the online/visible nudges can all call this at once: two live sockets would
+                // deliver every voice event twice). A handshake that hangs past 15 s is replaced.
+                if (rs === WebSocket.CONNECTING && Date.now() - (this.connectStartedAt || 0) < 15000) return;
+                // Any other superseded socket (hung CONNECTING, CLOSING, CLOSED) is detached: its delayed
+                // onclose must never reach this instance's state (it would stop the NEW socket's heartbeat).
+                const old = this.ws;
+                this.ws = null;
+                try { old.onopen = null; old.onmessage = null; old.onclose = null; old.onerror = null; old.close(); } catch (_) { /* already closed */ }
+            }
             console.log('[ZoeWS] Connecting push channel:', pushUrl);
+            this.connectStartedAt = Date.now();
             try {
-                this.ws = new WebSocket(pushUrl);
-                this.ws.onopen = () => {
+                const ws = new WebSocket(pushUrl);
+                this.ws = ws;
+                // Every handler is bound to ITS socket: a late event from a superseded one is ignored.
+                ws.onopen = () => {
+                    if (this.ws !== ws) return;
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
                     this.startPingInterval();
                     if (this.callbacks['connected']) this.callbacks['connected']();
                 };
-                this.ws.onmessage = (event) => {
+                ws.onmessage = (event) => {
+                    if (this.ws !== ws) return;
+                    this.lastRxAt = Date.now();
                     try { this.handleMessage(JSON.parse(event.data)); } catch(e) {}
                 };
-                this.ws.onclose = () => {
+                ws.onclose = () => {
+                    if (this.ws !== ws) return;
                     this.isConnected = false;
                     this.stopPingInterval();
                     this.reconnect();
                 };
-                this.ws.onerror = () => { this.isConnected = false; };
+                ws.onerror = () => { if (this.ws === ws) this.isConnected = false; };
             } catch(e) { this.reconnect(); }
         };
 

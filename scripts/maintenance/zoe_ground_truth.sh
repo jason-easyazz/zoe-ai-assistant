@@ -150,7 +150,14 @@ _gt_panel="${ZOE_GT_PANEL_ID:-zoe-touch-pi}"
 _gt_push=$(curl -s -m 2 "http://127.0.0.1:8000/api/panels/${_gt_panel}/push-status" 2>/dev/null)
 _gt_subs=$(printf '%s' "$_gt_push" | python3 -c 'import json,sys; print(json.load(sys.stdin)["subscribers"])' 2>/dev/null)
 if [ -z "$_gt_subs" ]; then dim "push-status unreadable for ${_gt_panel} (zoe-data down, or an older build without the endpoint)"
-elif [ "$_gt_subs" = "0" ]; then bad "${_gt_panel}: ZERO push subscribers — the panel is DEAF to voice events: $_gt_push"
+elif [ "$_gt_subs" = "0" ]; then
+  # deaf_alert (push.py): voice turns were LOST while the panel stayed deaf past 5 min — the page's
+  # reconnect loop is not recovering (2026-10-14); a page reload restores it. Older builds omit the field.
+  _gt_alert=$(printf '%s' "$_gt_push" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("%s %s" % (d.get("deaf_turns",0), d.get("deaf_alert",False)))' 2>/dev/null)
+  case "$_gt_alert" in
+    *True) bad "${_gt_panel}: DEAF ALERT — ZERO push subscribers and ${_gt_alert% *} voice turn(s) NOT shown on the panel; its /ws/push reconnect is not recovering, reload the page: $_gt_push" ;;
+    *) bad "${_gt_panel}: ZERO push subscribers — the panel is DEAF to voice events: $_gt_push" ;;
+  esac
 else ok "${_gt_panel}: ${_gt_subs} push subscriber(s) connected"; fi
 
 # ── Load-bearing tables: row count + freshness (empty+documented-live=suspect)
