@@ -182,16 +182,16 @@ async def get_current_user(request: Request) -> dict:
     """Extract and validate user from session header against zoe-auth.
 
     Also accepts X-Device-Token for voice/panel daemon requests — resolves to
-    the panel's registered user so voice commands run in the right user context.
+    the PANEL principal (guest-class + ``panel_id``), never the panel's bound
+    member (``panel_auth._resolve_device_token_user``, security fix 2026-10-17).
     """
     session_id = request.headers.get("X-Session-ID", "")
     device_token = request.headers.get("X-Device-Token", "")
 
-    # Device token path: resolve to panel user without going through zoe-auth session.
+    # Device token path: resolve to the panel principal without going through zoe-auth.
     # Late import inside function body avoids module-level circular dependency
-    # with panel_auth (which imports auth). Delegate to _resolve_device_token_user
-    # so this path honours panel_user_bindings instead of hardcoding the
-    # household-admin identity for every device token (ZOE security review).
+    # with panel_auth (which imports auth). _resolve_device_token_user owns the
+    # rule (the device, not a person; ZOE_DEVICE_TOKEN_BINDS_MEMBER is the rollback).
     if not session_id and device_token:
         try:
             from routers.panel_auth import _resolve_device_token_user

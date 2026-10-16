@@ -10,7 +10,7 @@ import panel_kiosk_credential
 import panel_principal
 from auth import get_current_user
 from database import get_db
-from skybridge_service import active_timers_for, cancel_timer_by_id, resolve_skybridge_request
+from skybridge_service import active_timers_for, cancel_timer_by_id, classify_skybridge_intent, resolve_skybridge_request
 
 
 logger = logging.getLogger(__name__)
@@ -132,7 +132,29 @@ async def resolve_skybridge_command(
         context = None
     # Anyone AT THE PANEL may use the household list; an anonymous LAN caller still touches no list.
     await panel_principal.mark_if_panel(request, user, db)
+    # Home control (security fix 2026-10-17): the same rule as ``/api/ha/control`` - a member or the panel. Without this an
+    # anonymous LAN caller refused there could post "turn off the lights" here instead. Classified only for a non-member, and
+    # the voice lanes call ``resolve_skybridge_request`` directly, so a voice turn is unaffected.
+    if not panel_principal.is_member(user):
+        intent = classify_skybridge_intent(message, context)
+        if intent is not None and intent.domain == "smart_home" and not await panel_principal.may_control_home(request, user, db):
+            logger.warning("skybridge resolve: smart-home %s refused for a caller that is neither a member nor the panel",
+                           intent.action)
+            return _home_control_refused(intent.action, context)
     return await resolve_skybridge_request(message, user.get("user_id", "voice-guest"), context=context, db=db)
+
+
+def _home_control_refused(action: str, context: dict | None) -> dict:
+    """The skybridge answer when a non-member, non-panel caller asks to drive the house: nothing ran."""
+    return {
+        "handled": True,
+        "auth_required": True,
+        "intent": {"domain": "smart_home", "action": action},
+        "spoken_summary": "Sign in, or use the wall panel, to control the house.",
+        "cards": [],
+        "actions": [{"type": "auth_required", "domain": "smart_home", "action": action}],
+        "skybridge_context": context or {},
+    }
 
 
 @router.get("/timers")

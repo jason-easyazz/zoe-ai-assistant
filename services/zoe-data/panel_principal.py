@@ -8,8 +8,8 @@ list stays private: a guest never sees or changes one.
 unforgeable from the open LAN. The panel kiosk is a browser whose only credential is a guest session, and ``POST /api/auth/guest``
 mints one for any caller, so "a guest session" is not evidence of a panel. In order of strength, a request is the panel when:
 
-  1. its principal came from a provisioned device token with NO bound member (``get_current_user`` stamps ``panel_id`` on that
-     guest) - the voice daemon / provisioned kiosk; or
+  1. its principal came from a provisioned device token (``get_current_user`` resolves EVERY device token to a guest stamped
+     with ``panel_id`` since 2026-10-17 - the token is the device, never its bound member) - the voice daemon / kiosk gate; or
   1b. it carries the KIOSK CREDENTIAL (``panel_kiosk_credential``, flag ``ZOE_PANEL_KIOSK_CREDENTIAL``, default off): an
      HttpOnly cookie the panel's loopback gate obtains with the device token, naming an ACTIVE panel that allows guests. This is
      what keeps the kiosk browser "the panel" when its address changes (private link home, another Wi-Fi); or
@@ -163,9 +163,12 @@ async def _with_registry(db: Any, check: Any, value: str) -> bool:
         return False
 
 
-async def is_panel_guest(request: Any, user: Mapping[str, Any] | None, db: Any = None) -> bool:
-    """True only for a GUEST principal whose request is demonstrably from the panel (see the module docstring)."""
-    mode = scope_mode()
+async def is_panel_guest(request: Any, user: Mapping[str, Any] | None, db: Any = None, *, mode: Optional[str] = None) -> bool:
+    """True only for a GUEST principal whose request is demonstrably from the panel (see the module docstring).
+
+    ``mode`` defaults to ``ZOE_HOUSEHOLD_LISTS_PANEL_SCOPE`` (the household-list rule). A caller with its own policy passes
+    ``"registered"`` to get the strict device / kiosk-credential / registered-address test whatever the list flag says."""
+    mode = scope_mode() if mode is None else mode
     if mode == "off" or request is None or not is_guest_id((user or {}).get("user_id")):
         return False
     if (user or {}).get("auth_degraded"):
@@ -197,3 +200,43 @@ async def mark_if_panel(request: Any, user: Mapping[str, Any] | None, db: Any = 
     except Exception as exc:  # noqa: BLE001
         logger.warning("panel_principal: mark_if_panel failed (%s)", type(exc).__name__)
     return False
+
+
+# ── Home control: who may drive Home Assistant (lights, switches, covers, locks, media) ─────────────────────────────────────
+#
+# Security fix 2026-10-17: ``POST /api/ha/control`` accepted ANY principal, and ``get_current_user`` resolves a credential-less
+# request as ``guest`` - so every device on the home LAN (guest Wi-Fi visitors, IoT gadgets) could drive the house anonymously.
+# Rule: a signed-in MEMBER, or THE PANEL (``is_panel_guest`` in its strict ``registered`` form, independent of the household-list
+# flag: a device token, the kiosk credential, or a registered panel address - never ``lan``, which any phone with a guest session
+# satisfies, and never ``off``, which would silently break the kiosk's light pins). An anonymous LAN caller, a forged
+# X-Real-IP / X-Forwarded-For, anything over the Cloudflare tunnel without a member or a device token, and an auth-outage
+# principal are refused.
+
+
+def home_control_scope() -> str:
+    """``panel`` (default, the fix): a member or the panel. ``open``: the pre-fix behaviour (any caller, incl. an anonymous LAN
+    guest) - an operator ROLLBACK only, for a kiosk whose address is not registered. Anything else is the safe default.
+    Read per call."""
+    return "open" if os.environ.get("ZOE_HA_CONTROL_SCOPE", "panel").strip().lower() == "open" else "panel"
+
+
+def is_member(user: Mapping[str, Any] | None) -> bool:
+    """A real signed-in household member (any non-guest role) - never a guest id, never an auth-outage principal."""
+    u = user or {}
+    if u.get("auth_degraded"):
+        return False
+    role = str(u.get("role") or "").strip().lower()
+    return bool(role) and role != "guest" and not is_guest_id(u.get("user_id"))
+
+
+async def may_control_home(request: Any, user: Mapping[str, Any] | None, db: Any = None) -> bool:
+    """True when this request may drive Home Assistant (or read its entity states): a member, or the panel. Never raises."""
+    if home_control_scope() == "open":
+        return True
+    if is_member(user):
+        return True
+    try:
+        return await is_panel_guest(request, user, db, mode="registered")
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        logger.warning("panel_principal: home-control panel check failed (%s) - refusing", type(exc).__name__)
+        return False

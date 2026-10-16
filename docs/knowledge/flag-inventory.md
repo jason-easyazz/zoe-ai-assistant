@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-16T00:00:00Z
+timestamp: 2026-10-17T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-16T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-16. The table body is deterministic (sorted, no
+Last generated: 2026-10-17. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-653 flags; 651 not documented in `.env.example`.
+655 flags; 653 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -138,6 +138,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DEFAULT_MEDIA_PLAYER` | `'media_player.all'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DELIVERY_LEDGER` | `''` | yes | NO | `services/zoe-data/proactive/lines.py` |
 | `ZOE_DEVICE_TOKEN` | `-` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
+| `ZOE_DEVICE_TOKEN_BINDS_MEMBER` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_DIGARR_AI_BASE_URL` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DIGARR_AI_MODEL` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DIGARR_AI_TIMEOUT_S` | `'300'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
@@ -212,6 +213,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_GRAPH_RECALL_WEIGHT` | `dynamic` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_HARNESS` | `-` | no | NO | `services/zoe-data/live_store_guard.py` |
 | `ZOE_HA_BRIDGE_URL` | `''`, `'http://127.0.0.1:8007'` | no | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_HA_CONTROL_SCOPE` | `'panel'` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_HA_URL` | `dynamic` | no | NO | `services/zoe-data/routers/stubs.py` |
 | `ZOE_HA_VOICE_INGRESS_URL` | `'http://host.docker.internal:8000'` | no | NO | `services/homeassistant-mcp-bridge/main.py` |
 | `ZOE_HA_VOICE_TOKEN` | `''` | no | NO | `services/homeassistant-mcp-bridge/main.py` |

@@ -163,22 +163,48 @@ async def _resolve_session_principal_for_panel(request: Request | None, panel_id
     return uid
 
 
+def _device_token_binds_member() -> bool:
+    """``ZOE_DEVICE_TOKEN_BINDS_MEMBER`` (default OFF = the fix): the pre-2026-10-17 rule, where a device token for a panel with
+    a ``default`` member binding resolved AS that member (and a token minted with role ``admin`` as an ADMIN). An operator
+    ROLLBACK only. Read per call."""
+    return os.environ.get("ZOE_DEVICE_TOKEN_BINDS_MEMBER", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _panel_principal(panel_id: str, role: str) -> dict:
+    """The PANEL principal: guest-class, stamped with ``panel_id`` (``panel_principal.is_panel_guest`` path 1)."""
+    return {
+        "user_id": "guest",
+        "role": "guest",
+        "username": f"panel:{panel_id}",
+        "permissions": [],
+        "panel_id": panel_id,
+        "device_token_role": role,
+    }
+
+
 async def _resolve_device_token_user(raw_token: str) -> dict | None:
     """Resolve a device token to a user dict for use in get_current_user().
 
-    A device token authenticates the DEVICE, not a person. The acting user is
-    the one bound to that panel in panel_user_bindings (binding_type='default').
-    A device with NO such binding is treated as **guest** (fail-closed): an
-    unassigned device gets only guest-allowed capabilities, never a real user's
-    (let alone admin's) data. This mirrors the session model where an absent
-    identity resolves to guest. Bind a panel to a user to give its voice/kiosk
-    that user's personal context. (ZOE-4321; unbound-device→guest hardening.)
+    A device token authenticates the DEVICE, not a person, so it resolves to the
+    PANEL principal (guest-class + ``panel_id``): "anyone at the panel" - the
+    household lists, home control - and nothing personal (security fix
+    2026-10-17, design: docs/architecture/panel-anywhere.md 6.2). It used to
+    resolve AS the panel's ``default`` member binding, which made the token on the
+    panel's disk (no expiry, sent with certificate checks off) a standing member
+    credential, and a token minted with role ``admin`` an admin one. A person at
+    the panel proves who they are per turn instead: the voice lanes take the
+    member ONLY from a fresh source (an accepted voice claim, a fresh PIN panel
+    session, a verified voice session - ``voice_tts._resolve_fresh_panel_member``)
+    and never read this result; a member's own browser session is unaffected.
+    ``ZOE_DEVICE_TOKEN_BINDS_MEMBER=1`` restores the old binding (rollback only).
     """
     info = lookup_device_token(raw_token)
     if not info:
         return None
     panel_id = info.get("panel_id", "unknown")
     role = info.get("role", "voice")
+    if not _device_token_binds_member():
+        return _panel_principal(panel_id, role)
 
     bound_user_id: Optional[str] = None
     lookup_failed = False
@@ -216,14 +242,7 @@ async def _resolve_device_token_user(raw_token: str) -> dict | None:
                 "device token for panel %s has no default user binding — acting as guest",
                 panel_id,
             )
-        return {
-            "user_id": "guest",
-            "role": "guest",
-            "username": f"panel:{panel_id}",
-            "permissions": [],
-            "panel_id": panel_id,
-            "device_token_role": role,
-        }
+        return _panel_principal(panel_id, role)
 
     user_role = "member" if role in ("voice", "panel", "kiosk") else "admin" if role == "admin" else "member"
     return {

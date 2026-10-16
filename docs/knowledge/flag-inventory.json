@@ -1238,6 +1238,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_DEVICE_TOKEN_BINDS_MEMBER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/panel_auth.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_DIGARR_AI_BASE_URL": {
         "defaults": [
           "''"
@@ -1991,6 +2001,16 @@
           "services/zoe-data/routers/system.py",
           "services/zoe-data/smart_home_service.py",
           "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HA_CONTROL_SCOPE": {
+        "defaults": [
+          "'panel'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
         ],
         "typed_env": false
       },
