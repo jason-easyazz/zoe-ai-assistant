@@ -56,9 +56,19 @@ A, B, KID = "member-a", "member-b", "member-kid"
 MID = "wespeaker_resnet34+i8qdq-u8s8+c1"
 UTC = timezone.utc
 BASE = """
-CREATE TABLE people (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, relationship TEXT, email TEXT, phone TEXT,
-    birthday TEXT, notes TEXT, visibility TEXT NOT NULL DEFAULT 'family', deleted INTEGER DEFAULT 0, is_partial INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT, updated_at TEXT);
+CREATE TABLE people (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, relationship TEXT, email TEXT, phone TEXT, birthday TEXT,
+    notes TEXT, preferences TEXT, visibility TEXT NOT NULL DEFAULT 'family', deleted INTEGER DEFAULT 0,
+    is_partial INTEGER NOT NULL DEFAULT 0, context TEXT, circle TEXT, how_we_met TEXT, first_met_date TEXT,
+    introduced_by_person_id TEXT, created_at TEXT, updated_at TEXT);
+CREATE TABLE person_relationships (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, person_a_id TEXT NOT NULL, person_b_id TEXT NOT NULL, rel_type TEXT NOT NULL,
+    rel_a_to_b TEXT NOT NULL, rel_b_to_a TEXT NOT NULL, rel_group TEXT NOT NULL, notes TEXT, valid_from TEXT, valid_to TEXT,
+    superseded_by TEXT, authority TEXT, origin TEXT, close_reason TEXT, turn_id TEXT, quote_span TEXT, speaker_rank INTEGER,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE person_activities (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, user_id TEXT NOT NULL);
+CREATE TABLE person_gift_ideas (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, user_id TEXT NOT NULL);
+CREATE TABLE person_bucket_list (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, user_id TEXT NOT NULL);
 CREATE TABLE person_important_dates (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, user_id TEXT NOT NULL, label TEXT NOT NULL,
     date_type TEXT NOT NULL DEFAULT 'birthday', month INTEGER, day INTEGER, year INTEGER, reminder_days_before INTEGER NOT NULL DEFAULT 7,
     mem_id TEXT, created_at TEXT);
@@ -516,6 +526,31 @@ def test_a_segment_store_failure_never_costs_the_transcript(env, monkeypatch):
     monkeypatch.setattr(ov, "store_segments", boom)
     rid = transcribe(env, monkeypatch, turns((0, 6, "other", 0.0, SAM)))
     assert env.db.q("SELECT status, transcript, speaker_state FROM omi_recordings WHERE id = ?", (rid,)) == [("done", "said6s", "untaggable")]
+
+
+def test_a_person_merge_moves_the_members_tags_to_the_survivor(env, monkeypatch):
+    import person_merge
+    cid = _sam_cluster(env, monkeypatch)
+    stub = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    env.db.conn.execute("INSERT INTO people (id, user_id, name, visibility, deleted, is_partial) VALUES ('real', ?, 'Sam Lee', "
+                        "'personal', 0, 0)", (A,))
+    env.db.conn.commit()
+    run(person_merge.merge_person(env.db, A, stub, "real"))
+    assert env.db.q("SELECT DISTINCT tagged_person_id FROM omi_segments WHERE tagged_person_id IS NOT NULL") == [("real",)]
+    run(_sweep(datetime.now(UTC)))                                                   # the soft-deleted stub's purge loses nothing
+    assert env.db.q("SELECT COUNT(*) FROM omi_segments WHERE tagged_person_id = 'real'") == [(2,)]
+
+
+def test_a_voice_erase_failure_is_loud_and_never_blocks_erasing_audio(env, monkeypatch, caplog):
+    rid = transcribe(env, monkeypatch, turns((0, 6, "other", 0.0, TV)))
+
+    async def boom(db, uid):
+        raise RuntimeError("voice tables unreachable")
+    monkeypatch.setattr(ov, "forget_user", boom)
+    caplog.set_level("ERROR")
+    assert run(omi.forget_user(A)) == 1
+    assert env.db.q("SELECT status FROM omi_recordings WHERE id = ?", (rid,)) == [("deleted",)]
+    assert "OMI_VOICES_ERASE_INCOMPLETE" in caplog.text
 
 
 def test_erasing_the_member_erases_every_voice_row(env, monkeypatch):
