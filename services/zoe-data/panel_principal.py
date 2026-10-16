@@ -221,9 +221,11 @@ def home_control_scope() -> str:
 
 
 def is_member(user: Mapping[str, Any] | None) -> bool:
-    """A real signed-in household member (any non-guest role) - never a guest id, never an auth-outage principal."""
+    """A real signed-in household member (any non-guest role) - never a guest id, never an auth-outage principal, and never the
+    header-less caller ``ZOE_UNAUTHENTICATED_ROLE=family-admin`` promotes (that legacy override makes every LAN device an admin;
+    home control stays member-or-panel under it, and ``ZOE_HA_CONTROL_SCOPE=open`` is the explicit way to open it)."""
     u = user or {}
-    if u.get("auth_degraded"):
+    if u.get("auth_degraded") or u.get("unauthenticated_override"):
         return False
     role = str(u.get("role") or "").strip().lower()
     return bool(role) and role != "guest" and not is_guest_id(u.get("user_id"))
@@ -236,6 +238,8 @@ async def may_control_home(request: Any, user: Mapping[str, Any] | None, db: Any
     if is_member(user):
         return True
     try:
+        if (user or {}).get("unauthenticated_override"):
+            user = {"user_id": "guest", "role": "guest"}  # a header-less caller IS anonymous: judge it as one, by its device
         return await is_panel_guest(request, user, db, mode="registered")
     except Exception as exc:  # noqa: BLE001 - fail closed
         logger.warning("panel_principal: home-control panel check failed (%s) - refusing", type(exc).__name__)

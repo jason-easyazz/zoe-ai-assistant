@@ -265,3 +265,40 @@ def test_skybridge_still_runs_home_control_for_the_panel_and_members_and_other_a
     # not home control: unchanged for an anonymous caller (the resolver applies its own per-domain rules)
     assert client(PHONE_IP).post("/api/skybridge/resolve", json={"message": "what time is it"}).json()["spoken_summary"] == "done"
     assert [m for m, _ in seen] == ["turn off the kitchen light", "turn off the kitchen light", "what time is it"]
+
+
+# ---- review round (cross-review on #2089) ------------------------------------------------------------------------------------
+def test_the_legacy_unauthenticated_admin_override_does_not_open_the_house(registry, bridge, monkeypatch):
+    # ZOE_UNAUTHENTICATED_ROLE=family-admin promotes EVERY header-less caller to admin; home control must not follow it.
+    monkeypatch.setattr(auth, "_UNAUTH_ROLE", "family-admin")
+    assert _control(PHONE_IP).status_code == 403
+    assert _ha(PHONE_IP).get("/api/ha/entities").status_code == 403
+    assert bridge == []
+    # the kiosk is still the panel, and opening the house stays the explicit ZOE_HA_CONTROL_SCOPE=open
+    assert _control(PROXY, {"X-Real-IP": PANEL_IP}).status_code == 200
+    monkeypatch.setenv("ZOE_HA_CONTROL_SCOPE", "open")
+    assert _control(PHONE_IP).status_code == 200
+
+
+def test_an_auth_outage_over_http_reaches_nothing_even_from_the_panel_address(registry, bridge, monkeypatch):
+    # ZOE_AUTH_FAIL_CLOSED=false: an outage resolves ANY session header to a degraded guest - never evidence of the panel.
+    monkeypatch.setattr(auth, "_AUTH_FAIL_CLOSED", False)
+
+    async def _outage(_sid):
+        return auth._degraded_user()
+
+    monkeypatch.setattr(auth, "_validate_with_auth_service", _outage)
+    r = _control(PROXY, {"X-Session-ID": "anything-at-all", "X-Real-IP": PANEL_IP})
+    assert r.status_code == 403, r.text
+    assert bridge == []
+
+
+def test_the_kiosk_credential_is_the_panel_from_any_address_but_not_over_the_tunnel(registry, bridge, monkeypatch):
+    import panel_kiosk_credential
+
+    monkeypatch.setattr(panel_kiosk_credential, "credential_panel_id", lambda _req: "kitchen-panel")
+    assert _control(PROXY, {"X-Real-IP": PHONE_IP}).status_code == 200       # the kiosk on another Wi-Fi / private link
+    assert _control(PROXY, {"X-Real-IP": PHONE_IP, **CF}).status_code == 403  # never over Cloudflare
+    registry.con.execute("UPDATE panels SET allow_guest = 0")
+    assert _control(PROXY, {"X-Real-IP": PHONE_IP}).status_code == 403       # the row still decides
+    assert len(bridge) == 1

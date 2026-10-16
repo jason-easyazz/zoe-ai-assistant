@@ -209,7 +209,9 @@ async def get_current_user(request: Request) -> dict:
                 "(path=%s method=%s) — flip back to 'guest' for fail-closed behaviour",
                 request.url.path, request.method,
             )
-            return {"user_id": DEFAULT_USER_ID, "role": "admin"}
+            # Marked so a gate that must not trust a header-less caller (home control,
+            # panel_principal.is_member) can tell this promotion from a real sign-in.
+            return {"user_id": DEFAULT_USER_ID, "role": "admin", "unauthenticated_override": True}
         return {
             "user_id": "guest",
             "role": "guest",
