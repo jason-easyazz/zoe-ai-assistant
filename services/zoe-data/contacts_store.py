@@ -191,6 +191,20 @@ async def _create_person(db, user_id: str, name: str, *, now: str) -> str:
     return pid
 
 
+async def ensure_person(db, user_id: str, name: str, *, relationship: Optional[str] = None) -> tuple[str, bool]:
+    """``(person_id, created)``: the member's live person whose name folds to ``name``, else a new PERSONAL row in their own layer
+    (the pendant day review's approved "person" candidate). A relationship fills an empty one only, never overwrites."""
+    key = fold(name)
+    for p in await _live_people(db, user_id):
+        if key and fold(p["name"]) == key:
+            return p["id"], False
+    pid = await _create_person(db, user_id, name, now=now_iso())
+    if relationship:
+        await _run(db, "UPDATE people SET relationship = ? WHERE id = ? AND user_id = ? AND relationship IS NULL",
+                   (relationship[:60], pid, user_id))
+    return pid, True
+
+
 def names_compatible(a: str, b: str) -> bool:
     """Same person by name? One folded token set contains the other ("Dana" ~ "Dana Okafor"); an empty side is compatible."""
     ta, tb = set(fold(a).split()), set(fold(b).split())

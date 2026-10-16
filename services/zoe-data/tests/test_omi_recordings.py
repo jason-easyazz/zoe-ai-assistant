@@ -615,9 +615,10 @@ def test_the_cascade_and_the_delete_user_path_call_this_module():
 def test_nothing_else_reads_pendant_transcripts():
     """A pendant transcript is unreviewed and unverified: no fact extraction, recall, digest or prompt may read the table.
     Static guard: the only modules naming it are the module itself, its router, main (mount + loop), the two forget hooks and
-    ``omi_devices.py`` (the one-time registry seed reads device_id + user_id only - never a transcript)."""
+    ``omi_devices.py`` (the one-time registry seed reads device_id + user_id only - never a transcript), and ``omi_day_review.py`` (the
+    owner's day review: it PROPOSES candidates the owner approves; ``test_omi_day_review`` pins that it calls no write path)."""
     allowed = {"omi_recordings.py", "routers/omi_recordings.py", "main.py", "memory_service.py", "memory_forget_cascade.py",
-               "omi_devices.py"}
+               "omi_devices.py", "omi_day_review.py"}      # the day review (0054): proposals the owner approves, never a write of its own
     hits = set()
     for p in SVC.rglob("*.py"):
         rel = str(p.relative_to(SVC))

@@ -2067,6 +2067,8 @@ class MemoryService:
                 await commitments.forget_user(user_id)
                 import omi_recordings   # ... and their pendant recordings (migration 0045): audio, transcript and times
                 await omi_recordings.forget_user(user_id)
+                import omi_day_review   # ... and what the day review proposed from them (migration 0054)
+                await omi_day_review.forget_user(user_id)
             except Exception:  # noqa: BLE001
                 pass
             try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints

@@ -1024,12 +1024,16 @@ def test_the_night_mind_entry_point_is_used_as_soon_as_it_exists_with_the_served
     assert [j["name"] for j in host.jobs_run][:3] == ["night_digest.py", "zoe-nightly-dreaming.py", "zoe-night-mind.py"]
     assert not any(r["name"] == "night_mind" and r["backend"] == "4B" for r in w.jobs)                  # no 4B fallback for the new pass
     custom = nw.build_jobs(nw.NightCfg(night_mind_cmd="python /x/nm.py --u {model_url} --c {ctx_tokens} --t {decode_tps} --p {prefill_tps}", night_mind_script=tmp_path / "no.py"), 16384, 11.5, 136.0)
+    custom = [j for j in custom if j.name == "night_mind"]
     assert custom[-1].argv == ["python", "/x/nm.py", "--u", "http://127.0.0.1:11500", "--c", "16384", "--t", "11.50", "--p", "136.0"]
     script2 = tmp_path / "nm2.py"
     script2.write_text("# stand-in")
-    only_decode = nw.build_jobs(nw.NightCfg(night_mind_script=script2), 16384, 3.62)[-1].argv
+    only_decode = next(j for j in nw.build_jobs(nw.NightCfg(night_mind_script=script2), 16384, 3.62) if j.name == "night_mind").argv
     assert "--decode-tok-s" in only_decode and "--prefill-tok-s" not in only_decode                 # no probe result for prefill: the pass keeps its own default
-    assert nw.build_jobs(nw.NightCfg(night_mind_script=tmp_path / "no.py"))[-1].skip_reason.startswith("no.py not found")
+    assert next(j for j in nw.build_jobs(nw.NightCfg(night_mind_script=tmp_path / "no.py")) if j.name == "night_mind").skip_reason.startswith("no.py not found")
+    odr = next(j for j in nw.build_jobs(nw.NightCfg(), 8192, 6.2, 150.0) if j.name == "omi_day_review")      # the day review runs LAST, on the 12B, at the measured speed
+    assert nw.build_jobs(nw.NightCfg())[-1].name == "omi_day_review" and not odr.fallback_4b
+    assert odr.argv[1].endswith("zoe-omi-day-review.py") and odr.argv[2:] == ["--model-url", "http://127.0.0.1:11500/v1", "--ctx-tokens", "8192", "--all-members", "--decode-tok-s", "6.20", "--prefill-tok-s", "150.0"]
 
 
 def test_the_trial_also_scores_the_night_mind_cells_when_the_entry_point_exists(tmp_path):
@@ -1497,7 +1501,7 @@ def test_the_real_night_command_in_the_unit_carries_every_lever_and_equals_the_c
     args = _exec_start_args()
     parsed = nw.build_parser().parse_args(args)                                   # every flag in the unit is a flag the script accepts
     cfg = nw.configure(parsed)
-    assert args[args.index("--jobs") + 1] == "digest,dreaming,night_mind" and cfg.jobs == ("digest", "dreaming", "night_mind")
+    assert args[args.index("--jobs") + 1] == "digest,dreaming,night_mind,omi_day_review" and cfg.jobs == ("digest", "dreaming", "night_mind", "omi_day_review")
     assert (cfg.ngl, cfg.ctx_choice, cfg.kv_choice) == (34, 8192, "q8_0") and "--ngl" in args and "--ctx" in args and "--kv" in args
     assert args[args.index("--end-by") + 1] == "03:55" and cfg.end_by == 3 * 60 + 55
     defaults = nw.configure(nw.build_parser().parse_args([]))                     # written-out levers == the code's defaults: a changed default cannot silently change the night

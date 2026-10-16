@@ -332,14 +332,14 @@ class NightCfg(bk.Cfg):
     busy_units: tuple = ("zoe-training.service", "zoe-backup.service", "zoe-backup-verify.service", "zoe-memory-export.service", "zoe-dreaming.service")
     busy_wait_max_min: float = 20.0
     busy_poll_s: float = 30.0
-    jobs: tuple = ("digest", "dreaming", "night_mind")
+    jobs: tuple = ("digest", "dreaming", "night_mind", "omi_day_review")
     night_mind_cmd: str = os.environ.get("NIGHT_MIND_CMD", "")
     #: the night-mind pass's standalone entry point (its contract: the docstring of ``zoe-night-mind.py`` on feat/night-mind-v1-reflection-pass): used by default as soon as the file exists
     night_mind_script: Path = REPO / "scripts" / "maintenance" / "zoe-night-mind.py"
     fallback_4b: bool = True
     py: str = sys.executable
     trial: bool = False
-    job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "compaction": 900.0})
+    job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "omi_day_review": 1200.0, "compaction": 900.0})
     metrics_poll_s: float = 5.0
     live_health_port: int = 11434
 
@@ -566,6 +566,7 @@ class JobSpec:
     fallback_4b: bool = False         # runs again on the live 4B after the restore when it did not finish on the 12B
     needs_loop_miss: bool = False     # the digest: only when zoe-data's own 03:00 loop will not run it tonight
     skip_reason: str = ""
+    best_effort: bool = False         # the night is not failed when this job runs out of time ("no time" / "timeout"): another lane covers it (the day review's daytime lane)
 
 
 def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[float]" = None, prefill_tps: "Optional[float]" = None) -> "list[JobSpec]":
@@ -589,6 +590,12 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
         jobs["night_mind"] = JobSpec("night_mind", argv, t["night_mind"])
     else:
         jobs["night_mind"] = JobSpec("night_mind", [], t["night_mind"], skip_reason=f"{cfg.night_mind_script.name} not found (night-mind v1 is not merged); set --night-mind-cmd / NIGHT_MIND_CMD to wire another entry point")
+    # The pendant day review (services/zoe-data/omi_day_review.py): LAST, only with the time the night has left (exec_job clips its
+    # timeout to the window and skips it under 2 min). A no-op while ZOE_OMI_DAY_REVIEW is off; no 4B fallback here - zoe-data's own
+    # daytime lane picks up a day the night did not finish, only when the panel is idle.
+    odr = [cfg.py, str(REPO / "scripts" / "maintenance" / "zoe-omi-day-review.py"), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens),
+           "--all-members"] + (["--decode-tok-s", tps] if decode_tps else []) + (["--prefill-tok-s", pps] if prefill_tps else [])
+    jobs["omi_day_review"] = JobSpec("omi_day_review", odr, t.get("omi_day_review", 1200.0), best_effort=True)
     return [jobs[j] for j in cfg.jobs if j in jobs]
 
 
@@ -1366,7 +1373,7 @@ class NightWindow(bk.Window):
 
     def exec_job(self, job: JobSpec, backend: str, port: int, model_name: str, scale: int) -> "dict[str, Any]":
         rec: "dict[str, Any]" = {"name": job.name, "backend": backend, "status": "not run", "rc": None, "wall_s": None, "tokens_prompt": None, "tokens_predicted": None,
-                                 "mem_low_mib": None, "notes": []}
+                                 "mem_low_mib": None, "notes": [], "best_effort": job.best_effort}
         self.jobs.append(rec)
         if job.skip_reason:
             rec.update(status="skipped", notes=[job.skip_reason])
@@ -1998,7 +2005,8 @@ class NightWindow(bk.Window):
                 self.after_restore()
             except Exception as exc:  # noqa: BLE001
                 self.event(f"after-restore step failed: {type(exc).__name__}: {exc}")
-            if rc == EXIT_OK and any(j["status"] not in ("ok", "skipped") and not (j["backend"] == "12B" and self.fallback_covered(j)) for j in self.jobs):
+            if rc == EXIT_OK and any(j["status"] not in ("ok", "skipped") and not (j["backend"] == "12B" and self.fallback_covered(j))
+                                     and not (j.get("best_effort") and j["status"] in ("no time", "timeout")) for j in self.jobs):
                 rc = EXIT_JOBS_FAILED
             self.release_lock()
             self.write_report(rc)
@@ -2253,7 +2261,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--kv", choices=KV_OPTIONS, default=None, help="pin the KV cache type (default: q8_0, the measured winner: q4_0 OOMs at -ngl 38; NIGHT_KV)")
     ap.add_argument("--cap-min", type=float, default=None, help="hard cap in minutes (default 65; never past --end-by)")
     ap.add_argument("--end-by", default=None, help="HH:MM local; the window must be over (zoe-data back) by then (default 03:55)")
-    ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind)")
+    ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind,omi_day_review)")
     ap.add_argument("--night-mind-cmd", default=None, help="the night-mind pass command line; {model_url} / {model_url_v1} are the 12B's base URL")
     ap.add_argument("--no-fallback", action="store_true", help="do not run a job on the live 4B after the restore when it did not finish on the 12B")
     ap.add_argument("--binary", default=None, help="llama-server binary other than the default b11194 build (flags are translated for any build but the parked unit's b9733)")
@@ -2333,9 +2341,9 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
         cfg.report_dir = args.report_dir
     if args.night_dir:
         cfg.night_dir = args.night_dir
-    unknown = [j for j in cfg.jobs if j not in ("digest", "dreaming", "night_mind")]
+    unknown = [j for j in cfg.jobs if j not in ("digest", "dreaming", "night_mind", "omi_day_review")]
     if unknown:
-        raise Refused(f"unknown job(s) {', '.join(unknown)} (digest, dreaming, night_mind)")
+        raise Refused(f"unknown job(s) {', '.join(unknown)} (digest, dreaming, night_mind, omi_day_review)")
     return cfg
 
 
