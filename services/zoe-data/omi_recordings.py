@@ -407,7 +407,7 @@ def _measure_reader(w: Any) -> dict:
                 if m > pk:
                     pk = m
                 if m >= 32767:
-                    clipped += sum(1 for v in part if v >= 32767 or v <= -32767)
+                    clipped += sum(1 for v in part if v >= 32767 or v <= -32768)
                 if len(part) == win:
                     wins.append((sq / win) ** 0.5)
     rms = (sumsq / count) ** 0.5 if count else 0.0
@@ -428,7 +428,7 @@ def measure_wav(wav: bytes) -> dict:
     ``seconds``/``rate``/``channels``/``width``: the format. ``peak``/``rms``: whole-file - and BOTH are dominated by a single
     click: one full-scale pendant wake transient over ten seconds of room noise reads "peak 32768, rms 700" (measured 2026-10-16,
     plan 4.3b: the median 100 ms-window RMS of those files was ~60). So the transient-robust numbers are what to read:
-    ``clipped`` (samples at +-32767), ``rms_median`` (the median 100 ms-window RMS: the room, not the click) and ``active_s``
+    ``clipped`` (samples on the int16 rails, 32767 / -32768), ``rms_median`` (the median 100 ms-window RMS: the room, not the click) and ``active_s``
     (seconds of 100 ms windows at or above ``ACTIVE_RMS``: sustained sound, which a click is not)."""
     try:
         with wave.open(io.BytesIO(wav)) as w:
@@ -965,23 +965,48 @@ def _pipeline_marker() -> Path:
     return audio_dir() / ".transcribe-pipeline"
 
 
+def _write_marker(marker: Path, value: Optional[str]) -> None:
+    """Durably set (``value``) or clear (``None``) the pipeline marker: tmp + fsync + rename. Raises ``OSError``."""
+    if value is None:
+        marker.unlink(missing_ok=True)
+        return
+    marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = marker.with_suffix(".part")
+    with open(tmp, "w", opener=lambda p, f: os.open(p, f, 0o600)) as fh:
+        fh.write(value + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, marker)
+
+
 async def requeue_after_pipeline_change() -> int:
-    """ONCE per ``TRANSCRIBE_PIPELINE`` value: requeue every held empty/failed recording so a transcription fix reaches the audio
-    still inside its retention window. The marker is written only after the requeue succeeded, so a failed pass retries next loop;
-    a recording that comes back empty again is not requeued again (the marker already names this pipeline)."""
+    """AT MOST ONCE per ``TRANSCRIBE_PIPELINE`` value: requeue every held empty/failed recording so a transcription fix reaches the
+    audio still inside its retention window.
+
+    The marker is CLAIMED (durably written) BEFORE anything is requeued, so this can never loop: a marker that cannot be written
+    requeues nothing (WARNING; the owner routes still work), and a recording that comes back empty again is not requeued again. If
+    the requeue itself fails, the previous marker is put back so the next loop pass retries - and if even that fails, the cost is a
+    missed one-shot (the owner can still requeue), never a repeat."""
     marker = _pipeline_marker()
     try:
-        if marker.is_file() and marker.read_text().strip() == TRANSCRIBE_PIPELINE:
-            return 0
+        prev = marker.read_text().strip() if marker.is_file() else None
     except OSError:
         return 0
-    n = await requeue_held(None)
+    if prev == TRANSCRIBE_PIPELINE:
+        return 0
     try:
-        marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        marker.write_text(TRANSCRIBE_PIPELINE + "\n")
+        _write_marker(marker, TRANSCRIBE_PIPELINE)
     except OSError as exc:
-        logger.warning("omi_recordings: pipeline marker not written (%s)", type(exc).__name__)
-    return n
+        logger.warning("omi_recordings: pipeline marker not written (%s) - held recordings NOT requeued", type(exc).__name__)
+        return 0
+    try:
+        return await requeue_held(None)
+    except Exception:
+        try:
+            _write_marker(marker, prev)
+        except OSError as exc:
+            logger.warning("omi_recordings: pipeline marker not restored after a failed requeue (%s)", type(exc).__name__)
+        raise
 
 
 async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:

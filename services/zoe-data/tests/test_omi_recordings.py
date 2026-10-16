@@ -638,6 +638,38 @@ def test_a_pipeline_change_requeues_held_recordings_once(env, monkeypatch):
     assert run(omi.requeue_after_pipeline_change()) == 2                                  # the next change reaches them again
 
 
+def test_a_marker_that_cannot_be_written_requeues_nothing_so_it_can_never_loop(env, monkeypatch):
+    """Negative control for the once-per-pipeline guarantee: claim-then-requeue. With the marker unwritable, requeue-then-write would
+    requeue on EVERY loop pass (each pass re-transcribing whatever came back empty) - here no pass requeues anything."""
+    _held(env, monkeypatch)
+
+    def no_write(marker, value):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(omi, "_write_marker", no_write)
+    for _ in range(3):
+        assert run(omi.requeue_after_pipeline_change()) == 0
+        assert set(_status(env).values()) == {"empty_transcript"}
+    assert env.client.post("/api/omi/recordings/retranscribe").json()["queued"] == 2       # the owner route still works
+
+
+def test_a_failed_requeue_restores_the_marker_so_the_next_pass_retries(env, monkeypatch):
+    _held(env, monkeypatch)
+    marker = omi._pipeline_marker()
+    omi._write_marker(marker, "older-pipeline")
+    real = omi.requeue_held
+
+    async def db_down(*a, **k):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(omi, "requeue_held", db_down)
+    with pytest.raises(RuntimeError):
+        run(omi.requeue_after_pipeline_change())
+    assert marker.read_text().strip() == "older-pipeline"                                  # put back: not silently "done"
+    monkeypatch.setattr(omi, "requeue_held", real)
+    assert run(omi.requeue_after_pipeline_change()) == 2 and marker.read_text().strip() == omi.TRANSCRIBE_PIPELINE
+
+
 def test_an_expired_held_recording_is_purged_not_requeued(env, monkeypatch):
     _held(env, monkeypatch, n=1)
     assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1

@@ -403,7 +403,7 @@ Sub-options inside (A) — the receiver:
   caller's `empty_transcript` / `failed` rows whose WAV is still on disk) and `POST /api/omi/recordings/{id}/retranscribe`
   put them back to `pending` with `attempts = 0`; the retention expiry is NOT extended and a tombstone is never resurrected.
   The same requeue runs **once per `omi_recordings.TRANSCRIBE_PIPELINE` value** from the loop (marker
-  `<ZOE_OMI_AUDIO_DIR>/.transcribe-pipeline`, written only after the requeue succeeded), so a transcription change reaches the
+  `<ZOE_OMI_AUDIO_DIR>/.transcribe-pipeline`, claimed durably BEFORE the requeue so it can never loop; unwritable = nothing requeued, a failed requeue restores it), so a transcription change reaches the
   audio still held; bump the constant with any change to transcription or its diagnostics.
 
 ### 4.3a The RAM floor — measured 2026-10-15 (default `ZOE_OMI_MIN_MEM_MB=800`)
