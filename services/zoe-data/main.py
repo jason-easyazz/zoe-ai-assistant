@@ -2283,6 +2283,11 @@ _persona_router.register(app)
 from routers import omi_recordings as _omi_router  # noqa: E402
 _omi_router.register(app)
 
+# Contact cards (flag-dark): the member's own multi-value contact fields with provenance, vCard export/import and the merge-review
+# queue (migration 0053, contacts_store.py). Mounted ONLY when ZOE_CONTACTS_API is on — flag off = 404. No sync engine.
+from routers import contacts as _contacts_router  # noqa: E402
+_contacts_router.register(app)
+
 # Settings > Bluetooth devices (flag-dark): the household admin's scan/connect/disconnect/forget/update controls and the per-panel
 # agent's poll/report lane. Mounted ONLY when ZOE_BLUETOOTH_SETTINGS is on — flag off = 404. Never touches the voice path.
 from routers import bluetooth as _bluetooth_router  # noqa: E402

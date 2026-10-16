@@ -923,6 +923,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_CONTACTS_API": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/contacts.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_CONTACTS_CONVERSATIONAL": {
         "defaults": [
           "''"
