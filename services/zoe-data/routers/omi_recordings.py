@@ -252,5 +252,7 @@ def register(app: FastAPI) -> bool:
     if not omi.enabled():
         return False
     app.include_router(router)
+    from routers import omi_voices         # the member's voices in their recordings (same flag, same owner rule)
+    app.include_router(omi_voices.router)
     logger.info("Omi recordings router registered (ZOE_OMI_SYNC_ENABLED on; owner %s)", "set" if omi.owner_user_id() else "NOT SET")
     return True

@@ -886,13 +886,21 @@ async def forget_entity(db, user_id: str, rx) -> int:
 
 
 async def forget_voiceprints(db, user_id: str, rx) -> int:
-    """"Forget <name>" erases the voiceprint the member's tagging taught Zoe for that person (owner decision 2026-10-14): only the
-    TAGGING member's rows, every model. RAISES on a failure; a missing table is nothing to reach."""
+    """"Forget <name>" erases the voiceprint the member's tagging taught Zoe for that person (owner decision 2026-10-14) AND
+    everything derived from it in their pendant recordings - the contributions, the tags and the suggestions
+    (``omi_voices.purge_people``): only the TAGGING member's rows, every model. RAISES on a failure; a missing table is nothing to
+    reach (before migration 0054 only the voiceprint rows exist)."""
     rows = await _all(db, "SELECT id, people_id FROM learned_voiceprints WHERE owner_user_id = ?", (user_id,))
-    if not rows:
+    ids = sorted(set(await _person_ids_named(db, user_id, rx)))
+    if not ids:
         return 0
-    ids = set(await _person_ids_named(db, user_id, rx))
-    doomed = [r[0] for r in rows if r[1] in ids]
+    import omi_voices
+    try:
+        return await omi_voices.purge_people(db, user_id, ids)
+    except Exception as exc:  # noqa: BLE001
+        if not omi_voices._missing(exc):
+            raise
+    doomed = [r[0] for r in rows if r[1] in set(ids)]
     if not doomed:
         return 0
     n = await _run(db, f"DELETE FROM learned_voiceprints WHERE owner_user_id = ? AND id IN ({_qs(len(doomed))})", (user_id, *doomed))

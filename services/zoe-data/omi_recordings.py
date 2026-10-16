@@ -577,10 +577,21 @@ async def count_empty_transcripts(user_id: str) -> int:
 
 
 async def get_recording(user_id: str, rid: str) -> Optional[dict]:
+    """One recording with its transcript and, once tagging has run on it, its speaker turns (``segments``, the member's own)."""
     from db_compat import get_compat_db
+    import omi_voices
     async with get_compat_db() as db:
         rows = await _fetch(db, "SELECT * FROM omi_recordings WHERE id = ? AND user_id = ? AND status != 'deleted'", (rid, user_id))
-    return _public(rows[0], transcript=True) if rows else None
+        if not rows:
+            return None
+        out = _public(rows[0], transcript=True)
+        try:
+            out["segments"] = await omi_voices.segments_for(db, user_id, rid) if rows[0]["status"] == "done" else []
+        except Exception as exc:  # noqa: BLE001 - pre-0054: no segments yet
+            if not omi_voices._missing(exc):
+                raise
+            out["segments"] = []
+    return out
 
 
 async def _tombstone(db, row: Any, now: datetime) -> None:
@@ -588,6 +599,8 @@ async def _tombstone(db, row: Any, now: datetime) -> None:
     await db.execute(
         "UPDATE omi_recordings SET status = 'deleted', transcript = '', audio_path = '', audio_bytes = 0, started_at = '', ended_at = '', "
         "duration_s = 0, keep_audio = 0, audio_expires_at = NULL, reviewed = 0, deleted_at = ? WHERE id = ?", (_iso(now), row["id"]))
+    import omi_voices            # its segments, held voice embeddings and voiceprint contributions go with it (voiceprints rebuilt)
+    await omi_voices.drop_recording(db, row["id"])
 
 
 async def delete_recording(user_id: str, rid: str) -> bool:
@@ -643,6 +656,8 @@ async def forget_user(user_id: str) -> int:
                 for r in await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE user_id = ? AND status != 'deleted'", (user_id,)):
                     await _tombstone(db, r, _now())
                     n += 1
+                import omi_voices
+                await omi_voices.forget_user(db, user_id)
                 await db.commit()
             try:        # AFTER the recordings are committed: a registry that is not migrated yet (0047) must never block erasing audio
                 async with get_compat_db() as db:
@@ -673,6 +688,12 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
                     await db.execute("UPDATE omi_recordings SET transcript = ?, audio_path = '', audio_bytes = 0, keep_audio = 0 WHERE id = ?",
                                      (rx.sub(_FORGOTTEN_MARK, text), r["id"]))
                     n += 1
+                import omi_voices
+                try:
+                    n += await omi_voices.redact(db, user_id, rx, _FORGOTTEN_MARK)     # each speaker turn's text, too
+                except Exception as exc:  # noqa: BLE001
+                    if not omi_voices._missing(exc):
+                        raise
                 await db.commit()
         return n
     except Exception as exc:  # noqa: BLE001
@@ -714,16 +735,21 @@ def _chunk_wav(pcm: bytes, tmpdir: str, idx: int) -> str:
     return p
 
 
-async def transcribe_wave(w: Any, *, gate=None, pause_s: float = 0.4, stats: Optional[dict] = None) -> str:
+async def transcribe_wave(w: Any, *, gate=None, pause_s: float = 0.4, stats: Optional[dict] = None,
+                          spans: Optional[list] = None) -> str:
     """Moonshine over an open ``wave`` reader in ~20 s chunks cut at the quietest point, STREAMED (``iter_wave_chunks``). Silent chunks
     are skipped. ``gate()`` (sync or async) is asked before every chunk and aborts the job by raising ``GateClosed``; the caller leaves
-    the recording pending. ``stats`` (optional) is filled with ``chunks`` (total) and ``voiced`` (sent to Moonshine, peak >= ``SILENCE_PEAK``)."""
+    the recording pending. ``stats`` (optional) is filled with ``chunks`` (total) and ``voiced`` (sent to Moonshine, peak >= ``SILENCE_PEAK``).
+    ``spans`` (optional) receives ``(start_ms, end_ms, text)`` per chunk - the untagged form of ``omi_segments``."""
     parts: list[str] = []
     st = stats if stats is not None else {}
-    st["chunks"], st["voiced"] = 0, 0
+    st.setdefault("chunks", 0)
+    st.setdefault("voiced", 0)
+    pos = 0
     with tempfile.TemporaryDirectory(prefix="zoe-omi-") as tmp:
         for i, piece in enumerate(iter_wave_chunks(w)):
             st["chunks"] += 1
+            start_ms, pos = pos * 1000 // SAMPLE_RATE, pos + len(piece) // 2
             if gate is not None:
                 verdict = gate()
                 if asyncio.iscoroutine(verdict):
@@ -732,13 +758,48 @@ async def transcribe_wave(w: Any, *, gate=None, pause_s: float = 0.4, stats: Opt
                 if not ok:
                     raise GateClosed(why)
             if peak(piece) < SILENCE_PEAK:
+                if spans is not None:
+                    spans.append((start_ms, pos * 1000 // SAMPLE_RATE, ""))
                 continue
             st["voiced"] += 1
             text = (await _transcribe_file(_chunk_wav(piece, tmp, i)) or "").strip()
             if text:
                 parts.append(text)
+            if spans is not None:
+                spans.append((start_ms, pos * 1000 // SAMPLE_RATE, text))
             await asyncio.sleep(pause_s)           # a waiting voice turn gets the Moonshine lock between chunks
     return " ".join(parts)
+
+
+class _Span:
+    """A ``wave`` reader limited to frames ``[start, end)`` - what ``iter_wave_chunks`` needs to transcribe ONE speaker turn."""
+
+    def __init__(self, w: Any, start: int, end: int) -> None:
+        self.w, self.left, self.n = w, max(0, end - start), max(0, end - start)
+        w.setpos(start)
+
+    def getframerate(self) -> int:
+        return self.w.getframerate()
+
+    def getnframes(self) -> int:
+        return self.n
+
+    def readframes(self, k: int) -> bytes:
+        got = self.w.readframes(min(k, self.left)) if self.left > 0 else b""
+        self.left -= len(got) // 2
+        return got
+
+
+async def transcribe_turns(path: str, turns: list, **kw: Any) -> list[str]:
+    """Text ALIGNED to speaker turns (Moonshine has no word times): each turn ``(start_ms, end_ms)`` is transcribed on its own,
+    split at its quietest points when longer than a chunk - the same model, the same gate and the same silence rule as
+    ``transcribe_wave``. Returns one text per turn."""
+    out = []
+    with wave.open(path) as w:
+        for start_ms, end_ms in turns:
+            sub = _Span(w, start_ms * SAMPLE_RATE // 1000, end_ms * SAMPLE_RATE // 1000)
+            out.append(await transcribe_wave(sub, **kw))
+    return out
 
 
 async def transcribe_audio_file(path: str, **kw: Any) -> str:
@@ -826,9 +887,23 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
     text, err = "", ""
     seen_chunks: dict = {}
     level: dict = {}
+    segs: Optional[list] = None            # the omi_segments rows (only while ZOE_OMI_SPEAKER_TAG is not off)
+    spk_state, model_id = "unverified", None
     try:
-        text = await transcribe_audio_file(path, gate=lambda: _patient_gate(now), pause_s=pause_s, stats=seen_chunks)
-        text = await _redact_forgotten(uid, text)
+        turns, spk_state, model_id = await _diarise(uid, path, now)
+        if turns:
+            texts = await transcribe_turns(path, [(t.start_ms, t.end_ms) for t in turns], gate=lambda: _patient_gate(now),
+                                           pause_s=pause_s, stats=seen_chunks)
+            segs = [{"start_ms": t.start_ms, "end_ms": t.end_ms, "speaker": t.speaker, "score": t.score, "windows": t.windows,
+                     "embedding": t.embedding, "text": await _redact_forgotten(uid, x)} for t, x in zip(turns, texts)]
+            text = " ".join(x["text"] for x in segs if x["text"].strip())
+        else:
+            spans: Optional[list] = [] if _tag_mode() != "off" else None
+            text = await transcribe_audio_file(path, gate=lambda: _patient_gate(now), pause_s=pause_s, stats=seen_chunks, spans=spans)
+            text = await _redact_forgotten(uid, text)
+            if spans is not None:
+                segs = [{"start_ms": a, "end_ms": b, "speaker": "unverified", "score": None, "windows": 0, "embedding": None,
+                         "text": await _redact_forgotten(uid, x)} for a, b, x in spans]
         if not text.strip():                    # diagnostics for the WARNING below; off the event loop (a 10-minute WAV is ~10M samples)
             level = await asyncio.to_thread(measure_wav_file, path)
     except GateClosed as exc:                   # the gate closed mid-job: not a failure, try again later
@@ -871,14 +946,65 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                                seen_chunks.get("voiced"), seen_chunks.get("chunks"),
                                "below_silence_floor" if not seen_chunks.get("voiced") else "voiced_but_no_text")
                 return True
-            await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, transcribed_at = ?"
+            seg_ids: list = []
+            if segs is not None:              # segments land BEFORE the row says done, and the WAV goes only after both
+                import omi_voices
+                omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid))     # Zoe's own replies: not a person
+                seg_ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=model_id,
+                                                          channel="panel" if spk_state == "tagged" else None)
+            await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, transcribed_at = ?, speaker_state = ?"
                              + ("" if keep else ", audio_path = '', audio_bytes = 0, audio_expires_at = NULL")
-                             + " WHERE id = ? AND status = 'transcribing'", (text, _iso(_now()), rid))
+                             + " WHERE id = ? AND status = 'transcribing'", (text, _iso(_now()), spk_state, rid))
             await db.commit()
             if not keep:
                 _unlink(path)
-    logger.info("OMI_TRANSCRIBED id=%s chars=%d kept_audio=%s", rid, len(text), keep)
+            if seg_ids and spk_state == "tagged":
+                try:                          # learning is optional; the transcript and its segments are already safe
+                    import omi_diarize
+                    learned = await omi_voices.learn(db, uid, seg_ids, segs, model_id=model_id, you_min=omi_diarize.thresholds()[0])
+                    if learned["stored"]:
+                        logger.info("OMI_VOICES_LEARNED id=%s stored=%d suggested=%d", rid, learned["stored"], learned["suggested"])
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("omi_voices: learning pass failed for %s (%s)", rid, type(exc).__name__)
+    logger.info("OMI_TRANSCRIBED id=%s chars=%d kept_audio=%s segments=%d speaker_state=%s", rid, len(text), keep,
+                len(segs or []), spk_state)
     return True
+
+
+def _tag_mode() -> str:
+    import omi_diarize
+    return omi_diarize.mode()
+
+
+async def _diarise(uid: str, path: str, now: Optional[datetime]) -> tuple[Optional[list], str, Optional[str]]:
+    """Speaker turns for the recording, or ``(None, state, model)`` for the untagged path. ``unverified``: tagging is off, the
+    wearer is not positively an adult (D14: no tagging of a child's pendant) or has no profile in this model (turns are still cut
+    by voice, labelled ``unverified``); ``untaggable``: the model refused or the pass failed (the transcript is never lost to it).
+    A closing gate is NOT a failure: ``GateClosed`` propagates and the recording goes back to pending."""
+    if _tag_mode() == "off":
+        return None, "unverified", None
+    import manner_block
+    import omi_diarize
+    import omi_voices
+    if not await manner_block.eligible(uid):
+        return None, "unverified", None
+    embedder = await asyncio.to_thread(omi_diarize.load_embedder)
+    if embedder is None:
+        return None, "untaggable", None
+    mid = omi_diarize.model_id()
+    try:
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            profile = await omi_voices.wearer_profile(db, uid, mid)
+        turns = await omi_diarize.diarise(path, embedder, profile, gate=lambda: _patient_gate(now))
+        return turns, ("tagged" if profile is not None else "unverified"), mid
+    except GateClosed:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("OMI_TAG_FAILED reason=%s - transcribing untagged", type(exc).__name__)
+        return None, "untaggable", None
+    finally:
+        del embedder                          # the session is released after every pass (RAM is the scarce resource)
 
 
 async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
@@ -900,6 +1026,19 @@ async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
     return n
 
 
+async def _sweep_voices() -> None:
+    """Learned-voice expiry runs whether or not learning is on (design 2.6): turning the flag off must not stop things expiring."""
+    try:
+        import omi_voices
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            await omi_voices.sweep(db)
+    except Exception as exc:  # noqa: BLE001
+        import omi_voices
+        if not omi_voices._missing(exc):                     # pre-0054: nothing to expire yet
+            logger.warning("omi_voices: expiry sweep failed (%s)", type(exc).__name__)
+
+
 async def run_loop() -> None:
     """The background task (started by ``main.lifespan`` only when the flag is on). One pass per ``POLL_S``; never raises."""
     logger.info("omi_recordings: transcription loop started")
@@ -908,6 +1047,7 @@ async def run_loop() -> None:
         try:
             if enabled():
                 await purge_expired_audio()
+                await _sweep_voices()
                 await transcribe_pending(limit=3)
         except asyncio.CancelledError:
             raise
