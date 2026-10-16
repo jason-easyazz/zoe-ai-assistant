@@ -133,6 +133,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
         p = pathlib.Path(args.dump).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)          # O_TRUNC keeps an existing file's mode: a reused path must not stay world-readable
         with os.fdopen(fd, "w") as f:
             json.dump(dump, f, indent=1)
     if not summary["days"]:

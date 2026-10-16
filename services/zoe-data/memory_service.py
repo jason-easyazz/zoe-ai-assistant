@@ -1997,11 +1997,12 @@ class MemoryService:
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
         # waits for an approval already writing (that write needs this lock for its ingest - inside the lock it would deadlock) and
         # moves the generation so every later approval is dropped. The approved fact it may have written is then enumerated below.
+        # Fail closed, like the exact words below: candidates hold quotes of what the pendant heard.
         try:
             import omi_day_review
             await omi_day_review.forget_user(user_id)
-        except Exception as exc:  # noqa: BLE001 - logged inside; the rows below still go
-            logger.warning("memory_service: day-review rows not erased for a deleted user (%s)", type(exc).__name__)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: day-review erasure failed ({type(exc).__name__})") from exc
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.

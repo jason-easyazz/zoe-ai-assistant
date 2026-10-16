@@ -899,12 +899,18 @@ async def _owner_names(user_id: str) -> list[str]:
     return names
 
 
+class LedgerUnavailable(RuntimeError):
+    """The forget ledger could not be read: nothing is stored (a forgotten name must never land in the candidate store)."""
+
+
 async def _forgotten(user_id: str, text: str) -> bool:
+    """Does ``text`` name an entity the member forgot? An unreadable ledger RAISES ``LedgerUnavailable`` (fail closed); an
+    unconfigured ledger (no salt: nothing can have been forgotten) is a clean no."""
     try:
         import memory_forgotten as mf
         return bool(await mf.spans(user_id, text))
-    except Exception:  # noqa: BLE001 - an unreadable ledger: the cascade's erase_entity still reaches stored rows
-        return False
+    except Exception as exc:  # noqa: BLE001
+        raise LedgerUnavailable(type(exc).__name__) from exc
 
 
 async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[datetime] = None, dry_run: bool = False,
@@ -969,6 +975,22 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
         return res
     res.update(usage)
     merged = merge(cands)
+    try:
+        return await _store(user_id, day, cfg, recs, merged, counts, res, review_id, seq, gen, now, dry_run)
+    except LedgerUnavailable as exc:
+        if not dry_run:
+            async with _db() as db:            # the recordings stay unanalysed; the next pass retries the day
+                await db.execute("DELETE FROM omi_day_reviews WHERE id = ? AND status = 'analysing'", (review_id,))
+                await db.commit()
+        res.update(status="ledger_unavailable", reason=str(exc)[:80], stored=0)
+        res.pop("candidates", None)
+        _log(res, counts)
+        return res
+
+
+async def _store(user_id: str, day: str, cfg: Config, recs: list, merged: list, counts: dict, res: dict, review_id: str, seq: int,
+                 gen: int, now: datetime, dry_run: bool) -> dict:
+    """The write half of ``review_day``: the last checks against the member's own stores, then one transaction of candidates."""
     async with erase_gate.writing(user_id, gen) as ok:
         if not ok:
             res["status"] = "erased"
@@ -1109,7 +1131,9 @@ async def pending_counts(user_id: str) -> dict:
 
 # --- forgetting ---------------------------------------------------------------------------------------------------
 async def forget_user(user_id: str) -> int:
-    """Right to be forgotten: every review and candidate of the member. Returns the candidates deleted."""
+    """Right to be forgotten: every review and candidate of the member. Returns the candidates deleted. RAISES when they could not be
+    erased (``MemoryService.delete_user`` then fails and is retried); a store with nothing to reach - the table not migrated, or no
+    database in this process - is 0, the forget cascade's own rule (``memory_forget_cascade._store_missing``)."""
     try:
         async with erase_gate.erasing(user_id):
             async with _db() as db:
@@ -1118,8 +1142,11 @@ async def forget_user(user_id: str) -> int:
                 await db.commit()
                 return int(getattr(cur, "rowcount", 0) or 0)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("omi_day_review: candidates NOT erased for a forgotten user (%s)", type(exc).__name__)
-        return 0
+        import memory_forget_cascade
+        if memory_forget_cascade._store_missing(exc):
+            return 0
+        logger.error("omi_day_review: candidates NOT erased for a forgotten user (%s)", type(exc).__name__)
+        raise
 
 
 async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = False) -> int:

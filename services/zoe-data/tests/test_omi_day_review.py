@@ -46,6 +46,7 @@ SVC = Path(__file__).resolve().parents[1]
 OWNER, OTHER = "owner-a", "member-b"
 DAY = "2026-10-13"                      # a Tuesday, household time Australia/Perth (+08:00)
 AS_OF = datetime(2026, 10, 13, 23, 59, tzinfo=timezone.utc)
+REAL_FORGOTTEN = dr._forgotten          # captured before any fixture stubs it
 
 
 class _Sqlite:
@@ -595,6 +596,46 @@ def test_an_untimed_event_is_a_duplicate_only_of_the_same_title(env):
     assert run(dr._on_calendar(env.db, OWNER, ev("Dentist checkup", "09:00"))) is True
 
 
+def test_an_unreadable_forget_ledger_stores_nothing_and_the_day_is_retried(env, monkeypatch):
+    """Codex #2091: the ledger fails CLOSED at create - a forgotten name must never land in the candidate store."""
+    add_rec(env, "rec1", GOLDEN)
+    dr.set_llm(fake_model(GOLDEN_RULES))
+
+    async def ledger_down(user_id, text):
+        raise dr.LedgerUnavailable("RuntimeError")
+    monkeypatch.setattr(dr, "_forgotten", ledger_down)
+    res = review()
+    assert res["status"] == "ledger_unavailable" and res["stored"] == 0 and cands(env) == []
+    assert env.db.rows("SELECT * FROM omi_day_reviews") == []                                  # the claim is released ...
+    assert env.db.rows("SELECT day_review_id FROM omi_recordings")[0]["day_review_id"] is None  # ... and the day is retried
+
+    import memory_forgotten
+
+    async def spans_down(user_id, text):
+        raise RuntimeError("pool lost")
+    monkeypatch.setattr(memory_forgotten, "spans", spans_down)
+    with pytest.raises(dr.LedgerUnavailable):
+        run(REAL_FORGOTTEN(OWNER, "anything"))                    # the real check (the fixture stubs it for the other tests)
+
+
+def test_a_failed_member_erase_is_loud_and_a_missing_table_is_nothing_to_erase(env, monkeypatch):
+    """Codex #2091: ``forget_user`` raises on a real failure (so ``delete_user`` fails and is retried) and returns 0 when there is
+    nothing to reach (the table not migrated)."""
+    real = env.db.execute
+
+    def locked(sql, params=()):
+        if "DELETE FROM omi_day_candidates" in sql:
+            raise sqlite3.OperationalError("database is locked")
+        return real(sql, params)
+    monkeypatch.setattr(env.db, "execute", locked)
+    with pytest.raises(sqlite3.OperationalError):
+        run(dr.forget_user(OWNER))
+    monkeypatch.setattr(env.db, "execute", real)
+    env.db.conn.execute("DROP TABLE omi_day_candidates")
+    env.db.conn.commit()
+    assert run(dr.forget_user(OWNER)) == 0
+
+
 def test_a_user_delete_erases_the_day_review_before_taking_the_memory_lock():
     """Codex #2091 (P1): an approval writes under the erase gate and its ingest needs the memory lock. ``delete_user`` must run the
     day review's erase (which takes the gate) BEFORE the lock: inside it, an approval in flight would deadlock it, and an approval
@@ -604,6 +645,8 @@ def test_a_user_delete_erases_the_day_review_before_taking_the_memory_lock():
     body = body[:body.index("\n    async def ", 10)]
     assert body.index("omi_day_review.forget_user(user_id)") < body.index("async with lock:")
     assert body.count("omi_day_review.forget_user") == 1
+    head = body[:body.index("async with lock:")]
+    assert 'raise MemoryServiceError(f"delete_user failed: day-review erasure failed' in head      # fail closed, not a log line
 
 
 # --- static guards ----------------------------------------------------------------------------------------------------------
