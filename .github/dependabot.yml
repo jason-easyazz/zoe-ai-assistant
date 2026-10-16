@@ -107,4 +107,4 @@ updates:
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "scipy"            # 1.18+ needs numpy>=2 and Python>=3.12; the numpy<2 ceiling holds (chromadb + both voice rocks), so it cannot resolve (#2074); patches within 1.17.x still flow
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
-      - dependency-name: "livekit-protocol" # the py312 manifest must not diverge from requirements.txt (tests/unit/test_zoe_data_py312_cutover.py STEP_UP_DIVERGENCE, #2074); bump BOTH together by hand
+      - dependency-name: "livekit-protocol" # lane-specific on purpose: py312 lane 1.1.27, the 3.10 rollback manifest holds 1.1.8 (STEP_UP_DIVERGENCE in tests/unit/test_zoe_data_py312_cutover.py, #2074); move each lane by hand, never auto-bump the rollback pin
