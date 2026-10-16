@@ -121,3 +121,19 @@ Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settin
 - 💡 **Failure-fed evolution proposals** (P9): W7's first inputs = replay misses + Samantha-bar FAILs + `chat_feedback` (Letta skill learning: +36.8 % with failures).
 - 💡 **Learned should-I-speak head** (P10): numpy head on bge-small trained on `proactive_responses` once ~200 rows exist (evidence: arXiv 2605.30152).
 - 💡 **Location per household / member / panel**: settings-UI home for country + timezone (today `ZOE_HOUSEHOLD_COUNTRY` / `ZOE_TIMEZONE` env only), overridable per member and per panel, feeding crisis lines, time and weather (see open-problems 2026-10-12).
+
+### Ambient-memory field scan (Omi, Limitless, Bee, Plaud, Owl; 2026-10-17) — 💡 pinned
+- **Source:** [omi-gap-audit-2026-10.md](research/omi-gap-audit-2026-10.md) §3 (Omi read in source, the rest secondary). Borrow the PIECE; every item stays local and approve-before-write.
+- 💡 **Capture kind + owner + certainty on every day-review candidate**: Omi's `capture_kind` (explicit command / clear commitment / direct request / inferred next step), `capture_owner` (you / other / unknown), `due_certainty` (confirmed / tentative), `source_segment_ids`. A ready-made schema for the commitment-strength rule.
+- 💡 **"Not a person" voice answer**: tag an unknown-voice cluster as TV / radio / music / Zoe and stop asking; drop its segments from the review (Omi `speaker_tag_prompts.py`).
+- 💡 **Short-snippet discard bar**: under 2 minutes only clearly actionable stretches survive; a fragment that only continues the previous conversation is dropped (Omi `relevance.py`).
+- 💡 **Daily recap card**: unresolved questions, decisions made, things you promised, memories learned. Private view only, pulled not pushed (Omi `daily_summary.py`; the default is 22:00).
+- 💡 **"Ask your day"**: word search over your own pendant transcripts, answered as a private card with day and time, on Zoe's own index (`exact_words` pattern), never through the brain's context.
+- 💡 **Off-the-record windows**: "that last hour was private" / "off the record until 3", by voice, Telegram or phone. Recordings overlapping the window are dropped on arrival, never transcribed. Works on stock firmware.
+- 💡 **Auto-drop in sensitive places**: a private calendar event or a Home Assistant zone visit becomes an off-the-record window, with no GPS on the pendant.
+- 💡 **Highlight button**: a double-tap on the pendant marks "remember this" (needs the press-to-record firmware; stock button events are not stored offline).
+- 💡 **People pages as derived views**: what you said about someone, open loops with them, and their learned voice. Corrections go to the memory ledger, never to the page (Omi `entity_pages.py`).
+- 💡 **Follow-ups on what others asked of you**: "<person> asked you to send the photos". It extends the W2.5 commitment tracker from Zoe's promises to the owner's, approve-first.
+- 💡 **Mood and energy over time from the affect rows**: nobody in the field ships this. Owner-only, never on the wall, and it needs restraint's affect class settled first (D11).
+- 💡 **Away sync without the Omi app**: a Web Bluetooth page (Chrome on Android) served over the private link home, or a Pi Zero 2 W travel dock, draining the ring under the same custody rule.
+- 💡 **Pendant telemetry on the Memories page**: last synced, battery, how full, minutes lost to overwrite. It makes loss visible (gap audit P0-2).

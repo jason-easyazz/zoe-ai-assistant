@@ -1,13 +1,18 @@
 ---
 type: architecture-plan
 date: 2026-09-25
-updated: 2026-10-13
+updated: 2026-10-17
 status: 🔨 owner chose "record on the pendant, sync when in range of Zoe" (2026-10-12) — phase 1 built flag-dark (services/omi-sync + zoe-data omi_recordings); the real pendant runs firmware 3.0.18 (below the ring protocol) so the 3.0.18 file path is opt-in and a firmware update is the recommended route (section 4.10); hardware-only facts still UNVERIFIED (section 0.3a); the live-stream path (sections 4a-6) is now the LATER path, not the first
 owner: W6 (attributed ambient capture) — samantha-evolution-plan.md; program block B9 below
 audience: Jason + every agent picking up the Omi work
 ---
 # Omi wearable → Zoe: integration plan
 
+> **Update 2026-10-17.** The pendant was updated to firmware **3.0.21** on 2026-10-13 (supervised DFU from the panel) and
+> `omi-sync` drains it on the **ring** path. The 3.0.18 legacy-file path and the codec `0x0f` question below are history for
+> this unit. The end-to-end gap audit (BLE exposure while away, silent overwrite, backups, search, the law, what the day
+> review must call into) is [`docs/research/omi-gap-audit-2026-10.md`](../research/omi-gap-audit-2026-10.md).
+>
 > **One line (2026-10-12).** The pendant pairs with **Zoe, not the Omi phone app**. Jason records on
 > the pendant away from home (on stock firmware "recording" = the pendant is powered on); when he
 > comes within Bluetooth range of the panel Pi, a small flag-dark service drains the pendant's SD
