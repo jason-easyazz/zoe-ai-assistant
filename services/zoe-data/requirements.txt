@@ -84,7 +84,7 @@ PyJWT==2.15.0
 # such as `binary` retired; models regenerated from spec/1.0) — zoe-data only
 # EMITS the 14 event classes it imports, and every shape it emits encodes to
 # byte-identical SSE under 0.1.19 and 1.0.0 (pinned by test_ag_ui_chat_contract).
-ag-ui-protocol==0.1.19
+ag-ui-protocol==1.0.0
 python-json-logger>=4.1.0
 
 # ── Vector memory store (3.10 LANE — NOT the live palace client) ────────────
