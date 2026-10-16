@@ -670,6 +670,51 @@ def test_a_failed_requeue_restores_the_marker_so_the_next_pass_retries(env, monk
     assert run(omi.requeue_after_pipeline_change()) == 2 and marker.read_text().strip() == omi.TRANSCRIBE_PIPELINE
 
 
+def test_a_requeue_cancelled_part_way_restores_the_marker_and_the_next_pass_requeues_the_rest(env, monkeypatch):
+    """asyncio.CancelledError is a BaseException: an ``except Exception`` restore would leave the marker claimed with only part of
+    the rows requeued, and the rest would never be requeued for this pipeline."""
+    a, b = _held(env, monkeypatch)
+    marker = omi._pipeline_marker()
+    omi._write_marker(marker, "older-pipeline")
+    real = omi.requeue_held
+
+    async def cancelled_part_way(user_id=None, *, rid=None):
+        assert await real(user_id, rid=a) == 1               # one row requeued ...
+        raise asyncio.CancelledError()                        # ... then the loop task is cancelled (shutdown)
+
+    monkeypatch.setattr(omi, "requeue_held", cancelled_part_way)
+    with pytest.raises(asyncio.CancelledError):
+        run(omi.requeue_after_pipeline_change())
+    assert marker.read_text().strip() == "older-pipeline"
+    assert _status(env) == {a: "pending", b: "empty_transcript"}
+    monkeypatch.setattr(omi, "requeue_held", real)
+    assert run(omi.requeue_after_pipeline_change()) == 1                                  # the remainder, and only the remainder
+    assert set(_status(env).values()) == {"pending"} and marker.read_text().strip() == omi.TRANSCRIBE_PIPELINE
+
+
+def test_the_marker_write_fsyncs_its_directory(env, monkeypatch):
+    """A rename is not durable until its directory is fsynced: without it a crash can bring the old marker back (a second requeue)."""
+    import os
+    import stat
+    marker = omi._pipeline_marker()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    dir_ino = marker.parent.stat().st_ino
+    real_fsync = os.fsync
+    synced: list[tuple[bool, int]] = []
+
+    def spy(fd):
+        st = os.fstat(fd)
+        synced.append((stat.S_ISDIR(st.st_mode), st.st_ino))
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", spy)
+    omi._write_marker(marker, "p1")
+    assert (True, dir_ino) in synced and (False, marker.stat().st_ino) in synced           # the file AND its directory
+    synced.clear()
+    omi._write_marker(marker, None)                                                       # clearing it is a directory change too
+    assert (True, dir_ino) in synced and not marker.exists()
+
+
 def test_an_expired_held_recording_is_purged_not_requeued(env, monkeypatch):
     _held(env, monkeypatch, n=1)
     assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1

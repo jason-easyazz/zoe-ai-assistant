@@ -133,7 +133,8 @@ function boot(opts = {}) {
 
   const sockets = [];
   function FakeWS(url) { this.url = url; this.sent = []; this.readyState = 1; this.closed = false; sockets.push(this); }
-  FakeWS.prototype.send = function (d) { this.sent.push(d); };
+  // the real server answers every 'ping' with {"type":"pong"}; the executor's heartbeat relies on it
+  FakeWS.prototype.send = function (d) { this.sent.push(d); if (d === 'ping' && this.readyState === 1 && typeof this.onmessage === 'function') this.onmessage({ data: '{"type":"pong"}' }); };
   FakeWS.prototype.close = function () { this.closed = true; this.readyState = 3; };
 
   const swMessages = [];
@@ -156,7 +157,7 @@ function boot(opts = {}) {
     state, window, localStorage, fetch, navigator: { serviceWorker: { ready: Promise.resolve({ active: swPort }), controller: swPort } },
     location: window.location, console: { warn() {}, info() {}, log() {} }, WebSocket: FakeWS, URLSearchParams, JSON, Date: clock.Date, Number, String, Promise,
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, setInterval: clock.setInterval, clearInterval: clock.clearInterval,
-    PUSH_PING_MS: constValue('PUSH_PING_MS'), PUSH_RETRY_MAX_MS: constValue('PUSH_RETRY_MAX_MS'),
+    PUSH_PING_MS: constValue('PUSH_PING_MS'), PUSH_RETRY_MAX_MS: constValue('PUSH_RETRY_MAX_MS'), PUSH_STALE_MS: constValue('PUSH_STALE_MS'),
     PANEL_RECOVER_MIN_MS: constValue('PANEL_RECOVER_MIN_MS'), SESSION_DOWNGRADE_MARGIN_MS: constValue('SESSION_DOWNGRADE_MARGIN_MS'),
     PANEL_WATCHDOG_MS: constValue('PANEL_WATCHDOG_MS'), PANEL_DEAF_AFTER_MS: constValue('PANEL_DEAF_AFTER_MS'),
     PANEL_GUEST_RECLAIM_GRACE_MS: constValue('PANEL_GUEST_RECLAIM_GRACE_MS'), PANEL_HEAL_MIN_MS: constValue('PANEL_HEAL_MIN_MS'), PANEL_RELOAD_MIN_MS: constValue('PANEL_RELOAD_MIN_MS'), PANEL_RELOAD_KEY: 'zoe_panel_watchdog_reload_at', PANEL_HANDOVER_KEY: 'zoe_member_handover_at',
@@ -166,9 +167,9 @@ function boot(opts = {}) {
   };
   const names = Object.keys(env);
   const fnNames = ['isExpiredSession', 'isGuestSession', 'getSession', 'getDataApiSession', 'api', 'isKioskContext', 'dataApiSessionId',
-    'sessionNeedsDowngrade', 'noteMemberHandover', 'adoptMemberHandover', 'dropStoredSession', 'storeSession', 'mintGuestSession', 'pushIsUp', 'ensurePushSocket', 'startServiceWorkerPanelPoll',
+    'sessionNeedsDowngrade', 'noteMemberHandover', 'adoptMemberHandover', 'dropStoredSession', 'storeSession', 'mintGuestSession', 'pushSocketStale', 'pushIsUp', 'restartFallbackPushSocket', 'ensurePushSocket', 'startServiceWorkerPanelPoll',
     'startPanelServices', 'recoverPanelSession', 'stopServiceWorkerPanelPoll', 'stopPanelServices', 'panelAuthFailed', 'handlePanelAuthFailure',
-    'reloadPageRateLimited', 'panelWatchdogTick', 'bindPanel', 'syncState', 'pollActions', 'schedulePushReconnect', 'connectPushWebSocket'];
+    'reloadPageRateLimited', 'panelWatchdogTick', 'bindPanel', 'syncState', 'pollActions', 'schedulePushReconnect', 'startPushPing', 'connectPushWebSocket'];
   const fns = new Function(...names, fnNames.map(extract).join('\n') + '\nreturn { ' + fnNames.join(', ') + ' };')(...names.map((n) => env[n]));
   // what init() does on a kiosk
   function start() {

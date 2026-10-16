@@ -489,8 +489,13 @@ def _write_audio(path: Path, data: bytes) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
+    _fsync_dir(path.parent)
+
+
+def _fsync_dir(directory: Path) -> None:
+    """fsync a directory so a rename/unlink inside it survives a crash. Best effort (some filesystems refuse a dir fsync)."""
     try:
-        dfd = os.open(str(path.parent), os.O_RDONLY)
+        dfd = os.open(str(directory), os.O_RDONLY)
         try:
             os.fsync(dfd)
         finally:
@@ -966,9 +971,11 @@ def _pipeline_marker() -> Path:
 
 
 def _write_marker(marker: Path, value: Optional[str]) -> None:
-    """Durably set (``value``) or clear (``None``) the pipeline marker: tmp + fsync + rename. Raises ``OSError``."""
+    """Durably set (``value``) or clear (``None``) the pipeline marker: tmp + fsync + rename + fsync of the directory (the rename is
+    not durable until its directory is - a crash could otherwise bring back the old marker and requeue a second time). Raises ``OSError``."""
     if value is None:
         marker.unlink(missing_ok=True)
+        _fsync_dir(marker.parent)
         return
     marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = marker.with_suffix(".part")
@@ -977,6 +984,7 @@ def _write_marker(marker: Path, value: Optional[str]) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, marker)
+    _fsync_dir(marker.parent)
 
 
 async def requeue_after_pipeline_change() -> int:
@@ -985,8 +993,9 @@ async def requeue_after_pipeline_change() -> int:
 
     The marker is CLAIMED (durably written) BEFORE anything is requeued, so this can never loop: a marker that cannot be written
     requeues nothing (WARNING; the owner routes still work), and a recording that comes back empty again is not requeued again. If
-    the requeue itself fails, the previous marker is put back so the next loop pass retries - and if even that fails, the cost is a
-    missed one-shot (the owner can still requeue), never a repeat."""
+    the requeue itself fails OR IS CANCELLED part-way, the previous marker is put back so the next loop pass requeues the rest (rows
+    already requeued are ``pending``, so they are not picked twice) - and if even that fails, the cost is a missed one-shot (the owner
+    can still requeue), never a repeat."""
     marker = _pipeline_marker()
     try:
         prev = marker.read_text().strip() if marker.is_file() else None
@@ -1001,7 +1010,7 @@ async def requeue_after_pipeline_change() -> int:
         return 0
     try:
         return await requeue_held(None)
-    except Exception:
+    except BaseException:                 # a cancellation too (shutdown mid-requeue): put the claim back so the next pass finishes
         try:
             _write_marker(marker, prev)
         except OSError as exc:

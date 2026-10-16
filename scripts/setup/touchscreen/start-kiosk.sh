@@ -4,7 +4,7 @@ set -e
 export DISPLAY=:0
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
-CONFIG="/opt/TouchKio/config.json"
+CONFIG="${ZOE_KIOSK_CONFIG:-/opt/TouchKio/config.json}"
 PROVISIONED="/opt/TouchKio/.provisioned"
 PROVISION_SERVER="/opt/TouchKio/provision-server.py"
 KIOSK_HOME="${HOME:-/home/pi}"
@@ -38,6 +38,9 @@ PYC
 ZOE_URL="$(read_config_key url)"
 ZOE_URL="${ZOE_URL:-${DEFAULT_URL}}"
 TOKEN="$(read_config_key token)"
+# The local status gate (zoe-kiosk-gate.py, loopback). When configured, Chromium starts THERE: it shows what is
+# wrong (Wi-Fi / link home / Zoe) and keeps retrying, instead of this script exiting for systemd to loop on.
+GATE_URL="$(read_config_key gate_url)"
 
 # Wait for X server
 for i in $(seq 1 30); do
@@ -81,13 +84,25 @@ if [ -f "${PROVISION_SERVER}" ] && { [ ! -f "${PROVISIONED}" ] || [ -z "${TOKEN}
     "http://localhost:8888/"
 fi
 
-echo "Starting Zoe Kiosk: ${ZOE_URL}"
+echo "Starting Zoe Kiosk: ${ZOE_URL}${GATE_URL:+ (via the status gate ${GATE_URL})}"
 mkdir -p "${KIOSK_HOME}/.config/chromium-kiosk"
 
-# Gate on the configured Zoe host being reachable. On total failure exit
-# non-zero so systemd (Restart=always) retries, instead of booting Chromium
-# into a connection-error page it never recovers from.
-ZOE_HOST="$(python3 -c "import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).hostname or '')" "${ZOE_URL}")"
+START_URL="${ZOE_URL}"
+if [ -n "${GATE_URL}" ]; then
+  # The gate owns "can't reach Zoe": no ping loop and no exit. Wait (bounded) for the gate itself to answer, then
+  # start the browser on it; the gate hands the browser to Zoe when Zoe answers.
+  for i in $(seq 1 30); do
+    python3 -c "import sys, urllib.request; urllib.request.urlopen(sys.argv[1] + 'status', timeout=1)" "${GATE_URL%/}/" \
+      >/dev/null 2>&1 && break
+    sleep 1
+  done
+  START_URL="${GATE_URL}"
+  ZOE_HOST=""
+else
+  # Legacy (no gate): gate on the configured Zoe host being reachable. On total failure exit
+  # non-zero so systemd (Restart=always) retries.
+  ZOE_HOST="$(python3 -c "import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).hostname or '')" "${ZOE_URL}")"
+fi
 if [ -n "${ZOE_HOST}" ]; then
   NET_OK=0
   for i in $(seq 1 60); do
@@ -124,4 +139,4 @@ exec "${CHROMIUM_BIN}" \
   --autoplay-policy=no-user-gesture-required \
   --use-fake-ui-for-media-stream \
   --user-data-dir="${KIOSK_HOME}/.config/chromium-kiosk" \
-  "${ZOE_URL}"
+  "${START_URL}"
