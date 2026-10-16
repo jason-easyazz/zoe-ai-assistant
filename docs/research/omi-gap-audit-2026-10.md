@@ -51,8 +51,9 @@ the owner's copy.** [V]
 - The ring holds up to about 34 hours of audio (P0-2). Stock firmware advances its read pointer as data is delivered
   (`sync_checkpoint_advance`, plan 0.3). So any phone running a generic BLE tool can download what the pendant holds,
   and the owner's copy is gone when it does. Command `0x13` CLEAR wipes the ring outright.
-- The pendant is connectable exactly when it is away from the panel: one central at a time
-  (`CONFIG_BT_MAX_CONN=1`), so at home the Pi's link protects it, and away nothing does.
+- The pendant takes one central at a time (`CONFIG_BT_MAX_CONN=1`), and `omi-sync` does not hold the link: it
+  connects per visit and lets go (`runner.py`, `OMI_SYNC_SCAN_INTERVAL_S` 30 s) [V]. The pendant is therefore
+  connectable to a stranger all the time while away, and between the Pi's visits at home, through walls included.
 - The ledger already records the related OTA hole (the public MCUboot key, 2026-10-13). This read-and-erase exposure
   is not recorded anywhere.
 - **Next action:** say it plainly in the operator pack. Fold the fix into phase-2 firmware: encrypted, authenticated
@@ -444,8 +445,9 @@ See P1-1. In short:
 
 ## 9. Owner decisions
 
-1. **OD1 Wear posture while P0-1 stands.** Readable without pairing when away: keep wearing it as now, power it off
-   in public places, or prioritise the phase-2 firmware (encrypted storage plus a bond with the Pi)?
+1. **OD1 Wear posture while P0-1 stands.** The pendant is readable without pairing whenever the Pi is not connected:
+   keep wearing it as now, power it off in public places, or prioritise the phase-2 firmware (encrypted storage plus a
+   bond with the Pi)?
 2. **OD2 Sync while away** (P1-7): Web Bluetooth page on an Android phone, a travel dock, or accept the ring and the
    warning?
 3. **OD3 Backups of pendant text** (P1-4): exclude it from the nightly dump (recommended; no 35-day tail), or keep it
