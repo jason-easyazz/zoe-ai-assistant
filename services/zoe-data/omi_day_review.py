@@ -815,13 +815,13 @@ async def _on_calendar(db, user_id: str, c: "Candidate") -> bool:
     return any(not want or str(r["start_time"] or "")[:5] == want for r in rows)
 
 
-async def _known(db, user_id: str) -> tuple[set[str], set[str], set[str]]:
+async def _known(db, user_id: str, day: str) -> tuple[set[str], set[str], set[str]]:
     """(pending dedup keys of other recent days, the member's live contact names, items open on their lists), folded. Each read
     fails soft to empty: a missed check is a redundant proposal, never a write."""
     keys: set[str] = set()
     names: set[str] = set()
     items: set[str] = set()
-    since = (_now() - timedelta(days=CROSS_DAY_DEDUP_DAYS)).astimezone(_tz()).date().isoformat()
+    since = (date.fromisoformat(day) - timedelta(days=CROSS_DAY_DEDUP_DAYS)).isoformat()
     try:
         keys = {r["dedup_key"] for r in await _fetch(db, "SELECT dedup_key FROM omi_day_candidates WHERE user_id = ? AND status = 'pending' "
                                                           "AND day_local >= ?", (user_id, since))}
@@ -867,6 +867,7 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
     are skipped and candidates are unique per (user, day, dedup_key). Returns counts only - never text."""
     now = _now()
     as_of = as_of or now
+    gen = erase_gate.generation(user_id)      # an erase that runs while we read and think wins: the write below is dropped
     res: dict[str, Any] = {"user_id": user_id, "day": day, "status": "ok", "calls": 0, "calls_invalid": 0, "proposed": 0,
                            "kept": 0, "stored": 0, "prompt_tokens": 0, "completion_tokens": 0}
     lo, hi = _day_bounds_utc(day)
@@ -922,13 +923,12 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
         return res
     res.update(usage)
     merged = merge(cands)
-    gen = erase_gate.generation(user_id)
     async with erase_gate.writing(user_id, gen) as ok:
         if not ok:
             res["status"] = "erased"
             return res
         async with _db() as db:
-            keys, names, items = await _known(db, user_id)
+            keys, names, items = await _known(db, user_id, day)
             final: list[Candidate] = []
             for c in merged:
                 main = c.payload.get("item") or c.payload.get("title") or c.payload.get("name") or c.payload.get("fact") or ""
