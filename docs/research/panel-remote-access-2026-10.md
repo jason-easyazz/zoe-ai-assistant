@@ -3,13 +3,15 @@ type: research
 title: Panel remote access - headless Wi-Fi onboarding and a private link home, field research and Zoe survey (2026-10-16)
 date: 2026-10-16
 status: research-only; nothing built. Design is docs/architecture/panel-remote-access.md.
-description: Research record behind the panel-remote-access design. Covers headless Wi-Fi onboarding for a keyboard-less Debian 12 / NetworkManager kiosk (balena wifi-connect, Comitup, RaspAP, a plain nmcli hotspot with captive-portal detection, Improv Wi-Fi over BLE, WPS, Raspberry Pi Connect, the Wi-Fi QR format); private links back to a home server (Tailscale, Headscale, plain WireGuard, Cloudflare Tunnel + Access, Nebula, ZeroTier, NetBird) compared on privacy, what leaves the house, NAT behaviour, packages, cost and latency; the voice latency budget (ITU-T G.114) and Opus bitrates; and the read-only survey of Zoe's code and the live panel and Jetson.
+description: Research record behind the panel-remote-access design. Covers headless Wi-Fi onboarding for a keyboard-less Debian 12 / NetworkManager kiosk (balena wifi-connect, Comitup, RaspAP, a plain nmcli hotspot with captive-portal detection, Improv Wi-Fi over BLE, WPS, Raspberry Pi Connect, the Wi-Fi QR format); private links back to a home server (Tailscale, Headscale, plain WireGuard, Cloudflare Tunnel + Access, Nebula, ZeroTier, NetBird) compared on privacy, what leaves the house, NAT behaviour, packages, cost and latency; Cloudflare Tunnel in TCP pass-through mode and Headscale's Cloudflare, nginx, relay and Tailnet-Lock facts (both read from source); the home line's NAT signs; the voice latency budget (ITU-T G.114) and Opus bitrates; and the read-only survey of Zoe's code and the live panel and Jetson.
 ---
 
 # Panel remote access: research (2026-10-16)
 
 Owner ask: *"Is there a way we can connect the touch panel back to Zoe over the internet? We'd need the ability
 to connect the panel to a new Wi-Fi and something like Tailscale to connect over a different network."*
+Follow-up the same day: prefer a link that needs **no new account**; the owner's existing cloud server (root, host
+nginx) is available as the public box.
 
 The design built on this record is [panel-remote-access.md](../architecture/panel-remote-access.md). Nothing on the
 panel or the Jetson was changed to write it; the live reads were read-only (`ss`, `nmcli`, `tailscale status`,
@@ -159,15 +161,49 @@ person must finish on their phone.
   [verified: https://headscale.net/stable/about/features/]. Not listed: `tailscale cert`, Tailnet Lock, key expiry
   [verified, absence only]. `tailscale cert` relies on Tailscale publishing DNS records under `ts.net`, which a
   Headscale server cannot do [secondary].
-- Needs a publicly reachable server (VPS or forwarded port) with a domain and TLS; the official clients log in to it
-  with `--login-server` [unverified: widely documented, not fetched]. It moves the metadata to our VPS; it does not
-  remove it.
+- Needs a publicly reachable server (a VPS, or a forwarded port) with a domain and TLS. It moves the metadata to
+  that server; it does not remove it.
+- Clients join with `tailscale up --login-server <url>` [verified: headscale `docs/ref/registration.md`]; the
+  changelog says the next release (0.30) requires clients at 1.84.0 or newer [verified] - both boxes run 1.104.1.
+- **Not behind Cloudflare.** "Running Headscale behind a Cloudflare Proxy or Cloudflare Tunnel is not supported and
+  will not work as Cloudflare does not support WebSocket POSTs as required by the Tailscale protocol" (the client
+  upgrades with `POST` and `Upgrade: tailscale-control-protocol`) [verified: headscale
+  `docs/ref/integration/reverse-proxy.md`, issue 1468]. So the control name must be DNS-only (grey cloud).
+- **Behind nginx:** the same file carries a community nginx example (upgrade map, `proxy_http_version 1.1`,
+  `proxy_buffering off`, `proxy_pass http://127.0.0.1:8080`, Headscale `listen_addr 127.0.0.1:8080`,
+  `trusted_proxies` loopback), labelled "not verified by Headscale developers", with "test your setup without a
+  reverse proxy before raising an issue" [verified].
+- **Embedded DERP:** needs a public IP, TCP 443 and UDP 3478 (STUN, "expose publicly") [verified: headscale
+  `docs/setup/requirements.md`]; `derp.server.enabled` (default false), `stun_listen_addr` required when enabled,
+  `verify_clients: true` [verified: `config-example.yaml`]. DERP is served on the main listener at `/derp`
+  [verified: `hscontrol/app.go`], so it shares 443 with the control protocol; STUN is expected to be exposed
+  directly. Tailscale's public relay map stays merged by default, so its regions remain a fallback [verified:
+  `docs/ref/derp.md`].
+- **Tailnet Lock: not implemented** - "Headscale has no tailnet-lock implementation" [verified:
+  `hscontrol/policy/v2/tailnet_state_caps.go`]; feature request #1307 open. A compromised control server can add or
+  re-key nodes.
+- **Registration and expiry:** pre-auth keys (reusable/ephemeral, tags), web-auth registration approved by the
+  operator on the CLI, tags, grants, OIDC [verified: `docs/about/features.md`, `docs/ref/registration.md`];
+  `node.expiry` with tagged nodes exempt [verified: `config-example.yaml`]. CLI names differ between doc pages
+  (`auth register` vs `nodes register`) - check `--help` on the installed version.
+- **Certificates and DNS:** MagicDNS with `dns.base_domain` [verified: `config-example.yaml`]. `tailscale cert`
+  does not work: the control server answers the client's `/set-dns` (the ACME DNS-01 hook) with "not implemented"
+  [verified: `hscontrol/noise.go`]. Serve and Funnel are not supported [verified: features page].
+- **Packages:** `headscale_0.29.5_linux_amd64.deb` and `_arm64.deb`; supported on Ubuntu 22.04+ and Debian 12+
+  [verified: release assets, `docs/setup/install/official.md`].
 
 ### 2.3 Plain WireGuard
 
 - No NAT traversal; `PersistentKeepalive` (25 s suggested) keeps a mapping open; one side needs a reachable
   endpoint [verified: https://www.wireguard.com/quickstart/]. A house behind CGNAT therefore needs a VPS hub that
-  relays all traffic (encrypted) [unverified: reasoning]. The Jetson's kernel has no in-kernel WireGuard (section 4).
+  relays all traffic (encrypted) [unverified: reasoning].
+- The Jetson has no in-kernel WireGuard (section 4). `wireguard-go` is packaged for Ubuntu 22.04 (universe,
+  `0.0.20220117-2ubuntu0.1`, arm64) [verified: packages.ubuntu.com]; wireguard.com says it is "quite functional" and
+  a drop-in for the kernel interface [verified: https://www.wireguard.com/xplatform/], while its README says to
+  prefer the kernel module on Linux because it is faster [verified: https://github.com/WireGuard/wireguard-go].
+  Tailscale itself runs a wireguard-go fork in userspace [verified: tailscale `go.mod`].
+- With the home line behind carrier-grade NAT (section 2.8), a home port forward cannot work; WireGuard would need a
+  hub on a public server relaying every packet.
 
 ### 2.4 Cloudflare Tunnel + Access
 
@@ -205,10 +241,50 @@ person must finish on their phone.
 | Tailscale | yes, DERP fallback | no | no (metadata only) | free (Personal) |
 | Headscale | yes | yes (VPS) | no (metadata on our VPS) | a VPS |
 | WireGuard | only if one side reachable | yes behind CGNAT | no | a VPS behind CGNAT |
-| Cloudflare Tunnel | no, via edge | no | **yes** | free |
+| Cloudflare Tunnel (HTTP proxy) | no, via edge | no | **yes** | free |
+| Cloudflare Tunnel (TCP pass-through, section 2.7) | no, via edge | no | no (ciphertext; connection metadata) | free |
 | Nebula | yes | lighthouse | no | a lighthouse |
 | ZeroTier | yes | no | no | free, 10 devices |
 | NetBird | yes, relay fallback | self-host VM (or hosted) | no | a VM or hosted |
+
+### 2.7 Cloudflare Tunnel in TCP pass-through mode
+
+Read from cloudflared's source (opensrc cache of `cloudflare/cloudflared`, master) and Cloudflare's docs.
+
+- **Client side:** `cloudflared access tcp` (aliases `rdp`, `ssh`, `smb`) opens a local listener and, per accepted
+  connection, dials `wss://<hostname>` and pipes the TCP bytes as binary WebSocket frames ("Websocket is used to
+  carry data via WS binary frames over the tunnel from client to the origin") [verified: `cmd/cloudflared/access/cmd.go`,
+  `cmd/cloudflared/access/carrier.go`, `carrier/websocket.go`].
+- **Origin side:** an ingress `tcp://` service becomes `newTCPOverWSService`, which plain-dials the destination and
+  copies bytes both ways through `stream.Pipe` [verified: `ingress/ingress.go`, `ingress/origin_service.go`,
+  `ingress/origin_proxy.go`, `ingress/origin_connection.go`]. Nothing parses the payload or terminates TLS, so an
+  inner TLS session (panel to nginx) stays end-to-end: Cloudflare sees the outer WebSocket handshake with the
+  hostname and Access headers, then ciphertext [verified: same files; the conclusion is a reading of the code].
+- **No PROXY protocol, no forwarding header** on this path (the only `X-Forwarded-*` code is `X-Forwarded-Host` on
+  the HTTP path) [verified: grep of the tree]. The origin sees the cloudflared connector's own address.
+- **Service token flags:** `--service-token-id` / `--service-token-secret` (env `TUNNEL_SERVICE_TOKEN_ID` /
+  `TUNNEL_SERVICE_TOKEN_SECRET`), sent as `Cf-Access-Client-Id` / `Cf-Access-Client-Secret`; `--hostname`, `--url`
+  [verified: `cmd/cloudflared/access/cmd.go`, `carrier/carrier.go`]. Arbitrary TCP behind Access is a documented flow
+  [verified: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/non-http/cloudflared-authentication/arbitrary-tcp/].
+- **Timeouts:** Cloudflare closes WebSockets idle for an unstated time and restarts edge servers, which ends them
+  [verified: https://developers.cloudflare.com/network/websockets/]. The origin pings every 54 s
+  [verified: `websocket/connection.go`]. A dropped stream closes that TCP connection; the next local connection
+  re-dials, there is no in-stream reconnect [verified: `carrier/carrier.go`].
+- **Packages:** cloudflared 2026.10.1 (2026-10-15) with `cloudflared-linux-arm64.deb`; Cloudflare's apt repository
+  serves `bookworm` arm64 at that version [verified: release API, `pkg.cloudflare.com` Packages index].
+
+### 2.8 The home line and the relays
+
+- TTL-limited pings from the Jetson: hop 1 private, **hop 2 in `100.64.0.0/10`**, then public [verified, live
+  2026-10-16; addresses not recorded]. `tailscale netcheck`: UDP works; `MappingVariesByDestIP: false` ("easy" NAT);
+  port mapping via UPnP/PCP is offered, but the NAT-PMP reply carries no valid public address; nearest relay region
+  Sydney at 53 ms RTT, then Tokyo 165 ms [verified, live]. Together these are strong signs of carrier-grade NAT
+  (inbound connections to the house impossible), not proof: the decisive check is the router's WAN address in its own
+  admin page against the address the internet sees.
+- Tailscale's relay map has Sydney (region 5) as its only Australian region; Singapore, Tokyo and Hong Kong are the next
+  [verified: https://login.tailscale.com/derpmap/default]. Headscale merges this map by default (section 2.2).
+- The owner's cloud server relays at roughly 50 ms each way from the house [owner-supplied]; a direct path between
+  panel and Jetson avoids any relay.
 
 ## 3. The voice budget
 
@@ -238,7 +314,11 @@ URL and the daemon's `ZOE_URL` are `https://` + a private LAN address; `VERIFY_S
 **Live, Jetson** [verified]: Tailscale 1.104.1 (installed 2026-10-08), `tailscaled` active and enabled,
 `NeedsLogin`. `CONFIG_TUN=y`, `/dev/net/tun` present, `CONFIG_WIREGUARD` not set. Listening on all interfaces:
 80/443 (zoe-ui nginx in Docker), 8000 (zoe-data, host-native), 8123 (Home Assistant); loopback-only: llama 11434,
-Serena 9121. Docker uses the iptables backend. An earlier record (`agent-sessions-off-box-2026-10-04.md`) saw no
+Serena 9121. Also on all interfaces, against the merged compose (#1727 binds them to loopback; the containers were
+created 2026-05-10 and never recreated): **8007, the Home Assistant MCP bridge with no inbound auth**, and **5432,
+Postgres**. The panel's daemon env still carries an `HA_BRIDGE_URL` pointing at that port, and a request from the
+panel got HTTP 200 (unused: `VOICE_ROUTE_MODE=direct`). Docker uses the iptables backend; `docker-proxy` processes
+are present for published ports. An earlier record (`agent-sessions-off-box-2026-10-04.md`) saw no
 Tailscale on 2026-10-04; it was installed after that.
 
 **Code** [verified]:
