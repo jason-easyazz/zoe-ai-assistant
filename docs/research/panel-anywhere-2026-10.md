@@ -3,7 +3,7 @@ type: research
 title: Panel anywhere - a touch panel linked to its own Zoe from anywhere in the world, for many households (field research, 2026-10-16)
 date: 2026-10-16
 status: research-only; nothing built, nothing changed on any live system. The design is docs/architecture/panel-anywhere.md.
-description: Research record behind the panel-anywhere design. It covers the Nabu Casa remote-UI pattern read from source (snitun 0.47.0, hass-nabucasa 2.7.0), the adopt candidates for a shared multi-tenant SNI-passthrough relay (frp, snitun, sish, rathole, zrok/OpenZiti, Pangolin/Newt, NetBird, inlets, piko, boringproxy, Cloudflare Tunnel, Headscale per household), certificates (ACME DNS-01 through a narrow relay API, TLS-ALPN-01, Let's Encrypt limits, the Public Suffix List, a private-use name no public CA issues for), pairing and identity on top of the #2082 device-token kiosk credential, the voice WAN budget through a Sydney relay, and what the owner's planned Device Relay should become.
+description: Research record behind the panel-anywhere design. It covers the Nabu Casa remote-UI pattern read from source (snitun 0.47.0, hass-nabucasa 2.7.0), the adopt candidates for a shared multi-tenant SNI-passthrough relay (frp, snitun, sish, rathole, zrok/OpenZiti, Pangolin/Newt, NetBird, inlets, piko, boringproxy, Cloudflare Tunnel, Headscale per household), certificates (ACME DNS-01 through a narrow relay API, TLS-ALPN-01, Let's Encrypt limits, the Public Suffix List, a private-use name no public CA issues for), pairing and identity on top of the #2082 device-token kiosk credential, the voice WAN budget through a Sydney relay, and why one relay should carry every inbound need.
 builds_on: docs/architecture/panel-remote-access.md + docs/research/panel-remote-access-2026-10.md (PR #2080, owner-only link over Headscale), services/zoe-data/panel_kiosk_credential.py + routers/panel_kiosk.py (#2082), routers/panel_auth.py, routers/panel_provision.py, scripts/setup/remote-access/headscale/ (PR #2083)
 ---
 
@@ -19,7 +19,7 @@ encrypted so the relay operator cannot read it (VISION principle 2).
 
 The design built on this record is [panel-anywhere.md](../architecture/panel-anywhere.md). Nothing was changed to write
 it. Placeholders: `<relay-domain>` (the public relay name), `<hid>` (a household's opaque relay id), `<box>` (the
-household's Zoe box). No addresses, household names or business details appear here.
+household's Zoe box). No addresses or household names appear here.
 
 **Evidence tags.** **[verified]** = read in primary source code (opensrc cache, version pinned), an official doc, a
 release API or a standard in this session. **[secondary]** = a search result, blog, mirror or a sub-agent's reading not
@@ -265,7 +265,8 @@ What exists [verified: code at origin/main c0c3743ac]:
   `X-Real-IP` equal to a registered `panels.ip_address`; `X-Real-IP` is believed only from a peer inside
   `ZOE_TRUSTED_PROXY_NETS` (default loopback + `172.16.0.0/12`); `lan` scope mode trusts any private address with a
   guest session.
-- `auth._is_internal_request`: any loopback TCP peer on zoe-data is an internal caller that may assert identity.
+- `auth._is_internal_request`: any loopback TCP peer on zoe-data is an internal caller and passes every
+  `require_internal_token` endpoint; asserting another user's identity by header additionally needs the internal token.
 
 What a relay hop does to these [verified by reading the code; behaviour unverified until lab cell I1]:
 
@@ -274,8 +275,13 @@ What a relay hop does to these [verified by reading the code; behaviour unverifi
   container address inside `172.16.0.0/12`, i.e. **private**. So over the relay every caller looks like a private-LAN
   client: harmless for the registered-address path (nobody registers that address), wrong for `lan` scope mode and
   for `livekit_available` (`routers/voice_tts.py`), and the reason the design marks relay traffic explicitly.
-- If the relay client ever pointed at zoe-data's `127.0.0.1:8000` directly, **every relayed caller would pass
-  `_is_internal_request`** and could assert any identity. This is categorical: the local target is nginx only.
+- If the relay client ever pointed at zoe-data's `127.0.0.1:8000` directly, every relayed caller would be a loopback
+  peer and **pass `_is_internal_request`**, so it would reach every endpoint guarded by `require_internal_token`
+  (loopback OR token; used across `routers/system.py`, `routers/memories.py`, `routers/telegram_media.py` and others)
+  [verified: `auth.py`]. Header impersonation is narrower: `resolve_acting_user` honours `X-Zoe-User-Id` only with a
+  valid `X-Internal-Token`, never for loopback alone, and the intent-dispatch route needs the token too while
+  `ZOE_INTENT_DISPATCH_REQUIRE_TOKEN` is on [verified: `auth.py` `_has_valid_internal_token`, `resolve_acting_user`,
+  the intent-dispatch guard]. Still categorical: the local target is nginx only.
 - The kiosk credential's "no Cloudflare" rule does not fire on the relay (no Cloudflare header), which is right: the
   relay path is end-to-end. It must not be reused as "the internet" for the credential, only for address trust.
 - No nginx location in `services/zoe-ui` allows or denies by source address [verified: grep for `allow`/`deny`/`geo`],
@@ -285,9 +291,14 @@ What a relay hop does to these [verified by reading the code; behaviour unverifi
   is one extra RTT to the relay plus one end-to-end RTT for TLS 1.3 per turn (section 6).
 
 Pairing authenticity: today's pairing runs with `VERIFY_SSL=false` and `--ignore-certificate-errors` on the LAN, i.e.
-trust on first use. Bluetooth-style **numeric comparison** (both screens show the same short code derived from the
-exchanged keys; the person confirms on both) is the standard defence against a device in the middle during pairing
-[unverified: general protocol knowledge; the design specifies it and lab cell P2 tests it].
+trust on first use, and the 6-character code is generated by Zoe and handed to the panel over that same unauthenticated
+channel (`/request` returns it), so it cannot authenticate anything against a device in the middle [verified:
+`routers/panel_provision.py`]. The standard fix is an **out-of-band channel the attacker cannot see**: the panel shows
+a QR that carries a high-entropy secret and its public-key fingerprint; the member's phone scans it and hands both to
+Zoe over the member's own signed-in session; Zoe then authenticates everything it sends the panel with that secret
+(device linking in Signal and WhatsApp works this way) [unverified: general protocol knowledge; the design specifies it
+in section 6.1 and lab cell P2 attacks it from both ends]. Short-code comparison (Bluetooth numeric comparison) is only
+safe inside an authenticated key agreement with commitments, and is the fallback, not the plan.
 
 ## 5. Wi-Fi onboarding away from home
 
@@ -352,21 +363,12 @@ RTT + upload bytes / uplink + the first sentence's download.
   not depend on the relay, and the owner's own panel as a stopgap. #2083's bundle is lab-proven (65/65 cells,
   v0.29.4 pinned) and only needs deploying [verified: PR #2083 description].
 
-## 8. The owner's planned Device Relay
+## 8. One relay for every inbound need
 
-The owner's companion platform (a separate, private repository) already plans a "Zoe Device Relay" on the same
-server: devices connect outbound, MQTT over TLS for platform-to-device messages, a bidirectional WebSocket relay for
-interactive app-to-Zoe traffic with NaCl secretbox end-to-end encryption and keys exchanged at pairing, Ed25519 device
-keys generated on the device, a `devices` registry, short-lived device JWTs, and Nabu Casa's relay design cited as
-inspiration. No relay code exists yet [verified: read of that repository's technical build plan, read-only; business
-details deliberately not copied here].
+Findings that shape design section 9 [unverified: design reasoning]:
 
-Findings that shape the merge (design section 9):
-
-- The SNI relay already carries any TLS client to the box end to end, so a second, custom-encrypted WebSocket relay
-  for interactive traffic would duplicate it and add a hand-built crypto protocol (NaCl secretbox + ECDH) where TLS to
-  the box already gives authenticated encryption [unverified: design reasoning].
-- The session master the SNI relay needs (section 1.2) is exactly a device registry with device-key authentication,
-  which that plan already specifies.
-- MQTT stays useful for platform-originated, low-sensitivity messages that the platform already knows (it is the
-  sender), with retained state and offline queueing [verified: that plan's protocol section].
+- The SNI relay already carries any TLS client to the box end to end. A second relay for interactive app traffic,
+  with its own hand-built encryption layer, would duplicate it; TLS to the box already gives authenticated encryption.
+- The session master the SNI relay needs (section 1.2) is a device registry with device-key authentication. Any other
+  system that needs to reach a household's box should reuse that registry and that relay rather than grow a parallel
+  one. Integrations outside Zoe are out of scope for this record.

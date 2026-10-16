@@ -38,8 +38,9 @@ builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link,
   - sish is the fallback, with weaker name ownership.
 - **The panel does not use a public certificate.** It connects with SNI `<hid>.zoe.internal`. `.internal` is
   reserved for private use and public CAs do not issue for it, so the box answers with a leaf from the
-  **household's own CA**, installed on the panel at pairing (research 3.3). The relay operator therefore cannot
-  mint a certificate the panel would accept, even if it turned malicious, and the name never lands in Certificate
+  **household's own CA**, installed on the panel at pairing (research 3.3). Provided pairing delivered that CA root
+  authentically (section 6.1) and the panel's trust store is not tampered with, the relay operator cannot mint a
+  certificate the panel would accept, even if it turned malicious, and the name never lands in Certificate
   Transparency. The same name maps to the box's LAN address at home and to the relay away. One origin and one
   certificate cover both, so nothing in the browser changes when the panel moves.
 - **Public certificates only where Zoe does not manage the client:** phone browsers, webhooks, OAuth redirects. They
@@ -51,12 +52,11 @@ builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link,
     `X-Zoe-Ingress: relay`, and zoe-data treats them as "no address": the panel proves itself with the #2082 device
     token or kiosk credential and, from R3, a client certificate (mTLS) on the relay listener.
   - The relay client's local target is the relay nginx listener, **never zoe-data's `127.0.0.1:8000`**. A loopback
-    peer passes `_is_internal_request`.
-- **One system with the owner's planned Device Relay** (section 9):
-  - the session master is that plan's device registry;
-  - the SNI relay replaces its bespoke encrypted WebSocket relay;
-  - MQTT stays for platform-originated messages;
-  - webhooks and OAuth arrive on the narrow public name.
+    peer passes `_is_internal_request` and so reaches every `require_internal_token` endpoint (header impersonation
+    still needs the internal token; research 4).
+- **One relay for every inbound need** (section 9): panels, the Zoe phone app later, webhooks and OAuth redirects all
+  reach the box through the same SNI relay and the same session master. Anything else that needs to reach a
+  household's box reuses them rather than building a second relay with its own encryption.
 - **Voice:** relays belong next to the HOME, not the panel. Through Sydney, Perth is ~100 ms round trip, London
   ~320 ms and New York ~270 ms (research 6.1). The biggest cheap fix is a keep-alive HTTP session in the voice
   daemon: today every turn pays a new TCP connection plus a TLS handshake, about 2 round trips. Head-of-line
@@ -155,7 +155,7 @@ builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link,
 3. Every later call to the session master is signed with the device key (short-lived device JWT, which the owner's
    plan already specifies). Through those calls the box rotates the relay secret and, in R5, sets ACME TXT records.
 
-No human account is created. Linking the box to a person on the owner's platform is optional and separate.
+No human account is created.
 
 ### 4.2 Per-tenant authorization in frp
 
@@ -219,22 +219,38 @@ only by re-enrolling, so no second relay ever claims its `<hid>`.
 
 ### 6.1 Pairing (at home, extended)
 
-The household links the panel at home with today's QR flow (`/api/panels/provision/*`, member confirms on the phone),
-and the relay setup rides along:
+Today's flow (`/api/panels/provision/*`) is trust on first use: Zoe generates the 6-character code and hands it to the
+panel over the same unauthenticated LAN channel (`/request` returns it), with certificate checks off, so the code
+proves nothing against a device in the middle (research 4). The extension authenticates the pairing through a channel
+that attacker cannot see, the member's phone camera, and needs no typing and no tap on the panel:
 
-1. The panel generates a key pair and sends its public key and a CSR with `/request`.
-2. The phone page and the panel both show a 6-digit comparison code. It is derived from the panel's public key, the
-   household CA root and the pairing nonce. The member confirms on the phone that the codes match, then taps "match"
-   on the panel. That is one tap, not typing. A device in the middle shows different digits on one of the two
-   screens (lab cell P2).
-3. The poll response (`/{code}` with the poll secret) returns:
-   - the device token, as today;
-   - the household CA root;
-   - a client certificate for the panel (from R3);
-   - `<hid>.zoe.internal`;
-   - the relay's public address name.
+1. **The panel generates, locally:** an ECDSA P-256 key pair (its client-certificate key from R3), a 128-bit random
+   pairing secret `s`, and a pairing id. Neither the secret nor anything derived from it, other than the MAC check in
+   step 5, ever crosses the panel's network channel.
+2. **The panel sends** `/request` with the pairing id and its public key only, and shows a QR encoding
+   `https://<zoe>/pair#id=<pairing id>&k=<s>&fp=<sha256 of the panel public key>`. The secret travels in the URL
+   fragment, which the phone's browser does not send to any server.
+3. **The member's phone scans it.** The pairing page (served by Zoe to the member's signed-in session) reads the
+   fragment and posts `id`, `s` and `fp` to `/confirm`, under the existing rule that confirmation needs a real member
+   session.
+4. **Zoe checks** that the public key received in step 2 hashes to `fp`. A mismatch means the panel's channel was
+   tampered with: the attempt is burned and the phone says so. Zoe then signs the panel's client certificate (R3) and
+   assembles the bundle: device token, household CA root, client certificate, `<hid>.zoe.internal`, relay address name.
+5. **Zoe authenticates the bundle to the panel.** The poll response carries the bundle plus
+   `HMAC-SHA256(key = HKDF(s, "zoe.pair.v1"), "zoe->panel" || pairing id || panel public key || bundle)`. The panel
+   recomputes it with a constant-time compare and accepts nothing that fails. The role label and the panel key in the
+   MAC bind it to this session and direction; a bundle from another run or for another key does not verify.
+6. **Limits:**
+   - one pairing id = one attempt;
+   - the secret is single-use and dies with the code's existing TTL (`ZOE_PROVISION_CODE_TTL_S`, 300 s);
+   - existing per-device request rate limits apply, and three failed confirmations lock the pairing id;
+   - an uncollected bundle is revoked as today.
 
-   The panel stores them. From then on it verifies Zoe with the household CA, never with `VERIFY_SSL=false`.
+From then on the panel verifies Zoe with the pinned household CA only, never with `VERIFY_SSL=false`.
+
+What this rests on: the phone's own channel to Zoe is authentic. At home today that is the member's LAN session; with R5
+it is a publicly trusted name. A panel with no camera-capable phone nearby falls back to numeric comparison, which is
+only acceptable inside an authenticated key agreement with commitments (research 4); it is not designed here.
 
 Pairing away from home (a panel posted to a relative) needs the member's phone to reach Zoe remotely. It waits for the
 phone path (R5 public name or the Zoe app); it is not in the first phases.
@@ -274,6 +290,9 @@ reads the relay (research 5):
 - frp's `unrecognized_name` alert: "Zoe's computer at home is offline or its internet is down";
 - no TCP connection: "I can't reach the relay; this network may block it" (try the phone hotspot).
 
+If the home/away guess is wrong, the gate tries the other mapping before showing red: a panel that thinks it is away
+while at home still works through the relay (slower), and one that thinks it is home while away falls back to the relay.
+
 Captive portals, WPA2-Enterprise and away mode are unchanged from #2080 5.4 and 4.5.
 
 ## 7. Voice over the WAN
@@ -302,32 +321,27 @@ Captive portals, WPA2-Enterprise and away mode are unchanged from #2080 5.4 and 
 | Party | Sees | Can do | Cannot |
 |---|---|---|---|
 | Passive relay operator | `<hid>`, public addresses, timing, byte counts | nothing to content | read audio, transcripts or pages (TLS ends on the box) |
-| Malicious relay operator | the same | deny service; route `<hid>` to itself; mint a public certificate for `<hid>.<relay-domain>` (R5 only) | present a certificate the panel accepts for `<hid>.zoe.internal`; past R3, complete mTLS as the panel; reach anything on the public name but webhook and OAuth paths (and the box's CT watch reports a foreign certificate) |
+| Malicious relay operator | the same | deny service; route `<hid>` to itself; mint a public certificate for `<hid>.<relay-domain>` (R5 only) | (given an authentic pairing and an untampered panel trust store) present a certificate the panel accepts for `<hid>.zoe.internal`; past R3, complete mTLS as the panel; reach anything on the public name but webhook and OAuth paths (and the box's CT watch reports a foreign certificate) |
 | Another household | its own `<hid>` | nothing to yours | claim your name (the plugin assigns names; `ErrRouterConfigConflict` on a live name) |
 | Someone who knows your `<hid>` | that it exists | open a TLS connection | get past the handshake (R3); before R3, more than an anonymous guest |
 | Thief with the panel | until revoked, a guest-level panel | what the panel could do in the house as a guest | anything after revocation; any member action without the member's voice or PIN |
 
-## 9. One system with the owner's Device Relay
-
-The owner's platform already plans a device relay on the same server: outbound devices, MQTT, an interactive WebSocket
-relay with its own NaCl encryption, Ed25519 device keys and a device registry (research 8). This design makes them one
-system:
+## 9. One relay for every inbound need
 
 | Need | Carried by |
 |---|---|
-| Panel to its Zoe (and later the Zoe phone app) | frp SNI relay, `<hid>.zoe.internal`, TLS ending on the box |
-| The platform's app to a user's Zoe (interactive) | the same SNI relay. The app connects to the box with TLS, either as a managed client with the household CA or through the R5 public name. **The bespoke WebSocket relay and its NaCl/ECDH layer are dropped**: TLS to the box is the end-to-end layer |
-| Platform to device (nudges, venue data, status) | MQTT over TLS, unchanged: platform-originated messages the platform already knows, with queueing and retained state |
+| Panel to its Zoe (and later the Zoe phone app) | the SNI relay, `<hid>.zoe.internal`, TLS ending on the box |
+| Any other app that talks to a household's Zoe interactively | the same SNI relay, with TLS to the box as the end-to-end layer: as a managed client trusting the household CA, or through the R5 public name. No second relay and no hand-built encryption layer |
 | Webhooks and OAuth redirects for a household's Zoe | the R5 public name, terminating on the box, narrow surface (section 5, item 5) |
-| Device identity, enrolment, revocation, relay secrets, ACME TXT | the platform's device registry = the session master and frp plugin |
+| Device identity, enrolment, revocation, relay secrets, ACME TXT | one device registry = the session master and the frp plugin |
 
-The concrete edits to that plan are held privately and are not part of this public record. In short: the registry
-gains the relay fields, the relay becomes frp behind the stream front, the WebSocket relay is removed, and MQTT ACLs
-are scoped per device.
+Integrations outside Zoe that want to reach a household's box reuse this registry and relay; designing them is out of
+scope for this record.
 
 ## 10. Phases and lab cells
 
-Every cell has a negative control that must fail; "baseline" marks a comparison that is not a falsifying control. The
+Every cell has a negative control that must fail, and a cell that only proves rejection also has a positive control
+that must succeed. "Baseline" marks an extra comparison; it is never the only control in a cell. The
 lab is hermetic and follows #2083's harness: Docker on an internal network, with a `MemAvailable` gate before starting
 and teardown asserted.
 
@@ -362,14 +376,16 @@ Steps:
 5. on the panel: hosts switch, CA root, URLs, `VERIFY_SSL=true`;
 6. set the kiosk credential flag on, `ZOE_RELAY_INGRESS` on, and `ZOE_RELAY_HOSTNAME`.
 
-Cells: T1-T9 re-run against the live relay host on a lab "panel" before the real one. Then L6 from #2080, the
+Cells: T1-T7 and T9 re-run against the live relay host on a lab "panel" before the real one. Then L6 from #2080, the
 time-to-first-audio comparison against the LAN baseline, plus the replay gate.
 
 ### R2 - many households
 
 - The session master moves into the device registry (enrolment codes, signed device calls, relay secrets, regions).
-- Load cell: simulate N households (target 500) on the relay host size and record memory per frpc session, CPU, and
-  the p95 of a turn-sized request. Negative control: frps' own memory with zero clients (baseline).
+- Load cell L1: simulate N households (target 500) on the relay host size and record memory per frpc session, CPU,
+  and the p95 of a turn-sized request; every simulated household must complete a round trip through its own name.
+  Negative control: ten of the simulated households are given a wrong relay secret, and the harness must report
+  exactly those ten as failed (it counts real sessions, not attempts). Baseline: frps memory with zero clients.
 - Isolation cell: T1 against a registry of 500 households.
 
 ### R3 - pairing extension + mTLS
@@ -377,7 +393,7 @@ time-to-first-audio comparison against the LAN baseline, plus the replay gate.
 | Cell | Test | Negative control |
 |---|---|---|
 | P1 | pairing returns CA root + client certificate; relayed requests carry a fingerprint bound to the panel | a valid client certificate from household A presented with household B's device token is refused |
-| P2 | numeric comparison codes match on both screens | a lab man-in-the-middle swapping the CA root makes them differ, and pairing does not complete |
+| P2 | through a transparent lab proxy that forwards every pairing message unchanged, pairing completes (positive control: the proxy itself breaks nothing) | the same proxy made active at BOTH ends - it replaces the panel's public key in `/request`, the CA root, the client certificate and the device token in the bundle, and replays a bundle from an earlier run - and every variant fails: Zoe refuses the key whose hash is not the QR's `fp`, the panel refuses every bundle whose MAC does not verify, and nothing is stored on either side |
 | C3 | kiosk Chromium presents its client certificate with no prompt (`AutoSelectCertificateForUrls`) | with the policy removed, the handshake fails, so `ssl_verify_client on` is load-bearing |
 | T8 | revoke the token: daemon 401, kiosk credential dead next request; revoke the certificate: handshake or fingerprint refused | before revocation the same calls succeed |
 
@@ -385,8 +401,8 @@ time-to-first-audio comparison against the LAN baseline, plus the replay gate.
 
 | Cell | Test | Negative control |
 |---|---|---|
-| V1 | `tc netem` RTT 100/320 ms on the lab panel, keep-alive vs not, 20 turns each: first-audio and total | baseline: 0 ms netem reproduces LAN numbers; plus the replay gate shows no said-vs-did or per-stage regression |
-| V2 | 1% loss on the box leg with a concurrent bulk upload: turn p95, TCP vs QUIC transport | baseline: 0% loss, the same upload |
+| V1 | `tc netem` RTT 100/320 ms on the lab panel, keep-alive vs not, 20 turns each: first-audio, total, and new TLS handshakes per turn (packet capture) | with keep-alive disabled, the capture must show a handshake on every turn (proves the cell sees reuse); netem adding 500 ms each way must make the budget check report a breach. Baseline: 0 ms netem reproduces LAN numbers. Plus the replay gate: no said-vs-did or per-stage regression |
+| V2 | 1% loss on the box leg with a concurrent bulk upload: turn p95, TCP vs QUIC transport | the same 1% loss moved to the panel leg must show no TCP-vs-QUIC difference (proves the cell measures the box-leg mechanism). Baseline: 0% loss, the same upload |
 
 ### R5 - the public name (opt-in)
 
@@ -398,8 +414,10 @@ time-to-first-audio comparison against the LAN baseline, plus the replay gate.
 
 ### R6 - more regions
 
-A second relay region; the box chooses by latency at enrolment. Cell: a box enrolled in region 1 cannot register its
-`<hid>` on region 2 (the plugin consults the registry's region).
+A second relay region; the box chooses by latency at enrolment. Cell G1: a box enrolled in region 1 logs in and
+serves its `<hid>` on region 1. Negative control: the same box cannot register its `<hid>` on region 2 (the plugin
+consults the registry's region). Sensitivity check: with the plugin's region check disabled in the lab, the region-2
+registration is accepted, which proves the check is what refuses it.
 
 ## 11. The owner's trip: fast path vs Headscale
 
@@ -432,7 +450,7 @@ stream front, which changes how that server's existing sites are reached.
 | D3 | How a household enrols | **operator-issued enrolment codes** first; open self-service later with rate limits |
 | D4 | The relay domain | a **dedicated domain** separate from the platform's, with its public zone on the Public Suffix List before public names scale (R5) |
 | D5 | Public name per household (webhooks, OAuth, phone browser) | **off by default**, opt-in per household in R5, narrow surface, CT watch |
-| D6 | Merge with the planned Device Relay | **yes**: registry = session master; drop the bespoke WebSocket/NaCl relay; MQTT stays; webhooks and OAuth on the public name (section 9) |
+| D6 | One relay for every inbound need | **yes**: one device registry = session master; every interactive path to a household's box goes through the SNI relay with TLS to the box; no second relay with its own encryption (section 9) |
 | D7 | The trip | **Headscale now** (shared work first), frp F0 the same week, the panel moves to the relay after R1's cells pass |
 | D8 | Household CA custody | box-local intermediate for issuing; root generated on the box and exported once to the owner's offline backup, then removed (R3) |
 | D9 | mTLS on the relay listener | **required** once cell C3 passes; until then `optional` plus the device credential |
