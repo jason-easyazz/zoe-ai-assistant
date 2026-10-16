@@ -889,7 +889,7 @@ async def forget_voiceprints(db, user_id: str, rx) -> int:
     """"Forget <name>" erases the voiceprint the member's tagging taught Zoe for that person (owner decision 2026-10-14) AND
     everything derived from it in their pendant recordings - the contributions, the tags and the suggestions
     (``omi_voices.purge_people``): only the TAGGING member's rows, every model. RAISES on a failure; a missing table is nothing to
-    reach (before migration 0054 only the voiceprint rows exist)."""
+    reach (before migration 0055 only the voiceprint rows exist)."""
     rows = await _all(db, "SELECT id, people_id FROM learned_voiceprints WHERE owner_user_id = ?", (user_id,))
     ids = sorted(set(await _person_ids_named(db, user_id, rx)))
     if not ids:

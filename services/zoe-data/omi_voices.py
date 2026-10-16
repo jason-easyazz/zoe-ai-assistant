@@ -1,7 +1,7 @@
 """Speaker turns in a member's pendant recordings, the voices Zoe hears in them, and the voices she learns from the member's tags.
 
 Design ``docs/architecture/memories-space.md`` sections 2.4 / 2.6; owner decision 2026-10-14 ("Zoe needs to learn" - NO spoken-
-consent gate). Tables: migration 0054 (+ ``learned_voiceprints`` from 0053). Writers: ``omi_recordings._transcribe_one`` (segments,
+consent gate). Tables: migration 0055 (+ ``learned_voiceprints`` from 0053). Writers: ``omi_recordings._transcribe_one`` (segments,
 via ``store_segments`` + ``learn``) and ``routers/omi_voices.py`` (the member's own tag API). Flags:
 
   ``ZOE_OMI_SPEAKER_TAG`` (omi_diarize.mode)  off = no segments are written at all; shadow / on = turns are stored with labels.
@@ -498,7 +498,7 @@ async def purge_people(db, user_id: str, person_ids: Iterable[str]) -> int:
 
 async def drop_recording(db, rid: str) -> None:
     """A recording is deleted / tombstoned: its segments, held embeddings and every voiceprint contribution from it go, and the
-    voiceprints it fed are REBUILT from what remains. A missing table (pre-0054) is nothing to drop."""
+    voiceprints it fed are REBUILT from what remains. A missing table (pre-0055) is nothing to drop."""
     try:
         vps = [r[0] for r in await _all(db, "SELECT DISTINCT voiceprint_id FROM learned_voiceprint_segments WHERE recording_id = ?", (rid,))]
         await _run(db, "DELETE FROM learned_voiceprint_segments WHERE recording_id = ?", (rid,))

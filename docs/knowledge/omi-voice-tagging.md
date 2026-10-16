@@ -14,7 +14,7 @@ gate, for suggestions in the tagging member's own recordings only.
 
 ## What runs, and where
 
-Code: `services/zoe-data/omi_diarize.py`, `omi_voices.py`, `routers/omi_voices.py`, migration 0054.
+Code: `services/zoe-data/omi_diarize.py`, `omi_voices.py`, `routers/omi_voices.py`, migration 0055.
 
 1. **Turns.** The pass runs inside the existing transcription claim, under the same gate (night window, voice turn, RAM floor),
    before the WAV is deleted:
@@ -123,7 +123,7 @@ Public labelled speakers: LibriSpeech test-clean, speaker-disjoint from the cent
 
 ## Operator steps (none needed for the merge; all are owner decisions)
 
-1. Run migration 0054.
+1. Run migration 0055.
 2. Make sure the INT8 file is in `~/.cache/zoe-speaker-resnet34`. It is already built on the Jetson.
 3. The wearer needs a consented ResNet34 panel profile: `ZOE_SPEAKER_MODEL=dual` plus the 5-phrase re-enrolment. Without one,
    every turn is `unverified` and nothing is learned.

@@ -587,7 +587,7 @@ async def get_recording(user_id: str, rid: str) -> Optional[dict]:
         out = _public(rows[0], transcript=True)
         try:
             out["segments"] = await omi_voices.segments_for(db, user_id, rid) if rows[0]["status"] == "done" else []
-        except Exception as exc:  # noqa: BLE001 - pre-0054: no segments yet
+        except Exception as exc:  # noqa: BLE001 - pre-0055: no segments yet
             if not omi_voices._missing(exc):
                 raise
             out["segments"] = []
@@ -1048,7 +1048,7 @@ async def _sweep_voices() -> None:
             await omi_voices.sweep(db)
     except Exception as exc:  # noqa: BLE001
         import omi_voices
-        if not omi_voices._missing(exc):                     # pre-0054: nothing to expire yet
+        if not omi_voices._missing(exc):                     # pre-0055: nothing to expire yet
             logger.warning("omi_voices: expiry sweep failed (%s)", type(exc).__name__)
 
 

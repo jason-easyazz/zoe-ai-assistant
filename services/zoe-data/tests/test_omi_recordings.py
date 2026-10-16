@@ -618,7 +618,7 @@ def test_nothing_else_reads_pendant_transcripts():
     ``omi_devices.py`` (the one-time registry seed reads device_id + user_id only - never a transcript)."""
     allowed = {"omi_recordings.py", "routers/omi_recordings.py", "main.py", "memory_service.py", "memory_forget_cascade.py",
                "omi_devices.py",
-               # speaker turns + learned voices (0054): the diariser imports GateClosed, the voice store joins a recording's status
+               # speaker turns + learned voices (0055): the diariser imports GateClosed, the voice store joins a recording's status
                # and day, its router reuses the owner rule. ``omi_voices.review_segments`` is the ONE seam the day review reads.
                "omi_diarize.py", "omi_voices.py", "routers/omi_voices.py"}
     hits = set()

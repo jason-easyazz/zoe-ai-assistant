@@ -1,4 +1,4 @@
-"""0054 - pendant segments + learned voices (``omi_diarize.py``, ``omi_voices.py``, ``routers/omi_voices.py``).
+"""0055 - pendant segments + learned voices (``omi_diarize.py``, ``omi_voices.py``, ``routers/omi_voices.py``).
 
 Design: ``docs/architecture/memories-space.md`` sections 2.4, 2.6, 3 and 7 (owner decision 2026-10-14: tagging a person in
 your recordings teaches Zoe their voice, for SUGGESTIONS in your own recordings only, never auth). PURE STORAGE: every
@@ -25,7 +25,8 @@ behaviour that fills these tables is flag-dark (``ZOE_OMI_SPEAKER_TAG``, ``ZOE_O
 Conventions as 0045 / 0053: TEXT ids and UTC timestamps, ``user_id`` with no FK to a users table, bytes as BYTEA / BLOB.
 ``people`` rows are SOFT-deleted, so the FK cascades are a backstop only: the purge is explicit (``omi_voices.purge_people``).
 The nightly backup excludes the DATA of the four biometric tables (``postgres-nightly-backup.sh``). ``IF NOT EXISTS`` everywhere;
-the downgrade drops the new tables and the column (lossy by design: learned voices are re-learned).
+the downgrade drops the new tables and the column (lossy by design: learned voices are re-learned). Chained after the day
+review's 0054 (``0054_omi_day_review.py``, PR #2091), which merges first.
 """
 
 from __future__ import annotations
@@ -33,8 +34,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0054"
-down_revision = "0053"
+revision = "0055"
+down_revision = "0054"
 branch_labels = None
 depends_on = None
 
