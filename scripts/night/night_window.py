@@ -336,6 +336,8 @@ class NightCfg(bk.Cfg):
     night_mind_cmd: str = os.environ.get("NIGHT_MIND_CMD", "")
     #: the night-mind pass's standalone entry point (its contract: the docstring of ``zoe-night-mind.py`` on feat/night-mind-v1-reflection-pass): used by default as soon as the file exists
     night_mind_script: Path = REPO / "scripts" / "maintenance" / "zoe-night-mind.py"
+    #: the pendant day review's standalone entry point (services/zoe-data/omi_day_review.py): the window's LAST, best-effort job
+    omi_day_review_script: Path = REPO / "scripts" / "maintenance" / "zoe-omi-day-review.py"
     fallback_4b: bool = True
     py: str = sys.executable
     trial: bool = False
@@ -593,9 +595,10 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
     # The pendant day review (services/zoe-data/omi_day_review.py): LAST, only with the time the night has left (exec_job clips its
     # timeout to the window and skips it under 2 min). A no-op while ZOE_OMI_DAY_REVIEW is off; no 4B fallback here - zoe-data's own
     # daytime lane picks up a day the night did not finish, only when the panel is idle.
-    odr = [cfg.py, str(REPO / "scripts" / "maintenance" / "zoe-omi-day-review.py"), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens),
+    odr = [cfg.py, str(cfg.omi_day_review_script), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens),
            "--all-members"] + (["--decode-tok-s", tps] if decode_tps else []) + (["--prefill-tok-s", pps] if prefill_tps else [])
-    jobs["omi_day_review"] = JobSpec("omi_day_review", odr, t.get("omi_day_review", 1200.0), best_effort=True)
+    jobs["omi_day_review"] = JobSpec("omi_day_review", odr if cfg.omi_day_review_script.exists() else [], t.get("omi_day_review", 1200.0),
+                                     best_effort=True, skip_reason="" if cfg.omi_day_review_script.exists() else f"{cfg.omi_day_review_script.name} not found")
     return [jobs[j] for j in cfg.jobs if j in jobs]
 
 

@@ -155,6 +155,12 @@ def _parse_utc(raw: Any) -> Optional[datetime]:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def tz_name() -> str:
+    """The household zone every ``day_local`` / ``at`` is computed in (recorded on each candidate: the wearer may have been
+    elsewhere - P1-2 of the Omi gap audit)."""
+    return str(getattr(_tz(), "key", None) or _tz())
+
+
 def day_of(started_at: Any) -> str:
     """The household-local day (YYYY-MM-DD) a recording was made on; '' when its start time is unreadable."""
     dt = _parse_utc(started_at)
@@ -175,6 +181,7 @@ class Line:
     at: str                    # household-local HH:MM of the recording's start
     text: str
     speaker: str = "not_sure"
+    clock: str = "device"      # the recording's time_quality: device | corrected | estimated (a pendant clock reset lands on the sync day)
 
 
 _STRIP = re.compile(r"[\[\]{}<>`|\\]")
@@ -220,7 +227,7 @@ def lines_for_day(recordings: Sequence[dict], segments: Optional[dict] = None) -
             if not t or t == "[forgotten]":
                 continue
             n += 1
-            out.append(Line(f"r{k}.{n}", str(r["id"]), at, t, spk))
+            out.append(Line(f"r{k}.{n}", str(r["id"]), at, t, spk, str(r.get("time_quality") or "device")))
     return out
 
 
@@ -258,6 +265,7 @@ _HEDGE = re.compile(r"\b(?:maybe|perhaps|sometime|some time|someday|one day|at s
                     r"would be nice|if we|i guess)\b", _I)
 _COMMIT = re.compile(r"\b(?:see you|meeting|appointment|booked|i'll|i will|we'll|we will|we're|i'm going|going to|at \d|"
                      r"o'clock|\d\s*(?:am|pm)|is at|is on|confirmed)\b", _I)
+_SEE_YOU = re.compile(r"\bsee you (?:on |at |this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|tonight|\d)", _I)
 _IDENTITY = re.compile(r"\b(?:my name is|my name's|call me|i live at|my address)\b", _I)
 _SENSITIVE_ALL = frozenset({"health", "money", "grief", "family_conflict"})
 #: an owner fact is DURABLE (who they are, what they do, what they like), not a passing remark or a plan
@@ -308,6 +316,15 @@ def media_windows(lines: Sequence[Line]) -> set[str]:
     return out
 
 
+def _distress(text: str) -> bool:
+    """Any distress tier (not only an enforced one: a shadow-mode floor must not let a crisis line become a reminder). Fails CLOSED."""
+    try:
+        import distress_handoff
+        return distress_handoff.detect(text).tier != "none"
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def est_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
@@ -320,6 +337,16 @@ def pack(lines: Sequence[Line], chunk_tokens: int, calls: int) -> tuple[list[lis
     """``(chunks to send, counts)``: broadcast stretches and uncued lines dropped, the rest chunked to ``chunk_tokens``, the best
     ``calls`` chunks kept (by cue density), sent in day order."""
     counts = {"lines": len(lines), "lines_media": 0, "lines_zoe": 0, "lines_routine": 0, "chunks_total": 0, "chunks_skipped": 0}
+    # the distress floor (distress_handoff, the digest's and night mind's own guard): ANY distress tier leaves that line and the
+    # conversation around it (+/- WINDOW_LINES of the same recording) out - no model call, no candidate, nothing to any writer (gap
+    # audit P0-3; owner decision OD6 on whether anyone is told). Not the whole recording: the lexicon over-triggers on idiom ("you're
+    # gonna kill me"), and a 10-minute recording would lose everything else said in it. Approval re-checks the candidate text too.
+    hit = [i for i, ln in enumerate(lines) if _distress(ln.text)]
+    out_ids = {lines[j].id for i in hit for j in range(max(0, i - WINDOW_LINES), min(len(lines), i + WINDOW_LINES + 1))
+               if lines[j].recording_id == lines[i].recording_id}
+    counts["recordings_distress"] = len({lines[i].recording_id for i in hit})
+    counts["lines_distress"] = len(out_ids)
+    lines = [ln for ln in lines if ln.id not in out_ids]
     media = media_windows(lines)
     counts["lines_media"] = len(media)
     zoe = {ln.id for ln in lines if ln.id not in media and _ZOE_VOICE.search(ln.text)}
@@ -578,13 +605,13 @@ def _when(text: str, said_at: datetime) -> tuple[Optional[str], Optional[str]]:
     if not raw:
         return None, None
     try:
-        from reminder_service import normalize_due_date, normalize_due_time
+        from reminder_service import normalize_due_date
     except Exception:  # noqa: BLE001
         return None, None
     tm = re.search(r"\b(\d{1,2}(?::\d\d)?\s*(?:am|pm))\b|\b(\d{1,2}:\d\d)\b", raw, _I)
     if tm:
         try:
-            t = hhmm(normalize_due_time((tm.group(1) or tm.group(2)).replace(" ", "").upper()) or "")
+            t = hhmm(tm.group(1) or tm.group(2))          # validated here: a real clock time or nothing
         except Exception:  # noqa: BLE001
             t = None
     rest = re.sub(r"\b(?:at|by|on|this|the)\b|\d{1,2}(?::\d\d)?\s*(?:am|pm)|\d{1,2}:\d\d", " ", raw, flags=_I)
@@ -595,6 +622,15 @@ def _when(text: str, said_at: datetime) -> tuple[Optional[str], Optional[str]]:
         except Exception:  # noqa: BLE001 - not a date the reminder grammar knows: no date, never a guess
             d = None
     return d, t
+
+
+def _quoted(span: str) -> bool:
+    """``own_words.analyze`` (the exact-words index's own filter): the span carries reported speech or pasted/read-out text."""
+    try:
+        import own_words
+        return own_words.analyze(span).changed
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _restraint(text: str) -> set[str]:
@@ -640,7 +676,7 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
     hedged = bool(_HEDGE.search(span))
     conf = 0.8 if speaker == "you" else 0.5 if speaker == "not_sure" else 0.3
     payload: dict[str, Any] = {}
-    if kind in ACTION_KINDS and not _FIRST.search(span):
+    if kind in ACTION_KINDS and not _FIRST.search(span) and not (kind == "calendar_event" and _SEE_YOU.search(span)):
         drop("not_first_person")                 # a TV/radio/advert line ("don't forget to book your tickets") is never a task
         return None
     if (kind == "reminder" and not _TASK.search(span)) or (kind == "follow_up" and not _INTENT.search(span)) or (
@@ -653,6 +689,9 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
         if (speaker == "someone_else" or about not in ("me", "") or not _FIRST_SG.search(span) or _REPORTED.search(span)
                 or not fact):
             drop("not_owner_words")              # other people's words are context, never facts about the owner
+            return None
+        if _quoted(span):
+            drop("not_owner_words")              # the wearer quoting someone ("she said I'm ...") or reading text aloud (own_words)
             return None
         if not _DURABLE.search(span) or _PASSING.search(span) or len(span.split()) < 3:
             drop("not_durable")                  # "I'm at one", "I've done nothing wrong", "I'll leave early": not a fact to keep
@@ -716,7 +755,10 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
             payload = {"title": title, "date": d or "", "time": t or "", "when_said": clean(when_text, 40)}
     main = payload.get("item") or payload.get("title") or payload.get("name") or payload.get("fact") or ""
     key = f"{kind}|{_norm(main)}" + (f"|{payload.get('date')}" if kind == "calendar_event" else "")
-    return Candidate(kind=kind, payload=payload, evidence=[{"line": line.id, "recording_id": line.recording_id, "quote": span}],
+    if line.clock == "estimated":
+        conf -= 0.1                              # the day itself may be wrong (P1-2): the owner sees the clock it came from
+    return Candidate(kind=kind, payload=payload, evidence=[{"line": line.id, "recording_id": line.recording_id, "quote": span,
+                                                            "at": line.at, "clock": line.clock, "tz": tz_name()}],
                      recording_ids=sorted({ln.recording_id for ln in cited}), confidence=round(max(0.1, min(0.95, conf)), 2),
                      speaker=speaker, dedup_key=hashlib.sha256(key.encode()).hexdigest()[:24])
 
@@ -873,7 +915,7 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
     async with _db() as db:
         # a dry run re-reads the whole day and touches nothing (it also runs against a database without migration 0054)
         recs = [dict(r) for r in await _fetch(
-            db, "SELECT id, started_at, transcript, speaker_state FROM omi_recordings WHERE user_id = ? AND status = 'done' "
+            db, "SELECT id, started_at, transcript, speaker_state, time_quality FROM omi_recordings WHERE user_id = ? AND status = 'done' "
                 + ("" if dry_run else "AND day_review_id IS NULL ") + "AND started_at >= ? AND started_at < ? ORDER BY started_at",
             (user_id, lo, hi))]
         if not recs:
@@ -975,7 +1017,9 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
                 "UPDATE omi_day_reviews SET status = 'ready', calls = ?, chunks_total = ?, chunks_skipped = ?, counts = ?, dropped = ?, "
                 "recording_ids = ?, finished_at = ? WHERE id = ?",
                 (res["calls"], counts["chunks_total"], counts["chunks_skipped"], json.dumps(kinds),
-                 json.dumps({k: v for k, v in counts.items() if k.startswith(("drop_", "lines", "downgraded"))}), json.dumps(ids), stamp, review_id))
+                 json.dumps({**{k: v for k, v in counts.items() if k.startswith(("drop_", "lines", "downgraded", "recordings_"))},
+                             "tz": tz_name(), "clocks": sorted({str(r.get("time_quality") or "device") for r in recs})}),
+                 json.dumps(ids), stamp, review_id))
             await db.commit()
     res["seq"] = seq
     _log(res, counts)

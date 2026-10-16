@@ -166,10 +166,19 @@ async def write_person(user_id: str, c: dict, via: str) -> str:
 
 
 async def write_owner_fact(user_id: str, c: dict, via: str) -> str:
+    import memory_authority as auth
     from memory_service import get_memory_service
 
     ev = (c.get("evidence") or [{}])[0]
-    ref = await get_memory_service().ingest(
+    svc = get_memory_service()
+    # Trust order: user-stated > confirmed > inferred. A pendant fact is confirmed by THIS approval, but it never stands against a
+    # row the owner told Zoe in their own words: a contradiction with any approved row at or above user_stated is HELD (the
+    # owner settles it), never written beside it. The scan is the authority wall's own (``_protected_conflict``), asked at the rank
+    # just below user_stated so every user-stated / confirmed / operator row counts.
+    clash = await svc._protected_conflict(user_id, c["payload"]["fact"], auth.DERIVED_RANK)
+    if clash is not None:
+        raise ApplyError("held_conflict")
+    ref = await svc.ingest(
         c["payload"]["fact"], user_id=user_id, source=dr.WRITER, origin=dr.WRITER, memory_type="fact",
         confidence=0.9, source_excerpt=ev.get("quote") or None, anchor_text=ev.get("quote") or None,
         turn_ref=f"omi_recording:{ev.get('recording_id', '')}", authority="user_confirmed",
@@ -181,6 +190,31 @@ async def write_owner_fact(user_id: str, c: dict, via: str) -> str:
 
 WRITERS = {"calendar_event": "write_calendar_event", "list_item": "write_list_item", "reminder": "write_reminder",
            "follow_up": "write_follow_up", "person": "write_person", "owner_fact": "write_owner_fact"}
+
+
+# --- the floors re-checked at write time (gap audit P0-3) ------------------------------------------------------------------
+def _candidate_text(c: dict) -> str:
+    return " ".join([json.dumps(c.get("payload") or {})] + [str(e.get("quote") or "") for e in (c.get("evidence") or [])])
+
+
+async def _floors(user_id: str, c: dict) -> None:
+    """Raise when the candidate may not be written NOW, whatever the analysis saw: a name forgotten since (forgotten means forever:
+    the candidate is deleted), or distress content (never to a memory writer). The forget ledger fails CLOSED here: an unreadable
+    ledger refuses the write rather than risk bringing a forgotten name back."""
+    text = _candidate_text(c)
+    if dr._distress(text):
+        raise ApplyError("distress", 409)
+    try:
+        import memory_forgotten as mf
+        hit = bool(await mf.spans(user_id, text))
+    except Exception:  # noqa: BLE001
+        raise ApplyError("forget_ledger_unavailable", 503)
+    if hit:
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            await db.execute("DELETE FROM omi_day_candidates WHERE id = ? AND user_id = ?", (c["id"], user_id))
+            await db.commit()
+        raise ApplyError("forgotten", 410)
 
 
 # --- approve ---------------------------------------------------------------------------------------------------------------
@@ -212,9 +246,13 @@ async def approve(user_id: str, cid: str, *, fields: Optional[dict] = None, via:
             raise ApplyError("in_progress")
     c["payload"] = payload
     try:
+        await _floors(user_id, c)
         ref = await globals()[WRITERS[c["kind"]]](user_id, c, via)
     except Exception as exc:  # noqa: BLE001 - every failure leaves the candidate pending and says why
         code = exc.code if isinstance(exc, ApplyError) else f"write_failed:{type(exc).__name__}"
+        if code == "forgotten":                    # already deleted: nothing to put back
+            logger.info("OMI_REVIEW_APPLY user=%s kind=%s result=forgotten", user_id, c["kind"])
+            raise
         async with get_compat_db() as db:
             await db.execute("UPDATE omi_day_candidates SET status = 'pending', write_error = ? WHERE id = ? AND user_id = ?",
                              (code[:80], cid, user_id))

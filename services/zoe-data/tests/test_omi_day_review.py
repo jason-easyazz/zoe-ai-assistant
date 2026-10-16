@@ -148,13 +148,13 @@ def cands(env, user=OWNER):
 
 
 GOLDEN = ("Morning. I need to buy milk and eggs on the way home. "
-          "I'll send you the budget report by Friday. "
+          "I'll send you the project report by Friday. "
           "Great, so see you Thursday at 10am for the project meeting. "
           "I had lunch with Priya Raman today, she is my new manager. "
           "I'm training for the half marathon in December.")
 GOLDEN_RULES = [
     ("I need to buy milk and eggs", {"kind": "list_item", "fields": {"item": "milk and eggs", "list": "shopping"}}),
-    ("I'll send you the budget report by Friday", {"kind": "reminder", "fields": {"title": "Send the budget report", "when": "Friday"}}),
+    ("I'll send you the project report by Friday", {"kind": "reminder", "fields": {"title": "Send the project report", "when": "Friday"}}),
     ("see you Thursday at 10am for the project meeting", {"kind": "calendar_event", "fields": {"title": "Project meeting", "date": "Thursday", "time": "10am"}}),
     ("I had lunch with Priya Raman today", {"kind": "person", "fields": {"name": "Priya Raman", "relation": "my new manager"}}),
     ("I'm training for the half marathon in December", {"kind": "owner_fact", "fields": {"fact": "I'm training for the half marathon in December."}}),
@@ -186,11 +186,11 @@ def test_a_golden_day_proposes_one_candidate_per_kind_and_writes_nothing_else(en
 
 # --- other people's words are context, never facts about the owner ----------------------------------------------------------
 def test_a_fact_someone_else_said_never_becomes_an_owner_fact(env):
-    add_rec(env, "rec1", "Dana said she's moving to Sydney next year. My brother thinks he got the job. I'm allergic to cats.")
+    add_rec(env, "rec1", "Dana said she's moving to Sydney next year. My brother thinks he got the job. I'm a keen surfer.")
     dr.set_llm(fake_model([
         ("she's moving to Sydney next year", {"kind": "owner_fact", "fields": {"fact": "I'm moving to Sydney next year."}}),   # the model attributes it to the wearer
         ("he got the job", {"kind": "owner_fact", "about": "me", "fields": {"fact": "I got the job."}}),
-        ("I'm allergic to cats", {"kind": "owner_fact", "about": "other", "fields": {"fact": "I'm allergic to cats."}}),        # the model says: about someone else
+        ("I'm a keen surfer", {"kind": "owner_fact", "about": "other", "fields": {"fact": "I'm a keen surfer."}}),        # the model says: about someone else
     ]))
     res = review()
     assert cands(env) == [] and res["stored"] == 0
@@ -199,13 +199,13 @@ def test_a_fact_someone_else_said_never_becomes_an_owner_fact(env):
 def test_with_speaker_labels_a_line_someone_else_said_is_never_an_owner_fact():
     """The omi_segments SEAM: a per-turn ``someone_else`` label vetoes an owner fact even in the first person."""
     recs = [{"id": "rec1", "started_at": "2026-10-13T01:00:00Z", "transcript": "joined text is ignored"}]
-    lines = dr.lines_for_day(recs, segments={"rec1": [("I'm allergic to cats.", "someone_else"), ("I'm allergic to dust.", "you")]})
-    assert [(ln.text, ln.speaker) for ln in lines] == [("I'm allergic to cats.", "someone_else"), ("I'm allergic to dust.", "you")]
+    lines = dr.lines_for_day(recs, segments={"rec1": [("I'm from Bunbury.", "someone_else"), ("I'm a keen surfer.", "you")]})
+    assert [(ln.text, ln.speaker) for ln in lines] == [("I'm from Bunbury.", "someone_else"), ("I'm a keen surfer.", "you")]
     by_id = {ln.id: ln for ln in lines}
     counts: dict = {}
-    item = {"kind": "owner_fact", "quote": "I'm allergic to cats", "heard_from": "conversation", "about": "me", "fields": {"fact": "I'm allergic to cats."}}
+    item = {"kind": "owner_fact", "quote": "I'm from Bunbury", "heard_from": "conversation", "about": "me", "fields": {"fact": "I'm from Bunbury."}}
     assert dr.verify({**item, "ids": ["r1.1"]}, by_id, lambda ln: AS_OF, AS_OF, counts) is None and counts["drop_not_owner_words"] == 1
-    ok = dr.verify({**item, "ids": ["r1.2"], "quote": "I'm allergic to dust", "fields": {"fact": "I'm allergic to dust."}}, by_id, lambda ln: AS_OF, AS_OF, counts)
+    ok = dr.verify({**item, "ids": ["r1.2"], "quote": "I'm a keen surfer", "fields": {"fact": "I'm a keen surfer."}}, by_id, lambda ln: AS_OF, AS_OF, counts)
     assert ok is not None and ok.speaker == "you" and ok.confidence == 0.8
 
 
@@ -297,6 +297,9 @@ def test_approval_writes_with_provenance_and_a_failed_write_stays_pending(env, m
     calls = []
 
     class _Svc:
+        async def _protected_conflict(self, user_id, text, rank):
+            return None
+
         async def ingest(self, text, **kw):
             calls.append((text, kw))
             return _Ref() if len(calls) > 1 else None          # the first ingest is refused (the forget shield, a dedup ...)
@@ -399,6 +402,98 @@ def test_the_day_lane_waits_for_quiet_and_a_cancelled_day_is_released(env, monke
     res = run(dr.review_day(OWNER, DAY, cfg, as_of=AS_OF))
     assert res["status"] == "deferred" and cands(env) == [] and env.db.rows("SELECT * FROM omi_day_reviews") == []
     assert env.db.rows("SELECT day_review_id FROM omi_recordings")[0]["day_review_id"] is None      # retried later from scratch
+
+
+# --- the memory floors (gap audit P0-3): distress, forget ledger at create AND at write, restraint, trust order --------------
+def test_a_recording_with_distress_never_yields_a_candidate_or_reaches_the_model(env):
+    import distress_handoff
+    sad = "I need to buy milk tomorrow. Honestly I just want to die some days."
+    assert distress_handoff.detect(sad).tier != "none"                  # the floor's own classifier, not a copy of it
+    add_rec(env, "rec1", sad)
+    add_rec(env, "rec2", "I need to buy bread.", started="2026-10-13T03:00:00Z")
+    llm = fake_model([("I need to buy milk tomorrow", {"kind": "list_item", "fields": {"item": "milk"}}),
+                      ("I need to buy bread", {"kind": "list_item", "fields": {"item": "bread"}})])
+    dr.set_llm(llm)
+    res = review()
+    assert all("want to die" not in shown and "buy milk" not in shown for shown in llm.seen)     # the line and the conversation around it are left out
+    assert [json.loads(c["payload"])["item"] for c in cands(env)] == ["bread"] and res["counts"]["recordings_distress"] == 1
+
+
+def test_a_forgotten_name_is_never_proposed_and_never_written(env, monkeypatch):
+    add_rec(env, "rec1", GOLDEN)
+    dr.set_llm(fake_model(GOLDEN_RULES))
+
+    async def ledger_knows_priya(user_id, text):
+        return "Priya" in text
+    monkeypatch.setattr(dr, "_forgotten", ledger_knows_priya)
+    review()
+    assert "person" not in {c["kind"] for c in cands(env)}            # at CREATE: not stored
+
+    import memory_forgotten
+    by = {c["kind"]: c["id"] for c in cands(env)}
+
+    async def forgot_the_report(user_id, text):
+        return [(0, 6)] if "project report" in text else []
+    monkeypatch.setattr(memory_forgotten, "spans", forgot_the_report)   # forgotten AFTER the candidate was made
+    with pytest.raises(apply.ApplyError) as exc:
+        run(apply.approve(OWNER, by["reminder"]))
+    assert exc.value.code == "forgotten" and exc.value.status == 410
+    assert env.db.rows("SELECT * FROM omi_day_candidates WHERE id = ?", (by["reminder"],)) == []    # forgotten means forever
+
+    async def ledger_down(user_id, text):
+        raise RuntimeError("pool lost")
+    monkeypatch.setattr(memory_forgotten, "spans", ledger_down)         # an unreadable ledger fails CLOSED at write time
+    with pytest.raises(apply.ApplyError) as exc:
+        run(apply.approve(OWNER, by["list_item"]))
+    assert exc.value.code == "forget_ledger_unavailable"
+    assert env.db.rows("SELECT status FROM omi_day_candidates WHERE id = ?", (by["list_item"],))[0]["status"] == "pending"
+
+
+def test_restraint_classes_are_not_proposed(env):
+    add_rec(env, "rec1", "I need to book the dentist for my tooth on Friday. I need to buy bread.")
+    dr.set_llm(fake_model([("I need to book the dentist for my tooth", {"kind": "reminder", "fields": {"title": "Book the dentist", "when": "Friday"}}),
+                           ("I need to buy bread", {"kind": "list_item", "fields": {"item": "bread"}})]))
+    res = review()
+    assert [c["kind"] for c in cands(env)] == ["list_item"] and res["counts"]["drop_sensitive"] == 1
+
+
+def test_trust_order_a_pendant_fact_never_stands_against_what_the_owner_said(env, monkeypatch):
+    import memory_authority
+    assert memory_authority.writer_class("omi_review") == memory_authority.USER_CONFIRMED      # approval = confirmed, never user_stated
+    add_rec(env, "rec1", GOLDEN)
+    dr.set_llm(fake_model(GOLDEN_RULES))
+    review()
+    fid = next(c["id"] for c in cands(env) if c["kind"] == "owner_fact")
+    ingested = []
+    seen_rank = []
+
+    class _Svc:
+        async def _protected_conflict(self, user_id, text, rank):
+            seen_rank.append(rank)
+            return (object(), "contradiction")                         # the owner told Zoe otherwise
+
+        async def ingest(self, text, **kw):
+            ingested.append(text)
+
+    import memory_service
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _Svc())
+    with pytest.raises(apply.ApplyError) as exc:
+        run(apply.approve(OWNER, fid))
+    assert exc.value.code == "held_conflict" and ingested == []
+    assert seen_rank == [memory_authority.DERIVED_RANK] and memory_authority.DERIVED_RANK < memory_authority.USER_RANK
+
+
+def test_each_candidate_records_the_clock_and_zone_it_came_from(env):
+    add_rec(env, "rec1", "I need to buy bread.")
+    env.db.conn.execute("UPDATE omi_recordings SET time_quality = 'estimated'")
+    env.db.conn.commit()
+    dr.set_llm(fake_model([("I need to buy bread", {"kind": "list_item", "fields": {"item": "bread"}})]))
+    review()
+    (c,) = cands(env)
+    (e,) = json.loads(c["evidence"])
+    assert (e["clock"], e["tz"], e["at"]) == ("estimated", "Australia/Perth", "09:00") and c["confidence"] == 0.4
+    (rv,) = env.db.rows("SELECT dropped FROM omi_day_reviews")
+    assert json.loads(rv["dropped"])["tz"] == "Australia/Perth" and json.loads(rv["dropped"])["clocks"] == ["estimated"]
 
 
 # --- static guards ----------------------------------------------------------------------------------------------------------

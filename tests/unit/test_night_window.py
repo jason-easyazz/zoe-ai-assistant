@@ -296,7 +296,8 @@ class FakeHost(nw.NightHost):
 
 def make(tmp_path, *, cfg_kw=None, argv=(), **host_kw):
     args = nw.build_parser().parse_args(list(argv))
-    cfg_kw = {"night_mind_script": tmp_path / "absent" / "zoe-night-mind.py", **(cfg_kw or {})}      # the real entry point lives on another branch: tests never depend on whether it is merged
+    cfg_kw = {"night_mind_script": tmp_path / "absent" / "zoe-night-mind.py", "omi_day_review_script": tmp_path / "absent" / "zoe-omi-day-review.py",
+              **(cfg_kw or {})}      # the optional entry points are absent unless a test brings its own (a plain skip, never a failed night)      # the real entry point lives on another branch: tests never depend on whether it is merged
     cfg = nw.NightCfg(lock_path=str(tmp_path / "brain.lock"), night_dir=tmp_path / "night", report_dir=tmp_path / "reports", buddyinfo=str(tmp_path / "buddyinfo"), meminfo=str(tmp_path / "meminfo"),
                       blackouts=((250, 292),), contig_min_blocks=64, health_wait_s=20.0, quiet_wait_max_min=2.0, quiet_poll_s=10.0, busy_wait_max_min=2.0, busy_poll_s=10.0,
                       bakeoff_dir=tmp_path / "bakeoff", **cfg_kw)
@@ -1032,8 +1033,23 @@ def test_the_night_mind_entry_point_is_used_as_soon_as_it_exists_with_the_served
     assert "--decode-tok-s" in only_decode and "--prefill-tok-s" not in only_decode                 # no probe result for prefill: the pass keeps its own default
     assert next(j for j in nw.build_jobs(nw.NightCfg(night_mind_script=tmp_path / "no.py")) if j.name == "night_mind").skip_reason.startswith("no.py not found")
     odr = next(j for j in nw.build_jobs(nw.NightCfg(), 8192, 6.2, 150.0) if j.name == "omi_day_review")      # the day review runs LAST, on the 12B, at the measured speed
-    assert nw.build_jobs(nw.NightCfg())[-1].name == "omi_day_review" and not odr.fallback_4b
+    assert nw.build_jobs(nw.NightCfg())[-1].name == "omi_day_review" and not odr.fallback_4b and odr.best_effort and not odr.skip_reason
     assert odr.argv[1].endswith("zoe-omi-day-review.py") and odr.argv[2:] == ["--model-url", "http://127.0.0.1:11500/v1", "--ctx-tokens", "8192", "--all-members", "--decode-tok-s", "6.20", "--prefill-tok-s", "150.0"]
+
+
+def test_the_day_review_runs_last_on_the_12b_and_running_out_of_time_never_fails_the_night(tmp_path):
+    script = tmp_path / "zoe-omi-day-review.py"
+    script.write_text("# stand-in")
+    w, host, _ = make(tmp_path, cfg_kw={"omi_day_review_script": script})
+    assert w.run() == nw.EXIT_OK, w.outcome
+    names = [j["name"] for j in host.jobs_run]
+    assert names.index("zoe-omi-day-review.py") > names.index("zoe-nightly-dreaming.py")
+    odr = next(j for j in host.jobs_run if j["name"] == "zoe-omi-day-review.py")
+    assert odr["env"]["GEMMA_SERVER_URL"] == "http://127.0.0.1:11500/v1" and "--all-members" in odr["argv"]
+    w2, host2, _ = make(tmp_path, cfg_kw={"omi_day_review_script": script}, job_rc={"zoe-omi-day-review.py": 124})
+    assert w2.run() == nw.EXIT_OK and any(j["name"] == "omi_day_review" and j["status"] == "timeout" for j in w2.jobs)      # best-effort
+    w3, host3, _ = make(tmp_path, cfg_kw={"omi_day_review_script": script}, job_rc={"zoe-omi-day-review.py": 1})
+    assert w3.run() == nw.EXIT_JOBS_FAILED                                                    # a real failure is still loud
 
 
 def test_the_trial_also_scores_the_night_mind_cells_when_the_entry_point_exists(tmp_path):
