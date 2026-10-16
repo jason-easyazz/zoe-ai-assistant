@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import omi_day_review as dr
+import user_erase_gate as erase_gate
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +226,7 @@ async def approve(user_id: str, cid: str, *, fields: Optional[dict] = None, via:
 
     via = via if via in VIAS else "desktop"
     now = _now()
+    gen = erase_gate.generation(user_id)
     async with get_compat_db() as db:
         cur = await db.execute("SELECT * FROM omi_day_candidates WHERE id = ? AND user_id = ?", (cid, user_id))
         row = await cur.fetchone()
@@ -246,11 +248,16 @@ async def approve(user_id: str, cid: str, *, fields: Optional[dict] = None, via:
             raise ApplyError("in_progress")
     c["payload"] = payload
     try:
-        await _floors(user_id, c)
-        ref = await globals()[WRITERS[c["kind"]]](user_id, c, via)
+        # the member's erase gate (the commitments pattern): an erase that ran since this approval began wins, and one that starts
+        # now waits for this write and then removes it
+        async with erase_gate.writing(user_id, gen) as ok:
+            if not ok:
+                raise ApplyError("erased", 410)
+            await _floors(user_id, c)
+            ref = await globals()[WRITERS[c["kind"]]](user_id, c, via)
     except Exception as exc:  # noqa: BLE001 - every failure leaves the candidate pending and says why
         code = exc.code if isinstance(exc, ApplyError) else f"write_failed:{type(exc).__name__}"
-        if code == "forgotten":                    # already deleted: nothing to put back
+        if code in ("forgotten", "erased"):        # already deleted: nothing to put back
             logger.info("OMI_REVIEW_APPLY user=%s kind=%s result=forgotten", user_id, c["kind"])
             raise
         async with get_compat_db() as db:
