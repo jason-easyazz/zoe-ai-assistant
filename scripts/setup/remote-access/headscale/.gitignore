@@ -1,4 +1,4 @@
-# Runtime state created on the droplet: keys + database. Never commit.
+# Runtime state created on the server: keys + database. Never commit.
 data/
 *.key
 *.sqlite*

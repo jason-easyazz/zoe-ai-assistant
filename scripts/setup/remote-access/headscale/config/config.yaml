@@ -50,18 +50,18 @@ derp:
     stun_listen_addr: "0.0.0.0:3478"
     private_key_path: /var/lib/headscale/derp_server_private.key
     automatically_add_embedded_derp_region: true
-    # OPTIONAL (docs: "improved connection stability"): the droplet's public
+    # OPTIONAL (docs: "improved connection stability"): the server's public
     # addresses. Clients otherwise resolve hs.the411.life. Uncomment and fill in
-    # on the droplet; do not commit real addresses.
-    # ipv4: <DROPLET_PUBLIC_IPV4>
-    # ipv6: <DROPLET_PUBLIC_IPV6>
+    # on the server; do not commit real addresses.
+    # ipv4: <SERVER_PUBLIC_IPV4>
+    # ipv6: <SERVER_PUBLIC_IPV6>
   # EMPTY on purpose: do NOT also hand clients Tailscale Inc's public DERP map.
   #  + no dependency on, and no node-key/IP metadata sent to, a third party;
   #  + the "no Tailscale account, no Tailscale infrastructure" requirement holds;
   #  + headscale starts with no outbound fetch.
   #  - the embedded relay is then the ONLY relay (single point of failure). That
-  #    is acceptable: it lives on the same droplet as the control plane, so if
-  #    the droplet is down no new connection can be coordinated anyway, and
+  #    is acceptable: it lives on the same host as the control plane, so if
+  #    the server is down no new connection can be coordinated anyway, and
   #    already-established direct paths keep working. Verify with
   #    `tailscale debug derp headscale` (README: Verify).
   # To add Tailscale's relays later: urls: [https://controlplane.tailscale.com/derpmap/default]

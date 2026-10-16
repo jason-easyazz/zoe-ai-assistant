@@ -2,12 +2,12 @@
 
 A self-hosted Tailscale control server (Headscale) so the Zoe touch panel can
 reach Zoe at home from another city with **no Tailscale account**. The control
-plane runs on the owner's DigitalOcean droplet; the Jetson ("zoe-box") and the
+plane runs on the owner's server; the Jetson ("zoe-box") and the
 panel ("zoe-panel") keep using their stock Tailscale clients and point them at
 `https://hs.the411.life` instead.
 
 ```
- panel (other city)                                   droplet (Sydney)
+ panel (other city)                                   control server
  tailscale --accept-routes ──https/websocket──▶ nginx :443 ──▶ headscale 127.0.0.1:18080
         │                                         (host)        control plane + embedded DERP
         │            ◀── UDP 3478 STUN ────────────────────────▶ headscale 0.0.0.0:3478/udp
@@ -44,19 +44,19 @@ from memory.
 | `nginx-hs.the411.life.conf` | nginx stage 2: the final reverse proxy (websocket upgrade, DERP) |
 | `lab_test.sh`, `lab/` | the local lab proof (not deployed) |
 
-Nothing in the bundle contains a secret, a key, or the droplet's address. The
+Nothing in the bundle contains a secret, a key, or the server's address. The
 runtime state (`data/`: noise key, DERP key, `db.sqlite`) is created on the
-droplet and is ignored by version control.
+server and is ignored by version control.
 
 ## Owner checklist (do these, in this order)
 
 Everything here is the owner's step: nothing in this bundle has been deployed and
-no real node has been joined. Replace `<DROPLET>` with the droplet's SSH target.
+no real node has been joined. Replace `<SERVER>` with the server's SSH target.
 
-### 0. Preflight on the droplet (read-only)
+### 0. Preflight on the server (read-only)
 
 ```bash
-ssh root@<DROPLET>
+ssh root@<SERVER>
 docker compose version                      # v2 plugin required
 nginx -v                                    # 1.18+ is fine; no http2 directive is used
 ss -ltnup | grep -E ':(18080|3478)\b'       # must print nothing: both ports free
@@ -70,30 +70,29 @@ be added to that routing instead; stop and fix the snippet before step 5.
 
 ### 1. DNS (Cloudflare)
 
-Add an `A` record `hs` → the droplet's public IPv4 (and `AAAA` if the droplet has
+Add an `A` record `hs` → the server's public IPv4 (and `AAAA` if the server has
 public IPv6), **proxy status: DNS only (grey cloud)**. The Cloudflare proxy does
 not support the WebSocket POST the Tailscale protocol uses, and the embedded DERP
-needs a direct path. Check: `dig +short hs.the411.life` returns the droplet.
+needs a direct path. Check: `dig +short hs.the411.life` returns the server.
 
-### 2. DigitalOcean firewall
+### 2. Cloud firewall
 
-Cloud Firewall attached to the droplet: allow inbound **UDP 3478** from anywhere.
+The hosting provider's cloud firewall attached to the server: allow inbound **UDP 3478** from anywhere.
 TCP 80/443 are already open for nginx. If `ufw` is active on the host as well:
 `ufw allow 3478/udp`. Nothing else is published: the HTTP listener is
 `127.0.0.1:18080`; gRPC and metrics are not published at all.
 
 ### 3. Copy the bundle
 
-From a checkout of this repo (the lab files are not needed on the droplet):
+From a checkout of this repo (the lab files are not needed on the server):
 
 ```bash
 rsync -a --exclude lab --exclude lab_test.sh --exclude README.md \
-  scripts/setup/remote-access/headscale/ root@<DROPLET>:/opt/headscale/
+  scripts/setup/remote-access/headscale/ root@<SERVER>:/opt/headscale/
 ```
 
-`/opt/headscale` is deliberately separate from the411's directory: the411's
-GitHub Actions deploy pulls and runs `docker compose up` inside its own directory
-and never touches this one. Headscale is its own compose project (`headscale`) on
+`/opt/headscale` is deliberately separate from every other deployment on the
+host, so another site's deploy never touches it. Headscale is its own compose project (`headscale`) on
 its own network (`10.77.250.0/28`), shares no volume, and has no docker socket.
 
 ### 4. Start Headscale
@@ -116,8 +115,8 @@ step 9 re-runs it for real.
 
 ### 5. nginx + certificate
 
-Install the two stages as **their own file**, never inside the411's existing file
-(its deploy may rewrite that one). Use whichever directory your nginx already
+Install the two stages as **their own file**, never inside an existing site's file
+(a deploy of that site could rewrite it). Use whichever directory your nginx already
 includes: check `nginx -T | grep -n include` (`/etc/nginx/conf.d/` is shown here).
 
 ```bash
@@ -215,7 +214,7 @@ Laptop:
 sudo tailscale up --login-server https://hs.the411.life --hostname owner-laptop --accept-dns=false
 ```
 
-It prints `https://hs.the411.life/register/<AUTH_ID>`. On the droplet:
+It prints `https://hs.the411.life/register/<AUTH_ID>`. On the server:
 
 ```bash
 hs auth register --user owner --auth-id <AUTH_ID>
@@ -282,8 +281,8 @@ sees it, but a compromised or malicious Headscale can:
 - advertise a route so panel traffic bound for 192.168.1.218 is steered to a
   node it controls (it still cannot read TLS it has no certificate for).
 
-Anyone with root on the droplet, or the CI deploy key that reaches it, controls the
-tailnet. Mitigations, in order of value:
+Anyone with root on the server, or any automation credential that reaches it,
+controls the tailnet. Mitigations, in order of value:
 
 1. **Defence in depth on the box.** Do not rely on the ACL alone. The Zoe services
    keep their own authentication; keep TLS verification on in the panel (ideally
@@ -295,12 +294,12 @@ tailnet. Mitigations, in order of value:
 3. **Watch the node list.** `hs nodes list` should show exactly: zoe-box,
    zoe-panel, and your own devices. A cron job that diffs it and alerts on change is
    cheap and catches rogue additions.
-4. **The droplet.** The container is isolated (own network, read-only root, no
+4. **The server.** The container is isolated (own network, read-only root, no
    capabilities, no docker socket, loopback-only HTTP), but it shares a host with
-   other services: keep the host patched, SSH key-only, and the deploy key scoped.
+   other services: keep the host patched, SSH key-only, and automation credentials scoped.
 5. **Node-key expiry** is off for appliances (they must not fall off the tailnet in
    another city); use `hs nodes expire --identifier <ID>` to cut one off.
-6. **Back up the keys** (below) off the droplet: the noise key identifies the
+6. **Back up the keys** (below) off the server: the noise key identifies the
    server to every client.
 
 To cut a node off immediately: `hs nodes delete --identifier <ID>` (or
@@ -313,14 +312,14 @@ outright, delete or expire the nodes, or run `sudo tailscale down` on the box.
 State lives in `/opt/headscale/data`: `noise_private.key` (server identity),
 `derp_server_private.key`, `db.sqlite` (users, nodes, keys, approved routes) and
 its WAL. Config and policy are in `/opt/headscale/config`. Treat the whole archive
-as a secret (mode 600, off the droplet).
+as a secret (mode 600, off the server).
 
 ```bash
 cd /opt/headscale
 docker compose stop headscale                      # ~10 s; existing tunnels keep working
 tar czf /root/headscale-$(date +%F).tgz data config
 docker compose start headscale
-chmod 600 /root/headscale-*.tgz                    # then copy off the droplet
+chmod 600 /root/headscale-*.tgz                    # then copy off the server
 ```
 
 Restore: `docker compose down`, unpack `data/` and `config/` into
@@ -338,7 +337,7 @@ sudo tailscale down
 sudo tailscale logout
 ```
 
-On the droplet, leaving the411 untouched:
+On the server, leaving every other site untouched:
 
 ```bash
 cd /opt/headscale && docker compose down            # stop (keeps data/)
@@ -348,14 +347,14 @@ rm /etc/nginx/conf.d/hs.the411.life.conf && nginx -t && systemctl reload nginx
 certbot delete --cert-name hs.the411.life
 ```
 
-Then delete the `hs` DNS record and the UDP 3478 firewall rule. Verify the411 is
-unaffected: `systemctl is-active nginx` and `curl -sI https://the411.life | head -1`.
+Then delete the `hs` DNS record and the UDP 3478 firewall rule. Verify your other
+sites are unaffected: `systemctl is-active nginx` and a `curl -sI` against one of them.
 
 ## Upgrading Headscale
 
 Read the release notes for the target version, take a backup, bump **both** the tag
 and the digest in `docker-compose.yml`, run `./lab_test.sh` on a dev box, then
-`docker compose pull && docker compose up -d` on the droplet. (The client minimum
+`docker compose pull && docker compose up -d` on the server. (The client minimum
 for this version is Tailscale v1.80; the clients here are 1.104.1.)
 
 ## The lab proof

@@ -1,7 +1,7 @@
 """Static guards for the Headscale remote-access bundle.
 
 The bundle (scripts/setup/remote-access/headscale/) is deployed BY HAND on a
-public droplet, so nothing at runtime will catch a drifted pin, a widened bind,
+public server, so nothing at runtime will catch a drifted pin, a widened bind,
 or a leaked address. These tests pin the properties the runbook and the lab
 (lab_test.sh) depend on. They are text/structure checks only: the behavioural
 proof is the lab, which needs Docker and ~1.5 GB free and is run by hand.
@@ -13,7 +13,7 @@ Negative controls (each turned this file red, then reverted):
   - `derp.urls` given Tailscale's public map, `magic_dns: true`
   - a panel rule that adds a port beyond 443/8007
   - `http2 on;` or the bare `$connection_upgrade` name in the nginx file
-  - a droplet-looking public IPv4 / a hskey- or tskey- token in any bundle file
+  - a public-looking IPv4, a hosting-provider/region/co-tenancy detail / a hskey- or tskey- token in any bundle file
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml  # installed explicitly by validate.yml; a missing dep must redden the lane
 
 pytestmark = pytest.mark.ci_safe
 
@@ -42,7 +43,6 @@ PRIVATE_ALLOWED_PREFIXES = ("10.77.250.", "10.99.99.", "192.168.1.", "100.64.", 
 
 
 def _load_yaml(path: Path):
-    yaml = pytest.importorskip("yaml")  # slim lane: collect, then skip
     return yaml.safe_load(path.read_text())
 
 
@@ -200,6 +200,38 @@ def test_lab_script_is_valid_bash_and_guards_memory():
     assert 'MIN_MEM_MB="${HS_LAB_MIN_MEM_MB:-1500}"' in text
     assert "docker compose -p" in text or 'docker compose -p "$PROJECT"' in text
     # never touches the host tailscaled / network
+
+
+def test_lab_script_never_mutates_the_host():
+    code = _code(LAB)
+    for pat in (
+        r"\bsudo\b",
+        r"\bsystemctl\b",
+        r"\bresolvectl\b",
+        r"\biptables\b",
+        r"\bnft\b",
+        r"\bip\s+(route|rule|addr|link\s+(set|add|del))\b",
+        r"--privileged",
+        r"--net(work)?[= ]host",
+        r"/var/run/docker\.sock",
+    ):
+        assert not re.search(pat, code), pat
+    # A direct (host-side) tailscale invocation may only be a read-only status probe;
+    # everything that changes state goes through the containers (`tsc`, `exec`).
+    direct = re.compile(r"(^|[;&|(]|\$\()\s*tailscale\s+(up|down|login|logout|set|serve|funnel|file|switch)\b", re.M)
+    assert not direct.search(code)
+
+
+def test_no_hosting_or_business_details_in_the_bundle():
+    """Public repo: only the hostname hs.the411.life may name the owner's setup."""
+    banned = re.compile(
+        r"digitalocean|droplet|sydney|github actions|deploy key|/opt/the411|the411's|(?<!hs\.)(?<!hs\\\.)the411",
+        re.I,
+    )
+    for path in sorted(BUNDLE.rglob("*")):
+        if path.is_file():
+            hit = banned.search(path.read_text())
+            assert not hit, "%s in %s" % (hit.group(0), path)
 
 
 def test_no_secrets_and_no_public_addresses_in_the_bundle():

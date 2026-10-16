@@ -15,7 +15,7 @@
 name: hslab
 
 x-tailscale-client: &tsclient
-  image: docker.io/tailscale/tailscale:v1.104.1
+  image: docker.io/tailscale/tailscale:v1.104.1@sha256:87c55d6be56ad85b3d8bceca5f87f73de288c609131460dd1be1874c250cc41d
   # userspace networking: no TUN device, no NET_ADMIN, nothing touches a host
   # interface, route or resolver.
   entrypoint: ["tailscaled"]
@@ -57,7 +57,7 @@ services:
   # SHIPPED nginx-hs.the411.life.conf (rendered), and relays UDP 3478 so
   # `tailscale netcheck` can exercise STUN (production publishes 3478 directly).
   proxy:
-    image: nginx:alpine
+    image: docker.io/library/nginx:alpine@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f
     volumes:
       - ${HS_LAB_DIR}/nginx.conf:/etc/nginx/nginx.conf:ro
       - ${HS_LAB_DIR}/hs.conf:/etc/nginx/conf.d/hs.conf:ro
@@ -80,7 +80,7 @@ services:
   # Stands in for the Zoe box's LAN address (192.168.1.218): 443 and 8007 are the
   # allowed ports, 9999 is the extra port the ACL must NOT open.
   dummy:
-    image: alpine:latest
+    image: docker.io/library/alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
     command:
       - sh
       - -c
