@@ -126,9 +126,12 @@ def test_no_world_can_collide_with_the_artifacts_fixed_text(bench):
     the seed) so the next example year cannot hide in the generator's range."""
     assert bench["go"]() == 0
     a = bench["art"]()
+    first_seed: dict[str, int] = {}                       # one scan of the union, not 200 scans of the ~127 KB artifact
     for i in range(200):
-        names = world.make_world(f"flake-sweep-{i}").all_strings()
-        assert artifact.household_strings_in(a, names) == [], i
+        for s in world.make_world(f"flake-sweep-{i}").all_strings():
+            first_seed.setdefault(s, i)
+    hits = artifact.household_strings_in(a, list(first_seed))
+    assert hits == [], {h: first_seed[h] for h in hits}
 
 
 def test_the_leak_check_still_catches_a_real_household_string(bench):
