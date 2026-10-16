@@ -1,0 +1,20 @@
+# Zoe touch panel - inbound firewall (nftables table inet zoe_panel_fw). Installed by install_panel_firewall.sh, which
+# renders /etc/zoe-panel-firewall/ruleset.nft and enables this unit only on --confirm (after the rollback window).
+# Rollback: sudo install_panel_firewall.sh --rollback  (or: systemctl disable --now zoe-panel-firewall)
+[Unit]
+Description=Zoe panel inbound firewall (nftables table inet zoe_panel_fw)
+Documentation=https://github.com/jason-easyazz/zoe-ai-assistant/blob/main/docs/knowledge/panel-away-p1.md
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+ConditionPathExists=/etc/zoe-panel-firewall/ruleset.nft
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/zoe-panel-firewall/ruleset.nft
+ExecStop=-/usr/sbin/nft delete table inet zoe_panel_fw
+
+[Install]
+WantedBy=sysinit.target

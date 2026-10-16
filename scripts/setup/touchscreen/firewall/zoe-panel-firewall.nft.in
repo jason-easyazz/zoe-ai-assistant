@@ -1,0 +1,49 @@
+#!/usr/sbin/nft -f
+# Zoe touch panel - inbound firewall (docs/architecture/panel-remote-access.md section 4.6).
+#
+# Rendered by install_panel_firewall.sh: the HOME_V4 placeholder becomes the home LAN subnet the panel sat on AT INSTALL TIME. It is
+# captured once and never re-detected, so on a hotel or friend's Wi-Fi the foreign subnet is NOT trusted.
+#
+# Inbound is accepted only from: loopback, replies to connections the panel opened, the tailnet (tailscale0), the home LAN
+# subnet, and the minimum the link itself needs (DHCP, IPv6 neighbour discovery, Tailscale's WireGuard port). Everything
+# else - SSH :22, the voice daemon :7777 (/activate), the wake agent :8765, AirPlay :7000 - is dropped on any other
+# network. Outbound is untouched.
+#
+# OWN TABLE ONLY: this file never flushes the ruleset. tailscaled and the distro keep their own tables; a packet must be
+# accepted by every base chain on the hook, so this table only ever narrows what they allow.
+
+table inet zoe_panel_fw
+delete table inet zoe_panel_fw
+
+table inet zoe_panel_fw {
+	set home_v4 {
+		type ipv4_addr
+		flags interval
+		elements = { @HOME_V4@ }
+	}
+
+	chain input {
+		type filter hook input priority filter; policy drop;
+
+		iif "lo" accept
+		ct state established,related accept
+		ct state invalid drop
+
+		# the private link home: everything that arrives decrypted on tailscale0 (the tailnet ACL decides who)
+		iifname "tailscale0" accept
+		# Tailscale's own WireGuard endpoint, so peers can reach the panel directly instead of via a relay
+		udp dport 41641 accept
+
+		# keep the link itself alive on any network
+		udp sport 67 udp dport 68 accept
+		meta nfproto ipv6 udp sport 547 udp dport 546 accept
+		icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert, nd-redirect } ip6 hoplimit 255 accept
+		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem } accept
+		icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+
+		# the home LAN (AirPlay, mDNS, SSH from home, the voice daemon) - home only
+		ip saddr @home_v4 accept
+
+		counter comment "dropped: not loopback, not the tailnet, not the home LAN"
+	}
+}

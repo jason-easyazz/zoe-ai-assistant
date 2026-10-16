@@ -1,0 +1,28 @@
+# The panel's local status gate (scripts/setup/touchscreen/zoe-kiosk-gate.py): the "can't reach Zoe" screen the kiosk
+# browser starts on, and the kiosk-credential hand-off. Loopback only (127.0.0.1:7781). Installed by install_kiosk_gate.sh.
+# Reads the voice daemon's env (ZOE_URL, PANEL_ID, DEVICE_TOKEN, VERIFY_SSL) then /etc/zoe-kiosk-gate.env (overrides,
+# e.g. ZOE_KIOSK_CREDENTIAL=1). Rollback: install_kiosk_gate.sh --rollback.
+[Unit]
+Description=Zoe kiosk status gate (loopback)
+After=network.target
+Before=zoe-kiosk.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+EnvironmentFile=-/home/pi/.zoe-voice/.env.voice
+EnvironmentFile=-/etc/zoe-kiosk-gate.env
+ExecStart=/usr/bin/python3 /opt/TouchKio/zoe-kiosk-gate.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target
