@@ -459,7 +459,189 @@ def test_measure_wav_reports_what_the_audio_is():
     assert tone["seconds"] == 2.0 and tone["peak"] == 6000 and 4200 < tone["rms"] < 4300 and tone["rate"] == 16000 and tone["channels"] == 1
     silent = omi.measure_wav(make_wav(2.0, amp=0))
     assert silent["peak"] == 0 and silent["rms"] == 0.0 and silent["seconds"] == 2.0
-    assert omi.measure_wav(b"not a wav") == {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0}
+    assert omi.measure_wav(b"not a wav") == {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0,
+                                            "clipped": 0, "rms_median": 0.0, "active_s": 0.0}
+    assert tone["clipped"] == 0 and tone["active_s"] == 2.0 and 4200 < tone["rms_median"] < 4300
+
+
+# --- the pendant's wake transient vs sustained sound (synthetic; measured shape 2026-10-16, numbers only) ---------------------------------
+def _pcm_to_wav(samples) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"".join(struct.pack("<h", max(-32768, min(32767, int(v)))) for v in samples))
+    return buf.getvalue()
+
+
+def _room(seconds: float, rms: float = 60.0, seed: int = 7) -> list:
+    import random
+    rnd = random.Random(seed)
+    return [rnd.gauss(0.0, rms) for _ in range(int(16000 * seconds))]
+
+
+def wake_transient_wav(seconds: float = 11.0, at_s: float = 0.1) -> bytes:
+    """What 27 of the 32 kept empty recordings are: ~10 s of room noise (100 ms-window RMS ~60) opened by ONE full-scale click -
+    a ~10 ms slab clipped at -32768 that decays over ~50 ms (the pendant mic's wake transient + the firmware's 10 s VAD hold)."""
+    x = _room(seconds)
+    k = int(16000 * at_s)
+    for j in range(160):
+        x[k + j] = -32768.0                                   # the clipped slab
+    for j in range(800):                                      # recovery, sign-flipping like the measured ringing
+        x[k + 160 + j] += 12000.0 * (0.993 ** j) * (1 if j % 2 else -1)
+    return _pcm_to_wav(x)
+
+
+def speechlike_wav(seconds: float = 6.0, *, bursts: int = 8) -> bytes:
+    """Syllable-like bursts (a 140 Hz voice with harmonics, ~250 ms on, amplitude ~4000) over the same room noise: sustained sound."""
+    import math
+    x = _room(seconds, seed=11)
+    for b in range(bursts):
+        start = int(16000 * (0.4 + b * 0.6))
+        for j in range(4000):
+            if start + j >= len(x):
+                break
+            t = (start + j) / 16000
+            x[start + j] += math.sin(math.pi * j / 4000) * 4000 * sum(math.sin(2 * math.pi * 140 * h * t) / h for h in (1, 2, 3, 4))
+    return _pcm_to_wav(x)
+
+
+def test_measure_wav_tells_a_wake_click_from_sustained_sound():
+    click = omi.measure_wav(wake_transient_wav())
+    # the whole-file numbers LOOK loud and clipped - exactly what made quiet recordings read as "voiced, peak 32768, rms 700"
+    assert click["peak"] == 32768 and click["clipped"] >= 160 and click["rms"] > 500
+    # ... the transient-robust ones say what it is: a room at ~60 RMS and under 0.5 s of sustained sound
+    assert click["rms_median"] < 100 and click["active_s"] < omi.TRANSIENT_ONLY_S
+    speech = omi.measure_wav(speechlike_wav())
+    assert speech["clipped"] == 0 and speech["active_s"] >= 1.0
+    room = omi.measure_wav(_pcm_to_wav(_room(5.0)))                         # negative control: nothing at all
+    assert room["active_s"] == 0.0 and room["clipped"] == 0 and room["peak"] < omi.SILENCE_PEAK
+
+
+def test_empty_reason_labels():
+    click, speech = omi.measure_wav(wake_transient_wav()), omi.measure_wav(speechlike_wav())
+    assert omi.empty_reason({"voiced": 0, "chunks": 1}, click) == "below_silence_floor"
+    assert omi.empty_reason({"voiced": 1, "chunks": 1}, click) == "transient_only"
+    assert omi.empty_reason({"voiced": 1, "chunks": 1}, speech) == "voiced_but_no_text"
+    assert omi.empty_reason({"voiced": 1, "chunks": 1}, {}) == "transient_only"          # unmeasurable: never claims "voiced"
+
+
+def test_a_click_only_recording_is_labelled_transient_only_and_kept(env, monkeypatch, caplog):
+    import logging
+
+    async def says_nothing(path):
+        return ""
+
+    monkeypatch.setattr(omi, "_transcribe_file", says_nothing)
+    upload(env, wake_transient_wav(), duration=11.0)
+    path = rows(env)[0]["audio_path"]
+    with caplog.at_level(logging.WARNING, logger="omi_recordings"):
+        assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    (row,) = rows(env)
+    assert row["status"] == "empty_transcript" and Path(path).exists()                  # still kept: the label is not a verdict
+    (msg,) = [r.getMessage() for r in caplog.records if "OMI_EMPTY_TRANSCRIPT" in r.getMessage()]
+    assert "reason=transient_only" in msg and "peak=32768" in msg and "voiced_chunks=1/1" in msg
+    assert re.search(r"active_s=0\.\d ", msg) and re.search(r"rms_median=\d{2}\.\d ", msg)
+
+
+def test_sustained_sound_with_no_words_is_still_voiced_but_no_text(env, monkeypatch, caplog):
+    import logging
+
+    async def says_nothing(path):
+        return ""
+
+    monkeypatch.setattr(omi, "_transcribe_file", says_nothing)
+    upload(env, speechlike_wav(), duration=6.0)
+    with caplog.at_level(logging.WARNING, logger="omi_recordings"):
+        run(omi.transcribe_pending(limit=1, pause_s=0))
+    (msg,) = [r.getMessage() for r in caplog.records if "OMI_EMPTY_TRANSCRIPT" in r.getMessage()]
+    assert "reason=voiced_but_no_text" in msg
+
+
+def test_the_transient_label_is_never_a_gate_a_click_recording_still_reaches_moonshine(env):
+    """Negative control for the label: Moonshine runs its own VAD, so a short word after a click must not be skipped by ours."""
+    upload(env, wake_transient_wav(), duration=11.0)
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    (row,) = rows(env)
+    assert len(env.stt) == 1 and row["status"] == "done" and row["transcript"] == "words1"
+
+
+# --- requeue: held recordings can be transcribed again inside their retention ---------------------------------------------------------
+def _held(env, monkeypatch, n=2):
+    async def says_nothing(path):
+        return ""
+
+    monkeypatch.setattr(omi, "_transcribe_file", says_nothing)
+    ids = [upload(env, make_wav(3.0), key=f"r1.{i * 10}-{i * 10 + 9}", started=f"2026-10-10T0{i}:00:00Z").json()["id"] for i in range(n)]
+    run(omi.transcribe_pending(limit=n, pause_s=0))
+    assert {r["status"] for r in rows(env)} == {"empty_transcript"}
+    return ids
+
+
+def _status(env) -> dict:
+    return {r["id"]: r["status"] for r in rows(env)}
+
+
+def test_the_owner_requeues_held_recordings_and_a_fixed_pipeline_files_text(env, monkeypatch):
+    ids = _held(env, monkeypatch)
+    before = {r["id"]: r["audio_expires_at"] for r in rows(env)}
+    r = env.client.post("/api/omi/recordings/retranscribe")
+    assert r.status_code == 200 and r.json() == {"ok": True, "queued": 2}
+    got = {r["id"]: r for r in rows(env)}
+    assert all(got[i]["status"] == "pending" and got[i]["attempts"] == 0 and got[i]["transcribed_at"] is None for i in ids)
+    assert {i: got[i]["audio_expires_at"] for i in ids} == before                         # retention NOT extended
+
+    async def fixed(path):
+        return "now heard"
+
+    monkeypatch.setattr(omi, "_transcribe_file", fixed)
+    assert run(omi.transcribe_pending(limit=2, pause_s=0)) == 2
+    assert set(_status(env).values()) == {"done"} and all(r["audio_path"] == "" for r in rows(env))
+    assert env.client.post("/api/omi/recordings/retranscribe").json()["queued"] == 0     # nothing held any more
+
+
+def test_requeue_one_and_what_is_not_requeueable(env, monkeypatch):
+    a, b = _held(env, monkeypatch)
+    assert env.client.post(f"/api/omi/recordings/{a}/retranscribe").json() == {"ok": True, "queued": 1}
+    assert _status(env) == {a: "pending", b: "empty_transcript"}
+    assert env.client.post(f"/api/omi/recordings/{a}/retranscribe").status_code == 404   # already pending
+    assert env.client.post("/api/omi/recordings/nope/retranscribe").status_code == 404
+    Path(env.db.rows("SELECT audio_path FROM omi_recordings WHERE id = ?", (b,))[0]["audio_path"]).unlink()
+    assert env.client.post(f"/api/omi/recordings/{b}/retranscribe").status_code == 404   # the WAV is gone: nothing to transcribe
+    assert env.client.delete(f"/api/omi/recordings/{a}").status_code == 200
+    assert run(omi.requeue_held(None)) == 0                                               # a tombstone is never resurrected
+    assert _status(env) == {a: "deleted", b: "empty_transcript"}
+
+
+def test_requeue_is_per_member_and_a_failed_row_counts(env, monkeypatch):
+    (a,) = _held(env, monkeypatch, n=1)
+    env.db.conn.execute("UPDATE omi_recordings SET user_id = ? WHERE id = ?", (OTHER, a))
+    env.db.conn.commit()
+    assert env.client.post("/api/omi/recordings/retranscribe").json()["queued"] == 0      # the owner cannot requeue another member's row
+    assert env.client.post(f"/api/omi/recordings/{a}/retranscribe").status_code == 404
+    env.db.conn.execute("UPDATE omi_recordings SET status = 'failed', attempts = 3, user_id = ? WHERE id = ?", (OWNER, a))
+    env.db.conn.commit()
+    assert env.client.post("/api/omi/recordings/retranscribe").json()["queued"] == 1
+    assert rows(env)[0]["status"] == "pending" and rows(env)[0]["attempts"] == 0
+
+
+def test_a_pipeline_change_requeues_held_recordings_once(env, monkeypatch):
+    _held(env, monkeypatch)
+    marker = omi._pipeline_marker()
+    assert not marker.exists()
+    assert run(omi.requeue_after_pipeline_change()) == 2 and marker.read_text().strip() == omi.TRANSCRIBE_PIPELINE
+    run(omi.transcribe_pending(limit=2, pause_s=0))                                       # still nothing heard: held again
+    assert set(_status(env).values()) == {"empty_transcript"}
+    assert run(omi.requeue_after_pipeline_change()) == 0                                  # ONCE per pipeline: no requeue loop
+    monkeypatch.setattr(omi, "TRANSCRIBE_PIPELINE", omi.TRANSCRIBE_PIPELINE + ".next")
+    assert run(omi.requeue_after_pipeline_change()) == 2                                  # the next change reaches them again
+
+
+def test_an_expired_held_recording_is_purged_not_requeued(env, monkeypatch):
+    _held(env, monkeypatch, n=1)
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1
+    assert run(omi.requeue_held(None)) == 0 and rows(env)[0]["status"] == "empty_transcript"
 
 
 def test_the_night_window_blocks_transcription(env, monkeypatch):

@@ -13,6 +13,9 @@ THE FLOW
   the WAV is deleted right after a transcription that PRODUCED TEXT unless the owner kept it; ``purge_expired_audio`` bounds the rest.
   An EMPTY transcript is not a success: the row goes ``empty_transcript``, the WAV is KEPT until its retention expiry, and a WARNING
   logs its measured length/peak/RMS - so a deaf pipeline (wrong rate, dead mic, gain) never silently eats the owner's audio.
+  The WARNING's ``reason`` reads the transient-robust levels (``measure_wav``): ``transient_only`` is a click over room noise (the
+  pendant's mic-wake transient opens most short recordings), ``voiced_but_no_text`` is sustained sound Moonshine found no words in.
+  ``requeue_held`` (owner routes, and once per ``TRANSCRIBE_PIPELINE`` automatically) puts held recordings back in the queue.
 
 WHAT THIS DOES NOT DO (on purpose, and why)
   * It does not feed the transcript to fact extraction, recall, the digest or the memory gate. A pendant recording can hold
@@ -57,7 +60,12 @@ SAMPLE_RATE = 16000
 CHUNK_S = 20.0                    # one Moonshine call at a time; a voice turn waits at most this long
 SPLIT_SEARCH_S = 3.0              # look for the quietest 100 ms in the last 3 s of a chunk to cut at
 SILENCE_PEAK = 300                # int16 peak under this = room noise: not sent to Moonshine (it hallucinates on silence)
+ACTIVE_RMS = 600                  # a 100 ms window at/above this RMS (~-35 dBFS) is sustained sound; the pendant's room floor is ~40-300
+TRANSIENT_ONLY_S = 0.5            # under this much sustained sound, a "voiced" recording was a click (diagnostic label only, never a gate)
 MAX_ATTEMPTS = 3
+#: Bump whenever transcription or its empty-transcript diagnostics change. The first loop pass after a deploy that changes it requeues
+#: every held empty/failed recording ONCE (``requeue_after_pipeline_change``), so the change reaches audio still inside its retention.
+TRANSCRIBE_PIPELINE = "2026-10-16.transient-robust-levels"
 STALE_CLAIM_S = 30 * 60
 POLL_S = 60.0
 VOICE_BUSY_S = 45.0              # a voice turn this recent = "in flight": it aborts/holds a running job
@@ -379,27 +387,49 @@ def peak(pcm: bytes) -> int:
 
 def _measure_reader(w: Any) -> dict:
     rate, ch, width, n = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()
-    pk, sumsq, count = 0, 0, 0
+    pk, sumsq, count, clipped = 0, 0, 0, 0
+    win = max(1, (rate or SAMPLE_RATE) // 10)                # 100 ms windows for the transient-robust numbers
+    wins: list[float] = []
     if width == 2:
         left = n
-        while left > 0:                                    # one second at a time: never the whole file
-            a = _samples(w.readframes(min(left, max(rate, 1))))
+        step = max(win, (max(rate, 1) // win) * win)           # one second at a time (a whole number of windows): never the whole file
+        while left > 0:
+            a = _samples(w.readframes(min(left, step)))
             if not len(a):
                 break
             left -= len(a)
             count += len(a)
-            pk = max(pk, max(map(abs, a)))
-            sumsq += sum(v * v for v in a)
+            for i in range(0, len(a), win):
+                part = a[i:i + win]
+                sq = sum(v * v for v in part)
+                sumsq += sq
+                m = max(map(abs, part))
+                if m > pk:
+                    pk = m
+                if m >= 32767:
+                    clipped += sum(1 for v in part if v >= 32767 or v <= -32767)
+                if len(part) == win:
+                    wins.append((sq / win) ** 0.5)
     rms = (sumsq / count) ** 0.5 if count else 0.0
-    return {"seconds": round(n / rate, 1) if rate else 0.0, "peak": int(pk), "rms": round(rms, 1), "rate": rate, "channels": ch, "width": width}
+    wins_sorted = sorted(wins)
+    return {"seconds": round(n / rate, 1) if rate else 0.0, "peak": int(pk), "rms": round(rms, 1), "rate": rate, "channels": ch,
+            "width": width, "clipped": clipped, "rms_median": round(wins_sorted[len(wins_sorted) // 2], 1) if wins_sorted else 0.0,
+            "active_s": round(sum(1 for r in wins if r >= ACTIVE_RMS) * win / (rate or SAMPLE_RATE), 1)}
 
 
-_UNREADABLE = {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0}
+_UNREADABLE = {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0, "clipped": 0, "rms_median": 0.0,
+               "active_s": 0.0}
 
 
 def measure_wav(wav: bytes) -> dict:
-    """What the audio actually is, for the empty-transcript WARNING: ``{"seconds", "peak", "rms", "rate", "channels", "width"}``.
-    Never raises (an unreadable WAV measures as zeros) - it is diagnostics, not a gate. Peak/RMS are int16 units (full scale 32768)."""
+    """What the audio actually is, for the empty-transcript WARNING. Never raises (an unreadable WAV measures as zeros) - it is
+    diagnostics, not a gate. Levels are int16 units (full scale 32768).
+
+    ``seconds``/``rate``/``channels``/``width``: the format. ``peak``/``rms``: whole-file - and BOTH are dominated by a single
+    click: one full-scale pendant wake transient over ten seconds of room noise reads "peak 32768, rms 700" (measured 2026-10-16,
+    plan 4.3b: the median 100 ms-window RMS of those files was ~60). So the transient-robust numbers are what to read:
+    ``clipped`` (samples at +-32767), ``rms_median`` (the median 100 ms-window RMS: the room, not the click) and ``active_s``
+    (seconds of 100 ms windows at or above ``ACTIVE_RMS``: sustained sound, which a click is not)."""
     try:
         with wave.open(io.BytesIO(wav)) as w:
             return _measure_reader(w)
@@ -414,6 +444,19 @@ def measure_wav_file(path: str) -> dict:
             return _measure_reader(w)
     except (wave.Error, EOFError, OSError):
         return dict(_UNREADABLE)
+
+
+def empty_reason(chunk_stats: dict, level: dict) -> str:
+    """Why a recording came back with no text - the label on ``OMI_EMPTY_TRANSCRIPT``:
+    ``below_silence_floor`` - no chunk reached Moonshine (peak under ``SILENCE_PEAK``);
+    ``transient_only``      - chunks reached Moonshine only because of a click (a pendant wake transient, a tap): under
+                              ``TRANSIENT_ONLY_S`` of sustained sound. Nothing was said; Moonshine was right;
+    ``voiced_but_no_text``  - there WAS sustained sound and Moonshine still found no words. This is the one worth a look."""
+    if not chunk_stats.get("voiced"):
+        return "below_silence_floor"
+    if float(level.get("active_s") or 0.0) < TRANSIENT_ONLY_S:
+        return "transient_only"
+    return "voiced_but_no_text"
 
 
 # --- rows -----------------------------------------------------------------------------------------------------------
@@ -866,10 +909,11 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                 await db.execute("UPDATE omi_recordings SET status = 'empty_transcript', transcript = '', transcribed_at = ? "
                                  "WHERE id = ? AND status = 'transcribing'", (_iso(_now()), rid))
                 await db.commit()
-                logger.warning("OMI_EMPTY_TRANSCRIPT id=%s seconds=%s peak=%s rms=%s rate=%s voiced_chunks=%s/%s reason=%s - WAV kept until retention",
-                               rid, level.get("seconds"), level.get("peak"), level.get("rms"), level.get("rate"),
-                               seen_chunks.get("voiced"), seen_chunks.get("chunks"),
-                               "below_silence_floor" if not seen_chunks.get("voiced") else "voiced_but_no_text")
+                logger.warning("OMI_EMPTY_TRANSCRIPT id=%s seconds=%s peak=%s rms=%s clipped=%s rms_median=%s active_s=%s rate=%s "
+                               "voiced_chunks=%s/%s reason=%s - WAV kept until retention",
+                               rid, level.get("seconds"), level.get("peak"), level.get("rms"), level.get("clipped"),
+                               level.get("rms_median"), level.get("active_s"), level.get("rate"),
+                               seen_chunks.get("voiced"), seen_chunks.get("chunks"), empty_reason(seen_chunks, level))
                 return True
             await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, transcribed_at = ?"
                              + ("" if keep else ", audio_path = '', audio_bytes = 0, audio_expires_at = NULL")
@@ -879,6 +923,65 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                 _unlink(path)
     logger.info("OMI_TRANSCRIBED id=%s chars=%d kept_audio=%s", rid, len(text), keep)
     return True
+
+
+_REQUEUE_STATUSES = ("empty_transcript", "failed")
+
+
+async def requeue_held(user_id: Optional[str] = None, *, rid: Optional[str] = None) -> int:
+    """Put held recordings back in the transcription queue: rows that ended ``empty_transcript`` or ``failed`` and whose WAV is
+    still on disk go back to ``pending`` with ``attempts = 0``. ``user_id`` scopes it to one member (the owner routes); ``None``
+    is every member (the one-shot after a pipeline change). ``rid`` narrows it to one recording. Returns how many were requeued.
+
+    Nothing here extends the retention: a requeued recording still loses its WAV at ``audio_expires_at``. A row whose file is gone
+    is left as it is (there is nothing to transcribe). An erase landing meanwhile wins: the transcription pass re-checks the gate."""
+    from db_compat import get_compat_db
+    sql = (f"SELECT id, audio_path FROM omi_recordings WHERE status IN ({', '.join('?' for _ in _REQUEUE_STATUSES)}) "
+           "AND audio_path != ''")
+    params: list = list(_REQUEUE_STATUSES)
+    if user_id is not None:
+        sql += " AND user_id = ?"
+        params.append(user_id)
+    if rid is not None:
+        sql += " AND id = ?"
+        params.append(rid)
+    n = 0
+    async with get_compat_db() as db:
+        for r in await _fetch(db, sql, tuple(params)):
+            if not Path(r["audio_path"]).is_file():
+                continue
+            cur = await db.execute(
+                f"UPDATE omi_recordings SET status = 'pending', attempts = 0, claimed_at = NULL, transcribed_at = NULL "
+                f"WHERE id = ? AND status IN ({', '.join('?' for _ in _REQUEUE_STATUSES)})", (r["id"], *_REQUEUE_STATUSES))
+            n += 1 if getattr(cur, "rowcount", 1) else 0
+        if n:
+            await db.commit()
+    if n:
+        logger.info("OMI_REQUEUED count=%d scope=%s", n, "one" if rid else ("member" if user_id else "all"))
+    return n
+
+
+def _pipeline_marker() -> Path:
+    return audio_dir() / ".transcribe-pipeline"
+
+
+async def requeue_after_pipeline_change() -> int:
+    """ONCE per ``TRANSCRIBE_PIPELINE`` value: requeue every held empty/failed recording so a transcription fix reaches the audio
+    still inside its retention window. The marker is written only after the requeue succeeded, so a failed pass retries next loop;
+    a recording that comes back empty again is not requeued again (the marker already names this pipeline)."""
+    marker = _pipeline_marker()
+    try:
+        if marker.is_file() and marker.read_text().strip() == TRANSCRIBE_PIPELINE:
+            return 0
+    except OSError:
+        return 0
+    n = await requeue_held(None)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        marker.write_text(TRANSCRIBE_PIPELINE + "\n")
+    except OSError as exc:
+        logger.warning("omi_recordings: pipeline marker not written (%s)", type(exc).__name__)
+    return n
 
 
 async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
@@ -908,6 +1011,7 @@ async def run_loop() -> None:
         try:
             if enabled():
                 await purge_expired_audio()
+                await requeue_after_pipeline_change()
                 await transcribe_pending(limit=3)
         except asyncio.CancelledError:
             raise
