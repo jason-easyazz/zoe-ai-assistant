@@ -460,6 +460,13 @@ Counts and durations only; no recording content leaves the box.
 - **2026-10-15** · Quiet hours implemented four times from household env (`proactive/engine.py:34`, `voice_delivery.py:112`, `voice_enrollment.py:309`, `proactive/pull.py:270`); no per-member quiet hours exist · agent, with communication-preferences P2 (one helper, member override) · one quiet-hours helper, every caller uses it.
 - **2026-10-15** · Cross-review tier · `scripts/maintenance/cross_review.sh` failed twice in a row on PR #2075: the polly session ended `failed` with "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh" (the Omnigent orchestrator's Claude OAuth, not the reviewer); the review was run directly with `codex exec --sandbox read-only` inside `zoe-omnigent` instead · operator (re-auth the orchestrator's Claude session) · `cross_review.sh <PR> "<contract>"` returns a report.
 
+## Panel anywhere survey findings (2026-10-16, research/panel-anywhere)
+
+Design: `docs/architecture/panel-anywhere.md`. Code read at origin/main c0c3743ac; nothing changed.
+
+- **2026-10-16** · Voice daemon opens a new connection per call · `scripts/setup/zoe_voice_daemon.py` uses module-level `requests.post` / `requests.get` (no `requests.Session`), so every turn pays a TCP connect + TLS handshake; free on the LAN, about 2 extra round trips per turn over any WAN path (Headscale relay, the planned SNI relay) · code read · agent (a keep-alive session, flag-dark, replay-gated under `flock /tmp/zoe-voice-harness.lock`; panel-anywhere R4 cell V1) · verified fixed when, under `tc netem` 100 ms RTT, consecutive turns show one connection reused (no new TLS handshake in a capture) and the replay gate shows no regression.
+- **2026-10-16** · Relay-hop addresses look like the LAN · any local relay client (frpc, a snitun runner, a `tailscale serve`-style proxy) that connects to the zoe-ui nginx makes `X-Real-IP` a private Docker address, so `ZOE_HOUSEHOLD_LISTS_PANEL_SCOPE=lan` and `livekit_available` (`routers/voice_tts.py`) would treat every relayed caller as a LAN client; pointed at `127.0.0.1:8000` instead it would pass `auth._is_internal_request` outright · code read (`panel_principal.py`, `auth.py`, `services/zoe-ui/nginx.d/locations.inc`) · agent (panel-anywhere section 5: an `X-Zoe-Ingress: relay` marker set by a dedicated nginx listener + `ZOE_RELAY_INGRESS`; a test pinning the relay client's target) · verified fixed when a relayed guest never matches `lan` scope or a registered address, and the frpc-target test fails on a `127.0.0.1:8000` fixture.
+
 ## Panel away P1 (2026-10-16, feature/panel-away-p1)
 
 Record: `docs/knowledge/panel-away-p1.md`. Design: `docs/architecture/panel-remote-access.md` (PR #2080).
