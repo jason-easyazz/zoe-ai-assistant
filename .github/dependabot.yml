@@ -105,3 +105,6 @@ updates:
       - dependency-name: "fastembed"        # embedding model/numerics feed memory recall; replay-gated PR only (same probe blind spot)
       - dependency-name: "cloakbrowser"     # 0.x: a minor is a breaking change (browser_broker); move deliberately
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "scipy"            # 1.18+ needs numpy>=2 and Python>=3.12; the numpy<2 ceiling holds (chromadb + both voice rocks), so it cannot resolve (#2074); patches within 1.17.x still flow
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "livekit-protocol" # lane-specific on purpose: py312 lane 1.1.27, the 3.10 rollback manifest holds 1.1.8 (STEP_UP_DIVERGENCE in tests/unit/test_zoe_data_py312_cutover.py, #2074); move each lane by hand, never auto-bump the rollback pin

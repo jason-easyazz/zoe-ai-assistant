@@ -10,6 +10,9 @@ mints one for any caller, so "a guest session" is not evidence of a panel. In or
 
   1. its principal came from a provisioned device token with NO bound member (``get_current_user`` stamps ``panel_id`` on that
      guest) - the voice daemon / provisioned kiosk; or
+  1b. it carries the KIOSK CREDENTIAL (``panel_kiosk_credential``, flag ``ZOE_PANEL_KIOSK_CREDENTIAL``, default off): an
+     HttpOnly cookie the panel's loopback gate obtains with the device token, naming an ACTIVE panel that allows guests. This is
+     what keeps the kiosk browser "the panel" when its address changes (private link home, another Wi-Fi); or
   2. its client address is the address of a REGISTERED, ACTIVE panel that allows guests (``panels.ip_address``, ``allow_guest``).
      The address is nginx's ``X-Real-IP`` (set absolutely from ``$remote_addr``) and is trusted ONLY when the TCP peer is a proxy
      we run (loopback / the docker bridge) - zoe-data's own port answers on the LAN, where a caller could write that header
@@ -37,6 +40,8 @@ import ipaddress
 import logging
 import os
 from typing import Any, Mapping, Optional
+
+import panel_kiosk_credential
 
 logger = logging.getLogger(__name__)
 
@@ -119,22 +124,42 @@ def trusted_client_ip(request: Any) -> str:
 def _via_public_tunnel(request: Any) -> bool:
     """True when the request carries a Cloudflare edge header. The tunnel's container address sits inside the trusted proxy
     range, and Cloudflare passes a caller's own ``X-Real-IP`` through, so without this a tunnel hop could forge a panel address.
-    Cloudflare sets these on every proxied request and a caller cannot remove them."""
-    headers = request.headers
-    return bool(headers.get("cf-connecting-ip") or headers.get("cf-ray") or headers.get("cf-visitor"))
+    Cloudflare sets these on every proxied request and a caller cannot remove them. One rule, shared with the kiosk credential."""
+    return panel_kiosk_credential.via_public_tunnel(request)
 
 
-async def _from_registered_panel(db: Any, client_ip: str) -> bool:
-    if not client_ip:
+async def _registry_has(db: Any, sql: str, value: str) -> bool:
+    if not value:
         return False
     try:
-        cur = await db.execute(
-            "SELECT 1 FROM panels WHERE ip_address = ? AND is_active = 1 AND allow_guest = 1 LIMIT 1",
-            (client_ip,),
-        )
+        cur = await db.execute(sql, (value,))
         return await cur.fetchone() is not None
     except Exception as exc:  # noqa: BLE001 - an unreadable registry is "not the panel" (fail closed), but say so
         logger.warning("panel_principal: panel registry lookup failed (%s) - treating the request as not-a-panel", type(exc).__name__)
+        return False
+
+
+async def _from_registered_panel(db: Any, client_ip: str) -> bool:
+    return await _registry_has(
+        db, "SELECT 1 FROM panels WHERE ip_address = ? AND is_active = 1 AND allow_guest = 1 LIMIT 1", client_ip)
+
+
+async def _kiosk_panel_allows_guest(db: Any, panel_id: str) -> bool:
+    return await _registry_has(
+        db, "SELECT 1 FROM panels WHERE panel_id = ? AND is_active = 1 AND allow_guest = 1 LIMIT 1", panel_id)
+
+
+async def _with_registry(db: Any, check: Any, value: str) -> bool:
+    """Run one registry check on the caller's handle, or on a pooled one when the caller has none (fail closed)."""
+    if db is not None:
+        return await check(db, value)
+    try:
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as pooled:
+            return await check(pooled, value)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("panel_principal: no database for the panel check (%s)", type(exc).__name__)
         return False
 
 
@@ -149,6 +174,10 @@ async def is_panel_guest(request: Any, user: Mapping[str, Any] | None, db: Any =
         return True  # device token, no bound member
     if _via_public_tunnel(request):
         return False  # a request that crossed Cloudflare is the internet, never the kiosk on the LAN
+    # Path 1b: the kiosk browser's credential minted from the device token (flag-dark; None whenever the flag is off).
+    kiosk_panel = panel_kiosk_credential.credential_panel_id(request)
+    if kiosk_panel and await _with_registry(db, _kiosk_panel_allows_guest, kiosk_panel):
+        return True
     client_ip = trusted_client_ip(request)
     if mode == "lan":
         try:
@@ -156,16 +185,7 @@ async def is_panel_guest(request: Any, user: Mapping[str, Any] | None, db: Any =
         except ValueError:
             private = False
         return bool(private and str(request.headers.get("X-Session-ID", "")).strip())
-    if db is None:
-        try:
-            from db_pool import get_db_ctx
-
-            async with get_db_ctx() as pooled:
-                return await _from_registered_panel(pooled, client_ip)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("panel_principal: no database for the panel check (%s)", type(exc).__name__)
-            return False
-    return await _from_registered_panel(db, client_ip)
+    return await _with_registry(db, _from_registered_panel, client_ip)
 
 
 async def mark_if_panel(request: Any, user: Mapping[str, Any] | None, db: Any = None) -> bool:

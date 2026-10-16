@@ -77,18 +77,76 @@ def test_status_panel_binding_display_identity(monkeypatch):
     monkeypatch.setattr(db_pool, "get_db_ctx", fake_ctx)
     app = FastAPI()
     app.include_router(sky.router)
-    resp = TestClient(app).get("/api/skybridge/status?panel_id=zoe-touch-pi",
-                               headers={"X-Real-IP": "192.168.1.61"})
+    # The TCP peer is nginx (our proxy); the browser's address arrives in X-Real-IP.
+    via_nginx = TestClient(app, client=("172.18.0.5", 50000))
+    resp = via_nginx.get("/api/skybridge/status?panel_id=zoe-touch-pi",
+                         headers={"X-Real-IP": "192.168.1.61"})
     u = resp.json()["user"]
     assert u["guest"] is False and u["username"] == "Jason" and u["source"] == "panel_binding"
     # Anti-enumeration: a caller NOT at the panel's registered IP stays guest.
-    resp2 = TestClient(app).get("/api/skybridge/status?panel_id=zoe-touch-pi",
-                                headers={"X-Real-IP": "192.168.1.99"})
+    resp2 = via_nginx.get("/api/skybridge/status?panel_id=zoe-touch-pi",
+                          headers={"X-Real-IP": "192.168.1.99"})
     assert resp2.json()["user"]["guest"] is True
     # Spoof attempt: client-controlled X-Forwarded-For must be IGNORED entirely.
-    resp3 = TestClient(app).get("/api/skybridge/status?panel_id=zoe-touch-pi",
-                                headers={"X-Forwarded-For": "192.168.1.61"})
+    resp3 = via_nginx.get("/api/skybridge/status?panel_id=zoe-touch-pi",
+                          headers={"X-Forwarded-For": "192.168.1.61"})
     assert resp3.json()["user"]["guest"] is True
+    # Spoof attempt: a LAN device talking to :8000 DIRECTLY writes X-Real-IP itself - it is judged by its own address.
+    direct = TestClient(app, client=("192.168.1.99", 50000))
+    resp4 = direct.get("/api/skybridge/status?panel_id=zoe-touch-pi", headers={"X-Real-IP": "192.168.1.61"})
+    assert resp4.json()["user"]["guest"] is True
+    # A request that crossed the Cloudflare tunnel is never the panel by address.
+    resp5 = via_nginx.get("/api/skybridge/status?panel_id=zoe-touch-pi",
+                          headers=dict([("X-Real-IP", "192.168.1.61"), ("CF-Ray", "1")]))
+    assert resp5.json()["user"]["guest"] is True
+
+
+def test_status_panel_display_identity_follows_the_kiosk_credential_not_the_address(monkeypatch):
+    """Over the private link the kiosk's address is no longer the registered one; its kiosk credential (minted from the
+    device token by the panel's gate) still identifies it. Flag-dark: without ZOE_PANEL_KIOSK_CREDENTIAL it is ignored."""
+    import contextlib
+    import hashlib
+
+    import db_pool
+    import panel_kiosk_credential as kiosk
+    import routers.skybridge as sky
+    from routers import panel_auth
+
+    class _FakeDb:
+        async def fetchrow(self, q, *a):
+            if "FROM panels" in q:
+                return dict(ip_address="192.168.1.61", is_active=True)
+            return dict(user_id="jason", name="Jason")
+
+    @contextlib.asynccontextmanager
+    async def fake_ctx():
+        yield _FakeDb()
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", fake_ctx)
+    raw = "skybridge-test-device-token"
+    th = hashlib.sha256(raw.encode()).hexdigest()
+    monkeypatch.setitem(panel_auth._token_cache, th, dict(panel_id="zoe-touch-pi", revoked=0, expires_at=None))
+    cred = kiosk.mint_credential("zoe-touch-pi", th)
+    other = kiosk.mint_credential("another-panel", th)
+    app = FastAPI()
+    app.include_router(sky.router)
+    tailnet = TestClient(app, client=("172.18.0.5", 50000))
+    url = "/api/skybridge/status?panel_id=zoe-touch-pi"
+
+    def hdrs(cookie=None, *extra):
+        h = [("X-Real-IP", "100.101.102.103")]
+        if cookie:
+            h.append(("Cookie", kiosk.COOKIE_NAME + "=" + cookie))
+        return dict(h + list(extra))
+
+    monkeypatch.delenv("ZOE_PANEL_KIOSK_CREDENTIAL", raising=False)
+    assert tailnet.get(url, headers=hdrs(cred)).json()["user"]["guest"] is True          # flag off: ignored
+    monkeypatch.setenv("ZOE_PANEL_KIOSK_CREDENTIAL", "1")
+    assert tailnet.get(url, headers=hdrs(cred)).json()["user"]["source"] == "panel_binding"
+    # negative controls: no credential, another panel's credential, or the credential over the tunnel
+    assert tailnet.get(url, headers=hdrs()).json()["user"]["guest"] is True
+    assert tailnet.get(url, headers=hdrs(other)).json()["user"]["guest"] is True
+    assert tailnet.get(url, headers=hdrs(cred, ("CF-Ray", "1"))).json()["user"]["guest"] is True
 
 
 def test_status_no_panel_id_stays_guest():

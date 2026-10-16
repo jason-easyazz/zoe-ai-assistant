@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 # up to ~20 s, so this is "one per turn").
 DEAF_PANEL_WARN_INTERVAL_S = 30.0
 
+# A panel that has had NO push subscriber for this long while voice turns keep arriving is not a
+# blip (a page reload or a deploy restart reconnects in seconds): it is a dead channel nobody is
+# looking at (2026-10-14: the wall panel sat deaf for hours behind one WARNING per turn). The turn
+# then logs an ERROR, at most once per DEAF_PANEL_ERROR_INTERVAL_S per panel.
+DEAF_PANEL_ERROR_AFTER_S = 300.0
+DEAF_PANEL_ERROR_INTERVAL_S = 600.0
+
 # A panel counts as live (see ``panel_live``) if it acked a UI action this recently.
 PANEL_LIVE_WINDOW_S = 60.0
 
@@ -42,6 +49,12 @@ class PushBroadcaster:
         self._panel_connected_at: Dict[str, float] = {}
         self._panel_disconnected_at: Dict[str, float] = {}
         self._deaf_warned_at: Dict[str, float] = {}
+        self._deaf_errored_at: Dict[str, float] = {}
+        # Voice turns that found the panel with ZERO subscribers since it last had one
+        # (reset on connect). A counter, not an alert: ``panel_push_status`` serves it.
+        self._deaf_turns: Dict[str, int] = {}
+        # Epoch seconds this process started: the deaf clock for a panel never seen connecting.
+        self._started_at = time.time()
         self._panel_acked_at: Dict[str, float] = {}
 
     async def connect(self, websocket: WebSocket, channel: str = "all", user_id: str | None = None):
@@ -66,6 +79,8 @@ class PushBroadcaster:
             self._connections[ch].add(websocket)
         self._ws_panels[websocket] = panel_id
         self._panel_connected_at[panel_id] = time.time()
+        self._deaf_turns.pop(panel_id, None)
+        self._deaf_errored_at.pop(panel_id, None)
         await websocket.send_json({
             "type": "connected",
             "channel": panel_channel,
@@ -155,19 +170,40 @@ class PushBroadcaster:
         """Live sockets subscribed to this panel's dedicated channel."""
         return len(self._connections.get(f"panel_{panel_id}", ()))
 
-    def panel_push_status(self, panel_id: str) -> dict:
+    def deaf_for_s(self, panel_id: str, *, wall_now: Optional[float] = None) -> Optional[float]:
+        """Seconds this panel has had zero subscribers; None while one is connected.
+
+        Measured from its last disconnect, or from process start when it has never connected to
+        this process (the push-status ``last_connect_at: null`` signature of 2026-10-14)."""
+        if self.panel_subscriber_count(panel_id) > 0:
+            return None
+        t = time.time() if wall_now is None else wall_now
+        since = self._panel_disconnected_at.get(panel_id) or self._started_at
+        return max(0.0, t - since)
+
+    def panel_push_status(self, panel_id: str, *, wall_now: Optional[float] = None) -> dict:
         """Read-only liveness of one panel's push channel (no household data).
 
         ``last_connect_at`` / ``last_disconnect_at`` are epoch seconds (None if never seen
         since this process started). ``subscribers`` > 0 means a socket is registered; it
         cannot prove the browser is still reading it (a half-open socket is only reaped by
         the idle timeout), but 0 PROVES nothing can receive a ``voice:*`` event.
+
+        ``deaf_turns`` counts voice turns that targeted the panel while it had no subscriber
+        (since it last had one); ``deaf_for_s`` is how long it has been deaf (None when
+        connected); ``deaf_alert`` is True once voice turns were lost AND the deafness outlasted
+        ``DEAF_PANEL_ERROR_AFTER_S`` — what ``zoe_ground_truth.sh`` flags.
         """
+        deaf_for = self.deaf_for_s(panel_id, wall_now=wall_now)
+        turns = self._deaf_turns.get(panel_id, 0)
         return {
             "panel_id": panel_id,
             "subscribers": self.panel_subscriber_count(panel_id),
             "last_connect_at": self._panel_connected_at.get(panel_id),
             "last_disconnect_at": self._panel_disconnected_at.get(panel_id),
+            "deaf_turns": turns,
+            "deaf_for_s": None if deaf_for is None else int(deaf_for),
+            "deaf_alert": bool(turns > 0 and deaf_for is not None and deaf_for >= DEAF_PANEL_ERROR_AFTER_S),
         }
 
     def note_panel_ack(self, panel_id: Optional[str], *, now: Optional[float] = None) -> None:
@@ -195,13 +231,21 @@ class PushBroadcaster:
         t = time.time() if now is None else now
         return acked is not None and 0 <= t - acked <= within_s
 
-    def warn_if_panel_deaf(self, panel_id: Optional[str], *, now: Optional[float] = None) -> bool:
+    def warn_if_panel_deaf(self, panel_id: Optional[str], *, now: Optional[float] = None,
+                           wall_now: Optional[float] = None) -> bool:
         """Log ONE WARNING when a voice turn targets a panel with zero push subscribers.
 
         Every ``voice:*`` event and ``show_card`` reaches the wall panel only over its
         ``/ws/push`` socket, and ``broadcast``'s delivered count used to be ignored — so a
         deaf panel (2026-10-12) looked exactly like a healthy one from the server side.
-        Rate-limited per panel (``DEAF_PANEL_WARN_INTERVAL_S``). Returns True when it warned.
+        Rate-limited per panel (``DEAF_PANEL_WARN_INTERVAL_S``, i.e. one per turn). Returns True
+        when it warned.
+
+        A panel that stays deaf past ``DEAF_PANEL_ERROR_AFTER_S`` while turns keep arriving also
+        logs an ERROR (once per ``DEAF_PANEL_ERROR_INTERVAL_S``): by then it is not a reconnect
+        blip. Every deaf turn (one per limiter window) is counted in ``panel_push_status``.
+        ``now`` is the limiter clock (monotonic), ``wall_now`` the epoch clock the deaf duration
+        is measured on.
         Never raises: it runs on the voice hot path.
         """
         try:
@@ -213,8 +257,20 @@ class PushBroadcaster:
             t = time.monotonic() if now is None else now
             last = self._deaf_warned_at.get(pid)
             if last is not None and t - last < DEAF_PANEL_WARN_INTERVAL_S:
-                return False
+                return False   # same turn (several entry points call this): counted/alerted once below
             self._deaf_warned_at[pid] = t
+            self._deaf_turns[pid] = self._deaf_turns.get(pid, 0) + 1
+            deaf_for = self.deaf_for_s(pid, wall_now=wall_now)
+            if deaf_for is not None and deaf_for >= DEAF_PANEL_ERROR_AFTER_S:
+                last_err = self._deaf_errored_at.get(pid)
+                if last_err is None or t - last_err >= DEAF_PANEL_ERROR_INTERVAL_S:
+                    self._deaf_errored_at[pid] = t
+                    logger.error(
+                        "PANEL DEAF: %s has had ZERO push subscribers for %d min; %d voice turn(s) (this one "
+                        "included) were NOT shown on the panel. The kiosk page's /ws/push reconnect is not "
+                        "recovering (a page reload restores it). Check GET /api/panels/%s/push-status",
+                        pid, int(deaf_for // 60), self._deaf_turns[pid], pid,
+                    )
             disconnected = self._panel_disconnected_at.get(pid)
             ago = f"{int(time.time() - disconnected)}s ago" if disconnected else "never since this process started"
             logger.warning(
