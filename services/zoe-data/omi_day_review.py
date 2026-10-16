@@ -254,7 +254,6 @@ _CUE = re.compile(
     r"october|november|december|remind|remember|forget|need to|needs to|have to|got to|gotta|buy|get some|pick up|grab|shopping|"
     r"list|groceries|meeting|appointment|booked|book|call|ring|text|email|send|dinner|lunch|breakfast|coffee|catch up|see you|"
     r"birthday|party|met|meet|name is|i'll|i will|we'll|let's|i'm|i've|my)\b", _I)
-_NAME = re.compile(r"\b[A-Z][a-z]{2,}\b")
 _HEDGE = re.compile(r"\b(?:maybe|perhaps|sometime|some time|someday|one day|at some point|might|could|should probably|we should|"
                     r"would be nice|if we|i guess)\b", _I)
 _COMMIT = re.compile(r"\b(?:see you|meeting|appointment|booked|i'll|i will|we'll|we will|we're|i'm going|going to|at \d|"
