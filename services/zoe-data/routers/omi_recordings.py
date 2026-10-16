@@ -12,6 +12,8 @@
   GET    /api/omi/recordings/{id}   one recording with its transcript
   PATCH  /api/omi/recordings/{id}   ``{"keep_audio"?, "reviewed"?}``
   DELETE /api/omi/recordings/{id}   delete (audio, transcript, times); a content-free tombstone stays
+  POST   /api/omi/recordings/retranscribe       requeue the caller's held recordings (``empty_transcript`` / ``failed``, WAV still kept)
+  POST   /api/omi/recordings/{id}/retranscribe  requeue one of them (404 if it is not held with audio)
 
 WHO MAY DO WHAT - two modes, chosen by ``ZOE_OMI_DEVICE_OWNERS`` (default OFF; see ``omi_devices.py``).
 
@@ -217,6 +219,19 @@ async def list_my_recordings(limit: int = Query(50, ge=1, le=200), offset: int =
     return {"recordings": await omi.list_recordings(user["user_id"], limit=limit, offset=offset),
             "empty_transcript_held": await omi.count_empty_transcripts(user["user_id"]),
             "transcription": await omi.transcription_status(user["user_id"])}
+
+
+@router.post("/recordings/retranscribe")
+async def retranscribe_my_held(user: dict = Depends(_require_owner)):
+    """Requeue every one of the caller's held recordings (empty transcript or failed, WAV still kept). Their retention is unchanged."""
+    return {"ok": True, "queued": await omi.requeue_held(user["user_id"])}
+
+
+@router.post("/recordings/{rid}/retranscribe")
+async def retranscribe_my_recording(rid: str, user: dict = Depends(_require_owner)):
+    if not await omi.requeue_held(user["user_id"], rid=rid):
+        raise HTTPException(status_code=404, detail="no held recording with audio to transcribe again")
+    return {"ok": True, "queued": 1}
 
 
 @router.get("/recordings/{rid}")
