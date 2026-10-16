@@ -65,7 +65,9 @@
         pushPing: null,
         pushRetry: null,
         pushAttempts: 0,
+        pushLastRxAt: 0,
         unloading: false,
+        unloadGuard: null,
         autoHomeTimer: null,
         autoHomeArmed: false,
     };
@@ -82,6 +84,15 @@
     // reached the panel. Same cadence as websocket-sync.js.
     const PUSH_PING_MS = 30000;
     const PUSH_RETRY_MAX_MS = 30000;
+    // An OPEN socket can be dead (a server that rebooted behind a firewall that drops instead of
+    // resetting never closes it), and readyState === 1 hides that from every check below. The
+    // server answers each 'ping' with {"type":"pong"}, so ANY frame is proof of life: none for this
+    // long (two missed pongs plus margin) and the socket is replaced.
+    const PUSH_STALE_MS = 75000;
+    // beforeunload is a REQUEST to leave, not a fact: the navigation can be cancelled, handed to a
+    // download or an external handler, or the page can come back from the back/forward cache. If the
+    // page is still alive this long after it, the unload did not happen and the panel resumes.
+    const PAGE_UNLOAD_GRACE_MS = 5000;
 
     // A panel session dies on the server (a PIN member's passcode session lives
     // 60 min, a guest's 30) while the kiosk runs for days. A 401 from any panel
@@ -466,14 +477,35 @@
         } catch (_) { return null; }
     }
 
-    // Is the push channel actually open right now (either path)?
+    // Has the fallback push socket heard nothing (no frame, no pong) for PUSH_STALE_MS?
+    function pushSocketStale() {
+        return !!state.pushLastRxAt && Date.now() - state.pushLastRxAt > PUSH_STALE_MS;
+    }
+
+    // Is the push channel actually open right now (either path)? An OPEN-but-silent socket is not up.
     function pushIsUp() {
         try {
-            if (state.pushWs && state.pushWs.readyState === 1) return true;
+            if (state.pushWs && state.pushWs.readyState === 1 && !pushSocketStale()) return true;
             const shared = window.zoePushWs;
-            if (shared && shared.ws && shared.ws.readyState === 1) return true;
+            if (shared && shared.ws && shared.ws.readyState === 1
+                && !(shared.staleAfterMs && Date.now() - (shared.lastRxAt || 0) > shared.staleAfterMs)) return true;
         } catch (_) { /* treat as down */ }
         return false;
+    }
+
+    // Drop the fallback socket (detached first: its late close must not schedule a second
+    // reconnect) and open a fresh one now with the backoff reset. Used by the watchdog, the
+    // heartbeat and the resume paths.
+    function restartFallbackPushSocket() {
+        if (state.pushRetry) { clearTimeout(state.pushRetry); state.pushRetry = null; }
+        if (state.pushPing) { clearInterval(state.pushPing); state.pushPing = null; }
+        if (state.pushWs) {
+            const old = state.pushWs;
+            state.pushWs = null;
+            try { old.onopen = null; old.onmessage = null; old.onclose = null; old.close(); } catch (_) { /* already closed */ }
+        }
+        state.pushAttempts = 0;
+        connectPushWebSocket();
     }
 
     // Make sure SOME push socket is open or being opened: reset the backoff and connect now.
@@ -486,15 +518,7 @@
             try { shared.stopped = false; shared.reconnectAttempts = 0; shared.connect(); } catch (_) { /* non-fatal */ }
             return;
         }
-        if (state.pushRetry) { clearTimeout(state.pushRetry); state.pushRetry = null; }
-        if (state.pushPing) { clearInterval(state.pushPing); state.pushPing = null; }
-        if (state.pushWs) {
-            const old = state.pushWs;
-            state.pushWs = null;   // detach first: the stale socket's late close must not reconnect
-            try { old.onopen = null; old.onmessage = null; old.onclose = null; old.close(); } catch (_) { /* already closed */ }
-        }
-        state.pushAttempts = 0;
-        connectPushWebSocket();
+        restartFallbackPushSocket();
     }
 
     // (Re)start the service worker's own panel poll under the CURRENT session.
@@ -1151,6 +1175,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             const ws = new WebSocket(url);
             state.pushWs = ws;
             ws.onmessage = (event) => {
+                state.pushLastRxAt = Date.now();   // any frame (a pong included) proves the socket is alive
                 try {
                     const msg = JSON.parse(event.data);
                     if (msg.type === 'panel_pin_request' && msg.data) {
@@ -1282,11 +1307,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             };
             ws.onopen = () => {
                 state.pushAttempts = 0;
+                state.pushLastRxAt = Date.now();
                 try { ws.send('ping'); } catch (e) { /* ignore */ }
-                if (state.pushPing) clearInterval(state.pushPing);
-                state.pushPing = setInterval(() => {
-                    try { if (ws.readyState === 1) ws.send('ping'); } catch (e) { /* ignore */ }
-                }, PUSH_PING_MS);
+                startPushPing(ws);
             };
             ws.onclose = () => {
                 if (state.pushWs !== ws) return;   // a newer socket already replaced this one
@@ -1300,7 +1323,24 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         }
     }
 
-    // Exponential backoff, capped: a dead server must not be hammered, and a
+    // Keepalive + heartbeat watchdog for the fallback socket: a ping every PUSH_PING_MS, and if no
+    // frame at all has arrived for PUSH_STALE_MS the socket is dead whatever readyState says.
+    function startPushPing(ws) {
+        if (state.pushPing) clearInterval(state.pushPing);
+        state.pushPing = setInterval(() => {
+            try {
+                if (ws.readyState !== 1) return;
+                if (state.pushWs === ws && pushSocketStale()) {
+                    console.warn('[executor] push socket silent; replacing it');
+                    restartFallbackPushSocket();
+                    return;
+                }
+                ws.send('ping');
+            } catch (e) { /* ignore */ }
+        }, PUSH_PING_MS);
+    }
+
+    // Exponential backoff, capped (never a retry limit): a dead server must not be hammered, and a
     // panel must never stay deaf for longer than the cap once it is back.
     function schedulePushReconnect() {
         if (state.unloading || state.pushRetry || state.pushStopped) return;
@@ -2593,6 +2633,50 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
         return false;
     }
 
+    // The page is about to unload: stop the timers and the socket keepalive. This is a request, not a
+    // fact (see PAGE_UNLOAD_GRACE_MS) — it used to set a flag that was never cleared, so ONE cancelled
+    // navigation silently killed the poll, the sync, the watchdog and every push reconnect until a
+    // manual reload (2026-10-14: the wall panel sat deaf for hours with no timer left to retry).
+    function onPageUnloading() {
+        state.unloading = true;   // the socket closes with the page — never reconnect it
+        if (state.pushPing) { clearInterval(state.pushPing); state.pushPing = null; }
+        if (state.pushRetry) { clearTimeout(state.pushRetry); state.pushRetry = null; }
+        if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+        if (state.syncTimer) { clearInterval(state.syncTimer); state.syncTimer = null; }
+        if (state.watchdogTimer) { clearInterval(state.watchdogTimer); state.watchdogTimer = null; }
+        clearAutoHomeTimer('beforeunload');
+        if (state.unloadGuard) clearTimeout(state.unloadGuard);
+        state.unloadGuard = setTimeout(() => {
+            state.unloadGuard = null;
+            resumeAfterCancelledUnload('navigation did not happen');
+        }, PAGE_UNLOAD_GRACE_MS);
+    }
+
+    // The page is still here after an unload request: put every panel service back. Returns true
+    // when it resumed, false when there was nothing to resume.
+    function resumeAfterCancelledUnload(reason) {
+        if (state.unloadGuard) { clearTimeout(state.unloadGuard); state.unloadGuard = null; }
+        if (!state.unloading) return false;
+        state.unloading = false;
+        if (state.viewer) return true;
+        console.warn(`[executor] unload did not happen (${reason}); resuming panel services`);
+        // A genuine 403 stop stays stopped (the watchdog decides when the identity changed).
+        if (!state.panelServicesStopped) startPanelServices(`resumed: ${reason}`);
+        if (isKioskContext() && !state.watchdogTimer) state.watchdogTimer = setInterval(panelWatchdogTick, PANEL_WATCHDOG_MS);
+        // The still-open fallback socket lost its keepalive in onPageUnloading: replace it.
+        if (!window.zoePushWs && state.pushWs && state.pushWs.readyState === 1 && !state.pushPing) restartFallbackPushSocket();
+        return true;
+    }
+
+    // The network came back / the page became visible / was restored: if the push channel is not
+    // up, reconnect now instead of waiting out a backoff. Never overrides a deliberate stop.
+    function nudgePushSocket(reason) {
+        if (state.unloading || state.viewer || state.panelServicesStopped || state.pushStopped) return;
+        if (pushIsUp()) return;
+        console.info(`[executor] push channel down (${reason}); reconnecting now`);
+        ensurePushSocket();
+    }
+
     async function init() {
         if (window.zoeAuthReady && typeof window.zoeAuthReady.then === 'function') {
             try {
@@ -2619,6 +2703,8 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
             state.seenActions.add(key);
             executeAction(normalized).then((result) => ackAction(normalized.id, result)).catch(() => {});
         };
+        // websocket-sync.js asks before its own online/visible reconnect nudge (never while unloading / stopped).
+        window._zoePushNudgeAllowed = () => !(state.unloading || state.viewer || state.panelServicesStopped || state.pushStopped);
         window._zoeSetOrbMode = setOrbMode;
         window._zoeResetAutoHomeTimer = resetAutoHomeTimer;
 
@@ -2655,15 +2741,12 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
         ['pointerdown', 'touchstart', 'keydown'].forEach((evt) => {
             window.addEventListener(evt, () => resetAutoHomeTimer(`user:${evt}`), { passive: true });
         });
-        window.addEventListener('beforeunload', () => {
-            state.unloading = true;   // the socket closes with the page — never reconnect it
-            if (state.pushPing) clearInterval(state.pushPing);
-            if (state.pushRetry) clearTimeout(state.pushRetry);
-            if (state.pollTimer) clearInterval(state.pollTimer);
-            if (state.syncTimer) clearInterval(state.syncTimer);
-            if (state.watchdogTimer) clearInterval(state.watchdogTimer);
-            clearAutoHomeTimer('beforeunload');
+        window.addEventListener('beforeunload', onPageUnloading);
+        window.addEventListener('pageshow', (ev) => {
+            if (ev && ev.persisted && !resumeAfterCancelledUnload('restored from the back/forward cache')) nudgePushSocket('page restored');
         });
+        window.addEventListener('online', () => nudgePushSocket('network back'));
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) nudgePushSocket('page visible'); });
     }
 
     if (document.readyState === 'loading') {
