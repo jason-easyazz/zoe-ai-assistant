@@ -656,9 +656,14 @@ async def forget_user(user_id: str) -> int:
                 for r in await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE user_id = ? AND status != 'deleted'", (user_id,)):
                     await _tombstone(db, r, _now())
                     n += 1
-                import omi_voices
-                await omi_voices.forget_user(db, user_id)
                 await db.commit()
+            try:        # the member's voice rows: a failure is LOUD (an erase that leaves biometrics behind is a P1)
+                import omi_voices
+                async with get_compat_db() as db:
+                    await omi_voices.forget_user(db, user_id)
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("OMI_VOICES_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
             try:        # AFTER the recordings are committed: a registry that is not migrated yet (0047) must never block erasing audio
                 async with get_compat_db() as db:
                     await omi_devices.forget_user(db, user_id)
@@ -949,9 +954,17 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
             seg_ids: list = []
             if segs is not None:              # segments land BEFORE the row says done, and the WAV goes only after both
                 import omi_voices
-                omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid))     # Zoe's own replies: not a person
-                seg_ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=model_id,
-                                                          channel="panel" if spk_state == "tagged" else None)
+                try:
+                    omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid))  # Zoe's own replies: not a person
+                    seg_ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=model_id,
+                                                              channel="panel" if spk_state == "tagged" else None)
+                except Exception as exc:  # noqa: BLE001 - a segment-store failure never costs the transcript
+                    logger.warning("OMI_SEGMENTS_NOT_STORED id=%s reason=%s - transcript kept untagged", rid, type(exc).__name__)
+                    seg_ids, spk_state, segs = [], "untaggable", None
+                    try:
+                        await omi_voices.drop_recording(db, rid)
+                    except Exception:  # noqa: BLE001
+                        pass
             await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, transcribed_at = ?, speaker_state = ?"
                              + ("" if keep else ", audio_path = '', audio_bytes = 0, audio_expires_at = NULL")
                              + " WHERE id = ? AND status = 'transcribing'", (text, _iso(_now()), spk_state, rid))
