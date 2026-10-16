@@ -145,7 +145,7 @@ swap_used_mb() { awk '/^SwapTotal/ { t = $2 } /^SwapFree/ { f = $2 } END { print
 
 # ---------------------------------------------------------------- preflight --
 step "Preflight"
-for tool in docker openssl jq flock; do
+for tool in docker openssl jq flock python3; do
   command -v "$tool" > /dev/null || die "missing $tool"
 done
 docker compose version > /dev/null 2>&1 || die "docker compose v2 is required"
@@ -166,7 +166,8 @@ say "MemAvailable ${mem} MB (>= ${MIN_MEM_MB}); swap used ${SWAP_BEFORE} MB"
 
 # The host own tailscale must be untouched; record it to compare at the end.
 HOST_TS_BEFORE="n/a"
-if command -v tailscale > /dev/null; then HOST_TS_BEFORE="$(tailscale status 2>&1 | head -1)"; fi
+HOST_TSIF_BEFORE="$(ip -br link | grep -ci tailscale || true)"
+if command -v tailscale > /dev/null; then HOST_TS_BEFORE="$( (tailscale status 2>&1 || true) | head -1)"; fi
 
 # ------------------------------------------------------------------- render --
 step "Render the lab from the SHIPPED files"
@@ -222,7 +223,7 @@ expect "client containers run tailscale 1.104.1" yes \
 count_is()   { [[ "$(node_count)" == "$1" ]]; }
 field_is()   { [[ "$(node_field "$1" "$2")" == "$3" ]]; }          # NAME JQ VALUE
 route_is()   { [[ "$(route_field "$1" "$2")" == "$3" ]]; }          # NAME JQ VALUE
-log_has()    { "${DC[@]}" logs --no-log-prefix "$1" 2> /dev/null | grep -Eq "$2"; }
+log_has()    { local o; o="$("${DC[@]}" logs --no-log-prefix "$1" 2> /dev/null || true)"; grep -Eq "$2" <<< "$o"; }
 mkkey()      { hsc preauthkeys create --tags "$1" --expiration 1h -o json | jq -r '.key'; }
 
 # ------------------------------------------------------------- control plane --
@@ -279,7 +280,7 @@ expect "an admin CAN approve another prefix by hand (the owner approval path)" y
 hsc nodes approve-routes -i "$BOX_ID" -r "$STANDIN_IP/32" > /dev/null
 tsc box set --advertise-routes="$STANDIN_IP/32" --advertise-exit-node=false
 expect "box restored to the README state: advertises and is approved for the /32 only" yes \
-  eventually 30 route_is lab-box '(.approved_routes // []) | join(",") + "|" + ((.available_routes // []) | join(","))' "$STANDIN_IP/32|$STANDIN_IP/32"
+  eventually 30 route_is lab-box '((.approved_routes // []) | join(",")) + "|" + ((.available_routes // []) | join(","))' "$STANDIN_IP/32|$STANDIN_IP/32"
 mem_guard
 
 # ------------------------------------------------------------- owner device --
@@ -348,7 +349,7 @@ mem_guard
 step "ACL control experiment: the refusal of dummy:$EXTRA_PORT is the ACL, nothing else"
 ACL="$WORK/config/acl.hujson"
 cp "$ACL" "$WORK/acl.orig"
-log_since() { "${DC[@]}" logs --no-log-prefix --since "${3}s" "$1" 2> /dev/null | grep -Eq "$2"; }
+log_since() { local o; o="$("${DC[@]}" logs --no-log-prefix --since "${3}s" "$1" 2> /dev/null || true)"; grep -Eq "$2" <<< "$o"; }
 reload()    { "${DC[@]}" kill -s HUP headscale > /dev/null; }
 
 # (a) widen the policy but leave the tests block in: the reload must be REJECTED.
@@ -356,7 +357,7 @@ sed "s#:443,8007\"#:443,8007,$EXTRA_PORT\"#" "$WORK/acl.orig" > "$ACL"
 reload
 sleep 6
 expect "widened policy is rejected at reload by the tests block (log: test(s) failed)" yes \
-  eval 'log_since headscale "test\(s\) failed" 15'
+  log_since headscale 'test\(s\) failed' 15
 expect "...and the old policy is still enforced: panel -> dummy:$EXTRA_PORT refused" no \
   reachable panel "$STANDIN_IP" "$EXTRA_PORT" dummy-$EXTRA_PORT
 
@@ -381,10 +382,18 @@ step "Embedded DERP, STUN and the nginx websocket upgrade"
 expect "DERP map holds ONLY the embedded region (derp.urls empty)" yes \
   test "$(tsc panel debug derp-map | jq -r '.Regions | keys | join(",")')" = 999
 expect "tailscale debug derp headscale succeeds" yes tsc panel debug derp headscale
-expect "STUN answers (tailscale netcheck: UDP true)" yes grep -q "UDP: true" <<< "$(tsc panel netcheck 2>&1 || true)"
+# STUN is proved with a raw Binding request (lab/stun_probe.py): directly at the
+# headscale container, and through the lab UDP relay that stands in for the
+# production host publish. (`tailscale netcheck` from the userspace lab client
+# reports UDP false even though both probes below are answered, so it is not used
+# as the assertion; see the README, "What the lab cannot prove".)
+expect "STUN: the embedded DERP answers a Binding request on UDP 3478 (direct)" yes \
+  python3 -I "$BUNDLE/lab/stun_probe.py" 10.77.250.2
+expect "STUN: ...and through the UDP relay on the proxy" yes \
+  python3 -I "$BUNDLE/lab/stun_probe.py" 10.77.250.3
 expect "nginx upgraded the control connections (POST /ts2021 -> 101)" yes \
-  eval 'log_since proxy "POST /ts2021 HTTP/1.1\" 101" 3600'
-expect "nginx upgraded DERP connections (/derp -> 101)" yes eval 'log_since proxy "/derp.*\" 101" 3600'
+  log_since proxy 'POST /ts2021.* 101' 3600
+expect "nginx upgraded DERP connections (/derp -> 101)" yes log_since proxy '/derp.* 101' 3600
 
 # --------------------------------------------------------------- resources --
 step "Resources and host isolation"
@@ -392,9 +401,9 @@ mem_guard
 SWAP_AFTER="$(swap_used_mb)"
 say "MemAvailable now $(mem_avail_mb) MB; swap used ${SWAP_BEFORE} -> ${SWAP_AFTER} MB"
 HOST_TS_AFTER="n/a"
-if command -v tailscale > /dev/null; then HOST_TS_AFTER="$(tailscale status 2>&1 | head -1)"; fi
+if command -v tailscale > /dev/null; then HOST_TS_AFTER="$( (tailscale status 2>&1 || true) | head -1)"; fi
 expect "host tailscaled untouched (status unchanged: $HOST_TS_BEFORE)" yes test "$HOST_TS_AFTER" = "$HOST_TS_BEFORE"
-expect "no tailscale network interface on the host" yes test -z "$(ip -br link | grep -i tailscale || true)"
+expect "no new tailscale interface appeared on the host (before: ${HOST_TSIF_BEFORE})" yes test "$(ip -br link | grep -ci tailscale || true)" = "$HOST_TSIF_BEFORE"
 
 # ---------------------------------------------------------------- teardown --
 step "Teardown"

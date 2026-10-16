@@ -233,6 +233,7 @@ tailscale status                              # zoe-box listed; direct, or relay
 tailscale ping zoe-box
 curl -skI https://192.168.1.218/ | head -1    # answered by the Jetson, over the route
 tailscale debug derp headscale                # the embedded relay works over :443
+tailscale netcheck                            # UDP: true (STUN via UDP 3478), Nearest DERP: the embedded one
 ```
 
 The refusals (each must hang or fail within a few seconds):
@@ -389,10 +390,15 @@ gone). What it proves, with a positive control beside every refusal:
   reused single-use key are refused, and the pending laptop is absent from the node
   list until the admin approves it;
 - the nginx snippet upgrades the control protocol (`POST /ts2021` returns 101) and
-  DERP, STUN answers, and the DERP map holds only the embedded region.
+  DERP, the STUN listener answers, and the DERP map holds only the embedded region.
 
 What the lab **cannot** prove, and therefore what step 8 and the Verify block check
 on the real hardware: real Let's Encrypt issuance and the DO firewall letting UDP
 3478 in from the internet; kernel-mode `tailscaled` on the Jetson and the Pi (the
-lab uses userspace networking); the panel's behaviour at home with `--accept-routes`.
+lab uses userspace networking); the panel's behaviour at home with `--accept-routes`;
+and a client-side STUN round trip: the lab proves the embedded STUN listener answers a raw
+Binding request, directly and through its UDP relay, but `tailscale netcheck` run from the
+userspace lab client reported `UDP: false` (cause not established), so check
+`tailscale netcheck` from the panel on a real network and expect `UDP: true` and
+`Nearest DERP: Headscale Embedded DERP`; if not, the usual cause is the UDP 3478 firewall rule.
 TLS in the lab is a throwaway CA; production is Let's Encrypt on the host nginx.
