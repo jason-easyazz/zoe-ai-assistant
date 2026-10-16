@@ -848,12 +848,17 @@ async def _on_calendar(db, user_id: str, c: "Candidate") -> bool:
     if c.kind != "calendar_event" or not c.payload.get("date"):
         return False
     try:
-        rows = await _fetch(db, "SELECT start_time FROM events WHERE user_id = ? AND start_date = ? AND (deleted = 0 OR deleted IS NULL)",
+        rows = await _fetch(db, "SELECT title, start_time FROM events WHERE user_id = ? AND start_date = ? AND (deleted = 0 OR deleted IS NULL)",
                             (user_id, c.payload["date"]))
     except Exception:  # noqa: BLE001
         return False
-    want = c.payload.get("time") or ""
-    return any(not want or str(r["start_time"] or "")[:5] == want for r in rows)
+    want, title = c.payload.get("time") or "", _norm(c.payload.get("title") or "")
+    words = {w for w in title.split() if len(w) >= 4}
+    # the same title that day is the same event; at the same clock time, a shared content word is enough ("project meeting" ~
+    # "meeting with the project team"). An untimed candidate never matches on the date alone (a dentist on Friday is not lunch).
+    return any(_norm(r["title"] or "") == title or (want and str(r["start_time"] or "")[:5] == want
+                                                     and words & {w for w in _norm(r["title"] or "").split() if len(w) >= 4})
+               for r in rows)
 
 
 async def _known(db, user_id: str, day: str) -> tuple[set[str], set[str], set[str]]:

@@ -1994,6 +1994,14 @@ class MemoryService:
         docs/knowledge/memory-loss-audit-2026-10-05.md."""
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
+        # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
+        # waits for an approval already writing (that write needs this lock for its ingest - inside the lock it would deadlock) and
+        # moves the generation so every later approval is dropped. The approved fact it may have written is then enumerated below.
+        try:
+            import omi_day_review
+            await omi_day_review.forget_user(user_id)
+        except Exception as exc:  # noqa: BLE001 - logged inside; the rows below still go
+            logger.warning("memory_service: day-review rows not erased for a deleted user (%s)", type(exc).__name__)
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.
@@ -2067,8 +2075,6 @@ class MemoryService:
                 await commitments.forget_user(user_id)
                 import omi_recordings   # ... and their pendant recordings (migration 0045): audio, transcript and times
                 await omi_recordings.forget_user(user_id)
-                import omi_day_review   # ... and what the day review proposed from them (migration 0054)
-                await omi_day_review.forget_user(user_id)
             except Exception:  # noqa: BLE001
                 pass
             try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
@@ -2824,10 +2830,11 @@ class MemoryService:
         return not (mode == "optin" and member.mode == UNSET_MODE)
 
     async def _protected_conflict(
-        self, user_id: str, text: str, writer_rank: int
+        self, user_id: str, text: str, writer_rank: int, *, strict: bool = False
     ) -> Optional[tuple[Any, str]]:
         """``(row, kind)`` of the approved row that OUTRANKS ``writer_rank`` and that ``text``
-        contradicts, else None. Fail-open (a read error never blocks a write)."""
+        contradicts, else None. Fail-open (a read error never blocks a write) unless ``strict``: then a read
+        error RAISES (the pendant day review's approval must not write a fact it could not check)."""
         if not _auth.active():
             return None
         try:
@@ -2840,6 +2847,8 @@ class MemoryService:
             # every approved row is compared (no recency prefix), off the event loop
             return await self._run_sync(_auth.find_conflict, text, rows, writer_rank)
         except Exception as exc:  # noqa: BLE001 - the guard must never break ingestion
+            if strict:
+                raise
             logger.debug("memory_service: authority conflict scan skipped (%s)", type(exc).__name__)
             return None
 

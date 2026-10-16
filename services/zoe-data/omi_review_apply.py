@@ -61,6 +61,8 @@ def apply_edits(kind: str, payload: dict, fields: Optional[dict]) -> dict:
         if k not in EDITABLE.get(kind, ()):
             raise ApplyError(f"field_not_editable:{k}", 422)
         v = dr.clean(v, 160)
+        if k in ("title", "item", "name", "fact") and not v:
+            raise ApplyError(f"empty_field:{k}", 422)
         if k == "date" and v:
             try:
                 from reminder_service import normalize_due_date
@@ -176,7 +178,7 @@ async def write_owner_fact(user_id: str, c: dict, via: str) -> str:
     # row the owner told Zoe in their own words: a contradiction with any approved row at or above user_stated is HELD (the
     # owner settles it), never written beside it. The scan is the authority wall's own (``_protected_conflict``), asked at the rank
     # just below user_stated so every user-stated / confirmed / operator row counts.
-    clash = await svc._protected_conflict(user_id, c["payload"]["fact"], auth.DERIVED_RANK)
+    clash = await svc._protected_conflict(user_id, c["payload"]["fact"], auth.DERIVED_RANK, strict=True)   # unreadable = no write
     if clash is not None:
         raise ApplyError("held_conflict")
     ref = await svc.ingest(

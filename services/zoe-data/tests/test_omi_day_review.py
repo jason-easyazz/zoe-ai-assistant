@@ -337,7 +337,7 @@ def test_approval_writes_with_provenance_and_a_failed_write_stays_pending(env, m
     calls = []
 
     class _Svc:
-        async def _protected_conflict(self, user_id, text, rank):
+        async def _protected_conflict(self, user_id, text, rank, **kw):
             return None
 
         async def ingest(self, text, **kw):
@@ -520,7 +520,7 @@ def test_trust_order_a_pendant_fact_never_stands_against_what_the_owner_said(env
     seen_rank = []
 
     class _Svc:
-        async def _protected_conflict(self, user_id, text, rank):
+        async def _protected_conflict(self, user_id, text, rank, **kw):
             seen_rank.append(rank)
             return (object(), "contradiction")                         # the owner told Zoe otherwise
 
@@ -546,6 +546,64 @@ def test_each_candidate_records_the_clock_and_zone_it_came_from(env):
     assert (e["clock"], e["tz"], e["at"]) == ("estimated", "Australia/Perth", "09:00") and c["confidence"] == 0.4
     (rv,) = env.db.rows("SELECT dropped FROM omi_day_reviews")
     assert json.loads(rv["dropped"])["tz"] == "Australia/Perth" and json.loads(rv["dropped"])["clocks"] == ["estimated"]
+
+
+def test_an_unreadable_authority_scan_writes_nothing(env, monkeypatch):
+    """Codex #2091: the conflict scan fails CLOSED at approval - a fact it could not check stays pending, never written."""
+    add_rec(env, "rec1", GOLDEN)
+    dr.set_llm(fake_model(GOLDEN_RULES))
+    review()
+    fid = next(c["id"] for c in cands(env) if c["kind"] == "owner_fact")
+    ingested, asked = [], []
+
+    class _Svc:
+        async def _protected_conflict(self, user_id, text, rank, **kw):
+            asked.append(kw.get("strict"))
+            raise RuntimeError("index unreadable")
+
+        async def ingest(self, text, **kw):
+            ingested.append(text)
+
+    import memory_service
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _Svc())
+    with pytest.raises(apply.ApplyError):
+        run(apply.approve(OWNER, fid))
+    assert asked == [True] and ingested == []
+    assert env.db.rows("SELECT status FROM omi_day_candidates WHERE id = ?", (fid,))[0]["status"] == "pending"
+
+
+def test_an_empty_edit_of_required_text_is_refused(env):
+    add_rec(env, "rec1", GOLDEN)
+    dr.set_llm(fake_model(GOLDEN_RULES))
+    review()
+    lid = next(c["id"] for c in cands(env) if c["kind"] == "list_item")
+    with pytest.raises(apply.ApplyError) as exc:
+        run(apply.approve(OWNER, lid, fields={"item": "   "}))
+    assert exc.value.status == 422 and exc.value.code == "empty_field:item"
+    assert env.db.rows("SELECT status FROM omi_day_candidates WHERE id = ?", (lid,))[0]["status"] == "pending"
+
+
+def test_an_untimed_event_is_a_duplicate_only_of_the_same_title(env):
+    env.db.conn.execute("INSERT INTO events (id, user_id, title, start_date, start_time, deleted) VALUES ('e1', ?, 'Dentist', '2026-10-16', '09:00', 0)", (OWNER,))
+    env.db.conn.commit()
+
+    def ev(title, time=""):
+        return dr.Candidate("calendar_event", {"title": title, "date": "2026-10-16", "time": time}, [], [], 0.5, "not_sure", "k")
+    assert run(dr._on_calendar(env.db, OWNER, ev("Lunch with Sam"))) is False          # a dentist on Friday is not lunch
+    assert run(dr._on_calendar(env.db, OWNER, ev("dentist"))) is True
+    assert run(dr._on_calendar(env.db, OWNER, ev("Lunch with Sam", "09:00"))) is False  # same time, nothing in common
+    assert run(dr._on_calendar(env.db, OWNER, ev("Dentist checkup", "09:00"))) is True
+
+
+def test_a_user_delete_erases_the_day_review_before_taking_the_memory_lock():
+    """Codex #2091 (P1): an approval writes under the erase gate and its ingest needs the memory lock. ``delete_user`` must run the
+    day review's erase (which takes the gate) BEFORE the lock: inside it, an approval in flight would deadlock it, and an approval
+    landing after the enumeration would survive the delete."""
+    src = (SVC / "memory_service.py").read_text()
+    body = src[src.index("    async def delete_user"):]
+    body = body[:body.index("\n    async def ", 10)]
+    assert body.index("omi_day_review.forget_user(user_id)") < body.index("async with lock:")
+    assert body.count("omi_day_review.forget_user") == 1
 
 
 # --- static guards ----------------------------------------------------------------------------------------------------------
