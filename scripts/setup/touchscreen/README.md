@@ -46,6 +46,19 @@ panel still runs the pre-hardening versions until these are deployed:
 > none of the provisioning files. They are kept for reference; decide whether to retire or
 > re-align them in a follow-up.
 
+## Away from home (P1): status gate, kiosk credential, firewall
+
+Runbook with every command: `docs/knowledge/panel-away-p1.md`. None of this is on the live panel until an operator runs it.
+
+- `zoe-kiosk-gate.py` + `systemd/zoe-kiosk-gate.service` + `install_kiosk_gate.sh` -> `/opt/TouchKio/`: a loopback
+  (`127.0.0.1:7781`) "can't reach Zoe" page the kiosk starts on when `config.json` has `gate_url`. Three lights (Wi-Fi, link
+  home, Zoe), one plain sentence, retries forever, opens Zoe when it answers. With `ZOE_KIOSK_CREDENTIAL=1` (and
+  `ZOE_PANEL_KIOSK_CREDENTIAL=1` on zoe-data) it trades the device token for the kiosk credential cookie, so the kiosk stays
+  "the panel" when its address changes. Without `gate_url`, `start-kiosk.sh` keeps its legacy ping-then-exit path.
+- `firewall/`: nftables table `inet zoe_panel_fw` (loopback, replies, `tailscale0`, the home subnet captured at install,
+  DHCP/ND/UDP 41641; everything else dropped; outbound open). `install_panel_firewall.sh --dry-run | --apply | --confirm |
+  --rollback | --status`; `--apply` arms a rollback timer and is not enabled at boot until `--confirm`.
+
 ## Files
 
 - `config.json` -> `/opt/TouchKio/config.json`

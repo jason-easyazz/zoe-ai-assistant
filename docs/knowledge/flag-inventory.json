@@ -2218,6 +2218,7 @@
           "services/zoe-data/auth.py",
           "services/zoe-data/auth_handoff.py",
           "services/zoe-data/mcp_server.py",
+          "services/zoe-data/panel_kiosk_credential.py",
           "services/zoe-data/zoe_core_client.py"
         ],
         "typed_env": true
@@ -2429,6 +2430,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KIOSK_GATE_PORT": {
+        "defaults": [
+          "'7781'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/touchscreen/zoe-kiosk-gate.py"
         ],
         "typed_env": false
       },
@@ -3920,6 +3931,46 @@
         "readers": [
           "scripts/maintenance/zoe_latency_probe.py",
           "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_KIOSK_CREDENTIAL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_kiosk_credential.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_KIOSK_CREDENTIAL_TTL_S": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_kiosk_credential.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_KIOSK_SECRET": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_kiosk_credential.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_KIOSK_TICKET_TTL_S": {
+        "defaults": [
+          "60"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_kiosk_credential.py"
         ],
         "typed_env": false
       },
