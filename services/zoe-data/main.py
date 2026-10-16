@@ -2225,6 +2225,10 @@ app.include_router(push_router)
 app.include_router(proactive_router)
 app.include_router(panel_auth_router)
 app.include_router(panel_provision_router)
+# The kiosk credential (panel-remote-access design 4.2): POST /api/panels/PANEL/kiosk-ticket + /api/panels/kiosk-enter.
+# Flag-dark (ZOE_PANEL_KIOSK_CREDENTIAL); both routes 404 while it is off.
+from routers.panel_kiosk import router as panel_kiosk_router
+app.include_router(panel_kiosk_router)
 # Registered AFTER panel_provision on purpose: that router's more specific
 # /api/panels/provision/{code} must win over /api/panels/{device_id}/config
 # (FastAPI matches routes in registration order).

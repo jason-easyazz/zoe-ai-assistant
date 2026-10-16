@@ -79,8 +79,13 @@ def _hash_token(raw: str) -> str:
 
 def lookup_device_token(raw_token: str) -> dict | None:
     """Check cache for a valid (non-revoked, non-expired) device token."""
-    h = _hash_token(raw_token)
-    info = _token_cache.get(h)
+    return lookup_device_token_hash(_hash_token(raw_token))
+
+
+def lookup_device_token_hash(token_hash: str) -> dict | None:
+    """``lookup_device_token`` by the stored SHA-256 - for a credential that was minted FROM a token (the kiosk credential,
+    ``panel_kiosk_credential``) and must die with it: revoking or expiring the token revokes everything minted from it."""
+    info = _token_cache.get(token_hash)
     if not info or info.get("revoked"):
         return None
     exp = info.get("expires_at")
