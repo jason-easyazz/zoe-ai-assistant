@@ -124,7 +124,7 @@ Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settin
 
 ### Ambient-memory field scan (Omi, Limitless, Bee, Plaud, Owl; 2026-10-17) — 💡 pinned
 - **Source:** [omi-gap-audit-2026-10.md](research/omi-gap-audit-2026-10.md) §3 (Omi read in source, the rest secondary). Borrow the PIECE; every item stays local and approve-before-write.
-- 💡 **Capture kind + owner + certainty on every day-review candidate**: Omi's `capture_kind` (explicit command / clear commitment / direct request / inferred next step), `capture_owner` (you / other / unknown), `due_certainty` (confirmed / tentative), `source_segment_ids`. A ready-made schema for the commitment-strength rule.
+- 💡 **Capture kind + owner + certainty on every day-review candidate**: Omi's `capture_kind` (explicit command / clear commitment / direct request / inferred next step), `capture_owner` (user / other / unknown), `due_certainty` (confirmed / tentative), `source_segment_ids`. A ready-made schema for the commitment-strength rule.
 - 💡 **"Not a person" voice answer**: tag an unknown-voice cluster as TV / radio / music / Zoe and stop asking; drop its segments from the review (Omi `speaker_tag_prompts.py`).
 - 💡 **Short-snippet discard bar**: under 2 minutes only clearly actionable stretches survive; a fragment that only continues the previous conversation is dropped (Omi `relevance.py`).
 - 💡 **Daily recap card**: unresolved questions, decisions made, things you promised, memories learned. Private view only, pulled not pushed (Omi `daily_summary.py`; the default is 22:00).

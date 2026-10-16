@@ -3,7 +3,7 @@ type: research
 title: Omi pendant gap audit - pendant to memory, the product field, bystanders, memory quality, scale, recall (2026-10-17)
 date: 2026-10-17
 status: research and audit only. No code, flag, table, route or live system was changed. Live reads were read-only and count-only (row counts, sums, timestamps; no transcript text was read). Findings are ranked P0/P1/P2 in section 1; owner decisions are in section 9.
-description: Owner request 2026-10-17, "maybe do a deep dive on anything you have missed", about Zoe hearing every conversation through the Omi pendant. Audits the whole path (pendant, Pi sync, transcription, storage, retention, backup, search, observability) and the two builds in flight (the day review and voice tagging), compares the ambient-memory products (Omi, Limitless, Bee, Plaud, Friend, open-source projects), consolidates the Western Australian law into one lawyer question, and lists what the day review must call into so it cannot bypass the memory rules. Every finding is tagged verified, secondary or unverified with its source.
+description: An owner request (2026-10-17) for a deep dive on anything missed about Zoe hearing every conversation through the Omi pendant. Audits the whole path (pendant, Pi sync, transcription, storage, retention, backup, search, observability) and the two builds in flight (the day review and voice tagging), compares the ambient-memory products (Omi, Limitless, Bee, Plaud, Friend, open-source projects), consolidates the Western Australian law into one lawyer question, and lists what the day review must call into so it cannot bypass the memory rules. Every finding is tagged verified, secondary or unverified with its source.
 tags: [omi, pendant, ambient, audit, privacy, memory, research]
 evidence_labels: "[V] verified: read in source on origin/main acca1f2e1, in the cached Omi source (opensrc, tag Omi_CV1_v3.0.21), or measured read-only on the live box | [S] secondary: press, vendor marketing or a summarising fetch | [U] unverified: reasoned or estimated, not measured"
 ---
@@ -31,7 +31,7 @@ invented. Live numbers are aggregates.
 | Time quality | 202 `device`, 71 `corrected`, 0 `estimated` (the device clock is now set) | [V] same |
 | Reviewed / kept | 0 reviewed, 0 kept-audio, 0 deleted | [V] same |
 | Pendant registry | 0 rows in `omi_devices` (attribution is by `ZOE_OMI_OWNER_USER_ID`) | [V] same; `.env` |
-| Last upload | 2026-10-16 00:36 UTC; out of range since | [V] same |
+| Last upload | more than a day before this audit (the pendant was out of range while it was written) | [V] same |
 | Pi while the pendant is away | about **85 failed connect attempts per hour**, about 256 `hcitool`/sudo journal lines per hour | [V] Pi journal, last hour |
 | Pi spool | `spool.sqlite3` is 252 MB, of which 63,977 of 64,413 pages are free (no VACUUM); 3,103 records held (one open recording) | [V] read-only SQLite open |
 | Jetson memory | MemAvailable 967 MB at one sample; live `ZOE_OMI_MIN_MEM_MB=1200`, so a new transcription job would have deferred at that moment | [V] `free -m`; `.env` |
@@ -74,7 +74,7 @@ mechanism, [U] for the hours.
   is, how much it overwrote, or its battery level.
 - The struggle detector reads conversation turns only (`struggle_signals.SIGNALS`) [V]. `zoe_ground_truth.sh` has
   no pendant check [V]. "No sync for 3 days" therefore goes unnoticed, as does "the pendant overwrote a day".
-- Live now: last upload 2026-10-16 [V].
+- Live now: no upload for more than a day when this was written [V].
 - **Next action:** one heartbeat per visit from `omi-sync`. Send `POST /api/omi/device-status` with
   `{last_seen, battery, ring_fill_pct, dropped_records, firmware, clock_offset_s}` (numbers only, device token).
   Store the latest row per pendant and return it on `GET /api/omi/recordings` and in Settings > Bluetooth.
@@ -155,13 +155,14 @@ not Hindsight.** [V]
   the microphone heard. It depends on P1-2 for correct times.
 - **Effort:** M.
 
-**P1-4. Deleting or forgetting does not reach the backups for about five weeks.** [V]
+**P1-4. Deleting or forgetting does not reach the backups for about five weeks.** [V] for the schedule, [U] for
+the day count (arithmetic)
 - `postgres-nightly-backup.sh` keeps 7 daily and 4 weekly dumps, on the box. `redact_backups.py` covers the palace
   exports and chat, not the Postgres dumps.
 - The design already excludes the **biometric** tables' data from the dump (memories-space §2.6 item 1). It does not
   exclude transcript text: `omi_recordings.transcript`, and soon `omi_segments.text` and the candidate
   `payload`/`evidence`.
-- A deleted recording, a forgotten name, or a bystander's words therefore stay restorable for up to about 35 days.
+- A deleted recording, a forgotten name, or a bystander's words therefore stay restorable for up to about 35 days [U: 7 dailies plus up to 4 weeklies, arithmetic].
   That conflicts with "forgotten means forever".
 - **Next action:** owner decision OD3. Option (i): `--exclude-table-data` for the pendant text tables. Transcripts
   are derived from audio that no longer exists, so a restore loses them; that is the honest cost. Option (ii): keep
@@ -247,7 +248,7 @@ empty (#2081). Its misses (quiet speech at distance) leave no trace at all, so r
 matches Omi and Plaud. Whether the household wants an upper bound, for example 12 months unless reviewed or kept, is
 owner decision OD4. **Effort:** S.
 
-**P2-7. People pages, a daily recap, and mood.** The field's most-used surfaces (section 3) are not in any Zoe plan
+**P2-7. People pages, a daily recap, and mood.** [S] The field's most-used surfaces (section 3) are not in any Zoe plan
 for pendant data. They are pinned as ideas (`docs/IDEAS.md`), not planned work.
 
 ## 2. The pipeline end to end, with failure modes
@@ -277,7 +278,7 @@ Status and privacy model first. Source: a field scan this session, with Omi read
 |---|---|---|---|
 | **Omi** (BasedHardware, MIT) | alive, very active | Cloud: transcripts in Firebase, audio in GCS, embeddings in Pinecone, text to OpenAI. "Enhanced" encryption is server-held HKDF, not end-to-end. `store_recording_permission` defaults off. Delete per conversation, memory, person, summary, account. No bystander logic, and the LED is a connection light [V] | The richest feature set; the backend is readable source |
 | **Limitless** (ex-Rewind) | Acquired by Meta, announced 2025-12-05. Sales stopped; support "throughout 2026"; withdrawn from the EU, UK and others [V limitless.ai] | Cloud. "Consent Mode" (records only voices that consented) is claimed [S/U] | End-of-life; the consent-mode idea is the piece |
-| **Bee** | Acquired by Amazon (2025) and still sold [S] | Vendor claims: audio processed then deleted, private by default [V vendor page, marketing] | Facts that learn patterns, a daily timeline with places, to-dos turned into drafts |
+| **Bee** | Acquired by Amazon (2025) and still sold [S] | Vendor claims: audio processed then deleted, private by default [S: vendor marketing on the vendor page] | Facts that learn patterns, a daily timeline with places, to-dos turned into drafts |
 | **Plaud** (NotePin, Note Pro) | alive; strongest for meetings | Regional "private cloud", no training on data, per-file deletion; bystanders get a "let others know" notice only [V privacy policy] | Large template library for meeting notes |
 | **Friend** | alive, marginal (about 3k units [S]) | Cloud LLM, claims no retention [S] | A companion, not a memory tool; nothing to borrow |
 | **Owl** (OwlAIProject) | experimental | Can run fully local (Whisper + Ollama) [V README] | Closest in spirit; VAD segmentation, learns your voice |
@@ -304,7 +305,8 @@ What Omi does that Zoe's design does not, read in its source (`/home/zoe/.opensr
    - A prior for build (b)'s thresholds, which today are 2 s windows.
 4. **A daily summary shape.** Headline, stats, highlights per topic, prioritised action items,
    **unresolved questions**, **decisions made**, memories learned (ids for a review card), and locations
-   (`backend/models/daily_summary.py`). The recap fires at 22:00 local by default.
+   (`backend/models/daily_summary.py`). The recap fires at 22:00 local by default
+   (`backend/database/notifications.py:169-171`).
 5. **Memory attribution and decay.** `subject_attribution` (user / third_party / unknown), uncertainty reasons,
    `half_life_days` / `valid_to`, and per-memory evidence. Identity rule: "if uncertain about a person's identity, DO
    NOT extract", never "Speaker 0".
@@ -327,18 +329,23 @@ The borrowable pieces are pinned in `docs/IDEAS.md` (section "Ambient-memory fie
 Not legal advice. Act text read on the WA legislation site (consolidation with amendments to 5 April 2023; the
 current compilation was not confirmed) [V]; commentary [S].
 
-- **WA requires the consent of every principal party, including when the recorder is a party.** Under s 5(1), a
-  person must not use a listening device:
-  - (a) to record a private conversation they are not a party to; or
-  - (b) to record one they **are** a party to.
-
-  For the party-recorder, the everyday exception is s 5(3)(c), the express or implied consent of **each** principal
-  party. There is also s 5(3)(d): one principal party consents and the recording is reasonably necessary to protect
-  that party's lawful interests. "Lawful interests" is undefined. Penalty for an individual: $5,000 or 12 months.
-  An always-on pendant engages both limbs: the wearer's own conversations and the ones overheard.
+- **WA is not a one-party-consent state.** Under s 5(1), a person must not use a listening device:
+  - (a) to record, monitor or listen to a private conversation they are **not** a party to; or
+  - (b) to record a private conversation they **are** a party to.
+- **The two limbs have different exceptions.**
+  - The s 5(3) exceptions apply to the **party-recorder limb (b)** only. The everyday one is s 5(3)(c): the express or
+    implied consent of **each** principal party. Separately, s 5(3)(d) is a one-party limb: one principal party
+    consents and the recording is reasonably necessary to protect that party's lawful interests. "Lawful interests"
+    is undefined.
+  - The **non-party limb (a)**, a conversation the wearer only overhears, has no s 5(3) consent route; only the
+    s 5(2) exceptions apply (warrants, emergencies, unintentional hearing and the like). So overheard bystander talk
+    is the sharper exposure, not the softer one.
+  - Penalty for an individual: $5,000 or 12 months. An always-on pendant engages both limbs [V Act text, read through
+    a summarising fetch; the limb-to-exception mapping was confirmed by the cross-review].
 - **"Private conversation"** excludes conversations where the parties ought reasonably to expect to be overheard. A
   family kitchen is likely private; a café queue may not be.
-- **s 9** separately prohibits communicating or publishing a record of a private conversation, with s 9(2) exceptions.
+- **s 9(1)** separately prohibits *knowingly* publishing or communicating a private conversation, or a record or report of
+  one, obtained through a listening device (directly or indirectly), with s 9(2) exceptions.
   A lawful recording still needs one of them to be shared. Whether moving it to one's own server is "communicating"
   is untested [U]. Zoe never shares, but a card or a Telegram message to the owner's phone is worth asking about.
 - **Privacy Act 1988 (Cth).** The household exemption (s 16) and the individual exemption (s 7B(1)) likely take a
@@ -353,12 +360,13 @@ current compilation was not confirmed) [V]; commentary [S].
 **The one lawyer question (D1, consolidated; send as is):**
 
 > I wear an always-on audio pendant in Western Australia. It records conversations around me, including with
-> household members (some of them children), visitors and bystanders. A server on my own hardware transcribes it,
+> household members (possibly including minors), visitors and bystanders. A server on my own hardware transcribes it,
 > extracts reminders and notes I approve, and keeps voiceprints of people I tag, for suggestions only. Nothing is
 > published or sent off my hardware.
-> (1) Under the Surveillance Devices Act 1998 (WA), is this unlawful under s 5(1)(a) and (b) unless every principal
-> party consents under s 5(3)(c)? Can that consent be implied by household awareness, a visible recording light, a
-> notice, or an easy pause? Can a parent consent for a child? Does s 5(3)(d) "lawful interests" ever cover day-to-day
+> (1) Under the Surveillance Devices Act 1998 (WA): for conversations I am a party to (s 5(1)(b)), is the consent of
+> every principal party under s 5(3)(c) the only practical route; and for conversations I only overhear (s 5(1)(a)),
+> does any exception apply at all, given that s 5(3) does not? Can the s 5(3)(c) consent be implied by household
+> awareness, a visible recording light, a notice, or an easy pause? Can a parent consent for a child? Does s 5(3)(d) "lawful interests" ever cover day-to-day
 > memory-aid use?
 > (2) Does moving the recording to my own server, or showing an extract on my own phone, "communicate" it under s 9?
 > (3) How do the Privacy Act's statutory tort (from 10 June 2025) and the household exemption apply to me as an
@@ -372,12 +380,13 @@ current compilation was not confirmed) [V]; commentary [S].
 - **Visible indicator**: the stock LED is solid red when *disconnected* and blue when connected, so "red" is in
   practice "recording to the card", and nobody around knows that. Phase-2 firmware turns the LED into a recording
   light (firmware research §8.4).
-- **The household is told.**
+- **Tell the people the wearer lives with** (a practice, not a feature).
 - **A pause that works**: the 3 s power-off today; P1-3's off-the-record window on the Zoe side; press-to-record
   later.
 - **Auto-drop in sensitive places**: P1-3, calendar and zones.
 - **Delete on request**: P1-3's time-range delete.
-- **Kids**: no child wears a pendant (D14); a child's voice is not learned by default (D16).
+- **Minors**: the design's recommended defaults are that no child account wears a pendant (D14) and that a child's
+  voice is not learned (D16); both are still open in `memories-space.md` §11.
 - **Not worn in others' homes or workplaces** until the lawyer answers (D2's "alone or with people who know").
 
 ## 5. Memory quality: what the day review must call into
@@ -409,8 +418,8 @@ Numbers from the live aggregates (section 0) plus arithmetic [U where marked]:
 | Item | Per day of heavy wear (about 12 h of recorded audio) | Notes |
 |---|---|---|
 | Opus on the pendant / Pi spool | about 170 MB [U] (32 kbit/s ceiling) | The spool file keeps its high-water size (P2-2). The Pi SD has 13 GB free [V] |
-| WAV staged in zoe-data | about 1.4 GB transient (16 kHz s16 = 115 MB/h) | Deleted after a non-empty transcript. The disk has 1.3 TB free [V] |
-| Transcript text | about 180 KB (4.2 chars/s [V]) | About 66 MB a year. The table is 528 kB today [V] |
+| WAV staged in zoe-data | about 1.4 GB transient [U] (16 kHz s16 = 115 MB/h) | Deleted after a non-empty transcript. The disk has 1.3 TB free [V] |
+| Transcript text | about 180 KB [U] (4.2 chars/s [V]) | About 66 MB a year [U]. The table is 528 kB today [V] |
 | Segment embeddings (build b) | a few MB to about 40 MB [U] (depends on window and hop; 14-day TTL) | Excluded from backups by design |
 | Moonshine time | unmeasured under the gates (P1-6) | Shares the voice model; a running job yields per chunk |
 | 4B evening lane | at most 8 calls per batch (design) | Cancel-on-turn and the prewarm loss are unmeasured (E9) |
