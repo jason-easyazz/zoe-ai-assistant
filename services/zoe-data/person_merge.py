@@ -44,6 +44,31 @@ _SATELLITE_TABLES = (
 )
 
 
+# The contact model (migration 0053): owner-scoped rows that hang off a person. Re-pointed only where the tables exist
+# (probed from the catalog BEFORE the merge transaction - a failing probe would poison an open Postgres transaction).
+_CONTACT_REPOINTS = (
+    ("contact_fields", "UPDATE contact_fields SET person_id=$1 WHERE person_id=$2 AND user_id=$3",
+     "UPDATE contact_fields SET person_id=? WHERE person_id=? AND user_id=?"),
+    ("person_contact_links", "UPDATE person_contact_links SET person_id=$1 WHERE person_id=$2 AND user_id=$3",
+     "UPDATE person_contact_links SET person_id=? WHERE person_id=? AND user_id=?"),
+    ("contact_merge_reviews", "UPDATE contact_merge_reviews SET person_id=$1 WHERE person_id=$2 AND user_id=$3",
+     "UPDATE contact_merge_reviews SET person_id=? WHERE person_id=? AND user_id=?"),
+)
+
+
+async def _contact_tables_present(db) -> bool:
+    try:
+        rows = await _fetchall(
+            db,
+            "SELECT to_regclass('contact_fields') IS NOT NULL AND to_regclass('learned_voiceprints') IS NOT NULL",
+            "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table' AND name IN ('contact_fields', 'learned_voiceprints')",
+            (),
+        )
+    except Exception:  # noqa: BLE001 - cannot tell: the merge goes on without the contact re-point, as before 0053
+        return False
+    return bool(rows) and bool(rows[0][0])
+
+
 class PersonMergeError(Exception):
     """Merge cannot proceed (missing person, same id, cross-user). Endpoint → 404/400."""
 
@@ -177,8 +202,33 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str, *,
     if target is None:
         raise PersonMergeError(f"target person {target_id!r} not found for this user")
 
+    contacts_present = await _contact_tables_present(db)
+
     async def _apply() -> tuple[dict, int, int]:
         repointed: dict[str, int] = {}
+
+        # ── 2b. The contact model (0053): fields, links, reviews; the voiceprint the member's tagging taught. A voiceprint is
+        # never AVERAGED across a merge (a wrong merge must not poison it): the survivor keeps its own for a model, the
+        # duplicate's moves only where the survivor has none, and the colliding leftover is erased.
+        if contacts_present:
+            for table, sql_pg, sql_q in _CONTACT_REPOINTS:
+                repointed[table] = await _exec(db, sql_pg, sql_q, (target_id, source_id, user_id))
+            repointed["learned_voiceprints"] = await _exec(
+                db,
+                "UPDATE learned_voiceprints SET people_id=$1 WHERE people_id=$2 AND owner_user_id=$3 AND NOT EXISTS "
+                "(SELECT 1 FROM learned_voiceprints t WHERE t.owner_user_id=$4 AND t.people_id=$5 "
+                "AND t.model_id=learned_voiceprints.model_id)",
+                "UPDATE learned_voiceprints SET people_id=? WHERE people_id=? AND owner_user_id=? AND NOT EXISTS "
+                "(SELECT 1 FROM learned_voiceprints t WHERE t.owner_user_id=? AND t.people_id=? "
+                "AND t.model_id=learned_voiceprints.model_id)",
+                (target_id, source_id, user_id, user_id, target_id),
+            )
+            await _exec(
+                db,
+                "DELETE FROM learned_voiceprints WHERE people_id=$1 AND owner_user_id=$2",
+                "DELETE FROM learned_voiceprints WHERE people_id=? AND owner_user_id=?",
+                (source_id, user_id),
+            )
 
         # ── 2. Re-point satellite tables ─────────────────────────────────────
         for table in _SATELLITE_TABLES:
