@@ -227,8 +227,11 @@ into `~/.opensrc/repos/`.
 
 ### 3.1 Getting the real origin at fill time
 
-- **CDP:** `Page.getFrameTree` returns frames with `id`, `parentId`, `url`, `securityOrigin` and
+- **CDP:** `Page.getFrameTree` returns frames with `id`, `parentId`, `loaderId`, `url`, `securityOrigin` and
   `domainAndRegistry`, the browser's own eTLD+1. `Target.getTargetInfo` exists [verified, `browser_protocol.json`].
+  `DOM.Node.frameId` is set only for frame-owner elements such as an `iframe`, so it cannot name an input's frame
+  [cross-review finding, consistent with the protocol's field description]. The broker therefore locates fields from
+  per-frame isolated worlds (`Page.createIsolatedWorld`), where the owning frame is known by construction.
   A cross-origin iframe usually runs out of process as its own target, so the broker must look at child targets too
   [unverified; lab V1 checks it].
 - **Playwright** 1.59: `page.main_frame`, `page.frames`, `frame.url`, `frame.parent_frame` (null for main or detached
@@ -333,8 +336,7 @@ record section 6, and the operator's own topology notes):
   at creation. That gap has caused an outage before. Moving every secret into one rotation record (design S1)
   answers this.
 - **Exposure:** every one of those files is readable by every process running as `zoe`, which includes coding
-  agents. The owner brief names a GitHub token leak on 2026-10-16 as the motivating example. This record does not
-  describe that incident: it is not recorded in the repository, and it should not be.
+  agents. A leaked long-lived access token is the motivating class.
 - **Recommendation:** do not make services fetch secrets from a vault at boot. That couples the voice stack's start
   to a password manager, and it creates a circular dependency the moment the vault uses Postgres. Instead:
   - the owner's vault holds the master copy and rotation notes;
