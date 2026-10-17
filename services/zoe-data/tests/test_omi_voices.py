@@ -349,6 +349,16 @@ def test_a_suggestion_is_not_a_tag_until_the_member_says_yes(env, monkeypatch):
     assert vp["status"] == "confirmed" and vp["segments"] == 3 and vp["last_confirmed_at"]
 
 
+def test_a_contact_edited_into_a_child_after_learning_is_never_suggested(env, monkeypatch):
+    cid = _sam_cluster(env, monkeypatch)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    env.db.conn.execute("UPDATE people SET relationship = 'son' WHERE id = ?", (pid,))
+    env.db.conn.commit()
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, 9, 0.3))))
+    (seg,) = [s for s in run(_segs(rid)) if s["speaker"] == "other"]
+    assert seg["suggested_person_id"] is None
+
+
 def test_no_raises_the_bar_and_learns_nothing(env, monkeypatch):
     cid = _sam_cluster(env, monkeypatch)
     env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})

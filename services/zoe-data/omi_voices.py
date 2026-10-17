@@ -239,10 +239,12 @@ async def learn(db, user_id: str, ids: list[str], segs: list, *, model_id: str, 
 
 # --- suggestions (a suggestion is NEVER a tag) -------------------------------------------------------------------------------
 async def _voiceprints_for_suggest(db, user_id: str, model_id: str) -> list[dict]:
-    rows = await _all(db, "SELECT v.people_id, v.embedding, v.rejections FROM learned_voiceprints v JOIN people p ON p.id = v.people_id "
-                          "WHERE v.owner_user_id = ? AND v.model_id = ? AND v.learning_enabled = 1 AND p.user_id = ? "
-                          "AND (p.deleted = 0 OR p.deleted IS NULL)", (user_id, model_id, user_id))
-    return [dict(person=r[0], v=_unit(_vec(r[1])), rej=int(r[2] or 0)) for r in rows]
+    rows = await _all(db, "SELECT v.people_id, v.embedding, v.rejections, p.relationship, p.birthday FROM learned_voiceprints v "
+                          "JOIN people p ON p.id = v.people_id WHERE v.owner_user_id = ? AND v.model_id = ? AND v.learning_enabled = 1 "
+                          "AND p.user_id = ? AND (p.deleted = 0 OR p.deleted IS NULL)", (user_id, model_id, user_id))
+    # a contact edited into a child AFTER their voice was learned is never suggested (the label-only child rule holds after edits)
+    return [dict(person=r[0], v=_unit(_vec(r[1])), rej=int(r[2] or 0)) for r in rows
+            if not person_may_be_child({"relationship": r[3], "birthday": r[4]})]
 
 
 def suggest(e: np.ndarray, prints: list[dict]) -> Optional[tuple[str, float]]:
