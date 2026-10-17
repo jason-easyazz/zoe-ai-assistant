@@ -64,7 +64,7 @@ DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", 
                       "calendar_attendees"))
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
-              "calendar_attendees", "restraint_mutes", "commitments", "omi_recordings")
+              "calendar_attendees", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review")
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -186,12 +186,19 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
 
         return await omi_recordings.erase_entity(user_id, rx, strict=True)
 
+    async def omi_review() -> int:
+        import omi_day_review
+
+        return await omi_day_review.erase_entity(user_id, rx, strict=True)
+
     if want("restraint_mutes"):
         await _step("restraint_mutes", mutes, res)
     if want("commitments"):
         await _step("commitments", commitments_, res)
     if want("omi_recordings"):
         await _step("omi_recordings", omi, res)
+    if want("omi_day_review"):
+        await _step("omi_day_review", omi_review, res)
 
 
 async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:

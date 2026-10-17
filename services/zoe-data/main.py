@@ -1228,6 +1228,12 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_omi_rec.run_loop(), name="omi_transcription")
     except Exception as _omi_exc:
         logger.warning("omi transcription loop not started (non-fatal): %s", _omi_exc)
+    try:  # the pendant day review's DAYTIME fallback lane (flag-dark ZOE_OMI_DAY_REVIEW; the night window is the primary lane)
+        import omi_day_review as _omi_dr
+        if _omi_dr.enabled() and _omi_dr.lane() != "night":
+            asyncio.create_task(_omi_dr.run_loop(), name="omi_day_review")
+    except Exception as _omi_dr_exc:
+        logger.warning("omi day review loop not started (non-fatal): %s", _omi_dr_exc)
 
     # Runtime health probe — run once immediately, then refresh every 5 min
     await _probe_runtimes()
@@ -2286,6 +2292,8 @@ _persona_router.register(app)
 # when ZOE_OMI_SYNC_ENABLED is on — flag off = 404. Calls the existing Moonshine helper; the voice path is untouched.
 from routers import omi_recordings as _omi_router  # noqa: E402
 _omi_router.register(app)
+from routers import omi_day_review as _omi_dr_router  # noqa: E402
+_omi_dr_router.register(app)
 
 # Contact cards (flag-dark): the member's own multi-value contact fields with provenance, vCard export/import and the merge-review
 # queue (migration 0053, contacts_store.py). Mounted ONLY when ZOE_CONTACTS_API is on — flag off = 404. No sync engine.

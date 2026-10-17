@@ -562,6 +562,7 @@
           "services/zoe-data/digest_pack.py",
           "services/zoe-data/memory_digest.py",
           "services/zoe-data/night_mind.py",
+          "services/zoe-data/omi_day_review.py",
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": true
@@ -3756,6 +3757,66 @@
           "services/zoe-data/omi_devices.py"
         ],
         "typed_env": true
+      },
+      "ZOE_OMI_DAY_REVIEW": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMI_DAY_REVIEW_IDLE_S": {
+        "defaults": [
+          "600"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMI_DAY_REVIEW_LANE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMI_DAY_REVIEW_MAX_AGE_DAYS": {
+        "defaults": [
+          "7"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMI_DAY_REVIEW_MAX_CALLS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMI_DAY_REVIEW_MIN_MEM_MB": {
+        "defaults": [
+          "1000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
       },
       "ZOE_OMI_DEVICE_OWNERS": {
         "defaults": [
