@@ -345,6 +345,25 @@ async def _resolve_person(db, user_id: str, person_id: Optional[str], name: Opti
     return {"id": pid, "name": clean, "birthday": None, "relationship": None, "created": True}
 
 
+async def _release_contributions(db, user_id: str, seg_ids: list[str], *, keep_person: Optional[str] = None) -> list[tuple]:
+    """Take these segments' contributions out of the member's voiceprints (all of them, or all but ``keep_person``'s) and REBUILD
+    each voiceprint that lost one - the print goes when none is left. A re-tag or a "not a person" correction must un-learn what
+    the first tag taught. Returns ``(segment_id, model_id, embedding)`` of what was released so a re-tag can hand it to the new
+    person (the held embedding was deleted at the first tag, so the contribution is the only copy)."""
+    sql = ("SELECT c.voiceprint_id, c.segment_id, v.model_id, c.embedding FROM learned_voiceprint_segments c "
+           "JOIN learned_voiceprints v ON v.id = c.voiceprint_id WHERE v.owner_user_id = ? "
+           f"AND c.segment_id IN ({_qs(len(seg_ids))})")
+    params: list = [user_id, *seg_ids]
+    if keep_person:
+        sql, params = sql + " AND v.people_id != ?", params + [keep_person]
+    rows = await _all(db, sql, tuple(params))
+    for vp, sid, _model, _blob_ in rows:
+        await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, sid))
+    for vp in sorted({r[0] for r in rows}):
+        await rebuild(db, vp)
+    return [(r[1], r[2], r[3]) for r in rows]
+
+
 async def tag(db, user_id: str, *, person_id: Optional[str] = None, name: Optional[str] = None, cluster_id: Optional[str] = None,
               segment_id: Optional[str] = None, source: str = "owner") -> dict:
     """The member says who a voice is. Every named segment gets the CONFIRMED tag; the person is the member's own (picked, or
@@ -360,11 +379,13 @@ async def tag(db, user_id: str, *, person_id: Optional[str] = None, name: Option
     person = await _resolve_person(db, user_id, person_id, name, f"omi_tag:{key}")
     seg_ids = [s[0] for s in segs]
     now = _iso(_now())
+    moved = await _release_contributions(db, user_id, seg_ids, keep_person=person["id"])         # a RE-tag: the old person un-learns it
     await _run(db, f"UPDATE omi_segments SET tagged_person_id = ?, tag_source = ?, tagged_at = ?, suggested_person_id = NULL, "
                    f"suggested_score = NULL, voice_cluster_id = NULL WHERE user_id = ? AND id IN ({_qs(len(seg_ids))})",
                (person["id"], source, now, user_id, *seg_ids))
     embs = await _all(db, f"SELECT segment_id, model_id, embedding FROM omi_segment_embeddings WHERE user_id = ? "
                           f"AND segment_id IN ({_qs(len(seg_ids))})", (user_id, *seg_ids))
+    embs = [*embs, *moved]                       # what a re-tag released joins the new person's print (when learning is allowed)
     learning = "off"
     if person_may_be_child(person):
         learning = "label_only_child"
@@ -433,9 +454,16 @@ async def mark_not_a_person(db, user_id: str, *, kind: str, cluster_id: Optional
         where, key = "voice_cluster_id = ?", cluster_id
     else:
         where, key = "id = ?", segment_id
+    clear_tag = ""
+    if kind is not None:                         # a tagged line the member now calls TV / Zoe / media: untag it and un-learn it
+        tagged = [r[0] for r in await _all(db, f"SELECT id FROM omi_segments WHERE user_id = ? AND {where} AND tagged_person_id IS NOT NULL",
+                                           (user_id, key))]
+        if tagged:
+            await _release_contributions(db, user_id, tagged)
+        clear_tag = ", tagged_person_id = NULL, tag_source = NULL, tagged_at = NULL"
     await _run(db, f"DELETE FROM omi_segment_embeddings WHERE user_id = ? AND segment_id IN (SELECT id FROM omi_segments WHERE "
                    f"user_id = ? AND {where})", (user_id, user_id, key))
-    n = await _run(db, f"UPDATE omi_segments SET not_person = ?, suggested_person_id = NULL, suggested_score = NULL WHERE user_id = ? "
+    n = await _run(db, f"UPDATE omi_segments SET not_person = ?, suggested_person_id = NULL, suggested_score = NULL{clear_tag} WHERE user_id = ? "
                        f"AND {where}", (kind, user_id, key))
     await db.commit()
     if not n and segment_id:
