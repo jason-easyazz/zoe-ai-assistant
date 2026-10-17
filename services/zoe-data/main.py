@@ -13,6 +13,7 @@ from gemma_endpoint import gemma_base
 from typed_env import env_float, env_int, env_list, env_str
 from push import broadcaster
 from auth import require_internal_token
+import relay_ingress
 from routers import (
     calendar_router,
     lists_router,
@@ -2136,7 +2137,10 @@ def _allowed_browser_origins() -> frozenset[str]:
     here cannot leave the HTTP and WebSocket policies inconsistent.
     """
     extra = env_list("ZOE_ALLOWED_WS_ORIGINS")
-    return frozenset(ALLOWED_ORIGINS) | _SELF_LAN_ORIGINS | frozenset(extra)
+    # The relay origin (https://<hid>.zoe.internal, from ZOE_RELAY_HOSTNAME) joins ONLY while ZOE_RELAY_INGRESS is on: the kiosk
+    # opened over the relay presents it, and without it the push socket refuses the kiosk (the 2026-07-03 incident class).
+    relay_origin = relay_ingress.origin()
+    return frozenset(ALLOWED_ORIGINS) | _SELF_LAN_ORIGINS | frozenset(extra) | (frozenset({relay_origin}) if relay_origin else frozenset())
 
 
 def _ws_origin_allowed(websocket: WebSocket) -> bool:
@@ -2192,6 +2196,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Relay ingress gate (flag-dark, ZOE_RELAY_INGRESS - a no-op while it is off). Added LAST so it is the OUTERMOST middleware: a
+# relayed request without a bound client certificate AND a matching device credential is refused before CORS or any route runs.
+app.add_middleware(relay_ingress.RelayIngressMiddleware)
+
 app.include_router(calendar_router)
 app.include_router(lists_router)
 app.include_router(people_router)
@@ -2229,6 +2237,9 @@ app.include_router(panel_provision_router)
 # Flag-dark (ZOE_PANEL_KIOSK_CREDENTIAL); both routes 404 while it is off.
 from routers.panel_kiosk import router as panel_kiosk_router
 app.include_router(panel_kiosk_router)
+# Relay client-certificate binding (panel-anywhere R1): /api/panels/PANEL/client-certs. 404 while ZOE_RELAY_INGRESS is off.
+from routers.panel_relay import router as panel_relay_router
+app.include_router(panel_relay_router)
 # Registered AFTER panel_provision on purpose: that router's more specific
 # /api/panels/provision/{code} must win over /api/panels/{device_id}/config
 # (FastAPI matches routes in registration order).

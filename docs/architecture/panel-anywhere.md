@@ -2,7 +2,7 @@
 type: design
 title: Panel anywhere - any household pairs a touch panel to its own Zoe and takes it anywhere, through one shared end-to-end encrypted relay
 date: 2026-10-16
-status: design only; nothing built, nothing changed on any live system. Every phase is lab-proven in a hermetic lab first, and each Zoe-side code change ships flag-dark.
+status: design; nothing changed on any live system. Every phase is lab-proven in a hermetic lab first, and each Zoe-side code change ships flag-dark. R1 box side (zoe-data relay ingress, the nginx relay listener, the certificate registry, the frpc check, the household CA tooling) built flag-dark 2026-10-17 in branch feature/relay-r1-ingress; record and owner steps in docs/knowledge/panel-relay-r1-box.md; C3 and the panel side are pending.
 evidence: docs/research/panel-anywhere-2026-10.md (sources tagged verified/secondary/unverified; snitun 0.47.0, hass-nabucasa 2.7.0 and frp v0.71.0 read in source)
 builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link, Wi-Fi onboarding, away mode, panel firewall), services/zoe-data/panel_kiosk_credential.py + routers/panel_kiosk.py (#2082), routers/panel_provision.py + routers/panel_auth.py (pairing, device tokens), routers/ha_control.py + auth.get_current_user (the guest fallback this design must not inherit)
 depends_on: PR #2083 (still open) - the Headscale bundle scripts/setup/remote-access/headscale/ (the trip stopgap and the lab-harness pattern) lands with #2083; every reference to it below is marked so. #2080 is merged: panel-remote-access.md and its research are on main.

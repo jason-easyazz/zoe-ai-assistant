@@ -42,6 +42,7 @@ import os
 from typing import Any, Mapping, Optional
 
 import panel_kiosk_credential
+import relay_ingress
 
 logger = logging.getLogger(__name__)
 
@@ -110,11 +111,23 @@ def _in_nets(addr: str, nets: list) -> bool:
     return any(ip in net for net in nets)
 
 
+def peer_is_trusted_proxy(peer: str) -> bool:
+    """True when the TCP peer is a proxy we run (``ZOE_TRUSTED_PROXY_NETS``; default loopback + the docker ``172.16/12``). The one
+    rule behind both ``X-Real-IP`` and the relay ingress marker (``relay_ingress.is_relay``): a header nginx sets is believed only
+    from nginx's side of the wire."""
+    return bool(peer) and _in_nets(peer, _networks(os.environ.get("ZOE_TRUSTED_PROXY_NETS", _DEFAULT_PROXY_NETS)))
+
+
 def trusted_client_ip(request: Any) -> str:
-    """The caller's address. ``X-Real-IP`` only when the TCP peer is a proxy of ours; otherwise the peer itself."""
+    """The caller's address. ``X-Real-IP`` only when the TCP peer is a proxy of ours; otherwise the peer itself.
+
+    A RELAYED request (``relay_ingress.is_relay``) has NO address: the relay hides the client and nginx's relay listener sends no
+    ``X-Real-IP`` / ``X-Forwarded-For``, so the peer here is just the nginx container. It returns "" and can match no
+    ``panels.ip_address`` (the panel is proven by its device credential and certificate, never located)."""
+    if relay_ingress.is_relay(request):
+        return ""
     peer = request.client.host if getattr(request, "client", None) else ""
-    nets = _networks(os.environ.get("ZOE_TRUSTED_PROXY_NETS", _DEFAULT_PROXY_NETS))
-    if peer and _in_nets(peer, nets):
+    if peer_is_trusted_proxy(peer):
         real = str(request.headers.get("x-real-ip", "") or "").strip()
         if real:
             return real
@@ -181,6 +194,8 @@ async def is_panel_guest(request: Any, user: Mapping[str, Any] | None, db: Any =
     kiosk_panel = panel_kiosk_credential.credential_panel_id(request)
     if kiosk_panel and await _with_registry(db, _kiosk_panel_allows_guest, kiosk_panel):
         return True
+    if relay_ingress.is_relay(request):
+        return False  # a relayed request is never matched by address, and never satisfies the ``lan`` scope
     client_ip = trusted_client_ip(request)
     if mode == "lan":
         try:
@@ -232,7 +247,17 @@ def is_member(user: Mapping[str, Any] | None) -> bool:
 
 
 async def may_control_home(request: Any, user: Mapping[str, Any] | None, db: Any = None) -> bool:
-    """True when this request may drive Home Assistant (or read its entity states): a member, or the panel. Never raises."""
+    """True when this request may drive Home Assistant (or read its entity states): a member, or the panel. Never raises.
+
+    Over the RELAY it is a verified member only (panel-anywhere 5.2, the away-mode rule enforced at the server): the panel
+    principal - a device token or kiosk credential, which a stolen panel carries - does not open the house from afar, and
+    ``ZOE_HA_CONTROL_SCOPE=open`` (a LAN rollback) does not reach the relay."""
+    try:
+        if relay_ingress.is_relay(request):
+            return is_member(user)
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        logger.warning("panel_principal: relay home-control check failed (%s) - refusing", type(exc).__name__)
+        return False
     if home_control_scope() == "open":
         return True
     if is_member(user):
