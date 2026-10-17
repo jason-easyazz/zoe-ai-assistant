@@ -42,8 +42,18 @@ def _ha_url() -> str:
     return os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007").rstrip("/")
 
 
+def _turn_refused(what: str) -> bool:
+    """Home control on a turn (2026-10-18): True when this turn's entry point recorded a caller that is neither a member nor
+    the panel (``panel_principal.home_control_refused``). The executor-level backstop: nothing reaches the bridge then."""
+    import panel_principal
+
+    return panel_principal.home_control_refused(what)
+
+
 async def _ha_get(path: str) -> Any:
     """GET a bridge path. Returns parsed JSON or None on any failure."""
+    if _turn_refused(f"GET {path.split('?', 1)[0]}"):
+        return None
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as c:
             r = await c.get(f"{_ha_url()}{path}")
@@ -58,6 +68,8 @@ async def _ha_get(path: str) -> Any:
 
 async def _ha_post(path: str, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
     """POST a bridge command. Returns parsed JSON on success, None on any failure."""
+    if _turn_refused(f"POST {path}"):
+        return None
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as c:
             r = await c.post(f"{_ha_url()}{path}", json=payload)
@@ -616,6 +628,20 @@ async def resolve_smart_home(
     action = getattr(intent, "action", "status")
     query = (getattr(intent, "query", "") or "").strip()
     entity_id = (getattr(intent, "entity_id", "") or "").strip()
+
+    # Home control on a turn (2026-10-18): a caller that is neither a member nor the panel gets a polite "sign in" - no read,
+    # no command, no device-setup QR. Checked first, so the refusal is spoken instead of an "I couldn't reach the hub".
+    import panel_principal
+
+    if _turn_refused(f"smart_home {action}"):
+        return {
+            "handled": True,
+            "auth_required": True,
+            "intent": {"domain": "smart_home", "action": action},
+            "spoken_summary": panel_principal.HOME_CONTROL_REFUSAL,
+            "cards": [],
+            "actions": [],
+        }
 
     # "Add a device" is answerable even if the hub is momentarily unreachable — it
     # just shows a QR for the owner's phone, so resolve it before the hub read.

@@ -31,7 +31,8 @@ for a panel whose ``ip_address`` is not on file: any private-LAN client holding 
 behaviour (no guest ever touches a list).
 
 Voice/chat/skybridge turns carry the verdict as a per-request ContextVar (``mark_panel_turn``) because ``execute_intent`` and the
-skybridge resolvers take a bare ``user_id``; the request-level entry points that have authenticated the channel set it.
+skybridge resolvers take a bare ``user_id``; the request-level entry points that have authenticated the channel set it. Home
+control rides a second, stricter ContextVar (``record_turn_home_control`` / ``home_control_refused``, at the bottom).
 """
 from __future__ import annotations
 
@@ -244,3 +245,47 @@ async def may_control_home(request: Any, user: Mapping[str, Any] | None, db: Any
     except Exception as exc:  # noqa: BLE001 - fail closed
         logger.warning("panel_principal: home-control panel check failed (%s) - refusing", type(exc).__name__)
         return False
+
+
+# ── Home control on a TURN: chat, the voice WebSocket, the voice HTTP lanes, the brain's intent dispatch ─────────────────────
+#
+# Security fix 2026-10-18 (the turn half of the 2026-10-17 fix above): ``/api/ha/control`` refused an anonymous LAN caller, but
+# the same caller could say "turn off the lights" to ``POST /api/chat`` or ``/ws/voice/`` and reach Home Assistant through
+# ``intent_router`` / ``smart_home_service`` / the legacy agent's ``ha_control`` tool. Those executors take a bare ``user_id`` (a
+# guest at the panel and an anonymous phone are both ``guest``), so the verdict travels the way ``mark_panel_turn`` does: each
+# TURN ENTRY POINT records ``may_control_home`` for its caller (``record_turn_home_control``) and every Home Assistant executor
+# checks it at the moment it would act (``home_control_refused``). Tri-state: unset = not a turn (a scheduler, or an HTTP route
+# that gates itself such as ``/api/ha/control``) = unchanged; False = refuse; True = allow. Rollback: ZOE_HA_CONTROL_SCOPE=open.
+
+HOME_CONTROL_REFUSAL = "I can only control the house for someone in the household. Sign in, or ask me from the wall panel."
+
+_home_control_turn: contextvars.ContextVar[Optional[bool]] = contextvars.ContextVar("zoe_home_control_turn", default=None)
+
+
+def record_home_control(allowed: bool) -> None:
+    """Record, for the rest of THIS request's context, whether the turn's caller may drive the house."""
+    _home_control_turn.set(bool(allowed))
+
+
+def home_control_verdict() -> Optional[bool]:
+    return _home_control_turn.get()
+
+
+def home_control_refused(what: str = "") -> bool:
+    """True when THIS turn's entry point recorded a caller that may not drive the house. Every Home Assistant executor calls
+    it right before it acts. ``ZOE_HA_CONTROL_SCOPE=open`` never refuses (read per call)."""
+    if _home_control_turn.get() is not False or home_control_scope() == "open":
+        return False
+    logger.warning("home control refused%s: the turn's caller is neither a member nor the panel", f" ({what})" if what else "")
+    return True
+
+
+async def record_turn_home_control(request: Any, user: Mapping[str, Any] | None, db: Any = None) -> bool:
+    """Turn entry points: judge the caller with ``may_control_home`` and record the verdict. Returns it. Never raises."""
+    try:
+        allowed = await may_control_home(request, user, db)
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        logger.warning("panel_principal: turn home-control check failed (%s) - refusing", type(exc).__name__)
+        allowed = False
+    record_home_control(allowed)
+    return allowed

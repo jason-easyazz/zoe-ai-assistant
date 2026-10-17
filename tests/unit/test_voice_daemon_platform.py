@@ -44,7 +44,8 @@ _ENV = ("PANEL_PLATFORM", "HEALTH_BIND", "HEALTH_PORT", "CF_ACCESS_CLIENT_ID",
         "CF_ACCESS_CLIENT_SECRET", "AUDIO_DEVICE", "AUDIO_OUTPUT_DEVICE", "MIC_DEVICE_INDEX",
         "DEVICE_TOKEN", "BARGE_DUCK_ENABLED", "BARGE_DUCK_DB", "BARGE_DUCK_RAMP_MS",
         "BARGE_COMMIT_SPEECH_MS", "BARGE_RESUME_SILENCE_MS", "BARGE_DECIDE_MAX_MS",
-        "BARGE_IN_THRESHOLD", "CHUNK_SIZE", "SAMPLE_RATE", "ZOE_VOICE_LOG", "WAKE_BEEP_ENABLED")
+        "BARGE_IN_THRESHOLD", "CHUNK_SIZE", "SAMPLE_RATE", "ZOE_VOICE_LOG", "WAKE_BEEP_ENABLED",
+        "ACTIVATE_GUARD", "ACTIVATE_ALLOWED_ORIGINS", "ZOE_URL")
 
 
 def _load_daemon(name: str):
@@ -642,12 +643,47 @@ def test_pi_without_the_secret_starts_as_before(pi):
 ])
 def test_mac_activate_needs_a_loopback_host_and_the_zoe_origin(mac, monkeypatch, host, origin, want):
     monkeypatch.setattr(mac, "ZOE_URL", "https://zoe.the411.life")
-    assert mac._activate_request_allowed(host, origin) is want
+    assert mac._activate_request_allowed(host, origin, "127.0.0.1") is want
 
 
-@pytest.mark.parametrize("host,origin", [("evil.example", "https://evil.example"), (None, "null"), ("x", None)])
-def test_pi_activate_is_unchecked_exactly_as_before(pi, host, origin):
-    assert pi._activate_request_allowed(host, origin) is True
+# ── 2026-10-18: the Pi gets the same guard, plus the peer check a LAN device cannot forge ──────────────────────────────────
+
+@pytest.mark.parametrize("host,origin,want", [
+    ("127.0.0.1:7777", None, True),
+    ("localhost:7777", "https://192.168.1.218", True),                # the kiosk's touch page (ZOE_URL's origin)
+    ("localhost:7777", "https://evil.example", False),
+    ("evil.example:7777", None, False),
+    (None, "null", False),
+])
+def test_pi_activate_needs_a_loopback_host_and_the_zoe_origin(pi, monkeypatch, host, origin, want):
+    monkeypatch.setattr(pi, "ZOE_URL", "https://192.168.1.218")
+    assert pi._activate_request_allowed(host, origin, "127.0.0.1") is want
+
+
+@pytest.mark.parametrize("peer,want", [
+    ("127.0.0.1", True), ("127.0.1.1", True), ("::1", True), ("::ffff:127.0.0.1", True),
+    ("192.168.1.50", False), ("100.64.0.7", False), ("::ffff:192.168.1.50", False), ("fe80::1", False), ("", False), (None, False),
+])
+@pytest.mark.parametrize("backend", ["pi", "mac"])
+def test_activate_answers_only_a_loopback_peer(request, backend, peer, want):
+    """A LAN device writes whatever Host/Origin it likes; the TCP peer it cannot. Only the kiosk on this machine passes."""
+    d = request.getfixturevalue(backend)
+    assert d._activate_request_allowed("localhost:7777", None, peer) is want
+
+
+def test_pi_activate_extra_origins_and_the_rollback(pi, monkeypatch):
+    monkeypatch.setattr(pi, "ZOE_URL", "https://192.168.1.218")
+    assert pi._activate_request_allowed("localhost:7777", "http://zoe.local", "127.0.0.1") is False
+    monkeypatch.setenv("ACTIVATE_ALLOWED_ORIGINS", " http://zoe.local , https://other.example")
+    assert pi._activate_request_allowed("localhost:7777", "http://zoe.local", "127.0.0.1") is True
+    # ACTIVATE_GUARD=off restores the old Pi behaviour (any caller); it never applies to the Mac build.
+    monkeypatch.setenv("ACTIVATE_GUARD", "off")
+    assert pi._activate_request_allowed("evil.example", "https://evil.example", "192.168.1.50") is True
+
+
+def test_mac_ignores_the_pi_rollback(mac, monkeypatch):
+    monkeypatch.setenv("ACTIVATE_GUARD", "off")
+    assert mac._activate_request_allowed("evil.example", None, "127.0.0.1") is False
 
 
 def _post_activate(d, headers):
@@ -674,7 +710,52 @@ def test_activate_over_real_http_mac_blocks_a_hostile_page(mac, monkeypatch):
     assert _post_activate(mac, {}) == (200, True)  # no Origin: not a browser cross-origin POST
 
 
-def test_activate_over_real_http_on_the_pi_accepts_any_origin_as_before(pi):
-    """Control: the identical hostile request on the Pi backend is accepted."""
+def test_activate_over_real_http_on_the_pi_blocks_a_hostile_page(pi, monkeypatch):
+    """2026-10-18: the Pi now refuses what the Mac refuses (it used to accept this exact request)."""
     assert pi.PANEL_PLATFORM == "pi"
-    assert _post_activate(pi, {"Origin": "https://evil.example"}) == (200, True)
+    monkeypatch.setattr(pi, "ZOE_URL", "https://192.168.1.218")
+    assert _post_activate(pi, {"Origin": "https://evil.example"}) == (403, False)
+    assert _post_activate(pi, {"Origin": "https://192.168.1.218"}) == (200, True)   # the kiosk's orb tap
+    assert _post_activate(pi, {}) == (200, True)
+
+
+def _lan_ipv4():
+    """A non-loopback address of this machine, or None (a sandbox with loopback only)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))   # TEST-NET-1: nothing is sent, the kernel only picks the outbound interface
+        ip = s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+    return None if ip.startswith("127.") else ip
+
+
+@pytest.mark.parametrize("path", ["/activate", "/enroll/cancel"])
+def test_a_lan_peer_is_refused_over_real_http(pi, path):
+    """The live hole: the Pi binds every interface, so a device on its Wi-Fi reached /activate. Serve on this machine's
+    LAN address and connect FROM it: the peer is not loopback, so 403 and nothing starts - whatever Host it claims."""
+    import http.client
+    import socketserver
+    ip = _lan_ipv4()
+    if ip is None:
+        pytest.skip("no non-loopback IPv4 on this machine")
+    srv = socketserver.TCPServer((ip, 0), pi._HealthHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        pi._orb_activate_event.clear()
+        pi._enroll_cancel.clear()
+        conn = http.client.HTTPConnection(ip, srv.server_address[1], timeout=5)
+        conn.request("POST", path, headers={"Host": "localhost:7777"})
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 403
+        assert not pi._orb_activate_event.is_set() and not pi._enroll_cancel.is_set()
+        conn = http.client.HTTPConnection(ip, srv.server_address[1], timeout=5)
+        conn.request("GET", "/health")
+        assert conn.getresponse().status == 200        # the Jetson still reads /health from the LAN
+    finally:
+        srv.shutdown()
+        srv.server_close()
