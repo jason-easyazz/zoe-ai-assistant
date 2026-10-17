@@ -1,0 +1,130 @@
+# F0 relay lab: one relay host, two fake households, one panel. Hermetic: the network is `internal` (no route out).
+# Started and torn down by run_lab.py, which renders ${RUN} (a 0700 temp dir holding configs and the throwaway PKI)
+# and the household ids. Do not `compose up` by hand: the files under ${RUN} do not exist until the runner makes them.
+#
+# "The relay host" is ONE network namespace owned by `front`: the nginx stream front, frps and the plugin stub all live in
+# it (frps and the plugin talk over 127.0.0.1, exactly as on the real host). Each box is the same trick: `*-nginx` owns
+# the namespace, `*-frpc` joins it, so frpc's local target 127.0.0.1:8443 is the box's relay listener.
+name: zoe-relay-lab
+
+x-labels: &labels
+  zoe.relay-lab: "1"
+
+networks:
+  lab:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+
+services:
+  front:
+    image: ${NGINX_IMAGE}
+    container_name: relaylab-front
+    labels: *labels
+    networks:
+      lab: {ipv4_address: 10.77.0.10}
+    volumes:
+      - ${RUN}/relay/nginx-front.conf:/etc/nginx/nginx.conf:ro
+    mem_limit: 64m
+
+  relay:
+    image: ${FRP_IMAGE}
+    container_name: relaylab-relay
+    labels: *labels
+    network_mode: service:front
+    depends_on: [front]
+    entrypoint: ["/opt/relay/entrypoint.sh"]
+    environment:
+      PREFLIGHT_WAIT_S: "40"
+    volumes:
+      - ${RUN}/relay/frps.toml:/etc/frp/frps.toml:ro
+      - ${RUN}/relay/tls:/etc/frp/tls:ro
+    mem_limit: 128m
+
+  plugin:
+    image: ${FRP_IMAGE}
+    container_name: relaylab-plugin
+    labels: *labels
+    network_mode: service:front
+    depends_on: [front]
+    command: ["python3", "/opt/relay/plugin.py"]
+    environment:
+      RELAY_REGISTRY: /etc/relay/households.json
+      RELAY_LAB_MODE: "1"
+      RELAY_LAB_TOGGLES: /etc/relay/toggles.json
+      RELAY_BANDWIDTH_LIMIT: ${LAB_BANDWIDTH_LIMIT}
+      RELAY_RATE_MAX: ${LAB_RATE_MAX}
+      RELAY_RATE_WINDOW_S: ${LAB_RATE_WINDOW_S}
+    volumes:
+      - ${RUN}/relay/etc:/etc/relay:ro
+    mem_limit: 64m
+
+  boxa-nginx:
+    image: ${NGINX_IMAGE}
+    container_name: relaylab-boxa-nginx
+    labels: *labels
+    networks:
+      lab: {ipv4_address: 10.77.0.21}
+    volumes:
+      - ${RUN}/box-a/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${RUN}/box-a/pki:/etc/zoe/pki:ro
+      - ${RUN}/blob:/var/lib/lab:ro
+    mem_limit: 64m
+
+  boxa-frpc:
+    image: ${FRP_IMAGE}
+    container_name: relaylab-boxa-frpc
+    labels: *labels
+    network_mode: service:boxa-nginx
+    depends_on: [boxa-nginx, relay]
+    command: ["frpc", "-c", "/etc/frp/frpc.toml"]
+    volumes:
+      - ${RUN}/box-a/frpc.toml:/etc/frp/frpc.toml:ro
+      - ${RUN}/box-a/relay-ca.pem:/etc/zoe/relay-ca.pem:ro
+    mem_limit: 64m
+
+  boxb-nginx:
+    image: ${NGINX_IMAGE}
+    container_name: relaylab-boxb-nginx
+    labels: *labels
+    networks:
+      lab: {ipv4_address: 10.77.0.22}
+    volumes:
+      - ${RUN}/box-b/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${RUN}/box-b/pki:/etc/zoe/pki:ro
+      - ${RUN}/blob:/var/lib/lab:ro
+    mem_limit: 64m
+
+  boxb-frpc:
+    image: ${FRP_IMAGE}
+    container_name: relaylab-boxb-frpc
+    labels: *labels
+    network_mode: service:boxb-nginx
+    depends_on: [boxb-nginx, relay]
+    command: ["frpc", "-c", "/etc/frp/frpc.toml"]
+    volumes:
+      - ${RUN}/box-b/frpc.toml:/etc/frp/frpc.toml:ro
+      - ${RUN}/box-b/relay-ca.pem:/etc/zoe/relay-ca.pem:ro
+    mem_limit: 64m
+
+  panel:
+    image: ${PANEL_IMAGE}
+    container_name: relaylab-panel
+    labels: *labels
+    networks:
+      lab: {ipv4_address: 10.77.0.30}
+    # the away-from-home hosts mapping (#2080 D4): both household names point at the relay
+    extra_hosts:
+      - "${HID_A}.zoe.internal:10.77.0.10"
+      - "${HID_B}.zoe.internal:10.77.0.10"
+      - "relay.lab:10.77.0.10"
+    volumes:
+      - ${RUN}/panel:/etc/zoe/panel:ro
+    # the evil CA goes into the SYSTEM store (T4's "another CA the panel trusts")
+    command:
+      - sh
+      - -c
+      - cp /etc/zoe/panel/evil-ca.pem /usr/local/share/ca-certificates/evil.crt && update-ca-certificates >/dev/null 2>&1 && exec sleep infinity
+    mem_limit: 128m

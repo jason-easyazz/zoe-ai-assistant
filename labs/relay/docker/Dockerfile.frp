@@ -1,0 +1,30 @@
+# frps + frpc v0.71.0 and the relay-side Python tools (plugin stub, preflight, capture sidecar), one image.
+# Build context: labs/relay.   Built by run_lab.py with:  DOCKER_BUILDKIT=0 docker build -f docker/Dockerfile.frp .
+#
+# Pinning (panel-anywhere 14-day rule): frp by VERSION + the release's published sha256 for each architecture
+# (frp_sha256_checksums.txt of the v0.71.0 release, verified at build time); base images by multi-arch INDEX digest
+# (arm64 and amd64 both present). A mismatch fails the build.
+ARG ALPINE_IMAGE=alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+ARG PYTHON_IMAGE=python@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
+
+FROM ${ALPINE_IMAGE} AS fetch
+ARG FRP_VERSION=0.71.0
+ARG FRP_SHA256_LINUX_ARM64=f33c293c275d8fc68c654b6fba8f10b2551d6463d09a9fc9cffb7227eae82266
+ARG FRP_SHA256_LINUX_AMD64=84f27e39f11169f7adcef8e8b70c9329de17747b1f14dad9fb95eef5682ea716
+RUN set -eu; \
+    case "$(uname -m)" in \
+      aarch64) arch=arm64; sum="$FRP_SHA256_LINUX_ARM64" ;; \
+      x86_64)  arch=amd64; sum="$FRP_SHA256_LINUX_AMD64" ;; \
+      *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    wget -q -O /frp.tgz "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${arch}.tar.gz"; \
+    echo "${sum}  /frp.tgz" | sha256sum -c -; \
+    mkdir /out; tar -xzf /frp.tgz -C /out --strip-components=1
+
+FROM ${PYTHON_IMAGE}
+COPY --from=fetch /out/frps /out/frpc /usr/local/bin/
+COPY relay/plugin.py relay/preflight.py relay/entrypoint.sh /opt/relay/
+COPY lab/capture.py /opt/relay/capture.py
+COPY box/frpc_config.py /opt/relay/frpc_config.py
+RUN chmod 0755 /opt/relay/entrypoint.sh && /usr/local/bin/frps --version && /usr/local/bin/frpc --version
+ENV PYTHONUNBUFFERED=1
