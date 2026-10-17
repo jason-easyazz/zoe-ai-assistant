@@ -387,6 +387,36 @@ def test_not_a_person_leaves_suggestions_and_the_review_for_good(env, monkeypatc
     assert [r["label"] for r in run(_review(rid))] == ["you"]                         # and never reaches the day review
 
 
+def test_a_retag_moves_what_the_first_tag_taught_to_the_right_person(env, monkeypatch):
+    """The first tag moved the held embedding into Sam's print and deleted it; correcting the tag to Alex must un-learn Sam (rebuild
+    or drop his print) and teach Alex - a retag that only flipped ``tagged_person_id`` left the contribution with the wrong person."""
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    sam = env.db.q("SELECT id FROM people WHERE name = 'Sam'")[0][0]
+    (seg_a, seg_b) = [r[0] for r in env.db.q("SELECT segment_id FROM learned_voiceprint_segments ORDER BY segment_id")]
+    out = env.client.post(f"/api/omi/segments/{seg_a}/tag", json={"name": "Alex"}).json()
+    assert out["learning"] == "learning"
+    alex = env.db.q("SELECT id FROM people WHERE name = 'Alex'")[0][0]
+    assert env.db.q("SELECT p.name, COUNT(*) FROM learned_voiceprint_segments c JOIN learned_voiceprints v ON v.id = c.voiceprint_id "
+                    "JOIN people p ON p.id = v.people_id GROUP BY p.name ORDER BY p.name") == [("Alex", 1), ("Sam", 1)]
+    assert env.db.q("SELECT n_segments FROM learned_voiceprints WHERE people_id = ?", (sam,)) == [(1,)]       # Sam's print was rebuilt
+    assert env.db.q("SELECT n_segments FROM learned_voiceprints WHERE people_id = ?", (alex,)) == [(1,)]
+    # the last contribution leaves Sam too: his print goes rather than keeping a clip the member said is not his
+    env.client.post(f"/api/omi/segments/{seg_b}/tag", json={"person_id": alex})
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprints WHERE people_id = ?", (sam,)) == [(0,)]
+    assert env.db.q("SELECT n_segments FROM learned_voiceprints WHERE people_id = ?", (alex,)) == [(2,)]
+
+
+def test_a_tagged_line_marked_not_a_person_is_untagged_and_unlearned(env, monkeypatch):
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    seg_a = env.db.q("SELECT segment_id FROM learned_voiceprint_segments ORDER BY segment_id")[0][0]
+    assert env.client.patch(f"/api/omi/segments/{seg_a}", json={"not_person": "tv"}).status_code == 200
+    assert env.db.q("SELECT not_person, tagged_person_id, tag_source FROM omi_segments WHERE id = ?", (seg_a,)) == [("tv", None, None)]
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments WHERE segment_id = ?", (seg_a,)) == [(0,)]
+    assert env.db.q("SELECT n_segments FROM learned_voiceprints") == [(1,)]                                  # Sam's print was rebuilt
+
+
 def test_lines_under_zoes_own_speech_are_not_a_person(env, monkeypatch):
     async def spoke(db, uid, rec):
         return [(2500, 6000)]
