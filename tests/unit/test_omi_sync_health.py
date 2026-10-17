@@ -323,16 +323,15 @@ def test_a_quiet_pendant_is_not_reported_every_visit_but_a_change_is_reported_at
     n = len(up.reports)
     waits_of(runner, clock, 1)
     assert len(up.reports) == n + 1 and up.reports[-1]["reachable"] is True and up.reports[-1]["battery_pct"] == 63
-    # control arm: the heartbeat interval passing sends one even with no change
+    # control arm: the SAME picture again, well inside the heartbeat interval, is not re-sent ...
+    n = len(up.reports)
+    waits_of(runner, clock, 1)                       # a clean visit one cooldown (120 s) later: nothing changed
+    assert len(up.reports) == n, "same picture, 120 s later: no report"
+    # ... and once the heartbeat interval has passed, exactly ONE more goes out even with no change
     clock.t += 1000
-    runner.connect = never_there()
     runner.rotation.targets[0].next_at = 0
-    step(runner)
-    runner.rotation.targets[0].next_at = 0
-    clock.t += 1000
-    before = len(up.reports)
-    step(runner)
-    assert len(up.reports) >= before
+    waits_of(runner, clock, 1)
+    assert len(up.reports) == n + 1 and up.reports[-1]["reachable"] is True, "the heartbeat fires on its interval, once"
 
 
 def test_a_refused_report_is_retried_not_treated_as_delivered():
@@ -354,6 +353,29 @@ def test_health_can_never_fail_a_visit_or_change_custody(failure):
     waits_of(runner, clock, 1)
     assert runner.rotation.targets[0].next_at - clock.t == 120.0, "a clean visit still waits out the normal cooldown"
     assert up.reports, "it did try"
+
+
+def test_a_stalled_battery_read_cannot_hold_the_drain(spool, tmp_path, monkeypatch):
+    """The read is bounded: a GATT read that never answers costs the timeout, not the session. Control arm: the same pendant without the
+    stall drains identically."""
+    from omi_sync import engine
+    monkeypatch.setattr(engine, "BATTERY_READ_TIMEOUT_S", 0.05)
+
+    class Stalled(HealthyPendant):
+        async def battery(self):
+            await asyncio.sleep(30)
+
+    import time
+    t0 = time.monotonic()
+    res = drain(Stalled(build_ring(RING), caps=0x09), spool, FakeZoe(), tmp_path)
+    assert time.monotonic() - t0 < 5, "the stalled read was cut off at its timeout, not waited out"
+    assert res.battery_pct is None and res.uploaded == 3 and res.advanced_to == 120 and res.clean
+    other = Spool(tmp_path / "ok.sqlite3")
+    try:
+        ok = drain(HealthyPendant(build_ring(RING), caps=0x09), other, FakeZoe(), tmp_path / "ok")
+    finally:
+        other.close()
+    assert ok.battery_pct == 63 and (ok.uploaded, ok.advanced_to) == (res.uploaded, res.advanced_to)
 
 
 def test_a_uploader_without_a_health_method_is_simply_skipped():

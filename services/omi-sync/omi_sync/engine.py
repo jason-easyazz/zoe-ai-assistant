@@ -35,6 +35,7 @@ crash inside it loses at most that batch).
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -51,6 +52,9 @@ from .spool import Spool, SpoolRecord
 from .uploader import Outcome, UploadMeta, Uploader, sha256_hex
 
 log = logging.getLogger("omi_sync.engine")
+
+#: the battery read is informational: a GATT read that stalls must cost this much, never the session
+BATTERY_READ_TIMEOUT_S = 5.0
 
 
 class LinkDropped(Exception):
@@ -249,7 +253,7 @@ class Drain:
         if reader is None:
             return
         try:
-            level = await reader()
+            level = await asyncio.wait_for(reader(), BATTERY_READ_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001 - LinkDropped included: the next operation finds a dropped link on its own
             log.debug("battery unreadable: %s", type(exc).__name__)
             return

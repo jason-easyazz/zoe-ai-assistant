@@ -345,6 +345,16 @@ def test_a_device_token_session_and_a_guest_cannot_read_it(env):
     assert env.get().status_code == 200, "control arm: ann herself"
 
 
+def test_a_guest_cannot_read_it(env):
+    register(env, DEV_A, "ann")
+    env.post(body())
+    env.as_({"user_id": "guest", "role": "guest", "username": "guest"})
+    r = env.get()
+    assert r.status_code in (401, 403) and "pendants" not in r.text
+    env.as_(ANN)
+    assert env.get().status_code == 200, "control arm: the owner"
+
+
 def test_a_reassigned_pendant_vanishes_from_the_previous_owner_at_once(env):
     register(env, DEV_A, "ann")
     env.post(body())
@@ -429,6 +439,47 @@ def test_a_warning_rings_once_when_the_report_that_causes_it_arrives(env):
     env.now = T0 + timedelta(hours=20)
     env.post(body(battery_pct=12))
     assert [b[2] for b in env.bells()] == ["battery_low", "battery_low"], "control arm: cleared, then a fresh low rings again"
+
+
+def test_a_bell_that_failed_to_ring_is_retried_not_treated_as_delivered(env):
+    register(env, DEV_A, "ann")
+    real = oh._notify
+    calls = []
+
+    async def flaky(user_id, warning):
+        calls.append(warning["kind"])
+        if len(calls) == 1:
+            return False                                    # the notifications insert failed this time
+        return await real(user_id, warning)
+
+    env.mp.setattr(oh, "_notify", flaky)
+    env.post(body(battery_pct=10))
+    assert env.bells() == [] and calls == ["battery_low"]
+    state = json.loads(env.rows()[DEV_A]["warn_state"])
+    assert state["battery_low"]["retry"] is True and state["battery_low"]["notified_at"] is None
+    env.now = T0 + timedelta(minutes=15)
+    env.post(body(battery_pct=10))                          # next report: the same low battery rings now
+    assert [b[2] for b in env.bells()] == ["battery_low"] and calls == ["battery_low", "battery_low"]
+    env.now = T0 + timedelta(minutes=30)
+    env.post(body(battery_pct=10))
+    assert len(env.bells()) == 1 and len(calls) == 2, "control arm: once it rang it is not rung again while the warning stays active"
+    assert "retry" not in json.loads(env.rows()[DEV_A]["warn_state"])["battery_low"]
+
+
+def test_the_sweep_retries_a_failed_bell_too(env):
+    register(env, DEV_A, "ann")
+    env.post(body())
+    real = oh._notify
+    fail = {"on": True}
+
+    async def flaky(user_id, warning):
+        return False if fail["on"] else await real(user_id, warning)
+
+    env.mp.setattr(oh, "_notify", flaky)
+    assert run(oh.sweep(now=T0 + timedelta(hours=4))) == 0 and env.bells() == []
+    fail["on"] = False
+    assert run(oh.sweep(now=T0 + timedelta(hours=5))) == 1 and [b[2] for b in env.bells()] == ["bridge_silent"]
+    assert run(oh.sweep(now=T0 + timedelta(hours=6))) == 0, "and then it is done"
 
 
 def test_the_first_report_is_a_baseline_and_a_later_rise_is_an_overwrite_that_rings(env):

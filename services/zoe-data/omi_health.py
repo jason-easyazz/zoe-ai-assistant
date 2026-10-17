@@ -219,7 +219,7 @@ def transition(row: dict, active: list[dict], now: datetime) -> tuple[dict, list
         notified = prev.get("notified_at")
         was_active = bool(prev.get("since"))
         last = _parse(notified)
-        if not was_active and (last is None or _hours(now, last) >= RENOTIFY_H):
+        if (not was_active or prev.get("retry")) and (last is None or _hours(now, last) >= RENOTIFY_H):
             notify.append(w)
             notified = stamp
         new[kind] = {"since": since, "notified_at": notified}
@@ -296,9 +296,36 @@ async def record_report(owner: str, device_id: str, rep: Report, *, now: Optiona
             active, notify, row["warn_state"] = [], [], old_state
         await _save(db, device_id, row)
         await db.commit()
-    for w in notify:
-        await _notify(owner, w)
+    await _ring(owner, device_id, notify)
     return active
+
+
+async def _ring(user_id: str, device_id: str, notify: list[dict]) -> int:
+    """Send the bells; a bell that FAILED is flagged ``retry`` in the row's ``warn_state`` (and its ``notified_at`` cleared), so the next
+    report or sweep rings it again instead of treating it as delivered. Returns how many rang. Never raises."""
+    rang, failed = 0, []
+    for w in notify:
+        if await _notify(user_id, w):
+            rang += 1
+        else:
+            failed.append(w["kind"])
+    if failed:
+        try:
+            from db_compat import get_compat_db
+
+            async with get_compat_db() as db:
+                row = await _get_row(db, device_id)
+                if row is not None:
+                    state = _state(row)
+                    for kind in failed:
+                        if kind in state:
+                            state[kind] = {"since": state[kind].get("since"), "notified_at": None, "retry": True}
+                    await db.execute("UPDATE omi_device_health SET warn_state = ? WHERE device_id = ?",
+                                     (json.dumps(state, sort_keys=True), device_id))
+                    await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("omi_health: could not flag a failed notification for retry (%s)", type(exc).__name__)
+    return rang
 
 
 async def list_for(user_id: str, *, now: Optional[datetime] = None) -> list[dict]:
@@ -391,14 +418,14 @@ async def sweep(*, now: Optional[datetime] = None) -> int:
             new_state = json.dumps(state, sort_keys=True)
             if new_state != (row.get("warn_state") or "{}"):
                 updates.append((new_state, row["device_id"]))
-            todo.extend((row["user_id"], w) for w in notify)
+            todo.extend((row["user_id"], row["device_id"], w) for w in notify)
         if updates:
             async with get_compat_db() as db:
                 for new_state, device_id in updates:
                     await db.execute("UPDATE omi_device_health SET warn_state = ? WHERE device_id = ?", (new_state, device_id))
                 await db.commit()
-        for user_id, w in todo:
-            raised += 1 if await _notify(user_id, w) else 0
+        for user_id, device_id, w in todo:
+            raised += await _ring(user_id, device_id, [w])
     except Exception as exc:  # noqa: BLE001
         logger.warning("omi_health: sweep failed (%s)", type(exc).__name__)
     return raised
