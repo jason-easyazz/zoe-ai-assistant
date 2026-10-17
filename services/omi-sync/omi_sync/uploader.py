@@ -117,10 +117,10 @@ class HttpUploader:
             self._ctx.check_hostname = False
             self._ctx.verify_mode = ssl.CERT_NONE
 
-    def _post(self, path: str, data: bytes, headers: dict[str, str]) -> tuple[int, bytes]:
+    def _post(self, path: str, data: bytes, headers: dict[str, str], timeout: Optional[float] = None) -> tuple[int, bytes]:
         req = urllib.request.Request(self.base + path, data=data, method="POST", headers={"X-Device-Token": self.token, **headers})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout, context=self._ctx) as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
@@ -153,6 +153,21 @@ class HttpUploader:
                                     {"Content-Type": "application/json"})
         except Exception as exc:  # noqa: BLE001
             log.info("sync notice not sent: %s", type(exc).__name__)
+
+    async def report_health(self, report: dict) -> bool:
+        """Best-effort numbers-only health heartbeat (``POST /api/omi/device-status``). True only when Zoe answered 200 ``ok``. Never
+        raises and never waits long (15 s): it runs AFTER a visit's custody work and must not delay the next one. A 401/404/409 (token
+        wrong, Zoe older than this, pendant not assigned yet) is simply 'not delivered'."""
+        try:
+            status, body = await asyncio.to_thread(self._post, "/api/omi/device-status", json.dumps(report).encode(),
+                                                   {"Content-Type": "application/json"}, 15.0)
+        except Exception as exc:  # noqa: BLE001
+            log.info("health report not sent: %s", type(exc).__name__)
+            return False
+        if status != 200:
+            log.info("health report not accepted: HTTP %s %s", status, _error_code(body))
+            return False
+        return True
 
     async def reachable(self) -> bool:
         def _get() -> bool:

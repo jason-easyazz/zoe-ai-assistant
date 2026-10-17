@@ -1230,6 +1230,13 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_omi_rec.run_retention_loop(), name="omi_retention")
     except Exception as _omi_exc:
         logger.warning("omi transcription loop not started (non-fatal): %s", _omi_exc)
+    try:
+        import omi_health as _omi_health
+        import omi_recordings as _omi_rec_h
+        if _omi_rec_h.enabled() and _omi_health.enabled():
+            asyncio.create_task(_omi_health.run_loop(), name="omi_health")
+    except Exception as _omi_h_exc:
+        logger.warning("omi health sweep not started (non-fatal): %s", _omi_h_exc)
     try:  # the pendant day review's DAYTIME fallback lane (flag-dark ZOE_OMI_DAY_REVIEW; the night window is the primary lane)
         import omi_day_review as _omi_dr
         if _omi_dr.enabled() and _omi_dr.lane() != "night":

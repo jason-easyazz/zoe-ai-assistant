@@ -721,6 +721,11 @@ async def forget_user(user_id: str) -> int:
             except Exception as exc:  # noqa: BLE001
                 logger.error("OMI_VOICES_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
                 voice_failure = exc               # raised below, once the rest of the erase has run: success is never reported
+            try:        # the member's pendant health rows (numbers only; an unmigrated 0056 must never block erasing audio)
+                import omi_health
+                await omi_health.forget_user(user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("omi_health: health rows NOT erased for a forgotten user (%s)", type(exc).__name__)
             try:        # AFTER the recordings are committed: a registry that is not migrated yet (0047) must never block erasing audio
                 async with get_compat_db() as db:
                     await omi_devices.forget_user(db, user_id)
