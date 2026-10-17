@@ -4991,6 +4991,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_RELAY_HOSTNAME": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/relay_ingress.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RELAY_INGRESS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/relay_ingress.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_REMINDER_DEFAULT_TIME": {
         "defaults": [
           "''"
