@@ -140,7 +140,7 @@ def test_no_admin_token_can_be_issued(db, role):
     assert _count(db) == 0
 
 
-@pytest.mark.parametrize("scopes", [["voice"], ["chat", "voice"], "chat,voice"])
+@pytest.mark.parametrize("scopes", [["voice"], ["chat", "voice"], "chat,voice", [], "", None])
 def test_scopes_are_refused_not_silently_promised(db, scopes):
     r = _issue(db, {"role": "voice-daemon", "scopes": scopes})
     assert r.status_code == 400 and "scopes" in r.json()["detail"], r.text
@@ -242,6 +242,19 @@ def test_only_a_valid_token_holder_renews(db, peer, headers):
     before = db.con.execute("SELECT token_hash, expires_at FROM device_tokens ORDER BY token_hash").fetchall()
     assert _renew(db, headers, peer).status_code == 401
     assert db.con.execute("SELECT token_hash, expires_at FROM device_tokens ORDER BY token_hash").fetchall() == before
+
+
+def test_a_stale_cache_never_overwrites_a_later_expiry_in_the_db(db):
+    """Compare-and-swap (cross-review, codex): another worker renewed, or an admin set a long expiry, after this worker loaded
+    its cache. This worker's view is stale; the UPDATE must match nothing and the stored, later value must stand."""
+    h = db.token(LIVE_TOKEN, (_now() + timedelta(days=3)).isoformat())
+    later = (_now() + timedelta(days=800)).isoformat()
+    db.con.execute("UPDATE device_tokens SET expires_at = ? WHERE token_hash = ?", (later, h))
+    db.con.commit()
+    r = _renew(db, {"X-Device-Token": LIVE_TOKEN})
+    assert r.status_code == 200 and r.json()["renewed"] is False, r.text
+    assert db.expiry(LIVE_TOKEN) == later == r.json()["expires_at"]
+    assert panel_auth._token_cache[h]["expires_at"] == later  # the cache adopts the stored value
 
 
 def test_a_token_revoked_in_the_db_but_not_the_cache_is_not_renewed(db):

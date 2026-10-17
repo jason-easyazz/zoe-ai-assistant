@@ -570,7 +570,7 @@ async def issue_token(panel_id: str, payload: dict, admin: dict = Depends(requir
     role = str(payload.get("role") or "voice-daemon").strip()
     if is_refused_token_role(role):
         raise HTTPException(status_code=400, detail="A device token cannot carry an admin role")
-    if payload.get("scopes"):
+    if "scopes" in payload:  # any value, empty included: there is no such thing as a scoped device token
         raise HTTPException(
             status_code=400,
             detail="Device tokens have no scopes: a device token is the panel, whatever it says. Omit 'scopes'.",
@@ -640,13 +640,22 @@ async def renew_device_token(request: Request, db=Depends(get_db)):
     if not proposed or parse_token_expiry(proposed) <= parse_token_expiry(current):
         return {"ok": True, "panel_id": panel_id, "expires_at": current, "renewed": False}
     token_hash = _hash_token(raw)
+    # Compare-and-swap on the exact expiry this decision was made against: a concurrent renew (another worker) or an admin
+    # change since the cache was loaded makes this match nothing, so a stale view can never overwrite a later/longer value.
     cur = await db.execute(
-        "UPDATE device_tokens SET expires_at = ? WHERE token_hash = ? AND revoked = 0", (proposed, token_hash)
+        "UPDATE device_tokens SET expires_at = ? WHERE token_hash = ? AND revoked = 0 AND expires_at = ?",
+        (proposed, token_hash, current),
     )
     await db.commit()
-    if getattr(cur, "rowcount", 1) == 0:  # revoked (or deleted) in the DB since the cache was loaded
-        info["revoked"] = 1
-        raise HTTPException(status_code=401, detail="A valid device token is required")
+    if getattr(cur, "rowcount", 1) == 0:
+        row = await (await db.execute(
+            "SELECT expires_at, revoked FROM device_tokens WHERE token_hash = ?", (token_hash,)
+        )).fetchone()
+        if row is None or row["revoked"]:  # revoked (or deleted) in the DB since the cache was loaded
+            info["revoked"] = 1
+            raise HTTPException(status_code=401, detail="A valid device token is required")
+        info["expires_at"] = row["expires_at"]  # someone else moved it: adopt the stored value, change nothing
+        return {"ok": True, "panel_id": panel_id, "expires_at": row["expires_at"], "renewed": False}
     info["expires_at"] = proposed
     logger.info("panel_auth: renewed device token for panel %s until %s", panel_id, proposed)
     return {"ok": True, "panel_id": panel_id, "expires_at": proposed, "renewed": True}
