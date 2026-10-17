@@ -49,6 +49,7 @@ FRONT_IP, ROGUE_IP, OPEN_IP, TERM_IP = "10.77.0.10", "10.77.0.50", "10.77.0.51",
 RELAY_NAME = "relay.lab"
 MIN_MEM_MB = 1500
 NIGHT = (datetime.time(1, 50), datetime.time(4, 55))
+NIGHT_START_GUARD = datetime.time(1, 35)  # do not START within 15 minutes of the window: a run takes about 5
 LAB_BANDWIDTH = "256KB"
 LAB_RATE_MAX = 64
 LAB_RATE_WINDOW_S = 10
@@ -69,8 +70,8 @@ def mem_available_mb() -> int:
     raise RuntimeError("MemAvailable not found")
 
 
-def in_night_window(now: datetime.time) -> bool:
-    return NIGHT[0] <= now <= NIGHT[1]
+def in_night_window(now: datetime.time, *, starting: bool = False) -> bool:
+    return (NIGHT_START_GUARD if starting else NIGHT[0]) <= now <= NIGHT[1]
 
 
 def lab_containers() -> list[str]:
@@ -808,8 +809,9 @@ def main() -> int:
     args = ap.parse_args()
 
     now = datetime.datetime.now().time()
-    if in_night_window(now):
-        print(f"REFUSED: {now:%H:%M} is inside the 01:50-04:55 night window; the lab never runs then.", file=sys.stderr)
+    if in_night_window(now, starting=True):
+        print(f"REFUSED: {now:%H:%M} is inside (or within 15 minutes of) the 01:50-04:55 night window; the lab never runs then.",
+              file=sys.stderr)
         return 3
     deadline = time.monotonic() + args.wait_mem_s
     while mem_available_mb() < MIN_MEM_MB:
@@ -859,6 +861,9 @@ def main() -> int:
         for key, fn in CELLS:
             if wanted and key not in wanted:
                 continue
+            if in_night_window(datetime.datetime.now().time()):
+                rec.check(key.upper(), "night window reached: remaining cells skipped, tearing down", False)
+                break
             try:
                 fn(lab, rec)
             except Exception as e:  # noqa: BLE001

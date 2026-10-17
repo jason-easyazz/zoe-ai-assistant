@@ -55,6 +55,10 @@ def check_config(cfg: dict) -> list[str]:
     plugins = cfg.get("httpPlugins") or []
     if not plugins:
         errs.append("no [[httpPlugins]]: frps would allow every login and every proxy")
+    if len(plugins) > 1:
+        # frp calls every plugin in turn and a later one may REWRITE the content the session master returned, so a second
+        # (permissive, or merely different) plugin is a bypass of the first.
+        errs.append(f"exactly one [[httpPlugins]] entry is allowed, found {len(plugins)}")
     covered: set[str] = set()
     for p in plugins:
         host, port = _plugin_host_port(str(p.get("addr", "")))

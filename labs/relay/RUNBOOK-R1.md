@@ -70,7 +70,7 @@ Decisions this fixes:
   reserved IPs manually" page applies. A Droplet made from a custom image maps the Reserved IP straight to the
   public address instead of an anchor IP; then `<ANCHOR_IP>` below means `<PRIMARY_IP>` and step 4 cannot work.
   Stop and tell the operator in either case.
-- RAM: frps + the stream front + the plugin use about 100 MB (measured in the lab, README "Memory"). The Droplet
+- RAM: frps + the stream front + the plugin use about 60 MB idle and 150 MB at peak (measured in the lab, README "Measured"). The Droplet
   needs that much free.
 
 ## 2. Add the second public IP (a DigitalOcean Reserved IP)
@@ -118,8 +118,8 @@ Order matters: ufw evaluates in rule order, so the allow must sit above the deny
 turn it on only after adding an allow for SSH from the operator's address and for 80/443 to `<PRIMARY_IP>`, or use
 the DigitalOcean Cloud Firewall (inbound TCP 443 only) on the Droplet instead.
 
-Honest limit: Docker publishes container ports with iptables NAT, and those rules are consulted *before* ufw's
-INPUT chain, so ufw does not govern the one port Docker publishes (`<ANCHOR_IP>:443`, step 6). That is the intended
+Honest limit: Docker publishes container ports with iptables NAT; that traffic is forwarded to the container and never
+traverses the INPUT chain where ufw's rules live, so ufw does not govern the one port Docker publishes (`<ANCHOR_IP>:443`, step 6). That is the intended
 exposure; the `deny` above exists for everything that is *not* published (sshd and the411's own services).
 
 Check, from a machine that is not the411 (before step 6, everything must be closed):
@@ -163,8 +163,8 @@ sudo ss -ltnp 'sport = :443'                    # expect <PRIMARY_IP>:443 (and [
 curl -sI https://the411.life/ | head -3         # the411's own site still answers
 ```
 
-If the 411's nginx stops answering: `sudo rm -rf /etc/nginx && sudo cp -a /etc/nginx.pre-relay.<date> /etc/nginx &&
-sudo systemctl restart nginx`.
+If the411's nginx does not come back: `sudo mv /etc/nginx /etc/nginx.narrowed && sudo cp -a /etc/nginx.pre-relay.<date> /etc/nginx &&
+sudo nginx -t && sudo systemctl restart nginx`.
 
 Watch for: certbot's `--nginx` installer rewrites `listen` lines only when it installs a *new* certificate; renewals do
 not touch them. After any future certbot install on the411, re-run the `ss` check above.
@@ -217,7 +217,7 @@ On the411, as a dedicated unprivileged login or root:
 
 ```sh
 sudo install -d -m 0750 /opt/zoe-relay /opt/zoe-relay/etc /opt/zoe-relay/tls
-git clone --depth 1 --branch <TAG> https://github.com/<owner>/<repo>.git /opt/zoe-relay/src   # public repo; or copy a tarball
+git clone --depth 1 --branch <TAG> https://github.com/jason-easyazz/zoe-ai-assistant.git /opt/zoe-relay/src   # the public repo; or copy a tarball
 cd /opt/zoe-relay/src/labs/relay
 DOCKER_BUILDKIT=0 docker build -f docker/Dockerfile.frp -t zoe-relay/frp:v0.71.0 .          # verifies the release sha256 for amd64
 ```
@@ -326,7 +326,8 @@ nc -vz -w 3 relay.the411.life 80; nc -vz -w 3 relay.the411.life 22   # both clos
 ```
 
 From the411: `curl -sI https://the411.life/ | head -1` (the sites still answer), `docker stats --no-stream`
-(expect roughly 100 MB across the three containers), `sudo ss -ltnp 'sport = :443'` (PRIMARY and ANCHOR each once).
+(expect roughly 60 MB across the three containers at idle), `sudo ss -ltnp 'sport = :443'` (nginx on `<PRIMARY_IP>:443`,
+`docker-proxy` on `<ANCHOR_IP>:443`, nothing on `0.0.0.0:443`).
 
 ## 7. The household's box and the go-live gate
 

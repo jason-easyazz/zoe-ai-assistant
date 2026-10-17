@@ -28,6 +28,11 @@ class ConfigTests(unittest.TestCase):
         del c["httpPlugins"]
         self.assertTrue(any("no [[httpPlugins]]" in e for e in preflight.check_config(c)))
 
+    def test_a_second_plugin_is_refused(self):
+        c = good()
+        c["httpPlugins"].append(dict(c["httpPlugins"][0], name="second", addr="127.0.0.1:9101"))
+        self.assertTrue(any("exactly one" in e for e in preflight.check_config(c)))
+
     def test_each_required_op_is_required(self):
         for op in ("Login", "NewProxy", "NewUserConn"):  # literal on purpose: do not derive from the code under test
             c = good()

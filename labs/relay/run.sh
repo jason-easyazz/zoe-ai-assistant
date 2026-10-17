@@ -6,6 +6,12 @@
 # The wait for memory happens BEFORE the lock is taken, so a waiting lab never holds the lane against other agents.
 #   RELAY_LAB_WAIT_MEM_S   how long to wait for the gate (default 3600)
 set -eu
+# never run 01:35-04:55 local time (the owner's night window starts 01:50; 15 minutes of margin for a run in progress)
+h=$(date +%H); m=$(date +%M); now_min=$(( ${h#0} * 60 + ${m#0} ))
+if [ "$now_min" -ge 95 ] && [ "$now_min" -le 295 ]; then
+  echo "REFUSED: $(date +%H:%M) is inside (or within 15 minutes of) the 01:50-04:55 night window" >&2
+  exit 3
+fi
 here="$(cd "$(dirname "$0")" && pwd)"
 PY="${PYTHON:-python3.12}"
 case "${1:-}" in
