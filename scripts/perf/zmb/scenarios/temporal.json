@@ -165,7 +165,7 @@
       "kind": "script",
       "controls": ["event_time"],
       "lme_map": "temporal-reasoning (event time vs ingestion time)",
-      "note": "fixed (audit P2.1): valid_from is the event time stated in the owner's own words (memory_temporal.parse_validity: 'since 2015' -> 1 January 2015, precision year, basis `stated`); without a phrase it is the capture time, and a model writer never gets an event time. It was FAIL on main: valid_from was always the capture time. Control `event_time` (the parser off: valid_from falls back to the capture year)",
+      "note": "fixed (audit P2.1): valid_from is the event time stated in the owner's own words (memory_temporal.parse_validity: 'since 2009' -> 1 January 2009, precision year, basis `stated`); without a phrase it is the capture time, and a model writer never gets an event time. It was FAIL on main: valid_from was always the capture time. Control `event_time` (the parser off: valid_from falls back to the capture year)",
       "events": [
         {"text": "I live in {home}, I have been here since {since_year}", "speaker": "owner_typed"}
       ],
