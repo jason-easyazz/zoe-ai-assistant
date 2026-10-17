@@ -2,8 +2,17 @@
 Home Assistant direct control endpoint.
 
 Allows the touch panel to control HA entities (lights, switches, media players)
-directly without going through the full chat → OpenClaw pipeline.
-Authenticates via session OR device token (same as voice endpoints).
+directly without going through the full chat pipeline.
+
+Auth (security fix 2026-10-17): every route needs a signed-in MEMBER or THE PANEL
+(``panel_principal.may_control_home``: a device token, the kiosk credential, or a
+registered panel address). ``get_current_user`` resolves a credential-less request
+as ``guest``, so "any principal" used to mean any device on the home LAN. An
+anonymous LAN guest, a forged X-Real-IP / X-Forwarded-For, a Cloudflare-tunnel
+request without a member and an auth-outage principal get 403. The entity reads are
+gated too: HA state carries presence (person/device_tracker incl. GPS), lock and
+alarm state and camera access tokens. ``ZOE_HA_CONTROL_SCOPE=open`` is the operator
+rollback to the old behaviour (default ``panel``).
 
 Routes:
   POST /api/ha/control        — call a HA service (toggle, turn_on, turn_off, etc.)
@@ -12,14 +21,16 @@ Routes:
 """
 import logging
 import os
+import re
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+import panel_principal
 from auth import get_current_user
-from log_throttle import log_upstream_failure
+from log_throttle import log_throttled, log_upstream_failure
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ha", tags=["ha-control"])
@@ -44,11 +55,24 @@ class HAControlPayload(BaseModel):
     params: dict[str, Any] | None = Field(default=None, max_length=100)
     service_data: dict[str, Any] | None = Field(default=None, max_length=100)
 
-# ── auth: session or device token ────────────────────────────────────────────
+# ── auth: a member or the panel, never a plain anonymous guest ──────────────
 
-async def _require_caller(user: dict = Depends(get_current_user)) -> dict:
-    """Accept any authenticated caller (session user or device token)."""
-    return user
+_REFUSED = "Sign in, or use the wall panel, to control the house"
+# Home Assistant entity ids are ``domain.object_id`` (lower-case, digits, underscore). Anything else is refused before it can
+# reach the loopback-only bridge as a path (``/entities/{id}``).
+_ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+
+
+async def _require_caller(request: Request, user: dict = Depends(get_current_user)) -> dict:
+    """A signed-in member or the panel (``panel_principal.may_control_home``); anyone else gets 403."""
+    if await panel_principal.may_control_home(request, user):
+        return user
+    log_throttled(
+        logger, logging.WARNING, f"ha-refused:{request.method}",
+        "ha refused: %s %s from a caller that is neither a member nor the panel (user=%s)",
+        request.method, request.url.path, _ent((user or {}).get("user_id")),
+    )
+    raise HTTPException(status_code=403, detail=_REFUSED)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -94,6 +118,8 @@ async def list_entities(
 @router.get("/state/{entity_id:path}")
 async def get_entity_state(entity_id: str, caller: dict = Depends(_require_caller)):
     """Get current state of a single HA entity."""
+    if not _ENTITY_ID_RE.match(entity_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid entity_id")
     try:
         return await _bridge_get(f"/entities/{entity_id}")
     except httpx.ConnectError:
