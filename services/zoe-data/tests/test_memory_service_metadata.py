@@ -283,6 +283,35 @@ async def test_delete_user_purges_audit_payload_rows(monkeypatch):
     assert invalidated == ["jason"]
 
 
+@pytest.mark.asyncio
+async def test_delete_user_fails_closed_when_the_pendant_voice_erase_fails(monkeypatch):
+    """A learned-voice erase that did not complete must NOT read as "forgotten": delete_user raises (the caller retries the whole
+    delete) - and the contact-model erase still ran. Negative control: with a working pendant erase the same call succeeds."""
+    import omi_recordings
+    import contacts_store
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-delete")
+    service._collection = lambda: _FakeCollection(get_result={"ids": ["mem-1"]})
+    service._audit_collection = lambda: _FakeCollection(get_result={"ids": []})
+    monkeypatch.setattr(memory_service, "_invalidate_agent_user_facts_cache", lambda user_id: None)
+    contacts_ran = []
+
+    async def contacts_forget(uid):
+        contacts_ran.append(uid)
+    monkeypatch.setattr(contacts_store, "forget_user", contacts_forget)
+
+    async def ok(uid):
+        return 0
+    monkeypatch.setattr(omi_recordings, "forget_user", ok)
+    assert await service.delete_user("jason", actor="admin") == 1
+
+    async def boom(uid):
+        raise omi_recordings.VoiceEraseIncomplete("RuntimeError")
+    monkeypatch.setattr(omi_recordings, "forget_user", boom)
+    with pytest.raises(MemoryServiceError, match="pendant erasure failed"):
+        await service.delete_user("jason", actor="admin")
+    assert contacts_ran == ["jason", "jason"]
+
+
 def test_build_metadata_defaults_keep_review_edit_call_compatible():
     metadata = MemoryService._build_metadata(
         user_id="jason",

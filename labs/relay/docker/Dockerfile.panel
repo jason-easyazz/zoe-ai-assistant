@@ -1,0 +1,11 @@
+# The lab "panel": curl + Python requests (what the voice daemon uses) + openssl. Headless Chromium is NOT included:
+# it does not fit the daytime memory budget (see README "Memory"); no F0 cell needs a browser (T5/C3 are the next PR).
+# Build context: labs/relay.   Base pinned by multi-arch index digest; Python deps pinned by exact version.
+ARG PYTHON_IMAGE=python@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
+FROM ${PYTHON_IMAGE}
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir requests==2.32.5 urllib3==2.6.3 certifi==2026.4.22 idna==3.11 charset-normalizer==3.4.4
+COPY panel/ /opt/panel/
+ENV PYTHONUNBUFFERED=1

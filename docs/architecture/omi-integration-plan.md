@@ -1,13 +1,18 @@
 ---
 type: architecture-plan
 date: 2026-09-25
-updated: 2026-10-13
+updated: 2026-10-17
 status: 🔨 owner chose "record on the pendant, sync when in range of Zoe" (2026-10-12) — phase 1 built flag-dark (services/omi-sync + zoe-data omi_recordings); the real pendant runs firmware 3.0.18 (below the ring protocol) so the 3.0.18 file path is opt-in and a firmware update is the recommended route (section 4.10); hardware-only facts still UNVERIFIED (section 0.3a); the live-stream path (sections 4a-6) is now the LATER path, not the first
 owner: W6 (attributed ambient capture) — samantha-evolution-plan.md; program block B9 below
 audience: Jason + every agent picking up the Omi work
 ---
 # Omi wearable → Zoe: integration plan
 
+> **Update 2026-10-17.** The pendant was updated to firmware **3.0.21** on 2026-10-13 (supervised DFU from the panel) and
+> `omi-sync` drains it on the **ring** path. The 3.0.18 legacy-file path and the codec `0x0f` question below are history for
+> this unit. The end-to-end gap audit (BLE exposure while away, silent overwrite, backups, search, the law, what the day
+> review must call into) is [`docs/research/omi-gap-audit-2026-10.md`](../research/omi-gap-audit-2026-10.md).
+>
 > **One line (2026-10-12).** The pendant pairs with **Zoe, not the Omi phone app**. Jason records on
 > the pendant away from home (on stock firmware "recording" = the pendant is powered on); when he
 > comes within Bluetooth range of the panel Pi, a small flag-dark service drains the pendant's SD
@@ -399,6 +404,12 @@ Sub-options inside (A) — the receiver:
   drop or delete it), and a WARNING `OMI_EMPTY_TRANSCRIPT` logs its measured seconds / peak / RMS / rate and how many chunks
   reached Moonshine. `GET /api/omi/recordings` returns `empty_transcript_held`. Only a transcript with text deletes the audio.
 - The voice path is untouched: no `VOICE_PATH_PATTERNS` file changes, so the replay gate does not front this PR.
+- **Held recordings can be transcribed again** inside their retention: `POST /api/omi/recordings/retranscribe` (all of the
+  caller's `empty_transcript` / `failed` rows whose WAV is still on disk) and `POST /api/omi/recordings/{id}/retranscribe`
+  put them back to `pending` with `attempts = 0`; the retention expiry is NOT extended (a row already past it is never requeued, even while its WAV awaits the purge) and a tombstone is never resurrected.
+  The same requeue runs **once per `omi_recordings.TRANSCRIBE_PIPELINE` value** from the loop (marker
+  `<ZOE_OMI_AUDIO_DIR>/.transcribe-pipeline`, claimed durably BEFORE the requeue so it can never loop; unwritable = nothing requeued, a failed requeue restores it), so a transcription change reaches the
+  audio still held; bump the constant with any change to transcription or its diagnostics.
 
 ### 4.3a The RAM floor — measured 2026-10-15 (default `ZOE_OMI_MIN_MEM_MB=800`)
 
@@ -430,6 +441,34 @@ Chosen: start floor **800 MB** (about 200 MB under the idle minimum so the backl
 reserve, ~80x the job's own streamed cost); a running job yields below **400 MB** (half) and waits out shorter dips.
 Judgement, not measurement: the 800 is a margin choice; the evidence is that the job costs <= 10 MB and the box never went
 below 1010 MB at idle. Revisit if `OMI_TRANSCRIBE_DEFERRED reason=low_memory` appears with `avail` far above 400.
+
+### 4.3b Why "voiced" recordings came back empty (measured 2026-10-16, numbers only)
+
+The 30 `OMI_EMPTY_TRANSCRIPT reason=voiced_but_no_text` rows of 2026-10-16 (logged "rms 500–950, peak 32768") were
+measured on their kept WAVs (32 held by then; read-only, under the voice-harness lock). No content was listened to or copied.
+
+- **Format is right**: all 32 are 16 kHz mono s16 PCM.
+- **The clipping is one click, not loud audio**: clipped samples are 0–0.0045 % of each file (≤ ~20 samples); in 26 of 32
+  the clip sits in second 0, where that second's RMS is ~2350 while the median per-second RMS of the files is ~64
+  (≈ −54 dBFS, a quiet room). The whole-file "rms 500–950" was that single click averaged over ~11 s.
+- **The click is electrical and identical every time**: a ~10 ms slab at −32768 20–120 ms into the recording, CELT-style
+  sign-alternating ringing before it and a decay over ~50 ms after it (10 ms means −12 500, +6 300, +5 100, +3 500, +1 200 in
+  every file checked). It is the pendant's mic restart after a hardware wake (T5838 AAD wake → `mic_resume`, PDM restart),
+  not sound. Read from the 3.0.21 source (`mic.c` `exit_hw_aad` / `aad_track_silence`, `omi.conf`): any wake resets the
+  silence timer and the mic records at least `CONFIG_OMI_VAD_HOLD_MS=10000` before sleeping again — so a bump or rustle that
+  trips the T5838 makes a ~11 s recording of a quiet room. 9 files are 10.9–11.2 s; 26 of 32 are ≤ 45 s.
+- **Not our decode**: `opuslib.Decoder.decode` is `opus_decode` (int16, saturating); `render_wav` does no float → int16
+  conversion; the samples show saturation plateaus, never an int16 wrap. The firmware's stereo → mono mix clamps too.
+- **Speech**: Silero VAD (the same model and gate Moonshine runs inside `transcribe_without_streaming`: p > 0.5 over a 0.5 s
+  mean) on 12 of them — the 4 long ones with sustained sound and 8 short ones — passes 0.0 s on 10, 0.6 s on one 600 s file
+  and 1.3 s on one 14 s file. Moonshine was not deaf: there was (almost) nothing to transcribe. The three long files with
+  sustained sound are rumble (57–68 % of energy under 100 Hz) or steady speech-band noise without speech.
+- Sustained sound by the robust measure (100 ms windows at RMS ≥ 600): < 0.5 s in 22 of 32 files.
+
+What changed: `measure_wav` adds `clipped`, `rms_median` and `active_s`; the WARNING's reason gains `transient_only` (sound
+reached Moonshine only because of a click) beside `voiced_but_no_text` (sustained sound, still no words — the one worth a look).
+It is a label, never a gate: a click recording is still transcribed (Moonshine's own VAD decides). The wake click itself is a
+firmware matter (upstream; this repo never writes the pendant).
 
 ### 4.4 Retention, review, forgetting
 
