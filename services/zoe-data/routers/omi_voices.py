@@ -11,6 +11,7 @@ query filters on THAT member: there is no admin override and no way to name anot
   POST   /api/omi/segments/{segment_id}/tag          ``{"person_id"} | {"name"}`` one line
   PATCH  /api/omi/segments/{segment_id}              ``{"owner_label": "you" | "other" | null}`` "that was me" / "not me";
                                                     ``{"not_person": kind | null}`` "that was Zoe / the TV"
+  POST   /api/omi/segments/{segment_id}/suggestion   ``{"answer": "yes" | "no" | "someone_else"}`` on "Sounds like Sam?"
   GET    /api/omi/voices                             the voices Zoe has learned for me + my learning switch
   PATCH  /api/omi/voices/{voice_id}                  ``{"learning_enabled": bool}`` stop / resume learning this voice
   DELETE /api/omi/voices/{voice_id}                  forget this voice (the person and my tags stay)
@@ -58,6 +59,10 @@ class _Kind(BaseModel):
     kind: str
 
 
+class _Answer(BaseModel):
+    answer: str
+
+
 class _Learning(BaseModel):
     learning_enabled: bool
 
@@ -103,6 +108,11 @@ async def label_segment(segment_id: str, body: _Label, user: dict = Depends(_req
     if "owner_label" in given:
         return _found(await _call(voices.set_owner_label, user["user_id"], segment_id, body.owner_label))
     return {"ok": True}
+
+
+@router.post("/segments/{segment_id}/suggestion")
+async def answer_suggestion(segment_id: str, body: _Answer, user: dict = Depends(_require_owner)):
+    return await _call(voices.answer_suggestion, user["user_id"], segment_id, body.answer)
 
 
 @router.get("/voices")
