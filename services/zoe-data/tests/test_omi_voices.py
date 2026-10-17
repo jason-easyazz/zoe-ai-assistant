@@ -920,6 +920,8 @@ def test_a_public_only_section_never_touches_the_panel_corpus(tmp_path, monkeypa
         def embed(self, x):
             return None
     import omi_diarize
+    import types
+    monkeypatch.setitem(sys.modules, "threadpoolctl", types.SimpleNamespace(threadpool_limits=lambda n: None))     # absent in the slim CI venv
     monkeypatch.setattr(omi_diarize, "load_embedder", lambda: Emb())
     monkeypatch.setattr(sys, "argv", ["x", "--sections", "C", "--panel-dir", str(tmp_path / "panel"), "--public-dir", str(tmp_path / "pub"),
                                       "--report", str(tmp_path / "r.md")])
