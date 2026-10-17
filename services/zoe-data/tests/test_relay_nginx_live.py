@@ -115,9 +115,8 @@ def stack(tmp_path, reg, on, bridge, monkeypatch):
     rogue = panel_cert("rogue-panel", rogue_ca)
 
     # The shipped enable script installs the listener (the real path), with the flag check on a real env file.
-    envf = tmp_path / ".env"
-    envf.write_text("ZOE_RELAY_INGRESS=1\n")
-    assert enable.main(["--repo", str(REPO), "--ssl-dir", str(ssl_dir), "--env-file", str(envf)]) == 0
+    # (the env-file flag / trusted-peer checks are unit-tested; the peer here is the container this fixture starts, known only later)
+    assert enable.main(["--repo", str(REPO), "--ssl-dir", str(ssl_dir), "--skip-flag-check"]) == 0
 
     reg.cert(kitchen[2], "kitchen-panel")
     reg.cert(hall[2], "hall-panel")
@@ -166,7 +165,9 @@ def stack(tmp_path, reg, on, bridge, monkeypatch):
                 break
             except (OSError, subprocess.CalledProcessError):
                 time.sleep(0.25)
-        yield dict(relay=port(9443), lan=port(80), ca=str(relay_dir / "ca.pem"), kitchen=kitchen, hall=hall, rogue=rogue,
+        ip = _sh("docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name).stdout.strip()
+        monkeypatch.setenv("ZOE_RELAY_TRUSTED_PEER", ip + "/32")  # the container itself: one address, not the docker /12
+        yield dict(relay=port(9443), nginx_ip=ip, lan=port(80), ca=str(relay_dir / "ca.pem"), kitchen=kitchen, hall=hall, rogue=rogue,
                    seen=counting.seen, bridge=bridge, reg=reg, gw=gw, container=name)
     finally:
         print(subprocess.run(["docker", "logs", "--tail", "15", name], capture_output=True, text=True).stderr)  # shown on a failure
@@ -317,6 +318,20 @@ def test_no_certificate_or_a_foreign_ca_certificate_gets_nowhere(stack):
     # POSITIVE CONTROL (same client code, same path, a household certificate):
     ok = relay_get(stack, "GET", "/api/whoami", creds(stack), cert=stack["kitchen"][:2])
     assert ok[0] == 200 and len(stack["seen"]) == before + 1
+
+
+def test_a_stale_trusted_peer_setting_is_refused_not_downgraded_to_the_lan(stack, monkeypatch):
+    """The nginx container's address changes when it is recreated. With the flag on and ZOE_RELAY_TRUSTED_PEER stale, relayed
+    traffic must stop (403), never be judged by the LAN rules; and another address in the same docker /12 is not nginx."""
+    ok = relay_get(stack, "GET", "/api/whoami", creds(stack), cert=stack["kitchen"][:2])
+    assert ok[0] == 200
+    head, tail = stack["nginx_ip"].rsplit(".", 1)
+    other = "%s.%d" % (head, 250 if tail != "250" else 249)
+    monkeypatch.setenv("ZOE_RELAY_TRUSTED_PEER", other)
+    status, body = relay_get(stack, "GET", "/api/whoami", creds(stack), cert=stack["kitchen"][:2])
+    assert status == 403 and body["detail"] == "relay_marker_untrusted_peer", (status, body)
+    monkeypatch.delenv("ZOE_RELAY_TRUSTED_PEER")
+    assert relay_get(stack, "GET", "/api/whoami", creds(stack), cert=stack["kitchen"][:2])[0] == 403  # unset trusts nobody
 
 
 def test_tls_below_1_3_is_refused(stack):

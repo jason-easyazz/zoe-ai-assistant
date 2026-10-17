@@ -2690,6 +2690,12 @@ async def websocket_push(
             if not subscribe_panel_id:
                 await websocket.close(1008, "Invalid device token")
                 return
+        # RELAYED socket: it may only join the channel of the panel its certificate + credential were proven to be (a stolen panel
+        # must not listen in on the household's other panels). `subscribe_panel_id` is the RESOLVED id (an alias maps to its
+        # registered panel first), so an alias of its own panel still works.
+        if not relay_ingress.panel_subscription_allowed(subscribe_panel_id):
+            await websocket.close(1008, "Panel not bound to this certificate")
+            return
         # Panel token or bound browser session verified; subscribe to panel push.
         await broadcaster.connect_panel(websocket, subscribe_panel_id)
         # Clean up under the RESOLVED id we actually subscribed to — not the

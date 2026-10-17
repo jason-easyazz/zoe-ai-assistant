@@ -239,6 +239,26 @@ def test_a_failed_leaf_renewal_leaves_the_serving_pair_untouched(pki, tmp_path):
     assert (relay_dir / "leaf.pem").read_bytes() != before["leaf.pem"]
 
 
+def test_enable_requires_the_nginx_container_address_as_a_single_address(tmp_path):
+    en = _load("enable_relay_listener")
+    en.zoe_ui_address = lambda: None
+    env = tmp_path / ".env"
+    env.write_text("ZOE_RELAY_INGRESS=1\n")
+    assert any("ZOE_RELAY_TRUSTED_PEER is not set" in p for p in en.peer_problems([env]))
+    for wide in ("172.16.0.0/12", "172.18.0.0/24"):  # a network is the pre-fix trust boundary, not the nginx container
+        env.write_text("ZOE_RELAY_TRUSTED_PEER=%s\n" % wide)
+        assert any("network" in p for p in en.peer_problems([env])), wide
+    env.write_text("ZOE_RELAY_TRUSTED_PEER=nonsense\n")
+    assert any("not an address" in p for p in en.peer_problems([env]))
+    env.write_text("ZOE_RELAY_TRUSTED_PEER=172.18.0.5/32\n")
+    assert en.peer_problems([env]) == []
+    # the running container is the authority when docker can be read: a stale address after a recreate is refused
+    en.zoe_ui_address = lambda: ["172.18.0.9"]
+    assert any("not the running zoe-ui" in p for p in en.peer_problems([env]))
+    en.zoe_ui_address = lambda: ["172.18.0.5"]
+    assert en.peer_problems([env]) == []
+
+
 def test_the_flag_check_reads_every_env_file_in_service_order_and_the_last_assignment_wins(tmp_path):
     en = _load("enable_relay_listener")
     a, b, c = tmp_path / "a.env", tmp_path / "b.env", tmp_path / "c.env"
@@ -286,14 +306,15 @@ def test_sign_csr_issues_client_auth_only_and_ignores_requested_extensions(pki, 
 def test_enable_installs_the_listener_only_when_everything_is_in_place(pki, tmp_path):
     _, _, relay_dir = pki
     en = _load("enable_relay_listener")
+    en.zoe_ui_address = lambda: None  # no docker in the unit lane
     env = tmp_path / ".env"
     # Flag off in the env file: refuse (listener up + flag off = relayed requests judged as LAN).
-    env.write_text("ZOE_RELAY_INGRESS=0\n# ZOE_RELAY_INGRESS=1\n")
+    env.write_text("ZOE_RELAY_INGRESS=0\n# ZOE_RELAY_INGRESS=1\nZOE_RELAY_TRUSTED_PEER=172.18.0.5\n")
     assert any("ZOE_RELAY_INGRESS" in p for p in en.problems(relay_dir, env))
     assert en.main(["--repo", str(ROOT), "--ssl-dir", str(relay_dir.parent), "--env-file", str(env)]) == 2
     assert not (relay_dir / "listener.conf").exists()
     # Flag on: installed, byte-identical to the shipped server block.
-    env.write_text("export ZOE_RELAY_INGRESS=\"1\"  # relay\n")
+    env.write_text("export ZOE_RELAY_INGRESS=\"1\"  # relay\nZOE_RELAY_TRUSTED_PEER=172.18.0.5\n")
     assert en.problems(relay_dir, env) == []
     assert en.main(["--repo", str(ROOT), "--ssl-dir", str(relay_dir.parent), "--env-file", str(env)]) == 0
     assert (relay_dir / "listener.conf").read_text() == LISTENER

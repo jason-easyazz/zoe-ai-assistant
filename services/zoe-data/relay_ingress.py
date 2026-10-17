@@ -14,9 +14,10 @@ them) and zoe-data would ignore them anyway, so a relayed request never matches 
 
 The rules this module owns (every one has a negative control in ``tests/test_relay_ingress.py``):
 
-  1. The marker counts ONLY when the flag is on AND the TCP peer is a proxy of ours (``panel_principal.peer_is_trusted_proxy``:
-     the same ``ZOE_TRUSTED_PROXY_NETS`` helper the panel address rule uses). Flag off, or a peer that is not our proxy: the
-     header is inert and the request is judged exactly as it is today.
+  1. The marker counts ONLY when the flag is on AND the TCP peer is the zoe-ui nginx container itself (``ZOE_RELAY_TRUSTED_PEER``,
+     a single address - not the docker ``172.16/12`` that ``ZOE_TRUSTED_PROXY_NETS`` trusts for ``X-Real-IP``). Flag off: the header
+     is inert and the request is judged exactly as it is today. Flag on and the marker from any other peer: refused (403) by the
+     middleware - a forgery, or a stale address after the container was recreated, never a silent fall-through to the LAN rules.
   2. NEVER ``guest``. A relayed request must carry a valid DEVICE TOKEN (``X-Device-Token``) or a valid KIOSK CREDENTIAL
      (``zoe_panel_kiosk`` cookie, ``ZOE_PANEL_KIOSK_CREDENTIAL``), else 401. ``auth.get_current_user``'s anonymous-guest fallback
      and ``ZOE_UNAUTHENTICATED_ROLE`` never apply; a zoe-auth outage is refused (503), never downgraded.
@@ -39,6 +40,7 @@ safe). ``auth._is_internal_request`` is not involved and must never be widened f
 from __future__ import annotations
 
 import contextvars
+import ipaddress
 import logging
 import os
 import re
@@ -124,17 +126,57 @@ def origin() -> Optional[str]:
 # ── is this request relayed? ────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def is_relay(conn: Any) -> bool:
-    """True only when the flag is on, the TCP peer is a proxy of ours AND the request carries ``X-Zoe-Ingress: relay``."""
-    if conn is None:
-        return False
-    marker = str(conn.headers.get(INGRESS_HEADER, "") or "").strip().lower()
-    if marker != RELAY_VALUE:
-        return False
-    peer = conn.client.host if getattr(conn, "client", None) else ""
+def trusted_peer_nets() -> list:
+    """``ZOE_RELAY_TRUSTED_PEER``: the address(es) of the zoe-ui nginx container - the only TCP peer whose relay marker is believed.
+
+    Deliberately NOT ``ZOE_TRUSTED_PROXY_NETS`` (default loopback + the whole docker ``172.16/12``, which also serves ``X-Real-IP``
+    and must not change): any container on the bridge could then assert the marker. Only SINGLE ADDRESSES count (``172.18.0.5`` or
+    ``172.18.0.5/32``); a wider network is ignored with a warning. Unset = nobody is trusted: with the flag on, every request that
+    carries the marker is refused (403) until the address is set - closed, never downgraded to the LAN rules. The nginx container's
+    address changes when the container is recreated: ``docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+    zoe-ui`` (``enable_relay_listener.py`` checks it)."""
+    out = []
+    for part in os.environ.get("ZOE_RELAY_TRUSTED_PEER", "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            net = ipaddress.ip_network(part, strict=False)
+        except ValueError:
+            logger.warning("relay_ingress: ignoring bad ZOE_RELAY_TRUSTED_PEER entry %r", part)
+            continue
+        if net.prefixlen != net.max_prefixlen:
+            logger.warning("relay_ingress: ignoring ZOE_RELAY_TRUSTED_PEER entry %r: a single address (the nginx container), not a network", part)
+            continue
+        out.append(net)
+    return out
+
+
+def peer_is_nginx(peer: str) -> bool:
     import panel_principal  # late: panel_principal imports this module
 
-    if not panel_principal.peer_is_trusted_proxy(peer):
+    return bool(peer) and panel_principal._in_nets(peer, trusted_peer_nets())
+
+
+def _marker(conn: Any) -> bool:
+    return str(conn.headers.get(INGRESS_HEADER, "") or "").strip().lower() == RELAY_VALUE
+
+
+def _peer(conn: Any) -> str:
+    return conn.client.host if getattr(conn, "client", None) else ""
+
+
+def marker_from_untrusted_peer(conn: Any) -> bool:
+    """Flag on, the relay marker present, but the TCP peer is not the nginx container. Nginx always writes the marker (and the LAN
+    blocks always clear it), so this is a forgery or a misconfigured ``ZOE_RELAY_TRUSTED_PEER`` - and in the second case falling
+    through to the LAN rules would treat a relayed request as a LAN one. The middleware refuses it (403)."""
+    return conn is not None and enabled() and _marker(conn) and not peer_is_nginx(_peer(conn))
+
+
+def is_relay(conn: Any) -> bool:
+    """True only when the flag is on, the TCP peer is the zoe-ui nginx container (``ZOE_RELAY_TRUSTED_PEER``) AND the request
+    carries ``X-Zoe-Ingress: relay``."""
+    if conn is None or not _marker(conn):
         return False
     if not enabled():
         log_throttled(
@@ -143,7 +185,7 @@ def is_relay(conn: Any) -> bool:
             "Turn the flag on (and restart) BEFORE enabling the nginx relay listener.",
         )
         return False
-    return True
+    return peer_is_nginx(_peer(conn))
 
 
 def client_fingerprint(conn: Any) -> Optional[str]:
@@ -280,6 +322,12 @@ def current_panel() -> Optional[str]:
     return _relay_panel.get()
 
 
+def panel_subscription_allowed(panel_id: str) -> bool:
+    """For the push socket: True when the request is not relayed, or ``panel_id`` is the panel it was proven to be."""
+    panel = _relay_panel.get()
+    return True if panel is None else str(panel_id or "") == panel
+
+
 async def member_allowed_here(user_id: str) -> bool:
     """For code that resolves a member from a bare session id (the websocket handlers): True when the request is not relayed, or
     the member has a fresh sign-in at the panel the relayed request was proven to be."""
@@ -342,6 +390,19 @@ class RelayIngressMiddleware:
         from starlette.requests import HTTPConnection
 
         conn = HTTPConnection(scope)
+        if marker_from_untrusted_peer(conn):
+            log_throttled(logger, logging.WARNING, "relay-marker-untrusted-peer",
+                          "relay_ingress: refused a request carrying X-Zoe-Ingress from %s, which is not ZOE_RELAY_TRUSTED_PEER (the nginx container)",
+                          _peer(conn))
+            if scope["type"] == "websocket":
+                from starlette.websockets import WebSocket
+
+                await WebSocket(scope, receive, send).close(code=1008)
+                return
+            from starlette.responses import JSONResponse
+
+            await JSONResponse({"detail": "relay_marker_untrusted_peer"}, status_code=403)(scope, receive, send)
+            return
         if not is_relay(conn):
             await self.app(scope, receive, send)
             return

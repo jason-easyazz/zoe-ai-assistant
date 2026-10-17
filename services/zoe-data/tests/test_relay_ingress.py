@@ -159,7 +159,7 @@ FRESH: dict = {}
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     for var in ("ZOE_RELAY_INGRESS", "ZOE_RELAY_HOSTNAME", "ZOE_HA_CONTROL_SCOPE", "ZOE_HOUSEHOLD_LISTS_PANEL_SCOPE",
-                "ZOE_TRUSTED_PROXY_NETS", "ZOE_PANEL_KIOSK_CREDENTIAL", "ZOE_DEVICE_TOKEN_BINDS_MEMBER"):
+                "ZOE_TRUSTED_PROXY_NETS", "ZOE_PANEL_KIOSK_CREDENTIAL", "ZOE_DEVICE_TOKEN_BINDS_MEMBER", "ZOE_RELAY_TRUSTED_PEER"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("ZOE_INTERNAL_TOKEN", "test-internal-token")
     monkeypatch.setattr(auth, "_UNAUTH_ROLE", "guest")
@@ -198,6 +198,7 @@ def _env(monkeypatch):
 def on(monkeypatch):
     monkeypatch.setenv("ZOE_RELAY_INGRESS", "1")
     monkeypatch.setenv("ZOE_RELAY_HOSTNAME", HOST)
+    monkeypatch.setenv("ZOE_RELAY_TRUSTED_PEER", NGINX + "/32")  # the zoe-ui container: ONE address, never the docker /12
 
 
 @pytest.fixture
@@ -273,18 +274,43 @@ def test_t5_the_marker_counts_only_from_a_trusted_proxy_with_the_exact_value(reg
     assert relay_ingress.is_relay(req(NGINX)) is False
     # ... and a host that talks to :8000 directly (not our proxy) cannot claim it, even with a real-looking fingerprint.
     assert relay_ingress.is_relay(req(LAN_HOST, **{"X-Zoe-Ingress": "relay", "X-Zoe-Client-Cert-Fp": FP_KITCHEN})) is False
+    # ... and so cannot ANOTHER container in the same docker /12 that ZOE_TRUSTED_PROXY_NETS trusts for X-Real-IP (the trust is the
+    # nginx container's single address, not the subnet), nor loopback.
+    assert relay_ingress.is_relay(req("172.18.0.99", **{"X-Zoe-Ingress": "relay"})) is False
+    assert relay_ingress.is_relay(req("172.17.0.2", **{"X-Zoe-Ingress": "relay"})) is False
+    assert relay_ingress.is_relay(req("127.0.0.1", **{"X-Zoe-Ingress": "relay"})) is False
 
 
-def test_t5_a_lan_host_writing_the_relay_headers_is_still_just_the_lan(reg, on):
-    # The phone writes both headers itself and reaches zoe-data directly: peer = the phone, not nginx -> judged as a LAN guest.
-    lan = client(reg, LAN_HOST)
-    r = lan.get("/api/whoami", headers=relay_headers())
-    assert r.status_code == 200, r.text
-    user = r.json()["user"]
-    assert user["panel_id"] == "kitchen-panel" and "ingress" not in user  # the LAN rule: a device token is the panel
-    # No credentials at all: an anonymous LAN guest (200), NOT the relay's 401 - the marker bought the phone nothing.
-    r = lan.get("/api/whoami", headers=relay_headers(token=None))
-    assert r.status_code == 200 and r.json()["user"]["user_id"] == "guest" and "panel_id" not in r.json()["user"]
+def test_t5_the_trusted_peer_is_a_single_address_and_unset_trusts_nobody(reg, on, monkeypatch):
+    def req(peer):
+        return Request(dict(type="http", method="GET", path="/", client=(peer, 1), headers=[(b"x-zoe-ingress", b"relay")]))
+
+    for wide in ("172.16.0.0/12", "172.18.0.0/24", "0.0.0.0/0", "not-an-address"):
+        monkeypatch.setenv("ZOE_RELAY_TRUSTED_PEER", wide)
+        assert relay_ingress.trusted_peer_nets() == [], wide
+        assert relay_ingress.is_relay(req(NGINX)) is False, wide  # a network is ignored, never widened into trust
+    monkeypatch.setenv("ZOE_RELAY_TRUSTED_PEER", "172.18.0.7, " + NGINX)
+    assert relay_ingress.is_relay(req(NGINX)) is True and relay_ingress.is_relay(req("172.18.0.7")) is True
+    monkeypatch.delenv("ZOE_RELAY_TRUSTED_PEER")
+    assert relay_ingress.is_relay(req(NGINX)) is False, "unset trusts nobody"
+    # FAIL CLOSED, never to the LAN rules: with the flag on, a marker from any other peer (a forgery, or the nginx container's
+    # address changed after a recreate and the setting is stale) is refused by the gate instead of being judged as a LAN request.
+    r = client(reg).get("/api/whoami", headers=relay_headers())
+    assert r.status_code == 403 and r.json()["detail"] == "relay_marker_untrusted_peer"
+    monkeypatch.setenv("ZOE_RELAY_TRUSTED_PEER", NGINX)
+    assert client(reg).get("/api/whoami", headers=relay_headers()).status_code == 200  # POSITIVE: the same request once pinned
+
+
+def test_t5_a_host_that_is_not_nginx_writing_the_relay_headers_is_refused_not_believed(reg, on):
+    # A phone on the Wi-Fi, or another container on the docker bridge, writes both headers itself and reaches zoe-data directly.
+    for peer in (LAN_HOST, "172.18.0.99"):
+        r = client(reg, peer).get("/api/whoami", headers=relay_headers())
+        assert r.status_code == 403 and r.json()["detail"] == "relay_marker_untrusted_peer", (peer, r.text)
+    # POSITIVE CONTROL: the same request from the pinned nginx address is the relay.
+    assert client(reg).get("/api/whoami", headers=relay_headers()).json()["user"]["ingress"] == "relay"
+    # And the very same host without the headers is the ordinary LAN (a client that never mentions the relay is untouched).
+    lan = client(reg, LAN_HOST).get("/api/whoami", headers={"X-Device-Token": TOK_KITCHEN})
+    assert lan.status_code == 200 and lan.json()["user"]["panel_id"] == "kitchen-panel" and "ingress" not in lan.json()["user"]
 
 
 def test_t5_a_relayed_request_has_no_address_and_never_matches_a_registered_panel(reg, on):
@@ -347,7 +373,7 @@ def test_t10_no_device_credential_is_401_and_home_control_is_refused_over_the_re
     assert ok.status_code == 200 and len(bridge) == 1
 
 
-def test_t10_a_certificate_and_token_are_the_panel_not_a_guest_and_not_the_house(reg, on, bridge, monkeypatch):
+def test_t10_a_certificate_and_token_resolve_to_the_guest_class_panel_principal_which_cannot_drive_the_house(reg, on, bridge, monkeypatch):
     c = client(reg)
     who = c.get("/api/whoami", headers=relay_headers())
     assert who.status_code == 200, who.text
@@ -495,14 +521,22 @@ def test_the_middleware_publishes_the_proven_panel_to_code_without_a_request_and
     assert relay_ingress.current_panel() is None
 
 
-def test_main_makes_the_websocket_session_resolvers_relay_aware():
+def test_the_relay_gate_is_the_last_middleware_main_adds():
     src = (ROOT / "main.py").read_text()
-    ws_session = re.search(r"async def _resolve_ws_session\(.*?\n\n\n", src, re.S).group(0)
-    ws_user = re.search(r"async def _resolve_ws_user\(.*?\n\n\n", src, re.S).group(0)
-    assert "relay_ingress.current_panel()" in ws_session and "relay_ingress.member_allowed_here" in ws_session
-    assert "relay_ingress.member_allowed_here" in ws_user
     assert src.count("app.add_middleware(") == 3 and src.rindex("app.add_middleware(") == src.index("app.add_middleware(relay_ingress.RelayIngressMiddleware)"), \
         "the relay gate must be the LAST middleware added (outermost); a later one would run before it"
+    # the real websocket handlers are exercised end to end in test_relay_ws_live.py (cross-panel subscription, stale member session)
+
+
+@pytest.mark.skip(reason="KNOWN GAP, closed by the separate voice-path PR fix/voice-path-identity (replay-gated): un-skip it there. "
+                         "R1 must not go live until this passes.")
+def test_a_relayed_voice_command_ignores_a_forged_panel_id_and_identified_user_id():
+    """Over the relay a stolen panel's certificate + device token must not become a MEMBER by writing ``identified_user_id`` (and a
+    claim score) or another panel's ``panel_id`` into the ``/api/voice/command`` payload. Intended contract: for a relayed request
+    the voice lane takes the panel from the proven panel (``relay_ingress.current_panel()``) and the member only from a
+    server-verified claim or the fresh PIN session. Today ``routers/voice_tts.py`` (voice-path, not touched by the relay PR) reads
+    both from the payload, so this test has nothing to assert against yet."""
+    raise AssertionError("implemented with fix/voice-path-identity")
 
 
 def test_an_open_relayed_websocket_is_closed_when_its_certificate_is_revoked(reg, on, monkeypatch):
@@ -661,6 +695,7 @@ def test_kiosk_enter_over_the_relay_needs_the_ticket_panels_certificate(reg, on,
 
 
 def test_flag_off_the_relay_header_is_ignored_and_nothing_new_is_exposed(reg, monkeypatch):
+    monkeypatch.setenv("ZOE_RELAY_TRUSTED_PEER", NGINX)  # only the FLAG may keep it off: the peer is pinned and correct
     c = client(reg)
     # No credentials, relay marker from the proxy, flag OFF: judged exactly as the LAN - an anonymous guest, no 401 gate.
     r = c.get("/api/whoami", headers=relay_headers(fp=None, token=None))

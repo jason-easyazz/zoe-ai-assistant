@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,9 +43,10 @@ def _openssl(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["openssl", *args], capture_output=True, text=True, check=False)
 
 
-def flag_on(env_files) -> bool:
-    """ZOE_RELAY_INGRESS as zoe-data will see it: the last assignment across the env files, in order, is truthy."""
+def env_value(env_files, name: str):
+    """``name`` as zoe-data will see it: the last assignment across the env files, in order (None when never assigned)."""
     files = [env_files] if isinstance(env_files, (str, os.PathLike)) else list(env_files)
+    rx = re.compile(r"^\s*(?:export\s+)?" + re.escape(name) + r"\s*=\s*['\"]?([^'\"#\s]*)['\"]?\s*(?:#.*)?$", re.I)
     value = None
     for f in files:
         try:
@@ -52,10 +54,50 @@ def flag_on(env_files) -> bool:
         except OSError:
             continue
         for line in text.splitlines():
-            m = _ASSIGN_RE.match(line)
+            m = rx.match(line)
             if m:
-                value = m.group(1).strip().lower()
-    return value in ("1", "true", "yes", "on")
+                value = m.group(1).strip()
+    return value
+
+
+def flag_on(env_files) -> bool:
+    """ZOE_RELAY_INGRESS as zoe-data will see it: the last assignment across the env files, in order, is truthy."""
+    return (env_value(env_files, "ZOE_RELAY_INGRESS") or "").lower() in ("1", "true", "yes", "on")
+
+
+def zoe_ui_address():
+    """The zoe-ui container's current address(es), or None when docker / the container is not available."""
+    r = subprocess.run(["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", "zoe-ui"],
+                       capture_output=True, text=True, check=False) if shutil.which("docker") else None
+    if r is None or r.returncode != 0:
+        return None
+    return r.stdout.split() or None
+
+
+def peer_problems(env_files) -> list[str]:
+    """ZOE_RELAY_TRUSTED_PEER must name the nginx container as a single address (and match the running container, when it can be read)."""
+    value = env_value(env_files, "ZOE_RELAY_TRUSTED_PEER")
+    if not value:
+        return ["ZOE_RELAY_TRUSTED_PEER is not set (the zoe-ui nginx container's address, e.g. 172.18.0.5): without it zoe-data refuses every "
+                "relayed request. Find it with: docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' zoe-ui"]
+    import ipaddress
+
+    out, nets = [], []
+    for part in value.split(","):
+        try:
+            net = ipaddress.ip_network(part.strip(), strict=False)
+        except ValueError:
+            out.append("ZOE_RELAY_TRUSTED_PEER entry %r is not an address" % part)
+            continue
+        if net.prefixlen != net.max_prefixlen:
+            out.append("ZOE_RELAY_TRUSTED_PEER entry %r is a network; use the single address of the zoe-ui container" % part.strip())
+        else:
+            nets.append(net)
+    live = zoe_ui_address()
+    if live and nets and not any(ipaddress.ip_address(a) in n for a in live for n in nets):
+        out.append("ZOE_RELAY_TRUSTED_PEER (%s) is not the running zoe-ui container's address (%s): it changes when the container is recreated"
+                   % (value, ", ".join(live)))
+    return out
 
 
 def problems(relay_dir: Path, env_file) -> list[str]:
@@ -84,6 +126,8 @@ def problems(relay_dir: Path, env_file) -> list[str]:
         out.append("leaf.pem expires within 7 days (or already has): issue a new leaf first")
     if _openssl("x509", "-in", str(ca), "-noout", "-checkend", "0").returncode != 0:
         out.append("ca.pem has expired")
+    if env_file is not None:
+        out.extend(peer_problems(env_file))
     if env_file is not None and not flag_on(env_file):
         out.append("ZOE_RELAY_INGRESS is not on in %s (last assignment wins): set it to 1 and restart zoe-data BEFORE enabling the "
                    "listener (listener up + flag off = relayed requests judged as LAN requests)" % env_file)
