@@ -41,25 +41,35 @@ class ConfigTests(unittest.TestCase):
                 self.assertTrue(any(op in e for e in preflight.check_config(c)))
 
     def test_plugin_must_be_loopback_plain_http(self):
-        for addr in ("10.0.0.1:9100", "0.0.0.0:9100", "plugin.example.com:9100", "https://127.0.0.1:9100", "127.0.0.1"):
+        # "localhost" is a NAME: the system resolver (and /etc/hosts) can map it to a routable address, so it is refused
+        for addr in ("10.0.0.1:9100", "0.0.0.0:9100", "plugin.example.com:9100", "localhost:9100", "https://127.0.0.1:9100", "127.0.0.1"):
             c = good()
             c["httpPlugins"][0]["addr"] = addr
             with self.subTest(addr=addr):
                 self.assertTrue(preflight.check_config(c))
 
     def test_loopback_forms_accepted(self):
-        for addr in ("127.0.0.1:9100", "localhost:9100", "http://127.0.0.1:9100"):
+        for addr in ("127.0.0.1:9100", "http://127.0.0.1:9100", "[::1]:9100"):
             c = good()
             c["httpPlugins"][0]["addr"] = addr
             with self.subTest(addr=addr):
                 self.assertEqual(preflight.check_config(c), [])
 
-    def test_open_surfaces_fail(self):
-        for key, val in (("vhostHTTPPort", 80), ("tcpmuxHTTPConnectPort", 1337), ("subDomainHost", "x.example.com"), ("kcpBindPort", 7000)):
+    def test_every_extra_listener_fails(self):
+        # table-driven over the list the code forbids AND over a literal list, so shrinking the code's list is caught
+        literal = (("vhostHTTPPort", 80), ("tcpmuxHTTPConnectPort", 1337), ("kcpBindPort", 7000), ("quicBindPort", 7002))
+        for key, val in literal:
             c = good()
             c[key] = val
             with self.subTest(key=key):
-                self.assertTrue(preflight.check_config(c))
+                self.assertTrue(any(key in e for e in preflight.check_config(c)))
+        for key in preflight.FORBIDDEN_LISTENERS:
+            self.assertIn(key, [k for k, _ in literal] + ["sshTunnelGateway.bindPort"])
+
+    def test_open_surfaces_fail(self):
+        c = good()
+        c["subDomainHost"] = "x.example.com"
+        self.assertTrue(preflight.check_config(c))
         c = good()
         c["sshTunnelGateway"] = {"bindPort": 2200}
         self.assertTrue(preflight.check_config(c))
@@ -71,7 +81,7 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(preflight.check_config(c))
 
 
-def serve(handler_answer):
+def serve(handler_answer, status=200, raw_body=None):
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
@@ -80,8 +90,8 @@ def serve(handler_answer):
 
         def do_POST(self):
             self.rfile.read(int(self.headers.get("Content-Length", 0)))
-            raw = json.dumps(handler_answer).encode()
-            self.send_response(200)
+            raw = raw_body if raw_body is not None else json.dumps(handler_answer).encode()
+            self.send_response(status)
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
@@ -104,6 +114,21 @@ class ProbeTests(unittest.TestCase):
         srv = serve({"reject": False, "unchange": True})
         self.addCleanup(srv.shutdown)
         self.assertIn("ACCEPTED", preflight.probe_plugin(f"127.0.0.1:{srv.server_port}", "/handler"))
+
+    def test_a_server_that_is_not_the_session_master_is_refused(self):
+        # healthy on /healthz but 404 / 401 / 500 on the real route: every real login would be refused, so not ready
+        for status in (404, 401, 500):
+            srv = serve({}, status=status)
+            self.addCleanup(srv.shutdown)
+            with self.subTest(status=status):
+                self.assertIn(str(status), preflight.probe_plugin(f"127.0.0.1:{srv.server_port}", "/handler"))
+
+    def test_malformed_answers_are_refused(self):
+        for body in (b"not json", b"[]", b'"reject"', b'{"reject": "true"}', b"{}"):
+            srv = serve(None, raw_body=body)
+            self.addCleanup(srv.shutdown)
+            with self.subTest(body=body):
+                self.assertIsNotNone(preflight.probe_plugin(f"127.0.0.1:{srv.server_port}", "/handler"))
 
     def test_nothing_listening_is_refused(self):
         self.assertIn("unreachable", preflight.probe_plugin("127.0.0.1:1", "/handler", timeout=0.5))

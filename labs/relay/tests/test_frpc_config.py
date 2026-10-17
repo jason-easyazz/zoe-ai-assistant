@@ -52,6 +52,32 @@ class FrpcConfigTests(unittest.TestCase):
         self.assertTrue(any("loginFailExit" in e for e in violations(fc.render(**KW).replace("loginFailExit = false\n", ""))))
         self.assertTrue(any("loginFailExit" in e for e in violations(fc.render(**KW).replace("loginFailExit = false", "loginFailExit = true"))))
 
+    def test_empty_plugin_table_still_fails(self):
+        errs = violations(fc.render(**KW, extra_proxy="\n[proxies.plugin]\n"))
+        self.assertTrue(any("plugin" in e for e in errs), errs)
+
+    def test_unexpected_shapes_are_violations_not_exceptions(self):
+        base = fc.render(**KW)
+        header = base.split("\n[[proxies]]")[0] + "\n"
+        shapes = {
+            "[proxies] as a table": header + "[proxies]\nname = 'x'\n",
+            "proxies as a scalar": "proxies = 3\n" + header,
+            "proxies as strings": header + "proxies = ['a']\n",
+            "transport as a scalar": "transport = 3\nuser = 'x'\n",
+            "metadatas as a scalar": header.replace("metadatas.hid", "x.hid").replace("metadatas.secret", "y.secret") + "metadatas = 'x'\n",
+            "empty file": "",
+        }
+        for label, text in shapes.items():
+            with self.subTest(shape=label):
+                errs = violations(text)
+                self.assertTrue(errs)  # a list of violations, never an exception and never []
+
+    def test_the_checker_itself_failing_means_refusal(self):
+        # an internal error (here: a broken `listener` argument reached on the violation path) must come back as a violation
+        errs = fc.check(fc.render(**KW), expect_hid=HID, listener=None)
+        self.assertEqual(len(errs), 1)
+        self.assertIn("could not be checked", errs[0])
+
     def test_garbage_fails(self):
         self.assertTrue(violations("not = [toml"))
 

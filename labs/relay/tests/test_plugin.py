@@ -71,6 +71,19 @@ class LoginTests(unittest.TestCase):
         os.utime(reg, ns=(1, 2_000_000_000))  # force a distinct mtime
         self.assertTrue(self.login()["reject"])
 
+    def test_edit_that_keeps_the_timestamp_is_still_seen(self):
+        reg = os.path.join(self.tmp, "households.json")
+        self.assertFalse(self.login()["reject"])  # loads and caches the registry
+        st = os.stat(reg)
+        with open(reg) as f:
+            rows = json.load(f)
+        rows["households"][HID_A]["active"] = False
+        rows["households"][HID_A]["pad"] = "x" * 10  # different size
+        with open(reg, "w") as f:
+            json.dump(rows, f)
+        os.utime(reg, ns=(st.st_atime_ns, st.st_mtime_ns))  # restore the old mtime: only size and ctime differ
+        self.assertTrue(self.login()["reject"])
+
     def test_missing_registry_fails_closed(self):
         os.unlink(os.path.join(self.tmp, "households.json"))
         with self.assertRaises(FileNotFoundError):  # the HTTP layer turns this into a 500, which frps treats as a refusal
@@ -142,8 +155,24 @@ class NewUserConnTests(unittest.TestCase):
         self.t = [0.0]
         self.p, self.reg = make_policy(self.tmp, rate_max=3, rate_window_s=10, clock=lambda: self.t[0])
 
-    def conn(self, hid=HID_A):
-        return self.p.handle("NewUserConn", {"user": user(hid), "proxy_name": hid + ".https", "proxy_type": "https", "remote_addr": "1.2.3.4:5"})
+    def conn(self, hid=HID_A, **over):
+        c = {"user": user(hid, SEC_A if hid == HID_A else SEC_B), "proxy_name": hid + ".https", "proxy_type": "https",
+             "remote_addr": "1.2.3.4:5"}
+        c.update(over)
+        return self.p.handle("NewUserConn", c)
+
+    def test_connection_must_belong_to_the_authenticated_household(self):
+        self.assertFalse(self.conn()["reject"])
+        bad = {
+            "A's identity with B's hid in the metas": {"user": {"user": HID_A, "metas": {"hid": HID_B, "secret": SEC_B}}},
+            "wrong secret": {"user": user(HID_A, "nope")},
+            "proxy of another household": {"proxy_name": HID_B + ".https"},
+            "not an https proxy": {"proxy_type": "tcp"},
+        }
+        for label, over in bad.items():
+            with self.subTest(bad=label):
+                self.assertTrue(self.conn(**over)["reject"])
+        self.assertEqual([self.conn(HID_B)["reject"] for _ in range(4)], [False, False, False, True])  # B's own counter, untouched by A's bad tries
 
     def test_rate_cap_is_per_household_and_drains(self):
         self.assertEqual([self.conn()["reject"] for _ in range(5)], [False, False, False, True, True])

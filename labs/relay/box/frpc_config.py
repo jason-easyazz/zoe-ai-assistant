@@ -92,28 +92,47 @@ def check(
     expect_relay_addr: str | None = None,
     listener: tuple[str, int] = ("127.0.0.1", 8443),
 ) -> list[str]:
-    """Return the violations in an frpc config; empty means it is acceptable for a household box."""
+    """Return the violations in an frpc config; empty means it is acceptable for a household box.
+
+    Fails closed: a config shape the checker did not anticipate is a violation, never an exception that a caller might
+    swallow as "no problems"."""
+    try:
+        return _check(text, expect_hid=expect_hid, expect_relay_addr=expect_relay_addr, listener=listener)
+    except Exception as e:  # noqa: BLE001
+        return [f"config could not be checked ({type(e).__name__}): refusing it"]
+
+
+def _table(v) -> bool:
+    return isinstance(v, dict)
+
+
+def _check(text: str, *, expect_hid: str, expect_relay_addr: str | None, listener: tuple[str, int]) -> list[str]:
     errs: list[str] = []
     try:
         cfg = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         return [f"not valid TOML: {e}"]
 
-    proxies = cfg.get("proxies") or []
+    proxies = cfg.get("proxies", [])
+    if not isinstance(proxies, list) or not all(_table(p) for p in proxies):
+        return ["proxies must be an array of tables ([[proxies]])"]
     if len(proxies) != 1:
         errs.append(f"exactly one proxy allowed, found {len(proxies)}")
     for key in ("visitors", "includes", "webServer"):
         if key in cfg:
             errs.append(f"{key!r} must not be present (extra proxies / an admin API would bypass this check)")
 
-    tls = (cfg.get("transport") or {}).get("tls") or {}
+    transport = cfg.get("transport", {})
+    if not _table(transport) or not _table(transport.get("tls", {})):
+        return ["transport / transport.tls must be tables"]
+    tls = transport.get("tls", {})
     if tls.get("enable") is False:
         errs.append("transport.tls.enable must not be false")
     if not tls.get("trustedCaFile"):
         errs.append("transport.tls.trustedCaFile missing: frpc would not verify the relay")
     if not tls.get("serverName"):
         errs.append("transport.tls.serverName missing")
-    proto = (cfg.get("transport") or {}).get("protocol", "tcp")
+    proto = transport.get("protocol", "tcp")
     if proto not in ("tcp", "quic"):
         errs.append(f"transport.protocol {proto!r} not allowed")
 
@@ -121,8 +140,8 @@ def check(
         errs.append("loginFailExit must be false: the box has to keep retrying while the relay is down or starting")
     if cfg.get("user") != expect_hid:
         errs.append("user must equal the household id")
-    metas = cfg.get("metadatas") or {}
-    if metas.get("hid") != expect_hid or not metas.get("secret"):
+    metas = cfg.get("metadatas", {})
+    if not _table(metas) or metas.get("hid") != expect_hid or not metas.get("secret"):
         errs.append("metadatas.hid/secret missing or wrong")
     if expect_relay_addr is not None and cfg.get("serverAddr") != expect_relay_addr:
         errs.append(f"serverAddr must be {expect_relay_addr!r}")
@@ -130,7 +149,7 @@ def check(
     for p in proxies:
         if p.get("type") != "https":
             errs.append(f"proxy type {p.get('type')!r} not allowed: only https")
-        if p.get("plugin"):
+        if "plugin" in p:  # key presence, not truthiness: an empty [proxies.plugin] table is still a plugin declaration
             errs.append("proxy plugin (e.g. https2http) not allowed: it would terminate TLS in frpc and bypass the relay listener")
         host, port = str(p.get("localIP", "127.0.0.1")), p.get("localPort")
         if (host, port) != listener:
@@ -140,7 +159,8 @@ def check(
             elif _is_loopbackish(host):
                 why = " (a loopback service other than the relay listener)"
             errs.append(f"proxy target {host}:{port} is not the relay listener {listener[0]}:{listener[1]}{why}")
-        if p.get("transport", {}).get("proxyProtocolVersion") != "v2":
+        ptransport = p.get("transport", {})
+        if not _table(ptransport) or ptransport.get("proxyProtocolVersion") != "v2":
             errs.append("proxy transport.proxyProtocolVersion must be v2")
         doms = [str(d).lower().rstrip(".") for d in (p.get("customDomains") or [])]
         if doms != [own_name(expect_hid)]:

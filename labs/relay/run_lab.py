@@ -79,7 +79,27 @@ def lab_containers() -> list[str]:
 
 
 def lab_networks() -> list[str]:
-    return [x for x in sh("docker", "network", "ls", "--filter", f"name={NET}", "--format", "{{.Name}}").stdout.split() if x]
+    # `--filter name=` is a substring match: keep only the exact lab network so teardown can never remove a lookalike
+    return [x for x in sh("docker", "network", "ls", "--filter", f"name={NET}", "--format", "{{.Name}}").stdout.split() if x == NET]
+
+
+def project_containers() -> list[str]:
+    """Containers Docker Compose thinks belong to the lab's project, labelled by us or not."""
+    return [x for x in sh("docker", "ps", "-a", "--filter", f"label=com.docker.compose.project={PROJECT}", "--format",
+                          "{{.Names}}").stdout.split() if x]
+
+
+def wait_for_gate(wait_s: int) -> str | None:
+    """None when it is allowed to start; otherwise the reason. Re-checks the night window on every poll."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        if in_night_window(datetime.datetime.now().time(), starting=True):
+            return "inside (or within 15 minutes of) the 01:50-04:55 night window"
+        if mem_available_mb() >= MIN_MEM_MB:
+            return None
+        if time.monotonic() >= deadline:
+            return f"MemAvailable {mem_available_mb()} MB < {MIN_MEM_MB} MB gate"
+        time.sleep(10)
 
 
 def parse_mib(s: str) -> float:
@@ -813,14 +833,12 @@ def main() -> int:
         print(f"REFUSED: {now:%H:%M} is inside (or within 15 minutes of) the 01:50-04:55 night window; the lab never runs then.",
               file=sys.stderr)
         return 3
-    deadline = time.monotonic() + args.wait_mem_s
-    while mem_available_mb() < MIN_MEM_MB:
-        if time.monotonic() >= deadline:
-            print(f"REFUSED: MemAvailable {mem_available_mb()} MB < {MIN_MEM_MB} MB gate.", file=sys.stderr)
-            return 4
-        time.sleep(10)
+    why = wait_for_gate(args.wait_mem_s)
+    if why:
+        print(f"REFUSED: {why}.", file=sys.stderr)
+        return 4
     mem_before = mem_available_mb()
-    pre = lab_containers() + lab_networks()
+    pre = sorted(set(lab_containers() + project_containers() + lab_networks()))
     if pre:
         print(f"REFUSED: leftovers from an earlier run exist: {pre}", file=sys.stderr)
         return 5
@@ -840,6 +858,11 @@ def main() -> int:
     try:
         print(f"run dir {run}\nhouseholds {lab.hid}", flush=True)
         lab.render()
+        # the gate is re-checked HERE, after the image builds: it is the start of the lab (containers) that it protects
+        why = wait_for_gate(120)
+        if why:
+            rec.check("BOOT", f"gate re-check before starting containers: {why}", False)
+            raise SystemExit(4)
         lab.up()
         if not lab.wait_proxies(lab.both_online(), 60):
             rec.check("BOOT", "both boxes register with the relay", False)

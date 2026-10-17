@@ -216,7 +216,7 @@ namespace.
 On the411, as a dedicated unprivileged login or root:
 
 ```sh
-sudo install -d -m 0750 /opt/zoe-relay /opt/zoe-relay/etc /opt/zoe-relay/tls
+sudo install -d -m 0750 /opt/zoe-relay /opt/zoe-relay/etc /opt/zoe-relay/registry /opt/zoe-relay/tls
 git clone --depth 1 --branch <TAG> https://github.com/jason-easyazz/zoe-ai-assistant.git /opt/zoe-relay/src   # the public repo; or copy a tarball
 cd /opt/zoe-relay/src/labs/relay
 DOCKER_BUILDKIT=0 docker build -f docker/Dockerfile.frp -t zoe-relay/frp:v0.71.0 .          # verifies the release sha256 for amd64
@@ -250,7 +250,7 @@ The household registry, one row per household (secrets are random, shown once, s
 SECRET=$(python3 -c 'import secrets;print(secrets.token_hex(24))')   # give this to the household's box; never log it
 HID=h$(python3 -c 'import secrets;print(secrets.token_hex(4))')
 printf '{"households":{"%s":{"secret_sha256":"%s","active":true}}}\n' "$HID" \
-  "$(printf %s "$SECRET" | sha256sum | cut -d' ' -f1)" | sudo tee /opt/zoe-relay/etc/households.json >/dev/null
+  "$(printf %s "$SECRET" | sha256sum | cut -d' ' -f1)" | sudo tee /opt/zoe-relay/registry/households.json >/dev/null
 ```
 
 `frps.toml`: render `relay/frps.toml.tmpl` (replace `@@ADMIN_PASSWORD@@` with a random string) to
@@ -294,7 +294,7 @@ services:
       RELAY_BANDWIDTH_LIMIT: "2441KB"             # 20 Mbit/s (design D10)
       RELAY_RATE_MAX: "64"                        # new connections per window per household (see README, finding 1)
       RELAY_RATE_WINDOW_S: "10"
-    volumes: ["/opt/zoe-relay/etc:/etc/relay:ro"]
+    volumes: ["/opt/zoe-relay/registry:/etc/relay:ro"]   # ONLY the registry: the plugin must not be able to read frps.toml (dashboard password)
     mem_limit: 64m
 ```
 
@@ -311,8 +311,9 @@ A relay that logs `preflight FAILED, refusing to start frps` is the safety worki
 bypass the entrypoint.
 
 Per-household suspension and secret rotation are edits to `households.json` (`"active": false`, or a new
-`secret_sha256`); the plugin re-reads the file on every call [lab: suspension cell N1]. A running box keeps its
-control connection until its next login or user connection.
+`secret_sha256`). Write the new file beside it and `mv` it over (an atomic replace); the plugin notices a changed
+inode, size or timestamp on its next call [lab: suspension cell N1]. A suspended household's next panel connection
+is refused at once; its box keeps its control connection until it next logs in, which the plugin also refuses.
 
 ### 6.3 Verify the relay is up and empty (no household yet)
 

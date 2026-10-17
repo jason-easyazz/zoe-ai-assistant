@@ -24,7 +24,10 @@ import urllib.error
 import urllib.request
 
 REQUIRED_OPS = ("Login", "NewProxy", "NewUserConn")
-LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
+# every other listener frps v0.71.0 can open. quicBindPort is allowed back only deliberately, when lab cell V2 passes.
+FORBIDDEN_LISTENERS = ("vhostHTTPPort", "tcpmuxHTTPConnectPort", "kcpBindPort", "quicBindPort", "sshTunnelGateway.bindPort")
+# numeric loopback only: a NAME such as "localhost" is resolved by the system and /etc/hosts can map it anywhere
+LOOPBACK = {"127.0.0.1", "::1", "[::1]"}
 
 
 def _get(cfg: dict, dotted: str, default=None):
@@ -81,9 +84,9 @@ def check_config(cfg: dict) -> list[str]:
         errs.append("transport.tls.certFile/keyFile must be set (frps would otherwise present a random self-signed cert)")
     if not _get(cfg, "vhostHTTPSPort"):
         errs.append("vhostHTTPSPort must be set (the https vhost is the only data path)")
-    for key in ("vhostHTTPPort", "tcpmuxHTTPConnectPort", "kcpBindPort", "sshTunnelGateway.bindPort"):
+    for key in FORBIDDEN_LISTENERS:
         if _get(cfg, key):
-            errs.append(f"{key} must be unset: only the https vhost is allowed")
+            errs.append(f"{key} must be unset: only the TCP control port and the https vhost are allowed")
     if _get(cfg, "subDomainHost"):
         errs.append("subDomainHost must be unset: every name is assigned by the plugin")
     if _get(cfg, "webServer.port") and _get(cfg, "webServer.addr", "0.0.0.0") not in LOOPBACK:
@@ -115,12 +118,14 @@ def probe_plugin(addr: str, path: str, *, timeout: float = 3.0) -> str | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             ans = json.loads(r.read())
-    except urllib.error.HTTPError:
-        return None  # a non-200 makes frps refuse: fail closed, which is the behaviour we want
+    except urllib.error.HTTPError as e:
+        # fail-closed per request, but a plugin that answers a well-formed login with an HTTP error is broken or is not the
+        # session master: every real login would be refused, so the relay must not be declared ready
+        return f"plugin answered HTTP {e.code} to a bogus login (expected a JSON rejection)"
     except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
-        return f"plugin unreachable: {e}"
-    if ans.get("reject") is not True:
-        return "plugin ACCEPTED a bogus login: permissive, or not the session master"
+        return f"plugin unreachable or malformed: {e}"
+    if not isinstance(ans, dict) or ans.get("reject") is not True:
+        return "plugin ACCEPTED a bogus login (or answered something that is not a rejection): permissive, or not the session master"
     return None
 
 

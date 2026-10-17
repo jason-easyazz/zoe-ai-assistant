@@ -48,7 +48,7 @@ browser (C3 and T5's push socket are the next PR). The panel is curl, Python `re
 ## Running it
 
 ```sh
-labs/relay/run.sh unit          # 42 unit tests, no Docker (Python 3.12)
+labs/relay/run.sh unit          # 58 unit tests, no Docker (Python 3.12)
 labs/relay/run.sh lab           # the hermetic lab: ~3-4 minutes, ~120 MiB of containers
 ```
 
@@ -68,15 +68,16 @@ Images are built by `docker build` with `DOCKER_BUILDKIT=0` (this host has no bu
 
 Each cell has a positive control (the thing works) and a negative control (the thing it guards against is refused),
 and every negative has a sensitivity check so a refusal cannot come from a broken probe. Measured on the Jetson
-(arm64) on 2026-10-17 with frp v0.71.0: **80 of 81 runner checks passed; the one failure was a teardown assertion
-that compared `MemAvailable` before and after (unrelated processes moved it by 500 MB), which was replaced with
-"no lab container holds memory" - see Measured.** The re-run after that change is in the PR description.
+(arm64) on 2026-10-17 with frp v0.71.0 on the final code: **81 of 81 runner checks passed** (68 cell checks, the boot
+and the teardown assertions), in 237 s. Earlier runs on the same day found and fixed: the stream front not routing
+frpc's control SNI, frpc giving up at boot, a header-value bug in the probe client, two check conditions that
+matched their own error messages, and a teardown assertion on `MemAvailable` that unrelated processes made flaky.
 
 | Cell | Positive | Negative control (must be refused) | Result |
 |---|---|---|---|
 | **T1** names | A's login and proxy register exactly `A.zoe.internal`, B's `B.zoe.internal`; the panel reaches each box through its own name | box A asking for B's name, `*.zoe.internal`, an arbitrary public host, or its own name plus B's: rejected by the plugin (`why=foreign-or-wildcard-name`), registry unchanged. `tcp`, `udp`, `http`, `stcp` proxies: all four rejected (`why=type`). Wrong secret / unknown household: login refused | pass |
 | **T1** overwrite | the client asked for `HAE42B31F1.Zoe.Internal`; frps registered exactly `hae42b31f1.zoe.internal` and it still routes | with the plugin's domain overwrite switched off the client's value is what frps registers (the overwrite does the work) | pass |
-| **T2** preflight | with the plugin configured the relay passes the preflight and frps runs | no `[[httpPlugins]]`, a plugin lacking `NewUserConn`, a non-loopback plugin, the http vhost enabled, TLS not forced, a configured-but-down plugin, a **permissive** plugin that accepts a bogus login: each exits 78 and frps never starts. Control: the same frps launched *without* the preflight accepted a foreign name, a wildcard and a `tcp` proxy | pass |
+| **T2** preflight | with the plugin configured the relay passes the preflight and frps runs | no `[[httpPlugins]]`, a plugin lacking `NewUserConn`, a non-loopback plugin, the http vhost enabled, TLS not forced, a configured-but-down plugin, a **permissive** plugin that accepts a bogus login: each exits 78 and frps never starts (unit-tested too: a second plugin entry, `localhost` instead of a numeric loopback address, `quicBindPort`, a plugin that is healthy on `/healthz` but answers 404/500 on the real route). Control: the same frps launched *without* the preflight accepted a foreign name, a wildcard and a `tcp` proxy | pass |
 | **T3** blind relay | requests crossed the relay (both households echoed a random canary) | capture on the relay host (raw sockets on `eth0` and `lo`, 159 payload segments): canary, request line, `PRIVATE KEY` appear in no stream; each household connection on the vhost hop is ClientHello then only ciphertext (ServerHello then ciphertext back); the only plaintext on the host is frps' own `POST /handler` calls to the plugin; the only private key on the relay filesystem is the relay's own. **Control:** a deliberately TLS-terminating relay served the same request, the same capture shows the canary and `GET /lab/echo` in plaintext (2 and 1 hits), and the key scan flags the household key it holds | pass |
 | **T4** CA pinning | `requests` with `verify=<household CA>` reaches A | a leaf for the same name from another CA that **is** in the panel's system store: an unpinned `curl` and an unpinned `requests` accept it (so the attack is real), the pinned `requests` refuses (`CERTIFICATE_VERIFY_FAILED`), `curl --cacert ... --capath <empty>` refuses (exit 60). Finding: plain `curl --cacert` is **not** a pin on Debian (exit 0) | pass |
 | **T6** frpc config test | the generated config for both boxes passes (and is the config the lab boxes run) | `127.0.0.1:8000` (message names zoe-data's trusted loopback port), an `https2http` plugin at `:8000`, `127.0.0.1:5432`, a LAN address, a second proxy, a `tcp` proxy, no `trustedCaFile`: each fails | pass |
@@ -88,18 +89,18 @@ that compared `MemAvailable` before and after (unrelated processes moved it by 5
 | S1-S5 (extra) listener stub | via the relay with the household client certificate: `X-Zoe-Ingress: relay`, the fingerprint header matches the certificate, no `X-Forwarded-For` | client-sent `X-Zoe-Ingress` / `X-Zoe-Client-Cert-Fp` are overwritten (S2); no client certificate -> nginx answers 400 and nothing reaches the upstream (S3); B's certificate on A's listener -> 400 (S5); the LAN listener clears both headers (S4) | pass |
 | T5, T10, T11, C3 | not in F0 (need zoe-data relay-ingress code and the kiosk) | - | next PR (interface below) |
 
-The unit net (`./run.sh unit`, 43 tests) covers the plugin policy, the preflight, the frpc config check and the
+The unit net (`./run.sh unit`, 58 tests) covers the plugin policy, the preflight, the frpc config check and the
 capture analyser with their own negative controls (each was spot-checked by breaking the code under test).
 
 ## Measured
 
-- Containers at idle: **56 MiB** across the eight lab containers (`docker stats`); peak during the cells **146 MiB**
-  (relay 16-22 MiB, plugin 20 MiB, each frpc 3 MiB, nginx 3-7 MiB, panel 4 MiB). One run takes about 4 minutes.
-- `MemAvailable` at the gate: 2011 MB; with the lab up 1771 MB; lowest during the run 1375 MB; after teardown 1487 MB.
+- Containers at idle: **57 MiB** across the eight lab containers (`docker stats`); peak during the cells **149 MiB**
+  (relay 16 MiB, plugin 20 MiB, each frpc 3 MiB, nginx 3-5 MiB, panel 4 MiB). One run takes about 4 minutes.
+- `MemAvailable` at the gate: 1830 MB; with the lab up 1598 MB; lowest during the run 1377 MB; after teardown 1386 MB.
   The box's other processes (other agents' test runs) move it by far more than the lab uses, so before/after is
   informational; the teardown assertion is "no lab container, no lab network, run directory deleted, `docker stats`
   lists none".
-- The gate is real: three earlier attempts refused to start because the daytime `MemAvailable` sat at 1.0-1.4 GB.
+- The gate is real: earlier attempts refused to start, or waited most of an hour, because the daytime `MemAvailable` sat at 1.0-1.4 GB.
   `run.sh` therefore waits for the gate *before* taking the test-lane lock, so a waiting lab never holds the lane.
 
 ## Findings (where the lab corrected the design or the research)

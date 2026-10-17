@@ -85,11 +85,14 @@ class Registry:
 
     def _load(self) -> dict:
         with self._lock:
-            mtime = os.stat(self.path).st_mtime_ns  # missing file -> exception -> 500 -> fail closed
-            if mtime != self._mtime:
+            st = os.stat(self.path)  # missing file -> exception -> 500 -> fail closed
+            # the whole stat identity, not mtime alone: an in-place edit that keeps the timestamp still changes size/ctime,
+            # and an atomic replace (os.replace) changes the inode
+            sig = (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+            if sig != self._mtime:
                 with open(self.path, "r", encoding="utf-8") as f:
                     self._rows = json.load(f).get("households", {})
-                self._mtime = mtime
+                self._mtime = sig
             return self._rows
 
     def authenticate(self, hid, secret) -> bool:
@@ -233,10 +236,15 @@ class Policy:
         return self.changed(out)
 
     def _new_user_conn(self, c: dict) -> dict:
-        user = c.get("user") or {}
-        hid = (user.get("metas") or {}).get("hid")
-        if not isinstance(hid, str) or not HID_RE.match(hid) or not self.registry.is_active(hid):
-            _log("conn-refused", hid=_safe_hid(hid), why="suspended-or-unknown")
+        # re-authenticate from the login metas exactly as NewProxy does, and bind the connection to the household's own proxy:
+        # the rate counter and the suspension check must be charged to the household that really owns this connection
+        hid = self._authenticated_hid(c)
+        if hid is None or c.get("proxy_type") != "https" or c.get("proxy_name") != hid + ".https":
+            _log("conn-refused", hid=_safe_hid(((c.get("user") or {}).get("metas") or {}).get("hid")),
+                 why="unauthenticated-or-mismatch")
+            return self.reject("connection refused")
+        if not self.registry.is_active(hid):
+            _log("conn-refused", hid=hid, why="suspended")
             return self.reject("household suspended")
         now = self.clock()
         with self._lock:
