@@ -585,7 +585,10 @@ def test_guests_and_panels_cannot_call_the_voice_api(env, monkeypatch):
 
 
 ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_recordings.py", "routers/omi_voices.py", "routers/omi_recordings.py", "contacts_store.py", "person_merge.py",
-           "memory_forget_cascade.py"}
+           "memory_forget_cascade.py",
+           # the day review names the ``omi_segments`` vocabulary in its seam (``lines_for_day(segments=)``); it never touches a
+           # voice table - its input is ``review_segments`` output (confirmed labels, no suggestions) handed in by the caller
+           "omi_day_review.py"}
 NEEDLES = ("learned_voiceprint", "omi_segment", "omi_voice_cluster", "omi_voice_settings", "omi_voices")
 
 

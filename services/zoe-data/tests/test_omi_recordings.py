@@ -459,7 +459,299 @@ def test_measure_wav_reports_what_the_audio_is():
     assert tone["seconds"] == 2.0 and tone["peak"] == 6000 and 4200 < tone["rms"] < 4300 and tone["rate"] == 16000 and tone["channels"] == 1
     silent = omi.measure_wav(make_wav(2.0, amp=0))
     assert silent["peak"] == 0 and silent["rms"] == 0.0 and silent["seconds"] == 2.0
-    assert omi.measure_wav(b"not a wav") == {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0}
+    assert omi.measure_wav(b"not a wav") == {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0,
+                                            "clipped": 0, "rms_median": 0.0, "active_s": 0.0}
+    assert tone["clipped"] == 0 and tone["active_s"] == 2.0 and 4200 < tone["rms_median"] < 4300
+
+
+# --- the pendant's wake transient vs sustained sound (synthetic; measured shape 2026-10-16, numbers only) ---------------------------------
+def _pcm_to_wav(samples) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"".join(struct.pack("<h", max(-32768, min(32767, int(v)))) for v in samples))
+    return buf.getvalue()
+
+
+def _room(seconds: float, rms: float = 60.0, seed: int = 7) -> list:
+    import random
+    rnd = random.Random(seed)
+    return [rnd.gauss(0.0, rms) for _ in range(int(16000 * seconds))]
+
+
+def wake_transient_wav(seconds: float = 11.0, at_s: float = 0.1) -> bytes:
+    """What 27 of the 32 kept empty recordings are: ~10 s of room noise (100 ms-window RMS ~60) opened by ONE full-scale click -
+    a ~10 ms slab clipped at -32768 that decays over ~50 ms (the pendant mic's wake transient + the firmware's 10 s VAD hold)."""
+    x = _room(seconds)
+    k = int(16000 * at_s)
+    for j in range(160):
+        x[k + j] = -32768.0                                   # the clipped slab
+    for j in range(800):                                      # recovery, sign-flipping like the measured ringing
+        x[k + 160 + j] += 12000.0 * (0.993 ** j) * (1 if j % 2 else -1)
+    return _pcm_to_wav(x)
+
+
+def speechlike_wav(seconds: float = 6.0, *, bursts: int = 8) -> bytes:
+    """Syllable-like bursts (a 140 Hz voice with harmonics, ~250 ms on, amplitude ~4000) over the same room noise: sustained sound."""
+    import math
+    x = _room(seconds, seed=11)
+    for b in range(bursts):
+        start = int(16000 * (0.4 + b * 0.6))
+        for j in range(4000):
+            if start + j >= len(x):
+                break
+            t = (start + j) / 16000
+            x[start + j] += math.sin(math.pi * j / 4000) * 4000 * sum(math.sin(2 * math.pi * 140 * h * t) / h for h in (1, 2, 3, 4))
+    return _pcm_to_wav(x)
+
+
+def test_measure_wav_tells_a_wake_click_from_sustained_sound():
+    click = omi.measure_wav(wake_transient_wav())
+    # the whole-file numbers LOOK loud and clipped - exactly what made quiet recordings read as "voiced, peak 32768, rms 700"
+    assert click["peak"] == 32768 and click["clipped"] >= 160 and click["rms"] > 500
+    # ... the transient-robust ones say what it is: a room at ~60 RMS and under 0.5 s of sustained sound
+    assert click["rms_median"] < 100 and click["active_s"] < omi.TRANSIENT_ONLY_S
+    speech = omi.measure_wav(speechlike_wav())
+    assert speech["clipped"] == 0 and speech["active_s"] >= 1.0
+    room = omi.measure_wav(_pcm_to_wav(_room(5.0)))                         # negative control: nothing at all
+    assert room["active_s"] == 0.0 and room["clipped"] == 0 and room["peak"] < omi.SILENCE_PEAK
+
+
+def test_empty_reason_labels():
+    click, speech = omi.measure_wav(wake_transient_wav()), omi.measure_wav(speechlike_wav())
+    assert omi.empty_reason({"voiced": 0, "chunks": 1}, click) == "below_silence_floor"
+    assert omi.empty_reason({"voiced": 1, "chunks": 1}, click) == "transient_only"
+    assert omi.empty_reason({"voiced": 1, "chunks": 1}, speech) == "voiced_but_no_text"
+    assert omi.empty_reason({"voiced": 1, "chunks": 1}, {}) == "transient_only"          # unmeasurable: never claims "voiced"
+
+
+def test_a_click_only_recording_is_labelled_transient_only_and_kept(env, monkeypatch, caplog):
+    import logging
+
+    async def says_nothing(path):
+        return ""
+
+    monkeypatch.setattr(omi, "_transcribe_file", says_nothing)
+    upload(env, wake_transient_wav(), duration=11.0)
+    path = rows(env)[0]["audio_path"]
+    with caplog.at_level(logging.WARNING, logger="omi_recordings"):
+        assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    (row,) = rows(env)
+    assert row["status"] == "empty_transcript" and Path(path).exists()                  # still kept: the label is not a verdict
+    (msg,) = [r.getMessage() for r in caplog.records if "OMI_EMPTY_TRANSCRIPT" in r.getMessage()]
+    assert "reason=transient_only" in msg and "peak=32768" in msg and "voiced_chunks=1/1" in msg
+    assert re.search(r"active_s=0\.\d ", msg) and re.search(r"rms_median=\d{2}\.\d ", msg)
+
+
+def test_sustained_sound_with_no_words_is_still_voiced_but_no_text(env, monkeypatch, caplog):
+    import logging
+
+    async def says_nothing(path):
+        return ""
+
+    monkeypatch.setattr(omi, "_transcribe_file", says_nothing)
+    upload(env, speechlike_wav(), duration=6.0)
+    with caplog.at_level(logging.WARNING, logger="omi_recordings"):
+        run(omi.transcribe_pending(limit=1, pause_s=0))
+    (msg,) = [r.getMessage() for r in caplog.records if "OMI_EMPTY_TRANSCRIPT" in r.getMessage()]
+    assert "reason=voiced_but_no_text" in msg
+
+
+def test_the_transient_label_is_never_a_gate_a_click_recording_still_reaches_moonshine(env):
+    """Negative control for the label: Moonshine runs its own VAD, so a short word after a click must not be skipped by ours."""
+    upload(env, wake_transient_wav(), duration=11.0)
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    (row,) = rows(env)
+    assert len(env.stt) == 1 and row["status"] == "done" and row["transcript"] == "words1"
+
+
+# --- requeue: held recordings can be transcribed again inside their retention ---------------------------------------------------------
+def _held(env, monkeypatch, n=2):
+    async def says_nothing(path):
+        return ""
+
+    monkeypatch.setattr(omi, "_transcribe_file", says_nothing)
+    ids = [upload(env, make_wav(3.0), key=f"r1.{i * 10}-{i * 10 + 9}", started=f"2026-10-10T0{i}:00:00Z").json()["id"] for i in range(n)]
+    run(omi.transcribe_pending(limit=n, pause_s=0))
+    assert {r["status"] for r in rows(env)} == {"empty_transcript"}
+    return ids
+
+
+def _status(env) -> dict:
+    return {r["id"]: r["status"] for r in rows(env)}
+
+
+def test_the_owner_requeues_held_recordings_and_a_fixed_pipeline_files_text(env, monkeypatch):
+    ids = _held(env, monkeypatch)
+    before = {r["id"]: r["audio_expires_at"] for r in rows(env)}
+    r = env.client.post("/api/omi/recordings/retranscribe")
+    assert r.status_code == 200 and r.json() == {"ok": True, "queued": 2}
+    got = {r["id"]: r for r in rows(env)}
+    assert all(got[i]["status"] == "pending" and got[i]["attempts"] == 0 and got[i]["transcribed_at"] is None for i in ids)
+    assert {i: got[i]["audio_expires_at"] for i in ids} == before                         # retention NOT extended
+
+    async def fixed(path):
+        return "now heard"
+
+    monkeypatch.setattr(omi, "_transcribe_file", fixed)
+    assert run(omi.transcribe_pending(limit=2, pause_s=0)) == 2
+    assert set(_status(env).values()) == {"done"} and all(r["audio_path"] == "" for r in rows(env))
+    assert env.client.post("/api/omi/recordings/retranscribe").json()["queued"] == 0     # nothing held any more
+
+
+def test_requeue_one_and_what_is_not_requeueable(env, monkeypatch):
+    a, b = _held(env, monkeypatch)
+    assert env.client.post(f"/api/omi/recordings/{a}/retranscribe").json() == {"ok": True, "queued": 1}
+    assert _status(env) == {a: "pending", b: "empty_transcript"}
+    assert env.client.post(f"/api/omi/recordings/{a}/retranscribe").status_code == 404   # already pending
+    assert env.client.post("/api/omi/recordings/nope/retranscribe").status_code == 404
+    Path(env.db.rows("SELECT audio_path FROM omi_recordings WHERE id = ?", (b,))[0]["audio_path"]).unlink()
+    assert env.client.post(f"/api/omi/recordings/{b}/retranscribe").status_code == 404   # the WAV is gone: nothing to transcribe
+    assert env.client.delete(f"/api/omi/recordings/{a}").status_code == 200
+    assert run(omi.requeue_held(None)) == 0                                               # a tombstone is never resurrected
+    assert _status(env) == {a: "deleted", b: "empty_transcript"}
+
+
+def test_requeue_is_per_member_and_a_failed_row_counts(env, monkeypatch):
+    (a,) = _held(env, monkeypatch, n=1)
+    env.db.conn.execute("UPDATE omi_recordings SET user_id = ? WHERE id = ?", (OTHER, a))
+    env.db.conn.commit()
+    assert env.client.post("/api/omi/recordings/retranscribe").json()["queued"] == 0      # the owner cannot requeue another member's row
+    assert env.client.post(f"/api/omi/recordings/{a}/retranscribe").status_code == 404
+    env.db.conn.execute("UPDATE omi_recordings SET status = 'failed', attempts = 3, user_id = ? WHERE id = ?", (OWNER, a))
+    env.db.conn.commit()
+    assert env.client.post("/api/omi/recordings/retranscribe").json()["queued"] == 1
+    assert rows(env)[0]["status"] == "pending" and rows(env)[0]["attempts"] == 0
+
+
+def test_a_pipeline_change_requeues_held_recordings_once(env, monkeypatch):
+    _held(env, monkeypatch)
+    marker = omi._pipeline_marker()
+    assert not marker.exists()
+    assert run(omi.requeue_after_pipeline_change()) == 2 and marker.read_text().strip() == omi.TRANSCRIBE_PIPELINE
+    run(omi.transcribe_pending(limit=2, pause_s=0))                                       # still nothing heard: held again
+    assert set(_status(env).values()) == {"empty_transcript"}
+    assert run(omi.requeue_after_pipeline_change()) == 0                                  # ONCE per pipeline: no requeue loop
+    monkeypatch.setattr(omi, "TRANSCRIBE_PIPELINE", omi.TRANSCRIBE_PIPELINE + ".next")
+    assert run(omi.requeue_after_pipeline_change()) == 2                                  # the next change reaches them again
+
+
+def test_a_marker_that_cannot_be_written_requeues_nothing_so_it_can_never_loop(env, monkeypatch):
+    """Negative control for the once-per-pipeline guarantee: claim-then-requeue. With the marker unwritable, requeue-then-write would
+    requeue on EVERY loop pass (each pass re-transcribing whatever came back empty) - here no pass requeues anything."""
+    _held(env, monkeypatch)
+
+    def no_write(marker, value):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(omi, "_write_marker", no_write)
+    for _ in range(3):
+        assert run(omi.requeue_after_pipeline_change()) == 0
+        assert set(_status(env).values()) == {"empty_transcript"}
+    assert env.client.post("/api/omi/recordings/retranscribe").json()["queued"] == 2       # the owner route still works
+
+
+def test_a_failed_requeue_restores_the_marker_so_the_next_pass_retries(env, monkeypatch):
+    _held(env, monkeypatch)
+    marker = omi._pipeline_marker()
+    omi._write_marker(marker, "older-pipeline")
+    real = omi.requeue_held
+
+    async def db_down(*a, **k):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(omi, "requeue_held", db_down)
+    with pytest.raises(RuntimeError):
+        run(omi.requeue_after_pipeline_change())
+    assert marker.read_text().strip() == "older-pipeline"                                  # put back: not silently "done"
+    monkeypatch.setattr(omi, "requeue_held", real)
+    assert run(omi.requeue_after_pipeline_change()) == 2 and marker.read_text().strip() == omi.TRANSCRIBE_PIPELINE
+
+
+def test_a_requeue_cancelled_part_way_restores_the_marker_and_the_next_pass_requeues_the_rest(env, monkeypatch):
+    """asyncio.CancelledError is a BaseException: an ``except Exception`` restore would leave the marker claimed with only part of
+    the rows requeued, and the rest would never be requeued for this pipeline."""
+    a, b = _held(env, monkeypatch)
+    marker = omi._pipeline_marker()
+    omi._write_marker(marker, "older-pipeline")
+    real = omi.requeue_held
+
+    async def cancelled_part_way(user_id=None, *, rid=None):
+        assert await real(user_id, rid=a) == 1               # one row requeued ...
+        raise asyncio.CancelledError()                        # ... then the loop task is cancelled (shutdown)
+
+    monkeypatch.setattr(omi, "requeue_held", cancelled_part_way)
+    with pytest.raises(asyncio.CancelledError):
+        run(omi.requeue_after_pipeline_change())
+    assert marker.read_text().strip() == "older-pipeline"
+    assert _status(env) == {a: "pending", b: "empty_transcript"}
+    monkeypatch.setattr(omi, "requeue_held", real)
+    assert run(omi.requeue_after_pipeline_change()) == 1                                  # the remainder, and only the remainder
+    assert set(_status(env).values()) == {"pending"} and marker.read_text().strip() == omi.TRANSCRIBE_PIPELINE
+
+
+def test_the_marker_write_fsyncs_its_directory(env, monkeypatch):
+    """A rename is not durable until its directory is fsynced: without it a crash can bring the old marker back (a second requeue)."""
+    import os
+    import stat
+    marker = omi._pipeline_marker()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    dir_ino = marker.parent.stat().st_ino
+    real_fsync = os.fsync
+    synced: list[tuple[bool, int]] = []
+
+    def spy(fd):
+        st = os.fstat(fd)
+        synced.append((stat.S_ISDIR(st.st_mode), st.st_ino))
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", spy)
+    omi._write_marker(marker, "p1")
+    assert (True, dir_ino) in synced and (False, marker.stat().st_ino) in synced           # the file AND its directory
+    synced.clear()
+    omi._write_marker(marker, None)                                                       # clearing it is a directory change too
+    assert (True, dir_ino) in synced and not marker.exists()
+
+
+def test_a_row_past_its_retention_is_never_requeued_even_while_its_wav_waits_for_the_purge(env, monkeypatch):
+    """Negative control for retention: between ``audio_expires_at`` and the next purge pass the WAV is still on disk. Requeueing it
+    then would transcribe past retention (or leave a pending row whose audio the purge removes). Neither route nor the automatic pass
+    may pick it up; the live row beside it still requeues (so the filter is not just 'requeue nothing')."""
+    live, expired = _held(env, monkeypatch)
+    past = (datetime.now(UTC) - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    env.db.conn.execute("UPDATE omi_recordings SET audio_expires_at = ? WHERE id = ?", (past, expired))
+    env.db.conn.commit()
+    exp_path = env.db.rows("SELECT audio_path FROM omi_recordings WHERE id = ?", (expired,))[0]["audio_path"]
+    assert Path(exp_path).exists()                                                        # the WAV is still there: only the clock says no
+    assert env.client.post(f"/api/omi/recordings/{expired}/retranscribe").status_code == 404
+    assert env.client.post("/api/omi/recordings/retranscribe").json()["queued"] == 1
+    assert _status(env) == {live: "pending", expired: "empty_transcript"}
+    env.db.conn.execute("UPDATE omi_recordings SET status = 'empty_transcript' WHERE id = ?", (live,))
+    env.db.conn.commit()
+    assert run(omi.requeue_after_pipeline_change()) == 1
+    assert _status(env) == {live: "pending", expired: "empty_transcript"}
+    # the guarded UPDATE re-checks it too: a row that expires between the SELECT and the UPDATE stays held
+    env.db.conn.execute("UPDATE omi_recordings SET status = 'empty_transcript' WHERE id = ?", (live,))
+    env.db.conn.commit()
+    later = datetime.now(UTC) + timedelta(days=30)                                        # every row is past retention by then
+    real_fetch = omi._fetch
+
+    async def select_ignoring_expiry(db, sql, params=()):
+        if sql.startswith("SELECT id, audio_path FROM omi_recordings WHERE status IN"):
+            return await real_fetch(db, "SELECT id, audio_path FROM omi_recordings WHERE audio_path != ''")
+        return await real_fetch(db, sql, params)
+
+    monkeypatch.setattr(omi, "_fetch", select_ignoring_expiry)
+    assert run(omi.requeue_held(None, now=later)) == 0
+    assert set(_status(env).values()) == {"empty_transcript"}
+
+
+def test_an_expired_held_recording_is_purged_not_requeued(env, monkeypatch):
+    _held(env, monkeypatch, n=1)
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1
+    assert run(omi.requeue_held(None)) == 0 and rows(env)[0]["status"] == "empty_transcript"
 
 
 def test_the_night_window_blocks_transcription(env, monkeypatch):
@@ -615,9 +907,10 @@ def test_the_cascade_and_the_delete_user_path_call_this_module():
 def test_nothing_else_reads_pendant_transcripts():
     """A pendant transcript is unreviewed and unverified: no fact extraction, recall, digest or prompt may read the table.
     Static guard: the only modules naming it are the module itself, its router, main (mount + loop), the two forget hooks and
-    ``omi_devices.py`` (the one-time registry seed reads device_id + user_id only - never a transcript)."""
+    ``omi_devices.py`` (the one-time registry seed reads device_id + user_id only - never a transcript), and ``omi_day_review.py`` (the
+    owner's day review: it PROPOSES candidates the owner approves; ``test_omi_day_review`` pins that it calls no write path)."""
     allowed = {"omi_recordings.py", "routers/omi_recordings.py", "main.py", "memory_service.py", "memory_forget_cascade.py",
-               "omi_devices.py",
+               "omi_devices.py", "omi_day_review.py",      # the day review (0054): proposals the owner approves, never a write of its own
                # speaker turns + learned voices (0055): the diariser imports GateClosed, the voice store joins a recording's status
                # and day, its router reuses the owner rule. ``omi_voices.review_segments`` is the ONE seam the day review reads.
                "omi_diarize.py", "omi_voices.py", "routers/omi_voices.py"}
