@@ -118,6 +118,35 @@ def test_the_artifact_never_carries_household_text(bench):
         assert artifact.household_strings_in(a, world.pool_strings()) == []   # not even a pool name
 
 
+def test_no_world_can_collide_with_the_artifacts_fixed_text(bench):
+    """The leak check once flaked on ONE seed in ~43: the world's birth year (1962-2004) or 'since' year
+    (2011-2021) equals a year written as an example in a spec title / note (``7/8/1991``), and digit-only household
+    strings are matched against the artifact's text. The class: a generated digit string that is also a literal of
+    the fixed spec text. Sweep 200 seeds over the fixed text (the cells' ids / titles / notes do not depend on
+    the seed) so the next example year cannot hide in the generator's range."""
+    assert bench["go"]() == 0
+    a = bench["art"]()
+    first_seed: dict[str, int] = {}                       # one scan of the union, not 200 scans of the ~127 KB artifact
+    for i in range(200):
+        for s in world.make_world(f"flake-sweep-{i}").all_strings():
+            first_seed.setdefault(s, i)
+    hits = artifact.household_strings_in(a, list(first_seed))
+    assert hits == [], {h: first_seed[h] for h in hits}
+
+
+def test_the_leak_check_still_catches_a_real_household_string(bench):
+    """Negative control for the sweep above: it must be able to fail. A generated name, or a generated year inside
+    a sentence, planted in the artifact is reported; the same year as a bare number (a duration) is not."""
+    assert bench["go"]() == 0
+    a = bench["art"]()
+    w = world.make_world(a["corpus_seed"])
+    names = w.all_strings()
+    assert artifact.household_strings_in(a, names) == []
+    leaked = dict(a, leak=f"{w.slots['owner']} was born in {w.slots['dob_y']}")
+    assert artifact.household_strings_in(leaked, names) == sorted({w.slots["owner"], str(w.slots["dob_y"])})
+    assert artifact.household_strings_in(dict(a, duration_ms=w.slots["dob_y"]), names) == []
+
+
 def test_a_control_that_stays_green_refuses_the_run_and_nothing_is_measured(bench):
     green = ["A1.digest.home", "A1.mcp.pet"]
     bench["controls"] = lambda chosen, off: {"off": sorted(off), "checked": 98, "red": 96, "green": green,
