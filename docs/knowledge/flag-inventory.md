@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-662 flags; 660 not documented in `.env.example`.
+668 flags; 666 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -71,7 +71,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BRAIN_SLOT_GUARD` | `-` | no | NO | `services/zoe-data/brain_slot_guard.py` |
 | `ZOE_BRAIN_SLOT_MAX_DEFER_S` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
 | `ZOE_BRAIN_SLOT_QUIET_S` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
-| `ZOE_BRAIN_SLOT_TOKENS` | `'8192'`, `8192`, `dynamic` | yes | NO | `services/zoe-data/digest_pack.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_BRAIN_SLOT_TOKENS` | `'8192'`, `8192`, `dynamic` | yes | NO | `services/zoe-data/digest_pack.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_BRAIN_STARTUP_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_BRAIN_TOKEN` | `-` | no | NO | `scripts/perf/hop_placement_ab.py`<br>`scripts/perf/measure_tts_cadence.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/user_model_ab.py`<br>`services/zoe-data/zoe_flue_client.py` |
 | `ZOE_BRAIN_UNIT` | `'llama-server.service'` | no | NO | `scripts/maintenance/router_selftrain.py`<br>`services/zoe-data/main.py` |
@@ -385,6 +385,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_OMI_AUDIO_DIR` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIO_RETENTION_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIT_PATH` | `''` | yes | NO | `services/zoe-data/omi_devices.py` |
+| `ZOE_OMI_DAY_REVIEW` | `-` | no | NO | `services/zoe-data/omi_day_review.py` |
+| `ZOE_OMI_DAY_REVIEW_IDLE_S` | `600` | no | NO | `services/zoe-data/omi_day_review.py` |
+| `ZOE_OMI_DAY_REVIEW_LANE` | `-` | no | NO | `services/zoe-data/omi_day_review.py` |
+| `ZOE_OMI_DAY_REVIEW_MAX_AGE_DAYS` | `7` | no | NO | `services/zoe-data/omi_day_review.py` |
+| `ZOE_OMI_DAY_REVIEW_MAX_CALLS` | `dynamic` | no | NO | `services/zoe-data/omi_day_review.py` |
+| `ZOE_OMI_DAY_REVIEW_MIN_MEM_MB` | `1000` | no | NO | `services/zoe-data/omi_day_review.py` |
 | `ZOE_OMI_DEVICE_OWNERS` | `False` | yes | NO | `services/zoe-data/omi_devices.py` |
 | `ZOE_OMI_DIAR_LINK_MIN` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_IDLE_S` | `120` | yes | NO | `services/zoe-data/omi_recordings.py` |

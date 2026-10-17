@@ -208,7 +208,7 @@ OPERATOR_WRITERS = frozenset({
     "samantha_live_cleanup",
 })
 #: The review UI IS the person: approving / editing a row there is "yes, that's right".
-USER_CONFIRMED_WRITERS = frozenset({"review_ui", "user_confirmed"})
+USER_CONFIRMED_WRITERS = frozenset({"review_ui", "user_confirmed", "omi_review"})   # omi_review: the owner approved a pendant candidate quoting their own words (omi_review_apply)
 #: The person's own words, typed or dictated, or a deterministic extractor over their turn
 #: (assistant text is never mined — tests/test_memory_extractor_purity.py).
 USER_STATED_WRITERS = frozenset({
