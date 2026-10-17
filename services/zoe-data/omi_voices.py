@@ -285,8 +285,9 @@ async def set_owner_label(db, user_id: str, segment_id: str, value: Optional[str
                    (value, _iso(_now()) if value else None, segment_id, user_id))
     if n and value == "you":          # "that was me": the wearer's own voice is never held as a bystander's - the embedding goes too
         await _run(db, "DELETE FROM omi_segment_embeddings WHERE segment_id = ? AND user_id = ?", (segment_id, user_id))
-        await _run(db, "UPDATE omi_segments SET voice_cluster_id = NULL, suggested_person_id = NULL, suggested_score = NULL "
-                       "WHERE id = ? AND user_id = ?", (segment_id, user_id))
+        await _release_contributions(db, user_id, [segment_id])       # tagged as a person before: that print un-learns the wearer's voice
+        await _run(db, "UPDATE omi_segments SET voice_cluster_id = NULL, suggested_person_id = NULL, suggested_score = NULL, "
+                       "tagged_person_id = NULL, tag_source = NULL, tagged_at = NULL WHERE id = ? AND user_id = ?", (segment_id, user_id))
         for cid in former:
             await rebuild_cluster(db, cid)
     await db.commit()
