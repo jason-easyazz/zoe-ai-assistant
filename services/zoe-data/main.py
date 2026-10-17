@@ -1226,6 +1226,8 @@ async def lifespan(app: FastAPI):
         import omi_recordings as _omi_rec
         if _omi_rec.enabled():
             asyncio.create_task(_omi_rec.run_loop(), name="omi_transcription")
+        # expiry (unconfirmed voiceprints, held voice embeddings, WAV retention) runs whatever the sync flag says
+        asyncio.create_task(_omi_rec.run_retention_loop(), name="omi_retention")
     except Exception as _omi_exc:
         logger.warning("omi transcription loop not started (non-fatal): %s", _omi_exc)
     try:  # the pendant day review's DAYTIME fallback lane (flag-dark ZOE_OMI_DAY_REVIEW; the night window is the primary lane)

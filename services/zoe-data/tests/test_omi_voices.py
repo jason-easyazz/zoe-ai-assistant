@@ -253,6 +253,27 @@ def test_diarise_reads_the_wav_and_cuts_where_the_voice_changes(tmp_path):
     assert 4800 <= segs[0].end_ms <= 5400 and segs[-1].end_ms == 10200
 
 
+def test_the_energy_fallback_does_not_drift_over_a_long_recording(tmp_path):
+    """Without Silero the VAD reads one-second blocks; a block is not a whole number of 512-sample hops, so dropping the remainder
+    shifted every later turn 8 ms per second (2.4 s five minutes in)."""
+    p = tmp_path / "late.wav"
+    t = np.arange(int(16000 * 5)) / 16000
+    with wave.open(str(p), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\0\0" * (16000 * 300) + (6000 * np.sin(2 * np.pi * 150 * t)).astype("<i2").tobytes())
+
+    heard = []
+
+    class Fake:
+        def embed(self, x):
+            heard.append(float(np.abs(x).max()))
+            return WEARER
+    run(od.diarise(str(p), Fake(), WEARER, vad_factory=lambda: None))
+    assert heard and min(heard) > 0.1, heard                  # every window sits on the tone; a drifted timeline embeds silence
+
+
 # --- transcription: text aligned to turns, written before the WAV goes ----------------------------------------------------------
 def test_each_turn_is_transcribed_on_its_own_and_lands_with_the_transcript(env, monkeypatch):
     rid = transcribe(env, monkeypatch, turns((0, 2, "you", 0.6, WEARER), (2, 6, "other", 0.05, SAM)))
@@ -384,7 +405,22 @@ def test_not_a_person_leaves_suggestions_and_the_review_for_good(env, monkeypatc
     rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(TV, 5, 0.3))))
     assert [s["label"] for s in run(_segs(rid))] == ["you", "not_a_person"]          # a later TV line is marked on arrival
     assert env.db.q("SELECT COUNT(*) FROM omi_segment_embeddings") == [(0,)]
+    monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", "on")
     assert [r["label"] for r in run(_review(rid))] == ["you"]                         # and never reaches the day review
+
+
+def test_in_shadow_mode_the_review_ignores_model_labels_but_keeps_the_members_word(env, monkeypatch):
+    """ZOE_OMI_SPEAKER_TAG=shadow: the owner sees the model's labels, the day review does not use them (design 9)."""
+    cid = _sam_cluster(env, monkeypatch)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, 9, 0.3))))
+    assert [s["label"] for s in run(_segs(rid))] == ["you", "someone_else"]                        # the owner's page shows them
+    assert [r["label"] for r in run(_review(rid))] == ["unverified", "unverified"]                  # the review does not
+    sid = env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'you'", (rid,))[0][0]
+    env.client.patch(f"/api/omi/segments/{sid}", json={"owner_label": "you"})                       # the member's own word counts
+    assert [r["label"] for r in run(_review(rid))] == ["you", "unverified"]
+    monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", "on")
+    assert [r["label"] for r in run(_review(rid))] == ["you", "someone_else"]
 
 
 def test_a_retag_moves_what_the_first_tag_taught_to_the_right_person(env, monkeypatch):
@@ -544,16 +580,104 @@ def test_a_person_merge_moves_the_members_tags_to_the_survivor(env, monkeypatch)
     assert env.db.q("SELECT COUNT(*) FROM omi_segments WHERE tagged_person_id = 'real'") == [(2,)]
 
 
-def test_a_voice_erase_failure_is_loud_and_never_blocks_erasing_audio(env, monkeypatch, caplog):
+def test_a_voice_erase_failure_fails_closed_but_still_erases_the_audio(env, monkeypatch, caplog):
+    """A learned-voice erase that fails must never read as "forgotten": forget_user RAISES (after the audio and the pendant
+    registrations are done, which it never blocks) so the cascade reports the failure and the caller retries."""
     rid = transcribe(env, monkeypatch, turns((0, 6, "other", 0.0, TV)))
 
     async def boom(db, uid):
         raise RuntimeError("voice tables unreachable")
     monkeypatch.setattr(ov, "forget_user", boom)
     caplog.set_level("ERROR")
-    assert run(omi.forget_user(A)) == 1
+    with pytest.raises(omi.VoiceEraseIncomplete):
+        run(omi.forget_user(A))
     assert env.db.q("SELECT status FROM omi_recordings WHERE id = ?", (rid,)) == [("deleted",)]
     assert "OMI_VOICES_ERASE_INCOMPLETE" in caplog.text
+
+
+def test_a_failed_voice_cleanup_leaves_the_recording_deletable_again(env, monkeypatch):
+    """If the voice cleanup fails the recording must NOT already be a tombstone (a retry would exit at "already deleted" and the
+    segments / embeddings / voiceprint contributions would stay for good)."""
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    (rid,) = env.db.q("SELECT id FROM omi_recordings ORDER BY id LIMIT 1")[0]
+    real = ov.drop_recording
+
+    async def boom(db, r):
+        raise RuntimeError("transient")
+    monkeypatch.setattr(ov, "drop_recording", boom)
+    with pytest.raises(RuntimeError):
+        run(omi.delete_recording(A, rid))
+    assert env.db.q("SELECT status FROM omi_recordings WHERE id = ?", (rid,)) != [("deleted",)]
+    monkeypatch.setattr(ov, "drop_recording", real)
+    assert run(omi.delete_recording(A, rid)) is True
+    assert env.db.q("SELECT COUNT(*) FROM omi_segments WHERE recording_id = ?", (rid,)) == [(0,)]
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments WHERE recording_id = ?", (rid,)) == [(0,)]
+
+
+def test_the_expiry_sweep_runs_with_the_sync_flag_off(env, monkeypatch):
+    """Turning ZOE_OMI_SYNC_ENABLED off stops the transcription loop, not the retention of biometrics already held."""
+    cid = _sam_cluster(env, monkeypatch)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    env.db.conn.execute("UPDATE learned_voiceprints SET expires_at = '2000-01-01T00:00:00Z'")
+    env.db.conn.commit()
+    monkeypatch.setattr(omi, "enabled", lambda: False)
+    monkeypatch.setattr(omi, "RETENTION_S", 0.01)
+
+    async def go():
+        try:
+            await asyncio.wait_for(omi.run_retention_loop(), 1.0)
+        except asyncio.TimeoutError:
+            pass
+    run(go())
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
+    assert "run_retention_loop" in (SVC / "main.py").read_text()                    # and main starts it unconditionally
+
+
+def test_a_wearer_correction_drops_the_held_embedding(env, monkeypatch):
+    """"That was me" on a line held as a bystander's voice: the embedding and its place in the unknown voice go, so tagging the voice
+    can never teach another person's print the wearer's voice."""
+    for i in range(2):
+        transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
+    sid = env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")[0][0]
+    assert env.client.patch(f"/api/omi/segments/{sid}", json={"owner_label": "you"}).status_code == 200
+    assert env.db.q("SELECT COUNT(*) FROM omi_segment_embeddings WHERE segment_id = ?", (sid,)) == [(0,)]
+    assert env.db.q("SELECT voice_cluster_id FROM omi_segments WHERE id = ?", (sid,)) == [(None,)]
+    assert env.db.q("SELECT n_segments FROM omi_voice_clusters") == [(1,)]                           # the voice forgot that sample
+
+
+def test_a_segment_marked_not_a_person_leaves_the_unknown_voice(env, monkeypatch):
+    for i in range(2):
+        transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
+    sid = env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")[0][0]
+    assert env.client.patch(f"/api/omi/segments/{sid}", json={"not_person": "tv"}).status_code == 200
+    (v,) = env.client.get("/api/omi/voices/unknown").json()["voices"]
+    assert v["segments"] == 1 and sid not in [x["segment_id"] for x in v["samples"]]                                            # no longer a sample of it
+    assert env.db.q("SELECT n_segments FROM omi_voice_clusters") == [(1,)]
+
+
+def test_tagging_one_line_rebuilds_the_voice_it_came_from(env, monkeypatch):
+    for i in range(2):
+        transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
+    a, b = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")]
+    before = env.db.q("SELECT centroid FROM omi_voice_clusters")[0][0]
+    env.client.post(f"/api/omi/segments/{a}/tag", json={"name": "Sam"})
+    assert env.db.q("SELECT n_segments FROM omi_voice_clusters") == [(1,)]
+    assert env.db.q("SELECT centroid FROM omi_voice_clusters")[0][0] != before                      # no longer includes the tagged sample
+    env.client.post(f"/api/omi/segments/{b}/tag", json={"name": "Sam2"})
+    assert env.db.q("SELECT COUNT(*) FROM omi_voice_clusters") == [(0,)]                            # the last sample took the voice with it
+
+
+def test_a_patch_with_a_bad_field_applies_nothing(env, monkeypatch):
+    for i in range(2):
+        transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
+    sid = env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")[0][0]
+    r = env.client.patch(f"/api/omi/segments/{sid}", json={"not_person": "tv", "owner_label": "bogus"})
+    assert r.status_code == 400
+    assert env.db.q("SELECT not_person, owner_label FROM omi_segments WHERE id = ?", (sid,)) == [(None, None)]
+    r = env.client.patch(f"/api/omi/segments/{sid}", json={"not_person": "pets", "owner_label": "you"})
+    assert r.status_code == 400
+    assert env.db.q("SELECT not_person, owner_label FROM omi_segments WHERE id = ?", (sid,)) == [(None, None)]
 
 
 def test_erasing_the_member_erases_every_voice_row(env, monkeypatch):

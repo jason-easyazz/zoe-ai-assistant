@@ -643,12 +643,12 @@ async def get_recording(user_id: str, rid: str) -> Optional[dict]:
 
 
 async def _tombstone(db, row: Any, now: datetime) -> None:
+    import omi_voices            # FIRST: its segments, held voice embeddings and voiceprint contributions go with it (voiceprints rebuilt).
+    await omi_voices.drop_recording(db, row["id"])    # A failure here leaves the row NOT deleted, so the owner's retry runs it again
     _unlink(row["audio_path"] or "")
     await db.execute(
         "UPDATE omi_recordings SET status = 'deleted', transcript = '', audio_path = '', audio_bytes = 0, started_at = '', ended_at = '', "
         "duration_s = 0, keep_audio = 0, audio_expires_at = NULL, reviewed = 0, deleted_at = ? WHERE id = ?", (_iso(now), row["id"]))
-    import omi_voices            # its segments, held voice embeddings and voiceprint contributions go with it (voiceprints rebuilt)
-    await omi_voices.drop_recording(db, row["id"])
 
 
 async def delete_recording(user_id: str, rid: str) -> bool:
@@ -693,14 +693,20 @@ async def update_recording(user_id: str, rid: str, *, keep_audio: Optional[bool]
     return await get_recording(user_id, rid)
 
 
+class VoiceEraseIncomplete(RuntimeError):
+    """A member's learned-voice rows could not be erased. Raised by ``forget_user`` so the erase never reads as complete."""
+
+
 async def forget_user(user_id: str) -> int:
     """Right to be forgotten: every recording of the member is deleted (audio, transcript, times) AND their pendant registrations are
     unassigned (``omi_devices.forget_user``; the device row stays, unowned, so a restart cannot re-seed it to them). Takes the member's
-    erase gate. Returns the number of recordings deleted."""
+    erase gate. Returns the number of recordings deleted. FAILS CLOSED: a voice-erase (or recording) failure raises after the rest of
+    the erase has run, so the caller cannot report the member forgotten."""
     try:
         from db_compat import get_compat_db
         import omi_devices
         n = 0
+        voice_failure: Optional[BaseException] = None
         async with erase_gate.erasing(user_id):
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE user_id = ? AND status != 'deleted'", (user_id,)):
@@ -714,14 +720,24 @@ async def forget_user(user_id: str) -> int:
                     await db.commit()
             except Exception as exc:  # noqa: BLE001
                 logger.error("OMI_VOICES_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
+                voice_failure = exc               # raised below, once the rest of the erase has run: success is never reported
             try:        # AFTER the recordings are committed: a registry that is not migrated yet (0047) must never block erasing audio
                 async with get_compat_db() as db:
                     await omi_devices.forget_user(db, user_id)
                     await db.commit()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("omi_devices: pendant registrations NOT unassigned for a forgotten user (%s)", type(exc).__name__)
+        if voice_failure is not None:
+            raise VoiceEraseIncomplete(type(voice_failure).__name__) from voice_failure
         return n
+    except VoiceEraseIncomplete:
+        raise                                     # fail closed: the caller must retry the whole erase, not read this as done
     except Exception as exc:  # noqa: BLE001
+        import omi_voices
+        no_store = omi_voices._missing(exc) or (isinstance(exc, RuntimeError) and "not initialised" in str(exc))   # nothing to erase
+        if not no_store:                          # a recording or its voice cleanup that failed is NOT "forgotten"
+            logger.error("omi_recordings: recordings NOT erased for a forgotten user (%s)", type(exc).__name__)
+            raise
         logger.warning("omi_recordings: recordings NOT erased for a forgotten user (%s)", type(exc).__name__)
         return 0
 
@@ -1196,6 +1212,24 @@ async def _sweep_voices() -> None:
             logger.warning("omi_voices: expiry sweep failed (%s)", type(exc).__name__)
 
 
+RETENTION_S = 3600.0
+
+
+async def run_retention_loop() -> None:
+    """Expiry that must NOT depend on the sync flag (started by ``main.lifespan`` always): unconfirmed voiceprints, held voice
+    embeddings and unknown voices expire on their dates and WAVs go at their retention, also after an operator turns
+    ``ZOE_OMI_SYNC_ENABLED`` off with learned data and audio still on disk. A missing table is nothing to expire. Never raises."""
+    while True:
+        await asyncio.sleep(RETENTION_S)
+        try:
+            await purge_expired_audio()
+            await _sweep_voices()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("omi_recordings: retention pass failed (%s)", type(exc).__name__)
+
+
 async def run_loop() -> None:
     """The background task (started by ``main.lifespan`` only when the flag is on). One pass per ``POLL_S``; never raises."""
     logger.info("omi_recordings: transcription loop started")
@@ -1204,7 +1238,6 @@ async def run_loop() -> None:
         try:
             if enabled():
                 await purge_expired_audio()
-                await _sweep_voices()
                 await requeue_after_pipeline_change()
                 await transcribe_pending(limit=3)
         except asyncio.CancelledError:

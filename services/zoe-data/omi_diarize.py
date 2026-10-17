@@ -316,13 +316,20 @@ async def diarise(path: str, embedder: Any, profile: Optional[np.ndarray], *, ga
         dur = w.getnframes() / RATE
         vad = vad_factory()
         probs: list = []
+        carry = [b""]                          # the energy fallback's partial hop between one-second blocks (RATE is not a multiple of HOP)
 
         def _vad_minute() -> bool:            # off the event loop: a 30-minute file is ~56k Silero hops
             for _ in range(60):
                 block = w.readframes(RATE)
                 if not block:
                     return False
-                probs.extend(vad.process_hops(block) if vad is not None else energy_probs(block))
+                if vad is not None:
+                    probs.extend(vad.process_hops(block))
+                else:                          # without the carry every block dropped 128 samples and the timeline drifted 8 ms per second
+                    buf = carry[0] + block
+                    whole = len(buf) // (2 * HOP) * (2 * HOP)
+                    probs.extend(energy_probs(buf[:whole]))
+                    carry[0] = buf[whole:]
             return True
         while True:
             if gate is not None:
