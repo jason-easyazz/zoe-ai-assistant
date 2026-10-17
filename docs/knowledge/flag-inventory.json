@@ -1239,6 +1239,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_DEVICE_TOKEN_BINDS_MEMBER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/panel_auth.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_DIGARR_AI_BASE_URL": {
         "defaults": [
           "''"
@@ -1992,6 +2002,16 @@
           "services/zoe-data/routers/system.py",
           "services/zoe-data/smart_home_service.py",
           "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HA_CONTROL_SCOPE": {
+        "defaults": [
+          "'panel'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
         ],
         "typed_env": false
       },
@@ -3909,6 +3929,26 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_SUGGEST_MARGIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_SUGGEST_MIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMI_SYNC_ENABLED": {
         "defaults": [
           "False"
@@ -3946,6 +3986,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/omi_diarize.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_VOICEPRINT_IDLE_DAYS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
         ],
         "typed_env": true
       },

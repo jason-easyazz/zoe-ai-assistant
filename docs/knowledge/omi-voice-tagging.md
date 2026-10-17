@@ -37,7 +37,7 @@ Code: `services/zoe-data/omi_diarize.py`, `omi_voices.py`, `routers/omi_voices.p
      provenance.
    - When learning is allowed, the turns' embeddings join that person's learned voiceprint: the mean after leave-one-out
      outlier removal, rebuilt from each contribution.
-5. **Suggestions** (the follow-up PR; the column, its erasure and the calibration land with it).
+5. **Suggestions.**
    - A suggestion needs a cosine of at least 0.45 and must beat the runner-up by 0.10. Each "no" raises that voice's margin
      by 0.02.
    - A suggestion is never a tag until the member says yes.
@@ -68,7 +68,7 @@ Code: `services/zoe-data/omi_diarize.py`, `omi_voices.py`, `routers/omi_voices.p
 
 ## Calibration
 
-Reproduce with `scripts/perf/omi_voice_calibrate.py` (lands with the suggestions PR). Its gates: not 01:50-04:55, MemAvailable at least the measured peak RSS
+Reproduce with `scripts/perf/omi_voice_calibrate.py`. Its gates: not 01:50-04:55, MemAvailable at least the measured peak RSS
 plus 600 MB, and no voice turn in the last 5 minutes. The owner's numbers go to a private report in `~/.zoe/reports/` and never
 into the repo.
 
@@ -116,7 +116,7 @@ Public labelled speakers: LibriSpeech test-clean, speaker-disjoint from the cent
 | `ZOE_OMI_TAG_YOU_MIN` / `_OTHER_MAX` | 0.351 / 0.15 | wearer labelling |
 | `ZOE_OMI_DIAR_LINK_MIN` | 0.45 | within-recording linkage cut |
 | `ZOE_OMI_VOICE_CLUSTER_MIN` | 0.45 | across-recording unknown-voice cut |
-| `ZOE_OMI_SUGGEST_MIN` / `_MARGIN` | 0.45 / 0.10 | suggestion bar and runner-up margin (the suggestions PR) |
+| `ZOE_OMI_SUGGEST_MIN` / `_MARGIN` | 0.45 / 0.10 | suggestion bar and runner-up margin |
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | 14 | life of a held bystander embedding and an unknown voice |
 | `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` | 30 / 365 | learned-voice expiry |
 | `ZOE_OMI_TAG_MODEL_DIR` | `~/.cache/zoe-speaker-resnet34` | where `fetch_speaker_models.sh build` wrote the INT8 file |

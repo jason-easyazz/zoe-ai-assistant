@@ -300,8 +300,9 @@ phone path (R5 public name or the Zoe app); it is not in the first phases.
   3. set `panels.is_active = 0`.
 - The panel's disk holds a device token, a client key, the household CA root and `<hid>`. Over the relay those
   give at most the panel principal (guest-class), never a member, because the relay ingress ignores the token's
-  member binding (section 5). That matters: on the home LAN today a device token with a `default` binding IS a member
-  credential (verified; ledger line 2026-10-16), so a panel provisioned the current way carries one. Once revoked,
+  member binding (section 5). On the home LAN the same now holds: until the 2026-10-17 fix a device token with a
+  `default` binding WAS a member credential (ledger line 2026-10-16); it now resolves to the panel principal on every
+  route (`panel_auth._resolve_device_token_user`; `ZOE_DEVICE_TOKEN_BINDS_MEMBER=1` is a rollback only). Once revoked,
   none of them opens anything. The CA private key never lives on the panel, and knowing `<hid>` gets no further than
   the TLS handshake. If the owner wants the name gone too, rotating `<hid>` is one call.
 - **Household-level revocation** is the session master's job: it suspends the box, and the next `Login` fails. The
