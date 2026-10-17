@@ -41,7 +41,11 @@ import logging
 import os
 from typing import Any, Mapping, Optional
 
+from fastapi import Depends, HTTPException, Request
+
 import panel_kiosk_credential
+from auth import get_current_user
+from log_throttle import log_throttled
 
 logger = logging.getLogger(__name__)
 
@@ -244,3 +248,44 @@ async def may_control_home(request: Any, user: Mapping[str, Any] | None, db: Any
     except Exception as exc:  # noqa: BLE001 - fail closed
         logger.warning("panel_principal: home-control panel check failed (%s) - refusing", type(exc).__name__)
         return False
+
+
+# ── FastAPI dependencies for the house-state routes outside ``/api/ha`` (security follow-up 2026-10-18) ──────────────────────
+#
+# The #2089 audit left routes that serve the same house state, or re-target what the panel controls, to any LAN caller:
+# ``GET /api/panels/{id}/sleep-gate`` (is this room lit right now?), ``GET /api/panels/{id}/config`` and ``GET /api/rooms``
+# + ``/api/rooms/unassigned`` (live HA state per device). Those READS take the home-control rule (``require_member_or_panel``:
+# a member or the panel, incl. its ``ZOE_HA_CONTROL_SCOPE=open`` rollback). The WRITES behind them change which device a dock
+# pin or "the light" in a room means, so they take a MEMBER only (``require_member``); the estate already answers that refusal
+# with "Sign in to manage rooms" / "Sign in to change panel settings".
+
+
+def _route_label(request: Any) -> str:
+    try:
+        return f"{request.method} {request.url.path}"[:160]
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
+def _refuse(kind: str, request: Any, user: Mapping[str, Any] | None, detail: str) -> HTTPException:
+    label = _route_label(request)
+    log_throttled(
+        logger, logging.WARNING, f"{kind}:{label}",
+        "refused %s: %s (user=%s)", label, kind, str((user or {}).get("user_id"))[:64],
+    )
+    return HTTPException(status_code=403, detail=detail)
+
+
+async def require_member_or_panel(request: Request, user: dict = Depends(get_current_user)) -> dict:
+    """A signed-in member or the panel (``may_control_home``); anyone else gets 403."""
+    if await may_control_home(request, user):
+        return user
+    raise _refuse("neither a member nor the panel", request, user, "Sign in, or use the wall panel")
+
+
+async def require_member(request: Request, user: dict = Depends(get_current_user)) -> dict:
+    """A signed-in household member (``is_member``): never a guest, the panel (device token, kiosk credential, registered
+    address), an auth-outage principal or the ``ZOE_UNAUTHENTICATED_ROLE`` promotion. 403 otherwise."""
+    if is_member(user):
+        return user
+    raise _refuse("not a signed-in member", request, user, "Sign in to change this")

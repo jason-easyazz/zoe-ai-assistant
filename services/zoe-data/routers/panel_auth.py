@@ -6,7 +6,8 @@ Tokens are SHA-256 hashed before storage.  The raw token is returned once on iss
 
 Routes:
   POST /api/panels/register         — create panel record (admin only)
-  POST /api/panels/{panel_id}/token — issue device token (admin only)
+  POST /api/panels/{panel_id}/token — issue device token (admin only; never an admin-role token)
+  POST /api/panels/device-token/renew — the holder of a device token pushes its expiry forward
   DELETE /api/panels/{panel_id}/token/{token_id} — revoke token (admin only)
   GET  /api/panels                  — list panels (admin only)
   POST /api/panels/auth/pin         — submit PIN for a challenge (any authenticated user)
@@ -20,7 +21,7 @@ import os
 import secrets
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import asyncio
@@ -39,7 +40,7 @@ _CHALLENGE_TTL_S = int(os.environ.get("ZOE_PIN_CHALLENGE_TTL_S", "120"))
 
 # In-memory cache for device tokens (panel_id → list of token info dicts).
 # Populated from DB on startup via load_device_tokens() called from main.py.
-_token_cache: dict[str, dict] = {}  # token_hash → {panel_id, role, scopes, expires_at, revoked}
+_token_cache: dict[str, dict] = {}  # token_hash → {panel_id, role, expires_at, revoked}
 
 # PIN brute-force protection: track failed attempts per challenge (challenge_id → count, lockout_until)
 _pin_attempts: dict[str, dict] = {}  # challenge_id → {"count": int, "locked_until": float}
@@ -89,9 +90,67 @@ def lookup_device_token_hash(token_hash: str) -> dict | None:
     if not info or info.get("revoked"):
         return None
     exp = info.get("expires_at")
-    if exp and datetime.fromisoformat(exp) < datetime.now(tz=timezone.utc):
-        return None
+    if exp:
+        try:
+            if parse_token_expiry(exp) <= datetime.now(tz=timezone.utc):
+                return None
+        except (TypeError, ValueError):
+            # An expiry nobody can read is not "never expires": refuse the token (it used to raise out of auth instead).
+            logger.warning("panel_auth: device token for panel %s has an unreadable expires_at - refusing it", info.get("panel_id"))
+            return None
     return info
+
+
+# ── device-token lifecycle (security follow-up 2026-10-18) ───────────────────────────────────────────────────────────────
+#
+# A device token used to be minted with NO expiry, and with any role string (``admin`` included). Now:
+#   * a NEW token (``issue_token``, ``panel_provision.provision_confirm``) expires ``ZOE_DEVICE_TOKEN_TTL_DAYS`` after it is
+#     minted (default 365; ``0`` = mint without an expiry). Existing rows are untouched: a NULL ``expires_at`` still never
+#     expires, so no panel in the house is forced off by this change.
+#   * ``POST /api/panels/device-token/renew`` pushes the CALLER's own token's expiry forward IN PLACE (never shortens it, never
+#     adds one to a no-expiry token). In place, not a rotation, because one token is shared by every process on the panel
+#     (voice daemon, kiosk gate, omi-sync, panel-bluetooth) - a rotation would strand all but the caller. Nothing on the panel
+#     calls it yet: the voice daemon is a voice-path file, so wiring it is a separate, replay-gated change (ledger).
+#   * ``issue_token`` refuses an admin role: a device token is the PANEL principal, never an admin.
+#   * ``scopes`` is gone from the code. It was written in two formats and enforced nowhere, so a token "limited to voice" was
+#     in fact the full panel principal. The ``device_tokens.scopes`` column stays (unread): dropping it is a migration that a
+#     code rollback would then crash on in ``load_device_tokens``.
+
+_DEFAULT_TOKEN_TTL_DAYS = 365
+# Role strings a device token may NOT carry: ``admin`` (the legacy rollback mapped it to an admin principal) and the admin
+# aliases ``auth`` honours for people.
+_REFUSED_TOKEN_ROLES = frozenset({"admin", "family-admin"})
+
+
+def device_token_ttl_days() -> int:
+    """``ZOE_DEVICE_TOKEN_TTL_DAYS`` (default 365, read per call). ``0`` (or negative) mints tokens without an expiry."""
+    raw = os.environ.get("ZOE_DEVICE_TOKEN_TTL_DAYS", "").strip()
+    try:
+        return int(raw) if raw else _DEFAULT_TOKEN_TTL_DAYS
+    except ValueError:
+        logger.warning("panel_auth: ZOE_DEVICE_TOKEN_TTL_DAYS=%r is not an integer - using %d", raw, _DEFAULT_TOKEN_TTL_DAYS)
+        return _DEFAULT_TOKEN_TTL_DAYS
+
+
+def new_token_expiry(now: Optional[datetime] = None) -> Optional[str]:
+    """The ``expires_at`` for a token minted (or renewed) now: ISO-8601 UTC, or None when the TTL is 0."""
+    days = device_token_ttl_days()
+    if days <= 0:
+        return None
+    return ((now or datetime.now(tz=timezone.utc)) + timedelta(days=days)).isoformat()
+
+
+def parse_token_expiry(value) -> datetime:
+    """An ``expires_at`` value as an aware datetime (a naive one is UTC). Raises ValueError/TypeError when unreadable."""
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        dt = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def is_refused_token_role(role: str) -> bool:
+    return str(role or "").strip().lower() in _REFUSED_TOKEN_ROLES
 
 
 def _request_has_panel_device_token(request: Request | None, panel_id: str) -> bool:
@@ -244,10 +303,11 @@ async def _resolve_device_token_user(raw_token: str) -> dict | None:
             )
         return _panel_principal(panel_id, role)
 
-    user_role = "member" if role in ("voice", "panel", "kiosk") else "admin" if role == "admin" else "member"
+    # Even under the rollback a device token is never an ADMIN (it used to be, for a token minted with role ``admin``): the
+    # rollback restores the member binding the kiosk relied on, not an admin credential on the panel's disk.
     return {
         "user_id": bound_user_id,
-        "role": user_role,
+        "role": "member",
         "username": f"panel:{panel_id}",
         "permissions": ["chat", "voice"],
         "panel_id": panel_id,
@@ -259,7 +319,7 @@ async def load_device_tokens(db) -> None:
     """Load all active device tokens from DB into the in-memory cache (call at startup)."""
     _token_cache.clear()
     cursor = await db.execute(
-        "SELECT token_hash, panel_id, role, scopes, expires_at, revoked FROM device_tokens"
+        "SELECT token_hash, panel_id, role, expires_at, revoked FROM device_tokens"
     )
     rows = await cursor.fetchall()
     for row in rows:
@@ -501,7 +561,31 @@ async def set_panel_bindings(panel_id: str, payload: dict, admin: dict = Depends
 
 @router.post("/{panel_id}/token")
 async def issue_token(panel_id: str, payload: dict, admin: dict = Depends(require_admin), db=Depends(get_db)):
-    """Issue a new device token for a panel daemon."""
+    """Issue a new device token for a panel daemon (lifecycle rules: the block above ``device_token_ttl_days``).
+
+    Body: ``{name?, role?, expires_at?}``. ``role`` is a label (the token is the panel principal whatever it says) and may
+    not be an admin role. ``expires_at`` (ISO-8601, in the future) overrides the default ``ZOE_DEVICE_TOKEN_TTL_DAYS``.
+    ``scopes`` is refused: it was never enforced, so accepting it would promise a narrower token than the one minted.
+    """
+    role = str(payload.get("role") or "voice-daemon").strip()
+    if is_refused_token_role(role):
+        raise HTTPException(status_code=400, detail="A device token cannot carry an admin role")
+    if payload.get("scopes"):
+        raise HTTPException(
+            status_code=400,
+            detail="Device tokens have no scopes: a device token is the panel, whatever it says. Omit 'scopes'.",
+        )
+    if payload.get("expires_at"):
+        try:
+            expiry = parse_token_expiry(payload["expires_at"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expires_at must be an ISO-8601 timestamp")
+        if expiry <= datetime.now(tz=timezone.utc):
+            raise HTTPException(status_code=400, detail="expires_at must be in the future")
+        expires_at: Optional[str] = expiry.astimezone(timezone.utc).isoformat()
+    else:
+        expires_at = new_token_expiry()
+
     panel = await (await db.execute("SELECT panel_id FROM panels WHERE panel_id = ?", (panel_id,))).fetchone()
     if not panel:
         raise HTTPException(status_code=404, detail=f"Panel '{panel_id}' not found")
@@ -510,13 +594,10 @@ async def issue_token(panel_id: str, payload: dict, admin: dict = Depends(requir
     token_hash = _hash_token(raw_token)
     token_id = uuid.uuid4().hex
     name = str(payload.get("name") or "voice-daemon").strip()
-    role = str(payload.get("role") or "voice-daemon").strip()
-    scopes = json.dumps(payload.get("scopes") or ["voice"])
-    expires_at = payload.get("expires_at") or None
 
     await db.execute(
-        "INSERT INTO device_tokens (id, panel_id, token_hash, name, role, scopes, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (token_id, panel_id, token_hash, name, role, scopes, expires_at),
+        "INSERT INTO device_tokens (id, panel_id, token_hash, name, role, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (token_id, panel_id, token_hash, name, role, expires_at),
     )
     await db.commit()
 
@@ -524,20 +605,51 @@ async def issue_token(panel_id: str, payload: dict, admin: dict = Depends(requir
     _token_cache[token_hash] = {
         "panel_id": panel_id,
         "role": role,
-        "scopes": scopes,
         "expires_at": expires_at,
         "revoked": 0,
         "token_id": token_id,
     }
-    logger.info("panel_auth: issued token %s for panel %s role %s", token_id, panel_id, role)
+    logger.info("panel_auth: issued token %s for panel %s role %s expires %s", token_id, panel_id, role, expires_at or "never")
     return {
         "ok": True,
         "token_id": token_id,
         "panel_id": panel_id,
         "token": raw_token,  # Only returned here — store securely on the device.
         "role": role,
+        "expires_at": expires_at,
         "note": "Store this token securely. It cannot be retrieved again.",
     }
+
+
+@router.post("/device-token/renew")
+async def renew_device_token(request: Request, db=Depends(get_db)):
+    """The holder of a valid device token (``X-Device-Token``) pushes ITS OWN expiry to now + ``ZOE_DEVICE_TOKEN_TTL_DAYS``.
+
+    In place: the token string does not change, so every process on the panel that shares it keeps working. Never shortens
+    an expiry, and never gives a no-expiry (legacy) token one. An expired, revoked or unknown token gets 401 - renewal is not
+    a way back in."""
+    raw = str(request.headers.get("X-Device-Token", "") or "").strip()
+    info = lookup_device_token(raw) if raw else None
+    if not info:
+        raise HTTPException(status_code=401, detail="A valid device token is required")
+    current = info.get("expires_at")
+    panel_id = info.get("panel_id")
+    if not current:
+        return {"ok": True, "panel_id": panel_id, "expires_at": None, "renewed": False}
+    proposed = new_token_expiry()
+    if not proposed or parse_token_expiry(proposed) <= parse_token_expiry(current):
+        return {"ok": True, "panel_id": panel_id, "expires_at": current, "renewed": False}
+    token_hash = _hash_token(raw)
+    cur = await db.execute(
+        "UPDATE device_tokens SET expires_at = ? WHERE token_hash = ? AND revoked = 0", (proposed, token_hash)
+    )
+    await db.commit()
+    if getattr(cur, "rowcount", 1) == 0:  # revoked (or deleted) in the DB since the cache was loaded
+        info["revoked"] = 1
+        raise HTTPException(status_code=401, detail="A valid device token is required")
+    info["expires_at"] = proposed
+    logger.info("panel_auth: renewed device token for panel %s until %s", panel_id, proposed)
+    return {"ok": True, "panel_id": panel_id, "expires_at": proposed, "renewed": True}
 
 
 @router.delete("/{panel_id}/token/{token_id}")
