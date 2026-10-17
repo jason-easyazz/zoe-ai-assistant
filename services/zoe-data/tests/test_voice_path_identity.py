@@ -355,6 +355,66 @@ def test_the_brain_dispatch_still_runs_a_members_home_command(bridge, monkeypatc
     assert bridge
 
 
+async def test_the_livekit_media_lane_records_the_verdict(registry, monkeypatch):
+    """`/api/voice/livekit-audio` runs a full brain turn behind its own auth dependency (review finding, codex on #2097)."""
+    from routers import voice_livekit
+
+    async def _no_member(_panel_id, fallback_db=None):
+        return None
+
+    monkeypatch.setattr(voice_tts, "_resolve_fresh_panel_member", _no_member)
+    guest = {"user_id": "guest", "role": "guest"}
+    await voice_livekit._require_livekit_media_auth(_req(PROXY, {"X-Session-ID": GUEST_SID, "X-Real-IP": PHONE_IP}),
+                                                    device=None, user=guest)
+    assert panel_principal.home_control_verdict() is False          # a phone's minted guest session is not the panel
+    await voice_livekit._require_livekit_media_auth(_req(PROXY, {"X-Session-ID": GUEST_SID, "X-Real-IP": PANEL_IP}),
+                                                    device=None, user=guest)
+    assert panel_principal.home_control_verdict() is True           # the estate kiosk at its registered address
+    panel_principal.record_home_control(False)
+    await voice_livekit._require_livekit_media_auth(_req(PHONE_IP), device={"panel_id": PANEL_A, "user_id": "voice-daemon"},
+                                                    user=guest)
+    assert panel_principal.home_control_verdict() is True           # the panel's device token
+    panel_principal.record_home_control(False)
+    await voice_livekit._require_livekit_media_auth(_req(PHONE_IP), device=None, user={"user_id": "casey", "role": "user"})
+    assert panel_principal.home_control_verdict() is True           # a member
+
+
+@pytest.mark.parametrize("tool", ["media_get_now_playing", "panel_show_smart_home"])
+async def test_the_mcp_home_reads_obey_a_refused_turn(monkeypatch, tool):
+    import mcp_server
+
+    async def _actor(_db, _name, _args, _ctx):
+        return {"user_id": "guest", "role": "guest"}
+
+    monkeypatch.setattr(mcp_server, "_resolve_mcp_actor", _actor)
+    calls: list = []
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, **k):
+            calls.append(url)
+            raise RuntimeError("stop here")   # the allowed path reached the bridge: that is all this control needs
+
+    monkeypatch.setattr(mcp_server, "httpx", types.SimpleNamespace(AsyncClient=_Client))
+    panel_principal.record_home_control(False)
+    assert await mcp_server._execute_tool(object(), tool, {}) == {"error": REFUSAL}
+    assert calls == []
+    panel_principal.record_home_control(True)   # NEGATIVE CONTROL
+    try:
+        await mcp_server._execute_tool(object(), tool, {})
+    except Exception:  # noqa: BLE001 - downstream of the bridge call is not under test
+        pass
+    assert calls, "an allowed turn must reach the bridge"
+
+
 # ── 3. the voice HTTP lanes: the server decides the panel and the member ─────────────────────────────────────────────────
 
 def _req(peer=PROXY, headers=None):
