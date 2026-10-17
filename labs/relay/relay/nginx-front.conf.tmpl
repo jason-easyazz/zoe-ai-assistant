@@ -1,0 +1,34 @@
+# Stream front for the relay host (design section 2). Routes by SNI WITHOUT terminating TLS:
+# ssl_preread reads only the ClientHello. This file holds no certificate and no key.
+worker_processes 1;
+error_log /dev/stderr warn;
+pid /tmp/nginx.pid;
+events { worker_connections 1024; }
+
+stream {
+    log_format relay '$remote_addr sni="$ssl_preread_server_name" -> $relay_upstream status=$status in=$bytes_received out=$bytes_sent';
+    access_log /dev/stdout relay;
+
+    map $ssl_preread_server_name $relay_upstream {
+        # household panels: <hid>.zoe.internal -> frps https vhost (raw bytes, SNI passthrough)
+        "~*^[a-z0-9]{8,32}\.zoe\.internal$"   127.0.0.1:8443;
+        # boxes' frpc: its TLS ClientHello carries transport.tls.serverName (the relay's own name) -> frps control port.
+        # An empty SNI is routed there too (frpc with no serverName); frps' own TLS/login checks decide from there.
+        "@@RELAY_NAME@@"                    127.0.0.1:7000;
+        ""                                  127.0.0.1:7000;
+        # any other name: refuse (discard port, nothing listens)
+        default                             127.0.0.1:9;
+    }
+
+    # per-source-IP concurrency. NOTE: a per-household cap keyed on the SNI is NOT possible here:
+    # limit_conn runs in the preaccess phase, before ssl_preread has read the ClientHello.
+    limit_conn_zone $binary_remote_addr zone=perip:1m;
+
+    server {
+        listen 443;
+        ssl_preread on;
+        limit_conn perip 128;
+        proxy_connect_timeout 5s;
+        proxy_pass $relay_upstream;
+    }
+}
