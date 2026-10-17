@@ -321,9 +321,55 @@ _INTERACT = re.compile(r"\b(?:with|to|told|tell|met|meet|rang|ring|call|called|s
 _VAGUE = frozenset({"do", "it", "that", "this", "her", "him", "them", "call", "get", "go", "see", "send", "make", "a", "an", "the",
                     "some", "something", "thing", "things", "stuff", "one", "to", "up", "out", "back", "there", "here", "be"})
 
+#: words that carry no content in a title / item / name: pronouns, demonstratives, determiners, prepositions, auxiliaries, fillers
+_STOP = frozenset((
+    "i me my mine myself we us our ours you your yours he him his she her hers it its they them their theirs this that these those "
+    "here there who whom whose what which when where why how a an the and or but so then than as if of to in on at by for with from "
+    "up out off over about into onto is am are was were be been being do does did have has had will would can could should shall may "
+    "might must not no yes some any all each one ones thing things stuff something anything everything someone somebody just also "
+    "very really too again back more still yeah okay ok um uh well like gonna wanna gotta let lets now soon later").split())
+#: a verb on its own says nothing about WHAT ("look", "forget it", "check"): the title needs an object
+_GENERIC_VERBS = frozenset(("look check forget remember do get go see send make call ring text take put say tell ask try think find "
+                            "need want give come talk follow sort deal handle fix sorted done").split())
+#: a generic noun on its own ("meeting") does not name which one
+_GENERIC_NOUNS = frozenset(("meeting meetings appointment appointments call calls catch catchup chat reminder task tasks event "
+                            "events plan plans work job errand errands visit").split())
+_PRONOUN_NAMES = frozenset(("i me my we us our you your he him his she her hers it its they them their this that these those who "
+                            "whom what which").split())
+_REL = r"(?:new |old |step-?)?(?:mum|mom|mother|dad|father|son|daughter|brother|sister|wife|husband|partner|boss|manager|friend|" \
+       r"colleague|neighbou?r|cousin|aunt|auntie|uncle|nephew|niece|grandma|grandmother|grandpa|grandfather|doctor|teacher|girlfriend|boyfriend)"
+#: reported or past SPEECH ("I was like I'll ...", "I said I'll ...", "so I rang him and I said I'll ..."): narrative, not a plan
+_NARRATIVE = re.compile(r"\b(?:i|we|he|she|they)\s+(?:said|told\s+\w+|replied|answered|was like|were like|goes|went)\b|\b(?:was|were) like\b", _I)
 _SENSITIVE_FACT = _SENSITIVE_ALL | {"affect", "other_member"}
 _NOT_NAMES = frozenset({"zoe", "user", "someone", "somebody", "everyone", "nobody", "god", "monday", "tuesday", "wednesday",
                         "thursday", "friday", "saturday", "sunday", "today", "tomorrow", "mum", "mom", "dad", "the"})
+
+
+def _content(text: str) -> list[str]:
+    """The words of a title / item that name something: stopwords out, generic verbs out."""
+    return [w for w in _norm(text).split() if w not in _STOP and w not in _GENERIC_VERBS and w not in _VAGUE]
+
+
+def vague_text(text: str) -> bool:
+    """A title or list item that does not say WHAT: no content word left ("that", "it", "forget it", "check", "do it") or only a
+    generic noun ("meeting") with no object. A single specific noun ("passport", "milk") passes."""
+    c = _content(text)
+    return not c or all(w in _GENERIC_NOUNS for w in c)
+
+
+def bad_name(name: str) -> bool:
+    """Not a proper noun: a pronoun, a stopword or a filler capitalised at the start of a sentence ("She", "Then")."""
+    toks = _norm(name).split()
+    return not toks or any(t in _PRONOUN_NAMES or t in _STOP for t in toks)
+
+
+def relation_of(name: str, span: str) -> str:
+    """The wearer's relation to ``name`` ONLY from "my <relation>, <Name>" or "<Name>, my <relation>" / "<Name> is my <relation>".
+    "I'm X's son" would make X the wearer's parent, so possessive and every other shape give "" (the person is stored unrelated)."""
+    n = re.escape(name)
+    m = (re.search(rf"\b(my {_REL})\s*,?\s*(?:is |named |called )?{n}\b", span, _I)
+         or re.search(rf"\b{n}\b\s*,?\s*(?:who is |is |as )?(my {_REL})\b", span, _I))
+    return m.group(1).lower() if m else ""
 
 
 def _words(text: str) -> int:
@@ -756,14 +802,20 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
         if _norm(name).split()[0] in {_norm(n).split()[0] for n in owner_names if _norm(n)}:
             drop("owner_name")                   # "I'm Jason": the wearer is not a new person
             return None
+        if bad_name(name):
+            drop("bad_person")                   # "She", "Then": a pronoun or filler is not a name
+            return None
         if not _INTERACT.search(span):
             drop("no_interaction")               # "and then Julie, Tanika, Cody": a name in passing
             return None
-        payload = {"name": name, "relation": _field(fields, "relation", 40)}
+        payload = {"name": name, "relation": relation_of(name, span)}       # the model's own "relation" is never trusted: direction
     elif kind == "list_item":
         it = _field(fields, "item", 60)
         if not it:
             drop("empty")
+            return None
+        if vague_text(it):
+            drop("vague")                        # "that", "it", "more": nothing to put on a list
             return None
         lst = str(fields.get("list") or "shopping").strip().lower()
         payload = {"item": it, "list": lst if lst in ("shopping", "tasks") else "shopping"}
@@ -772,8 +824,11 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
         if not title:
             drop("empty")
             return None
-        if not [w for w in _norm(title).split() if w not in _VAGUE]:
-            drop("vague")                        # "do it", "call her"
+        if vague_text(title):
+            drop("vague")                        # "do it", "call her", "look", a bare "meeting"
+            return None
+        if _NARRATIVE.search(line.text):
+            drop("narrative")                    # "I said I'll ...", "I was like I'll ...": reported speech, not a plan
             return None
         when_text = " ".join(_field(fields, k, 40) for k in ("date", "time", "when")).strip()
         d, t = _when(when_text, anchor)
@@ -805,14 +860,21 @@ def merge(cands: Iterable[Candidate]) -> list[Candidate]:
     """One candidate per dedup key: the same thing heard twice keeps the stronger reading and both pieces of evidence (<= 3)."""
     out: dict[str, Candidate] = {}
     for c in cands:
-        have = out.get(c.dedup_key)
+        have = out.get(c.dedup_key) or next((o for o in out.values() if c.kind == o.kind == "owner_fact" and near_duplicate(c, o)), None)
         if have is None:
             out[c.dedup_key] = c
             continue
         best, other = (c, have) if c.confidence > have.confidence else (have, c)
         ev = best.evidence + [e for e in other.evidence if e not in best.evidence]
-        out[c.dedup_key] = dataclasses.replace(best, evidence=ev[:3], recording_ids=sorted(set(best.recording_ids) | set(other.recording_ids)))
+        out.pop(have.dedup_key, None)
+        out[best.dedup_key] = dataclasses.replace(best, evidence=ev[:3], recording_ids=sorted(set(best.recording_ids) | set(other.recording_ids)))
     return list(out.values())
+
+
+def near_duplicate(a: Candidate, b: Candidate) -> bool:
+    """Two owner facts of one day that say the same thing in different words (same subject and predicate, high token overlap)."""
+    x, y = set(_content(a.payload.get("fact", ""))), set(_content(b.payload.get("fact", "")))
+    return bool(x and y) and len(x & y) / min(len(x), len(y)) >= 0.75 and len(x & y) / len(x | y) >= 0.5
 
 
 # --- the run ------------------------------------------------------------------------------------------------------

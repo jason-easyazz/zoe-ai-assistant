@@ -924,19 +924,24 @@ def _retention_passed(expires: Any, stamp: str) -> bool:
     return bool(expires) and str(expires) <= stamp
 
 
-async def _expire_unclaimed(db, r: Any) -> None:
+async def _expire_unclaimed(db, r: Any, stamp: str) -> bool:
     """A pending row whose retention passed before it was claimed (it expired between ``requeue_held`` and the claim, or waited out
-    the deferral gates): never transcribed and never left pending. The WAV goes now, the row is marked ``failed`` with no audio
-    (``requeue_held`` needs a WAV and an unexpired retention, so nothing brings it back) and the pass moves on."""
+    the deferral gates, or ran out between the read and the claim): never transcribed and never left pending. The row is marked
+    ``failed`` by a GUARDED update (still pending AND the SQL itself says the retention has passed, so a live row is never touched),
+    then its WAV goes and the path is cleared (``requeue_held`` needs a WAV and an unexpired retention, so nothing brings it back)."""
+    cur = await db.execute("UPDATE omi_recordings SET status = 'failed' WHERE id = ? AND status = 'pending' "
+                           "AND audio_expires_at IS NOT NULL AND audio_expires_at <= ?", (r["id"], stamp))
+    await db.commit()
+    if not getattr(cur, "rowcount", 1):
+        return False                                     # not pending any more, or not expired after all: nothing marked
     path = r["audio_path"]
     _unlink(path)
-    gone = not path or not Path(path).exists()          # a WAV that would not unlink keeps its path: the hourly purge retries it
-    cur = await db.execute("UPDATE omi_recordings SET status = 'failed'"
-                           + (", audio_path = '', audio_bytes = 0, audio_expires_at = NULL, keep_audio = 0" if gone else "")
-                           + " WHERE id = ? AND status = 'pending'", (r["id"],))
-    await db.commit()
-    if getattr(cur, "rowcount", 1):
-        logger.info("OMI_EXPIRED_AT_CLAIM id=%s - retention passed before transcription; WAV removed, row marked failed", r["id"])
+    if not path or not Path(path).exists():             # a WAV that would not unlink keeps its path: the hourly purge retries it
+        await db.execute("UPDATE omi_recordings SET audio_path = '', audio_bytes = 0, audio_expires_at = NULL, keep_audio = 0 "
+                         "WHERE id = ? AND status = 'failed'", (r["id"],))
+        await db.commit()
+    logger.info("OMI_EXPIRED_AT_CLAIM id=%s - retention passed before transcription; WAV removed, row marked failed", r["id"])
+    return True
 
 
 async def transcribe_pending(*, limit: int = 1, now: Optional[datetime] = None, pause_s: float = 0.4) -> int:
@@ -964,7 +969,8 @@ async def transcribe_pending(*, limit: int = 1, now: Optional[datetime] = None, 
                     if not rows:
                         break
                     if _retention_passed(rows[0]["audio_expires_at"], stamp):
-                        await _expire_unclaimed(db, rows[0])
+                        if not await _expire_unclaimed(db, rows[0], stamp):
+                            break                      # could not mark it: end this pass rather than spin on the same row
                         continue
                     r = rows[0]
                 if r is None:
@@ -975,6 +981,7 @@ async def transcribe_pending(*, limit: int = 1, now: Optional[datetime] = None, 
                                          (stamp, r["id"], stamp))
                 await db.commit()
                 if not getattr(claim, "rowcount", 1):
+                    await _expire_unclaimed(db, r, stamp)       # lost the race with the clock: mark it now, not a pass later
                     continue
             if await _transcribe_one(r, seen, now, pause_s):
                 done += 1

@@ -21,6 +21,7 @@ pytestmark = pytest.mark.ci_safe
 
 import asyncio
 import contextlib
+import dataclasses
 import importlib.util
 import json
 import re
@@ -276,8 +277,8 @@ def test_the_database_itself_refuses_a_duplicate_candidate(env, monkeypatch):
 
 
 def test_a_vague_plan_is_never_a_calendar_event(env):
-    add_rec(env, "rec1", "We should catch up sometime next week maybe.")
-    dr.set_llm(fake_model([("We should catch up sometime next week maybe", {"kind": "calendar_event", "fields": {"title": "Catch up", "date": "next week"}})]))
+    add_rec(env, "rec1", "We should catch up with Dana sometime next week maybe.")
+    dr.set_llm(fake_model([("We should catch up with Dana sometime next week maybe", {"kind": "calendar_event", "fields": {"title": "Catch up with Dana", "date": "next week"}})]))
     review()
     (c,) = cands(env)
     assert c["kind"] == "follow_up" and c["confidence"] <= 0.3
@@ -704,3 +705,83 @@ def test_migration_is_reversible_and_rerunnable(env):
     _migrate(env.engine, "0054_omi_day_review.py", down=True)
     assert env.db.rows("SELECT name FROM sqlite_master WHERE name LIKE 'omi_day_%'") == []
     assert "day_review_id" not in {r["name"] for r in env.db.rows("PRAGMA table_info(omi_recordings)")}
+
+
+# --- code-side floors from the first live shadow run (2026-10-18). Synthetic lines only. Negative controls (re-run by Edit):
+#   vague title/item   make ``vague_text`` return False                       -> test_a_vague_title_or_item_is_never_a_candidate
+#   pronoun name       make ``bad_name`` return False                         -> test_a_pronoun_or_filler_is_never_a_person
+#   relation direction return the model's ``relation`` in the person payload  -> test_a_relation_is_stored_only_from_an_explicit_pattern
+#   narrative          drop the ``_NARRATIVE`` check in ``verify``            -> test_reported_speech_is_never_a_reminder
+#   near duplicates    make ``near_duplicate`` return False                   -> test_near_duplicate_owner_facts_of_a_day_merge_with_both_quotes
+def _verify(text, item, *, speaker_line=None):
+    lines = dr.lines_for_day([{"id": "rec1", "started_at": "2026-10-13T01:00:00Z", "transcript": text}])
+    counts: dict = {}
+    got = dr.verify({"ids": ["r1.1"], "heard_from": "conversation", "about": "me", **item}, {ln.id: ln for ln in lines},
+                    lambda ln: AS_OF, AS_OF, counts)
+    return got, counts
+
+
+def test_a_vague_title_or_item_is_never_a_candidate():
+    for item_text in ("that", "it", "this", "more", "the thing", "stuff"):
+        got, counts = _verify("I need to get that from the shop.", {"kind": "list_item", "quote": "I need to get that", "fields": {"item": item_text}})
+        assert got is None and counts.get("drop_vague") == 1, item_text
+    for title in ("that", "it", "this", "look", "forget it", "check", "do it", "meeting", "Meeting", "the appointment", "catch up"):
+        got, counts = _verify("I'll sort it out on Friday.", {"kind": "reminder", "quote": "I'll sort it out on Friday", "fields": {"title": title, "when": "Friday"}})
+        assert got is None and counts.get("drop_vague") == 1, title
+    got, counts = _verify("I need to chase this up and I'll ring on Friday.", {"kind": "follow_up", "quote": "I'll ring on Friday", "fields": {"title": "meeting"}})
+    assert got is None and counts.get("drop_vague") == 1                              # a one-word follow-up title needs a context object
+    # control: a title or item that names something passes
+    for kind, fields in (("list_item", {"item": "passport photos"}), ("reminder", {"title": "Check passport", "when": "Friday"}),
+                         ("reminder", {"title": "Meeting with Dana", "when": "Friday"}), ("follow_up", {"title": "Garage"})):
+        got, _ = _verify("I need passport photos and I'll sort the garage with Dana on Friday.",
+                         {"kind": kind, "quote": "I need passport photos" if kind == "list_item" else "I'll sort the garage with Dana on Friday", "fields": fields})
+        assert got is not None, (kind, fields)
+
+
+def test_a_pronoun_or_filler_is_never_a_person():
+    for name in ("She", "He", "They", "Her", "Him", "Them", "Then", "This", "Someone Else"):
+        got, counts = _verify(f"I had lunch with {name} today.", {"kind": "person", "quote": f"I had lunch with {name}", "fields": {"name": name}})
+        assert got is None and counts.get("drop_bad_person") == 1, name
+    got, _ = _verify("I had lunch with Priya Raman today.", {"kind": "person", "quote": "I had lunch with Priya Raman", "fields": {"name": "Priya Raman"}})
+    assert got is not None and got.payload["name"] == "Priya Raman"                  # control
+
+
+def test_a_relation_is_stored_only_from_an_explicit_pattern():
+    def person(text, name, relation):
+        got, _ = _verify(text, {"kind": "person", "quote": text.rstrip("."), "fields": {"name": name, "relation": relation}})
+        assert got is not None, text
+        return got.payload["relation"]
+    assert person("I'm Dana's son and I met her today.", "Dana", "my son") == ""            # X's son: X is the PARENT, never "my son"
+    assert person("I'm Dana's daughter, I met her today.", "Dana", "my daughter") == ""
+    assert person("I rang Dana today and she said hi.", "Dana", "my mother") == ""          # the model's guess alone is not enough
+    assert person("I had lunch with my boss, Priya today.", "Priya", "my son") == "my boss"
+    assert person("I had lunch with Priya, my new manager, today.", "Priya", "") == "my new manager"
+    assert person("I met Sam today, he is my brother.", "Sam", "my brother") == ""         # a pronoun in between: not an explicit pattern
+
+
+def test_reported_speech_is_never_a_reminder():
+    for text in ("I was like I'll send the report on Friday.", "I said I'll send the report on Friday.",
+                 "So I rang the office and I said I'll send the report on Friday.", "She goes I'll send the report on Friday.",
+                 "He told me I'll send the report on Friday."):
+        quote = text[text.index("I'll"):].rstrip(".")
+        for kind in ("reminder", "follow_up"):
+            got, counts = _verify(text, {"kind": kind, "quote": quote, "fields": {"title": "Send the report", "when": "Friday"}})
+            assert got is None and counts.get("drop_narrative") == 1, (kind, text)
+    got, _ = _verify("I'll send the report on Friday.", {"kind": "reminder", "quote": "I'll send the report on Friday", "fields": {"title": "Send the report", "when": "Friday"}})
+    assert got is not None                                                              # control: present intent is kept
+
+
+def test_near_duplicate_owner_facts_of_a_day_merge_with_both_quotes():
+    def fact(text, rec="rec1"):
+        got, _ = _verify(text, {"kind": "owner_fact", "quote": text.rstrip("."), "fields": {"fact": text}})
+        assert got is not None, text
+        return dataclasses.replace(got, recording_ids=[rec])
+    a = fact("I'm training for the half marathon in December.", "rec1")
+    b = fact("I am training for a half marathon this December.", "rec2")
+    c = fact("I'm a keen surfer.", "rec3")
+    assert a.dedup_key != b.dedup_key                                                   # different words: the key alone does not catch it
+    merged = dr.merge([a, b, c])
+    assert len(merged) == 2
+    marathon = next(m for m in merged if "marathon" in m.payload["fact"])
+    assert len(marathon.evidence) == 2 and marathon.recording_ids == ["rec1", "rec2"]
+    assert any("surfer" in m.payload["fact"] for m in merged)                          # control: an unrelated fact stays its own candidate

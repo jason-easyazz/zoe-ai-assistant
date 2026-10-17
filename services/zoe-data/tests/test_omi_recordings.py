@@ -774,19 +774,19 @@ def test_a_row_that_expired_before_its_claim_is_marked_never_transcribed_or_left
     assert run(omi.requeue_held(None)) == 0                                                    # and nothing brings it back
 
 
-def test_the_claim_itself_refuses_a_row_that_expires_between_the_read_and_the_claim(env, monkeypatch):
-    """The read-side check can lose a race with the clock: the claim UPDATE re-checks the retention, so such a row is not claimed
-    (the next pass then marks it). Negative control: drop ``AND (audio_expires_at IS NULL OR audio_expires_at > ?)`` from the claim
-    and the row is transcribed here."""
+def test_a_row_that_loses_the_race_with_the_clock_is_refused_by_the_claim_and_marked_at_once(env, monkeypatch):
+    """The read-side check can lose a race with the clock (the row expires between the read and the claim). The claim UPDATE
+    re-checks the retention, so the row is not claimed AND it is marked in the same pass - never transcribed, never left pending.
+    Negative controls: drop ``AND (audio_expires_at IS NULL OR audio_expires_at > ?)`` from the claim and the row is transcribed;
+    drop the ``_expire_unclaimed`` call after a lost claim and it stays ``pending``."""
     rid = upload(env, make_wav(3.0)).json()["id"]
+    wav = rows(env)[0]["audio_path"]
     _expire(env, rid)
-    real = omi._retention_passed
     monkeypatch.setattr(omi, "_retention_passed", lambda expires, stamp: False)               # the read-side check "missed" it
     assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0
-    assert env.stt == [] and rows(env)[0]["status"] == "pending" and rows(env)[0]["attempts"] == 0
-    monkeypatch.setattr(omi, "_retention_passed", real)
-    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0                                 # next pass: marked, still not transcribed
-    assert env.stt == [] and rows(env)[0]["status"] == "failed"
+    got = rows(env)[0]
+    assert env.stt == [] and got["attempts"] == 0 and got["transcript"] in (None, "")
+    assert got["status"] == "failed" and got["audio_path"] == "" and not Path(wav).exists()
 
 
 def test_an_expired_held_recording_is_purged_not_requeued(env, monkeypatch):
