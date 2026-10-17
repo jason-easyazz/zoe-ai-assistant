@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-659 flags; 657 not documented in `.env.example`.
+668 flags; 666 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -392,11 +392,20 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_OMI_DAY_REVIEW_MAX_CALLS` | `dynamic` | no | NO | `services/zoe-data/omi_day_review.py` |
 | `ZOE_OMI_DAY_REVIEW_MIN_MEM_MB` | `1000` | no | NO | `services/zoe-data/omi_day_review.py` |
 | `ZOE_OMI_DEVICE_OWNERS` | `False` | yes | NO | `services/zoe-data/omi_devices.py` |
+| `ZOE_OMI_DIAR_LINK_MIN` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_IDLE_S` | `120` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_KEEP_AUDIO` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_LEARN_VOICES` | `False` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_MIN_MEM_MB` | `dynamic` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_OWNER_USER_ID` | `''` | yes | NO | `services/zoe-data/omi_devices.py`<br>`services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
+| `ZOE_OMI_SPEAKER_TAG` | `'off'` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_SYNC_ENABLED` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_TAG_MODEL_DIR` | `''` | yes | NO | `services/zoe-data/omi_diarize.py` |
+| `ZOE_OMI_TAG_OTHER_MAX` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
+| `ZOE_OMI_TAG_YOU_MIN` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
+| `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
+| `ZOE_OMI_VOICE_CLUSTER_MIN` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMNIGENT_AGENT_ID` | `'057995d1517418e6839f51d340785dd6'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_CLOSE_POLL_S` | `'60'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_CLOSE_TIMEOUT_S` | `'2400'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |

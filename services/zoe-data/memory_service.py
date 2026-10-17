@@ -2074,15 +2074,21 @@ class MemoryService:
                 await reply_ledger.forget_user(user_id)
                 import commitments      # ... and the promises Zoe made to them
                 await commitments.forget_user(user_id)
-                import omi_recordings   # ... and their pendant recordings (migration 0045): audio, transcript and times
-                await omi_recordings.forget_user(user_id)
             except Exception:  # noqa: BLE001
                 pass
+            pendant_failure = None
+            try:   # ... and their pendant recordings (migration 0045) and learned voices: audio, transcript, times, biometrics. FAIL CLOSED:
+                import omi_recordings   # a pendant erase that left anything behind must not read as "forgotten" (the caller retries)
+                await omi_recordings.forget_user(user_id)
+            except Exception as exc:  # noqa: BLE001
+                pendant_failure = exc
             try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
                 import contacts_store
                 await contacts_store.forget_user(user_id)
             except Exception:  # noqa: BLE001 - logged at ERROR inside; the palace rows ARE gone either way
                 pass
+            if pendant_failure is not None:
+                raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
             return len(ids)
 
     async def list_by_status(

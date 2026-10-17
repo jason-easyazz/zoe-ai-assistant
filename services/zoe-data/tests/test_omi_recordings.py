@@ -910,7 +910,10 @@ def test_nothing_else_reads_pendant_transcripts():
     ``omi_devices.py`` (the one-time registry seed reads device_id + user_id only - never a transcript), and ``omi_day_review.py`` (the
     owner's day review: it PROPOSES candidates the owner approves; ``test_omi_day_review`` pins that it calls no write path)."""
     allowed = {"omi_recordings.py", "routers/omi_recordings.py", "main.py", "memory_service.py", "memory_forget_cascade.py",
-               "omi_devices.py", "omi_day_review.py"}      # the day review (0054): proposals the owner approves, never a write of its own
+               "omi_devices.py", "omi_day_review.py",      # the day review (0054): proposals the owner approves, never a write of its own
+               # speaker turns + learned voices (0055): the diariser imports GateClosed, the voice store joins a recording's status
+               # and day, its router reuses the owner rule. ``omi_voices.review_segments`` is the ONE seam the day review reads.
+               "omi_diarize.py", "omi_voices.py", "routers/omi_voices.py"}
     hits = set()
     for p in SVC.rglob("*.py"):
         rel = str(p.relative_to(SVC))
