@@ -11,9 +11,11 @@ WHAT IT DOES
 
 THE PASS (model points, code decides)
   1. LINES (code). Each transcript is cut into sentence lines ``[r<k>.<n> HH:MM] text`` (k = the recording's place in the day).
-     Text is flattened and stripped of brackets, so a transcript cannot forge a delimiter or a label. SEAM: when per-turn speaker
-     segments exist (``omi_segments``, built on its own branch), ``lines_for_day(..., segments=)`` takes them instead of the joined
-     transcript; until then every line's speaker is ``not_sure`` (the segments' own vocabulary: you | someone_else | not_sure).
+     Text is flattened and stripped of brackets, so a transcript cannot forge a delimiter or a label. A recording WITH
+     per-turn speaker segments (``omi_segments``, read through ``voice_segments`` -> ``omi_voices.review_segments``) is read turn by
+     turn with the segment's speaker (you | someone_else | not_sure; a tagged contact reads ``someone_else``; a model-only label in
+     shadow reads ``not_sure``; a line the member marked not-a-person is dropped and NEVER falls back to the joined transcript);
+     a recording without segments keeps the joined transcript with every line ``not_sure``.
   2. PACK (code). Broadcast stretches (TV, radio, a video: broadcast cue words, or a long run with almost no first person) are
      dropped; lines with no cue (a date, a time, a list word, a commitment, the first person, a name) and no cued neighbour are
      dropped as routine. What is left is chunked to the slot (``night_mind``'s budget: 2,400 tokens at 8k) and at most
@@ -205,6 +207,42 @@ def _sentences(text: str) -> list[str]:
         if s.strip():
             out.append(s)
     return out
+
+
+#: ``omi_voices.review_segments`` label -> this module's speaker vocabulary. ``person`` (a contact the member tagged) is somebody ELSE,
+#: so their words are context, never facts about the wearer; ``unverified`` (a model-only label while ``ZOE_OMI_SPEAKER_TAG`` is not
+#: ``on``), ``not_sure`` and anything unknown read ``not_sure``. ``not_a_person`` is not here: those lines are dropped.
+_VOICE_SPEAKER = {"you": "you", "someone_else": "someone_else", "person": "someone_else"}
+
+
+def segment_map(segs: Iterable[dict], segmented: Iterable[str] = ()) -> dict:
+    """The adapter: ``omi_voices.review_segments`` rows -> ``{recording_id: [(text, speaker), ...]}`` for ``lines_for_day``.
+    ``segmented`` names every recording that HAS segment rows (including ones the member marked entirely not-a-person): such a
+    recording is always in the map, possibly empty, so a TV/Zoe line the member excluded is never re-read from the joined transcript.
+    A tagged contact's ``person_id`` is not carried: ``Line`` has no place for it and the person candidate rules need none."""
+    out: dict[str, list[tuple[str, str]]] = {str(r): [] for r in segmented}
+    for sg in segs:
+        label = sg.get("label")
+        if label == "not_a_person":
+            continue
+        out.setdefault(str(sg["recording_id"]), []).append((str(sg.get("text") or ""), _VOICE_SPEAKER.get(label, "not_sure")))
+    return out
+
+
+async def voice_segments(db, user_id: str, recording_ids: Sequence[str]) -> dict:
+    """Per-turn speaker segments of these recordings for ``review_day``. A database without migration 0055 has none (``{}``: the
+    joined-transcript path); any OTHER read failure raises - falling back would re-admit lines the member marked not-a-person."""
+    if not recording_ids:
+        return {}
+    import omi_voices
+    try:
+        segs = await omi_voices.review_segments(db, user_id, list(recording_ids))
+        have = await omi_voices.recordings_with_segments(db, user_id, list(recording_ids))
+    except Exception as exc:  # noqa: BLE001
+        if omi_voices._missing(exc):
+            return {}
+        raise
+    return segment_map(segs, have)
 
 
 def lines_for_day(recordings: Sequence[dict], segments: Optional[dict] = None) -> list[Line]:
@@ -932,6 +970,13 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
         if not recs:
             res["status"] = "nothing_to_do"
             return res
+        if segments is None:         # the voice labels (None = read them; a caller may pass {} to force the joined transcripts)
+            try:
+                segments = await voice_segments(db, user_id, [r["id"] for r in recs])
+            except Exception as exc:  # noqa: BLE001 - before the claim, so nothing to release; the day is retried
+                res.update(status="error", reason="segments_" + type(exc).__name__)
+                _log(res, {})
+                return res
         claim = None if dry_run else await _claim(db, user_id, day, cfg, now)
         if not dry_run and claim is None:
             res["status"] = "busy"
