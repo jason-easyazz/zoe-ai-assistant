@@ -89,7 +89,7 @@ async def test_a_lost_pool_is_a_failure_in_every_store(monkeypatch, caplog):
     with caplog.at_level(logging.ERROR):
         res = await cascade.cascade_forget(USER, FRIEND)
     assert not res.complete
-    assert set(res.failed) == {"database", "restraint_mutes", "commitments", "omi_recordings"}
+    assert set(res.failed) == {"database", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review"}
     assert any("FORGET_CASCADE_INCOMPLETE" in r.getMessage() and USER in r.getMessage() for r in caplog.records)
     assert FRIEND not in caplog.text            # counts / labels only, never the name
     # control: the SAME failure in a process that never had a pool is "nothing to clear", not a failure
@@ -139,12 +139,14 @@ async def test_a_missing_table_is_nothing_to_clear_not_a_failure():
 @pytest.mark.asyncio
 async def test_strict_erasers_raise_and_the_default_still_swallows(monkeypatch):
     import commitments
+    import omi_day_review
     import omi_recordings
     import restraint
     _lost_pool(monkeypatch, ever_initialised=True)
     rx = cascade._name_re(FRIEND)
     for call in (lambda **k: commitments.erase_entity(USER, rx, **k),
                  lambda **k: omi_recordings.erase_entity(USER, rx, **k),
+                 lambda **k: omi_day_review.erase_entity(USER, rx, **k),
                  lambda **k: restraint.erase_entity(USER, FRIEND, **k)):
         assert await call() == 0                              # default: swallow + log (unchanged for other callers)
         with pytest.raises(RuntimeError):

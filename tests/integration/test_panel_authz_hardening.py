@@ -628,17 +628,36 @@ class _BindingLookupDB:
 
 
 def _patch_binding_db(monkeypatch, default_user):
-    import database as _database
+    # _resolve_device_token_user reads the binding through db_pool.get_db_ctx (not database.get_db: #953).
+    import contextlib
 
-    async def _fake_get_db():
+    import db_pool as _db_pool
+
+    @contextlib.asynccontextmanager
+    async def _fake_ctx():
         yield _BindingLookupDB(default_user)
 
-    monkeypatch.setattr(_database, "get_db", _fake_get_db)
+    monkeypatch.setattr(_db_pool, "get_db_ctx", _fake_ctx)
 
 
 @pytest.mark.asyncio
-async def test_device_token_bound_panel_resolves_to_bound_user(monkeypatch):
-    """A device token for a panel bound to a user acts as that user (unchanged behaviour)."""
+async def test_device_token_bound_panel_resolves_to_the_panel_not_the_member(monkeypatch):
+    """Security fix 2026-10-17: a device token authenticates the DEVICE. Even for a panel with a ``default`` member binding
+    it is the PANEL principal (guest + panel_id), never that member - and a token minted with role ``admin`` is no admin."""
+    monkeypatch.delenv("ZOE_DEVICE_TOKEN_BINDS_MEMBER", raising=False)
+    _patch_binding_db(monkeypatch, "jason")
+    for token_role in ("kiosk", "voice-daemon", "admin"):
+        monkeypatch.setattr(panel_auth, "lookup_device_token", lambda t, r=token_role: {"panel_id": "zoe-touch-pi", "role": r})
+        user = await panel_auth._resolve_device_token_user("tok")
+        assert user is not None
+        assert user["user_id"] == "guest" and user["role"] == "guest" and user["permissions"] == [], token_role
+        assert user["panel_id"] == "zoe-touch-pi"
+
+
+@pytest.mark.asyncio
+async def test_device_token_member_binding_only_with_the_rollback_flag(monkeypatch):
+    """``ZOE_DEVICE_TOKEN_BINDS_MEMBER=1`` restores the pre-fix binding (operator rollback only)."""
+    monkeypatch.setenv("ZOE_DEVICE_TOKEN_BINDS_MEMBER", "1")
     monkeypatch.setattr(
         panel_auth, "lookup_device_token",
         lambda t: {"panel_id": "zoe-touch-pi", "role": "voice-daemon"},
@@ -679,17 +698,21 @@ async def test_device_token_invalid_returns_none(monkeypatch):
 async def test_device_token_db_failure_fails_closed_to_guest(monkeypatch, caplog):
     """If the binding lookup RAISES, fail closed to guest (never the bound user or
     admin) and log at WARNING so operators can observe a bound panel losing context."""
+    monkeypatch.setenv("ZOE_DEVICE_TOKEN_BINDS_MEMBER", "1")  # the binding is only read in the rollback mode
     monkeypatch.setattr(
         panel_auth, "lookup_device_token",
         lambda t: {"panel_id": "zoe-touch-pi", "role": "voice-daemon"},
     )
-    import database as _database
+    import contextlib
 
-    async def _boom_get_db():
+    import db_pool as _db_pool
+
+    @contextlib.asynccontextmanager
+    async def _boom_ctx():
         raise RuntimeError("pool exhausted")
-        yield  # pragma: no cover — makes this an async generator
+        yield  # pragma: no cover
 
-    monkeypatch.setattr(_database, "get_db", _boom_get_db)
+    monkeypatch.setattr(_db_pool, "get_db_ctx", _boom_ctx)
 
     with caplog.at_level("WARNING"):
         user = await panel_auth._resolve_device_token_user("tok")

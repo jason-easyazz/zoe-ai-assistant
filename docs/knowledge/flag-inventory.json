@@ -562,6 +562,7 @@
           "services/zoe-data/digest_pack.py",
           "services/zoe-data/memory_digest.py",
           "services/zoe-data/night_mind.py",
+          "services/zoe-data/omi_day_review.py",
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": true
@@ -1235,6 +1236,16 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/zoe_latency_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DEVICE_TOKEN_BINDS_MEMBER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/panel_auth.py"
         ],
         "typed_env": false
       },
@@ -1991,6 +2002,16 @@
           "services/zoe-data/routers/system.py",
           "services/zoe-data/smart_home_service.py",
           "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HA_CONTROL_SCOPE": {
+        "defaults": [
+          "'panel'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
         ],
         "typed_env": false
       },
@@ -3757,6 +3778,66 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_DAY_REVIEW": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMI_DAY_REVIEW_IDLE_S": {
+        "defaults": [
+          "600"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMI_DAY_REVIEW_LANE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMI_DAY_REVIEW_MAX_AGE_DAYS": {
+        "defaults": [
+          "7"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMI_DAY_REVIEW_MAX_CALLS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMI_DAY_REVIEW_MIN_MEM_MB": {
+        "defaults": [
+          "1000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_day_review.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_OMI_DEVICE_OWNERS": {
         "defaults": [
           "False"
@@ -3764,6 +3845,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/omi_devices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_DIAR_LINK_MIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_diarize.py"
         ],
         "typed_env": true
       },
@@ -3784,6 +3875,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_LEARN_VOICES": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
         ],
         "typed_env": true
       },
@@ -3808,6 +3909,46 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_SEGMENT_EMBED_TTL_DAYS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_SPEAKER_TAG": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_diarize.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_SUGGEST_MARGIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_SUGGEST_MIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMI_SYNC_ENABLED": {
         "defaults": [
           "False"
@@ -3815,6 +3956,66 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_TAG_MODEL_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_diarize.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_TAG_OTHER_MAX": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_diarize.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_TAG_YOU_MIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_diarize.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_VOICEPRINT_IDLE_DAYS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_VOICE_CLUSTER_MIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
         ],
         "typed_env": true
       },
