@@ -403,6 +403,19 @@ def test_a_yes_after_the_contact_became_a_child_confirms_nothing_and_drops_the_p
     assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments") == [(0,)]
 
 
+def test_stopping_a_voice_withdraws_its_suggestions_and_a_stale_yes_cannot_refresh_it(env, monkeypatch):
+    pid, sid = _suggested(env, monkeypatch)
+    (vp,) = [v["id"] for v in env.client.get("/api/omi/voices").json()["voices"]]
+    before = env.db.q("SELECT status, last_confirmed_at, expires_at FROM learned_voiceprints")
+    assert env.client.patch(f"/api/omi/voices/{vp}", json={"learning_enabled": False}).status_code == 200
+    assert env.db.q("SELECT suggested_person_id FROM omi_segments WHERE id = ?", (sid,)) == [(None,)]     # withdrawn with the voice
+    # a suggestion that somehow outlived the switch (a race): the yes labels the line but confirms and refreshes nothing
+    env.db.conn.execute("UPDATE omi_segments SET suggested_person_id = ? WHERE id = ?", (pid, sid))
+    env.db.conn.commit()
+    assert env.client.post(f"/api/omi/segments/{sid}/suggestion", json={"answer": "yes"}).status_code == 200
+    assert env.db.q("SELECT status, last_confirmed_at, expires_at FROM learned_voiceprints") == before
+
+
 def test_a_suggestion_answer_touches_only_the_voiceprint_of_its_own_model(env, monkeypatch):
     pid, sid = _suggested(env, monkeypatch)
     (model,) = env.db.q("SELECT model_id FROM omi_segments WHERE id = ?", (sid,))[0]
@@ -712,6 +725,21 @@ def test_the_expiry_sweep_runs_with_the_sync_flag_off(env, monkeypatch):
     run(go())
     assert env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
     assert "run_retention_loop" in (SVC / "main.py").read_text()                    # and main starts it unconditionally
+
+
+def test_a_tagged_line_corrected_to_you_is_untagged_and_unlearned(env, monkeypatch):
+    """The member tagged a line as Sam, then says "that was me": Sam's print must stop holding the wearer's voice, and the line
+    must stop reading as Sam."""
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    seg_a = env.db.q("SELECT segment_id FROM learned_voiceprint_segments ORDER BY segment_id")[0][0]
+    assert env.client.patch(f"/api/omi/segments/{seg_a}", json={"owner_label": "you"}).status_code == 200
+    assert env.db.q("SELECT tagged_person_id, tag_source, tagged_at, owner_label FROM omi_segments WHERE id = ?", (seg_a,)) == [
+        (None, None, None, "you")]
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments WHERE segment_id = ?", (seg_a,)) == [(0,)]
+    assert env.db.q("SELECT n_segments FROM learned_voiceprints") == [(1,)]                  # Sam's print was rebuilt without it
+    assert [s["label"] for s in run(_segs(env.db.q("SELECT recording_id FROM omi_segments WHERE id = ?", (seg_a,))[0][0]))
+            if s["id"] == seg_a] == ["you"]
 
 
 def test_a_wearer_correction_drops_the_held_embedding(env, monkeypatch):

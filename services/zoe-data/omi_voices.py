@@ -317,8 +317,9 @@ async def set_owner_label(db, user_id: str, segment_id: str, value: Optional[str
                    (value, _iso(_now()) if value else None, segment_id, user_id))
     if n and value == "you":          # "that was me": the wearer's own voice is never held as a bystander's - the embedding goes too
         await _run(db, "DELETE FROM omi_segment_embeddings WHERE segment_id = ? AND user_id = ?", (segment_id, user_id))
-        await _run(db, "UPDATE omi_segments SET voice_cluster_id = NULL, suggested_person_id = NULL, suggested_score = NULL "
-                       "WHERE id = ? AND user_id = ?", (segment_id, user_id))
+        await _release_contributions(db, user_id, [segment_id])       # tagged as a person before: that print un-learns the wearer's voice
+        await _run(db, "UPDATE omi_segments SET voice_cluster_id = NULL, suggested_person_id = NULL, suggested_score = NULL, "
+                       "tagged_person_id = NULL, tag_source = NULL, tagged_at = NULL WHERE id = ? AND user_id = ?", (segment_id, user_id))
         for cid in former:
             await rebuild_cluster(db, cid)
     await db.commit()
@@ -451,13 +452,13 @@ async def answer_suggestion(db, user_id: str, segment_id: str, answer: str) -> d
     pid, model_id = rows[0][0], rows[0][1]      # the answer is about the print of the model that made the suggestion, and only that one
     if answer == "yes":
         out = await tag(db, user_id, person_id=pid, segment_id=segment_id, source="suggested_confirmed")
-        if out["learning"] == "label_only_child":     # the contact became a child since the suggestion: a label only, nothing confirmed
-            await db.commit()
+        if out["learning"] == "label_only_child" or not await may_learn(db, user_id):   # a child now, or learning stopped since the
+            await db.commit()                                                           # suggestion: a label only, nothing confirmed
             return out
         now = _now()
         for vp, n_seg, n_rec, expires in await _all(
                 db, "SELECT id, n_segments, n_recordings, expires_at FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ? "
-                    "AND model_id = ?", (user_id, pid, model_id)):
+                    "AND model_id = ? AND learning_enabled = 1", (user_id, pid, model_id)):      # a stopped print stays frozen
             ok = int(n_seg) >= 3 and int(n_rec) >= 2
             await _run(db, "UPDATE learned_voiceprints SET last_confirmed_at = ?, status = ?, expires_at = ? WHERE id = ?",
                        (_iso(now), "confirmed" if ok else "provisional",
@@ -564,6 +565,11 @@ async def list_learned(db, user_id: str) -> list[dict]:
 async def set_voice_learning(db, user_id: str, vp_id: str, enabled: bool) -> bool:
     n = await _run(db, "UPDATE learned_voiceprints SET learning_enabled = ?, updated_at = ? WHERE id = ? AND owner_user_id = ?",
                    (1 if enabled else 0, _iso(_now()), vp_id, user_id))
+    if n and not enabled:             # a stopped voice makes no more suggestions, and the ones it already made are withdrawn
+        for pid, model_id in await _all(db, "SELECT people_id, model_id FROM learned_voiceprints WHERE id = ? AND owner_user_id = ?",
+                                        (vp_id, user_id)):
+            await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE user_id = ? "
+                           "AND suggested_person_id = ? AND model_id = ?", (user_id, pid, model_id))
     await db.commit()
     return bool(n)
 
