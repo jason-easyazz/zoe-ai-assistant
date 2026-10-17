@@ -1,0 +1,74 @@
+# Household box nginx, F0 lab STUB of the R1 relay listener (panel-anywhere section 5.1).
+# Rendered by run_lab.py per household (@@HID@@). The next PR (R1 zoe-data code) replaces the
+# fake upstreams below with the real zoe-ui `server` block and the real proxy_pass target.
+#
+# Interface this stub pins (README "Interface for the R1 PR"):
+#   relay listener  127.0.0.1:8443  ssl + proxy_protocol (frpc sends PROXY v2), TLS 1.3 only, household-CA leaf for
+#                   <hid>.zoe.internal, ssl_verify_client on (mTLS from R1, never optional),
+#                   X-Zoe-Ingress: relay and X-Zoe-Client-Cert-Fp set ABSOLUTELY (client values overwritten),
+#                   no X-Forwarded-For (identity never comes from an address).
+#   LAN listener    127.0.0.1:8444  clears both headers so a LAN client cannot claim the relay ingress.
+worker_processes 1;
+error_log /dev/stderr warn;
+pid /tmp/nginx.pid;
+events { worker_connections 256; }
+
+http {
+    access_log /dev/stdout;
+    default_type text/plain;
+    ssl_protocols TLSv1.3;
+    ssl_certificate     /etc/zoe/pki/leaf.pem;
+    ssl_certificate_key /etc/zoe/pki/leaf.key;
+
+    # ---- relay listener -------------------------------------------------
+    server {
+        listen 127.0.0.1:8443 ssl proxy_protocol;
+        server_name @@HID@@.zoe.internal;
+
+        ssl_client_certificate /etc/zoe/pki/ca.pem;   # the HOUSEHOLD CA: only panels it signed get in
+        ssl_verify_client on;
+
+        location / {
+            proxy_set_header X-Zoe-Ingress "relay";
+            proxy_set_header X-Zoe-Client-Cert-Fp $ssl_client_fingerprint;
+            proxy_set_header X-Forwarded-For "";
+            proxy_set_header Host $host;
+            proxy_pass http://127.0.0.1:8099;
+        }
+    }
+
+    # ---- LAN listener (stub of the existing one) -------------------------
+    server {
+        listen 127.0.0.1:8444 ssl;
+        server_name @@HID@@.zoe.internal;
+
+        location / {
+            proxy_set_header X-Zoe-Ingress "";
+            proxy_set_header X-Zoe-Client-Cert-Fp "";
+            proxy_set_header Host $host;
+            proxy_pass http://127.0.0.1:8099;
+        }
+    }
+
+    # ---- fake zoe-data (what the relay listener proxies to in R1) ---------
+    server {
+        listen 127.0.0.1:8099;
+        location = /lab/whoami {
+            return 200 "box=@@HID@@\ningress=$http_x_zoe_ingress\nfp=$http_x_zoe_client_cert_fp\nxff=$http_x_forwarded_for\n";
+        }
+        location = /lab/echo {
+            return 200 "canary:$arg_c\n";
+        }
+        location = /lab/blob {
+            alias /var/lib/lab/blob.bin;
+            default_type application/octet-stream;
+        }
+    }
+
+    # ---- stand-in for zoe-data's TRUSTED loopback port ---------------------
+    # `_is_internal_request` trusts a loopback peer, so whatever listens here must never be an frpc target (cell T6).
+    server {
+        listen 127.0.0.1:8000;
+        location / { return 200 "INTERNAL-ZOE-DATA-8000\n"; }
+    }
+}

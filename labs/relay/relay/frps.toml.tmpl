@@ -1,0 +1,35 @@
+# frps for the F0 lab / R1 relay. Rendered by run_lab.py (lab) or by the operator (RUNBOOK-R1.md).
+# Everything not listed here is OFF on purpose; relay/preflight.py enforces the important parts.
+
+# frps binds loopback only: the nginx stream front is the only way in.
+bindAddr = "127.0.0.1"
+bindPort = 7000
+# data path: the https vhost (SNI passthrough, TLS is never terminated here)
+vhostHTTPSPort = 8443
+
+# Only TLS-wrapped frp connections; the cert is the relay's own (frpc pins its CA).
+transport.tls.force = true
+transport.tls.certFile = "/etc/frp/tls/server.pem"
+transport.tls.keyFile = "/etc/frp/tls/server.key"
+
+# a box that vanishes is noticed after this long (default 90)
+transport.heartbeatTimeout = 30
+# how long a panel connection waits for a work connection from the box
+userConnTimeout = 10
+detailedErrorsToClient = false
+
+# dashboard/API on loopback inside the relay host; the lab reads registered proxies from it
+webServer.addr = "127.0.0.1"
+webServer.port = 7500
+webServer.user = "relay"
+webServer.password = "@@ADMIN_PASSWORD@@"
+
+log.to = "console"
+log.level = "info"
+
+# The session master. Without these blocks frp allows every login and every proxy.
+[[httpPlugins]]
+name = "session-master"
+addr = "127.0.0.1:9100"
+path = "/handler"
+ops = ["Login", "NewProxy", "NewUserConn", "CloseProxy"]
