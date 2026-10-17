@@ -28,6 +28,7 @@ import math
 import re
 import sqlite3
 import struct
+import sys
 import wave
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -254,6 +255,27 @@ def test_diarise_reads_the_wav_and_cuts_where_the_voice_changes(tmp_path):
     assert 4800 <= segs[0].end_ms <= 5400 and segs[-1].end_ms == 10200
 
 
+def test_the_energy_fallback_does_not_drift_over_a_long_recording(tmp_path):
+    """Without Silero the VAD reads one-second blocks; a block is not a whole number of 512-sample hops, so dropping the remainder
+    shifted every later turn 8 ms per second (2.4 s five minutes in)."""
+    p = tmp_path / "late.wav"
+    t = np.arange(int(16000 * 5)) / 16000
+    with wave.open(str(p), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\0\0" * (16000 * 300) + (6000 * np.sin(2 * np.pi * 150 * t)).astype("<i2").tobytes())
+
+    heard = []
+
+    class Fake:
+        def embed(self, x):
+            heard.append(float(np.abs(x).max()))
+            return WEARER
+    run(od.diarise(str(p), Fake(), WEARER, vad_factory=lambda: None))
+    assert heard and min(heard) > 0.1, heard                  # every window sits on the tone; a drifted timeline embeds silence
+
+
 # --- transcription: text aligned to turns, written before the WAV goes ----------------------------------------------------------
 def test_each_turn_is_transcribed_on_its_own_and_lands_with_the_transcript(env, monkeypatch):
     rid = transcribe(env, monkeypatch, turns((0, 2, "you", 0.6, WEARER), (2, 6, "other", 0.05, SAM)))
@@ -359,6 +381,48 @@ def test_a_contact_edited_into_a_child_after_learning_is_never_suggested(env, mo
     assert seg["suggested_person_id"] is None
 
 
+def _suggested(env, monkeypatch):
+    cid = _sam_cluster(env, monkeypatch)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, 9, 0.3))))
+    (seg,) = [s for s in run(_segs(rid)) if s["speaker"] == "other"]
+    assert seg["suggested_person_id"] == pid
+    return pid, seg["id"]
+
+
+def test_a_yes_after_the_contact_became_a_child_confirms_nothing_and_drops_the_print(env, monkeypatch):
+    """The suggestion was made while Sam was an adult; the contact was then edited into a child. A yes is a label only: no promotion,
+    no 365-day refresh, and the print learned earlier goes."""
+    pid, sid = _suggested(env, monkeypatch)
+    env.db.conn.execute("UPDATE people SET relationship = 'son' WHERE id = ?", (pid,))
+    env.db.conn.commit()
+    out = env.client.post(f"/api/omi/segments/{sid}/suggestion", json={"answer": "yes"}).json()
+    assert out["learning"] == "label_only_child"
+    assert env.db.q("SELECT tagged_person_id, tag_source FROM omi_segments WHERE id = ?", (sid,)) == [(pid, "suggested_confirmed")]
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments") == [(0,)]
+
+
+def test_a_suggestion_answer_touches_only_the_voiceprint_of_its_own_model(env, monkeypatch):
+    pid, sid = _suggested(env, monkeypatch)
+    (model,) = env.db.q("SELECT model_id FROM omi_segments WHERE id = ?", (sid,))[0]
+    env.db.conn.execute("INSERT INTO learned_voiceprints (id, owner_user_id, people_id, model_id, channel, embedding, n_segments, "
+                        "n_recordings, status, learning_enabled, created_at, updated_at, expires_at) VALUES ('other-model-vp', ?, ?, "
+                        "'some-other-model', 'pendant', ?, 5, 5, 'provisional', 1, '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z', "
+                        "'2026-10-31T00:00:00Z')", (A, pid, sqlite3.Binary(np.zeros(256, dtype="<f4").tobytes())))
+    env.db.conn.commit()
+    env.client.post(f"/api/omi/segments/{sid}/suggestion", json={"answer": "yes"})
+    assert env.db.q("SELECT status, last_confirmed_at, expires_at FROM learned_voiceprints WHERE id = 'other-model-vp'") == [
+        ("provisional", None, "2026-10-31T00:00:00Z")]
+    assert env.db.q("SELECT last_confirmed_at IS NOT NULL FROM learned_voiceprints WHERE model_id = ?", (model,)) == [(1,)]
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, 11, 0.3))))
+    (seg,) = [s for s in run(_segs(rid)) if s["speaker"] == "other"]
+    assert seg["suggested_person_id"] == pid
+    env.client.post(f"/api/omi/segments/{seg['id']}/suggestion", json={"answer": "no"})
+    assert env.db.q("SELECT rejections FROM learned_voiceprints WHERE id = 'other-model-vp'") == [(0,)]
+    assert env.db.q("SELECT rejections FROM learned_voiceprints WHERE model_id = ?", (model,)) == [(1,)]
+
+
 def test_no_raises_the_bar_and_learns_nothing(env, monkeypatch):
     cid = _sam_cluster(env, monkeypatch)
     env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
@@ -420,7 +484,22 @@ def test_not_a_person_leaves_suggestions_and_the_review_for_good(env, monkeypatc
     rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(TV, 5, 0.3))))
     assert [s["label"] for s in run(_segs(rid))] == ["you", "not_a_person"]          # a later TV line is marked on arrival
     assert env.db.q("SELECT COUNT(*) FROM omi_segment_embeddings") == [(0,)]
+    monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", "on")
     assert [r["label"] for r in run(_review(rid))] == ["you"]                         # and never reaches the day review
+
+
+def test_in_shadow_mode_the_review_ignores_model_labels_but_keeps_the_members_word(env, monkeypatch):
+    """ZOE_OMI_SPEAKER_TAG=shadow: the owner sees the model's labels, the day review does not use them (design 9)."""
+    cid = _sam_cluster(env, monkeypatch)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, 9, 0.3))))
+    assert [s["label"] for s in run(_segs(rid))] == ["you", "someone_else"]                        # the owner's page shows them
+    assert [r["label"] for r in run(_review(rid))] == ["unverified", "unverified"]                  # the review does not
+    sid = env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'you'", (rid,))[0][0]
+    env.client.patch(f"/api/omi/segments/{sid}", json={"owner_label": "you"})                       # the member's own word counts
+    assert [r["label"] for r in run(_review(rid))] == ["you", "unverified"]
+    monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", "on")
+    assert [r["label"] for r in run(_review(rid))] == ["you", "someone_else"]
 
 
 def test_a_retag_moves_what_the_first_tag_taught_to_the_right_person(env, monkeypatch):
@@ -581,16 +660,104 @@ def test_a_person_merge_moves_the_members_tags_to_the_survivor(env, monkeypatch)
     assert env.db.q("SELECT COUNT(*) FROM omi_segments WHERE tagged_person_id = 'real'") == [(2,)]
 
 
-def test_a_voice_erase_failure_is_loud_and_never_blocks_erasing_audio(env, monkeypatch, caplog):
+def test_a_voice_erase_failure_fails_closed_but_still_erases_the_audio(env, monkeypatch, caplog):
+    """A learned-voice erase that fails must never read as "forgotten": forget_user RAISES (after the audio and the pendant
+    registrations are done, which it never blocks) so the cascade reports the failure and the caller retries."""
     rid = transcribe(env, monkeypatch, turns((0, 6, "other", 0.0, TV)))
 
     async def boom(db, uid):
         raise RuntimeError("voice tables unreachable")
     monkeypatch.setattr(ov, "forget_user", boom)
     caplog.set_level("ERROR")
-    assert run(omi.forget_user(A)) == 1
+    with pytest.raises(omi.VoiceEraseIncomplete):
+        run(omi.forget_user(A))
     assert env.db.q("SELECT status FROM omi_recordings WHERE id = ?", (rid,)) == [("deleted",)]
     assert "OMI_VOICES_ERASE_INCOMPLETE" in caplog.text
+
+
+def test_a_failed_voice_cleanup_leaves_the_recording_deletable_again(env, monkeypatch):
+    """If the voice cleanup fails the recording must NOT already be a tombstone (a retry would exit at "already deleted" and the
+    segments / embeddings / voiceprint contributions would stay for good)."""
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    (rid,) = env.db.q("SELECT id FROM omi_recordings ORDER BY id LIMIT 1")[0]
+    real = ov.drop_recording
+
+    async def boom(db, r):
+        raise RuntimeError("transient")
+    monkeypatch.setattr(ov, "drop_recording", boom)
+    with pytest.raises(RuntimeError):
+        run(omi.delete_recording(A, rid))
+    assert env.db.q("SELECT status FROM omi_recordings WHERE id = ?", (rid,)) != [("deleted",)]
+    monkeypatch.setattr(ov, "drop_recording", real)
+    assert run(omi.delete_recording(A, rid)) is True
+    assert env.db.q("SELECT COUNT(*) FROM omi_segments WHERE recording_id = ?", (rid,)) == [(0,)]
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments WHERE recording_id = ?", (rid,)) == [(0,)]
+
+
+def test_the_expiry_sweep_runs_with_the_sync_flag_off(env, monkeypatch):
+    """Turning ZOE_OMI_SYNC_ENABLED off stops the transcription loop, not the retention of biometrics already held."""
+    cid = _sam_cluster(env, monkeypatch)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    env.db.conn.execute("UPDATE learned_voiceprints SET expires_at = '2000-01-01T00:00:00Z'")
+    env.db.conn.commit()
+    monkeypatch.setattr(omi, "enabled", lambda: False)
+    monkeypatch.setattr(omi, "RETENTION_S", 0.01)
+
+    async def go():
+        try:
+            await asyncio.wait_for(omi.run_retention_loop(), 1.0)
+        except asyncio.TimeoutError:
+            pass
+    run(go())
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
+    assert "run_retention_loop" in (SVC / "main.py").read_text()                    # and main starts it unconditionally
+
+
+def test_a_wearer_correction_drops_the_held_embedding(env, monkeypatch):
+    """"That was me" on a line held as a bystander's voice: the embedding and its place in the unknown voice go, so tagging the voice
+    can never teach another person's print the wearer's voice."""
+    for i in range(2):
+        transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
+    sid = env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")[0][0]
+    assert env.client.patch(f"/api/omi/segments/{sid}", json={"owner_label": "you"}).status_code == 200
+    assert env.db.q("SELECT COUNT(*) FROM omi_segment_embeddings WHERE segment_id = ?", (sid,)) == [(0,)]
+    assert env.db.q("SELECT voice_cluster_id FROM omi_segments WHERE id = ?", (sid,)) == [(None,)]
+    assert env.db.q("SELECT n_segments FROM omi_voice_clusters") == [(1,)]                           # the voice forgot that sample
+
+
+def test_a_segment_marked_not_a_person_leaves_the_unknown_voice(env, monkeypatch):
+    for i in range(2):
+        transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
+    sid = env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")[0][0]
+    assert env.client.patch(f"/api/omi/segments/{sid}", json={"not_person": "tv"}).status_code == 200
+    (v,) = env.client.get("/api/omi/voices/unknown").json()["voices"]
+    assert v["segments"] == 1 and sid not in [x["segment_id"] for x in v["samples"]]                                            # no longer a sample of it
+    assert env.db.q("SELECT n_segments FROM omi_voice_clusters") == [(1,)]
+
+
+def test_tagging_one_line_rebuilds_the_voice_it_came_from(env, monkeypatch):
+    for i in range(2):
+        transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
+    a, b = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")]
+    before = env.db.q("SELECT centroid FROM omi_voice_clusters")[0][0]
+    env.client.post(f"/api/omi/segments/{a}/tag", json={"name": "Sam"})
+    assert env.db.q("SELECT n_segments FROM omi_voice_clusters") == [(1,)]
+    assert env.db.q("SELECT centroid FROM omi_voice_clusters")[0][0] != before                      # no longer includes the tagged sample
+    env.client.post(f"/api/omi/segments/{b}/tag", json={"name": "Sam2"})
+    assert env.db.q("SELECT COUNT(*) FROM omi_voice_clusters") == [(0,)]                            # the last sample took the voice with it
+
+
+def test_a_patch_with_a_bad_field_applies_nothing(env, monkeypatch):
+    for i in range(2):
+        transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
+    sid = env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")[0][0]
+    r = env.client.patch(f"/api/omi/segments/{sid}", json={"not_person": "tv", "owner_label": "bogus"})
+    assert r.status_code == 400
+    assert env.db.q("SELECT not_person, owner_label FROM omi_segments WHERE id = ?", (sid,)) == [(None, None)]
+    r = env.client.patch(f"/api/omi/segments/{sid}", json={"not_person": "pets", "owner_label": "you"})
+    assert r.status_code == 400
+    assert env.db.q("SELECT not_person, owner_label FROM omi_segments WHERE id = ?", (sid,)) == [(None, None)]
 
 
 def test_erasing_the_member_erases_every_voice_row(env, monkeypatch):
@@ -694,6 +861,71 @@ def test_the_calibration_refuses_unless_every_gate_is_positively_open(tmp_path):
     with pytest.raises(SystemExit):
         cal.report_path(str(REPO / "docs" / "x.md"), "ABCD")                            # never inside the public repo
     assert cal.report_path(str(tmp_path / "r.md"), "ABCD").endswith("r.md")
+
+
+def test_the_calibration_quiet_window_is_the_households_not_the_hosts(tmp_path):
+    """TZ=UTC on the host: 18:00Z is 02:00 in the household zone - inside the night window, so it refuses; 12:00Z (20:00 local) is open."""
+    cal = _calibrate_module()
+    log = tmp_path / "app.log"
+    log.write_text("2026-10-17T00:00:00+0800 INFO routers.voice_tts: turn_stream start\n")
+    with pytest.raises(SystemExit):
+        cal.preflight(0, log, now=datetime(2026, 10, 17, 18, 0, tzinfo=timezone.utc), mem_mb=5000)
+    cal.preflight(0, log, now=datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc), mem_mb=5000)
+
+
+def test_the_calibration_stops_before_the_night_window_it_started_ahead_of(tmp_path):
+    cal = _calibrate_module()
+    log = tmp_path / "app.log"
+    log.write_text("2026-10-16T00:00:00+0800 INFO routers.voice_tts: turn_stream start\n")
+    start = datetime(2026, 10, 17, 1, 0, tzinfo=timezone(timedelta(hours=8)))
+    deadline = cal.preflight(0, log, now=start, mem_mb=5000)
+    assert (deadline.hour, deadline.minute, deadline.day) == (1, 45, 17)                     # 5 minutes before 01:50, same night
+    cal.DEADLINE = deadline
+    cal.check_deadline(now=start + timedelta(minutes=30))                                     # 01:30 - still running
+    with pytest.raises(SystemExit):
+        cal.check_deadline(now=start + timedelta(minutes=46))                                 # 01:46 - stop
+    evening = datetime(2026, 10, 17, 20, 0, tzinfo=timezone(timedelta(hours=8)))
+    assert cal.quiet_deadline(evening).day == 18                                              # an evening start is bounded by tomorrow's 01:45
+
+
+def test_the_calibration_reads_other_rates_skips_bad_files_and_never_retightens_a_directory(tmp_path):
+    cal = _calibrate_module()
+    p = tmp_path / "r24.wav"
+    with wave.open(str(p), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(b"\x10\x00" * 24000)
+    assert abs(len(cal.read(str(p))) - 16000) < 50                                            # one second at 24 kHz is 16k samples at 16 kHz
+    bad = tmp_path / "bad.wav"
+    bad.write_bytes(b"RIFFnotawave")
+    assert cal.read(str(bad)) is None and cal.SKIPPED["unreadable"] >= 1
+    shared = tmp_path / "shared-reports"
+    shared.mkdir(mode=0o755)
+    shared.chmod(0o755)
+    cal.write_report(str(shared / "r.md"), ["x"])
+    assert (shared.stat().st_mode & 0o777) == 0o755 and ((shared / "r.md").stat().st_mode & 0o777) == 0o600
+    cal.write_report(str(tmp_path / "fresh" / "r.md"), ["x"])
+    assert ((tmp_path / "fresh").stat().st_mode & 0o777) == 0o700
+
+
+def test_a_public_only_section_never_touches_the_panel_corpus(tmp_path, monkeypatch):
+    cal = _calibrate_module()
+    seen = []
+    real = cal.glob.glob
+    monkeypatch.setattr(cal.glob, "glob", lambda pat, *a, **k: (seen.append(pat), real(pat, *a, **k))[1])
+    monkeypatch.setattr(cal, "preflight", lambda *a, **k: datetime(2999, 1, 1, tzinfo=timezone.utc))
+
+    class Emb:
+        def embed(self, x):
+            return None
+    import omi_diarize
+    monkeypatch.setattr(omi_diarize, "load_embedder", lambda: Emb())
+    monkeypatch.setattr(sys, "argv", ["x", "--sections", "C", "--panel-dir", str(tmp_path / "panel"), "--public-dir", str(tmp_path / "pub"),
+                                      "--report", str(tmp_path / "r.md")])
+    with pytest.raises(FileNotFoundError):                                                    # no public manifest: it got as far as section C
+        asyncio.run(cal.main())
+    assert not any("panel" in pat for pat in seen), seen
 
 
 def test_someone_else_clears_the_suggestion_and_learns_nothing(env, monkeypatch):

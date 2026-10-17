@@ -287,18 +287,23 @@ async def segments_for(db, user_id: str, rid: str) -> list[dict]:
 async def review_segments(db, user_id: str, recording_ids: list[str]) -> list[dict]:
     """THE seam for the day review: the member's segments of DONE recordings with their label and CONFIRMED person only. A
     suggestion is withheld here on purpose (guardrail 3): the review may say "Sam (you tagged)", never "Sam (suggested)". Lines
-    marked not a person (Zoe's replies, TV, radio, media) are left out: they are never a candidate."""
+    marked not a person (Zoe's replies, TV, radio, media) are left out: they are never a candidate. Unless
+    ``ZOE_OMI_SPEAKER_TAG=on`` a MODEL-only label reads ``unverified`` (shadow: the owner sees labels, the review does not use them)."""
     if not recording_ids:
         return []
     rows = await _all(db, f"SELECT s.{', s.'.join(_SEG_COLS)} FROM omi_segments s JOIN omi_recordings r ON r.id = s.recording_id "
                           f"WHERE s.user_id = ? AND r.user_id = ? AND r.status = 'done' AND s.not_person IS NULL AND s.recording_id IN ({_qs(len(recording_ids))}) "
                           "ORDER BY r.started_at, s.seq", (user_id, user_id, *recording_ids))
+    import omi_diarize
+    trusted = omi_diarize.mode() == "on"           # shadow shows model labels to the owner; the review ignores them (design 9)
     out = []
     for r in rows:
         d = public_segment(r)
         d.pop("suggested_person_id")
         d.pop("suggested_score")
         d.pop("voice_cluster_id")
+        if not trusted and d["source"] != "confirmed":      # the member's own word (owner label, tag) always counts
+            d["label"] = d["speaker"] = "unverified"
         out.append(d)
     return out
 
@@ -306,8 +311,16 @@ async def review_segments(db, user_id: str, recording_ids: list[str]) -> list[di
 async def set_owner_label(db, user_id: str, segment_id: str, value: Optional[str]) -> bool:
     if value not in (None, "you", "other"):
         raise VoiceError("owner_label is you, other or null")
+    former = [r[0] for r in await _all(db, "SELECT voice_cluster_id FROM omi_segments WHERE id = ? AND user_id = ? "
+                                           "AND voice_cluster_id IS NOT NULL", (segment_id, user_id))]
     n = await _run(db, "UPDATE omi_segments SET owner_label = ?, owner_labelled_at = ? WHERE id = ? AND user_id = ?",
                    (value, _iso(_now()) if value else None, segment_id, user_id))
+    if n and value == "you":          # "that was me": the wearer's own voice is never held as a bystander's - the embedding goes too
+        await _run(db, "DELETE FROM omi_segment_embeddings WHERE segment_id = ? AND user_id = ?", (segment_id, user_id))
+        await _run(db, "UPDATE omi_segments SET voice_cluster_id = NULL, suggested_person_id = NULL, suggested_score = NULL "
+                       "WHERE id = ? AND user_id = ?", (segment_id, user_id))
+        for cid in former:
+            await rebuild_cluster(db, cid)
     await db.commit()
     return bool(n)
 
@@ -319,7 +332,7 @@ async def list_unknown(db, user_id: str, *, samples: int = 3) -> list[dict]:
                                                 "WHERE user_id = ? AND status = 'open' ORDER BY last_heard_at DESC", (user_id,)):
         segs = await _all(db, "SELECT s.id, s.recording_id, s.start_ms, s.end_ms, r.started_at FROM omi_segments s JOIN omi_recordings r "
                               "ON r.id = s.recording_id WHERE s.user_id = ? AND s.voice_cluster_id = ? AND s.tagged_person_id IS NULL "
-                              "AND r.status = 'done' ORDER BY s.end_ms - s.start_ms DESC", (user_id, cid))
+                              "AND s.not_person IS NULL AND r.status = 'done' ORDER BY s.end_ms - s.start_ms DESC", (user_id, cid))
         if not segs:
             continue
         recs = {s[1] for s in segs}
@@ -366,6 +379,14 @@ async def _release_contributions(db, user_id: str, seg_ids: list[str], *, keep_p
     return [(r[1], r[2], r[3]) for r in rows]
 
 
+async def _drop_voiceprints(db, user_id: str, person_id: str) -> None:
+    """Delete every learned voiceprint (and its contributions) of one person; their tags and labels stay. Used when a person turns out
+    to be a child: the label-only rule must hold after the contact is edited, not only when the voice was first tagged."""
+    for (vp,) in await _all(db, "SELECT id FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ?", (user_id, person_id)):
+        await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp,))
+        await _run(db, "DELETE FROM learned_voiceprints WHERE id = ?", (vp,))
+
+
 async def tag(db, user_id: str, *, person_id: Optional[str] = None, name: Optional[str] = None, cluster_id: Optional[str] = None,
               segment_id: Optional[str] = None, source: str = "owner") -> dict:
     """The member says who a voice is. Every named segment gets the CONFIRMED tag; the person is the member's own (picked, or
@@ -381,6 +402,8 @@ async def tag(db, user_id: str, *, person_id: Optional[str] = None, name: Option
     person = await _resolve_person(db, user_id, person_id, name, f"omi_tag:{key}")
     seg_ids = [s[0] for s in segs]
     now = _iso(_now())
+    former = [r[0] for r in await _all(db, f"SELECT DISTINCT voice_cluster_id FROM omi_segments WHERE user_id = ? AND voice_cluster_id IS NOT NULL "
+                                           f"AND id IN ({_qs(len(seg_ids))})", (user_id, *seg_ids))]
     moved = await _release_contributions(db, user_id, seg_ids, keep_person=person["id"])         # a RE-tag: the old person un-learns it
     await _run(db, f"UPDATE omi_segments SET tagged_person_id = ?, tag_source = ?, tagged_at = ?, suggested_person_id = NULL, "
                    f"suggested_score = NULL, voice_cluster_id = NULL WHERE user_id = ? AND id IN ({_qs(len(seg_ids))})",
@@ -391,6 +414,7 @@ async def tag(db, user_id: str, *, person_id: Optional[str] = None, name: Option
     learning = "off"
     if person_may_be_child(person):
         learning = "label_only_child"
+        await _drop_voiceprints(db, user_id, person["id"])      # a print learned before the contact became a child goes now
     elif await may_learn(db, user_id) and embs:
         rec_of = {s[0]: s[1] for s in segs}
         for model_id in sorted({e[1] for e in embs}):
@@ -408,6 +432,9 @@ async def tag(db, user_id: str, *, person_id: Optional[str] = None, name: Option
     await _run(db, f"DELETE FROM omi_segment_embeddings WHERE user_id = ? AND segment_id IN ({_qs(len(seg_ids))})", (user_id, *seg_ids))
     if cluster_id:
         await _run(db, "DELETE FROM omi_voice_clusters WHERE id = ? AND user_id = ?", (cluster_id, user_id))
+    for cid in former:                           # a one-line tag leaves the voice it came from: its centroid forgets the tagged sample
+        if cid != cluster_id:
+            await rebuild_cluster(db, cid)
     await db.commit()
     logger.info("OMI_VOICE_TAGGED segments=%d learning=%s created_person=%s", len(seg_ids), learning, person["created"])
     return {"person_id": person["id"], "person_created": person["created"], "segments": len(seg_ids), "learning": learning}
@@ -418,25 +445,29 @@ async def answer_suggestion(db, user_id: str, segment_id: str, answer: str) -> d
     clears it and raises that voice's margin. The suggestion is never used as a training clip on a no."""
     if answer not in ("yes", "no", "someone_else"):
         raise VoiceError("answer is yes, no or someone_else")
-    rows = await _all(db, "SELECT suggested_person_id FROM omi_segments WHERE id = ? AND user_id = ?", (segment_id, user_id))
+    rows = await _all(db, "SELECT suggested_person_id, model_id FROM omi_segments WHERE id = ? AND user_id = ?", (segment_id, user_id))
     if not rows or not rows[0][0]:
         raise VoiceError("no suggestion on that line", 404)
-    pid = rows[0][0]
+    pid, model_id = rows[0][0], rows[0][1]      # the answer is about the print of the model that made the suggestion, and only that one
     if answer == "yes":
         out = await tag(db, user_id, person_id=pid, segment_id=segment_id, source="suggested_confirmed")
+        if out["learning"] == "label_only_child":     # the contact became a child since the suggestion: a label only, nothing confirmed
+            await db.commit()
+            return out
         now = _now()
-        for vp, n_seg, n_rec in await _all(db, "SELECT id, n_segments, n_recordings FROM learned_voiceprints WHERE owner_user_id = ? "
-                                               "AND people_id = ?", (user_id, pid)):
+        for vp, n_seg, n_rec, expires in await _all(
+                db, "SELECT id, n_segments, n_recordings, expires_at FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ? "
+                    "AND model_id = ?", (user_id, pid, model_id)):
             ok = int(n_seg) >= 3 and int(n_rec) >= 2
             await _run(db, "UPDATE learned_voiceprints SET last_confirmed_at = ?, status = ?, expires_at = ? WHERE id = ?",
                        (_iso(now), "confirmed" if ok else "provisional",
-                        _iso(now + timedelta(days=_days(env_int("ZOE_OMI_VOICEPRINT_IDLE_DAYS", IDLE_DAYS)))) if ok else
-                        (await _all(db, "SELECT expires_at FROM learned_voiceprints WHERE id = ?", (vp,)))[0][0], vp))
+                        _iso(now + timedelta(days=_days(env_int("ZOE_OMI_VOICEPRINT_IDLE_DAYS", IDLE_DAYS)))) if ok else expires, vp))
         await db.commit()
         return out
     await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE id = ? AND user_id = ?",
                (segment_id, user_id))
-    await _run(db, "UPDATE learned_voiceprints SET rejections = rejections + 1 WHERE owner_user_id = ? AND people_id = ?", (user_id, pid))
+    await _run(db, "UPDATE learned_voiceprints SET rejections = rejections + 1 WHERE owner_user_id = ? AND people_id = ? AND model_id = ?",
+               (user_id, pid, model_id))
     await db.commit()
     return {"person_id": None, "segments": 1, "learning": "unchanged"}
 
@@ -456,17 +487,22 @@ async def mark_not_a_person(db, user_id: str, *, kind: str, cluster_id: Optional
         where, key = "voice_cluster_id = ?", cluster_id
     else:
         where, key = "id = ?", segment_id
-    clear_tag = ""
+    clear_tag, former = "", []
+    if kind is not None and segment_id:          # a line called TV / Zoe leaves its unknown voice (the voice itself stays open)
+        former = [r[0] for r in await _all(db, "SELECT DISTINCT voice_cluster_id FROM omi_segments WHERE user_id = ? AND id = ? "
+                                               "AND voice_cluster_id IS NOT NULL", (user_id, segment_id))]
     if kind is not None:                         # a tagged line the member now calls TV / Zoe / media: untag it and un-learn it
         tagged = [r[0] for r in await _all(db, f"SELECT id FROM omi_segments WHERE user_id = ? AND {where} AND tagged_person_id IS NOT NULL",
                                            (user_id, key))]
         if tagged:
             await _release_contributions(db, user_id, tagged)
-        clear_tag = ", tagged_person_id = NULL, tag_source = NULL, tagged_at = NULL"
+        clear_tag = ", tagged_person_id = NULL, tag_source = NULL, tagged_at = NULL" + (", voice_cluster_id = NULL" if segment_id else "")
     await _run(db, f"DELETE FROM omi_segment_embeddings WHERE user_id = ? AND segment_id IN (SELECT id FROM omi_segments WHERE "
                    f"user_id = ? AND {where})", (user_id, user_id, key))
     n = await _run(db, f"UPDATE omi_segments SET not_person = ?, suggested_person_id = NULL, suggested_score = NULL{clear_tag} WHERE user_id = ? "
                        f"AND {where}", (kind, user_id, key))
+    for cid in former:
+        await rebuild_cluster(db, cid)
     await db.commit()
     if not n and segment_id:
         raise VoiceError("not found", 404)

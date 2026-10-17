@@ -98,6 +98,11 @@ async def label_segment(segment_id: str, body: _Label, user: dict = Depends(_req
     given = body.model_fields_set
     if not given:
         raise HTTPException(status_code=400, detail="give owner_label and/or not_person")
+    # validate the WHOLE payload before either change: a 400 must mean nothing was applied
+    if "owner_label" in given and body.owner_label not in (None, "you", "other"):
+        raise HTTPException(status_code=400, detail="owner_label is you, other or null")
+    if "not_person" in given and body.not_person is not None and body.not_person not in voices.NOT_PERSON_KINDS:
+        raise HTTPException(status_code=400, detail="not_person is one of " + ", ".join(voices.NOT_PERSON_KINDS))
     if "not_person" in given:
         await _call(voices.mark_not_a_person, user["user_id"], kind=body.not_person, segment_id=segment_id)
     if "owner_label" in given:
