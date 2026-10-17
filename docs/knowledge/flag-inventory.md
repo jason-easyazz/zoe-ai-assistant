@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-670 flags; 668 not documented in `.env.example`.
+673 flags; 671 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -402,10 +402,13 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_OMI_OWNER_USER_ID` | `''` | yes | NO | `services/zoe-data/omi_devices.py`<br>`services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_SPEAKER_TAG` | `'off'` | yes | NO | `services/zoe-data/omi_diarize.py` |
+| `ZOE_OMI_SUGGEST_MARGIN` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
+| `ZOE_OMI_SUGGEST_MIN` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_SYNC_ENABLED` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_TAG_MODEL_DIR` | `''` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_TAG_OTHER_MAX` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_TAG_YOU_MIN` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
+| `ZOE_OMI_VOICEPRINT_IDLE_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_VOICE_CLUSTER_MIN` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMNIGENT_AGENT_ID` | `'057995d1517418e6839f51d340785dd6'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |

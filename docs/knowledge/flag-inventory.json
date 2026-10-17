@@ -3929,6 +3929,26 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_SUGGEST_MARGIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_SUGGEST_MIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMI_SYNC_ENABLED": {
         "defaults": [
           "False"
@@ -3966,6 +3986,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/omi_diarize.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_VOICEPRINT_IDLE_DAYS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
         ],
         "typed_env": true
       },
