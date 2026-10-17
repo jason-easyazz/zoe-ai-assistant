@@ -1,0 +1,69 @@
+# Headscale — self-hosted Tailscale control server for Zoe remote access.
+#
+# Runbook: README.md (same directory). Lab proof: lab_test.sh.
+#
+# Isolation: its own compose project (`headscale`), its own bridge network, no
+# shared volumes, no docker.sock, no link to any other stack on the host.
+# Exposure: the HTTP listener binds loopback only (host nginx terminates TLS and
+# proxies to it); the only public port is UDP 3478 (STUN for the embedded DERP).
+#
+# Pin: exact release, plus the multi-arch index digest so a moved tag cannot
+# change what runs.
+#
+# v0.29.5 was published 2026-10-13, i.e. UNDER the repo's 14-day age rule. The owner
+# approved this one exception on 2026-10-16 (scoped to this release) because v0.29.4
+# has a policy bug fixed upstream in v0.29.5 (PR #3501): a rejected policy left its
+# packet filter live in memory. The lab proves both halves (lab_test.sh, hazard cell).
+#
+# To upgrade: read the release notes, bump BOTH the tag and the digest, re-run
+# lab_test.sh, then `docker compose pull && docker compose up -d`.
+name: headscale
+
+services:
+  headscale:
+    image: docker.io/headscale/headscale:v0.29.5@sha256:780ed2f9e85719a2211277433f2c8afb45105d0d25031949a6848a485f9e216d
+    restart: unless-stopped
+    command: serve
+    read_only: true
+    tmpfs:
+      - /var/run/headscale # the CLI's unix socket lives here
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 256m
+    ports:
+      # Control plane + embedded DERP over HTTP; host nginx proxies :443 to this.
+      # Loopback only — never publish this on 0.0.0.0 (TLS is nginx's job).
+      - "127.0.0.1:18080:8080"
+      # STUN for the embedded DERP. Must be publicly reachable (UDP).
+      - "3478:3478/udp"
+    volumes:
+      # Directory mounts (not single files): an editor that replaces a file
+      # swaps its inode, and a single-file bind mount would keep the stale copy.
+      - ./config:/etc/headscale:ro
+      - ./data:/var/lib/headscale # noise key, DERP key, db.sqlite — BACK UP
+    healthcheck:
+      test: ["CMD", "headscale", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - headscale
+
+networks:
+  headscale:
+    # Fixed, unusual subnet so (a) it cannot collide with another compose
+    # project's auto-allocated network and (b) config.yaml can name it in
+    # `trusted_proxies` (the proxy peer inside the container is the bridge
+    # gateway, not 127.0.0.1).
+    ipam:
+      config:
+        - subnet: 10.77.250.0/28

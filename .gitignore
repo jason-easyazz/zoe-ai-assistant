@@ -156,6 +156,7 @@ aider_env/
 !scripts/deploy/*.sh
 !scripts/permanent/*.sh
 !scripts/setup/*.sh
+!scripts/setup/remote-access/headscale/*.sh
 !scripts/setup/lib/*.sh
 !scripts/setup/jetson/*.sh
 !scripts/setup/touchscreen/*.sh

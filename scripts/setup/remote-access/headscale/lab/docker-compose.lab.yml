@@ -1,0 +1,128 @@
+# Lab override for lab_test.sh — NOT a deployment file.
+#
+# Layered on the real ../docker-compose.yml (`docker compose -f ../docker-compose.yml
+# -f docker-compose.lab.yml`), so the lab runs the SHIPPED image pin, read-only
+# root, dropped capabilities, tmpfs, healthcheck and resource limits. It only
+# swaps what a local lab cannot share with production:
+#   - the host publish (no ports) and the bind-mounted data dir (a named volume,
+#     root-owned like a real fresh install, removed by `down -v`);
+#   - the config directory (rendered by lab_test.sh from ../config with hs.the411.life
+#     -> hs.lab.test, and the stand-in IP in the ACL);
+#   - the network: INTERNAL (no route off the Jetson) on 10.77.250.0/24, so a lab
+#     client can never reach the internet or any real host.
+# Difference from production, stated plainly: TLS is a throwaway self-signed CA
+# (production uses Let's Encrypt via certbot) and nginx runs in a container.
+name: hslab
+
+x-tailscale-client: &tsclient
+  image: docker.io/tailscale/tailscale:v1.104.1@sha256:87c55d6be56ad85b3d8bceca5f87f73de288c609131460dd1be1874c250cc41d
+  # userspace networking: no TUN device, no NET_ADMIN, nothing touches a host
+  # interface, route or resolver.
+  entrypoint: ["tailscaled"]
+  command: ["--tun=userspace-networking", "--statedir=/var/lib/tailscale"]
+  environment:
+    # Trust the lab CA only for this process.
+    SSL_CERT_FILE: /lab/tls/ca.crt
+    # Force every peer path through the embedded DERP (over nginx :443) — the
+    # hard case, the panel behind a NAT in another city — instead of letting a
+    # direct path on the lab bridge hide a DERP problem.
+    TS_DEBUG_ALWAYS_USE_DERP: "1"
+    TS_NO_LOGS_NO_SUPPORT: "true"
+  volumes:
+    - ${HS_LAB_DIR}/tls:/lab/tls:ro
+  tmpfs:
+    - /var/lib/tailscale
+    - /var/run/tailscale
+    - /tmp
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  mem_limit: 128m
+  pids_limit: 256
+  restart: "no"
+
+services:
+  headscale:
+    ports: !reset []
+    volumes: !override
+      - ${HS_LAB_DIR}/config:/etc/headscale:ro
+      - hsdata:/var/lib/headscale
+    networks: !override
+      headscale:
+        ipv4_address: 10.77.250.2
+
+  # Stand-in for the host nginx: terminates TLS for hs.lab.test using the
+  # SHIPPED nginx-hs.the411.life.conf (rendered), and relays UDP 3478 so
+  # `tailscale netcheck` can exercise STUN (production publishes 3478 directly).
+  proxy:
+    image: docker.io/library/nginx:alpine@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f
+    volumes:
+      - ${HS_LAB_DIR}/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${HS_LAB_DIR}/hs.conf:/etc/nginx/conf.d/hs.conf:ro
+      - ${HS_LAB_DIR}/tls:/lab/tls:ro
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    read_only: true
+    mem_limit: 64m
+    depends_on:
+      headscale:
+        condition: service_healthy
+    networks:
+      headscale:
+        ipv4_address: 10.77.250.3
+        aliases:
+          - hs.lab.test
+
+  # Stands in for the Zoe box's LAN address (192.168.1.218): 443 is the
+  # only allowed port; 8007 and 9999 are alive but must NOT be reachable from the panel.
+  dummy:
+    image: docker.io/library/alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+    command:
+      - sh
+      - -c
+      - |
+        for p in 443 8007 9999; do
+          ( while true; do echo "dummy-$$p" | nc -l -p $$p > /dev/null; done ) &
+        done
+        wait
+    read_only: true
+    mem_limit: 32m
+    networks:
+      headscale:
+        ipv4_address: 10.77.250.40
+
+  box:
+    <<: *tsclient
+    hostname: lab-box
+    networks:
+      headscale:
+        ipv4_address: 10.77.250.10
+
+  panel:
+    <<: *tsclient
+    hostname: lab-panel
+    networks:
+      headscale:
+        ipv4_address: 10.77.250.11
+
+  # The owner's laptop: personal (untagged) node, registered by the admin.
+  owner:
+    <<: *tsclient
+    hostname: lab-owner
+    networks:
+      headscale:
+        ipv4_address: 10.77.250.12
+
+volumes:
+  hsdata: {}
+
+networks:
+  headscale: !override
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.250.0/24

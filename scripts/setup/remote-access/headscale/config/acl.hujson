@@ -1,0 +1,81 @@
+// Headscale ACL policy for Zoe remote access (huJSON: comments + trailing commas).
+// Loaded from policy.path in config.yaml at start-up. Change it ONLY through
+// ./policy_apply.sh, which runs the "tests" block below OFFLINE against the real
+// users and nodes and applies the file only if every assertion passes, so a typo
+// cannot silently widen access. (Headscale v0.29.4 could leave a rejected
+// hot-reloaded policy live in memory; fixed in v0.29.5, PR #3501. The flow stays
+// offline-check-then-restart as defence in depth.)
+//
+// Default is deny: there is no rule not listed below. Intent:
+//   - the panel may reach ONLY the Zoe box LAN address, tcp 443 (the 8007 HA bridge
+//     is loopback-only on the box and the panel never uses it: direct voice route);
+//   - the box and the owner devices may ssh to the panel;
+//   - nothing else, in any direction.
+{
+  "groups": {
+    // The Headscale user created in the README (`headscale users create owner`).
+    // Personal devices (phone, laptop) register under this user.
+    "group:owner": ["owner@"],
+  },
+
+  // Who may put these tags on a node. The box and panel get theirs from a
+  // tagged pre-auth key the owner mints on the server.
+  "tagOwners": {
+    "tag:zoe-box":   ["group:owner"],
+    "tag:zoe-panel": ["group:owner"],
+  },
+
+  // Route auto-approval for exactly ONE prefix, and only from a node carrying
+  // tag:zoe-box. An approver covers its own prefix and anything inside it, not
+  // a wider prefix (a /24, 0.0.0.0/0) and not a different /32. Anything else a
+  // node advertises waits for `headscale nodes approve-routes`. No exitNode
+  // auto-approver is defined, so exit-node advertisements are never auto-approved.
+  "autoApprovers": {
+    "routes": {
+      "192.168.1.218/32": ["tag:zoe-box"],
+    },
+  },
+
+  "acls": [
+    // Panel -> Zoe box (its LAN address, served by the box as a subnet router).
+    {
+      "action": "accept",
+      "proto":  "tcp",
+      "src":    ["tag:zoe-panel"],
+      "dst":    ["192.168.1.218:443"],
+    },
+    // Box and owner devices -> panel, plain OpenSSH over the tailnet (the panel's
+    // own sshd; Tailscale SSH is not enabled and there is no "ssh" section).
+    {
+      "action": "accept",
+      "proto":  "tcp",
+      "src":    ["tag:zoe-box", "group:owner"],
+      "dst":    ["tag:zoe-panel:22"],
+    },
+  ],
+
+  // Executable assertions, evaluated against the compiled policy by
+  // `headscale policy check --bypass-grpc-and-access-database-directly` (what
+  // policy_apply.sh runs). They need the users and nodes to exist, so on an empty
+  // tailnet they cannot resolve; that is expected before the nodes have joined.
+  "tests": [
+    {
+      "src":    "tag:zoe-panel",
+      "proto":  "tcp",
+      "accept": ["192.168.1.218:443"],
+      "deny":   ["192.168.1.218:8007", "192.168.1.218:22", "192.168.1.218:80", "192.168.1.218:9999", "192.168.1.1:443"],
+    },
+    {
+      "src":    "tag:zoe-box",
+      "proto":  "tcp",
+      "accept": ["tag:zoe-panel:22"],
+      "deny":   ["tag:zoe-panel:443"],
+    },
+    {
+      "src":    "owner@",
+      "proto":  "tcp",
+      "accept": ["tag:zoe-panel:22"],
+      "deny":   ["tag:zoe-panel:443", "tag:zoe-box:22"],
+    },
+  ],
+}

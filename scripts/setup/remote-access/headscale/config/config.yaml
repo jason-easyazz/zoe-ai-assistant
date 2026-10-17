@@ -1,0 +1,149 @@
+# Headscale v0.29.5 configuration for Zoe remote access.
+# Every key below was checked against config-example.yaml and
+# hscontrol/types/config.go at the v0.29.5 tag (opensrc: juanfont/headscale@v0.29.5; no key changed from 0.29.4).
+# Mounted read-only at /etc/headscale (see docker-compose.yml).
+#
+# Owner-specific values: server_url (and the nginx file) name hs.the411.life.
+# The only OPTIONAL placeholders are derp.server.ipv4/ipv6 below.
+
+# Public URL clients use. Must be HTTPS on 443: the Tailscale client assumes
+# 443 in places (headscale issue 2164). TLS is terminated by the host nginx.
+server_url: https://hs.the411.life
+
+# Inside the container. Reachable only through the loopback publish in
+# docker-compose.yml (127.0.0.1:18080 -> 8080), then nginx.
+listen_addr: 0.0.0.0:8080
+
+# Not published by compose — reachable only from inside the container.
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+# The peer headscale sees is the compose network's bridge gateway, not
+# 127.0.0.1 (the docs' example assumes a host install). This is the compose
+# subnet; with it, nginx's X-Real-IP/True-Client-IP reach the logs.
+trusted_proxies:
+  - 10.77.250.0/28
+
+# Created on first start; part of the backup set (README: Backup).
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+# Tailnet address pools (the defaults). 100.64.0.0/10 is CGNAT space; if the
+# panel's mobile carrier or another VPN uses it, change v4 BEFORE the first node
+# joins — it cannot be changed cleanly afterwards.
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    # Embedded DERP relay + STUN. DERP is served by the same HTTP listener
+    # (path /derp) — so it rides the same nginx :443 — STUN is UDP 3478.
+    enabled: true
+    region_id: 999
+    region_code: "headscale"
+    region_name: "Headscale Embedded DERP"
+    # Only nodes known to this tailnet may use the relay.
+    verify_clients: true
+    stun_listen_addr: "0.0.0.0:3478"
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+    # OPTIONAL (docs: "improved connection stability"): the server's public
+    # addresses. Clients otherwise resolve hs.the411.life. Uncomment and fill in
+    # on the server; do not commit real addresses.
+    # ipv4: <SERVER_PUBLIC_IPV4>
+    # ipv6: <SERVER_PUBLIC_IPV6>
+  # EMPTY on purpose: do NOT also hand clients Tailscale Inc's public DERP map.
+  #  + no dependency on, and no node-key/IP metadata sent to, a third party;
+  #  + the "no Tailscale account, no Tailscale infrastructure" requirement holds;
+  #  + headscale starts with no outbound fetch.
+  #  - the embedded relay is then the ONLY relay (single point of failure). That
+  #    is acceptable: it lives on the same host as the control plane, so if
+  #    the server is down no new connection can be coordinated anyway, and
+  #    already-established direct paths keep working. Verify with
+  #    `tailscale debug derp headscale` (README: Verify).
+  # To add Tailscale's relays later: urls: [https://controlplane.tailscale.com/derpmap/default]
+  urls: []
+  paths: []
+  auto_update_enabled: false
+  update_frequency: 3h
+
+# The pinned version is a deliberate choice; do not phone GitHub at start-up.
+disable_check_updates: true
+
+node:
+  # 0 = personal nodes never expire by default (tagged nodes never expire). An
+  # appliance in another city must not fall off the tailnet after N days and
+  # need an interactive re-login there.
+  expiry: 0
+  ephemeral:
+    inactivity_timeout: 30m
+  routes:
+    ha:
+      probe_interval: 10s
+      probe_timeout: 5s
+
+database:
+  type: sqlite
+  debug: false
+  gorm:
+    prepare_stmt: true
+    parameterized_queries: true
+    skip_err_record_not_found: true
+    slow_threshold: 1000
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+    wal_autocheckpoint: 1000
+
+# TLS is terminated by nginx; headscale listens plain HTTP on loopback only.
+# (It logs "listening without TLS but ServerURL does not start with http://" —
+# expected, per the reverse-proxy docs.)
+tls_cert_path: ""
+tls_key_path: ""
+tls_letsencrypt_hostname: ""
+
+log:
+  level: info
+  format: text
+
+# ACL policy, loaded from the config directory at start-up. Change it ONLY with
+# ./policy_apply.sh (offline database-aware check, applied only if it passed, then
+# restart). v0.29.4 could leave a rejected hot-reloaded policy live in memory (fixed
+# in v0.29.5, PR #3501); the flow is kept as defence in depth.
+policy:
+  mode: file
+  path: /etc/headscale/acl.hujson
+
+dns:
+  # OFF, deliberately. MagicDNS makes tailscaled take over the client's resolver;
+  # these two boxes also run the voice stack and Home Assistant, whose name
+  # resolution must never depend on a remote control server. Nodes are addressed
+  # by IP (the panel keeps using https://192.168.1.218 unchanged). The join
+  # commands also pass --accept-dns=false as a second lock.
+  magic_dns: false
+  # Unused while magic_dns is off; set because the CLI/FQDN code expects one.
+  # `.invalid` is reserved and never resolves.
+  base_domain: tailnet.invalid
+  override_local_dns: false
+  nameservers:
+    global: []
+    split: {}
+  search_domains: []
+  extra_records: []
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+# Do not tell clients to ship logs to Tailscale Inc.
+logtail:
+  enabled: false
+
+# File sharing between nodes is not needed; fewer features, less surface.
+taildrop:
+  enabled: false
+
+auto_update:
+  enabled: false
