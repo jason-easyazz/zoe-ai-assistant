@@ -392,3 +392,16 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   Verdict: plan around SetFit-alone 80.2%; a two-stage needs a fine-tuned
   decoder. Hand-run only (`run_two_stage.py`, :11435, memory-gated); results
   committed under `results/`.
+- `relay/` — **F0 / R0 of panel anywhere** (`docs/architecture/panel-anywhere.md`
+  section 10): a hermetic Docker lab (internal network, nothing published) with an nginx
+  stream front + frp v0.71.0 `frps` behind a fail-closed preflight, a session-master
+  plugin stub (loopback, stdlib Python), two fake household boxes (`frpc` pinning the relay
+  CA + an nginx relay-listener stub with mTLS) and a panel (curl, `requests`). Cells T1-T4,
+  T6, T7, T9, A1 (+ plugin-down, rate/suspension and listener-stub self-checks), each with
+  its positive and negative control. Hand-run via `labs/relay/run.sh` (takes
+  `flock /tmp/zoe-test-lane.lock`; refuses 01:50-04:55 and `MemAvailable` < 1500 MB;
+  asserts its own teardown). Pinned by frp release sha256 + base-image index digests.
+  Never wired into zoe-data, a systemd unit, an image or CI; T5/T10/T11/C3 and the real
+  nginx listener are the next PR (interface in its README). `RUNBOOK-R1.md` is the
+  docs-only plan for the the411 relay host (nothing in it has been run there). README
+  and RUNBOOK are records, not contracts. Unit net: `labs/relay/run.sh unit` (Python 3.12).

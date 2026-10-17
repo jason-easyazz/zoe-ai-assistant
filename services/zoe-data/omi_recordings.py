@@ -13,6 +13,9 @@ THE FLOW
   the WAV is deleted right after a transcription that PRODUCED TEXT unless the owner kept it; ``purge_expired_audio`` bounds the rest.
   An EMPTY transcript is not a success: the row goes ``empty_transcript``, the WAV is KEPT until its retention expiry, and a WARNING
   logs its measured length/peak/RMS - so a deaf pipeline (wrong rate, dead mic, gain) never silently eats the owner's audio.
+  The WARNING's ``reason`` reads the transient-robust levels (``measure_wav``): ``transient_only`` is a click over room noise (the
+  pendant's mic-wake transient opens most short recordings), ``voiced_but_no_text`` is sustained sound Moonshine found no words in.
+  ``requeue_held`` (owner routes, and once per ``TRANSCRIBE_PIPELINE`` automatically) puts held recordings back in the queue.
 
 WHAT THIS DOES NOT DO (on purpose, and why)
   * It does not feed the transcript to fact extraction, recall, the digest or the memory gate. A pendant recording can hold
@@ -57,7 +60,12 @@ SAMPLE_RATE = 16000
 CHUNK_S = 20.0                    # one Moonshine call at a time; a voice turn waits at most this long
 SPLIT_SEARCH_S = 3.0              # look for the quietest 100 ms in the last 3 s of a chunk to cut at
 SILENCE_PEAK = 300                # int16 peak under this = room noise: not sent to Moonshine (it hallucinates on silence)
+ACTIVE_RMS = 600                  # a 100 ms window at/above this RMS (~-35 dBFS) is sustained sound; the pendant's room floor is ~40-300
+TRANSIENT_ONLY_S = 0.5            # under this much sustained sound, a "voiced" recording was a click (diagnostic label only, never a gate)
 MAX_ATTEMPTS = 3
+#: Bump whenever transcription or its empty-transcript diagnostics change. The first loop pass after a deploy that changes it requeues
+#: every held empty/failed recording ONCE (``requeue_after_pipeline_change``), so the change reaches audio still inside its retention.
+TRANSCRIBE_PIPELINE = "2026-10-16.transient-robust-levels"
 STALE_CLAIM_S = 30 * 60
 POLL_S = 60.0
 VOICE_BUSY_S = 45.0              # a voice turn this recent = "in flight": it aborts/holds a running job
@@ -379,27 +387,49 @@ def peak(pcm: bytes) -> int:
 
 def _measure_reader(w: Any) -> dict:
     rate, ch, width, n = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()
-    pk, sumsq, count = 0, 0, 0
+    pk, sumsq, count, clipped = 0, 0, 0, 0
+    win = max(1, (rate or SAMPLE_RATE) // 10)                # 100 ms windows for the transient-robust numbers
+    wins: list[float] = []
     if width == 2:
         left = n
-        while left > 0:                                    # one second at a time: never the whole file
-            a = _samples(w.readframes(min(left, max(rate, 1))))
+        step = max(win, (max(rate, 1) // win) * win)           # one second at a time (a whole number of windows): never the whole file
+        while left > 0:
+            a = _samples(w.readframes(min(left, step)))
             if not len(a):
                 break
             left -= len(a)
             count += len(a)
-            pk = max(pk, max(map(abs, a)))
-            sumsq += sum(v * v for v in a)
+            for i in range(0, len(a), win):
+                part = a[i:i + win]
+                sq = sum(v * v for v in part)
+                sumsq += sq
+                m = max(map(abs, part))
+                if m > pk:
+                    pk = m
+                if m >= 32767:
+                    clipped += sum(1 for v in part if v >= 32767 or v <= -32768)
+                if len(part) == win:
+                    wins.append((sq / win) ** 0.5)
     rms = (sumsq / count) ** 0.5 if count else 0.0
-    return {"seconds": round(n / rate, 1) if rate else 0.0, "peak": int(pk), "rms": round(rms, 1), "rate": rate, "channels": ch, "width": width}
+    wins_sorted = sorted(wins)
+    return {"seconds": round(n / rate, 1) if rate else 0.0, "peak": int(pk), "rms": round(rms, 1), "rate": rate, "channels": ch,
+            "width": width, "clipped": clipped, "rms_median": round(wins_sorted[len(wins_sorted) // 2], 1) if wins_sorted else 0.0,
+            "active_s": round(sum(1 for r in wins if r >= ACTIVE_RMS) * win / (rate or SAMPLE_RATE), 1)}
 
 
-_UNREADABLE = {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0}
+_UNREADABLE = {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0, "clipped": 0, "rms_median": 0.0,
+               "active_s": 0.0}
 
 
 def measure_wav(wav: bytes) -> dict:
-    """What the audio actually is, for the empty-transcript WARNING: ``{"seconds", "peak", "rms", "rate", "channels", "width"}``.
-    Never raises (an unreadable WAV measures as zeros) - it is diagnostics, not a gate. Peak/RMS are int16 units (full scale 32768)."""
+    """What the audio actually is, for the empty-transcript WARNING. Never raises (an unreadable WAV measures as zeros) - it is
+    diagnostics, not a gate. Levels are int16 units (full scale 32768).
+
+    ``seconds``/``rate``/``channels``/``width``: the format. ``peak``/``rms``: whole-file - and BOTH are dominated by a single
+    click: one full-scale pendant wake transient over ten seconds of room noise reads "peak 32768, rms 700" (measured 2026-10-16,
+    plan 4.3b: the median 100 ms-window RMS of those files was ~60). So the transient-robust numbers are what to read:
+    ``clipped`` (samples on the int16 rails, 32767 / -32768), ``rms_median`` (the median 100 ms-window RMS: the room, not the click) and ``active_s``
+    (seconds of 100 ms windows at or above ``ACTIVE_RMS``: sustained sound, which a click is not)."""
     try:
         with wave.open(io.BytesIO(wav)) as w:
             return _measure_reader(w)
@@ -414,6 +444,19 @@ def measure_wav_file(path: str) -> dict:
             return _measure_reader(w)
     except (wave.Error, EOFError, OSError):
         return dict(_UNREADABLE)
+
+
+def empty_reason(chunk_stats: dict, level: dict) -> str:
+    """Why a recording came back with no text - the label on ``OMI_EMPTY_TRANSCRIPT``:
+    ``below_silence_floor`` - no chunk reached Moonshine (peak under ``SILENCE_PEAK``);
+    ``transient_only``      - chunks reached Moonshine only because of a click (a pendant wake transient, a tap): under
+                              ``TRANSIENT_ONLY_S`` of sustained sound. Nothing was said; Moonshine was right;
+    ``voiced_but_no_text``  - there WAS sustained sound and Moonshine still found no words. This is the one worth a look."""
+    if not chunk_stats.get("voiced"):
+        return "below_silence_floor"
+    if float(level.get("active_s") or 0.0) < TRANSIENT_ONLY_S:
+        return "transient_only"
+    return "voiced_but_no_text"
 
 
 # --- rows -----------------------------------------------------------------------------------------------------------
@@ -446,8 +489,13 @@ def _write_audio(path: Path, data: bytes) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
+    _fsync_dir(path.parent)
+
+
+def _fsync_dir(directory: Path) -> None:
+    """fsync a directory so a rename/unlink inside it survives a crash. Best effort (some filesystems refuse a dir fsync)."""
     try:
-        dfd = os.open(str(path.parent), os.O_RDONLY)
+        dfd = os.open(str(directory), os.O_RDONLY)
         try:
             os.fsync(dfd)
         finally:
@@ -577,13 +625,26 @@ async def count_empty_transcripts(user_id: str) -> int:
 
 
 async def get_recording(user_id: str, rid: str) -> Optional[dict]:
+    """One recording with its transcript and, once tagging has run on it, its speaker turns (``segments``, the member's own)."""
     from db_compat import get_compat_db
+    import omi_voices
     async with get_compat_db() as db:
         rows = await _fetch(db, "SELECT * FROM omi_recordings WHERE id = ? AND user_id = ? AND status != 'deleted'", (rid, user_id))
-    return _public(rows[0], transcript=True) if rows else None
+        if not rows:
+            return None
+        out = _public(rows[0], transcript=True)
+        try:
+            out["segments"] = await omi_voices.segments_for(db, user_id, rid) if rows[0]["status"] == "done" else []
+        except Exception as exc:  # noqa: BLE001 - pre-0055: no segments yet
+            if not omi_voices._missing(exc):
+                raise
+            out["segments"] = []
+    return out
 
 
 async def _tombstone(db, row: Any, now: datetime) -> None:
+    import omi_voices            # FIRST: its segments, held voice embeddings and voiceprint contributions go with it (voiceprints rebuilt).
+    await omi_voices.drop_recording(db, row["id"])    # A failure here leaves the row NOT deleted, so the owner's retry runs it again
     _unlink(row["audio_path"] or "")
     await db.execute(
         "UPDATE omi_recordings SET status = 'deleted', transcript = '', audio_path = '', audio_bytes = 0, started_at = '', ended_at = '', "
@@ -598,6 +659,8 @@ async def delete_recording(user_id: str, rid: str) -> bool:
             rows = await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
             if not rows or rows[0]["status"] == "deleted":
                 return False
+            import omi_day_review          # FIRST: the day review's quotes of this recording go too (a failure keeps the recording for a retry)
+            await omi_day_review.forget_recording(user_id, rid)
             await _tombstone(db, rows[0], _now())
             await db.commit()
     logger.info("OMI_DELETED id=%s", rid)
@@ -630,28 +693,51 @@ async def update_recording(user_id: str, rid: str, *, keep_audio: Optional[bool]
     return await get_recording(user_id, rid)
 
 
+class VoiceEraseIncomplete(RuntimeError):
+    """A member's learned-voice rows could not be erased. Raised by ``forget_user`` so the erase never reads as complete."""
+
+
 async def forget_user(user_id: str) -> int:
     """Right to be forgotten: every recording of the member is deleted (audio, transcript, times) AND their pendant registrations are
     unassigned (``omi_devices.forget_user``; the device row stays, unowned, so a restart cannot re-seed it to them). Takes the member's
-    erase gate. Returns the number of recordings deleted."""
+    erase gate. Returns the number of recordings deleted. FAILS CLOSED: a voice-erase (or recording) failure raises after the rest of
+    the erase has run, so the caller cannot report the member forgotten."""
     try:
         from db_compat import get_compat_db
         import omi_devices
         n = 0
+        voice_failure: Optional[BaseException] = None
         async with erase_gate.erasing(user_id):
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE user_id = ? AND status != 'deleted'", (user_id,)):
                     await _tombstone(db, r, _now())
                     n += 1
                 await db.commit()
+            try:        # the member's voice rows: a failure is LOUD (an erase that leaves biometrics behind is a P1)
+                import omi_voices
+                async with get_compat_db() as db:
+                    await omi_voices.forget_user(db, user_id)
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("OMI_VOICES_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
+                voice_failure = exc               # raised below, once the rest of the erase has run: success is never reported
             try:        # AFTER the recordings are committed: a registry that is not migrated yet (0047) must never block erasing audio
                 async with get_compat_db() as db:
                     await omi_devices.forget_user(db, user_id)
                     await db.commit()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("omi_devices: pendant registrations NOT unassigned for a forgotten user (%s)", type(exc).__name__)
+        if voice_failure is not None:
+            raise VoiceEraseIncomplete(type(voice_failure).__name__) from voice_failure
         return n
+    except VoiceEraseIncomplete:
+        raise                                     # fail closed: the caller must retry the whole erase, not read this as done
     except Exception as exc:  # noqa: BLE001
+        import omi_voices
+        no_store = omi_voices._missing(exc) or (isinstance(exc, RuntimeError) and "not initialised" in str(exc))   # nothing to erase
+        if not no_store:                          # a recording or its voice cleanup that failed is NOT "forgotten"
+            logger.error("omi_recordings: recordings NOT erased for a forgotten user (%s)", type(exc).__name__)
+            raise
         logger.warning("omi_recordings: recordings NOT erased for a forgotten user (%s)", type(exc).__name__)
         return 0
 
@@ -673,6 +759,12 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
                     await db.execute("UPDATE omi_recordings SET transcript = ?, audio_path = '', audio_bytes = 0, keep_audio = 0 WHERE id = ?",
                                      (rx.sub(_FORGOTTEN_MARK, text), r["id"]))
                     n += 1
+                import omi_voices
+                try:
+                    n += await omi_voices.redact(db, user_id, rx, _FORGOTTEN_MARK)     # each speaker turn's text, too
+                except Exception as exc:  # noqa: BLE001
+                    if not omi_voices._missing(exc):
+                        raise
                 await db.commit()
         return n
     except Exception as exc:  # noqa: BLE001
@@ -714,16 +806,21 @@ def _chunk_wav(pcm: bytes, tmpdir: str, idx: int) -> str:
     return p
 
 
-async def transcribe_wave(w: Any, *, gate=None, pause_s: float = 0.4, stats: Optional[dict] = None) -> str:
+async def transcribe_wave(w: Any, *, gate=None, pause_s: float = 0.4, stats: Optional[dict] = None,
+                          spans: Optional[list] = None) -> str:
     """Moonshine over an open ``wave`` reader in ~20 s chunks cut at the quietest point, STREAMED (``iter_wave_chunks``). Silent chunks
     are skipped. ``gate()`` (sync or async) is asked before every chunk and aborts the job by raising ``GateClosed``; the caller leaves
-    the recording pending. ``stats`` (optional) is filled with ``chunks`` (total) and ``voiced`` (sent to Moonshine, peak >= ``SILENCE_PEAK``)."""
+    the recording pending. ``stats`` (optional) is filled with ``chunks`` (total) and ``voiced`` (sent to Moonshine, peak >= ``SILENCE_PEAK``).
+    ``spans`` (optional) receives ``(start_ms, end_ms, text)`` per chunk - the untagged form of ``omi_segments``."""
     parts: list[str] = []
     st = stats if stats is not None else {}
-    st["chunks"], st["voiced"] = 0, 0
+    st.setdefault("chunks", 0)
+    st.setdefault("voiced", 0)
+    pos = 0
     with tempfile.TemporaryDirectory(prefix="zoe-omi-") as tmp:
         for i, piece in enumerate(iter_wave_chunks(w)):
             st["chunks"] += 1
+            start_ms, pos = pos * 1000 // SAMPLE_RATE, pos + len(piece) // 2
             if gate is not None:
                 verdict = gate()
                 if asyncio.iscoroutine(verdict):
@@ -732,13 +829,48 @@ async def transcribe_wave(w: Any, *, gate=None, pause_s: float = 0.4, stats: Opt
                 if not ok:
                     raise GateClosed(why)
             if peak(piece) < SILENCE_PEAK:
+                if spans is not None:
+                    spans.append((start_ms, pos * 1000 // SAMPLE_RATE, ""))
                 continue
             st["voiced"] += 1
             text = (await _transcribe_file(_chunk_wav(piece, tmp, i)) or "").strip()
             if text:
                 parts.append(text)
+            if spans is not None:
+                spans.append((start_ms, pos * 1000 // SAMPLE_RATE, text))
             await asyncio.sleep(pause_s)           # a waiting voice turn gets the Moonshine lock between chunks
     return " ".join(parts)
+
+
+class _Span:
+    """A ``wave`` reader limited to frames ``[start, end)`` - what ``iter_wave_chunks`` needs to transcribe ONE speaker turn."""
+
+    def __init__(self, w: Any, start: int, end: int) -> None:
+        self.w, self.left, self.n = w, max(0, end - start), max(0, end - start)
+        w.setpos(start)
+
+    def getframerate(self) -> int:
+        return self.w.getframerate()
+
+    def getnframes(self) -> int:
+        return self.n
+
+    def readframes(self, k: int) -> bytes:
+        got = self.w.readframes(min(k, self.left)) if self.left > 0 else b""
+        self.left -= len(got) // 2
+        return got
+
+
+async def transcribe_turns(path: str, turns: list, **kw: Any) -> list[str]:
+    """Text ALIGNED to speaker turns (Moonshine has no word times): each turn ``(start_ms, end_ms)`` is transcribed on its own,
+    split at its quietest points when longer than a chunk - the same model, the same gate and the same silence rule as
+    ``transcribe_wave``. Returns one text per turn."""
+    out = []
+    with wave.open(path) as w:
+        for start_ms, end_ms in turns:
+            sub = _Span(w, start_ms * SAMPLE_RATE // 1000, end_ms * SAMPLE_RATE // 1000)
+            out.append(await transcribe_wave(sub, **kw))
+    return out
 
 
 async def transcribe_audio_file(path: str, **kw: Any) -> str:
@@ -826,9 +958,23 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
     text, err = "", ""
     seen_chunks: dict = {}
     level: dict = {}
+    segs: Optional[list] = None            # the omi_segments rows (only while ZOE_OMI_SPEAKER_TAG is not off)
+    spk_state, model_id = "unverified", None
     try:
-        text = await transcribe_audio_file(path, gate=lambda: _patient_gate(now), pause_s=pause_s, stats=seen_chunks)
-        text = await _redact_forgotten(uid, text)
+        turns, spk_state, model_id = await _diarise(uid, path, now)
+        if turns:
+            texts = await transcribe_turns(path, [(t.start_ms, t.end_ms) for t in turns], gate=lambda: _patient_gate(now),
+                                           pause_s=pause_s, stats=seen_chunks)
+            segs = [{"start_ms": t.start_ms, "end_ms": t.end_ms, "speaker": t.speaker, "score": t.score, "windows": t.windows,
+                     "embedding": t.embedding, "text": await _redact_forgotten(uid, x)} for t, x in zip(turns, texts)]
+            text = " ".join(x["text"] for x in segs if x["text"].strip())
+        else:
+            spans: Optional[list] = [] if _tag_mode() != "off" else None
+            text = await transcribe_audio_file(path, gate=lambda: _patient_gate(now), pause_s=pause_s, stats=seen_chunks, spans=spans)
+            text = await _redact_forgotten(uid, text)
+            if spans is not None:
+                segs = [{"start_ms": a, "end_ms": b, "speaker": "unverified", "score": None, "windows": 0, "embedding": None,
+                         "text": await _redact_forgotten(uid, x)} for a, b, x in spans]
         if not text.strip():                    # diagnostics for the WARNING below; off the event loop (a 10-minute WAV is ~10M samples)
             level = await asyncio.to_thread(measure_wav_file, path)
     except GateClosed as exc:                   # the gate closed mid-job: not a failure, try again later
@@ -866,19 +1012,172 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                 await db.execute("UPDATE omi_recordings SET status = 'empty_transcript', transcript = '', transcribed_at = ? "
                                  "WHERE id = ? AND status = 'transcribing'", (_iso(_now()), rid))
                 await db.commit()
-                logger.warning("OMI_EMPTY_TRANSCRIPT id=%s seconds=%s peak=%s rms=%s rate=%s voiced_chunks=%s/%s reason=%s - WAV kept until retention",
-                               rid, level.get("seconds"), level.get("peak"), level.get("rms"), level.get("rate"),
-                               seen_chunks.get("voiced"), seen_chunks.get("chunks"),
-                               "below_silence_floor" if not seen_chunks.get("voiced") else "voiced_but_no_text")
+                logger.warning("OMI_EMPTY_TRANSCRIPT id=%s seconds=%s peak=%s rms=%s clipped=%s rms_median=%s active_s=%s rate=%s "
+                               "voiced_chunks=%s/%s reason=%s - WAV kept until retention",
+                               rid, level.get("seconds"), level.get("peak"), level.get("rms"), level.get("clipped"),
+                               level.get("rms_median"), level.get("active_s"), level.get("rate"),
+                               seen_chunks.get("voiced"), seen_chunks.get("chunks"), empty_reason(seen_chunks, level))
                 return True
-            await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, transcribed_at = ?"
+            seg_ids: list = []
+            if segs is not None:              # segments land BEFORE the row says done, and the WAV goes only after both
+                import omi_voices
+                try:
+                    omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid))  # Zoe's own replies: not a person
+                    seg_ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=model_id,
+                                                              channel="panel" if spk_state == "tagged" else None)
+                except Exception as exc:  # noqa: BLE001 - a segment-store failure never costs the transcript
+                    logger.warning("OMI_SEGMENTS_NOT_STORED id=%s reason=%s - transcript kept untagged", rid, type(exc).__name__)
+                    seg_ids, spk_state, segs = [], "untaggable", None
+                    try:
+                        await omi_voices.drop_recording(db, rid)
+                    except Exception:  # noqa: BLE001
+                        pass
+            await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, transcribed_at = ?, speaker_state = ?"
                              + ("" if keep else ", audio_path = '', audio_bytes = 0, audio_expires_at = NULL")
-                             + " WHERE id = ? AND status = 'transcribing'", (text, _iso(_now()), rid))
+                             + " WHERE id = ? AND status = 'transcribing'", (text, _iso(_now()), spk_state, rid))
             await db.commit()
             if not keep:
                 _unlink(path)
-    logger.info("OMI_TRANSCRIBED id=%s chars=%d kept_audio=%s", rid, len(text), keep)
+            if seg_ids and spk_state == "tagged":
+                try:                          # learning is optional; the transcript and its segments are already safe
+                    import omi_diarize
+                    learned = await omi_voices.learn(db, uid, seg_ids, segs, model_id=model_id, you_min=omi_diarize.thresholds()[0])
+                    if learned["stored"]:
+                        logger.info("OMI_VOICES_LEARNED id=%s stored=%d suggested=%d", rid, learned["stored"], learned["suggested"])
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("omi_voices: learning pass failed for %s (%s)", rid, type(exc).__name__)
+    logger.info("OMI_TRANSCRIBED id=%s chars=%d kept_audio=%s segments=%d speaker_state=%s", rid, len(text), keep,
+                len(segs or []), spk_state)
     return True
+
+
+def _tag_mode() -> str:
+    import omi_diarize
+    return omi_diarize.mode()
+
+
+async def _diarise(uid: str, path: str, now: Optional[datetime]) -> tuple[Optional[list], str, Optional[str]]:
+    """Speaker turns for the recording, or ``(None, state, model)`` for the untagged path. ``unverified``: tagging is off, the
+    wearer is not positively an adult (D14: no tagging of a child's pendant) or has no profile in this model (turns are still cut
+    by voice, labelled ``unverified``); ``untaggable``: the model refused or the pass failed (the transcript is never lost to it).
+    A closing gate is NOT a failure: ``GateClosed`` propagates and the recording goes back to pending."""
+    if _tag_mode() == "off":
+        return None, "unverified", None
+    import manner_block
+    import omi_diarize
+    import omi_voices
+    if not await manner_block.eligible(uid):
+        return None, "unverified", None
+    embedder = await asyncio.to_thread(omi_diarize.load_embedder)
+    if embedder is None:
+        return None, "untaggable", None
+    mid = omi_diarize.model_id()
+    try:
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            profile = await omi_voices.wearer_profile(db, uid, mid)
+        turns = await omi_diarize.diarise(path, embedder, profile, gate=lambda: _patient_gate(now))
+        return turns, ("tagged" if profile is not None else "unverified"), mid
+    except GateClosed:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("OMI_TAG_FAILED reason=%s - transcribing untagged", type(exc).__name__)
+        return None, "untaggable", None
+    finally:
+        del embedder                          # the session is released after every pass (RAM is the scarce resource)
+
+
+_REQUEUE_STATUSES = ("empty_transcript", "failed")
+
+
+async def requeue_held(user_id: Optional[str] = None, *, rid: Optional[str] = None, now: Optional[datetime] = None) -> int:
+    """Put held recordings back in the transcription queue: rows that ended ``empty_transcript`` or ``failed`` and whose WAV is
+    still on disk go back to ``pending`` with ``attempts = 0``. ``user_id`` scopes it to one member (the owner routes); ``None``
+    is every member (the one-shot after a pipeline change). ``rid`` narrows it to one recording. Returns how many were requeued.
+
+    Nothing here extends the retention: a requeued recording still loses its WAV at ``audio_expires_at``, and a row whose retention
+    has ALREADY passed is never requeued, even while its WAV still waits for ``purge_expired_audio`` - in the SELECT and again in the
+    guarded UPDATE (the expiry is always set while a WAV is held - ``store_recording`` sets it, ``keep_audio`` does not clear it - so
+    a NULL expiry is not "kept forever" and is not requeued either). A row whose file is gone is left as it is (nothing to
+    transcribe). An erase landing meanwhile wins: the transcription pass re-checks the gate."""
+    from db_compat import get_compat_db
+    stamp = _iso(now or _now())
+    sql = (f"SELECT id, audio_path FROM omi_recordings WHERE status IN ({', '.join('?' for _ in _REQUEUE_STATUSES)}) "
+           "AND audio_path != '' AND audio_expires_at IS NOT NULL AND audio_expires_at > ?")
+    params: list = [*_REQUEUE_STATUSES, stamp]
+    if user_id is not None:
+        sql += " AND user_id = ?"
+        params.append(user_id)
+    if rid is not None:
+        sql += " AND id = ?"
+        params.append(rid)
+    n = 0
+    async with get_compat_db() as db:
+        for r in await _fetch(db, sql, tuple(params)):
+            if not Path(r["audio_path"]).is_file():
+                continue
+            cur = await db.execute(
+                f"UPDATE omi_recordings SET status = 'pending', attempts = 0, claimed_at = NULL, transcribed_at = NULL "
+                f"WHERE id = ? AND status IN ({', '.join('?' for _ in _REQUEUE_STATUSES)}) "
+                "AND audio_path != '' AND audio_expires_at IS NOT NULL AND audio_expires_at > ?", (r["id"], *_REQUEUE_STATUSES, stamp))
+            n += 1 if getattr(cur, "rowcount", 1) else 0
+        if n:
+            await db.commit()
+    if n:
+        logger.info("OMI_REQUEUED count=%d scope=%s", n, "one" if rid else ("member" if user_id else "all"))
+    return n
+
+
+def _pipeline_marker() -> Path:
+    return audio_dir() / ".transcribe-pipeline"
+
+
+def _write_marker(marker: Path, value: Optional[str]) -> None:
+    """Durably set (``value``) or clear (``None``) the pipeline marker: tmp + fsync + rename + fsync of the directory (the rename is
+    not durable until its directory is - a crash could otherwise bring back the old marker and requeue a second time). Raises ``OSError``."""
+    if value is None:
+        marker.unlink(missing_ok=True)
+        _fsync_dir(marker.parent)
+        return
+    marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = marker.with_suffix(".part")
+    with open(tmp, "w", opener=lambda p, f: os.open(p, f, 0o600)) as fh:
+        fh.write(value + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, marker)
+    _fsync_dir(marker.parent)
+
+
+async def requeue_after_pipeline_change() -> int:
+    """AT MOST ONCE per ``TRANSCRIBE_PIPELINE`` value: requeue every held empty/failed recording so a transcription fix reaches the
+    audio still inside its retention window.
+
+    The marker is CLAIMED (durably written) BEFORE anything is requeued, so this can never loop: a marker that cannot be written
+    requeues nothing (WARNING; the owner routes still work), and a recording that comes back empty again is not requeued again. If
+    the requeue itself fails OR IS CANCELLED part-way, the previous marker is put back so the next loop pass requeues the rest (rows
+    already requeued are ``pending``, so they are not picked twice) - and if even that fails, the cost is a missed one-shot (the owner
+    can still requeue), never a repeat."""
+    marker = _pipeline_marker()
+    try:
+        prev = marker.read_text().strip() if marker.is_file() else None
+    except OSError:
+        return 0
+    if prev == TRANSCRIBE_PIPELINE:
+        return 0
+    try:
+        _write_marker(marker, TRANSCRIBE_PIPELINE)
+    except OSError as exc:
+        logger.warning("omi_recordings: pipeline marker not written (%s) - held recordings NOT requeued", type(exc).__name__)
+        return 0
+    try:
+        return await requeue_held(None)
+    except BaseException:                 # a cancellation too (shutdown mid-requeue): put the claim back so the next pass finishes
+        try:
+            _write_marker(marker, prev)
+        except OSError as exc:
+            logger.warning("omi_recordings: pipeline marker not restored after a failed requeue (%s)", type(exc).__name__)
+        raise
 
 
 async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
@@ -900,6 +1199,37 @@ async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
     return n
 
 
+async def _sweep_voices() -> None:
+    """Learned-voice expiry runs whether or not learning is on (design 2.6): turning the flag off must not stop things expiring."""
+    try:
+        import omi_voices
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            await omi_voices.sweep(db)
+    except Exception as exc:  # noqa: BLE001
+        import omi_voices
+        if not omi_voices._missing(exc):                     # pre-0055: nothing to expire yet
+            logger.warning("omi_voices: expiry sweep failed (%s)", type(exc).__name__)
+
+
+RETENTION_S = 3600.0
+
+
+async def run_retention_loop() -> None:
+    """Expiry that must NOT depend on the sync flag (started by ``main.lifespan`` always): unconfirmed voiceprints, held voice
+    embeddings and unknown voices expire on their dates and WAVs go at their retention, also after an operator turns
+    ``ZOE_OMI_SYNC_ENABLED`` off with learned data and audio still on disk. A missing table is nothing to expire. Never raises."""
+    while True:
+        await asyncio.sleep(RETENTION_S)
+        try:
+            await purge_expired_audio()
+            await _sweep_voices()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("omi_recordings: retention pass failed (%s)", type(exc).__name__)
+
+
 async def run_loop() -> None:
     """The background task (started by ``main.lifespan`` only when the flag is on). One pass per ``POLL_S``; never raises."""
     logger.info("omi_recordings: transcription loop started")
@@ -908,6 +1238,7 @@ async def run_loop() -> None:
         try:
             if enabled():
                 await purge_expired_audio()
+                await requeue_after_pipeline_change()
                 await transcribe_pending(limit=3)
         except asyncio.CancelledError:
             raise

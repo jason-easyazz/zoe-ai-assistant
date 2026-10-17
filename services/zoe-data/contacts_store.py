@@ -191,6 +191,19 @@ async def _create_person(db, user_id: str, name: str, *, now: str) -> str:
     return pid
 
 
+async def ensure_person(db, user_id: str, name: str, *, relationship: Optional[str] = None) -> tuple[str, bool]:
+    """``(person_id, created)``: the member's live person whose name folds to ``name``, else a new PERSONAL row in their own layer
+    (the pendant day review's approved "person" candidate). A relationship fills an empty one only, never overwrites."""
+    key = fold(name)
+    pid, created = next((p["id"] for p in await _live_people(db, user_id) if key and fold(p["name"]) == key), None), False
+    if pid is None:
+        pid, created = await _create_person(db, user_id, name, now=now_iso()), True
+    if relationship:              # an existing person gains an EMPTY relationship too; a set one is never overwritten
+        await _run(db, "UPDATE people SET relationship = ? WHERE id = ? AND user_id = ? AND relationship IS NULL",
+                   (relationship[:60], pid, user_id))
+    return pid, created
+
+
 def names_compatible(a: str, b: str) -> bool:
     """Same person by name? One folded token set contains the other ("Dana" ~ "Dana Okafor"); an empty side is compatible."""
     ta, tb = set(fold(a).split()), set(fold(b).split())
@@ -886,13 +899,21 @@ async def forget_entity(db, user_id: str, rx) -> int:
 
 
 async def forget_voiceprints(db, user_id: str, rx) -> int:
-    """"Forget <name>" erases the voiceprint the member's tagging taught Zoe for that person (owner decision 2026-10-14): only the
-    TAGGING member's rows, every model. RAISES on a failure; a missing table is nothing to reach."""
+    """"Forget <name>" erases the voiceprint the member's tagging taught Zoe for that person (owner decision 2026-10-14) AND
+    everything derived from it in their pendant recordings - the contributions, the tags and the suggestions
+    (``omi_voices.purge_people``): only the TAGGING member's rows, every model. RAISES on a failure; a missing table is nothing to
+    reach (before migration 0055 only the voiceprint rows exist)."""
     rows = await _all(db, "SELECT id, people_id FROM learned_voiceprints WHERE owner_user_id = ?", (user_id,))
-    if not rows:
+    ids = sorted(set(await _person_ids_named(db, user_id, rx)))
+    if not ids:
         return 0
-    ids = set(await _person_ids_named(db, user_id, rx))
-    doomed = [r[0] for r in rows if r[1] in ids]
+    import omi_voices
+    try:
+        return await omi_voices.purge_people(db, user_id, ids)
+    except Exception as exc:  # noqa: BLE001
+        if not omi_voices._missing(exc):
+            raise
+    doomed = [r[0] for r in rows if r[1] in set(ids)]
     if not doomed:
         return 0
     n = await _run(db, f"DELETE FROM learned_voiceprints WHERE owner_user_id = ? AND id IN ({_qs(len(doomed))})", (user_id, *doomed))

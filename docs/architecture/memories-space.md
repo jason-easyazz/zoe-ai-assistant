@@ -1,7 +1,7 @@
 ---
 type: design
 title: "The Memories space: what Zoe knows about me, caregiver-curated memories, and the Omi day review (design, 2026-10-14)"
-status: DESIGN for the owner. Docs only. No code, flag, table, route or live path changed. Phase 1 (the Memories tile and a read-only view) is being built in parallel on feature/touch-memories-space; section 2.1 is the contract that build follows. Every later phase ships flag-dark and shadow-first. Nothing is decided until the owner answers section 11.
+status: DESIGN for the owner; the P4/P4b backend is built flag-dark (section 9, 2026-10-17). Originally docs only. No code, flag, table, route or live path changed. Phase 1 (the Memories tile and a read-only view) is being built in parallel on feature/touch-memories-space; section 2.1 is the contract that build follows. Every later phase ships flag-dark and shadow-first. Nothing is decided until the owner answers section 11.
 date: 2026-10-14
 owner: W6 / program B9 (Omi), B3 (visible, sound memory), B4 (identity)
 description: The Ask Zoe tile on the touch estate becomes Memories. It is one space, with a desktop counterpart, that holds four things. (1) What Zoe knows about the identified member, with provenance and voice-first correction. (2) Memories a parent or a nominated carer curates for a young child or an older relative who wants help remembering. (3) The member's Omi pendant recordings, with each line tagged You or Someone else and a way to say who someone else was. (4) The day review. When a day's pendant recordings are transcribed and tagged, Zoe proposes calendar events, list items, reminders, follow-ups and conversation memories. They come only from the owner's own speech or things said to them, and each carries an exact evidence span. On the owner's next turn Zoe says "I went through your day: 2 meetings, 3 things for the shopping list ...". Never unprompted. Nothing is written until the owner approves it.
@@ -848,6 +848,28 @@ omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_con
 
 ## 9. Phases (F): minimum useful product first
 
+**Build status (2026-10-17): the P4 / P4b BACKEND is built, flag-dark** (`omi_diarize.py`, `omi_voices.py`,
+`routers/omi_voices.py`, migration 0055, which follows the day review's 0054 (#2091); record [omi-voice-tagging.md](../knowledge/omi-voice-tagging.md)). Differences from the
+text above, each deliberate:
+
+- Turns, not windows-then-forced-cuts: the recording is cut into speaker turns (VAD + ResNet34 windows + centroid linkage) and
+  Moonshine transcribes each turn on its own. Turns cover the whole recording, so no audio goes untranscribed.
+- Unknown voices are clustered across recordings and days per member (`omi_voice_clusters`, "Voice 3"), so a member can tag a
+  voice once instead of line by line. A "not a person" answer (TV, radio) dismisses a voice for good (adopted from Omi's own
+  prompt set).
+- `pendant_speaker_profiles` and the pendant enrolment flow are NOT built yet: "You" uses the member's consented panel ResNet34
+  profile at the strict short-group bar, as section 3.4 allows. The calibration record measures the channel shift.
+- A tagger failure keeps the transcript (`untaggable`) but does not keep the WAV for a retry: less audio held.
+- Household-member tagging (D12) cannot be detected from a `people` row yet; until identity Phase 4 links people to the
+  directory, a member tagged by name is treated like anyone else (children are still label-only).
+
+**Hand-off to the day review (P5).** The day review reads speaker turns ONLY through `omi_voices.review_segments(db, user_id,
+recording_ids)`: the member's own segments of `done` recordings with `speaker`, `label` (you / someone_else / not_sure /
+unverified / person), `source` (model / confirmed), `owner_label` and the CONFIRMED `tagged_person_id`. Suggestions are withheld
+there. A fact about a tagged person is a `person_memory` candidate citing segment ids; it is written only on the member's approval.
+"Forget <name>" clears `tagged_person_id`, so the review must re-read segments rather than cache names.
+
+
 Each phase is one PR (or a small workstream), flag-dark, with its tests, and says what changes for the family.
 
 | Phase | What | Needs | Changes for the family |
@@ -857,7 +879,7 @@ Each phase is one PR (or a small workstream), flag-dark, with its tests, and say
 | P3 | memory actions: tap-to-explain + spoken forget/correct, the phone hand-off for fixes, the voice-session `memories` card | P1 | correcting a memory from the panel |
 | P4 | speaker tagging (`ZOE_OMI_SPEAKER_TAG=shadow`), segments, per-line labels and corrections, pendant enrolment, "Who is this?" labels | `ZOE_SPEAKER_MODEL` past `resemblyzer` (#2024 is merged), ResNet34 built on the Jetson, owner re-enrolled; T8 measured | lines say You / Someone else; Zoe can learn the pendant voice |
 | P4b | learned voices (`ZOE_OMI_LEARN_VOICES`): segment embeddings, voiceprints from tags, suggestions, the "Voices I've learned" list, the forget step | P4 | "this sounds like Sam, right?" |
-| P5 | day analysis (`ZOE_OMI_DAY_REVIEW=shadow`), candidates on the desktop Pendant tab with approve / edit / skip and real writes **on approval** | P2 (P4 for the full form) | "Zoe found these in your day" on the computer |
+| P5 | **backend built flag-dark (Phase 1 of the day review, migration 0054: `omi_day_review.py`, `omi_review_apply.py`, `routers/omi_day_review.py`; kinds add `person` and `owner_fact`, statuses pending / approved / dismissed, the omi_segments speaker vocabulary)**; day analysis (`ZOE_OMI_DAY_REVIEW=shadow`), candidates on the desktop Pendant tab with approve / edit / skip and real writes **on approval** | P2 (P4 for the full form) | "Zoe found these in your day" on the computer |
 | P6 | the conversation: raise / pull / orb, the voice dialogue tier (replay-gated), the panel private card (touch), the crowded-room phone send | P5, the voice session live | "I went through your day ..." on the next turn |
 | P7 | caregiver curation | owner decisions D7-D10 | parents and carers can add memories for someone |
 | P8 | 12B night lane; naming consented household members in tags; linking tags to `person_directory` | identity Phase 4, omi plan §5 consent | quality, people layer |
