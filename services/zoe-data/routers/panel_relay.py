@@ -15,7 +15,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 import relay_ingress
 from auth import require_admin
@@ -100,3 +100,20 @@ async def revoke_client_cert(panel_id: str, fingerprint: str, admin: dict = Depe
     relay_ingress.invalidate_cache()
     logger.info("panel_relay: revoked relay client certificate %s... for panel %s", fp[:12], panel_id)
     return {"ok": True, "panel_id": panel_id, "fingerprint": fp, "revoked": True}
+
+
+# ── the nginx auth_request gate ──────────────────────────────────────────────────────────────────────────────────────────────
+#
+# The relay listener proxies zoe-auth's routes too (login, touch-panel, guest sessions). zoe-auth knows nothing about client
+# certificates, so a revoked or unbound household-CA certificate could still reach them from the internet. nginx therefore asks
+# THIS endpoint first (`auth_request`, nginx.d/auth-gate.inc): ``RelayIngressMiddleware`` has already proven the certificate
+# binding and the device credential by the time this handler runs, so reaching it IS the proof - 204. The LAN blocks point the same
+# directive at an internal always-204 location, so the LAN never asks.
+gate_router = APIRouter(prefix="/api/relay", tags=["panel-relay"])
+
+
+@gate_router.get("/check")
+async def relay_gate(request: Request):
+    if not relay_ingress.is_relay(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return Response(status_code=204)

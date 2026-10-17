@@ -2238,8 +2238,9 @@ app.include_router(panel_provision_router)
 from routers.panel_kiosk import router as panel_kiosk_router
 app.include_router(panel_kiosk_router)
 # Relay client-certificate binding (panel-anywhere R1): /api/panels/PANEL/client-certs. 404 while ZOE_RELAY_INGRESS is off.
-from routers.panel_relay import router as panel_relay_router
+from routers.panel_relay import gate_router as panel_relay_gate_router, router as panel_relay_router
 app.include_router(panel_relay_router)
+app.include_router(panel_relay_gate_router)
 # Registered AFTER panel_provision on purpose: that router's more specific
 # /api/panels/provision/{code} must win over /api/panels/{device_id}/config
 # (FastAPI matches routes in registration order).
@@ -2899,9 +2900,18 @@ async def _resolve_ws_session(session_id: str | None) -> dict | None:
     from fastapi import HTTPException
 
     try:
-        return await _validate_with_auth_service(session_id)
+        user = await _validate_with_auth_service(session_id)
     except HTTPException:
         return None
+    if user is not None and relay_ingress.current_panel() is not None:
+        # RELAYED socket: a bare session id is not enough for a member (the kiosk's browser keeps one in storage). The member
+        # needs a fresh sign-in at the panel the socket was proven to be; a guest session passes unchanged (panel-guest policy),
+        # and an auth-outage principal is refused (never downgraded to a guest over the relay).
+        if user.get("auth_degraded") or user.get("__zoe_degraded__"):
+            return None
+        if _ws_role_signed_in(user) and not await relay_ingress.member_allowed_here(str(user.get("user_id") or "")):
+            return None
+    return user
 
 
 async def _resolve_ws_user(session_id: str) -> str:
@@ -2923,6 +2933,8 @@ async def _resolve_ws_user(session_id: str) -> str:
         if r.status_code == 200:
             data = r.json()
             uid = data.get("user_id") or data.get("id") or ""
+            if uid and not await relay_ingress.member_allowed_here(uid):
+                return "voice-guest"  # relayed socket, no fresh sign-in at the panel: a session id alone is not the member
             return uid or "voice-guest"
     except Exception:
         pass

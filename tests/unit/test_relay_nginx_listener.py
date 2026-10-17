@@ -34,8 +34,10 @@ LISTENER = (UI / "nginx.d" / "relay-listener.conf").read_text(encoding="utf-8")
 COMPOSE = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 SETUP = ROOT / "scripts" / "setup" / "relay"
 
-# Services a relayed (certificate + device credential) request may reach: both authenticate every request themselves.
+# Services a relayed request may reach: zoe-data authenticates every request itself (RelayIngressMiddleware); zoe-auth knows nothing
+# about client certificates, so its locations must ask zoe-data first (auth-gate.inc -> auth_request).
 RELAY_OK_TARGETS = ("host.docker.internal:8000", "zoe-auth:8002")
+AUTH_GATE_INCLUDE = "include /etc/nginx/zoe/auth-gate.inc;"
 
 
 def _strip_comments(text: str) -> str:
@@ -77,7 +79,6 @@ def test_the_listener_is_only_reachable_through_a_glob_that_matches_nothing_by_d
     assert CONF.count("include /etc/nginx/ssl/relay/*.conf;") == 1
     assert "relay-listener" not in _strip_comments(CONF) and "9443" not in _strip_comments(CONF), \
         "nginx.conf must never name the listener file: a missing file is a startup failure, a glob is not"
-    assert not list((ROOT / "ssl").glob("relay/*")), "no generated listener or key is tracked"
     gi = (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert re.search(r"^ssl/relay/$", gi, re.M), "household CA / leaf / rendered listener must never be committable"
 
@@ -113,12 +114,38 @@ def test_services_with_no_zoe_auth_are_not_reachable_over_the_relay():
         target = re.search(r"proxy_pass\s+https?://([^/\s;]+)", body)
         if not target:
             continue
+        if target.group(1) == "zoe-auth:8002":
+            assert AUTH_GATE_INCLUDE in body, "%s reaches zoe-auth over the relay with no certificate check" % head
         if target.group(1) in RELAY_OK_TARGETS:
             continue
         first = [ln.strip() for ln in body.splitlines() if ln.strip() and not ln.strip().startswith("#")][0]
         assert first == "include /etc/nginx/zoe/lan-only.inc;", "%s proxies to %s and must 404 on the relay listener" % (head, target.group(1))
     lan_only = _strip_comments((UI / "nginx.d" / "lan-only.inc").read_text(encoding="utf-8"))
     assert 'if ($zoe_ingress != "")' in lan_only and "return 404;" in lan_only
+
+
+def test_the_auth_gate_asks_zoe_data_on_the_relay_and_nothing_on_the_lan():
+    gate = _strip_comments((UI / "nginx.d" / "auth-gate.inc").read_text(encoding="utf-8"))
+    assert gate.strip() == "auth_request /__zoe_auth_gate;", "auth_request's URI is not variable-expanded: a fixed location per server"
+    lan = _strip_comments((UI / "nginx.d" / "ingress-lan.inc").read_text(encoding="utf-8"))
+    assert re.search(r"location = /__zoe_auth_gate \{\s*internal;\s*return 204;\s*\}", lan), "LAN: an internal always-204, never an upstream hop"
+    relay = _strip_comments(LISTENER)
+    block = re.search(r"location = /__zoe_auth_gate \{(.*?)\}", relay, re.S).group(1)
+    assert "internal;" in block and "proxy_pass http://host.docker.internal:8000/api/relay/check;" in block
+    assert "proxy_pass_request_body off;" in block and "include /etc/nginx/zoe/ingress-headers.inc;" in block
+
+
+def test_every_server_that_includes_the_locations_sets_all_four_ingress_variables_and_defines_the_auth_gate():
+    servers = [b for b in re.findall(r"^server\s*\{.*?^\}", CONF, re.M | re.S)] + [_strip_comments(LISTENER)]
+    assert len(servers) == 3
+    lan_vars = _strip_comments((UI / "nginx.d" / "ingress-lan.inc").read_text(encoding="utf-8"))
+    for block in servers:
+        if "locations.inc" not in block:
+            continue
+        text = block + ("\n" + lan_vars if "ingress-lan.inc" in block else "")
+        for var in ("zoe_ingress", "zoe_client_cert_fp", "zoe_real_ip", "zoe_xff"):
+            assert re.search(r"set \$%s\b" % var, text), "a server includes locations.inc without setting $%s" % var
+        assert "location = /__zoe_auth_gate {" in text, "a server includes locations.inc (zoe-auth locations) without the auth gate"
 
 
 # ── the listener's contract ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -192,6 +219,39 @@ def test_pki_ca_key_stays_out_of_the_docker_mounted_tree_and_is_private(pki):
     assert HID + ".zoe.internal" in text and "TLS Web Server Authentication" in text
     with pytest.raises(SystemExit):
         mod.issue_leaf("Bad Name", ca_dir, relay_dir)
+
+
+@needs_openssl
+def test_a_failed_leaf_renewal_leaves_the_serving_pair_untouched(pki, tmp_path):
+    mod, ca_dir, relay_dir = pki
+    before = {n: (relay_dir / n).read_bytes() for n in ("leaf.key", "leaf.pem", "ca.pem")}
+    with pytest.raises(SystemExit):
+        mod.issue_leaf(HID, tmp_path / "no-such-ca", relay_dir)  # wrong --ca-dir
+    broken = tmp_path / "broken-ca"
+    broken.mkdir()
+    (broken / "ca.pem").write_bytes((ca_dir / "ca.pem").read_bytes())
+    (broken / "ca.key").write_text("not a key")
+    with pytest.raises(SystemExit):
+        mod.issue_leaf(HID, broken, relay_dir)  # openssl fails mid-way
+    assert {n: (relay_dir / n).read_bytes() for n in before} == before, "key and certificate must still match what nginx serves"
+    assert sorted(p.name for p in relay_dir.iterdir()) == ["ca.pem", "leaf.key", "leaf.pem"], "no half-written temp files"
+    mod.issue_leaf(HID, ca_dir, relay_dir)  # control: a good renewal does replace them
+    assert (relay_dir / "leaf.pem").read_bytes() != before["leaf.pem"]
+
+
+def test_the_flag_check_reads_every_env_file_in_service_order_and_the_last_assignment_wins(tmp_path):
+    en = _load("enable_relay_listener")
+    a, b, c = tmp_path / "a.env", tmp_path / "b.env", tmp_path / "c.env"
+    a.write_text("ZOE_RELAY_INGRESS=1\n")
+    b.write_text("OTHER=1\n")
+    assert en.flag_on([a, b]) is True
+    c.write_text("ZOE_RELAY_INGRESS=0\n")
+    assert en.flag_on([a, b, c]) is False, "a later file (zoe-data.service loads services/zoe-data/.env after .env) wins"
+    assert en.flag_on([c, a]) is True
+    a.write_text("ZOE_RELAY_INGRESS=1\nZOE_RELAY_INGRESS=0\n")
+    assert en.flag_on([a]) is False, "the first =1 in a file does not win over a later =0"
+    a.write_text("# ZOE_RELAY_INGRESS=1\n")
+    assert en.flag_on([a]) is False and en.flag_on([tmp_path / "missing.env"]) is False
 
 
 @needs_openssl

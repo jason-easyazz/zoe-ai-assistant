@@ -243,6 +243,7 @@ def make_app(reg, *, middleware=True):
 
     app.include_router(ha_control.router)
     app.include_router(panel_relay.router)
+    app.include_router(panel_relay.gate_router)
     app.include_router(panel_kiosk.router)
 
     async def _db():
@@ -465,14 +466,81 @@ def test_t11_a_member_route_needs_a_fresh_sign_in_at_the_panel(reg, on):
     assert c.get("/api/member", headers={"X-Session-ID": SID_CASEY}).status_code == 200
 
 
-def test_t11_an_open_voice_session_also_counts_as_a_fresh_sign_in(reg, on, monkeypatch):
+def test_t11_a_voice_session_is_not_a_fresh_sign_in_over_the_relay(reg, on, monkeypatch):
+    # A voice session opens on a CLAIM the panel itself reports (identified_user_id + a score): over the relay the distrusted device
+    # could mint it, so it must not unlock member routes. Only the PIN panel session counts until the voice lanes verify claims.
     import voice_session
 
     monkeypatch.setattr(voice_session, "enabled", lambda: True)
     monkeypatch.setattr(voice_session, "active_member", lambda panel_id: "casey" if panel_id == "kitchen-panel" else None)
-    assert client(reg).get("/api/member", headers=relay_headers(session=SID_CASEY)).status_code == 200
-    monkeypatch.setattr(voice_session, "enabled", lambda: False)  # flag off: nothing to read
     assert client(reg).get("/api/member", headers=relay_headers(session=SID_CASEY)).status_code == 403
+    FRESH["kitchen-panel"] = "casey"  # control: the PIN session for the same member still opens it
+    assert client(reg).get("/api/member", headers=relay_headers(session=SID_CASEY)).status_code == 200
+
+
+def test_the_middleware_publishes_the_proven_panel_to_code_without_a_request_and_clears_it(reg, on):
+    app = make_app(reg)
+
+    @app.get("/panel-now")
+    async def panel_now():
+        return {"panel": relay_ingress.current_panel(), "casey_ok": await relay_ingress.member_allowed_here("casey")}
+
+    c = TestClient(app, client=(NGINX, 1))
+    assert c.get("/panel-now", headers=relay_headers()).json() == {"panel": "kitchen-panel", "casey_ok": False}
+    FRESH["kitchen-panel"] = "casey"
+    assert c.get("/panel-now", headers=relay_headers()).json() == {"panel": "kitchen-panel", "casey_ok": True}
+    # not relayed (the LAN): no panel, and no freshness requirement - the websocket resolvers behave exactly as before
+    FRESH.clear()
+    assert c.get("/panel-now").json() == {"panel": None, "casey_ok": True}
+    assert relay_ingress.current_panel() is None
+
+
+def test_main_makes_the_websocket_session_resolvers_relay_aware():
+    src = (ROOT / "main.py").read_text()
+    ws_session = re.search(r"async def _resolve_ws_session\(.*?\n\n\n", src, re.S).group(0)
+    ws_user = re.search(r"async def _resolve_ws_user\(.*?\n\n\n", src, re.S).group(0)
+    assert "relay_ingress.current_panel()" in ws_session and "relay_ingress.member_allowed_here" in ws_session
+    assert "relay_ingress.member_allowed_here" in ws_user
+    assert src.count("app.add_middleware(") == 3 and src.rindex("app.add_middleware(") == src.index("app.add_middleware(relay_ingress.RelayIngressMiddleware)"), \
+        "the relay gate must be the LAST middleware added (outermost); a later one would run before it"
+
+
+def test_an_open_relayed_websocket_is_closed_when_its_certificate_is_revoked(reg, on, monkeypatch):
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.0)
+    app = make_app(reg)
+    closed = []
+
+    @app.websocket("/ws/echo")
+    async def echo(websocket: WebSocket):
+        await websocket.accept()
+        try:
+            while True:
+                await websocket.send_text(await websocket.receive_text())
+        except WebSocketDisconnect as exc:
+            closed.append(exc.code)
+            await websocket.close(code=1008)
+
+    c = TestClient(app, client=(NGINX, 1))
+    with c.websocket_connect("/ws/echo", headers=relay_headers()) as ws:
+        ws.send_text("one")
+        assert ws.receive_text() == "one"  # POSITIVE: the socket works while the certificate is bound
+        reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (FP_KITCHEN,))
+        reg.con.commit()
+        relay_ingress.invalidate_cache()
+        ws.send_text("two")  # the next message re-proves the binding: revoked -> the server sees a disconnect
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_text()
+    assert closed == [1008]
+
+
+def test_the_nginx_auth_gate_answers_only_for_a_proven_relayed_request(reg, on):
+    c = client(reg)
+    ok = c.get("/api/relay/check", headers=relay_headers())
+    assert ok.status_code == 204
+    assert c.get("/api/relay/check", headers=relay_headers(token=None)).status_code == 401           # no credential
+    assert c.get("/api/relay/check", headers=relay_headers(fp=FP_REVOKED)).status_code == 401        # revoked certificate
+    assert c.get("/api/relay/check", headers=relay_headers(fp=FP_HALL)).status_code == 401           # another panel's certificate
+    assert c.get("/api/relay/check").status_code == 404                                              # the LAN never calls it
 
 
 # ── the client-certificate binding ─────────────────────────────────────────────────────────────────────────────────────────
@@ -669,6 +737,7 @@ def test_migration_chain_is_linear_and_rerun_safe():
     assert len(heads) == 1, f"more than one alembic head {sorted(heads)}: set 0055's down_revision to the other head (see its docstring)"
     assert "0055" in revs
     con = sqlite3.connect(":memory:")
+    con.execute("PRAGMA foreign_keys = ON")
     con.execute("CREATE TABLE panels (panel_id TEXT PRIMARY KEY)")
     _migration("upgrade", con)
     _migration("upgrade", con)  # IF NOT EXISTS: a rerun is a no-op
@@ -678,5 +747,7 @@ def test_migration_chain_is_linear_and_rerun_safe():
     con.execute("INSERT INTO panel_client_certs VALUES ('" + "1" * 40 + "', 'p1', '', 'now', NULL)")
     with pytest.raises(sqlite3.IntegrityError):  # a fingerprint binds ONE panel, for good
         con.execute("INSERT INTO panel_client_certs VALUES ('" + "1" * 40 + "', 'p1', '', 'now', NULL)")
+    con.execute("DELETE FROM panels WHERE panel_id = 'p1'")  # rows go with their panel
+    assert con.execute("SELECT count(*) FROM panel_client_certs").fetchone()[0] == 0
     _migration("downgrade", con)
     assert not list(con.execute("SELECT name FROM sqlite_master WHERE name = 'panel_client_certs'"))

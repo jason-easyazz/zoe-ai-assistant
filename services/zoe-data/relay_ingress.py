@@ -38,6 +38,7 @@ safe). ``auth._is_internal_request`` is not involved and must never be widened f
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
@@ -67,6 +68,11 @@ _BOUND_SQL = (
 )
 
 _bound_cache: dict[str, tuple[Optional[str], float]] = {}
+#: How often an OPEN relayed websocket re-proves its certificate binding and device credential (revocation must not wait for a
+#: reconnect). Seconds; a module constant so a test can set it to 0.
+WS_RECHECK_S = 15.0
+#: The panel a RELAYED request was proven to be, for code that has no ``Request`` in hand (the websocket session resolvers in main.py).
+_relay_panel: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("zoe_relay_panel", default=None)
 
 
 class RelayRefused(Exception):
@@ -254,23 +260,31 @@ async def cert_matches_panel(conn: Any, panel_id: str) -> bool:
 
 
 async def _fresh_member_ok(panel_id: str, user_id: str) -> bool:
-    """The panel has a FRESH sign-in for this member: the PIN panel session inside the idle-logout window (the voice lanes'
-    single authority - no second TTL), or the panel's open voice session. Anything unreadable is "not fresh"."""
+    """The panel has a FRESH PIN sign-in for this member: the PIN panel session inside the idle-logout window (the voice lanes'
+    single authority - no second TTL). Anything unreadable is "not fresh".
+
+    Deliberately NOT ``voice_session.active_member``: a voice session opens on a voice CLAIM the panel itself reports
+    (``identified_user_id`` + a score in the voice payload), so over the relay the device that is distrusted could mint the very
+    proof that unlocks member routes. It joins when the voice lanes verify claims server-side (ledger 2026-10-17)."""
     try:
         from routers.voice_tts import _resolve_fresh_panel_member
 
-        if await _resolve_fresh_panel_member(panel_id) == user_id:
-            return True
+        return await _resolve_fresh_panel_member(panel_id) == user_id
     except Exception as exc:  # noqa: BLE001
         logger.warning("relay_ingress: fresh panel session check failed (%s) - treating as not fresh", type(exc).__name__)
-    try:
-        import voice_session
+        return False
 
-        if voice_session.enabled() and voice_session.active_member(panel_id) == user_id:
-            return True
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("relay_ingress: voice session check failed (%s) - treating as not fresh", type(exc).__name__)
-    return False
+
+def current_panel() -> Optional[str]:
+    """The panel the current relayed request/socket was proven to be (set by the middleware), or None (not relayed)."""
+    return _relay_panel.get()
+
+
+async def member_allowed_here(user_id: str) -> bool:
+    """For code that resolves a member from a bare session id (the websocket handlers): True when the request is not relayed, or
+    the member has a fresh sign-in at the panel the relayed request was proven to be."""
+    panel = _relay_panel.get()
+    return True if panel is None else await _fresh_member_ok(panel, str(user_id or ""))
 
 
 async def resolve_user(conn: Any) -> dict:
@@ -332,7 +346,7 @@ class RelayIngressMiddleware:
             await self.app(scope, receive, send)
             return
         try:
-            await context(conn, require_credential=scope.get("path") not in NO_CREDENTIAL_PATHS)
+            ctx = await context(conn, require_credential=scope.get("path") not in NO_CREDENTIAL_PATHS)
         except RelayRefused as refused:
             log_throttled(
                 logger, logging.WARNING, f"relay-refused:{refused.code}",
@@ -347,4 +361,34 @@ class RelayIngressMiddleware:
 
             await JSONResponse({"detail": refused.code}, status_code=refused.status)(scope, receive, send)
             return
-        await self.app(scope, receive, send)
+        token = _relay_panel.set(ctx.panel_id)
+        try:
+            if scope["type"] == "websocket":
+                receive = _rechecking_receive(conn, scope, receive)
+            await self.app(scope, receive, send)
+        finally:
+            _relay_panel.reset(token)
+
+
+def _rechecking_receive(conn: Any, scope: dict, receive: Any) -> Any:
+    """Wrap a relayed websocket's ``receive`` so revocation does not wait for a reconnect: at most every ``WS_RECHECK_S`` the
+    certificate binding and device credential are proven again, and a socket that no longer passes sees a disconnect (1008)."""
+    last = [time.monotonic()]
+
+    async def _receive() -> dict:
+        message = await receive()
+        if message.get("type") != "websocket.receive":
+            return message
+        if time.monotonic() - last[0] < WS_RECHECK_S:
+            return message
+        last[0] = time.monotonic()
+        scope.get("state", {}).pop("relay_ctx", None)
+        try:
+            await context(conn, require_credential=scope.get("path") not in NO_CREDENTIAL_PATHS)
+        except RelayRefused as refused:
+            log_throttled(logger, logging.WARNING, f"relay-ws-revoked:{refused.code}",
+                          "relay_ingress: closing open websocket %s (%s)", scope.get("path"), refused.code)
+            return {"type": "websocket.disconnect", "code": 1008}
+        return message
+
+    return _receive

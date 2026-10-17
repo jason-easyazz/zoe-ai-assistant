@@ -32,21 +32,33 @@ REPO = Path(__file__).resolve().parents[3]
 LISTENER_SRC = Path("services/zoe-ui/nginx.d/relay-listener.conf")
 REQUIRED = ("ca.pem", "leaf.pem", "leaf.key")
 MIN_LEAF_VALID_S = 7 * 24 * 3600
-_FLAG_RE = re.compile(r"^\s*(?:export\s+)?ZOE_RELAY_INGRESS\s*=\s*['\"]?(1|true|yes|on)['\"]?\s*(?:#.*)?$", re.I | re.M)
+# zoe-data.service loads these EnvironmentFile= entries in this order and the LAST assignment wins (systemd semantics); the file this
+# script checks must therefore be ALL of them, not just the first.
+_ASSIGN_RE = re.compile(r"^\s*(?:export\s+)?ZOE_RELAY_INGRESS\s*=\s*['\"]?([^'\"#\s]*)['\"]?\s*(?:#.*)?$", re.I)
+DEFAULT_ENV_FILES = (Path("{repo}/.env"), Path("{repo}/services/zoe-data/.env"), Path("~/.hermes/.env"))
 
 
 def _openssl(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["openssl", *args], capture_output=True, text=True, check=False)
 
 
-def flag_on(env_file: Path) -> bool:
-    try:
-        return bool(_FLAG_RE.search(env_file.read_text(encoding="utf-8")))
-    except OSError:
-        return False
+def flag_on(env_files) -> bool:
+    """ZOE_RELAY_INGRESS as zoe-data will see it: the last assignment across the env files, in order, is truthy."""
+    files = [env_files] if isinstance(env_files, (str, os.PathLike)) else list(env_files)
+    value = None
+    for f in files:
+        try:
+            text = Path(f).expanduser().read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = _ASSIGN_RE.match(line)
+            if m:
+                value = m.group(1).strip().lower()
+    return value in ("1", "true", "yes", "on")
 
 
-def problems(relay_dir: Path, env_file: Path | None) -> list[str]:
+def problems(relay_dir: Path, env_file) -> list[str]:
     """Everything wrong with enabling the listener now; empty means it is safe to install."""
     out: list[str] = []
     for name in REQUIRED:
@@ -73,8 +85,8 @@ def problems(relay_dir: Path, env_file: Path | None) -> list[str]:
     if _openssl("x509", "-in", str(ca), "-noout", "-checkend", "0").returncode != 0:
         out.append("ca.pem has expired")
     if env_file is not None and not flag_on(env_file):
-        out.append("ZOE_RELAY_INGRESS is not on in %s: set it to 1 and restart zoe-data BEFORE enabling the listener "
-                   "(listener up + flag off = relayed requests judged as LAN requests)" % env_file)
+        out.append("ZOE_RELAY_INGRESS is not on in %s (last assignment wins): set it to 1 and restart zoe-data BEFORE enabling the "
+                   "listener (listener up + flag off = relayed requests judged as LAN requests)" % env_file)
     return out
 
 
@@ -97,7 +109,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", type=Path, default=REPO)
     ap.add_argument("--ssl-dir", type=Path, default=None, help="default: <repo>/ssl")
-    ap.add_argument("--env-file", type=Path, default=None, help="default: <repo>/.env")
+    ap.add_argument("--env-file", type=Path, action="append", default=None,
+                    help="repeatable, in zoe-data.service order (last assignment wins); default: <repo>/.env, <repo>/services/zoe-data/.env, ~/.hermes/.env")
     ap.add_argument("--skip-flag-check", action="store_true")
     ap.add_argument("--disable", action="store_true")
     a = ap.parse_args(argv)
@@ -110,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("the relay listener is not enabled (no %s)" % target)
         return 0
-    env_file = None if a.skip_flag_check else (a.env_file or a.repo / ".env")
+    env_file = None if a.skip_flag_check else (a.env_file or [Path(str(p).format(repo=a.repo)) for p in DEFAULT_ENV_FILES])
     bad = problems(relay_dir, env_file)
     if bad:
         for b in bad:

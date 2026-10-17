@@ -84,22 +84,31 @@ def _sign(csr: Path, ca_dir: Path, out: Path, *, days: int, extensions: list[str
 
 
 def issue_leaf(hid: str, ca_dir: Path, out_dir: Path, *, days: int = 90) -> Path:
+    """Issue the box's leaf. The live ``leaf.key`` / ``leaf.pem`` are replaced ONLY after the new pair has been generated, signed
+    and checked as a pair (a failed renewal must never leave a key that does not match the certificate nginx is serving: the
+    next zoe-ui restart would refuse to start, taking the LAN UI down with it)."""
     if not HID_RE.match(hid):
         raise SystemExit("hid must be 6-62 characters of a-z, 0-9 and '-' (random; never derived from a name)")
+    if not (ca_dir / "ca.key").exists() or not (ca_dir / "ca.pem").exists():
+        raise SystemExit("no CA in %s - run init-ca first" % ca_dir)
     name = hid + NAME_SUFFIX
     out_dir.mkdir(parents=True, exist_ok=True)
     key, crt = out_dir / "leaf.key", out_dir / "leaf.pem"
-    _private_write(key)
-    _openssl("ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(key))
-    with tempfile.TemporaryDirectory() as tmp:
-        csr = Path(tmp) / "leaf.csr"
-        _openssl("req", "-new", "-key", str(key), "-subj", "/CN=%s" % name, "-out", str(csr))
-        _sign(csr, ca_dir, crt, days=days, extensions=[
+    with tempfile.TemporaryDirectory(dir=out_dir, prefix=".issue-") as tmp:
+        tkey, tcrt, csr = Path(tmp) / "leaf.key", Path(tmp) / "leaf.pem", Path(tmp) / "leaf.csr"
+        _private_write(tkey)
+        _openssl("ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(tkey))
+        _openssl("req", "-new", "-key", str(tkey), "-subj", "/CN=%s" % name, "-out", str(csr))
+        _sign(csr, ca_dir, tcrt, days=days, extensions=[
             "basicConstraints=critical,CA:FALSE", "keyUsage=critical,digitalSignature", "extendedKeyUsage=serverAuth",
             "subjectKeyIdentifier=hash", "authorityKeyIdentifier=keyid", "subjectAltName=DNS:%s" % name])
+        if _openssl("x509", "-in", str(tcrt), "-noout", "-pubkey") != _openssl("pkey", "-in", str(tkey), "-pubout"):
+            raise SystemExit("the new leaf does not match its key; nothing was replaced")
+        os.chmod(tcrt, 0o644)
+        os.replace(tkey, key)
+        os.replace(tcrt, crt)
     (out_dir / "ca.pem").write_bytes((ca_dir / "ca.pem").read_bytes())
     os.chmod(out_dir / "ca.pem", 0o644)
-    os.chmod(crt, 0o644)
     return crt
 
 

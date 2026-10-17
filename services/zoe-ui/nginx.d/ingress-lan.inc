@@ -10,9 +10,18 @@
 #   $zoe_real_ip / $zoe_xff             -> X-Real-IP / X-Forwarded-For exactly as before (the TCP peer; the peer appended to any
 #                                          client-sent chain). The relay listener sets them EMPTY: a relayed request has no address.
 #
-# A server block that includes locations.inc without including this file (or setting the four variables itself) fails `nginx -t`
-# with "unknown variable", which is what the deploy pre-flight and validate.yml catch.
+# and /__zoe_auth_gate, the auth_request target of the zoe-auth locations (auth-gate.inc): an internal always-204 here, the
+# certificate gate on the relay listener.
+#
+# A new server block that includes locations.inc MUST include this file or set all four variables and define /__zoe_auth_gate itself: nginx declares a `set`
+# variable for the whole configuration, so a block that forgets would NOT fail `nginx -t` - it would silently forward no
+# X-Real-IP / X-Forwarded-For and ask no auth gate. tests/unit/test_relay_nginx_listener.py pins that every server that includes
+# locations.inc sets them.
 set $zoe_ingress "";
 set $zoe_client_cert_fp "";
 set $zoe_real_ip $remote_addr;
 set $zoe_xff $proxy_add_x_forwarded_for;
+location = /__zoe_auth_gate {
+    internal;
+    return 204;
+}

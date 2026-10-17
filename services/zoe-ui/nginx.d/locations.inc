@@ -73,6 +73,7 @@ location = /.well-known/agent.json {
 # OIDC provider endpoints — served by zoe-auth
 location ^~ /.well-known/ {
     proxy_pass http://zoe-auth:8002/.well-known/;
+    include /etc/nginx/zoe/auth-gate.inc;
     include /etc/nginx/zoe/ingress-headers.inc;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -80,12 +81,14 @@ location ^~ /.well-known/ {
 }
 location = /jwks.json {
     proxy_pass http://zoe-auth:8002/jwks.json;
+    include /etc/nginx/zoe/auth-gate.inc;
     include /etc/nginx/zoe/ingress-headers.inc;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 location ^~ /application/o/ {
     proxy_pass http://zoe-auth:8002/application/o/;
+    include /etc/nginx/zoe/auth-gate.inc;
     include /etc/nginx/zoe/ingress-headers.inc;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -95,6 +98,7 @@ location ^~ /application/o/ {
 
 location ^~ /api/auth/ {
     proxy_pass http://zoe-auth:8002;
+    include /etc/nginx/zoe/auth-gate.inc;
     include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
@@ -104,6 +108,7 @@ location ^~ /api/auth/ {
 }
 location ^~ /api/admin/ {
     proxy_pass http://zoe-auth:8002;
+    include /etc/nginx/zoe/auth-gate.inc;
     include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
@@ -113,6 +118,7 @@ location ^~ /api/admin/ {
 }
 location ^~ /api/touch-panel/ {
     proxy_pass http://zoe-auth:8002;
+    include /etc/nginx/zoe/auth-gate.inc;
     include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
@@ -122,6 +128,7 @@ location ^~ /api/touch-panel/ {
 }
 location ^~ /api/sso/ {
     proxy_pass http://zoe-auth:8002;
+    include /etc/nginx/zoe/auth-gate.inc;
     include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;

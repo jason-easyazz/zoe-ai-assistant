@@ -148,6 +148,8 @@ def stack(tmp_path, reg, on, bridge, monkeypatch):
     shutil.copytree(REPO / "services/zoe-ui/nginx.d", nginx_d)
     loc = nginx_d / "locations.inc"
     loc.write_text(loc.read_text().replace("host.docker.internal:8000", "host.docker.internal:%d" % app_port))
+    listener = relay_dir / "listener.conf"  # the auth gate subrequest also targets zoe-data's port
+    listener.write_text(listener.read_text().replace("host.docker.internal:8000", "host.docker.internal:%d" % app_port))
     name = "zoe-relay-live-" + uuid.uuid4().hex[:8]
     _sh("docker", "run", "-d", "--rm", "--name", name,
         "--add-host", "host.docker.internal:host-gateway", "--add-host", "zoe-auth:127.0.0.1",
@@ -167,6 +169,7 @@ def stack(tmp_path, reg, on, bridge, monkeypatch):
         yield dict(relay=port(9443), lan=port(80), ca=str(relay_dir / "ca.pem"), kitchen=kitchen, hall=hall, rogue=rogue,
                    seen=counting.seen, bridge=bridge, reg=reg, gw=gw, container=name)
     finally:
+        print(subprocess.run(["docker", "logs", "--tail", "15", name], capture_output=True, text=True).stderr)  # shown on a failure
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
         server.should_exit = True
         thread.join(timeout=5)
@@ -434,3 +437,21 @@ def test_http2_with_a_client_certificate_works_over_the_listener(stack):
     # NEGATIVE CONTROL: the same request without the client certificate is not a 200.
     bad = subprocess.run(base, capture_output=True, text=True, timeout=20)
     assert not bad.stdout.rstrip().endswith(" 200"), bad.stdout
+
+
+def test_zoe_auth_routes_are_gated_by_the_certificate_binding_over_the_relay(stack):
+    """zoe-auth knows nothing about client certificates: nginx asks zoe-data first (auth_request). In this rig zoe-auth is not
+    running, so 'past the gate' is 502 (nginx could not reach it) while 'refused by the gate' is 401."""
+    kitchen, hall = stack["kitchen"][:2], stack["hall"][:2]
+    for path in ("/api/auth/profiles", "/api/touch-panel/x", "/api/admin/x", "/api/sso/x", "/.well-known/openid", "/jwks.json"):
+        assert relay_get(stack, "GET", path, {}, cert=kitchen)[0] == 401, path                     # certificate but no credential
+        assert relay_get(stack, "GET", path, creds(stack, who="kitchen"), cert=hall)[0] == 401, path    # another panel's certificate
+        status, _ = relay_get(stack, "GET", path, creds(stack), cert=kitchen)
+        assert status in (502, 504), (path, status)                                                # POSITIVE: the gate let it through
+    stack["reg"].con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (stack["kitchen"][2],))
+    stack["reg"].con.commit()
+    t.relay_ingress.invalidate_cache()
+    assert relay_get(stack, "GET", "/api/auth/profiles", creds(stack), cert=stack["kitchen"][:2])[0] == 401  # a revoked certificate
+    # The LAN is unchanged: the same route is not gated by anything and fails only because zoe-auth is not running here.
+    status, _ = lan_get(stack, "GET", "/api/auth/profiles")
+    assert status in (502, 504)

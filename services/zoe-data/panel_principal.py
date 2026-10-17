@@ -23,6 +23,10 @@ mints one for any caller, so "a guest session" is not evidence of a panel. In or
      Cloudflare header is refused outright (the tunnel is the one internet-facing hop). To narrow it, pin the nginx container's
      address in ``ZOE_TRUSTED_PROXY_NETS`` (e.g. ``127.0.0.0/8,172.18.0.5/32``).
 
+A request that came through the panel RELAY (``relay_ingress.is_relay``, flag ``ZOE_RELAY_INGRESS``) has no address: path 2 and the
+``lan`` scope never apply to it (``trusted_client_ip`` is "" and ``is_panel_guest`` returns before the address rules); only paths 1
+and 1b can make it the panel, and ``relay_ingress`` has already required a client certificate bound to the same panel.
+
 Everything else - an anonymous caller, a phone on the Wi-Fi, a guest session from anywhere that is not a registered panel, a
 degraded (auth-outage) principal - is NOT the panel and keeps today's rule: a guest touches no list.
 
