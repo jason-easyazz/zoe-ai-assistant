@@ -188,12 +188,39 @@ location ^~ /livekit/ {
     proxy_send_timeout 900s;
 }
 
-# Home Assistant proxy — serves HA over HTTPS so the kiosk can embed dashboards in iframes without mixed-content errors
+# SECURITY: Home Assistant's own web UI, REST API, login flow (/ha/auth/*) and WebSocket
+# (/ha/api/websocket). It used to be proxied with no Zoe check, so anyone reaching this nginx
+# reached HA's login, API and (unauthenticated) webhooks. Every request - HTTP and the
+# WebSocket handshake - now runs an auth_request to zoe-data first (routers/ha_ui.py) and is
+# proxied only on a 2xx: a signed-in member or the panel (device token, kiosk credential,
+# registered address). A browser cannot attach Zoe's X-Session-ID bearer to a navigation or a
+# WebSocket handshake, so a member trades it for a signed HttpOnly SameSite=Strict cookie scoped
+# to /ha/ (POST /api/ha-ui/session). HA's own login still applies behind the gate. A gate that
+# cannot answer (zoe-data down) is a 5xx: closed. Rollback without an nginx change:
+# ZOE_HA_UI_GATE=off on zoe-data. The gate location is `internal` (404 from outside), passes
+# the request headers but not the body, and overwrites X-Real-IP so a caller cannot forge a
+# panel address.
+location = /_zoe/ha-gate {
+    internal;
+    proxy_pass http://host.docker.internal:8000/api/ha-ui/gate;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Internal-Token "";
+    proxy_set_header X-Zoe-User-Id "";
+    proxy_set_header Upgrade "";
+}
+
+# Home Assistant proxy (behind the gate above).
 # NOTE: Requires HA to trust the nginx container IP (e.g. 172.18.0.0/16) in configuration.yaml:
 #   http:
 #     use_x_forwarded_for: true
 #     trusted_proxies: ["172.18.0.0/16", "172.17.0.0/16"]
 location ^~ /ha/ {
+    auth_request /_zoe/ha-gate;
     rewrite ^/ha/(.*)$ /$1 break;
     proxy_pass http://host.docker.internal:8123;
     proxy_http_version 1.1;

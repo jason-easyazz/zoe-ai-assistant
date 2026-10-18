@@ -336,3 +336,22 @@ async def require_member(request: Request, user: dict = Depends(get_current_user
     if "device_token_role" not in u and not u.get("panel_id") and is_member(u):
         return user
     raise _refuse("not a signed-in member", request, user, "Sign in to change this")
+
+
+# ── Gated web UIs behind an nginx ``auth_request`` (Home Assistant's /ha/; ``path_cookie_gate``) ─────────────────────────────
+
+
+async def member_or_panel(request: Any, user: Mapping[str, Any] | None) -> bool:
+    """A signed-in member, or the panel in its strict ``registered`` form (device token, kiosk credential, registered address -
+    never over the Cloudflare tunnel, never ``lan``). Unlike ``may_control_home`` this ignores the ``ZOE_HA_CONTROL_SCOPE=open``
+    rollback: that is a home-control rollback, and every gated web UI has its own kill switch. Never raises (fail closed)."""
+    try:
+        if is_member(user):
+            return True
+        u = user or {}
+        if u.get("unauthenticated_override"):
+            u = {"user_id": "guest", "role": "guest"}  # a header-less caller IS anonymous: judge it as one, by its device
+        return await is_panel_guest(request, u, None, mode="registered")
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        logger.warning("panel_principal: member-or-panel check failed (%s) - refusing", type(exc).__name__)
+        return False

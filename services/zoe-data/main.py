@@ -2285,6 +2285,8 @@ app.include_router(geo_router)
 
 from routers.ha_control import router as ha_control_router
 app.include_router(ha_control_router)
+from routers.ha_ui import router as ha_ui_router
+app.include_router(ha_ui_router)
 
 from routers.auth import router as auth_router
 app.include_router(auth_router)
