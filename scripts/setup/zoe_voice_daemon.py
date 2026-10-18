@@ -3577,6 +3577,8 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         # an unclosed streamed response would hold its keep-alive connection until GC.
         _close_quietly(r)
     except requests.exceptions.SSLError:
+        _set_turn_response(None)
+        _close_quietly(r)
         raise
     except Exception as exc:
         _set_turn_response(None)
