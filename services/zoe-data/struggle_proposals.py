@@ -674,38 +674,6 @@ async def counts() -> dict[str, dict[str, int]]:
     return out
 
 
-async def pending_maintenance(since: float, *, now: Optional[float] = None) -> int:
-    """How much proposal work is waiting for the next night pass, as a COUNT (the quiet-night precheck asks this so that a night with no
-    member turns is not skipped while proposals still need tending). Two kinds, both of which the pass resolves, so the count falls back
-    to 0 after the window has run:
-
-    * struggle events logged after ``since`` (epoch seconds; the start of the last window that did its work) - this includes a guest's,
-      which the member-turn check cannot see;
-    * ``proposed`` proposals still linked to evidence older than the lookback: the pass recounts them and withdraws any that no longer
-      recur, which without this only ever happened on a night that already had other work.
-
-    0 while ``ZOE_STRUGGLE_PROPOSALS`` is off (the pass is a no-op then) and when the tables are not migrated. RAISES on any other
-    failure so the window fails OPEN (runs as before)."""
-    if mode() == "off":
-        return 0
-    cutoff = (time.time() if now is None else now) - lookback_days() * DAY_S
-    try:
-        async with _ctx() as db:
-            cur = await db.execute("SELECT user_id, is_guest, COUNT(*) FROM struggle_events WHERE ts > ? GROUP BY user_id, is_guest", (float(since),))
-            # the pass ignores synthetic / harness users, so their events are not work for it (a harness logging every night would
-            # otherwise keep the window from ever being quiet); a guest's are
-            new_events = sum(int(n) for uid, guest, n in await cur.fetchall() if guest or not _synthetic(str(uid)))
-            cur = await db.execute(
-                "SELECT COUNT(DISTINCT pe.proposal_id) FROM struggle_proposal_events pe JOIN struggle_proposals p ON p.id = pe.proposal_id "
-                "WHERE p.status = ? AND pe.ts < ?", (PROPOSED, float(cutoff)))
-            aged = int((await cur.fetchone())[0] or 0)
-    except Exception as exc:
-        if _missing_table(exc):
-            return 0
-        raise
-    return new_events + aged
-
-
 # ── the decision (admin) ─────────────────────────────────────────────────────
 
 def build_followup(p: dict, now: float) -> dict:

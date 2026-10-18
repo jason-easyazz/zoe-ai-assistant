@@ -159,8 +159,8 @@ days and returns only if it recurred since; an `accepted` / `applied` one is nev
 later night, and an eligible cluster that already has a `proposed` row is refreshed and kept however it ranks (ranking never withdraws).
 The 12B rewords a proposal's counts as placeholders (`{episodes}`, `{days}`, `{people}`, `{n:SIGNAL}`) that code renders from the proposal's
 own fields; a digit written by the model, a placeholder in front of another field's unit noun or an unknown signal falls back to the template.
-The quiet-night precheck (`night_precheck.py --struggle`) counts `struggle_proposals.pending_maintenance` - struggle events after the last
-window, a guest's included, plus `proposed` rows whose evidence aged out of the lookback - as work, so those nights are not skipped.
+The night window runs the proposal pass every night (the quiet-night skip and its precheck were removed on 2026-10-18, owner decision: the 12B
+runs every night), so aged-out `proposed` rows are recounted and withdrawn without any special check.
 
 **Failed -> success labelling (how a failed turn gets its label).** The detector records, in the text-free `detail` of a pair event by one
 member (`_follow_up`), the fast domain that answered the turn that REVEALED the struggle (`next_domain`; `resolved_route`: served by a fast

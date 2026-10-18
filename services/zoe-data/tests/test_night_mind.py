@@ -108,10 +108,10 @@ def test_the_flag_is_off_by_default_and_off_means_no_calls_no_reads_no_writes(la
 
 
 @pytest.mark.parametrize("raw,want", [("", "off"), ("0", "off"), ("false", "off"), ("typo", "off"), ("shadow", "shadow"), ("SHADOW", "shadow"),
-                                       ("1", "enforce"), ("on", "enforce"), ("enforce", "enforce"), ("true", "enforce")])
+                                       ("1", "enforce"), ("on", "enforce"), ("enforce", "enforce"), ("true", "enforce"), ("serve", "serve"), ("SERVE", "serve")])
 def test_mode_parsing(monkeypatch, raw, want):
     monkeypatch.setenv(nm.ENV, raw)
-    assert nm.mode() == want and nm.enabled() == (want == "enforce")
+    assert nm.mode() == want and nm.enabled() == (want in ("enforce", "serve")) and nm.runs_pass() == (want in ("shadow", "enforce"))
 
 
 def test_the_chunk_budget_derives_from_the_context_and_stays_inside_the_slot(monkeypatch):
@@ -481,6 +481,53 @@ def test_a_forgotten_name_is_never_served_and_a_forget_erases_the_rows(lab, monk
     assert not any(sub in (t["title"] or "").lower() for t in run(lab.threads(UID)))
 
 
+def test_serve_reads_what_the_night_window_wrote_and_never_runs_the_pass_itself(lab, monkeypatch):
+    """Owner decision 2026-10-18 ("make it work"): the 12B night window writes in enforce (``zoe-night-mind.py --mode enforce``) and zoe-data,
+    with ``ZOE_NIGHT_MIND=serve``, READS it: the recall block is served, the pass never runs in this process. Control arms: the same rows
+    with the flag unset serve nothing; ``run_for_user`` without a forced mode makes no call under serve."""
+    night(life_transcript(), mode="enforce")                                                   # the window's CLI: force_mode=enforce
+    written = len(lab.obs_rows)
+    assert written >= 5
+    sub = LF.threads[0].identity[0]
+    ask = f"what's been going on with {sub} lately"
+    monkeypatch.delenv(nm.ENV, raising=False)
+    nm.invalidate()
+    assert run(nm.prompt_block(UID, ask, now=NOW)) == "" and run(nm.morning_items(UID, now=NOW)) == []        # control: unset = nothing served
+    monkeypatch.setenv(nm.ENV, "serve")
+    nm.invalidate()
+    served: list = []
+    block = run(nm.prompt_block(UID, ask, now=NOW, served=served))
+    assert block.startswith("## What I've noticed") and sub in block.lower()
+    assert served and all(tid and quote for tid, _at, quote in served)                         # provenance: every line names the owner's turn it stands on
+    by_turn = {o["turn_id"]: o for o in lab.obs_rows.values()}
+    assert all(by_turn[tid]["authority_class"] == "user_stated_derived" and by_turn[tid]["state"] == "current" for tid, _a, _q in served)
+    rec = Recorder()
+    nm.set_llm(rec)
+    res = run(nm.run_for_user(UID, life_transcript(), None, now=NOW))
+    assert res["status"] == "off" and rec.brain.calls == 0 and len(lab.obs_rows) == written   # serve never writes a second night
+
+
+def test_under_serve_a_held_quote_and_a_forgotten_name_are_never_served(lab, monkeypatch):
+    night(transcript([("I might look around for a new job, not sure yet.", 2), ("Maybe I will look around for a new job after the review.", 1),
+                      ("Rowan has a school concert at Thornby on the 20th and he is nervous.", 3), ("Rowan is learning the viola for the concert at Thornby.", 1)]),
+          mode="enforce")
+    monkeypatch.setenv(nm.ENV, "serve")
+    nm.invalidate()
+    held = [o for o in lab.obs_rows.values() if o["state"] == "held"]
+    week = run(nm.prompt_block(UID, "how has my week been", now=NOW))
+    assert all(o["quote"] not in week for o in held)                                           # a hedge is held, never served
+    assert "Rowan" in run(nm.prompt_block(UID, "how is Rowan going with the concert", now=NOW))
+    import memory_tombstones
+    memory_tombstones.add(UID, "Rowan")
+    try:
+        nm.invalidate()
+        assert "Rowan" not in run(nm.prompt_block(UID, "how is Rowan going with the concert", now=NOW))   # forgotten means forever, on every serve
+        assert all("Rowan" not in i["text"] for i in run(nm.morning_items(UID, now=NOW)))
+    finally:
+        memory_tombstones.clear_all(UID)
+    assert run(nm.erase_entity(UID, "Rowan")) >= 1 and not any("Rowan" in o["quote"] for o in lab.obs_rows.values())   # the erase works whatever the mode
+
+
 def test_delete_user_removes_every_row_and_only_that_users(lab):
     night(life_transcript())
     lab.obs_rows["other"] = {**next(iter(lab.obs_rows.values())), "id": "other", "user_id": "demo_bar_00000002"}
@@ -527,6 +574,12 @@ def test_the_digest_runs_the_pass_after_its_facts_and_a_failure_is_its_own_resul
     nm.set_llm(Recorder())
     off = run(md.run_memory_digest(UID))
     assert "night_mind" not in off and not lab.obs_rows                                    # flag off: byte-identical result, nothing written
+    monkeypatch.setenv(nm.ENV, "serve")
+    rec = Recorder()
+    nm.set_llm(rec)
+    served = run(md.run_memory_digest(UID))
+    assert "night_mind" not in served and not lab.obs_rows and rec.brain.calls == 0          # serve: the 12B window is the writer, the 4B digest never is
+    nm.set_llm(Recorder())
     monkeypatch.setenv(nm.ENV, "enforce")
     on = run(md.run_memory_digest(UID))
     assert on["night_mind"]["status"] == "ran" and on["night_mind"]["observations_written"] >= 5 and "error" not in on
@@ -543,6 +596,8 @@ def test_the_day_loader_reads_the_whole_day_and_the_old_cut_is_not_applied(monke
     assert md._turn_limit() == 200
     monkeypatch.setenv(nm.ENV, "shadow")
     assert md._turn_limit() == 600
+    monkeypatch.setenv(nm.ENV, "serve")
+    assert md._turn_limit() == 200                     # serve runs no pass here, so it does not widen the digest's read
     monkeypatch.delenv(nm.ENV, raising=False)
     monkeypatch.delenv("ZOE_DIGEST_CHUNKED", raising=False)      # the chunked pack step (default on) reads the whole day too
     assert md._turn_limit() == 600
