@@ -11,6 +11,9 @@ Conditions (same turn sequence in each):
   isolated     no helper traffic                              (what the old harnesses measured; the ceiling)
   interleaved  three helper calls right after every turn      (the live behaviour before ``brain_slot_guard``)
   guarded      helpers queued and run as a batch once the burst of turns ends (``brain_slot_guard`` quiet window)
+  harness      guarded, plus ONE harness conversation turn (its own session: the same system + tool block, its own
+               ~0.5k-token history) between EVERY two panel turns - the Samantha bar / day-sim running while the
+               household talks (P-3, 2026-10-19). guarded vs harness = what harness quiet hours buy the panel.
 
 Everything is synthetic text: no household words. The prompts only need the right TOKEN COUNTS and the right place where they
 change; ``/tokenize`` on the target server sizes them.
@@ -121,9 +124,20 @@ def helper_prompts(tg: Target, utterance: str) -> list[str]:
     return [tg.words(500 + i, n) + " " + utterance for i, n in enumerate((376, 476, 296))]
 
 
+def harness_session(tg: Target, panel: "Session", seed: int) -> "Session":
+    """A second conversation sharing the panel's system + tool block (the same Flue sidecar soul), with its own
+    pre-grown history (~0.5k tokens, a bar session mid-run; kept to its last 6 turns so it fits the 8192 slot)."""
+    h = Session(tg, seed)
+    h.system, h.tools = panel.system, panel.tools
+    for k in range(4):
+        h.history.append((tg.words(seed * 3000 + k, 12), tg.words(seed * 4000 + k, 120)))
+    return h
+
+
 def run_condition(tg: Target, name: str, turns: int, burst: int, seed: int) -> dict:
     sess = Session(tg, seed)
     rows, pending = [], []
+    harness = harness_session(tg, sess, seed + 500) if name == "harness" else None
     for i in range(turns):
         recall = i % 3 == 0                       # one in three turns is a recall turn (block, then elided)
         if i in (6, 13):                          # the router shortlist unlocks another ability group
@@ -137,12 +151,18 @@ def run_condition(tg: Target, name: str, turns: int, burst: int, seed: int) -> d
         if name == "interleaved":
             for c in calls:
                 tg.complete(c, 2)
-        elif name == "guarded":
+        elif name in ("guarded", "harness"):
             pending += calls
             if (i + 1) % burst == 0:              # the conversation went quiet: flush the backlog, serially
                 for c in pending:
                     tg.complete(c, 2)
                 pending = []
+        if harness is not None:                   # the harness takes the slot before the next panel turn
+            harness.stage = sess.stage
+            h_prompt, h_words = harness.prompt(i % 2 == 0)
+            _pn, _cn, _t, h_reply = tg.complete(h_prompt, 12)
+            harness.settle(h_words, h_reply.strip() or "ok")
+            harness.history = harness.history[-6:]
     return {"name": name, "rows": rows}
 
 
@@ -159,6 +179,8 @@ def summarise(res: dict, tg: Target) -> dict:
     return {
         "condition": res["name"], "turns": len(rows),
         "miss_rate": round(len(miss) / len(rows), 3) if rows else 0,
+        # the panel alarm's measure (PANEL_KV_MISS, ZOE_PANEL_KV_MISS_TOKENS default 500)
+        "reprefill_gt500_rate": round(sum(1 for r in rows if r["prompt_n"] > 500) / len(rows), 3) if rows else 0,
         "first_prompt_n_p50": pct([r["prompt_n"] for r in rows], 50), "first_prompt_n_p95": pct([r["prompt_n"] for r in rows], 95),
         "first_cache_n_p50": pct([r["cache_n"] for r in rows], 50),
         "ttft_ms_measured_p50": round(pct([r["ttft_ms"] for r in rows], 50)), "ttft_ms_measured_p95": round(pct([r["ttft_ms"] for r in rows], 95)),
@@ -205,7 +227,7 @@ def main() -> int:
     for k, name in enumerate(a.conditions.split(",")):
         res = run_condition(tg, name.strip(), a.turns, a.burst, seed=11 + k)   # a fresh session per condition
         out.append({**summarise(res, tg), "rows": res["rows"]})
-    keys = ["condition", "turns", "miss_rate", "first_prompt_n_p50", "first_prompt_n_p95", "first_cache_n_p50",
+    keys = ["condition", "turns", "miss_rate", "reprefill_gt500_rate", "first_prompt_n_p50", "first_prompt_n_p95", "first_cache_n_p50",
             "ttft_ms_projected_live_p50", "ttft_ms_projected_live_p95", "ttft_ms_measured_p50", "ttft_ms_measured_p95"]
     print("\t".join(keys))
     for o in out:

@@ -130,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
 
     gates = (  # (passes?, why not) — evaluated in order, lazily
         lambda: (not bar.in_nightly_window(dt.datetime.now()), "inside/near the nightly window"),
+        lambda: (lambda r: (r is None, r or ""))(bar.harness_quiet_refusal("recall_evidence_probe")),
         lambda: (lambda b: (b[0] is False, f"deploy check: {b[1]}"))(bar.deploy_in_progress()),
         lambda: (bool(token and dsn), "ZOE_INTERNAL_TOKEN / POSTGRES_URL not in the service .env"),
         lambda: bar._wait(bar._readyz, 600, "/readyz"),

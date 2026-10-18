@@ -231,6 +231,7 @@ async def get_current_user(request: Request) -> dict:
 
     cached = _cache_get(session_id)
     if cached:
+        _refine_traffic_class(cached)
         return cached
 
     validated = await _validate_with_auth_service(session_id)
@@ -256,9 +257,22 @@ async def get_current_user(request: Request) -> dict:
         # a caller may branch on to refuse rather than trust. Do NOT cache this.
         degraded = {k: v for k, v in validated.items() if k != _DEGRADED_MARK}
         degraded["auth_degraded"] = True
+        _refine_traffic_class(degraded)
         return degraded
     _cache_set(session_id, validated)
+    _refine_traffic_class(validated)
     return validated
+
+
+def _refine_traffic_class(principal: dict) -> None:
+    """A synthetic principal forces its traffic class (P-2, ``traffic_class.py``) - only ever AWAY from
+    household; the request middleware already classified what the headers prove. Never raises."""
+    try:
+        import traffic_class
+
+        traffic_class.refine_for_user((principal or {}).get("user_id"))
+    except Exception:  # noqa: BLE001 - instrumentation must never fail auth
+        pass
 
 
 _ADMIN_ROLES = {"admin", "family-admin"}  # ZOE-22dcd46d: honour family-admin alias
@@ -474,6 +488,7 @@ async def resolve_acting_user(request: Request) -> dict:
     override = request.headers.get("X-Zoe-User-Id", "").strip()
     if override:
         if _has_valid_internal_token(request):
+            _refine_traffic_class({"user_id": override})
             return {
                 "user_id": override,
                 # A forwarded, pre-resolved real user acts as a normal member;
