@@ -230,7 +230,7 @@ async def _panel_at_address(db: Any, key: str) -> bool:
         return False
     try:
         cur = await db.execute(
-            "SELECT 1 FROM panels WHERE panel_id = ? AND ip_address = ? AND is_active = 1 AND allow_guest = 1 LIMIT 1",
+            "SELECT 1 FROM panels WHERE panel_id = ? AND ip_address = ? AND is_active = 1 LIMIT 1",
             (panel_id, client_ip))
         return await cur.fetchone() is not None
     except Exception as exc:  # noqa: BLE001 - fail closed, but say so
@@ -238,16 +238,21 @@ async def _panel_at_address(db: Any, key: str) -> bool:
         return False
 
 
+async def _panel_is_active(db: Any, panel_id: str) -> bool:
+    return await _registry_has(db, "SELECT 1 FROM panels WHERE panel_id = ? AND is_active = 1 LIMIT 1", panel_id)
+
+
 async def request_is_this_panel(request: Any, panel_id: str, db: Any = None) -> bool:
     """True only when ``request`` (an HTTP request or a WebSocket handshake) is demonstrably the panel ``panel_id`` itself - not
-    merely "a panel": its kiosk credential names ``panel_id`` (row active + allows guests), or its trusted client address is
-    ``panel_id``'s registered ``ip_address`` (row active + allows guests). Never over the Cloudflare tunnel. Never raises."""
+    merely "a panel": its kiosk credential names ``panel_id``, or its trusted client address is ``panel_id``'s registered
+    ``ip_address``; the row must be active. Never over the Cloudflare tunnel. Never raises. This is IDENTITY only: whether a
+    guest may use the panel (``allow_guest``) stays the caller's policy (a guest bound to a members-only panel still proves it)."""
     try:
         pid = str(panel_id or "").strip()
         if not pid or request is None or _via_public_tunnel(request):
             return False
         kiosk_panel = panel_kiosk_credential.credential_panel_id(request)
-        if kiosk_panel and kiosk_panel == pid and await _with_registry(db, _kiosk_panel_allows_guest, pid):
+        if kiosk_panel and kiosk_panel == pid and await _with_registry(db, _panel_is_active, pid):
             return True
         client_ip = trusted_client_ip(request)
         return bool(client_ip) and await _with_registry(db, _panel_at_address, f"{pid}\n{client_ip}")

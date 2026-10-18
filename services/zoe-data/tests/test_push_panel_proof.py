@@ -38,6 +38,9 @@ PANEL_IP, OTHER_IP, PHONE_IP, PROXY = "192.0.2.61", "192.0.2.62", "192.0.2.77", 
 PANEL_TOKEN, OTHER_TOKEN = "tok-touch-pi", "tok-kitchen"
 MEMBER_SID, ADMIN_SID, GUEST_SID = "sid-member", "sid-admin", "sid-guest"
 REGISTRY = {PANEL: PANEL_IP, OTHER_PANEL: OTHER_IP}  # both active + allow guests
+LOCKED_PANEL, LOCKED_IP = "study-panel", "192.0.2.63"     # active, registered, but does NOT allow guests
+ACTIVE = {**REGISTRY, LOCKED_PANEL: LOCKED_IP}
+NO_PANEL_TOKEN = "tok-no-panel"
 
 
 class _WS:
@@ -97,19 +100,25 @@ def _env(monkeypatch):
     monkeypatch.setattr(main, "_panel_allows_guest_push", _allows_guest)
 
     async def _bound(user_id, _sid, panel_id):
-        return PANEL if (user_id == "casey" and panel_id == PANEL) else None  # casey's session is bound to the kiosk
+        if user_id == "casey" and panel_id == PANEL:
+            return PANEL  # casey's session is bound to the kiosk
+        if user_id == "guest" and panel_id == LOCKED_PANEL:
+            return LOCKED_PANEL  # the guest session has a bound row on the members-only panel
+        return None
 
     monkeypatch.setattr(main, "_resolve_bound_panel", _bound)
 
     async def _with_registry(_db, check, value):
         if check is panel_principal._panel_at_address:
             pid, _, ip = value.partition("\n")
-            return REGISTRY.get(pid) == ip
-        if check is panel_principal._kiosk_panel_allows_guest:
-            return value in REGISTRY
+            return ACTIVE.get(pid) == ip
+        if check is panel_principal._panel_is_active:
+            return value in ACTIVE
         return False
 
     monkeypatch.setattr(panel_principal, "_with_registry", _with_registry)
+    monkeypatch.setitem(panel_auth._token_cache, panel_auth._hash_token(NO_PANEL_TOKEN),
+                        {"panel_id": "", "role": "voice-daemon", "expires_at": None, "revoked": 0})
     for tok, pid in ((PANEL_TOKEN, PANEL), (OTHER_TOKEN, OTHER_PANEL)):
         monkeypatch.setitem(panel_auth._token_cache, panel_auth._hash_token(tok),
                             {"panel_id": pid, "role": "voice-daemon", "expires_at": None, "revoked": 0})
@@ -195,6 +204,26 @@ async def test_a_device_token_cannot_join_another_panel(_env, monkeypatch):
     monkeypatch.setenv("ZOE_PANEL_PUSH_PROOF", "shadow")  # shadow admits (and logs)
     ws = await _connect(PHONE_IP, {"X-Device-Token": OTHER_TOKEN})
     assert ws.closed is None and _env.panels == [PANEL]
+
+
+@pytest.mark.asyncio
+async def test_a_device_token_that_names_no_panel_joins_none(_env):
+    ws = await _connect(PHONE_IP, {"X-Device-Token": NO_PANEL_TOKEN})
+    assert ws.closed and ws.closed[0] == 1008 and _env.panels == []
+
+
+# ── proof is identity, not guest policy: a guest bound to a members-only panel ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_a_bound_guest_on_a_members_only_panel_passes_from_that_panel_only(_env):
+    """The reclaim-window case: a guest session with a bound row on a panel that disallows guests. From the panel's own
+    address it keeps its channel (proof does not re-apply allow_guest); from anywhere else it gets none."""
+    ws = await _connect(PROXY, {"X-Real-IP": LOCKED_IP}, panel_id=LOCKED_PANEL, session=GUEST_SID)
+    assert ws.closed is None and _env.panels == [LOCKED_PANEL]
+    ws = await _connect(PROXY, {"X-Real-IP": PHONE_IP}, panel_id=LOCKED_PANEL, session=GUEST_SID)
+    assert ws.closed and _env.panels == [LOCKED_PANEL]
+    ws = await _connect(PROXY, {"X-Real-IP": LOCKED_IP}, panel_id=LOCKED_PANEL)   # session-less: allow_guest still applies
+    assert ws.closed and _env.panels == [LOCKED_PANEL]
 
 
 # ── kiosk credential (flag-dark today): a cookie rides the WebSocket handshake, nothing in the URL ─────────────────────────

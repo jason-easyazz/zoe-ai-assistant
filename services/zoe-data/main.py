@@ -2471,11 +2471,11 @@ def _push_channel_is_panel(channel: str) -> bool:
 
 def _device_token_may_join(device_info: dict, panel_id: str) -> bool:
     """A device token joins only ITS OWN panel's channel (``ZOE_PANEL_PUSH_PROOF``: enforce refuses another
-    panel's, shadow admits and logs, off skips). A token row without a panel id keeps the old behaviour."""
+    panel's, shadow admits and logs, off skips). A token row without a panel id names no panel: refused too."""
     import panel_principal
 
     token_panel = str((device_info or {}).get("panel_id") or "").strip()
-    if not token_panel or token_panel == str(panel_id or "").strip():
+    if token_panel and token_panel == str(panel_id or "").strip():
         return True
     mode = panel_principal.panel_push_mode()
     if mode == "off":
