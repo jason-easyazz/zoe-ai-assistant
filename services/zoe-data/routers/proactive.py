@@ -247,11 +247,13 @@ async def run_selector_synthetic(target_user: str, request: Request, night_mind:
 async def _run_night_mind_synthetic(user_id: str) -> dict:
     """The day-sim's ``night_mind`` intent (``?night_mind=1``): the REAL night pass over this harness id's own-words turns (the digest's loader, so the same
     own-words / forgotten-turn filters), standing in for the 03:00 digest the day-sim does not run. Counts only; ``{"enabled": false}`` with ``ZOE_NIGHT_MIND`` off
-    (no work); never raises (a failure is its own status). Reached only through the guards above: a harness-minted, unregistered id."""
+    (no work); never raises (a failure is its own status). Reached only through the guards above: a harness-minted, unregistered id. Under ``serve`` (zoe-data
+    while the 12B night window is the writer) it still runs, in ``enforce``, for this harness id alone: the night window drops synthetic ids, so the two never meet."""
     try:
         import night_mind
         if night_mind.mode() == "off":
             return {"enabled": False}
+        force = "enforce" if night_mind.mode() == "serve" else None
         from memory_digest import _load_todays_messages
         from memory_service import get_memory_service
 
@@ -259,8 +261,8 @@ async def _run_night_mind_synthetic(user_id: str) -> dict:
         try:
             transcript = await _load_todays_messages(user_id)
         except TranscriptLoadError as exc:      # a failed read is its own status, never a quiet day
-            return {"enabled": True, **night_mind.load_failed(user_id, exc)}
-        res = await night_mind.run_for_user(user_id, transcript, get_memory_service())
+            return {"enabled": True, **night_mind.load_failed(user_id, exc, force_mode=force)}
+        res = await night_mind.run_for_user(user_id, transcript, get_memory_service(), force_mode=force)
         keep = ("status", "mode", "turns_in", "turns_dropped_routine", "chunks", "calls", "moments_verified", "moments_held", "observations_written",
                 "observations_pending", "threads_created", "threads_updated", "calls_invalid", "skipped_reason", "error")
         return {"enabled": True, **{k: res[k] for k in keep if k in res}}
