@@ -308,6 +308,17 @@ async def review_segments(db, user_id: str, recording_ids: list[str]) -> list[di
     return out
 
 
+async def recordings_with_segments(db, user_id: str, recording_ids: list[str]) -> set[str]:
+    """Which of these recordings have ANY segment row - including lines the member marked not-a-person, which ``review_segments``
+    leaves out. The day review needs the difference: a recording with segments is read turn by turn (and may be empty), one with
+    none keeps the joined transcript."""
+    if not recording_ids:
+        return set()
+    rows = await _all(db, f"SELECT DISTINCT recording_id FROM omi_segments WHERE user_id = ? AND recording_id IN ({_qs(len(recording_ids))})",
+                      (user_id, *recording_ids))
+    return {str(r[0]) for r in rows}
+
+
 async def set_owner_label(db, user_id: str, segment_id: str, value: Optional[str]) -> bool:
     if value not in (None, "you", "other"):
         raise VoiceError("owner_label is you, other or null")
@@ -467,8 +478,8 @@ async def answer_suggestion(db, user_id: str, segment_id: str, answer: str) -> d
         return out
     await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE id = ? AND user_id = ?",
                (segment_id, user_id))
-    await _run(db, "UPDATE learned_voiceprints SET rejections = rejections + 1 WHERE owner_user_id = ? AND people_id = ? AND model_id = ?",
-               (user_id, pid, model_id))
+    await _run(db, "UPDATE learned_voiceprints SET rejections = rejections + 1 WHERE owner_user_id = ? AND people_id = ? AND model_id = ? "
+                   "AND learning_enabled = 1", (user_id, pid, model_id))          # a stopped print stays frozen, a "no" included
     await db.commit()
     return {"person_id": None, "segments": 1, "learning": "unchanged"}
 
@@ -574,6 +585,17 @@ async def set_voice_learning(db, user_id: str, vp_id: str, enabled: bool) -> boo
     return bool(n)
 
 
+async def _withdraw_orphaned_suggestions(db, user_id: str, person_id: str) -> int:
+    """After a voiceprint of ``person_id`` is deleted (forgotten or expired): withdraw the suggestions that no longer have a print
+    behind them. A suggestion belongs to the print of the MODEL that made it (``omi_segments.model_id``), so a person who still has a
+    print under another model keeps those suggestions. Safe side: a suggestion with no recorded model, or whose own model has no
+    print left for that person, goes."""
+    return await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE user_id = ? "
+                          "AND suggested_person_id = ? AND (model_id IS NULL OR NOT EXISTS (SELECT 1 FROM learned_voiceprints v "
+                          "WHERE v.owner_user_id = omi_segments.user_id AND v.people_id = omi_segments.suggested_person_id "
+                          "AND v.model_id = omi_segments.model_id))", (user_id, person_id))
+
+
 async def forget_voice(db, user_id: str, vp_id: str) -> bool:
     """"Forget this voice": the voiceprint and every contribution go, and so do the suggestions it made; the person and the
     member's tags stay (that is "forget <name>")."""
@@ -582,8 +604,7 @@ async def forget_voice(db, user_id: str, vp_id: str) -> bool:
         return False
     await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp_id,))
     await _run(db, "DELETE FROM learned_voiceprints WHERE id = ? AND owner_user_id = ?", (vp_id, user_id))
-    await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE user_id = ? AND suggested_person_id = ?",
-               (user_id, rows[0][0]))
+    await _withdraw_orphaned_suggestions(db, user_id, rows[0][0])
     await db.commit()
     return True
 
@@ -703,8 +724,7 @@ async def sweep(db, *, now: Optional[datetime] = None) -> dict:
     for vp, owner, pid in await _all(db, "SELECT id, owner_user_id, people_id FROM learned_voiceprints WHERE expires_at < ?", (stamp,)):
         await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp,))
         out["voiceprints"] += await _run(db, "DELETE FROM learned_voiceprints WHERE id = ?", (vp,))
-        await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE user_id = ? "
-                       "AND suggested_person_id = ?", (owner, pid))          # what an expired voice suggested goes with it
+        await _withdraw_orphaned_suggestions(db, owner, pid)          # what an expired voice suggested goes with it
     for uid, pid in await _all(db, "SELECT DISTINCT s.user_id, p.id FROM people p JOIN omi_segments s ON (s.tagged_person_id = p.id OR "
                                    "s.suggested_person_id = p.id) WHERE p.deleted = 1 UNION SELECT v.owner_user_id, p.id FROM people p "
                                    "JOIN learned_voiceprints v ON v.people_id = p.id WHERE p.deleted = 1"):

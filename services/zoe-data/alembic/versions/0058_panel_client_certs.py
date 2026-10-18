@@ -1,4 +1,4 @@
-"""0056 - the relay client-certificate registry (``relay_ingress.py``, ``routers/panel_relay.py``; flag ``ZOE_RELAY_INGRESS``,
+"""0058 - the relay client-certificate registry (``relay_ingress.py``, ``routers/panel_relay.py``; flag ``ZOE_RELAY_INGRESS``,
 default off). Design: ``docs/architecture/panel-anywhere.md`` sections 5.2 and 6.1.
 
 ONE new table, so a deploy that has not run this migration degrades to "a relayed request is refused (503)" - the relay is
@@ -10,16 +10,15 @@ to ONE panel for good; ``revoked_at`` is the stolen-panel switch (a revoked fing
 un-revoked - a new certificate gets a new fingerprint). Rows go with their panel (``ON DELETE CASCADE``). TEXT timestamps like
 the rest of the panel tables, so the SQLite unit lane runs it. ``IF NOT EXISTS`` makes a rerun safe; the downgrade drops the table.
 
-REVISION CHAIN NOTE: ``down_revision`` is ``0055`` (``0055_omi_segments_voices``, #2092, landing on ``main``). This PR is stacked
-on #2089 (``fix/ha-control-member-or-panel``), whose base predates ``0054`` and ``0055``, so on THIS branch the chain has two heads
-and ``tests/test_relay_ingress.py::test_migration_chain`` is red until main (0054, 0055) is merged in. Expected; do not change
-``down_revision`` to make it green.
+REVISION CHAIN NOTE: ``down_revision`` is ``0057`` (#2109, struggle proposals), after ``0055`` (#2092) and ``0056`` (#2098, omi device
+health). If #2109 has not merged when this lands, the chain shows two heads and ``tests/test_relay_ingress.py::test_migration_chain``
+is red until it does; do not change ``down_revision`` to make it green.
 """
 
 from alembic import op
 
-revision = "0056"
-down_revision = "0055"
+revision = "0058"
+down_revision = "0057"
 branch_labels = None
 depends_on = None
 

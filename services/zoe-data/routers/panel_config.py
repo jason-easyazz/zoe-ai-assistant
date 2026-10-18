@@ -38,12 +38,18 @@ Storage lives in the ``panels`` row (see alembic 0021): ``location`` already
 existed, ``default_player`` + ``pinned`` are new. ``panel_id`` == the panel's
 ``device_id`` (``localStorage.zoe_panel_id``).
 
-Auth mirrors the existing per-device settings store in ``system.py``:
-  - GET is deliberately unauthenticated — the kiosk runs as a guest and polls
-    this at boot, exactly like ``GET /api/system/display/preferences``. No
-    sensitive data is exposed (HA entity state is already readable unauthed).
-  - PUT requires ``get_current_user``, matching ``PUT /api/system/display/
-    preferences``.
+Auth (security follow-up 2026-10-18, after #2089 gated ``/api/ha/*``):
+  - ``GET /config`` and ``GET /sleep-gate`` need a signed-in MEMBER or THE
+    PANEL (``panel_principal.require_member_or_panel`` - the home-control rule).
+    Both carry live HA state (pin states; whether this room is lit right now),
+    which is the presence signal ``/api/ha/entities`` stopped serving to
+    anonymous LAN callers. The kiosk passes as the panel (registered address,
+    kiosk credential or device token), exactly like its ``/api/ha/entities``
+    poll; a refused sleep-gate falls toward sleeping, a refused config to the
+    cached dock.
+  - ``PUT /config`` needs a MEMBER (``panel_principal.require_member``): it
+    re-targets which device a dock pin drives and which room the panel is in.
+  - ``GET /push-status`` stays open: a subscriber count and two timestamps.
 """
 
 from __future__ import annotations
@@ -55,8 +61,8 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from auth import get_current_user
 from database import get_db
+from panel_principal import require_member, require_member_or_panel
 from log_throttle import log_upstream_failure
 
 logger = logging.getLogger(__name__)
@@ -589,12 +595,13 @@ def _row_value(row, key: str):
 # ── routes ────────────────────────────────────────────────────────────────────
 
 @router.get("/{device_id}/config")
-async def get_panel_config(device_id: str, db=Depends(get_db)) -> dict[str, Any]:
+async def get_panel_config(
+    device_id: str, db=Depends(get_db), caller: dict = Depends(require_member_or_panel)
+) -> dict[str, Any]:
     """The resolved config for one panel.
 
-    Deliberately unauthenticated so the kiosk (which runs as a guest) can read
-    its own dock config at boot — same rationale as
-    ``GET /api/system/display/preferences``.
+    A member or the panel (module docstring): the pins carry live HA state. The
+    kiosk reads it at boot as the panel; a refusal leaves it on the cached dock.
 
     An unregistered panel is NOT an error: it returns defaults with
     ``pins_configured: false``, so a brand-new panel boots to the fallback dock.
@@ -613,16 +620,19 @@ async def get_panel_config(device_id: str, db=Depends(get_db)) -> dict[str, Any]
 
 
 @router.get("/{device_id}/sleep-gate")
-async def get_sleep_gate(device_id: str, db=Depends(get_db)) -> dict[str, Any]:
+async def get_sleep_gate(
+    device_id: str, db=Depends(get_db), caller: dict = Depends(require_member_or_panel)
+) -> dict[str, Any]:
     """Whether this panel should stay awake because its room looks occupied.
 
     Polled by the kiosk at the moment it is about to drift to the sleep clock,
     so it must be LIVE — a value cached at boot would be stale by the time the
     decision is taken (the same trap the music guard already documents).
 
-    Unauthenticated for the same reason as ``GET /{device_id}/config``: the
-    kiosk runs as a guest, and this exposes nothing beyond HA entity state that
-    ``/api/ha/entities`` already serves unauthed.
+    A member or the panel (module docstring): "is a light on in that room right
+    now" is presence. It was open "because ``/api/ha/entities`` already serves
+    unauthed"; that stopped being true with #2089. A refusal is a failed vote on
+    the client, which falls toward sleeping.
     """
     from routers.rooms import room_entity_ids_for_panel
 
@@ -640,8 +650,8 @@ async def get_push_status(device_id: str) -> dict[str, Any]:
     looked exactly like a healthy one from the server. ``subscribers == 0`` PROVES nothing
     can receive a voice event; ``zoe_ground_truth.sh`` prints this for the wall panel.
 
-    Unauthenticated for the same reason as ``GET /{device_id}/config``: it exposes only a
-    count and two timestamps, no household data, and the ground-truth probe has no session.
+    Unauthenticated: it exposes only a count and two timestamps, no household data, and the
+    ground-truth probe has no session.
     """
     from push import broadcaster
 
@@ -652,12 +662,13 @@ async def get_push_status(device_id: str) -> dict[str, Any]:
 async def put_panel_config(
     device_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member),
     db=Depends(get_db),
 ) -> dict[str, Any]:
-    """Update one panel's config. Partial by design — a key that is absent is
-    left untouched, so the settings UI can save one field without having to
-    round-trip the others.
+    """Update one panel's config (a signed-in MEMBER only, module docstring).
+
+    Partial by design — a key that is absent is left untouched, so the settings
+    UI can save one field without having to round-trip the others.
 
     Explicit clears:
       - ``location: null`` / ``""``   → clear the room.

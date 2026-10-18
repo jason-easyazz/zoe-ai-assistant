@@ -21,11 +21,16 @@ the same rule ``panel_config.py`` documents. This house has zero ``light.*``;
 its controls are ``input_boolean.*``, ``switch.*``, ``input_number.*`` and
 ``scene.*``, so an allow-list would reject every real device.
 
-Auth mirrors ``panel_config.py``:
-  - GET is unauthenticated — the kiosk runs as a guest and needs to read rooms
-    to render them, exactly like it reads its own panel config. No sensitive
-    data is exposed (HA entity state is already readable unauthed).
-  - Writes require ``get_current_user``.
+Auth mirrors ``panel_config.py`` (security follow-up 2026-10-18):
+  - GETs need a signed-in MEMBER or THE PANEL
+    (``panel_principal.require_member_or_panel``): every device carries its live
+    HA state, the same presence/lock signal ``/api/ha/entities`` refuses to an
+    anonymous LAN caller since #2089. The kiosk reads them as the panel.
+  - Writes need a MEMBER (``panel_principal.require_member``). They take no HA
+    action, but a renamed, deleted or re-stocked room re-targets "the light in
+    here" on the panel and the voice path. ``get_current_user`` alone resolved
+    an anonymous LAN caller to ``guest`` and let it through. The estate answers a
+    refusal with "Sign in to manage rooms".
 """
 
 from __future__ import annotations
@@ -37,8 +42,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from auth import get_current_user
 from database import get_db
+from panel_principal import require_member, require_member_or_panel
 
 logger = logging.getLogger(__name__)
 
@@ -227,8 +232,10 @@ async def _device_ids(db, room_id: str) -> list[str]:
 # ── routes ────────────────────────────────────────────────────────────────────
 
 @router.get("")
-async def list_rooms(db=Depends(get_db)) -> dict[str, Any]:
-    """Every room with its devices resolved. Unauthenticated (kiosk reads it)."""
+async def list_rooms(
+    db=Depends(get_db), caller: dict = Depends(require_member_or_panel)
+) -> dict[str, Any]:
+    """Every room with its devices resolved. A member or the panel (module docstring)."""
     cursor = await db.execute(
         "SELECT id, name, slug, ha_area_id FROM rooms ORDER BY sort, name"
     )
@@ -246,7 +253,9 @@ def is_pickable(entity_id: str) -> bool:
 
 
 @router.get("/unassigned")
-async def unassigned_devices(db=Depends(get_db)) -> dict[str, Any]:
+async def unassigned_devices(
+    db=Depends(get_db), caller: dict = Depends(require_member_or_panel)
+) -> dict[str, Any]:
     """Controllable devices not yet in any room — the picker's source.
 
     Filtered to `_PICKABLE_DOMAINS`: the live house exposes 48 entities, most of
@@ -273,7 +282,7 @@ async def unassigned_devices(db=Depends(get_db)) -> dict[str, Any]:
 @router.post("")
 async def create_room(
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member),
     db=Depends(get_db),
 ) -> dict[str, Any]:
     """Create a room. Only ``name`` is required — no Home Assistant needed."""
@@ -306,7 +315,7 @@ async def create_room(
 async def update_room(
     room_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member),
     db=Depends(get_db),
 ) -> dict[str, Any]:
     """Rename a room or (un)link its HA area. Partial — an absent key is untouched.
@@ -346,7 +355,7 @@ async def update_room(
 @router.delete("/{room_id}")
 async def delete_room(
     room_id: str,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member),
     db=Depends(get_db),
 ) -> dict[str, Any]:
     """Delete a room. Its device links go with it (FK ON DELETE CASCADE) — the
@@ -366,7 +375,7 @@ async def delete_room(
 async def set_room_devices(
     room_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member),
     db=Depends(get_db),
 ) -> dict[str, Any]:
     """Replace this room's device list, in order.
@@ -416,7 +425,7 @@ async def set_room_devices(
 async def unlink_device(
     room_id: str,
     entity_id: str,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member),
     db=Depends(get_db),
 ) -> dict[str, Any]:
     """Take one device out of a room. It becomes unassigned, not deleted."""

@@ -92,8 +92,33 @@ def _typed_delegators(tree: ast.AST) -> frozenset[str]:
     return frozenset(out)
 
 
+def _flag_constants(tree: ast.AST) -> dict[str, str]:
+    """Module-level ``NAME = "ZOE_X"`` constants (also annotated), so a read through the constant is attributed to the flag.
+
+    Only names assigned EXACTLY ONCE at module level: a constant that is rebound anywhere at module level could mean something else at the read, and
+    an unresolved read is only ever under-counted (the honest direction). Found 2026-10-18: ``ZOE_SEAM_RECALL_INJECT``, live in the brain lane, was absent
+    from the inventory because ``zoe_flue_client.py`` reads it as ``os.environ.get(_RECALL_INJECT_ENV)``.
+    """
+    seen: dict[str, list[str | None]] = {}
+    for node in ast.iter_child_nodes(tree):
+        targets: list[ast.expr] = []
+        value: ast.expr | None = None
+        if isinstance(node, ast.Assign):
+            targets, value = list(node.targets), node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets, value = [node.target], node.value
+        else:
+            continue
+        for t in targets:
+            if isinstance(t, ast.Name):
+                flag = value.value if isinstance(value, ast.Constant) and isinstance(value.value, str) and FLAG_RE.match(value.value) else None
+                seen.setdefault(t.id, []).append(flag)
+    return {name: vals[0] for name, vals in seen.items() if len(vals) == 1 and vals[0]}
+
+
 class _FlagVisitor(ast.NodeVisitor):
-    def __init__(self, typed_delegators: frozenset[str] = frozenset()) -> None:
+    def __init__(self, typed_delegators: frozenset[str] = frozenset(), flag_constants: dict[str, str] | None = None) -> None:
+        self._consts = flag_constants or {}
         # name -> list of (default_str, via_typed_env)
         self.reads: list[tuple[str, str, bool]] = []
         # Local wrappers in THIS module whose body is a bare delegation to a
@@ -101,6 +126,14 @@ class _FlagVisitor(ast.NodeVisitor):
         # reads through them ARE typed (Greptile P1 on #1575: voice_tts/main.py
         # delegators were inflating the untyped count).
         self._typed_delegators = typed_delegators
+
+    def _flag_name(self, expr: ast.expr) -> str | None:
+        """The ZOE_* name an env-read's key expression denotes: a string literal, or a module-level constant that holds one."""
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, str) and FLAG_RE.match(expr.value):
+            return expr.value
+        if isinstance(expr, ast.Name):
+            return self._consts.get(expr.id)
+        return None
 
     @staticmethod
     def _call_name(func: ast.expr) -> str:
@@ -145,8 +178,8 @@ class _FlagVisitor(ast.NodeVisitor):
                            "_env_enabled", "_int_from_env")
                   or self._is_environ_get(node.func))
         if (typed or is_get) and node.args:
-            key = node.args[0]
-            if isinstance(key, ast.Constant) and isinstance(key.value, str) and FLAG_RE.match(key.value):
+            flag = self._flag_name(node.args[0])
+            if flag:
                 default: ast.expr | None = None
                 if len(node.args) > 1:
                     default = node.args[1]
@@ -154,7 +187,7 @@ class _FlagVisitor(ast.NodeVisitor):
                     for kw in node.keywords:
                         if kw.arg == "default":
                             default = kw.value
-                self.reads.append((key.value, _literal_repr(default), typed))
+                self.reads.append((flag, _literal_repr(default), typed))
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
@@ -167,9 +200,9 @@ class _FlagVisitor(ast.NodeVisitor):
             return
         v = node.value
         if isinstance(v, ast.Attribute) and v.attr == "environ":
-            sl = node.slice
-            if isinstance(sl, ast.Constant) and isinstance(sl.value, str) and FLAG_RE.match(sl.value):
-                self.reads.append((sl.value, REQUIRED, False))
+            flag = self._flag_name(node.slice)
+            if flag:
+                self.reads.append((flag, REQUIRED, False))
         self.generic_visit(node)
 
 
@@ -198,13 +231,13 @@ def scan_repo(repo: Path, files: list[str] | None = None) -> dict:
             ) from exc
         files = [f for f in out.stdout.splitlines() if f]
 
-    env_example = repo / ".env.example"
     documented: set[str] = set()
-    if env_example.exists():
-        for line in env_example.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"\s*#?\s*(ZOE_[A-Z0-9_]+)\s*=", line)
-            if m:
-                documented.add(m.group(1))
+    for env_example in (repo / ".env.example", repo / "services" / "zoe-data" / ".env.example"):
+        if env_example.exists():
+            for line in env_example.read_text(encoding="utf-8").splitlines():
+                m = re.match(r"\s*#?\s*(ZOE_[A-Z0-9_]+)\s*=", line)
+                if m:
+                    documented.add(m.group(1))
 
     inventory: dict[str, dict[str, dict]] = {"prod": {}, "lab": {}}
     for rel in sorted(files):
@@ -216,7 +249,7 @@ def scan_repo(repo: Path, files: list[str] | None = None) -> dict:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError, OSError):
             continue
-        visitor = _FlagVisitor(_typed_delegators(tree))
+        visitor = _FlagVisitor(_typed_delegators(tree), _flag_constants(tree))
         visitor.visit(tree)
         for flag, default, typed in visitor.reads:
             info = inventory[section].setdefault(

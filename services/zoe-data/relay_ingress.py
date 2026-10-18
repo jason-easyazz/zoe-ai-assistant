@@ -21,7 +21,7 @@ The rules this module owns (every one has a negative control in ``tests/test_rel
   2. NEVER ``guest``. A relayed request must carry a valid DEVICE TOKEN (``X-Device-Token``) or a valid KIOSK CREDENTIAL
      (``zoe_panel_kiosk`` cookie, ``ZOE_PANEL_KIOSK_CREDENTIAL``), else 401. ``auth.get_current_user``'s anonymous-guest fallback
      and ``ZOE_UNAUTHENTICATED_ROLE`` never apply; a zoe-auth outage is refused (503), never downgraded.
-  3. The client certificate is bound to ONE panel: ``panel_client_certs.fingerprint -> panel_id`` (alembic 0056, operator-bound
+  3. The client certificate is bound to ONE panel: ``panel_client_certs.fingerprint -> panel_id`` (alembic 0058, operator-bound
      through ``routers/panel_relay.py``). The credential's panel must equal the certificate's panel; a certificate with no
      credential, a credential with no bound certificate, a revoked or unknown fingerprint, an inactive panel and a mismatch are
      all 401. A device token or kiosk cookie copied off one panel is therefore useless with another panel's certificate.

@@ -5,7 +5,7 @@ date: 2026-10-16
 status: design; phase F0 (the relay in the lab) built and run 2026-10-17 in labs/relay (see its README for results and the findings folded in below); nothing changed on any live system. Every phase is lab-proven in a hermetic lab first, and each Zoe-side code change ships flag-dark. R1 box side (zoe-data relay ingress, the nginx relay listener, the certificate registry, the frpc check, the household CA tooling) built flag-dark 2026-10-17 in branch feature/relay-r1-ingress (PR #2095); record and owner steps in docs/knowledge/panel-relay-r1-box.md; C3 and the panel side are pending.
 evidence: docs/research/panel-anywhere-2026-10.md (sources tagged verified/secondary/unverified; snitun 0.47.0, hass-nabucasa 2.7.0 and frp v0.71.0 read in source)
 builds_on: docs/architecture/panel-remote-access.md (PR #2080 - owner-only link, Wi-Fi onboarding, away mode, panel firewall), services/zoe-data/panel_kiosk_credential.py + routers/panel_kiosk.py (#2082), routers/panel_provision.py + routers/panel_auth.py (pairing, device tokens), routers/ha_control.py + auth.get_current_user (the guest fallback this design must not inherit)
-depends_on: PR #2083 (still open) - the Headscale bundle scripts/setup/remote-access/headscale/ (the trip stopgap and the lab-harness pattern) lands with #2083; every reference to it below is marked so. #2080 is merged: panel-remote-access.md and its research are on main.
+depends_on: PR #2083 was CLOSED unmerged on 2026-10-17 - the Headscale bundle scripts/setup/remote-access/headscale/ is NOT on main (it lives on branch feature/headscale-bundle) and Headscale was removed from the live box on 2026-10-18; every reference to it below describes that branch, not main. #2080 is merged: panel-remote-access.md and its research are on main.
 ---
 
 # Panel anywhere
@@ -72,7 +72,7 @@ depends_on: PR #2083 (still open) - the Headscale bundle scripts/setup/remote-ac
   ~320 ms and New York ~270 ms (research 6.1). The biggest cheap fix is a keep-alive HTTP session in the voice
   daemon: today every turn pays a new TCP connection plus a TLS handshake, about 2 round trips. Head-of-line
   blocking across the multiplexer is tail latency, not breakage; frp's QUIC transport removes it on the box leg.
-- **The trip: finish Headscale (#2083, still open; the bundle lands with it) for the owner's panel now and build frp in parallel** (section 11). The
+- **The trip: ~~finish Headscale (#2083)~~ SUPERSEDED - owner decision 2026-10-17: pause Headscale and build our own relay; #2083 was closed unmerged and Headscale was removed 2026-10-18 (the bundle is only on `feature/headscale-bundle`). What follows is the original recommendation, kept for the record:** finish Headscale (#2083) for the owner's panel now and build frp in parallel (section 11). The
   Headscale bundle is lab-proven and needs no Zoe code or change to the server's port 443. It is not throwaway,
   because it stays as the operator's admin path. The frp fast path (F0 + R1, about 3-4 days now that mTLS and the never-guest rule are in R1) is a true subset of this
   design and should follow right behind it.
@@ -372,7 +372,7 @@ scope for this record.
 
 Every cell has a negative control that must fail, and a cell that only proves rejection also has a positive control
 that must succeed. "Baseline" marks an extra comparison; it is never the only control in a cell. The
-lab is hermetic and follows #2083's harness (lands with #2083): Docker on an internal network, with a `MemAvailable` gate before starting
+lab is hermetic and follows #2083's harness (closed unmerged; the harness is on branch `feature/headscale-bundle`): Docker on an internal network, with a `MemAvailable` gate before starting
 and teardown asserted.
 
 ### F0 / R0 - the relay in the lab (two fake households)
@@ -463,7 +463,7 @@ registration is accepted, which proves the check is what refuses it.
 
 ## 11. The owner's trip: fast path vs Headscale
 
-| | Headscale stopgap (#2083, lands with #2083) | frp fast path (F0 then R1) |
+| | Headscale stopgap (#2083, CLOSED unmerged 2026-10-17; bundle on `feature/headscale-bundle`; Headscale removed 2026-10-18) | frp fast path (F0 then R1) |
 |---|---|---|
 | Ready | bundle lab-proven 65/65, pinned v0.29.4, clients already installed on both boxes | to build: the lab (F0), the nginx relay listener (a zoe-ui config PR), the `ZOE_RELAY_INGRESS` flag (a small zoe-data PR), frpc unit, the household CA |
 | Touches the relay host's 443 | no (one grey-cloud DNS name, UDP 3478) | yes (stream front), or a second public address |
@@ -472,14 +472,14 @@ registration is accepted, which proves the check is what refuses it.
 | Days | about 1 (operator steps) | about 3-4 including the lab, both PRs, the hand-signed client certificate and cells T10, T11, C3 |
 | Shared work that carries over either way | recreate the drifted containers; apply the #2082 panel firewall (and narrow it on `tailscale0`) and the kiosk gate; the household/private CA; the panel's `/etc/hosts` home/away switch | the same |
 
-**Recommendation:**
+**Recommendation (superseded 2026-10-17/18 - the frp path was chosen and Headscale was dropped; kept as written):**
 
 1. **Now:** the shared work, then Headscale for the trip.
 2. **Same week:** F0 in the lab.
 3. **After the trip, or during it once F0 passes and R1's cells pass on a lab panel:** move the owner's panel to the
    relay.
 
-Headscale is never deleted. It is the operator's own path to every box. If the owner would rather build one path
+Headscale is never deleted. It is the operator's own path to every box. *(Superseded: it was deleted from the live box on 2026-10-18 and its bundle PR closed unmerged.)* If the owner would rather build one path
 only, F0 + R1 fits before the trip only if it starts at once and nothing slips. The honest risk is the relay host's
 stream front, which changes how that server's existing sites are reached.
 
@@ -493,7 +493,7 @@ stream front, which changes how that server's existing sites are reached.
 | D4 | The relay domain | a **dedicated domain** separate from the platform's, with its public zone on the Public Suffix List before public names scale (R5) |
 | D5 | Public name per household (webhooks, OAuth, phone browser) | **off by default**, opt-in per household in R5, narrow surface, CT watch |
 | D6 | One relay for every inbound need | **yes**: one device registry = session master; every interactive path to a household's box goes through the SNI relay with TLS to the box; no second relay with its own encryption (section 9) |
-| D7 | The trip | **Headscale now** (shared work first), frp F0 the same week, the panel moves to the relay after R1's cells pass |
+| D7 | The trip | ~~**Headscale now**~~ superseded 2026-10-17: Headscale paused, then removed 2026-10-18; **frp F0/R1** is the path. Original: Headscale now (shared work first), frp F0 the same week, the panel moves to the relay after R1's cells pass |
 | D8 | Household CA custody | box-local intermediate for issuing; root generated on the box and exported once to the owner's offline backup, then removed (R3) |
 | D9 | mTLS on the relay listener | **required from R1**, no optional phase; relay ingress never maps to `guest`; if C3 fails, R1 waits for the loopback forwarder |
 | D11 | A device token's member binding | **ignored over the relay** (panel principal only; members re-authenticate by voice or PIN). Whether to drop it on the LAN too is the ledger line of 2026-10-16 |
