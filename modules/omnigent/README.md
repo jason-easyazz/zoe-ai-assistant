@@ -295,6 +295,16 @@ Cursor), not metered API keys.
 CLIs use the **API (metered billing) and ignore the subscription**. So those env vars are
 deliberately *absent* from the compose file. Don't add them back.
 
+**Exception, out-of-repo and opt-in (2026-10-18):** the stored Claude `/login` refresh is
+unreliable when several Claude processes start together ("another Claude Code process is
+refreshing it"). The compose file therefore reads an OPTIONAL env file
+`~/.config/zoe-omnigent/claude.env` (override: `OMNIGENT_CLAUDE_ENV_FILE`; absent = no change)
+that may carry `CLAUDE_CODE_OAUTH_TOKEN` (a `claude setup-token` one-year token, never
+refreshed) and `ZOE_OMNIGENT_ANTHROPIC_API_KEY` (a dedicated Console key for polly's SDK brain
+only, enabled by `scripts/maintenance/omnigent_claude_auth_mode.py api`). It is deliberately
+NOT named `ANTHROPIC_API_KEY`. Exact owner steps, root cause and rollback:
+[docs/knowledge/omnigent-cross-review.md](../../docs/knowledge/omnigent-cross-review.md).
+
 **One-time login** (tokens then persist in the credential volumes and auto-refresh):
 ```bash
 docker exec -it zoe-omnigent claude            # /login in the TUI → paste the code

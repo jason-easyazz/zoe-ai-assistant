@@ -74,6 +74,14 @@ into the repo.
 
 Public labelled speakers: LibriSpeech test-clean, speaker-disjoint from the centring cohort.
 
+**Leakage fixed, numbers below are stale (2026-10-18).** The public manifest lists most clips twice, a `clean` and a `farfield`
+file of the SAME utterance. Sections C and D used both, so a voiceprint built from one entry was queried with its own twin
+and the grids read better than the truth. The script now keeps ONE variant per source clip (`one_variant_per_clip`:
+speaker plus file name, farfield preferred as the pendant's channel). The table below was measured BEFORE that change: its
+precision / recall / purity / labelling figures, and the thresholds chosen from them (suggest min 0.45 and margin 0.10, cluster
+0.45, link 0.45, you 0.351), must be re-derived with a fresh run of sections C and D before they are trusted. The suggestion
+thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); nothing was changed live.
+
 | Cell | Setting chosen | Result |
 |---|---|---|
 | Suggestions: 5 tagged voices of 3 clips each, against their other clips and 10 strangers, over 30 trials | min 0.45, margin 0.10 | precision 99.6 %, recall 74.4 %, a stranger suggested 0.2 %, wrong person 0.0 % (min 0.40 gives 98.7 % / 82.7 %, with strangers at 0.8 %) |
