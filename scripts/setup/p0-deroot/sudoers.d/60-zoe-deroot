@@ -1,0 +1,35 @@
+# P0 de-root sudo ALLOWLIST (docs/architecture/p0-deroot.md). NOT installed by anything. The owner installs it,
+# from the zoe-admin account, with:
+#   sudo install -m 0440 -o root -g root 60-zoe-deroot /etc/sudoers.d/60-zoe-deroot && sudo visudo -c
+# It only ADDS narrow rules; it is inert until phase P0-3 removes /etc/sudoers.d/zoe-temp (NOPASSWD: ALL) and
+# takes `zoe` out of the `sudo` group. Rules for this file (pinned by tests/unit/test_p0_deroot_files.py):
+#   - every command is an absolute path with an exact argument list: no wildcards, no shells, no editors,
+#     no interpreters, no `systemctl edit|link|enable`, nothing that takes a path from the caller;
+#   - each helper under /usr/local/libexec/zoe-priv/ is root-owned, fixed-function and validates its argument.
+
+# Memory compaction and NvMap reads for the 12B night window, the bake-off and the brain cold start.
+Cmnd_Alias ZOE_MEM = /usr/local/libexec/zoe-priv/zoe-mem-compact 1, \
+                     /usr/local/libexec/zoe-priv/zoe-mem-compact 3, \
+                     /usr/local/libexec/zoe-priv/zoe-nvmap-read free, \
+                     /usr/local/libexec/zoe-priv/zoe-nvmap-read clients
+
+# The model tier as SYSTEM units (phase P0-4): the night window stops and restarts them around the 12B.
+# Before P0-4 these unit names do not exist at system scope, so the rules match nothing.
+Cmnd_Alias ZOE_MODEL_UNITS = /usr/bin/systemctl start llama-server.service, \
+                             /usr/bin/systemctl stop llama-server.service, \
+                             /usr/bin/systemctl restart llama-server.service, \
+                             /usr/bin/systemctl start kokoro-tts.service, \
+                             /usr/bin/systemctl stop kokoro-tts.service, \
+                             /usr/bin/systemctl restart kokoro-tts.service, \
+                             /usr/bin/systemctl start functiongemma-router.service, \
+                             /usr/bin/systemctl stop functiongemma-router.service, \
+                             /usr/bin/systemctl restart functiongemma-router.service
+
+# The service tier as SYSTEM units (phase P0-4): deploy restarts them; an agent may too (a restart is DoS-only
+# power, and "restart is authorized" is a standing owner rule).
+Cmnd_Alias ZOE_SVC_UNITS = /usr/bin/systemctl restart zoe-data.service, \
+                           /usr/bin/systemctl restart flue-zoe-brain-2x.service, \
+                           /usr/bin/systemctl restart flue-zoe-telegram.service
+
+zoe ALL=(root) NOPASSWD: ZOE_MEM, ZOE_MODEL_UNITS, ZOE_SVC_UNITS
+zoe-deploy ALL=(root) NOPASSWD: ZOE_SVC_UNITS
