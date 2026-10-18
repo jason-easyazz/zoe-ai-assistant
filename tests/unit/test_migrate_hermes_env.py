@@ -258,3 +258,14 @@ def test_a_plain_line_is_still_copied_verbatim_negative_control(mig, box):
     assert parsed.lines["OPENAI_API_KEY"] == f"OPENAI_API_KEY={SECRET_A}"
     assert parsed.lines["EXPORTED_KEY"] == "EXPORTED_KEY=expv"
     assert parsed.lines["EXPORTED_KEY"] != "export EXPORTED_KEY=expv"
+
+
+def test_every_cleanup_family_unit_is_retired_here(mig):
+    """Codex P2 on #2110: a unit cleanup_dead_units.py retires (e.g. zoe-dreaming, whose code is gone) must never be a migration
+    target - else the conservative path copies nearly every secret into a private env file nothing removes. Drift pin."""
+    spec = importlib.util.spec_from_file_location("cleanup_dead_units", SCRIPT.parent / "cleanup_dead_units.py")
+    cleanup = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = cleanup
+    spec.loader.exec_module(cleanup)
+    services = {n for names, _globs in cleanup.FAMILIES.values() for n in names if n.endswith(".service")}
+    assert services and services <= mig.RETIRED_UNITS, sorted(services - mig.RETIRED_UNITS)

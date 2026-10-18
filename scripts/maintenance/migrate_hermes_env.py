@@ -67,8 +67,13 @@ from typing import Iterable, Optional
 _EXPORT_RE = re.compile(r"^\s*export\s+")
 _NAME_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
-# Units that are retired (their removal is scripts/maintenance/cleanup_dead_units.py): never a migration target.
-RETIRED_UNITS = frozenset({"hermes-agent.service", "zoe-keepwarm.service"})
+# Units that are retired (their removal is scripts/maintenance/cleanup_dead_units.py): never a migration target. EVERY cleanup
+# family's units (a retired unit whose code is gone would otherwise take the conservative copy-everything path into a private env
+# file that nothing removes - Codex P2 on #2110). Pinned to cleanup_dead_units.FAMILIES by tests/unit/test_migrate_hermes_env.py.
+RETIRED_UNITS = frozenset({
+    "hermes-agent.service", "openclaw-gateway.service", "flue-zoe-brain.service", "zoe-dreaming.service",
+    "zoe-keepwarm.service", "bonsai-server.service",
+})
 
 # Dead whatever the code says, and why. NEVER copied: a revoked secret in a live env file only hides a 401 behind a name that looks
 # configured. Coordinator note 2026-10-18 (A9, #2108): TELEGRAM_BOT_TOKEN in ~/.hermes/.env is revoked (getMe -> 401); the working
