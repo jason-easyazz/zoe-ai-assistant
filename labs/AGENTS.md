@@ -401,7 +401,18 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   negative controls: wrong password, append-only delete, cross-household, identity on the
   box, wrong identity, the 35-day retention bound). Hand-run via `run.sh` (01:35-04:55
   refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`, asserts its own
-  teardown). 19/19 on 2026-10-18.
+  teardown). 19/19 on 2026-10-18. Its tier-policy cell (B2) also covers the deep dive 2
+  S0-8 host sources.
+- `restore-drill/` — **S0-8 weekly restore drill + host sources** (`docs/knowledge/offbox-backup.md`
+  section 7): a synthetic source database in its own capped `--network none` container
+  (the pinned live image), a synthetic chromadb 1.5.9 palace, a synthetic box, and the
+  REAL nightly scripts, `zoe_host_snapshot.py`, `zoe_restore_drill.py` and the two backup
+  root helpers (repo copies, run unprivileged). Cells S1-S5, D1, negative controls N1-N10
+  (corrupted dump, missing table, wrong pgvector, palace without HNSW, tampered host file,
+  a planted same-name container, a truncated encrypted archive,
+  planted symlinks, memory floor, helper argv), T1 teardown + the live database's database
+  list unchanged. Hand-run via `run.sh` (`night_busy.sh test`, 01:35-04:55 refused,
+  `MemAvailable` >= 2000 MB, the test-lane lock). 18/18 on 2026-10-19.
 - `relay/` — **F0 / R0 of panel anywhere** (`docs/architecture/panel-anywhere.md`
   section 10): a hermetic Docker lab (internal network, nothing published) with an nginx
   stream front + frp v0.71.0 `frps` behind a fail-closed preflight, a session-master
