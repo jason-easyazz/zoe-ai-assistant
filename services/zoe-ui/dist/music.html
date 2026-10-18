@@ -1008,8 +1008,16 @@
     }
 
     /* ── WebSocket ──────────────────────────────────────────────────────── */
-    function connectWS() {
+    // Music Assistant's own UI + socket sit behind a Zoe gate (nginx auth_request -> /api/music/ma-ui/gate). A WebSocket
+    // handshake and a window.open cannot carry our X-Session-ID header, so we trade it for a path-scoped HttpOnly cookie first.
+    async function maUiSession() {
+        try { await fetch('/api/music/ma-ui/session', { method: 'POST', headers: zoeHdrs() }); } catch {}
+    }
+    setInterval(maUiSession, 3600 * 1000);   // the cookie lasts 12 h; keep it fresh for the "Open Music Assistant" popup
+
+    async function connectWS() {
         clearTimeout(S.wsRetryTimer);
+        await maUiSession();   // every (re)connect refreshes the cookie before the handshake
         try {
             if (S.ws) { S.ws.onclose = null; S.ws.close(); }
             S.ws = new WebSocket(MA_WS);

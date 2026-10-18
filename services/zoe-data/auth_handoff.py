@@ -176,6 +176,23 @@ def phone_base_url(request: Any) -> str:
     return str(request.base_url).rstrip("/")
 
 
+def lan_base_url(request: Any) -> Optional[str]:
+    """The LAN origin a phone on the same Wi-Fi will open, taken ONLY from the host the panel itself loaded the page from.
+
+    Unlike ``phone_base_url`` it never reads ``ZOE_PUBLIC_URL``, and it returns ``None`` for a request that crossed the Cloudflare
+    tunnel (its Host is the tunnel's name, not the LAN's): a QR that grants a capability must not encode a public origin, so
+    there is no configuration or request shape that makes this return one. The caller refuses on ``None``."""
+    import panel_kiosk_credential
+
+    if panel_kiosk_credential.via_public_tunnel(request):
+        return None
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").strip()
+    scheme = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").strip()
+    if host:
+        return f"{scheme}://{host}".rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
 def _view(row: Any) -> dict[str, Any]:
     """The public, secret-free shape — the only thing a panel ever sees."""
     exp = float(row["expires_at"])
