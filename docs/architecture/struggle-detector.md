@@ -132,7 +132,7 @@ All four of the evening's misses are caught. Still missed (stated, not hidden): 
 domain evidence ("how are you" -> "I want to know how you are"), garbled STT that is never repeated, and a correction
 that says "it's okay, you don't need to" without a cue.
 
-## Phase 2 - explain + propose (built; `struggle_proposals.py`, migration `0058`, flag `ZOE_STRUGGLE_PROPOSALS`)
+## Phase 2 - explain + propose (built; `struggle_proposals.py`, migration `0057`, flag `ZOE_STRUGGLE_PROPOSALS`)
 
 The night window's `struggle_proposals` job (`scripts/maintenance/zoe-struggle-proposals.py`, after the night mind, before the pendant day
 review; best-effort, <= 8 min; the window unit's `--jobs` list carries it) reads the last 7 days of `struggle_events` and turns recurring

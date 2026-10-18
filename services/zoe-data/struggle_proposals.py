@@ -503,7 +503,7 @@ async def summarise(items: list[tuple[str, dict]], llm: LLM, *, budget_s: float 
     return out
 
 
-# ── the store (struggle_proposals / struggle_proposal_events, alembic 0058) ───
+# ── the store (struggle_proposals / struggle_proposal_events, alembic 0057) ───
 
 _PCOLS = ("id", "fingerprint", "kind", "status", "pattern", "domain", "label", "label_source", "signals", "episode_count", "event_count", "user_count",
           "day_count", "first_seen", "last_seen", "confidence", "summary", "summary_source", "followup", "decision_note", "created_at",

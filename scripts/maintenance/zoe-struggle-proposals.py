@@ -115,7 +115,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
             res = await sp.run_pass(llm=llm, dry_run=args.dry_run, days=args.days or None, min_ep=args.min_episodes or None,
                                     budget_s=args.budget_s)
         except Exception as exc:  # noqa: BLE001
-            if sp._missing_table(exc):       # migration 0058 has not run yet (deploy order): nothing to do tonight, not a failed night
+            if sp._missing_table(exc):       # migration 0057 has not run yet (deploy order): nothing to do tonight, not a failed night
                 return 0, {"status": "table_missing"}
             return 1, {"status": "error", "error": type(exc).__name__}
         return 0, res

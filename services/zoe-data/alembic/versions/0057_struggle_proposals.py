@@ -1,4 +1,4 @@
-"""0058 - ``struggle_proposals`` + ``struggle_proposal_events``: Phase 2 of the struggle detector (``struggle_proposals.py``).
+"""0057 - ``struggle_proposals`` + ``struggle_proposal_events``: Phase 2 of the struggle detector (``struggle_proposals.py``).
 
 The night pass clusters the last days of ``struggle_events`` (0050) into PROPOSALS - a recurring problem with a candidate fix class:
 
@@ -19,8 +19,8 @@ the events themselves stay in ``struggle_events``.
 
 from alembic import op
 
-revision = "0058"
-down_revision = "0055"
+revision = "0057"
+down_revision = "0056"
 branch_labels = None
 depends_on = None
 

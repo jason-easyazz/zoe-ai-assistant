@@ -1,7 +1,7 @@
-"""Migration 0058 (``struggle_proposals`` + ``struggle_proposal_events``): create-if-missing, rerun-safe, unique fingerprint, the only DDL for the
+"""Migration 0057 (``struggle_proposals`` + ``struggle_proposal_events``): create-if-missing, rerun-safe, unique fingerprint, the only DDL for the
 tables, and a proposal written by the module's own SQL reads back.
 
-Negative controls (run by hand when this was written): drop ``IF NOT EXISTS`` from 0058 -> the rerun test goes red; drop the UNIQUE index ->
+Negative controls (run by hand when this was written): drop ``IF NOT EXISTS`` from 0057 -> the rerun test goes red; drop the UNIQUE index ->
 the fingerprint test goes red; add a ``CREATE TABLE`` to ``struggle_proposals.py`` -> the no-request-time-DDL test goes red.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from alembic.operations import Operations
 pytestmark = pytest.mark.ci_safe
 
 SVC = Path(__file__).resolve().parents[1]
-MIG = SVC / "alembic/versions/0058_struggle_proposals.py"
+MIG = SVC / "alembic/versions/0057_struggle_proposals.py"
 PROPOSAL_COLUMNS = {"id", "fingerprint", "kind", "status", "pattern", "domain", "label", "label_source", "signals", "episode_count", "event_count",
                     "user_count", "day_count", "first_seen", "last_seen", "confidence", "summary", "summary_source", "followup", "decision_note",
                     "created_at", "updated_at", "decided_at", "decided_by", "mode"}
@@ -26,7 +26,7 @@ EVENT_COLUMNS = {"proposal_id", "event_id", "user_id", "ts", "signal"}
 
 
 def _mod():
-    spec = importlib.util.spec_from_file_location("mig_0058", MIG)
+    spec = importlib.util.spec_from_file_location("mig_0057", MIG)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -41,7 +41,7 @@ def _run(engine, fn_name):
 
 def test_revision_chain_is_linear_with_one_head():
     mod = _mod()
-    assert mod.revision == "0058"
+    assert mod.revision == "0057"
     revs, downs = set(), set()
     for f in (SVC / "alembic/versions").glob("*.py"):
         src = f.read_text()
@@ -51,7 +51,7 @@ def test_revision_chain_is_linear_with_one_head():
             revs.add(r.group(1))
         if d:
             downs.add(d.group(1))
-    assert mod.down_revision in revs, "0058 must chain onto an existing revision"
+    assert mod.down_revision in revs, "0057 must chain onto an existing revision"
     heads = revs - downs
     assert len(heads) == 1, f"more than one head: {sorted(heads)}"
 

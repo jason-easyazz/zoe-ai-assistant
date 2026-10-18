@@ -1,7 +1,7 @@
-"""Struggle PROPOSALS (Phase 2; ``struggle_proposals.py``, migration 0058, ``routers/struggles.py``, ``scripts/maintenance/zoe-struggle-proposals.py``).
+"""Struggle PROPOSALS (Phase 2; ``struggle_proposals.py``, migration 0057, ``routers/struggles.py``, ``scripts/maintenance/zoe-struggle-proposals.py``).
 
 Every event, phrase and name is INVENTED (public repo). The store is the REAL SQL on a real SQLite file built by the real migrations
-(0050 + 0058), so the joins the privacy cascade depends on are exercised, not mocked. The model is a fake that records what it was shown.
+(0050 + 0057), so the joins the privacy cascade depends on are exercised, not mocked. The model is a fake that records what it was shown.
 No brain, no network.
 
 Negative controls (run by hand when this was written; re-run them after touching the rule - each should turn the named test red):
@@ -86,7 +86,7 @@ def env(monkeypatch, tmp_path):
     path = str(tmp_path / "zoe.db")
     engine = sa.create_engine(f"sqlite:///{path}")
     _migrate(engine, "0050_struggle_events.py")
-    _migrate(engine, "0058_struggle_proposals.py")
+    _migrate(engine, "0057_struggle_proposals.py")
     db = _Sqlite(path)
 
     @contextlib.asynccontextmanager
