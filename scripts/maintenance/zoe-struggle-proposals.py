@@ -7,7 +7,7 @@ The night window's job ``struggle_proposals`` runs this on the 12B after the dig
     zoe-struggle-proposals.py --dry-run [--days 30] [--min-episodes 2]       # cluster + count, NOTHING written, no model call
     zoe-struggle-proposals.py --no-model                                     # store proposals with the template sentence
     zoe-struggle-proposals.py --list [--status proposed] [--kind intent_gap] # what is stored (counts and shapes, never words)
-    zoe-struggle-proposals.py --accept ID [--note TEXT] | --reject ID [--note TEXT]
+    zoe-struggle-proposals.py --accept ID [--reason CODE] | --reject ID [--reason CODE]
 
 CODE does the grouping, counting and thresholds; the model only rewords the counts as one sentence, and it is shown nothing else
 (no utterance, no name, no id). With ``ZOE_STRUGGLE_PROPOSALS=off`` the pass is a no-op (a ``--dry-run`` still counts). Accepting a
@@ -83,7 +83,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap.add_argument("--show", default="")
     ap.add_argument("--accept", default="")
     ap.add_argument("--reject", default="")
-    ap.add_argument("--note", default="")
+    ap.add_argument("--reason", default="", help="not_a_problem | wrong_label | already_fixed | not_now | other (a code, never free text)")
     ap.add_argument("--allow-remote", action="store_true")
     args = ap.parse_args(argv)
 
@@ -103,9 +103,9 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
             if args.show:
                 return 0, {"status": "ok", "proposal": await sp.get_proposal(args.show)}
             if args.accept or args.reject:
-                p = await sp.decide(args.accept or args.reject, "accept" if args.accept else "reject", "cli", args.note)
+                p = await sp.decide(args.accept or args.reject, "accept" if args.accept else "reject", "cli", args.reason)
                 return 0, {"status": "ok", "proposal": p}
-        except sp.ProposalError as exc:
+        except (sp.ProposalError, ValueError) as exc:
             return 1, {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         llm = None
         if not (args.no_model or args.dry_run) and url:

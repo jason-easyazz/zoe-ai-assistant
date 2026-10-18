@@ -11,8 +11,8 @@ COUNTS and text-free shapes only (never a household word; the router-example tex
 ``queued_router_examples`` resolves it in-process):
   * ``GET  /api/system/struggles/proposals?status=&kind=&limit=``    list (best first) + counts by status / kind + the mode
   * ``GET  /api/system/struggles/proposals/{id}``                    one proposal with its evidence event ids
-  * ``POST /api/system/struggles/proposals/{id}/accept`` ``{note}``  router_example -> the router self-train queue; others -> a task stub
-  * ``POST /api/system/struggles/proposals/{id}/reject`` ``{note}``  suppressed for 30 days
+  * ``POST /api/system/struggles/proposals/{id}/accept`` ``{reason}`` router_example -> the router self-train queue; others -> a task stub
+  * ``POST /api/system/struggles/proposals/{id}/reject`` ``{reason}`` suppressed for 30 days
   Accepting APPLIES NOTHING: it records the decision and the follow-up for Phase 3 / the operator.
 
 A panel device token authenticates a panel, not a person, so it is refused even when bound to an admin. Registered
@@ -20,10 +20,10 @@ unconditionally (read-only); with ``ZOE_STRUGGLE_DETECT=off`` it reports what is
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from auth import require_admin
 
@@ -62,7 +62,8 @@ async def struggles_report(
 # ── Phase 2: proposals ───────────────────────────────────────────────────────
 
 class Decision(BaseModel):
-    note: str = Field(default="", max_length=200)
+    # a CODE, never free text: a note could carry a household utterance into a proposal and back out of the API
+    reason: Literal["", "not_a_problem", "wrong_label", "already_fixed", "not_now", "other"] = ""
 
 
 def _unavailable(exc: Exception) -> HTTPException:
@@ -102,7 +103,7 @@ async def _decide(proposal_id: str, action: str, body: Decision, user: dict) -> 
     import struggle_proposals as sp
 
     try:
-        return await sp.decide(proposal_id, action, str(user.get("user_id") or ""), body.note)
+        return await sp.decide(proposal_id, action, str(user.get("user_id") or ""), body.reason)
     except sp.NotFound as exc:
         raise HTTPException(status_code=404, detail="no such proposal") from exc
     except sp.Conflict as exc:

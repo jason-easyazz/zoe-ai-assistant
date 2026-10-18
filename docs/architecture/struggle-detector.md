@@ -140,7 +140,7 @@ problems into **proposals**. **Code groups, counts and thresholds; the 12B write
 
 ```
 struggle_events --(code)--> classify -> cluster by (kind, text-free key) -> recurrence thresholds -> struggle_proposals + struggle_proposal_events (evidence ids)
-                                                                                       |-- sentence: template, or the 12B's rewording of the SAME counts (validated, else the template)
+                                                                                       |-- sentence: template, or the 12B's rewording of the SAME counts (validated word by word: only words from its own facts plus a fixed list of grammar / generic words, no number the facts do not hold - it can rearrange the counts but has no word to introduce a name, a place or a cause - else the template)
                                                                                        |-- morning brief line (mode `on`) / admin API / CLI
                                                                                        `-- accept -> router_example: the router self-train queue (Phase 3 reads it);  others: a task stub + ledger line (no PR)
 ```
@@ -182,7 +182,7 @@ follow-up: `router_example` -> `{type: router_selftrain_queue, consumer: ZOE_ROU
 seam, an `accepted` proposal only) reaches `applied`.
 
 **Surfaces.** Admin PERSONS only (a panel device token is refused): `GET /api/system/struggles/proposals?status=&kind=` (list, counts, mode),
-`GET .../proposals/{id}` (with evidence event ids), `POST .../{id}/accept|reject` `{note}`; `scripts/maintenance/zoe-struggle-proposals.py`
+`GET .../proposals/{id}` (with evidence event ids), `POST .../{id}/accept|reject` `{reason}` (a code - `not_a_problem | wrong_label | already_fixed | not_now | other` - never free text, so no utterance can be typed into a proposal); `scripts/maintenance/zoe-struggle-proposals.py`
 (`--dry-run` counts only, `--list`, `--show`, `--accept ID`, `--reject ID`); a `STRUGGLE_PROPOSALS_SUMMARY` line in the night report
 (`NIGHT_JOB struggle_proposals ...`, counts only); mode `on` only: one line in the admin's morning brief ("I have 2 ideas for getting better
 at things I struggled with (1 router, 1 missing ability)").

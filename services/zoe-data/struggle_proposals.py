@@ -431,8 +431,38 @@ def messages_for(facts: dict) -> list[dict]:
     ]
 
 
+_WORD_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
+#: the only words a reworded sentence may use besides the ones in its own facts: grammar, plus generic words for "a recurring problem"
+#: (no name, place, thing or cause a household could have supplied is in this list)
+_FUNCTION_WORDS = frozenset("""
+a an the and or but so then than that this these those it its it's they them their there here is are was were be been being has have had do does did
+not no never of in on at to for from by with without over under about around after before again also still just only more most many few some
+several each every all any one two three four five six seven eight nine ten once twice often repeatedly recurring recurrently regularly
+keeps kept keep time times episode episodes day days user users person people household member members assistant zoe
+problem problems issue issues pattern patterns struggle struggles struggled struggling trouble difficulty
+request requests question questions command commands statement statements phrasing phrasings word words shape shapes turn turns
+answer answers answered answering reply replies replied response responses wrong right correct corrected correction long longer short
+fast path paths handler handlers missing incomplete ability abilities support supported unsupported fall fell fallen through brain
+candidate suggestion suggested possible possibly likely may might could should would can cannot needs need needed add added adding
+router routing routed example examples training label labelled labeled domain domains speech heard hear misheard mishear recognised
+recognition keyterm keyterms homophone homophones fix fixes review reviewing prompt prompts format formats quality
+asked ask asking rephrased reworded rephrase reword marked cut off later next first when while because where which who what how
+""".split())
+
+
+def allowed_words(facts: dict) -> frozenset:
+    """Every word a reworded sentence may use: the words of its own facts (kind, domain, shape, signal phrases, suggestion) plus ``_FUNCTION_WORDS``."""
+    bag = [str(facts.get("kind", "")).replace("_", " "), str(facts.get("domain", "")), str(facts.get("shape", "")), str(facts.get("suggestion", ""))]
+    for name in (facts.get("signals") or {}):
+        bag.append(_SIGNAL_PHRASE.get(name, str(name)))
+        bag.append(str(name).replace("_", " "))
+    return frozenset(w for text in bag for w in _WORD_RE.findall(text.lower())) | _FUNCTION_WORDS
+
+
 def valid_summary(text: Any, facts: dict) -> Optional[str]:
-    """The model's sentence if it is one plain line that adds no number the facts do not hold; else None (the template is used)."""
+    """The model's sentence if it is ONE plain line made only of words from its facts and a fixed list of grammar / generic words, adding no
+    number the facts do not hold; else None (the template is used). The model may rearrange the counts; it cannot introduce a name, a place, a
+    cause or a claim, because it has no word to say one with."""
     if not isinstance(text, str):
         return None
     s = text.strip().splitlines()[0].strip() if text.strip() else ""
@@ -441,6 +471,9 @@ def valid_summary(text: Any, facts: dict) -> Optional[str]:
         return None
     allowed = {str(x) for x in (facts["episodes"], facts["days"], facts["people"], *facts["signals"].values())}
     if any(n not in allowed for n in _NUM_RE.findall(s)):
+        return None
+    vocab = allowed_words(facts)
+    if any(w.removesuffix("'s") not in vocab and w not in vocab for w in _WORD_RE.findall(s.lower())):
         return None
     return s
 
@@ -614,10 +647,17 @@ def build_followup(p: dict, now: float) -> dict:
             "created_at": now}
 
 
-async def decide(pid: str, action: str, by: str, note: str = "") -> dict:
-    """accept | reject a ``proposed`` proposal. Records the decision and the follow-up; applies NOTHING."""
+#: the only reasons a decision may carry. A free-text note could hold a household utterance, and a proposal / the API never does
+REASONS = ("", "not_a_problem", "wrong_label", "already_fixed", "not_now", "other")
+_REF_RE = re.compile(r"^[A-Za-z0-9._:-]{0,60}$")
+
+
+async def decide(pid: str, action: str, by: str, reason: str = "") -> dict:
+    """accept | reject a ``proposed`` proposal. Records the decision (and a ``reason`` from ``REASONS``) and the follow-up; applies NOTHING."""
     if action not in ("accept", "reject"):
         raise ValueError(action)
+    if (reason or "") not in REASONS:
+        raise ValueError(f"reason must be one of {', '.join(r for r in REASONS if r)}")
     now = time.time()
     async with _ctx() as db:
         row = await _fetch_one(db, pid)
@@ -632,7 +672,7 @@ async def decide(pid: str, action: str, by: str, note: str = "") -> dict:
         cur = await db.execute(
             "UPDATE struggle_proposals SET status = ?, followup = ?, decision_note = ?, decided_at = ?, decided_by = ?, updated_at = ? "
             "WHERE id = ? AND status = ?",
-            (new_status, json.dumps(followup, sort_keys=True), (note or "").strip()[:200], now, str(by or "")[:80], now, pid, PROPOSED))
+            (new_status, json.dumps(followup, sort_keys=True), reason or "", now, str(by or "")[:80], now, pid, PROPOSED))
         changed = int(getattr(cur, "rowcount", 0) or 0)
         await db.commit()
         if changed <= 0:
@@ -643,6 +683,8 @@ async def decide(pid: str, action: str, by: str, note: str = "") -> dict:
 async def mark_applied(pid: str, ref: str = "") -> dict:
     """The Phase 3 seam: an ``accepted`` proposal whose fix landed becomes ``applied`` (``ref`` = the PR / generation). Nothing in
     the night job calls this."""
+    if not _REF_RE.match(ref or ""):
+        raise ValueError("ref must be a short id (letters, digits, . _ : -)")
     now = time.time()
     async with _ctx() as db:
         row = await _fetch_one(db, pid)
@@ -650,7 +692,7 @@ async def mark_applied(pid: str, ref: str = "") -> dict:
             raise NotFound(pid)
         cur = await db.execute(
             "UPDATE struggle_proposals SET status = ?, decision_note = ?, updated_at = ? WHERE id = ? AND status = ?",
-            (APPLIED, ((row["decision_note"] + " ") if row["decision_note"] else "")[:120] + f"applied: {ref}"[:80], now, pid, ACCEPTED))
+            (APPLIED, (((row["decision_note"] + " ") if row["decision_note"] else "") + f"applied: {ref}")[:120], now, pid, ACCEPTED))
         changed = int(getattr(cur, "rowcount", 0) or 0)
         await db.commit()
         if changed <= 0:
