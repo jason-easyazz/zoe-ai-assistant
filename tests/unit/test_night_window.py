@@ -1021,7 +1021,7 @@ def test_the_night_mind_entry_point_is_used_as_soon_as_it_exists_with_the_served
     w, host, _ = make(tmp_path, argv=["--ctx", "32768"], cfg_kw={"night_mind_script": script})
     assert w.run() == nw.EXIT_OK, w.outcome
     nm = next(j for j in host.jobs_run if j["name"] == "zoe-night-mind.py")
-    assert nm["argv"][2:] == ["--model-url", "http://127.0.0.1:11500/v1", "--ctx-tokens", "32768", "--all-members", "--decode-tok-s", "4.20", "--prefill-tok-s", "120.5"]     # both measured rates
+    assert nm["argv"][2:] == ["--model-url", "http://127.0.0.1:11500/v1", "--ctx-tokens", "32768", "--all-members", "--mode", "enforce", "--decode-tok-s", "4.20", "--prefill-tok-s", "120.5"]     # --mode is explicit (the CLI default is not the night's contract); both measured rates
     assert [j["name"] for j in host.jobs_run][:3] == ["night_digest.py", "zoe-nightly-dreaming.py", "zoe-night-mind.py"]
     assert not any(r["name"] == "night_mind" and r["backend"] == "4B" for r in w.jobs)                  # no 4B fallback for the new pass
     custom = nw.build_jobs(nw.NightCfg(night_mind_cmd="python /x/nm.py --u {model_url} --c {ctx_tokens} --t {decode_tps} --p {prefill_tps}", night_mind_script=tmp_path / "no.py"), 16384, 11.5, 136.0)
@@ -1960,3 +1960,189 @@ def test_cells_corpus_and_trace_are_refused_outside_cells_only(tmp_path):
     for flag in (["--cells-trace", "on"], ["--cells-corpus", "zmb-x"]):
         with pytest.raises(nw.Refused):
             nw.configure(ap.parse_args(["--trial", *flag]))
+
+
+# ── a quiet night is a noop (no 12B load); --mode is explicit; a slow night raises the morning alarm ──────────────────────────────────
+
+LAST_NIGHT = "2026-10-08T02:50:00"          # the naive local stamp the reports carry in ``started``
+
+
+def dt_utc(naive_local: str) -> str:
+    import datetime as dt
+    return dt.datetime.fromisoformat(naive_local).astimezone(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def seed_report(cfg, name, *, started=LAST_NIGHT, outcome="ok", exit=0, mode="night", decode=None, run_id=None):
+    """A night report as ``write_report`` leaves it (only the fields the precheck and the alert read)."""
+    cfg.report_dir.mkdir(parents=True, exist_ok=True)
+    rec = {"run_id": run_id or name, "mode": mode, "outcome": outcome, "exit": exit, "started": started, "jobs": []}
+    if decode is not None:
+        rec["speed"] = {"12B": {"decode_tps": decode}}
+    (cfg.report_dir / f"{name}.json").write_text(json.dumps(rec))
+
+
+def answer_precheck(host, out="", rc=0):
+    """Make the stand-in precheck answer ``out`` / ``rc`` (everything else still goes to the double); returns the argv of every precheck call."""
+    calls: "list[list[str]]" = []
+    orig = host.run
+
+    def run(argv, *a, **k):
+        res = orig(argv, *a, **k)
+        if any("night_precheck.py" in x for x in argv):
+            calls.append(list(argv))
+            return bk.Result(rc, out)
+        return res
+    host.run = run
+    return calls
+
+
+def precheck_line(turns, omi=None):
+    return "NIGHT_PRECHECK " + json.dumps({"members_with_new_turns": turns, "omi_members": omi, "since": "x"}) + "\n"
+
+
+def quiet_window(tmp_path, *, out=None, rc=0, argv=(), prior=True):
+    script = tmp_path / "night_precheck.py"
+    script.write_text("# stand-in")
+    w, host, cfg = make(tmp_path, argv=argv, cfg_kw={"precheck_script": script})
+    if prior:
+        seed_report(cfg, "2026-10-08")
+    calls = answer_precheck(host, precheck_line(0, 0) if out is None else out, rc)
+    return w, host, cfg, calls
+
+
+def slept_or_loaded(host):
+    return [c for c in host.joined() if c.startswith("systemd-run") or " --user stop " in c or " --user start " in c]
+
+
+def test_a_quiet_night_is_a_noop_that_stops_nothing_and_loads_no_12b(tmp_path):
+    w, host, cfg, calls = quiet_window(tmp_path)
+    assert w.run() == nw.EXIT_OK
+    assert w.outcome == "noop" and "no member has new turns" in w.rec["noop"]
+    assert slept_or_loaded(host) == [] and w.lock_fd is None                # Zoe never went to sleep: no stop, no start, no 12B; and the brain-window lock is not left held
+    assert not any(j["name"] in ("night_digest.py", "zoe-night-mind.py") for j in host.jobs_run)      # the 12B jobs did not run
+    saved = json.loads(next(p for p in w.report_paths if p.suffix == ".json").read_text())
+    assert saved["outcome"] == "noop" and saved["exit"] == 0 and saved["mode"] == "night"
+    assert calls[0][calls[0].index("--since") + 1] == dt_utc(LAST_NIGHT) and "--omi" in calls[0]        # measured against the last window's start; the pendant check rides along
+
+
+def test_a_noop_night_still_runs_dreaming_on_the_live_4b_like_a_refused_night(tmp_path):
+    w, host, cfg, _ = quiet_window(tmp_path)
+    assert w.run() == nw.EXIT_OK
+    assert [(j["name"], j["backend"]) for j in w.jobs] == [("dreaming", "4B")]            # the non-LLM maintenance in dreaming is not lost on a quiet night
+    assert slept_or_loaded(host) == []
+
+
+def test_any_member_with_a_new_turn_runs_the_window_as_before(tmp_path):
+    w, host, cfg, _ = quiet_window(tmp_path, out=precheck_line(1, 0))
+    assert w.run() == nw.EXIT_OK and w.outcome == "ok"
+    assert any(c.startswith("systemd-run") for c in host.joined()) and any(j["name"] == "night_digest.py" for j in host.jobs_run)
+
+
+def test_a_waiting_pendant_day_alone_runs_the_window(tmp_path):
+    w, host, cfg, _ = quiet_window(tmp_path, out=precheck_line(0, 1))
+    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and any(c.startswith("systemd-run") for c in host.joined())
+
+
+def test_the_pendant_check_is_only_asked_when_the_day_review_is_a_job(tmp_path):
+    w, host, cfg, calls = quiet_window(tmp_path, out=precheck_line(0, None), argv=["--jobs", "digest,dreaming,night_mind"])
+    assert w.run() == nw.EXIT_OK and w.outcome == "noop" and "--omi" not in calls[0]
+
+
+@pytest.mark.parametrize("out,rc", [("", 0), ("garbage\n", 0), (precheck_line(0, 0), 1), ("NIGHT_PRECHECK {not json}\n", 0), ('NIGHT_PRECHECK {"omi_members": 0}\n', 0),
+                                    (precheck_line(0, None), 0)], ids=["silent", "garbage", "nonzero exit", "bad json", "no count", "omi asked but unanswered"])
+def test_a_precheck_that_cannot_answer_fails_open_and_runs_the_window(tmp_path, out, rc):
+    w, host, cfg, calls = quiet_window(tmp_path, out=out, rc=rc)
+    assert w.run() == nw.EXIT_OK and w.outcome == "ok", w.outcome
+    assert calls and any(c.startswith("systemd-run") for c in host.joined())
+    assert any("no usable answer" in n for n in w.rec["notes"])
+
+
+def test_no_earlier_night_means_no_baseline_and_the_window_runs(tmp_path):
+    w, host, cfg, calls = quiet_window(tmp_path, prior=False)
+    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and calls == []
+
+
+def test_the_operator_can_switch_the_skip_off(tmp_path):
+    w, host, cfg, calls = quiet_window(tmp_path, argv=["--no-quiet-skip"])
+    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and calls == []
+
+
+def test_a_missing_precheck_script_is_not_a_quiet_night(tmp_path):
+    w, host, cfg = make(tmp_path, cfg_kw={"precheck_script": tmp_path / "absent.py"})
+    seed_report(cfg, "2026-10-08")
+    assert w.run() == nw.EXIT_OK and w.outcome == "ok"
+
+
+def test_only_a_night_that_did_its_work_moves_the_watermark(tmp_path):
+    w, host, cfg, calls = quiet_window(tmp_path, prior=False)
+    seed_report(cfg, "2026-10-05", started="2026-10-05T02:50:00")                                          # did its work
+    seed_report(cfg, "2026-10-06", started="2026-10-06T02:50:00", outcome="refused: RAM", exit=2)          # processed nothing
+    seed_report(cfg, "2026-10-07", started="2026-10-07T02:50:00", exit=5)                                  # a job did not finish anywhere
+    seed_report(cfg, "2026-10-08-trial", started="2026-10-08T09:00:00", mode="trial")                      # a measurement, not a night
+    assert w.run() == nw.EXIT_OK and w.outcome == "noop"
+    assert calls[0][calls[0].index("--since") + 1] == dt_utc("2026-10-05T02:50:00")                        # the turns the refused and failed nights skipped still count as new
+    seed_report(cfg, "2026-10-09", started="2026-10-09T02:50:00", outcome="noop")                          # a noop IS a night that did its work
+    assert w.last_processed_start().isoformat() == "2026-10-09T02:50:00"
+
+
+def test_the_dry_run_says_it_would_be_a_noop_and_still_prints_the_plan(tmp_path):
+    w, host, cfg, calls = quiet_window(tmp_path, argv=["--dry-run"])
+    lines: "list[str]" = []
+    w.log = lines.append
+    w.run()
+    assert any("would be a NOOP" in ln for ln in lines) and any("levers" in ln for ln in lines)
+    assert slept_or_loaded(host) == []
+
+
+def test_the_night_mind_mode_is_passed_explicitly_and_defaults_to_what_the_night_has_always_run(tmp_path):
+    script = tmp_path / "zoe-night-mind.py"
+    script.write_text("# stand-in")
+    argv = next(j for j in nw.build_jobs(nw.NightCfg(night_mind_script=script), 8192) if j.name == "night_mind").argv
+    assert argv[argv.index("--mode") + 1] == "enforce"
+    cfg = nw.configure(nw.build_parser().parse_args(["--night-mind-mode", "shadow"]), nw.NightCfg(night_mind_script=script))
+    argv = next(j for j in nw.build_jobs(cfg, 8192) if j.name == "night_mind").argv
+    assert argv[argv.index("--mode") + 1] == "shadow"
+    assert nw.configure(nw.build_parser().parse_args([]), nw.NightCfg()).night_mind_mode == "enforce"
+
+
+def test_the_windows_explicit_mode_equals_the_night_mind_clis_own_default():
+    """The window pins enforce; the CLI's fallback is enforce too. A change to either must be a decision, so the two are pinned together (docs/knowledge/night-mind.md)."""
+    cli = (REPO / "scripts/maintenance/zoe-night-mind.py").read_text()
+    assert 'mode = args.mode or ("shadow" if args.dry_run else "enforce")' in cli
+    assert nw.NightCfg().night_mind_mode == "enforce"
+
+
+def slow_night(tmp_path, history, *, argv=()):
+    w, host, cfg = make(tmp_path, argv=argv)
+    for i, v in enumerate(history):
+        seed_report(cfg, f"2026-10-0{i + 1}", started=f"2026-10-0{i + 1}T02:50:00", decode=v)
+    return w, host, cfg
+
+
+def test_a_steady_decode_under_half_the_trailing_median_raises_the_morning_alarm(tmp_path):
+    w, host, cfg = slow_night(tmp_path, [9.0, 10.0, 11.0, 10.0])       # median 10; tonight's probe says 4.2 (< 5.0)
+    assert w.run() == nw.EXIT_OK
+    alarm = (cfg.report_dir / "ALARM").read_text()
+    assert "DECODE SLOW" in alarm and "4.2 tok/s" in alarm and "median of 10.00" in alarm
+    assert "decode_alert" in w.rec
+    assert "DECODE_SLOW" in nw.summary_line({**w.rec, "outcome": "ok", "exit": 0})        # the journal line carries it too
+    assert not any("/tts" in c or "speak" in c for c in host.joined())                   # a file and a log line, never a voice
+
+
+@pytest.mark.parametrize("history,why", [([6.0, 8.0, 9.0, 7.0], "median 7.5: 4.2 is not under half of it (3.75)"), ([4.0, 5.0, 6.0], "median 5: 4.2 is not under half of it"),
+                                          ([20.0, 20.0], "fewer than three earlier nights: no baseline to judge by"), ([], "no history at all")])
+def test_a_normal_or_unmeasurable_night_raises_no_alarm(tmp_path, history, why):
+    w, host, cfg = slow_night(tmp_path, history)
+    assert w.run() == nw.EXIT_OK
+    assert not (cfg.report_dir / "ALARM").exists(), why
+    assert "decode_alert" not in w.rec
+
+
+def test_the_decode_baseline_ignores_trials_and_a_failing_alert_never_fails_the_night(tmp_path):
+    w, host, cfg = slow_night(tmp_path, [9.0, 10.0, 11.0])
+    seed_report(cfg, "2026-10-05-trial", started="2026-10-05T09:00:00", mode="trial", decode=0.5)      # a trial's number is not the night's baseline
+    assert w.decode_history() == [9.0, 10.0, 11.0]
+    def boom():
+        raise OSError("disk gone")
+    w.decode_history = boom                                         # a failing alert logs the failure; the night still reports its own outcome
+    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and not (cfg.report_dir / "ALARM").exists()
