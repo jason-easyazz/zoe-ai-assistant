@@ -38,26 +38,15 @@ if [[ -L "$LIVE_DIR" ]]; then
 fi
 echo "✅ zoe-data directory confirmed at $DATA_DIR"
 
-# ── 3. Install MemPalace + ChromaDB ─────────────────────────────────────────
-# BOTH pins are load-bearing and MUST match services/zoe-data/requirements.txt.
-# Unpinned, a resolver installs chromadb 1.5.x against a 0.6.x on-disk palace,
-# which makes mempalace's `_fix_blob_seq_ids` misread the sysdb-10 BLOB format as
-# legacy big-endian and SILENTLY DROP drawer writes (recovery:
-# `mempalace repair --mode max-seq-id`). chromadb 1.5.x also pulls numpy 2.x,
-# which the requirements file's `numpy<2` ceiling exists to prevent.
-# Full rationale: the "Vector memory store" block in services/zoe-data/requirements.txt.
-MEMPALACE_PIN="mempalace==3.3.1"
-CHROMADB_PIN="chromadb==0.6.3"
-echo ""
-echo "Installing MemPalace + ChromaDB ($MEMPALACE_PIN $CHROMADB_PIN) …"
-VENV="$DATA_DIR/venv"
-if [[ -d "$VENV" ]]; then
-  "$VENV/bin/pip" install --quiet "$MEMPALACE_PIN" "$CHROMADB_PIN"
-else
-  pip3 install --quiet "$MEMPALACE_PIN" "$CHROMADB_PIN"
-fi
+# ── 3. MemPalace data dir (no vector-store install here) ─────────────────────
+# The palace is chromadb 1.5.x format, and only the zoe-data py3.12 venv opens it
+# (scripts/setup/build_py312_venv.sh installs chromadb + mempalace from
+# services/zoe-data/requirements-py312.txt). This script must NOT install either
+# package into the system Python or a side venv: the old 0.6.3 / 3.3.1 pair dies
+# on the 1.x palace, and mempalace 3.3.1's `_fix_blob_seq_ids` silently drops
+# drawer writes on it. Pinned by tests/unit/test_jetson_agent_install_pins.py.
 mkdir -p "$ZOE_HOME/.mempalace"
-echo "✅ MemPalace installed, data dir: $ZOE_HOME/.mempalace"
+echo "✅ MemPalace data dir: $ZOE_HOME/.mempalace (store client lives in the py3.12 venv)"
 
 # ── 4. Update zoe-data.service with Jetson Agent env vars ───────────────────
 SERVICE_FILE="$HOME/.config/systemd/user/zoe-data.service"
