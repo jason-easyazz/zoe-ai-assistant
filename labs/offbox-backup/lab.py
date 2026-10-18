@@ -234,7 +234,7 @@ def main() -> int:
                    "pg/multica.dump.gz", "palace/mempalace.tar.gz",
                    # host sources (deep dive 2 S0-8): no .storage walk, log, recorder, shadow log, dead db, vapid
                    "pg/zoe.manifest.json", "pg/multica.manifest.json", "ha/config/configuration.yaml",
-                   "ha/storage.tar.gz", "zoe-data/data/music_prefs.json", "panel/hey_zoe.onnx", "models.lock"}
+                   "ha/storage.tar.gz", "zoe-data/data/music_prefs.json", "models.lock"}   # panel: artefacts tier (#2142)
         ok_bytes = all(hh[k] == box["files"][".zoe/" + k[4:]] for k in hh if k.startswith("zoe/")) and \
             all(hh[k] == box["files"][".zoe-voice-samples/" + k.split("/", 1)[1]] for k in hh
                 if k.startswith("voice-samples/"))

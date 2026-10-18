@@ -280,8 +280,10 @@ def _rels(srcs) -> set[str]:
 def test_host_sources_ship_the_new_stores_and_keep_the_exclusions(tmp_path):
     p = _box(tmp_path)
     hh, sec = _rels(ob.host_household_sources(p)), _rels(ob.host_secret_sources(p))
-    assert hh == {"ha/config/configuration.yaml", "zoe-data/data/music_prefs.json", "panel/hey_zoe.onnx",
-                  "models.lock"}
+    assert hh == {"ha/config/configuration.yaml", "zoe-data/data/music_prefs.json", "models.lock"}
+    # the panel backup is on-box only here: off the box it rides in the artefacts tier (#2142), never twice
+    assert _rels(ob.host_onbox_only_sources(p)) == {"panel/hey_zoe.onnx"}
+    assert "panel" not in {s.label for s in ob.household_sources(p)}
     assert sec == {"ha/secrets.yaml", "bin/t.sh", "systemd/user/zoe-data.service.d/10.conf",
                    "systemd/system/user@.service.d/delegate.conf"}
     # both host lists reach the off-box tiers

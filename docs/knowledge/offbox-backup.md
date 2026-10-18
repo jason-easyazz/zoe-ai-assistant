@@ -55,7 +55,7 @@ including words that were since forgotten.
 
 | tier | contents | encryption | retention |
 |---|---|---|---|
-| `household` | newest on-box Postgres dumps (`zoe`, `multica`; biometric table data already excluded by `postgres-nightly-backup.sh`) and their manifests, `pg_dumpall --globals-only`, newest MemPalace tarball, `~/.zoe` filtered, `~/.zoe-voice-samples`; **host sources (section 7)**: HA config (minus `.storage`, logs, recorder, tts, deps) + the newest `.storage`/`.cloud` helper export, `services/zoe-data/data/` (minus the router shadow log, the VAPID key and the dead `zoe.db`), `~/.zoe/backups/panel/` (panel config + `hey_zoe.onnx`), the models lock | age + restic | one per day for 7 days, one per week for 34 days; **never older than 35 days**, no monthly |
+| `household` | newest on-box Postgres dumps (`zoe`, `multica`; biometric table data already excluded by `postgres-nightly-backup.sh`) and their manifests, `pg_dumpall --globals-only`, newest MemPalace tarball, `~/.zoe` filtered, `~/.zoe-voice-samples`; **host sources (section 7)**: HA config (minus `.storage`, logs, recorder, tts, deps) + the newest `.storage`/`.cloud` helper export, `services/zoe-data/data/` (minus the router shadow log, the VAPID key and the dead `zoe.db`), the models lock | age + restic | one per day for 7 days, one per week for 34 days; **never older than 35 days**, no monthly |
 | `secrets` | the live checkout's `.env`, `.env.*`, `services|labs|modules/*/.env*` (never `*.example`, `*.bak*`), `ssl/`, `config/`, `~/.zoe/env`, `~/.zoe/secrets`; **host config (section 7)**: HA `secrets.yaml`, `~/.config/systemd/user` (units + drop-ins), `/etc/systemd/system/*.d`, `~/bin`, the crontab | age + restic | 7 daily, 4 weekly, 6 monthly |
 | `artefacts` | `labs/functiongemma-finetune/runs/gen1/merged` (the router lineage checkpoint: NEVER delete) and `~/models/functiongemma-router` | restic | 7 daily, 4 weekly, 6 monthly |
 
@@ -266,8 +266,8 @@ mirrors the same sources file by file (so restic de-duplicates them).
 | `~/.config/systemd/user` (units + the ~25 drop-ins) and `/etc/systemd/system/*.d` | secrets | walked (drop-ins carry env lines) | symlinks (`*.wants`) |
 | `~/bin` | secrets | walked (one script holds a DB password) | |
 | crontab | secrets | `crontab -l` at run time | |
-| `~/.zoe/backups/panel/` (panel config + `hey_zoe.onnx`, written by the panel-as-code work, V-3) | household | walked (the `~/.zoe` tree excludes `*backup*`, so it is its own source) | |
-| models lock (`~/assistant/models.lock`, `~/models/models.lock` or `~/.zoe/models.lock`; `ZOE_MODELS_LOCK` names another) | household | the first that exists | the 80 GB of weights: the lock (paths, sha256, source URLs) is the restore recipe. The panel-as-code work writes it; until it lands the source is reported missing |
+| `~/.zoe/backups/panel/` (panel config + `hey_zoe.onnx`, written by the panel-as-code work, V-3) | on-box host archive only; off the box it rides in the `artefacts` tier (#2142), not twice | walked (the `~/.zoe` tree excludes `*backup*`, so it is its own source) | |
+| models lock (`~/assistant/models.lock`, `~/models/models.lock` or `~/.zoe/models.lock`; `ZOE_MODELS_LOCK` names another) | household | the first that exists | the 80 GB of weights: the lock (paths + sha256) is the restore recipe. The panel-as-code PR (#2142) adds it at the repo root (so git holds it too); until it lands the source is reported missing |
 | Postgres dump manifests (7.2) | household | beside each dump | |
 
 **Pendant transcripts (owner decision OD3, 2026-10-19): kept.** They live in Postgres (`omi_recordings`, `omi_segments`, the

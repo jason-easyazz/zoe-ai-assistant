@@ -112,6 +112,7 @@ def host_sources(p, tmp: Path, ha_export: Optional[Path]) -> list:
         if s.label == "ha/storage.tar.gz":
             s = ob.Source(s.label, ha_export)      # tonight's export, never an older one
         srcs.append(s)
+    srcs += ob.host_onbox_only_sources(p)
     srcs += ob.host_secret_sources(p)
     ct = ob.crontab_source(tmp)
     srcs.append(ct if ct else ob.Source("crontab", None))

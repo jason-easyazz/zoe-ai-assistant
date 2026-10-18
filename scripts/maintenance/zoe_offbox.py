@@ -18,7 +18,7 @@ Tiers (one restic snapshot each, tagged ``zoe-<tier>``):
   tarball, ``~/.zoe`` minus caches, logs, backups, pendant audio and secrets, the voice regression corpus, and the
   HOST sources a dead disk lost even with this backup installed (deep dive 2 S0-8, ``host_household_sources``):
   Home Assistant's config (its root-owned ``.storage`` via the newest helper export), ``services/zoe-data/data/``,
-  the panel's config backup and wake model, and the models lock. Retention one per day for 7
+  and the models lock (the panel backup rides in the artefacts tier). Retention one per day for 7
   days and one per week for 35 days, NO monthly: gone within 35 days, the same bound as the on-box backups
   (``docs/knowledge/forget-reach.md``: forgotten means forever). See RETENTION for why it is time-bounded.
 * ``secrets`` - age-encrypted: the live checkout's ``.env*`` files (never ``.example`` / ``.bak*``), ``ssl/``,
@@ -197,9 +197,14 @@ def host_household_sources(p: Paths) -> list[Source]:
         Source("ha/storage.tar.gz", newest(p.home.joinpath(*HOST_BACKUP_DIR), "ha-storage-*.tar.gz"),
                max_age_hours=SOURCE_DUMP_MAX_AGE_HOURS),
         Source("zoe-data/data", p.checkout / "services" / "zoe-data" / "data", ZOE_DATA_DATA_EXCLUDES),
-        Source("panel", p.home / ".zoe" / "backups" / "panel"),     # config + hey_zoe.onnx (panel-as-code, V-3)
         Source("models.lock", models_lock(p)),
     ]
+
+
+def host_onbox_only_sources(p: Paths) -> list[Source]:
+    """In the ON-BOX host archive only: the panel backup (config + ``hey_zoe.onnx``, panel-as-code V-3) goes off the
+    box in the ARTEFACTS tier (``artefact_paths``, #2142), so the household tier does not ship it twice."""
+    return [Source("panel", p.home / ".zoe" / "backups" / "panel")]
 
 
 def host_secret_sources(p: Paths) -> list[Source]:
