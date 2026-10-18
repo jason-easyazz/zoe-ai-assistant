@@ -85,6 +85,8 @@ function fixtures() {
               source: 'model', suggested_person_id: 'p-alex', tagged_person_id: null, not_person: null },
             { id: 'seg-2', start_ms: 2000, end_ms: 4000, text: HOSTILE, label: 'person', speaker: 'other', source: 'confirmed',
               tagged_person_id: 'p-robin', suggested_person_id: null, not_person: null },
+            { id: 'seg-3', start_ms: 4000, end_ms: 6000, text: 'synthetic tv line', label: 'not_a_person', speaker: 'other',
+              source: 'confirmed', tagged_person_id: null, suggested_person_id: null, not_person: 'tv' },
         ] },
         '/api/omi/recordings/rec-old': { id: 'rec-old', status: 'done', transcript: 'synthetic joined transcript', has_audio: false,
             segments: [] },
@@ -260,6 +262,32 @@ async function check(label, fn) {
         await byText(e.doc.ids.pendantUnknown, '▶ Play')[0].click();
         assert.deepStrictEqual(e.played, []);
         assert(/no longer kept/.test(e.doc.ids.pendantToast.textContent), e.doc.ids.pendantToast.textContent);
+    });
+
+    await check('a line marked TV can be undone: Me / Who? clear the mark first, Not media clears it alone', async () => {
+        const e = makeEnv();
+        await e.Z.init(e.doc);
+        const rec = e.doc.ids.pendantRecordings.children[0];
+        await rec.children[0].click();
+        await new Promise(r => setImmediate(r));
+        const seg = () => rec.all(n => n.className === 'seg')[2];
+        assert(seg().textContent.includes('Not a person (tv)'));
+        assert.strictEqual(byText(seg(), 'TV / media').length, 0);
+        e.calls.length = 0;
+        await byText(seg(), 'Me')[0].click();
+        await new Promise(r => setImmediate(r));
+        assert.deepStrictEqual(posts(e.calls).slice(0, 2), [
+            { method: 'PATCH', url: '/api/omi/segments/seg-3', body: { not_person: null } },
+            { method: 'PATCH', url: '/api/omi/segments/seg-3', body: { owner_label: 'you' } }]);
+        await byText(seg(), 'Who?')[0].click();
+        e.calls.length = 0;
+        await byText(seg(), 'Alex Example')[0].click();
+        await new Promise(r => setImmediate(r));
+        assert.deepStrictEqual(posts(e.calls).slice(0, 2).map(c => c.url + ' ' + JSON.stringify(c.body)), [
+            '/api/omi/segments/seg-3 {"not_person":null}', '/api/omi/segments/seg-3/tag {"person_id":"p-alex"}']);
+        e.calls.length = 0;
+        await byText(seg(), 'Not media')[0].click();
+        assert.deepStrictEqual(posts(e.calls)[0], { method: 'PATCH', url: '/api/omi/segments/seg-3', body: { not_person: null } });
     });
 
     await check('an old recording (no segments) says plainly it cannot be tagged and shows its transcript', async () => {

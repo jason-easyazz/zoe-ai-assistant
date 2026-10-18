@@ -54,6 +54,7 @@ def test_pendant_page_harness_passes():
     ("onDone(exact.length === 1 ? { person_id: exact[0].id } : { name });", "onDone({ name });"),  # a duplicate person per tag
     ("root.fetch('/api/omi/segments/' + encodeURIComponent(segmentId) + '/clip'",
      "root.fetch('/api/omi/recordings/' + encodeURIComponent(segmentId) + '/clip'"),        # plays the wrong thing
+    ("const unmark = () => (seg.not_person ?", "const unmark = () => (false ?"),            # a mistaken TV mark cannot be undone
 ])
 def test_negative_controls_turn_the_harness_red(tmp_path, old, new):
     src = MODULE.read_text(encoding="utf-8")

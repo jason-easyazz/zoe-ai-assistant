@@ -302,16 +302,20 @@
             row.appendChild(sug);
         }
         const acts = el('div', 'row');
-        acts.appendChild(button('Me', 'small', () => done(api('PATCH', '/api/omi/segments/' + sid, { owner_label: 'you' }))));
-        acts.appendChild(button('Not me', 'small', () => done(api('PATCH', '/api/omi/segments/' + sid, { owner_label: 'other' }))));
+        // a line marked TV / media is excluded until the mark is cleared: a person correction clears it first (one change per
+        // PATCH - the server refuses owner_label + not_person together), so a mistaken media mark can always be undone
+        const unmark = () => (seg.not_person ? api('PATCH', '/api/omi/segments/' + sid, { not_person: null }) : Promise.resolve());
+        acts.appendChild(button('Me', 'small', () => done(unmark().then(() => api('PATCH', '/api/omi/segments/' + sid, { owner_label: 'you' })))));
+        acts.appendChild(button('Not me', 'small', () => done(unmark().then(() => api('PATCH', '/api/omi/segments/' + sid, { owner_label: 'other' })))));
         acts.appendChild(button('Who?', 'small primary', () => {
             acts.hidden = true;
             const picker = whoPicker(
-                (body) => done(api('POST', '/api/omi/segments/' + sid + '/tag', body)),
+                (body) => done(unmark().then(() => api('POST', '/api/omi/segments/' + sid + '/tag', body))),
                 () => { row.removeChild(picker); acts.hidden = false; });
             row.appendChild(picker);
         }));
-        acts.appendChild(button('TV / media', 'small ghost', () => done(api('PATCH', '/api/omi/segments/' + sid, { not_person: 'tv' }))));
+        if (seg.not_person) acts.appendChild(button('Not media', 'small ghost', () => done(unmark())));
+        else acts.appendChild(button('TV / media', 'small ghost', () => done(api('PATCH', '/api/omi/segments/' + sid, { not_person: 'tv' }))));
         row.appendChild(acts);
         return row;
     }
