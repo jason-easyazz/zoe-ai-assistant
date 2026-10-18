@@ -136,6 +136,8 @@ def http(method: str, url: str, user: str, pw: str) -> int:
             return r.status
     except urllib.error.HTTPError as e:
         return e.code
+    except (urllib.error.URLError, ConnectionError):
+        return 0          # not listening yet (the readiness poll retries); never a status a cell accepts
 
 
 def main() -> int:

@@ -92,8 +92,12 @@ WHERE c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_s
 ORDER BY 1;
 """
 EXT_SQL = "SELECT extname || '=' || extversion FROM pg_extension ORDER BY 1;"
-ALEMBIC_SQL = ("SELECT CASE WHEN to_regclass('public.alembic_version') IS NULL THEN '' ELSE "
-               "(SELECT string_agg(version_num, ',' ORDER BY version_num) FROM public.alembic_version) END;")
+# a CASE would still plan the missing relation: psql's \if skips it instead
+ALEMBIC_SQL = """SELECT to_regclass('public.alembic_version') IS NOT NULL AS has_alembic \\gset
+\\if :has_alembic
+SELECT string_agg(version_num, ',' ORDER BY version_num) FROM public.alembic_version;
+\\endif
+"""
 HNSW_LIST_SQL = r"""
 SELECT ci.relname || '|' || n.nspname || '|' || ct.relname || '|' || a.attname || '|' || oc.opcname || '|' || ix.indisvalid
 FROM pg_index ix
@@ -240,7 +244,7 @@ def check_existing_hnsw(sb: Sandbox, db: str) -> tuple[list[str], list[str]]:
     findings, notes = [], []
     for ln in sb.sql(db, HNSW_LIST_SQL):
         idx, schema, table, col, opclass, valid = ln.split("|")
-        if valid != "t":
+        if valid not in ("t", "true"):
             findings.append(f"{db}: HNSW index {idx} is INVALID after restore")
             continue
         op = _op_for(opclass)

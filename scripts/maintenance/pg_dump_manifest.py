@@ -45,8 +45,12 @@ CATALOG_TABLES_SQL = (
     "AND d.deptype = 'e') ORDER BY 1"
 )
 EXTENSIONS_SQL = "SELECT extname || '=' || extversion FROM pg_extension ORDER BY 1"
-ALEMBIC_SQL = ("SELECT CASE WHEN to_regclass('public.alembic_version') IS NULL THEN '' ELSE "
-               "(SELECT string_agg(version_num, ',' ORDER BY version_num) FROM public.alembic_version) END")
+# a CASE would still plan the missing relation: psql's \if skips it instead
+ALEMBIC_SQL = """SELECT to_regclass('public.alembic_version') IS NOT NULL AS has_alembic \\gset
+\\if :has_alembic
+SELECT string_agg(version_num, ',' ORDER BY version_num) FROM public.alembic_version;
+\\endif
+"""
 
 
 def _unquote_ident(s: str) -> str:
@@ -134,8 +138,9 @@ def _sha256(path: Path) -> str:
 
 def _psql(container: str, db: str, sql: str) -> list[str]:
     # `-e PGPASSWORD` (no value) copies it from this process's environment: never on a command line.
-    r = subprocess.run(["docker", "exec", "-e", "PGPASSWORD", container, "psql", "-U", "zoe", "-d", db, "-XAt",
-                        "-v", "ON_ERROR_STOP=1", "-c", sql], capture_output=True, text=True, timeout=120)
+    r = subprocess.run(["docker", "exec", "-i", "-e", "PGPASSWORD", container, "psql", "-U", "zoe", "-d", db, "-XAt",
+                        "-v", "ON_ERROR_STOP=1", "-f", "-"], input=sql, capture_output=True, text=True,
+                       timeout=120)
     if r.returncode != 0:
         raise RuntimeError(f"catalog read failed: {r.stderr.strip()[-200:]}")
     return [ln for ln in r.stdout.splitlines() if ln.strip()]

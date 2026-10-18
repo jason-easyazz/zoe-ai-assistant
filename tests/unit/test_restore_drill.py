@@ -301,6 +301,10 @@ def test_crontab_comes_from_crontab_l_or_the_lab_file(tmp_path, monkeypatch):
     monkeypatch.setenv("ZOE_OFFBOX_CRONTAB_FILE", str(f))
     s = ob.crontab_source(tmp_path)
     assert s.label == "crontab" and s.path.read_text() == "*/5 * * * * x\n" and (s.path.stat().st_mode & 0o077) == 0
+    ino = s.path.stat().st_ino, s.path.stat().st_ctime_ns
+    assert (ob.crontab_source(tmp_path).path.stat().st_ino, s.path.stat().st_ctime_ns) == ino   # unchanged: kept
+    f.write_text("*/10 * * * * y\n")
+    assert ob.crontab_source(tmp_path).path.read_text() == "*/10 * * * * y\n"              # changed: rewritten
     monkeypatch.setenv("ZOE_OFFBOX_CRONTAB_FILE", str(tmp_path / "absent"))
     assert ob.crontab_source(tmp_path) is None
 

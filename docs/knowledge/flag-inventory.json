@@ -347,7 +347,8 @@
         ],
         "in_env_example": false,
         "readers": [
-          "scripts/maintenance/reset_engineering_boards.py"
+          "scripts/maintenance/reset_engineering_boards.py",
+          "scripts/maintenance/zoe_restore_drill.py"
         ],
         "typed_env": false
       },
@@ -1582,6 +1583,37 @@
         ],
         "typed_env": true
       },
+      "ZOE_DRILL_HELPER": {
+        "defaults": [
+          "(required)",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_restore_drill.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DRILL_MEM_FLOOR_MB": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_restore_drill.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DRILL_PYTHON": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_restore_drill.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_EDGE_TTS_TIMEOUT_S": {
         "defaults": [
           "'5'"
@@ -2123,6 +2155,17 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/panel_principal.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HA_EXPORT_CMD": {
+        "defaults": [
+          "(required)",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_host_snapshot.py"
         ],
         "typed_env": false
       },
@@ -2988,6 +3031,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/memory_digest.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOCAL_BACKUP_ENCRYPT": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_host_snapshot.py"
         ],
         "typed_env": false
       },

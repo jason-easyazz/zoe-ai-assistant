@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-723 flags; 673 not documented in `.env.example`.
+728 flags; 678 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -51,7 +51,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_AUTOPILOT_QUEUE_WAIT_S` | `1200.0` | yes | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_AUTORESEARCH_RUN_ROOT` | `'data/autoresearch'` | no | NO | `services/zoe-data/routers/autoresearch.py` |
 | `ZOE_AUTO_APPROVE_THRESHOLD` | `'0'` | no | NO | `services/zoe-data/evolution_notice.py` |
-| `ZOE_BACKUP_DIR` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
+| `ZOE_BACKUP_DIR` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py`<br>`scripts/maintenance/zoe_restore_drill.py` |
 | `ZOE_BARGE_MIN_MS` | `'192'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_BARGE_SPEECH_THRESHOLD` | `'0.30'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_BAR_ADMIN_SESSION` | `''` | no | NO | `scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/user_model_ab.py` |
@@ -172,6 +172,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DISTRESS_HANDOFF` | `'enforce'` | yes | NO | `services/zoe-data/distress_handoff.py` |
 | `ZOE_DISTRESS_LINES_FILE` | `''` | yes | NO | `services/zoe-data/distress_handoff.py` |
 | `ZOE_DISTRESS_NOTIFY` | `'all'` | yes | NO | `services/zoe-data/distress_handoff.py` |
+| `ZOE_DRILL_HELPER` | `(required)`, `-` | no | NO | `scripts/maintenance/zoe_restore_drill.py` |
+| `ZOE_DRILL_MEM_FLOOR_MB` | `dynamic` | no | NO | `scripts/maintenance/zoe_restore_drill.py` |
+| `ZOE_DRILL_PYTHON` | `dynamic` | no | NO | `scripts/maintenance/zoe_restore_drill.py` |
 | `ZOE_EDGE_TTS_TIMEOUT_S` | `'5'` | no | yes | `services/zoe-data/tts_waterfall.py` |
 | `ZOE_EDGE_TTS_VOICE` | `dynamic` | no | yes | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_EMBEDDING_MODEL_VERSION` | `'minilm-v1'` | no | NO | `services/zoe-data/memory_service.py` |
@@ -225,6 +228,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_HARNESS` | `-` | no | NO | `services/zoe-data/live_store_guard.py` |
 | `ZOE_HA_BRIDGE_URL` | `''`, `'http://127.0.0.1:8007'` | no | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_HA_CONTROL_SCOPE` | `'panel'` | no | NO | `services/zoe-data/panel_principal.py` |
+| `ZOE_HA_EXPORT_CMD` | `(required)`, `-` | no | NO | `scripts/maintenance/zoe_host_snapshot.py` |
 | `ZOE_HA_URL` | `dynamic` | no | NO | `services/zoe-data/routers/stubs.py` |
 | `ZOE_HA_VOICE_INGRESS_URL` | `'http://host.docker.internal:8000'` | no | NO | `services/homeassistant-mcp-bridge/main.py` |
 | `ZOE_HA_VOICE_TOKEN` | `''` | no | NO | `services/homeassistant-mcp-bridge/main.py` |
@@ -310,6 +314,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LK_USE_AIORTC` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_LLAMA_URL` | `'http://127.0.0.1:11434'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_LLM_MODEL` | `'gemma'` | no | NO | `services/zoe-data/memory_digest.py` |
+| `ZOE_LOCAL_BACKUP_ENCRYPT` | `''` | no | NO | `scripts/maintenance/zoe_host_snapshot.py` |
 | `ZOE_LOCAL_MODEL` | `'Gemma 4 E4B-QAT'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_LOCAL_TTS_URL` | `''` | no | yes | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_LOCATION_CITY` | `''`, `'Geraldton'`, `dynamic` | no | NO | `services/zoe-data/identity_facts.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py`<br>`services/zoe-data/voice_stitch.py` |

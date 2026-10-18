@@ -17,4 +17,4 @@ database, the live palace or the live backups (T1 checks the live database's dat
   without its HNSW files, a tampered host-archive file, the HA helper never following a planted symlink, the memory
   floor, the helper's argument set), T1 (teardown). Each prints PASS/FAIL; exit 1 on any FAIL.
 
-Record: see `docs/knowledge/offbox-backup.md` section 7.5.
+Record (2026-10-19, Jetson): 15/15 cells PASS; details in `docs/knowledge/offbox-backup.md` section 7.5.

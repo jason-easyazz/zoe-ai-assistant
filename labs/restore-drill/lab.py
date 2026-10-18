@@ -180,7 +180,7 @@ def main() -> int:
         # a dump that LACKS a table (for N2), made the same way the nightly script makes one
         missing_dump = root / "zoe-missing-table.dump.gz"
         p = subprocess.run(["docker", "exec", SRC, "pg_dump", "-U", "zoe", "-Fc",
-                            "--exclude-table=public.chat_messages", "zoe"], capture_output=True)
+                            "--exclude-table=public.chat_messages", "--exclude-table-data=learned_voiceprints", "zoe"], capture_output=True)
         missing_dump.write_bytes(gzip.compress(p.stdout))
         run("docker", "rm", "-f", SRC)
 

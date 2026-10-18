@@ -345,4 +345,21 @@ Never touched: the live database (the drill only reads its image name), the live
 A synthetic source database in its own capped `--network none` container (the pinned image), a synthetic palace built with the
 real chromadb 1.5.9, a synthetic box, and the REAL scripts end to end: `postgres-nightly-backup.sh` + `pg_dump_manifest.py`,
 `mempalace-nightly-backup.sh`, `zoe_host_snapshot.py` + `zoe-ha-config-export`, `zoe_restore_drill.py` + `zoe-restore-drill-pg`.
-Gates: `night_busy.sh test`, 01:35-04:55, MemAvailable >= 2000 MB, the test-lane lock. Result: see the lab README.
+Gates: `night_busy.sh test`, 01:35-04:55, MemAvailable >= 2000 MB, the test-lane lock.
+
+**2026-10-19: 15/15 cells** (Jetson, pgvector 0.8.6-pg17 pinned digest, chromadb 1.5.9). S1 the real nightly script's manifest:
+1,234 multi-line rows counted exactly, a quoted table name, a partitioned parent (0) and its partition (40), the biometric
+table listed as data-excluded, pgvector 0.8.6, Alembic 0057, live table set equal; S2 the real palace tarball; S3 the host
+archive holds exactly the new sources and none of the exclusions (shadow log, VAPID key, dead `zoe.db`, HA log, recorder,
+tts); S4 the HA helper export (`.storage` + `.cloud`, 0600); **D1 the drill green**: every table count, pgvector, Alembic, the
+dump's own HNSW index valid + used + returning the probed row, a synthetic HNSW built and used, the palace opened with
+chromadb and queried, 14 host files checksum-verified. Negative controls, each red for its own reason only: **N1** bytes
+flipped in a dump (sha256 + gzip CRC); **N1b** a dump corrupted inside its zlib blocks with a matching sha256 (`pg_restore`
+fails); **N2** a dump missing `chat_messages` (table missing after restore); **N3** the box's older `pgvector/pgvector:pg17`
+image as the sandbox (pgvector 0.8.2 vs the dump's 0.8.6); **N4** a palace tarball without its HNSW segment dirs (chromadb
+`Error finding id`); **N5** one host file changed (differs from the manifest); **N6** the HA helper refuses a symlinked
+`.storage`, skips a symlinked file inside it and refuses a symlinked parent; **N7** a memory floor above MemAvailable
+refuses (exit 3) before any container exists; **N8** the drill helper refuses five out-of-set argument lists (exit 2);
+**T1** teardown leaves no container, network or scratch dir, and the live database's database list is unchanged.
+The A5 lab (`labs/offbox-backup`) was re-run with the host sources in its synthetic box: 19/19 (B2 ships exactly the
+new sources to each tier; B4 an unchanged crontab re-encrypts nothing).

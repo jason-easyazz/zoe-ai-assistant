@@ -215,14 +215,15 @@ def host_secret_sources(p: Paths) -> list[Source]:
     return srcs + [Source(f"systemd/system/{d.name}", d) for d in dropins]
 
 
-def crontab_source(tmpdir: Path) -> Optional[Source]:
-    """``crontab -l`` as a file (no crontab = no file). ZOE_OFFBOX_CRONTAB_FILE replaces the call (lab, tests)."""
-    out = tmpdir / "crontab.txt"
+def crontab_source(out_dir: Path) -> Optional[Source]:
+    """``crontab -l`` as ``<out_dir>/crontab.txt`` (no crontab = no file). The file is rewritten only when the text
+    CHANGED, so an unchanged crontab keeps its inode and ctime and the age mirror re-encrypts nothing (lab B4).
+    ZOE_OFFBOX_CRONTAB_FILE replaces the call (lab, tests)."""
     fake = os.environ.get("ZOE_OFFBOX_CRONTAB_FILE")
     if fake:
         if not Path(fake).is_file():
             return None
-        shutil.copyfile(fake, out)
+        text = Path(fake).read_bytes()
     else:
         try:
             r = subprocess.run(["crontab", "-l"], capture_output=True, timeout=30)
@@ -230,8 +231,15 @@ def crontab_source(tmpdir: Path) -> Optional[Source]:
             return None
         if r.returncode != 0:          # "no crontab for zoe"
             return None
-        out.write_bytes(r.stdout)
-    os.chmod(out, 0o600)
+        text = r.stdout
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / "crontab.txt"
+    try:
+        same = out.read_bytes() == text
+    except OSError:
+        same = False
+    if not same:
+        _atomic_write(out, text.decode(errors="replace"))      # 0600; never chmod an unchanged file (ctime)
     return Source("crontab", out)
 
 
@@ -683,7 +691,7 @@ def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:
         if g:
             hh.append(g)
         sec = secret_sources(p)
-        ct = crontab_source(Path(td))
+        ct = crontab_source(p.state_dir)
         if ct:
             sec.append(ct)
         tiers = {"household": hh, "secrets": sec}
