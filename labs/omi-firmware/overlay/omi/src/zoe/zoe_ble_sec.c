@@ -14,6 +14,7 @@
 LOG_MODULE_REGISTER(zoe_ble_sec, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define ZOE_BOND_WIPE_KEY "zoe/bw"
+#define ZOE_SMP_AUTH_BONDING 0x01 /* AuthReq bit 0, Core Vol 3 Part H 3.5.1 (Zephyr keeps it in a private header) */
 
 static struct k_spinlock lock;
 static int64_t window_until_ms;
@@ -63,10 +64,14 @@ void zoe_ble_sec_on_double_tap(void)
 static enum bt_security_err pairing_accept(struct bt_conn *conn, const struct bt_conn_pairing_feat *const feat)
 {
     ARG_UNUSED(conn);
-    ARG_UNUSED(feat);
     if (!zoe_ble_sec_pairing_open()) {
         LOG_WRN("pairing refused: window closed");
         return BT_SECURITY_ERR_PAIR_NOT_ALLOWED;
+    }
+    if (!(feat->auth_req & ZOE_SMP_AUTH_BONDING)) {
+        /* A session-only pairing would be an encrypted, readable link outside the one-bond model: bond or nothing. */
+        LOG_WRN("pairing refused: not a bonding request");
+        return BT_SECURITY_ERR_AUTH_REQUIREMENT;
     }
     return BT_SECURITY_ERR_SUCCESS;
 }
@@ -83,12 +88,13 @@ static const struct bt_conn_auth_cb auth_cb = {
 
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
-    ARG_UNUSED(conn);
     LOG_INF("pairing complete (bonded=%d)", bonded);
-    if (bonded) {
-        close_window();
-        play_haptic_milli(800);     /* a long buzz = bonded (the window opening is a short one); never sleep in a BT callback */
+    if (!bonded) {
+        (void) bt_conn_disconnect(conn, BT_HCI_ERR_AUTH_FAIL);    /* belt and braces for the check in pairing_accept */
+        return;
     }
+    close_window();
+    play_haptic_milli(800);         /* a long buzz = bonded (the window opening is a short one); never sleep in a BT callback */
 }
 
 static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)

@@ -18,6 +18,7 @@ void zrc_iv(uint8_t iv[ZRC_IV_BYTES], uint32_t salt, uint64_t seq)
 
 int zrc_xcrypt_packet(uint32_t salt, uint64_t seq, uint8_t *packet, size_t len)
 {
+    /* Not re-entrant, on purpose: every caller (append, read, mount/re-key) runs on the single SD worker thread. */
     static uint8_t scratch[ZRC_MAX_PACKET];
     uint8_t iv[ZRC_IV_BYTES];
 

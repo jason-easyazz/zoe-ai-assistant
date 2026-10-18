@@ -77,7 +77,7 @@ this:
     long buzz.
   - **first setup**: while the pendant holds no bond at all, the window is open for 120 s after boot.
 
-  One bond (`MAX_PAIRED=1`). A new pairing in the window replaces the old one (`CONFIG_BT_KEYS_OVERWRITE_OLDEST`).
+  A pairing request that does not ask to bond is refused, and a session-only pairing is disconnected: it is bond or nothing. One bond (`MAX_PAIRED=1`). A new pairing in the window replaces the old one (`CONFIG_BT_KEYS_OVERWRITE_OLDEST`).
 - **The first boot of this firmware deletes every stock-era bond**, for example a phone the Omi app once paired. A
   settings marker makes this happen once.
 - **When a bond exists, the pendant asks every central to encrypt** (a Security Request). The bonded Pi encrypts with its
