@@ -146,8 +146,9 @@ def put(env, text, *, user=ME, when="2026-10-06T02:00:00Z", **kw):
 
 @pytest.fixture
 def seeded(env):
-    for t in (ME_SISTER, ME_LIKE, ME_ROUTINE, ME_BIRTHDAY, ME_HEALTH, ME_FIGHT, ME_SHED):
+    for t in (ME_SISTER, ME_ROUTINE, ME_BIRTHDAY, ME_HEALTH, ME_FIGHT, ME_SHED):
         put(env, t)
+    put(env, ME_LIKE, source_excerpt="I like dark roast coffee with oat milk, every single morning.")
     put(env, f"My neighbour {OTHER_SECRET} keeps a parrot called Biscuit.", user=OTHER)
     put(env, f"I have {OTHER_SECRET} disease and I take insulin every day.", user=OTHER)
     return env
@@ -240,8 +241,8 @@ def test_member_b_never_sees_member_a(seeded):
 
 def test_inferred_rows_are_marked_and_never_the_spoken_example(env):
     put(env, ME_LIKE)
-    ref = run(env.svc.ingest("User seems to enjoy long hikes in the hills", user_id=ME, source="digest", confidence=0.6,
-                             session_id="s1", source_excerpt="we did a long hike in the hills on sunday",
+    ref = run(env.svc.ingest("User seems to enjoy long hikes in the hills", user_id=ME, source="chat_regex", confidence=0.6,
+                             session_id="s1", source_excerpt="we did a long hike in the hills on sunday", authority="inferred",
                              captured_at="2026-10-07T02:00:00Z"))
     assert ref is not None
     known = run(pa.gather(ME))
@@ -306,7 +307,7 @@ def test_other_intents_are_never_stolen(seeded, text):
 def test_forget_that_i_goes_through_the_audited_row_forget(seeded):
     rid = row_id(seeded, "dark roast")
     reply = say("forget that I like dark roast coffee", ME)
-    assert reply.startswith("Done - I've forgotten that you like dark roast coffee")
+    assert reply == "Done - I've forgotten that you like dark roast coffee with oat milk.", reply
     assert not any("dark roast" in t for t in approved(seeded))
     assert any(a.get("mem_id") == rid and a.get("action") == "reject" for a in seeded.audit), "audited reject"
     assert any("Marisol" in t for t in approved(seeded)), "only that row"
@@ -629,5 +630,7 @@ def test_control_without_the_owner_filter_another_members_row_would_be_forgotten
 
     monkeypatch.setattr(pa, "gather", everyone)
     monkeypatch.setattr(pa, "_owns", lambda meta, uid: True)
-    say("forget that I keep a parrot called Biscuit", ME)
-    assert not any("Biscuit" in t for t in approved(seeded, OTHER)), "the wall is what kept it"
+    reply = say("forget that I keep a parrot called Biscuit", ME)
+    assert reply != mv.NOT_FOUND_REPLY, "own-rows-only reading is what kept another member's row out of reach"
+    # the store's own owner check is a second wall: the reject is refused, so the row survives even then
+    assert any("Biscuit" in t for t in approved(seeded, OTHER))

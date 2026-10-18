@@ -162,6 +162,25 @@ def _covers(want: set, have: set) -> bool:
                               for t in want)
 
 
+_FIRST_PERSON = ((re.compile(r"^i['’]m\b", re.I), "you're"), (re.compile(r"^i\s+am\b", re.I), "you are"),
+                 (re.compile(r"^i['’]ve\b", re.I), "you've"), (re.compile(r"^i['’]d\b", re.I), "you'd"),
+                 (re.compile(r"^i\b", re.I), "you"), (re.compile(r"\bmy\b", re.I), "your"),
+                 (re.compile(r"\bmine\b", re.I), "yours"), (re.compile(r"\bmyself\b", re.I), "yourself"))
+
+
+def second(text: str) -> str:
+    """A stored row as Zoe says it to its owner, lower-case first ("you like jazz", "your birthday is on 14 March"): the store's
+    third person through ``provenance_answers.second_person``, then a row kept in the owner's own first person. Pure."""
+    t = pa.second_person(text or "").strip().rstrip(" .")
+    for rx, sub in _FIRST_PERSON:
+        t = rx.sub(sub, t)
+    return t[:1].lower() + t[1:]
+
+
+def _cap(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
 # -- the wall view -----------------------------------------------------------------------------------------------------------------
 def wall_safe(text: str) -> bool:
     """True when ``text`` may be said aloud / shown on a shared panel: no private class of ``provenance_answers`` and none of the
@@ -188,7 +207,12 @@ async def gather_wall(member: str, *, svc: Any = None) -> Wall:
         if it.mtype == "emotional_moment" or not wall_safe(it.text):
             w.private += 1
             continue
-        (people_items if it.group == "people" else w.items).append(it)
+        txt = " ".join((it.text or "").split())
+        # a people-group row the person parser can name goes into that person's entry; any other shape ("my brother and I
+        # went fishing") stays a row of its own, with its id, so it can be fixed or forgotten like every other row
+        named = it.group == "people" and bool(pa._NL_PERSON_RE.match(txt) or (pa._DERIVED_RE.match(txt) and it.mtype in (
+            "person", "relationship")))
+        (people_items if named else w.items).append(it)
     for e in pa.people_entries(people_items, known.people):
         if not (e.name or e.rel):
             continue
@@ -244,7 +268,7 @@ def build_card(panel_id: str, member: str, wall: Wall, *, title: str, people: Op
             n += 1
             key = f"m{n}"
             reg[key] = {"type": "memory", "ref": it.id, "text": it.text}
-            out.append({"id": key, "group": g, "text": pa.trim(pa.second_person(it.text), CARD_TEXT_CHARS),
+            out.append({"id": key, "group": g, "text": _cap(pa.trim(second(it.text), CARD_TEXT_CHARS)),
                         "meta": memory_space.provenance_label(it), "soft": bool(it.inferred),
                         "actions": [dict(a) for a in _ROW_ACTIONS]})
             shown_rows += 1
@@ -262,10 +286,14 @@ def build_card(panel_id: str, member: str, wall: Wall, *, title: str, people: Op
 
 # -- what is said ------------------------------------------------------------------------------------------------------------------
 def _examples(items: list, n: int) -> list:
+    """Up to ``n`` rows the member TOLD or CONFIRMED, as clauses that read after "like" ("you walk the dog every morning"): standing
+    facts (places, routines, preferences) first, short ones first, cut at a word. An inferred row is never an example."""
     told = [i for i in items if not i.inferred]
     standing = [i for i in told if memory_space.group_key(i) in ("places", "routines", "preferences")]
-    rest = [i for i in told if i not in standing]
-    return pa._spoken_example(standing + rest, n)
+    said = [second(i.text) for i in standing + [i for i in told if i not in standing]]
+    short = [x for x in said if len(x) <= pa.SPOKEN_EXAMPLE_CHARS]
+    picks = (short + [x for x in said if x not in short])[:n]
+    return [x if len(x) <= pa.SPOKEN_EXAMPLE_CHARS else pa.trim(x, pa.SPOKEN_EXAMPLE_CHARS).removesuffix("...") for x in picks]
 
 
 def spoken_me(wall: Wall, *, on_screen: bool = True) -> str:
@@ -413,10 +441,10 @@ async def _forget_one(member: str, row_id: str, text: str, *, svc: Any = None) -
     if outcome != "forgotten":
         return pa.FORGET_GONE_REPLY
     logger.info("MEMORIES_VOICE forget=1 user=%s", member)
-    said = pa.trim(pa.second_person(text), 80).removesuffix("...").rstrip(" .")
+    said = pa.trim(second(text), 80).removesuffix("...").rstrip(" .")
     if not said or not wall_safe(text):
         return "Done - I've forgotten that."
-    return f"Done - I've forgotten that {said[:1].lower() + said[1:]}."
+    return f"Done - I've forgotten that {said}."
 
 
 async def forget_fact(member: str, words: str, *, svc: Any = None) -> str:
@@ -436,12 +464,12 @@ async def forget_fact(member: str, words: str, *, svc: Any = None) -> str:
         return NOT_FOUND_REPLY
     hits.sort(key=lambda i: (len(_tokens(i.text) - want), -(i.epoch or 0.0)))
     first = hits[0]
-    if len(hits) > 1:
+    if len(hits) > 1 and _tokens(first.text) - want:
+        # more than one row says it and none says EXACTLY that: the twins of one utterance are one fact, anything else is asked
         svc = svc or pa._svc_default()
         ref = await asyncio.wait_for(svc.get(first.id), pa.READ_BUDGET_S)
         twins = {t.id for t in await pa.twins_of(member, ref, svc=svc)} if ref is not None else set()
-        rest = [h for h in hits[1:] if h.id not in twins and len(_tokens(h.text) - want) == len(_tokens(first.text) - want)]
-        if rest:
+        if [h for h in hits[1:] if h.id not in twins]:
             return WHICH_REPLY
     return await _forget_one(member, first.id, first.text, svc=svc)
 

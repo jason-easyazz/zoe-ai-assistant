@@ -90,8 +90,10 @@ def test_every_api_literal_is_a_served_memories_route():
     routes = [(m.upper(), p) for p, ops in app.openapi()["paths"].items() for m in ops]
     pats = [(m, re.compile("^" + re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(p)) + "$")) for m, p in routes]
     src = ABOUT.read_text(encoding="utf-8")
-    calls = re.findall(r"api\('(GET|POST)', '(/api/[^']+)'(?: \+ [^,)]+? \+ '([^']*)')?", src)
+    calls = re.findall(r"api\('(GET|POST)', '(/api/[^']+)'(?: \+ encodeURIComponent\([^)]*\) \+ '([^']*)')?", src)
     assert len(calls) >= 4, calls
+    assert {(m, b + t) for m, b, t in calls} >= {("GET", "/api/memories/mine/actions"), ("GET", "/api/memories/mine"),
+                                                ("POST", "/api/memories/mine//correct"), ("POST", "/api/memories/mine//forget")}
     for method, base, tail in calls:
         path = base + ("X" + tail if base.endswith("/") else "")
         assert any(m == method and p.match(path) for m, p in pats), f"{method} {path} is not served by routers/memories.py"
@@ -99,7 +101,8 @@ def test_every_api_literal_is_a_served_memories_route():
 
 def test_nothing_new_is_precached():
     sw = (DIST / "sw.js").read_text(encoding="utf-8")
-    block = sw.split("precacheAndRoute", 1)[1][:2000]
+    block = sw.split("precacheAndRoute([", 1)[1].split("]);", 1)[0]
+    assert "/index.html" in block, "the precache list was not found"
     for name in ("memories", "about-me", "touch-review-cards", "touch/home"):
         assert name not in block, f"{name} is precached now: bump SW_VERSION and the precache digest"
     home = (DIST / "touch" / "home.html").read_text(encoding="utf-8")
