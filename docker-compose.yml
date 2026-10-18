@@ -44,6 +44,9 @@ services:
           - zoe.local
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 71 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 256m
+    memswap_limit: 384m
 
   # ── Database ───────────────────────────────────────────────────────────────
   # PostgreSQL is required by zoe-auth and host-native zoe-data.
@@ -85,6 +88,9 @@ services:
     - zoe-network
     restart: unless-stopped
     logging: *default-logging
+    # NO memory cap, deliberately (B9, 2026-10-18; tests/unit/test_ops_hygiene_b9.py lists the exemption): an
+    # OOM kill here is an outage of every data path plus crash recovery - the zoe-data MemoryMax argument. Peak 217 MB
+    # against 128 MB shared_buffers; revisit with pg_stat_statements (docs/knowledge/docker-log-and-memory-limits.md).
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U zoe"]
       interval: 10s
@@ -103,6 +109,9 @@ services:
     - zoe-network
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 83 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 256m
+    memswap_limit: 384m
     depends_on:
       zoe-database:
         condition: service_healthy
@@ -130,6 +139,9 @@ services:
     container_name: homeassistant
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 453 MB; an HA upgrade's first start spikes; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 1536m
+    memswap_limit: 2304m
     ports:
     - 8123:8123
     volumes:
@@ -144,6 +156,9 @@ services:
     container_name: homeassistant-mcp-bridge
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 53 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 256m
+    memswap_limit: 384m
     # LOOPBACK ONLY. The bridge has NO inbound auth — on 0.0.0.0 any LAN host could drive
     # Home Assistant through it. Every consumer is host-local or on zoe-network:
     # zoe-data uses ZOE_HA_BRIDGE_URL=http://127.0.0.1:8007; Home Assistant calls
@@ -296,6 +311,9 @@ services:
     command: --config /etc/cloudflared/config.yml --no-autoupdate tunnel run
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 41 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 256m
+    memswap_limit: 384m
     profiles:
     - cloudflare
     volumes:

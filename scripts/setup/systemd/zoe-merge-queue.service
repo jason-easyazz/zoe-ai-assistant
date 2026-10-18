@@ -1,0 +1,19 @@
+# Local merge queue: one serial cycle per run (advance / merge one auto-merge-labelled PR). Tracked 2026-10-18 from
+# the live unit (architecture deep dive B9; B2 moves the engineering harness out of zoe-data later).
+# Off-switch without disabling the timer: touch %h/assistant/.cursor/tmp/pr_guard/merge_queue.disabled
+[Unit]
+Description=Zoe local merge queue - one serial cycle (advance/merge one auto-merge-labelled PR)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/assistant
+# The queue library is disabled unless this is set.
+Environment=ZOE_MERGE_QUEUE_ENABLED=1
+Environment=PYTHONPATH=%h/assistant/services/zoe-data
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/greploop_guard.py --queue
+# Every cycle's JSON decision is appended here.
+StandardOutput=append:%h/assistant/.cursor/tmp/pr_guard/merge_queue.log
+StandardError=append:%h/assistant/.cursor/tmp/pr_guard/merge_queue.log
