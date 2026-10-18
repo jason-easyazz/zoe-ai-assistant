@@ -327,11 +327,12 @@
             row.appendChild(sug);
         }
         const acts = el('div', 'row');
-        // a line marked TV / media is excluded until the mark is cleared: a person correction clears it first (one change per
-        // PATCH - the server refuses owner_label + not_person together), so a mistaken media mark can always be undone
+        // a line marked TV / media is excluded until the mark is cleared, so a mistaken mark can always be undone. Me / Not me
+        // clear it IN THE SAME request (two would let held audio be released between them); Who? clears it, then tags.
         const unmark = () => (seg.not_person ? api('PATCH', '/api/omi/segments/' + sid, { not_person: null }) : Promise.resolve());
-        acts.appendChild(button('Me', 'small', () => done(unmark().then(() => api('PATCH', '/api/omi/segments/' + sid, { owner_label: 'you' })))));
-        acts.appendChild(button('Not me', 'small', () => done(unmark().then(() => api('PATCH', '/api/omi/segments/' + sid, { owner_label: 'other' })))));
+        const label = (who) => api('PATCH', '/api/omi/segments/' + sid, seg.not_person ? { not_person: null, owner_label: who } : { owner_label: who });
+        acts.appendChild(button('Me', 'small', () => done(label('you'))));
+        acts.appendChild(button('Not me', 'small', () => done(label('other'))));
         acts.appendChild(button('Who?', 'small primary', () => {
             acts.hidden = true;
             const picker = whoPicker(

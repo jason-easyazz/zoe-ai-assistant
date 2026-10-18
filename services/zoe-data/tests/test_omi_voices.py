@@ -1129,7 +1129,7 @@ def test_a_patch_with_both_not_person_and_owner_label_is_rejected_and_applies_no
         transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
     sid = env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")[0][0]
     for body in ({"not_person": "tv", "owner_label": "you"}, {"not_person": "tv", "owner_label": "other"},
-                 {"not_person": None, "owner_label": "you"}, {"owner_label": None, "not_person": "radio"}):
+                 {"owner_label": None, "not_person": "radio"}):
         r = env.client.patch(f"/api/omi/segments/{sid}", json=body)
         assert r.status_code == 400, body
         assert env.db.q("SELECT not_person, owner_label FROM omi_segments WHERE id = ?", (sid,)) == [(None, None)], body
@@ -1322,6 +1322,29 @@ def test_a_line_learn_marks_not_a_person_releases_the_held_audio_at_once(env, mo
     rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(TV, 2, 0.3))))
     assert env.db.q("SELECT not_person FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (rid,)) == [("tv",)]
     assert not _held(env, rid)
+
+
+def test_un_marking_a_tv_line_as_not_me_is_one_request_and_keeps_the_audio(env, monkeypatch):
+    """Codex review on #2118: a TV-marked line the model called ``you`` is corrected to "not me". As two requests, the un-mark
+    alone left nothing needing a name and released the WAV before the label made the line nameable again. One request
+    ``{"not_person": null, "owner_label": "other"}`` does both, then releases. Mutation: reject that combination again (red)."""
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp))
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO_FOR_TAGGING", "1")
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, SAM)))
+    (you_sid,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'you'", (rid,))]
+    (sam_sid,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (rid,))]
+    assert env.client.patch(f"/api/omi/segments/{you_sid}", json={"not_person": "tv"}).status_code == 200
+    assert _held(env, rid)                                                         # Sam's line still needs a name
+    env.db.conn.execute("UPDATE omi_segments SET not_person = 'radio' WHERE id = ?", (sam_sid,))   # nothing needs a name now, but
+    env.db.conn.commit()                                                                          # no release has run yet
+    assert env.client.patch(f"/api/omi/segments/{you_sid}", json={"not_person": None, "owner_label": "other"}).status_code == 200
+    assert env.db.q("SELECT not_person, owner_label FROM omi_segments WHERE id = ?", (you_sid,)) == [(None, "other")]
+    assert _held(env, rid)                                                         # the corrected line needs a name: still playable
+    clip = env.client.get(f"/api/omi/segments/{you_sid}/clip")
+    assert clip.status_code == 200
+    r = env.client.patch(f"/api/omi/segments/{you_sid}", json={"not_person": None, "owner_label": "you"})
+    assert r.status_code == 200 and env.db.q("SELECT owner_label FROM omi_segments WHERE id = ?", (you_sid,)) == [("you",)]
+    assert not _held(env, rid)                                                     # now nothing needs a name: released
 
 
 def test_held_audio_never_outlives_its_retention_and_a_clip_never_leaves_the_audio_dir(env, monkeypatch):

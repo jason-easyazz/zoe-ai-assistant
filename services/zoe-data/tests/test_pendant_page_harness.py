@@ -50,7 +50,7 @@ def test_pendant_page_harness_passes():
     ("if (text !== undefined && text !== null) n.textContent = String(text);",
      "if (text !== undefined && text !== null) n.innerHTML = String(text);"),                 # string-built DOM
     ("'/me'", "'/tag'"),                                                                      # "That's me" names a person
-    ("{ owner_label: 'you' }", "{ owner_label: 'other' }"),                                  # "Me" says not me
+    ("done(label('you'))", "done(label('other'))"),                                         # "Me" says not me
     ("onDone(exact.length === 1 ? { person_id: exact[0].id } : { name });", "onDone({ name });"),  # a duplicate person per tag
     ("root.fetch('/api/omi/segments/' + encodeURIComponent(segmentId) + '/clip'",
      "root.fetch('/api/omi/recordings/' + encodeURIComponent(segmentId) + '/clip'"),        # plays the wrong thing

@@ -283,7 +283,7 @@ async function check(label, fn) {
         assert(/no longer kept/.test(e.doc.ids.pendantToast.textContent), e.doc.ids.pendantToast.textContent);
     });
 
-    await check('a line marked TV can be undone: Me / Who? clear the mark first, Not media clears it alone', async () => {
+    await check('a line marked TV can be undone: Me un-marks in the same request, Who? un-marks then tags, Not media alone', async () => {
         const e = makeEnv();
         await e.Z.init(e.doc);
         const rec = e.doc.ids.pendantRecordings.children[0];
@@ -295,9 +295,8 @@ async function check(label, fn) {
         e.calls.length = 0;
         await byText(seg(), 'Me')[0].click();
         await new Promise(r => setImmediate(r));
-        assert.deepStrictEqual(posts(e.calls).slice(0, 2), [
-            { method: 'PATCH', url: '/api/omi/segments/seg-3', body: { not_person: null } },
-            { method: 'PATCH', url: '/api/omi/segments/seg-3', body: { owner_label: 'you' } }]);
+        assert.deepStrictEqual(posts(e.calls)[0], { method: 'PATCH', url: '/api/omi/segments/seg-3', body: { not_person: null, owner_label: 'you' } });
+        assert.strictEqual(posts(e.calls).length, 1, 'un-mark + label is ONE request (held audio is never released in between)');
         await byText(seg(), 'Who?')[0].click();
         e.calls.length = 0;
         await byText(seg(), 'Alex Example')[0].click();
