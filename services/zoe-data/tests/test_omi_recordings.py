@@ -748,6 +748,95 @@ def test_a_row_past_its_retention_is_never_requeued_even_while_its_wav_waits_for
     assert set(_status(env).values()) == {"empty_transcript"}
 
 
+def _expire(env, rid):
+    past = (datetime.now(UTC) - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    env.db.conn.execute("UPDATE omi_recordings SET audio_expires_at = ? WHERE id = ?", (past, rid))
+    env.db.conn.commit()
+
+
+def test_a_row_that_expired_before_its_claim_is_marked_never_transcribed_or_left_pending(env):
+    """Retention is enforced at CLAIM time. A pending row whose ``audio_expires_at`` passed (it expired between ``requeue_held`` and
+    the claim) is skipped and MARKED (``failed``, WAV gone), never transcribed and never left pending - and it does not spend the
+    pass's quota: the live row behind it is transcribed in the same ``limit=1`` pass. Negative control: drop the
+    ``_retention_passed`` check in ``transcribe_pending`` and the stale row is transcribed (and ``env.stt`` has two calls)."""
+    stale = upload(env, make_wav(3.0), key="r1.0-9", started="2026-10-10T01:00:00Z").json()["id"]
+    live = upload(env, make_wav(3.0), key="r1.10-19", started="2026-10-10T02:00:00Z").json()["id"]
+    stale_wav = rows(env, f"SELECT audio_path FROM omi_recordings WHERE id = '{stale}'")[0]["audio_path"]
+    assert Path(stale_wav).exists()
+    _expire(env, stale)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    got = {r["id"]: r for r in rows(env)}
+    assert got[stale]["status"] == "failed" and got[stale]["audio_path"] == "" and got[stale]["audio_expires_at"] is None
+    assert got[stale]["transcript"] in (None, "") and got[stale]["attempts"] == 0           # never claimed, never transcribed
+    assert not Path(stale_wav).exists()
+    assert got[live]["status"] == "done" and len(env.stt) == 1                                # control: the unexpired row still transcribes
+    assert "pending" not in {r["status"] for r in rows(env)}
+    assert run(omi.requeue_held(None)) == 0                                                    # and nothing brings it back
+
+
+def test_a_row_that_loses_the_race_with_the_clock_is_refused_by_the_claim_and_marked_at_once(env, monkeypatch):
+    """The read-side check can lose a race with the clock (the row expires between the read and the claim). The claim UPDATE
+    re-checks the retention, so the row is not claimed AND it is marked in the same pass - never transcribed, never left pending.
+    Negative controls: drop ``AND (audio_expires_at IS NULL OR audio_expires_at > ?)`` from the claim and the row is transcribed;
+    drop the ``_expire_unclaimed`` call after a lost claim and it stays ``pending``."""
+    rid = upload(env, make_wav(3.0)).json()["id"]
+    wav = rows(env)[0]["audio_path"]
+    _expire(env, rid)
+    monkeypatch.setattr(omi, "_retention_passed", lambda expires, stamp: False)               # the read-side check "missed" it
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0
+    got = rows(env)[0]
+    assert env.stt == [] and got["attempts"] == 0 and got["transcript"] in (None, "")
+    assert got["status"] == "failed" and got["audio_path"] == "" and not Path(wav).exists()
+
+
+def test_the_retention_clock_is_read_at_each_claim_not_once_per_pass(env, monkeypatch):
+    """A pass transcribes up to ``limit`` rows and each takes minutes: a later row can expire while an earlier one is being worked.
+    The claim stamp is taken per claim, so that row is marked, not transcribed. Negative control: hoist ``stamp = _iso(now or _now())``
+    in ``transcribe_pending`` back out of the ``for`` loop and the second row is transcribed."""
+    first = upload(env, make_wav(3.0), key="r1.0-9", started="2026-10-10T01:00:00Z").json()["id"]
+    second = upload(env, make_wav(3.0), key="r1.10-19", started="2026-10-10T02:00:00Z").json()["id"]
+    t0 = datetime.now(UTC)
+    clock = {"now": t0}
+    monkeypatch.setattr(omi, "_now", lambda: clock["now"])
+    env.db.conn.execute("UPDATE omi_recordings SET audio_expires_at = ? WHERE id = ?", ((t0 + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ"), second))
+    env.db.conn.commit()
+
+    async def slow_stt(path):                                            # the first transcription "takes" an hour
+        env.stt.append(path)
+        clock["now"] = t0 + timedelta(hours=1)
+        return "words"
+    monkeypatch.setattr(omi, "_transcribe_file", slow_stt)
+    run(omi.transcribe_pending(limit=2, pause_s=0))
+    got = {r["id"]: r for r in rows(env)}
+    assert got[first]["status"] == "done" and len(env.stt) == 1
+    assert got[second]["status"] == "failed" and got[second]["audio_path"] == "" and got[second]["attempts"] == 0
+
+
+def test_the_retention_clock_is_refreshed_for_each_row_of_the_cleanup_loop(env, monkeypatch):
+    """Marking expired rows takes time too: the stamp is read again right before each row's retention check and claim, so a row that
+    expires while an earlier one is being cleaned up is marked, not claimed. Negative control: drop the ``stamp = _iso(now or _now())``
+    line inside the ``while r is None`` loop of ``transcribe_pending`` and the second row is transcribed."""
+    a = upload(env, make_wav(3.0), key="r1.0-9", started="2026-10-10T01:00:00Z").json()["id"]
+    b = upload(env, make_wav(3.0), key="r1.10-19", started="2026-10-10T02:00:00Z").json()["id"]
+    c = upload(env, make_wav(3.0), key="r1.20-29", started="2026-10-10T03:00:00Z").json()["id"]
+    t0 = datetime.now(UTC)
+    clock = {"now": t0}
+    monkeypatch.setattr(omi, "_now", lambda: clock["now"])
+    _expire(env, a)
+    env.db.conn.execute("UPDATE omi_recordings SET audio_expires_at = ? WHERE id = ?", ((t0 + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ"), b))
+    env.db.conn.commit()
+    real_expire = omi._expire_unclaimed
+
+    async def slow_expire(db, r, stamp):                                 # cleaning the first row "takes" an hour
+        out = await real_expire(db, r, stamp)
+        clock["now"] = t0 + timedelta(hours=1)
+        return out
+    monkeypatch.setattr(omi, "_expire_unclaimed", slow_expire)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    got = {r["id"]: r["status"] for r in rows(env)}
+    assert got == {a: "failed", b: "failed", c: "done"} and len(env.stt) == 1
+
+
 def test_an_expired_held_recording_is_purged_not_requeued(env, monkeypatch):
     _held(env, monkeypatch, n=1)
     assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1
