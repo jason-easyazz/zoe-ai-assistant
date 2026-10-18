@@ -34,6 +34,7 @@ import voice_stt_stream as _stt_stream
 import voice_utterance_shape as _utterance_shape
 import speaker_adaptation
 import speaker_models
+import traffic_class
 from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
@@ -2731,6 +2732,8 @@ def _log_voice_stt_sample(
             # Actual backend that produced this transcript (was hardcoded base.en).
             "model": _stt_backend_var.get() or env_str("ZOE_STT_BACKEND", "moonshine"),
             "moonshine_arch": moonshine_arch(),
+            # P-2: household | harness | probe | ci, server-derived (traffic_class.py) - NOT the body panel_id
+            "traffic_class": traffic_class.current(),
         }
         if error:
             record["error"] = error[:500]
