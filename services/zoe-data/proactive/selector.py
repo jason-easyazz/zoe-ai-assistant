@@ -197,7 +197,8 @@ async def _gather(db, user_id: str, now: datetime) -> tuple[list, list, list]:
 
     async with db.execute(
         "SELECT id, loop_text, follow_up_hint, emotional_weight, created_at, follow_up_after "
-        "FROM open_loops WHERE user_id = ? AND resolved IS NOT TRUE", (user_id,),
+        # a pendant follow-up (owner decision D5) is an open loop with no alarm: never raised (omi_review_apply.QUIET_LOOP_PREFIX)
+        "FROM open_loops WHERE user_id = ? AND resolved IS NOT TRUE AND COALESCE(context, '') NOT LIKE 'pendant:%'", (user_id,),
     ) as cur:
         loops = [{"id": r[0], "text": r[1], "hint": r[2], "weight": r[3], "created": r[4],
                   "due": r[5]} for r in await cur.fetchall()]
