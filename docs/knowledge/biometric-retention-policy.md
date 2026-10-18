@@ -175,7 +175,11 @@ Notes:
   at the token's own panel. Nobody verified, or the payload names someone else: 403,
   nothing written. The guided `scripts/setup/zoe_enroll_flow.py` (face or voice) therefore
   needs the member to sign in with their PIN at the panel first. A grant is in-process
-  state, so a zoe-data restart mid-run refuses the upload (fail closed).
+  state, so a zoe-data restart mid-run refuses the upload (fail closed). Residual,
+  stated: a copied token ON THE HOME LAN can still race an upload inside a live window
+  (a member's fresh PIN sign-in at that panel, or Zoe's few-minute enrolment grant);
+  closing it needs a per-command nonce the daemon echoes (a voice-path daemon change).
+  The enrolment result is LAN-only too.
 - Admin power is **explicit and fail-closed** (`auth.is_admin_role`), never implied
   by reaching the endpoint. It honours the `family-admin` alias; anything else —
   including a non-string role — is not an admin.

@@ -207,7 +207,7 @@ async def is_panel_guest(request: Any, user: Mapping[str, Any] | None, db: Any =
     if (user or {}).get("panel_id"):
         # Device token, no bound member. Over the Cloudflare tunnel it is a plain guest (owner decision 2026-10-19), unless
         # the ZOE_PANEL_TOKEN_VIA_CF=panel escape hatch restores the old rule.
-        return not (_via_public_tunnel(request) and not device_token_via_cf_is_panel())
+        return device_token_is_panel(request)       # fail-closed wrapper
     if _via_public_tunnel(request):
         return False  # a request that crossed Cloudflare is the internet, never the kiosk on the LAN
     # Path 1b: the kiosk browser's credential minted from the device token (flag-dark; None whenever the flag is off).

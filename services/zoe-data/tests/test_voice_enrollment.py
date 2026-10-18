@@ -705,7 +705,7 @@ def test_an_admin_sees_the_household_without_synthetic_ids(client, env):
 
 
 def test_a_device_token_owns_nothing_but_may_report_a_result(client, env):
-    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi", "via_relay": False, "via_tunnel": False}
     assert client.get("/api/enrollment/state").status_code == 403
     assert client.get("/api/enrollment/household").status_code == 403
     _grant()
@@ -723,13 +723,29 @@ def _grant(member=ADULT, panel="zoe-touch-pi"):
     biometric_scope.grant_enrolment(panel, member, ttl_s=300)
 
 
+@pytest.mark.parametrize("remote", [{"via_tunnel": True}, {"via_relay": True}], ids=["cloudflare", "relay"])
+def test_a_result_from_off_the_lan_is_refused_and_leaves_the_grant_alone(client, env, remote):
+    """Off the LAN a copied token must not close the panel's live grant or record a "no" for the granted member."""
+    import biometric_scope
+
+    biometric_scope.reset_enrolment_grants()
+    _grant()
+    client.who["caller"] = dict({"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi",
+                                 "via_relay": False, "via_tunnel": False}, **remote)
+    stop = {"status": "cancelled", "user_id": ADULT, "reason": "said_stop"}
+    assert client.post("/api/enrollment/result", json=stop).status_code == 403
+    assert not run(es.get_state(ADULT)).declined_now(NOW)
+    assert biometric_scope.granted_member("zoe-touch-pi") == ADULT              # the real run's grant survives
+    biometric_scope.reset_enrolment_grants()
+
+
 def test_a_result_without_a_grant_records_nothing_and_each_result_closes_the_grant(client, env):
     """2026-10-19: a copied panel token cannot put a member into the 60-day quiet period. Only the member Zoe granted at
     THAT panel can be recorded as having said stop, and the run's result closes the grant (a second report is ignored)."""
     import biometric_scope
 
     biometric_scope.reset_enrolment_grants()
-    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi", "via_relay": False, "via_tunnel": False}
     stop = {"status": "cancelled", "user_id": ADULT, "reason": "said_stop"}
     assert client.post("/api/enrollment/result", json=stop).status_code == 200
     assert not run(es.get_state(ADULT)).declined_now(NOW)                       # no grant: nothing recorded
@@ -914,7 +930,7 @@ def test_release_never_undoes_a_later_claim(env):
 
 
 def test_only_the_person_stopping_it_is_a_decline_a_daemon_shutdown_is_not(client, env):
-    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi", "via_relay": False, "via_tunnel": False}
 
     def post(**kw):
         _grant()                                                                   # every run is its own granted command
@@ -930,7 +946,7 @@ def test_only_the_person_stopping_it_is_a_decline_a_daemon_shutdown_is_not(clien
 
 
 def test_a_non_cancel_status_with_a_stop_reason_is_not_a_decline(client, env):
-    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi", "via_relay": False, "via_tunnel": False}
     client.post("/api/enrollment/result", json={"status": "failed", "user_id": ADULT, "reason": "said_stop"})
     assert not run(es.get_state(ADULT)).declined_now(NOW)
 

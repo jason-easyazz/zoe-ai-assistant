@@ -82,6 +82,8 @@ async def enrollment_household(caller: dict = Depends(_require_voice_auth)):
 async def enrollment_result(payload: dict, caller: dict = Depends(_require_voice_auth)):
     if caller.get("source") != "device":
         raise HTTPException(status_code=403, detail="enrolment results come from the panel daemon (device token)")
+    # Off the LAN a copied token could close the panel's live grant or record a "no" for the granted member (2026-10-19).
+    biometric_scope.require_local_panel(caller, "an enrolment result")
     body = payload or {}
     status = str(body.get("status") or "").strip().lower()
     uid = str(body.get("user_id") or "").strip()
