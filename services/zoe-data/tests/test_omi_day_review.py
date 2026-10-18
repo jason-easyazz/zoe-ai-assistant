@@ -200,6 +200,25 @@ def test_a_fact_someone_else_said_never_becomes_an_owner_fact(env):
     assert cands(env) == [] and res["stored"] == 0
 
 
+def test_a_long_diarised_turn_is_split_into_capped_lines_that_keep_the_speaker_and_lose_nothing():
+    """A turn longer than LINE_CHARS used to be cut at 400 characters and the rest dropped. It is split like the joined path
+    (sentences, then a cut at a space), every piece keeps the turn's speaker, and the words after the old cap still reach the model.
+    Negative control: pass ``[t]`` instead of ``_sentences(t)`` for a segment in ``lines_for_day`` and the tail is lost."""
+    filler = " ".join(["we kept talking about the garden and the weather"] * 9) + "."            # ~490 chars, one sentence
+    tail = "Later I'm moving the shed to the back fence."
+    long_turn = filler + " " + tail
+    runon = " ".join(["word"] * 150)                                                              # 749 chars, no stop at all
+    assert len(long_turn) > dr.LINE_CHARS and len(runon) > dr.LINE_CHARS
+    recs = [{"id": "rec1", "started_at": "2026-10-13T01:00:00Z", "transcript": "ignored"}]
+    lines = dr.lines_for_day(recs, segments={"rec1": [(long_turn, "someone_else"), (runon, "you"), ("Short one.", "not_sure")]})
+    assert all(len(ln.text) <= dr.LINE_CHARS for ln in lines)
+    first = [ln for ln in lines if ln.speaker == "someone_else"]
+    assert len(first) >= 2 and tail in [ln.text for ln in first]                                   # the part after the cap survives
+    runs = [ln for ln in lines if ln.speaker == "you"]
+    assert len(runs) >= 2 and " ".join(ln.text for ln in runs).split() == runon.split()             # nothing lost, nothing added
+    assert [ln.speaker for ln in lines][-1] == "not_sure" and len({ln.id for ln in lines}) == len(lines)
+
+
 def test_with_speaker_labels_a_line_someone_else_said_is_never_an_owner_fact():
     """The omi_segments SEAM: a per-turn ``someone_else`` label vetoes an owner fact even in the first person."""
     recs = [{"id": "rec1", "started_at": "2026-10-13T01:00:00Z", "transcript": "joined text is ignored"}]

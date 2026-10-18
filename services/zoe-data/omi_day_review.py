@@ -256,7 +256,9 @@ def lines_for_day(recordings: Sequence[dict], segments: Optional[dict] = None) -
         at = dt.astimezone(_tz()).strftime("%H:%M") if dt else "--:--"
         parts: list[tuple[str, str]]
         if segments and r["id"] in segments:
-            parts = [(t, s if s in SPEAKERS else "not_sure") for t, s in segments[r["id"]]]
+            # a diarised turn can run long: split it like the joined path does (sentences, then a cut at a space under LINE_CHARS) so
+            # nothing past the cap is lost, and every piece keeps the turn's speaker
+            parts = [(piece, s if s in SPEAKERS else "not_sure") for t, s in segments[r["id"]] for piece in _sentences(str(t or ""))]
         else:
             parts = [(s, "not_sure") for s in _sentences(str(r.get("transcript") or ""))]
         n = 0
