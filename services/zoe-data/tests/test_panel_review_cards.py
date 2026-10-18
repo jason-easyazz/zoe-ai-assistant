@@ -211,6 +211,8 @@ def test_health_and_money_loops_stay_off_the_wall(env):
     for word in ("migraine", "loan"):
         assert word not in reply.lower() and word not in json.dumps(env.pushed).lower()
     assert "1 open loop" in reply
+    typed = asyncio.run(prc.answer("what's on my plate", A, channel="chat", extra_ctx={}, allow_writes=True))
+    assert "migraine" in typed and "3 open loops" in typed     # a typed answer is not the wall: nothing approved is unreachable
 
 
 # --- voice closes ----------------------------------------------------------------------------------------------------------------

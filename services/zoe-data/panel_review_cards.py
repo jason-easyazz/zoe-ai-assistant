@@ -147,8 +147,9 @@ def _ago(created: Any, now: datetime) -> str:
     return "today" if days <= 0 else "yesterday" if days == 1 else f"{days} days ago"
 
 
-async def member_loops(member: str) -> list[dict]:
-    """The member's open loops, newest first, without the ones restraint keeps off the wall."""
+async def member_loops(member: str, *, wall: bool = True) -> list[dict]:
+    """The member's open loops, newest first. ``wall`` (the panel and anything spoken aloud) leaves out the ones restraint keeps
+    off the wall; a typed chat answer (``wall=False``) lists them all, so nothing the member approved is unreachable."""
     from db_compat import get_compat_db
 
     async with get_compat_db() as db:
@@ -157,7 +158,7 @@ async def member_loops(member: str) -> list[dict]:
             rows = await cur.fetchall()
     now = datetime.now(timezone.utc)
     out = [{"id": r[0], "text": " ".join(str(r[1] or "").split())[:200], "ago": _ago(r[2], now)} for r in rows]
-    return [lp for lp in out if lp["text"] and not _private(lp["text"])][:MAX_LOOPS]
+    return [lp for lp in out if lp["text"] and not (wall and _private(lp["text"]))][:MAX_LOOPS]
 
 
 async def close_loop(member: str, loop_id: Any, how: str) -> bool:
@@ -467,7 +468,7 @@ async def answer(text: str, user_id: str, *, channel: str, extra_ctx: Optional[d
         bits = ([f"{len(cands)} thing{'s' if len(cands) != 1 else ''} from your day"] if cands else []) + (
             [f"{len(voices)} new voice{'s' if len(voices) != 1 else ''} to name"] if voices else [])
         return f"You've got {' and '.join(bits)}." + (" They're on the screen." if panel_id else "")
-    loops = await member_loops(member)
+    loops = await member_loops(member, wall=channel == "voice")
     if kind == "read":
         if panel_id:
             await _push(loops_card(panel_id, member, loops))

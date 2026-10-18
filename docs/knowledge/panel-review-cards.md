@@ -27,7 +27,8 @@ reminder intent exactly as before. Two matching loops are asked about ("That cou
 - Open loops are the existing `open_loops` table (the nightly extractor `memory_digest._extract_open_loops` mines them from
   conversation). Closing one sets `resolved` and expires its proactive candidate.
 - **D5:** an approved pendant follow-up (`omi_review_apply.write_follow_up`) is now an open loop (`context='pendant:<candidate>'`),
-  not a `tasks` list item. `proactive/selector._gather` and `morning_checkin` skip `pendant:` loops, so they are never raised.
+  not a `tasks` list item. `proactive/selector._gather`, `morning_checkin` and the legacy agent's `[OPEN LOOPS]` block
+  (`zoe_agent._load_open_loops`) skip `pendant:` loops, so they are never raised.
   Loops mined from chat keep the existing proactive behaviour (gentle check-ins under the proactive flags).
 - The day review items and the voices are read and written ONLY through their own owner-checked routes
   (`routers/omi_day_review`, `routers/omi_voices`, called in-process); this module has no SQL on any pendant table.
@@ -37,7 +38,7 @@ reminder intent exactly as before. Two matching loops are asked about ("That cou
 - The member is the TURN's identity (`extra_ctx['scope_user']`: an open voice session or a fresh PIN sign-in). With none, the
   reply is "That's private..." and the panel gets the existing locked card: no row, no count, no name.
 - Loops classed health / money / grief / family conflict / feelings by `restraint` are never read out or shown (memories-space
-  D11). No transcript line is ever on the wall (D13): a voice row is "Voice 3, heard in 4 recordings".
+  D11); a typed chat answer lists them, so an approved loop is never unreachable. No transcript line is ever on the wall (D13): a voice row is "Voice 3, heard in 4 recordings".
 - The card goes to the panel's own push channel only (`voice_cards.push`) and is removed when the voice session closes (the
   existing `touch-voice-session.js` lifecycle; a PIN-path card fades after 90 s).
 - **Card token.** Each card carries an opaque token; its rows are opaque ids (`1`, `c1`, `v1`), so a tap can only act on what was
