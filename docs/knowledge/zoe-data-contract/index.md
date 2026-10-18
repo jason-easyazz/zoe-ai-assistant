@@ -182,4 +182,4 @@ One row per pre-pass bullet that was condensed. `before` / `after` are character
 | ZD176 | [HA media target resolution](platform.md#zd176-ha-media-target-resolution) | 589 | 525 |
 | ZD177 | [Capability prose honesty](platform.md#zd177-capability-prose-honesty) | 1141 | 621 |
 
-Total of condensed bullets: 308224 chars before, 94114 after. Four bullets that landed on main after the pass (A10 LiveKit rooms, A11 per-turn panel channel, change notices P1, A2 mutating-route auth) are already short and sit whole in `services/zoe-data/AGENTS.md`, so they have no record here.
+Total of condensed bullets at the first pass: 308224 chars before, 94114 after (the per-row `after` column is the first-pass size). A full cross-vendor review on 2026-10-19 (the '-' lines of the contract diff were these originals) found that the first pass had dropped binding clauses in many bullets; those were restored, so `services/zoe-data/AGENTS.md` is now about 173 KB (from ~314 KB). Four bullets that landed on main after the pass (A10 LiveKit rooms, A11 per-turn panel channel, change notices P1, A2 mutating-route auth) sit whole in `services/zoe-data/AGENTS.md` and have no record here.

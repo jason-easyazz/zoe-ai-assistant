@@ -8,6 +8,7 @@ cadence (docs/ROADMAP.md).
 """
 from __future__ import annotations
 
+import datetime
 import re
 from pathlib import Path
 
@@ -29,6 +30,14 @@ def parse_rows(text: str) -> list[dict]:
     return rows
 
 
+def _real_date(text: str) -> bool:
+    try:
+        datetime.date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
+
+
 def problems(rows: list[dict], files: set[str]) -> list[str]:
     out = []
     names = [r["name"] for r in rows]
@@ -39,12 +48,15 @@ def problems(rows: list[dict], files: set[str]) -> list[str]:
     for n in sorted(set(names) - files):
         out.append(f"{n}: has a row but no file (move it to the Retired section)")
     for r in rows:
+        if r["link"] != r["name"]:
+            out.append(f"{r['name']}: its link {r['link']!r} does not point at that record")
+    for r in rows:
         status = r["status"]
         if status == "open":
             continue
-        if not re.fullmatch(r"absorbed \d{4}-\d{2}-\d{2}", status):
+        if not re.fullmatch(r"absorbed \d{4}-\d{2}-\d{2}", status) or not _real_date(status.split()[1]):
             out.append(f"{r['name']}: status {status!r} is not 'open' or 'absorbed YYYY-MM-DD'")
-        elif not re.search(r"retire by \d{4}-\d{2}-\d{2}", r["note"]):
+        elif not (m := re.search(r"retire by (\d{4}-\d{2}-\d{2})", r["note"])) or not _real_date(m.group(1)):
             out.append(f"{r['name']}: an absorbed row must say 'retire by YYYY-MM-DD' in its note")
     n_open = sum(1 for r in rows if r["status"] == "open")
     if n_open > OPEN_CAP:
@@ -77,6 +89,13 @@ def test_control_a_row_without_a_file_is_caught():
     assert problems([_row("a.md"), _row("gone.md")], {"a.md"})
 
 
+def test_control_a_row_whose_link_points_elsewhere_is_caught():
+    """The label names a file that exists, but the link target is a different (or missing) file: the row must still fail."""
+    assert problems([{**_row("a.md"), "link": "missing.md"}], {"a.md"})
+    assert problems([{**_row("a.md"), "link": "b.md"}, _row("b.md")], {"a.md", "b.md"})
+    assert problems([_row("a.md")], {"a.md"}) == []
+
+
 def test_control_the_open_cap_is_enforced():
     rows = [_row(f"r{i}.md") for i in range(OPEN_CAP + 1)]
     assert problems(rows, {r["name"] for r in rows})
@@ -88,6 +107,9 @@ def test_control_an_absorbed_row_needs_its_dates():
     assert problems([_row("a.md", status="absorbed 2026-10-18", note="done")], {"a.md"})
     assert problems([_row("a.md", status="absorbed 2026-10-18", note="done; retire by 2026-11-17")], {"a.md"}) == []
     assert problems([_row("a.md", status="weird")], {"a.md"})
+    # impossible calendar dates are not dates
+    assert problems([_row("a.md", status="absorbed 2026-99-99", note="done; retire by 2026-11-17")], {"a.md"})
+    assert problems([_row("a.md", status="absorbed 2026-10-18", note="done; retire by 2026-00-00")], {"a.md"})
 
 
 def test_parse_rows_reads_the_real_row_shape():

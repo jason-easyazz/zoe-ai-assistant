@@ -119,16 +119,18 @@ def _helper_kind(name: str) -> str | None:
 _BOOL_VOCAB = _ON | _OFF | {""}
 
 
-def _compare_kind(cmp: ast.Compare) -> set[str]:
+def _compare_kind(cmp: ast.Compare, named: dict[str, list[str]]) -> set[str]:
     """A comparison is boolean evidence only when it is against the on/off vocabulary (``== "1"``, ``in ("1", "true")``,
     ``not in {"0", "false"}``, or a named set such as ``_TRUTHY``). A comparison against a mode word (``== "enforce"``) says the flag
-    is a mode string, which proves nothing about a numeric default."""
+    is a mode string, which proves nothing about a numeric default. A named collection counts only when its module-level literal
+    can be read and holds nothing but on/off words (its NAME is never evidence); an unresolvable one is no evidence at all."""
     words: list[str] = []
     for comp in cmp.comparators:
         if isinstance(comp, ast.Name):
-            if any(k in comp.id.lower() for k in ("true", "truthy", "falsy", "false", "_on", "yes", "enabled")):
-                return {"bool"}
-            return set()
+            if comp.id not in named:
+                return set()
+            words.extend(named[comp.id])
+            continue
         for node in ast.walk(comp):
             if isinstance(node, ast.Constant):
                 if not isinstance(node.value, str):
@@ -139,7 +141,7 @@ def _compare_kind(cmp: ast.Compare) -> set[str]:
     return {"str"} if words else set()
 
 
-def _consumption(node: ast.AST, parents: dict, uses_of, depth: int = 0) -> set[str]:
+def _consumption(node: ast.AST, parents: dict, uses_of, named: dict[str, list[str]], depth: int = 0) -> set[str]:
     """How the value produced at ``node`` (an untyped env read) is consumed: a subset of {"number", "bool"}.
 
     ``int(read)`` / ``float(read)`` -> number. ``read == "1"``, ``read in (...)``, ``not read``, ``bool(read)`` -> bool. Method chains
@@ -164,7 +166,7 @@ def _consumption(node: ast.AST, parents: dict, uses_of, depth: int = 0) -> set[s
                     return {"bool"}
             return set()
         if isinstance(parent, ast.Compare):
-            return _compare_kind(parent)
+            return _compare_kind(parent, named)
         if isinstance(parent, ast.UnaryOp) and isinstance(parent.op, ast.Not):
             return {"bool"}
         if isinstance(parent, (ast.BoolOp, ast.IfExp, ast.Attribute)):
@@ -176,9 +178,31 @@ def _consumption(node: ast.AST, parents: dict, uses_of, depth: int = 0) -> set[s
             for target in targets:
                 if isinstance(target, ast.Name):
                     for use in uses_of(parent, target.id):
-                        out |= _consumption(use, parents, uses_of, depth + 1)
+                        out |= _consumption(use, parents, uses_of, named, depth + 1)
             return out
         return set()
+
+
+def _named_word_collections(tree: ast.AST) -> dict[str, list[str]]:
+    """Module-level ``NAME = {"1", "true"}`` / tuple / list / ``frozenset({...})`` of string literals -> the lowercased words.
+    A name bound more than once, or to anything else, is left out (unresolvable = no evidence)."""
+    seen: dict[str, list[list[str] | None]] = {}
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id in ("frozenset", "set", "tuple", "list") and len(value.args) == 1:
+            value = value.args[0]
+        words: list[str] | None = None
+        if isinstance(value, (ast.Set, ast.Tuple, ast.List)) and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in value.elts):
+            words = [e.value.strip().lower() for e in value.elts]  # type: ignore[union-attr]
+        for target in targets:
+            if isinstance(target, ast.Name):
+                seen.setdefault(target.id, []).append(words)
+    return {n: v[0] for n, v in seen.items() if len(v) == 1 and v[0] is not None}
 
 
 def reader_kinds(repo: Path, inventory: dict) -> dict[str, set[str]]:
@@ -199,6 +223,7 @@ def reader_kinds(repo: Path, inventory: dict) -> dict[str, set[str]]:
         except (OSError, SyntaxError, UnicodeDecodeError):
             continue
         parents = {id(ch): node for node in ast.walk(tree) for ch in ast.iter_child_nodes(node)}
+        named = _named_word_collections(tree)
         delegators = fi._typed_delegators(tree)
         delegated: dict[str, str] = {}
         for fn in ast.iter_child_nodes(tree):
@@ -209,6 +234,7 @@ def reader_kinds(repo: Path, inventory: dict) -> dict[str, set[str]]:
                     delegated[fn.name] = inner
 
         def uses_of(assign: ast.AST, var: str, _tree=tree, _parents=parents) -> list[ast.AST]:
+            """Loads of ``var`` that can see THIS assignment's value: after it in the same scope and before the name is rebound."""
             scope: ast.AST = _tree
             cur = _parents.get(id(assign))
             while cur is not None:
@@ -216,12 +242,24 @@ def reader_kinds(repo: Path, inventory: dict) -> dict[str, set[str]]:
                     scope = cur
                     break
                 cur = _parents.get(id(cur))
-            return [n for n in ast.walk(scope) if isinstance(n, ast.Name) and n.id == var and isinstance(n.ctx, ast.Load)]
+            start = (assign.end_lineno or assign.lineno, assign.end_col_offset or 0)  # type: ignore[attr-defined]
+            here = (assign.lineno, assign.col_offset)  # type: ignore[attr-defined]
+            rebinds = [
+                (n.lineno, n.col_offset)
+                for n in ast.walk(scope)
+                if isinstance(n, ast.Name) and n.id == var and isinstance(n.ctx, ast.Store) and (n.lineno, n.col_offset) > here
+            ]
+            stop = min(rebinds) if rebinds else (10**9, 0)
+            return [
+                n
+                for n in ast.walk(scope)
+                if isinstance(n, ast.Name) and n.id == var and isinstance(n.ctx, ast.Load) and start <= (n.lineno, n.col_offset) < stop
+            ]
 
         class Classifier(fi._FlagVisitor):
             def on_read(self, flag: str, node: ast.Call, call_name: str) -> None:
                 kind = _helper_kind(call_name) or delegated.get(call_name)
-                found = {kind} if kind else _consumption(node, parents, uses_of)
+                found = {kind} if kind else _consumption(node, parents, uses_of, named)
                 if found:
                     kinds.setdefault(flag, set()).update(found)
 
@@ -254,10 +292,11 @@ def build(inventory: dict, kinds: dict[str, set[str]] | None = None) -> dict:
 
 
 def compatible(claim: str, defaults: list[str]) -> bool:
-    """A roadmap claim ``[default ZOE_X=<claim>]`` holds when it names one of the flag's default tokens (``off`` also holds for
-    ``unset``: an empty default is how most mode flags ship off)."""
+    """A roadmap claim ``[default ZOE_X=<claim>]`` holds only when it fits EVERY default token the code ships. A flag read in several
+    places with different defaults (``["unset", "enforce"]``) is ambiguous, so no single claim is true of it and it is stated in prose
+    instead. ``off`` also fits ``unset``: an empty default is how most mode flags ship off."""
     claim = claim.strip().lower()
-    return claim in defaults or (claim == "off" and "unset" in defaults)
+    return bool(defaults) and all(d == claim or (claim == "off" and d == "unset") for d in defaults)
 
 
 def render(state: dict) -> str:

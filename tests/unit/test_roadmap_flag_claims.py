@@ -109,6 +109,15 @@ def test_control_a_dynamic_default_cannot_be_claimed():
     assert check_claims("[default ZOE_X=on]", flags)
 
 
+def test_control_mixed_call_site_defaults_cannot_be_claimed():
+    """A flag read in several places with different defaults is ambiguous: 'off' must not pass just because one reader ships unset."""
+    flags = {"ZOE_M": {"defaults": ["enforce", "unset"], "readers": 2}}
+    assert check_claims("[default ZOE_M=off]", flags), "one reader defaults to enforce, so 'off' is false of the flag"
+    assert check_claims("[default ZOE_M=enforce]", flags), "...and 'enforce' is false of the unset reader"
+    assert check_claims("[default ZOE_M=off]", {"ZOE_M": {"defaults": ["off", "unset"], "readers": 2}}) == []
+    assert check_claims("[default ZOE_M=shadow]", {"ZOE_M": {"defaults": ["shadow", "shadow"], "readers": 2}}) == []
+
+
 def test_control_off_accepts_an_empty_default_but_a_mode_does_not():
     flags = {"ZOE_Y": {"defaults": ["unset"], "readers": 1}}
     assert check_claims("[default ZOE_Y=off]", flags) == []
@@ -194,6 +203,11 @@ F_WRAPPED = _wrapped("ZOE_T_WRAPPED_INT", 1)
 G_MODE = os.environ.get("ZOE_T_MODE", "off").lower() == "enforce"
 H_UNKNOWN = print(os.environ.get("ZOE_T_UNKNOWN", "1"))
 I_MODE_NUM = os.environ.get("ZOE_T_MODE_NUM", "1") == "enforce"
+_YES = frozenset({"1", "true", "yes"})
+_MODES = {"enforce", "shadow"}
+J_NAMED_BOOL = os.environ.get("ZOE_T_NAMED_BOOL", "1").strip().lower() in _YES
+K_NAMED_MODE = os.environ.get("ZOE_T_NAMED_MODE", "1").strip().lower() in _MODES
+L_NAME_ONLY = os.environ.get("ZOE_T_NAME_ONLY", "1").strip().lower() in _NOT_DEFINED_HERE_ON
 
 
 def alias():
@@ -204,6 +218,19 @@ def alias():
 def truthy():
     if os.environ.get("ZOE_T_TRUTHINESS", "0"):
         return True
+
+
+def rebound():
+    raw = os.environ.get("ZOE_T_REBOUND", "1")
+    raw = "yes"
+    return bool(raw)
+
+
+def used_before_rebind():
+    raw = os.environ.get("ZOE_T_BOUND_THEN_REBOUND", "1")
+    n = int(raw)
+    raw = "yes"
+    return n, bool(raw)
 '''
 
 
@@ -229,6 +256,14 @@ def test_reader_shapes_decide_whether_one_is_a_switch(shapes):
         "ZOE_T_TRUTHINESS": ("unknown", ["0"]),
         "ZOE_T_MODE_NUM": ("str", ["1"]),
         "ZOE_T_MODE": ("str", ["off"]),
+        # a named collection counts only through its literal: on/off words = bool, mode words = not bool, unresolvable = no evidence
+        "ZOE_T_NAMED_BOOL": ("bool", ["on"]),
+        "ZOE_T_NAMED_MODE": ("str", ["1"]),
+        "ZOE_T_NAME_ONLY": ("unknown", ["1"]),
+        # alias tracking is per definition: a later rebind must not lend its bool() to the env read ...
+        "ZOE_T_REBOUND": ("unknown", ["1"]),
+        # ... while a use BEFORE the rebind still counts
+        "ZOE_T_BOUND_THEN_REBOUND": ("number", ["1"]),
     }
     assert {n: (shapes[n]["kind"], shapes[n]["defaults"]) for n in want} == want
 

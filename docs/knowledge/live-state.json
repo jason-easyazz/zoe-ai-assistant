@@ -2008,7 +2008,7 @@
     "geraldton",
     "unset"
    ],
-   "kind": "bool",
+   "kind": "unknown",
    "readers": 4
   },
   "ZOE_LOCATION_COUNTRY": {
@@ -2081,7 +2081,7 @@
    "defaults": [
     "unset"
    ],
-   "kind": "bool",
+   "kind": "unknown",
    "readers": 1
   },
   "ZOE_LOG_QUIET_POLL_SLOW_MS": {
@@ -2783,7 +2783,7 @@
    "defaults": [
     "unset"
    ],
-   "kind": "unknown",
+   "kind": "str",
    "readers": 1
   },
   "ZOE_OMI_DAY_REVIEW_MAX_AGE_DAYS": {
@@ -3681,7 +3681,7 @@
    "defaults": [
     "unset"
    ],
-   "kind": "unknown",
+   "kind": "bool",
    "readers": 2
   },
   "ZOE_RIG_BIND": {
@@ -3793,7 +3793,7 @@
    "defaults": [
     "numpy"
    ],
-   "kind": "unknown",
+   "kind": "str",
    "readers": 1
   },
   "ZOE_ROUTER_HEAD_LOG": {
@@ -4355,7 +4355,7 @@
    "defaults": [
     "shadow"
    ],
-   "kind": "unknown",
+   "kind": "str",
    "readers": 1
   },
   "ZOE_STT_STREAM_FINISH_TIMEOUT_MS": {
@@ -4968,7 +4968,7 @@
    "defaults": [
     "auto"
    ],
-   "kind": "unknown",
+   "kind": "str",
    "readers": 1
   },
   "ZOE_WEB_SEARCH_TOOL": {

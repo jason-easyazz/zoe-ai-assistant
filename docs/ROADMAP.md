@@ -1,7 +1,7 @@
 ---
 type: roadmap
 audience: Jason + every agent
-updated: 2026-10-18
+updated: 2026-10-19
 ---
 # Zoe roadmap
 
@@ -58,7 +58,7 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
 8. **B8** memory evidence bound to commits: refuse dirty-tree runs for the trend, run the bar and day-sim weekly on a clean checkout after the night window.
 9. **D1** LAN PA and push-to-talk intercom (Opus over the panel WebSocket, room targeting on the server, sender log, guest denial) behind a flag; after item 4 of Now.
 10. **Voice enrolment and speaker model go-live.** Enrolment offers `[default ZOE_ENROLL_OFFER=off]`, voice sessions `[default ZOE_VOICE_SESSION=off]`, the dual-run speaker model
-    `[default ZOE_SPEAKER_MODEL=resemblyzer]` and face ID `[default ZOE_FACE_ID_ENABLED=off]` are all off in code and switched on per box; record the live values, then the
+    (`ZOE_SPEAKER_MODEL=dual` is the switch; the call sites disagree on whether the unset default is empty or `resemblyzer`, so no default is claimed here) and face ID `[default ZOE_FACE_ID_ENABLED=off]` are all off in code and switched on per box; record the live values, then the
     shadow-week FA/FR review before strict mode relaxes. Record: [`architecture/panel-identity-plan.md`](architecture/panel-identity-plan.md).
 
 ## Later (link list)
