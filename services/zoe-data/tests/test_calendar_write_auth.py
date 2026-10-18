@@ -9,7 +9,7 @@ lists follow: the panel may add, edit and remove HOUSEHOLD (family) events, neve
 Real HTTP, the REAL ``get_current_user``, the REAL device-token resolution (only zoe-auth's session validation is faked), the
 REAL panel-registry SQL and the REAL calendar SQL over SQLite (0052 applied). All data is invented; addresses are TEST-NET.
 
-Negative control (run by hand when written, 10 of 30 red): restore the pre-fix router (``Depends(get_current_user)`` + the
+Negative control (run by hand when written; 10 of the first 30 cases red): restore the pre-fix router (``Depends(get_current_user)`` + the
 bare ``require_feature_access``) -> the header-less-promotion cases go red (a stranger writes as ``family-admin``) and every
 panel case goes red (the guest matrix refuses the kiosk). The HA-open-rollback case is green on the old code too (the matrix
 refuses a plain guest); it pins that the new ``require_member_or_panel`` floor does not open the calendar under that rollback.
@@ -43,6 +43,7 @@ PHONE_IP = "192.0.2.77"
 PROXY = "127.0.0.1"
 MEMBER_SID = "sid-member"   # member-a
 GUEST_SID = "sid-guest"
+OUTAGE_SID = "sid-during-auth-outage"
 PANEL_TOKEN = "tok-hall-panel"
 CF = {"cf-connecting-ip": PANEL_IP, "cf-ray": "abc123"}
 A, B = "member-a", "member-b"
@@ -136,6 +137,8 @@ def _env(monkeypatch):
             return {"user_id": A, "role": "user", "username": A, "permissions": []}
         if session_id == GUEST_SID:
             return {"user_id": "guest", "role": "guest", "username": "guest", "permissions": []}
+        if session_id == OUTAGE_SID:  # zoe-auth unreachable, fail-open configured: the degraded guest
+            return {auth._DEGRADED_MARK: True, "user_id": "guest", "role": "guest", "username": "guest", "permissions": []}
         return None
 
     monkeypatch.setattr(auth, "_validate_with_auth_service", _validate)
@@ -184,6 +187,16 @@ def test_strangers_write_nothing(db, method, path, body, peer, headers):
 
 
 @pytest.mark.parametrize("method,path,body", WRITES)
+def test_an_auth_outage_principal_is_not_a_writer_even_at_the_panel(db, monkeypatch, method, path, body):
+    """An outage resolves ANY header to a guest: never evidence of the panel (or of anyone)."""
+    monkeypatch.setattr(auth, "_AUTH_FAIL_CLOSED", False)
+    before = db.snapshot()
+    r = _send(db, PROXY, {"X-Session-ID": OUTAGE_SID, "X-Real-IP": PANEL_IP}, method, path, body)
+    assert r.status_code == 403, r.text
+    assert db.snapshot() == before
+
+
+@pytest.mark.parametrize("method,path,body", WRITES)
 def test_the_header_less_admin_promotion_is_not_a_writer(db, monkeypatch, method, path, body):
     """``ZOE_UNAUTHENTICATED_ROLE=family-admin`` made every header-less LAN caller an ADMIN, which the matrix let write."""
     monkeypatch.setattr(auth, "_UNAUTH_ROLE", "family-admin")
@@ -216,6 +229,20 @@ def test_the_panel_works_household_events(db, peer, headers):
 
     assert _send(db, peer, headers, "DELETE", "/api/calendar/events/ev-family").status_code == 200
     assert db.row("ev-family")["deleted"] == 1
+
+
+def test_a_panel_edit_is_pushed_to_the_events_owner(db, monkeypatch):
+    sent = []
+
+    async def _capture(channel, kind, data, user_id=None):
+        sent.append((kind, user_id))
+        return 1
+
+    monkeypatch.setattr(calendar_router.broadcaster, "broadcast", _capture)
+    panel = {"X-Real-IP": PANEL_IP}
+    assert _send(db, PROXY, panel, "PUT", "/api/calendar/events/ev-family", {"title": "Bins"}).status_code == 200
+    assert _send(db, PROXY, panel, "DELETE", "/api/calendar/events/ev-family").status_code == 200
+    assert sent == [("event_updated", A), ("event_deleted", A)]  # never the HOUSEHOLD_VIEWER sentinel
 
 
 @pytest.mark.parametrize("peer,headers", PANEL)

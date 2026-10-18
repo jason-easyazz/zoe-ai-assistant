@@ -429,7 +429,8 @@ async def update_event(
     row = await cursor.fetchone()
     event = (await _present_all(db, [row], user_id))[0]
 
-    await broadcaster.broadcast("calendar", "event_updated", event, user_id=user_id)
+    # The panel owns nothing: its edit reaches the event's owner, as the owner's own edit would.
+    await broadcaster.broadcast("calendar", "event_updated", event, user_id=owner_id if _panel else user_id)
     return event
 
 
@@ -465,5 +466,6 @@ async def delete_event(
     event = _row_to_event(row)
     event["deleted"] = True
 
-    await broadcaster.broadcast("calendar", "event_deleted", {"id": event_id, **event}, user_id=user_id)
+    await broadcaster.broadcast("calendar", "event_deleted", {"id": event_id, **event},
+                                user_id=event.get("user_id") if _panel else user_id)
     return {"ok": True, "id": event_id}
