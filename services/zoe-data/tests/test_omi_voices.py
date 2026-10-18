@@ -1310,6 +1310,20 @@ def test_held_audio_goes_on_me_or_not_a_person_and_when_the_flag_is_turned_off(e
     assert run(omi.release_tagged_audio()) == 1 and not _held(env, c)             # the retention loop's backstop
 
 
+def test_a_line_learn_marks_not_a_person_releases_the_held_audio_at_once(env, monkeypatch):
+    """Codex review on #2118: the hold is decided before ``learn`` runs, and ``learn`` marks a line matching a voice the member
+    called TV as not-a-person. Mutation: drop the post-transcription ``release_tagged_audio`` -> the WAV stays held (red)."""
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp))
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO_FOR_TAGGING", "1")
+    first = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(TV, 1, 0.3))))
+    (cid,) = [v["id"] for v in env.client.get("/api/omi/voices/unknown").json()["voices"]]
+    assert env.client.post(f"/api/omi/voices/unknown/{cid}/not-a-person", json={"kind": "tv"}).status_code == 200
+    assert not _held(env, first)
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(TV, 2, 0.3))))
+    assert env.db.q("SELECT not_person FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (rid,)) == [("tv",)]
+    assert not _held(env, rid)
+
+
 def test_held_audio_never_outlives_its_retention_and_a_clip_never_leaves_the_audio_dir(env, monkeypatch):
     monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp))
     monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO_FOR_TAGGING", "1")

@@ -1056,7 +1056,7 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
         await note_deferred(str(exc))
     except Exception as exc:  # noqa: BLE001
         err = f"failed:{type(exc).__name__}"
-    keep = False
+    keep = hold = False
     async with erase_gate.writing(uid, seen.get(uid, 0)) as live:
         async with get_compat_db() as db:
             if not live:                         # the member was erased since this was fetched: nothing of it survives
@@ -1122,6 +1122,10 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                         logger.info("OMI_VOICES_LEARNED id=%s stored=%d suggested=%d", rid, learned["stored"], learned["suggested"])
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("omi_voices: learning pass failed for %s (%s)", rid, type(exc).__name__)
+    if hold and not keep:
+        # learn() may just have marked a line not-a-person (it matched a voice the member called TV / Zoe): if nothing in the
+        # recording needs a name any more, the WAV goes now, not at the next hourly pass
+        await release_tagged_audio(uid)
     logger.info("OMI_TRANSCRIBED id=%s chars=%d kept_audio=%s segments=%d speaker_state=%s", rid, len(text), keep,
                 len(segs or []), spk_state)
     return True
