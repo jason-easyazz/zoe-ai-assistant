@@ -24,7 +24,7 @@ AUTH_DEPENDENCIES = frozenset({
     "require_internal_token", "require_intent_dispatch_auth", "require_lab_operator", "resolve_acting_user",
     "get_a2a_caller", "_require_voice_auth", "_require_owner", "_require_human_admin", "_require_device", "_member",
     "_require_member", "_require_member_session", "_require_caller", "_require_livekit_media_auth", "_require_livekit_auth",
-    "_validate_device_token", "_require_multica_webhook_secret",
+    "_validate_device_token", "_require_multica_webhook_secret", "require_member_panel_or_jukebox",
 })
 
 # (file, handler) -> why it authenticates without a declared dependency.

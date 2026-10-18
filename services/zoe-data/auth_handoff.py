@@ -40,6 +40,7 @@ import time
 from typing import Any, Awaitable, Callable, Optional
 
 import setup_qr
+from typed_env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -386,19 +387,14 @@ _DEFAULT_NOTIFY_URL = "http://127.0.0.1:3582/internal/notify"
 
 
 def _bot_token() -> str:
-    for name in ("ZOE_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN"):
-        token = os.environ.get(name, "").strip()
-        if token:
-            return token
-    return ""
+    # One literal env_str read per name (typed_env), so the flag inventory lists both.
+    return env_str("ZOE_TELEGRAM_BOT_TOKEN") or env_str("TELEGRAM_BOT_TOKEN")
 
 
 def _notify_url() -> str:
     """The bot's loopback notify route, or "" when it cannot be used (disabled, or no shared secret)."""
-    raw = os.environ.get("ZOE_TELEGRAM_NOTIFY_URL", "").strip()
-    if raw.lower() in ("off", "0", "false", "none"):
-        return ""
-    if not os.environ.get("ZOE_INTERNAL_TOKEN", "").strip():
+    raw = env_str("ZOE_TELEGRAM_NOTIFY_URL")
+    if raw.lower() in ("off", "0", "false", "none") or not env_str("ZOE_INTERNAL_TOKEN"):
         return ""
     return raw or _DEFAULT_NOTIFY_URL
 
@@ -430,7 +426,7 @@ async def _telegram_send_via_bot(chat_id: str, text: str, url: str) -> bool:
     import httpx
 
     body = {"telegram_id": chat_id, "text": text, "url": url, "label": "Open on this phone"}
-    headers = {"Authorization": f"Bearer {os.environ.get('ZOE_INTERNAL_TOKEN', '').strip()}"}
+    headers = {"Authorization": f"Bearer {env_str('ZOE_INTERNAL_TOKEN')}"}
     async with httpx.AsyncClient(timeout=8.0) as c:
         r = await c.post(_notify_url(), json=body, headers=headers)
     if r.status_code != 200:

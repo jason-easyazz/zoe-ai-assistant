@@ -46,6 +46,7 @@ STRANGERS = [
 ]
 PANEL = [(PROXY, {"X-Real-IP": PANEL_IP}), (PHONE_IP, {"X-Device-Token": PANEL_TOKEN})]
 MEMBER = [(PHONE_IP, {"X-Session-ID": MEMBER_SID})]
+ACTIVE_PANELS = {PANEL_IP, "kitchen-panel"}  # the registry; a test may retire the panel
 
 
 @pytest.fixture(autouse=True)
@@ -65,7 +66,7 @@ def _env(monkeypatch):
                         {"panel_id": "kitchen-panel", "role": "voice-daemon", "expires_at": None, "revoked": 0})
 
     async def _with_registry(_db, check, value):  # the registry: one active, guest-allowing kiosk at PANEL_IP
-        return value in (PANEL_IP, "kitchen-panel")
+        return value in ACTIVE_PANELS
 
     monkeypatch.setattr(panel_principal, "_with_registry", _with_registry)
     yield
@@ -90,7 +91,7 @@ def ma_calls(monkeypatch):
     def _fake(name):
         async def fn(*a, **k):
             calls.append(name)
-            return [] if name == "get_players" else ({"ok": True} if "group" in name else True)
+            return [] if name == "get_players" else ({"ok": True} if "group" in name or name == "play_media" else True)
         return fn
 
     for name in ("control", "seek", "transfer", "group_players", "ungroup_player", "search_and_play", "play_media",
@@ -104,8 +105,8 @@ def ma_calls(monkeypatch):
 WRITES = sorted(r.path for r in music.router.routes if "POST" in getattr(r, "methods", set()))
 
 
-def test_the_music_router_has_the_17_writes_the_audit_found():
-    assert len(WRITES) == 17, WRITES  # a new write is covered by the tests below automatically
+def test_the_music_router_has_the_17_writes_the_audit_found_plus_the_jukebox_mint():
+    assert len(WRITES) == 18 and "/api/music/jukebox/start" in WRITES, WRITES  # a new write is covered below too
 
 
 @pytest.mark.parametrize("path", WRITES)
@@ -119,11 +120,71 @@ def test_strangers_cannot_drive_the_music(ma_calls, path, peer, headers):
 @pytest.mark.parametrize("path", WRITES)
 @pytest.mark.parametrize("peer,headers", PANEL + MEMBER)
 def test_the_panel_and_members_drive_the_music(ma_calls, path, peer, headers):
-    assert _client(music.router, peer).post(path, json={}, headers=headers).status_code == 200, path
+    body = {"panel_id": "kitchen-panel"} if path.endswith("/jukebox/start") else {}
+    assert _client(music.router, peer).post(path, json=body, headers=headers).status_code == 200, path
 
 
 def test_music_reads_stay_open(ma_calls):
     assert _client(music.router, PHONE_IP).get("/api/music/players").status_code == 200
+
+
+# ── the phone jukebox: a QR capability for play / queue-a-song only ──────────────────────────────────────────────────────────
+
+@pytest.fixture
+def jukebox(monkeypatch, ma_calls):
+    """The panel shows the QR; return the token the phone gets from it (the URL the SVG encodes)."""
+    import setup_qr
+
+    encoded = []
+    monkeypatch.setattr(setup_qr, "render_svg", lambda url: encoded.append(url) or b"<svg/>")  # segno is not in the slim venv
+    r = _client(music.router, PROXY).post("/api/music/jukebox/start", json={"panel_id": "kitchen-panel"},
+                                          headers={"X-Real-IP": PANEL_IP})
+    qr = _client(music.router, PROXY).get(r.json()["qr_path"])
+    assert qr.status_code == 200 and qr.headers["cache-control"] == "no-store"
+    assert _client(music.router, PROXY).get(r.json()["qr_path"]).status_code == 404  # the handle is single-use
+    assert encoded[0].split("#t=")[0].endswith("/jukebox.html")
+    return encoded[0].split("#t=", 1)[1]
+
+
+def _phone(path, token, extra=None, body=None):
+    headers = {"X-Jukebox-Token": token, **(extra or {})}
+    return _client(music.router, PHONE_IP).post(path, json=body or {"uri": "library://track/1", "option": "add"},
+                                                headers=headers)
+
+
+@pytest.mark.parametrize("path", ["/api/music/play_media", "/api/music/play"])
+def test_the_scanned_phone_plays_and_queues(jukebox, path):
+    assert _phone(path, jukebox).status_code == 200
+
+
+@pytest.mark.parametrize("path", [p for p in WRITES if not p.endswith(("/play_media", "/play"))])
+def test_the_token_opens_nothing_else(jukebox, ma_calls, path):
+    assert _phone(path, jukebox).status_code == 403, path  # no queue edits, library writes, speakers, or a new token
+    assert ma_calls == []
+
+
+def test_the_token_is_refused_over_the_tunnel_expired_forged_or_for_a_retired_panel(jukebox, monkeypatch):
+    import music_jukebox
+    import music_setup
+
+    assert _phone("/api/music/play_media", jukebox, {"cf-ray": "abc"}).status_code == 403
+    assert _phone("/api/music/play_media", jukebox[:-2] + "xx").status_code == 403
+    assert _phone("/api/music/play_media", music_setup.mint("spotify")["token"]).status_code == 403  # another flow's key
+    other = music_jukebox._TOKENS.mint({"k": "other", "pid": "kitchen-panel"}, 60)  # this key, another purpose
+    assert _phone("/api/music/play_media", other).status_code == 403
+    monkeypatch.setattr(music_jukebox, "ttl_s", lambda: -10)
+    assert _phone("/api/music/play_media", music_jukebox.mint("kitchen-panel")["token"]).status_code == 403
+    monkeypatch.setattr(sys.modules[__name__], "ACTIVE_PANELS", {PANEL_IP})  # the panel is retired / no longer allows guests
+    assert _phone("/api/music/play_media", jukebox).status_code == 403
+
+
+def test_only_a_member_or_the_panel_mints_and_only_for_a_live_panel(ma_calls):
+    for peer, headers in STRANGERS:
+        assert _client(music.router, peer).post("/api/music/jukebox/start", json={"panel_id": "kitchen-panel"},
+                                                headers=headers).status_code == 403
+    peer, headers = MEMBER[0]
+    assert _client(music.router, peer).post("/api/music/jukebox/start", json={"panel_id": "no-such-panel"},
+                                            headers=headers).status_code == 400
 
 
 # ── GET /api/settings ────────────────────────────────────────────────────────────────────────────────────────────────────────

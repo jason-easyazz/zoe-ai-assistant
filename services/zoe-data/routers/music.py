@@ -6,6 +6,7 @@ provider types — all forwarded from the local MA instance (default :8095).
 Auth: the READS stay session-free (the music page, settings and the kiosk need
 them). Every WRITE takes ``panel_principal.require_member_or_panel`` - a member or
 the wall panel, the ``/api/ha/*`` rule (#2089); until 2026-10-18 they took none.
+``/play`` and ``/play_media`` also take the phone jukebox token (music_jukebox.py).
 """
 import logging
 import os
@@ -13,9 +14,10 @@ import re
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from music_service import _first_image, _hi_res_art
+from music_jukebox import require_member_panel_or_jukebox
 from panel_principal import require_member_or_panel
 
 logger = logging.getLogger(__name__)
@@ -585,7 +587,7 @@ async def music_ungroup(payload: dict) -> dict[str, Any]:
     return await music_service.ungroup_player(str((payload or {}).get("player_id") or ""))
 
 
-@router.post("/play", dependencies=[Depends(require_member_or_panel)])
+@router.post("/play", dependencies=[Depends(require_member_panel_or_jukebox)])
 async def music_play(payload: dict) -> dict[str, Any]:
     """Search MA and play the top hit. body: {query, player_id?, radio?}.
     radio:true seeds an endless station of similar tracks from the hit
@@ -618,7 +620,7 @@ async def music_search(q: str = "", types: str = "", limit: int = 8) -> dict[str
     return await music_service.search(q, media_types=media_types, limit=n)
 
 
-@router.post("/play_media", dependencies=[Depends(require_member_or_panel)])
+@router.post("/play_media", dependencies=[Depends(require_member_panel_or_jukebox)])
 async def music_play_media(payload: dict) -> dict[str, Any]:
     """Play a specific search result on a chosen speaker.
 
@@ -741,3 +743,38 @@ async def music_dont_stop(payload: dict) -> dict[str, Any]:
     player_id = str((payload or {}).get("player_id") or "")
     ok = await music_service.set_dont_stop_the_music(enabled, player_id=player_id)
     return {"ok": ok, "enabled": enabled}
+
+
+# ── The phone jukebox (music_jukebox.py) ──────────────────────────────────────
+
+@router.post("/jukebox/start")
+async def jukebox_start(payload: dict, user: dict = Depends(require_member_or_panel)) -> dict[str, Any]:
+    """Panel: mint a jukebox token bound to this panel + a single-use QR handle for it.
+    body: {panel_id}; a device token's own panel wins over the body."""
+    import music_jukebox
+    import panel_principal
+    import setup_qr
+
+    panel_id = str((user or {}).get("panel_id") or (payload or {}).get("panel_id") or "").strip()
+    if not panel_id or not await panel_principal._with_registry(
+            None, panel_principal._kiosk_panel_allows_guest, panel_id):
+        raise HTTPException(status_code=400, detail="an active panel that allows guests is required")
+    minted = music_jukebox.mint(panel_id)
+    handle = setup_qr.issue("jukebox", token=minted["token"])
+    return {"ok": True, "qr_path": f"/api/music/jukebox/qr/{handle}", "expires_in": minted["expires_in"]}
+
+
+@router.get("/jukebox/qr/{handle}")
+async def jukebox_qr(handle: str, request: Request) -> Response:
+    """The QR (SVG) for ``<origin>/jukebox.html#t=<token>``; redeems the single-use handle, so the
+    token never sits in a URL a server logs."""
+    import auth_handoff
+    import music_jukebox
+    import setup_qr
+
+    held = setup_qr.redeem("jukebox", handle)
+    if held is None or not music_jukebox.panel_of(held["token"]):
+        return Response(status_code=404)
+    url = f"{auth_handoff.phone_base_url(request)}/jukebox.html#t={held['token']}"
+    return Response(content=setup_qr.render_svg(url), media_type="image/svg+xml",
+                    headers={"Cache-Control": "no-store"})
