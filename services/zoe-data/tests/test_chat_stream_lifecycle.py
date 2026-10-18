@@ -370,4 +370,4 @@ async def test_save_chat_message_records_truncated_in_metadata(monkeypatch):
 
     insert = next((sql, p) for sql, p in executed if "INSERT INTO chat_messages" in sql)
     metadata = json.loads(insert[1][4])
-    assert metadata == {"user_id": "jason", "truncated": True}
+    assert metadata == {"user_id": "jason", "truncated": True, "traffic_class": "household"}

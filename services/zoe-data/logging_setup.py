@@ -70,6 +70,25 @@ _FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 _DATE_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 
+class TrafficClassFormatter(logging.Formatter):
+    """The app-log format plus `` traffic=<class>`` on every line written inside a NON-household context
+    (harness / probe / ci, ``traffic_class.py``). Household lines are byte-identical to before, so every
+    existing parser of this log is unaffected, and ``grep -v traffic=`` is the household's own log.
+    A line that already names its class (``BRAIN_LANE ... traffic=``) is not suffixed twice. Never raises."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = super().format(record)
+        try:
+            import traffic_class
+
+            suffix = traffic_class.log_suffix()
+            if suffix and " traffic=" not in text:
+                return text + suffix
+        except Exception:  # noqa: BLE001 - a log line must never fail
+            pass
+        return text
+
+
 def _int_from_env(name: str, default: int) -> int:
     """Read a positive int from the environment, falling back on any garbage."""
     raw = os.environ.get(name)
@@ -194,7 +213,7 @@ def configure_logging(*, log_dir: str | os.PathLike[str] | None = None) -> loggi
 
     handler.name = HANDLER_NAME
     handler.setLevel(level)
-    handler.setFormatter(logging.Formatter(_FORMAT, datefmt=_DATE_FORMAT))
+    handler.setFormatter(TrafficClassFormatter(_FORMAT, datefmt=_DATE_FORMAT))
     root.addHandler(handler)
 
     logging.getLogger(__name__).info(
