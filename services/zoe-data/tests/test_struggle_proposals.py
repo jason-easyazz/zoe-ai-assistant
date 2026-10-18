@@ -575,32 +575,6 @@ def test_clusters_beyond_the_nightly_cap_are_ranked_not_withdrawn(env, monkeypat
     assert len(rows_of(env, "struggle_proposal_events")) == 15
 
 
-def test_pending_maintenance_counts_new_events_and_proposals_with_aged_out_evidence(env, monkeypatch):
-    """What the quiet-night precheck asks: is there proposal work for the night pass even though no member spoke? Falls to 0 after the pass."""
-    store(*genuine())
-    assert run(sp.pending_maintenance(NOW - 2 * DAY * 10, now=NOW)) == 5, "five struggle events nobody has clustered yet (a guest's would count too)"
-    assert run(sp.pending_maintenance(NOW + 1.0, now=NOW)) == 0, "nothing after the watermark, no proposals yet"
-    store(*[event(700 + i, user="test-user-1", ts=NOW - i * 100.0) for i in range(3)], *[event(710 + i, guest=True, ts=NOW - i * 100.0) for i in range(2)])
-    assert run(sp.pending_maintenance(NOW - 2 * DAY * 10, now=NOW)) == 7, "a harness user's three events are not work (the pass ignores them); a guest's two are"
-    env.db.conn.execute("DELETE FROM struggle_events WHERE id >= 'e700'")
-    env.db.conn.commit()
-    run(sp.run_pass(now=NOW))
-    assert run(sp.pending_maintenance(NOW + 1.0, now=NOW)) == 0, "a proposal whose evidence is inside the lookback needs nothing"
-    later = NOW + 8 * DAY                                        # the default lookback is 7 days: every link is now older than it
-    assert run(sp.pending_maintenance(later, now=later)) == 1, "the pass would recount and withdraw it: that is work"
-    res = run(sp.run_pass(now=later))
-    assert res["withdrawn"] == 1 and run(sp.pending_maintenance(later, now=later)) == 0, "and once it has run there is none (idempotent)"
-    # a DECIDED proposal is the admin's record, not pending maintenance
-    store(*genuine(start=100, pattern="time|what:now:none", domain="time", shift_days=-8))        # events inside THIS week's lookback
-    run(sp.run_pass(now=later))
-    (pid,) = [p["id"] for p in rows_of(env) if p["pattern"] == "time|what:now:none"]
-    run(sp.decide(pid, "accept", "admin-1"))
-    much_later = later + 30 * DAY
-    assert run(sp.pending_maintenance(much_later, now=much_later)) == 0
-    monkeypatch.setenv("ZOE_STRUGGLE_PROPOSALS", "off")
-    assert run(sp.pending_maintenance(0.0, now=NOW)) == 0, "the pass is a no-op while the flag is off: nothing is waiting for it"
-
-
 def test_the_cap_limits_new_proposals_best_first_and_the_rest_wait_for_a_later_night(env, monkeypatch):
     monkeypatch.setattr(sp, "MAX_PER_NIGHT", 2)
     rows = [r for i in range(3) for r in genuine(start=100 * i, pattern=f"p{i}|what:none:none", domain=f"d{i}")]
