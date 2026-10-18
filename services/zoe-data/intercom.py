@@ -125,6 +125,12 @@ def _split_target(rest: str, labels: Iterable[str]) -> Optional[tuple[str, str]]
 _POLITE_TAIL = re.compile(r"^(?:\s*(?:please|now|for\s+me|zoe|thanks|thank\s+you)\b)*\W*$", re.IGNORECASE)
 
 
+# A device word right after the room ("tell the kitchen light to stay on") makes it a smart-home turn, never an announcement.
+_DEVICE_AFTER_TARGET = re.compile(
+    r"^\s*(?:lights?|lamps?|fans?|tv|telly|television|heater|heating|aircon|air\s*con|blinds?|curtains?|switch(?:es)?|"
+    r"plugs?|doors?|thermostat)\b", re.IGNORECASE)
+
+
 def parse(text: str, labels: Iterable[str]) -> Optional[Request]:
     """The intercom request in ``text``, or None. ``labels`` are the normalised room / panel labels of the house's speaker panels
     (``norm_label``); a "tell" / "call" naming anything else ("tell me a joke", "call mum", "tell the kids ...") is NOT an intercom
@@ -167,6 +173,8 @@ def parse(text: str, labels: Iterable[str]) -> Optional[Request]:
             if not k:
                 return None  # "let the kitchen light stay on" is not a message
             remainder = remainder[k.end():]
+        elif _DEVICE_AFTER_TARGET.match(remainder):
+            return None  # "tell the kitchen light to stay on" is a smart-home turn that names a room, not a message to it
         msg = _clean_message(remainder)
         return Request("announce", target, msg) if msg else None
     return None

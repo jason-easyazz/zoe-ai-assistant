@@ -139,6 +139,9 @@ def test_intercom_phrasings_are_recognised(text, kind, target, message):
     "call the kitchen about the oven",
     "ring the garage",                     # not a speaker panel
     "let the kitchen light stay on",
+    "tell the kitchen light to stay on",   # a smart-home turn naming a room (cross-review #2143)
+    "tell the living room lights to turn off",
+    "tell the kitchen fan to stop",
     "turn on the kitchen light",
     "what's the announcement about",
     "the announcement was loud",
@@ -244,6 +247,27 @@ async def test_quiet_hours_queue_nothing(house):
     res = await _say("announce dinner's ready")
     assert res.reply.startswith("It's quiet hours")
     assert await _rows(house) == []
+
+
+async def test_the_identity_is_the_turns_scope_user_never_the_raw_user_id(house):
+    """The voice lane's resolved identity decides; a member id in ``user_id`` with no scope identity is still a guest turn."""
+    res = await ic.tier("tell the kitchen dinner's ready", ADULT, "s1", channel="voice", extra_ctx=_ctx(None))
+    assert res.reply.startswith("Only signed-in members")
+    assert await _rows(house) == []
+    res = await ic.tier("tell the kitchen dinner's ready", "guest", "s1", channel="voice", extra_ctx=_ctx(ADULT))
+    assert res.reply == "Okay, I've told the kitchen."
+    assert [r[1] for r in await _rows(house)] == [ADULT]
+
+
+async def test_the_adult_check_fails_closed_and_a_missing_name_still_announces(monkeypatch):
+    import manner_block
+
+    async def boom(member, db=None):
+        raise RuntimeError("auth store down")
+
+    monkeypatch.setattr(manner_block, "is_adult", boom)
+    assert await ic._is_adult(ADULT) is False
+    assert ic.spoken_line("announce", "", "dinner's ready", "kitchen") == "Announcement: dinner's ready"
 
 
 async def test_dry_runs_answer_but_queue_nothing(house):
