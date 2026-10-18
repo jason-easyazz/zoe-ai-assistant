@@ -559,7 +559,7 @@ sidecar store. Rollback is one env removal + a zoe-data restart (~15 s).
    stalls to the latency-gated voice path. It remains available via config if
    that trade ever flips.
 
-### Next action
+### Where the next action lives
 
-Fix-after #1 and #2 are closed. Phase 1 (Telegram front door) is ✅ done and
-live-hardened (§6). Next: §8.1 Multica recreation (gates before any deletion).
+The next action is **not** kept here any more: the one ordered list is [`docs/ROADMAP.md`](../ROADMAP.md) (Now / Next / Later). This document is the integration plan and retirement inventory; Phase 1 (Telegram front door) is done and live-hardened (section 6), and the Multica recreation (section 8.1, gates before any deletion) is tracked in the roadmap; update it when a step lands, but do not add a new "next action" to it.
+

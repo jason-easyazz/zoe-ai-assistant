@@ -1,0 +1,5056 @@
+{
+ "flags": {
+  "ZOE_A2A_CLIENT_TIMEOUT_S": {
+   "defaults": [
+    "30"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_A2A_TOKEN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ACP_DELIVERY_MODE": {
+   "defaults": [
+    "live"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_AFFECT_CONSENT_GATE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_AGENT_LLM_TIMEOUT": {
+   "defaults": [
+    "120.0",
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_AGENT_MAX_TOOL_ITERS": {
+   "defaults": [
+    "5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_AGENT_TOOL_TIMEOUT": {
+   "defaults": [
+    "10.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_AGENT_VOICE_LLM_TIMEOUT": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ALLOWED_WS_ORIGINS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_ANNOUNCE_POLL_ENABLED": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ANNOUNCE_POLL_S": {
+   "defaults": [
+    "5.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ANNOUNCE_STRICT_PANEL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ANNOUNCE_TTL_S": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_APP_LOG": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ASK_TO_REMEMBER": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ASK_WHEN_AMBIGUOUS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_ASSISTANT_ROOT": {
+   "defaults": [
+    "dynamic",
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 3
+  },
+  "ZOE_AUTH_ALLOWED_ORIGINS": {
+   "defaults": [
+    "http://localhost,http://localhost:3000,http://localhost:8000,http://127.0.0.1,http://127.0.0.1:8000,https://zoe.the411.life,http://zoe.local"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_AUTH_FAIL_CLOSED": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_AUTH_SETUP_TOKEN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_AUTH_URL": {
+   "defaults": [
+    "http://localhost:8002"
+   ],
+   "kind": "unknown",
+   "readers": 5
+  },
+  "ZOE_AUTOPILOT_QUEUE_WAIT_S": {
+   "defaults": [
+    "1200.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_AUTORESEARCH_RUN_ROOT": {
+   "defaults": [
+    "data/autoresearch"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_AUTO_APPROVE_THRESHOLD": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_BACKUP_DIR": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_BARGE_MIN_MS": {
+   "defaults": [
+    "192"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_BARGE_SPEECH_THRESHOLD": {
+   "defaults": [
+    "0.30"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_BAR_ADMIN_SESSION": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 5
+  },
+  "ZOE_BAR_BRAIN_URL": {
+   "defaults": [
+    "http://127.0.0.1:11434"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_BASE_URL": {
+   "defaults": [
+    "http://localhost:8000",
+    "http://zoe.local",
+    "https://192.168.1.218"
+   ],
+   "kind": "unknown",
+   "readers": 3
+  },
+  "ZOE_BENCHMARK_OUTPUT": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_BENCH_REPEATS": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_BLE_RADIO_LOCK": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_BLUETOOTH_AUDIT_PATH": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_BLUETOOTH_SETTINGS": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_BOARD_POLL_S": {
+   "defaults": [
+    "60"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_BRAIN_BACKEND": {
+   "defaults": [
+    "core"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_BRAIN_FAILOVER": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_BRAIN_FAILOVER_COOLDOWN_S": {
+   "defaults": [
+    "45"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_BRAIN_KV_WARM_ON_WAKE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_BRAIN_PREWARM_ON_WAKE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 2
+  },
+  "ZOE_BRAIN_SLOT_GUARD": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_BRAIN_SLOT_MAX_DEFER_S": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_BRAIN_SLOT_QUIET_S": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_BRAIN_SLOT_TOKENS": {
+   "defaults": [
+    "8192",
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 5
+  },
+  "ZOE_BRAIN_STARTUP_WAIT_S": {
+   "defaults": [
+    "30.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_BRAIN_TOKEN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 5
+  },
+  "ZOE_BRAIN_UNIT": {
+   "defaults": [
+    "llama-server.service"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_BRAIN_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_BRIEF_ON_FIRST_TURN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_BRIEF_WINDOW_END": {
+   "defaults": [
+    "12:00"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_BRIEF_WINDOW_START": {
+   "defaults": [
+    "05:00"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_BUFFER_DELAY_S": {
+   "defaults": [
+    "0.8"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_BUFFER_PHRASES": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_CALENDAR_FOLLOWUP_TTL_S": {
+   "defaults": [
+    "90"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CALENDAR_HEALTH_PRIVATE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_CAP_A2A_DELEGATE": {
+   "defaults": [
+    "3000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CAP_AMBIENT_ROWS": {
+   "defaults": [
+    "10"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CAP_AMBIENT_SEARCH": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CAP_AMBIENT_TRANSCRIPT": {
+   "defaults": [
+    "150"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CAP_MEMORY_LIST": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CAP_MEMORY_LIST_ROWS": {
+   "defaults": [
+    "25"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CAP_SELF_CAPS": {
+   "defaults": [
+    "2000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CAP_WEB_BROWSE": {
+   "defaults": [
+    "6000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CAP_WEB_RESEARCH": {
+   "defaults": [
+    "6000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CHANGE_NOTICES": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_CHANGE_NOTICES_INTERVAL_S": {
+   "defaults": [
+    "600"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CHANGE_NOTICES_STALE_MIN": {
+   "defaults": [
+    "60"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CHANGE_NOTICES_STATE_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_CHAT_CONTEXT_MAX_SESSIONS": {
+   "defaults": [
+    "2000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CHAT_INJECT_DB_MEMORY": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_CHAT_URL": {
+   "defaults": [
+    "http://localhost:8000"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_CHEAP_PR_AGENT_API_URL": {
+   "defaults": [
+    "https://openrouter.ai/api/v1/chat/completions"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_CHEAP_PR_AGENT_CMD": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_CHEAP_PR_AGENT_ESTIMATED_COST_USD": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CHEAP_PR_AGENT_MODEL": {
+   "defaults": [
+    "cheap-pr-agent",
+    "deepseek/deepseek-chat-v3.1"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_CHEAP_PR_AGENT_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_CLEAN_GOODBYE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_COMMITMENTS": {
+   "defaults": [
+    "shadow"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_COMPOSE_MAX_TOKENS": {
+   "defaults": [
+    "700"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_COMPOSE_STREAM_BUDGET_S": {
+   "defaults": [
+    "6"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_COMPOSE_TIMEOUT_S": {
+   "defaults": [
+    "14"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_COMPOSE_UI": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_COMPOSE_VOICE_BUDGET_S": {
+   "defaults": [
+    "8"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CONTACTS_API": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_CONTACTS_CONVERSATIONAL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_CONTACT_BACKFILL_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_CONTACT_OFFER_BATCH": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_CONTEXT_TOKEN_BUDGET": {
+   "defaults": [
+    "5500"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CONTINUE_WINDOW_S": {
+   "defaults": [
+    "2.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CONVERSATION_ENDER_ACKS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_CONVERSATION_FEEDBACK": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_CORE_DATA_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_CORE_IDLE_TIMEOUT_S": {
+   "defaults": [
+    "20"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CORE_MAX_CONCURRENCY": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CORE_MAX_WORKERS": {
+   "defaults": [
+    "4"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CORE_MEMORY_TIMEOUT_MS": {
+   "defaults": [
+    "2000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CORE_MODEL_ID": {
+   "defaults": [
+    "gemma-4-e4b-it-qat-ud-q4_k_xl.gguf"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_CORE_MODEL_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_CORE_PI_COMMAND": {
+   "defaults": [
+    "pi"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_CORE_PROVIDER": {
+   "defaults": [
+    "local-gemma"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_CORE_TIMEOUT_S": {
+   "defaults": [
+    "180"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CORE_VOICE_MODEL_MAXTOKENS": {
+   "defaults": [
+    "512"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CORRECTION_APPLY": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_DAILY_BRIEFING_CACHE_MAX_USERS": {
+   "defaults": [
+    "64"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS": {
+   "defaults": [
+    "120"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DATA_DB": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_DATA_URL": {
+   "defaults": [
+    "http://127.0.0.1:8000",
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 4
+  },
+  "ZOE_DATE_HINT": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_DATE_ORDER": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_DB_ACQUIRE_TIMEOUT_S": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DB_CONTAINER": {
+   "defaults": [
+    "zoe-database"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_DEFAULT_MEDIA_PLAYER": {
+   "defaults": [
+    "media_player.all"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_DELIVERY_LEDGER": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_DEPLOY_STATE_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_DEVICE_TOKEN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_DEVICE_TOKEN_BINDS_MEMBER": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_DEVICE_TOKEN_TTL_DAYS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DIGARR_AI_BASE_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_DIGARR_AI_MODEL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_DIGARR_AI_TIMEOUT_S": {
+   "defaults": [
+    "300"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DIGARR_IMAGE": {
+   "defaults": [
+    "docker.io/iuliandita/digarr:latest"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_DIGARR_PASSWORD": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_DIGARR_PORT": {
+   "defaults": [
+    "3199"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DIGARR_USER": {
+   "defaults": [
+    "zoe"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_DIGEST_CHUNKED": {
+   "defaults": [
+    "on",
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_DIGEST_CHUNK_TOKENS": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DIGEST_DECODE_TOK_S": {
+   "defaults": [
+    "60.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DIGEST_LLM_TIMEOUT_SCALE": {
+   "defaults": [
+    "1",
+    "1.0"
+   ],
+   "kind": "number",
+   "readers": 2
+  },
+  "ZOE_DIGEST_MAX_CHUNKS": {
+   "defaults": [
+    "5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DIGEST_MAX_FACTS": {
+   "defaults": [
+    "40"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DIGEST_OBSERVATION_GATE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_DIGEST_PREFILL_TOK_S": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DISCOVERY_DEFAULT_MOOD": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_DISCOVERY_MAX_USERS": {
+   "defaults": [
+    "4"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DISCOVERY_MIN_FREE_MB": {
+   "defaults": [
+    "1500"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DISCOVERY_MIN_PLAYS": {
+   "defaults": [
+    "10"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DISTRESS_CONTACT_NAME": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_DISTRESS_CONTACT_USER": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_DISTRESS_GENTLE": {
+   "defaults": [
+    "shadow"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_DISTRESS_HANDOFF": {
+   "defaults": [
+    "enforce"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_DISTRESS_LINES_FILE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_DISTRESS_NOTIFY": {
+   "defaults": [
+    "all"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_EDGE_TTS_TIMEOUT_S": {
+   "defaults": [
+    "5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_EDGE_TTS_VOICE": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_EMBEDDING_MODEL_VERSION": {
+   "defaults": [
+    "minilm-v1"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_EMOTIONAL_FOLLOWUP_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_EMOTIONAL_RECALL_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ENABLE_OPENCLAW_EXECUTION": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ENGINEERING_MODE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ENROLL_DECLINE_DAYS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ENROLL_MODE_ENABLED": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ENROLL_OFFER": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_ENROLL_OFFER_KIDS": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ENROLL_OFFER_PIN_DELAY_S": {
+   "defaults": [
+    "20"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ENROLL_RECORD_MAX_S": {
+   "defaults": [
+    "8.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ENV_FILE": {
+   "defaults": [
+    "/home/zoe/assistant/services/zoe-data/.env",
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 3
+  },
+  "ZOE_ESPEAK_PITCH": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ESPEAK_SPEED": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ESPEAK_VOLUME": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_EXACT_WORDS": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_EXACT_WORDS_BACKFILL_HOURS": {
+   "defaults": [
+    "36"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_EXPERT_ACTIVE_DOMAINS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_EXPERT_ALLOW_WRITES": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_EXPERT_ENABLED": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_EXPERT_MODE": {
+   "defaults": [
+    "shadow"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_EXPRESSIVE_GENTLE_FROM_H": {
+   "defaults": [
+    "22"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_EXPRESSIVE_GENTLE_TO_H": {
+   "defaults": [
+    "7"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_EXPRESSIVE_MIN_CHARS": {
+   "defaults": [
+    "60"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_EXPRESSIVE_TTS": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FACE_ID_ENABLED": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FACE_ID_THRESHOLD": {
+   "defaults": [
+    "0.45"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_FIRST_SOUND_CLAUSE": {
+   "defaults": [
+    "off",
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 2
+  },
+  "ZOE_FIRST_SOUND_CLAUSE_MIN_CHARS": {
+   "defaults": [
+    "24"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_FIRST_SOUND_CLAUSE_MIN_WORDS": {
+   "defaults": [
+    "4"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_FIRST_SOUND_NARRATION_EARLY": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FIRST_SOUND_TOOL_ACK": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FLUE_ABORT_ON_CANCEL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FLUE_BRAIN_TIMEOUT_S": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_FLUE_BRAIN_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_FLUE_STREAM_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FLUE_WIRE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FOLLOWUP_ADDRESSED": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FORGET_ALIAS_SWEEP": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FORGET_LEDGER_SALT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_FORGET_NEAR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FORGET_REDACT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_FORGOTTEN_SHIELD_DAYS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_FRUSTRATION_MAX_SESSIONS": {
+   "defaults": [
+    "2000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_GITHUB_DEFAULT_BRANCH": {
+   "defaults": [
+    "main"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_GITHUB_REPO": {
+   "defaults": [
+    "jason-easyazz/zoe-ai-assistant"
+   ],
+   "kind": "str",
+   "readers": 3
+  },
+  "ZOE_GRAPH_RECALL_BOOST": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_GRAPH_RECALL_WEIGHT": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_HARNESS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_HA_BRIDGE_URL": {
+   "defaults": [
+    "http://127.0.0.1:8007",
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 7
+  },
+  "ZOE_HA_CONTROL_SCOPE": {
+   "defaults": [
+    "panel"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_HA_URL": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_HA_VOICE_INGRESS_URL": {
+   "defaults": [
+    "http://host.docker.internal:8000"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_HA_VOICE_TOKEN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_HEALTH_CHECK_SCRIPT": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_HEALTH_CHECK_TIMEOUT_S": {
+   "defaults": [
+    "120"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_HEALTH_NO_ALERT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_HEALTH_STATE": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_HERMES_AUTO_ESCALATE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_HOLD_THE_FACT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_HOME_SETUP_SECRET": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_HOME_SETUP_TTL_S": {
+   "defaults": [
+    "900"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_HOST_LAN_IP": {
+   "defaults": [
+    "192.168.1.218",
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 2
+  },
+  "ZOE_HOUSEHOLD_COUNTRY": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_HOUSEHOLD_LISTS_PANEL_SCOPE": {
+   "defaults": [
+    "registered"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_HYBRID_RETRIEVAL_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_IDENTITY_BLOCK": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_IDLE_CONSOLIDATION_CHECK_S": {
+   "defaults": [
+    "60"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_IDLE_CONSOLIDATION_ENABLED": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_IDLE_CONSOLIDATION_IDLE_S": {
+   "defaults": [
+    "180"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_IDLE_CONSOLIDATION_LOOKBACK_S": {
+   "defaults": [
+    "3600"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_IDLE_CONSOLIDATION_MIN_TURNS": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_INTENT_DISPATCH_REQUIRE_TOKEN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_INTENT_ROUTER_GATE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_INTERNAL_TOKEN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 9
+  },
+  "ZOE_JUKEBOX_SECRET": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_JUKEBOX_TTL_S": {
+   "defaults": [
+    "7200"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_BACKEND": {
+   "defaults": [
+    "executor"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_KANBAN_BOARD": {
+   "defaults": [
+    "default"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_CONVERGE_NOOP_IMPLEMENT": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_KANBAN_DEAD_WORKER_GRACE_S": {
+   "defaults": [
+    "180"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_ESCALATION_MAX_RUNTIME": {
+   "defaults": [
+    "90m"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_KANBAN_IMPLEMENT_POST_FOCUS_FOCUSED_TEST_READ_BUDGET": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_IMPLEMENT_POST_FOCUS_GREP_BUDGET": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_IMPLEMENT_POST_FOCUS_READ_BUDGET": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_IMPLEMENT_POST_PATCH_FILE_READ_BUDGET": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET": {
+   "defaults": [
+    "12"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET": {
+   "defaults": [
+    "6"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_INTENT_GAP_PRE_EDIT_EXPLORE_BUDGET": {
+   "defaults": [
+    "6"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_INTENT_GAP_REPEAT_READ_BUDGET": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_MAX_RUNTIME": {
+   "defaults": [
+    "45m"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME": {
+   "defaults": [
+    "6h"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_KANBAN_PROTOCOL_VIOLATION_LIMIT": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_REAP_DEAD_WORKERS": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KANBAN_SKIP_SCOUT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_KANBAN_TERMINAL_TOOL_GRACE": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KIOSK_GATE_PORT": {
+   "defaults": [
+    "7781"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KOKORO_BRAIN_HEALTH_URL": {
+   "defaults": [
+    "http://127.0.0.1:11434/health"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_KOKORO_BRAIN_POLL_S": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KOKORO_BRAIN_WAIT_S": {
+   "defaults": [
+    "180"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KOKORO_CACHE_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_KOKORO_CACHE_FLUSH_INTERVAL_S": {
+   "defaults": [
+    "60"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KOKORO_CACHE_MAX_DISK": {
+   "defaults": [
+    "1000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KOKORO_CACHE_MAX_DISK_BYTES": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KOKORO_CACHE_PERSIST": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_KOKORO_CUDA_ATTEMPTS": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KOKORO_CUDA_RETRY_DELAY_S": {
+   "defaults": [
+    "6"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_KOKORO_SIDECAR_URL": {
+   "defaults": [
+    "http://127.0.0.1:10201"
+   ],
+   "kind": "unknown",
+   "readers": 3
+  },
+  "ZOE_KOKORO_VOICE": {
+   "defaults": [
+    "af_sky",
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_KOKORO_VOICES": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LATENCY_BASELINE": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LATENCY_RESULTS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LATENCY_SAMPLES": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LATENCY_SESSION_ID": {
+   "defaults": [
+    "zoe-latency-probe"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LATENCY_TIMEOUT_S": {
+   "defaults": [
+    "30"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LATENCY_WARN_MS": {
+   "defaults": [
+    "500"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LATENCY_WARN_RATIO": {
+   "defaults": [
+    "1.5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LAYOUT_MEMORY": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_LIVEKIT_BRAIN_TIMEOUT_S": {
+   "defaults": [
+    "20"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LIVEKIT_CONTAINER": {
+   "defaults": [
+    "livekit"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LIVEKIT_FAST_TIERS": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_LIVEKIT_IDLE_TIMEOUT_S": {
+   "defaults": [
+    "300"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LIVEKIT_ONDEMAND": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_LIVEKIT_STREAM_TTS": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_LIVE_PALACE_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LIVE_REPO_ROOT": {
+   "defaults": [
+    "/home/zoe/assistant"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LIVE_SERVICE_DIR": {
+   "defaults": [
+    "/home/zoe/assistant/services/zoe-data"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LK_COOLDOWN_TIMEOUT_S": {
+   "defaults": [
+    "4.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LK_ENERGY_THRESHOLD": {
+   "defaults": [
+    "400"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LK_MIN_SPEECH_FRAMES": {
+   "defaults": [
+    "5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LK_SILENCE_FRAMES": {
+   "defaults": [
+    "20"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LK_USE_AIORTC": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_LLAMA_URL": {
+   "defaults": [
+    "http://127.0.0.1:11434"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LLM_MODEL": {
+   "defaults": [
+    "gemma"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LOCAL_MODEL": {
+   "defaults": [
+    "gemma 4 e4b-qat"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LOCAL_TTS_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LOCATION_CITY": {
+   "defaults": [
+    "dynamic",
+    "geraldton",
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 4
+  },
+  "ZOE_LOCATION_COUNTRY": {
+   "defaults": [
+    "dynamic",
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 3
+  },
+  "ZOE_LOCATION_LAT": {
+   "defaults": [
+    "-28.7774",
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 2
+  },
+  "ZOE_LOCATION_LON": {
+   "defaults": [
+    "114.6158",
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 2
+  },
+  "ZOE_LOCATION_REGION": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_LOG_BACKUP_COUNT": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LOG_CHATTY_LIBS_LEVEL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LOG_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LOG_LEVEL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LOG_MAX_BYTES": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LOG_QUIET_POLL_PATHS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LOG_QUIET_POLL_SLOW_MS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LOG_REPEAT_WINDOW_S": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_LOOP_LIFECYCLE": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MANNER_BLOCK": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_MAX_BROWSER_TABS": {
+   "defaults": [
+    "5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MA_CONTAINER": {
+   "defaults": [
+    "zoe-music-assistant"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_MA_IDLE_MIN": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MA_IDLE_REAP": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 2
+  },
+  "ZOE_MA_INFLIGHT_GRACE_S": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MA_REAP_QUIET_HOURS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MA_REAP_STATE_DIR": {
+   "defaults": [
+    "~/.cache/zoe/ma-reap"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_MA_START_TIMEOUT_S": {
+   "defaults": [
+    "25"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MCP_ACTOR_ROLE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MCP_ACTOR_USER_ID": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MCP_STRICT_USER_ID": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MCP_USER_ID": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MCP_USER_ROLE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MEMORY_AUDIT_COLLECTION": {
+   "defaults": [
+    "mempalace_audit"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MEMORY_AUTHORITY": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MEMORY_COMPOSE_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MEMORY_DIGEST_LOOKBACK_HOURS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MEMORY_HEAP_SCRUB": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MEMORY_IMPLICIT_SUPERSEDE": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MEMORY_INDEX_COMPACT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MEMORY_INDEX_COMPACT_DAY": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MEMORY_LINK_RESOLVER_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MEMORY_LINT_IN_DREAMING": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MEMORY_LINT_NEAR_DUP_RATIO": {
+   "defaults": [
+    "0.92"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MEMORY_LINT_STALE_DAYS": {
+   "defaults": [
+    "365"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MEMORY_LOOP_LOG_PATH": {
+   "defaults": [
+    "~/.zoe/zoe-data-memory-loops.log"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MEMORY_PHYSICAL_ERASE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MEMORY_PROVENANCE_ANSWERS": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MEMORY_REJECT_LEDGER": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MEMORY_STARTUP_STRICT": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MERGE_QUEUE_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MERGE_QUEUE_LABEL": {
+   "defaults": [
+    "auto-merge"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MERGE_QUEUE_MAX_CANDIDATES": {
+   "defaults": [
+    "50"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MIRROR_GUARD": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_MIRROR_INTENTS_TO_OPENCLAW": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MISHEAR_CLARIFY": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_MOONSHINE_ARCH": {
+   "defaults": [
+    "medium_streaming",
+    "v2"
+   ],
+   "kind": "str",
+   "readers": 3
+  },
+  "ZOE_MOONSHINE_KEYTERMS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_MULTICA": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES_FOR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MULTICA_AUTOPILOT_STALE_HOURS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MULTICA_AUTOPIOT_STALE_HOURS": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MULTICA_AUTO_ADMIT": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MULTICA_BLOCKED_RESUME_BUDGET": {
+   "defaults": [
+    "4"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MULTICA_CROSS_REVIEW": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MULTICA_DISPATCH_PAUSE_FILE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MULTICA_KILL_SWITCH": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MULTICA_NATIVE_COMMENT_GUARD": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MULTICA_PAUSED_POLL_S": {
+   "defaults": [
+    "300.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MULTICA_POLL_DISPATCH_LIMIT": {
+   "defaults": [
+    "1"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MULTICA_POLL_REF_TIMEOUT_S": {
+   "defaults": [
+    "20.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MULTICA_POOL_MAX": {
+   "defaults": [
+    "4"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MULTICA_STALE_IN_PROGRESS_HOURS": {
+   "defaults": [
+    "6.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MULTICA_TRIAGE_JUDGE": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MULTICA_WORKSPACE_ID": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MULTI_HOP_RECALL": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MUSIC_DISCOVERY": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MUSIC_DISCOVERY_DOW": {
+   "defaults": [
+    "sun"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MUSIC_DISCOVERY_HOUR": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MUSIC_DISCOVERY_JSON": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MUSIC_HISTORY": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MUSIC_HISTORY_INTERVAL_S": {
+   "defaults": [
+    "300"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MUSIC_OAUTH_TTL_S": {
+   "defaults": [
+    "150"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MUSIC_OBSERVE_ATTRIB_MIN": {
+   "defaults": [
+    "30"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MUSIC_OBSERVE_DEDUP_H": {
+   "defaults": [
+    "12"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MUSIC_SETUP_SECRET": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MUSIC_SETUP_TTL_S": {
+   "defaults": [
+    "900"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_NIGHT_MIND": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 3
+  },
+  "ZOE_NIGHT_MIND_CHUNK_TOKENS": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_NIGHT_MIND_CTX_TOKENS": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_NIGHT_MIND_DECODE_TOK_S": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_NIGHT_MIND_MAX_CALLS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_NIGHT_MIND_MODEL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_NIGHT_MIND_PREFILL_TOK_S": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_NIGHT_MIND_SCHEMA": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_NIGHT_MIND_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_NVM_NODE_BIN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_CHECKOUT": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_CONFIG_DIR": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_HOME": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_MEM_FLOOR_MB": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_NO_ALERT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_SKIP_PG_GLOBALS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_SNAPSHOT_TIME": {
+   "defaults": [
+    "required",
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_STAGE_DIR": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_STATE_DIR": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OMI_AUDIO_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_OMI_AUDIO_RETENTION_DAYS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_AUDIT_PATH": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_OMI_DAY_REVIEW": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_OMI_DAY_REVIEW_IDLE_S": {
+   "defaults": [
+    "600"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_DAY_REVIEW_LANE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_OMI_DAY_REVIEW_MAX_AGE_DAYS": {
+   "defaults": [
+    "7"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_DAY_REVIEW_MAX_CALLS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_DAY_REVIEW_MIN_MEM_MB": {
+   "defaults": [
+    "1000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_DEVICE_OWNERS": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_OMI_DIAR_LINK_MIN": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_HEALTH": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_OMI_IDLE_S": {
+   "defaults": [
+    "120"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_KEEP_AUDIO": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_OMI_KEEP_AUDIO_FOR_TAGGING": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_OMI_LEARN_VOICES": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_OMI_MIN_MEM_MB": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_OWNER_USER_ID": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 2
+  },
+  "ZOE_OMI_SEGMENT_EMBED_TTL_DAYS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_SPEAKER_TAG": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_OMI_SUGGEST_MARGIN": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_SUGGEST_MIN": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_SYNC_ENABLED": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_OMI_TAG_MODEL_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_OMI_TAG_OTHER_MAX": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_TAG_YOU_MIN": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_VOICEPRINT_IDLE_DAYS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_VOICE_CLUSTER_MIN": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMNIGENT_AGENT_ID": {
+   "defaults": [
+    "057995d1517418e6839f51d340785dd6"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OMNIGENT_CLOSE_POLL_S": {
+   "defaults": [
+    "60"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMNIGENT_CLOSE_TIMEOUT_S": {
+   "defaults": [
+    "2400"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMNIGENT_CONTAINER": {
+   "defaults": [
+    "zoe-omnigent"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OMNIGENT_IMPLEMENT_TIMEOUT_S": {
+   "defaults": [
+    "1800"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMNIGENT_URL": {
+   "defaults": [
+    "http://127.0.0.1:6767"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OPENCLAW_GW": {
+   "defaults": [
+    "dynamic",
+    "http://127.0.0.1:18789"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_OTEL_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_OWN_FACT_PRECEDENCE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 2
+  },
+  "ZOE_PANEL_AGENT_PORT": {
+   "defaults": [
+    "8765"
+   ],
+   "kind": "number",
+   "readers": 2
+  },
+  "ZOE_PANEL_ALLOWED_HOSTS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PANEL_ID": {
+   "defaults": [
+    "post-merge-probe",
+    "zoe-touch-pi"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_PANEL_KIOSK_CREDENTIAL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PANEL_KIOSK_CREDENTIAL_TTL_S": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PANEL_KIOSK_SECRET": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PANEL_KIOSK_TICKET_TTL_S": {
+   "defaults": [
+    "60"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PANEL_SESSION_TRUST_WINDOW_S": {
+   "defaults": [
+    "900"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PERF": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 14
+  },
+  "ZOE_PERSONALISATION_HOP": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PERSONALISATION_HOP_PLACEMENT": {
+   "defaults": [
+    "block"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_PERSONALISATION_HOP_WORDING": {
+   "defaults": [
+    "natural"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_PERSONA_DRIFT": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PERSONA_LAYER": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PERSON_BENCH_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PERSON_DOSSIER_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PERSON_LLM_CONFIDENCE_GATE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PERSON_LLM_CONFIDENCE_MIN": {
+   "defaults": [
+    "0.4"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PERSON_LLM_PREFILTER": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PERSON_MERGE_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PERSON_RECALL_FLOOR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PERSON_SUGGEST_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PIN_CHALLENGE_TTL_S": {
+   "defaults": [
+    "120"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PIN_LOCKOUT_S": {
+   "defaults": [
+    "300"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PIN_MAX_ATTEMPTS": {
+   "defaults": [
+    "5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PIPELINE_HARNESS_CLOSEOUT_MERGE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PIPELINE_HARNESS_REVIEW_APPROVE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PIPELINE_HARNESS_VERIFY_TESTS": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PIPELINE_STORE_PATH": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 3
+  },
+  "ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT": {
+   "defaults": [
+    "1"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PI_EXECUTOR_COMMAND": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PI_EXECUTOR_MODE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PI_EXECUTOR_MODEL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PI_EXECUTOR_PROVIDER": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PI_EXECUTOR_TIMEOUT_S": {
+   "defaults": [
+    "900"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PI_HOST": {
+   "defaults": [
+    "192.168.1.61"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PI_INTENT_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PI_INTENT_MODEL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PI_INTENT_PREFILTER_ENABLED": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PI_INTENT_PROMOTED_GROUPS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PI_INTENT_SHADOW_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PI_INTENT_TIMEOUT_SECONDS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PI_LAB_MIN_AVAILABLE_MB": {
+   "defaults": [
+    "2048.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PI_LAB_MIN_SWAP_FREE_MB": {
+   "defaults": [
+    "256.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PI_LAB_RESOURCE_GUARD_ENABLED": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_POSTGRES_CONTAINER": {
+   "defaults": [
+    "zoe-database"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PRESENCE_WINDOW_S": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PROACTIVE_ARRIVAL_RESPONSE_S": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PROACTIVE_BRIEF_ON_ARRIVAL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PROACTIVE_LEDGER": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PROACTIVE_RAISE_GAP_S": {
+   "defaults": [
+    "7200"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PROACTIVE_RAISE_PER_DAY": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PROACTIVE_SELECTOR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PROACTIVE_SLOW_LOOP_S": {
+   "defaults": [
+    "300"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PROACTIVE_SPOKEN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PROACTIVE_SPOKEN_TRIGGERS": {
+   "defaults": [
+    "morning_checkin"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PROVENANCE_PERSIST": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PROVISION_CODE_TTL_S": {
+   "defaults": [
+    "300"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PROVISION_PICKUP_GRACE_S": {
+   "defaults": [
+    "120"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_ACTIVE_GREPTILE_STALE_SECONDS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_AUTO_RESOLVE_THREADS": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_AUTO_UPDATE_BRANCH": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_CLEAN_MERGE_IGNORES_CONFIDENCE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_GREPTILE_WAIT_POLL_SECONDS": {
+   "defaults": [
+    "120"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_GREPTILE_WAIT_TIMEOUT_SECONDS": {
+   "defaults": [
+    "1800"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_HEAD_STABILITY_SECONDS": {
+   "defaults": [
+    "90"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_MAX_ACTIVE_GREPTILE_REVIEWS": {
+   "defaults": [
+    "1"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_MAX_COST_USD": {
+   "defaults": [
+    "0.25"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_MAX_ITERATIONS": {
+   "defaults": [
+    "5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_MAX_OUTPUT_CHARS": {
+   "defaults": [
+    "12000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_NO_FINDINGS_RETRIGGER_LIMIT": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_NO_PROGRESS_LIMIT": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_SAME_ERROR_LIMIT": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_STATE_DIR": {
+   "defaults": [
+    "/home/zoe/assistant/.cursor/tmp/pr_guard"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_TRIGGER_COOLDOWN_SECONDS": {
+   "defaults": [
+    "900"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PR_GUARD_UPDATE_BRANCH_COOLDOWN_SECONDS": {
+   "defaults": [
+    "300"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_PUBLIC_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_PULL_NOT_PUSH": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_QUIET_END_HOUR": {
+   "defaults": [
+    "7"
+   ],
+   "kind": "number",
+   "readers": 2
+  },
+  "ZOE_QUIET_START_HOUR": {
+   "defaults": [
+    "22"
+   ],
+   "kind": "number",
+   "readers": 2
+  },
+  "ZOE_QUOTE_RETIRE": {
+   "defaults": [
+    "shadow"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_READINESS_CACHE_TTL_S": {
+   "defaults": [
+    "3.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_READINESS_TIMEOUT_S": {
+   "defaults": [
+    "4.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_RECALL_DURABLE_NO_DECAY": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_RECALL_EVIDENCE": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_RECALL_GATE": {
+   "defaults": [
+    "shadow"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_RECALL_PRESENT_STATE_SHAPES": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_RELATIONSHIP_GRAPH_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_REMINDER_DEFAULT_TIME": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_REMINDER_MAX_ATTEMPTS": {
+   "defaults": [
+    "5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_REMINDER_STUCK_CLAIM_S": {
+   "defaults": [
+    "600"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_REPO_ROOT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_RESTRAINT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 2
+  },
+  "ZOE_RIG_BIND": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_RIG_DISPLAY": {
+   "defaults": [
+    ":99"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_RIG_GEOMETRY": {
+   "defaults": [
+    "1280x800x24"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_RIG_LOGIN_URL": {
+   "defaults": [
+    "https://accounts.google.com/servicelogin?continue=https%3a%2f%2fmusic.youtube.com%2f"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_RIG_NOVNC_PORT": {
+   "defaults": [
+    "6080"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_RIG_USER_AGENT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_RIG_VNC_PORT": {
+   "defaults": [
+    "5900"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_RISK_CUES": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_ROLE_GUESS_GUARD": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ROSTER_NEUTRAL_ASK": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ROUTER_ARCHIVE_KEEP": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_BASE_HF": {
+   "defaults": [
+    "/home/zoe/models/lab/functiongemma-270m-it-hf"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_ENABLED": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ROUTER_EVENT_TIME_PRECEDENCE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ROUTER_HEAD": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ROUTER_HEADS_BACKEND": {
+   "defaults": [
+    "numpy"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_ROUTER_HEAD_LOG": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_HEAD_MIN_CONF": {
+   "defaults": [
+    "0.70"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_HEAD_MLP_PATH": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_HEAD_PATH": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_HEAD_THRESHOLD": {
+   "defaults": [
+    "0.4"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_MARGIN": {
+   "defaults": [
+    "0.05"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_MODE": {
+   "defaults": [
+    "shadow"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_MODEL": {
+   "defaults": [
+    "baai/bge-small-en-v1.5"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_MODEL_DIR": {
+   "defaults": [
+    "/home/zoe/models/functiongemma-router"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_SCRATCH_PORT": {
+   "defaults": [
+    "11437"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_SELFTRAIN": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ROUTER_SELFTRAIN_DOW": {
+   "defaults": [
+    "sat"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_SELFTRAIN_HOUR": {
+   "defaults": [
+    "1"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_SELFTRAIN_TIMEOUT_S": {
+   "defaults": [
+    "28800"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_SHADOW_KEEP": {
+   "defaults": [
+    "4"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_SHADOW_MAX_BYTES": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_SHADOW_TEXT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_ROUTER_SIDECAR_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_THRESHOLD": {
+   "defaults": [
+    "0.62"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_TWO_STAGE_GATE": {
+   "defaults": [
+    "0.5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_TWO_STAGE_TIMEOUT_S": {
+   "defaults": [
+    "1.5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_WARM_START": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_SCHEDULED_QUEUE_WAIT_S": {
+   "defaults": [
+    "1200.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SEAM_CONTINUITY_DEBUG": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_SEAM_CONTINUITY_INJECT": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_SEAM_OFFER_INJECT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_SEAM_RECALL_INJECT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_SEARCH_HOTNESS_WEIGHT": {
+   "defaults": [
+    "0.05"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SEARCH_PROVIDER": {
+   "defaults": [
+    "auto"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_SELF_MODEL": {
+   "defaults": [
+    "shadow"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_SESSION_LOCK_TIMEOUT_S": {
+   "defaults": [
+    "5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SETUP_QR_HANDLE_TTL_S": {
+   "defaults": [
+    "120"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SILERO_VAD_MODEL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 3
+  },
+  "ZOE_SKYBRIDGE_ONLY": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_SKYBRIDGE_ROUTER_VETO": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_SKYBRIDGE_TIMEZONE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_SKYBRIDGE_UNSURE_FLOOR_WRITE": {
+   "defaults": [
+    "0.45"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SMART_HOME_FOLLOWUP_TTL_S": {
+   "defaults": [
+    "60"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SMART_TURN_ENABLED": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_SMART_TURN_MAX_CHECKS": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SMART_TURN_MODEL": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_SMART_TURN_THREADS": {
+   "defaults": [
+    "1"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SMART_TURN_THRESHOLD": {
+   "defaults": [
+    "0.5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_ALPHA": {
+   "defaults": [
+    "0.05"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_ANCHOR_FLOOR": {
+   "defaults": [
+    "0.8"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_FACE_MIN": {
+   "defaults": [
+    "0.6"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_MAX_PER_DAY": {
+   "defaults": [
+    "5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_MIN_ANCHOR_COS": {
+   "defaults": [
+    "0.92"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_MIN_INTERVAL_S": {
+   "defaults": [
+    "600.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_MIN_MARGIN": {
+   "defaults": [
+    "0.1"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_MIN_SCORE": {
+   "defaults": [
+    "0.85"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_MIN_SPEECH_S": {
+   "defaults": [
+    "2.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_PIN_WINDOW_S": {
+   "defaults": [
+    "900.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_RESNET34_ANCHOR_FLOOR": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ADAPT_RESNET34_MIN_SCORE": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_ID_THRESHOLD": {
+   "defaults": [
+    "0.82"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_MODEL": {
+   "defaults": [
+    "resemblyzer",
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 4
+  },
+  "ZOE_SPEAKER_RESNET34_THRESHOLD_LONG": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPEAKER_RESNET34_TIER": {
+   "defaults": [
+    "dynamic",
+    "far1"
+   ],
+   "kind": "str",
+   "readers": 2
+  },
+  "ZOE_SPECULATIVE_MAX_HOLD_MS": {
+   "defaults": [
+    "5000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPECULATIVE_TAIL_MS": {
+   "defaults": [
+    "320"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPECULATIVE_TURN": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 2
+  },
+  "ZOE_STICKY_SESSION": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_STICKY_SESSION_MINUTES": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_STRIP_NARRATION": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_STRUCTURAL_CLAIMS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_STRUCTURAL_READER": {
+   "defaults": [
+    "shadow"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_STRUCTURAL_VERIFIER": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_STRUGGLE_DETECT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_STRUGGLE_PROPOSALS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_STRUGGLE_PROPOSAL_DAYS": {
+   "defaults": [
+    "7.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_STRUGGLE_PROPOSAL_MIN_EPISODES": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_STRUGGLE_QUEUE_MAX": {
+   "defaults": [
+    "256"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_STRUGGLE_RETENTION_DAYS": {
+   "defaults": [
+    "90"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_STRUGGLE_WINDOW_S": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_STT_BACKEND": {
+   "defaults": [
+    "moonshine"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_STT_PREWARM_ON_WAKE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_STT_SNAP": {
+   "defaults": [
+    "shadow"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_STT_STREAM_FINISH_TIMEOUT_MS": {
+   "defaults": [
+    "2500"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_STT_STREAM_UNDER_SPEECH": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_STT_STREAM_UPLOAD": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_SUBPROCESS_QUEUE_WAIT_S": {
+   "defaults": [
+    "30.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SYNTHETIC_USER_ALLOWLIST": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_TASK_TIMEOUT_S": {
+   "defaults": [
+    "dynamic",
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_TAVILY_DEPTH": {
+   "defaults": [
+    "basic"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_TELEGRAM_BOT_TOKEN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_TELEGRAM_BOT_USERNAME": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_TELEGRAM_FFMPEG": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_TELEGRAM_FFMPEG_TIMEOUT_S": {
+   "defaults": [
+    "20"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_TELEGRAM_LINK_SECRET": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_TELEGRAM_MEDIA": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_TELEGRAM_NOTIFY_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 2
+  },
+  "ZOE_TELEGRAM_STT_CAPTURE_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_TELEGRAM_VOICE_MAX_S": {
+   "defaults": [
+    "60"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_TEMPORAL_RELATIONSHIPS_ENABLED": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_TIMEZONE": {
+   "defaults": [
+    "australia/perth",
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 16
+  },
+  "ZOE_TOUCH_PANEL_OFFLINE_CACHE": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_TOUCH_PROBE_DEVICE_TOKEN": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_TOUCH_PROBE_PANEL_ID": {
+   "defaults": [
+    "zoe-touch-pi"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_TRIVIA_HEDGE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_TRUSTED_PROXY_NETS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_TTS_KEEP_TAIL_MS": {
+   "defaults": [
+    "130"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_TTS_LEAD_GUARD_MS": {
+   "defaults": [
+    "20"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_TTS_MODE": {
+   "defaults": [
+    "hybrid"
+   ],
+   "kind": "str",
+   "readers": 2
+  },
+  "ZOE_TTS_TRIM_SILENCE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_UNAUTHENTICATED_ROLE": {
+   "defaults": [
+    "guest"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_UPDATE_CHECK_ENABLED": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_URL": {
+   "defaults": [
+    "dynamic",
+    "http://127.0.0.1:8000",
+    "https://zoe.local"
+   ],
+   "kind": "unknown",
+   "readers": 4
+  },
+  "ZOE_USER_MODEL_BLOCK": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_USE_CORE_BRAIN": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_USE_OMNIGENT_EXECUTOR": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_USE_PI_EXECUTOR": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VAD_CLEAN_FALL_CHUNKS": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VAD_CLEAN_MIN_SPEECH_MS": {
+   "defaults": [
+    "480"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VAD_CLEAN_TAIL_MS": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VAD_HESITATION_TAIL_MS": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VAD_SPEECH_THRESHOLD": {
+   "defaults": [
+    "0.5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VAD_TAIL_DEEP_PROB": {
+   "defaults": [
+    "0.10"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VAD_TAIL_MS": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VAPID_KEY_PATH": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_VERIFY_ON_CHALLENGE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_ALERT_NON_PASS_RUNS": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_BARGE_IN": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_BASELINE": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_VOICE_CHAT_TIMEOUT_S": {
+   "defaults": [
+    "20"
+   ],
+   "kind": "number",
+   "readers": 2
+  },
+  "ZOE_VOICE_CONTINUATION_HOLD": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_FAST_FIRST_AUDIO": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_FILLER_AFTER_S": {
+   "defaults": [
+    "1.6"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_FILLER_ENABLED": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_FILLER_EXPECT_MIN_S": {
+   "defaults": [
+    "1.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_FILLER_PHRASES": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_VOICE_GATE_MAX_AGE_H": {
+   "defaults": [
+    "24"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_GATE_PATHS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_VOICE_GREETING_ENABLED": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_GREETING_STATE_PATH": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_VOICE_IDENT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_LOG": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_VOICE_MEMORY_PACKET_LAZY": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_PROBE_MIN_MEM_MB": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_PROBE_SAMPLES": {
+   "defaults": [
+    "20"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_PROBE_TIMEOUT_S": {
+   "defaults": [
+    "900"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_PROBE_USER": {
+   "defaults": [
+    "jason"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_VOICE_PROBE_VAD_CHECK": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_PROBE_VAD_CLIPS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_PROFILE": {
+   "defaults": [
+    "zoe_au_natural_v1"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_VOICE_REPLAY_STT": {
+   "defaults": [
+    "inprocess"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_VOICE_RESULTS": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 2
+  },
+  "ZOE_VOICE_SAMPLE_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 5
+  },
+  "ZOE_VOICE_SAVE_AUDIO": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_SESSION": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_SESSION_TTL_S": {
+   "defaults": [
+    "120"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_STITCH_ENABLED": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 2
+  },
+  "ZOE_VOICE_STREAM": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_STT_LOG": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_VOICE_STT_LOG_MAX_BYTES": {
+   "defaults": [
+    "5000000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_TOOL_FILLER": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_TREND": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_VOICE_TTS_MIN_SENTENCE_CADENCE_MS": {
+   "defaults": [
+    "0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_WARN_MS": {
+   "defaults": [
+    "1500"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_VOICE_WARN_RATIO": {
+   "defaults": [
+    "1.5"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_WAKE_ACK_PHRASE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_WEATHER_CACHE_TTL_S": {
+   "defaults": [
+    "600"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_WEB_BROWSE_MAX_HTML": {
+   "defaults": [
+    "1500000"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_WEB_FALLBACK_PROVIDER": {
+   "defaults": [
+    "auto"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_WEB_SEARCH_TOOL": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_WORKTREE_PRUNE_INTERVAL_S": {
+   "defaults": [
+    "86400.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_WORKTREE_ROOT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_WRITE_CLAIM_GUARD": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_WS_IDLE_TIMEOUT_SECONDS": {
+   "defaults": [
+    "120.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_YTMUSIC_POLL_S": {
+   "defaults": [
+    "2.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_YTMUSIC_POTOKEN_URL": {
+   "defaults": [
+    "http://localhost:4416"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_YTMUSIC_REFRESH_ENABLED": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_YTMUSIC_REFRESH_HOURS": {
+   "defaults": [
+    "12"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_YTMUSIC_SECRET_DIR": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_YTMUSIC_SESSION_TIMEOUT_S": {
+   "defaults": [
+    "300"
+   ],
+   "kind": "number",
+   "readers": 1
+  }
+ },
+ "kind": "code-defaults",
+ "note": "GENERATED by tools/audit/live_state.py from docs/knowledge/flag-inventory.json. These are the flag DEFAULTS as the code ships them, not the values set on the running box (read those with scripts/maintenance/zoe_ground_truth.sh). 'unset' = no default argument or an empty-string default; it is compatible with a claim of 'off'. A default of 1 or 0 is written 'on' / 'off' ONLY for a flag the code reads as a boolean; on a flag read as a number, or whose reader shape is not recognised, it stays the literal 1 or 0. 'kind' says which: bool | number | str | unknown.",
+ "prod_flag_count": 717,
+ "source": "docs/knowledge/flag-inventory.json"
+}

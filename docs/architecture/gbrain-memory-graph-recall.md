@@ -183,10 +183,7 @@ conflicts. Idle-time ⇒ no turn latency. Separate, later increment.
 
 ---
 
-## 8. NEXT ACTION
+## 8. Where the next action lives
 
-Land **Part A** (linkage hygiene: fix `memory_extractor` mislabelling + add the
-idle `person_pending` resolver to `memory_digest`) as the first, RAM-free step —
-it is independently valuable (cleaner entity linkage improves *today's*
-recall) and is the prerequisite the graph boost stands on. Everything graph-side
-waits on the W0 RAM gate.
+The next action is **not** kept here any more: the one ordered list is [`docs/ROADMAP.md`](../ROADMAP.md) (Now / Next / Later). This document is the design record for the graph-recall work. Open work: Part A (linkage hygiene: fix `memory_extractor` mislabelling and add the idle `person_pending` resolver to `memory_digest`) is the first RAM-free step and the prerequisite the graph boost stands on; everything graph-side waits on the RAM gate; update it when a step lands, but do not add a new "next action" to it.
+

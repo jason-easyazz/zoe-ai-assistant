@@ -402,20 +402,10 @@ Month 2+ (2026+): P2 Future Considerations
 
 ---
 
-## 🚦 Next Actions
+## Where the next action lives
 
-### Immediate (This Week)
-1. **Monday 9am:** Read `EXECUTIVE_SUMMARY.md` (entire team, 15 min)
-2. **Monday 10am:** Start P0-2 implementation (developer assigned)
-3. **Monday 5pm:** P0-2 tested and working
-4. **Tuesday:** Complete P0-2, start P0-3
-5. **Wednesday:** Complete P0-3, start P0-1
-6. **Thursday-Saturday:** Complete P0-1
+The next action is **not** kept here any more: the one ordered list is [`docs/ROADMAP.md`](../ROADMAP.md) (Now / Next / Later). This document is the index of the November 2025 memory-hallucination study (see `index.md` for the status of every research record); update it when a step lands, but do not add a new "next action" to it.
 
-### Next Week
-1. **Monday:** Measure P0 success metrics
-2. **Tuesday-Thursday:** Iterate based on feedback
-3. **Friday:** Go/No-Go decision for P1
 
 ---
 
