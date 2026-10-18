@@ -327,6 +327,8 @@ async function check(label, fn) {
         assert(!/\/touch\//.test(html) && !/\/touch\//.test(src));
         const a = html.indexOf('/js/auth.js'), m = html.indexOf('/js/pendant-page.js');
         assert(a > 0 && m > a, 'auth.js must load before pendant-page.js');
+        assert(/if \(window\.ZoePendant && !window\.__zoeAuthRedirecting\) window\.ZoePendant\.init\(document\)/.test(html),
+            'init must not run while the desktop gate is redirecting to sign-in');
         assert(!/innerHTML/.test(src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')), 'no innerHTML in the module');
     });
 

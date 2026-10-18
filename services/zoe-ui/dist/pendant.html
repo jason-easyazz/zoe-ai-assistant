@@ -96,7 +96,8 @@
     <div class="toast" id="pendantToast" role="status"></div>
     <script src="/js/pendant-page.js?v=3"></script>
     <script>
-        window.ZoePendant && window.ZoePendant.init(document);
+        // auth.js's synchronous desktop gate may already be redirecting to sign-in: send nothing from this page meanwhile
+        if (window.ZoePendant && !window.__zoeAuthRedirecting) window.ZoePendant.init(document);
     </script>
 </body>
 </html>
