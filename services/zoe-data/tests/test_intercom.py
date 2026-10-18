@@ -32,6 +32,7 @@ import voice_announce  # noqa: E402
 pytestmark = pytest.mark.ci_safe
 
 LIVING, KITCHEN, HALL, GARAGE, OFFICE = "zoe-panel-living", "zoe-panel-kitchen", "zoe-panel-hall", "zoe-panel-garage", "zoe-panel-office"
+SHED, STUDIO = "zoe-panel-shed", "zoe-panel-studio"
 ADULT, KID = "ann-0001", "kid-0002"
 LABELS = ["kitchen", "living room", "hall", "hallway"]
 
@@ -39,20 +40,25 @@ _SCHEMA = [
     """CREATE TABLE panels (panel_id TEXT PRIMARY KEY, name TEXT NOT NULL, location TEXT, is_active INTEGER DEFAULT 1,
        room_id TEXT)""",
     "CREATE TABLE rooms (id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE)",
-    "CREATE TABLE device_tokens (panel_id TEXT, revoked INTEGER DEFAULT 0)",
+    "CREATE TABLE device_tokens (panel_id TEXT, revoked INTEGER DEFAULT 0, expires_at TEXT)",
     """CREATE TABLE voice_announcements (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, panel_id TEXT, message TEXT NOT NULL,
        trigger_type TEXT DEFAULT '', created_at TEXT NOT NULL, expires_at TEXT NOT NULL, delivered_at TEXT, delivered_to TEXT,
        expired INTEGER NOT NULL DEFAULT 0, played_at TEXT)""",
 ]
-_ROOMS = [("r1", "Living Room", "living-room"), ("r2", "Kitchen", "kitchen"), ("r3", "Garage", "garage"), ("r4", "Office", "office")]
+_ROOMS = [("r1", "Living Room", "living-room"), ("r2", "Kitchen", "kitchen"), ("r3", "Garage", "garage"), ("r4", "Office", "office"),
+          ("r5", "Shed", "shed"), ("r6", "Studio", "studio")]
 _PANELS = [
     (LIVING, "Zoe Living", None, 1, "r1"),
     (KITCHEN, "Kitchen Panel", None, 1, "r2"),
     (HALL, "Zoe Hall", "Hallway", 1, None),  # no room: answers to its location
     (GARAGE, "Zoe Garage", None, 1, "r3"),   # no device token: no daemon to speak
     (OFFICE, "Zoe Office", None, 1, "r4"),   # revoked token
+    (SHED, "Zoe Shed", None, 1, "r5"),       # its only token is past expires_at: its daemon cannot authenticate
+    (STUDIO, "Zoe Studio", None, 1, "r6"),   # its only token has an unreadable expiry: refused like panel_auth refuses it
 ]
-_TOKENS = [(LIVING, 0), (KITCHEN, 0), (HALL, 0), (OFFICE, 1)]
+# expires_at: NULL never expires (living, hall); a future one is live (kitchen); a past one / garbage is not (shed, studio)
+_TOKENS = [(LIVING, 0, None), (KITCHEN, 0, "2999-01-01T00:00:00+00:00"), (HALL, 0, None), (OFFICE, 1, None),
+           (SHED, 0, "2020-01-01T00:00:00Z"), (STUDIO, 0, "not-a-date")]
 
 
 @pytest.fixture
@@ -64,7 +70,7 @@ def house(monkeypatch, tmp_path):
             conn.execute(ddl)
         conn.executemany("INSERT INTO rooms VALUES (?, ?, ?)", _ROOMS)
         conn.executemany("INSERT INTO panels VALUES (?, ?, ?, ?, ?)", _PANELS)
-        conn.executemany("INSERT INTO device_tokens VALUES (?, ?)", _TOKENS)
+        conn.executemany("INSERT INTO device_tokens VALUES (?, ?, ?)", _TOKENS)
 
     @contextlib.asynccontextmanager
     async def fake_db():
@@ -217,11 +223,22 @@ async def test_announce_reaches_every_other_speaker_panel_once(house):
     res = await _say("announce: shoes on, we're leaving")
     assert res.reply == "Okay, I've announced it on 2 panels."
     rows = await _rows(house)
-    assert [r[0] for r in rows] == [HALL, KITCHEN]  # not the origin, not the token-less garage, not the revoked office
+    # not the origin, not the token-less garage, not the revoked office, not the expired shed / unreadable studio
+    assert [r[0] for r in rows] == [HALL, KITCHEN]
     async with house["db"]() as db:
         assert len(await voice_announce.claim_announcements(db, panel_id=KITCHEN)) == 1
         assert len(await voice_announce.claim_announcements(db, panel_id=HALL)) == 1
         assert await voice_announce.claim_announcements(db, panel_id=KITCHEN) == []
+
+
+@pytest.mark.parametrize("room", ["shed", "studio"])
+async def test_a_panel_whose_only_token_expired_is_not_a_target(house, room):
+    # Codex P2 on #2143: an expired (or unreadable) token cannot claim a row, so the caller must not hear a false success
+    res = await _say(f"tell the {room} dinner's ready")
+    garage = await _say("tell the garage dinner's ready")  # the token-less panel: the outcome an un-claimable panel must get
+    assert (res is None) == (garage is None)
+    assert res is None or not res.reply.startswith("Okay")
+    assert await _rows(house) == []
 
 
 async def test_a_call_rings_and_says_the_audio_leg_is_not_built(house):

@@ -267,14 +267,35 @@ def reply_for(req: Request, d: Decision) -> str:
 # ── runtime ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 async def _speaker_panels(db) -> list[dict]:
-    """Active panels that hold a live device token (the only ones with a voice daemon), with their room / name / location."""
+    """Active panels that hold a live device token (the only ones with a voice daemon), with their room / name / location.
+
+    LIVE = not revoked AND not past ``expires_at`` (NULL never expires; an unreadable expiry is not live) - the same rule
+    ``panel_auth.lookup_device_token_hash`` applies, so a panel whose daemon could not authenticate to claim a row is never a
+    target. The expiry is compared in Python (``parse_token_expiry``), not SQL, so the ISO text compares the same on both stores."""
+    from datetime import timezone
+
+    from routers.panel_auth import parse_token_expiry
+
+    async with db.execute("SELECT panel_id, expires_at FROM device_tokens WHERE revoked = 0") as cur:
+        tokens = await cur.fetchall()
+    now = datetime.now(tz=timezone.utc)
+    live: set[str] = set()
+    for pid, exp in tokens:
+        if exp is not None and str(exp).strip():
+            try:
+                if parse_token_expiry(exp) <= now:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        live.add(str(pid))
     sql = ("SELECT p.panel_id, p.name, p.location, r.name AS room FROM panels p LEFT JOIN rooms r ON r.id = p.room_id "
-           "WHERE p.is_active = 1 AND p.panel_id IN (SELECT panel_id FROM device_tokens WHERE revoked = 0)")
+           "WHERE p.is_active = 1")
     async with db.execute(sql) as cur:
         rows = await cur.fetchall()
     out = []
     for r in rows:
-        out.append({"panel_id": str(r[0]), "name": r[1] or "", "location": r[2] or "", "room": r[3] or ""})
+        if str(r[0]) in live:
+            out.append({"panel_id": str(r[0]), "name": r[1] or "", "location": r[2] or "", "room": r[3] or ""})
     return out
 
 
