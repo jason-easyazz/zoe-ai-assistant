@@ -5331,9 +5331,8 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
     if (intent.slots or {}).get("delayed"):
         return command_shapes.DELAYED_COMMAND_REPLY  # nothing plays now, nothing is queued
     if intent.name != "music_favorite":   # favouriting goes through Music Assistant, not the house's media players
-        import panel_principal as _pp
+        import panel_principal as _pp   # home control on a turn (2026-10-18): the house's speakers via HA
 
-        # Home control on a turn (2026-10-18): driving the house's speakers through Home Assistant needs a member or the panel.
         if _pp.home_control_refused(f"music {intent.name}"):
             return _pp.HOME_CONTROL_REFUSAL
     try:

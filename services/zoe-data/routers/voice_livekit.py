@@ -1574,8 +1574,7 @@ async def _require_livekit_media_auth(
         from routers.voice_tts import _resolve_fresh_panel_member
 
         acting_user_id = await _resolve_fresh_panel_member(str(device.get("panel_id") or ""))
-        # Home control on a turn (2026-10-18): this lane runs a full brain turn, so it records the member-or-panel verdict
-        # every turn entry records (panel_principal.record_turn_home_control). The token is the panel.
+        # Home control on a turn (2026-10-18): this lane runs a full brain turn; the token is the panel.
         await panel_principal.record_turn_home_control(
             request, {"user_id": "guest", "role": "guest", "panel_id": device.get("panel_id")})
         return {
