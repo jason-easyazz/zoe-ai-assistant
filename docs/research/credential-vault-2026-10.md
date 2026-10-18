@@ -126,6 +126,12 @@ into `~/.opensrc/repos/`.
   - **Org keys:** every member of an organisation holds its key, so any organisation item that reaches a member can
     be decrypted by that member. Collections are a server-side filter. This is from the Bitwarden security white
     paper's org-key model [verified for the model; inference for the consequence].
+  - **Sharing moves ownership.** Moving an item into an organisation transfers its ownership to that organisation.
+    "Unsharing" is clone into the personal vault, then delete the organisation-owned original (bitwarden.com/help/sharing,
+    "Reclaim shared item ownership") [secondary: cited by the PR's codex review, page not fetched here]. The design
+    therefore makes revocation clone, verify, then delete, with a non-destructive "unassign from the collection"
+    quick stop. Whether Vaultwarden hides an unassigned item from a "can view" member, and how long its trash keeps a
+    deleted item (`TRASH_AUTO_DELETE_DAYS`), are lab V0 questions [unverified].
 
 ### 1.2 Official Bitwarden self-hosted
 
@@ -292,7 +298,9 @@ into `~/.opensrc/repos/`.
     agent's headless browser, which fills the form.
   - Login items with TOTP, not passkeys.
   - Early access with Browserbase from 2025-10, then a browser-agent integration in 2026-07.
-  - → It is **the same shape as this design's fill mode**, which is good evidence the pattern is right. It is
+  - → It is good evidence that "the agent never sees the password" is the right pattern. It differs from this
+    design in one way that matters: it fills into the agent's own browser. The design types passwords only into a
+    broker-owned browser, because whoever holds a browser's DevTools connection can read a filled field. It is also
     proprietary and cloud-coupled, so it is not adoptable here.
 
 ## 5. One-time codes: the trade-off
