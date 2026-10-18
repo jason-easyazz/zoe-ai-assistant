@@ -91,3 +91,17 @@ def test_the_dropins_preload_the_shim_onto_loopback(dropin):
     opts = [ln for ln in text.splitlines() if ln.startswith("Environment=NODE_OPTIONS=")]
     assert len(opts) == 1 and "--import=%h/assistant/scripts/lib/node_listen_host.mjs" in opts[0]
     assert "ExecStart" not in text            # a drop-in only adds the environment; the unit's own command stays
+    if dropin.parent.name.startswith("flue-zoe-telegram"):
+        # NODE_OPTIONS is one variable and this drop-in sorts last: it must carry the unit's Happy-Eyeballs flag too.
+        assert "--network-family-autoselection-attempt-timeout=1500" in opts[0]
+
+
+def test_no_other_brain_node_options_would_be_overridden():
+    """The brain drop-in carries only the import: true only while the brain template and its tracked drop-ins set no other
+    NODE_OPTIONS (the last drop-in wins). Adding one there means adding it to zoe-loopback.conf too."""
+    base = ROOT / "scripts" / "setup" / "systemd"
+    others = [base / "flue-zoe-brain-2x.service"] + sorted((base / "flue-zoe-brain-2x.service.d").glob("*.conf"))
+    for f in others:
+        if f.name == "zoe-loopback.conf":
+            continue
+        assert "NODE_OPTIONS" not in f.read_text(), f
