@@ -821,7 +821,7 @@ omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_con
 | `ZOE_OMI_TAG_YOU_MIN` / `_OTHER_MAX` | 0.309 / 0.15 | thresholds (per channel suffix `_PANEL` for the fallback) |
 | `ZOE_OMI_TAG_WINDOW_S` / `_HOP_S` | 2.0 / 1.0 | windowing |
 | `ZOE_OMI_DAY_REVIEW` | off | `shadow`: analyse and store candidates, shown on the desktop Pendant tab only, with no mention, no raise and no voice. `on`: the raise, the pull, the dialogue and the cards. |
-| `ZOE_OMI_DAY_REVIEW_LANE` | `4b` | `4b` / `12b` / `both` (12B only in the window, after the existing jobs) |
+| `ZOE_OMI_DAY_REVIEW_LANE` | `night` | `night` (the 12B night window, last; owner decision 2026-10-18) / `day` (the idle 4B, opt-in) / `both` |
 | `ZOE_OMI_DAY_REVIEW_IDLE_S` / `_MAX_CALLS` | 600 / 8 | lane E gate and budget |
 | `ZOE_OMI_REVIEW_UNTAGGED` | on (in shadow) | analyse untagged days in the reduced form of §5.2 (D4) |
 | `ZOE_OMI_CANDIDATE_RETENTION_DAYS` | 14 | candidate text retention after close |
