@@ -13,7 +13,7 @@ Evidence tags: **[V]** read in source or run this session, **[S]** secondary, **
 | Part | State |
 |---|---|
 | Firmware patch (`patches/zoe-phase2.patch`: Kconfig, CMake and 5 upstream sources) + new sources (`overlay/`) on upstream `Omi_CV1_v3.0.21` (`f12031d1`) | **written; applies cleanly** to a fresh fetch [V] |
-| Compile in the pinned toolchain (`build.sh`: Zephyr CI image `v0.26.13`, NCS v2.9.0, sysbuild + MCUboot, on this aarch64 box) | see section 5 |
+| Compile in the pinned toolchain (`build.sh`: Zephyr CI image `v0.26.13`, NCS v2.9.0, sysbuild + MCUboot, on this aarch64 box) | **compiled, all four images, no warnings in our code** (section 5) [V] |
 | Host tests of the pure firmware code (`host-test/`: ring-crypt IV layout, CTR against an independent reference, re-key; the pairing gesture) | **8/8** [V] |
 | Pi: `omi-sync` bonded-only mode (`OMI_SYNC_REQUIRE_BOND`), panel-bluetooth `omi_bond`, zoe-data broker op | built, unit-tested, flag-dark |
 | Panel UI button + spoken guidance for the pairing | **not built** (follow-up; the op and the API exist) |
@@ -177,10 +177,28 @@ for OTA), `merged.hex`, `merged_CPUNET.hex` (for SWD) and `app.config`. The cont
 To change the series: edit the fetched tree under `~/.cache/zoe-omi-fw/src`, regenerate the matching patch from there
 with a plain diff, and keep `overlay/` as the source of the new files.
 
-## 5. Compile result
-Recorded in the PR (whether the app, MCUboot and the net core built, the image sizes against the slot, and the
-`.config` showing `CONFIG_ZOE_BLE_BONDED_ONLY=y`, `CONFIG_ZOE_RING_ENCRYPT=y` and
-`CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW_ENCRYPT=y`).
+## 5. Compile result (2026-10-19 03:46, this box, aarch64, `build.sh` defaults, upstream public dev key)
+- **All four images built**: MCUboot, the app (ours), the net core `ipc_radio` and `b0n`. Our sources compiled with
+  **no warnings**. The warnings in the log are upstream's own (`battery.c`, `transport.c`, `imu.c`). No Kconfig warning
+  touches a symbol this patch sets.
+- `app.config` shows every symbol as set:
+  - `CONFIG_ZOE_BLE_BONDED_ONLY=y` and `CONFIG_ZOE_RING_ENCRYPT=y`
+  - `CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW_ENCRYPT=y`
+  - `CONFIG_BT_SMP_SC_PAIR_ONLY=y` and `CONFIG_BT_SMP_APP_PAIRING_ACCEPT=y`
+  - `CONFIG_BT_SETTINGS=y`, `CONFIG_BT_KEYS_OVERWRITE_OLDEST=y` and `CONFIG_BT_MAX_PAIRED=1`
+  - `CONFIG_NRF_SECURITY=y` and `CONFIG_PSA_WANT_ALG_CTR=y`
+  - `CONFIG_BT_DIS_FW_REV_STR="3.0.21.1"`
+- **App image** `omi.signed.bin`: 259 652 bytes (stock 3.0.21: 248 644), with a 258 804-byte payload.
+  - The MCUboot primary slot is 0x10000-0x100000 (960 KB). App flash use is 27.5 %; app RAM is 75.3 %.
+  - TLVs checked: magic `0x96f3b83d`, the image hash verifies, and the key-hash TLV is
+    `fc5701dc6135e1323847bdc40f04d2e5bee5833b23c29f93593d00018cfa9994`. That is the public dev key the stock bootloader
+    trusts, so this is an OTA-acceptable image.
+- Output SHA-256 sums (the first 8 hex digits; the full sums are in `~/.cache/zoe-omi-fw/out/SHA256SUMS`):
+  `omi.signed.bin` `10e36631`, `dfu_application.zip` `dfffe230`, `merged.hex` `3b2e70f8`, `merged_CPUNET.hex` `5ac6d59c`.
+  - Builds are not byte-reproducible: timestamps differ between runs.
+  - `dfu_application.zip` also carries a net-core image from this build. **Never push that net-core image over the air**
+    (README section 1).
+- About 10 minutes cold on this box, with 2 ninja jobs in a 1.5 GB container.
 
 ## 6. Unverified until the device is used
 - That Just Works pairing from BlueZ 5.66 completes with no agent once the adapter is made pairable.

@@ -3,6 +3,12 @@
 set -euo pipefail
 
 mkdir -p "$HOME"
+# The image registers its Zephyr SDK for ITS user; we run as the host uid with our own HOME, so name the SDK explicitly.
+if [ -z "${ZEPHYR_SDK_INSTALL_DIR:-}" ]; then
+  ZEPHYR_SDK_INSTALL_DIR="$(ls -d /opt/toolchains/zephyr-sdk-* | head -1)"
+  export ZEPHYR_SDK_INSTALL_DIR
+fi
+export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
 git config --global --add safe.directory '*'
 python3 -m pip install --user --quiet ecdsa 2>/dev/null || python3 -m pip install --user --quiet --break-system-packages ecdsa
 
