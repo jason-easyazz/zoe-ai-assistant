@@ -100,6 +100,10 @@ def env(monkeypatch, tmp_path):
     db = _Sqlite(str(tmp_path / "zoe.db"))
     db.conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY, role TEXT, name TEXT)")
     db.conn.executemany("INSERT INTO users VALUES (?, ?, ?)", [(ME, "user", "Casey"), (OTHER, "child", "Robin")])
+    # adulthood is read from the AUTHORITATIVE account (auth_users + member_modes), never the users mirror
+    db.conn.execute("CREATE TABLE auth_users (user_id TEXT PRIMARY KEY, role TEXT)")
+    db.conn.executemany("INSERT INTO auth_users VALUES (?, ?)", [(ME, "user"), (OTHER, "child")])
+    db.conn.execute("CREATE TABLE member_modes (user_id TEXT PRIMARY KEY, mode TEXT, minor INTEGER)")
     db.conn.commit()
 
     @contextlib.asynccontextmanager
@@ -515,6 +519,37 @@ def test_an_adult_may_change_their_own_curated_row(env):
     rid = row_id(env, "Swimming")
     _curate(env, rid)
     assert run(memory_space.forget_row(ME, rid)) == "forgotten"
+
+
+def test_a_child_whose_users_mirror_says_member_is_still_locked(env):
+    # _ensure_user_and_chat_session writes role='member' to the data-plane users mirror for EVERY chatting account, a child's
+    # included - the lock must read the authoritative account, not the mirror (Codex P1 on #2144).
+    env.db.conn.execute("UPDATE users SET role = 'member' WHERE id = ?", (OTHER,))
+    env.db.conn.commit()
+    put(env, "Grandma picks you up on Tuesdays", user=OTHER)
+    rid = row_id(env, "Grandma", OTHER)
+    _curate(env, rid)
+    assert run(memory_space.forget_row(OTHER, rid)) == "protected"
+    assert run(memory_space.correct_row(OTHER, rid, "Grandma picks me up every day")) == "protected"
+
+
+def test_a_minor_member_mode_locks_even_an_adult_role(env):
+    env.db.conn.execute("UPDATE auth_users SET role = 'member' WHERE user_id = ?", (OTHER,))
+    env.db.conn.execute("INSERT INTO member_modes VALUES (?, 'kid', 1)", (OTHER,))
+    env.db.conn.commit()
+    put(env, "Grandma picks you up on Tuesdays", user=OTHER)
+    rid = row_id(env, "Grandma", OTHER)
+    _curate(env, rid)
+    assert run(memory_space.forget_row(OTHER, rid)) == "protected"
+
+
+def test_an_unknown_account_locks_a_curated_row(env):
+    env.db.conn.execute("DELETE FROM auth_users WHERE user_id = ?", (ME,))
+    env.db.conn.commit()
+    put(env, "Swimming is on Saturday at 9")
+    rid = row_id(env, "Swimming")
+    _curate(env, rid)
+    assert run(memory_space.forget_row(ME, rid)) == "protected"
 
 
 # ── the phone's correct route ────────────────────────────────────────────────────────────────

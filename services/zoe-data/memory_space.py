@@ -214,19 +214,22 @@ CURATED_ORIGIN = "curator"
 async def curated_locked(user_id: str, meta: Optional[dict]) -> bool:
     """True when ``meta`` is a curated row and ``user_id`` is not known to be an adult member (owner D9, 2026-10-19: a child's
     passing remark never overwrites what an admin curated for them). Fail-closed: an unreadable role locks a curated row. Rows
-    that are not curated are never locked (no read at all)."""
+    that are not curated are never locked (no read at all).
+
+    Adulthood comes from the AUTHORITATIVE account (``manner_block._account_is_adult``: no minor / kid ``member_modes`` row AND an
+    adult ``auth_users`` role) - never the data-plane ``users`` mirror, which ``_ensure_user_and_chat_session`` fills with
+    ``member`` for every chatting account, children included."""
     if str((meta or {}).get("origin") or "") != CURATED_ORIGIN:
         return False
     try:
+        import manner_block
         from db_compat import get_compat_db
 
         async with get_compat_db() as db:
-            async with db.execute("SELECT role FROM users WHERE id = ?", (user_id,)) as cur:
-                row = await cur.fetchone()
-        role = str((row[0] if row else "") or "").strip().lower()
+            adult = await manner_block._account_is_adult(user_id, db=db)
     except Exception:  # noqa: BLE001
         return True
-    return role in ("", "child", "guest")
+    return not adult
 
 
 async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
