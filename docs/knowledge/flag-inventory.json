@@ -4622,6 +4622,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PANEL_TOKEN_VIA_CF": {
+        "defaults": [
+          "'guest'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PERF": {
         "defaults": [
           "-"
