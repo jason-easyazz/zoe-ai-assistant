@@ -189,8 +189,11 @@ def secret_files(p: Paths) -> list[tuple[str, Path]]:
 
 
 def artefact_paths(p: Paths) -> list[Path]:
+    # ~/.zoe/backups/panel: the panel's custom wake model (hey_zoe.onnx), in no git and on no other box (models.lock).
+    # It is excluded from the household tier's ~/.zoe walk by "*backup*", so it rides here, with the other models.
     return [x for x in (p.checkout / "labs" / "functiongemma-finetune" / "runs" / "gen1" / "merged",
-                        p.home / "models" / "functiongemma-router") if x.exists()]
+                        p.home / "models" / "functiongemma-router",
+                        p.home / ".zoe" / "backups" / "panel") if x.exists()]
 
 
 # ── the age mirror ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -609,8 +612,9 @@ def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:
             print(f"{tier}: snapshot {sid[:8]} - {len(man)} files ({res.encrypted} re-encrypted, "
                   f"{res.kept} unchanged, {res.removed} removed)")
     arts = artefact_paths(p)
-    if not arts:      # never a silent skip: the drill would then compare an ever-older artefacts snapshot
-        problems.append("artefacts: neither the router checkpoint nor the GGUF directory exists - no snapshot")
+    if not any("functiongemma" in str(a) for a in arts):  # never a silent skip: the drill would compare an ever-older snapshot
+        problems.append("artefacts: neither the router checkpoint nor the GGUF directory exists"
+                        + ("" if arts else " - no snapshot"))
     if arts:
         sid = backup_tier(cfg, "artefacts", arts)
         man = {}

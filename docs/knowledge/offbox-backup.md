@@ -57,7 +57,7 @@ including words that were since forgotten.
 |---|---|---|---|
 | `household` | newest on-box Postgres dumps (`zoe`, `multica`; biometric table data already excluded by `postgres-nightly-backup.sh`), `pg_dumpall --globals-only`, newest MemPalace tarball, `~/.zoe` filtered, `~/.zoe-voice-samples` | age + restic | one per day for 7 days, one per week for 34 days; **never older than 35 days**, no monthly |
 | `secrets` | the live checkout's `.env`, `.env.*`, `services|labs|modules/*/.env*` (never `*.example`, `*.bak*`), `ssl/`, `config/`, `~/.zoe/env`, `~/.zoe/secrets` | age + restic | 7 daily, 4 weekly, 6 monthly |
-| `artefacts` | `labs/functiongemma-finetune/runs/gen1/merged` (the router lineage checkpoint: NEVER delete) and `~/models/functiongemma-router` | restic | 7 daily, 4 weekly, 6 monthly |
+| `artefacts` | `labs/functiongemma-finetune/runs/gen1/merged` (the router lineage checkpoint: NEVER delete), `~/models/functiongemma-router`, and `~/.zoe/backups/panel` (the panel's custom wake model `hey_zoe.onnx`, in no git; sha256 in `models.lock`) | restic | 7 daily, 4 weekly, 6 monthly |
 
 Never shipped from `~/.zoe` (each is an fnmatch on any path component, `ZOE_TREE_EXCLUDES`): anything `*backup*` (backups of
 backups, the ad-hoc owner-script backups that hold raw text or secrets), caches and venvs, `bakeoff-*` and the chroma migration

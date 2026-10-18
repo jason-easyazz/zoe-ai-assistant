@@ -15,6 +15,7 @@ Capabilities:
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import io
 import itertools
@@ -949,22 +950,90 @@ def _get_silero_vad():
 
 
 _SILERO_WINDOW = 512  # Silero VAD requires exactly 512 samples at 16kHz
+_vad_copy_warned = False
 
 
-def _vad_prob(model, chunk_int16: np.ndarray, sample_rate: int = 16000) -> float:
-    """Return max speech probability across 512-sample windows in the chunk."""
-    try:
+class _VadStream:
+    """Silero VAD for ONE contiguous audio stream (2026-10-19, deep dive 2 V-3/V-5).
+
+    Silero is stateful: each call carries an RNN state AND the last 64 samples of the
+    previous window into the next (silero-vad 6.x JIT ``forward``: ``x = cat([_context, x])``),
+    so a model must be fed one contiguous stream per state. Until 2026-10-19 every consumer
+    shared ONE global model, ``_vad_prob`` fed each 1,280-sample chunk as two 512-sample
+    windows and DROPPED the remaining 256 samples (so the context jumped over a 16 ms gap
+    every chunk), and nothing called ``reset_states()`` - each recording started on whatever
+    the barge monitor or the previous turn left behind.
+
+    Now each stream owns its own copy of the model, carries the remainder into the next
+    chunk (1,280 = 2 windows + 256 carried, so every other chunk completes 3 windows), and
+    ``reset()`` clears both at the points where the audio stops being contiguous: a new
+    recording (after a wake fires), a new listen window (after a turn ends), a new playback
+    (the barge listeners drop the backlog), an ambient pause."""
+
+    def __init__(self, model):
+        self._model = model
+        self._pending = np.zeros(0, dtype=np.float32)
+        self.last_prob = 0.0
+
+    def reset(self) -> None:
+        reset_states = getattr(self._model, "reset_states", None)
+        if callable(reset_states):
+            reset_states()
+        self._pending = np.zeros(0, dtype=np.float32)
+        self.last_prob = 0.0
+
+    def feed(self, chunk_int16: np.ndarray, sample_rate: int = 16000) -> float:
+        """Max speech probability over the windows this chunk completes; the leftover
+        samples wait for the next chunk. A chunk that completes no window (shorter than
+        512 with nothing carried) answers the last window's probability."""
         import torch  # type: ignore
-        float32 = chunk_int16.astype(np.float32) / 32768.0
-        max_prob = 0.0
-        for start in range(0, len(float32) - _SILERO_WINDOW + 1, _SILERO_WINDOW):
-            window = float32[start:start + _SILERO_WINDOW]
-            tensor = torch.from_numpy(window)
-            prob = float(model(tensor, sample_rate).item())
-            if prob > max_prob:
-                max_prob = prob
-        return max_prob
+        samples = chunk_int16.astype(np.float32) / 32768.0
+        buf = np.concatenate([self._pending, samples]) if self._pending.size else samples
+        n_full = (len(buf) // _SILERO_WINDOW) * _SILERO_WINDOW
+        max_prob = None
+        with torch.no_grad():
+            for start in range(0, n_full, _SILERO_WINDOW):
+                window = torch.from_numpy(np.ascontiguousarray(buf[start:start + _SILERO_WINDOW]))
+                prob = float(self._model(window, sample_rate).item())
+                self.last_prob = prob
+                max_prob = prob if max_prob is None else max(max_prob, prob)
+        self._pending = buf[n_full:].copy()
+        return self.last_prob if max_prob is None else max_prob
+
+
+def _new_vad_stream() -> "_VadStream | None":
+    """A fresh, reset VAD stream with its OWN copy of the Silero model, or None when Silero
+    is unavailable. The copy is what keeps two consumers (the endpointer and a barge listener,
+    say) from writing into each other's state; ~8 ms per copy measured on the Jetson. If the
+    model cannot be copied the stream shares the loaded model (the old sharing, but still
+    contiguous and reset) and says so once."""
+    global _vad_copy_warned
+    model, _ = _get_silero_vad()
+    if model is None:
+        return None
+    try:
+        with _silero_lock:
+            own = copy.deepcopy(model)
+    except Exception as exc:  # noqa: BLE001
+        own = model
+        if not _vad_copy_warned:
+            _vad_copy_warned = True
+            log.warning("Silero VAD could not be copied per stream (%s) - streams share one model", exc)
+    stream = _VadStream(own)
+    stream.reset()
+    return stream
+
+
+def _vad_prob(vad, chunk_int16: np.ndarray, sample_rate: int = 16000) -> float:
+    """Feed one chunk of a contiguous stream to its ``_VadStream``; return the max speech
+    probability over the 512-sample windows it completes."""
+    try:
+        return vad.feed(chunk_int16, sample_rate)
     except Exception:
+        try:
+            vad.reset()  # the failed chunk broke the stream's continuity
+        except Exception:  # noqa: BLE001
+            pass
         # -1.0 sentinel, NOT 0.0: with the deep-quiet fast tail, 0.0 reads as the
         # strongest possible silence — a crashing Silero would fast-exit every
         # turn early on its own failures (Codex P2). Callers treat the sentinel
@@ -985,13 +1054,16 @@ class _Endpointer:
     cut off. Falls back to amplitude mode when Silero is unavailable.
     """
 
-    def __init__(self, spoke: bool = False):
+    def __init__(self, spoke: bool = False, vad: "_VadStream | None" = None):
         self.mode = "amplitude"
         self._model = None
         if VAD_ENDPOINT_ENABLED:
-            model, _ = _get_silero_vad()
-            if model is not None:
-                self._model = model
+            # ``vad``: the caller's stream when this recording CONTINUES audio it was already
+            # scoring (the follow-up trigger, the barge-in seed) - same state, no reset. Otherwise
+            # a fresh stream: a new recording is a new contiguous stream (reset at wake).
+            stream = vad if vad is not None else _new_vad_stream()
+            if stream is not None:
+                self._model = stream
                 self.mode = "vad"
         self._quiet = 0
         self._deep_quiet = 0
@@ -1155,13 +1227,50 @@ class _Endpointer:
         return self._quiet >= self._amp_max_silent and n_frames > self._min_frames
 
 
+# ── Keep-alive to zoe-data (deep dive 2 V-3, 2026-10-19) ─────────────────────
+# Every call to ZOE_URL used to be a module-level requests.post/get: a new TCP + TLS
+# handshake per call (~17k a day for the 5 s announce poll alone, ~10-15 per turn for the
+# under-speech STT upload). main() installs ONE pooled Session for the ZOE_URL calls.
+# Cookies are refused so every request stays what it was (a fresh module call never sent
+# a cookie a previous response set). Before main() runs (imports, tests) the module-level
+# calls are used, exactly as before.
+_HTTP_SESSION = None
+
+
+def _make_http_session():
+    import http.cookiejar
+    session = requests.Session()
+    session.cookies.set_policy(http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
+    # pool_maxsize: the turn stream, the STT uploader, the announce poll, the wake POST and
+    # the profile sync can overlap; past 8 a connection is simply not kept.
+    adapter = requests.adapters.HTTPAdapter(pool_connections=2, pool_maxsize=8)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+def _zoe_http():
+    """The pooled session for calls to ZOE_URL, or the ``requests`` module until main() installs it."""
+    return _HTTP_SESSION if _HTTP_SESSION is not None else requests
+
+
+def _close_quietly(response) -> None:
+    """Close a (streamed) response if it can be closed; never raises."""
+    close = getattr(response, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _api_post(path: str, data: dict, timeout: int = 60, retries: int | None = None) -> dict:
     url = f"{ZOE_URL}{path}"
     max_retries = VOICE_API_MAX_RETRIES if retries is None else max(0, int(retries))
     last_error = "unknown"
     for attempt in range(max_retries + 1):
         try:
-            r = requests.post(url, json=data, headers=_headers, timeout=timeout, verify=VERIFY_SSL)
+            r = _zoe_http().post(url, json=data, headers=_headers, timeout=timeout, verify=VERIFY_SSL)
             r.raise_for_status()
             return r.json()
         except requests.exceptions.HTTPError as exc:
@@ -1681,11 +1790,12 @@ class _BargeMonitor:
         seed, self.seed = self.seed, None
         return seed
 
-    def _capture_seed(self, stream, frames: list) -> None:
+    def _capture_seed(self, stream, frames: list, vad: "_VadStream | None" = None) -> None:
         """COMMIT: keep recording the interrupting utterance on the SAME stream to
-        the normal endpoint; the next turn runs on it, no beep (LiveKit-lane shape)."""
+        the normal endpoint; the next turn runs on it, no beep (LiveKit-lane shape).
+        ``vad`` is the monitor's own stream: the seed continues the audio it scored."""
         self._capturing = True
-        endpointer = _Endpointer(spoke=True)
+        endpointer = _Endpointer(spoke=True, vad=vad)
         caps = _record_caps()
         stop_reason = "max_duration"
         while len(frames) < caps[1] + caps[2] and not _shutdown.is_set():
@@ -1706,8 +1816,8 @@ class _BargeMonitor:
                  len(frames) * _CHUNK_S, stop_reason)
 
     def _run(self) -> None:
-        model, _ = _get_silero_vad()
-        if model is None:
+        vad = _new_vad_stream()  # this monitor's own mic stream: its own VAD state
+        if vad is None:
             return
         kw: dict = dict(
             format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
@@ -1743,7 +1853,7 @@ class _BargeMonitor:
                 read_at = time.monotonic()
                 # Every chunk goes through Silero so its streaming state stays
                 # continuous, but only audio heard DURING playback can count.
-                prob = _vad_prob(model, np.frombuffer(chunk, dtype=np.int16))
+                prob = _vad_prob(vad, np.frombuffer(chunk, dtype=np.int16))
                 if ring is not None:
                     ring.append(chunk)
                     if seed_frames is not None and len(seed_frames) < seed_cap:
@@ -1755,7 +1865,7 @@ class _BargeMonitor:
                         # Someone still talking becomes the next turn, no beep.
                         episode.finish("ended", read_at)
                         if seed_frames is not None and episode.decider.in_speech:
-                            self._capture_seed(stream, seed_frames)
+                            self._capture_seed(stream, seed_frames, vad)
                             break
                         episode, seed_frames = None, None
                     # Nothing is playing — the user STILL TALKING (e.g. the
@@ -1773,13 +1883,14 @@ class _BargeMonitor:
                     if dropped:
                         log.info("barge monitor: dropped %d stale chunks (~%dms)",
                                  dropped, int(dropped * _CHUNK_S * 1000))
+                        vad.reset()  # the dropped backlog is a gap: start the playback on a fresh state
                     # The chunk in hand was captured before playback began.
                     continue
                 if episode is not None:
                     outcome = episode.feed(prob, read_at - _CHUNK_S, read_at)
                     if outcome == "commit":
                         if seed_frames is not None:
-                            self._capture_seed(stream, seed_frames)
+                            self._capture_seed(stream, seed_frames, vad)
                         break
                     if outcome:  # resume / ceiling: the same playback may be barged again
                         episode, seed_frames = None, None
@@ -1823,8 +1934,8 @@ def _barge_in_vad_thread():
     _BargeDetector as the monitor: chunks queued before playback began are
     dropped, then grace + sustained speech.
     """
-    model, _ = _get_silero_vad()
-    if model is None:
+    vad = _new_vad_stream()
+    if vad is None:
         log.info("Barge-in thread: Silero VAD unavailable, barge-in disabled.")
         return
 
@@ -1855,8 +1966,11 @@ def _barge_in_vad_thread():
                 log.info("barge queue: dropped %d stale chunks (~%dms)",
                          len(stale), int(len(stale) * _CHUNK_S * 1000))
             batch = [b for b in batch if b[0] >= started_at]
+            # Chunks are only scored while something plays, so a new playback is a new
+            # contiguous stream: never carry the last playback's state into it.
+            vad.reset()
         for captured_at, chunk in batch:
-            prob = _vad_prob(model, np.frombuffer(chunk, dtype=np.int16))
+            prob = _vad_prob(vad, np.frombuffer(chunk, dtype=np.int16))
             if episode is not None:
                 outcome = episode.feed(prob, captured_at, time.monotonic())
                 if outcome:
@@ -1888,10 +2002,11 @@ def _ambient_capture_thread():
         log.info("Ambient capture disabled (AMBIENT_CAPTURE_ENABLED=false)")
         return
 
-    model, _ = _get_silero_vad()
-    if model is None:
+    vad = _new_vad_stream()
+    if vad is None:
         log.info("Ambient capture: Silero VAD unavailable, skipping.")
         return
+    vad_fresh = True
 
     log.info("Ambient capture thread started (VAD threshold=%.2f)", AMBIENT_VAD_THRESHOLD)
     speech_frames: list[bytes] = []
@@ -1913,9 +2028,13 @@ def _ambient_capture_thread():
             speech_frames.clear()
             in_speech = False
             silence_chunks = 0
+            if not vad_fresh:
+                vad.reset()  # skipped chunks are a gap in the stream
+                vad_fresh = True
             continue
 
-        prob = _vad_prob(model, np.frombuffer(chunk, dtype=np.int16))
+        vad_fresh = False
+        prob = _vad_prob(vad, np.frombuffer(chunk, dtype=np.int16))
         if prob >= AMBIENT_VAD_THRESHOLD:
             speech_frames.append(chunk)
             in_speech = True
@@ -2386,7 +2505,7 @@ def _sync_speaker_profiles(force: bool = False) -> None:
             return
         _profile_cache["syncing"] = True
     try:
-        r = requests.get(
+        r = _zoe_http().get(
             f"{ZOE_URL}/api/voice/profiles/sync",
             headers=_headers, timeout=10, verify=VERIFY_SSL, **_sync_request_extras(),
         )
@@ -3372,9 +3491,10 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     reply = ""
     played_any = False
     expect_audio = False
+    r = None
 
     try:
-        r = requests.post(url, json=payload, headers=_headers, timeout=60, stream=True, verify=VERIFY_SSL)
+        r = _zoe_http().post(url, json=payload, headers=_headers, timeout=60, stream=True, verify=VERIFY_SSL)
         r.raise_for_status()
         _set_turn_response(r)
         for raw_line in r.iter_lines(decode_unicode=False):
@@ -3453,10 +3573,14 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 expect_audio = True
                 continue
         _set_turn_response(None)
+        # Hand the pooled connection back (or close it when the stream was left unfinished):
+        # an unclosed streamed response would hold its keep-alive connection until GC.
+        _close_quietly(r)
     except requests.exceptions.SSLError:
         raise
     except Exception as exc:
         _set_turn_response(None)
+        _close_quietly(r)
         # If we've already started speaking, re-running the blocking turn would
         # double-play (user hears a fragment, then the whole reply again). Only
         # fall back when nothing has played yet; otherwise let the partial reply
@@ -3716,8 +3840,9 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
     uploader = None
     if stream_upload:
         _pending_stt_stream.clear()  # nothing left over from an earlier recording may name this one
-    model, _ = _get_silero_vad()
-    if model is None:
+    # A fresh state for a fresh window: the turn before it has ended (V-3/V-5 reset boundary).
+    vad = _new_vad_stream()
+    if vad is None:
         return None
 
     kw: dict = dict(
@@ -3754,7 +3879,7 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
         while time.monotonic() < deadline:
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             lookback.append(data)  # retain pre-trigger audio so VAD latency can't clip the onset
-            prob = _vad_prob(model, np.frombuffer(data, dtype=np.int16))
+            prob = _vad_prob(vad, np.frombuffer(data, dtype=np.int16))
             chunk_count += 1
             if prob > max_prob_seen:
                 max_prob_seen = prob
@@ -3781,7 +3906,7 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
             uploader = _start_stt_stream(frames)  # same bytes, same order as the WAV below
         # The trigger chunk was already-detected speech — seed the endpointer so
         # the fast VAD tail applies from the first pause.
-        endpointer = _Endpointer(spoke=True)
+        endpointer = _Endpointer(spoke=True, vad=vad)  # same stream: the recording continues the scored audio
         stop_reason = "max_duration"
         n_read = 0
         for _ in range(caps[1] + caps[2]):
@@ -4016,7 +4141,7 @@ def _fetch_announcements() -> list[dict]:
     """Claim pending announcements (device-token auth). Raises on transport
     failure so the poller's backoff sees it — a restarting zoe-data (every
     deploy) must quiet the poll, not crash the daemon."""
-    r = requests.get(
+    r = _zoe_http().get(
         f"{ZOE_URL}/api/voice/announcements",
         headers=_headers,
         timeout=10,
@@ -4466,8 +4591,49 @@ def _activate_request_allowed(host_header: "str | None", origin_header: "str | N
     return False
 
 
+# ── Which build is running (deep dive 2 V-3, 2026-10-19) ──────────────────
+# deploy-pi-voice.sh writes BUILD.json next to the daemon BEFORE the restart: the git sha it
+# shipped from (``-dirty`` when a shipped file differed from that commit) and when. /health
+# reports it with the sha256 of the daemon file actually loaded and of the wake model, so
+# "which daemon is running?" and "is it the locked wake model?" are answered remotely
+# (scripts/maintenance/zoe_ground_truth.sh, models.lock) instead of only at deploy time.
+_BUILD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "BUILD.json")
+
+
+def _file_sha256(path: str) -> str:
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(block)
+        return digest.hexdigest()
+    except OSError:
+        return ""
+
+
+def _read_build_info(path: str = _BUILD_FILE) -> dict:
+    """``{"sha", "deployed_at"}`` from BUILD.json; ``sha`` is "unknown" when there is no file
+    (a hand-copied daemon) and "unreadable" when it is not valid JSON. Never raises."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            raise ValueError("not an object")
+    except FileNotFoundError:
+        return {"sha": "unknown", "deployed_at": ""}
+    except Exception:  # noqa: BLE001
+        return {"sha": "unreadable", "deployed_at": ""}
+    return {"sha": str(data.get("sha") or "unknown")[:80], "deployed_at": str(data.get("deployed_at") or "")[:40]}
+
+
+_BUILD_INFO = _read_build_info()
+_CODE_SHA256 = _file_sha256(os.path.abspath(__file__))
+_WAKE_MODEL_SHA256 = ""  # set in main() once the wake model is chosen ("" = the bundled fallback)
+
+
 def _health_payload() -> dict:
-    """The /health body. Default mode: exactly what it always was. Otherwise it names the speaker model and ResNet34's state, and in
+    """The /health body. Always: status, identity, uptime and which build runs (build / code_sha256 / wake_model_sha256). Outside
+    the default speaker mode it also names the speaker model and ResNet34's state, and in
     ``resnet34`` (the ACTING model) a not-ready embedder makes the daemon ``degraded`` - health must not say ``ok`` while the model that
     identifies speakers cannot run. In ``dual`` ResNet34 is shadow-only, so its state is reported without degrading the daemon.
     ``deploy-pi-voice.sh`` waits (bounded) for ``speaker_resnet34 == ready`` in ``resnet34`` mode and fails the deploy otherwise."""
@@ -4477,6 +4643,10 @@ def _health_payload() -> dict:
         panel_id=PANEL_ID,
         uptime_s=int(time.time() - _daemon_started_at),
         wake_phrase=os.environ.get("_ZOE_WAKE_PHRASE_LOG", ""),
+        build=_BUILD_INFO["sha"],
+        build_deployed_at=_BUILD_INFO["deployed_at"],
+        code_sha256=_CODE_SHA256,
+        wake_model_sha256=_WAKE_MODEL_SHA256,
     )
     if SPEAKER_MODEL != "resemblyzer":
         state = _rn34_status()
@@ -4554,11 +4724,14 @@ def _start_health_server():
 
 
 def main():
-    global _INPUT_DEVICE_INDEX, _last_wake_at
+    global _INPUT_DEVICE_INDEX, _last_wake_at, _HTTP_SESSION, _WAKE_MODEL_SHA256
 
     if _CF_ACCESS_REFUSED:
         log.error("Refusing to start: fix ZOE_URL (public https tunnel host) or unset CF_ACCESS_CLIENT_ID/SECRET.")
         sys.exit(1)
+    log.info("Build %s (deployed %s), daemon sha256 %s", _BUILD_INFO["sha"], _BUILD_INFO["deployed_at"] or "?",
+             _CODE_SHA256[:12] or "?")
+    _HTTP_SESSION = _make_http_session()
     _start_health_server()
     try:
         from openwakeword.model import Model as OWWModel
@@ -4590,7 +4763,8 @@ def main():
             wakeword_models=[custom_model],
             **oww_kwargs,
         )
-        log.info("Loaded custom hey_zoe model from %s", custom_model)
+        _WAKE_MODEL_SHA256 = _file_sha256(custom_model)
+        log.info("Loaded custom hey_zoe model from %s (sha256 %s)", custom_model, _WAKE_MODEL_SHA256[:12])
     else:
         oww = OWWModel(
             wakeword_models=["hey_jarvis"],
