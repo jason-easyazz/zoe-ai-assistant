@@ -145,11 +145,11 @@ def test_health_unit_needs_no_secret():
 MEASURED_PEAK_MB = {
     "zoe-ui": 71, "zoe-auth": 83, "homeassistant": 453, "homeassistant-mcp-bridge": 53, "cloudflared": 41,
     "music-assistant": 833, "ytmusic-potoken": 213, "multica-backend": 26, "multica-web": 98, "omnigent": 273,
+    "livekit": 19,     # idle, docker stats 2026-10-18; capped in #2108 (A10)
 }
 EXEMPT = {
     "zoe-database": "an OOM kill is an outage of every data path; exempt by design",
     "keeper": "profile service, never run on this box: no measurement to size from",
-    "livekit": "capped in its own PR (#2108, deep dive A10)",
 }
 COMPOSE = [REPO / "docker-compose.yml", REPO / "docker-compose.modules.yml",
            REPO / "modules" / "omnigent" / "docker-compose.module.yml"]

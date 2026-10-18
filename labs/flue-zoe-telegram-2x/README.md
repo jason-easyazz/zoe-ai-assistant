@@ -74,9 +74,13 @@ BEFORE `getFile` (forwarded unless `ZOE_TELEGRAM_ALLOW_FORWARDED`, over
 `ZOE_TELEGRAM_VOICE_MAX_S`, over 8 MiB) → download (the URL embeds the bot token and is
 never logged; `file_unique_id` is) → zoe-data `transcribe` → the SAME `/api/chat` turn
 as text, as the member → reply in kind per `ZOE_TELEGRAM_VOICE_REPLY` (`voice` default,
-`text`, `both`; a voice outage falls back to text). `/talk` (when `ZOE_BASE_URL` is set)
+`text`, `both`; a voice outage falls back to text). `/talk` (when `ZOE_PUBLIC_URL` or
+`ZOE_BASE_URL` is set; the public one wins, and a LAN base says "home Wi-Fi only")
 hands the phone a "Talk to Zoe" URL button to the existing `voice.html` push-to-talk page —
-VISION principle 8, zero new infrastructure. Nothing in the Pi/panel voice path changes;
+VISION principle 8, zero new infrastructure. `POST /internal/notify` (`src/notify.ts`,
+`test/notify.test.ts`) lets zoe-data's "send to my phone" message a LINKED member with this
+bot's token: `Authorization: Bearer $ZOE_INTERNAL_TOKEN`, linked recipients only, 503 when the
+secret is unset. Nothing in the Pi/panel voice path changes;
 `test/voice_note_off.test.ts` is the flag-off control. One `TELEGRAM_VOICE …` log line per
 note carries the per-stage ms (download / stt / brain / reply) — that line is the
 measurement. Operator record: `docs/knowledge/telegram-voice-notes.md`.
