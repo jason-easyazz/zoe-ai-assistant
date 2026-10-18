@@ -72,6 +72,8 @@ function constValue(name) {
     setInterval: () => 1, clearInterval() {},
     console: { warn() {}, log() {} },
     panelMatches: (id) => !String(id || '').trim() || String(id).trim() === 'zoe-touch-pi',
+    panelMatchesStrict: (id) => String(id || '').trim() === 'zoe-touch-pi',
+    addressedToThisPanel: () => false,
     panelMatchesAuthTarget: () => true,
     setOrbMode() {}, showAmbientStatus: undefined, _attemptVoiceNavigation() {},
     VoiceOverlay: { onListeningStarted() {}, onTranscript() {}, onThinking() {}, onResponding() {}, onDone() {} },

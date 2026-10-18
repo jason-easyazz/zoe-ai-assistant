@@ -12,7 +12,7 @@ Each section below is the **full text, verbatim**, of one bullet of `services/zo
 
 ### ZD72 App connection handoff
 
-- App-connection handoff (B7.5): `auth_handoff.py` (engine: status machine, `auth_handoffs` table from alembic 0031, secret-free `handoff_update` push + best-effort Pi `/wake`, Telegram send-to-phone via `ZOE_TELEGRAM_BOT_TOKEN`) + `routers/handoff.py`; see [docs/knowledge/app-connection-handoff.md](../../docs/knowledge/app-connection-handoff.md).
+- App-connection handoff (B7.5): `auth_handoff.py` (engine: status machine, `auth_handoffs` table from alembic 0031, secret-free `handoff_update` push + best-effort Pi `/wake`, Telegram send-to-phone via the bot's loopback `/internal/notify` (`ZOE_INTERNAL_TOKEN`), else a held `ZOE_TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN`) + `routers/handoff.py`; see [docs/knowledge/app-connection-handoff.md](../../docs/knowledge/app-connection-handoff.md).
 
 ### ZD73 Telegram voice notes
 

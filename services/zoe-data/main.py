@@ -66,6 +66,7 @@ _digest_bg_task = None
 _consolidation_bg_task = None
 _runtime_health_task = None
 _zoe_update_bg_task = None
+_loop_lag_task = None
 _skills_observer = None
 _memory_capture_health: dict[str, str] = {"status": "unknown", "detail": "startup pending"}
 
@@ -1105,7 +1106,7 @@ async def _run_router_selftrain() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task
+    global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task, _loop_lag_task
 
     # First thing at startup: without this the root logger has no handler, so
     # every logger.info() in the service is discarded and WARNING+ falls through
@@ -1205,6 +1206,13 @@ async def lifespan(app: FastAPI):
         except Exception as _exc:
             logger.warning("voice_stitch prewarm not started: %s", _exc)
     _zoe_update_bg_task = start_zoe_update_background_tasks()
+    # Event-loop lag gauge (A1): zoe_event_loop_lag_seconds on /metrics + an EVENT_LOOP_LAG warning when a blocking call
+    # holds the single worker. Never breaks startup.
+    try:
+        import event_loop_lag as _event_loop_lag
+        _loop_lag_task = _event_loop_lag.start()
+    except Exception as _lag_exc:  # noqa: BLE001
+        logger.warning("event-loop lag monitor unavailable (non-fatal): %s", _lag_exc)
 
     try:
         from routers.voice_tts import warm_moonshine
@@ -1237,6 +1245,12 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_omi_health.run_loop(), name="omi_health")
     except Exception as _omi_h_exc:
         logger.warning("omi health sweep not started (non-fatal): %s", _omi_h_exc)
+    try:  # change notices (flag-dark ZOE_CHANGE_NOTICES=off|shadow|on): the owner's Telegram feed of raised / live PRs
+        import change_notices as _change_notices
+        if _change_notices.mode() != "off":
+            asyncio.create_task(_change_notices.run_loop(), name="change_notices")
+    except Exception as _cn_exc:
+        logger.warning("change notices loop not started (non-fatal): %s", _cn_exc)
     try:  # the pendant day review's DAYTIME fallback lane (flag-dark ZOE_OMI_DAY_REVIEW; the night window is the primary lane)
         import omi_day_review as _omi_dr
         if _omi_dr.enabled() and _omi_dr.lane() != "night":
@@ -2053,7 +2067,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("zoe-core worker shutdown failed (non-fatal)", exc_info=True)
     for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task,
-                 _consolidation_bg_task, _runtime_health_task):
+                 _consolidation_bg_task, _runtime_health_task, _loop_lag_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -2279,6 +2293,10 @@ app.include_router(auth_router)
 from routers.struggles import router as struggles_router  # noqa: E402
 app.include_router(struggles_router)
 
+# Change notices (change_notices, ZOE_CHANGE_NOTICES): the owner's preferences, status and kill switch; admin persons only.
+from routers.change_notices import router as change_notices_router  # noqa: E402
+app.include_router(change_notices_router)
+
 try:
     from routers.voice_livekit import router as voice_livekit_router
     app.include_router(voice_livekit_router)
@@ -2395,7 +2413,7 @@ async def router_classify(text: str, _: None = Depends(require_internal_token)):
     to influence routing if the service were LAN-exposed."""
     import semantic_router as _sr
     return {"enabled": _sr.is_enabled(), "mode": _sr.mode(),
-            "threshold": _sr.threshold(), **_sr.route(text)}
+            "threshold": _sr.threshold(), **(await asyncio.to_thread(_sr.route, text))}
 
 
 @app.get("/api/settings")

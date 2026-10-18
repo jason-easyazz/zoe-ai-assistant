@@ -5,13 +5,15 @@ The night window (scripts/night/night_window.py) asks this before it stops anyth
 did its work, loading the 12B burns ~3 minutes of household silence for jobs that read nothing (measured 2026-10-18: 0 prompt tokens in the
 digest and the night mind) -- so it reports ``noop`` instead.
 
-    night_precheck.py --since 2026-10-17T18:51:58+00:00 [--omi]
+    night_precheck.py --since 2026-10-17T18:51:58+00:00 [--omi] [--struggle]
 
-Prints ONE line, ``NIGHT_PRECHECK {"members_with_new_turns": N, "omi_members": M | null, "since": ...}``, and exits 0. Exit 1 on any failure
-(the window then runs as before: it fails OPEN).
+Prints ONE line, ``NIGHT_PRECHECK {"members_with_new_turns": N, "omi_members": M | null, "struggle_pending": K | null, "since": ...}``, and
+exits 0. Exit 1 on any failure (the window then runs as before: it fails OPEN).
 
   members_with_new_turns   members (synthetic / demo ids dropped, the same filter the digest uses) with a user chat turn after --since
   omi_members              with --omi: members with a past pendant day not reviewed yet (omi_day_review.days_to_review); null without --omi
+  struggle_pending         with --struggle: proposal work waiting for the night pass (struggle_proposals.pending_maintenance: struggle events
+                           after --since, a guest's included, plus proposed rows whose evidence has aged out of the lookback); null without
 """
 from __future__ import annotations
 
@@ -52,7 +54,7 @@ def parse_since(text: str) -> str:
     return d.astimezone(dt.timezone.utc).isoformat(timespec="seconds")
 
 
-async def count_members(since: str, want_omi: bool) -> dict:
+async def count_members(since: str, want_omi: bool, want_struggle: bool = False) -> dict:
     from db_pool import close_pool, get_db_ctx, init_pool
     from user_filters import drop_synthetic_users, message_owner_expr
 
@@ -69,7 +71,12 @@ async def count_members(since: str, want_omi: bool) -> dict:
             for uid in await dr.members_with_recordings():
                 if await dr.days_to_review(uid):
                     omi += 1
-        return {"members_with_new_turns": len(members), "omi_members": omi, "since": since}
+        struggle = None
+        if want_struggle:
+            import struggle_proposals as sp
+
+            struggle = await sp.pending_maintenance(dt.datetime.fromisoformat(since).timestamp())
+        return {"members_with_new_turns": len(members), "omi_members": omi, "struggle_pending": struggle, "since": since}
     finally:
         await close_pool()
 
@@ -78,9 +85,10 @@ def main(argv: "list[str] | None" = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--since", required=True, help="ISO instant WITH a UTC offset: the start of the last window that did its work")
     ap.add_argument("--omi", action="store_true", help="also count members with an unreviewed pendant day")
+    ap.add_argument("--struggle", action="store_true", help="also count struggle-proposal maintenance waiting for the night pass")
     args = ap.parse_args(argv)
     try:
-        out = asyncio.run(count_members(parse_since(args.since), args.omi))
+        out = asyncio.run(count_members(parse_since(args.since), args.omi, args.struggle))
     except Exception as exc:  # noqa: BLE001 - the window fails open on ANY failure
         print(f"NIGHT_PRECHECK failed: {type(exc).__name__}", file=sys.stderr)
         return 1

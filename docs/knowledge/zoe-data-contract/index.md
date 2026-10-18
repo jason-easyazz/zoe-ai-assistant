@@ -67,12 +67,12 @@ One row per pre-pass bullet that was condensed. `before` / `after` are character
 | ZD49 | [Spoken rhythm pacing guard](voice.md#zd49-spoken-rhythm-pacing-guard) | 1342 | 494 |
 | ZD50 | [Speaker identification](voice.md#zd50-speaker-identification) | 4443 | 782 |
 | ZD51 | [Silero VAD and smart turn](voice.md#zd51-silero-vad-and-smart-turn) | 1964 | 639 |
-| ZD52 | [Voice memory and event loop](voice.md#zd52-voice-memory-and-event-loop) | 756 | 407 |
+| ZD52 | [Voice memory and event loop](voice.md#zd52-voice-memory-and-event-loop) | 1622 | 1060 |
 | ZD53 | [WebRTC audio ingest](voice.md#zd53-webrtc-audio-ingest) | 991 | 397 |
 | ZD54 | [First turn greeting](voice.md#zd54-first-turn-greeting) | 1270 | 492 |
 | ZD55 | [Segment stitched TTS](voice.md#zd55-segment-stitched-tts) | 1385 | 438 |
 | ZD56 | [Spoken weather answers](voice.md#zd56-spoken-weather-answers) | 1359 | 508 |
-| ZD57 | [STT under speech](voice.md#zd57-stt-under-speech) | 1158 | 394 |
+| ZD57 | [STT under speech](voice.md#zd57-stt-under-speech) | 1249 | 550 |
 | ZD58 | [Pre brain utterance gate](voice.md#zd58-pre-brain-utterance-gate) | 1807 | 540 |
 | ZD59 | [Mishear clarification](voice.md#zd59-mishear-clarification) | 1501 | 564 |
 | ZD60 | [STT snap](voice.md#zd60-stt-snap) | 2607 | 648 |
@@ -85,7 +85,7 @@ One row per pre-pass bullet that was condensed. `before` / `after` are character
 | ZD67 | [Voice signature engine load failure](voice.md#zd67-voice-signature-engine-load-failure) | 853 | 440 |
 | ZD68 | [Voice verified panel session](voice.md#zd68-voice-verified-panel-session) | 3244 | 807 |
 | ZD70 | [Typed env parsing](platform.md#zd70-typed-env-parsing) | 482 | 478 |
-| ZD72 | [App connection handoff](music.md#zd72-app-connection-handoff) | 349 | 325 |
+| ZD72 | [App connection handoff](music.md#zd72-app-connection-handoff) | 446 | 422 |
 | ZD73 | [Telegram voice notes](music.md#zd73-telegram-voice-notes) | 1424 | 624 |
 | ZD74 | [Music setup bridge](music.md#zd74-music-setup-bridge) | 3011 | 675 |
 | ZD75 | [Smart home bridge](music.md#zd75-smart-home-bridge) | 2282 | 598 |
@@ -113,11 +113,11 @@ One row per pre-pass bullet that was condensed. `before` / `after` are character
 | ZD97 | [Health events private](proactive.md#zd97-health-events-private) | 873 | 412 |
 | ZD98 | [Calendar data model](proactive.md#zd98-calendar-data-model) | 1584 | 672 |
 | ZD99 | [Bluetooth settings broker](proactive.md#zd99-bluetooth-settings-broker) | 871 | 619 |
-| ZD100 | [Omi pendant recordings](omi-struggle.md#zd100-omi-pendant-recordings) | 3746 | 771 |
+| ZD100 | [Omi pendant recordings](omi-struggle.md#zd100-omi-pendant-recordings) | 4173 | 1140 |
 | ZD101 | [Pendant ownership registry](omi-struggle.md#zd101-pendant-ownership-registry) | 2166 | 744 |
 | ZD102 | [Omi speaker turns voices](omi-struggle.md#zd102-omi-speaker-turns-voices) | 4916 | 813 |
 | ZD103 | [Pendant day review](omi-struggle.md#zd103-pendant-day-review) | 5190 | 789 |
-| ZD104 | [Pendant health warnings](omi-struggle.md#zd104-pendant-health-warnings) | 2426 | 690 |
+| ZD104 | [Pendant health warnings](omi-struggle.md#zd104-pendant-health-warnings) | 2836 | 1018 |
 | ZD105 | [Struggle detector phase 1](omi-struggle.md#zd105-struggle-detector-phase-1) | 2345 | 770 |
 | ZD106 | [Struggle proposals phase 2](omi-struggle.md#zd106-struggle-proposals-phase-2) | 2640 | 751 |
 | ZD107 | [Open loop lifecycle](omi-struggle.md#zd107-open-loop-lifecycle) | 1878 | 574 |
@@ -182,4 +182,4 @@ One row per pre-pass bullet that was condensed. `before` / `after` are character
 | ZD176 | [HA media target resolution](platform.md#zd176-ha-media-target-resolution) | 589 | 525 |
 | ZD177 | [Capability prose honesty](platform.md#zd177-capability-prose-honesty) | 1141 | 621 |
 
-Total of condensed bullets: 306333 chars before, 92511 after.
+Total of condensed bullets: 308224 chars before, 94114 after. Four bullets that landed on main after the pass (A10 LiveKit rooms, A11 per-turn panel channel, change notices P1, A2 mutating-route auth) are already short and sit whole in `services/zoe-data/AGENTS.md`, so they have no record here.

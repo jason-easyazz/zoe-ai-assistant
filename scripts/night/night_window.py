@@ -1970,20 +1970,22 @@ class NightWindow(bk.Window):
         argv = [cfg.py, str(cfg.precheck_script), "--since", since.astimezone(dt.timezone.utc).isoformat(timespec="seconds")]
         if "omi_day_review" in cfg.jobs:
             argv.append("--omi")
+        if "struggle_proposals" in cfg.jobs:
+            argv.append("--struggle")
         res = self.host.run(argv, timeout=120.0, mutating=False)
         line = next((ln for ln in res.out.splitlines() if ln.startswith("NIGHT_PRECHECK ")), "")
         try:
             got = json.loads(line[len("NIGHT_PRECHECK "):])
-            turns, omi = int(got["members_with_new_turns"]), got.get("omi_members")
-            if res.rc != 0 or turns < 0 or ("--omi" in argv and omi is None):
+            turns, omi, struggle = int(got["members_with_new_turns"]), got.get("omi_members"), got.get("struggle_pending")
+            if res.rc != 0 or turns < 0 or ("--omi" in argv and omi is None) or ("--struggle" in argv and struggle is None):
                 raise ValueError("incomplete")
         except (ValueError, KeyError, TypeError):
             self.rec["notes"].append(f"quiet-night precheck gave no usable answer (exit {res.rc}): running the window")
             return ""
-        self.rec["precheck"] = {"since": since.isoformat(timespec="seconds"), "members_with_new_turns": turns, "omi_members": omi}
-        if turns or omi:
+        self.rec["precheck"] = {"since": since.isoformat(timespec="seconds"), "members_with_new_turns": turns, "omi_members": omi, "struggle_pending": struggle}
+        if turns or omi or struggle:
             return ""
-        return f"no member has new turns since the last window ({since:%Y-%m-%d %H:%M}) and no pendant day waits for review"
+        return f"no member has new turns since the last window ({since:%Y-%m-%d %H:%M}), no pendant day waits for review and no proposal needs tending"
 
     def decode_history(self) -> "list[float]":
         """The steady 12B decode (tok/s) of the last ``decode_history_nights`` earlier real nights that measured one, newest last."""
@@ -2073,6 +2075,24 @@ class NightWindow(bk.Window):
                 return f"the brain-window lock is held by someone else ({exc})"
         return self.busy_now() or self.busy_reason()
 
+    def noop_fallback_clearance(self) -> str:
+        """``fallback_clearance`` for a QUIET (noop) night, which waits instead of giving up on the first 'busy'. The timer that used to run dreaming
+        is disabled and this window owns that work, so a contended noop (a landing holds the brain-window lock, a nightly timer job or the training
+        cycle is running, the panel is mid-conversation) must not silently lose the night's non-LLM maintenance (memory quality, the music digest,
+        the weekly compaction). Polls every ``busy_poll_s`` for at most ``busy_wait_max_min`` and never past the time left before the end-by deadline
+        less room for the dreaming job itself. '' when clear; else why it never was (the caller records the skip)."""
+        cfg = self.cfg
+        why = self.fallback_clearance()
+        if not why:
+            return ""
+        room_s = (self.compute_cap() * 60.0) - cfg.job_timeout_s["dreaming"] - 120.0
+        deadline = self.host.mono() + max(0.0, min(cfg.busy_wait_max_min * 60.0, room_s))
+        while why and self.host.mono() + cfg.busy_poll_s <= deadline:
+            self.log(f"noop: the 4B fallback jobs are waiting for a clear box: {why}")
+            self.host.sleep(cfg.busy_poll_s)
+            why = self.fallback_clearance()
+        return why
+
     # ── the run ──
     def run(self) -> int:
         if self.dry:
@@ -2117,10 +2137,14 @@ class NightWindow(bk.Window):
             if self.opened or self.stopped:
                 restored = self.restore()
             elif self.cfg.fallback_4b and self.mode == "night" and self.fallback_allowed:
-                why = self.fallback_clearance()
+                why = self.noop_fallback_clearance() if self.outcome == "noop" else self.fallback_clearance()
                 if why:
                     self.event(f"no 4B fallback jobs: {why}")
                     self.rec["notes"].append(f"no 4B fallback jobs: {why}")
+                    if self.outcome == "noop":
+                        # a quiet night that was ALSO contended: say so where the morning reader looks, so the skipped dreaming pass is a
+                        # recorded decision and not a silent gap (the next night with new turns runs it as normal)
+                        self.rec["noop_fallback_skipped"] = why[:300]
                 else:
                     self.restore_ok = True                          # nothing was stopped, the lock is ours and the box is idle: the fallbacks below may run
             if not restored:

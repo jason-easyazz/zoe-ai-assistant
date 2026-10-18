@@ -23,6 +23,27 @@ DEAF_PANEL_ERROR_INTERVAL_S = 600.0
 PANEL_LIVE_WINDOW_S = 60.0
 
 
+# A voice turn with no usable panel id pushes to this channel, which no socket can ever join (connect_panel subscribes
+# ``panel_<id>``; a colon never appears there), so its events reach nobody instead of every screen.
+NO_PANEL_CHANNEL = "panel:none"
+_NO_PANEL_IDS = frozenset({"", "unknown", "none", "default", "all"})
+
+
+def panel_channel(panel_id: Optional[str]) -> str:
+    """The push channel for ONE panel's per-turn UI events (``voice:*``, the turn's ``ui_action`` cards/forms/navigation).
+
+    A11 (architecture deep dive 2026-10-18): the voice path used to broadcast these on ``"all"``, so with a second panel,
+    panel A showed panel B's transcripts and answers, and every signed-in desktop socket on ``"all"`` received them too.
+    The turn's panel id is server-decided (``voice_tts._lane_panel_id``: a device token acts for its own panel), and only
+    that panel's own socket subscribes to ``panel_<id>``. A blank / unknown id gets ``NO_PANEL_CHANNEL`` (nobody), never
+    a fan-out. Unlike ``broadcast_to_panel`` there is no fallback to ``"all"``. Household-wide events (announcements,
+    notifications) keep using ``"all"`` and are not routed through here."""
+    pid = str(panel_id or "").strip()
+    if pid.lower() in _NO_PANEL_IDS:
+        return NO_PANEL_CHANNEL
+    return f"panel_{pid}"
+
+
 class PushBroadcaster:
     """WebSocket push broadcaster for real-time UI updates.
 

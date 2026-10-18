@@ -37,8 +37,9 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
    store that holds household words (router shadow log, training copy, retired agent session stores); delete the retired training timer and its duplicate corpus. Owner: owner decision
    for the target and the deletions, agent for the build. Acceptance: a restore drill that passes; an inventory test of where household text lives. Record: deep dive A5-A7.
 4. **Owner decisions that gate other work.** (a) The household-communications decisions (section 8.5 of the deep dive: the411 RAM and second address, Matrix hybrid or not, PA as
-   member-initiated speech, who may ring whom, backup target, a Zoe-owned app or Element X) gate all of D. (b) Keep the night mind writing in enforce while nothing reads it
-   (`[default ZOE_NIGHT_MIND=unset]`), or run it in shadow. (c) Which shadow-mode features get flipped to enforce, each after its offline A/B: restraint
+   member-initiated speech, who may ring whom, backup target, a Zoe-owned app or Element X) gate all of D. (b) Night mind: decided (owner, 2026-10-18), it stays in enforce in the window and zoe-data serves what it wrote with `ZOE_NIGHT_MIND=serve` (PR #2122; the owner step is
+   setting it in `services/zoe-data/.env` after a voice replay gate). Live fact as of 2026-10-19, not a code default: the window writes nightly in enforce and zoe-data's readers are
+   still off because the flag is not set in zoe-data's environment (confirm with `scripts/maintenance/zoe_ground_truth.sh`). (c) Which shadow-mode features get flipped to enforce, each after its offline A/B: restraint
    `[default ZOE_RESTRAINT=unset]`, the recall gate `[default ZOE_RECALL_GATE=shadow]`, the struggle detector `[default ZOE_STRUGGLE_DETECT=unset]`, the delivery ledger
    `[default ZOE_DELIVERY_LEDGER=unset]` (for the first, third and fourth, unset means the reader runs `shadow`; see `PLANS.md`). Owner: owner. Record: deep dive section 8.5; [`PLANS.md`](PLANS.md) live flag block.
 5. **Landing the roadmap itself.** This file, `live-state.json`, `research/index.md`, the open-problems triage and the contract diet for `services/zoe-data/AGENTS.md`
@@ -80,7 +81,7 @@ action agent (research only); music discovery; router self-training `[default ZO
 **Operator steps waiting on the owner** (summarised from the private after-night ledger; no household details here): finish the remaining dependency batches once the age window
 passes and each is replay-probed; re-run the Omnigent container recreate after its pending PR lands; rotate any credential that was ever echoed into a transcript and
 revoke the long-lived tokens named in [`knowledge/open-problems.md`](knowledge/open-problems.md); recreate the HA bridge and database containers so they bind loopback as `main`'s compose already says;
-deploy the omi-sync Pi package by hand after its PRs merge; the pending brain-model re-upload swap in its own window; the TLS certificate renewal before 2026-11-24; the owner call on the adaptive end-of-speech tail `[default ZOE_VAD_CLEAN_TAIL_MS=off]` (a value of 560 closes a clean stop about 160 ms earlier at a measured 2 percent mid-sentence cut, and a lost command is a bug, so it is Jason's decision).
+deploy the omi-sync Pi package by hand after its PRs merge; the pending brain-model re-upload swap in its own window; the TLS certificate renewal before 2026-11-24; the owner call on the adaptive end-of-speech tail `[default ZOE_VAD_CLEAN_TAIL_MS=0]` (a value of 560 closes a clean stop about 160 ms earlier at a measured 2 percent mid-sentence cut, and a lost command is a bug, so it is Jason's decision).
 
 **Evidence and ledgers.** Open problems: [`knowledge/open-problems.md`](knowledge/open-problems.md) (triaged 2026-10-18; a line is deleted when its fix is verified).
 Ideas: [`IDEAS.md`](IDEAS.md). Research records: [`research/index.md`](research/index.md). Task list this roadmap derives from: deep dive section 10.

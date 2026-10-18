@@ -177,14 +177,16 @@ def evaluate(row: dict, now: datetime) -> list[dict]:
 
 
 def public_view(row: dict, now: datetime, *, label: str = "") -> dict:
-    """What ``GET /api/omi/health`` returns for one pendant: numbers, timestamps and the live warnings. No ids of people, no content."""
-    warnings = evaluate(row, now)
+    """What ``GET /api/omi/health`` returns for one pendant: numbers, timestamps and the live warnings. No ids of people, no content.
+    With the kill switch (``ZOE_OMI_HEALTH=0``) there are NO warnings and ``status`` is ``warnings_off`` - not ``ok``, which would read
+    as "checked and healthy" while nothing is being checked. The numbers stay."""
+    warnings = evaluate(row, now) if enabled() else []
     state = _state(row)
     for w in warnings:
         w["since"] = (state.get(w["kind"]) or {}).get("since")
     return {
         "device_id": row["device_id"], "label": label or None,
-        "status": "attention" if warnings else "ok",
+        "status": ("attention" if warnings else "ok") if enabled() else "warnings_off",
         "reachable": bool(row.get("reachable")), "reported_at": row.get("reported_at"), "last_seen_at": row.get("last_seen_at"),
         "last_sync_at": row.get("last_sync_at"), "consecutive_misses": int(row.get("consecutive_misses") or 0),
         "battery": {"pct": row.get("battery_pct"), "at": row.get("battery_at")},
@@ -259,6 +261,17 @@ async def _save(db, device_id: str, row: dict) -> None:
                      f"ON CONFLICT (device_id) DO UPDATE SET {updates}", values)
 
 
+def _rebaselined(prev: dict) -> dict:
+    """The stored row of a pendant whose OWNER changed, with the previous owner's overwrite history and counters dropped. The pendant's
+    cumulative ``dropped_total`` becomes a fresh baseline (the new owner's first report is a baseline, exactly like a first-ever one), so
+    audio lost on the previous owner's watch is neither charged to the new owner nor counted as a delta against the old baseline, and
+    the old "overwritten ... minutes" warning does not follow the pendant. Facts about the pendant itself (battery, ring, last sync,
+    firmware) stay: they describe the hardware, not a person. Pure."""
+    row = dict(prev)
+    row.update(dropped_total=None, overwritten_records_total=0, last_overwritten_records=0, last_overwrite_at=None)
+    return row
+
+
 async def current_owner(device_id: str) -> str:
     """Who owns the pendant NOW: the registry in device-owners mode, else the configured legacy owner. '' = nobody (never a guess)."""
     import omi_devices
@@ -297,6 +310,9 @@ async def record_report(owner: str, device_id: str, rep: Report, *, now: Optiona
       generation snapshotted when the request arrived) is stale and nothing is written - a racing heartbeat can never recreate a health
       row for a forgotten member. Ownership is re-checked inside the lock, so a reassignment/unassign that landed meanwhile also drops it
       (``NotTheOwner``; the route answers 409 ``device_not_registered``).
+    * DEVICE LOCK. The owner check and the save run under ``omi_devices.device_lock(device_id)``, the lock ``assign`` / ``unassign``
+      hold while they change the owner: a reassignment cannot slip between the check and the save. A report that reaches a pendant
+      whose owner CHANGED since its row was written starts a fresh overwrite baseline (``_rebaselined``).
     * ONE TRANSITION AT A TIME. The same lock serialises this with the sweep and with other heartbeats for the member, so two tasks can
       never both read the old ``warn_state`` and both ring.
     * NO LOST BELL. The bell rows are inserted BEFORE the new ``warn_state`` is saved, with an id derived from (pendant, kind, episode)
@@ -304,6 +320,7 @@ async def record_report(owner: str, device_id: str, rep: Report, *, now: Optiona
       already exists is simply kept. A bell is lost only if its insert fails, and then nothing is saved and the report fails (503), so
       the Pi sends it again.
     Raises on a storage failure; the route turns that into a 503."""
+    import omi_devices
     import user_erase_gate as erase_gate
     from db_compat import get_compat_db
 
@@ -313,27 +330,33 @@ async def record_report(owner: str, device_id: str, rep: Report, *, now: Optiona
     async with erase_gate.writing(owner, gen) as live:
         if not live:
             raise NotTheOwner("erased")
-        if await current_owner(device_id) != owner:
-            raise NotTheOwner("not_the_owner")
-        async with get_compat_db() as db:
-            prev = await _get_row(db, device_id)
-            row = merge(prev, rep, when)
-            row["user_id"] = owner
-            old_state = (prev or {}).get("warn_state") or "{}"
-            if prev is not None and prev.get("user_id") != owner:
-                # reassigned: the new owner inherits none of the previous owner's "already told" / cooldown state - but the episode
-                # counter stays (it makes the bell ids unique per pendant, so the new owner's first bell cannot collide with the old one's)
-                kept = _state(prev).get("_episodes")
-                old_state = json.dumps({"_episodes": kept} if kept else {})
-            if enabled():
-                active = evaluate(row, when)
-                state, notify = transition({"warn_state": old_state}, active, when)
-                row["warn_state"] = json.dumps(state, sort_keys=True)
-            else:
-                active, notify, row["warn_state"] = [], [], old_state
-            pushes = await _write_bells(db, owner, device_id, notify)
-            await _save(db, device_id, row)
-            await db.commit()
+        # The DEVICE lock spans the owner check and the save: a reassignment / unassignment (``omi_devices.assign`` / ``unassign`` take
+        # the same lock) can never land between them and leave the previous owner's id on the row (or a bell for the wrong member).
+        async with omi_devices.device_lock(device_id):
+            if await current_owner(device_id) != owner:
+                raise NotTheOwner("not_the_owner")
+            async with get_compat_db() as db:
+                prev = await _get_row(db, device_id)
+                reassigned = prev is not None and prev.get("user_id") != owner
+                if reassigned:
+                    prev = _rebaselined(prev)
+                row = merge(prev, rep, when)
+                row["user_id"] = owner
+                old_state = (prev or {}).get("warn_state") or "{}"
+                if reassigned:
+                    # reassigned: the new owner inherits none of the previous owner's "already told" / cooldown state - but the episode
+                    # counter stays (it makes the bell ids unique per pendant, so the new owner's first bell cannot collide with the old one's)
+                    kept = _state(prev).get("_episodes")
+                    old_state = json.dumps({"_episodes": kept} if kept else {})
+                if enabled():
+                    active = evaluate(row, when)
+                    state, notify = transition({"warn_state": old_state}, active, when)
+                    row["warn_state"] = json.dumps(state, sort_keys=True)
+                else:
+                    active, notify, row["warn_state"] = [], [], old_state
+                pushes = await _write_bells(db, owner, device_id, notify)
+                await _save(db, device_id, row)
+                await db.commit()
     await _push(owner, pushes)
     return active
 
@@ -439,6 +462,7 @@ async def sweep(*, now: Optional[datetime] = None) -> int:
     the sweep can never both decide to ring the same warning, and a member erased mid-sweep is skipped."""
     if not enabled():
         return 0
+    import omi_devices
     import user_erase_gate as erase_gate
     from db_compat import get_compat_db
 
@@ -456,19 +480,22 @@ async def sweep(*, now: Optional[datetime] = None) -> int:
         try:
             pushes: list[tuple[str, dict]] = []
             async with erase_gate.writing(user_id, gens.get(user_id, 0)) as live:
-                if not live or await current_owner(device_id) != user_id:
-                    continue                  # erased, reassigned or unassigned since its last report: not this member's business
-                async with get_compat_db() as db:
-                    row = await _get_row(db, device_id)
-                    if row is None or row["user_id"] != user_id:
-                        continue
-                    state, notify = transition(row, evaluate(row, when), when)
-                    new_state = json.dumps(state, sort_keys=True)
-                    if new_state == (row.get("warn_state") or "{}"):
-                        continue
-                    pushes = await _write_bells(db, user_id, device_id, notify)       # first: a failure here saves nothing
-                    await db.execute("UPDATE omi_device_health SET warn_state = ? WHERE device_id = ?", (new_state, device_id))
-                    await db.commit()
+                if not live:
+                    continue
+                async with omi_devices.device_lock(device_id):           # the owner check and the write are one step (see ``record_report``)
+                    if await current_owner(device_id) != user_id:
+                        continue              # erased, reassigned or unassigned since its last report: not this member's business
+                    async with get_compat_db() as db:
+                        row = await _get_row(db, device_id)
+                        if row is None or row["user_id"] != user_id:
+                            continue
+                        state, notify = transition(row, evaluate(row, when), when)
+                        new_state = json.dumps(state, sort_keys=True)
+                        if new_state == (row.get("warn_state") or "{}"):
+                            continue
+                        pushes = await _write_bells(db, user_id, device_id, notify)       # first: a failure here saves nothing
+                        await db.execute("UPDATE omi_device_health SET warn_state = ? WHERE device_id = ?", (new_state, device_id))
+                        await db.commit()
             await _push(user_id, pushes)
             raised += len(pushes)
         except Exception as exc:  # noqa: BLE001

@@ -48,9 +48,19 @@ def check_claims(text: str, flags: dict) -> list[str]:
 
 
 @pytest.fixture(scope="module")
-def derived() -> dict:
-    inv = json.loads((_REPO / "docs" / "knowledge" / "flag-inventory.json").read_text())
-    return live_state.build(inv)["flags"]
+def inventory() -> dict:
+    return json.loads((_REPO / "docs" / "knowledge" / "flag-inventory.json").read_text())
+
+
+@pytest.fixture(scope="module")
+def built(inventory) -> dict:
+    """The full derivation exactly as ``live_state.py`` writes it (reader shapes included)."""
+    return live_state.build(inventory, live_state.reader_kinds(_REPO, inventory))
+
+
+@pytest.fixture(scope="module")
+def derived(built) -> dict:
+    return built["flags"]
 
 
 def test_roadmap_exists_with_the_three_horizons():
@@ -107,6 +117,124 @@ def test_control_off_accepts_an_empty_default_but_a_mode_does_not():
 
 def test_default_normalisation():
     n = live_state.normalise_default
-    assert n("'0'") == "off" and n("False") == "off" and n("'1'") == "on" and n("True") == "on"
+    # a default of 1/0 is on/off ONLY for a flag read as a bool ...
+    assert n("'0'", "bool") == "off" and n("'1'", "bool") == "on"
+    # ... Python bools and words that cannot be numbers are unambiguous whatever the reader is
+    assert n("False") == "off" and n("True") == "on" and n("'true'") == "on" and n("'no'") == "off" and n("'off'", "number") == "off"
     assert n("''") == "unset" and n("-") == "unset" and n("'Shadow'") == "shadow"
     assert n("dynamic") == "dynamic" and n("(required)") == "required"
+
+
+def test_numeric_default_stays_numeric_unless_the_flag_is_read_as_a_bool():
+    n = live_state.normalise_default
+    for kind in ("number", "unknown", "str"):
+        assert n("'1'", kind) == "1" and n("0", kind) == "0" and n("1.0", kind) == "1.0", kind
+    # negative control: the pre-fix behaviour (every 1/0 is a switch) is exactly what "bool" does, so the assertions above can fail
+    assert n("'1'", "bool") == "on" and n("0", "bool") == "off"
+
+
+# -- the flags the review caught: integers recorded as "on" -----------------------------------------------------------------------
+
+_INT_FLAGS = {
+    "ZOE_ROUTER_SELFTRAIN_HOUR": ["1"],
+    "ZOE_SMART_TURN_THREADS": ["1"],
+    "ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT": ["1"],
+    "ZOE_VAD_CLEAN_TAIL_MS": ["0"],
+}
+
+
+def test_integer_flags_are_recorded_as_integers(derived):
+    for name, want in _INT_FLAGS.items():
+        assert derived[name]["defaults"] == want and derived[name]["kind"] == "number", (name, derived[name])
+
+
+def test_real_switches_are_still_on_off(derived):
+    """Negative control for the test above: the fix must not have turned every 1/0 into a literal."""
+    assert derived["ZOE_EXPERT_ENABLED"]["defaults"] == ["on"] and derived["ZOE_EXPERT_ENABLED"]["kind"] == "bool"  # in ("1", ...)
+    assert derived["ZOE_BUFFER_PHRASES"]["defaults"] == ["on"]  # not in {"0", "false", ...}
+    assert derived["ZOE_WEB_SEARCH_TOOL"]["defaults"] == ["off"]
+
+
+def test_no_numeric_default_is_on_or_off_without_a_bool_reader(derived, inventory):
+    """The invariant over the whole inventory, so a new int flag cannot regress: a flag not read as a bool never says on/off for a
+    default the code spelled as a bare 0/1."""
+    prod = inventory["flags"]["prod"]
+    bad = []
+    for name, rec in derived.items():
+        if rec["kind"] == "bool":
+            continue
+        for raw in prod[name]["defaults"]:
+            if raw.strip("'\"") in ("0", "1") and live_state.normalise_default(raw, rec["kind"]) in ("on", "off"):
+                bad.append(name)
+    assert bad == []
+
+
+def test_committed_live_state_is_exactly_the_derivation(built):
+    committed = (_REPO / "docs" / "knowledge" / "live-state.json").read_text()
+    assert committed == live_state.render(built), "docs/knowledge/live-state.json is stale - run python3 tools/audit/live_state.py"
+
+
+# -- reader-shape classification, on a throwaway repo so each shape is pinned independently --------------------------------------
+
+_SHAPES = '''\
+import os
+from env_typed import env_bool, env_int
+
+
+def _wrapped(name, default):
+    return env_int(name, default)
+
+
+A_INT_CALL = int(os.environ.get("ZOE_T_INT_CALL", "1"))
+B_BOOL_CMP = os.environ.get("ZOE_T_BOOL_CMP", "1").strip().lower() in ("1", "true", "yes")
+C_BOOL_NEG = (os.environ.get("ZOE_T_BOOL_NEG", "1") or "1").strip().lower() not in {"0", "false", "no"}
+D_ENV_INT = env_int("ZOE_T_ENV_INT", 0)
+E_ENV_BOOL = env_bool("ZOE_T_ENV_BOOL", True)
+F_WRAPPED = _wrapped("ZOE_T_WRAPPED_INT", 1)
+G_MODE = os.environ.get("ZOE_T_MODE", "off").lower() == "enforce"
+H_UNKNOWN = print(os.environ.get("ZOE_T_UNKNOWN", "1"))
+I_MODE_NUM = os.environ.get("ZOE_T_MODE_NUM", "1") == "enforce"
+
+
+def alias():
+    raw = os.environ.get("ZOE_T_ALIAS_INT", "1")
+    return int(raw) + 1
+
+
+def truthy():
+    if os.environ.get("ZOE_T_TRUTHINESS", "0"):
+        return True
+'''
+
+
+@pytest.fixture(scope="module")
+def shapes(tmp_path_factory):
+    repo = tmp_path_factory.mktemp("shapes")
+    (repo / "svc.py").write_text(_SHAPES)
+    inv = live_state._load_flag_inventory().scan_repo(repo, files=["svc.py"])
+    return live_state.build(inv, live_state.reader_kinds(repo, inv))["flags"]
+
+
+def test_reader_shapes_decide_whether_one_is_a_switch(shapes):
+    want = {
+        "ZOE_T_INT_CALL": ("number", ["1"]),
+        "ZOE_T_ENV_INT": ("number", ["0"]),
+        "ZOE_T_WRAPPED_INT": ("number", ["1"]),
+        "ZOE_T_ALIAS_INT": ("number", ["1"]),
+        "ZOE_T_BOOL_CMP": ("bool", ["on"]),
+        "ZOE_T_BOOL_NEG": ("bool", ["on"]),
+        "ZOE_T_ENV_BOOL": ("bool", ["on"]),
+        # no positive bool evidence -> the literal, never a guess
+        "ZOE_T_UNKNOWN": ("unknown", ["1"]),
+        "ZOE_T_TRUTHINESS": ("unknown", ["0"]),
+        "ZOE_T_MODE_NUM": ("str", ["1"]),
+        "ZOE_T_MODE": ("str", ["off"]),
+    }
+    assert {n: (shapes[n]["kind"], shapes[n]["defaults"]) for n in want} == want
+
+
+def test_control_without_reader_kinds_no_numeric_default_becomes_a_switch(inventory):
+    """Pre-fix behaviour was 'every 1/0 is a switch'; with no reader information the builder must now refuse to guess."""
+    blind = live_state.build(inventory)["flags"]
+    assert blind["ZOE_SMART_TURN_THREADS"]["defaults"] == ["1"]
+    assert blind["ZOE_EXPERT_ENABLED"]["defaults"] == ["1"], "a real switch is not recognised without the reader shape"
