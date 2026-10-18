@@ -6,6 +6,11 @@
                                     the audio on the pendant.
   POST   /api/omi/sync-notice       ``{"count": N, "device": <id>}`` from the Pi after a session: one short bell notice to THAT pendant's
                                     owner. Device token.
+  POST   /api/omi/device-status     the Pi's NUMBERS-ONLY health heartbeat (reachable, last-sync age, battery, ring fill, the pendant's overwrite
+                                    counter, firmware) after each visit and every ~15 min while the pendant is away. Device token. Stores the
+                                    latest row per pendant (``omi_health.py``, migration 0056); never audio, text or an address.
+  GET    /api/omi/health            the caller's pendants' health + live warnings (no_sync / ring_fill / overwrite / battery_low /
+                                    bridge_silent), owner-scoped exactly like the recordings. A device token never reads it.
   GET    /api/omi/recordings        the caller's recordings, newest first (no transcript text in the list) + ``transcription``: counts
                                     (``backlog`` waiting, ``transcribing``) and whether the transcriber is ``deferred`` and why
                                     (``reason`` code, ``since``, MemAvailable vs the floor) - never content
@@ -45,9 +50,10 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 import omi_devices as devices
+import omi_health as health
 import omi_recordings as omi
 from auth import require_admin, require_signed_in
 
@@ -160,6 +166,59 @@ async def sync_notice(body: _Notice, device: dict = Depends(_require_device)):
         return {"ok": True, "sent": False}
     _last_notice[owner] = now
     return {"ok": True, "sent": await omi.notify_synced(owner, body.count)}
+
+
+class _HealthReport(BaseModel):
+    """Numbers, bools and one short token. ``extra=forbid``: a field this model does not name (a transcript, a path, an address) is a 422,
+    so the endpoint cannot be used to smuggle content in."""
+    model_config = ConfigDict(extra="forbid")
+    device: str = Field(max_length=64)
+    reachable: bool
+    consecutive_misses: int = Field(0, ge=0, le=10_000_000)
+    last_sync_age_s: Optional[int] = Field(None, ge=0, le=10 * 365 * 86400)
+    battery_pct: Optional[int] = Field(None, ge=0, le=100)
+    firmware: Optional[str] = Field(None, max_length=32, pattern=r"^[0-9A-Za-z._+-]*$")
+    ring_fill_pct: Optional[float] = Field(None, ge=0, le=100)
+    ring_fill_start_pct: Optional[float] = Field(None, ge=0, le=100)
+    ring_stored_bytes: Optional[int] = Field(None, ge=0, le=2**40)
+    ring_capacity_bytes: Optional[int] = Field(None, ge=0, le=2**40)
+    dropped_total: Optional[int] = Field(None, ge=0, le=2**62)
+
+
+@router.post("/device-status")
+async def device_status(body: _HealthReport, device: dict = Depends(_require_device)):
+    # Whose pendant is it? The registry (or the legacy configured owner) - never the panel's session. Nobody's: nothing is stored, so
+    # there is no row an owner could be missing and no row another member could read.
+    if not health.DEVICE_ID_RX.match((body.device or "").strip()):
+        return _error(400, "bad device id")
+    import user_erase_gate as erase_gate
+    scheduled = erase_gate.snapshot()          # every member's erase generation NOW, before the owner is resolved: a later erase stales this write
+    owner, refusal = await _upload_owner((body.device or "").strip())
+    if refusal is not None:
+        return refusal
+    rep = health.Report(
+        reachable=body.reachable, consecutive_misses=body.consecutive_misses, last_sync_age_s=body.last_sync_age_s,
+        battery_pct=body.battery_pct, firmware=body.firmware or None, ring_fill_pct=body.ring_fill_pct,
+        ring_fill_start_pct=body.ring_fill_start_pct, ring_stored_bytes=body.ring_stored_bytes,
+        ring_capacity_bytes=body.ring_capacity_bytes, dropped_total=body.dropped_total)
+    try:
+        active = await health.record_report(owner, body.device.strip(), rep, scheduled_at=scheduled.get(owner, 0))
+    except health.NotTheOwner:
+        return _error(409, "device_not_registered")          # erased or reassigned while this request was in flight: store nothing
+    except Exception as exc:  # noqa: BLE001 - the Pi treats anything but 200 as 'not delivered' and tries again
+        logger.warning("OMI_HEALTH_STORE_FAILED device=%s (%s)", body.device.strip(), type(exc).__name__)
+        return _error(503, "health_unavailable")
+    return {"ok": True, "warnings": [w["kind"] for w in active]}
+
+
+@router.get("/health")
+async def my_pendant_health(user: dict = Depends(_require_owner)):
+    try:
+        pendants = await health.list_for(user["user_id"])
+    except Exception as exc:  # noqa: BLE001 - an unmigrated table reads as 'no data yet', not a 500
+        logger.warning("OMI_HEALTH_READ_FAILED (%s)", type(exc).__name__)
+        pendants = []
+    return {"pendants": pendants, "warnings_enabled": health.enabled()}
 
 
 # --- the device registry (device-owners mode; admin manages WHO OWNS a pendant, never what it recorded) -----------------------------

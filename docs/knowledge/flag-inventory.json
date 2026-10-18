@@ -3989,6 +3989,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_HEALTH": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_health.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMI_IDLE_S": {
         "defaults": [
           "120"
