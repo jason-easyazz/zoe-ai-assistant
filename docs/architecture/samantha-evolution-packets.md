@@ -32,7 +32,7 @@
    (`gh api repos/.../pulls/N --jq .merged`), never GraphQL pr-view. If `behind`:
    `gh api -X PUT .../pulls/N/update-branch` and re-wait.
 6. **After merge:** update `samantha-evolution-plan.md` §6 (tick the box, add the PR#)
-   and §7 if the NEXT ACTION changed; update `docs/PLANS.md` if a workstream completed.
+   and `docs/ROADMAP.md` if the next action changed; update `docs/PLANS.md` if a workstream completed.
 7. **Global STOP conditions (report, don't improvise):** a rock would need changing;
    free RAM < 1 GB during any measurement; the replay gate regresses; a migration would
    be needed that the packet didn't name; any prod `.env` change (operator-only).
