@@ -11,6 +11,10 @@ Four measurements (``docs/knowledge/omi-voice-tagging.md`` explains each and the
      from the centring cohort): precision / recall over the threshold grid;
   D  two-speaker conversations built from those speakers: time-weighted you / other labelling accuracy per linkage cut.
 
+Leakage: the public manifest holds most clips twice (clean + farfield of the SAME utterance); sections C and D keep ONE variant per
+source clip (``one_variant_per_clip``, farfield preferred - the pendant's channel). Numbers from before that change scored a clip
+against its own twin, so every threshold derived from them needs re-deriving (``docs/knowledge/omi-voice-tagging.md``).
+
 Privacy: the owner's audio and the profile built from it stay in this process. The report holds counts, rates and quantiles only -
 no names, no transcripts, no embeddings, no file names - and goes to ``~/.zoe/reports/`` (0600), never the repository.
 Gates (refuses rather than waits): not 01:50-04:55 HOUSEHOLD time (the night jobs; a run that starts earlier stops itself at 01:45), MemAvailable >= the measured peak RSS + headroom, no panel voice
@@ -123,6 +127,25 @@ def embed_file(emb, path: str, seconds: float | None = None):
     if x is None:
         return None
     return emb.embed(x[: int(16000 * seconds)] if seconds else x)
+
+
+def one_variant_per_clip(manifest: list, source: str = "libri", prefer: str = "farfield") -> dict:
+    """``{speaker: [path, ...]}`` with ONE variant (``prefer``, else whatever exists) per SOURCE clip. The public manifest lists most
+    clips twice - ``libri/clean/<spk>_<clip>.wav`` and ``libri/farfield/<spk>_<clip>.wav`` are the same utterance - so building a
+    voiceprint from some entries and querying with others scored a clip against its own twin (leakage: the threshold grids read
+    better than the truth). Two entries are the same source clip when speaker and file name match."""
+    best: dict = {}
+    for m in manifest:
+        if m.get("source") != source:
+            continue
+        key = (m["speaker"], os.path.basename(m["path"]))
+        keep = best.get(key)
+        if keep is None or (m.get("variant") == prefer and keep.get("variant") != prefer):
+            best[key] = m
+    files: dict = {}
+    for (spk, _), m in best.items():
+        files.setdefault(spk, []).append(m["path"])
+    return files
 
 
 def q(xs, ps=(0.1, 0.5, 0.9)) -> str:
@@ -319,10 +342,7 @@ async def main() -> None:
         man = []
     else:
         man = json.load(open(os.path.join(a.public_dir, "manifest.json")))
-    files: dict = {}
-    for m in man:
-        if m["source"] == "libri":
-            files.setdefault(m["speaker"], []).append(os.path.join(a.public_dir, m["path"]))
+    files = {spk: [os.path.join(a.public_dir, p) for p in ps] for spk, ps in one_variant_per_clip(man).items()}
     E = {} if "C" not in want else {s: [e for e in (embed_file(emb, f, 4) for f in fs[:14]) if e is not None] for s, fs in files.items()}
     if "C" in want:
         out += ["## C. Suggestions (public labelled speakers: 5 tagged voices, 3 clips each; queries = their other clips + 10 strangers)",
