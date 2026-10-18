@@ -5420,6 +5420,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_RESTORE_USER_IDS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "tools/restore_lists_data.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_RESTRAINT": {
         "defaults": [
           "-"

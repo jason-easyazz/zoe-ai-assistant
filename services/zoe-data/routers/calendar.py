@@ -10,20 +10,29 @@ before; every response carries them (``attendees`` / ``alarms`` as lists, possib
 Visibility: ``family`` (the household sees it), ``personal`` (only the owner), ``busy`` (the household sees
 WHEN, as "Busy", and nothing else - ``calendar_service.busy_projection``). Aliases ``household`` /
 ``private`` / ``busy_only`` are accepted on write; an unknown value is a 422.
+
+Who may WRITE (security fix 2026-10-19): every POST/PUT/DELETE declares ``require_member_or_panel`` and then
+``_calendar_writer`` decides. A personal (or busy-only) event is written by its member only. A household
+(``family``) event is written by any signed-in member or by THE PANEL (``panel_principal.is_panel_guest`` in its
+strict ``registered`` form - the fridge rule the household lists follow). A guest, an anonymous LAN caller, an
+auth-outage principal and the ``ZOE_UNAUTHENTICATED_ROLE`` header-less promotion are refused. The panel writes as
+the household (owner ``family-admin``) and never sees, edits or creates a private event.
 """
 import json
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import calendar_service as cal
+import panel_principal
 from auth import get_current_user
 from calendar_service import create_event_record
 from calendar_utils import row_to_event
 from database import get_db
 from guest_policy import require_feature_access
 from models import EventCreate, EventUpdate
+from panel_principal import require_member_or_panel
 from push import broadcaster
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
@@ -162,6 +171,25 @@ async def _clean_attendees(db, raw, *, actor_id: str, owner_id: str) -> Optional
     return attendees
 
 
+async def _calendar_writer(request, user: dict, db, action: str) -> tuple[bool, str]:
+    """``(is_panel, writer_id)`` for an event write, or 403.
+
+    A signed-in member writes as themself (the role matrix still decides their role). Otherwise only THE PANEL may
+    write, and only household events: ``writer_id`` is then ``HOUSEHOLD_VIEWER``, which owns nothing, so the
+    family-or-own lookups match family events only. The route dependency (``require_member_or_panel``) is the
+    declared floor; this is the rule, and it does not open under that dependency's ``ZOE_HA_CONTROL_SCOPE=open``
+    rollback. ``request`` is None only for a direct (non-HTTP) call, which is never the panel."""
+    if panel_principal.is_member(user):
+        await require_feature_access(db, user, feature="calendar", action=action)
+        return False, user["user_id"]
+    judged = user
+    if (user or {}).get("unauthenticated_override"):
+        judged = {"user_id": "guest", "role": "guest"}  # a header-less caller is anonymous: judged by its device
+    if request is not None and await panel_principal.is_panel_guest(request, judged, db, mode="registered"):
+        return True, panel_principal.HOUSEHOLD_VIEWER
+    raise HTTPException(status_code=403, detail="Sign in to change the calendar")
+
+
 async def _enforce_calendar_read_access(db, user: dict) -> str:
     """Apply the shared calendar read gate, then return user_id."""
     await require_feature_access(db, user, feature="calendar", action="read")
@@ -239,16 +267,21 @@ async def get_event(
 @router.post("/events", response_model=dict)
 async def create_event(
     payload: EventCreate,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member_or_panel),
     db=Depends(get_db),
+    request: Request = None,
 ):
-    """Create a new calendar event."""
-    await require_feature_access(db, user, feature="calendar", action="create")
-    user_id = user["user_id"]
+    """Create a new calendar event (a member: any visibility; the panel: a household event only)."""
+    panel, user_id = await _calendar_writer(request, user, db, "create")
     try:
         visibility = cal.normalize_visibility(payload.visibility)
     except ValueError as exc:
         raise _422(exc) from None
+    owner_id = user_id
+    if panel:
+        if visibility != "family":
+            raise HTTPException(status_code=403, detail="Sign in to add a private event")
+        owner_id = panel_principal.HOUSEHOLD_OWNER_ID  # events.user_id is a users FK; the household account, not a person
     data = payload.model_dump(exclude_unset=True)
     extra = _clean_fields(data)
     if "description" not in extra and isinstance(payload.metadata, dict) and isinstance(payload.metadata.get("description"), str):
@@ -259,12 +292,12 @@ async def create_event(
     if extra.get("timezone"):
         start_at, end_at = cal.derive_instants({**payload.model_dump(), **extra})
         extra.update({"start_at": start_at, "end_at": end_at})
-    attendees = await _clean_attendees(db, payload.attendees, actor_id=user_id, owner_id=user_id)
+    attendees = await _clean_attendees(db, payload.attendees, actor_id=user_id, owner_id=owner_id)
     metadata_json = json.dumps(metadata) if metadata else None
 
     record = await create_event_record(
         db,
-        user_id=user_id,
+        user_id=owner_id,
         title=payload.title,
         start_date=payload.start_date,
         start_time=payload.start_time,
@@ -281,14 +314,14 @@ async def create_event(
     )
     event_id = record["id"]
     if attendees:
-        await cal.replace_attendees(db, event_id, user_id, attendees)
+        await cal.replace_attendees(db, event_id, owner_id, attendees)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM events WHERE id = ?", [event_id])
     row = await cursor.fetchone()
     event = (await _present_all(db, [row], user_id))[0]
 
-    await broadcaster.broadcast("calendar", "event_created", event, user_id=user_id)
+    await broadcaster.broadcast("calendar", "event_created", event, user_id=owner_id)
     return event
 
 
@@ -296,12 +329,12 @@ async def create_event(
 async def update_event(
     event_id: str,
     payload: EventUpdate,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member_or_panel),
     db=Depends(get_db),
+    request: Request = None,
 ):
-    """Update an existing event."""
-    await require_feature_access(db, user, feature="calendar", action="update")
-    user_id = user["user_id"]
+    """Update an existing event (a member: family or their own; the panel: family events only)."""
+    _panel, user_id = await _calendar_writer(request, user, db, "update")
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
         "SELECT * FROM events WHERE " + where,
@@ -321,7 +354,8 @@ async def update_event(
     # uneditable from it (403s in the operator's 2026-07-13 report).
     # …but only the OWNER may change visibility: a non-owner flipping a family
     # event to 'personal' would hijack it out of the household's (and the
-    # owner's) view entirely (same guard as reminders).
+    # owner's) view entirely (same guard as reminders). The panel writes as
+    # HOUSEHOLD_VIEWER, which owns nothing, so it is never the owner either.
     owner_id = current.get("user_id")
     is_owner = owner_id == user_id
 
@@ -402,12 +436,12 @@ async def update_event(
 @router.delete("/events/{event_id}", response_model=dict)
 async def delete_event(
     event_id: str,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member_or_panel),
     db=Depends(get_db),
+    request: Request = None,
 ):
-    """Soft delete an event (set deleted=1; ``deleted_at`` is the sync tombstone's time)."""
-    await require_feature_access(db, user, feature="calendar", action="delete")
-    user_id = user["user_id"]
+    """Soft delete an event (set deleted=1; ``deleted_at`` is the sync tombstone's time). The panel: family events only."""
+    _panel, user_id = await _calendar_writer(request, user, db, "delete")
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
         "SELECT * FROM events WHERE " + where,

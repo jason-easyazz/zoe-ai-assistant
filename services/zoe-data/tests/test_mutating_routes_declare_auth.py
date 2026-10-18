@@ -5,6 +5,13 @@ the next one fail CI. A route passes when its parameters, decorator ``dependenci
 name a dependency in ``AUTH_DEPENDENCIES``. That is the FLOOR, not the right rule (``get_current_user`` admits a guest; each
 route's own tests pin who it needs). A route that authenticates in its body goes on ``ALLOWLIST`` with the reason; a stale
 entry fails. Static (``ast``): imports nothing, runs in the slim CI venv.
+
+Second tier (2026-10-19): ``get_current_user`` alone ADMITS A GUEST, so a write that declares only it relies on whatever its
+body checks - for the calendar that was the role matrix alone, which counted the header-less ``ZOE_UNAUTHENTICATED_ROLE``
+promotion as an admin writer. ``GUEST_ADMITTING_BASELINE`` is the reviewed inventory of the writes that still declare ONLY a
+guest-admitting dependency (guests may chat; the fridge-rule list items judge the panel in their body; ...). It is a RATCHET:
+a NEW guest-admitting write fails until it declares a principal (``require_member`` / ``require_member_or_panel`` /
+``require_admin`` ...) or is added here deliberately in review, and an entry that now declares one must be dropped.
 """
 from __future__ import annotations
 
@@ -41,6 +48,37 @@ ALLOWLIST = {
     ("routers/proactive.py", "claim_pending_endpoint"): "the unguessable pending id IS the capability (push-notification tap)",
     ("routers/proactive.py", "run_selector_synthetic"): "X-Internal-Token checked in the body; synthetic harness ids only",
     ("routers/memories.py", "forget_synthetic_user"): "X-Internal-Token checked in the body; synthetic harness ids only",
+}
+
+
+# Dependencies that establish a caller but ADMIT A GUEST (a credential-less LAN request resolves to ``guest``).
+GUEST_ADMITTING = frozenset({"get_current_user"})
+
+# file -> handlers whose writes declare ONLY a guest-admitting dependency (reviewed 2026-10-19; each judges the caller in its
+# body: the role matrix, an owner check, the fridge rule, or "guests may do this"). Shrink it; never grow it without review.
+GUEST_ADMITTING_BASELINE = {
+    "routers/auth.py": {"logout"},
+    "routers/chat.py": {"cancel_latest_run", "create_background_task", "create_session", "delete_session", "resume_run", "save_message", "submit_feedback", "whatsapp_connect"},
+    "routers/dashboard.py": {"add_widgets", "remove_widget", "save_layout"},
+    "routers/journal.py": {"create_entry", "delete_entry", "update_entry"},
+    "routers/lists.py": {"add_item", "create_list", "delete_item", "delete_list", "update_item", "update_list"},
+    "routers/memories.py": {"create_memory_proposal", "forget_my_memory", "link_preview", "review_memory", "set_memory_opt_out"},
+    "routers/notes.py": {"create_note", "delete_note", "patch_note", "update_note"},
+    "routers/notifications.py": {"create_notification", "delete_notification", "mark_read", "track_interaction"},
+    "routers/panel_auth.py": {"create_pin_challenge"},
+    "routers/people.py": {"add_activity", "add_bucket_item", "add_gift_idea", "add_important_date", "add_relationship", "create_person", "delete_person", "delete_relationship", "mark_bucket_done", "mark_person_read", "merge_person_endpoint", "update_gift_status", "update_person", "update_relationship"},
+    "routers/portrait.py": {"regenerate_my_portrait", "regenerate_portrait"},
+    "routers/proactive.py": {"accept_pending_suggestion", "create_schedule", "delete_schedule", "dismiss_pending_suggestion", "trigger_morning_brief"},
+    "routers/push.py": {"subscribe", "unsubscribe"},
+    "routers/reminders.py": {"acknowledge_reminder", "create_reminder", "delete_reminder", "mark_notification_delivered", "snooze_reminder", "update_reminder"},
+    "routers/skybridge.py": {"cancel_skybridge_timer", "resolve_skybridge_command"},
+    "routers/stubs.py": {"create_project", "save_intelligence_settings"},
+    "routers/system.py": {"board_review", "post_display_brightness", "post_display_volume", "put_display_preferences", "put_openclaw_preferences", "trigger_agent_sync", "trigger_memory_consolidation", "trigger_memory_digest", "trigger_run_digest"},
+    "routers/transactions.py": {"create_transaction", "delete_transaction", "toggle_transaction_status", "update_transaction"},
+    "routers/ui_actions.py": {"ack_ui_action", "bind_panel", "close_action_form", "confirm_action_form", "create_ui_action", "open_action_form", "requeue_stale_actions", "retry_ui_action", "sync_ui_state"},
+    "routers/user_profile.py": {"analyze_profile", "create_telegram_link_token", "set_telegram_link"},
+    "routers/voice_settings.py": {"preview_voice"},
+    "routers/weather.py": {"update_preferences"},
 }
 
 
@@ -128,6 +166,46 @@ def test_the_allowlist_does_not_rot():
     by_key = {(rel, name): deps for rel, name, _path, deps in _all_routes()}
     stale = [k for k in ALLOWLIST if k not in by_key or by_key[k]]
     assert not stale, f"allowlisted routes that no longer exist or now declare auth (drop them): {stale}"
+
+
+def _guest_admitting_only(routes) -> list[tuple[str, str]]:
+    return [(rel, name) for rel, name, _path, deps in routes if deps and deps <= GUEST_ADMITTING]
+
+
+def test_no_new_write_declares_only_a_guest_admitting_dependency():
+    new = sorted({(rel, name) for rel, name in _guest_admitting_only(_all_routes())
+                  if name not in GUEST_ADMITTING_BASELINE.get(rel, set())})
+    assert not new, (
+        "write route(s) that declare only get_current_user (which admits a guest) - declare a principal "
+        "(panel_principal.require_member / require_member_or_panel, auth.require_admin ...), or, if a guest or the "
+        "panel genuinely may do this and the body judges it, add it to GUEST_ADMITTING_BASELINE in review:\n  "
+        + "\n  ".join(f"{r}::{n}" for r, n in new))
+
+
+def test_the_guest_admitting_baseline_does_not_rot():
+    current = set(_guest_admitting_only(_all_routes()))
+    stale = sorted((rel, n) for rel, names in GUEST_ADMITTING_BASELINE.items() for n in names if (rel, n) not in current)
+    assert not stale, f"baseline entries that no longer exist or now declare a principal (drop them): {stale}"
+
+
+def test_household_writes_are_never_guest_admitting():
+    """The calendar is the household's shared record; music, rooms, panel config and home control drive the house."""
+    for rel in ("routers/calendar.py", "routers/music.py", "routers/rooms.py", "routers/panel_config.py",
+                "routers/ha_control.py"):
+        assert rel not in GUEST_ADMITTING_BASELINE, rel
+    routes = _all_routes()
+    calendar = {name for rel, name, _p, _d in routes if rel == "routers/calendar.py"}
+    assert {"create_event", "update_event", "delete_event"} <= calendar  # the scan still sees them
+
+
+@pytest.mark.parametrize("params, flagged", [
+    ("u=Depends(get_current_user)", True),                                   # the old calendar shape: flagged
+    ("u=Depends(require_member_or_panel)", False),
+    ("u=Depends(require_member), v=Depends(get_current_user)", False),
+])
+def test_control_the_guest_admitting_tier(params, flagged):
+    routes = [("routers/calendar.py", *r) for r in scan(f"r = APIRouter()\n@r.post('/events')\nasync def create_event({params}):\n    pass\n")]
+    assert bool(_guest_admitting_only(routes)) is flagged
 
 
 # Negative controls: the scanner goes red on a bare write, and recognises each way a dependency is declared.
