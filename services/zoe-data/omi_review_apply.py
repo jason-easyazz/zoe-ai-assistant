@@ -15,6 +15,19 @@ the owner's own approval (``routers/omi_day_review.py``). Every write goes throu
   owner_fact      ``MemoryService.ingest(source=origin="omi_review")`` - class ``user_confirmed`` (the approval is the owner
                   confirming their own words), ``source_excerpt`` = the quoted span, ``turn_ref`` = the recording, metadata
                   ``provenance=pendant``. ADD only: never an edit or a supersede. A write that returns nothing is a failure.
+  person_fact     a fact about one of the owner's OWN people (``payload.person_id``): ``MemoryService.ingest`` of "<Name>: <fact>",
+                  ``entity_type='person'`` / ``entity_id`` = that people row, class ``user_confirmed`` (the approval), personal
+                  (never family-visible), ``turn_ref`` = the segment, metadata ``stated_by`` (``stated_by_subject`` - the person
+                  said it on a voice the owner tagged - or ``owner_stated``), the candidate, day, recording and segment ids. ADD only.
+                  It contradicts any approved row about that person (``omi_day_review.facts_conflict``, whoever said either) ->
+                  ``held_conflict``, never written beside it; the same fact already there -> linked (``known:memory:<id>``), not
+                  written twice.
+  person_relation the person's relationship to the OWNER (``people.relationship``) on the owner's PERSONAL people row only, and only
+                  when it is empty; a different one already there -> ``held_conflict``; written_ref ``people:<id>#relationship``.
+
+``unwrite`` erases what an approved person_fact / person_relation wrote: forgetting the person, the name or the recording it came
+from (``omi_day_review.forget_people`` / ``erase_entity`` / ``forget_recording``) reaches it. A candidate deleted by a forget
+while its approval was writing is un-written at once (the approval answers 410).
 
 The candidate row is the provenance index: ``written_ref`` (``events:<id>``, ``list_items:<id>``, ``reminders:<id>``,
 ``people:<id>``, ``memory:<id>``), ``decided_at``, ``decided_via``. A failed write puts the candidate back to ``pending`` with
@@ -35,7 +48,8 @@ logger = logging.getLogger(__name__)
 
 STALE_CLAIM_S = 600
 EDITABLE = {"calendar_event": ("title", "date", "time"), "list_item": ("item", "list"), "reminder": ("title", "date", "time"),
-            "follow_up": ("title",), "person": ("name", "relation"), "owner_fact": ("fact",)}
+            "follow_up": ("title",), "person": ("name", "relation"), "owner_fact": ("fact",), "person_fact": ("fact",),
+            "person_relation": ("relation",)}
 VIAS = ("voice", "panel_touch", "desktop", "phone")
 
 
@@ -75,7 +89,11 @@ def apply_edits(kind: str, payload: dict, fields: Optional[dict]) -> dict:
                 raise ApplyError("bad_time", 422)
         elif k == "list" and v not in ("shopping", "tasks"):
             raise ApplyError("bad_list", 422)
+        elif kind == "person_relation" and not v:
+            raise ApplyError("empty_field:relation", 422)
         out[k] = v
+        if kind in dr.PERSON_KINDS and v != payload.get(k):
+            out["edited_by_owner"] = True      # no longer the exact words: the row says the owner changed it
     return out
 
 
@@ -191,8 +209,115 @@ async def write_owner_fact(user_id: str, c: dict, via: str) -> str:
     return f"memory:{ref.id}"
 
 
+async def _own_person(user_id: str, pid: str) -> dict:
+    """The owner's OWN live people row the candidate is about; gone (deleted, forgotten, another member's) = 409, nothing written."""
+    from db_compat import get_compat_db
+
+    async with get_compat_db() as db:
+        cur = await db.execute("SELECT id, name, birthday, relationship, visibility FROM people WHERE id = ? AND user_id = ? "
+                               "AND (deleted = 0 OR deleted IS NULL)", (pid, user_id))
+        row = await cur.fetchone()
+    if not row or not str(row["name"] or "").strip():
+        raise ApplyError("person_gone")
+    return {k: row[k] for k in ("id", "name", "birthday", "relationship", "visibility")}
+
+
+async def write_person_fact(user_id: str, c: dict, via: str) -> str:
+    """A fact about one of the owner's people, into the owner's memory linked to that person. Trust order (owner 2026-10-18):
+    the owner's own words > confirmed > inferred, and a fact the person said about themself (``stated_by_subject``) and one the owner
+    said about them (``owner_stated``) never silently overwrite each other: this is ADD only, and a contradiction with ANY approved
+    row about the person - whoever said it, whatever wrote it - is held for the owner (``held_conflict``)."""
+    from memory_service import get_memory_service
+
+    p = c["payload"]
+    person = await _own_person(user_id, str(p.get("person_id") or ""))
+    if dr.may_be_child(person):
+        raise ApplyError("child")              # a (possible) child is a label only, whatever the analysis saw
+    name, fact = str(person["name"]).strip(), str(p["fact"]).strip()
+    svc = get_memory_service()
+    # every row already linked to the person, read STRICTLY (``list_by_entity`` answers [] on a failed read, and an unreadable index
+    # must write nothing rather than skip the conflict check): approved rows only, as recall would serve them
+    have = [r for r in await svc._run_sync(svc._entity_rows_sync, [person["id"]], user_id)
+            if str(r.metadata.get("status") or "approved") == "approved"]
+    if any(dr.facts_conflict(fact, r.text, name) for r in have):
+        raise ApplyError("held_conflict")
+    same = next((r for r in have if dr.same_fact(fact, r.text, name)), None)
+    if same is not None:
+        return f"known:memory:{same.id}"       # already known: linked, not written twice (and never erased on this one's behalf)
+    ev = (c.get("evidence") or [{}])[0]
+    segs = [str(s) for s in (p.get("segment_ids") or []) if s]
+    ref = await svc.ingest(
+        f"{name}: {fact}", user_id=user_id, source=dr.WRITER, origin=dr.WRITER, memory_type="fact", confidence=0.9,
+        source_excerpt=ev.get("quote") or None, anchor_text=ev.get("quote") or None,
+        turn_ref=dr.turn_ref_for(segs, str(ev.get("recording_id") or "")), authority="user_confirmed",
+        entity_type="person", entity_id=person["id"], tags=["person", "pendant"],
+        metadata={"provenance": dr.PROVENANCE, **_prov(c, via), "stated_by": p.get("stated_by") or dr.OWNER_STATED,
+                  "person_id": person["id"], "segment_ids": segs, "edited_by_owner": bool(p.get("edited_by_owner"))})
+    if ref is None:                            # the forget shield, an opt-out, a dedup: NOT written, and the owner is told
+        raise ApplyError("not_stored")
+    return f"memory:{ref.id}"
+
+
+async def write_person_relation(user_id: str, c: dict, via: str) -> str:
+    """The person's relationship to the owner, on the owner's PERSONAL people row, only where none is set. A family-visible row is
+    refused (``shared_person``): writing there would tell every member what the owner's pendant heard. A different relationship
+    already set is held for the owner (``held_conflict``), never overwritten."""
+    from db_compat import get_compat_db
+
+    p = c["payload"]
+    person = await _own_person(user_id, str(p.get("person_id") or ""))
+    if str(person.get("visibility") or "") != "personal":
+        raise ApplyError("shared_person")
+    rel = dr.clean(p.get("relation") or "", 60)
+    have = str(person.get("relationship") or "").strip()
+    ref = f"people:{person['id']}#relationship"
+    if have:
+        if dr._norm(have) == dr._norm(rel):
+            return "known:" + ref
+        raise ApplyError("held_conflict")
+    async with get_compat_db() as db:
+        cur = await db.execute("UPDATE people SET relationship = ? WHERE id = ? AND user_id = ? AND relationship IS NULL "
+                               "AND (deleted = 0 OR deleted IS NULL)", (rel, person["id"], user_id))
+        await db.commit()
+    if not getattr(cur, "rowcount", 0):
+        raise ApplyError("held_conflict")      # set (or removed) between the read and the write: the owner looks again
+    return ref
+
+
+async def unwrite(user_id: str, rows: list) -> int:
+    """Erase what approved ``person_fact`` / ``person_relation`` candidates wrote (forget: the person, the name, the recording). A
+    memory row is HARD-erased (``MemoryService.erase_rows``: drawers, audit trail, the physical residue); a relationship goes back to
+    empty only while it still holds the value this approval set. A ``known:`` link wrote nothing and erases nothing. RAISES on a
+    failure, so the caller deletes nothing and is retried. Returns the rows erased."""
+    mem: list[str] = []
+    rels: list[tuple[str, str]] = []
+    for r in rows:
+        ref = str(r.get("written_ref") or "")
+        if r.get("kind") == "person_fact" and ref.startswith("memory:"):
+            mem.append(ref.split(":", 1)[1])
+        elif r.get("kind") == "person_relation" and ref.startswith("people:"):
+            rels.append((ref.split(":", 1)[1].split("#", 1)[0], str((r.get("payload") or {}).get("relation") or "")))
+    n = 0
+    if mem:
+        from memory_service import get_memory_service
+        out = await get_memory_service().erase_rows(user_id, mem, actor=user_id, reason="forgotten by request (pendant review)")
+        n += int(out.get("rows_removed") or 0)
+    if rels:
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            for pid, rel in rels:
+                cur = await db.execute("UPDATE people SET relationship = NULL WHERE id = ? AND user_id = ? AND relationship = ?",
+                                       (pid, user_id, dr.clean(rel, 60)))
+                n += int(getattr(cur, "rowcount", 0) or 0)
+            await db.commit()
+    if mem or rels:
+        logger.info("OMI_REVIEW_UNWRITE user=%s memory=%d relationships=%d erased=%d", user_id, len(mem), len(rels), n)
+    return n
+
+
 WRITERS = {"calendar_event": "write_calendar_event", "list_item": "write_list_item", "reminder": "write_reminder",
-           "follow_up": "write_follow_up", "person": "write_person", "owner_fact": "write_owner_fact"}
+           "follow_up": "write_follow_up", "person": "write_person", "owner_fact": "write_owner_fact",
+           "person_fact": "write_person_fact", "person_relation": "write_person_relation"}
 
 
 # --- the floors re-checked at write time (gap audit P0-3) ------------------------------------------------------------------
@@ -208,9 +333,14 @@ async def _floors(user_id: str, c: dict) -> None:
     if dr._distress(text):
         raise ApplyError("distress", 409)
     # restraint again at WRITE: the owner's edit at approval can bring in what the analysis never saw (cross-review B1, #2091)
-    sensitive = dr._SENSITIVE_FACT if c.get("kind") == "owner_fact" else dr._SENSITIVE_ALL
+    kind = c.get("kind")
+    # a person_fact is held to the strictest set (a family word in it is another member's business); a relationship is a family word
+    sensitive = dr._SENSITIVE_FACT | {"other_member"} if kind == "person_fact" else (
+        dr._SENSITIVE_FACT if kind == "owner_fact" else dr._SENSITIVE_ALL)
     if dr._restraint(text) & sensitive:
         raise ApplyError("sensitive", 409)
+    if kind == "person_fact" and dr._PERSON_SENSITIVE.search(text):
+        raise ApplyError("sensitive", 409)       # D11 about another person, re-checked: the owner's edit may have added it
     try:
         import memory_forgotten as mf
         hit = bool(await mf.spans(user_id, text))
@@ -273,8 +403,13 @@ async def approve(user_id: str, cid: str, *, fields: Optional[dict] = None, via:
         logger.info("OMI_REVIEW_APPLY user=%s kind=%s result=failed code=%s", user_id, c["kind"], code)
         raise ApplyError(code, exc.status if isinstance(exc, ApplyError) else 409)
     async with get_compat_db() as db:
-        await db.execute("UPDATE omi_day_candidates SET status = 'approved', written_ref = ?, decided_at = ? WHERE id = ? AND user_id = ?",
-                         (ref, dr._iso(_now()), cid, user_id))
+        cur = await db.execute("UPDATE omi_day_candidates SET status = 'approved', written_ref = ?, decided_at = ? WHERE id = ? "
+                               "AND user_id = ?", (ref, dr._iso(_now()), cid, user_id))
         await db.commit()
+    if c["kind"] in dr.PERSON_KINDS and not getattr(cur, "rowcount", 1):
+        # a forget (the person, the name, the recording) deleted the candidate while this write ran: what it wrote goes too
+        await unwrite(user_id, [{"kind": c["kind"], "written_ref": ref, "payload": c["payload"]}])
+        logger.info("OMI_REVIEW_APPLY user=%s kind=%s result=forgotten_during_write", user_id, c["kind"])
+        raise ApplyError("forgotten", 410)
     logger.info("OMI_REVIEW_APPLY user=%s kind=%s result=written", user_id, c["kind"])
     return await dr.get_candidate(user_id, cid) or c

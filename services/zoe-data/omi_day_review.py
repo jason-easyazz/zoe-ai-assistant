@@ -13,9 +13,9 @@ THE PASS (model points, code decides)
   1. LINES (code). Each transcript is cut into sentence lines ``[r<k>.<n> HH:MM] text`` (k = the recording's place in the day).
      Text is flattened and stripped of brackets, so a transcript cannot forge a delimiter or a label. A recording WITH
      per-turn speaker segments (``omi_segments``, read through ``voice_segments`` -> ``omi_voices.review_segments``) is read turn by
-     turn with the segment's speaker (you | someone_else | not_sure; a tagged contact reads ``someone_else``; a model-only label in
-     shadow reads ``not_sure``; a line the member marked not-a-person is dropped and NEVER falls back to the joined transcript);
-     a recording without segments keeps the joined transcript with every line ``not_sure``.
+     turn with the segment's speaker (you | someone_else | not_sure; a tagged contact reads ``someone_else`` AND carries the
+     person - see PEOPLE; a model-only label in shadow reads ``not_sure``; a line the member marked not-a-person is dropped and NEVER
+     falls back to the joined transcript); a recording without segments keeps the joined transcript with every line ``not_sure``.
   2. PACK (code). Broadcast stretches (TV, radio, a video: broadcast cue words, or a long run with almost no first person) are
      dropped; lines with no cue (a date, a time, a list word, a commitment, the first person, a name) and no cued neighbour are
      dropped as routine. What is left is chunked to the slot (``night_mind``'s budget: 2,400 tokens at 8k) and at most
@@ -48,6 +48,21 @@ PRIVACY. Owner-scoped: candidates are keyed by the recording's ``user_id``; one 
 ``erase_entity`` (the forget cascade) deletes candidates naming a forgotten entity, ``forget_user`` deletes the member's reviews and
 candidates; a candidate whose text names an entity already in the forget ledger is never stored.
 
+PEOPLE (owner want 2026-10-18: Zoe builds a profile of the people the member tags). A turn the member CONFIRMED-tagged (never a
+suggestion) carries that person (``Line.person_id`` / ``person_name``, from ``people_index``: the member's OWN live people only) and
+renders ``[r1.2 09:14 Sam] text``; a chunk with such a line (or a line the member is known to have said) also asks for
+``person_fact`` (``PERSON_KIND`` / ``PERSON_RULE``; a chunk without one is asked exactly what it was before). ``verify_person_fact``:
+  * ``stated_by_subject``: the person, on their own tagged line, in the first person about themself (their words about a third person
+    are ``hearsay``, dropped); "I'm your cousin" there is a ``person_relation`` instead.
+  * ``owner_stated``: a line the member is known to have said, naming ONE of their people (ambiguous / unknown names drop); "my
+    sister, Lee" about a known person is a ``person_relation`` (an unknown name stays a ``person`` candidate).
+  * never from an unlabelled line (D4), never a sensitive class (``restraint`` + ``_PERSON_SENSITIVE``, D11, checked first), never
+    about a possible child, never more than the quoted words say (``_supported``), never a passing remark, never an identity claim.
+  Provenance on the candidate: payload ``person_id`` / ``name`` / ``stated_by`` / ``segment_ids``; evidence ``recording_id``,
+  ``segment_id``, ``speaker``, ``person_id`` and the exact quote. Writing them is ``omi_review_apply``'s, on approval only. Forget:
+  ``forget_people`` (the cascade, by person id), ``erase_entity`` (by name) and ``forget_recording`` erase what an approved one
+  wrote (``omi_review_apply.unwrite``) and delete the candidates.
+
 NEXT-PHASE SEAMS (not built here): ``pending_counts(user_id)`` is the code-composed count the first-turn mention / the Memories
 space will read (``mode() == "on"``); nothing here speaks, raises or pushes.
 """
@@ -72,7 +87,15 @@ logger = logging.getLogger(__name__)
 ENV = "ZOE_OMI_DAY_REVIEW"
 MODES = ("off", "shadow", "on")
 LANES = ("night", "day", "both")
-KINDS = ("calendar_event", "list_item", "reminder", "follow_up", "person", "owner_fact")
+KINDS = ("calendar_event", "list_item", "reminder", "follow_up", "person", "owner_fact", "person_fact", "person_relation")
+#: what the model may propose; ``person_relation`` is decided by CODE from a person / person_fact item, never asked for
+MODEL_KINDS = tuple(k for k in KINDS if k != "person_relation")
+#: the kinds that are about one of the member's own PEOPLE (payload ``person_id``): forgetting that person erases them
+PERSON_KINDS = frozenset({"person_fact", "person_relation"})
+#: who said a fact about a person (owner 2026-10-18): the person themself on a voice the member tagged, or the member. Never merged:
+#: neither silently overwrites the other (``omi_review_apply`` holds a contradiction for the owner to settle).
+STATED_BY_SUBJECT = "stated_by_subject"
+OWNER_STATED = "owner_stated"
 ACTION_KINDS = frozenset({"calendar_event", "list_item", "reminder", "follow_up"})
 SPEAKERS = ("you", "someone_else", "not_sure")          # the omi_segments vocabulary
 STATUSES = ("pending", "approving", "approved", "dismissed")
@@ -184,6 +207,24 @@ class Line:
     text: str
     speaker: str = "not_sure"
     clock: str = "device"      # the recording's time_quality: device | corrected | estimated (a pendant clock reset lands on the sync day)
+    person_id: str = ""        # the member's OWN person this turn's voice is CONFIRMED-tagged as ("" = nobody named it)
+    person_name: str = ""      # that person's name as the member's people row holds it (never the model's spelling)
+    segment_id: str = ""       # the omi_segments row the line came from ("" = the joined transcript)
+
+
+class Turn(tuple):
+    """One diarised turn for ``lines_for_day``: ``(text, speaker)`` plus the confirmed person and the segment it came from. A plain
+    ``(text, speaker)`` tuple is still accepted wherever a Turn is."""
+    __slots__ = ()
+
+    def __new__(cls, text: str, speaker: str, person_id: str = "", person_name: str = "", segment_id: str = ""):
+        return tuple.__new__(cls, (text, speaker, person_id, person_name, segment_id))
+
+    text = property(lambda self: self[0])
+    speaker = property(lambda self: self[1])
+    person_id = property(lambda self: self[2])
+    person_name = property(lambda self: self[3])
+    segment_id = property(lambda self: self[4])
 
 
 _STRIP = re.compile(r"[\[\]{}<>`|\\]")
@@ -215,23 +256,52 @@ def _sentences(text: str) -> list[str]:
 _VOICE_SPEAKER = {"you": "you", "someone_else": "someone_else", "person": "someone_else"}
 
 
-def segment_map(segs: Iterable[dict], segmented: Iterable[str] = ()) -> dict:
-    """The adapter: ``omi_voices.review_segments`` rows -> ``{recording_id: [(text, speaker), ...]}`` for ``lines_for_day``.
+def segment_map(segs: Iterable[dict], segmented: Iterable[str] = (), people: Optional[dict] = None) -> dict:
+    """The adapter: ``omi_voices.review_segments`` rows -> ``{recording_id: [Turn, ...]}`` for ``lines_for_day``.
     ``segmented`` names every recording that HAS segment rows (including ones the member marked entirely not-a-person): such a
     recording is always in the map, possibly empty, so a TV/Zoe line the member excluded is never re-read from the joined transcript.
-    A tagged contact's ``person_id`` is not carried: ``Line`` has no place for it and the person candidate rules need none."""
-    out: dict[str, list[tuple[str, str]]] = {str(r): [] for r in segmented}
+    A CONFIRMED tag (``label == 'person'``; ``review_segments`` never carries a suggestion) keeps its speaker ``someone_else`` and
+    also carries the person - but only one of the member's OWN live people (``people``: ``{id: {"name", ...}}``, from
+    ``people_index``). A tag naming anyone else (a deleted row, another member's) is no person: the line is plain ``someone_else``."""
+    people = people or {}
+    out: dict[str, list] = {str(r): [] for r in segmented}
     for sg in segs:
         label = sg.get("label")
         if label == "not_a_person":
             continue
-        out.setdefault(str(sg["recording_id"]), []).append((str(sg.get("text") or ""), _VOICE_SPEAKER.get(label, "not_sure")))
+        pid = str(sg.get("tagged_person_id") or "") if label == "person" else ""
+        person = people.get(pid) if pid else None
+        out.setdefault(str(sg["recording_id"]), []).append(Turn(
+            str(sg.get("text") or ""), _VOICE_SPEAKER.get(label, "not_sure"), pid if person else "",
+            str(person["name"]) if person else "", str(sg.get("id") or "")))
     return out
 
 
-async def voice_segments(db, user_id: str, recording_ids: Sequence[str]) -> dict:
+async def people_index(db, user_id: str) -> dict:
+    """``{person_id: {"id", "name", "relationship", "child"}}`` of the member's OWN live people (``people.user_id`` = the member):
+    who a tagged voice may be, and whom a line the wearer said may name. ``child`` = ``omi_voices.person_may_be_child``."""
+    import omi_voices
+    try:
+        rows = await _fetch(db, "SELECT id, name, birthday, relationship FROM people WHERE user_id = ? AND (deleted = 0 OR deleted IS NULL)",
+                            (user_id,))
+    except Exception as exc:  # noqa: BLE001 - no people table: nobody can be named
+        if omi_voices._missing(exc):
+            return {}
+        raise
+    out = {}
+    for r in rows:
+        name = clean(r["name"] or "", 60)
+        if name:
+            out[str(r["id"])] = {"id": str(r["id"]), "name": name, "relationship": str(r["relationship"] or ""),
+                                 "child": omi_voices.person_may_be_child({"relationship": r["relationship"],
+                                                                                       "birthday": r["birthday"]})}
+    return out
+
+
+async def voice_segments(db, user_id: str, recording_ids: Sequence[str], people: Optional[dict] = None) -> dict:
     """Per-turn speaker segments of these recordings for ``review_day``. A database without migration 0055 has none (``{}``: the
-    joined-transcript path); any OTHER read failure raises - falling back would re-admit lines the member marked not-a-person."""
+    joined-transcript path); any OTHER read failure raises - falling back would re-admit lines the member marked not-a-person.
+    ``people`` (``people_index``) resolves a confirmed tag to the member's own person; None = read it when a tag is present."""
     if not recording_ids:
         return {}
     import omi_voices
@@ -242,32 +312,37 @@ async def voice_segments(db, user_id: str, recording_ids: Sequence[str]) -> dict
         if omi_voices._missing(exc):
             return {}
         raise
-    return segment_map(segs, have)
+    if people is None and any(sg.get("label") == "person" for sg in segs):
+        people = await people_index(db, user_id)
+    return segment_map(segs, have, people)
 
 
 def lines_for_day(recordings: Sequence[dict], segments: Optional[dict] = None) -> list[Line]:
     """Every recording of the day (dicts with ``id``, ``started_at``, ``transcript``), in recording order, as numbered lines.
-    ``segments`` (the omi_segments SEAM): ``{recording_id: [(text, speaker), ...]}``; a recording present there is read per segment
-    with its speaker label (you | someone_else | not_sure, anything else -> not_sure) instead of from the joined transcript."""
+    ``segments`` (the omi_segments SEAM): ``{recording_id: [Turn | (text, speaker), ...]}``; a recording present there is read per
+    segment with its speaker label (you | someone_else | not_sure, anything else -> not_sure) and its confirmed person, instead of
+    from the joined transcript."""
     out: list[Line] = []
     recs = sorted(recordings, key=lambda r: str(r.get("started_at") or ""))
     for k, r in enumerate(recs, 1):
         dt = _parse_utc(r.get("started_at"))
         at = dt.astimezone(_tz()).strftime("%H:%M") if dt else "--:--"
-        parts: list[tuple[str, str]]
+        parts: list[Turn]
         if segments and r["id"] in segments:
             # a diarised turn can run long: split it like the joined path does (sentences, then a cut at a space under LINE_CHARS) so
-            # nothing past the cap is lost, and every piece keeps the turn's speaker
-            parts = [(piece, s if s in SPEAKERS else "not_sure") for t, s in segments[r["id"]] for piece in _sentences(str(t or ""))]
+            # nothing past the cap is lost, and every piece keeps the turn's speaker and person
+            parts = [Turn(piece, tn[1] if tn[1] in SPEAKERS else "not_sure", *tuple(tn)[2:5])
+                     for tn in segments[r["id"]] for piece in _sentences(str(tn[0] or ""))]
         else:
-            parts = [(s, "not_sure") for s in _sentences(str(r.get("transcript") or ""))]
+            parts = [Turn(s, "not_sure") for s in _sentences(str(r.get("transcript") or ""))]
         n = 0
-        for text, spk in parts:
-            t = clean(text)
+        for tn in parts:
+            t = clean(tn.text)
             if not t or t == "[forgotten]":
                 continue
             n += 1
-            out.append(Line(f"r{k}.{n}", str(r["id"]), at, t, spk, str(r.get("time_quality") or "device")))
+            out.append(Line(f"r{k}.{n}", str(r["id"]), at, t, tn.speaker, str(r.get("time_quality") or "device"),
+                            tn.person_id, clean(tn.person_name, 40) if tn.person_id else "", tn.segment_id))
     return out
 
 
@@ -417,12 +492,23 @@ def est_tokens(text: str) -> int:
 
 
 def render(ln: Line) -> str:
-    return f"[{ln.id} {ln.at}] {ln.text}"
+    """``[r1.2 09:14] text``, or ``[r1.2 09:14 Sam] text`` for a turn the member TAGGED (the name is the member's own people row,
+    cleaned like the text: it cannot forge a label or the fence)."""
+    who = f" {ln.person_name}" if ln.person_id and ln.person_name else ""
+    return f"[{ln.id} {ln.at}{who}] {ln.text}"
 
 
-def pack(lines: Sequence[Line], chunk_tokens: int, calls: int) -> tuple[list[list[Line]], dict[str, int]]:
+def _named(names: Iterable[str]) -> Optional["re.Pattern[str]"]:
+    """A whole-word, case-SENSITIVE match of any capitalised word (3+ letters) of the member's people's names: "Sam" cues a line,
+    "will" / "may" in lower case never do."""
+    toks = sorted({t for n in names for t in re.findall(r"[^\W\d_]{3,}", str(n or "")) if t[:1].isupper()}, key=len, reverse=True)
+    return re.compile(r"\b(?:" + "|".join(map(re.escape, toks)) + r")\b") if toks else None
+
+
+def pack(lines: Sequence[Line], chunk_tokens: int, calls: int, *, names: Iterable[str] = ()) -> tuple[list[list[Line]], dict[str, int]]:
     """``(chunks to send, counts)``: broadcast stretches and uncued lines dropped, the rest chunked to ``chunk_tokens``, the best
-    ``calls`` chunks kept (by cue density), sent in day order."""
+    ``calls`` chunks kept (by cue density), sent in day order. A turn the member TAGGED with a person, or a line naming one of their
+    people (``names``), is cued: "I work at the library" carries no date or list word, and is exactly what a person's profile is."""
     counts = {"lines": len(lines), "lines_media": 0, "lines_zoe": 0, "lines_routine": 0, "chunks_total": 0, "chunks_skipped": 0}
     # the distress floor (distress_handoff, the digest's and night mind's own guard): ANY distress tier leaves that line and the
     # conversation around it (+/- WINDOW_LINES of the same recording) out - no model call, no candidate, nothing to any writer (gap
@@ -442,7 +528,8 @@ def pack(lines: Sequence[Line], chunk_tokens: int, calls: int) -> tuple[list[lis
             zoe.add(lines[i + 1].id)
     counts["lines_zoe"] = len(zoe)
     talk = [ln for ln in lines if ln.id not in media and ln.id not in zoe]
-    cued = [bool(_CUE.search(ln.text)) for ln in talk]
+    named = _named(names)
+    cued = [bool(_CUE.search(ln.text) or ln.person_id or (named and named.search(ln.text))) for ln in talk]
     keep = [ln for i, ln in enumerate(talk) if cued[i] or (i > 0 and cued[i - 1]) or (i + 1 < len(talk) and cued[i + 1])]
     counts["lines_routine"] = len(talk) - len(keep)
     chunks: list[list[Line]] = []
@@ -499,13 +586,40 @@ DATA>>>
 <<<DATA"""
 
 
+#: added to a chunk's prompt ONLY when it holds a line the member tagged with a person or confirmed as their own: a day nobody
+#: labelled (D4, the reduced form) is asked exactly what it was asked before, and can never yield a fact about a person
+PERSON_KIND = ('- person_fact: a lasting fact about a NAMED person who is not the wearer (their work, where they live or come from, '
+               'what they love or do, a pet): said by that person about themself on a line labelled with their name, or said about them '
+               'by name. fields: {"name", "fact" (short, about them, without their name, e.g. "works at the library")}')
+PERSON_RULE = ('- A line with a name after the time ([r1.2 09:14 Sam]) was said by that person: the wearer named their voice. What they '
+               'say about themself is a person_fact with their name, never an owner_fact.')
+
+
 def prompt_sha() -> str:
-    return hashlib.sha256((SYSTEM + USER).encode()).hexdigest()[:12]
+    return hashlib.sha256((SYSTEM + USER + PERSON_KIND + PERSON_RULE).encode()).hexdigest()[:12]
+
+
+def _after_line(text: str, prefix: str, add: str) -> str:
+    """``text`` with ``add`` on its own line right after the first line starting with ``prefix`` (unchanged when there is none)."""
+    i = text.find("\n" + prefix)
+    if i < 0:
+        return text
+    j = text.find("\n", i + 1)
+    return text if j < 0 else text[:j] + "\n" + add + text[j:]
+
+
+def wants_people(chunk: Sequence[Line]) -> bool:
+    """Does this chunk carry a member-confirmed speaker (a tagged person, or a line the wearer is known to have said)?"""
+    return any(ln.person_id or ln.speaker == "you" for ln in chunk)
 
 
 def messages_for(chunk: Sequence[Line]) -> list[dict]:
-    return [{"role": "system", "content": SYSTEM},
-            {"role": "user", "content": USER.format(max_items=MAX_ITEMS_PER_CHUNK, lines="\n".join(render(x) for x in chunk))}]
+    text = USER.format(max_items=MAX_ITEMS_PER_CHUNK, lines="\n".join(render(x) for x in chunk))
+    if wants_people(chunk):
+        text = _after_line(text, "- owner_fact:", PERSON_KIND)
+        text = _after_line(text, "- Something another person says about themself", PERSON_RULE)
+        text = text.replace("Speakers are NOT labelled:", "Most speakers are NOT labelled:", 1)
+    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}]
 
 
 # --- the model call -----------------------------------------------------------------------------------------------
@@ -729,9 +843,10 @@ def _restraint(text: str) -> set[str]:
 
 
 def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime], as_of: datetime, counts: dict,
-           owner_names: Iterable[str] = ()) -> Optional[Candidate]:
+           owner_names: Iterable[str] = (), people: Optional[dict] = None) -> Optional[Candidate]:
     """One model item -> a Candidate, or None with ``counts['drop_<reason>']`` bumped. Pure but for the date parser and restraint.
-    ``owner_names``: the wearer's own name(s) from the account - never proposed as a person they met."""
+    ``owner_names``: the wearer's own name(s) from the account - never proposed as a person they met. ``people``: the member's own
+    people (``people_index``) - whom a person_fact / relationship may be about."""
     def drop(reason: str) -> None:
         counts[f"drop_{reason}"] = counts.get(f"drop_{reason}", 0) + 1
 
@@ -741,7 +856,7 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
     kind = str(item.get("kind") or "").strip()
     fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
     ids = [str(i).strip() for i in (item.get("ids") or []) if str(i).strip()][:3]
-    if kind not in KINDS:
+    if kind not in MODEL_KINDS:
         drop("bad_kind")
         return None
     cited = [by_id[i] for i in ids if i in by_id]
@@ -771,6 +886,8 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
         drop("no_intent")                        # "I'm not going off the rails" is a line, not something to do
         return None
     anchor = said_at(line)
+    if kind == "person_fact":
+        return verify_person_fact(fields, about, cited, line, span, speaker, hedged, counts, people or {})
     if kind == "owner_fact":
         fact = _field(fields, "fact", 160)
         if (speaker == "someone_else" or about not in ("me", "") or not _FIRST_SG.search(span) or _REPORTED.search(span)
@@ -811,7 +928,13 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
         if not _INTERACT.search(span):
             drop("no_interaction")               # "and then Julie, Tanika, Cody": a name in passing
             return None
-        payload = {"name": name, "relation": relation_of(name, span)}       # the model's own "relation" is never trusted: direction
+        relation = relation_of(name, span)
+        known = resolve_known(name, people or {}) if relation and speaker == "you" else None
+        if known and known != "ambiguous":
+            # "my brother, Sam" from a line the wearer is KNOWN to have said, about one of their own people: the relationship to the
+            # wearer, for that person (an unknown name stays a "person" candidate; an unconfirmed speaker never reaches here - D4)
+            return _relation_candidate(known, relation, OWNER_STATED, cited, line, span, speaker, counts)
+        payload = {"name": name, "relation": relation}       # the model's own "relation" is never trusted: direction
     elif kind == "list_item":
         it = _field(fields, "item", 60)
         if not it:
@@ -851,12 +974,216 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
             payload = {"title": title, "date": d or "", "time": t or "", "when_said": clean(when_text, 40)}
     main = payload.get("item") or payload.get("title") or payload.get("name") or payload.get("fact") or ""
     key = f"{kind}|{_norm(main)}" + (f"|{payload.get('date')}" if kind == "calendar_event" else "")
+    return _candidate(kind, payload, key, cited, line, span, conf, speaker)
+
+
+def _evidence(line: Line, span: str) -> dict:
+    """One evidence entry: the line, the recording, the exact quote, when, which clock, which zone - and, for a diarised line, the
+    segment and who said it (``speaker``; ``person_id`` when the member tagged the voice). Pointers and the quote, nothing else."""
+    ev = {"line": line.id, "recording_id": line.recording_id, "quote": span, "at": line.at, "clock": line.clock, "tz": tz_name()}
+    if line.segment_id:
+        ev.update(segment_id=line.segment_id, speaker=line.speaker)
+        if line.person_id:
+            ev["person_id"] = line.person_id
+    return ev
+
+
+def _candidate(kind: str, payload: dict, key: str, cited: Sequence[Line], line: Line, span: str, conf: float,
+               speaker: str) -> Candidate:
     if line.clock == "estimated":
         conf -= 0.1                              # the day itself may be wrong (P1-2): the owner sees the clock it came from
-    return Candidate(kind=kind, payload=payload, evidence=[{"line": line.id, "recording_id": line.recording_id, "quote": span,
-                                                            "at": line.at, "clock": line.clock, "tz": tz_name()}],
+    return Candidate(kind=kind, payload=payload, evidence=[_evidence(line, span)],
                      recording_ids=sorted({ln.recording_id for ln in cited}), confidence=round(max(0.1, min(0.95, conf)), 2),
                      speaker=speaker, dedup_key=hashlib.sha256(key.encode()).hexdigest()[:24])
+
+
+# --- facts about the member's people (a tagged voice, or the wearer naming one of their people) -----------------------------------
+#: D11 (owner 2026-10-18): never proposed about another person, beyond ``restraint``'s classes (health, money, grief, family conflict,
+#: affect, another household member): intimate life, beliefs and politics, legal trouble, status papers, health and money words the
+#: classifier may miss. Conservative on purpose: "plays on the tennis court" is lost, which costs one fact; a leak costs trust.
+_PERSON_SENSITIVE = re.compile(
+    r"\b(?:pregnan\w*|sex\w*|gay|lesbian|bisexual|queer|trans(?:gender)?|affair|cheat\w*|dating|hook(?:ed|ing)? up|girlfriend|"
+    r"boyfriend|divorc\w*|separat(?:ed|ing|ion)|break ?up|broke up|religio\w*|church|mosque|temple|synagogue|pray\w*|atheist|"
+    r"vot(?:e|ed|es|ing)|politic\w*|labou?r party|liberals?|greens|arrest\w*|prison|jail|court|police|criminal|charged|convicted|"
+    r"lawyer|lawsuit|visa|deport\w*|citizenship|immigra\w*|refugee|rehab|addict\w*|alcoholic|drugs?|therap\w*|psychiatr\w*|"
+    r"counsell?(?:or|ing)|depress\w*|anxiety|diagnos\w*|cancer|surgery|hospital|medicat\w*|pills|disabilit\w*|sick|ill|"
+    r"salary|wages?|debt|loans?|mortgage|bankrupt\w*|broke|income|owes?|pension)\b", _I)
+#: a lasting fact ABOUT someone, in the third person and without their name ("works at the library", "is from Bunbury")
+_FACT_DURABLE = re.compile(
+    r"\b(?:is|was|has been|'s) (?:a|an|from|married|engaged|retired|vegetarian|vegan|learning|studying|training|based|into|"
+    r"a fan|mad about)\b|\b(?:works?|worked|lives?|lived|grew up|was born|studie[sd]|study|studying|manages?|runs?|owns?|loves?|"
+    r"likes?|hates?|prefers?|enjoys?|plays?|supports?|has|teach(?:es)?|coach(?:es)?|drives?|speaks?|volunteers?|collects?|"
+    r"breeds?|builds?|cooks?|bakes?|surfs?|swims?|rides?|keeps?)\b", _I)
+#: the tagged person tells the wearer how they are related ("I'm your cousin"): the relation to the WEARER, in the wearer's words
+_YOUR_REL = re.compile(rf"\b(?:i'm|i am|im) (?:your|ur) ({_REL})\b", _I)
+
+
+def resolve_known(name: str, people: dict) -> Optional[dict | str]:
+    """The member's own person a spoken name means: the ONE person whose folded name equals it, or failing that the one whose name
+    holds every word of it ("Sam" -> "Sam Okoro"). Two or more = ``"ambiguous"`` (never guessed); none = None."""
+    if not name or not people:
+        return None
+    from people_graph import match_tier
+    plist = list(people.values())
+    _tier, hits = match_tier(name, [p["name"] for p in plist], allow_prefix=False)
+    if len(hits) > 1:
+        return "ambiguous"
+    return plist[hits[0]] if hits else None
+
+
+def _supported(fact: str, span: str, name: str = "") -> bool:
+    """Do the fact's content words come from the quote (two thirds of them, a 4-letter stem counting: "works" ~ "work")? The model
+    points; it may not add what was not said."""
+    skip = set(_norm(name).split())
+    fw = [w for w in _content(fact) if w not in skip and len(w) > 2]
+    sw = _norm(span).split()
+
+    def seen(w: str) -> bool:
+        return any(s == w or (len(w) >= 4 and len(s) >= 4 and s[:4] == w[:4]) for s in sw)
+    return bool(fw) and sum(seen(w) for w in fw) * 3 >= len(fw) * 2
+
+
+def _relation_candidate(person: dict, relation: str, stated_by: str, cited: Sequence[Line], line: Line, span: str, speaker: str,
+                        counts: dict) -> Optional[Candidate]:
+    relation = clean(relation, 40).lower()
+    if not relation:
+        counts["drop_empty"] = counts.get("drop_empty", 0) + 1
+        return None
+    if _restraint(span) & _SENSITIVE_ALL:         # not ``other_member``: a family word IS what a relationship says
+        counts["drop_sensitive"] = counts.get("drop_sensitive", 0) + 1
+        return None
+    if _norm(person.get("relationship") or "") == _norm(relation):
+        counts["drop_known_relation"] = counts.get("drop_known_relation", 0) + 1      # already what the member's people row says
+        return None
+    payload = {"person_id": person["id"], "name": person["name"], "relation": relation, "stated_by": stated_by,
+               "segment_ids": [ln.segment_id for ln in cited if ln.segment_id]}
+    return _candidate("person_relation", payload, f"person_relation|{person['id']}|{_norm(relation)}", cited, line, span,
+                      0.7 if stated_by == OWNER_STATED else 0.6, speaker)
+
+
+def verify_person_fact(fields: dict, about: str, cited: Sequence[Line], line: Line, span: str, speaker: str, hedged: bool,
+                       counts: dict, people: dict) -> Optional[Candidate]:
+    """A ``person_fact`` item -> a candidate about ONE of the member's own people, or None (counted). Two sources, never more:
+
+      * ``stated_by = "stated_by_subject"``: the quoted line is a turn the member TAGGED as that person, and it is them speaking about
+        themself (first person, not quoting anyone, not read out). Their words about a third person are hearsay: dropped.
+      * ``stated_by = "owner_stated"``: the quoted line is one the wearer is KNOWN to have said (their own label, or ``ZOE_OMI_SPEAKER_TAG=on``)
+        and names one of their people (one unique match; ambiguous or unknown names are dropped - a new name is a ``person``).
+
+    An unlabelled line (``not_sure``: no tag, no enrolment - D4's reduced form) never yields a fact about a person. Then the floors:
+    the fact must come from the quote's own words, be lasting (not "today"), carry no sensitive class (``restraint`` + D11's list),
+    no identity claim, and not be about someone who may be a child."""
+    def drop(reason: str) -> None:
+        counts[f"drop_{reason}"] = counts.get(f"drop_{reason}", 0) + 1
+
+    name = _field(fields, "name", 60)
+    fact = _field(fields, "fact", 160)
+    if line.person_id:
+        person = people.get(line.person_id) or {"id": line.person_id, "name": line.person_name, "child": False}
+        if name and not resolve_known(name, {person["id"]: person}):
+            drop("hearsay")                      # a tagged voice talking about somebody else: their word, not the subject's
+            return None
+        if not _FIRST_SG.search(span) or _REPORTED.search(span) or _quoted(span) or about not in ("me", ""):
+            drop("not_subject_words")
+            return None
+        rel = _YOUR_REL.search(span)
+        if rel:
+            return _relation_candidate(person, "my " + rel.group(1), STATED_BY_SUBJECT, cited, line, span, speaker, counts)
+        stated_by, conf = STATED_BY_SUBJECT, 0.6
+        durable = _DURABLE.search(span) or _FACT_DURABLE.search(fact)
+    elif speaker == "you":
+        found = resolve_known(name, people)
+        if found == "ambiguous":
+            drop("ambiguous_person")
+            return None
+        if not found:
+            drop("unknown_person")               # a new name is a "person" candidate first; facts follow once they are someone
+            return None
+        person = found
+        if not any(re.search(rf"\b{re.escape(t)}\b", span, _I) for t in name.split()) or _quoted(span):
+            drop("not_owner_words")              # the wearer must NAME them in the quoted words, in their own voice
+            return None
+        stated_by, conf = OWNER_STATED, 0.7
+        durable = _FACT_DURABLE.search(fact)
+    else:
+        drop("unverified_speaker")               # nobody confirmed who said it: never a fact about a person (D4)
+        return None
+    if (_restraint(f"{fact} {span}") & (_SENSITIVE_FACT | {"other_member"})) or _PERSON_SENSITIVE.search(f"{fact} {span}"):
+        drop("sensitive")                        # D11: never proposed, only counted (before any other floor)
+        return None
+    if not fact or vague_text(fact):
+        drop("vague")
+        return None
+    if not _supported(fact, span, person["name"]):
+        drop("unsupported")                      # the model's fact says more than the words did
+        return None
+    if not durable or _PASSING.search(span) or len(span.split()) < 3:
+        drop("not_durable")
+        return None
+    if _IDENTITY.search(span) or _IDENTITY.search(fact):
+        drop("identity")                         # names come from the member's tag; addresses are never proposed
+        return None
+    if person.get("child"):
+        drop("child")                            # a person who is (or may be) a child is a label only: no facts about them
+        return None
+    payload = {"person_id": person["id"], "name": person["name"], "fact": fact, "stated_by": stated_by,
+               "segment_ids": [ln.segment_id for ln in cited if ln.segment_id]}
+    return _candidate("person_fact", payload, f"person_fact|{person['id']}|{_norm(fact)}", cited, line, span,
+                      conf - (0.1 if hedged else 0.0), speaker)
+
+
+_NEG_WORDS = frozenset("not no never none doesn don didn isn wasn aren weren won cannot can hasn haven hadn".split())
+#: the predicate families a person's fact can hold only ONE value of at a time ("works at the bakery" / "works at the library")
+_SINGLE_VALUED = frozenset({"work", "live", "born", "grew", "from", "based", "married", "engaged", "divorced", "retired"})
+
+
+def _pred_family(text: str) -> tuple[bool, frozenset]:
+    neg, preds = fact_predicate(text)
+    return neg, frozenset("sentiment" if p in "+-" else p[:-1] if p.endswith("s") and p[:-1] in _SINGLE_VALUED else p for p in preds)
+
+
+def facts_conflict(a: str, b: str, name: str = "") -> bool:
+    """Do two facts about the SAME person disagree? Deterministic, narrow on purpose (a missed conflict is two rows the owner can
+    see; a false one only holds an approval for the owner to settle):
+      * the same thing with the opposite polarity or sentiment ("likes coffee" / "doesn't like coffee" / "hates coffee"), or
+      * a single-valued predicate with a different value ("works at the bakery" / "works at the library").
+    The person's name and a ``Name:`` prefix are ignored."""
+    skip = set(_norm(name).split())
+
+    def obj(t: str) -> set:
+        return {w for w in _content(t) if w not in skip and w not in _PRED and w not in _NEG_WORDS and len(w) > 2}
+    (na, pa), (nb, pb) = _pred_family(a), _pred_family(b)
+    shared = pa & pb
+    if not shared and not ("sentiment" in pa and "sentiment" in pb):
+        return False
+    oa, ob = obj(a), obj(b)
+    if oa and ob and len(oa & ob) / min(len(oa), len(ob)) >= 0.5:
+        sa = fact_predicate(a)[1] & {"+", "-"}
+        sb = fact_predicate(b)[1] & {"+", "-"}
+        return na != nb or (bool(sa and sb) and sa != sb)
+    return bool(shared & _SINGLE_VALUED) and bool(oa) and bool(ob) and not (oa & ob)
+
+
+def same_fact(a: str, b: str, name: str = "") -> bool:
+    """The same fact about the same person in other words ("works at the library" / "Sam: works at the library on weekdays"): the
+    same predicate family and polarity, and three quarters of the smaller one's content words shared. Never true for a conflict."""
+    if _pred_family(a) != _pred_family(b) or facts_conflict(a, b, name):
+        return False
+    skip = set(_norm(name).split())
+    x = {w for w in _content(a) if w not in skip}
+    y = {w for w in _content(b) if w not in skip}
+    return bool(x and y) and len(x & y) / min(len(x), len(y)) >= 0.75
+
+
+def may_be_child(person: dict) -> bool:
+    """``omi_voices.person_may_be_child`` for the apply module (which never names the voice store: the never-auth allow-list)."""
+    import omi_voices
+    return omi_voices.person_may_be_child(person)
+
+
+def turn_ref_for(segment_ids: Sequence[str], recording_id: str) -> str:
+    """The memory row's ``turn_ref`` pointer for a pendant fact: the first segment it rests on, else the recording."""
+    return f"omi_segment:{segment_ids[0]}" if segment_ids else f"omi_recording:{recording_id}"
 
 
 def merge(cands: Iterable[Candidate]) -> list[Candidate]:
@@ -1055,9 +1382,14 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
         if not recs:
             res["status"] = "nothing_to_do"
             return res
+        try:                         # the member's own people: whom a tagged voice / a named person may be (fail-soft: nobody)
+            people = await people_index(db, user_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("omi_day_review: people unreadable (%s) - no facts about people this pass", type(exc).__name__)
+            people = {}
         if segments is None:         # the voice labels (None = read them; a caller may pass {} to force the joined transcripts)
             try:
-                segments = await voice_segments(db, user_id, [r["id"] for r in recs])
+                segments = await voice_segments(db, user_id, [r["id"] for r in recs], people)
             except Exception as exc:  # noqa: BLE001 - before the claim, so nothing to release; the day is retried
                 res.update(status="error", reason="segments_" + type(exc).__name__)
                 _log(res, {})
@@ -1071,7 +1403,7 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
     lines = lines_for_day(recs, segments)
     by_id = {ln.id: ln for ln in lines}
     start_of = {r["id"]: _parse_utc(r["started_at"]) or now for r in recs}
-    chunks, counts = pack(lines, cfg.chunk_tokens, cfg.max_calls)
+    chunks, counts = pack(lines, cfg.chunk_tokens, cfg.max_calls, names=[p["name"] for p in people.values()])
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
     cands: list[Candidate] = []
     try:
@@ -1091,7 +1423,7 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
             local = {ln.id: ln for ln in chunk}
             for it in items[:MAX_ITEMS_PER_CHUNK]:
                 res["proposed"] += 1
-                c = verify(it, local, lambda ln: start_of.get(ln.recording_id, now), as_of, counts, owner_names)
+                c = verify(it, local, lambda ln: start_of.get(ln.recording_id, now), as_of, counts, owner_names, people)
                 if c is not None:
                     cands.append(c)
     except (Deferred, ModelUnreachable, Exception) as exc:  # noqa: BLE001 - a half day is never stored: release the claim
@@ -1247,6 +1579,23 @@ async def dismiss(user_id: str, cid: str, *, via: str = "desktop") -> bool:
         return bool(getattr(cur, "rowcount", 0))
 
 
+VOICES_PER_CARD = 3
+
+
+async def voices_to_name(user_id: str, limit: int = VOICES_PER_CARD) -> list[dict]:
+    """A FEW of the member's own unknown voices for the day-review card (owner 2026-10-18: new voices are named there, a few at a
+    time), most recently heard first, each with ONE sample line: ``omi_voices.list_unknown``, the member's own layer only. Naming one
+    goes through the voice tag route; facts about that person follow in a later review. Fail-soft: no table / tagging off = []."""
+    try:
+        import omi_voices
+        async with _db() as db:
+            voices = await omi_voices.list_unknown(db, user_id, samples=1)
+    except Exception:  # noqa: BLE001
+        return []
+    return [{"id": v["id"], "name": v["name"], "segments": v["segments"], "recordings": v["recordings"], "days": v["days"],
+             "last_heard_at": v["last_heard_at"], "sample": (v["samples"] or [{}])[0]} for v in voices[:max(0, limit)]]
+
+
 async def pending_counts(user_id: str) -> dict:
     """{kind: n} of the member's pending candidates. The SEAM for the next phase (the first-turn mention / the Memories space):
     a code-composed count, never text."""
@@ -1285,19 +1634,27 @@ async def forget_recording(user_id: str, rid: str) -> int:
     """A deleted recording takes its words with it (``omi_recordings.delete_recording`` calls this BEFORE its tombstone, so a failure
     here leaves the recording in place for a retry). Candidates resting on it are deleted; one already approved (or being approved)
     keeps only its provenance index (``written_ref``, kind, day) - its quotes and payload are cleared. A table that is not migrated has
-    nothing to clear. Returns the candidates touched."""
+    nothing to clear. Returns the candidates touched.
+
+    A fact about one of the member's PEOPLE (``person_fact`` / ``person_relation``) is different: it is DERIVED from what was said in
+    this recording, so it goes with it - the memory row / relationship it wrote is erased (``omi_review_apply.unwrite``, which raises:
+    then nothing here is deleted and the recording stays for the retry) and the candidate is deleted, not kept."""
     try:
         async with _db() as db:
-            rows = await _fetch(db, "SELECT id, status, recording_ids FROM omi_day_candidates WHERE user_id = ? AND recording_ids LIKE ?",
-                                (user_id, f'%"{rid}"%'))
-            n = 0
+            rows = await _fetch(db, "SELECT id, kind, status, payload, written_ref, recording_ids FROM omi_day_candidates "
+                                    "WHERE user_id = ? AND recording_ids LIKE ?", (user_id, f'%"{rid}"%'))
+            mine = []
             for r in rows:
                 try:
                     if rid not in json.loads(r["recording_ids"] or "[]"):
                         continue
                 except ValueError:
                     pass
-                if r["status"] in ("approved", "approving"):
+                mine.append(r)
+            await _unwrite(user_id, [r for r in mine if r["kind"] in PERSON_KINDS])
+            n = 0
+            for r in mine:
+                if r["status"] in ("approved", "approving") and r["kind"] not in PERSON_KINDS:
                     await db.execute("UPDATE omi_day_candidates SET evidence = '[]', payload = '{}' WHERE id = ?", (r["id"],))
                 else:
                     await db.execute("DELETE FROM omi_day_candidates WHERE id = ?", (r["id"],))
@@ -1313,15 +1670,20 @@ async def forget_recording(user_id: str, rid: str) -> int:
 
 async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = False) -> int:
     """Forget a name: every candidate of the member whose payload or evidence names it is deleted (an approved one keeps the row it
-    wrote - that row follows its own store's forget path - but loses its text here too)."""
+    wrote - that row follows its own store's forget path - but loses its text here too). An approved fact or relationship ABOUT one
+    of the member's people that names it is erased first (``omi_review_apply.unwrite``: the memory row, the relationship it set), so
+    forgetting a person never depends on the memory sweep finding the name in the row's text."""
     try:
         n = 0
         async with erase_gate.erasing(user_id, bump=False):
             async with _db() as db:
-                for r in await _fetch(db, "SELECT id, payload, evidence FROM omi_day_candidates WHERE user_id = ?", (user_id,)):
-                    if rx.search(str(r["payload"] or "")) or rx.search(str(r["evidence"] or "")):
-                        await db.execute("DELETE FROM omi_day_candidates WHERE id = ?", (r["id"],))
-                        n += 1
+                hits = [r for r in await _fetch(db, "SELECT id, kind, status, payload, evidence, written_ref FROM omi_day_candidates "
+                                                    "WHERE user_id = ?", (user_id,))
+                        if rx.search(str(r["payload"] or "")) or rx.search(str(r["evidence"] or ""))]
+                await _unwrite(user_id, [r for r in hits if r["kind"] in PERSON_KINDS])
+                for r in hits:
+                    await db.execute("DELETE FROM omi_day_candidates WHERE id = ?", (r["id"],))
+                    n += 1
                 await db.commit()
         return n
     except Exception as exc:  # noqa: BLE001
@@ -1329,6 +1691,48 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
             raise
         logger.warning("omi_day_review: candidates naming a forgotten entity NOT erased (%s)", type(exc).__name__)
         return 0
+
+
+async def forget_people(user_id: str, person_ids: Iterable[str]) -> int:
+    """Forget these people of the member (the forget cascade, with the ids its people step resolved): every candidate ABOUT them
+    (``person_fact`` / ``person_relation``) goes, and what an approved one wrote is erased first. RAISES (the cascade records it);
+    a table that is not migrated is nothing to reach."""
+    ids = {str(p) for p in person_ids if p}
+    if not ids:
+        return 0
+    try:
+        async with erase_gate.erasing(user_id, bump=False):
+            async with _db() as db:
+                rows = [r for r in await _fetch(db, "SELECT id, kind, status, payload, written_ref FROM omi_day_candidates WHERE user_id = ? "
+                                                    "AND kind IN ('person_fact', 'person_relation')", (user_id,))
+                        if str(_payload(r).get("person_id") or "") in ids]
+                await _unwrite(user_id, rows)
+                for r in rows:
+                    await db.execute("DELETE FROM omi_day_candidates WHERE id = ? AND user_id = ?", (r["id"], user_id))
+                await db.commit()
+                return len(rows)
+    except Exception as exc:  # noqa: BLE001
+        import memory_forget_cascade
+        if memory_forget_cascade._store_missing(exc):
+            return 0
+        raise
+
+
+def _payload(row: Any) -> dict:
+    try:
+        out = json.loads(row["payload"] or "{}")
+        return out if isinstance(out, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+async def _unwrite(user_id: str, rows: Sequence[Any]) -> int:
+    """Erase what APPROVED person candidates wrote (``omi_review_apply.unwrite``). Nothing approved: nothing to do (and no import)."""
+    done = [{"kind": r["kind"], "written_ref": r["written_ref"], "payload": _payload(r)} for r in rows if r["written_ref"]]
+    if not done:
+        return 0
+    import omi_review_apply
+    return await omi_review_apply.unwrite(user_id, done)
 
 
 # --- the daytime fallback lane (zoe-data, the live 4B, only when idle) ------------------------------------------

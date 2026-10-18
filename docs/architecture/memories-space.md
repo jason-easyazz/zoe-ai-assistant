@@ -255,6 +255,8 @@ flag-off 404 hides it):
   that conversation. They are written on approval to the **owner's layer 2** (a memory row with
   `entity_id = <people id>`) and never to the directory or the person's own layer 3. The restraint rules of §5.5
   rule 4 apply: candidates whose content falls in a restraint class are not proposed (§6.4).
+  **Built 2026-10-19** as the kinds `person_fact` (`stated_by_subject` | `owner_stated`) and `person_relation`; the record is
+  [omi-voice-tagging.md](../knowledge/omi-voice-tagging.md), "Facts about tagged people".
 
 **Touch** (the panel `memories` surface, "Pendant" section; touch phase P6):
 

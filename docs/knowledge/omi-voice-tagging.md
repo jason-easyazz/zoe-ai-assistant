@@ -148,8 +148,55 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
 - The TTS-playback log behind `zoe_spoken_spans`.
 - Household-member detection for D12.
 - The panel "Who is this?" (touch).
-- Facts ABOUT a tagged person from what they said: the day review reads a tagged line as `someone_else` and does not carry the
-  person, so no `person_memory` candidate is proposed yet (memories-space section 2.4, "Populating a contact").
+- A Pendant-page card for the day review (approve / skip). The API carries everything it needs (below); no UI reads it yet.
+
+## Facts about tagged people (built 2026-10-19, behind `ZOE_OMI_DAY_REVIEW`)
+
+Owner want: once a voice is named, Zoe builds a profile of that person from the conversations. Code: `omi_day_review.py`
+(`people_index`, `segment_map`, `verify_person_fact`, `facts_conflict`), `omi_review_apply.py` (`write_person_fact`,
+`write_person_relation`, `unwrite`). Pinned by `services/zoe-data/tests/test_omi_person_facts.py` (negative controls in its
+docstring).
+
+- **The tag reaches the review.** A CONFIRMED tag (never a suggestion) on a turn carries the member's own person into the day
+  review. The line is shown to the model as `[r1.2 09:14 Sam] text`. A tag that points at anyone but one of the member's own
+  live people carries nobody.
+- **Two kinds of candidate, each with provenance.** Each one records the recording, the segment ids, who said it, the person id
+  and the exact quote.
+  - `person_fact`, `stated_by_subject`: the tagged person says it about themself, in the first person ("I work at the library").
+    What they say about someone else is hearsay and is dropped.
+  - `person_fact`, `owner_stated`: the member says it, on a line known to be theirs (their own "That was me" label, or
+    `ZOE_OMI_SPEAKER_TAG=on`), and names one of their people.
+  - `person_relation`: the person's relationship to the member. It comes from "I'm your cousin" on the person's tagged line, or
+    from "my sister, Lee" on the member's line about a known person.
+- **What is never proposed.**
+  - Anything from an unlabelled line (D4: an untagged day's prompt is unchanged and yields no person facts).
+  - The `restraint` classes plus a person-specific list (D11): intimate life, beliefs and politics, legal, status papers,
+    health and money words.
+  - A fact about a possible child.
+  - A fact whose words are not in the quote.
+  - A passing remark ("today").
+  - An identity claim or an address.
+- **The day-review card** (`GET /api/omi/day-review/candidates`) lists these candidates like any other. It also carries
+  `voices_to_name`: up to 3 of the member's unknown voices, each with one sample line, named through the voice tag route.
+- **Approval writes; nothing else does.**
+  - A fact goes into the OWNER's memory as "<Name>: <fact>": `entity_type='person'`, `entity_id` = the people row, class
+    `user_confirmed`, personal, `turn_ref = omi_segment:<id>`, metadata `stated_by` plus the candidate, day, recording and
+    segment ids.
+  - It is ADD only. A contradiction with any approved row about that person is `held_conflict` and is never written beside it.
+    "Any row" means one the subject said, one the owner said, or one the owner said in chat. So a `stated_by_subject` fact and an
+    `owner_stated` one never overwrite each other. The same fact already there is linked (`known:memory:<id>`).
+  - A relationship fills an EMPTY `people.relationship`, and only on a personal row. A different one already set is
+    `held_conflict`. A family-visible row is refused (`shared_person`).
+- **Forget.** These all erase the memory row (`MemoryService.erase_rows`) and clear the relationship, then delete the candidate:
+  - "forget <name>": the cascade's `omi_day_review` step, by name and by the person ids it resolved;
+  - deleting the recording the fact came from;
+  - a forget that lands while an approval is writing (the approval answers 410).
+- **Limits.**
+  - The owner's later direct statement in chat (`user_stated`, through `person_extractor`) may still supersede a pendant fact,
+    with history. That is the trust order: the owner's own words win.
+  - The conflict rule is narrow and deterministic: opposite polarity, or a different value of a single-valued predicate (works,
+    lives, from ...). "Is a nurse" against "is a teacher" is not caught.
+  - Owner-stated facts need lines known to be the owner's. In shadow mode that means the owner's own line labels.
 
 ## The Pendant page (built 2026-10-18)
 

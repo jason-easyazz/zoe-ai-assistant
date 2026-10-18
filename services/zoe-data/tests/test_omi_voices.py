@@ -1036,7 +1036,9 @@ def test_the_adapter_maps_voice_labels_to_the_review_vocabulary():
     got = dr.segment_map([seg("r1", "you", "a"), seg("r1", "someone_else", "b"), seg("r1", "person", "c"), seg("r1", "not_sure", "d"),
                           seg("r1", "unverified", "e"), seg("r1", "weird", "f"), seg("r1", "not_a_person", "TV line"),
                           seg("r2", "not_a_person", "Zoe's reply")], segmented=["r1", "r2", "r3"])
-    assert got["r1"] == [("a", "you"), ("b", "someone_else"), ("c", "someone_else"), ("d", "not_sure"), ("e", "not_sure"), ("f", "not_sure")]
+    assert [tuple(t)[:2] for t in got["r1"]] == [("a", "you"), ("b", "someone_else"), ("c", "someone_else"), ("d", "not_sure"),
+                                                ("e", "not_sure"), ("f", "not_sure")]
+    assert all(t.person_id == "" for t in got["r1"])                 # a tag with no person row of the member's own carries nobody
     assert got["r2"] == [] and got["r3"] == []                       # a recording of only excluded lines is present and EMPTY, not absent
     assert "TV line" not in json.dumps(got) and "Zoe's reply" not in json.dumps(got)
     assert dr.segment_map([]) == {}

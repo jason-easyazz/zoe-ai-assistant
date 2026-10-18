@@ -1,7 +1,10 @@
 """The pendant day review's surface (flag-dark ``ZOE_OMI_DAY_REVIEW``; mounted via ``register(app)``, off = routes ABSENT).
 
   GET  /api/omi/day-review/candidates              the caller's candidates (``?status=pending|approved|dismissed|all``, ``?day=``)
-                                                   + ``pending`` counts by kind
+                                                   + ``pending`` counts by kind + ``voices_to_name`` (a FEW of the caller's own
+                                                   unknown voices, ``omi_day_review.voices_to_name``; named through
+                                                   ``/api/omi/voices/unknown/{id}/tag``). Facts about the caller's tagged people are
+                                                   candidates like any other (``person_fact`` / ``person_relation``).
   GET  /api/omi/day-review/candidates/{id}         one candidate (payload, quoted evidence, recording ids, provenance)
   POST /api/omi/day-review/candidates/{id}/approve ``{"fields"?: {...}, "via"?: "desktop"|"phone"|"panel_touch"|"voice"}`` - writes
                                                    through the existing write path of its kind (``omi_review_apply``)
@@ -45,7 +48,8 @@ async def list_my_candidates(status: str = Query("pending", pattern="^(pending|a
                              day: str = Query("", pattern=r"^(\d{4}-\d{2}-\d{2})?$"), limit: int = Query(100, ge=1, le=500),
                              user: dict = Depends(_require_member)):
     uid = user["user_id"]
-    return {"candidates": await dr.list_candidates(uid, status=status, day=day, limit=limit), "pending": await dr.pending_counts(uid)}
+    return {"candidates": await dr.list_candidates(uid, status=status, day=day, limit=limit), "pending": await dr.pending_counts(uid),
+            "voices_to_name": await dr.voices_to_name(uid)}
 
 
 @router.get("/candidates/{cid}")
