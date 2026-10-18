@@ -1,0 +1,30 @@
+# Zoe weekly Samantha evidence run - the bar + day-sim from a CLEAN checkout of the deployed commit, with
+# --require-bound, so every trend line is attributable to a commit (deep dive B8; docs/knowledge/samantha-bar.md).
+# TEMPLATE, NOT INSTALLED: operator opt-in, ships inert (no [Install] here; the timer carries it). Install:
+#   cp zoe-samantha-weekly.{service,timer} ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   systemctl --user enable --now zoe-samantha-weekly.timer
+# RE-INSTALL NOTE: the installed unit is a COPY - after any change here, re-copy and daemon-reload.
+# Runs AFTER the night window (the 12B owns the box ~02:50-04:10; the daily voice probe is 04:30); the script itself
+# refuses to start inside 01:50-04:55. It takes /tmp/zoe-voice-harness.lock (never two heavy harnesses at once) and
+# the harnesses refuse on low MemAvailable, so it cannot OOM the live voice stack.
+[Unit]
+Description=Zoe weekly Samantha evidence run (commit-bound bar + day-sim)
+After=network-online.target zoe-data.service
+
+[Service]
+Type=oneshot
+# bar (~30 min) + day-sim (~30 min) + up to 2 h of lock/memory/deploy waiting; --with-person adds ~1 h.
+TimeoutStartSec=14400
+WorkingDirectory=%h/assistant
+# The harnesses read the internal token + DSN from the live service .env themselves (service-dir); this is only for PATH/HOME.
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# ZOE_BAR_ADMIN_SESSION (optional: admin teardown path) comes from the operator's own env file, never inlined here.
+EnvironmentFile=-%h/.hermes/.env
+ExecStartPre=/usr/bin/mkdir -p %h/.zoe-logs
+ExecStart=/bin/bash %h/assistant/scripts/maintenance/samantha_weekly.sh
+# 1 = a regression vs the baseline, 3 = the shared lock was busy, 4 = refused inside the night window: results, not unit failures.
+SuccessExitStatus=1 3 4
+StandardOutput=append:%h/.zoe-logs/samantha-weekly.log
+StandardError=append:%h/.zoe-logs/samantha-weekly.log
+Nice=5

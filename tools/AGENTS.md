@@ -7,6 +7,8 @@ Tooling that enforces repository structure and safety: validators, cleanup, gene
 ## Ownership
 
 - `audit/` — `validate_structure.py` (manifest/orphan check, root .md cap), `validate_critical_files.py`, `find_file_references.sh`, `sw_precache_digest.py` (records a digest of the service worker's precached files next to `SW_VERSION`; `tests/unit/test_sw_precache_digest.py` fails on drift — bump `SW_VERSION`, then `--write`).
+- `audit/flag_inventory.py` — the `ZOE_*` flag inventory GENERATED from the flag registry (`services/zoe-data/flag_registry.py`) joined with an AST/TS scan; also the conflicting-default check, the legacy direct-read ratchet (`docs/knowledge/flag-ratchet.json`, `--tighten-ratchet`) and `--sync-registry`. `tests/unit/test_flag_registry.py` + `test_flag_inventory.py` enforce it; record `docs/knowledge/flag-registry.md`.
+- `audit/memory_writer_map.py` — the memory writer map GENERATED from code (`docs/knowledge/memory-writer-map.md`; role lines in `docs/knowledge/memory-writer-notes.json`); `tests/unit/test_memory_writer_map.py` fails on a stale map or a new writer module with no note.
 - `cleanup/` — `safe_cleanup.py` (dry-run first, `--execute` only after operator approval).
 - `validate_module.py` — module structure + the `modules/AGENTS.md` security contract (service-token gate on state-changing `/tools/*`, fail-closed 503, loopback-only ports). Security checks are AST/parsed-compose, never text search; keep them that way, and keep the documented templates passing.
 - `generators/`, `intent/`, `docker/`, `reports/`, `verification/`, `utilities/` — supporting tool groups.

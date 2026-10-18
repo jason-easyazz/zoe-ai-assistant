@@ -1,0 +1,15 @@
+# Weekly, Sunday 05:30 local: after the night window (12B ~02:50-04:10) and the daily voice probe (04:30).
+# TEMPLATE, NOT INSTALLED (operator opt-in) - see zoe-samantha-weekly.service for the install line.
+# Persistent=false on purpose: a catch-up run at boot could land inside the night window; the script refuses
+# there anyway, and a missed week is better than an evidence run on a box that is busy dreaming.
+[Unit]
+Description=Zoe weekly Samantha evidence run timer (Sunday 05:30, after the night window)
+Requires=zoe-samantha-weekly.service
+
+[Timer]
+OnCalendar=Sun *-*-* 05:30:00
+Persistent=false
+AccuracySec=10min
+
+[Install]
+WantedBy=timers.target
