@@ -163,6 +163,8 @@ aider_env/
 !scripts/train/*.sh
 !scripts/perf/zmb/*.sh
 !labs/needle-benchmark/setup.sh
+!labs/p0-deroot/run.sh
+!labs/p0-deroot/lab/provision.sh
 !RESTART_SERVICES.sh
 !start-zoe.sh
 !stop-zoe.sh
