@@ -191,7 +191,11 @@ def test_a_hovering_value_does_not_ring_every_cycle_but_a_real_return_does():
     _, n3 = oh.transition({"warn_state": json.dumps(cleared)}, w, T0 + timedelta(hours=7))
     assert [n["kind"] for n in n3] == ["battery_low"], "control arm: the next day's low battery rings again"
     gone, _ = oh.transition({"warn_state": json.dumps(cleared)}, [], T0 + timedelta(hours=8))
-    assert gone == {}, "the cooldown memory is forgotten once it has expired"
+    assert {k: v for k, v in gone.items() if not k.startswith("_")} == {}, "the cooldown memory is forgotten once it has expired"
+    assert gone["_episodes"] == {"battery_low": 1}, "but the episode counter is never forgotten: the next bell id must not repeat an old one"
+    # the episode rides with every notified warning, and a re-arm is a NEW episode (a new bell id)
+    _, again = oh.transition({"warn_state": json.dumps(gone)}, w, T0 + timedelta(hours=9))
+    assert again[0]["episode"] == 2 and oh.bell_id(DEV_A, "battery_low", 1) != oh.bell_id(DEV_A, "battery_low", 2)
 
 
 # =============================================================================== the stored flow, through the routes
@@ -445,29 +449,63 @@ def test_a_warning_rings_once_when_the_report_that_causes_it_arrives(env):
     assert [b[2] for b in env.bells()] == ["battery_low", "battery_low"], "control arm: cleared, then a fresh low rings again"
 
 
-def test_a_bell_that_failed_to_ring_is_retried_not_treated_as_delivered(env):
+def test_a_bell_insert_that_fails_saves_nothing_and_the_report_is_retried(env):
+    """The bell and the new warn_state are one decision: if the bell cannot be written, NOTHING is saved and the report fails (503), so
+    the Pi sends it again and the bell rings then. It is never marked delivered without a row."""
     register(env, DEV_A, "ann")
-    real = oh._notify
+    env.post(body(battery_pct=50))                           # a stored row with no warning
+    before = dict(env.rows()[DEV_A])
+    real = oh._write_bells
     calls = []
 
-    async def flaky(user_id, warning):
-        calls.append(warning["kind"])
+    async def flaky(db, user_id, device_id, notify):
+        calls.append([w["kind"] for w in notify])
         if len(calls) == 1:
-            return False                                    # the notifications insert failed this time
-        return await real(user_id, warning)
+            raise OSError("notifications insert failed")
+        return await real(db, user_id, device_id, notify)
 
-    env.mp.setattr(oh, "_notify", flaky)
-    env.post(body(battery_pct=10))
-    assert env.bells() == [] and calls == ["battery_low"]
-    state = json.loads(env.rows()[DEV_A]["warn_state"])
-    assert state["battery_low"]["retry"] is True and state["battery_low"]["notified_at"] is None
+    env.mp.setattr(oh, "_write_bells", flaky)
     env.now = T0 + timedelta(minutes=15)
-    env.post(body(battery_pct=10))                          # next report: the same low battery rings now
-    assert [b[2] for b in env.bells()] == ["battery_low"] and calls == ["battery_low", "battery_low"]
+    r = env.post(body(battery_pct=10))
+    assert r.status_code == 503 and env.bells() == []
+    assert env.rows()[DEV_A] == before, "the failed report changed nothing: the warning is still un-notified"
     env.now = T0 + timedelta(minutes=30)
+    assert env.post(body(battery_pct=10)).status_code == 200
+    assert [b[2] for b in env.bells()] == ["battery_low"] and calls[0] == calls[1] == ["battery_low"]
+    env.now = T0 + timedelta(minutes=45)
     env.post(body(battery_pct=10))
-    assert len(env.bells()) == 1 and len(calls) == 2, "control arm: once it rang it is not rung again while the warning stays active"
-    assert "retry" not in json.loads(env.rows()[DEV_A]["warn_state"])["battery_low"]
+    assert len(env.bells()) == 1, "control arm: once it rang it is not rung again while the warning stays active"
+
+
+def test_a_crash_between_the_bell_and_the_saved_state_loses_nothing_and_duplicates_nothing(env):
+    """The bell row committed, then the process died before warn_state was saved. The retry decides to ring the same episode again: the
+    bell id is derived from (pendant, kind, episode), so it is the SAME row - the bell is neither lost nor doubled."""
+    register(env, DEV_A, "ann")
+    env.post(body(battery_pct=50))
+    real = oh._save
+    n = {"calls": 0}
+
+    async def crash(db, device_id, row):
+        n["calls"] += 1
+        if n["calls"] == 1:
+            raise RuntimeError("process died after the bell insert")
+        return await real(db, device_id, row)
+
+    env.mp.setattr(oh, "_save", crash)
+    env.now = T0 + timedelta(minutes=15)
+    assert env.post(body(battery_pct=10)).status_code == 503
+    assert [b[2] for b in env.bells()] == ["battery_low"], "the bell is already there"
+    assert "battery_low" not in json.loads(env.rows()[DEV_A]["warn_state"]), "but the state does not claim it"
+    env.now = T0 + timedelta(minutes=30)                     # a DIFFERENT clock reading than the crashed attempt
+    assert env.post(body(battery_pct=10)).status_code == 200
+    assert [b[2] for b in env.bells()] == ["battery_low"], "the retry found its own row: still exactly one bell"
+    assert json.loads(env.rows()[DEV_A]["warn_state"])["battery_low"]["notified_at"]
+    # control arm: after the warning clears and re-arms past the cooldown it is a NEW episode and a NEW bell
+    env.now = T0 + timedelta(hours=2)
+    env.post(body(battery_pct=90))
+    env.now = T0 + timedelta(hours=10)
+    env.post(body(battery_pct=5))
+    assert [b[2] for b in env.bells()] == ["battery_low", "battery_low"]
 
 
 def test_a_committed_bell_is_never_inserted_again_when_only_the_push_failed(env):
@@ -480,18 +518,85 @@ def test_a_committed_bell_is_never_inserted_again_when_only_the_push_failed(env)
 
     import push
     env.mp.setattr(push, "broadcaster", _Down())
-    env.post(body(battery_pct=10))
-    assert [b[2] for b in env.bells()] == ["battery_low"], "the row is there"
-    assert "retry" not in json.loads(env.rows()[DEV_A]["warn_state"])["battery_low"]
+    r = env.post(body(battery_pct=10))
+    assert r.status_code == 200 and [b[2] for b in env.bells()] == ["battery_low"], "the row is there and the report succeeded"
     for k in range(1, 4):
         env.now = T0 + timedelta(minutes=15 * k)
         env.post(body(battery_pct=10))
     assert len(env.bells()) == 1, "and four reports later it is still ONE bell"
-    # control arm: an INSERT failure (no row) is what retries
-    assert run(oh._notify("ann", {"kind": "ring_fill", "text": "x"})) is True
-    env.db.conn.execute("DROP TABLE notifications")
-    env.db.conn.commit()
-    assert run(oh._notify("ann", {"kind": "ring_fill", "text": "x"})) is False
+
+
+def test_the_sweep_and_a_heartbeat_can_never_both_ring_one_warning(env):
+    """Both read the same old warn_state (the report was stored with warnings off) and both want to ring. The per-member lock makes the
+    second see the first's state. Counted at the transition itself, so the bell id's own idempotence cannot hide a second decision."""
+    register(env, DEV_A, "ann")
+    env.mp.setenv("ZOE_OMI_HEALTH", "0")
+    env.post(body(battery_pct=10))
+    env.mp.delenv("ZOE_OMI_HEALTH")
+    decisions = []
+    real = oh._write_bells
+
+    async def counting(db, user_id, device_id, notify):
+        if notify:
+            decisions.append(([w["kind"] for w in notify], user_id))
+            await asyncio.sleep(0)                           # a yield between the decision and the write: where an unlocked race lives
+        return await real(db, user_id, device_id, notify)
+
+    env.mp.setattr(oh, "_write_bells", counting)
+    t = T0 + timedelta(minutes=1)
+
+    async def both():
+        return await asyncio.gather(oh.record_report("ann", DEV_A, rep(battery_pct=10), now=t), oh.sweep(now=t))
+
+    run(both())
+    assert decisions == [(["battery_low"], "ann")], "exactly one task decided to ring"
+    assert [b[2] for b in env.bells()] == ["battery_low"]
+
+
+def test_a_racing_heartbeat_cannot_recreate_a_health_row_for_a_forgotten_member(env):
+    register(env, DEV_A, "ann")
+    env.post(body())
+    stale = erase_gate.generation("ann")
+    run(omi.forget_user("ann"))
+    assert env.rows() == {}
+    register(env, DEV_A, "ann")                              # the pendant is hers again, so ONLY the generation can refuse the write
+    with pytest.raises(oh.NotTheOwner):
+        run(oh.record_report("ann", DEV_A, rep(), scheduled_at=stale))
+    assert env.rows() == {}, "a write scheduled before the erase is dropped"
+    run(oh.record_report("ann", DEV_A, rep(), scheduled_at=erase_gate.generation("ann")))
+    assert list(env.rows()) == [DEV_A], "control arm: a write scheduled after it is stored"
+
+
+def test_the_route_drops_a_heartbeat_whose_member_was_erased_after_the_owner_was_resolved(env):
+    register(env, DEV_A, "ann")
+    real = omi_router._upload_owner
+
+    async def racing(device_id):
+        out = await real(device_id)                          # the owner is resolved ...
+        await omi.forget_user("ann")                         # ... then the member is erased before the write runs
+        return out
+
+    env.mp.setattr(omi_router, "_upload_owner", racing)
+    r = env.post(body())
+    assert r.status_code == 409 and r.json()["error"] == "device_not_registered"
+    assert env.rows() == {} and env.bells() == [], "nothing of ann survives the erase"
+    env.mp.setattr(omi_router, "_upload_owner", real)
+    register(env, DEV_A, "ben")
+    assert env.post(body()).status_code == 200 and env.rows()[DEV_A]["user_id"] == "ben", "control arm: no race, no problem"
+
+
+def test_a_heartbeat_for_a_pendant_unassigned_meanwhile_is_dropped(env):
+    register(env, DEV_A, "ann")
+    real = omi_router._upload_owner
+
+    async def racing(device_id):
+        out = await real(device_id)
+        await omi_devices.unassign(device_id, actor=ADM)      # reassigned/unassigned between the lookup and the write
+        return out
+
+    env.mp.setattr(omi_router, "_upload_owner", racing)
+    r = env.post(body())
+    assert r.status_code == 409 and env.rows() == {}, "ownership is re-checked inside the lock"
 
 
 def test_a_reassigned_pendant_tells_the_new_owner_even_when_the_old_one_was_already_told(env):
@@ -509,17 +614,21 @@ def test_a_reassigned_pendant_tells_the_new_owner_even_when_the_old_one_was_alre
     assert len(env.bells()) == 2, "control arm: and once he is told it is not repeated"
 
 
-def test_the_sweep_retries_a_failed_bell_too(env):
+def test_the_sweep_leaves_state_untouched_when_its_bell_cannot_be_written(env):
     register(env, DEV_A, "ann")
     env.post(body())
-    real = oh._notify
+    real = oh._write_bells
     fail = {"on": True}
 
-    async def flaky(user_id, warning):
-        return False if fail["on"] else await real(user_id, warning)
+    async def flaky(db, user_id, device_id, notify):
+        if fail["on"] and notify:
+            raise OSError("notifications insert failed")
+        return await real(db, user_id, device_id, notify)
 
-    env.mp.setattr(oh, "_notify", flaky)
+    env.mp.setattr(oh, "_write_bells", flaky)
+    state = env.rows()[DEV_A]["warn_state"]
     assert run(oh.sweep(now=T0 + timedelta(hours=4))) == 0 and env.bells() == []
+    assert env.rows()[DEV_A]["warn_state"] == state, "nothing claimed as notified"
     fail["on"] = False
     assert run(oh.sweep(now=T0 + timedelta(hours=5))) == 1 and [b[2] for b in env.bells()] == ["bridge_silent"]
     assert run(oh.sweep(now=T0 + timedelta(hours=6))) == 0, "and then it is done"

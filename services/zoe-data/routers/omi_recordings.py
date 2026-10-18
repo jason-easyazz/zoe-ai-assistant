@@ -191,6 +191,8 @@ async def device_status(body: _HealthReport, device: dict = Depends(_require_dev
     # there is no row an owner could be missing and no row another member could read.
     if not health.DEVICE_ID_RX.match((body.device or "").strip()):
         return _error(400, "bad device id")
+    import user_erase_gate as erase_gate
+    scheduled = erase_gate.snapshot()          # every member's erase generation NOW, before the owner is resolved: a later erase stales this write
     owner, refusal = await _upload_owner((body.device or "").strip())
     if refusal is not None:
         return refusal
@@ -200,7 +202,9 @@ async def device_status(body: _HealthReport, device: dict = Depends(_require_dev
         ring_fill_start_pct=body.ring_fill_start_pct, ring_stored_bytes=body.ring_stored_bytes,
         ring_capacity_bytes=body.ring_capacity_bytes, dropped_total=body.dropped_total)
     try:
-        active = await health.record_report(owner, body.device.strip(), rep)
+        active = await health.record_report(owner, body.device.strip(), rep, scheduled_at=scheduled.get(owner, 0))
+    except health.NotTheOwner:
+        return _error(409, "device_not_registered")          # erased or reassigned while this request was in flight: store nothing
     except Exception as exc:  # noqa: BLE001 - the Pi treats anything but 200 as 'not delivered' and tries again
         logger.warning("OMI_HEALTH_STORE_FAILED device=%s (%s)", body.device.strip(), type(exc).__name__)
         return _error(503, "health_unavailable")

@@ -63,6 +63,7 @@ ring in wall-clock time, so in practice 36 h is "may be losing audio", not "is".
 1. A **bell notification** (`notifications` row, type `omi_health`, the same path as the "N recordings synced" notice) the moment a
    warning becomes active; once per arrival, with a 6 h re-notify cooldown so a battery hovering at 19/21 % does not ring every cycle.
    A 10-minute sweep raises the time-based ones (a silent Pi, 36 h with no report at all).
+   The bell row and the saved warning state are one decision: the row is written first with an id derived from (pendant, kind, episode), so a crash between the two can neither lose nor double the bell, and a heartbeat and the sweep are serialised per member (the same erase-gate lock that stops a racing heartbeat from recreating a forgotten member's row).
 2. `GET /api/omi/health` for the Memories/Pendant UI (each warning carries `since`).
 3. At most **one line** in the member's first-turn-of-the-day brief (`brief_first_turn.day_items`, fed by
    `morning_checkin._build_morning_context` -> `omi_health.morning_items`): "About their pendant ...", which Zoe mentions naturally if

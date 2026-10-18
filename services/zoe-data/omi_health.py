@@ -16,7 +16,7 @@ WARNINGS (constants below; each fires AND clears from the data, nothing is ackno
   battery_low    the battery level is below 20 % (from the standard BLE Battery Service).
   bridge_silent  the Pi has sent nothing for 3 h: the sync service or the panel is down, so "away" cannot be known. Suppresses no_sync.
 
-NEVER SPEAKS. A warning is (1) a ``notifications`` row (the bell; the same path as the "N recordings synced" notice), (2) a field on
+NEVER SPEAKS. A warning is (1) a ``notifications`` row (idempotent by pendant + kind + episode) (the bell; the same path as the "N recordings synced" notice), (2) a field on
 ``GET /api/omi/health`` for the Memories/Pendant UI, and (3) at most ONE line in the member's first-turn-of-the-day brief
 (``brief_first_turn`` via ``morning_items``), which Zoe mentions naturally if she speaks to them at all. Per
 ``project_w2_zoe_speaks_first``: no unprompted speech.
@@ -47,6 +47,7 @@ OVERWRITE_WINDOW_H = 72.0     # an overwrite keeps the warning up this long
 BRIDGE_SILENT_H = 3.0         # the Pi has said nothing for this long
 RENOTIFY_H = 6.0              # a warning that clears and re-arms inside this window does not produce a second bell
 SECONDS_PER_RECORD = 0.11     # mirrors omi_sync.recordings.NOMINAL_RECORD_S (a 444-byte ring record is about this much audio)
+BELL_TITLE = "Pendant"
 SWEEP_S = 600.0               # the periodic re-evaluation (time-based warnings arise with no report at all)
 
 KINDS = ("overwrite", "no_sync", "ring_fill", "battery_low", "bridge_silent")      # most to least important (the brief mentions the first)
@@ -207,11 +208,14 @@ def _state(row: dict) -> dict:
 def transition(row: dict, active: list[dict], now: datetime) -> tuple[dict, list[dict]]:
     """``(new warn_state, warnings to notify now)``. A kind that becomes active gets ``since``; it is notified unless it was notified inside
     the re-notify window (a battery hovering at 19/21 % does not ring every cycle). A kind that is no longer active loses its ``since``
-    but keeps ``notified_at`` for that window. Pure."""
+    but keeps ``notified_at`` for that window. Each notified warning carries an ``episode`` number (the reserved ``_episodes`` counter,
+    never dropped): the bell's notification id is derived from (pendant, kind, episode), so ringing the same episode twice - a retry
+    after a crash between the bell and the saved state - is the same row, never a second bell. Pure."""
     old = _state(row)
     stamp = _iso(now)
+    episodes = {k: int(v) for k, v in (old.get("_episodes") or {}).items() if isinstance(v, (int, float))}
     live = {w["kind"]: w for w in active}
-    new: dict[str, dict] = {}
+    new: dict[str, Any] = {}
     notify: list[dict] = []
     for kind, w in live.items():
         prev = old.get(kind) or {}
@@ -219,16 +223,19 @@ def transition(row: dict, active: list[dict], now: datetime) -> tuple[dict, list
         notified = prev.get("notified_at")
         was_active = bool(prev.get("since"))
         last = _parse(notified)
-        if (not was_active or prev.get("retry")) and (last is None or _hours(now, last) >= RENOTIFY_H):
-            notify.append(w)
+        if not was_active and (last is None or _hours(now, last) >= RENOTIFY_H):
+            episodes[kind] = episodes.get(kind, 0) + 1
+            notify.append(dict(w, episode=episodes[kind]))
             notified = stamp
         new[kind] = {"since": since, "notified_at": notified}
     for kind, prev in old.items():
-        if kind in live or not isinstance(prev, dict):
+        if kind.startswith("_") or kind in live or not isinstance(prev, dict):
             continue
         last = _parse(prev.get("notified_at"))
         if last is not None and _hours(now, last) < RENOTIFY_H:
             new[kind] = {"since": None, "notified_at": prev.get("notified_at")}
+    if episodes:
+        new["_episodes"] = episodes
     return new, notify
 
 
@@ -277,57 +284,92 @@ async def _label(device_id: str) -> str:
         return ""
 
 
-async def record_report(owner: str, device_id: str, rep: Report, *, now: Optional[datetime] = None) -> list[dict]:
-    """Apply one heartbeat for ``device_id`` (whose owner the caller already resolved from the registry). Returns the active warnings.
-    Raises on a storage failure; the route turns that into a 503 so the Pi tries again."""
+class NotTheOwner(Exception):
+    """The report cannot be stored: the member was erased since the request was scheduled, or the pendant is no longer theirs."""
+
+
+async def record_report(owner: str, device_id: str, rep: Report, *, now: Optional[datetime] = None,
+                        scheduled_at: Optional[int] = None) -> list[dict]:
+    """Apply one heartbeat for ``device_id`` (whose owner the caller resolved from the registry). Returns the active warnings.
+
+    * ERASE GATE. The write takes the member's ``user_erase_gate`` lock before any database connection, like every background writer:
+      an erase of the member queues behind it (and removes what it wrote) or runs first, in which case ``scheduled_at`` (the erase
+      generation snapshotted when the request arrived) is stale and nothing is written - a racing heartbeat can never recreate a health
+      row for a forgotten member. Ownership is re-checked inside the lock, so a reassignment/unassign that landed meanwhile also drops it
+      (``NotTheOwner``; the route answers 409 ``device_not_registered``).
+    * ONE TRANSITION AT A TIME. The same lock serialises this with the sweep and with other heartbeats for the member, so two tasks can
+      never both read the old ``warn_state`` and both ring.
+    * NO LOST BELL. The bell rows are inserted BEFORE the new ``warn_state`` is saved, with an id derived from (pendant, kind, episode)
+      and ``ON CONFLICT DO NOTHING``: a crash between the two leaves the old state, the retry rings the same episode, and the row that
+      already exists is simply kept. A bell is lost only if its insert fails, and then nothing is saved and the report fails (503), so
+      the Pi sends it again.
+    Raises on a storage failure; the route turns that into a 503."""
+    import user_erase_gate as erase_gate
     from db_compat import get_compat_db
 
     when = now or _utcnow()
-    async with get_compat_db() as db:
-        prev = await _get_row(db, device_id)
-        row = merge(prev, rep, when)
-        row["user_id"] = owner
-        old_state = (prev or {}).get("warn_state") or "{}"
-        if prev is not None and prev.get("user_id") != owner:
-            old_state = "{}"        # reassigned: the new owner inherits none of the previous owner's "already told" / cooldown state
-        if enabled():
-            active = evaluate(row, when)
-            state, notify = transition({"warn_state": old_state}, active, when)
-            row["warn_state"] = json.dumps(state, sort_keys=True)
-        else:
-            active, notify, row["warn_state"] = [], [], old_state
-        await _save(db, device_id, row)
-        await db.commit()
-    await _ring(owner, device_id, notify)
+    gen = erase_gate.generation(owner) if scheduled_at is None else scheduled_at
+    pushes: list[tuple[str, dict]] = []
+    async with erase_gate.writing(owner, gen) as live:
+        if not live:
+            raise NotTheOwner("erased")
+        if await current_owner(device_id) != owner:
+            raise NotTheOwner("not_the_owner")
+        async with get_compat_db() as db:
+            prev = await _get_row(db, device_id)
+            row = merge(prev, rep, when)
+            row["user_id"] = owner
+            old_state = (prev or {}).get("warn_state") or "{}"
+            if prev is not None and prev.get("user_id") != owner:
+                # reassigned: the new owner inherits none of the previous owner's "already told" / cooldown state - but the episode
+                # counter stays (it makes the bell ids unique per pendant, so the new owner's first bell cannot collide with the old one's)
+                kept = _state(prev).get("_episodes")
+                old_state = json.dumps({"_episodes": kept} if kept else {})
+            if enabled():
+                active = evaluate(row, when)
+                state, notify = transition({"warn_state": old_state}, active, when)
+                row["warn_state"] = json.dumps(state, sort_keys=True)
+            else:
+                active, notify, row["warn_state"] = [], [], old_state
+            pushes = await _write_bells(db, owner, device_id, notify)
+            await _save(db, device_id, row)
+            await db.commit()
+    await _push(owner, pushes)
     return active
 
 
-async def _ring(user_id: str, device_id: str, notify: list[dict]) -> int:
-    """Send the bells; a bell that FAILED is flagged ``retry`` in the row's ``warn_state`` (and its ``notified_at`` cleared), so the next
-    report or sweep rings it again instead of treating it as delivered. Returns how many rang. Never raises."""
-    rang, failed = 0, []
-    for w in notify:
-        if await _notify(user_id, w):
-            rang += 1
-        else:
-            failed.append(w["kind"])
-    if failed:
-        try:
-            from db_compat import get_compat_db
+def bell_id(device_id: str, kind: str, episode: int) -> str:
+    """The notification id of one warning episode of one pendant: stable across retries, different for the next episode."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"zoe:omi_health:{device_id}:{kind}:{int(episode)}"))
 
-            async with get_compat_db() as db:
-                row = await _get_row(db, device_id)
-                if row is not None:
-                    state = _state(row)
-                    for kind in failed:
-                        if kind in state:
-                            state[kind] = {"since": state[kind].get("since"), "notified_at": None, "retry": True}
-                    await db.execute("UPDATE omi_device_health SET warn_state = ? WHERE device_id = ?",
-                                     (json.dumps(state, sort_keys=True), device_id))
-                    await db.commit()
+
+async def _write_bells(db, user_id: str, device_id: str, notify: list[dict]) -> list[tuple[str, dict]]:
+    """Insert the bell rows (idempotent by ``bell_id``) on the caller's connection. Returns the ones that are NEW (to push live). A
+    failed insert RAISES: the caller has saved nothing yet, so the whole report is retried and the bell cannot be lost."""
+    fresh: list[tuple[str, dict]] = []
+    for w in notify:
+        nid = bell_id(device_id, w["kind"], w["episode"])
+        cur = await db.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) "
+                               "VALUES (?, ?, 'omi_health', ?, ?, ?, 0, NOW()) ON CONFLICT (id) DO NOTHING",
+                               (nid, user_id, BELL_TITLE, w["text"], json.dumps({"kind": w["kind"]})))
+        if int(getattr(cur, "rowcount", 1) or 0) > 0:
+            fresh.append((nid, w))
+    return fresh
+
+
+async def _push(user_id: str, fresh: list[tuple[str, dict]]) -> int:
+    """The live push of bells that are already committed. Best effort: a failure is logged and never retried (the row exists)."""
+    sent = 0
+    for nid, w in fresh:
+        try:
+            from push import broadcaster
+
+            await broadcaster.broadcast("all", "notification_created", {"id": nid, "type": "omi_health", "title": BELL_TITLE,
+                                                                         "message": w["text"], "delivered": False}, user_id=user_id)
+            sent += 1
         except Exception as exc:  # noqa: BLE001
-            logger.warning("omi_health: could not flag a failed notification for retry (%s)", type(exc).__name__)
-    return rang
+            logger.warning("omi_health: live push of a committed notification failed (%s)", type(exc).__name__)
+    return sent
 
 
 async def list_for(user_id: str, *, now: Optional[datetime] = None) -> list[dict]:
@@ -370,33 +412,6 @@ def _table_missing(exc: BaseException) -> bool:
 
 
 # --- notifications + the first-turn line -----------------------------------------------------------------------------------------------------------
-async def _notify(user_id: str, warning: dict) -> bool:
-    """One bell notice (the existing ``notifications`` row + broadcast path, as the "N recordings synced" notice). Never raises."""
-    nid = str(uuid.uuid4())
-    title = "Pendant"
-    try:
-        from db_pool import get_db_ctx
-
-        async with get_db_ctx() as db:
-            await db.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) "
-                             "VALUES (?, ?, 'omi_health', ?, ?, ?, 0, NOW())",
-                             (nid, user_id, title, warning["text"], json.dumps({"kind": warning["kind"]})))
-            await db.commit()
-    except Exception as exc:  # noqa: BLE001 - losing a bell loses nothing: the warning stays on GET /api/omi/health (and is retried)
-        logger.warning("omi_health: notification failed (%s)", type(exc).__name__)
-        return False
-    # The row is COMMITTED: the bell exists (it shows in the notification list) and must never be inserted again. The live push is a
-    # separate best-effort step; its failure is logged and does NOT make the caller retry.
-    try:
-        from push import broadcaster
-
-        await broadcaster.broadcast("all", "notification_created", {"id": nid, "type": "omi_health", "title": title,
-                                                                     "message": warning["text"], "delivered": False}, user_id=user_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("omi_health: live push of a committed notification failed (%s)", type(exc).__name__)
-    return True
-
-
 async def morning_items(user_id: str, *, now: Optional[datetime] = None) -> list[dict]:
     """At most ONE ``{"text", "kind"}`` for the member's first-turn-of-the-day brief (the most important active warning across their
     pendants), or []. ``ZOE_OMI_HEALTH`` off, no rows, or an unmigrated table = []. Never raises."""
@@ -418,35 +433,46 @@ async def morning_items(user_id: str, *, now: Optional[datetime] = None) -> list
 # --- the periodic sweep ---------------------------------------------------------------------------------------------------------------------------
 async def sweep(*, now: Optional[datetime] = None) -> int:
     """Re-evaluate every row (time-based warnings arise with no report at all: a silent Pi, a pendant away for 36 h) and notify new
-    ones. Returns how many notifications were raised. Never raises."""
+    ones. Returns how many bells were created. Never raises; one row's failure does not stop the others.
+
+    Each row is handled inside the owner's erase-gate lock (the same one a heartbeat takes), re-read FRESH inside it: a heartbeat and
+    the sweep can never both decide to ring the same warning, and a member erased mid-sweep is skipped."""
     if not enabled():
         return 0
+    import user_erase_gate as erase_gate
     from db_compat import get_compat_db
 
     when = now or _utcnow()
+    gens = erase_gate.snapshot()
     raised = 0
     try:
         async with get_compat_db() as db:
-            cur = await db.execute("SELECT * FROM omi_device_health")
-            rows = [dict(r) for r in await cur.fetchall()]
-        todo, updates = [], []
-        for row in rows:
-            if await current_owner(row["device_id"]) != row["user_id"]:
-                continue                          # reassigned/unassigned since its last report: not the old owner's business any more
-            state, notify = transition(row, evaluate(row, when), when)
-            new_state = json.dumps(state, sort_keys=True)
-            if new_state != (row.get("warn_state") or "{}"):
-                updates.append((new_state, row["device_id"]))
-            todo.extend((row["user_id"], row["device_id"], w) for w in notify)
-        if updates:
-            async with get_compat_db() as db:
-                for new_state, device_id in updates:
-                    await db.execute("UPDATE omi_device_health SET warn_state = ? WHERE device_id = ?", (new_state, device_id))
-                await db.commit()
-        for user_id, device_id, w in todo:
-            raised += await _ring(user_id, device_id, [w])
+            cur = await db.execute("SELECT device_id, user_id FROM omi_device_health")
+            targets = [(r["device_id"], r["user_id"]) for r in await cur.fetchall()]
     except Exception as exc:  # noqa: BLE001
         logger.warning("omi_health: sweep failed (%s)", type(exc).__name__)
+        return 0
+    for device_id, user_id in targets:
+        try:
+            pushes: list[tuple[str, dict]] = []
+            async with erase_gate.writing(user_id, gens.get(user_id, 0)) as live:
+                if not live or await current_owner(device_id) != user_id:
+                    continue                  # erased, reassigned or unassigned since its last report: not this member's business
+                async with get_compat_db() as db:
+                    row = await _get_row(db, device_id)
+                    if row is None or row["user_id"] != user_id:
+                        continue
+                    state, notify = transition(row, evaluate(row, when), when)
+                    new_state = json.dumps(state, sort_keys=True)
+                    if new_state == (row.get("warn_state") or "{}"):
+                        continue
+                    pushes = await _write_bells(db, user_id, device_id, notify)       # first: a failure here saves nothing
+                    await db.execute("UPDATE omi_device_health SET warn_state = ? WHERE device_id = ?", (new_state, device_id))
+                    await db.commit()
+            await _push(user_id, pushes)
+            raised += len(pushes)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("omi_health: sweep of one pendant failed (%s)", type(exc).__name__)
     return raised
 
 
