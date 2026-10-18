@@ -73,6 +73,14 @@ def test_missing_palace_is_not_refused(tmp_path):
     guard.check_client(str(tmp_path / "fresh"), "1.5.9")
 
 
+def test_interpreter_without_chromadb_is_refused_with_the_venv(tmp_path, monkeypatch):
+    """B9: the 3.10 lane carries no chromadb, so the opener must refuse clearly, naming the venv."""
+    monkeypatch.setitem(sys.modules, "chromadb", None)  # makes `import chromadb` raise ImportError
+    with pytest.raises(SystemExit, match="no chromadb") as exc:
+        guard.open_palace_client(str(_palace(tmp_path, 10)))
+    assert guard.VENV_PYTHON in str(exc.value)
+
+
 class _PersistentData:  # stand-in for chromadb 0.6's pickled object
     def __init__(self, total, live):
         self.total_elements_added = total

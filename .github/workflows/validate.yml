@@ -275,10 +275,10 @@ jobs:
   #
   # This resolves with `--dry-run` (metadata only, nothing is installed or built
   # into an environment) and then asserts the ceilings that exist for data-safety
-  # rather than taste. `numpy<2` is the one that matters most: chromadb 0.6.3
-  # declares a bare unbounded `numpy`, so without that ceiling a memory-store
-  # install pulls NumPy 2.x, which is a C-ABI break for every compiled package on
-  # this box (both canonical voice rocks plus the vector index).
+  # rather than taste. `numpy<2` is the one that matters most: several packages
+  # declare a bare unbounded `numpy`, so without that ceiling an install pulls
+  # NumPy 2.x, which is a C-ABI break for every compiled package on this box
+  # (both canonical voice rocks).
   #
   # NOT branch-protected on purpose — it resolves against live PyPI, so an
   # upstream yank or outage could redden it, and a required check that depends on
@@ -338,7 +338,6 @@ jobs:
           CEILINGS_BY_FILE = {
               "services/zoe-data/requirements.txt": {
                   "numpy": "2.0",     # C-ABI break for every compiled pkg on the Jetson
-                  "chromadb": "0.7",  # on-disk palace format (see requirements comment)
               },
               "services/zoe-auth/requirements.txt": {
                   "bcrypt": "5.0",    # 5.0 turns >72-byte passwords into a ValueError
