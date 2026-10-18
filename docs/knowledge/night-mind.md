@@ -13,8 +13,10 @@ Design record: `docs/research/night-mind-2026-10-09.md` (PR 1923). Why Hindsight
 (pass + readers), `night_store.py` (tables, alembic `0040_night_mind.py`), `scripts/maintenance/zoe-night-mind.py` (standalone), bench: `scripts/perf/zmb/`
 (`night_brain.py`, `z0n_window.py`, `z0_brain.py`, cells K1-K12).
 
-**Flag: `ZOE_NIGHT_MIND` = off (default) | shadow | enforce.** Off: no model call, no read, no write, byte-identical packets. Shadow: every call and every check
-runs, counts only, nothing is written. Enforce: written and served. `ZOE_NIGHT_MIND_URL` / `_MODEL` / `_MAX_CALLS` (default 7) / `_CTX_TOKENS` / `_CHUNK_TOKENS` /
+**Flag: `ZOE_NIGHT_MIND` = off (default) | shadow | enforce | serve.** Off: no model call, no read, no write, byte-identical packets. Shadow: every call and every check
+runs, counts only, nothing is written. Enforce: written and served. Serve (2026-10-18): the readers serve what ANOTHER process wrote and this process never runs
+the pass (`runs_pass()` is false: no digest hook, the day loader keeps its 200-turn cap) - zoe-data's value while the 12B night window is the writer; see
+"Serving the 12B's night" below. `ZOE_NIGHT_MIND_URL` / `_MODEL` / `_MAX_CALLS` (default 7) / `_CTX_TOKENS` / `_CHUNK_TOKENS` /
 `_DECODE_TOK_S` tune the pass; `ZOE_NIGHT_MIND_SCHEMA=1` sends the moments' JSON schema as `response_format` (default off: the llama.cpp overhead is unmeasured, E3).
 
 ## The four stages (the model points, code decides)
@@ -109,6 +111,24 @@ the bake-off window runs them with `BAKEOFF_Z0N=1`.
 1. Apply migration `0040` (the tables). Until then the pass writes nothing it cannot (an unreadable table is a nested `error`) and the forget / delete paths tolerate the missing table.
 2. `ZOE_NIGHT_MIND=shadow` for a week: read the `NIGHT_MIND ...` log lines (counts only): calls, held, uncited, parse failures. Then `enforce`. Voice path: `routers/memories.py` changed - run the voice replay gate before enabling `enforce` on the box.
 3. 12B window: `zoe-night-mind.py --model-url http://127.0.0.1:11500/v1 --ctx-tokens 16384 --all-members` after the 4B / Kokoro / router are stopped; check exit code 2 (model down, nothing written) and restore.
+
+## Serving the 12B's night (owner decision 2026-10-18: "keep it in ENFORCE, make it work")
+
+**What was wrong.** Since 2026-10-13 the 02:50 window has run the pass in `enforce` on the 12B every night with new turns (the store held 31 current + 11 held observations, 26 threads, 1 `raise`, on 2026-10-18), but zoe-data ran with `ZOE_NIGHT_MIND` unset, so `enabled()` was false and nothing it wrote was ever read. Setting `enforce` in zoe-data would have served it but ALSO turned on the in-digest pass: zoe-data's own 03:00 digest (it fires on the 4B whenever the window has finished by 03:00, which is most nights) would have written a second, weaker night over the 12B's (the 4B fails K6 and K11, the 12B passes them).
+
+**What it does now.** `serve` separates reading from writing: `enabled()` (the readers) is true for `enforce` and `serve`; `runs_pass()` (the digest hook, the 600-turn day read) only for `shadow` and `enforce`. The window's CLI still writes in `enforce` (it sets its own mode, whatever the `.env` says), and the window's digest job, which shares the `.env`, sees `serve` and runs no pass. The day-sim's `?night_mind=1` still runs the pass for a harness id (it forces `enforce`; the window drops synthetic ids).
+
+**What a live turn gets** (`routers/memories.py` `memory_for_prompt` -> `prompt_block`; `morning_checkin` -> `brief_first_turn` with `ZOE_BRIEF_ON_FIRST_TURN=1`, live): a "What I've noticed" block of at most 3 dated owner quotes when the message names a story, is an open check-in or voices a worry; at most one `raise` item in the first-turn brief. **Measured on the live store, read-only, 2026-10-18** (the last 300 user turns of the member with threads; an ad-hoc read-only script, counts only): 17 threads / 22 observations are servable; **98 of 300 turns (33%) would carry a block, mean 84 / max 136 estimated tokens** (68 matched a name or title word, 29 a single anchor word, 1 a check-in) - an upper bound, since those are the very turns the threads were drawn from; the check-in probes add 74-110 tokens. At the 4B's ~650 tok/s prefill that is ~0.13 s on a matching turn, nothing on the others. `prompt_block` itself costs 0.26 ms p50 / 4.7 ms max with the 90 s cache, 19-21 ms for a cold snapshot, bounded by its 0.6 s timeout (fail-open). Morning items on 2026-10-18: 0 (the one `raise` thread is older than the 3-day window: no chat turns since 2026-10-15).
+
+**The memory rules, as served** (pinned by `test_serve_reads_what_the_night_window_wrote_and_never_runs_the_pass_itself` and `test_under_serve_a_held_quote_and_a_forgotten_name_are_never_served`): user-stated > confirmed > inferred - an observation is an exact span of the owner's own turn, `authority_class` at most `user_stated_derived`, a hedged or unsupported quote is `held` (`pending`) and never served, a quote the owner's later word replaced is `history`; provenance on every write - the turn id + exact quote + run date, and every served line hands its turn id to the reply's provenance (`served`); forgotten means forever - every serve re-checks the tombstones and the durable forget ledger, and `erase_entity` / `erase_words` / `delete_user` work in every mode.
+
+**Owner step** (a flag write; the agent does not make it). Add this line to `services/zoe-data/.env`, then restart zoe-data (standing OK) and poll `/health`:
+
+```
+ZOE_NIGHT_MIND=serve
+```
+
+Before it: `routers/memories.py` is voice path and this changes what it injects, so run the voice replay gate with the flag set (`scripts/maintenance/voice_regression_probe.py` under `flock /tmp/zoe-voice-harness.lock`, `docs/knowledge/voice-pipeline.md`; said-vs-did and per-stage speed must not regress). Rollback: delete the line and restart. Read after a day: `BRIEF_FIRST_TURN ... night=N` in `~/.zoe-logs/zoe-data.app.log`.
 
 ## What landed and what is deferred
 

@@ -9,8 +9,8 @@ the owner's own approval (``routers/omi_day_review.py``). Every write goes throu
                   list is linked, not added twice
   reminder        ``reminder_service.create_reminder_record`` (role check, notification, scheduling); the description says it came
                   from the pendant on that day
-  follow_up       an item on the owner's personal ``tasks`` list (owner decision D5 pending: a reminder with no time is the other
-                  option; a list item never fires unprompted, so it is the conservative one)
+  follow_up       an OPEN LOOP (``open_loops``, owner decision D5 2026-10-18): no alarm, ``context='pendant:<candidate>'`` keeps it
+                  out of the proactive engine; read back by "what's on my plate?" (``panel_review_cards``)
   person          ``contacts_store.ensure_person``: the owner's live person of that name, or a new PERSONAL row in their own layer
   owner_fact      ``MemoryService.ingest(source=origin="omi_review")`` - class ``user_confirmed`` (the approval is the owner
                   confirming their own words), ``source_excerpt`` = the quoted span, ``turn_ref`` = the recording, metadata
@@ -53,6 +53,8 @@ EDITABLE = {"calendar_event": ("title", "date", "time"), "list_item": ("item", "
             # does not support (dismiss it, and set the relationship on the person instead)
             "person_relation": ()}
 VIAS = ("voice", "panel_touch", "desktop", "phone")
+#: ``open_loops.context`` of a loop the proactive engine must never raise (a pendant follow-up, D5)
+QUIET_LOOP_PREFIX = "pendant:"
 
 
 class ApplyError(Exception):
@@ -149,7 +151,21 @@ async def write_list_item(user_id: str, c: dict, via: str) -> str:
 
 
 async def write_follow_up(user_id: str, c: dict, via: str) -> str:
-    return await _list_add(user_id, "tasks", c["payload"]["title"])
+    """Owner decision D5 (2026-10-18): an OPEN LOOP - no alarm, never raised by the proactive engine (``context`` marks it
+    ``pendant:<candidate>``; ``panel_review_cards`` reads it back on request). A retry finds the row it already wrote."""
+    from db_compat import get_compat_db
+
+    ref = f"{QUIET_LOOP_PREFIX}{c['id']}"
+    async with get_compat_db() as db:
+        for _ in range(2):
+            cur = await db.execute("SELECT id FROM open_loops WHERE user_id = ? AND context = ?", (user_id, ref))
+            row = await cur.fetchone()
+            if row:
+                return f"open_loops:{row['id']}"
+            await db.execute("INSERT INTO open_loops (user_id, loop_text, context, emotional_weight) VALUES (?, ?, ?, 1)",
+                             (user_id, str(c["payload"]["title"])[:300], ref))
+            await db.commit()
+    raise ApplyError("not_stored")
 
 
 async def write_reminder(user_id: str, c: dict, via: str) -> str:

@@ -6,7 +6,7 @@ Tooling that enforces repository structure and safety: validators, cleanup, gene
 
 ## Ownership
 
-- `audit/` — `validate_structure.py` (manifest/orphan check, root .md cap), `validate_critical_files.py`, `find_file_references.sh`, `sw_precache_digest.py` (records a digest of the service worker's precached files next to `SW_VERSION`; `tests/unit/test_sw_precache_digest.py` fails on drift — bump `SW_VERSION`, then `--write`).
+- `audit/` — `validate_structure.py` (manifest/orphan check, root .md cap), `validate_critical_files.py`, `find_file_references.sh`, `live_state.py` (derives `docs/knowledge/live-state.json`, the flag DEFAULTS the code ships, from the flag inventory plus the reader shape at each call site, so a 1/0 default is `on`/`off` only for a flag read as a bool and stays numeric for an int flag; `--check` exits 1 when stale), `sw_precache_digest.py` (records a digest of the service worker's precached files next to `SW_VERSION`; `tests/unit/test_sw_precache_digest.py` fails on drift — bump `SW_VERSION`, then `--write`).
 - `cleanup/` — `safe_cleanup.py` (dry-run first, `--execute` only after operator approval).
 - `validate_module.py` — module structure + the `modules/AGENTS.md` security contract (service-token gate on state-changing `/tools/*`, fail-closed 503, loopback-only ports). Security checks are AST/parsed-compose, never text search; keep them that way, and keep the documented templates passing.
 - `generators/`, `intent/`, `docker/`, `reports/`, `verification/`, `utilities/` — supporting tool groups.

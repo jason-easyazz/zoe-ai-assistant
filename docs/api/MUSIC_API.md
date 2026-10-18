@@ -17,7 +17,7 @@ The Music API provides endpoints for:
 
 ## Authentication
 
-All endpoints require authentication via the `X-Session-ID` header or session cookie.
+Every endpoint, reads included, needs a signed-in household member (`X-Session-ID` header or session cookie) or the wall panel; a guest or anonymous LAN caller gets 403. The one exception is the phone jukebox (QR on the panel): its short-lived `X-Jukebox-Token` also opens `POST /play`, `POST /play_media`, `GET /now-playing` and `GET /search`, and nothing else.
 
 ## Playback Endpoints
 

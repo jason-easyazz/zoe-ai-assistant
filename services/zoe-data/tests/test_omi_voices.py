@@ -846,7 +846,10 @@ ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_recordings.py", "routers/omi_
            "memory_forget_cascade.py",
            # the day review names the ``omi_segments`` vocabulary in its seam (``lines_for_day(segments=)``); it never touches a
            # voice table - its input is ``review_segments`` output (confirmed labels, no suggestions) handed in by the caller
-           "omi_day_review.py"}
+           "omi_day_review.py",
+           # the panel day review card lists / tags unknown voices ONLY by calling the owner-checked ``routers/omi_voices`` handlers
+           # in-process (no SQL on a voice table); a learned print never authenticates anyone through it
+           "panel_review_cards.py", "routers/panel_review_cards.py"}
 NEEDLES = ("learned_voiceprint", "omi_segment", "omi_voice_cluster", "omi_voice_settings", "omi_voices")
 
 

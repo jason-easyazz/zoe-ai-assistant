@@ -124,8 +124,7 @@ def test_the_panel_and_members_drive_the_music(ma_calls, path, peer, headers):
     assert _client(music.router, peer).post(path, json=body, headers=headers).status_code == 200, path
 
 
-def test_music_reads_stay_open(ma_calls):
-    assert _client(music.router, PHONE_IP).get("/api/music/players").status_code == 200
+# (The reads followed the writes on 2026-10-18: tests/test_music_reads_auth.py.)
 
 
 # ── the phone jukebox: a QR capability for play / queue-a-song only ──────────────────────────────────────────────────────────
