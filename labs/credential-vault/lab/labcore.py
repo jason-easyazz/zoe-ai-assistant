@@ -126,7 +126,8 @@ def norecheck() -> None:
     fill.LoginRun.insert = insert
     fill.LoginRun.binding_valid = lambda self, b: True
     fill.LoginRun.frame_unchanged = lambda self, b: True
-    fill.LoginRun.check_targets = lambda self, f, ctx, frame_origin: None   # part of the re-check before insert
+    # part of the re-check before insert: read the targets, judge nothing (the submit then goes ahead as it would)
+    fill.LoginRun.check_targets = lambda self, f, ctx, frame_origin: self._eval(f.session, ctx, fill.TARGETS_JS)
 
 
 def unlock_for_client() -> None:
