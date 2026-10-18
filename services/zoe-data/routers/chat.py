@@ -69,7 +69,6 @@ _INTENT_PANEL_NAV = {
     "timer_create":      ("/touch/home.html?domain=timers",   "new_timer"),
     "recipe_search":     (None,                   None),
     "reminder_create":   (None,                   None),  # handled as toast
-    "lets_talk":         ("/touch/voice.html?conv=1", None),  # phone-call voice mode (still its own surface)
     # "Set up music" → the panel's Browse → Sources card (Connect = phone QR).
     "music_setup":       ("/touch/home.html?domain=music_sources", None),
 }
