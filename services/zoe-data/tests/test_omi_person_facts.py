@@ -25,6 +25,11 @@ test goes red):
   unreadable index           read the conflict scan through ``list_by_entity`` -> test_an_unreadable_memory_index_writes_nothing
   hearsay                    drop the ``hearsay`` check -> test_a_tagged_voice_about_someone_else_is_hearsay
   child                      drop the ``child`` check in ``verify_person_fact`` -> test_no_facts_about_a_child
+  child relationship         drop the child check in ``_relation_candidate`` -> test_no_relationship_about_a_child_from_either_side;
+                             in ``write_person_relation`` -> test_a_relationship_is_refused_at_approval_if_the_person_became_a_child
+  crash window               drop the ``orphans`` lookup in ``unwrite`` / the ``mine`` check in ``write_person_fact`` / the intent
+                             write in ``write_person_relation`` -> test_a_write_interrupted_before_its_written_ref_is_still_erased...
+  edit off its quote         drop the ``fact_holds`` check in ``approve`` -> test_an_edit_must_still_rest_on_the_quote
 """
 from __future__ import annotations
 
@@ -285,7 +290,11 @@ def test_an_owner_edit_cannot_bring_in_a_sensitive_fact(env):
     review(env, [LIBRARY_RULE])
     (c,) = cands(env, "person_fact")
     r = env.client.post(f"/api/omi/day-review/candidates/{c['id']}/approve", json={"fields": {"fact": "votes for the Greens every election"}})
-    assert r.status_code == 409 and r.json()["detail"] == "sensitive" and env.col.rows == {}
+    assert r.status_code in (409, 422) and env.col.rows == {}                      # the quote check refuses it first (422) ...
+    sensitive = dict(c, payload=dict(c["payload"], fact="votes for the Greens every election"))
+    with pytest.raises(apply.ApplyError) as exc:                                    # ... and the write-time floor on its own (409)
+        run(apply._floors(A, sensitive))
+    assert exc.value.code == "sensitive"
 
 
 def test_a_tagged_voice_about_someone_else_is_hearsay(env):
@@ -527,3 +536,95 @@ def test_an_unreadable_memory_index_writes_nothing(env, monkeypatch):
     r = env.client.post(f"/api/omi/day-review/candidates/{c['id']}/approve")
     assert r.status_code == 409 and r.json()["detail"].startswith("write_failed") and env.col.rows == {}
     assert cands(env, "person_fact")[0]["status"] == "pending"
+
+
+# --- cross-review round 1 (codex): child relationships, the crash window, edits that leave their quote --------------------------
+def test_no_relationship_about_a_child_from_either_side(env):
+    sids = add_day(env, "rec1", [("Hi mate, good to see you.", "you"), ("I'm your nephew, remember me?", "other")])
+    max_id = tag(env, sids[1], "Max")
+    env.db.conn.execute("UPDATE people SET relationship = 'grandson of a friend' WHERE id = ?", (max_id,))
+    env.db.conn.commit()
+    res, _ = review(env, [("I'm your nephew", {"kind": "person_fact", "fields": {"name": "Max", "fact": "is your nephew"}})])
+    assert cands(env) == [] and res["counts"]["drop_child"] == 1                     # a possible child: no relationship either
+    lee = tag(env, add_day(env, "rec2", [("Bye!", "other")], started="2026-10-13T05:00:00Z")[0], "Lee")
+    sids2 = add_day(env, "rec3", [("I took my son, Lee, to the footy on the weekend.", "you")], started="2026-10-13T06:00:00Z")
+    run(ov.set_owner_label(env.db, A, sids2[0], "you"))
+    res, _ = review(env, [("I took my son, Lee", {"kind": "person", "fields": {"name": "Lee", "relation": "son"}})])
+    assert [c for c in cands(env) if c["payload"].get("person_id") == lee] == [] and res["counts"]["drop_child"] == 1
+
+
+def test_a_relationship_is_refused_at_approval_if_the_person_became_a_child(env):
+    sids, pid = sam_day(env, ("I'm your cousin, remember the wedding?", "other"))
+    tag(env, sids[2], SAM)
+    review(env, [("I'm your cousin", {"kind": "person_fact", "fields": {"name": "Sam", "fact": "is your cousin"}})])
+    (c,) = cands(env, "person_relation")
+    env.db.conn.execute("UPDATE people SET birthday = '2019-05-01' WHERE id = ?", (pid,))
+    env.db.conn.commit()
+    r = env.client.post(f"/api/omi/day-review/candidates/{c['id']}/approve")
+    assert r.status_code == 409 and r.json()["detail"] == "child"
+    assert env.db.rows("SELECT relationship FROM people WHERE id = ?", (pid,))[0]["relationship"] is None
+
+
+def _claim(env, cid):
+    """What ``approve`` does before the write: the candidate is ``approving`` (a crash would leave it so)."""
+    env.db.conn.execute("UPDATE omi_day_candidates SET status = 'approving', decided_at = '2000-01-01T00:00:00Z' WHERE id = ?", (cid,))
+    env.db.conn.commit()
+    return dr.public(env.db.conn.execute("SELECT * FROM omi_day_candidates WHERE id = ?", (cid,)).fetchone())
+
+
+def test_a_write_interrupted_before_its_written_ref_is_still_erased_and_never_doubled(env):
+    """The crash window: the memory row / relationship exists, the candidate is still ``approving`` with no ``written_ref``.
+    Negative controls: skip the ``orphans`` lookup in ``unwrite``; drop the intent write in ``write_person_relation``; drop the
+    ``mine`` check in ``write_person_fact`` (the retry links ``known:`` and the row becomes unerasable)."""
+    sids, pid = sam_day(env, ("I'm your cousin, remember the wedding?", "other"))
+    tag(env, sids[2], SAM)
+    review(env, [LIBRARY_RULE, ("I'm your cousin", {"kind": "person_fact", "fields": {"name": "Sam", "fact": "is your cousin"}})])
+    fact, rel = cands(env, "person_fact")[0], cands(env, "person_relation")[0]
+    run(apply.write_person_fact(A, _claim(env, fact["id"]), "desktop"))              # ... and the process died here
+    run(apply.write_person_relation(A, _claim(env, rel["id"]), "desktop"))
+    assert len(rows_of(env)) == 1 and env.db.rows("SELECT relationship FROM people WHERE id = ?", (pid,))[0]["relationship"] == "my cousin"
+    (only,) = rows_of(env)
+    out = env.client.post(f"/api/omi/day-review/candidates/{fact['id']}/approve").json()     # the stale claim is retaken
+    assert out["written_ref"] == f"memory:{only}" and list(rows_of(env)) == [only]
+    env.db.conn.execute("UPDATE omi_day_candidates SET written_ref = NULL, status = 'approving' WHERE id = ?", (fact["id"],))
+    env.db.conn.commit()
+    assert run(dr.forget_recording(A, "rec1")) == 2
+    assert rows_of(env) == {} and cands(env) == []
+    assert env.db.rows("SELECT relationship FROM people WHERE id = ?", (pid,))[0]["relationship"] is None
+
+
+def test_an_edit_must_still_rest_on_the_quote(env):
+    sam_day(env)
+    review(env, [LIBRARY_RULE])
+    (c,) = cands(env, "person_fact")
+    r = env.client.post(f"/api/omi/day-review/candidates/{c['id']}/approve", json={"fields": {"fact": "owns the library"}})
+    assert r.status_code == 422 and r.json()["detail"] == "edit_unsupported" and env.col.rows == {}
+    assert cands(env, "person_fact")[0]["status"] == "pending"
+    out = env.client.post(f"/api/omi/day-review/candidates/{c['id']}/approve", json={"fields": {"fact": "works at the library"}}).json()
+    assert out["status"] == "approved"
+    ((_, (text, md)),) = rows_of(env).items()
+    assert text == f"{SAM}: works at the library" and md["candidate_edited_by_owner"] in (True, "True", "true", 1)
+
+
+# --- OD5 (owner 2026-10-19): searching what other people said - words only, privately to the wearer ---------------------------
+def test_searching_what_people_said_is_words_only_and_private(env):
+    """Negative controls: drop ``s.user_id = ? AND r.user_id = ?`` from ``search_said`` (member B finds A's lines); drop the
+    ``not_person IS NULL`` filter (the TV line comes back)."""
+    from routers import omi_recordings as omi_rec_router
+    from routers import omi_voices as voices_router
+    app = FastAPI()
+    app.include_router(voices_router.router)
+    app.dependency_overrides[omi_rec_router._require_owner] = lambda: env.who["user"]
+    client = TestClient(app)
+    sids, pid = sam_day(env, ("We booked the Bali trip for March.", "other"), ("Bali trip special, book now on channel nine!", "other"))
+    tag(env, sids[2], SAM)
+    run(ov.mark_not_a_person(env.db, A, kind="tv", segment_id=sids[3]))
+    got = client.get("/api/omi/segments/search", params={"q": "bali trip"}).json()["lines"]
+    assert [(x["text"], x["label"], x["person_name"]) for x in got] == [("We booked the Bali trip for March.", "person", SAM)]
+    assert set(got[0]) == {"segment_id", "recording_id", "started_at", "start_ms", "end_ms", "text", "label", "person_id", "person_name"}
+    by_person = client.get("/api/omi/segments/search", params={"person_id": pid}).json()["lines"]
+    assert {x["segment_id"] for x in by_person} == {sids[1], sids[2]}
+    assert client.get("/api/omi/segments/search", params={"q": "%"}).status_code == 400            # no words: refused, not "everything"
+    env.who["user"] = {"user_id": B, "role": "admin"}
+    assert client.get("/api/omi/segments/search", params={"q": "bali"}).json()["lines"] == []       # another member, even an admin
+    assert client.get("/api/omi/segments/search", params={"person_id": pid}).status_code == 404     # and A's person is not B's

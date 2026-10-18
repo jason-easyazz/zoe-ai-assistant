@@ -1052,6 +1052,9 @@ def _relation_candidate(person: dict, relation: str, stated_by: str, cited: Sequ
     if _restraint(span) & _SENSITIVE_ALL:         # not ``other_member``: a family word IS what a relationship says
         counts["drop_sensitive"] = counts.get("drop_sensitive", 0) + 1
         return None
+    if person.get("child") or relation_names_child(relation):
+        counts["drop_child"] = counts.get("drop_child", 0) + 1     # nothing about a (possible) child, a child relation included
+        return None
     if _norm(person.get("relationship") or "") == _norm(relation):
         counts["drop_known_relation"] = counts.get("drop_known_relation", 0) + 1      # already what the member's people row says
         return None
@@ -1179,6 +1182,25 @@ def may_be_child(person: dict) -> bool:
     """``omi_voices.person_may_be_child`` for the apply module (which never names the voice store: the never-auth allow-list)."""
     import omi_voices
     return omi_voices.person_may_be_child(person)
+
+
+def relation_names_child(relation: str) -> bool:
+    """Does the relationship itself say child ("my son", "my granddaughter")? Such a relationship is about a child: not proposed."""
+    return may_be_child({"relationship": relation})
+
+
+def fact_holds(fact: str, quote: str, name: str = "") -> str:
+    """'' when a (possibly owner-edited) fact still rests on its quote, else why not: the floors ``verify_person_fact`` ran at analysis,
+    re-run at approval so an edit cannot turn "works at the library" into "owns the library" under the original provenance."""
+    if not fact or vague_text(fact):
+        return "vague"
+    if not _supported(fact, quote, name):
+        return "unsupported"
+    if not (_FACT_DURABLE.search(fact) or _DURABLE.search(quote)):
+        return "not_durable"
+    if _IDENTITY.search(fact):
+        return "identity"
+    return ""
 
 
 def turn_ref_for(segment_ids: Sequence[str], recording_id: str) -> str:
@@ -1727,8 +1749,11 @@ def _payload(row: Any) -> dict:
 
 
 async def _unwrite(user_id: str, rows: Sequence[Any]) -> int:
-    """Erase what APPROVED person candidates wrote (``omi_review_apply.unwrite``). Nothing approved: nothing to do (and no import)."""
-    done = [{"kind": r["kind"], "written_ref": r["written_ref"], "payload": _payload(r)} for r in rows if r["written_ref"]]
+    """Erase what person candidates wrote (``omi_review_apply.unwrite``): an approved one's ``written_ref``, and an ``approving`` one
+    that a crash may have left between its write and its ``written_ref`` (the apply module finds that write by the candidate id).
+    Nothing approved or approving: nothing to do (and no import)."""
+    done = [{"id": r["id"], "kind": r["kind"], "status": r["status"], "written_ref": r["written_ref"], "payload": _payload(r)}
+            for r in rows if r["written_ref"] or r["status"] == "approving"]
     if not done:
         return 0
     import omi_review_apply

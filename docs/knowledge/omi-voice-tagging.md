@@ -110,7 +110,9 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
   - Erasing a member removes every voice row.
   - A name forget redacts the turn text too.
 - **Expiry.** The sweep runs whether or not learning is on. Held embeddings and unknown voices expire after 14 days.
-  Unconfirmed voices expire after 30 days, and confirmed ones after 365 idle days. Soft-deleted people are purged.
+  Learned voices are KEPT UNTIL FORGOTTEN (owner decision D15, 2026-10-19). There is no 30 / 365-day expiry unless one is
+  explicitly configured. A print learned before D15 keeps its old date, but the sweep ignores it while no expiry is configured.
+  Forgetting still erases. Soft-deleted people are purged.
 - **Children.** A child's pendant is not tagged. A member who is not positively an adult never holds a bystander voice. A tagged
   person who may be a child is a label only.
 - **Backups.** The nightly backup carries no row data of the four biometric tables.
@@ -126,7 +128,7 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
 | `ZOE_OMI_VOICE_CLUSTER_MIN` | 0.45 | across-recording unknown-voice cut |
 | `ZOE_OMI_SUGGEST_MIN` / `_MARGIN` | 0.45 / 0.10 | suggestion bar and runner-up margin |
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | 14 | life of a held bystander embedding and an unknown voice |
-| `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` | 30 / 365 | learned-voice expiry |
+| `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` | 0 / 0 | learned-voice expiry; 0 = kept until forgotten (D15), a positive value is an explicit bounded expiry |
 | `ZOE_OMI_TAG_MODEL_DIR` | `~/.cache/zoe-speaker-resnet34` | where `fetch_speaker_models.sh build` wrote the INT8 file |
 | `ZOE_OMI_KEEP_AUDIO_FOR_TAGGING` | off | hold a split recording's WAV while a line still needs a name, so the Pendant page can play a clip; released when nothing needs a name, never past `ZOE_OMI_AUDIO_RETENTION_DAYS` (7) |
 
@@ -172,8 +174,10 @@ docstring).
   - Anything from an unlabelled line (D4: an untagged day's prompt is unchanged and yields no person facts).
   - The `restraint` classes plus a person-specific list (D11): intimate life, beliefs and politics, legal, status papers,
     health and money words.
-  - A fact about a possible child.
-  - A fact whose words are not in the quote.
+  - Anything about a possible child: no fact, and no relationship (a child relationship such as "my son" counts too). The
+    check runs again at approval.
+  - A fact whose words are not in the quote. An owner's edit at approval is held to the same rule (`edit_unsupported`, 422),
+    because the row keeps the original quote and speaker as its provenance.
   - A passing remark ("today").
   - An identity claim or an address.
 - **The day-review card** (`GET /api/omi/day-review/candidates`) lists these candidates like any other. It also carries
@@ -190,7 +194,10 @@ docstring).
 - **Forget.** These all erase the memory row (`MemoryService.erase_rows`) and clear the relationship, then delete the candidate:
   - "forget <name>": the cascade's `omi_day_review` step, by name and by the person ids it resolved;
   - deleting the recording the fact came from;
-  - a forget that lands while an approval is writing (the approval answers 410).
+  - a forget that lands while an approval is writing (the approval answers 410);
+  - a crash between the write and `written_ref`. The memory row carries the candidate id, and a relationship's intent is
+    recorded on the candidate before the update. A forget follows either one, and a retried approval reuses the row rather
+    than linking it as `known:`.
 - **Limits.**
   - The owner's later direct statement in chat (`user_stated`, through `person_extractor`) may still supersede a pendant fact,
     with history. That is the trust order: the owner's own words win.

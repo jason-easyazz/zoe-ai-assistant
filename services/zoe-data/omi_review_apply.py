@@ -237,8 +237,11 @@ async def write_person_fact(user_id: str, c: dict, via: str) -> str:
     svc = get_memory_service()
     # every row already linked to the person, read STRICTLY (``list_by_entity`` answers [] on a failed read, and an unreadable index
     # must write nothing rather than skip the conflict check): approved rows only, as recall would serve them
-    have = [r for r in await svc._run_sync(svc._entity_rows_sync, [person["id"]], user_id)
-            if str(r.metadata.get("status") or "approved") == "approved"]
+    rows = await svc._run_sync(svc._entity_rows_sync, [person["id"]], user_id)
+    mine = next((r for r in rows if _written_by(r, c["id"])), None)
+    if mine is not None:
+        return f"memory:{mine.id}"             # a retry after a crash between the write and ``written_ref``: it is THIS approval's row
+    have = [r for r in rows if str(r.metadata.get("status") or "approved") == "approved"]
     if any(dr.facts_conflict(fact, r.text, name) for r in have):
         raise ApplyError("held_conflict")
     same = next((r for r in have if dr.same_fact(fact, r.text, name)), None)
@@ -269,13 +272,19 @@ async def write_person_relation(user_id: str, c: dict, via: str) -> str:
     if str(person.get("visibility") or "") != "personal":
         raise ApplyError("shared_person")
     rel = dr.clean(p.get("relation") or "", 60)
+    if dr.may_be_child(person) or dr.relation_names_child(rel):
+        raise ApplyError("child")              # nothing about a (possible) child, whatever the analysis or an edit says
     have = str(person.get("relationship") or "").strip()
     ref = f"people:{person['id']}#relationship"
     if have:
         if dr._norm(have) == dr._norm(rel):
-            return "known:" + ref
+            # THIS approval's own write when a crash left its intent recorded (below); otherwise someone else's, only linked
+            return ref if c.get("written_ref") == ref else "known:" + ref
         raise ApplyError("held_conflict")
     async with get_compat_db() as db:
+        # the intent FIRST: a crash between the people update and the final ``written_ref`` must leave a pointer a forget can follow
+        await db.execute("UPDATE omi_day_candidates SET written_ref = ? WHERE id = ? AND user_id = ? AND status = 'approving'",
+                         (ref, c["id"], user_id))
         cur = await db.execute("UPDATE people SET relationship = ? WHERE id = ? AND user_id = ? AND relationship IS NULL "
                                "AND (deleted = 0 OR deleted IS NULL)", (rel, person["id"], user_id))
         await db.commit()
@@ -284,24 +293,41 @@ async def write_person_relation(user_id: str, c: dict, via: str) -> str:
     return ref
 
 
+def _written_by(row: Any, candidate_id: str) -> bool:
+    """Was this memory row written by the approval of ``candidate_id``? (``ingest`` keeps an extra metadata key as ``candidate_<key>``.)"""
+    md = getattr(row, "metadata", None) or {}
+    return bool(candidate_id) and str(md.get("candidate_candidate_id") or "") == str(candidate_id) \
+        and str(md.get("origin") or "") == dr.WRITER
+
+
 async def unwrite(user_id: str, rows: list) -> int:
-    """Erase what approved ``person_fact`` / ``person_relation`` candidates wrote (forget: the person, the name, the recording). A
-    memory row is HARD-erased (``MemoryService.erase_rows``: drawers, audit trail, the physical residue); a relationship goes back to
-    empty only while it still holds the value this approval set. A ``known:`` link wrote nothing and erases nothing. RAISES on a
-    failure, so the caller deletes nothing and is retried. Returns the rows erased."""
+    """Erase what ``person_fact`` / ``person_relation`` candidates wrote (forget: the person, the name, the recording). A memory row
+    is HARD-erased (``MemoryService.erase_rows``: drawers, audit trail, the physical residue); a relationship goes back to empty only
+    while it still holds the value this approval set. An ``approving`` candidate a crash left without ``written_ref`` is covered too:
+    its memory row is found by the candidate id it carries, its relationship by the intent recorded before the update. A ``known:``
+    link wrote nothing and erases nothing. RAISES on a failure, so the caller deletes nothing and is retried. Returns rows erased."""
     mem: list[str] = []
     rels: list[tuple[str, str]] = []
+    orphans: dict[str, set] = {}           # person id -> candidate ids whose write may have landed without a ``written_ref``
     for r in rows:
         ref = str(r.get("written_ref") or "")
         if r.get("kind") == "person_fact" and ref.startswith("memory:"):
             mem.append(ref.split(":", 1)[1])
+        elif r.get("kind") == "person_fact" and not ref and r.get("status") == "approving" and r.get("id"):
+            orphans.setdefault(str((r.get("payload") or {}).get("person_id") or ""), set()).add(str(r["id"]))
         elif r.get("kind") == "person_relation" and ref.startswith("people:"):
             rels.append((ref.split(":", 1)[1].split("#", 1)[0], str((r.get("payload") or {}).get("relation") or "")))
     n = 0
-    if mem:
+    if mem or orphans:
         from memory_service import get_memory_service
-        out = await get_memory_service().erase_rows(user_id, mem, actor=user_id, reason="forgotten by request (pendant review)")
-        n += int(out.get("rows_removed") or 0)
+        svc = get_memory_service()
+        for pid, cids in orphans.items():      # read strictly: an unreadable index raises, and the forget is retried
+            if pid:
+                mem += [m.id for m in await svc._run_sync(svc._entity_rows_sync, [pid], user_id)
+                        if any(_written_by(m, cid) for cid in cids)]
+        if mem:
+            out = await svc.erase_rows(user_id, mem, actor=user_id, reason="forgotten by request (pendant review)")
+            n += int(out.get("rows_removed") or 0)
     if rels:
         from db_compat import get_compat_db
         async with get_compat_db() as db:
@@ -374,6 +400,12 @@ async def approve(user_id: str, cid: str, *, fields: Optional[dict] = None, via:
         if c["status"] == "dismissed":
             raise ApplyError("already_dismissed")
         payload = apply_edits(c["kind"], c["payload"], fields)
+        if c["kind"] == "person_fact" and fields:
+            # an edit must still rest on the words it cites: the stored row keeps the quote and who said it as provenance
+            why = dr.fact_holds(str(payload.get("fact") or ""), str((c.get("evidence") or [{}])[0].get("quote") or ""),
+                                str(payload.get("name") or ""))
+            if why:
+                raise ApplyError(f"edit_{why}", 422)
         stale = dr._iso(now - timedelta(seconds=STALE_CLAIM_S))
         cur = await db.execute(
             "UPDATE omi_day_candidates SET status = 'approving', payload = ?, decided_at = ?, decided_via = ?, write_error = NULL "
@@ -399,6 +431,8 @@ async def approve(user_id: str, cid: str, *, fields: Optional[dict] = None, via:
         async with get_compat_db() as db:
             await db.execute("UPDATE omi_day_candidates SET status = 'pending', write_error = ? WHERE id = ? AND user_id = ?",
                              (code[:80], cid, user_id))
+            if c["kind"] in dr.PERSON_KINDS:        # a recorded intent that did not land is no write: a forget must not follow it
+                await db.execute("UPDATE omi_day_candidates SET written_ref = NULL WHERE id = ? AND user_id = ?", (cid, user_id))
             await db.commit()
         logger.info("OMI_REVIEW_APPLY user=%s kind=%s result=failed code=%s", user_id, c["kind"], code)
         raise ApplyError(code, exc.status if isinstance(exc, ApplyError) else 409)
