@@ -128,9 +128,11 @@ zoe-data restart; F2 reaches a container only when it is re-created.
 - **R7 No slow-query evidence** for Postgres: `log_min_duration_statement` is unset and
   `pg_stat_statements` is not loaded (audit item A3). Set `log_min_duration_statement=500` in the
   database service when A3 lands.
-- **R8 Housekeeping candidates** (operator, with eyes on it): `livekit` has been `Exited (137)` for 6 days
-  (stopped by hand, `restart: unless-stopped` does not revive it), and four dead containers
+- **R8 Housekeeping candidates** (operator, with eyes on it): four dead containers
   (`awesome_chatterjee`, `wyoming-piper`, `zoe-orbit`, `zoe-jag-board`) are 3-4 months stale.
+  (Corrected 2026-10-18: this line used to list `livekit`'s `Exited (137)` as dead. It is not: zoe-data
+  starts it on demand for a LiveKit voice session and stops it after 300 s idle, so exited is its normal
+  resting state. See the 2026-10-04 LiveKit line in [open-problems.md](open-problems.md).)
 
 ## 5. Resource snapshot (13:44Z, read-only)
 

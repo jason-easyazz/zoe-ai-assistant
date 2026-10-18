@@ -85,7 +85,8 @@ def hdb(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_handoff, "_db_ctx", ctx)
     monkeypatch.setattr(push, "broadcaster", _Broadcaster())
     monkeypatch.setattr(auth_handoff, "_wake_panel", wake)
-    monkeypatch.delenv("ZOE_TELEGRAM_BOT_TOKEN", raising=False)
+    for var in ("ZOE_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "ZOE_INTERNAL_TOKEN", "ZOE_TELEGRAM_NOTIFY_URL"):
+        monkeypatch.delenv(var, raising=False)  # every Telegram channel input: a test opts in to the one it means
     monkeypatch.delenv("ZOE_PUBLIC_URL", raising=False)
     auth_handoff._LINKS.clear()
     return SimpleNamespace(path=path, sent=sent, woke=woke,
@@ -320,6 +321,100 @@ async def test_send_to_phone_after_a_restart_says_start_again(hdb, monkeypatch):
     auth_handoff._LINKS.clear()  # the process restarted: the token-bearing link is gone
     r = await auth_handoff.send_to_phone(h["id"])
     assert r["status"] == "unavailable" and "again" in r["detail"]
+
+
+# ── which Telegram channel (A9, 2026-10-18) ──────────────────────────────────
+# The live env names the token TELEGRAM_BOT_TOKEN, so the channel was silently off.
+# Both names are accepted (ZOE_ first); the bot's loopback notify is tried first.
+
+def _fake_httpx(monkeypatch, status_for):
+    """Record every POST (url, json, headers); answer with ``status_for(url)``."""
+    import httpx
+
+    posts = []
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            posts.append((url, json, headers or {}))
+            st = status_for(url)
+            if isinstance(st, Exception):
+                raise st
+            return SimpleNamespace(status_code=st)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    return posts
+
+
+@pytest.mark.parametrize("names, expected, available", [
+    ({"ZOE_TELEGRAM_BOT_TOKEN": "111:zoe"}, "111:zoe", True),
+    ({"TELEGRAM_BOT_TOKEN": "222:legacy"}, "222:legacy", True),
+    ({"ZOE_TELEGRAM_BOT_TOKEN": "111:zoe", "TELEGRAM_BOT_TOKEN": "222:legacy"}, "111:zoe", True),  # ZOE_ wins
+    ({"ZOE_TELEGRAM_BOT_TOKEN": "  ", "TELEGRAM_BOT_TOKEN": "222:legacy"}, "222:legacy", True),  # blank falls through
+    ({}, "", False),  # neither
+    ({"ZOE_INTERNAL_TOKEN": "s"}, "", True),  # the bot's loopback route alone
+    ({"ZOE_INTERNAL_TOKEN": "s", "ZOE_TELEGRAM_NOTIFY_URL": "off"}, "", False),  # ... switched off
+])
+async def test_bot_token_accepts_both_names_preferring_zoe(hdb, monkeypatch, names, expected, available):
+    for k, v in names.items():
+        monkeypatch.setenv(k, v)
+    assert auth_handoff._bot_token() == expected
+    _link_telegram(hdb.path)
+    assert await auth_handoff.telegram_available("jason") is available
+
+
+NOTIFY = "http://127.0.0.1:3582/internal/notify"
+
+
+@pytest.mark.parametrize("env, bot_up, expected_posts", [
+    ({"TELEGRAM_BOT_TOKEN": "222:legacy"}, True, ["https://api.telegram.org/bot222:legacy/sendMessage"]),  # legacy alone
+    ({"ZOE_INTERNAL_TOKEN": "s", "TELEGRAM_BOT_TOKEN": "222:legacy"}, True, [NOTIFY]),  # the bot first; direct untouched
+    ({"ZOE_INTERNAL_TOKEN": "s", "ZOE_TELEGRAM_BOT_TOKEN": "111:zoe"}, False,  # the bot is down: the direct fallback
+     [NOTIFY, "https://api.telegram.org/bot111:zoe/sendMessage"]),
+])
+async def test_send_to_phone_takes_the_bot_first_then_a_held_token(hdb, monkeypatch, env, bot_up, expected_posts):
+    import httpx
+
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    _link_telegram(hdb.path)
+    posts = _fake_httpx(monkeypatch, lambda url: 200 if bot_up or url != NOTIFY else httpx.ConnectError("refused"))
+    h = await _start()
+    assert h["channels"] == ["qr", "telegram"]
+    assert (await auth_handoff.send_to_phone(h["id"]))["status"] == "sent"
+    assert [p[0] for p in posts] == expected_posts
+    url, body, headers = posts[0]
+    if url == NOTIFY:
+        assert headers["Authorization"] == "Bearer s"
+        assert body["telegram_id"] == "123456789" and body["url"] == h["phone_url"]
+    else:
+        assert body["chat_id"] == "123456789"
+
+
+async def test_no_token_value_ever_reaches_the_log(hdb, monkeypatch, caplog):
+    import httpx
+
+    monkeypatch.setenv("ZOE_INTERNAL_TOKEN", "shared-secret")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "222:legacy-secret")
+    _link_telegram(hdb.path)
+
+    def boom(url):  # httpx errors embed the token-bearing Bot API URL in their message
+        return httpx.ConnectError(f"cannot reach {url}")
+    _fake_httpx(monkeypatch, boom)
+    h = await _start()
+    with caplog.at_level("DEBUG"):
+        r = await auth_handoff.send_to_phone(h["id"])
+    assert r["status"] == "failed"
+    assert "legacy-secret" not in caplog.text and "shared-secret" not in caplog.text
+    assert "ConnectError" in caplog.text
 
 
 # ── provider hooks by nonce ──────────────────────────────────────────────────
