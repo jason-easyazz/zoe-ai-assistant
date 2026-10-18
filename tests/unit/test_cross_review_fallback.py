@@ -34,7 +34,9 @@ case "${STUB_POLLY:-ok}" in
   ok)          printf 'REVIEWER-VENDOR: openai/codex\nblocking: none\nCLEAN\n' ;;
   claude)      printf 'REVIEWER-VENDOR: anthropic/claude-opus-4-8\nCLEAN\n' ;;
   noattest)    printf 'looks fine to me, CLEAN\n' ;;
-  unavailable) printf 'tried codex and pi, both out of quota\nCROSS-VENDOR-REVIEW-UNAVAILABLE\n' ;;
+  # A VALID non-Anthropic attestation on purpose: only the sentinel may reject this report
+  # (without it the attestation check alone would, and the sentinel check could rot unseen).
+  unavailable) printf 'REVIEWER-VENDOR: openai/codex\ntried codex and pi, both out of quota\nCROSS-VENDOR-REVIEW-UNAVAILABLE\n' ;;
   empty)       : ;;
   authfail)    echo "ALARM: session ended in error status 'failed'" >&2; exit 2 ;;
 esac
