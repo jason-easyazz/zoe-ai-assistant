@@ -1,0 +1,23 @@
+# Nightly OFF-BOX encrypted backup to the household's append-only restic repo on the411 (architecture deep dive A5).
+# scripts/maintenance/zoe_offbox.py: age-encrypts household words and secrets to a recipient whose identity
+# is OFF the box, then restic-uploads three tagged snapshots. Runbook + owner steps:
+# docs/knowledge/offbox-backup.md. Install ONLY after ~/.config/zoe-backup/offbox.env exists (without it the
+# run exits 2 and the unit shows failed, on purpose: a backup that silently does nothing is the failure mode).
+[Unit]
+Description=Zoe off-box encrypted backup (restic append-only on the411 + age)
+Wants=network-online.target
+After=network-online.target zoe-backup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/zoe_offbox.py backup
+# exit 3 = refused inside the night window (a Persistent= catch-up after a night boot): not a unit failure.
+# A low-memory refusal is also exit 3 but alerts; the monthly drill catches backups that stop landing.
+SuccessExitStatus=3
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+MemoryMax=1G
+TimeoutStartSec=6h
+StandardOutput=append:%h/.zoe-logs/offbox-backup.log
+StandardError=append:%h/.zoe-logs/offbox-backup.log

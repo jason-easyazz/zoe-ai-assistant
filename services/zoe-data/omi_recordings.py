@@ -109,6 +109,27 @@ def keep_audio_default() -> bool:
     return env_bool("ZOE_OMI_KEEP_AUDIO", default=False)
 
 
+def keep_for_tagging() -> bool:
+    """``ZOE_OMI_KEEP_AUDIO_FOR_TAGGING`` - default OFF. On: a transcribed recording whose voices were split keeps its WAV while ANY
+    line still needs a name (someone else / not sure / mixed, not tagged, not marked not-a-person), so the member can play a few
+    seconds of a voice on the Pendant page to tell who it is. The WAV goes the moment nothing in it needs a name
+    (``release_tagged_audio``) and never outlives ``audio_expires_at`` (the ``ZOE_OMI_AUDIO_RETENTION_DAYS`` bound, default 7)."""
+    return env_bool("ZOE_OMI_KEEP_AUDIO_FOR_TAGGING", default=False)
+
+
+NEEDS_NAME_SPEAKERS = ("other", "unsure", "mixed")
+CLIP_MAX_S = 8.0
+
+
+def needs_name(seg: dict) -> bool:
+    """A transcribed turn the member may still want to name (the in-memory twin of ``_NEEDS_NAME_SQL``)."""
+    return (seg.get("speaker") in NEEDS_NAME_SPEAKERS and not seg.get("not_person")) and bool(str(seg.get("text") or "").strip())
+
+
+_NEEDS_NAME_SQL = ("tagged_person_id IS NULL AND not_person IS NULL AND TRIM(text) != '' AND COALESCE(owner_label, speaker) IN ('other', "
+                   "'unsure', 'mixed')")
+
+
 #: Default RAM floor for STARTING a recording, MB of ``MemAvailable``. See ``docs/architecture/omi-integration-plan.md`` section 4
 #: ("The RAM floor") for the measurement this number comes from.
 DEFAULT_MIN_MEM_MB = 800
@@ -1035,7 +1056,7 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
         await note_deferred(str(exc))
     except Exception as exc:  # noqa: BLE001
         err = f"failed:{type(exc).__name__}"
-    keep = False
+    keep = hold = False
     async with erase_gate.writing(uid, seen.get(uid, 0)) as live:
         async with get_compat_db() as db:
             if not live:                         # the member was erased since this was fetched: nothing of it survives
@@ -1085,11 +1106,13 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                         await omi_voices.drop_recording(db, rid)
                     except Exception:  # noqa: BLE001
                         pass
+            # held for tagging: only while a line needs a name, never past audio_expires_at (release_tagged_audio / purge_expired_audio)
+            hold = keep or (keep_for_tagging() and bool(seg_ids) and spk_state == "tagged" and any(needs_name(x) for x in segs or []))
             await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, transcribed_at = ?, speaker_state = ?"
-                             + ("" if keep else ", audio_path = '', audio_bytes = 0, audio_expires_at = NULL")
+                             + ("" if hold else ", audio_path = '', audio_bytes = 0, audio_expires_at = NULL")
                              + " WHERE id = ? AND status = 'transcribing'", (text, _iso(_now()), spk_state, rid))
             await db.commit()
-            if not keep:
+            if not hold:
                 _unlink(path)
             if seg_ids and spk_state == "tagged":
                 try:                          # learning is optional; the transcript and its segments are already safe
@@ -1099,6 +1122,10 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                         logger.info("OMI_VOICES_LEARNED id=%s stored=%d suggested=%d", rid, learned["stored"], learned["suggested"])
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("omi_voices: learning pass failed for %s (%s)", rid, type(exc).__name__)
+    if hold and not keep:
+        # learn() may just have marked a line not-a-person (it matched a voice the member called TV / Zoe): if nothing in the
+        # recording needs a name any more, the WAV goes now, not at the next hourly pass
+        await release_tagged_audio(uid)
     logger.info("OMI_TRANSCRIBED id=%s chars=%d kept_audio=%s segments=%d speaker_state=%s", rid, len(text), keep,
                 len(segs or []), spk_state)
     return True
@@ -1252,6 +1279,82 @@ async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
     return n
 
 
+async def release_tagged_audio(user_id: Optional[str] = None) -> int:
+    """Delete the WAV of every transcribed recording held ONLY for tagging (``keep_audio`` off) in which no line needs a name any
+    more - everything tagged, called "me", or marked not a person - or whose voices were never split. ``user_id`` scopes it to one
+    member (after each of their tags); None is everyone (the retention loop). Also the backstop when the flag is turned off: a held
+    WAV is released at once rather than waiting for its retention. Returns how many WAVs went. Never raises."""
+    n = 0
+    try:
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            sql = "SELECT id, user_id, audio_path FROM omi_recordings WHERE status = 'done' AND keep_audio = 0 AND audio_path != ''"
+            rows = await _fetch(db, sql + (" AND user_id = ?" if user_id else ""), (user_id,) if user_id else ())
+            for r in rows:
+                if keep_for_tagging():
+                    try:
+                        left = await _fetch(db, f"SELECT COUNT(*) AS n FROM omi_segments WHERE recording_id = ? AND user_id = ? AND {_NEEDS_NAME_SQL}",
+                                            (r["id"], r["user_id"]))
+                    except Exception as exc:  # noqa: BLE001 - pre-0055: no segments, nothing to name
+                        import omi_voices
+                        if not omi_voices._missing(exc):
+                            raise
+                        left = []
+                    if left and int(left[0]["n"]):
+                        continue
+                # the row first, re-checking keep_audio: a "keep this" that lands meanwhile wins and the WAV stays
+                cur = await db.execute("UPDATE omi_recordings SET audio_path = '', audio_bytes = 0, audio_expires_at = NULL WHERE id = ? "
+                                       "AND keep_audio = 0 AND audio_path = ?", (r["id"], r["audio_path"]))
+                if getattr(cur, "rowcount", 1):
+                    _unlink(r["audio_path"])
+                    n += 1
+            if n:
+                await db.commit()
+                logger.info("OMI_TAGGING_AUDIO_RELEASED count=%d", n)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("omi_recordings: tagging-audio release failed (%s)", type(exc).__name__)
+    return n
+
+
+async def segment_clip(user_id: str, segment_id: str, *, max_s: float = CLIP_MAX_S) -> Optional[bytes]:
+    """A short WAV (at most ``max_s``, from the start of the turn) of one of the member's OWN lines, cut from its recording's
+    still-held WAV; None when the line is not theirs, its recording is not done, or no audio is held. The file must sit inside
+    ``audio_dir()`` (a row can never point the route at another path)."""
+    from db_compat import get_compat_db
+    async with get_compat_db() as db:
+        rows = await _fetch(db, "SELECT s.start_ms, s.end_ms, r.audio_path FROM omi_segments s JOIN omi_recordings r ON r.id = s.recording_id "
+                                "WHERE s.id = ? AND s.user_id = ? AND r.user_id = ? AND r.status = 'done' AND r.audio_path != '' "
+                                "AND (r.audio_expires_at IS NULL OR r.audio_expires_at > ?)",      # past retention: never served, even
+                            (segment_id, user_id, user_id, _iso(_now())))                               # before the hourly purge runs
+    if not rows:
+        return None
+    path = Path(rows[0]["audio_path"])
+    try:
+        path.resolve().relative_to(audio_dir().resolve())
+    except (ValueError, OSError):
+        logger.warning("OMI_CLIP_REFUSED reason=outside_audio_dir")
+        return None
+    start = max(0, int(rows[0]["start_ms"]))
+    end = max(start, min(int(rows[0]["end_ms"]), start + int(max_s * 1000)))
+
+    def _cut() -> Optional[bytes]:
+        try:
+            with wave.open(str(path)) as w:
+                rate, width, ch = w.getframerate(), w.getsampwidth(), w.getnchannels()
+                w.setpos(min(w.getnframes(), start * rate // 1000))
+                pcm = w.readframes(max(0, (end - start) * rate // 1000))
+        except (OSError, EOFError, wave.Error):
+            return None
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as o:
+            o.setnchannels(ch)
+            o.setsampwidth(width)
+            o.setframerate(rate)
+            o.writeframes(pcm)
+        return buf.getvalue()
+    return await asyncio.to_thread(_cut)
+
+
 async def _sweep_voices() -> None:
     """Learned-voice expiry runs whether or not learning is on (design 2.6): turning the flag off must not stop things expiring."""
     try:
@@ -1276,6 +1379,7 @@ async def run_retention_loop() -> None:
         await asyncio.sleep(RETENTION_S)
         try:
             await purge_expired_audio()
+            await release_tagged_audio()
             await _sweep_voices()
         except asyncio.CancelledError:
             raise

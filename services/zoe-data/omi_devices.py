@@ -23,6 +23,7 @@ guesses an owner.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -42,6 +43,16 @@ LABEL_MAX = 60
 _GUEST_ROLES = ("guest",)
 
 _seeded = False
+_device_locks: dict[str, asyncio.Lock] = {}
+
+
+def device_lock(device_id: str) -> asyncio.Lock:
+    """The per-pendant lock shared by every writer that changes WHO owns a pendant (``assign`` / ``unassign``) and every writer that
+    stores something under the owner it just resolved (``omi_health.record_report`` / ``sweep``). Without it a heartbeat checks the
+    owner, a reassignment lands, and the heartbeat then saves the previous owner's id on the pendant's row. Lock order is always erase
+    gate (the member) -> device lock; nothing takes the gate while holding this. Keys are validated 16-hex ids, so the map is bounded by
+    the number of pendants."""
+    return _device_locks.setdefault(device_id, asyncio.Lock())
 
 
 class DeviceError(Exception):
@@ -171,6 +182,7 @@ async def ensure_seeded() -> bool:
 def reset_for_tests() -> None:
     global _seeded
     _seeded = False
+    _device_locks.clear()
 
 
 # --- writes (admin-only at the route; audited fail-closed here) ---------------------------------------------------------------------
@@ -183,7 +195,7 @@ async def assign(device_id: str, user_id: str, *, label: Optional[str], actor: d
     async with erase_gate.writing(user_id, erase_gate.generation(user_id)) as live:
         if not live:
             raise DeviceError(409, "member_being_erased", "That member is being erased.")
-        async with get_compat_db() as db:
+        async with device_lock(device_id), get_compat_db() as db:
             urows = await _fetch(db, "SELECT id, role FROM users WHERE id = ?", (user_id,))
             if not urows or urows[0]["role"] in _GUEST_ROLES or user_id == "guest":
                 raise DeviceError(400, "not_a_member", "Pick a household member (guests cannot own a pendant).")
@@ -214,7 +226,7 @@ async def unassign(device_id: str, *, actor: dict) -> bool:
     if not DEVICE_ID_RX.match(device_id or ""):
         raise DeviceError(400, "bad_device_id", "That is not a pendant id.")
     from db_compat import get_compat_db
-    async with get_compat_db() as db:
+    async with device_lock(device_id), get_compat_db() as db:
         before = await _fetch(db, "SELECT * FROM omi_devices WHERE device_id = ?", (device_id,))
         if not before:
             return False

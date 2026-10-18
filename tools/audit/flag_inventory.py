@@ -188,7 +188,11 @@ class _FlagVisitor(ast.NodeVisitor):
                         if kw.arg == "default":
                             default = kw.value
                 self.reads.append((flag, _literal_repr(default), typed))
+                self.on_read(flag, node, name)
         self.generic_visit(node)
+
+    def on_read(self, flag: str, node: ast.Call, call_name: str) -> None:
+        """Hook for subclasses (``live_state.py`` classifies HOW each read consumes the value). No-op here."""
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
         # os.environ["ZOE_X"] — reads only. Store/Del contexts are WRITES

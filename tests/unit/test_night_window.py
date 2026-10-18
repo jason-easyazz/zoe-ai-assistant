@@ -1053,6 +1053,22 @@ def test_the_day_review_runs_last_on_the_12b_and_running_out_of_time_never_fails
     assert w3.run() == nw.EXIT_JOBS_FAILED                                                    # a real failure is still loud
 
 
+def test_the_day_review_is_handed_the_time_the_window_leaves_it_as_its_budget(tmp_path):
+    """Owner decision 2026-10-18 (the 12B overnight): the day review plans inside its own kill time. exec_job appends --budget-s = the clipped
+    timeout less BUDGET_MARGIN_S, so a day that would not finish is not started (the CLI's ``no_time``) instead of being killed half way."""
+    script = tmp_path / "zoe-omi-day-review.py"
+    script.write_text("# stand-in")
+    spec = next(j for j in nw.build_jobs(nw.NightCfg(), 8192, 6.2, 150.0) if j.name == "omi_day_review")
+    assert spec.budget_flag == "--budget-s" and "--budget-s" not in spec.argv and spec.timeout_s == 2400.0
+    w, host, _ = make(tmp_path, cfg_kw={"omi_day_review_script": script})
+    assert w.run() == nw.EXIT_OK, w.outcome
+    odr = next(j for j in host.jobs_run if j["name"] == "zoe-omi-day-review.py")
+    budget = float(odr["argv"][odr["argv"].index("--budget-s") + 1])
+    assert budget == pytest.approx(max(30.0, odr["timeout"] - nw.BUDGET_MARGIN_S), abs=1.0) and budget < odr["timeout"]
+    others = [j for j in host.jobs_run if j["name"] != "zoe-omi-day-review.py"]
+    assert others and not any("--budget-s" in j["argv"] for j in others)                     # control: only the budgeted job gets one
+
+
 def test_the_struggle_proposals_job_runs_after_the_night_mind_before_the_day_review_and_never_fails_the_night_for_time(tmp_path):
     spec = next(j for j in nw.build_jobs(nw.NightCfg(), 8192, 6.2, 150.0) if j.name == "struggle_proposals")
     assert spec.best_effort and not spec.fallback_4b and not spec.skip_reason and spec.timeout_s == 480.0
@@ -1985,18 +2001,13 @@ def test_cells_corpus_and_trace_are_refused_outside_cells_only(tmp_path):
             nw.configure(ap.parse_args(["--trial", *flag]))
 
 
-# ── a quiet night is a noop (no 12B load); --mode is explicit; a slow night raises the morning alarm ──────────────────────────────────
+# ── every night runs the 12B (owner 2026-10-18: no quiet-night skip); --mode is explicit; a slow night raises the morning alarm ───────
 
 LAST_NIGHT = "2026-10-08T02:50:00"          # the naive local stamp the reports carry in ``started``
 
 
-def dt_utc(naive_local: str) -> str:
-    import datetime as dt
-    return dt.datetime.fromisoformat(naive_local).astimezone(dt.timezone.utc).isoformat(timespec="seconds")
-
-
 def seed_report(cfg, name, *, started=LAST_NIGHT, outcome="ok", exit=0, mode="night", decode=None, run_id=None):
-    """A night report as ``write_report`` leaves it (only the fields the precheck and the alert read)."""
+    """A night report as ``write_report`` leaves it (only the fields the decode alert reads)."""
     cfg.report_dir.mkdir(parents=True, exist_ok=True)
     rec = {"run_id": run_id or name, "mode": mode, "outcome": outcome, "exit": exit, "started": started, "jobs": []}
     if decode is not None:
@@ -2004,117 +2015,34 @@ def seed_report(cfg, name, *, started=LAST_NIGHT, outcome="ok", exit=0, mode="ni
     (cfg.report_dir / f"{name}.json").write_text(json.dumps(rec))
 
 
-def answer_precheck(host, out="", rc=0):
-    """Make the stand-in precheck answer ``out`` / ``rc`` (everything else still goes to the double); returns the argv of every precheck call."""
-    calls: "list[list[str]]" = []
-    orig = host.run
-
-    def run(argv, *a, **k):
-        res = orig(argv, *a, **k)
-        if any("night_precheck.py" in x for x in argv):
-            calls.append(list(argv))
-            return bk.Result(rc, out)
-        return res
-    host.run = run
-    return calls
-
-
-def precheck_line(turns, omi=None):
-    return "NIGHT_PRECHECK " + json.dumps({"members_with_new_turns": turns, "omi_members": omi, "since": "x"}) + "\n"
-
-
-def quiet_window(tmp_path, *, out=None, rc=0, argv=(), prior=True):
-    script = tmp_path / "night_precheck.py"
-    script.write_text("# stand-in")
-    w, host, cfg = make(tmp_path, argv=argv, cfg_kw={"precheck_script": script})
-    if prior:
-        seed_report(cfg, "2026-10-08")
-    calls = answer_precheck(host, precheck_line(0, 0) if out is None else out, rc)
-    return w, host, cfg, calls
-
-
-def slept_or_loaded(host):
-    return [c for c in host.joined() if c.startswith("systemd-run") or " --user stop " in c or " --user start " in c]
-
-
-def test_a_quiet_night_is_a_noop_that_stops_nothing_and_loads_no_12b(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path)
-    assert w.run() == nw.EXIT_OK
-    assert w.outcome == "noop" and "no member has new turns" in w.rec["noop"]
-    assert slept_or_loaded(host) == [] and w.lock_fd is None                # Zoe never went to sleep: no stop, no start, no 12B; and the brain-window lock is not left held
-    assert not any(j["name"] in ("night_digest.py", "zoe-night-mind.py") for j in host.jobs_run)      # the 12B jobs did not run
-    saved = json.loads(next(p for p in w.report_paths if p.suffix == ".json").read_text())
-    assert saved["outcome"] == "noop" and saved["exit"] == 0 and saved["mode"] == "night"
-    assert calls[0][calls[0].index("--since") + 1] == dt_utc(LAST_NIGHT) and "--omi" in calls[0]        # measured against the last window's start; the pendant check rides along
-
-
-def test_a_noop_night_still_runs_dreaming_on_the_live_4b_like_a_refused_night(tmp_path):
-    w, host, cfg, _ = quiet_window(tmp_path)
-    assert w.run() == nw.EXIT_OK
-    assert [(j["name"], j["backend"]) for j in w.jobs] == [("dreaming", "4B")]            # the non-LLM maintenance in dreaming is not lost on a quiet night
-    assert slept_or_loaded(host) == []
-
-
-def test_any_member_with_a_new_turn_runs_the_window_as_before(tmp_path):
-    w, host, cfg, _ = quiet_window(tmp_path, out=precheck_line(1, 0))
+def test_a_night_with_nothing_new_still_loads_the_12b_and_runs_every_job(tmp_path):
+    """Owner decision 2026-10-18: the 12B runs EVERY night. The quiet-night skip (#2107) is retired, not defaulted off: no precheck is asked, nothing
+    can turn a real night into a noop, and an earlier night's report changes nothing about tonight."""
+    w, host, cfg = make(tmp_path)
+    seed_report(cfg, "2026-10-08")                                          # what the old watermark read: a night that did its work
     assert w.run() == nw.EXIT_OK and w.outcome == "ok"
-    assert any(c.startswith("systemd-run") for c in host.joined()) and any(j["name"] == "night_digest.py" for j in host.jobs_run)
+    assert any(c.startswith("systemd-run") for c in host.joined())           # the 12B loaded
+    assert any(j["name"] == "night_digest.py" for j in host.jobs_run) and any(j["name"] == "zoe-nightly-dreaming.py" for j in host.jobs_run)
+    assert not any("night_precheck" in c for c in host.joined()) and "noop" not in w.rec and "precheck" not in w.rec
 
 
-def test_a_waiting_pendant_day_alone_runs_the_window(tmp_path):
-    w, host, cfg, _ = quiet_window(tmp_path, out=precheck_line(0, 1))
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and any(c.startswith("systemd-run") for c in host.joined())
+def test_the_quiet_skip_is_removed_not_hidden(tmp_path):
+    """Retire by removing: the opt-out flag, the config field and the precheck script are gone, so no unit or operator can bring the skip back by accident."""
+    with pytest.raises(SystemExit):
+        nw.build_parser().parse_args(["--no-quiet-skip"])
+    assert not hasattr(nw.NightCfg(), "skip_when_quiet") and not hasattr(nw, "Noop")
+    assert not (REPO / "scripts" / "night" / "jobs" / "night_precheck.py").exists()
 
 
-def test_the_pendant_check_is_only_asked_when_the_day_review_is_a_job(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, out=precheck_line(0, None), argv=["--jobs", "digest,dreaming,night_mind"])
-    assert w.run() == nw.EXIT_OK and w.outcome == "noop" and "--omi" not in calls[0]
-
-
-@pytest.mark.parametrize("out,rc", [("", 0), ("garbage\n", 0), (precheck_line(0, 0), 1), ("NIGHT_PRECHECK {not json}\n", 0), ('NIGHT_PRECHECK {"omi_members": 0}\n', 0),
-                                    (precheck_line(0, None), 0)], ids=["silent", "garbage", "nonzero exit", "bad json", "no count", "omi asked but unanswered"])
-def test_a_precheck_that_cannot_answer_fails_open_and_runs_the_window(tmp_path, out, rc):
-    w, host, cfg, calls = quiet_window(tmp_path, out=out, rc=rc)
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok", w.outcome
-    assert calls and any(c.startswith("systemd-run") for c in host.joined())
-    assert any("no usable answer" in n for n in w.rec["notes"])
-
-
-def test_no_earlier_night_means_no_baseline_and_the_window_runs(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, prior=False)
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and calls == []
-
-
-def test_the_operator_can_switch_the_skip_off(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, argv=["--no-quiet-skip"])
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and calls == []
-
-
-def test_a_missing_precheck_script_is_not_a_quiet_night(tmp_path):
-    w, host, cfg = make(tmp_path, cfg_kw={"precheck_script": tmp_path / "absent.py"})
-    seed_report(cfg, "2026-10-08")
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok"
-
-
-def test_only_a_night_that_did_its_work_moves_the_watermark(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, prior=False)
-    seed_report(cfg, "2026-10-05", started="2026-10-05T02:50:00")                                          # did its work
-    seed_report(cfg, "2026-10-06", started="2026-10-06T02:50:00", outcome="refused: RAM", exit=2)          # processed nothing
-    seed_report(cfg, "2026-10-07", started="2026-10-07T02:50:00", exit=5)                                  # a job did not finish anywhere
-    seed_report(cfg, "2026-10-08-trial", started="2026-10-08T09:00:00", mode="trial")                      # a measurement, not a night
-    assert w.run() == nw.EXIT_OK and w.outcome == "noop"
-    assert calls[0][calls[0].index("--since") + 1] == dt_utc("2026-10-05T02:50:00")                        # the turns the refused and failed nights skipped still count as new
-    seed_report(cfg, "2026-10-09", started="2026-10-09T02:50:00", outcome="noop")                          # a noop IS a night that did its work
-    assert w.last_processed_start().isoformat() == "2026-10-09T02:50:00"
-
-
-def test_the_dry_run_says_it_would_be_a_noop_and_still_prints_the_plan(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, argv=["--dry-run"])
-    lines: "list[str]" = []
-    w.log = lines.append
-    w.run()
-    assert any("would be a NOOP" in ln for ln in lines) and any("levers" in ln for ln in lines)
-    assert slept_or_loaded(host) == []
+def test_a_refused_night_still_gives_up_on_a_busy_box_at_once(tmp_path):
+    """A refused night (already a degraded night) keeps its immediate answer: the 4B fallback runs only on a clear box."""
+    w, host, cfg = make(tmp_path)
+    w.cfg.max_load_failures = 0
+    host.busy.add("zoe-training.service")
+    polls = {"n": 0}
+    real_sleep = host.sleep
+    host.sleep = lambda s: (polls.__setitem__("n", polls["n"] + 1), real_sleep(s))[1]
+    assert w.run() == nw.EXIT_REFUSED and w.jobs == [] and polls["n"] == 0
 
 
 def test_the_night_mind_mode_is_passed_explicitly_and_defaults_to_what_the_night_has_always_run(tmp_path):

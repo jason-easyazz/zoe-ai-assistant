@@ -419,7 +419,6 @@ def template_summary(kind: str, key: str, domain: str, label: str, stats: dict, 
 
 
 SUMMARY_MAX = 240
-_NUM_RE = re.compile(r"\d+")
 
 
 def messages_for(facts: dict) -> list[dict]:
@@ -427,7 +426,9 @@ def messages_for(facts: dict) -> list[dict]:
         {"role": "system", "content": (
             "You write ONE short plain-English sentence (at most 35 words) for a household assistant's admin, describing a recurring "
             "problem the assistant had. Use ONLY the facts in the JSON the user sends. Do not quote anyone, and do not add any detail, "
-            "name, number or cause that is not in the facts. Reply with the sentence only.")},
+            "name or cause that is not in the facts. NEVER write a digit: write every count as a placeholder that the program fills in - "
+            "{episodes}, {days}, {people}, and {n:NAME} for the count of the signal NAME listed in \"signals\" (for example: "
+            "'Weather questions were asked again {n:RE_ASK} times over {episodes} episodes.'). Reply with the sentence only.")},
         {"role": "user", "content": json.dumps(facts, sort_keys=True)},
     ]
 
@@ -460,18 +461,59 @@ def allowed_words(facts: dict) -> frozenset:
     return frozenset(w for text in bag for w in _WORD_RE.findall(text.lower())) | _FUNCTION_WORDS
 
 
+#: the noun a count placeholder may sit in front of, per field. A count whose next word names a DIFFERENT field's unit is a mis-bound
+#: number ("over {days} episodes") and the sentence is refused.
+_UNIT_WORDS = {
+    "episodes": frozenset({"episode", "episodes"}),
+    "days": frozenset({"day", "days", "user-day", "user-days"}),
+    "people": frozenset({"person", "persons", "people", "user", "users", "member", "members"}),
+}
+_ALL_UNITS = frozenset().union(*_UNIT_WORDS.values())
+_PLACEHOLDER_RE = re.compile(r"\{(episodes|days|people|n:[A-Z_]+)\}(?:\s+([A-Za-z-]+))?")
+
+
+def _render_counts(s: str, facts: dict) -> Optional[str]:
+    """Fill the model's count placeholders from the facts' OWN fields; None if the sentence is not renderable. The model never writes a
+    digit (a digit is refused), so every number in the result comes from the field its placeholder names, and a placeholder followed by
+    another field's unit noun is refused. An unknown signal name, or a stray brace, is refused."""
+    if re.search(r"\d", s):
+        return None
+    signals = facts.get("signals") or {}
+
+    def fill(m: "re.Match[str]") -> str:
+        name, nxt = m.group(1), (m.group(2) or "").lower()
+        if name.startswith("n:"):
+            sig_name = name[2:]
+            if sig_name not in signals:
+                raise ValueError(name)
+            value, own = signals[sig_name], frozenset()
+        else:
+            value, own = facts[name], _UNIT_WORDS[name]
+        if nxt in _ALL_UNITS and nxt not in own:
+            raise ValueError(name)
+        return f"{value}" + (f" {m.group(2)}" if m.group(2) else "")
+
+    try:
+        out = _PLACEHOLDER_RE.sub(fill, s)
+    except (ValueError, KeyError):
+        return None
+    return out
+
+
 def valid_summary(text: Any, facts: dict) -> Optional[str]:
-    """The model's sentence if it is ONE plain line made only of words from its facts and a fixed list of grammar / generic words, adding no
-    number the facts do not hold; else None (the template is used). The model may rearrange the counts; it cannot introduce a name, a place, a
-    cause or a claim, because it has no word to say one with."""
+    """The model's sentence if it is ONE plain line made only of words from its facts and a fixed list of grammar / generic words; else None
+    (the template is used). Counts are written as PLACEHOLDERS and rendered from the facts' own fields (``_render_counts``): a digit typed
+    by the model, a number bound to the wrong field or an unknown signal is refused, so a sentence can never state a count that is not
+    the count of the thing it names. The model may rearrange the counts; it cannot introduce a name, a place, a cause or a claim,
+    because it has no word to say one with."""
     if not isinstance(text, str):
         return None
     s = text.strip().splitlines()[0].strip() if text.strip() else ""
     s = s.strip("\"'` ")
-    if not (20 <= len(s) <= SUMMARY_MAX) or any(c in s for c in "{}[]<>") or re.search(r"https?:|www\.|@", s, re.I):
+    if not s or re.search(r"https?:|www\.|@", s, re.I):
         return None
-    allowed = {str(x) for x in (facts["episodes"], facts["days"], facts["people"], *facts["signals"].values())}
-    if any(n not in allowed for n in _NUM_RE.findall(s)):
+    s = _render_counts(s, facts) or ""
+    if not (20 <= len(s) <= SUMMARY_MAX) or any(c in s for c in "{}[]<>"):
         return None
     vocab = allowed_words(facts)
     if any(w.removesuffix("'s") not in vocab and w not in vocab for w in _WORD_RE.findall(s.lower())):
@@ -581,8 +623,11 @@ async def _live_counts(db, pids: list[str]) -> dict[str, int]:
 
 
 async def list_proposals(*, status: Optional[str] = None, kind: Optional[str] = None, limit: int = 50) -> list[dict]:
-    """Proposals with live evidence only (one whose events are all gone is not shown), best first."""
-    sql = f"SELECT {', '.join(_PCOLS)} FROM struggle_proposals WHERE 1 = 1"
+    """Proposals with live evidence only (one whose events are all gone is not shown), best first. The live-evidence test is part of the
+    query, BEFORE ``ORDER BY`` / ``LIMIT``: filtering after the limit let evidence-less proposals (events forgotten or retired, not yet
+    reconciled) use up the page and hide live ones that ranked below them."""
+    sql = (f"SELECT {', '.join(_PCOLS)} FROM struggle_proposals WHERE 1 = 1 AND EXISTS ("
+           "SELECT 1 FROM struggle_proposal_events pe JOIN struggle_events se ON se.id = pe.event_id WHERE pe.proposal_id = struggle_proposals.id)")
     params: list[Any] = []
     if status:
         sql += " AND status = ?"
@@ -753,11 +798,18 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
       nothing outside ``struggle_events`` holds the words. Any doubt drops the example (a forget-ledger lookup that fails drops it).
     * ``split`` is the stable train / holdout assignment (by normalised text); ``audio_ref`` the saved recording's file name when one can be found unambiguously.
     Consumers re-label with their own independent oracle before training."""
+    if not sources:
+        return []
     out: list[dict] = []
     async with _ctx() as db:
+        # Only proposals that can yield an example are candidates, decided BEFORE the LIMIT: a recent accepted proposal whose evidence is
+        # gone (forgotten / retired), or whose label_source the caller does not want, must not use up the page.
         cur = await db.execute(
-            "SELECT id, label, label_source, followup FROM struggle_proposals WHERE kind = ? AND status = ? ORDER BY decided_at DESC LIMIT ?",
-            (KIND_ROUTER_EXAMPLE, ACCEPTED, int(max(1, min(200, limit)))))
+            "SELECT id, label, label_source, followup FROM struggle_proposals WHERE kind = ? AND status = ? "
+            f"AND label_source IN ({_marks(len(sources))}) AND EXISTS (SELECT 1 FROM struggle_proposal_events pe JOIN struggle_events se "
+            "ON se.id = pe.event_id WHERE pe.proposal_id = struggle_proposals.id AND se.is_guest = 0 AND se.summary <> '') "
+            "ORDER BY decided_at DESC LIMIT ?",
+            (KIND_ROUTER_EXAMPLE, ACCEPTED, *sources, int(max(1, min(200, limit)))))
         props = [(str(r[0]), str(r[1]), str(r[2]), _json(r[3])) for r in await cur.fetchall()]
         for pid, label, source, fu in props:
             if fu.get("type") != FOLLOWUP_ROUTER_QUEUE or label not in sig.FAST_DOMAINS or source not in sources:
@@ -896,7 +948,9 @@ async def run_pass(*, now: Optional[float] = None, llm: Optional[LLM] = None, dr
 
     Idempotent: a rerun updates the same proposals by fingerprint. A rejected proposal stays suppressed for ``REJECT_SUPPRESS_DAYS`` and
     then returns only if it recurred since the rejection; accepted / applied ones are never reopened, only re-counted; a ``proposed`` one
-    that no longer recurs is withdrawn. Nothing here accepts, rejects or applies anything."""
+    that no longer recurs is withdrawn. ``MAX_PER_NIGHT`` caps the NEW proposals created in one pass (best first; the rest are counted as
+    ``deferred`` and picked up on a later night); a ``proposed`` row whose cluster is still eligible is refreshed and KEPT even when it ranks
+    below the cap - ranking orders the queue, it never withdraws an eligible pattern. Nothing here accepts, rejects or applies anything."""
     import struggle_detector as sd
 
     m = mode()
@@ -905,13 +959,12 @@ async def run_pass(*, now: Optional[float] = None, llm: Optional[LLM] = None, dr
     t = time.time() if now is None else now
     span = lookback_days() if days is None else days
     rows = await asyncio.wait_for(sd.get_backend().rows(t - span * DAY_S, None, limit=ROW_LIMIT), 60.0)
-    clusters, skipped = cluster(rows, min_ep=min_ep)
-    clusters = clusters[:MAX_PER_NIGHT]
+    clusters, skipped = cluster(rows, min_ep=min_ep)         # EVERY eligible cluster, best first: the cap below limits NEW proposals, never what is kept
     res: dict[str, Any] = {
         "status": "ok", "mode": m, "dry_run": dry_run, "days": span, "events": len(rows), "truncated": len(rows) >= ROW_LIMIT,
         "events_by_kind": _by_kind(kind_of(r) for r in rows), "skipped": skipped,
         "clusters_by_kind": _by_kind(c.kind for c in clusters), "created": 0, "updated": 0, "withdrawn": 0, "suppressed": 0,
-        "reopened": 0, "summaries_model": 0, "summaries_template": 0, "reconciled": 0}
+        "reopened": 0, "deferred": 0, "summaries_model": 0, "summaries_template": 0, "reconciled": 0}
     if dry_run:
         res["would_propose"] = res["clusters_by_kind"]
         return res
@@ -919,8 +972,14 @@ async def run_pass(*, now: Optional[float] = None, llm: Optional[LLM] = None, dr
         res["reconciled"] = await _reconcile_in(db)
         existing = {r["fingerprint"]: r for r in await _all(db)}
         keep: set[str] = set()
+        fresh = 0
         for c in clusters:
             old = existing.get(c.fingerprint)
+            if old is None:
+                if fresh >= MAX_PER_NIGHT:
+                    res["deferred"] += 1       # RANKED, not dropped: a cluster beyond the nightly cap of NEW proposals waits for a later night
+                    continue
+                fresh += 1
             action = await _upsert(db, c, old, t, m)
             res[action[0]] = res.get(action[0], 0) + 1
             if action[1]:
@@ -1033,7 +1092,7 @@ def summary_line(res: dict) -> str:
     kinds = ",".join(f"{k}:{v}" for k, v in (res.get("clusters_by_kind") or {}).items() if v) or "-"
     return (f"STRUGGLE_PROPOSALS_SUMMARY status={res.get('status')} mode={res.get('mode')} events={res.get('events', 0)} clusters={kinds} "
             f"created={res.get('created', 0)} updated={res.get('updated', 0)} withdrawn={res.get('withdrawn', 0)} "
-            f"suppressed={res.get('suppressed', 0)} reopened={res.get('reopened', 0)} model_summaries={res.get('summaries_model', 0)}")
+            f"suppressed={res.get('suppressed', 0)} reopened={res.get('reopened', 0)} deferred={res.get('deferred', 0)} model_summaries={res.get('summaries_model', 0)}")
 
 
 async def brief_line(user_id: str) -> Optional[str]:

@@ -2997,16 +2997,16 @@
         if(r&&r.ok){toast(wasOn?'Removed from favourites':'Added to favourites');return;}
         mi.favorite=wasOn;cfPaintFav();toast(wasOn?'Couldn’t unfavourite':'Couldn’t favourite');
       }).catch(function(){mi.favorite=wasOn;cfPaintFav();toast('Couldn’t favourite');});};
-    // Jukebox QR: phones scan it to search + queue music (jukebox.html).
+    // Jukebox QR: phones scan it to search + queue music (jukebox.html). It carries a
+    // short-lived play/queue-only token bound to this panel, so it is a server SVG by
+    // single-use handle (POST /api/music/jukebox/start), re-minted once it expires.
     var qr=document.getElementById('mQRCode');
-    if(qr&&!qr.dataset.done){qr.dataset.done='1';
-      var url=location.origin+'/jukebox.html';
-      // The ONE client QR library (node-qrcode, also used by chat); the panel's
-      // secret-bearing QRs are server SVGs by single-use handle, never this.
-      var sc=document.createElement('script');sc.src='/lib/qrcode/qrcode.min.js';
-      sc.onload=function(){try{var cv=document.createElement('canvas');qr.appendChild(cv);
-        QRCode.toCanvas(cv,url,{width:74,margin:0,errorCorrectionLevel:'M'});}catch(e){}};
-      document.head.appendChild(sc);}
+    if(qr&&!(+qr.dataset.exp>Date.now())){qr.dataset.exp=String(Date.now()+60000);
+      apiJson('POST','/api/music/jukebox/start',{panel_id:_panelDevId()}).then(function(r){
+        if(!r||!r.qr_path)return;
+        qr.dataset.exp=String(Date.now()+Math.max(60,(r.expires_in||0)-300)*1000);
+        var im=document.createElement('img');im.alt='Jukebox code';im.width=74;im.height=74;im.src=r.qr_path;
+        qr.innerHTML='';qr.appendChild(im);}).catch(function(){});}
     // Speaker picker: list Music Assistant players, tap to move playback there.
     var spk=document.getElementById('mSpk');
     if(spk)spk.onclick=function(){
@@ -4965,8 +4965,9 @@
 })();
 </script>
 <script src="/js/touch-event-detail.js?v=ed-1"></script>
-<script src="/js/touch-voice-session.js?v=vs-1"></script>
+<script src="/js/touch-voice-session.js?v=vs-2"></script>
+<script src="/js/touch-review-cards.js?v=rc-1"></script>
 <script src="/js/touch-voice-enroll.js?v=ve-1"></script>
-<script src="/js/touch-ui-executor.js?v=estate-10-heal"></script>
+<script src="/js/touch-ui-executor.js?v=estate-11-panel-target"></script>
 </body>
 </html>

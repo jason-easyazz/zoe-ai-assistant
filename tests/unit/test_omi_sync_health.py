@@ -277,6 +277,20 @@ def test_a_drain_records_battery_firmware_fill_and_the_overwrite_counter(spool, 
     assert res.advanced_to == 120
 
 
+def test_an_unsupported_firmware_visit_still_reports_its_firmware_and_battery(spool, tmp_path):
+    """The firmware gate refuses the drain, but the pendant answered: Zoe should still learn its firmware and battery (they used to be
+    captured only AFTER the gate, so a refused visit reported neither)."""
+    pendant, zoe = HealthyPendant(build_ring(RING), fw="3.0.19", caps=0x09), FakeZoe()
+    res = drain(pendant, spool, zoe, tmp_path)
+    assert res.refused and "ring protocol" in res.refused and pendant.sent == [] and zoe.calls == []     # custody untouched
+    assert res.firmware == "3.0.19" and res.battery_pct == 63
+    rep = health.build_report(ID, reachable=True, misses=0, last_sync_age_s=None, res=res)
+    assert rep["firmware"] == "3.0.19" and rep["battery_pct"] == 63
+    # an unreadable battery on a refused visit is just unknown
+    res2 = drain(HealthyPendant(build_ring(RING), fw="3.0.19", caps=0x09, battery_raises=True), spool, FakeZoe(), tmp_path)
+    assert res2.refused and res2.battery_pct is None and res2.firmware == "3.0.19"
+
+
 def test_with_zoe_down_the_ring_stays_full_and_the_report_says_so(spool, tmp_path):
     pendant, zoe = HealthyPendant(build_ring(RING), caps=0x09), FakeZoe(mode="down")
     res = drain(pendant, spool, zoe, tmp_path)
@@ -414,7 +428,11 @@ def test_the_last_clean_sync_survives_a_restart(tmp_path):
 
 # --- the uploader's reading of Zoe's answer -------------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("status, body, expected", [(200, b'{"ok": true}', True), (401, b"", False), (404, b"", False),
-                                                    (409, b'{"ok": false, "error": "device_not_registered"}', False), (503, b"", False)])
+                                                    (409, b'{"ok": false, "error": "device_not_registered"}', False), (503, b"", False),
+                                                    # a 200 is not Zoe's "stored it": only a JSON object with ok exactly true suppresses the retry
+                                                    (200, b"", False), (200, b"<html>captive portal</html>", False), (200, b'{"ok": false}', False),
+                                                    (200, b'{"ok": 1}', False), (200, b'{"ok": "true"}', False), (200, b"[true]", False),
+                                                    (200, b'{"ok": true, "warnings": []}', True)])
 def test_report_health_is_true_only_when_zoe_accepted_it(status, body, expected):
     up = HttpUploader("https://zoe.invalid", "tok")
     seen = {}

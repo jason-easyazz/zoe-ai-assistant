@@ -21,7 +21,7 @@ The rules this module owns (every one has a negative control in ``tests/test_rel
   2. NEVER ``guest``. A relayed request must carry a valid DEVICE TOKEN (``X-Device-Token``) or a valid KIOSK CREDENTIAL
      (``zoe_panel_kiosk`` cookie, ``ZOE_PANEL_KIOSK_CREDENTIAL``), else 401. ``auth.get_current_user``'s anonymous-guest fallback
      and ``ZOE_UNAUTHENTICATED_ROLE`` never apply; a zoe-auth outage is refused (503), never downgraded.
-  3. The client certificate is bound to ONE panel: ``panel_client_certs.fingerprint -> panel_id`` (alembic 0058, operator-bound
+  3. The client certificate is bound to ONE panel: ``panel_client_certs.fingerprint -> panel_id`` (alembic 0059, operator-bound
      through ``routers/panel_relay.py``). The credential's panel must equal the certificate's panel; a certificate with no
      credential, a credential with no bound certificate, a revoked or unknown fingerprint, an inactive panel and a mismatch are
      all 401. A device token or kiosk cookie copied off one panel is therefore useless with another panel's certificate.
@@ -86,6 +86,9 @@ WS_RECHECK_S = 15.0
 #: in-memory token lookup - no DB round trip inside the cache TTL) unless it was proven this recently and no revocation happened in
 #: this process since. Short, so a broadcast to a revoked socket is stopped in seconds; cheap, so broadcasts are not slowed.
 WS_SEND_PROOF_TTL_S = 2.0
+#: Upper bound on writing the 1008 close of a revoked socket (a stalled client can block even that). Past it the guard gives up on the
+#: close frame; the app side still ends (the handler is handed a disconnect) and the server tears the connection down.
+WS_CLOSE_TIMEOUT_S = 2.0
 #: The panel a RELAYED request was proven to be, for code that has no ``Request`` in hand (the websocket session resolvers in main.py).
 _relay_panel: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("zoe_relay_panel", default=None)
 
@@ -486,6 +489,7 @@ class _SocketGuard:
         self._dead = asyncio.Event()
         self._finished = False  # the app (or the peer) already ended the socket: nothing left to close
         self._send_lock = asyncio.Lock()
+        self._inflight: Optional[asyncio.Future] = None  # the frame currently being written, if any (cancelled on revocation)
         self._prove_lock = asyncio.Lock()
         self._timer: Optional[asyncio.Future] = None
 
@@ -531,11 +535,36 @@ class _SocketGuard:
         self._dead.set()
         if self._finished:
             return
+        # A data frame the server is still writing to a STALLED client (backpressure) holds ``_send_lock`` until the transport drains,
+        # which may be never: abandon it, or the 1008 below queues behind network I/O and the 15 s promise is not kept. The frame is
+        # for a revoked socket that is being closed anyway; its sender gets ``OSError`` (see ``_send_frame``).
+        inflight = self._inflight
+        if inflight is not None and not inflight.done():
+            inflight.cancel()
         try:
-            async with self._send_lock:
-                await self._send({"type": "websocket.close", "code": 1008})
-        except Exception:  # noqa: BLE001 - already closing/closed by the app or the peer; the disconnect below still reaches the handler
-            pass
+            await asyncio.wait_for(self._send_close(), WS_CLOSE_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - already closing/closed by the app or the peer, or the close itself stalled (the timeout);
+            pass           # either way the disconnect handed to the handler still ends the app side
+
+    async def _send_close(self) -> None:
+        async with self._send_lock:
+            await self._send({"type": "websocket.close", "code": 1008})
+
+    async def _send_frame(self, message: dict) -> None:
+        """The underlying send as a task of its own, so a revocation can cancel it while it is blocked on a stalled client."""
+        inflight = asyncio.ensure_future(self._send(message))
+        self._inflight = inflight
+        try:
+            await asyncio.wait({inflight})  # wait() does not raise the task's own cancellation; the caller's cancellation it does
+        except asyncio.CancelledError:
+            inflight.cancel()
+            raise
+        finally:
+            if self._inflight is inflight:
+                self._inflight = None
+        if inflight.cancelled():
+            raise OSError("relayed websocket revoked")
+        inflight.result()
 
     async def _tick(self) -> None:
         while not self._dead.is_set() and not self._finished:
@@ -562,7 +591,7 @@ class _SocketGuard:
                 if kind == "websocket.send":
                     raise OSError("relayed websocket revoked")
                 return
-            await self._send(message)
+            await self._send_frame(message)
 
     async def receive(self) -> dict:
         if self._dead.is_set():

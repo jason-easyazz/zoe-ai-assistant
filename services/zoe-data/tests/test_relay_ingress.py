@@ -4,7 +4,7 @@ no address, resolves to the PANEL principal only, and is bound to its client cer
 Cells (design docs/architecture/panel-anywhere.md section 10): T5 (header trust, no address match), T10 (no device credential ->
 401, home control refused, LAN control), T11 (a bound token is the panel and nothing more; a member needs a fresh sign-in), the
 fingerprint binding, and "flag off = the relay header is inert". They go over REAL HTTP (``TestClient``) through the REAL
-``RelayIngressMiddleware``, ``auth.get_current_user``, ``panel_principal`` and the REAL panel/certificate SQL (alembic 0058 run on
+``RelayIngressMiddleware``, ``auth.get_current_user``, ``panel_principal`` and the REAL panel/certificate SQL (alembic 0059 run on
 in-memory SQLite). Only zoe-auth, the HA bridge and the voice lane's freshness lookup are faked. Every positive control is next
 to its negative: the LAN request without the relay marker proves the probe reaches the route. All data is invented.
 
@@ -77,7 +77,7 @@ def relay_headers(fp=FP_KITCHEN, token=TOK_KITCHEN, session=None, extra=None):
     return h
 
 
-# ── the registry: real alembic 0058 on SQLite ────────────────────────────────────────────────────────────────────────────
+# ── the registry: real alembic 0059 on SQLite ────────────────────────────────────────────────────────────────────────────
 
 
 class _Cur:
@@ -92,7 +92,7 @@ class _Cur:
 
 
 class Registry:
-    """The AsyncpgCompat surface the panel code uses (``execute(sql, params)`` + ``?``), over SQLite with the REAL 0058 schema."""
+    """The AsyncpgCompat surface the panel code uses (``execute(sql, params)`` + ``?``), over SQLite with the REAL 0059 schema."""
 
     def __init__(self):
         self.con = sqlite3.connect(":memory:", check_same_thread=False)
@@ -121,8 +121,8 @@ def _migration(fn, con):
     from alembic.operations import Operations
     import sqlalchemy as sa
 
-    path = ROOT / "alembic/versions/0058_panel_client_certs.py"
-    spec = importlib.util.spec_from_file_location("mig_0058", path)
+    path = ROOT / "alembic/versions/0059_panel_client_certs.py"
+    spec = importlib.util.spec_from_file_location("mig_0059", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     engine = sa.create_engine("sqlite://", creator=lambda: con)
@@ -662,6 +662,63 @@ def test_a_lan_socket_is_not_guarded_or_closed(reg, on, monkeypatch):
             assert lan_ws.receive_json() == SECRET
 
 
+async def test_a_revoked_socket_is_closed_even_while_a_send_is_stuck_behind_a_stalled_client(reg, on, monkeypatch):
+    """Codex P1 on #2115: a data frame blocked by client backpressure holds the send lock, so the 1008 close used to queue behind
+    network I/O and the 15 s bound was not kept. Driven at the ASGI level (a TestClient transport never stalls): the server's
+    ``send`` of a data frame blocks forever, the close frame passes."""
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.3)
+    monkeypatch.setattr(relay_ingress, "WS_SEND_PROOF_TTL_S", 3600.0)   # the timer, not the send-time check, is what notices
+    sent, outcome = [], []
+    in_flight, closed, stall = asyncio.Event(), asyncio.Event(), asyncio.Event()   # `stall` is never set: the client never drains
+
+    async def app(scope, receive, send):
+        await receive()                                                   # websocket.connect
+        await send({"type": "websocket.accept"})
+        try:
+            await send({"type": "websocket.send", "text": "broadcast"})
+            outcome.append("delivered")
+        except OSError:
+            outcome.append("send-abandoned")
+        await asyncio.sleep(3600)                                         # the handler would idle on; the harness cancels it
+
+    async def receive():
+        if not sent:
+            sent.append("connect")
+            return {"type": "websocket.connect"}
+        await asyncio.sleep(3600)
+
+    async def send(message):
+        sent.append(message["type"])
+        if message["type"] == "websocket.send":
+            in_flight.set()
+            await stall.wait()                                            # backpressure: the transport never drains
+        elif message["type"] == "websocket.close":
+            sent.append(("code", message["code"]))
+            closed.set()
+
+    scope = {
+        "type": "websocket", "path": "/ws/idle", "raw_path": b"/ws/idle", "query_string": b"", "scheme": "wss", "root_path": "",
+        "client": (NGINX, 1), "server": ("zoe", 8000), "subprotocols": [],
+        "headers": [(k.lower().encode(), v.encode()) for k, v in relay_headers().items()],
+    }
+    task = asyncio.ensure_future(relay_ingress.RelayIngressMiddleware(app)(scope, receive, send))
+    try:
+        await asyncio.wait_for(in_flight.wait(), 3.0)                      # POSITIVE: the frame is on the wire, the client is not draining
+        assert not closed.is_set()                                         # ... and a proven socket is NOT closed
+        reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (FP_KITCHEN,))
+        reg.con.commit()                                                   # out-of-band: only the timer's registry read sees it
+        await asyncio.wait_for(closed.wait(), 0.3 + 3.0)                   # the close was NOT held behind the stuck frame
+        assert ("code", 1008) in sent
+        for _ in range(50):
+            if outcome:
+                break
+            await asyncio.sleep(0.05)
+        assert outcome == ["send-abandoned"]                               # the stuck frame was cancelled, not delivered late
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 def test_the_proof_lives_under_a_namespaced_scope_key_not_a_bare_relay_ctx(reg, on):
     seen = []
     app = make_app(reg)
@@ -878,8 +935,8 @@ def test_migration_chain_is_linear_and_rerun_safe():
         if d:
             downs.add(d.group(1))
     heads = set(revs) - downs
-    assert len(heads) == 1, f"more than one alembic head {sorted(heads)}: 0058 chains onto 0057 (#2109); expected until #2109 is on main - see the migration docstring"
-    assert "0058" in revs
+    assert len(heads) == 1, f"more than one alembic head {sorted(heads)}: 0059 chains onto 0057 (#2109); expected until #2109 is on main - see the migration docstring"
+    assert "0059" in revs
     con = sqlite3.connect(":memory:")
     con.execute("PRAGMA foreign_keys = ON")
     con.execute("CREATE TABLE panels (panel_id TEXT PRIMARY KEY)")

@@ -73,6 +73,8 @@ function constValue(name) {
     console: { warn() {}, log() {} },
     // The real matcher's rule for a KNOWN identity: only this panel's ids match; '' matches anything.
     panelMatches: (id) => !String(id || '').trim() || String(id).trim() === 'zoe-touch-pi',
+    panelMatchesStrict: (id) => String(id || '').trim() === 'zoe-touch-pi',
+    addressedToThisPanel: () => false,
     panelMatchesAuthTarget: () => true,
     setOrbMode() {}, showAmbientStatus: undefined, _attemptVoiceNavigation() {},
     VoiceOverlay: { onListeningStarted() {}, onTranscript() {}, onThinking() {}, onResponding() {}, onDone: (d) => done.push(d) },
@@ -92,13 +94,17 @@ function constValue(name) {
   send('voice_card', { panel_id: 'zoe-touch-pi', member_id: 'casey', kind: 'calendar', private: true, items: [] });
   assert.strictEqual(relayed.length, 2);
   assert.strictEqual(relayed[1].type, 'zoe:voice-card');
-  // Absent panel_id: dropped (a voice:* frame without one is still "any panel" — checked below).
+  // Absent panel_id: dropped (since A11, 2026-10-18, a voice:* frame without one is dropped too — checked below).
   send('voice_card', { member_id: 'casey', kind: 'calendar', private: true, items: [{ text: 'Dentist' }] });
   send('voice_card', { panel_id: 'kitchen-panel', member_id: 'casey', kind: 'calendar', private: true, items: [] });
   send('voice_session', { panel_id: 'kitchen-panel', state: 'open', member_id: 'dana' });
   assert.strictEqual(relayed.length, 2, 'a private frame without THIS panel\'s id must never be relayed');
   send('voice:done', { text: 'ok' });
-  assert.strictEqual(done.length, 1, 'voice:* handling unchanged');
+  assert.strictEqual(done.length, 0, 'a voice:* frame that names no panel is a turn on SOME panel: never acted on (A11)');
+  send('voice:done', { panel_id: 'kitchen-panel', text: 'ok' });
+  assert.strictEqual(done.length, 0, 'another panel\'s voice:* frame is ignored');
+  send('voice:done', { panel_id: 'zoe-touch-pi', text: 'ok' });
+  assert.strictEqual(done.length, 1, 'this panel\'s voice:* frame is handled');
 }
 
 // ── Part B: the estate badge + cards ─────────────────────────────────────────

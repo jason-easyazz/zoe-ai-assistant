@@ -12,7 +12,8 @@ Covered:
     a mid-stream backend error is surfaced at WARNING, not swallowed at DEBUG;
   - the aiortc stand-in (no ``aclose``) is handled without error and never trips the
     native→aiortc switch;
-  - ``stop_livekit_ondemand`` cancels the tracked cooldown watchdog (P2 task leak).
+  - ``stop_livekit_ondemand`` cancels every session-room agent (each room loop cancels its own cooldown
+    watchdog on exit: tests/test_livekit_session_rooms.py).
 
 No models, no network, no DB — safe on the slim GitHub runner.
 """
@@ -166,25 +167,26 @@ def test_aiortc_miduse_failure_does_not_force_switch(monkeypatch, caplog):
     assert any("audio stream error" in r.getMessage() for r in caplog.records)
 
 
-def test_stop_livekit_ondemand_cancels_cooldown_watchdog(monkeypatch):
+def test_stop_livekit_ondemand_cancels_every_room_agent(monkeypatch):
     # Avoid touching real docker / a stale cross-loop lifecycle lock.
     async def _fake_docker(*_a, **_k):
         return (0, "")
 
     monkeypatch.setattr(v, "_docker_cmd", _fake_docker)
     monkeypatch.setattr(v, "_lifecycle_lock", None, raising=False)
+    monkeypatch.setattr(v, "_room_tasks", {})
 
     async def _body():
         async def _forever():
             while True:
                 await asyncio.sleep(0.05)
 
-        task = asyncio.ensure_future(_forever())
-        v._cooldown_task = task
+        tasks = [asyncio.ensure_future(_forever()) for _ in range(2)]
+        v._room_tasks.update({"zoe-voice-a-000000000001": tasks[0], "zoe-voice-b-000000000002": tasks[1]})
         await v.stop_livekit_ondemand(reason="test")
-        await asyncio.gather(task, return_exceptions=True)
-        return task
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return tasks
 
-    task = _run(_body())
-    assert task.cancelled(), "cooldown watchdog must be cancelled on stop"
-    assert v._cooldown_task is None
+    tasks = _run(_body())
+    assert all(t.cancelled() for t in tasks), "every session-room agent must be cancelled on stop"
+    assert v._room_tasks == {}

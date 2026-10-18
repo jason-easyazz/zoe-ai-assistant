@@ -17,6 +17,7 @@ Design notes (see docs/architecture/stage-a-channel-agnostic-core.md):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, Optional
@@ -615,7 +616,8 @@ async def resolve(
             # rather than silently embedding anyway.
             if not _sr.is_enabled():
                 return None
-            rr = _sr.route(text)
+            # off the loop (A1): route() blocks ~400 ms on the sidecar decode; zoe-data is ONE uvicorn worker
+            rr = await asyncio.to_thread(_sr.route, text)
         domain = rr.get("domain") if rr else None
         if domain in (None, "chat"):
             return None
@@ -854,6 +856,17 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
 
             answered = await _ss.tier(text, user_id, session_id, channel=kwargs.get("channel"),
                                       extra_ctx=kwargs.get("extra_ctx"))
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
+        # panel review cards (ZOE_PANEL_REVIEW_CARDS, default OFF = returns before any work): "what's on my plate?", "I've done the
+        # plumber one", "review my day" - the member's own open loops / day review, read back + a private card on THIS panel only.
+        try:
+            import panel_review_cards as _prc
+
+            answered = await _prc.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                       extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
         except Exception:  # noqa: BLE001 - the tier never breaks a turn
             answered = None
         if answered is not None:

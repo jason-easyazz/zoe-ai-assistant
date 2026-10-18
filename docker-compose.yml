@@ -47,6 +47,9 @@ services:
           - zoe.local
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 71 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 256m
+    memswap_limit: 384m
 
   # ── Database ───────────────────────────────────────────────────────────────
   # PostgreSQL is required by zoe-auth and host-native zoe-data.
@@ -88,6 +91,9 @@ services:
     - zoe-network
     restart: unless-stopped
     logging: *default-logging
+    # NO memory cap, deliberately (B9, 2026-10-18; tests/unit/test_ops_hygiene_b9.py lists the exemption): an
+    # OOM kill here is an outage of every data path plus crash recovery - the zoe-data MemoryMax argument. Peak 217 MB
+    # against 128 MB shared_buffers; revisit with pg_stat_statements (docs/knowledge/docker-log-and-memory-limits.md).
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U zoe"]
       interval: 10s
@@ -106,6 +112,9 @@ services:
     - zoe-network
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 83 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 256m
+    memswap_limit: 384m
     depends_on:
       zoe-database:
         condition: service_healthy
@@ -133,6 +142,9 @@ services:
     container_name: homeassistant
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 453 MB; an HA upgrade's first start spikes; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 1536m
+    memswap_limit: 2304m
     ports:
     - 8123:8123
     volumes:
@@ -147,6 +159,9 @@ services:
     container_name: homeassistant-mcp-bridge
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 53 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 256m
+    memswap_limit: 384m
     # LOOPBACK ONLY. The bridge has NO inbound auth — on 0.0.0.0 any LAN host could drive
     # Home Assistant through it. Every consumer is host-local or on zoe-network:
     # zoe-data uses ZOE_HA_BRIDGE_URL=http://127.0.0.1:8007; Home Assistant calls
@@ -195,10 +210,20 @@ services:
   #
   # ── LiveKit WebRTC server (for remote "Her"-style voice via /voice?mode=livekit) ──────────────
   livekit:
-    image: livekit/livekit-server:latest
+    # PINNED (was :latest): the exact image the box runs — v1.9.3, multi-arch index digest
+    # read from `docker image inspect` (RepoDigests) on 2026-10-18. Bump both together.
+    image: livekit/livekit-server:v1.9.3@sha256:75484e317a90991f5e7a8edbc2eb1ee92f690e440c5b7d88a2713b5fa70f368a
     container_name: livekit
     restart: unless-stopped
     logging: *default-logging
+    # ON DEMAND, not dead: zoe-data `docker start`s it on the first /livekit-token and stops it
+    # after ZOE_LIVEKIT_IDLE_TIMEOUT_S (300 s) with nobody in the room (routers/voice_livekit.py).
+    # Memory cap: measured 18-19 MiB RSS idle (docker stats, 2026-10-18); the long-quoted
+    # "~560 MB" was never a measurement. 512m is ~27x idle for a room of a few audio tracks, and
+    # memswap = mem keeps it out of swap on the shared 15.6 GB box. Under-sized shows up as an
+    # OOM kill in `docker inspect livekit` (.State.OOMKilled) - raise it then, with that evidence.
+    mem_limit: 512m
+    memswap_limit: 512m
     command: --config /config.yaml
     environment:
     # The API key pair is NOT in the tracked config.yaml — it comes from the
@@ -289,6 +314,9 @@ services:
     command: --config /etc/cloudflared/config.yml --no-autoupdate tunnel run
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 41 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 256m
+    memswap_limit: 384m
     profiles:
     - cloudflare
     volumes:

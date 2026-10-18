@@ -179,9 +179,7 @@ the mic). Resolve during PR-1a.
 (no bouncing home mid-sentence) and the **idle→sleep** timer. The timer-finish alarm (z85) still
 surfaces above the conversation — correct.
 
-## 8. NEXT ACTION
+## 8. Where the next action lives
 
-**PR-1a** — Ask-card conversation mode: lazy-load the LiveKit client on entry → `/livekit-token` →
-join → publish mic → play Zoe's track → render the `publish_data` transcript; suppress
-ambient-return + idle-sleep while live; release the mic on every exit. Resolve the wake-word
-question (§7) as part of it. Phase 1 must land before `voice.html` retires.
+The next action is **not** kept here any more: the one ordered list is [`docs/ROADMAP.md`](../ROADMAP.md) (Now / Next / Later). This document is the design record for the Ask-card conversation mode. Open work: PR-1a (lazy LiveKit client, join, publish mic, play the track, render the transcript; suppress ambient-return and idle-sleep while live; release the mic on every exit; resolve the wake-word question of section 7) - it is tracked as a Later item in the roadmap; update it when a step lands, but do not add a new "next action" to it.
+
