@@ -409,7 +409,7 @@ def test_a_tap_is_only_for_the_next_turn_of_the_same_member(seeded):
     seeded.sessions[PANEL] = ME
     frame, item = _member_card(seeded)
     tap(seeded, frame["card_token"], item["id"], "wrong", "voice")
-    assert say("forget it", None) is None or True           # a guest's turn in between consumes and clears it
+    assert say("forget it", None) is None                    # a guest's turn in between consumes and clears it
     assert say("forget it", ME) is None                      # so the member's "forget it" no longer means that row
     assert any("dark roast" in t for t in approved(seeded))
     tap(seeded, frame["card_token"], item["id"], "wrong", "voice")
@@ -425,8 +425,12 @@ def test_a_tap_expires(seeded):
 
 def test_a_command_after_a_tap_is_not_taken_as_the_correction(seeded):
     mv.tap(PANEL, ME, row_id(seeded, "dark roast"), ME_LIKE)
-    assert say("turn on the lights", ME) is None
-    assert say("never mind", ME) is None or True
+    assert say("turn on the lights", ME) is None             # a command is not the correction, and it clears the tap
+    assert say("forget it", ME) is None                      # so a later "forget it" no longer means that row
+    assert any("dark roast" in t for t in approved(seeded))
+    mv.tap(PANEL, ME, row_id(seeded, "dark roast"), ME_LIKE)
+    assert say("never mind", ME) == mv.LEAVE_IT_REPLY
+    assert say("forget it", ME) is None
     assert any("dark roast" in t for t in approved(seeded))
 
 
