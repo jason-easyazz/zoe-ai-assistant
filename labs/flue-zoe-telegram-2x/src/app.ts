@@ -10,7 +10,9 @@
  *      local voice Gemma on :11434 is NOT wired up (labs/AGENTS.md Forbidden).
  *   2. Take the bot over cleanly from any prior consumer (e.g. Hermes).
  *   3. Mount the HTTP surface + a /health route (so the process can be
- *      supervised); /health reports non-200 when long-polling is down.
+ *      supervised); /health reports non-200 when long-polling is down. Plus
+ *      `POST /internal/notify`: zoe-data asks us to message a linked member
+ *      with this bot's token ("send to my phone"; src/notify.ts).
  *
  * WHAT CHANGED FROM THE BETA:
  *
@@ -47,6 +49,7 @@ import {
   transcribeTelegramAudio,
 } from './brain.ts';
 import { handleIncoming, handleNew, handleStart } from './handler.ts';
+import { handleNotify, isLoopbackAddress } from './notify.ts';
 import { bot, downloadTelegramFile } from './telegram.ts';
 import {
   MAX_NOTE_BYTES,
@@ -235,6 +238,24 @@ export function startTelegramPolling(health: PollHealth = pollHealth): Promise<v
   );
 }
 
+/** Send one notify message: a URL button when given; plain text with the URL if
+ *  Telegram refuses the button (it rejects some LAN hostnames as button URLs). */
+async function sendNotify(chatId: number, text: string, link?: { label: string; url: string }): Promise<void> {
+  if (!link) {
+    await bot.api.sendMessage(chatId, text, { link_preview_options: { is_disabled: true } });
+    return;
+  }
+  try {
+    await bot.api.sendMessage(chatId, text, {
+      reply_markup: new InlineKeyboard().url(link.label, link.url),
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (err) {
+    if (!(err instanceof GrammyError && err.error_code === 400)) throw err;
+    await bot.api.sendMessage(chatId, `${text}\n${link.url}`, { link_preview_options: { is_disabled: true } });
+  }
+}
+
 /**
  * Build the channel's HTTP route map.
  *
@@ -258,6 +279,22 @@ export function createApp(health: PollHealth = pollHealth): Hono {
   // The placeholder agent's HTTP surface, mounted at the same path the beta's
   // auto-router served it from. Never used by this channel; see agents/zoe.ts.
   app.route('/agents/zoe', createAgentRouter(ZoeTelegram));
+
+  // zoe-data → a linked member's chat ("send to my phone"), sent with THIS bot's
+  // token. Shared-secret + linked-member gated; see src/notify.ts.
+  app.post('/internal/notify', async (c) => {
+    // We listen on every interface: a loopback socket is required (unknown = refused).
+    const remote = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket
+      ?.remoteAddress;
+    if (!remote || !isLoopbackAddress(remote)) return c.json({ ok: false, error: 'loopback only' }, 403);
+    const body = await c.req.json().catch(() => null);
+    const result = await handleNotify(c.req.header('authorization'), body, {
+      token: process.env.ZOE_INTERNAL_TOKEN,
+      resolve: resolveTelegramUser,
+      send: sendNotify,
+    });
+    return c.json(result.body, result.status);
+  });
 
   return app;
 }

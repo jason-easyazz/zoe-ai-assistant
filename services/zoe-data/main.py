@@ -1245,6 +1245,12 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_omi_health.run_loop(), name="omi_health")
     except Exception as _omi_h_exc:
         logger.warning("omi health sweep not started (non-fatal): %s", _omi_h_exc)
+    try:  # change notices (flag-dark ZOE_CHANGE_NOTICES=off|shadow|on): the owner's Telegram feed of raised / live PRs
+        import change_notices as _change_notices
+        if _change_notices.mode() != "off":
+            asyncio.create_task(_change_notices.run_loop(), name="change_notices")
+    except Exception as _cn_exc:
+        logger.warning("change notices loop not started (non-fatal): %s", _cn_exc)
     try:  # the pendant day review's DAYTIME fallback lane (flag-dark ZOE_OMI_DAY_REVIEW; the night window is the primary lane)
         import omi_day_review as _omi_dr
         if _omi_dr.enabled() and _omi_dr.lane() != "night":
@@ -2286,6 +2292,10 @@ app.include_router(auth_router)
 # The struggles report (struggle_detector, ZOE_STRUGGLE_DETECT): admin persons only, read-only.
 from routers.struggles import router as struggles_router  # noqa: E402
 app.include_router(struggles_router)
+
+# Change notices (change_notices, ZOE_CHANGE_NOTICES): the owner's preferences, status and kill switch; admin persons only.
+from routers.change_notices import router as change_notices_router  # noqa: E402
+app.include_router(change_notices_router)
 
 try:
     from routers.voice_livekit import router as voice_livekit_router
