@@ -772,6 +772,46 @@
         ],
         "typed_env": true
       },
+      "ZOE_CHANGE_NOTICES": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/change_notices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_CHANGE_NOTICES_INTERVAL_S": {
+        "defaults": [
+          "600"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/change_notices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_CHANGE_NOTICES_STALE_MIN": {
+        "defaults": [
+          "60"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/change_notices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_CHANGE_NOTICES_STATE_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/change_notices.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_CHAT_CONTEXT_MAX_SESSIONS": {
         "defaults": [
           "'2000'"
@@ -1226,6 +1266,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/proactive/lines.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_DEPLOY_STATE_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/change_notices.py"
         ],
         "typed_env": true
       },
@@ -1993,10 +2043,11 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/change_notices.py",
           "services/zoe-data/greploop_guard.py",
           "services/zoe-data/greptile_client.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_GRAPH_RECALL_BOOST": {
         "defaults": [
@@ -2281,6 +2332,7 @@
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/music_jukebox.py",
           "services/zoe-data/panel_kiosk_credential.py",
+          "services/zoe-data/telegram_notify.py",
           "services/zoe-data/zoe_core_client.py"
         ],
         "typed_env": true
@@ -5105,23 +5157,27 @@
       },
       "ZOE_QUIET_END_HOUR": {
         "defaults": [
-          "'7'"
+          "'7'",
+          "7"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/comm_prefs.py",
           "services/zoe-data/proactive/engine.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_QUIET_START_HOUR": {
         "defaults": [
-          "'22'"
+          "'22'",
+          "22"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/comm_prefs.py",
           "services/zoe-data/proactive/engine.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_QUOTE_RETIRE": {
         "defaults": [
@@ -6361,7 +6417,8 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/auth_handoff.py"
+          "services/zoe-data/auth_handoff.py",
+          "services/zoe-data/telegram_notify.py"
         ],
         "typed_env": true
       },
