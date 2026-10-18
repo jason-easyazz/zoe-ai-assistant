@@ -235,13 +235,29 @@ def test_a_follow_up_that_did_not_work_does_not_label_anything():
         assert sp.classify(r)[0] == sp.KIND_ANSWER_QUALITY
     # the SAME fast domain that already served the failed turn is not a re-route
     same = followed(label="weather", pattern="weather|what:none:none", domain="weather")[0]
-    same["path_served"] = "fast"
+    same["path_served"], same["domain_served"] = "fast", "weather"
     assert sp.followup_label(same) == ""
+    # ... judged by what SERVED the failed turn, not what the router predicted
+    other = followed(label="weather", pattern="calendar|what:none:none", domain="calendar")[0]
+    other["path_served"], other["domain_served"] = "fast", "weather"                           # predicted calendar, weather answered it
+    assert sp.followup_label(other) == "" and sp.classify(other)[0] == sp.KIND_ANSWER_QUALITY   # right route, wrong answer: not a router example
+    other["domain_served"] = "calendar"                                                          # predicted weather-ish elsewhere, calendar answered: a real re-route
+    assert sp.followup_label(other) == "weather"
     # a guest's pair carries no words: nothing to train on
     g = followed()[0]
     g["is_guest"], g["summary"] = 1, ""
     assert sp.classify(g)[0] is None and sp.classify(g)[4] == "unkeyed"
     assert sp.followup_label({"prev_turn_id": "", "detail": json.dumps({"next_domain": "weather"}), "path_served": "brain:flue"}) == ""   # a single-turn event has no follow-up
+
+
+def test_a_fast_turn_records_the_handler_that_answered_it_as_the_domain_served():
+    about = sig.Turn(ts=70.0, text="y", reply="Today it is 24 degrees and sunny.", path=sig.PATH_FAST, user_id="guest", is_guest=True,
+                     predicted_domain="calendar")
+    cur = sig.Turn(ts=100.0, text="x", reply="z", path=sig.PATH_FAST, user_id="guest", is_guest=True)
+    row = run(sd._row(sig.Event(sig.REPHRASE, 0.8, sig.FIX_CAPABILITY_GAP, cur, about, ["r"])))
+    assert row["domain_predicted"] == "calendar" and row["domain_served"] == "weather"          # the reply's own phrasing, not the prediction
+    brain = sig.Turn(ts=70.0, text="y", reply="a long brain answer", path=sig.PATH_BRAIN, user_id="guest", is_guest=True, predicted_domain="weather")
+    assert run(sd._row(sig.Event(sig.REPHRASE, 0.8, sig.FIX_ANSWER_QUALITY, cur, brain, ["r"])))["domain_served"] == "chat"
 
 
 def test_the_detector_records_the_follow_up_domain_without_words():
@@ -381,6 +397,9 @@ def test_off_writes_nothing_and_dry_run_counts_without_writing(env, monkeypatch)
     store(*genuine())
     monkeypatch.setenv("ZOE_STRUGGLE_PROPOSALS", "off")
     assert run(sp.run_pass(now=NOW)) == {"status": "off", "mode": "off"} and rows_of(env) == []
+    off_dry = run(sp.run_pass(now=NOW, dry_run=True))                    # off gates the WRITING pass only: an operator can preview before enabling
+    assert off_dry["status"] == "ok" and off_dry["mode"] == "off" and off_dry["events"] == 5 and off_dry["would_propose"]["intent_gap"] == 1
+    assert rows_of(env) == [] and rows_of(env, "struggle_proposal_events") == []
     monkeypatch.setenv("ZOE_STRUGGLE_PROPOSALS", "shadow")
     dry = run(sp.run_pass(now=NOW, dry_run=True))
     assert dry["dry_run"] and dry["would_propose"]["intent_gap"] == 1 and rows_of(env) == []
@@ -558,7 +577,7 @@ def test_accepting_a_router_example_queues_it_for_the_self_train_loop_and_applie
     queued = run(_with_ledger_clear(sp.queued_router_examples()))
     assert len(queued) == 5 and {q["label"] for q in queued} == {"weather"} and {q["text"] for q in queued} == {"what is the high today"}
     assert all(q["proposal_id"] == pid and q["event_id"].startswith("e") and q["label_source"] == "followup" for q in queued)
-    assert {q["split"] for q in queued} <= {"train", "holdout"} and [q["split"] for q in queued] == [sp.split_of(q["event_id"]) for q in queued]
+    assert {q["split"] for q in queued} <= {"train", "holdout"} and [q["split"] for q in queued] == [sp.split_of(q["text"]) for q in queued]
     assert rows_of(env)[0]["status"] == "accepted"                                    # still not applied: only Phase 3's mark_applied does that
 
 
@@ -602,10 +621,57 @@ def test_a_belief_labelled_example_is_not_handed_out_unless_asked_for(env):
 
 
 def test_the_holdout_split_is_stable_and_about_a_fifth():
-    ids = [f"e{i}" for i in range(2000)]
-    first = [sp.split_of(i) for i in ids]
-    assert first == [sp.split_of(i) for i in ids]
-    assert 0.15 < first.count("holdout") / len(ids) < 0.25
+    texts = [f"what is the thing number {i} today" for i in range(2000)]
+    first = [sp.split_of(t) for t in texts]
+    assert first == [sp.split_of(t) for t in texts]
+    assert 0.15 < first.count("holdout") / len(texts) < 0.25
+
+
+def test_duplicate_phrasings_never_straddle_train_and_holdout():
+    variants = ["what is the high today", "What's the high today?", "Zoe, what is the high today", "what is the high today please", "WHAT IS THE HIGH TODAY"]
+    for base in [f"what is the {w} today" for w in range(300)] + variants:
+        assert len({sp.split_of(base), sp.split_of(base.upper()), sp.split_of(f"  {base}?  ")}) == 1
+    assert len({sp.split_of(v) for v in variants[:3]}) == 1                              # wake word / contraction folded away
+    assert sp.split_of("") in ("train", "holdout")
+
+
+def test_the_same_failed_wording_by_two_events_lands_on_one_side_in_the_seam(env):
+    rows = followed(summary="what is the high today")
+    for r in rows:
+        r["summary"] = "What's the high today?" if r["id"] in ("e1", "e3") else "what is the high today"
+    store(*rows)
+    run(sp.run_pass(now=NOW))
+    run(sp.decide(rows_of(env)[0]["id"], "accept", "admin-1"))
+    q = run(_with_ledger_clear(sp.queued_router_examples()))
+    assert len(q) == 5 and len({x["split"] for x in q}) == 1                              # five event ids, two spellings, ONE side
+
+
+def test_forgetting_the_confident_evidence_withdraws_a_proposal_that_no_longer_clears_the_confidence_floor(env):
+    rows = wide()
+    conf = {A: 0.95, B: 0.6, C: 0.35}                                                    # mean 0.633: eligible only thanks to A
+    for r in rows:
+        r["confidence"] = conf[r["user_id"]]
+    store(*rows)
+    run(sp.run_pass(now=NOW))
+    assert len(rows_of(env)) == 1
+    run(sd.delete_user(A))                                                               # the remaining 4 events still recur (4 episodes, 4 user-days) ...
+    assert rows_of(env) == [] and rows_of(env, "struggle_proposal_events") == []          # ... but their mean confidence is 0.475: withdrawn, not kept alive
+    run(sp.run_pass(now=NOW))
+    assert rows_of(env) == []                                                            # and the nightly pass agrees
+
+
+def test_forgetting_low_confidence_evidence_keeps_the_proposal_and_recomputes_its_confidence(env):
+    rows = wide()
+    conf = {A: 0.95, B: 0.6, C: 0.35}
+    for r in rows:
+        r["confidence"] = conf[r["user_id"]]
+    store(*rows)
+    run(sp.run_pass(now=NOW))
+    before = rows_of(env)[0]["confidence"]
+    run(sd.delete_user(C))                                                               # the weak evidence goes: mean 0.775, still a pattern
+    after = rows_of(env)
+    assert len(after) == 1 and after[0]["event_count"] == 4 and after[0]["confidence"] != before
+    assert after[0]["confidence"] == sp.confidence_of(0.775, sp.stats_of((r["user_id"], r["ts"], r["signal"]) for r in rows if r["user_id"] != C))
 
 
 def test_the_failed_turns_saved_audio_is_found_by_time_and_never_guessed(tmp_path):

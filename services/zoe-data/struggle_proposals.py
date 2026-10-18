@@ -171,7 +171,8 @@ def followup_label(row: dict, detail: Optional[dict] = None) -> str:
     if label not in sig.FAST_DOMAINS:
         return ""
     brain = str(row.get("path_served") or "").startswith("brain")
-    return label if (brain or str(row.get("domain_predicted") or "") != label) else ""
+    # compare with what actually SERVED the failed turn (the router's prediction can differ from the handler that answered)
+    return label if (brain or str(row.get("domain_served") or "") != label) else ""
 
 
 def struck_turns(rows: Iterable[dict]) -> frozenset:
@@ -700,17 +701,20 @@ async def mark_applied(pid: str, ref: str = "") -> dict:
     return await get_proposal(pid, with_evidence=False)
 
 
-#: a fifth of the labelled failures are held out for the Phase 3 evaluation; the split is a HASH of the event id, so an example never moves
-#: between train and holdout from one night to the next (a model that trained on it last week cannot be scored on it this week)
+#: a fifth of the labelled failures are held out for the Phase 3 evaluation; the split is a HASH of the normalised failed text, so an example
+#: never moves between train and holdout from one night to the next and duplicate phrasings never straddle the two (a model that trained on a
+#: wording cannot be scored on the same wording)
 HOLDOUT_MOD = 5
 #: the saved utterance of a voice turn is looked for this long before the turn finished (STT, then the brain's time to answer)
 AUDIO_LOOKBACK_S = 90.0
 AUDIO_AMBIGUOUS_S = 5.0
 
 
-def split_of(event_id: str) -> str:
-    """``holdout`` | ``train``: deterministic per event id."""
-    return "holdout" if int(hashlib.sha1(f"router-holdout|{event_id}".encode("utf-8")).hexdigest()[:8], 16) % HOLDOUT_MOD == 0 else "train"
+def split_of(text: str) -> str:
+    """``holdout`` | ``train``: deterministic per NORMALISED failed text (wake word, contractions, number words, plurals, fillers folded), so a
+    re-asked phrasing - which has a different event id every time - and its near-duplicates always land on the same side."""
+    key = sig.normalise(text) or str(text or "").strip().lower()
+    return "holdout" if int(hashlib.sha1(f"router-holdout|{key}".encode("utf-8")).hexdigest()[:8], 16) % HOLDOUT_MOD == 0 else "train"
 
 
 def audio_ref(about_ts: Any, *, sample_dir: Optional[str] = None) -> Optional[dict]:
@@ -747,7 +751,7 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
     * ``text`` is resolved NOW from the member's own ``struggle_events.summary`` (the FAILED turn's words only; member rows only; never a
       guest's; not a word that names a thing the member has forgotten), so a forget that erased the row has already removed the example and
       nothing outside ``struggle_events`` holds the words. Any doubt drops the example (a forget-ledger lookup that fails drops it).
-    * ``split`` is the stable train / holdout assignment; ``audio_ref`` the saved recording's file name when one can be found unambiguously.
+    * ``split`` is the stable train / holdout assignment (by normalised text); ``audio_ref`` the saved recording's file name when one can be found unambiguously.
     Consumers re-label with their own independent oracle before training."""
     out: list[dict] = []
     async with _ctx() as db:
@@ -767,7 +771,7 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
                 if not text or is_guest(str(uid)):
                     continue
                 out.append({"proposal_id": pid, "event_id": str(eid), "user_id": str(uid), "label": label, "label_source": source,
-                            "split": split_of(str(eid)), "text": text,
+                            "split": split_of(text), "text": text,
                             "audio_ref": audio_ref(parse_detail(detail).get("about_ts")) if str(channel) == "voice" else None})
     kept: list[dict] = []
     try:
@@ -796,10 +800,15 @@ async def _refresh(db, pids: Iterable[str]) -> int:
         if row is None:
             await db.execute("DELETE FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
             continue
-        cur = await db.execute("SELECT user_id, ts, signal FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
-        links = [(str(r[0]), float(r[1]), str(r[2])) for r in await cur.fetchall()]
+        # the remaining LIVE evidence only (joined back to the events), with each event's own confidence
+        cur = await db.execute(
+            "SELECT pe.user_id, pe.ts, pe.signal, se.confidence FROM struggle_proposal_events pe JOIN struggle_events se ON se.id = pe.event_id "
+            "WHERE pe.proposal_id = ?", (pid,))
+        live = [(str(r[0]), float(r[1]), str(r[2]), float(r[3] or 0.0)) for r in await cur.fetchall()]
+        links = [(u, ts, s) for u, ts, s, _ in live]
         st = stats_of(links)
-        if not links or (row["status"] == PROPOSED and not recurs(st)):
+        mean = sum(c for *_, c in live) / len(live) if live else 0.0
+        if not links or (row["status"] == PROPOSED and not eligible(st, mean)):
             await db.execute("DELETE FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
             await db.execute("DELETE FROM struggle_proposals WHERE id = ?", (pid,))
             deleted += 1
@@ -807,9 +816,10 @@ async def _refresh(db, pids: Iterable[str]) -> int:
         if (st["events"], st["episodes"], st["users"], st["user_days"]) != (row["event_count"], row["episode_count"], row["user_count"], row["day_count"]):
             await db.execute(
                 "UPDATE struggle_proposals SET signals = ?, episode_count = ?, event_count = ?, user_count = ?, day_count = ?, first_seen = ?, "
-                "last_seen = ?, summary = ?, summary_source = 'template', updated_at = ? WHERE id = ?",
+                "last_seen = ?, confidence = ?, summary = ?, summary_source = 'template', updated_at = ? WHERE id = ?",
                 (json.dumps(st["signals"], sort_keys=True), st["episodes"], st["events"], st["users"], st["user_days"], st["first_seen"],
-                 st["last_seen"], template_summary(row["kind"], row["pattern"], row["domain"], row["label"], st, row["label_source"]), time.time(), pid))
+                 st["last_seen"], confidence_of(mean, st),
+                 template_summary(row["kind"], row["pattern"], row["domain"], row["label"], st, row["label_source"]), time.time(), pid))
     return deleted
 
 
@@ -890,7 +900,7 @@ async def run_pass(*, now: Optional[float] = None, llm: Optional[LLM] = None, dr
     import struggle_detector as sd
 
     m = mode()
-    if m == "off":
+    if m == "off" and not dry_run:            # off gates the WRITING pass; a dry run only counts, so it may preview before the flag is enabled
         return {"status": "off", "mode": m}
     t = time.time() if now is None else now
     span = lookback_days() if days is None else days

@@ -224,8 +224,8 @@ days). `label_source = router` examples are not fed.
 
 **Training (inside the existing machinery, not beside it).** The job extends `scripts/maintenance/router_selftrain.py` (its ratchet,
 `decide_promotion`, `deploy`, `restore_lkg`, journal and scoreboard stay the only path to a live model); the delta set is a second candidate
-source next to the miner's. Steps: (1) read `queued_router_examples()` (train + holdout split from `split_of`, a hash of the event id - an
-example never moves between sets from one night to the next); (2) re-label each example with the loop's independent grammar-constrained
+source next to the miner's. Steps: (1) read `queued_router_examples()` (train + holdout split from `split_of`, a hash of the normalised failed text - an
+example never moves between sets from one night to the next and duplicate phrasings never straddle the two); (2) re-label each example with the loop's independent grammar-constrained
 oracle and keep only those where oracle and follow-up AGREE (two sources, as for mined candidates); (3) refuse any text that overlaps the
 frozen 81-case corpus (the loop's existing held-out guard); (4) warm-start from `ZOE_ROUTER_WARM_START` (`runs/<gen>/merged`, **never
 deleted**) on the train split plus a replay sample of the previous training set (against forgetting); (5) export a candidate GGUF.

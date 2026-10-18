@@ -489,7 +489,9 @@ async def _row(e: sig.Event) -> dict[str, Any]:
         "prev_turn_id": about.turn_id if about is not cur else "",
         "turn_id": cur.turn_id,
         "domain_predicted": about.domain(),
-        "domain_served": about.two_stage_domain or (about.domain() if about.path == sig.PATH_FAST else "chat"),
+        # the handler that actually answered: a fast reply's own phrasing first (the router's prediction can differ), else the old rule
+        "domain_served": ((sig.reply_domain(about.reply) if about.path == sig.PATH_FAST else "")
+                          or about.two_stage_domain or (about.domain() if about.path == sig.PATH_FAST else "chat")),
         "path_served": about.path + (f":{about.lane}" if about.lane else ""),
         "latency_ms": about.latency_ms,
         "stt_ms": about.stt_ms,
