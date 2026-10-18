@@ -3456,7 +3456,8 @@ async def voice_command(
     # no daemon sends it - so it is ignored: a device or a member's session could otherwise name ANY member. A member then
     # comes only from a claim the server's gate accepts (below), a fresh PIN / voice session, or the caller's own session.
     panel_id = _lane_panel_id(payload, caller, "command")
-    _panel_caller = (caller or {}).get("source") in ("device", "pin_resume")
+    # Only a member's OWN session is not the panel; every in-process caller keeps the panel lookups it always had.
+    _panel_caller = (caller or {}).get("source") != "session"
     identified_user_id: Optional[str] = None
     if (caller or {}).get("source") == "pin_resume":
         identified_user_id = (payload or {}).get("identified_user_id") or None
