@@ -76,7 +76,7 @@ memory, probes the server first and commits at the end; an unreachable model or 
 `scripts/maintenance/zoe-night-mind.py` - the same code as the digest hook, runnable on its own.
 
 ```
-zoe-night-mind.py --model-url http://127.0.0.1:11500/v1 --ctx-tokens 16384 --all-members            # the night (mode enforce)
+zoe-night-mind.py --model-url http://127.0.0.1:11500/v1 --ctx-tokens 16384 --all-members            # the night (mode enforce; the 02:50 window passes --mode enforce explicitly)
 zoe-night-mind.py --model-url ... --ctx-tokens 16384 --user <id> --date 2026-10-08 --dry-run         # calls + checks, NOTHING written (mode shadow)
 zoe-night-mind.py --model-url ... --ctx-tokens 16384 --cells                                          # score K1-K12 (lab, scratch stores) against that model
 ```
