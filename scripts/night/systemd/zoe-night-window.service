@@ -25,11 +25,11 @@ Environment=MEMPALACE_DATA_DIR=%h/.mempalace
 Environment=MALLOC_ARENA_MAX=2
 Environment=PYTHONDONTWRITEBYTECODE=1
 # The REAL night, every lever written out (these equal the code's defaults; a test pins the two together, so a changed default cannot silently change the night):
-#   --jobs digest,dreaming,night_mind,omi_day_review   the window's own order (docs/knowledge/night-window.md section 5); dreaming runs here, the installer disables zoe-dreaming.timer
+#   --jobs digest,dreaming,night_mind,struggle_proposals,omi_day_review   the window's own order (docs/knowledge/night-window.md section 5); dreaming runs here, the installer disables zoe-dreaming.timer
 #   --ngl 34 --ctx 8192 --kv q8_0       the layer count that LOADS on a fragmented Tegra (38 was refused twice on 2026-10-09), the context the jobs' 3-8k prompts need, the KV that fits
 #   --end-by 03:55                      zoe-data and the voice stack are back before the Sunday 04:00 consolidation loop and the 04:10 voice-gate blackout; the household wakes after
 # The hard cap (65 min), the batch sizes (512 / 128), UMA and mlock are the code's measured defaults.
-ExecStart=%h/assistant/scripts/night/night_window.sh --jobs digest,dreaming,night_mind,omi_day_review --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55
+ExecStart=%h/assistant/scripts/night/night_window.sh --jobs digest,dreaming,night_mind,struggle_proposals,omi_day_review --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55
 # Restore on EVERY way out first (success, failure, timeout, kill), then ONE journal line about the night (`journalctl --user -t zoe-night-window`; priority err when the unit failed).
 ExecStopPost=%h/assistant/scripts/night/night_window.sh --restore-only
 ExecStopPost=-/bin/sh -c 'p=info; [ "$$SERVICE_RESULT" = success ] || p=err; %h/assistant/scripts/night/night_window.sh --summary | /usr/bin/systemd-cat -t zoe-night-window -p $$p'
