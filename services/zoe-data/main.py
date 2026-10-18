@@ -2319,6 +2319,10 @@ from routers import omi_recordings as _omi_router  # noqa: E402
 _omi_router.register(app)
 from routers import omi_day_review as _omi_dr_router  # noqa: E402
 _omi_dr_router.register(app)
+# Panel review cards (flag-dark): taps on the "on your plate" / day review cards a voice turn pushes to its panel. Mounted ONLY when
+# ZOE_PANEL_REVIEW_CARDS is on - flag off = 404. The voice side is a fast tier (panel_review_cards.tier).
+from routers import panel_review_cards as _panel_cards_router  # noqa: E402
+_panel_cards_router.register(app)
 
 # Contact cards (flag-dark): the member's own multi-value contact fields with provenance, vCard export/import and the merge-review
 # queue (migration 0053, contacts_store.py). Mounted ONLY when ZOE_CONTACTS_API is on — flag off = 404. No sync engine.

@@ -4299,7 +4299,8 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/omi_recordings.py"
+          "services/zoe-data/omi_recordings.py",
+          "services/zoe-data/panel_review_cards.py"
         ],
         "typed_env": true
       },
@@ -4528,6 +4529,16 @@
           "services/zoe-data/panel_kiosk_credential.py"
         ],
         "typed_env": false
+      },
+      "ZOE_PANEL_REVIEW_CARDS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_review_cards.py"
+        ],
+        "typed_env": true
       },
       "ZOE_PANEL_SESSION_TRUST_WINDOW_S": {
         "defaults": [
