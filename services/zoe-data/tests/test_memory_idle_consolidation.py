@@ -168,19 +168,19 @@ def test_saved_message_carries_user_id_in_metadata(monkeypatch):
     _run(_save_chat_message("sess-1", "user", "hello", user_id="jason"))
     insert = next(p for sql, p in captured if "INSERT INTO chat_messages" in sql)
     meta = insert[4]
-    assert _json.loads(meta) == {"user_id": "jason"}
+    assert _json.loads(meta) == {"user_id": "jason", "traffic_class": "household"}
 
-    # Guest → metadata NULL (we don't know whose memory it is).
+    # Guest → no user_id in metadata (we do not know whose memory it is); only the traffic class (P-2).
     captured.clear()
     _run(_save_chat_message("sess-1", "user", "hello", user_id="guest"))
     insert = next(p for sql, p in captured if "INSERT INTO chat_messages" in sql)
-    assert insert[4] is None
+    assert _json.loads(insert[4]) == {"traffic_class": "household"}
 
-    # No user_id passed → metadata NULL (back-compat).
+    # No user_id passed → no user_id in metadata (back-compat); only the traffic class.
     captured.clear()
     _run(_save_chat_message("sess-1", "user", "hello"))
     insert = next(p for sql, p in captured if "INSERT INTO chat_messages" in sql)
-    assert insert[4] is None
+    assert _json.loads(insert[4]) == {"traffic_class": "household"}
 
 
 def test_resolve_owner_from_metadata_most_recent_nonguest():
