@@ -5593,10 +5593,12 @@
       },
       "ZOE_ROUTER_HEAD_LOG": {
         "defaults": [
+          "-",
           "dynamic"
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/maintenance/router_struggle_retrain.py",
           "services/zoe-data/semantic_router.py"
         ],
         "typed_env": false
@@ -5678,6 +5680,76 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/router_selftrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_RETRAIN_DELTA_REPEAT": {
+        "defaults": [
+          "2"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_struggle_retrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_RETRAIN_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/router_retrain_ledger.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_RETRAIN_EPOCHS": {
+        "defaults": [
+          "1.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_struggle_retrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_RETRAIN_HOLDOUT_FRAC": {
+        "defaults": [
+          "0.2"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_struggle_retrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_RETRAIN_LR": {
+        "defaults": [
+          "0.0001"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_struggle_retrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_RETRAIN_REPLAY": {
+        "defaults": [
+          "300"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_struggle_retrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_RETRAIN_STOP_BRAIN": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_struggle_retrain.py"
         ],
         "typed_env": false
       },
@@ -7137,6 +7209,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/curate_voice_corpus.py",
+          "scripts/maintenance/router_struggle_retrain.py",
           "scripts/maintenance/stt_accuracy_report.py",
           "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-data/routers/voice_tts.py",
