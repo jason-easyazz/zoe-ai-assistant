@@ -35,6 +35,7 @@ crash inside it loses at most that batch).
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -51,6 +52,9 @@ from .spool import Spool, SpoolRecord
 from .uploader import Outcome, UploadMeta, Uploader, sha256_hex
 
 log = logging.getLogger("omi_sync.engine")
+
+#: the battery read is informational: a GATT read that stalls must cost this much, never the session
+BATTERY_READ_TIMEOUT_S = 5.0
 
 
 class LinkDropped(Exception):
@@ -100,6 +104,21 @@ class DrainResult:
     pending: int = 0                    # closed recordings left unconfirmed + the open tail
     advanced_to: Optional[int] = None
     notes: list[str] = field(default_factory=list)
+    # --- pendant health facts for the heartbeat (``health.build_report``): informational, never read by a custody decision ---
+    firmware: Optional[str] = None               # the DIS firmware string
+    battery_pct: Optional[int] = None            # standard BLE Battery Service level (0x2A19); None = unreadable
+    ring_capacity_records: Optional[int] = None  # ring INFO: capacity in records, and the record size in bytes
+    ring_packet_bytes: Optional[int] = None
+    ring_unread_start: Optional[int] = None      # unread records when we connected
+    ring_after: Optional[tuple] = None           # (read_seq, write_seq) after the drain's ADVANCE, from a fresh INFO
+    dropped_total: Optional[int] = None          # the pendant's cumulative count of records it overwrote before they were read
+
+    @property
+    def ring_unread_end(self) -> Optional[int]:
+        """Records still on the ring when the session ended (None = not measured, e.g. the link dropped before the ADVANCE step)."""
+        if self.ring_after is None:
+            return None
+        return max(0, self.ring_after[1] - self.ring_after[0])
 
     @property
     def clean(self) -> bool:
@@ -173,6 +192,8 @@ class Drain:
             else:
                 res.refused = f"firmware {fw!r} is below {'.'.join(map(str, rp.MIN_RING_FIRMWARE))} (no ring protocol)"
                 return res
+            res.firmware = fw
+            await self._read_battery()
             reported = await link.codec()
             codec = reported if reported in rp.FRAME_SAMPLES_BY_CODEC else cfg.assume_codec
             if codec not in rp.FRAME_SAMPLES_BY_CODEC:
@@ -205,6 +226,8 @@ class Drain:
             assert info is not None
             ring = ring_label(self.spool, device, info)
             self._open_rings = {ring}
+            res.ring_capacity_records, res.ring_packet_bytes = info.capacity_packets, info.packet_size
+            res.ring_unread_start, res.dropped_total = info.unread, info.dropped_packets
             if info.dropped_packets:
                 res.notes.append(f"pendant overwrote {info.dropped_packets} records before they were read")
             if not (info.caps & rp.CAP_APP_ACK_RECLAIM):
@@ -222,6 +245,20 @@ class Drain:
         if res.uploaded:
             await self.up.notify_synced(res.uploaded, device)
         return res
+
+    async def _read_battery(self) -> None:
+        """Best effort and informational: one GATT read of the standard Battery Service. Never affects custody; a fake or an old link
+        without it, or a failed read, just leaves the level unknown."""
+        reader = getattr(self.link, "battery", None)
+        if reader is None:
+            return
+        try:
+            level = await asyncio.wait_for(reader(), BATTERY_READ_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - LinkDropped included: the next operation finds a dropped link on its own
+            log.debug("battery unreadable: %s", type(exc).__name__)
+            return
+        if isinstance(level, int) and not isinstance(level, bool) and 0 <= level <= 100:
+            self.res.battery_pct = level
 
     # ------------------------------------------------------------------------------ ring path
     async def _read(self, info: rp.RingInfo, device: str, ring: str, codec: int, offset: Optional[float]) -> None:
@@ -497,6 +534,9 @@ class Drain:
             info = rp.parse_info(await link.info())          # the pendant may have moved its own pointer meanwhile
         except (LinkDropped, rp.ProtocolError):
             info = info_before
+        else:
+            res.ring_after = (info.read_seq, info.write_seq)          # health only: what the pendant holds before our ADVANCE
+            res.dropped_total = max(res.dropped_total or 0, info.dropped_packets)
         remaining = spool.records(device, ring)
         first_unconfirmed = remaining[0].seq if remaining else None
         target = advance_target(info.read_seq, spool.coverage(device, ring), first_unconfirmed)
@@ -511,6 +551,7 @@ class Drain:
             return
         if ack.ok:
             res.advanced_to = target
+            res.ring_after = (target, info.write_seq)
             return
         if ack.status == rp.ACK_SEQ_OUT_OF_RANGE:
             # benign iff the pendant's read pointer is already at/after what we asked for (it freed it itself)
@@ -520,6 +561,7 @@ class Drain:
                 return
             if target <= again.read_seq:
                 res.advanced_to = again.read_seq
+                res.ring_after = (again.read_seq, again.write_seq)
             else:
                 res.notes.append(f"ADVANCE {target} out of range (read {again.read_seq}, write {again.write_seq})")
         elif ack.status == rp.ACK_RING_ID_MISMATCH:

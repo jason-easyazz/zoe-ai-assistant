@@ -278,3 +278,33 @@ def test_nested_delegator_name_collision_does_not_type_the_raw_wrapper(tmp_path)
     data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
     flat = {**data["flags"]["prod"], **data["flags"]["lab"]}
     assert flat["ZOE_RAW_COLLIDE"]["typed_env"] is False, flat["ZOE_RAW_COLLIDE"]
+
+
+def test_a_read_through_a_module_constant_is_attributed_to_the_flag(tmp_path):
+    """``_X_ENV = "ZOE_X"`` then ``os.environ.get(_X_ENV)`` is a read of ZOE_X (2026-10-18: ZOE_SEAM_RECALL_INJECT, live in the brain lane, was absent from the
+    inventory for exactly this reason). A name bound more than once at module level, or to a non-flag string, stays unresolved (under-counted, never wrong)."""
+    (tmp_path / "services").mkdir()
+    (tmp_path / "services" / "m.py").write_text(
+        "import os\n"
+        '_ONCE_ENV = "ZOE_VIA_CONST"\n'
+        'TYPED_ENV: str = "ZOE_VIA_ANN"\n'
+        '_TWICE_ENV = "ZOE_REBOUND_A"\n'
+        '_TWICE_ENV = "ZOE_REBOUND_B"\n'
+        '_NOT_A_FLAG = "HOME"\n'
+        "a = (os.environ.get(_ONCE_ENV) or '').strip()\n"
+        "b = os.environ[TYPED_ENV]\n"
+        "c = os.environ.get(_TWICE_ENV)\n"
+        "d = os.environ.get(_NOT_A_FLAG)\n"
+        "e = os.environ.get(_UNDEFINED_ENV)\n"
+    )
+    prod = flag_inventory.scan_repo(tmp_path, files=["services/m.py"])["flags"]["prod"]
+    assert set(prod) == {"ZOE_VIA_CONST", "ZOE_VIA_ANN"}
+    assert prod["ZOE_VIA_CONST"]["defaults"] == ["-"] and prod["ZOE_VIA_ANN"]["defaults"] == ["(required)"]
+
+
+def test_the_zoe_data_env_example_counts_as_documentation(tmp_path):
+    (tmp_path / "services" / "zoe-data").mkdir(parents=True)
+    (tmp_path / "services" / "m.py").write_text('import os\nA = os.environ.get("ZOE_IN_SERVICE_EXAMPLE")\nB = os.environ.get("ZOE_IN_NO_EXAMPLE")\n')
+    (tmp_path / "services" / "zoe-data" / ".env.example").write_text("# ZOE_IN_SERVICE_EXAMPLE=1\n")
+    prod = flag_inventory.scan_repo(tmp_path, files=["services/m.py"])["flags"]["prod"]
+    assert prod["ZOE_IN_SERVICE_EXAMPLE"]["in_env_example"] is True and prod["ZOE_IN_NO_EXAMPLE"]["in_env_example"] is False

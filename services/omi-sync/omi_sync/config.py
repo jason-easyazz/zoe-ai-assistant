@@ -59,6 +59,9 @@ class Settings:
     scan_interval_s: float
     cooldown_s: float
     unregistered_retry_s: float  # how long to wait before asking again after Zoe said "this pendant is not assigned to anyone"
+    away_backoff_max_s: float    # the longest wait between tries for a pendant that is not answering (exponential up to this)
+    health: bool                 # send the numbers-only health heartbeat to Zoe (kill switch; read-only, default on)
+    health_heartbeat_s: float    # ... at least this often when nothing changed
 
     @property
     def spool_path(self) -> Path:
@@ -91,4 +94,7 @@ def load(env: dict | None = None) -> Settings:
         scan_interval_s=_float("OMI_SYNC_SCAN_INTERVAL_S", 30.0, e),
         cooldown_s=_float("OMI_SYNC_COOLDOWN_S", 120.0, e),
         unregistered_retry_s=max(60.0, _float("OMI_SYNC_UNREGISTERED_RETRY_S", 900.0, e)),
+        away_backoff_max_s=max(_float("OMI_SYNC_SCAN_INTERVAL_S", 30.0, e), _float("OMI_SYNC_AWAY_BACKOFF_MAX_S", 600.0, e)),
+        health=_truthy(get("OMI_SYNC_HEALTH", "1")),
+        health_heartbeat_s=max(60.0, _float("OMI_SYNC_HEALTH_HEARTBEAT_S", 900.0, e)),
     )
