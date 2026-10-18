@@ -1,0 +1,128 @@
+{
+  "started": "2026-10-19T05:22:37+0800",
+  "host_mem_available_mb": 2021,
+  "images": {
+    "matrixdotorg/synapse:v1.163.0": "matrixdotorg/synapse@sha256:e98ab72138d90fa8b8876c6421fe78a9fdb181c0d7cc690ad740e5173e0c65e6",
+    "ghcr.io/matrix-construct/tuwunel:v1.9.4": "ghcr.io/matrix-construct/tuwunel@sha256:0e86c6164d6c9f5b60291938eb61ad8395021c37fe58d47a963ea7edddbedaec",
+    "postgres:17.6-alpine": "postgres@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94",
+    "livekit/livekit-server:v1.13.10": "livekit/livekit-server@sha256:89ca9ce0791e18d6e03bf6e2c49ceb27e1c754eae8bd50c989386c1a5963791a",
+    "ghcr.io/element-hq/lk-jwt-service:0.9.0": "ghcr.io/element-hq/lk-jwt-service@sha256:d210fd778ba38b7e42e6fc64e8a24a7d66ccc3b938fb20d73bd713224af2dfea",
+    "livekit/livekit-cli:v2.19.0": "livekit/livekit-cli@sha256:5ef79abfdc8f48f55e177434cdeb6abf9d1e498c0d436886b2ce2b21e44d1004",
+    "nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f": "nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f"
+  },
+  "results": [
+    {
+      "server": "synapse",
+      "image": "matrixdotorg/synapse:v1.163.0",
+      "boot_s": 10.1,
+      "ram_idle_mb": {
+        "mxlab-front": 6.9,
+        "mxlab-hs": 166.4,
+        "mxlab-livekit": 33.9,
+        "mxlab-lkjwt": 8.4,
+        "mxlab-pg": 100.8
+      },
+      "accounts_ms": [
+        431,
+        395,
+        391,
+        391,
+        391,
+        385
+      ],
+      "federation_off": {
+        "/_matrix/federation/v1/version": 404,
+        "/_matrix/key/v2/server": 404,
+        "/_matrix/federation/v1/query/profile": 404,
+        "refused": true
+      },
+      "load": {
+        "room_id": "!jSmZqsv47vMaq2pDxIvZoVs-5HvFjZHjkdoRSizNM3o",
+        "seconds": 20.5,
+        "send_ms_p50": 54.6,
+        "send_ms_p95": 80.1,
+        "initial_sync_ms": {
+          "member1": 100,
+          "member2": 73,
+          "member3": 54,
+          "member4": 48,
+          "zoebot": 68,
+          "panel1": 43
+        }
+      },
+      "ram_after_load_mb": {
+        "mxlab-front": 5.6,
+        "mxlab-hs": 156.9,
+        "mxlab-livekit": 25.2,
+        "mxlab-lkjwt": 6.6,
+        "mxlab-pg": 116.4
+      },
+      "msc4140_delayed_events": {
+        "schedule_status": 200,
+        "delay_id": true,
+        "before_status": 404,
+        "restart_status": 200,
+        "after_status": 200,
+        "supported": true
+      },
+      "msc4143_rtc_focus": {
+        "well_known_status": 200,
+        "rtc_foci": [
+          {
+            "type": "livekit",
+            "livekit_service_url": "http://10.78.0.31:8080"
+          }
+        ],
+        "transports_status": 404,
+        "transports": null,
+        "advertised": true
+      },
+      "call_token": {
+        "member1": {
+          "status": 200,
+          "ms": 70,
+          "url": "ws://10.78.0.30:7880",
+          "claims": {
+            "sub_is_user": true,
+            "room": true,
+            "can_publish": true
+          },
+          "detail": ""
+        },
+        "member2": {
+          "status": 200,
+          "ms": 13,
+          "url": "ws://10.78.0.30:7880",
+          "claims": {
+            "sub_is_user": true,
+            "room": true,
+            "can_publish": true
+          },
+          "detail": ""
+        },
+        "ok": true
+      },
+      "media": {
+        "exit": 0,
+        "seconds": 21.1,
+        "livekit_peak_mb": 51.4,
+        "summary": [
+          "Using url, api-key, api-secret from environment",
+          "Starting load test with 2 audio publishers, room: lab-call",
+          "publishing audio track - ajtwb_pub_1",
+          "publishing audio track - ajtwb_pub_0",
+          "Finished connecting to room, waiting 20s"
+        ]
+      },
+      "ram_peak_mb": {
+        "mxlab-front": 6.2,
+        "mxlab-hs": 157.1,
+        "mxlab-livekit": 51.4,
+        "mxlab-lkjwt": 11.4,
+        "mxlab-pg": 117.1
+      },
+      "min_mem_available_mb_seen": 1689
+    }
+  ],
+  "finished": "2026-10-19T05:24:33+0800"
+}
