@@ -22,7 +22,7 @@ def _reset_lifecycle(monkeypatch):
     # monkeypatch.setattr restores the original bindings on teardown even if a
     # test raises before the cleanup below — no stale global leaks into the next
     # test. Use a fresh set so in-test mutations are discarded with it.
-    monkeypatch.setattr(voice_livekit, "_agent_task", None)
+    monkeypatch.setattr(voice_livekit, "_room_tasks", {})
     monkeypatch.setattr(voice_livekit, "_idle_task", None)
     monkeypatch.setattr(voice_livekit, "_lifecycle_lock", None)
     monkeypatch.setattr(voice_livekit, "_active_participant_sids", set())
@@ -31,14 +31,14 @@ def _reset_lifecycle(monkeypatch):
     yield
     # Tasks created during the test must still be cancelled — monkeypatch
     # restores the binding, not any task object the test spawned into it.
-    for handle in (voice_livekit._agent_task, voice_livekit._idle_task):
+    for handle in (*voice_livekit._room_tasks.values(), voice_livekit._idle_task):
         if handle is not None and not handle.done():
             handle.cancel()
     voice_livekit.reset_voice_health_for_tests()
 
 
-async def _never_ending():
-    # Stand-in for _agent_loop: runs until cancelled.
+async def _never_ending(*_a):
+    # Stand-in for _agent_loop(room_name) / _idle_monitor(): runs until cancelled.
     while True:
         await asyncio.sleep(3600)
 
@@ -64,11 +64,13 @@ async def test_ensure_started_starts_container_and_agent(monkeypatch):
     monkeypatch.setattr(voice_livekit, "_agent_loop", _never_ending)
     monkeypatch.setattr(voice_livekit, "_idle_monitor", _never_ending)
 
-    ready = await voice_livekit.ensure_livekit_started(wait_ready=1.0)
+    room = voice_livekit.new_session_room("panel-a")
+    ready = await voice_livekit.ensure_livekit_started(wait_ready=1.0, room_name=room)
 
     assert ready is True
     assert ("start", voice_livekit._CONTAINER_NAME) in calls
-    assert voice_livekit._agent_task is not None and not voice_livekit._agent_task.done()
+    assert list(voice_livekit._room_tasks) == [room], "the agent joins exactly the minted session room"
+    assert not voice_livekit._room_tasks[room].done()
     assert voice_livekit._idle_task is not None and not voice_livekit._idle_task.done()
 
 
@@ -90,8 +92,8 @@ async def test_ensure_started_skips_docker_when_disabled(monkeypatch):
     ready = await voice_livekit.ensure_livekit_started(wait_ready=1.0)
 
     assert ready is True
-    assert started == []  # boot mode owns the always-on agent
-    assert voice_livekit._agent_task is None
+    assert started == []  # boot mode owns the always-on container
+    assert voice_livekit._room_tasks == {}  # no room named -> no agent (there is no fixed room any more)
 
 
 @pytest.mark.asyncio
@@ -110,7 +112,7 @@ async def test_ensure_started_returns_false_when_docker_start_fails(monkeypatch)
     ready = await voice_livekit.ensure_livekit_started(wait_ready=1.0)
 
     assert ready is False
-    assert voice_livekit._agent_task is None
+    assert voice_livekit._room_tasks == {}
 
 
 @pytest.mark.asyncio

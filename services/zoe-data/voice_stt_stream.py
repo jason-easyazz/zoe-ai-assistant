@@ -23,7 +23,15 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 16000
 _ID_RE = re.compile(r"^[0-9a-f]{8,64}$")
 MAX_SESSIONS = 2
-MAX_SAMPLES = 30 * SAMPLE_RATE  # the daemon's record cap is 12 s; 30 s is a hard ceiling, not a target
+# The longest ONE recording the panel daemon sends: a conversation window's hard cap (CONV_RECORD_SECONDS_HARD_MAX,
+# default 60 s) plus the snap-to-a-pause tail (RECORD_SNAP_S, default 3 s) = 63 s, rounded up. It was 30 s, so every
+# 31-63 s conversation turn broke its stream and silently paid full post-speech batch STT (A, 2026-10-18). Measured on
+# the Orin (MEDIUM_STREAMING, real corpus speech, 0.32 s batches): once the allocator is warm a 63 s session adds ~8 MB
+# RSS over a 30 s one (first ever 63 s session: high-water +142 MB vs +89 MB for 30 s, then reused); feeding 63 s costs
+# ~28 s of CPU spread under the speech, stop() 0.11 s. MAX_SESSIONS stays 2. Pinned against the daemon's defaults by
+# tests/test_voice_stt_stream.py.
+MAX_TURN_AUDIO_S = 64
+MAX_SAMPLES = MAX_TURN_AUDIO_S * SAMPLE_RATE
 IDLE_TTL_S = 30.0
 MAX_QUEUE = 512  # queued, not-yet-fed chunks; the daemon sends ~0.32 s chunks, so this is minutes of backlog
 OPEN_WAIT_S = 10.0  # a concurrent chunk for an id whose stream is still being created waits this long

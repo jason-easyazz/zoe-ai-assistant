@@ -162,7 +162,7 @@ function boot(opts = {}) {
     PANEL_WATCHDOG_MS: constValue('PANEL_WATCHDOG_MS'), PANEL_DEAF_AFTER_MS: constValue('PANEL_DEAF_AFTER_MS'),
     PANEL_GUEST_RECLAIM_GRACE_MS: constValue('PANEL_GUEST_RECLAIM_GRACE_MS'), PANEL_HEAL_MIN_MS: constValue('PANEL_HEAL_MIN_MS'), PANEL_RELOAD_MIN_MS: constValue('PANEL_RELOAD_MIN_MS'), PANEL_RELOAD_KEY: 'zoe_panel_watchdog_reload_at', PANEL_HANDOVER_KEY: 'zoe_member_handover_at',
     buildContext: () => ({}), executeAction: async (a) => { executed.push(a.id); return { status: 'success' }; }, ackAction: async () => {},
-    panelMatches: () => true, panelMatchesAuthTarget: () => true, setOrbMode() {}, showAmbientStatus: undefined, _attemptVoiceNavigation() {},
+    panelMatches: () => true, panelMatchesStrict: () => true, addressedToThisPanel: () => false, panelMatchesAuthTarget: () => true, setOrbMode() {}, showAmbientStatus: undefined, _attemptVoiceNavigation() {},
     VoiceOverlay: { onListeningStarted() {}, onTranscript() {}, onThinking() {}, onResponding: (t) => responding.push(t), onDone() {} },
   };
   const names = Object.keys(env);
