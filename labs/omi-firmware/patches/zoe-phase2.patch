@@ -1,0 +1,397 @@
+diff --git a/omi/firmware/omi/CMakeLists.txt b/omi/firmware/omi/CMakeLists.txt
+index 4a4de28..56dd578 100644
+--- a/omi/firmware/omi/CMakeLists.txt
++++ b/omi/firmware/omi/CMakeLists.txt
+@@ -35,6 +35,13 @@ if(CONFIG_OMI_ENABLE_OFFLINE_STORAGE)
+     list(APPEND core_sources src/lib/core/storage.c)
+ endif()
+ 
++if(CONFIG_ZOE_BLE_BONDED_ONLY)
++    list(APPEND app_sources src/zoe/zoe_ble_sec.c)
++endif()
++if(CONFIG_ZOE_RING_ENCRYPT)
++    list(APPEND app_sources src/zoe/zoe_ring_crypt.c src/zoe/zoe_ring_crypt_psa.c)
++endif()
++
+ target_sources(app PRIVATE ${core_sources} ${app_sources})
+ target_include_directories(app PRIVATE
+     ${CMAKE_CURRENT_SOURCE_DIR}/src
+diff --git a/omi/firmware/omi/Kconfig b/omi/firmware/omi/Kconfig
+index 9e48615..946b3f6 100644
+--- a/omi/firmware/omi/Kconfig
++++ b/omi/firmware/omi/Kconfig
+@@ -2,6 +2,28 @@ source "Kconfig.zephyr"
+ 
+ menu "Omi Features Configuration"
+ 
++config ZOE_BLE_BONDED_ONLY
++    bool "Zoe: bonded-only BLE (encrypted GATT and SMP, button-gated LE Secure Connections pairing)"
++    depends on BT_SMP && BT_SMP_APP_PAIRING_ACCEPT && BT_SETTINGS
++    default n
++
++config ZOE_PAIRING_WINDOW_S
++    int "Zoe: seconds the pairing window stays open after the gesture"
++    default 60
++
++config ZOE_FIRST_SETUP_WINDOW_S
++    int "Zoe: seconds the pairing window is open after boot while NO bond exists"
++    default 120
++
++config ZOE_UNENCRYPTED_KICK_S
++    int "Zoe: seconds an unencrypted connection may stay outside the pairing window"
++    default 30
++
++config ZOE_RING_ENCRYPT
++    bool "Zoe: encrypt the SD ring's audio packets at rest (AES-128-CTR, device key)"
++    depends on OMI_ENABLE_OFFLINE_STORAGE && SETTINGS
++    default n
++
+ config OMI_CODEC_OPUS
+     bool "Opus Audio Codec"
+     help
+diff --git a/omi/firmware/omi/src/haptic.c b/omi/firmware/omi/src/haptic.c
+index ac412d4..3c3698a 100644
+--- a/omi/firmware/omi/src/haptic.c
++++ b/omi/firmware/omi/src/haptic.c
+@@ -1,4 +1,5 @@
+ #include "lib/core/haptic.h"
++#include "zoe/zoe_ble_sec.h"
+ 
+ #include <zephyr/bluetooth/gatt.h>
+ #include <zephyr/bluetooth/uuid.h>
+@@ -42,7 +43,7 @@ static struct bt_gatt_attr haptic_attrs[] = {
+     BT_GATT_PRIMARY_SERVICE(&haptic_service_uuid),
+     BT_GATT_CHARACTERISTIC(&haptic_char_uuid.uuid,
+                            BT_GATT_CHRC_WRITE,
+-                           BT_GATT_PERM_WRITE,
++                           ZOE_PERM_W,
+                            NULL,
+                            haptic_write_handler,
+                            NULL),
+diff --git a/omi/firmware/omi/src/lib/core/button.c b/omi/firmware/omi/src/lib/core/button.c
+index 9e6af77..54b373c 100644
+--- a/omi/firmware/omi/src/lib/core/button.c
++++ b/omi/firmware/omi/src/lib/core/button.c
+@@ -18,6 +18,7 @@
+ #include "speaker.h"
+ #include "transport.h"
+ #include "wdog_facade.h"
++#include "zoe/zoe_ble_sec.h"
+ 
+ #include "imu.h"
+ #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
+@@ -44,11 +45,11 @@ static struct bt_gatt_attr button_service_attr[] = {
+     BT_GATT_PRIMARY_SERVICE(&button_uuid),
+     BT_GATT_CHARACTERISTIC(&button_characteristic_data_uuid.uuid,
+                            BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+-                           BT_GATT_PERM_READ,
++                           ZOE_PERM_R,
+                            button_data_read_characteristic,
+                            NULL,
+                            NULL),
+-    BT_GATT_CCC(button_ccc_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
++    BT_GATT_CCC(button_ccc_config_changed_handler, ZOE_PERM_RW),
+ };
+ 
+ static struct bt_gatt_service button_service = BT_GATT_SERVICE(button_service_attr);
+@@ -228,6 +229,9 @@ void check_button_level(struct k_work *work_item)
+         LOG_INF("double tap detected\n");
+         btn_last_event = event;
+         notify_double_tap();
++#ifdef CONFIG_ZOE_BLE_BONDED_ONLY
++        zoe_ble_sec_on_double_tap(); /* two double-taps = open the pairing window */
++#endif
+     }
+ 
+     // Long press, one time event
+diff --git a/omi/firmware/omi/src/lib/core/storage.c b/omi/firmware/omi/src/lib/core/storage.c
+index 2262747..d918449 100644
+--- a/omi/firmware/omi/src/lib/core/storage.c
++++ b/omi/firmware/omi/src/lib/core/storage.c
+@@ -16,6 +16,7 @@
+ #include "sd_card.h"
+ #include "transport.h"
+ #include "utils.h"
++#include "zoe/zoe_ble_sec.h"
+ 
+ LOG_MODULE_REGISTER(storage, CONFIG_LOG_DEFAULT_LEVEL);
+ 
+@@ -80,18 +81,18 @@ static struct bt_gatt_attr storage_service_attr[] = {
+     BT_GATT_PRIMARY_SERVICE(&storage_service_uuid),
+     BT_GATT_CHARACTERISTIC(&storage_write_uuid.uuid,
+                            BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
+-                           BT_GATT_PERM_WRITE,
++                           ZOE_PERM_W,
+                            NULL,
+                            storage_write_handler,
+                            NULL),
+-    BT_GATT_CCC(storage_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
++    BT_GATT_CCC(storage_config_changed_handler, ZOE_PERM_RW),
+     BT_GATT_CHARACTERISTIC(&storage_read_uuid.uuid,
+                            BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+-                           BT_GATT_PERM_READ,
++                           ZOE_PERM_R,
+                            storage_read_characteristic,
+                            NULL,
+                            NULL),
+-    BT_GATT_CCC(storage_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
++    BT_GATT_CCC(storage_config_changed_handler, ZOE_PERM_RW),
+ };
+ 
+ struct bt_gatt_service storage_service = BT_GATT_SERVICE(storage_service_attr);
+diff --git a/omi/firmware/omi/src/lib/core/transport.c b/omi/firmware/omi/src/lib/core/transport.c
+index 3196ce0..0392789 100644
+--- a/omi/firmware/omi/src/lib/core/transport.c
++++ b/omi/firmware/omi/src/lib/core/transport.c
+@@ -24,6 +24,7 @@
+ #include "button.h"
+ #include "config.h"
+ #include "features.h"
++#include "zoe/zoe_ble_sec.h"
+ #include "haptic.h"
+ #include "mic.h"
+ #ifdef CONFIG_OMI_ENABLE_MONITOR
+@@ -145,25 +146,25 @@ static struct bt_gatt_attr audio_service_attr[] = {
+     BT_GATT_PRIMARY_SERVICE(&audio_service_uuid),
+     BT_GATT_CHARACTERISTIC(&audio_characteristic_data_uuid.uuid,
+                            BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+-                           BT_GATT_PERM_READ,
++                           ZOE_PERM_R,
+                            audio_data_read_characteristic,
+                            NULL,
+                            NULL),
+-    BT_GATT_CCC(audio_ccc_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
++    BT_GATT_CCC(audio_ccc_config_changed_handler, ZOE_PERM_RW),
+     BT_GATT_CHARACTERISTIC(&audio_characteristic_format_uuid.uuid,
+                            BT_GATT_CHRC_READ,
+-                           BT_GATT_PERM_READ,
++                           ZOE_PERM_R,
+                            audio_codec_read_characteristic,
+                            NULL,
+                            NULL),
+ #ifdef CONFIG_OMI_ENABLE_SPEAKER
+     BT_GATT_CHARACTERISTIC(&audio_characteristic_speaker_uuid.uuid,
+                            BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
+-                           BT_GATT_PERM_WRITE,
++                           ZOE_PERM_W,
+                            NULL,
+                            audio_data_write_handler,
+                            NULL),
+-    BT_GATT_CCC(audio_ccc_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), //
++    BT_GATT_CCC(audio_ccc_config_changed_handler, ZOE_PERM_RW), //
+ #endif
+ 
+ };
+@@ -184,23 +185,23 @@ static struct bt_gatt_attr settings_service_attr[] = {
+     BT_GATT_PRIMARY_SERVICE(&settings_service_uuid),
+     BT_GATT_CHARACTERISTIC(&settings_dim_ratio_characteristic_uuid.uuid,
+                            BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+-                           BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
++                           ZOE_PERM_RW,
+                            settings_dim_ratio_read_handler,
+                            settings_dim_ratio_write_handler,
+                            NULL),
+     BT_GATT_CHARACTERISTIC(&settings_mic_gain_characteristic_uuid.uuid,
+                            BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+-                           BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
++                           ZOE_PERM_RW,
+                            settings_mic_gain_read_handler,
+                            settings_mic_gain_write_handler,
+                            NULL),
+     BT_GATT_CHARACTERISTIC(&settings_charging_status_characteristic_uuid.uuid,
+                            BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+-                           BT_GATT_PERM_READ,
++                           ZOE_PERM_R,
+                            settings_charging_status_read_handler,
+                            NULL,
+                            NULL),
+-    BT_GATT_CCC(charging_status_ccc_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
++    BT_GATT_CCC(charging_status_ccc_config_changed_handler, ZOE_PERM_RW),
+ };
+ 
+ static struct bt_gatt_service settings_service = BT_GATT_SERVICE(settings_service_attr);
+@@ -215,7 +216,7 @@ static struct bt_gatt_attr features_service_attr[] = {
+     BT_GATT_PRIMARY_SERVICE(&features_service_uuid),
+     BT_GATT_CHARACTERISTIC(&features_characteristic_uuid.uuid,
+                            BT_GATT_CHRC_READ,
+-                           BT_GATT_PERM_READ,
++                           ZOE_PERM_R,
+                            features_read_handler,
+                            NULL,
+                            NULL),
+@@ -278,13 +279,13 @@ static struct bt_gatt_attr time_sync_service_attr[] = {
+     BT_GATT_PRIMARY_SERVICE(&time_sync_service_uuid),
+     BT_GATT_CHARACTERISTIC(&time_sync_write_characteristic_uuid.uuid,
+                            BT_GATT_CHRC_WRITE,
+-                           BT_GATT_PERM_WRITE,
++                           ZOE_PERM_W,
+                            NULL,
+                            time_sync_write_handler,
+                            NULL),
+     BT_GATT_CHARACTERISTIC(&time_sync_read_characteristic_uuid.uuid,
+                            BT_GATT_CHRC_READ,
+-                           BT_GATT_PERM_READ,
++                           ZOE_PERM_R,
+                            time_sync_read_handler,
+                            NULL,
+                            NULL),
+@@ -1339,6 +1340,15 @@ int transport_start()
+         LOG_WRN("Continuing without confirmed BLE identity (err %d)", err);
+     }
+ 
++#ifdef CONFIG_ZOE_BLE_BONDED_ONLY
++    /* Bonds are loaded now: register the pairing gate and drop stock-era bonds BEFORE anyone can connect. */
++    err = zoe_ble_sec_init();
++    if (err) {
++        LOG_ERR("Zoe BLE security init failed (err %d): not advertising", err);
++        return err;
++    }
++#endif
++
+     // Production-line helper: emit local BLE addresses on UART for fixture parsing.
+     log_local_ble_addresses();
+ 
+diff --git a/omi/firmware/omi/src/sd_card.c b/omi/firmware/omi/src/sd_card.c
+index 70d4370..042b4ff 100644
+--- a/omi/firmware/omi/src/sd_card.c
++++ b/omi/firmware/omi/src/sd_card.c
+@@ -14,6 +14,9 @@
+ #include <zephyr/sys/util.h>
+ 
+ #include "rtc.h"
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++#include "zoe/zoe_ring_crypt.h"
++#endif
+ 
+ LOG_MODULE_REGISTER(sd_card, CONFIG_LOG_DEFAULT_LEVEL);
+ 
+@@ -33,7 +36,12 @@ LOG_MODULE_REGISTER(sd_card, CONFIG_LOG_DEFAULT_LEVEL);
+ 
+ #define RAW_META_MAGIC 0x4F4D4952U
+ #define RAW_BATCH_MAGIC 0x4F4D4942U
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++/* A different layout: stock firmware reads an encrypted ring as invalid (and the reverse), never as audio. */
++#define RAW_LAYOUT_VERSION 0x5A01U
++#else
+ #define RAW_LAYOUT_VERSION 1U
++#endif
+ 
+ #define ERROR_THRESHOLD 5
+ 
+@@ -179,6 +187,7 @@ static uint8_t batch_read_buffer[RAW_BATCH_BYTES];
+ static uint8_t sector_buffer[DISK_SECTOR_SIZE];
+ static uint16_t current_batch_packets;
+ static uint64_t current_batch_base_seq;
++static uint32_t current_batch_salt; /* Zoe: the open batch's IV salt (header reserved0) */
+ static uint64_t cached_read_batch_base_seq = UINT64_MAX;
+ static struct raw_batch_header cached_read_batch_header;
+ static bool current_batch_loaded;
+@@ -256,6 +265,9 @@ static void start_empty_batch(uint64_t base_seq)
+     memset(current_batch, 0, sizeof(current_batch));
+     current_batch_base_seq = base_seq;
+     current_batch_packets = 0;
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++    current_batch_salt = zrc_backend_new_salt();
++#endif
+     current_batch_loaded = true;
+     current_batch_dirty = false;
+ }
+@@ -468,6 +480,23 @@ static int restore_tail_batch(void)
+         (void) persist_ring_metadata();
+     }
+ 
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++    /* Re-key the re-opened tail to a fresh salt, so no (salt, seq) pair can ever cover two plaintexts. */
++    uint32_t new_salt = zrc_backend_new_salt();
++    if (header.reserved0 == 0U || header.reserved0 == new_salt ||
++        zrc_rekey(current_batch + RAW_BATCH_HEADER_BYTES, RAW_AUDIO_PACKET_BYTES, RAW_AUDIO_PACKET_BYTES, header.start_seq,
++                  header.packet_count, header.reserved0, new_salt) != 0) {
++        LOG_ERR("tail batch could not be re-keyed: dropping it");
++        ring_state.write_seq = base_seq;
++        if (ring_state.read_seq > ring_state.write_seq) {
++            ring_state.read_seq = ring_state.write_seq;
++        }
++        (void) persist_ring_metadata();
++        start_empty_batch(ring_state.write_seq);
++        return -EIO;
++    }
++    current_batch_salt = new_salt;
++#endif
+     current_batch_base_seq = header.start_seq;
+     current_batch_packets = header.packet_count;
+     current_batch_loaded = true;
+@@ -496,6 +525,7 @@ static int flush_current_batch(bool sync_requested)
+         .packet_count = current_batch_packets,
+         .generation = meta_generation + 1U,
+         .start_seq = current_batch_base_seq,
++        .reserved0 = current_batch_salt,
+     };
+     memcpy(current_batch, &header, sizeof(header));
+ 
+@@ -633,6 +663,16 @@ static int read_packets_internal(uint64_t start_seq,
+         size_t src_offset = RAW_BATCH_HEADER_BYTES + ((size_t) packet_offset * RAW_AUDIO_PACKET_BYTES);
+         size_t copy_bytes = (size_t) copy_packets * RAW_AUDIO_PACKET_BYTES;
+         memcpy(out_buf + (*bytes_read), batch_read_buffer + src_offset, copy_bytes);
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++        for (uint32_t i = 0; i < copy_packets; i++) {
++            if (zrc_xcrypt_packet(loaded_header.reserved0, seq + i,
++                                  out_buf + (*bytes_read) + (size_t) i * RAW_AUDIO_PACKET_BYTES, RAW_AUDIO_PACKET_BYTES) != 0) {
++                memset(out_buf, 0, max_bytes);
++                *bytes_read = 0;
++                return -EIO;
++            }
++        }
++#endif
+ 
+         *bytes_read += (uint32_t) copy_bytes;
+         copied_packets += copy_packets;
+@@ -697,6 +737,15 @@ static void process_write_data_req(const sd_req_t *req)
+     size_t dst_offset = RAW_BATCH_HEADER_BYTES + ((size_t) current_batch_packets * RAW_AUDIO_PACKET_BYTES);
+     sys_put_be32(timestamp, current_batch + dst_offset);
+     memcpy(current_batch + dst_offset + RAW_AUDIO_TIMESTAMP_BYTES, req->u.write.buf, MAX_WRITE_SIZE);
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++    /* Encrypted once, here, before it can reach the SD; a failure drops the packet - it is never stored in plaintext. */
++    if (zrc_xcrypt_packet(current_batch_salt, current_batch_base_seq + current_batch_packets, current_batch + dst_offset,
++                          RAW_AUDIO_PACKET_BYTES) != 0) {
++        memset(current_batch + dst_offset, 0, RAW_AUDIO_PACKET_BYTES);
++        write_drop_packets++;
++        return;
++    }
++#endif
+     current_batch_packets++;
+     current_batch_dirty = true;
+     last_batch_activity_ms = k_uptime_get();
+@@ -855,6 +904,15 @@ static int sd_mount(void)
+ 
+     ring_state.capacity_packets = data_batch_count * RAW_PACKETS_PER_BATCH;
+ 
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++    int key_state = zrc_backend_init();
++    if (key_state < 0) {
++        LOG_ERR("no ring key (%d): not mounting, nothing is stored", key_state);
++        sd_enable_power(false);
++        return key_state;
++    }
++#endif
++
+     ret = load_ring_metadata();
+     if (ret < 0) {
+         LOG_ERR("failed to load raw ring metadata: %d", ret);
+@@ -862,7 +920,17 @@ static int sd_mount(void)
+         return ret;
+     }
+ 
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++    if (key_state == 1) {
++        /* A new key cannot read the old ring: start it empty rather than serve undecryptable audio. */
++        LOG_WRN("new ring key: clearing the unreadable ring");
++        (void) clear_ring_internal(true);
++    } else {
++        (void) restore_tail_batch();
++    }
++#else
+     (void) restore_tail_batch();
++#endif
+     is_mounted = true;
+ 
+     LOG_INF("Raw SD ring mounted: sectors=%u, batches=%u, capacity=%u packets",

@@ -340,6 +340,23 @@ def test_a_confirmed_update_is_queued_with_only_the_confirmation_params(env):
     assert poll(env)[0]["params"] == {"confirm": True, "ack_no_undo": True}
 
 
+@pytest.mark.parametrize("body", [{}, {"confirm": "true"}, {"confirm": 1}, {"replace": True}])
+def test_secure_pairing_must_be_confirmed(env, body):
+    online(env)
+    r = env.client.post(f"/api/bluetooth/panels/{PANEL}/devices/{DEV}/omi_bond", json=body)
+    assert r.status_code == 400 and "confirmed" in r.json()["detail"]
+    assert env.broker.jobs == {} and env.audit_lines() == []
+
+
+def test_a_confirmed_pairing_is_audited_and_forwards_only_confirm_and_replace(env):
+    online(env)
+    r = env.client.post(f"/api/bluetooth/panels/{PANEL}/devices/{DEV}/omi_bond",
+                        json={"confirm": True, "replace": True, "ack_no_undo": True, "evil": "x" * 500})
+    assert r.status_code == 200
+    assert poll(env)[0]["params"] == {"confirm": True, "replace": True}
+    assert [(a["action"], a["phase"]) for a in env.audit_lines()] == [("omi_bond", "requested")]
+
+
 # --- bounds on what a panel may say -----------------------------------------------------------------------------------------------------------
 def test_panel_supplied_data_is_bounded(env):
     huge = {"agent": {"version": "v" * 5000}, "devices": [{"id": DEV, "name": "n" * 5000, "driver": "omi"} for _ in range(500)],

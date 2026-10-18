@@ -6,7 +6,10 @@ Household-facing (HUMAN ADMIN session only - never a device token, never a membe
   GET    /api/bluetooth/panels/{panel}                          one panel: devices (scan merged with remembered), active job
   POST   /api/bluetooth/panels/{panel}/scan                     -> job
   POST   /api/bluetooth/panels/{panel}/devices/{id}/{action}    connect | disconnect | forget | info | update_check | update_start |
-                                                                update_cancel   -> job   (update_start needs {"confirm":true,"ack_no_undo":true})
+                                                                update_cancel | omi_bond   -> job   (update_start needs
+                                                                {"confirm":true,"ack_no_undo":true}; omi_bond needs {"confirm":true},
+                                                                optional "replace":true - the owner-run secure pairing of a pendant
+                                                                on Zoe phase-2 firmware, panel flag PANEL_BT_BOND_ENABLED)
   GET    /api/bluetooth/panels/{panel}/jobs/{job}               progress / outcome (the UI polls; there is no push)
 Panel-facing (a panel's DEVICE TOKEN only):
   POST   /api/bluetooth/agent/poll                              long poll: {"snapshot", "wait_s"} -> {"commands": [...]}
