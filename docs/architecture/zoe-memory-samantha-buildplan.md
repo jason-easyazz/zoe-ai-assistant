@@ -1,7 +1,7 @@
 # Zoe Memory → Samantha-grade: Autonomous Build Plan
 
 > **Single source of truth for the memory rebuild.** A fresh/autonomous session
-> (no human present) reads this top-to-bottom, does the **§7 NEXT ACTION**, updates
+> (no human present) reads this top-to-bottom, takes the next item from `docs/ROADMAP.md`, updates
 > the **§6 checklist**, and repeats. Do not improvise around it. Companion analysis
 > lives in memory `project-mempalace-deep-dive`; this is the *executable* version.
 
@@ -121,18 +121,10 @@ memory unprompted; its understanding of the user evolves.
 - [x] **Voice regression clean** — 25 `~/.zoe-voice-samples` via `scripts/maintenance/voice_regression_probe.py` → **0 hard failures (fail=0)**; 24/25 scored "OK" and the 25th was a non-failing soft/warn outcome (the probe's third bucket — not an error/timeout), so no regression from any memory change.
 - [ ] (carry-over) identity deploy `#768` — FF-deploy when the tooling/classifier outage clears
 
-## 7. NEXT ACTION (always exactly one)
-→ **Build phase COMPLETE. All four Samantha criteria are met and measured at 100% on the LIVE Flue
-brain** (2026-07-05 full eval: 40/40 usable across fact recall ×5, emotional recall ×2, safety
-recall, + morning brief PASS — §6). 3a/3b/3c done; the acceptance suite is 8/8. The remaining work
-is **monitoring, not building** — and the one thing that would move the needle is **not a code
-task**: jason still has **0 real `emotional_moment` rows**, so the entire emotional path is proven on
-seeded/demo data and does nothing for him until a genuine emotional conversation is captured by the
-live brain. Watch with `scripts/maintenance/check_emotional_thread.py`; when the first real row
-appears, spot-check that recall + the morning brief surface it, then this is truly done for a real
-user. Do NOT resurrect the dead idle-consolidation path (§8) as "the" memory path — the live memory
-is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_memory` tool
-(governed by the live persona doctrines in `labs/flue-zoe-brain-2x/src/agents/zoe.ts`).
+## 7. Where the next action lives
+
+The next action is **not** kept here any more: the one ordered list is [`docs/ROADMAP.md`](../ROADMAP.md) (Now / Next / Later). This document is the executable record of the memory rebuild. State when it was last current: the build phase is complete and measured at 100% on the live Flue brain (2026-07-05); what remains is monitoring, not building. The live memory is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_memory` tool; do NOT resurrect the dead idle-consolidation path (section 8) as the memory path; update it when a step lands, but do not add a new "next action" to it.
+
 
 ## 8. Increment 1c — enable runbooks
 

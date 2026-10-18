@@ -257,36 +257,10 @@ Only proceed if P0 succeeds:
 
 ---
 
-## Next Actions (Start This Week)
+## Where the next action lives
 
-### Monday Morning: P0-2 Implementation
-1. Create `intent_system/validation/context_validator.py`
-2. Update `chat.py` to call validator before context fetching
-3. Test with deterministic intents
+The next action is **not** kept here any more: the one ordered list is [`docs/ROADMAP.md`](../ROADMAP.md) (Now / Next / Later). This document is a November 2025 study, long superseded; update it when a step lands, but do not add a new "next action" to it.
 
-**Success Metric:** Tier 0 intents execute in < 10ms without context overhead
-
-**Why start here:** Highest impact/effort ratio, immediate hallucination reduction
-
----
-
-### Tuesday-Wednesday: P0-3 Implementation
-1. Create `intent_system/formatters/response_formatter.py`
-2. Update `chat.py` to format responses with confidence thresholds
-3. Test uncertainty language phrasing
-
-**Success Metric:** Users report "Zoe feels more honest" in feedback
-
----
-
-### Thursday-Saturday: P0-1 Implementation
-1. Create `behavioral_memory.py` service
-2. Design SQL schema for behavioral patterns
-3. Implement LLM-based pattern extraction
-4. Add cron job for nightly extraction
-5. Integrate with context assembly
-
-**Success Metric:** 5-10 behavioral patterns extracted per user after 7 days
 
 ---
 
