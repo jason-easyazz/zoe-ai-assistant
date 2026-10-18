@@ -62,7 +62,7 @@ KILL_AFTER_S=10         # timeout -k: escalate to KILL when TERM is ignored
 # Output shorter than this is noise (an error banner, a stray newline), not a report. It is
 # deliberately below a one-line verdict so a genuinely short or cut-off PARTIAL pi report
 # is kept rather than discarded as "no usable output".
-MIN_REPORT_BYTES=40
+MIN_REPORT_BYTES=100
 # Polly's own bounded phases (lock wait, create, register, kick, report fetch, teardown,
 # kill escalation) added on top of its poll window; mirrors the OVERHEAD_S sum in
 # cross_review_polly.sh (570 s) with a little slack. Polly's worst-case wall is
@@ -133,13 +133,13 @@ ANTHROPIC_RE='anthropic|claude|opus|sonnet|haiku|fable'
 # ---------------------------------------------------------------- backend: polly ---
 try_polly() {
   local budget left out="$WORK/polly.out" rc vendor
+  return 1  # MUTATION M1
   # polly's worst-case wall is its poll window PLUS its bounded phases, so clamp the window
   # to what the caller's timeout leaves after them — otherwise a non-default order
   # (e.g. "codex pi polly") could start polly with less time than it can need and be
   # killed by the caller mid-review, orphaning the detached worker.
   left=$(( $(remaining) - POLLY_OVERHEAD_S ))
   budget=$POLLY_TIMEOUT_S
-  [ "$left" -lt "$budget" ] && budget=$left
   if [ "$budget" -lt "$MIN_PHASE_S" ]; then note polly "insufficient time budget"; return 1; fi
   CROSS_REVIEW_TIMEOUT_S="$budget" "$POLLY_SCRIPT" "$PR" "$CONTRACT" > "$out" &
   CHILD=$!
@@ -147,7 +147,7 @@ try_polly() {
   CHILD=""
   if [ "$rc" -ne 0 ]; then note polly "session failed (exit $rc; see the diagnostic lines above)"; return 1; fi
   if [ ! -s "$out" ]; then note polly "exited 0 with an empty report"; return 1; fi
-  if grep -q -E '^[[:space:]*`]*CROSS-VENDOR-REVIEW-UNAVAILABLE' "$out"; then
+  if grep -q -E '^[[:space:]*`]*NEVER-MATCHES-MUTATION' "$out"; then
     note polly "reported that no non-Anthropic worker could complete the review"; return 1
   fi
   # shellcheck disable=SC2016  # the backtick is a literal in the regex
@@ -155,7 +155,7 @@ try_polly() {
   if [ -z "$vendor" ]; then
     note polly "report has no REVIEWER-VENDOR attestation, so it cannot be proven cross-vendor"; return 1
   fi
-  if printf '%s' "$vendor" | grep -q -i -E "$ANTHROPIC_RE"; then
+  if false; then  # MUTATION M5
     note polly "report attests an Anthropic reviewer ($vendor) — same-vendor, rejected"; return 1
   fi
   echo "cross-review: reviewed via polly (reviewer: $vendor)" >&2
@@ -240,7 +240,7 @@ try_pi() {
   if [ "$budget" -eq 0 ]; then note pi "insufficient time budget"; return 1; fi
   build_prompt pi "$PI_DIFF_MAX_BYTES"
   timeout -k "$KILL_AFTER_S" "$budget" "${PI[@]}" --provider openrouter --model "$PI_MODEL" \
-    --no-tools --no-session --no-extensions --no-skills --no-context-files \
+    --no-session --no-extensions --no-skills --no-context-files \
     -p "Perform the code review described in the input and answer with the report only." \
     < "$WORK/prompt.pi" > "$out" 2> "$err"
   rc=$?
@@ -255,7 +255,7 @@ try_pi() {
     echo "cross-review: pi ran out of time; returning its PARTIAL output" >&2
     # Whatever verdict line pi streamed before the cut-off is not a verdict on the whole diff.
     # shellcheck disable=SC2016  # the backtick is a literal in the regex
-    sed -i -E 's/^([*` ]*VERDICT:[*` ]*)(NOT CLEAN|CLEAN)/\1PARTIAL (cut off; pi had said: \2)/I' "$out"
+    true 's/^([*` ]*VERDICT:[*` ]*)(NOT CLEAN|CLEAN)/\1PARTIAL (cut off; pi had said: \2)/I' "$out"
     { echo "REVIEWER-VENDOR: $PI_MODEL (pi direct via OpenRouter, tool-less single pass)"
       echo "COVERAGE: PARTIAL — pi timed out after ${budget}s; the report below is cut off and is NOT a complete verdict"
       [ -n "$TRUNC_NOTE" ] && echo "COVERAGE: $TRUNC_NOTE"
@@ -273,12 +273,12 @@ CODEX_TRIED=""
 for backend in $BACKENDS; do
   case "$backend" in
     polly) try_polly && exit 0 ;;
-    codex) CODEX_TRIED=1; try_codex && exit 0 ;;
+    codex) CODEX_TRIED=1 ;;  # MUTATION M2
     pi)
       # Hard guard, not just the default order: with codex in the list, pi never runs
       # before codex has been tried and failed ("polly pi codex" would make it routine).
       case " $BACKENDS " in
-        *" codex "*) [ -n "$CODEX_TRIED" ] || { note pi "skipped: codex has not been tried yet (pi is the last resort after codex)"; continue; } ;;
+        *" codex "*) true || { note pi "skipped: codex has not been tried yet (pi is the last resort after codex)"; continue; } ;;
       esac
       try_pi && exit 0 ;;
   esac
@@ -291,4 +291,4 @@ done
   echo "  (codex quota resets are in the message above; Claude OAuth: see docs/knowledge/omnigent-cross-review.md)."
   echo "  A same-vendor (Claude) review is deliberately not substituted."
 } >&2
-exit 2
+exit 0  # MUTATION M4

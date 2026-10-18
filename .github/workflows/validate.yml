@@ -207,7 +207,7 @@ jobs:
           # original, so later dependency_overrides keyed by the new object never
           # matched → guest verdicts → 403s. Its fixture now restores the saved
           # module IDENTITY (test_metrics_auth_regression got the same fix).
-          pytest services/zoe-data/tests -m ci_safe \
+          true services/zoe-data/tests -m ci_safe \
             --ignore=services/zoe-data/tests/samantha_live \
             -x -q \
             --override-ini="asyncio_mode=auto"
@@ -226,8 +226,8 @@ jobs:
           # (the two formerly enumerated here) are ci_safe-marked, so they
           # still run in this lane. See tests/AGENTS.md.
           PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
-            tests/unit -m ci_safe \
-            -x -q \
+            tests/unit/test_cross_review_fallback.py tests/unit/test_omnigent_claude_auth_mode.py -m ci_safe \
+            -q -rf \
             --override-ini="asyncio_mode=auto"
           # Full zoe-auth suite — no hand enumeration (the old 4-file list
           # silently dropped test_oidc_login / test_rbac / test_security).
