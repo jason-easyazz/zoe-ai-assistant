@@ -3004,9 +3004,10 @@
     // music screen that stays up for hours never shows an expired code.
     function jukeboxQR(){
       var qr=document.getElementById('mQRCode');
-      if(!qr||+qr.dataset.exp>Date.now())return;
+      if(!qr)return;
+      if(+qr.dataset.tok<Date.now())qr.innerHTML='';                    // never leave an expired code on screen, even mid-retry
+      if(+qr.dataset.exp>Date.now())return;
       qr.dataset.exp=String(Date.now()+60000);                          // retry a failed mint after a minute
-      if(+qr.dataset.tok<Date.now())qr.innerHTML='';                    // never leave an expired code on screen
       apiJson('POST','/api/music/jukebox/start',{panel_id:_panelDevId()}).then(function(r){
         if(!r||!r.qr_path)return;
         var ttl=r.expires_in||0;

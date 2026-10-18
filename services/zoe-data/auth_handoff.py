@@ -32,6 +32,7 @@ import base64
 import hashlib
 import hmac
 import importlib
+import ipaddress
 import json
 import logging
 import os
@@ -176,21 +177,49 @@ def phone_base_url(request: Any) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def lan_base_url(request: Any) -> Optional[str]:
-    """The LAN origin a phone on the same Wi-Fi will open, taken ONLY from the host the panel itself loaded the page from.
+_LAN_NAME_SUFFIXES = (".local", ".lan", ".home.arpa", ".internal", ".localdomain")
 
-    Unlike ``phone_base_url`` it never reads ``ZOE_PUBLIC_URL``, and it returns ``None`` for a request that crossed the Cloudflare
-    tunnel (its Host is the tunnel's name, not the LAN's): a QR that grants a capability must not encode a public origin, so
-    there is no configuration or request shape that makes this return one. The caller refuses on ``None``."""
+
+def _is_lan_host(hostport: str) -> bool:
+    """A private / loopback / link-local IP literal, a dotless name, a ``.local``-style name, or a name the operator listed in
+    ``ZOE_LAN_HOSTS`` (comma list, for a LAN host whose name looks public). Anything else - a public hostname, a public IP - is
+    not the LAN, whoever put it in the ``Host`` header."""
+    from urllib.parse import urlsplit
+
+    try:
+        host = (urlsplit("//" + hostport.strip()).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
+    except ValueError:
+        pass
+    extra = {h.strip().lower().rstrip(".") for h in os.environ.get("ZOE_LAN_HOSTS", "").split(",") if h.strip()}
+    return "." not in host or host.endswith(_LAN_NAME_SUFFIXES) or host in extra
+
+
+def lan_base_url(request: Any) -> Optional[str]:
+    """The LAN origin a phone on the same Wi-Fi will open, taken ONLY from the ``Host`` the panel itself loaded the page from.
+
+    Unlike ``phone_base_url`` it never reads ``ZOE_PUBLIC_URL`` or the client-suppliable ``X-Forwarded-Host``, and it returns
+    ``None`` unless that host IS a LAN host (``_is_lan_host``) and the request did not cross the Cloudflare tunnel (whose Host is the
+    tunnel's name): a QR that grants a capability must not encode a public origin, so no configuration or request shape - a forged
+    ``Host``, a non-Cloudflare tunnel that preserves the public name - makes this return one. The caller refuses on ``None``."""
     import panel_kiosk_credential
 
     if panel_kiosk_credential.via_public_tunnel(request):
         return None
-    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").strip()
-    scheme = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").strip()
-    if host:
-        return f"{scheme}://{host}".rstrip("/")
-    return str(request.base_url).rstrip("/")
+    host = (request.headers.get("host") or "").strip()
+    scheme = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").strip().lower()
+    if not host:
+        base = str(request.base_url).rstrip("/")
+        scheme, _, host = base.partition("://")
+    if scheme not in ("http", "https") or not _is_lan_host(host):
+        return None
+    return f"{scheme}://{host}".rstrip("/")
 
 
 def _view(row: Any) -> dict[str, Any]:

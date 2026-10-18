@@ -240,6 +240,43 @@ def test_a_tunnelled_request_mints_nothing_and_renders_nothing(monkeypatch, enco
     assert encoded == []
 
 
+@pytest.mark.parametrize("host,ok", [
+    ("192.168.1.218", True), ("192.168.1.218:8443", True), ("10.0.0.7", True), ("172.20.1.5", True), ("127.0.0.1:8000", True),
+    ("[fd00::1]:443", True), ("zoe.local", True), ("zoe.home.arpa", True), ("zoe", True), ("localhost:8080", True),
+    ("zoe.the411.life", False), ("tunnel.example.test", False), ("evil.example.com:443", False), ("zoe.local.evil.com", False),
+    ("8.8.8.8", False), ("100.64.0.9", False), ("[2606:4700::1111]", False), ("", False), ("@evil.com", False),
+])
+def test_only_a_lan_host_is_ever_an_origin(host, ok, monkeypatch):
+    monkeypatch.delenv("ZOE_LAN_HOSTS", raising=False)
+    assert auth_handoff._is_lan_host(host) is ok, host
+
+
+def test_a_lan_host_with_a_public_looking_name_is_an_explicit_operator_choice(monkeypatch):
+    assert auth_handoff._is_lan_host("zoe.the411.life") is False
+    monkeypatch.setenv("ZOE_LAN_HOSTS", "zoe.the411.life, other.example")
+    assert auth_handoff._is_lan_host("zoe.the411.life:443") is True
+
+
+def test_a_forged_public_host_mints_nothing_and_renders_nothing_even_without_cloudflare_headers(encoded):
+    """Cross-review finding: a non-Cloudflare tunnel (or a caller) can put a public name in Host; that must never be an origin."""
+    c = _client(PROXY)
+    r = c.post("/api/music/jukebox/start", json={"panel_id": "kitchen-panel"},
+               headers={"X-Real-IP": PANEL_IP, "Host": "zoe.the411.life"})
+    assert r.status_code == 403
+    ok = c.post("/api/music/jukebox/start", json={"panel_id": "kitchen-panel"}, headers={"X-Real-IP": PANEL_IP})
+    assert ok.status_code == 200  # control: the LAN host works
+    assert c.get(ok.json()["qr_path"], headers={"Host": "tunnel.example.test"}).status_code == 404
+    assert encoded == []
+
+
+def test_x_forwarded_host_is_not_an_input(encoded):
+    c = _client(PROXY)
+    path = c.post("/api/music/jukebox/start", json={"panel_id": "kitchen-panel"},
+                  headers={"X-Real-IP": PANEL_IP}).json()["qr_path"]
+    assert c.get(path, headers={"X-Forwarded-Host": "zoe.the411.life"}).status_code == 200
+    assert encoded[0].startswith(f"http://{LAN_HOST}/jukebox.html#t="), encoded
+
+
 def test_the_jukebox_qr_route_cannot_reach_the_public_url_helper():
     """Structural pin: neither jukebox handler may call ``phone_base_url`` (it reads ZOE_PUBLIC_URL)."""
     import inspect

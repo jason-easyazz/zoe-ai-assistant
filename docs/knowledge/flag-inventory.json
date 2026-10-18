@@ -2732,6 +2732,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LAN_HOSTS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth_handoff.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LATENCY_BASELINE": {
         "defaults": [
           "dynamic"

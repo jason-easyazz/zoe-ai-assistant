@@ -23,7 +23,7 @@ HOME = Path(__file__).resolve().parents[2] / "services" / "zoe-ui" / "dist" / "t
 HARNESS = r"""
 const src = process.argv[1];
 let now = 1000000, calls = 0, mode = 'ok', ttl = 7200;
-const el = { dataset: {}, innerHTML: '', kids: [], appendChild(c) { this.kids.push(c); } };
+const el = { dataset: {}, innerHTML: '', kids: [], appendChild(c) { this.kids.push(c); this.innerHTML = '<img src="' + c.src + '">'; } };
 const document = { getElementById: (id) => (id === 'mQRCode' ? el : null), createElement: () => ({}) };
 const Date_ = { now: () => now };
 const _panelDevId = () => 'kitchen';
@@ -44,7 +44,11 @@ const tick = async (s) => { now += s * 1000; jukeboxQR(); await new Promise((r) 
   await tick(7200 - 500 - 300 + 1);                        // 5 min before expiry: re-mint
   out.remint = { calls, src: el.kids[el.kids.length - 1].src };
   mode = 'fail'; ttl = 7200;
-  await tick(7200 + 1);                                    // the token is now expired and the mint keeps failing
+  await tick(6900); await tick(270);                       // two failed re-mints; the retry deadline now sits PAST the token's expiry
+  out.beforeExpiry = { innerHTML: el.innerHTML };          // (token still valid here: the old code is still on screen)
+  await tick(40);                                          // token expired, retry deadline not reached: must already be blank
+  out.midRetry = { innerHTML: el.innerHTML };
+  await tick(7200 + 1);
   out.expired = { calls, innerHTML: el.innerHTML };
   mode = 'ok';
   await tick(61);
@@ -81,16 +85,28 @@ def test_the_qr_is_re_minted_before_it_expires_and_never_left_expired():
     assert out["first"]["calls"] == 1 and out["first"]["kids"] == 1                  # minted on build
     assert out["during"]["calls"] == 1                                               # not on every 5 s poll
     assert out["remint"]["calls"] == 2 and out["remint"]["src"].endswith("/h2")      # re-minted ahead of the 2 h expiry
+    assert out["beforeExpiry"]["innerHTML"].startswith("<img")                       # control: a valid code stays up while failing
+    assert out["midRetry"]["innerHTML"] == ""                                        # expired between retries: blank, not a dead code
     assert out["expired"]["calls"] >= 3 and out["expired"]["innerHTML"] == ""        # mint failing past expiry: no stale code shown
-    assert out["recovered"]["src"].endswith(f"/h{out['recovered']['calls']}")        # and it comes back when the server does
+    assert out["recovered"]["innerHTML"].startswith("<img") and out["recovered"]["src"].endswith(f"/h{out['recovered']['calls']}")        # and it comes back when the server does
 
 
 def test_negative_control_the_old_once_per_build_behaviour_fails_the_same_harness():
     """The pre-fix block ran once per music-card build and had no clock: strip the poll and the harness must notice."""
     src = _function_source()
-    stale = src.replace("if(!qr||+qr.dataset.exp>Date.now())return;", "if(!qr||qr.dataset.exp)return;")
+    stale = src.replace("if(+qr.dataset.exp>Date.now())return;", "if(qr.dataset.exp)return;")
     assert stale != src
     assert _run(stale)["remint"]["calls"] == 1, "the control must show the old behaviour (never re-mints)"
+
+
+def test_negative_control_checking_the_retry_deadline_before_expiry_leaves_a_dead_code_up():
+    """Cross-review finding: with the retry throttle first, a code that expires between two failed re-mints stays on screen."""
+    src = _function_source()
+    expiry = "if(+qr.dataset.tok<Date.now())qr.innerHTML='';"
+    throttle = "if(+qr.dataset.exp>Date.now())return;"
+    assert expiry in src and throttle in src and src.index(expiry) < src.index(throttle)
+    swapped = src.replace(expiry, "").replace(throttle, throttle + expiry)
+    assert _run(swapped)["midRetry"]["innerHTML"].startswith("<img"), "the control must show the dead code left up"
 
 
 def test_the_music_poll_and_the_build_both_call_it():
