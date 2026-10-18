@@ -1039,3 +1039,34 @@ async def test_journal_queries_run_against_text_created_at_on_postgres():
         assert streak["current_streak"] == 2
     finally:
         await conn.close()
+
+
+# --------------------------------------------------------------------------
+# A3 (2026-10-19): intent_router's in-process tool path against the REAL handle_tool (cross-review, slice 1): the
+# router's own tests use a stand-in module, so this pins the real return shape (a JSON string) and that the acting user
+# - not family-admin - is the actor the tool's SQL runs as.
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_intent_router_in_process_tools_run_the_real_handle_tool_as_the_acting_user(monkeypatch):
+    import intent_router
+
+    db = _RoutingDb({
+        "SELECT role FROM users": [{"role": "member"}],
+        "FROM transactions": [{"type": "expense", "total": 12.5}],
+    })
+
+    @asynccontextmanager
+    async def fake_db_ctx():
+        yield db
+
+    monkeypatch.setattr(mcp_server, "_pg_get_db", fake_db_ctx)
+    monkeypatch.setattr(mcp_server, "_MCP_STRICT_USER_ID", True)
+
+    prompts = await intent_router.execute_intent(intent_router.Intent("journal_prompt", {}), "member-a3")
+    assert prompts and prompts.startswith("Here are some journaling prompts")
+
+    summary = await intent_router.execute_intent(
+        intent_router.Intent("transaction_summary", {"period": "week"}), "member-a3")
+    assert summary and "Total spent: $12.50" in summary
+    sql, params = next(call for call in db.calls if "FROM transactions" in call[0])
+    assert params[0] == "member-a3" and "family-admin" not in params
