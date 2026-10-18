@@ -663,7 +663,7 @@ candidates whose status is `approved` or `edited`, re-checked inside the owner's
 | calendar_event | `calendar_service.create_event_record`, `visibility='personal'` unless the owner chose otherwise | `metadata` JSON: `{"source":"pendant","day":..,"recording_ids":[..],"review_id":..,"approved_by":<owner>,"approved_at":..}` |
 | list_item | `list_service.add_item_to_list` (the existing dedup window) | the candidate row (below); `list_items` has no provenance column, and adding one is not needed |
 | reminder | `reminder_service.create_reminder_record` (the owner as `user`) | the candidate row |
-| follow_up | a reminder with no time, or an open loop (owner decision D5) | the candidate row |
+| follow_up | an open loop (`open_loops`, `context='pendant:<candidate>'`; owner decision D5, 2026-10-18: no alarm, never raised; `docs/knowledge/panel-review-cards.md`) | the candidate row |
 | person_memory | `MemoryService.ingest(user_id=owner, origin="omi_review", source="pendant", entity_id=<owner's people row>, ...)`, **ingest only, never `review(edit)`/supersede** | memory columns: `origin`, `turn_ref="omi_segment:<id>"`, the day; class `user_confirmed` (the approval) |
 
 - **What the apply module does around the raw write calls.** `create_event_record` does not notify, broadcast or touch
@@ -821,7 +821,7 @@ omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_con
 | `ZOE_OMI_TAG_YOU_MIN` / `_OTHER_MAX` | 0.309 / 0.15 | thresholds (per channel suffix `_PANEL` for the fallback) |
 | `ZOE_OMI_TAG_WINDOW_S` / `_HOP_S` | 2.0 / 1.0 | windowing |
 | `ZOE_OMI_DAY_REVIEW` | off | `shadow`: analyse and store candidates, shown on the desktop Pendant tab only, with no mention, no raise and no voice. `on`: the raise, the pull, the dialogue and the cards. |
-| `ZOE_OMI_DAY_REVIEW_LANE` | `4b` | `4b` / `12b` / `both` (12B only in the window, after the existing jobs) |
+| `ZOE_OMI_DAY_REVIEW_LANE` | `night` | `night` (the 12B night window, last; owner decision 2026-10-18) / `day` (the idle 4B, opt-in) / `both` |
 | `ZOE_OMI_DAY_REVIEW_IDLE_S` / `_MAX_CALLS` | 600 / 8 | lane E gate and budget |
 | `ZOE_OMI_REVIEW_UNTAGGED` | on (in shadow) | analyse untagged days in the reduced form of §5.2 (D4) |
 | `ZOE_OMI_CANDIDATE_RETENTION_DAYS` | 14 | candidate text retention after close |
@@ -947,7 +947,7 @@ against `~/.zoe-voice-samples` per AGENTS.md.
    default)?
 3. **D3 Lane**: 4B evening (recommended) or 12B night, or both. The night window is already full.
 4. **D4 Untagged days**: analyse in the reduced form (recommended) or wait for pendant enrolment?
-5. **D5 Follow-ups**: a reminder with no time, or an open loop?
+5. **D5 Follow-ups**: DECIDED 2026-10-18 - an open loop (no alarm, nothing proactive), reviewed on the panel.
 6. **D6 Forget scope**: does "forget Sam" delete approved calendar events and list items naming Sam
    (recommendation: no, they are the owner's)?
 7. **D7 Children**: is every admin the implicit curator for every child, or is an explicit grant required?

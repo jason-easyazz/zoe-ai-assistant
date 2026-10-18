@@ -44,7 +44,7 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
         async with db.execute(
             """SELECT loop_text, follow_up_hint, emotional_weight, follow_up_after, id
                FROM open_loops
-               WHERE user_id=? AND resolved = false
+               WHERE user_id=? AND resolved = false AND COALESCE(context, '') NOT LIKE 'pendant:%'
                  AND (follow_up_after IS NULL OR follow_up_after <= CURRENT_TIMESTAMP + INTERVAL '1 day')
                ORDER BY emotional_weight DESC, created_at ASC
                LIMIT 3""",
