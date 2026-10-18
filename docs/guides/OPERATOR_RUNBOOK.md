@@ -91,9 +91,12 @@ Full env matrix lives in `services/zoe-data/.env.example` and `assistant/.env`.
    curl -s -X POST https://zoe.local/api/panels/zoe-touch-pi/token \
      -H "X-Session-ID: <admin-session>" \
      -H "Content-Type: application/json" \
-     -d '{"name":"voice-daemon","role":"voice-daemon","scopes":["voice"]}'
+     -d '{"name":"voice-daemon","role":"voice-daemon"}'
    ```
-   The response includes `"token": "..."` — **copy it now, it is never shown again**.
+   The response includes `"token": "..."` — **copy it now, it is never shown again** — and its `expires_at`
+   (`ZOE_DEVICE_TOKEN_TTL_DAYS`, default 365 days; the holder can push it forward with
+   `POST /api/panels/device-token/renew` + `X-Device-Token`). An admin `role` and a `scopes` field are refused (400):
+   a device token is the panel, never an admin, and scopes were never enforced.
 
 3. On the Pi, set `DEVICE_TOKEN=<token>` in `~/.zoe-voice/.env.voice` and restart:
    ```bash
