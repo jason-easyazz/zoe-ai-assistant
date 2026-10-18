@@ -81,7 +81,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(music_service, "provider_setup_form", fake_form)
     monkeypatch.setattr(music_service, "save_provider", fake_save)
     monkeypatch.setattr(setup_qr, "render_svg", lambda url: b"<svg/>")  # segno not in the slim venv
-    monkeypatch.delenv("ZOE_TELEGRAM_BOT_TOKEN", raising=False)
+    for var in ("ZOE_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "ZOE_INTERNAL_TOKEN", "ZOE_TELEGRAM_NOTIFY_URL"):
+        monkeypatch.delenv(var, raising=False)
     app = FastAPI()
     app.include_router(handoff_router.router)
     c = TestClient(app)

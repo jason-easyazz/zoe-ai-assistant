@@ -52,6 +52,11 @@
   'use strict';
   var out=document.getElementById('out'),q=document.getElementById('q'),np=document.getElementById('np');
   var toastEl=document.getElementById('toast'),toastT=null;
+  // The panel's QR carries a short-lived play/queue-only token in the #fragment (never
+  // sent to a server log); keep it for this tab and send it as X-Jukebox-Token.
+  var jt='';try{var m=/(?:^|[#&])t=([^&]+)/.exec(location.hash||'');
+    if(m){jt=decodeURIComponent(m[1]);sessionStorage.setItem('zoe_jukebox_token',jt);history.replaceState(null,'',location.pathname);}
+    else jt=sessionStorage.getItem('zoe_jukebox_token')||'';}catch(e){}
   function esc(s){var d=document.createElement('div');d.textContent=String(s==null?'':s);return d.innerHTML;}
   function toast(t){toastEl.textContent=t;toastEl.classList.add('on');clearTimeout(toastT);toastT=setTimeout(function(){toastEl.classList.remove('on');},2400);}
   function loadNP(){fetch('/api/music/now-playing').then(function(r){return r.json();}).then(function(d){
@@ -104,8 +109,8 @@
     if(!uri)return;
     var opt=btn.getAttribute('data-opt')==='play'?'replace':'add';
     btn.disabled=true;
-    fetch('/api/music/play_media',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uri:uri,option:opt})})
-      .then(function(res){return res.json();}).then(function(d){
+    fetch('/api/music/play_media',{method:'POST',headers:{'Content-Type':'application/json','X-Jukebox-Token':jt},body:JSON.stringify({uri:uri,option:opt})})
+      .then(function(res){if(res.status===401||res.status===403)return {reason:'scan the code on the panel again'};return res.json();}).then(function(d){
         btn.disabled=false;
         if(d&&d.ok){toast(opt==='add'?'Added to the queue':'Playing now');setTimeout(loadNP,1200);}
         else toast('Couldn’t do that — '+((d&&d.reason)||'try again'));
