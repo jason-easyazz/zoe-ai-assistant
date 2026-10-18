@@ -1732,6 +1732,10 @@ async def _context_enhance(message: str, portrait: str, user_id: str) -> str:
 
 async def _ha_control(entity_id: str, action: str, data: dict | None = None) -> dict:
     """Call /devices/control on the HA bridge."""
+    import panel_principal
+
+    if panel_principal.home_control_refused(f"agent ha_control {action}"):   # home control on a turn (2026-10-18)
+        return {"error": panel_principal.HOME_CONTROL_REFUSAL}
     body = {"entity_id": entity_id, "action": action, "data": data or {}}
     try:
         async with httpx.AsyncClient(timeout=_TOOL_TIMEOUT) as client:

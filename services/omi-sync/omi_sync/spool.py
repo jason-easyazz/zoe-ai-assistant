@@ -172,6 +172,21 @@ class Spool:
         with self._lock:
             return self._db.execute("DELETE FROM confirmed WHERE confirmed_at < ?", (older_than,)).rowcount
 
+    def compact_if_sparse(self, *, min_free_bytes: int = 16 * 1024 * 1024, min_free_ratio: float = 0.5) -> int:
+        """Give the disk back after a big drain (gap audit P2-2: the file was 252 MB with 99% of its pages free and never shrank, because
+        SQLite only reuses free pages). ``VACUUM`` rewrites the file without its free pages; no row changes, and a crash mid-VACUUM leaves
+        the original intact. Only runs when the free pages are both large and most of the file, so a busy spool is never churned.
+        Returns the bytes released (0 = nothing to do). Call between visits, never during one."""
+        with self._lock:
+            pages = self._db.execute("PRAGMA page_count").fetchone()[0]
+            free = self._db.execute("PRAGMA freelist_count").fetchone()[0]
+            size = self._db.execute("PRAGMA page_size").fetchone()[0]
+            if not pages or free * size < min_free_bytes or free / pages < min_free_ratio:
+                return 0
+            self._db.execute("VACUUM")
+            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return free * size
+
     def stats(self) -> dict:
         with self._lock:
             n = self._db.execute("SELECT COUNT(*) FROM records").fetchone()[0]

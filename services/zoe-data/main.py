@@ -1230,6 +1230,13 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_omi_rec.run_retention_loop(), name="omi_retention")
     except Exception as _omi_exc:
         logger.warning("omi transcription loop not started (non-fatal): %s", _omi_exc)
+    try:
+        import omi_health as _omi_health
+        import omi_recordings as _omi_rec_h
+        if _omi_rec_h.enabled() and _omi_health.enabled():
+            asyncio.create_task(_omi_health.run_loop(), name="omi_health")
+    except Exception as _omi_h_exc:
+        logger.warning("omi health sweep not started (non-fatal): %s", _omi_h_exc)
     try:  # the pendant day review's DAYTIME fallback lane (flag-dark ZOE_OMI_DAY_REVIEW; the night window is the primary lane)
         import omi_day_review as _omi_dr
         if _omi_dr.enabled() and _omi_dr.lane() != "night":
@@ -3010,6 +3017,13 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     await websocket.accept()
     ws_session_id = session_id or f"ws-voice-{_uuid_mod.uuid4().hex[:8]}"
     user_id = await _resolve_ws_user(session_id)
+    # Home control (2026-10-18): any LAN client reaches this socket; driving the house needs a member or the panel.
+    import panel_principal as _pp_ws
+
+    await _pp_ws.record_turn_home_control(
+        websocket,
+        {"user_id": user_id, "role": "guest" if _pp_ws.is_guest_id(user_id) else "member"},
+    )
 
     await websocket.send_json({"type": "state", "state": "ambient"})
 

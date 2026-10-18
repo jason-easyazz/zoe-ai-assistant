@@ -697,6 +697,10 @@ class VoiceEraseIncomplete(RuntimeError):
     """A member's learned-voice rows could not be erased. Raised by ``forget_user`` so the erase never reads as complete."""
 
 
+class HealthEraseIncomplete(VoiceEraseIncomplete):
+    """A member's pendant-health rows could not be erased (anything but a missing table). Same fail-closed contract as the voice erase."""
+
+
 async def forget_user(user_id: str) -> int:
     """Right to be forgotten: every recording of the member is deleted (audio, transcript, times) AND their pendant registrations are
     unassigned (``omi_devices.forget_user``; the device row stays, unowned, so a restart cannot re-seed it to them). Takes the member's
@@ -707,6 +711,7 @@ async def forget_user(user_id: str) -> int:
         import omi_devices
         n = 0
         voice_failure: Optional[BaseException] = None
+        health_failure: Optional[BaseException] = None
         async with erase_gate.erasing(user_id):
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE user_id = ? AND status != 'deleted'", (user_id,)):
@@ -721,6 +726,12 @@ async def forget_user(user_id: str) -> int:
             except Exception as exc:  # noqa: BLE001
                 logger.error("OMI_VOICES_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
                 voice_failure = exc               # raised below, once the rest of the erase has run: success is never reported
+            try:        # the member's pendant health rows: only a MISSING table (0056 not applied) is "nothing to erase"; anything else is LOUD
+                import omi_health
+                await omi_health.forget_user(user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("OMI_HEALTH_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
+                health_failure = exc              # raised below, once the rest of the erase has run
             try:        # AFTER the recordings are committed: a registry that is not migrated yet (0047) must never block erasing audio
                 async with get_compat_db() as db:
                     await omi_devices.forget_user(db, user_id)
@@ -729,6 +740,8 @@ async def forget_user(user_id: str) -> int:
                 logger.warning("omi_devices: pendant registrations NOT unassigned for a forgotten user (%s)", type(exc).__name__)
         if voice_failure is not None:
             raise VoiceEraseIncomplete(type(voice_failure).__name__) from voice_failure
+        if health_failure is not None:
+            raise HealthEraseIncomplete(type(health_failure).__name__) from health_failure
         return n
     except VoiceEraseIncomplete:
         raise                                     # fail closed: the caller must retry the whole erase, not read this as done
@@ -917,6 +930,33 @@ async def transcription_status(user_id: str) -> dict:
     return {"backlog": await backlog_count(user_id), "transcribing": int(rows[0]["n"]) if rows else 0, **st}
 
 
+def _retention_passed(expires: Any, stamp: str) -> bool:
+    """True when a WAV's retention has run out at ``stamp`` (equal counts as out: ``requeue_held`` needs ``expires > now`` too). A
+    row with no expiry is not expired here - ``store_recording`` always sets one while a WAV is held, so NULL is a row with no audio
+    to age."""
+    return bool(expires) and str(expires) <= stamp
+
+
+async def _expire_unclaimed(db, r: Any, stamp: str) -> bool:
+    """A pending row whose retention passed before it was claimed (it expired between ``requeue_held`` and the claim, or waited out
+    the deferral gates, or ran out between the read and the claim): never transcribed and never left pending. The row is marked
+    ``failed`` by a GUARDED update (still pending AND the SQL itself says the retention has passed, so a live row is never touched),
+    then its WAV goes and the path is cleared (``requeue_held`` needs a WAV and an unexpired retention, so nothing brings it back)."""
+    cur = await db.execute("UPDATE omi_recordings SET status = 'failed' WHERE id = ? AND status = 'pending' "
+                           "AND audio_expires_at IS NOT NULL AND audio_expires_at <= ?", (r["id"], stamp))
+    await db.commit()
+    if not getattr(cur, "rowcount", 1):
+        return False                                     # not pending any more, or not expired after all: nothing marked
+    path = r["audio_path"]
+    _unlink(path)
+    if not path or not Path(path).exists():             # a WAV that would not unlink keeps its path: the hourly purge retries it
+        await db.execute("UPDATE omi_recordings SET audio_path = '', audio_bytes = 0, audio_expires_at = NULL, keep_audio = 0 "
+                         "WHERE id = ? AND status = 'failed'", (r["id"],))
+        await db.commit()
+    logger.info("OMI_EXPIRED_AT_CLAIM id=%s - retention passed before transcription; WAV removed, row marked failed", r["id"])
+    return True
+
+
 async def transcribe_pending(*, limit: int = 1, now: Optional[datetime] = None, pause_s: float = 0.4) -> int:
     """Claim and transcribe up to ``limit`` pending recordings (oldest first). Returns how many finished. Never raises."""
     done = 0
@@ -934,16 +974,29 @@ async def transcribe_pending(*, limit: int = 1, now: Optional[datetime] = None, 
                 await note_deferred(why)
                 break
             _clear_deferred()
+            stamp = _iso(now or _now())         # CLAIM time: a transcription takes minutes, so a later row may have expired meanwhile
             async with get_compat_db() as db:
-                rows = await _fetch(db, "SELECT id, user_id, audio_path FROM omi_recordings WHERE status = 'pending' AND attempts < ? "
-                                        "ORDER BY created_at LIMIT 1", (MAX_ATTEMPTS,))
-                if not rows:
+                r = None
+                while r is None:       # an expired row is marked and the next one taken: it never spends the pass's quota
+                    rows = await _fetch(db, "SELECT id, user_id, audio_path, audio_expires_at FROM omi_recordings WHERE status = 'pending' "
+                                            "AND attempts < ? ORDER BY created_at LIMIT 1", (MAX_ATTEMPTS,))
+                    if not rows:
+                        break
+                    stamp = _iso(now or _now())     # the clock AT this row's check and claim: the cleanup loop can run a while
+                    if _retention_passed(rows[0]["audio_expires_at"], stamp):
+                        if not await _expire_unclaimed(db, rows[0], stamp):
+                            break                      # could not mark it: end this pass rather than spin on the same row
+                        continue
+                    r = rows[0]
+                if r is None:
                     break
-                r = rows[0]
+                # the retention is re-checked IN the claim: a row that expires between the read above and here is not claimed
                 claim = await db.execute("UPDATE omi_recordings SET status = 'transcribing', claimed_at = ?, attempts = attempts + 1 "
-                                         "WHERE id = ? AND status = 'pending'", (stamp, r["id"]))
+                                         "WHERE id = ? AND status = 'pending' AND (audio_expires_at IS NULL OR audio_expires_at > ?)",
+                                         (stamp, r["id"], stamp))
                 await db.commit()
                 if not getattr(claim, "rowcount", 1):
+                    await _expire_unclaimed(db, r, stamp)       # lost the race with the clock: mark it now, not a pass later
                     continue
             if await _transcribe_one(r, seen, now, pause_s):
                 done += 1
