@@ -43,12 +43,4 @@ async def gate(request: Request) -> Response:
 async def session(request: Request, response: Response, user: dict = Depends(get_current_user)) -> dict:
     """Set the board cookies for an adult member."""
     await _decide(request, user)
-    minted = multica_ui_gate.mint(str((user or {}).get("user_id") or ""))
-    secure = str(request.headers.get("x-forwarded-proto") or request.url.scheme or "").lower() == "https"
-    for path in multica_ui_gate.COOKIE_PATHS:
-        response.set_cookie(
-            multica_ui_gate.COOKIE, minted["token"], max_age=minted["expires_in"], path=path,
-            secure=secure, httponly=True, samesite="strict",
-        )
-    response.headers["Cache-Control"] = "no-store"
-    return {"ok": True, "expires_in": minted["expires_in"]}
+    return multica_ui_gate.GATE.set_cookies(request, response, str((user or {}).get("user_id") or ""))

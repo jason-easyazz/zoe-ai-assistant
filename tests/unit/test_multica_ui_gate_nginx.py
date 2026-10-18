@@ -25,7 +25,9 @@ BOARD_HTML = (UI / "dist" / "board.html").read_text(encoding="utf-8")
 GATE = "/_zoe/multica-gate"
 BOARD_PREFIXES = ("^~ /multica/", "^~ /multica-api/", "^~ /_next/")
 # How a location can reach Multica: the host-gateway ports today, the container names after the loopback move (#2130).
-_MULTICA_UPSTREAM = re.compile(r"proxy_pass\s+https?://[^/\s;]*(?::3000|:8080|multica)", re.I)  # the HOST part only
+# The HOST part only (a scheme is optional: `proxy_pass $multica_web;` may carry it in the variable), so the gate's own
+# `proxy_pass http://...:8000/api/multica-ui/gate` is not mistaken for a route to Multica.
+_MULTICA_UPSTREAM = re.compile(r"proxy_pass\s+(?:https?://)?[^/\s;]*(?::3000|:8080|multica)", re.I)
 
 
 def _blocks(text: str) -> list[tuple[str, str]]:
@@ -104,14 +106,17 @@ def test_negative_control_the_pin_catches_a_conf_that_dropped_an_auth_request():
         assert _ungated_board_routes(broken) == [prefix]
 
 
-def test_negative_control_a_new_ungated_route_to_multica_is_caught():
-    added = LOCATIONS + "\nlocation ^~ /board-raw/ {\n    proxy_pass http://zoe-multica-web:3000/;\n}\n"
+@pytest.mark.parametrize("upstream", ["http://zoe-multica-web:3000/", "$multica_web", "http://$multica_backend",
+                                      "http://host.docker.internal:8080/"])
+def test_negative_control_a_new_ungated_route_to_multica_is_caught(upstream):
+    added = LOCATIONS + f"\nlocation ^~ /board-raw/ {{\n    proxy_pass {upstream};\n}}\n"
     assert _ungated_board_routes(added) == ["^~ /board-raw/"]
 
 
 def test_board_html_mints_the_cookie_and_only_follows_a_board_path():
     assert '<script src="/js/auth.js"></script>' in BOARD_HTML     # no session -> sign in, then back here
-    assert "fetch('/api/multica-ui/session', { method: 'POST'" in BOARD_HTML
+    assert "fetch('/api/multica-ui/session', {" in BOARD_HTML and "method: 'POST'" in BOARD_HTML
+    assert "'X-Session-ID': sid" in BOARD_HTML  # explicit, not left to auth.js's interceptor
     assert "startsWith('/multica/')" in BOARD_HTML and "u.origin !== origin" in BOARD_HTML
 
 

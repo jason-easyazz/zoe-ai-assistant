@@ -43,7 +43,11 @@
         const title = document.getElementById('title'), msg = document.getElementById('msg');
         let r;
         try {
-            r = await fetch('/api/multica-ui/session', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+            // Explicit, not left to auth.js's fetch interceptor: this call is the whole point of the page.
+            let sid = '';
+            try { sid = String((JSON.parse(localStorage.getItem('zoe_session') || '{}') || {}).session_id || ''); } catch (_) {}
+            r = await fetch('/api/multica-ui/session', {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid } });
         } catch (_) {
             title.textContent = 'Zoe is not answering';
             msg.textContent = 'Try again in a moment.';

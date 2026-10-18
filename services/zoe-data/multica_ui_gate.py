@@ -9,7 +9,8 @@ login (the dev code) is then a second step that only a signed-in adult household
 
 Zoe's member session is a bearer header kept in localStorage, which a browser cannot attach to a navigation, an asset load or a
 WebSocket handshake. So ``/board.html`` first calls ``POST /api/multica-ui/session`` with its normal credentials; that sets a
-signed, HttpOnly, SameSite=Strict cookie on each of the three paths and nothing else, and the gate accepts the cookie. The gate
+signed, HttpOnly, SameSite=Strict cookie on each of the three paths and nothing else (mechanics shared with the Music
+Assistant UI gate: ``path_gate.py``), and the gate accepts the cookie. The gate
 also accepts the credentials directly (an ``X-Session-ID``), so a caller that can set headers never needs the cookie.
 
 Who passes, minting or gating: a signed-in household member who is POSITIVELY an adult (``manner_block.eligible``: an
@@ -24,13 +25,11 @@ directly. None of them goes through nginx.
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 from typing import Any, Mapping, Optional
 
-import auth_handoff
 import manner_block
 import panel_principal
+import path_gate
 from typed_env import env_bool, env_int, env_str
 
 COOKIE = "zoe_multica_ui"
@@ -52,29 +51,22 @@ def ttl_s() -> int:
 
 
 def _key() -> Optional[str]:
-    """``ZOE_MULTICA_UI_SECRET`` as is, else a key derived from ``ZOE_INTERNAL_TOKEN`` for this purpose only - a Music
-    Assistant UI / jukebox / kiosk token can never verify here, nor this cookie there. With neither set, ``SignedTokens``
-    keeps a per-process random key, so cookies die with the process (fail safe)."""
-    own = env_str("ZOE_MULTICA_UI_SECRET")
-    if own:
-        return own
-    base = env_str("ZOE_INTERNAL_TOKEN")
-    return hmac.new(base.encode(), b"zoe-multica-ui-v1", hashlib.sha256).hexdigest() if base else None
+    """``ZOE_MULTICA_UI_SECRET`` as is, else a key derived from ``ZOE_INTERNAL_TOKEN`` for this purpose only
+    (``path_gate.purpose_key``)."""
+    return path_gate.purpose_key(env_str("ZOE_MULTICA_UI_SECRET"), b"zoe-multica-ui-v1")
 
 
-_TOKENS = auth_handoff.SignedTokens("ZOE_MULTICA_UI_SECRET", _key)
+GATE = path_gate.PathCookieGate(purpose=_PURPOSE, cookie=COOKIE, paths=COOKIE_PATHS, secret_env="ZOE_MULTICA_UI_SECRET",
+                                read_key=_key, ttl_s=ttl_s)
 
 
 def mint(who: str) -> dict[str, Any]:
-    ttl = ttl_s()
-    return {"token": _TOKENS.mint({"k": _PURPOSE, "who": str(who or "")[:64]}, ttl), "expires_in": ttl}
+    return GATE.mint(who)
 
 
 def cookie_valid(request: Any) -> bool:
     """The request carries an unexpired, correctly signed board cookie."""
-    raw = str((getattr(request, "cookies", None) or {}).get(COOKIE, "") or "").strip()
-    claims = _TOKENS.verify(raw) if raw else None
-    return bool(claims and claims.get("k") == _PURPOSE)
+    return GATE.cookie_valid(request)
 
 
 def is_signed_in(user: Mapping[str, Any] | None) -> bool:

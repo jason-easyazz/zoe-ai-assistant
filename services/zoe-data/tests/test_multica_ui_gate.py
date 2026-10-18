@@ -116,9 +116,13 @@ def test_adult_members_pass(sid):
     {"X-Device-Token": "not-a-real-token"},    # an unknown device token is a guest
     {"X-Device-Token": PANEL_TOKEN},           # the wall panel: a kiosk is whoever stands at it
     {"X-Real-IP": "192.0.2.50"},               # a forged panel address
+    {"X-Zoe-User-Id": "ada_uid"},              # forged internal-trust headers (nginx blanks them; zoe-data must not care)
+    {"X-Internal-Token": "anything", "X-Zoe-User-Id": "ada_uid"},
 ])
 def test_strangers_and_the_panel_are_401(headers):
     assert _gate(headers).status_code == 401
+    r = _client().post("/api/multica-ui/session", headers=headers)
+    assert r.status_code == 401 and not r.headers.get_list("set-cookie")
 
 
 @pytest.mark.parametrize("sid", ["sid-mia", "sid-kid", "sid-odd", "sid-ghost"])
@@ -134,10 +138,13 @@ def test_the_bound_panel_rollback_is_still_not_a_person(monkeypatch):
     assert multica_ui_gate.is_signed_in(principal) is False
 
 
-def test_the_family_admin_promotion_is_not_a_sign_in(monkeypatch):
-    """ZOE_UNAUTHENTICATED_ROLE=family-admin makes every header-less LAN caller an admin; the board does not trust it."""
-    monkeypatch.setattr(auth, "_UNAUTH_ROLE", "family-admin")
+@pytest.mark.parametrize("role", ["family-admin", "user", "admin", "member"])
+def test_no_unauthenticated_role_setting_is_a_sign_in(monkeypatch, role):
+    """ZOE_UNAUTHENTICATED_ROLE=family-admin makes every header-less LAN caller an admin; the board does not trust it, nor any
+    other value of that setting."""
+    monkeypatch.setattr(auth, "_UNAUTH_ROLE", role)
     assert _gate().status_code == 401
+    assert _client().post("/api/multica-ui/session").status_code == 401
 
 
 def test_zoe_auth_down_is_closed(monkeypatch):
