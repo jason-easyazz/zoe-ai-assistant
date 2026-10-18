@@ -232,11 +232,16 @@ def test_zoe_calls_use_one_session_once_main_installs_it(daemon, monkeypatch):
 
 
 def test_session_refuses_cookies(daemon, monkeypatch):
-    monkeypatch.delitem(sys.modules, "requests", raising=False)   # the daemon fixture's stub, not the real one
-    requests = pytest.importorskip("requests")
-    if not hasattr(requests, "Session"):
+    # The daemon fixture keeps an empty `requests` stub in sys.modules, and other tests may have left a
+    # half-linked package behind: import the real submodules by name instead of trusting attributes.
+    import importlib
+    monkeypatch.delitem(sys.modules, "requests", raising=False)
+    try:
+        sessions = importlib.import_module("requests.sessions")
+        adapters = importlib.import_module("requests.adapters")
+    except ImportError:
         pytest.skip("requests unavailable")
-    real = types.SimpleNamespace(Session=requests.Session, adapters=requests.adapters)
+    real = types.SimpleNamespace(Session=sessions.Session, adapters=adapters)
     orig = daemon.requests
     daemon.requests = real
     try:
