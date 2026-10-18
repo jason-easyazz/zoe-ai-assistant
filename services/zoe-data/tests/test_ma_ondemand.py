@@ -275,7 +275,7 @@ _MUTATING_ROUTES = {
     "music_dont_stop": {"enabled": True},
 }
 # POST routes that mutate ZOE state only (never MA) -- a reaped MA stays reaped.
-_LOCAL_ONLY_ROUTES = {"set_preferred_player"}
+_LOCAL_ONLY_ROUTES = {"set_preferred_player", "jukebox_start"}  # jukebox_start mints a QR token, never touches MA
 
 
 @pytest.fixture
