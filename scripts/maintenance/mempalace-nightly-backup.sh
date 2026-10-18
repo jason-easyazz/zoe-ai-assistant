@@ -29,6 +29,12 @@ fi
 # Integrity check on the live Chroma sqlite before we snapshot it.
 # Uses python3 because the sqlite3 CLI isn't installed on Jetson by default.
 CHROMA_DB="$MEMPALACE_DIR/chroma.sqlite3"
+# A palace directory WITHOUT its database is a damaged palace, not an empty one: archiving it would publish an
+# unrestorable tarball, and seven such nights would rotate away the last archive that held the database.
+if [[ ! -f "$CHROMA_DB" ]]; then
+  echo "mempalace-nightly-backup: $CHROMA_DB is missing - refusing to archive or rotate" >&2
+  exit 2
+fi
 if [[ -f "$CHROMA_DB" ]]; then
   integrity=$(python3 - "$CHROMA_DB" <<'PY' || true
 import sqlite3, sys

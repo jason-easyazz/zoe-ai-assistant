@@ -102,10 +102,11 @@ ZOE_TREE_EXCLUDES = (
     "compaction-salvage-*",    # transient emergency spill files
     "env", "secrets",          # the secrets tier owns these
 )
-# ssl/ and config/ are RECURSIVE: the relay's household CA and listener config live in ssl/relay/ (panel-anywhere R1).
-SECRET_GLOBS = (".env", ".env.*", "services/*/.env*", "labs/*/.env*", "modules/*/.env*", "ssl/**/*", "config/**/*",
+# ssl/ and config/ (SECRET_TREES, below) are walked RECURSIVELY as Sources: the relay's household CA lives in ssl/relay/
+SECRET_GLOBS = (".env", ".env.*", "services/*/.env*", "labs/*/.env*", "modules/*/.env*",
                 "services/zoe-data/data/vapid_keys.json")
 SECRET_EXCLUDES = ("*.example", "*.bak*", "*.orig", "*.sample")
+SECRET_TREES = ("ssl", "config")
 AGE_IDENTITY_MARKER = b"AGE-SECRET-KEY-"
 
 
@@ -161,7 +162,7 @@ def household_sources(p: Paths) -> list[Source]:
     ]
 
 
-def secret_files(p: Paths) -> list[tuple[str, Path]]:
+def _secret_glob_files(p: Paths) -> list[tuple[str, Path]]:
     out: dict[str, Path] = {}
     for g in SECRET_GLOBS:
         for f in sorted(p.checkout.glob(g)):
@@ -171,9 +172,20 @@ def secret_files(p: Paths) -> list[tuple[str, Path]]:
 
 
 def secret_sources(p: Paths) -> list[Source]:
-    srcs = [Source(label, f) for label, f in secret_files(p)]
+    """The directory trees are walked as Sources (not pre-enumerated with glob), so a subtree that cannot be
+    listed is REPORTED by walk_source and its last good ciphertext kept, never read as deleted."""
+    srcs = [Source(label, f) for label, f in _secret_glob_files(p)]
+    srcs += [Source(f"checkout/{t}", p.checkout / t, SECRET_EXCLUDES) for t in SECRET_TREES]
     srcs += [Source("zoe-env", p.home / ".zoe" / "env"), Source("zoe-secrets", p.home / ".zoe" / "secrets")]
     return srcs
+
+
+def secret_files(p: Paths) -> list[tuple[str, Path]]:
+    """Every checkout secret file the secrets tier ships (for ``check`` and the tests)."""
+    out = dict(_secret_glob_files(p))
+    for t in SECRET_TREES:
+        out.update(walk_source(Source(f"checkout/{t}", p.checkout / t, SECRET_EXCLUDES)))
+    return sorted(out.items())
 
 
 def artefact_paths(p: Paths) -> list[Path]:

@@ -333,6 +333,18 @@ def test_vapid_migration_dry_run_apply_and_conflict(tmp_path):
     assert stat.S_IMODE(new.stat().st_mode) == 0o600, "the surviving copy must be tightened before the legacy goes"
 
 
+def test_mempalace_refuses_a_palace_without_its_database(tmp_path):
+    import subprocess
+    pal = tmp_path / "palace"
+    (pal / "seg").mkdir(parents=True)
+    (pal / "seg" / "data_level0.bin").write_bytes(b"x")
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "MEMPALACE_DATA_DIR": str(pal),
+           "ZOE_BACKUP_DIR": str(tmp_path / "bk")}
+    r = subprocess.run(["bash", str(MAINT / "mempalace-nightly-backup.sh")], env=env, capture_output=True, text=True)
+    assert r.returncode == 2 and "missing" in r.stderr
+    assert not list((tmp_path / "bk" / "mempalace").glob("*")), "no archive may be published or rotated"
+
+
 def test_mempalace_archive_is_published_only_after_tar_succeeds():
     text = (MAINT / "mempalace-nightly-backup.sh").read_text()
     body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))

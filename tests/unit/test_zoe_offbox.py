@@ -148,6 +148,17 @@ def test_secret_files_are_recursive_under_ssl_and_config(tmp_path):
     assert {"checkout/ssl/relay/household-ca.key", "checkout/config/sub/creds.json"} <= got
 
 
+def test_secret_trees_are_walked_sources_so_unreadable_subtrees_are_reported(tmp_path):
+    """Codex review: ssl/ and config/ were pre-enumerated with glob, which skips an unreadable subtree silently -
+    mirror() then dropped its ciphertext as deleted. They are walked Sources now, with walk_source's reporting."""
+    p = ob.Paths(home=tmp_path / "h", checkout=tmp_path, config_dir=tmp_path / "c", state_dir=tmp_path / "s",
+                 stage_dir=tmp_path / "st")
+    tree(tmp_path, {"ssl/relay/ca.key": b"x", ".env": b"x"})
+    srcs = {s.label: s for s in ob.secret_sources(p)}
+    assert srcs["checkout/ssl"].path == tmp_path / "ssl" and srcs["checkout/ssl"].path.is_dir()
+    assert "checkout/.env" in srcs and not any(k.startswith("checkout/ssl/") for k in srcs)
+
+
 def test_a_failed_drill_does_not_advance_the_monthly_clock(tmp_path):
     p = ob.Paths(home=tmp_path, checkout=tmp_path, config_dir=tmp_path / "c", state_dir=tmp_path / "s",
                  stage_dir=tmp_path / "st")
