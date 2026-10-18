@@ -2019,8 +2019,8 @@ def answer_precheck(host, out="", rc=0):
     return calls
 
 
-def precheck_line(turns, omi=None):
-    return "NIGHT_PRECHECK " + json.dumps({"members_with_new_turns": turns, "omi_members": omi, "since": "x"}) + "\n"
+def precheck_line(turns, omi=None, struggle=0):
+    return "NIGHT_PRECHECK " + json.dumps({"members_with_new_turns": turns, "omi_members": omi, "struggle_pending": struggle, "since": "x"}) + "\n"
 
 
 def quiet_window(tmp_path, *, out=None, rc=0, argv=(), prior=True):
@@ -2055,6 +2055,55 @@ def test_a_noop_night_still_runs_dreaming_on_the_live_4b_like_a_refused_night(tm
     assert slept_or_loaded(host) == []
 
 
+def contended_quiet_window(tmp_path, *, clears_after=None):
+    """A quiet night whose box is busy (the training cycle holds its lock). ``clears_after`` = polls before it frees up (None = never)."""
+    w, host, cfg, calls = quiet_window(tmp_path)
+    host.busy.add("zoe-training.service")
+    polls = {"n": 0}
+    real_sleep = host.sleep
+
+    def sleep(s):
+        polls["n"] += 1
+        if clears_after is not None and polls["n"] >= clears_after:
+            host.busy.discard("zoe-training.service")
+        real_sleep(s)
+    host.sleep = sleep
+    return w, host, cfg, polls
+
+
+def test_a_contended_quiet_night_waits_for_a_clear_box_then_still_runs_dreaming_on_the_4b(tmp_path):
+    """Follow-up (#2107): a quiet night whose box was busy at the one moment it asked silently lost the night's dreaming (the timer that used to
+    run it is disabled). It now waits, bounded, and runs the fallback once the box is clear."""
+    w, host, cfg, polls = contended_quiet_window(tmp_path, clears_after=2)
+    assert w.run() == nw.EXIT_OK and w.outcome == "noop"
+    assert [(j["name"], j["backend"]) for j in w.jobs] == [("dreaming", "4B")] and polls["n"] >= 2
+    assert "noop_fallback_skipped" not in w.rec and slept_or_loaded(host) == [] and w.lock_fd is None
+
+
+def test_a_contended_quiet_night_that_never_clears_logs_the_skip_explicitly_and_gives_up_in_bounded_time(tmp_path):
+    w, host, cfg, polls = contended_quiet_window(tmp_path, clears_after=None)
+    t0 = host.t
+    assert w.run() == nw.EXIT_OK and w.outcome == "noop"
+    assert w.jobs == [] and slept_or_loaded(host) == []
+    assert "zoe-training.service is running" in w.rec["noop_fallback_skipped"]
+    assert any(n.startswith("no 4B fallback jobs: zoe-training.service") for n in w.rec["notes"])
+    assert (host.t - t0) <= cfg.busy_wait_max_min * 60.0 + 5 * cfg.busy_poll_s, "bounded by the busy wait, never an open-ended hold"
+    saved = json.loads(next(p for p in w.report_paths if p.suffix == ".json").read_text())
+    assert saved["noop_fallback_skipped"] == w.rec["noop_fallback_skipped"] and saved["exit"] == 0
+
+
+def test_a_refused_night_still_gives_up_on_a_busy_box_at_once(tmp_path):
+    """Control arm: only a QUIET night waits. A refused one (already a degraded night) keeps the old immediate answer."""
+    w, host, cfg = make(tmp_path)
+    w.cfg.max_load_failures = 0
+    host.busy.add("zoe-training.service")
+    polls = {"n": 0}
+    real_sleep = host.sleep
+    host.sleep = lambda s: (polls.__setitem__("n", polls["n"] + 1), real_sleep(s))[1]
+    assert w.run() == nw.EXIT_REFUSED and w.jobs == [] and polls["n"] == 0
+    assert w.rec.get("noop_fallback_skipped") is None
+
+
 def test_any_member_with_a_new_turn_runs_the_window_as_before(tmp_path):
     w, host, cfg, _ = quiet_window(tmp_path, out=precheck_line(1, 0))
     assert w.run() == nw.EXIT_OK and w.outcome == "ok"
@@ -2064,6 +2113,26 @@ def test_any_member_with_a_new_turn_runs_the_window_as_before(tmp_path):
 def test_a_waiting_pendant_day_alone_runs_the_window(tmp_path):
     w, host, cfg, _ = quiet_window(tmp_path, out=precheck_line(0, 1))
     assert w.run() == nw.EXIT_OK and w.outcome == "ok" and any(c.startswith("systemd-run") for c in host.joined())
+
+
+def test_pending_proposal_maintenance_alone_runs_the_window(tmp_path):
+    """Follow-up (#2109): a quiet night skipped the struggle-proposal pass, so a proposal whose evidence had aged out (or one made from a
+    guest's struggles, which the member-turn check cannot see) waited for the next non-quiet night."""
+    w, host, cfg, calls = quiet_window(tmp_path, out=precheck_line(0, 0, 2))
+    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and any(c.startswith("systemd-run") for c in host.joined())
+    assert "--struggle" in calls[0] and w.rec["precheck"]["struggle_pending"] == 2
+    # control arm: nothing pending anywhere is still a quiet night
+    (tmp_path / "b").mkdir()
+    w2, host2, cfg2, calls2 = quiet_window(tmp_path / "b", out=precheck_line(0, 0, 0))
+    assert w2.run() == nw.EXIT_OK and w2.outcome == "noop" and "no proposal needs tending" in w2.rec["noop"]
+
+
+def test_the_proposal_check_is_only_asked_when_the_proposal_pass_is_a_job_and_must_be_answered(tmp_path):
+    w, host, cfg, calls = quiet_window(tmp_path, out=precheck_line(0, 0, None), argv=["--jobs", "digest,dreaming,night_mind,omi_day_review"])
+    assert w.run() == nw.EXIT_OK and w.outcome == "noop" and "--struggle" not in calls[0]
+    (tmp_path / "b").mkdir()
+    w2, host2, cfg2, calls2 = quiet_window(tmp_path / "b", out=precheck_line(0, 0, None))          # asked, not answered: fails OPEN
+    assert w2.run() == nw.EXIT_OK and w2.outcome == "ok" and any("no usable answer" in n for n in w2.rec["notes"])
 
 
 def test_the_pendant_check_is_only_asked_when_the_day_review_is_a_job(tmp_path):

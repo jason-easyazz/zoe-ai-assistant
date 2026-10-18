@@ -41,15 +41,30 @@ async def get_user_layout(user: dict = Depends(get_current_user)):
     return {"layout": None}
 
 
-@router.post("/api/user/layout")
-async def save_user_layout(user: dict = Depends(get_current_user)):
-    return {"status": "ok"}
+# There is no ``POST /api/user/layout``: the stub answered ``{"status": "ok"}`` and saved
+# nothing (fake success), and no page ever called it. A save that is not built is a 405.
 
 
 # ── /api/settings ─────────────────────────────────────────────────────────────
-# Minimal settings endpoints. Returns system preferences and feature flags.
-# The music widget uses homeassistant_url from here; other callers use the
-# settings dict. Full implementation would read from system_preferences table.
+# ``system_preferences`` plus ``homeassistant_url`` (the music widget's link, its only browser
+# caller). Security fix 2026-10-18: this returned EVERY row to an anonymous guest, incl. the
+# household's weather lat/lon and other members' ``intelligence_settings:<user_id>`` rows. Now a
+# non-member (guest, the panel) gets ``_PUBLIC_SETTING_KEYS`` only; a member gets the household
+# rows (no ``:``) and only their OWN ``<key>:<user_id>`` rows.
+_PUBLIC_SETTING_KEYS = frozenset({
+    "homeassistant_url",    # the music widget's link to HA (a LAN URL, already in the page)
+    "panel_idle_logout_s",  # how long the panel waits before signing out: panel behaviour, not data
+    "_status", "_error",    # the degraded-read markers, so every caller can tell "storage down" from "no settings"
+})
+
+
+def _visible_settings(settings: dict, user: dict) -> dict:
+    from panel_principal import is_member
+
+    if not is_member(user):
+        return {k: v for k, v in settings.items() if k in _PUBLIC_SETTING_KEYS}
+    own = str((user or {}).get("user_id") or "")
+    return {k: v for k, v in settings.items() if ":" not in k or k.split(":", 1)[1] == own}
 
 _INTELLIGENCE_SETTINGS_KEY = "intelligence_settings"
 _INTELLIGENCE_DEFAULTS = {
@@ -86,9 +101,9 @@ async def get_settings(user: dict = Depends(get_current_user), db=Depends(get_db
         logger.exception("Failed to load system settings")
         settings["_status"] = "degraded"
         settings["_error"] = "settings_storage_unavailable"
-        return _add_env_settings(settings)
+        return _visible_settings(_add_env_settings(settings), user)
     # Expose HA bridge URL for widgets that need it
-    return _add_env_settings(settings)
+    return _visible_settings(_add_env_settings(settings), user)
 
 
 @router.get("/api/settings/intelligence")

@@ -195,10 +195,20 @@ services:
   #
   # ── LiveKit WebRTC server (for remote "Her"-style voice via /voice?mode=livekit) ──────────────
   livekit:
-    image: livekit/livekit-server:latest
+    # PINNED (was :latest): the exact image the box runs — v1.9.3, multi-arch index digest
+    # read from `docker image inspect` (RepoDigests) on 2026-10-18. Bump both together.
+    image: livekit/livekit-server:v1.9.3@sha256:75484e317a90991f5e7a8edbc2eb1ee92f690e440c5b7d88a2713b5fa70f368a
     container_name: livekit
     restart: unless-stopped
     logging: *default-logging
+    # ON DEMAND, not dead: zoe-data `docker start`s it on the first /livekit-token and stops it
+    # after ZOE_LIVEKIT_IDLE_TIMEOUT_S (300 s) with nobody in the room (routers/voice_livekit.py).
+    # Memory cap: measured 18-19 MiB RSS idle (docker stats, 2026-10-18); the long-quoted
+    # "~560 MB" was never a measurement. 512m is ~27x idle for a room of a few audio tracks, and
+    # memswap = mem keeps it out of swap on the shared 15.6 GB box. Under-sized shows up as an
+    # OOM kill in `docker inspect livekit` (.State.OOMKilled) - raise it then, with that evidence.
+    mem_limit: 512m
+    memswap_limit: 512m
     command: --config /config.yaml
     environment:
     # The API key pair is NOT in the tracked config.yaml — it comes from the
