@@ -32,7 +32,7 @@ pytestmark = pytest.mark.ci_safe
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / "scripts" / "maintenance" / "cross_review_poll.py"
-_WRAPPER_PATH = _MODULE_PATH.parent / "cross_review.sh"
+_WRAPPER_PATH = _MODULE_PATH.parent / "cross_review_polly.sh"
 _CALLER_PATH = _REPO_ROOT / "services" / "zoe-data" / "pipeline_cross_review.py"
 
 
@@ -597,7 +597,7 @@ def test_exit_codes_match_the_documented_mapping_exactly():
 
     # The published table must agree with the code, verbatim.
     for doc in (
-        (_MODULE_PATH.parent / "cross_review.sh").read_text(),
+        (_MODULE_PATH.parent / "cross_review_polly.sh").read_text(),
         (_MODULE_PATH.parents[1] / "AGENTS.md").read_text(),
     ):
         for code, label in (
@@ -612,7 +612,7 @@ def test_exit_codes_match_the_documented_mapping_exactly():
 
 def test_wrapper_validates_the_registration_budget_env_var():
     """Bad input must hit this script's alarm, not an argparse traceback."""
-    sh = (_MODULE_PATH.parent / "cross_review.sh").read_text()
+    sh = (_MODULE_PATH.parent / "cross_review_polly.sh").read_text()
     assert "CROSS_REVIEW_REGISTER_TIMEOUT_S must be a positive integer" in sh
     assert 'REGISTER_TIMEOUT_S" -gt 0' in sh
 
@@ -632,7 +632,7 @@ def test_cli_wires_every_subcommand(tmp_path, capsys):
 
 def test_wrapper_no_longer_parses_any_body_inline():
     """Structural guard: the incident class was an inline `json.load` in bash."""
-    raw = (_MODULE_PATH.parent / "cross_review.sh").read_text()
+    raw = (_MODULE_PATH.parent / "cross_review_polly.sh").read_text()
     # Comments explain the incident and legitimately name both; check the CODE.
     code = "\n".join(l for l in raw.splitlines() if not l.lstrip().startswith("#"))
     assert "json.load" not in code, "response parsing belongs in cross_review_poll.py"
