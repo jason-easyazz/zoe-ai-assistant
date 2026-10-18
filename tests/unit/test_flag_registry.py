@@ -199,6 +199,50 @@ def test_control_two_readers_two_defaults_is_a_conflict_and_needs_an_ack(tmp_pat
     assert sorted(c["sites"]) == ["services/zoe-data/a.py", "services/zoe-data/b.py"]
 
 
+def test_control_an_acknowledgement_must_name_the_conflicting_files(tmp_path):
+    sites = {
+        "services/zoe-data/a.py": 'import os\nU = os.environ.get("ZOE_URLISH", "http://a")\n',
+        "services/zoe-data/b.py": 'import os\nU = os.environ.get("ZOE_URLISH")\n',  # unset vs a literal: a contradiction
+    }
+    unrelated = "    _f('ZOE_URLISH', 'str', 'http://a', divergent_ok={'services/zoe-data/zzz.py': 'some other file'}),"
+    c = _scan(_make_repo(tmp_path / "x", unrelated, **sites))["conflicts"]["ZOE_URLISH"]
+    assert c["acknowledged"] is False and c["unacknowledged_sites"] == ["services/zoe-data/b.py"]
+    named = "    _f('ZOE_URLISH', 'str', 'http://a', divergent_ok={'services/zoe-data/b.py': 'reads the caller env'}),"
+    c = _scan(_make_repo(tmp_path / "y", named, **sites))["conflicts"]["ZOE_URLISH"]
+    assert c["acknowledged"] is True and "unacknowledged_sites" not in c
+
+
+def test_control_int_and_float_wrappers_make_a_number_not_a_bool(tmp_path):
+    repo = _make_repo(
+        tmp_path,
+        "    _f('ZOE_ANCHOR', 'bool', False),",
+        **{"services/zoe-data/n.py": (
+            'import os\nHOUR = int(os.environ.get("ZOE_HOUR", "1"))\n'
+            'COST = float(os.environ.get("ZOE_COST", "0"))\n'
+            'ON = bool(int(os.environ.get("ZOE_ON", "0")))\n'
+            'ANCHOR = os.environ.get("ZOE_ANCHOR")\n')},
+    )
+    files = ["services/zoe-data/n.py"]
+    wraps = fi.numeric_wrapped_flags(repo, files)
+    assert wraps == {"ZOE_HOUR": {"int"}, "ZOE_COST": {"float"}}   # bool(int(..)) is a boolean read
+    fi.sync_registry(repo, fi.scan_repo(repo, files=files, registry={}), files)
+    reg = fi.load_registry(repo)
+    assert (reg["ZOE_HOUR"]["type"], reg["ZOE_HOUR"]["default"]) == ("int", 1)
+    assert (reg["ZOE_COST"]["type"], reg["ZOE_COST"]["default"]) == ("float", 0.0)
+    assert reg["ZOE_ON"]["type"] == "bool"
+
+
+def test_no_bool_declared_flag_is_read_as_a_number():
+    # A bool declaration of a number is invisible to the default comparison ('1' normalises to True and
+    # True == 1), so a wrong type here would let a real divergence through. Numeric reads must be int/float.
+    import subprocess
+
+    files = subprocess.run(["git", "-C", str(_REPO), "ls-files", "*.py"], capture_output=True, text=True, check=True).stdout.split()
+    wrong = sorted(f for f, kinds in fi.numeric_wrapped_flags(_REPO, files).items()
+                   if registry_mod.is_registered(f) and registry_mod.spec(f).type == "bool")
+    assert not wrong, f"registered as bool but read through int()/float(): {wrong}. Declare them int/float with the code default."
+
+
 def test_control_spelling_differences_and_or_defaults_are_not_conflicts(tmp_path):
     repo = _make_repo(
         tmp_path,

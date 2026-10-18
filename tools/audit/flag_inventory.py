@@ -569,7 +569,19 @@ def scan_repo(repo: Path, files: list[str] | None = None, registry: dict[str, di
             }
             if registry is not None:
                 spec = registry.get(flag)
-                entry["acknowledged"] = bool(spec and spec.get("divergent_ok"))
+                # Acknowledged = EVERY site that hard-codes a comparable default different from the declared one
+                # (an unset read included: unset vs a non-zero literal IS a contradiction) is named in the
+                # entry's divergent_ok. A non-empty divergent_ok that names some other file acknowledges nothing.
+                unack: list[str] = []
+                if spec:
+                    want = normalize_default(spec["default"])
+                    ack = spec.get("divergent_ok") or {}
+                    unack = [f for f, ds in sorted(files_map.items()) if f not in ack and any(
+                        effective_default(d) is not _SKIP and len(distinct_defaults([effective_default(d), want])) > 1
+                        for d in ds)]
+                entry["acknowledged"] = bool(spec) and not unack
+                if unack:
+                    entry["unacknowledged_sites"] = unack
             conflicts[flag] = entry
 
     # Divergences: a reader hard-codes a literal default that differs from the registry's declared
@@ -688,8 +700,51 @@ def _infer_spec(flag: str, info: dict, typed_funcs: dict[str, set[str]], doc_idx
             "note": "", "divergent_ok": {}}
 
 
+def numeric_wraps(tree: ast.AST) -> dict[str, set[str]]:
+    """flag → {"int" | "float"} for a ``ZOE_*`` name read inside ``int(...)`` / ``float(...)`` in this module.
+
+    ``int(os.environ.get("ZOE_X", "1"))`` reads a NUMBER whose '1' default must not be inferred as a bool
+    (``normalize_default`` turns '1' into True, and True == 1 makes a wrong ``bool`` declaration invisible to the
+    default comparison). ``bool(int(os.environ.get(...)))`` is a boolean read and is skipped.
+    """
+    parents: dict[ast.AST, ast.AST] = {}
+    for n in ast.walk(tree):
+        for c in ast.iter_child_nodes(n):
+            parents[c] = n
+    consts = _flag_constants(tree)
+    out: dict[str, set[str]] = {}
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("int", "float") and n.args):
+            continue
+        par = parents.get(n)
+        if isinstance(par, ast.Call) and isinstance(par.func, ast.Name) and par.func.id == "bool":
+            continue
+        for c in ast.walk(n.args[0]):
+            nm = c.value if isinstance(c, ast.Constant) and isinstance(c.value, str) else consts.get(getattr(c, "id", ""))
+            if nm and FLAG_RE.match(nm):
+                out.setdefault(nm, set()).add(n.func.id)
+    return out
+
+
+def numeric_wrapped_flags(repo: Path, files: list[str]) -> dict[str, set[str]]:
+    """``numeric_wraps`` over every prod/lab python file."""
+    out: dict[str, set[str]] = {}
+    for rel in sorted(files):
+        if _section(rel) is None or not rel.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse((repo / rel).read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError, OSError):
+            continue
+        for nm, kinds in numeric_wraps(tree).items():
+            out.setdefault(nm, set()).update(kinds)
+    return out
+
+
 def _typed_func_index(repo: Path, files: list[str]) -> dict[str, set[str]]:
-    """flag → set of typed accessor names used to read it (to infer a type)."""
+    """flag → set of typed accessor names used to read it (to infer a type).
+
+    An ``int(...)`` / ``float(...)`` wrapper counts as an ``env_int`` / ``env_float`` read."""
     out: dict[str, set[str]] = {}
     for rel in sorted(files):
         if _section(rel) is None or not rel.endswith(".py"):
@@ -707,6 +762,8 @@ def _typed_func_index(repo: Path, files: list[str]) -> dict[str, set[str]]:
                     nm = a.value if isinstance(a, ast.Constant) and isinstance(a.value, str) else consts.get(getattr(a, "id", ""))
                     if nm and FLAG_RE.match(nm):
                         out.setdefault(nm, set()).add(fn)
+        for nm, kinds in numeric_wraps(tree).items():
+            out.setdefault(nm, set()).update("env_" + k for k in kinds)
     return out
 
 

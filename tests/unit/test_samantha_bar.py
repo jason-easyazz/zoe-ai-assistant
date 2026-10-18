@@ -1906,3 +1906,13 @@ def test_prompt_size_column_summarises_the_packets_the_run_read(monkeypatch, tmp
     line_path = sb.record_trend(tmp_path / "t.jsonl", {"ts": "x"}, {"bound": True, "tree": "T"}, ps)
     row = json.loads(line_path.read_text())
     assert row["prompt_chars_p95"] == 1200 and row["prompt_packets"] == 2 and row["bound"] is True
+
+
+def test_prompt_size_p95_is_nearest_rank_not_the_next_order_statistic():
+    live = sb.Live("t", "", "dsn", False)
+    live.packet_chars = list(range(1, 21))                 # n=20: nearest-rank p95 is the 19th value, not the max
+    assert sb.prompt_size_summary(live)["chars_p95"] == 19
+    live.packet_chars = list(range(1, 101))
+    assert sb.prompt_size_summary(live)["chars_p95"] == 95
+    live.packet_chars = [7]
+    assert sb.prompt_size_summary(live)["chars_p95"] == 7

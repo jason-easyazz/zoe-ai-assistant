@@ -45,9 +45,11 @@ done
 
 # The night window: never run tests/evidence inside 01:50-04:55 local (the 12B and the dreaming jobs own the box).
 # Checked before EVERY step too: a step can wait up to 2 h for the shared lock and must not start inside the window.
+WIN_START_MIN=$((1 * 60 + 50))
+WIN_END_MIN=$((4 * 60 + 55))
 in_night_window() {
   local m=$((10#$(date +%H) * 60 + 10#$(date +%M)))
-  [ "$m" -ge $((1 * 60 + 50)) ] && [ "$m" -lt $((4 * 60 + 55)) ]
+  [ "$m" -ge "$WIN_START_MIN" ] && [ "$m" -lt "$WIN_END_MIN" ]
 }
 if [ "$DRY" -eq 0 ] && in_night_window; then
   echo "samantha_weekly: inside the night window (01:50-04:55) - not starting" >&2
@@ -91,7 +93,17 @@ for s in "${STEPS[@]}"; do
     break
   fi
   echo "samantha_weekly: === $s ==="
-  flock -E 3 -w 7200 "$LOCK" nice -n 5 python3 "$WORK/repo/$s" --require-bound --service-dir "$LIVE" ${extra[@]+"${extra[@]}"}
+  # The lock wait can span the start of the window, so the window is re-checked AFTER the lock is held, in the
+  # command flock runs (exit 4 = refused). `exec` keeps flock as the harness's parent, which is how the harness
+  # recognises it is already serialised by this wrapper's lock.
+  flock -E 3 -w 7200 "$LOCK" bash -c '
+    m=$((10#$(date +%H) * 60 + 10#$(date +%M)))
+    if [ "$m" -ge "$1" ] && [ "$m" -lt "$2" ]; then
+      echo "samantha_weekly: the night window opened while waiting for the lock - not starting" >&2
+      exit 4
+    fi
+    shift 2
+    exec nice -n 5 python3 "$@"' _ "$WIN_START_MIN" "$WIN_END_MIN" "$WORK/repo/$s" --require-bound --service-dir "$LIVE" ${extra[@]+"${extra[@]}"}
   rc=$?
   echo "samantha_weekly: $s exit $rc"
   [ "$rc" -gt "$worst" ] && worst=$rc

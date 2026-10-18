@@ -55,6 +55,10 @@ RAW_RECEIVER = re.compile(
     r"|(get_drawers_collection|leased_drawers|get_collection)\(.*\))$"
 )
 RAW_METHODS = frozenset({"upsert", "update", "delete", "add"})
+# A call that RETURNS a drawers collection: whatever name it is bound to inside a function
+# (`d = get_drawers_collection(..)`, `with leased_drawers() as d:`) is a raw handle there, so `d.upsert(...)`
+# is a writer under any alias.
+COLLECTION_FACTORY = re.compile(r"^(await )?(\w+\.)*(get_drawers_collection|leased_drawers|get_collection)\(")
 
 
 class _Walker(ast.NodeVisitor):
@@ -62,6 +66,27 @@ class _Walker(ast.NodeVisitor):
         self.stack: list[str] = []
         self.sites: dict[str, set[str]] = {}
         self.is_funnel = is_funnel
+        self.raw_aliases: set[tuple[str, str]] = set()  # (enclosing scope, bound name)
+
+    def _bind(self, target: ast.AST | None, value: ast.AST | None) -> None:
+        if isinstance(target, ast.Name) and value is not None and COLLECTION_FACTORY.match(ast.unparse(value)):
+            self.raw_aliases.add((".".join(self.stack), target.id))
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for t in node.targets:
+            self._bind(t, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._bind(node.target, node.value)
+        self.generic_visit(node)
+
+    def visit_With(self, node: ast.With) -> None:
+        for item in node.items:
+            self._bind(item.optional_vars, item.context_expr)
+        self.generic_visit(node)
+
+    visit_AsyncWith = visit_With
 
     def _scope(self, node) -> None:
         self.stack.append(node.name)
@@ -74,7 +99,7 @@ class _Walker(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute):
             attr, recv = node.func.attr, ast.unparse(node.func.value)
             kind = None
-            if attr in RAW_METHODS and RAW_RECEIVER.match(recv):
+            if attr in RAW_METHODS and (RAW_RECEIVER.match(recv) or (".".join(self.stack), recv) in self.raw_aliases):
                 kind = "raw_" + attr
             elif not self.is_funnel:  # inside memory_service.py the service API is the implementation, not a caller
                 if attr in UNIQUE_METHODS:

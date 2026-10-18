@@ -131,5 +131,36 @@ def test_control_test_files_are_not_writers(tmp_path):
     assert mwm.collect(repo, files) == {}
 
 
+def test_control_a_raw_write_through_any_alias_of_a_collection_factory_is_seen(tmp_path):
+    repo, files = _repo(
+        tmp_path,
+        **{"alias.py": "def f():\n    drawer = get_drawers_collection('p')\n    drawer.upsert(ids=[1])\n"
+                       "async def g():\n    async with leased_drawers() as d:\n        d.delete(ids=[1])\n"
+                       "def h(other, d):\n    other.upsert('not a collection')\n    d.delete('another scope, not bound here')\n"},
+    )
+    assert mwm.collect(repo, files)["services/zoe-data/alias.py"] == {"f": ["raw_upsert"], "g": ["raw_delete"]}
+
+
+# The methods of the REAL MemoryService that only read. Every other public method is a write and MUST be in the
+# scanner's name sets: a new writer added to the class turns this test red until it is classified.
+_READ_ONLY_METHODS = frozenset({
+    "load_for_prompt", "load_durable_for_hop", "load_recent_for_prompt", "search", "history", "list_by_status",
+    "get", "export_user", "collection_sizes_by_user", "index_health", "list_by_entity",
+})
+
+
+def test_every_public_memoryservice_method_is_classified_read_or_write():
+    import ast
+
+    tree = ast.parse((_REPO / mwm.FUNNEL).read_text(encoding="utf-8"))
+    cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "MemoryService")
+    public = {n.name for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and not n.name.startswith("_")}
+    writers = mwm.UNIQUE_METHODS | mwm.GENERIC_METHODS
+    unclassified = sorted(public - writers - _READ_ONLY_METHODS)
+    assert not unclassified, f"new MemoryService method(s) the writer map has not classified: {unclassified}"
+    assert not (writers - public), f"scanner names that are not MemoryService methods any more: {sorted(writers - public)}"
+    assert not (_READ_ONLY_METHODS - public), f"stale read-only entries: {sorted(_READ_ONLY_METHODS - public)}"
+
+
 def test_control_a_stale_note_is_reported(tmp_path):
     assert mwm.stale_notes({}, {"services/zoe-data/gone.py": "Used to write memory, no longer does."}) == ["services/zoe-data/gone.py"]

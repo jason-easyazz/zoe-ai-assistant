@@ -53,7 +53,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PANEL_ID` | `'zoe-touch-pi'` | `'post-merge-probe'`, `'zoe-touch-pi'` | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_SPEAKER_MODEL` | `'resemblyzer'` | `'resemblyzer'`, `unset` | `scripts/setup/zoe_enroll_flow.py`, `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_TIMEZONE` | `'Australia/Perth'` | `'Australia/Perth'`, `unset` | `services/zoe-data/identity_facts.py` |
-| `ZOE_URL` | `'https://zoe.local'` | `'http://127.0.0.1:8000'`, `'https://zoe.local'`, `unset` | `scripts/maintenance/zoe_latency_probe.py` |
+| `ZOE_URL` | `'https://zoe.local'` | `'http://127.0.0.1:8000'`, `'https://zoe.local'`, `unset` | `scripts/maintenance/zoe_latency_probe.py`, `scripts/setup/mac_panel/preflight.py` |
 
 ## Production flags
 
@@ -84,7 +84,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_AUTH_URL` | str | `'http://localhost:8002'` | - | `docs/reviews/issue-register-2026-07-07.md` | `'http://localhost:8002'` | no | yes | `services/zoe-auth/touch_panel/quick_auth.py`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/main.py`<br>`services/zoe-data/routers/auth.py`<br>`services/zoe-data/routers/panel_auth.py` |
 | `ZOE_AUTOPILOT_QUEUE_WAIT_S` | float | `1200.0` | - | - | `1200.0` | yes | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_AUTORESEARCH_RUN_ROOT` | str | `'data/autoresearch'` | - | - | `'data/autoresearch'` | no | NO | `services/zoe-data/routers/autoresearch.py` |
-| `ZOE_AUTO_APPROVE_THRESHOLD` | bool | `False` | - | `docs/research/failure-fed-proposals-2026-10-04.md` | `'0'` | no | NO | `services/zoe-data/evolution_notice.py` |
+| `ZOE_AUTO_APPROVE_THRESHOLD` | int | `0` | - | `docs/research/failure-fed-proposals-2026-10-04.md` | `'0'` | no | NO | `services/zoe-data/evolution_notice.py` |
 | `ZOE_BACKUP_DIR` | str | `''` | - | - | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
 | `ZOE_BARGE_MIN_MS` | int | `192` | - | `docs/knowledge/voice-pipeline.md` | `'192'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_BARGE_SPEECH_THRESHOLD` | float | `0.3` | - | `docs/knowledge/voice-pipeline.md` | `'0.30'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
@@ -136,7 +136,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_CHAT_URL` | str | `'http://localhost:8000'` | - | `docs/guides/OPERATOR_RUNBOOK.md` | `'http://localhost:8000'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CHEAP_PR_AGENT_API_URL` | str | `'https://openrouter.ai/api/v1/chat/completions'` | - | - | `'https://openrouter.ai/api/v1/chat/completions'` | no | NO | `scripts/maintenance/zoe_cheap_pr_agent.py` |
 | `ZOE_CHEAP_PR_AGENT_CMD` | str | `''` | - | `docs/architecture/zoe-flue-integration.md` | `-` | no | NO | `services/zoe-data/greploop_guard.py` |
-| `ZOE_CHEAP_PR_AGENT_ESTIMATED_COST_USD` | bool | `False` | - | - | `'0'` | no | NO | `services/zoe-data/greploop_guard.py` |
+| `ZOE_CHEAP_PR_AGENT_ESTIMATED_COST_USD` | float | `0.0` | - | - | `'0'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_CHEAP_PR_AGENT_MODEL` | str | `'deepseek/deepseek-chat-v3.1'` | - | - | `'cheap-pr-agent'`, `'deepseek/deepseek-chat-v3.1'` | no | NO | `scripts/maintenance/zoe_cheap_pr_agent.py`<br>`services/zoe-data/greploop_guard.py` |
 | `ZOE_CHEAP_PR_AGENT_URL` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_CLEAN_GOODBYE` | str | `'shadow'` | `off`, `shadow`, `enforce` | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `-` | yes | NO | `services/zoe-data/clean_goodbye.py` |
@@ -299,9 +299,9 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_KANBAN_CONVERGE_NOOP_IMPLEMENT` | bool | `True` | - | - | `'true'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_DEAD_WORKER_GRACE_S` | int | `180` | - | - | `'180'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `ZOE_KANBAN_ESCALATION_MAX_RUNTIME` | str | `'90m'` | - | - | `'90m'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
-| `ZOE_KANBAN_IMPLEMENT_POST_FOCUS_FOCUSED_TEST_READ_BUDGET` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
-| `ZOE_KANBAN_IMPLEMENT_POST_FOCUS_GREP_BUDGET` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
-| `ZOE_KANBAN_IMPLEMENT_POST_FOCUS_READ_BUDGET` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
+| `ZOE_KANBAN_IMPLEMENT_POST_FOCUS_FOCUSED_TEST_READ_BUDGET` | int | `4` | - | - | `dynamic` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
+| `ZOE_KANBAN_IMPLEMENT_POST_FOCUS_GREP_BUDGET` | int | `3` | - | - | `dynamic` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
+| `ZOE_KANBAN_IMPLEMENT_POST_FOCUS_READ_BUDGET` | int | `2` | - | - | `dynamic` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `ZOE_KANBAN_IMPLEMENT_POST_PATCH_FILE_READ_BUDGET` | int | `2` | - | - | `'2'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET` | int | `12` | - | - | `'12'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET` | int | `6` | - | - | `'6'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
@@ -412,10 +412,10 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MULTICA` | bool | `False` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES_FOR` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
-| `ZOE_MULTICA_AUTOPILOT_STALE_HOURS` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
+| `ZOE_MULTICA_AUTOPILOT_STALE_HOURS` | float | `2.0` | - | - | `dynamic` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES` | bool | `False` | - | - | `'false'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR` | str | `''` | - | - | `''` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
-| `ZOE_MULTICA_AUTOPIOT_STALE_HOURS` | int | `2` | - | - | `'2'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
+| `ZOE_MULTICA_AUTOPIOT_STALE_HOURS` | float | `2.0` | - | - | `'2'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_MULTICA_AUTO_ADMIT` | bool | `False` | - | `docs/architecture/multica-retirement-gates.md` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_BLOCKED_RESUME_BUDGET` | int | `4` | - | `docs/architecture/multica-retirement-gates.md` | `4` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_CROSS_REVIEW` | bool | `False` | - | `docs/research/failure-fed-proposals-2026-10-04.md` | `'false'` | no | NO | `services/zoe-data/pipeline_cross_review.py` |
@@ -528,7 +528,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PIPELINE_HARNESS_REVIEW_APPROVE` | bool | `True` | - | - | `'true'` | no | NO | `services/zoe-data/pipeline_store.py` |
 | `ZOE_PIPELINE_HARNESS_VERIFY_TESTS` | bool | `True` | - | - | `'true'` | no | NO | `services/zoe-data/pipeline_store.py` |
 | `ZOE_PIPELINE_STORE_PATH` | str | `''` | - | `docs/guides/ENGINEERING_HARNESS_LOOP.md` | `''` | no | NO | `scripts/maintenance/compact_pipeline_state.py`<br>`scripts/maintenance/engineering_harness_loop.py`<br>`services/zoe-data/pipeline_store.py` |
-| `ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT` | bool | `True` | - | - | `'1'` | no | NO | `services/zoe-data/pipeline_store.py` |
+| `ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT` | int | `1` | - | - | `'1'` | no | NO | `services/zoe-data/pipeline_store.py` |
 | `ZOE_PI_EXECUTOR_COMMAND` | str | `'pi'` | - | - | `'pi'` | no | NO | `services/zoe-data/pi_executor.py` |
 | `ZOE_PI_EXECUTOR_MODE` | str | `'text'` | - | - | `'text'` | no | NO | `services/zoe-data/pi_executor.py` |
 | `ZOE_PI_EXECUTOR_MODEL` | str | `'minimax/minimax-m3'` | - | - | `'minimax/minimax-m3'` | no | NO | `services/zoe-data/pi_executor.py` |
@@ -560,14 +560,14 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PROVENANCE_PERSIST` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/reply_ledger.py` |
 | `ZOE_PROVISION_CODE_TTL_S` | int | `300` | - | `docs/architecture/panel-anywhere.md` | `'300'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
 | `ZOE_PROVISION_PICKUP_GRACE_S` | int | `120` | - | `services/zoe-data/routers/AGENTS.md` | `'120'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
-| `ZOE_PR_GUARD_ACTIVE_GREPTILE_STALE_SECONDS` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/greploop_guard.py` |
+| `ZOE_PR_GUARD_ACTIVE_GREPTILE_STALE_SECONDS` | int | `1800` | - | - | `dynamic` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_AUTO_RESOLVE_THREADS` | bool | `False` | - | - | `'0'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_AUTO_UPDATE_BRANCH` | bool | `False` | - | - | `'0'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_CLEAN_MERGE_IGNORES_CONFIDENCE` | bool | `True` | - | - | `True` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_GREPTILE_WAIT_POLL_SECONDS` | int | `120` | - | - | `'120'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_GREPTILE_WAIT_TIMEOUT_SECONDS` | int | `1800` | - | - | `'1800'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_HEAD_STABILITY_SECONDS` | int | `90` | - | - | `'90'` | no | NO | `services/zoe-data/greploop_guard.py` |
-| `ZOE_PR_GUARD_MAX_ACTIVE_GREPTILE_REVIEWS` | bool | `True` | - | - | `'1'` | no | NO | `services/zoe-data/greploop_guard.py` |
+| `ZOE_PR_GUARD_MAX_ACTIVE_GREPTILE_REVIEWS` | int | `1` | - | - | `'1'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_MAX_COST_USD` | float | `0.25` | - | - | `'0.25'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_MAX_ITERATIONS` | int | `5` | - | - | `'5'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_MAX_OUTPUT_CHARS` | int | `12000` | - | - | `'12000'` | no | NO | `services/zoe-data/greploop_guard.py` |
@@ -622,10 +622,10 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_ROUTER_SCRATCH_PORT` | int | `11437` | - | `docs/knowledge/router-selftrain-loop.md` | `'11437'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_SELFTRAIN` | bool | `False` | - | `docs/knowledge/router-selftrain-loop.md` | `'off'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_ROUTER_SELFTRAIN_DOW` | str | `'sat'` | - | `docs/knowledge/router-selftrain-loop.md` | `'sat'` | no | NO | `services/zoe-data/main.py` |
-| `ZOE_ROUTER_SELFTRAIN_HOUR` | bool | `True` | - | `docs/knowledge/router-selftrain-loop.md` | `'1'` | no | NO | `services/zoe-data/main.py` |
+| `ZOE_ROUTER_SELFTRAIN_HOUR` | int | `1` | - | `docs/knowledge/router-selftrain-loop.md` | `'1'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_ROUTER_SELFTRAIN_TIMEOUT_S` | int | `28800` | - | `docs/knowledge/router-selftrain-loop.md` | `'28800'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_ROUTER_SHADOW_KEEP` | int | `4` | - | `services/zoe-data/AGENTS.md` | `4` | no | NO | `services/zoe-data/semantic_router.py` |
-| `ZOE_ROUTER_SHADOW_MAX_BYTES` | str | `''` | - | `services/zoe-data/AGENTS.md` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_SHADOW_MAX_BYTES` | int | `16777216` | - | `services/zoe-data/AGENTS.md` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SHADOW_TEXT` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `''` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SIDECAR_URL` | str | `'http://127.0.0.1:11436'` | - | `docs/knowledge/router-selftrain-loop.md` | `'http://127.0.0.1:11436'` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_THRESHOLD` | float | `0.62` | - | - | `'0.62'` | no | NO | `services/zoe-data/semantic_router.py` |
@@ -651,7 +651,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_SMART_TURN_ENABLED` | bool | `False` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SMART_TURN_MAX_CHECKS` | int | `2` | - | `docs/knowledge/voice-pipeline.md` | `'2'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SMART_TURN_MODEL` | str | `'/home/zoe/models/smart-turn-v3.2-cpu.onnx'` | - | `docs/knowledge/voice-pipeline.md` | `'/home/zoe/models/smart-turn-v3.2-cpu.onnx'` | no | NO | `services/zoe-data/voice_turn.py` |
-| `ZOE_SMART_TURN_THREADS` | bool | `True` | - | `docs/research/incomplete-turn-marker-2026-10-04.md` | `'1'` | no | NO | `services/zoe-data/voice_turn.py` |
+| `ZOE_SMART_TURN_THREADS` | int | `1` | - | `docs/research/incomplete-turn-marker-2026-10-04.md` | `'1'` | no | NO | `services/zoe-data/voice_turn.py` |
 | `ZOE_SMART_TURN_THRESHOLD` | float | `0.5` | - | `docs/knowledge/voice-pipeline.md` | `'0.5'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SPEAKER_ADAPT` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/speaker-resnet34-switch.md` | `'off'` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ADAPT_ALPHA` | float | `0.05` | - | - | `0.05` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
@@ -755,7 +755,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_VOICE_PROBE_TIMEOUT_S` | int | `900` | - | - | `'900'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_USER` | str | `'jason'` | - | - | `'jason'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_VAD_CHECK` | bool | `True` | - | `docs/knowledge/voice-pipeline.md` | `'1'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
-| `ZOE_VOICE_PROBE_VAD_CLIPS` | str | `''` | - | - | `dynamic` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
+| `ZOE_VOICE_PROBE_VAD_CLIPS` | int | `24` | - | - | `dynamic` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROFILE` | str | `'zoe_au_natural_v1'` | - | - | `'zoe_au_natural_v1'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_REPLAY_STT` | str | `'inprocess'` | - | `docs/knowledge/chroma-1-5-migration.md` | `'inprocess'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_RESULTS` | str | `''` | - | `docs/knowledge/voice-pipeline.md` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |

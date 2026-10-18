@@ -1540,11 +1540,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": false,
+          "default": 0,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/research/failure-fed-proposals-2026-10-04.md",
-          "type": "bool"
+          "type": "int"
         },
         "typed_env": false
       },
@@ -2551,11 +2551,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": false,
+          "default": 0.0,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
-          "type": "bool"
+          "type": "float"
         },
         "typed_env": false
       },
@@ -5751,11 +5751,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "",
+          "default": 4,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
-          "type": "str"
+          "type": "int"
         },
         "typed_env": false
       },
@@ -5770,11 +5770,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "",
+          "default": 3,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
-          "type": "str"
+          "type": "int"
         },
         "typed_env": false
       },
@@ -5789,11 +5789,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "",
+          "default": 2,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
-          "type": "str"
+          "type": "int"
         },
         "typed_env": false
       },
@@ -7941,11 +7941,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "",
+          "default": 2.0,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
-          "type": "str"
+          "type": "float"
         },
         "typed_env": false
       },
@@ -7998,11 +7998,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": 2,
+          "default": 2.0,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
-          "type": "int"
+          "type": "float"
         },
         "typed_env": false
       },
@@ -10184,11 +10184,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": true,
+          "default": 1,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
-          "type": "bool"
+          "type": "int"
         },
         "typed_env": false
       },
@@ -10793,11 +10793,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "",
+          "default": 1800,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
-          "type": "str"
+          "type": "int"
         },
         "typed_env": false
       },
@@ -10926,11 +10926,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": true,
+          "default": 1,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
-          "type": "bool"
+          "type": "int"
         },
         "typed_env": false
       },
@@ -11998,11 +11998,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": true,
+          "default": 1,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/router-selftrain-loop.md",
-          "type": "bool"
+          "type": "int"
         },
         "typed_env": false
       },
@@ -12055,11 +12055,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "",
+          "default": 16777216,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "services/zoe-data/AGENTS.md",
-          "type": "str"
+          "type": "int"
         },
         "typed_env": false
       },
@@ -12555,11 +12555,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": true,
+          "default": 1,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/research/incomplete-turn-marker-2026-10-04.md",
-          "type": "bool"
+          "type": "int"
         },
         "typed_env": false
       },
@@ -13916,7 +13916,8 @@
           "allowed": null,
           "default": "https://zoe.local",
           "divergent_ok": {
-            "scripts/maintenance/zoe_latency_probe.py": "the probe runs on the host itself and defaults to loopback"
+            "scripts/maintenance/zoe_latency_probe.py": "the probe runs on the host itself and defaults to loopback",
+            "scripts/setup/mac_panel/preflight.py": "reads the Mac daemon's own env mapping and REQUIRES ZOE_URL (fails when unset); it hard-codes no fallback"
           },
           "note": "live: unset (code default in force)",
           "owner_doc": "docs/knowledge/mac-virtual-panel.md",
@@ -14603,11 +14604,11 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "",
+          "default": 24,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
-          "type": "str"
+          "type": "int"
         },
         "typed_env": false
       },

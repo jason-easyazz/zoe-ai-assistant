@@ -1420,7 +1420,7 @@ def prompt_size_summary(live: Any) -> dict[str, Any] | None:
     sizes = sorted(getattr(live, "packet_chars", []) or [])
     if not sizes:
         return None
-    p95 = sizes[min(len(sizes) - 1, int(0.95 * len(sizes)))]
+    p95 = sizes[min(len(sizes) - 1, -(-95 * len(sizes) // 100) - 1)]   # nearest-rank: ceil(0.95 n) - 1
     return {"packets": len(sizes), "chars_mean": round(sum(sizes) / len(sizes)), "chars_p95": p95,
             "chars_max": sizes[-1], "est_tokens_p95": -(-p95 // 4)}
 
