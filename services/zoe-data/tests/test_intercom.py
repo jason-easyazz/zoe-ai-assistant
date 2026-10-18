@@ -129,6 +129,9 @@ async def _say(text, member=ADULT, panel=LIVING, **kw):
     ("ring the hallway please", "ring", "hallway", ""),
     ("can you call the living room panel?", "ring", "living room", ""),
     ("drop in on the kitchen", "drop_in", "kitchen", ""),
+    # a device word followed by a statement is news FOR the room, not a command (Codex P2 on #2143)
+    ("tell the kitchen lights are still on", "announce", "kitchen", "lights are still on"),
+    ("tell the kitchen fan is making a noise", "announce", "kitchen", "fan is making a noise"),
 ])
 def test_intercom_phrasings_are_recognised(text, kind, target, message):
     req = ic.parse(text, LABELS)
@@ -148,6 +151,8 @@ def test_intercom_phrasings_are_recognised(text, kind, target, message):
     "tell the kitchen light to stay on",   # a smart-home turn naming a room (cross-review #2143)
     "tell the living room lights to turn off",
     "tell the kitchen fan to stop",
+    "tell the kitchen lights off",
+    "tell the kitchen tv",
     "turn on the kitchen light",
     "what's the announcement about",
     "the announcement was loud",

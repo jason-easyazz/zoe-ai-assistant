@@ -125,10 +125,12 @@ def _split_target(rest: str, labels: Iterable[str]) -> Optional[tuple[str, str]]
 _POLITE_TAIL = re.compile(r"^(?:\s*(?:please|now|for\s+me|zoe|thanks|thank\s+you)\b)*\W*$", re.IGNORECASE)
 
 
-# A device word right after the room ("tell the kitchen light to stay on") makes it a smart-home turn, never an announcement.
+# A device word right after the room followed by a COMMAND shape ("tell the kitchen light to stay on", "... lights off", "... fan")
+# makes it a smart-home turn, never an announcement. A device word followed by a statement is news FOR the room and stays an
+# announcement ("tell the kitchen lights are still on", "tell the kitchen fan is making a noise" - Codex P2 on #2143).
 _DEVICE_AFTER_TARGET = re.compile(
     r"^\s*(?:lights?|lamps?|fans?|tv|telly|television|heater|heating|aircon|air\s*con|blinds?|curtains?|switch(?:es)?|"
-    r"plugs?|doors?|thermostat)\b", re.IGNORECASE)
+    r"plugs?|doors?|thermostat)\b(?:\s+(?:to|on|off|up|down|open|closed?|shut)\b|\W*$)", re.IGNORECASE)
 
 
 def parse(text: str, labels: Iterable[str]) -> Optional[Request]:
