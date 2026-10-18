@@ -231,8 +231,11 @@ def test_zoe_calls_use_one_session_once_main_installs_it(daemon, monkeypatch):
     assert "_zoe_http().post(url, json=payload" in src   # the streamed turn
 
 
-def test_session_refuses_cookies(daemon):
+def test_session_refuses_cookies(daemon, monkeypatch):
+    monkeypatch.delitem(sys.modules, "requests", raising=False)   # the daemon fixture's stub, not the real one
     requests = pytest.importorskip("requests")
+    if not hasattr(requests, "Session"):
+        pytest.skip("requests unavailable")
     real = types.SimpleNamespace(Session=requests.Session, adapters=requests.adapters)
     orig = daemon.requests
     daemon.requests = real

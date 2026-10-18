@@ -165,9 +165,11 @@ else ok "${_gt_panel}: ${_gt_subs} push subscriber(s) connected"; fi
 # the daemon file it loaded, and the wake model's sha256 (models.lock pins it).
 # Compared with this checkout's daemon file: "differs" means the panel runs other
 # code than main - an unshipped merge, or a hand edit on the Pi. Bounded (-m 2),
-# read-only; the Pi binds :7777 for exactly this read. ZOE_GT_PANEL_HOST overrides.
+# read-only; the Pi binds :7777 for exactly this read. ZOE_GT_PANEL_HOST overrides the ssh alias.
 hdr "PANEL VOICE DAEMON"
-_gt_ph="${ZOE_GT_PANEL_HOST:-192.168.1.61}"
+# The host comes from the operator's ssh alias (ssh -G resolves it locally, no connection), not a committed address.
+_gt_ph="${ZOE_GT_PANEL_HOST:-$(timeout 2 ssh -G zoe-pi 2>/dev/null | awk '/^hostname /{print $2; exit}')}"
+_gt_ph="${_gt_ph:-zoe-pi}"
 _gt_vh=$(curl -s -m 2 "http://${_gt_ph}:7777/health" 2>/dev/null)
 _gt_vline=$(printf '%s' "$_gt_vh" | python3 -c '
 import hashlib, json, os, sys
