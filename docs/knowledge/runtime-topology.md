@@ -53,7 +53,9 @@ clients use `localhost`/`127.0.0.1`, containers use the `zoe-network` service na
 loopback-bound port through `host.docker.internal` (that is the docker0 gateway, not loopback).
 The deliberate LAN-facing ports (UI 80/443, HA 8123, LiveKit, zoe-auth 8002, Multica 3000/8080, …)
 are listed with their reason in `tests/unit/test_compose_loopback_binds.py` (`LAN_LEDGER`); adding one
-is a reviewed edit there. Postgres image/port changes are an **operator** step (pg_dumpall first,
+is a reviewed edit there. The Multica BOARD (nginx `/multica/`, `/multica-api/`, `/_next/`) is behind Zoe's sign-in
+(an nginx `auth_request` admitting adult household members only, [multica-zoe-signin.md](multica-zoe-signin.md));
+zoe-data, Cursor MCP and the executor reach Multica on loopback or through its database, never through nginx. Postgres image/port changes are an **operator** step (pg_dumpall first,
 then recreate `zoe-database`, then `multica-backend`): CD's zoe-auth reconcile is `--no-deps` so a
 deploy never recreates the database as a side effect.
 

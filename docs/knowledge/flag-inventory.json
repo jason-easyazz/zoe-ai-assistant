@@ -2350,6 +2350,7 @@
           "services/zoe-data/auth.py",
           "services/zoe-data/auth_handoff.py",
           "services/zoe-data/mcp_server.py",
+          "services/zoe-data/multica_ui_gate.py",
           "services/zoe-data/music_jukebox.py",
           "services/zoe-data/panel_kiosk_credential.py",
           "services/zoe-data/telegram_notify.py",
@@ -3736,6 +3737,36 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/multica_triage_judge.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MULTICA_UI_GATE": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_ui_gate.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MULTICA_UI_SECRET": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_ui_gate.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MULTICA_UI_TTL_S": {
+        "defaults": [
+          "28800"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_ui_gate.py"
         ],
         "typed_env": true
       },

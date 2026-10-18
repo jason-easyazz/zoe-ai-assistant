@@ -81,6 +81,48 @@ def test_probe_rejects_client_errors(monkeypatch):
     assert result["status"] == 404
 
 
+def _gated_probe(monkeypatch, status, location=""):
+    module = _module()
+
+    class Response:
+        status_code = status
+        headers = {"location": location} if location else {}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return Response()
+
+    seen = {}
+
+    def _client(**kwargs):
+        seen.update(kwargs)
+        return Client()
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", _client)
+    result = asyncio.run(module._probe_gated("http://example.test/multica/"))
+    assert seen.get("follow_redirects") is False  # following the 302 would report the launcher page's 200 as the board's
+    return result
+
+
+def test_gated_probe_counts_the_sign_in_gate_refusal_as_healthy(monkeypatch):
+    for status, location in ((401, ""), (403, ""), (302, "/board.html?next=/multica/")):
+        result = _gated_probe(monkeypatch, status, location)
+        assert result["ok"] is True and result["gated"] is True, (status, result)
+
+
+def test_gated_probe_reports_an_open_gate_and_real_failures(monkeypatch):
+    assert _gated_probe(monkeypatch, 200) == {"ok": True, "gated": False, "status": 200, "url": "http://example.test/multica/"}
+    for status, location in ((502, ""), (500, ""), (404, ""), (302, "/elsewhere")):
+        result = _gated_probe(monkeypatch, status, location)
+        assert result["ok"] is False and result["gated"] is False, (status, result)
+
+
 def test_upload_check_reads_the_runtime_compose_contract():
     module = _module()
 

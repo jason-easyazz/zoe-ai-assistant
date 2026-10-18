@@ -1133,8 +1133,12 @@ def step_j_create_issues(
         ),
         (
             "Multica OIDC — activate when Multica ships it",
-            "Multica OIDC SSO integration is blocked on Multica shipping its OIDC client. "
-            "Credentials are already configured in .env (MULTICA_OIDC_CLIENT_ID/SECRET).",
+            "Upstream Multica has no generic OIDC login yet (checked to v0.6.3, 2026-10-19: Google "
+            "only, endpoints hardcoded). Track multica-ai/multica#1014 and PRs #5791/#5792/#8129. "
+            "Meanwhile the board sits behind Zoe's own sign-in (nginx auth_request, "
+            "docs/knowledge/multica-zoe-signin.md). When upstream ships OIDC: upgrade the pinned "
+            "images, point it at zoe-auth's discovery URL with the seeded 'multica' client "
+            "(MULTICA_OIDC_CLIENT_ID/SECRET), prove it in a lab, then retire the gate.",
             "backlog", infra_project, openclaw_id, "low",
         ),
         (
@@ -1145,8 +1149,9 @@ def step_j_create_issues(
         ),
         (
             "Set MULTICA_DEV_VERIFICATION_CODE for stable dev login",
-            "MULTICA_DEV_CODE=888888 is set but MULTICA_DEV_VERIFICATION_CODE env var should "
-            "be confirmed stable for the backend. Verify env mapping in docker-compose.",
+            "Multica only honours a fixed dev code of exactly six digits (any other value disables "
+            "it; per-login codes then print to the backend log). It is now a second step behind "
+            "Zoe's sign-in gate, not the boundary. Keep it random, never 888888.",
             "todo", infra_project, openclaw_id, "medium",
         ),
         (
