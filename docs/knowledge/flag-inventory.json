@@ -1249,6 +1249,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_DEVICE_TOKEN_TTL_DAYS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/panel_auth.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_DIGARR_AI_BASE_URL": {
         "defaults": [
           "''"

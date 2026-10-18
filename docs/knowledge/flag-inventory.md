@@ -139,6 +139,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DELIVERY_LEDGER` | `''` | yes | NO | `services/zoe-data/proactive/lines.py` |
 | `ZOE_DEVICE_TOKEN` | `-` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_DEVICE_TOKEN_BINDS_MEMBER` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
+| `ZOE_DEVICE_TOKEN_TTL_DAYS` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_DIGARR_AI_BASE_URL` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DIGARR_AI_MODEL` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DIGARR_AI_TIMEOUT_S` | `'300'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |

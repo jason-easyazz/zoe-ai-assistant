@@ -128,6 +128,11 @@ def _client(monkeypatch, rooms_by_panel, entity_index):
         return None
 
     app.dependency_overrides[get_db] = _no_db
+    # The route needs a member or the panel; who may call it is pinned over real HTTP by
+    # tests/test_house_state_routes_auth.py. These tests are about the room wiring.
+    from panel_principal import require_member_or_panel
+
+    app.dependency_overrides[require_member_or_panel] = lambda: {"user_id": "guest", "role": "guest", "panel_id": "p"}
     return TestClient(app)
 
 
