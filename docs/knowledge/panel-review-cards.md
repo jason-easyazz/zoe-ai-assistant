@@ -38,7 +38,9 @@ reminder intent exactly as before. Two matching loops are asked about ("That cou
 - The member is the TURN's identity (`extra_ctx['scope_user']`: an open voice session or a fresh PIN sign-in). With none, the
   reply is "That's private..." and the panel gets the existing locked card: no row, no count, no name.
 - Loops classed health / money / grief / family conflict / feelings by `restraint` are never read out or shown (memories-space
-  D11); a typed chat answer lists them, so an approved loop is never unreachable. No transcript line is ever on the wall (D13): a voice row is "Voice 3, heard in 4 recordings".
+  D11); a typed chat answer lists them, so an approved loop is never unreachable. No transcript line is on these cards (D13,
+  owner answer 2026-10-19: a voice session may show the short item text; a FULL transcript on the wall needs a FRESH PIN - not
+  built here, see Follow-ups): a voice row is "Voice 3, heard in 4 recordings".
 - The card goes to the panel's own push channel only (`voice_cards.push`) and is removed when the voice session closes (the
   existing `touch-voice-session.js` lifecycle; a PIN-path card fades after 90 s).
 - **Card token.** Each card carries an opaque token; its rows are opaque ids (`1`, `c1`, `v1`), so a tap can only act on what was
@@ -69,6 +71,11 @@ returns before any work with the flag off. It runs on `voice` and `chat` (chat: 
 
 **Rollback:** unset the flag and restart; the tier returns None and the routes are absent. The D5 change (pendant follow-ups as
 open loops) is not behind this flag: it applies to every approval once merged.
+
+## Follow-ups
+
+- **D13 transcript view (owner 2026-10-19):** a "show me what was said" view of a day item's or voice's full transcript on the
+  wall, behind a FRESH PIN only (a voice session is not enough; the existing PIN step-up challenge). These cards show none today.
 
 ## Unproven
 

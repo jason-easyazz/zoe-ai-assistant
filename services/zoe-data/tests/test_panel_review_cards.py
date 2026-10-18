@@ -335,8 +335,12 @@ def test_the_day_card_offers_at_most_three_voices_and_tags_only_card_people(env,
     assert tap(env, tok, "v1", "tag", "p-sam").status_code == 400           # a raw person id is not a card choice
     assert tap(env, tok, "v1", "tag", "p1").status_code == 200
     assert ("tag", "cl1", "p-sam", A) in calls
+    import setup_qr                                                      # segno is not in the slim CI venv: the URL is the point
+    qr_urls = []
+    monkeypatch.setattr(setup_qr, "render_svg", lambda url: qr_urls.append(url) or b"<svg/>")
     qr = env.client.get("/api/panel/cards/phone-qr", headers={"X-Panel-Card": tok})
     assert qr.status_code == 200 and qr.headers["content-type"].startswith("image/svg")
+    assert qr_urls == ["http://testserver/pendant.html"]                # the Pendant page, no token or id in the QR
     env.sessions.pop(PANEL)
     assert env.client.get("/api/panel/cards/clip/v2", headers={"X-Panel-Card": tok}).status_code == 403
     assert env.client.get("/api/panel/cards/phone-qr", headers={"X-Panel-Card": tok}).status_code == 403
