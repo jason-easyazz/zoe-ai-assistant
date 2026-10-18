@@ -21,6 +21,7 @@ Secrets are never inlined — they are read from `.env` files.
 | `serena-mcp.service`       | 9121  | Shared Serena MCP code-intelligence server (dev tooling, one per HOST — see below) |
 | `zoe-claude-bridge.service` | —    | Claude Code remote bridge as a managed unit (`Slice=zoe-agents.slice` + the session lease) — **inert, no `[Install]`, stage-gated**; see `docs/knowledge/engineering-off-box.md` |
 | `zoe-agents-sampler.{service,timer}` | — | 5-minute JSONL sample of the engineering cgroups (`~/.zoe-logs/agents-sampler.jsonl`) — operator opt-in; install first |
+| `zoe-samantha-weekly.{service,timer}` | — | Weekly commit-bound Samantha evidence run (`scripts/maintenance/samantha_weekly.sh`; Sunday 05:30, after the night window) — **template, NOT installed, operator opt-in**; see `docs/knowledge/samantha-bar.md` |
 | `zoe-agents.slice`         | —     | **Slice, not a service** (the `*.service` glob does not copy it): the 3G / swap-0 aggregate for every engineering cgroup — install by hand, FIRST |
 | `zoe-backup.{service,timer}` | — | Nightly ON-BOX backup (Postgres dumps + MemPalace tarball, 02:30); tracked 2026-10-18 from the live unit |
 | `zoe-backup-verify.{service,timer}` | — | Weekly on-box restore check + the MONTHLY off-box restore drill (Sunday 05:45) |

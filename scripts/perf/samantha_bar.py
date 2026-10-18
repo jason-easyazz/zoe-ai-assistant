@@ -1353,10 +1353,92 @@ def service_revision(service_dir: Path | None) -> dict[str, Any] | None:
     if not commit:
         return None
     status = _git("status", "--porcelain")
-    clean_verified = status is not None
+    tracked = _git("status", "--porcelain", "--untracked-files=no")
+    clean_verified = status is not None and tracked is not None
+    # ``dirty`` stays the strict, fail-closed bit (any porcelain line, untracked included) so older
+    # readers keep their meaning. ``tracked_dirty`` is the one that matters for attribution: the code
+    # under test equals ``commit`` iff no TRACKED file differs. Untracked files (the live checkout always
+    # carries some) are counted, not ignored, and ``diff_sha256`` pins the exact tracked change when
+    # there is one, so even an unbound run says WHAT it ran.
+    tracked_dirty = True if tracked is None else bool(tracked)
+    diff_sha = None
+    if tracked_dirty and tracked is not None:
+        diff = _git("diff", "HEAD", "--binary")
+        diff_sha = hashlib.sha256(diff.encode("utf-8", "replace")).hexdigest()[:16] if diff is not None else None
     return {"commit": commit, "tree": _git("rev-parse", "HEAD^{tree}"),
             "dirty": True if not clean_verified else bool(status),
+            "tracked_dirty": tracked_dirty,
+            "untracked_files": None if status is None else sum(1 for ln in status.splitlines() if ln.startswith("??")),
+            "diff_sha256": diff_sha,
             "clean_verified": clean_verified, "service_dir": str(service_dir)}
+
+
+def harness_revision() -> dict[str, Any] | None:
+    """Revision of the checkout THIS harness runs from (same shape as ``service_revision``)."""
+    return service_revision(Path(__file__).resolve().parents[2])
+
+
+def evidence_binding(revision: dict[str, Any] | None, harness: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Can this run's result be attributed to a commit? (the evidence-binding rule the voice gate already has)
+
+    A score is evidence for a commit only if (1) the live service's TRACKED files equal that commit, (2) the
+    harness that asked the questions is a checkout with no tracked modifications, and (3) harness tree ==
+    service tree, i.e. the scripts that ran are the code under test. Anything else is ``bound: false`` with a
+    reason: the run still happens (a developer wants to see the scores) but it is NEVER recorded in the trend
+    and NEVER becomes a baseline. Run it from a clean checkout of the deployed commit:
+    ``scripts/maintenance/samantha_weekly.sh``.
+    """
+    rev, har = revision or {}, harness or {}
+    reason = ""
+    if not rev.get("commit") or not rev.get("tree"):
+        reason = "the live service's commit is unknown"
+    elif not rev.get("clean_verified"):
+        reason = "git status failed on the service checkout: cleanliness unverified (fail closed)"
+    elif rev.get("tracked_dirty"):
+        reason = f"the service checkout has tracked modifications (diff {rev.get('diff_sha256') or '?'})"
+    elif not har.get("commit") or not har.get("tree"):
+        reason = "the harness is not running from a git checkout"
+    elif not har.get("clean_verified"):
+        reason = "git status failed on the harness checkout: cleanliness unverified (fail closed)"
+    elif har.get("tracked_dirty"):
+        reason = f"the harness checkout has tracked modifications (diff {har.get('diff_sha256') or '?'})"
+    elif har["tree"] != rev["tree"]:
+        reason = "harness tree != service tree: the scripts that ran are not the code under test"
+    return {"bound": not reason, "reason": reason or None,
+            "commit": rev.get("commit"), "tree": rev.get("tree"),
+            "harness_commit": har.get("commit"), "harness_tree": har.get("tree"),
+            "tracked_dirty": rev.get("tracked_dirty"), "untracked_files": rev.get("untracked_files"),
+            "diff_sha256": rev.get("diff_sha256")}
+
+
+def prompt_size_summary(live: Any) -> dict[str, Any] | None:
+    """The prompt-size column: the recall packet the brain would get, as the run measured it (chars).
+
+    Every ``Live.packet`` read records its length. ~4 chars per token is the repo's usual estimate, so the
+    token figure is an estimate; the CHARS are exact and comparable run to run. None when no packet was read.
+    """
+    sizes = sorted(getattr(live, "packet_chars", []) or [])
+    if not sizes:
+        return None
+    p95 = sizes[min(len(sizes) - 1, -(-95 * len(sizes) // 100) - 1)]   # nearest-rank: ceil(0.95 n) - 1
+    return {"packets": len(sizes), "chars_mean": round(sum(sizes) / len(sizes)), "chars_p95": p95,
+            "chars_max": sizes[-1], "est_tokens_p95": -(-p95 // 4)}
+
+
+def record_trend(path: Path, line: dict[str, Any], binding: dict[str, Any], prompt: dict[str, Any] | None) -> Path:
+    """Append one trend line. BOUND evidence goes to ``path``; unbound evidence goes to a sibling
+    ``<name>.unbound.jsonl`` so the trend only ever holds scores attributable to a commit."""
+    line = {**line, "bound": binding["bound"], "tree": binding.get("tree"),
+            "tracked_dirty": binding.get("tracked_dirty"), "diff_sha256": binding.get("diff_sha256"),
+            "unbound_reason": binding.get("reason")}
+    if prompt:
+        line.update({"prompt_packets": prompt["packets"], "prompt_chars_mean": prompt["chars_mean"],
+                     "prompt_chars_p95": prompt["chars_p95"], "prompt_chars_max": prompt["chars_max"]})
+    target = path if binding["bound"] else path.with_name(path.stem + ".unbound" + path.suffix)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line, sort_keys=True) + "\n")
+    return target
 
 
 def env_file_value(service_dir: Path, key: str) -> str:
@@ -1414,6 +1496,7 @@ class Live:
         self.token, self.admin, self.dsn, self.keep = token, admin_session, dsn, keep_replies
         self.nonce = secrets.token_hex(3)
         self.sessions: dict[str, list[str]] = {}
+        self.packet_chars: list[int] = []   # the prompt-size column: len() of every recall packet read
 
     # HTTP ------------------------------------------------------------------
     def _req(self, method: str, url: str, headers: dict, body: dict | None = None,
@@ -1467,7 +1550,9 @@ class Live:
                                {"X-Internal-Token": self.token})
         if code != 200:
             return None
-        return str((body or {}).get("packet") or "")
+        packet = str((body or {}).get("packet") or "")
+        self.packet_chars.append(len(packet))
+        return packet
 
     def capture_status(self, user: str) -> dict[str, Any] | None:
         """Per-user post-turn capture counters (/capture-status, internal). None
@@ -2346,17 +2431,17 @@ def write_json(path: Path, payload: Any) -> None:
     tmp.replace(path)
 
 
-def append_trend(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def append_trend(path: Path, payload: dict[str, Any]) -> Path:
     rev = payload.get("revision") or {}
     line = {"ts": payload["finished_at"], "status": payload["status"],
             "commit": rev.get("commit"), "dirty": rev.get("dirty"),
+            "partial": bool(payload.get("partial")),
             "verdicts": verdict_map(payload.get("scenarios", [])),
             "regressions": (payload.get("compare") or {}).get("regressions", []),
             "teardown_proven": (payload.get("teardown") or {}).get("proven"),
             "duration_s": payload.get("duration_s")}
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(line, sort_keys=True) + "\n")
+    binding = payload.get("evidence") or evidence_binding(rev, None)
+    return record_trend(path, line, binding, payload.get("prompt_size"))
 
 
 def _acquire_lock():
@@ -2459,6 +2544,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--teardown-only", action="store_true",
                     help="only clean up a previous run's pending teardown")
     ap.add_argument("--service-dir", default=None)
+    ap.add_argument("--require-bound", action="store_true",
+                    help="refuse to run unless the result can be attributed to a commit (clean tracked service "
+                         "checkout, clean harness checkout, same tree) - the weekly clean-checkout run passes this")
     ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     ap.add_argument("--trend", type=Path, default=DEFAULT_TREND)
     ap.add_argument("--results", type=Path, default=DEFAULT_RESULTS)
@@ -2493,6 +2581,9 @@ def main(argv: list[str] | None = None) -> int:
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = resolve_service_dir(args.service_dir)
     revision = service_revision(service_dir)
+    binding = evidence_binding(revision, harness_revision())
+    if args.require_bound and not binding["bound"]:
+        return _refuse(args, f"--require-bound: unbound evidence - {binding['reason']}", revision)
     load_source_fallback_markers(service_dir)  # the checkout's own "brain did not answer" texts
     lock_fd = _acquire_lock()  # noqa: F841 — held for the process lifetime
     try:
@@ -2605,18 +2696,23 @@ def main(argv: list[str] | None = None) -> int:
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
                "backdate": not args.no_backdate, "partial": partial,
                "selected": sorted(expected_ids) if partial else None,
-               "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
+               "revision": revision, "evidence": binding, "prompt_size": prompt_size_summary(live),
+               "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
                "scenarios": results, "compare": cmp, "teardown": td,
                "baseline_ref": {"path": str(args.baseline),
                                 "created_at": (baseline or {}).get("created_at"),
                                 "commit": ((baseline or {}).get("revision") or {}).get("commit")}}
     write_json(args.results, payload)
-    append_trend(args.trend, payload)
-    if args.record_baseline and status == "ok" and not partial:  # a partial run NEVER records
+    trend_file = append_trend(args.trend, payload)
+    if not binding["bound"]:
+        log(f"EVIDENCE UNBOUND: {binding['reason']} - logged to {trend_file.name}, NOT the trend; "
+            "run scripts/maintenance/samantha_weekly.sh (a clean checkout of the deployed commit) for a result that counts")
+    if args.record_baseline and status == "ok" and not partial and binding["bound"]:  # a partial run NEVER records
         write_json(args.baseline, make_baseline(results, revision, args.samples))
         log(f"baseline recorded: {args.baseline}")
     elif args.record_baseline:
-        log("baseline NOT recorded: the run errored or its teardown is unproven")
+        log("baseline NOT recorded: the run errored, its teardown is unproven, or its evidence is unbound "
+            f"({binding['reason'] or 'bound'})")
 
     for r in results:
         exp = f"  (expected {r['expected']}: a target)" if r.get("expected") else ""

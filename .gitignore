@@ -209,6 +209,9 @@ credentials/
 !services/zoe-core/.pi/settings.json
 # generated flag inventory (tools/audit/flag_inventory.py) — no secrets, names+defaults only
 !docs/knowledge/flag-inventory.json
+# the flag legacy-read ratchet and the memory writer-map role notes - plain data read by ci_safe tests, no secrets
+!docs/knowledge/flag-ratchet.json
+!docs/knowledge/memory-writer-notes.json
 # zoe-data test fixtures: golden recordings replayed by ci_safe tests. Contract
 # data only, no secrets. Without this, a new .json fixture is silently ignored
 # and CI fails on a file the author can see locally.

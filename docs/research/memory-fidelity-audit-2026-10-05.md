@@ -77,6 +77,10 @@ counts only. `[unverified]` marks anything not read at source.
 
 ## 1. Write-path map
 
+> **Update 2026-10-18:** the 31 write paths below are the 2026-10-05 hand count and are stale. The map is now
+> generated from code and guarded by a test: [`docs/knowledge/memory-writer-map.md`](../knowledge/memory-writer-map.md)
+> (68 write sites in 27 modules at landing; `tests/unit/test_memory_writer_map.py` fails on a new writer module without a note).
+
 Legend. **Inputs** says whose words the writer reads. **Overwrites** is the strongest thing it may do to
 an *existing* row. **Told** is whether the user hears about it. **Hist** is whether the old row survives.
 "Audit" is the `mempalace_audit` collection (`memory_service.py:2539`), one row per
