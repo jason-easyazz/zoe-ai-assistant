@@ -377,9 +377,34 @@ async def _wake_panel(panel_id: str) -> None:
 
 
 # ── send to my phone (Telegram) ───────────────────────────────────────────────
+# Tried in order: (1) the flue-zoe-telegram bot over loopback (``ZOE_TELEGRAM_NOTIFY_URL``,
+# default below, ``off`` disables; ``Bearer ZOE_INTERNAL_TOKEN``) - it sends with the token of
+# the bot the member LINKED with, and a bot can only message someone who started it;
+# (2) the Bot API with a held token, ``ZOE_TELEGRAM_BOT_TOKEN`` else ``TELEGRAM_BOT_TOKEN`` (the
+# live env's name). No token is ever logged: the API URL embeds it, so failures log type/status.
+_DEFAULT_NOTIFY_URL = "http://127.0.0.1:3582/internal/notify"
+
 
 def _bot_token() -> str:
-    return os.environ.get("ZOE_TELEGRAM_BOT_TOKEN", "").strip()
+    for name in ("ZOE_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN"):
+        token = os.environ.get(name, "").strip()
+        if token:
+            return token
+    return ""
+
+
+def _notify_url() -> str:
+    """The bot's loopback notify route, or "" when it cannot be used (disabled, or no shared secret)."""
+    raw = os.environ.get("ZOE_TELEGRAM_NOTIFY_URL", "").strip()
+    if raw.lower() in ("off", "0", "false", "none"):
+        return ""
+    if not os.environ.get("ZOE_INTERNAL_TOKEN", "").strip():
+        return ""
+    return raw or _DEFAULT_NOTIFY_URL
+
+
+def _channel_configured() -> bool:
+    return bool(_notify_url()) or bool(_bot_token())
 
 
 async def _telegram_chat(user_id: str) -> Optional[str]:
@@ -394,13 +419,26 @@ async def _telegram_chat(user_id: str) -> Optional[str]:
 
 async def telegram_available(user_id: str) -> bool:
     try:
-        return bool(_bot_token()) and bool(await _telegram_chat(user_id))
+        return _channel_configured() and bool(await _telegram_chat(user_id))
     except Exception as exc:  # noqa: BLE001
         logger.info("auth_handoff: telegram availability unknown: %s", exc)
         return False
 
 
-async def _telegram_send(chat_id: str, text: str, url: str) -> bool:
+async def _telegram_send_via_bot(chat_id: str, text: str, url: str) -> bool:
+    """Ask the Telegram channel process to send (it holds the linked bot's token)."""
+    import httpx
+
+    body = {"telegram_id": chat_id, "text": text, "url": url, "label": "Open on this phone"}
+    headers = {"Authorization": f"Bearer {os.environ.get('ZOE_INTERNAL_TOKEN', '').strip()}"}
+    async with httpx.AsyncClient(timeout=8.0) as c:
+        r = await c.post(_notify_url(), json=body, headers=headers)
+    if r.status_code != 200:
+        logger.info("auth_handoff: the telegram channel refused the notify (HTTP %s)", r.status_code)
+    return r.status_code == 200
+
+
+async def _telegram_send_direct(chat_id: str, text: str, url: str) -> bool:
     """Bot API sendMessage with a link button; plain text if Telegram refuses the
     button (it rejects some LAN hostnames as button URLs)."""
     import httpx
@@ -414,7 +452,25 @@ async def _telegram_send(chat_id: str, text: str, url: str) -> bool:
             body.pop("reply_markup")
             body["text"] = f"{text}\n{url}"
             r = await c.post(api, json=body)
+    if r.status_code != 200:
+        logger.info("auth_handoff: the Telegram Bot API refused the send (HTTP %s)", r.status_code)
     return r.status_code == 200
+
+
+async def _telegram_send(chat_id: str, text: str, url: str) -> bool:
+    """The bot's loopback route first, then the Bot API directly. Never raises; never logs a secret."""
+    if _notify_url():
+        try:
+            if await _telegram_send_via_bot(chat_id, text, url):
+                return True
+        except Exception as exc:  # noqa: BLE001 - the channel is down: fall through to the direct path
+            logger.info("auth_handoff: telegram channel unreachable (%s)", type(exc).__name__)
+    if _bot_token():
+        try:
+            return await _telegram_send_direct(chat_id, text, url)
+        except Exception as exc:  # noqa: BLE001 - type only: an httpx error can carry the token-bearing URL
+            logger.info("auth_handoff: telegram send failed (%s)", type(exc).__name__)
+    return False
 
 
 async def send_to_phone(handoff_id: str) -> dict[str, Any]:
@@ -425,7 +481,7 @@ async def send_to_phone(handoff_id: str) -> dict[str, Any]:
     if row is None or row["status"] == "done" or float(row["expires_at"]) < time.time():
         return {"ok": False, "status": "unavailable", "detail": "This link has finished — start again."}
     url = _link(handoff_id)
-    chat = await _telegram_chat(row["user_id"]) if _bot_token() else None
+    chat = await _telegram_chat(row["user_id"]) if _channel_configured() else None
     if not url or not chat:
         return {"ok": False, "status": "unavailable",
                 "detail": "Scan the code instead." if url else "Start again to get a fresh link."}
@@ -434,8 +490,8 @@ async def send_to_phone(handoff_id: str) -> dict[str, Any]:
         sent = await _telegram_send(chat, f"Tap to finish connecting {what} to Zoe (home Wi-Fi only; "
                                           f"expires in {max(1, int(float(row['expires_at']) - time.time()) // 60)} min).",
                                     url)
-    except Exception as exc:  # noqa: BLE001
-        logger.info("auth_handoff: telegram send failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - type only: an httpx error can carry the token-bearing URL
+        logger.info("auth_handoff: telegram send failed (%s)", type(exc).__name__)
         sent = False
     if not sent:
         return {"ok": False, "status": "failed", "detail": "Couldn't reach Telegram — scan the code instead."}

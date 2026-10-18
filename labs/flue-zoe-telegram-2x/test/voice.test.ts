@@ -14,6 +14,7 @@ import {
   framedTranscript,
   handleTalk,
   handleVoiceNote,
+  isHomeOnlyUrl,
   optionsFromEnv,
   redactToken,
   refusalFor,
@@ -248,6 +249,20 @@ test('/talk: a linked sender gets ONE URL button to the existing talk page', asy
   assert.deepEqual(links, [
     { text: 'Tap below, then press and hold to talk to me from your phone.', label: 'Talk to Zoe', url: 'https://zoe.example/voice.html' },
   ]);
+});
+
+test('/talk: the public host wins over a LAN ZOE_BASE_URL, and a LAN link says so (A9, 2026-10-18)', async () => {
+  const lan = 'https://192.168.1.218';
+  assert.equal(talkPageUrl({ ZOE_BASE_URL: lan, ZOE_PUBLIC_URL: 'https://zoe.example//' }), 'https://zoe.example/voice.html');
+  assert.equal(talkPageUrl({ ZOE_BASE_URL: lan, ZOE_PUBLIC_URL: '  ' }), `${lan}/voice.html`);
+  for (const u of [lan, 'http://10.0.0.5/', 'https://172.20.1.1/', 'https://zoe.local/', 'https://[fd00::1]/']) assert.ok(isHomeOnlyUrl(u), u);
+  for (const u of ['https://zoe.example/', 'https://172.32.0.1/', 'not a url']) assert.ok(!isHomeOnlyUrl(u), u);
+  const texts: string[] = [];
+  const deps = { resolve: async () => 'jason', replyWithLink: async (t: string) => void texts.push(t), reply: async () => {} };
+  await handleTalk(1, `${lan}/voice.html`, deps);
+  await handleTalk(1, 'https://zoe.example/voice.html', deps);
+  assert.match(texts[0]!, /home Wi-Fi only/);
+  assert.doesNotMatch(texts[1]!, /Wi-Fi/);
 });
 
 test('/talk NEGATIVE CONTROL: an unlinked sender gets no link', async () => {

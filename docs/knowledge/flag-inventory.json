@@ -6062,16 +6062,6 @@
         ],
         "typed_env": true
       },
-      "ZOE_TELEGRAM_BOT_TOKEN": {
-        "defaults": [
-          "''"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/auth_handoff.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_TELEGRAM_BOT_USERNAME": {
         "defaults": [
           "''"
@@ -6119,6 +6109,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/routers/telegram_media.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TELEGRAM_NOTIFY_URL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth_handoff.py"
         ],
         "typed_env": false
       },

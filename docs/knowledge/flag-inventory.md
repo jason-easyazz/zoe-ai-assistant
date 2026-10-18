@@ -612,12 +612,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SYNTHETIC_USER_ALLOWLIST` | `''` | no | NO | `services/zoe-data/user_filters.py` |
 | `ZOE_TASK_TIMEOUT_S` | `-`, `dynamic` | yes | NO | `services/zoe-data/background_runner.py` |
 | `ZOE_TAVILY_DEPTH` | `'basic'` | yes | NO | `services/zoe-data/web_search_provider.py` |
-| `ZOE_TELEGRAM_BOT_TOKEN` | `''` | no | NO | `services/zoe-data/auth_handoff.py` |
 | `ZOE_TELEGRAM_BOT_USERNAME` | `''` | no | NO | `services/zoe-data/telegram_link.py` |
 | `ZOE_TELEGRAM_FFMPEG` | `''` | no | NO | `services/zoe-data/routers/telegram_media.py` |
 | `ZOE_TELEGRAM_FFMPEG_TIMEOUT_S` | `'20'` | no | NO | `services/zoe-data/routers/telegram_media.py` |
 | `ZOE_TELEGRAM_LINK_SECRET` | `-` | no | NO | `services/zoe-data/telegram_link.py` |
 | `ZOE_TELEGRAM_MEDIA` | `'off'` | no | NO | `services/zoe-data/routers/telegram_media.py` |
+| `ZOE_TELEGRAM_NOTIFY_URL` | `''` | no | NO | `services/zoe-data/auth_handoff.py` |
 | `ZOE_TELEGRAM_STT_CAPTURE_DIR` | `''` | no | NO | `services/zoe-data/routers/telegram_media.py` |
 | `ZOE_TELEGRAM_VOICE_MAX_S` | `'60'` | no | NO | `services/zoe-data/routers/telegram_media.py` |
 | `ZOE_TEMPORAL_RELATIONSHIPS_ENABLED` | `''` | no | NO | `services/zoe-data/person_extractor.py` |

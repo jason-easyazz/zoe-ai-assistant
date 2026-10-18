@@ -1876,10 +1876,8 @@ async def board_review(task_id: str, user: dict = Depends(get_current_user)):
         return {"ok": False, "reason": str(exc)}
 
 
-@_agent_card_router.post("/board/cancel")
-async def board_cancel(task_id: str, user: dict = Depends(get_current_user)):
-    """Cancel a pending board task."""
-    return {"ok": True, "task_id": task_id, "status": "cancelled"}
+# No ``/board/cancel``: it answered "cancelled" and did nothing. Nothing reaches Multica before
+# "Start now" / "Review first", so ignoring the chat card IS the cancel.
 
 
 def _multica_webhook_dispatch_allowed(request: Request) -> bool:
@@ -1895,7 +1893,15 @@ def _multica_webhook_dispatch_allowed(request: Request) -> bool:
     )
 
 
-@_agent_card_router.post("/board/webhook")
+async def _require_multica_webhook_secret(request: Request) -> None:
+    """``MULTICA_WEBHOOK_SECRET`` before the body is read or anything written (unset = 401).
+    Fix 2026-10-18: it was checked only before a DISPATCH, so anyone could flip
+    ``evolution_proposals.status``. The only sender (``multica_webhook_emitter``) sends it."""
+    if not _multica_webhook_dispatch_allowed(request):
+        raise HTTPException(status_code=401, detail="webhook secret required")
+
+
+@_agent_card_router.post("/board/webhook", dependencies=[Depends(_require_multica_webhook_secret)])
 async def multica_webhook(request: Request):
     """Receive Multica webhook events and update evolution proposal status."""
     try:
