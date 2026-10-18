@@ -13,7 +13,7 @@ Per homeserver (Tuwunel, then Synapse + Postgres), one at a time:
 RAM is sampled from each container's cgroup (memory.current, 0.5 s) for the whole run; the peak and the steady values are kept.
 
 Synthetic data only (usernames like `member1`), throwaway secrets minted per run and never printed. Everything is torn down at
-the end (`compose down -v`, the temp dir removed) unless --keep. Refuses to start with MemAvailable below --min-mem-mb (2000).
+the end (`compose down -v`, the temp dir removed) and the teardown is checked (report "teardown_ok"). Refuses to start with MemAvailable below --min-mem-mb (2000).
 """
 from __future__ import annotations
 
@@ -301,7 +301,7 @@ def federation_off() -> dict:
     for path in ("/_matrix/federation/v1/version", "/_matrix/key/v2/server", "/_matrix/federation/v1/query/profile?user_id=x"):
         code, _ = http("GET", HS + path, timeout=5)
         out[path.split("?")[0]] = code
-    out["refused"] = all(c in (0, 400, 401, 403, 404, 405) for c in out.values())
+    out["refused"] = all(c in (403, 404) for c in out.values())
     return out
 
 
@@ -366,7 +366,7 @@ def delayed_events(tokens: dict[str, str], rid: str) -> dict:
     time.sleep(5.0)
     c_after, after = http("GET", f"{HS}/_matrix/client/v3/rooms/{q(rid)}/state/{etype}/{q(key)}", token=tok)
     out.update(before_status=c_before, restart_status=c_restart, after_status=c_after,
-               supported=(c_before == 404 and c_after == 200 and after.get("lab") == "fired"))
+               supported=(c_before == 404 and c_restart == 200 and c_after == 200 and after.get("lab") == "fired"))
     return out
 
 
@@ -375,46 +375,80 @@ def rtc_focus() -> dict:
     c2, tr = http("GET", f"{HS}/_matrix/client/unstable/org.matrix.msc4143/rtc/transports")
     foci = wk.get("org.matrix.msc4143.rtc_foci") if isinstance(wk, dict) else None
     transports = tr.get("rtc_transports") if isinstance(tr, dict) else None
+    def good(lst) -> bool:
+        return isinstance(lst, list) and any(isinstance(f, dict) and f.get("type") == "livekit"
+                                             and f.get("livekit_service_url") == LKJWT for f in lst)
+
     return {"well_known_status": c1, "rtc_foci": foci, "transports_status": c2, "transports": transports,
-            "advertised": bool(foci or transports)}
+            "advertised": good(foci) or good(transports)}
 
 
-def call_token(tokens: dict[str, str], rid: str) -> dict:
-    out = {}
+def _jwt_claims(jwt: str, secret: str) -> dict | None:
+    """Verify an HS256 LiveKit JWT with the lab's API secret; the claims, or None when the signature or shape is wrong."""
+    parts = jwt.split(".")
+    if len(parts) != 3:
+        return None
+
+    def b64(x: str) -> bytes:
+        return base64.urlsafe_b64decode(x + "=" * (-len(x) % 4))
+
+    try:
+        header = json.loads(b64(parts[0]))
+        sig = hmac.new(secret.encode(), f"{parts[0]}.{parts[1]}".encode(), hashlib.sha256).digest()
+        if header.get("alg") != "HS256" or not hmac.compare_digest(sig, b64(parts[2])):
+            return None
+        return json.loads(b64(parts[1]))
+    except (ValueError, TypeError):
+        return None
+
+
+def call_token(tokens: dict[str, str], rid: str, secret: str) -> dict:
+    """C6: each member's OpenID token -> lk-jwt /sfu/get -> a LiveKit JWT. Passes only when every JWT is SIGNED by the lab's
+    LiveKit secret, names that member as its subject, grants join + publish + subscribe, and both members land in the SAME
+    LiveKit room (lk-jwt derives the room name from the Matrix room)."""
+    out: dict = {}
+    rooms = set()
     for u in ("member1", "member2"):
         t0 = time.monotonic()
         code, oid = http("POST", f"{HS}/_matrix/client/v3/user/{q('@' + u + ':' + SERVER_NAME)}/openid/request_token", {},
                          token=tokens[u])
         if code != 200:
-            out[u] = {"openid_status": code}
+            out[u] = {"openid_status": code, "ok": False}
             continue
         code2, sfu = http("POST", f"{LKJWT}/sfu/get", {"room": rid, "openid_token": oid, "device_id": f"LAB{u.upper()}"},
                           timeout=40)
         dt = round((time.monotonic() - t0) * 1000)
         jwt = sfu.get("jwt", "") if isinstance(sfu, dict) else ""
-        claims = {}
-        if jwt.count(".") == 2:
-            pad = jwt.split(".")[1] + "=" * (-len(jwt.split(".")[1]) % 4)
-            try:
-                c = json.loads(base64.urlsafe_b64decode(pad))
-                claims = {"sub_is_user": str(c.get("sub", "")).startswith(f"@{u}:"), "room": bool((c.get("video") or {}).get("room")),
-                          "can_publish": (c.get("video") or {}).get("canPublish")}
-            except ValueError:
-                pass
-        out[u] = {"status": code2, "ms": dt, "url": sfu.get("url") if isinstance(sfu, dict) else None, "claims": claims,
-                  "detail": "" if code2 == 200 else str(sfu)[:200]}
-    out["ok"] = all(isinstance(v, dict) and v.get("status") == 200 for k, v in out.items() if k != "ok")
+        c = _jwt_claims(jwt, secret) or {}
+        video = c.get("video") or {}
+        cell = {"status": code2, "ms": dt, "signature_ok": bool(c), "sub_is_user": str(c.get("sub", "")).startswith(f"@{u}:"),
+                "room_join": video.get("roomJoin") is True, "can_publish": video.get("canPublish") is not False,
+                "can_subscribe": video.get("canSubscribe") is not False, "detail": "" if code2 == 200 else str(sfu)[:200]}
+        cell["ok"] = code2 == 200 and all(cell[k] for k in ("signature_ok", "sub_is_user", "room_join", "can_publish", "can_subscribe"))
+        if video.get("room"):
+            rooms.add(video["room"])
+        out[u] = cell
+    out["same_room"] = len(rooms) == 1
+    out["livekit_room"] = next(iter(rooms)) if len(rooms) == 1 else ""
+    out["ok"] = out["same_room"] and all(out[u].get("ok") for u in ("member1", "member2"))
     return out
 
 
-def media(env: dict, sampler: Sampler) -> dict:
+def media(env: dict, sampler: Sampler, room: str) -> dict:
+    """C7: one audio publisher and one subscriber in the Matrix call's LiveKit room for 20 s; the subscriber must receive.
+    lk load-test signs its own participant tokens with the API key (it takes no token), so this proves the SFU path in the
+    Matrix-derived room, not a client join WITH the Matrix JWT (that needs a WebRTC client; see README)."""
     sampler.reset_peaks()
     t0 = time.monotonic()
-    r = compose(env, "--profile", "cli", "run", "--rm", "-T", "cli", "load-test", "--room", "lab-call", "--audio-publishers", "2",
-                "--subscribers", "0", "--duration", "20s", check=False, timeout=180)
-    tail = [ln for ln in (r.stdout + r.stderr).splitlines() if ln.strip()][-14:]
-    return {"exit": r.returncode, "seconds": round(time.monotonic() - t0, 1), "livekit_peak_mb": sampler.peaks().get("mxlab-livekit"),
-            "summary": tail}
+    proc = subprocess.Popen(["docker", "compose", "-p", PROJECT, "-f", str(COMPOSE), "--profile", "cli", "run", "--rm", "-T", "cli",
+                             "load-test", "--room", room or "lab-call", "--audio-publishers", "1", "--subscribers", "1",
+                             "--duration", "20s"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc.wait()
+    text = proc.stdout.read() if proc.stdout else ""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    peaks = sampler.peaks()
+    return {"exit": proc.returncode, "seconds": round(time.monotonic() - t0, 1), "room": room or "lab-call",
+            "livekit_peak_mb": peaks.get("mxlab-livekit"), "summary": lines[-24:]}
 
 
 # ── one homeserver ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -447,9 +481,9 @@ def run_server(server: str, run: Path, env: dict, settle_s: int, min_mem: int, w
         rid = res["load"]["room_id"]
         res["msc4140_delayed_events"] = delayed_events(tokens, rid)
         res["msc4143_rtc_focus"] = rtc_focus()
-        res["call_token"] = call_token(tokens, rid)
-        res["media"] = media(env, sampler)
-        res["ram_peak_mb"] = sampler.peaks()
+        res["call_token"] = call_token(tokens, rid, env["LK_SECRET"])
+        res["media"] = media(env, sampler, res["call_token"].get("livekit_room", ""))
+        res["ram_peak_mb_during_media"] = sampler.peaks()  # per-container maxima over C7 only; not simultaneous
         res["min_mem_available_mb_seen"] = mem_available_mb()
     except Exception as exc:  # noqa: BLE001 - a lab cell failing is a result, not a crash
         res["error"] = f"{type(exc).__name__}: {exc}"[:400]
@@ -459,6 +493,33 @@ def run_server(server: str, run: Path, env: dict, settle_s: int, min_mem: int, w
         sampler.stop.set()
         compose(env, "--profile", server, "--profile", "cli", "down", "-v", "--remove-orphans", check=False, timeout=300)
     return res
+
+
+def verdict(res: dict) -> dict:
+    """The cells a run must pass. MSC4140 is REPORTED, not required: a server without it is a finding, not a lab failure."""
+    ct = res.get("call_token") or {}
+    md = res.get("media") or {}
+    checks = {
+        "no_error": "error" not in res and "refused" not in res,
+        "federation_refused": bool((res.get("federation_off") or {}).get("refused")),
+        "load_done": bool((res.get("load") or {}).get("room_id")),
+        "focus_advertised": bool((res.get("msc4143_rtc_focus") or {}).get("advertised")),
+        "call_token_ok": bool(ct.get("ok")),
+        "media_exit_0": md.get("exit") == 0,
+        # lk load-test's subscriber summary: the one subscriber got the one published audio track
+        "media_received": any("Total" in ln and "1/1" in ln for ln in (md.get("summary") or [])),
+    }
+    return {"checks": checks, "pass": all(checks.values())}
+
+
+def lab_leftovers() -> list[str]:
+    """Anything of this lab still on the box: labelled containers, the network, labelled volumes."""
+    left = []
+    for args in (["docker", "ps", "-a", "--filter", "label=zoe.matrix-lab=1", "--format", "{{.Names}}"],
+                 ["docker", "network", "ls", "--filter", f"name={PROJECT}", "--format", "{{.Name}}"],
+                 ["docker", "volume", "ls", "--filter", f"label=com.docker.compose.project={PROJECT}", "--format", "{{.Name}}"]):
+        left += [ln for ln in sh(args, check=False).stdout.splitlines() if ln.strip()]
+    return left
 
 
 def image_digests() -> dict:
@@ -479,7 +540,6 @@ def main() -> int:
     ap.add_argument("--settle-s", type=int, default=30)
     ap.add_argument("--wait-mem-s", type=int, default=300, help="how long to wait for the memory gate before each server")
     ap.add_argument("--report", default="")
-    ap.add_argument("--keep", action="store_true", help="keep the temp dir (configs + throwaway secrets) for debugging")
     a = ap.parse_args()
     if not wait_mem(a.min_mem_mb, a.wait_mem_s):
         print(f"REFUSED: MemAvailable {mem_available_mb()} MB < {a.min_mem_mb} MB", file=sys.stderr)
@@ -499,14 +559,18 @@ def main() -> int:
     finally:
         compose(env, "--profile", "tuwunel", "--profile", "synapse", "--profile", "cli", "down", "-v", "--remove-orphans",
                 check=False, timeout=300)
-        if not a.keep:
-            shutil.rmtree(run, ignore_errors=True)
+        shutil.rmtree(run, ignore_errors=True)
+    for res in report["results"]:
+        res["verdict"] = verdict(res)
+    report["teardown_leftovers"] = lab_leftovers()
+    report["teardown_ok"] = not report["teardown_leftovers"] and not run.exists()
+    report["pass"] = report["teardown_ok"] and bool(report["results"]) and all(r["verdict"]["pass"] for r in report["results"])
     report["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     text = json.dumps(report, indent=2)
     if a.report:
         Path(a.report).write_text(text + "\n")
     print(text)
-    return 0
+    return 0 if report["pass"] else 1
 
 
 if __name__ == "__main__":
