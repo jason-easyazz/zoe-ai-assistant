@@ -1000,11 +1000,11 @@
                 (status.providers || []).map(p => (p.domain || p.id || '').toLowerCase())
             );
             showSetup(connectedIds);
-            connectWS();
+            await connectWS();
             return;
         }
         await fetchPlayersFromBackend();
-        connectWS();
+        await connectWS();
     }
 
     /* ── WebSocket ──────────────────────────────────────────────────────── */
