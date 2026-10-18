@@ -2325,6 +2325,10 @@ _omi_dr_router.register(app)
 # ZOE_PANEL_REVIEW_CARDS is on - flag off = 404. The voice side is a fast tier (panel_review_cards.tier).
 from routers import panel_review_cards as _panel_cards_router  # noqa: E402
 _panel_cards_router.register(app)
+# Memories card (flag-dark): taps on the "what I know about you" card a voice turn pushes to its panel (That's wrong / Forget /
+# Where's this from). Mounted ONLY when ZOE_MEMORIES_VOICE is on - flag off = 404. The voice side is memories_voice.tier.
+from routers import memories_card as _memories_card_router  # noqa: E402
+_memories_card_router.register(app)
 
 # Contact cards (flag-dark): the member's own multi-value contact fields with provenance, vCard export/import and the merge-review
 # queue (migration 0053, contacts_store.py). Mounted ONLY when ZOE_CONTACTS_API is on — flag off = 404. No sync engine.

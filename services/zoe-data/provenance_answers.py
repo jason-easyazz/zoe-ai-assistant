@@ -574,6 +574,8 @@ class Item:
     inferred: bool = False
     classes: frozenset = frozenset()
     mtype: str = ""             # the row's memory_type (a derived person-projection row is "person")
+    origin: str = ""            # the writer that stored it (``origin``, else ``source``): "omi_review" = approved from the day review
+    cls: str = ""               # the authority class (``memory_authority.row_class``): user_stated / user_confirmed / ...
 
 
 @dataclass
@@ -629,7 +631,9 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
             continue
         if own_words.is_pasted_row(meta) or own_words.instruction_shaped(text) or auth.is_unverified(meta):
             continue
+        cls = ""
         try:
+            cls = auth.row_class(meta, text)
             inferred = auth.row_rank(meta, text) < auth.USER_RANK
             # A row the writer could not tie to anything the owner said ("unanchored", class below the
             # derived-from-the-owner's-words rank) is a guess about them: it is not said back as something they told Zoe
@@ -644,7 +648,7 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
         classes = sensitive_classes(text, meta)
         primary = next((c for c in _CLASS_ORDER if c in classes), "")
         it = Item(ref.id, text, _row_epoch(meta), group_of(text, meta), primary, inferred, classes,
-                  str(meta.get("memory_type") or "").lower())
+                  str(meta.get("memory_type") or "").lower(), str(meta.get("origin") or meta.get("source") or ""), cls)
         known.total += 1
         if it.sensitive:
             known.private.setdefault(it.sensitive, []).append(it)

@@ -334,9 +334,66 @@ async def forget_my_memory(
     except Exception as exc:  # noqa: BLE001 - the forget may be half done: say so, the retry finishes it
         logger.warning("memories/mine forget failed (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="I couldn't finish forgetting that. Try again in a moment.")
+    if outcome == "protected":
+        raise HTTPException(status_code=409, detail="A grown-up added this one, so only they can change it.")
     if outcome != "forgotten":
         raise HTTPException(status_code=404, detail="Memory not found")
     return JSONResponse(content={"forgotten": True}, headers={"Cache-Control": "no-store"})
+
+
+def _memories_voice_on() -> None:
+    import memories_voice
+
+    if not memories_voice.enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+@router.get("/mine/actions")
+async def my_memory_actions(request: Request, user: dict = Depends(get_current_user)):
+    """What the phone / desktop "What Zoe knows about you" section may offer (flag-dark ``ZOE_MEMORIES_VOICE``: off = 404, so the
+    section stays hidden). Same identity wall as ``GET /mine``."""
+    _memories_voice_on()
+    _member_or_refuse(request, user)
+    import correction_apply
+
+    return JSONResponse(content={"forget": True, "correct": bool(correction_apply.enabled())},
+                        headers={"Cache-Control": "no-store"})
+
+
+@router.post("/mine/{memory_id}/correct")
+async def correct_my_memory(
+    memory_id: str,
+    request: Request,
+    body: dict,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Correct ONE of the signed-in member's own memories with the words they typed (the phone's "Fix this"; flag-dark
+    ``ZOE_MEMORIES_VOICE``). The EXISTING correction path (``memory_space.correct_row`` -> ``correction_apply``): the old row is
+    SUPERSEDED, kept as history with ``superseded_by_id``, and the new one carries the typed words as its evidence. Same identity
+    wall and the same no-oracle 404 as the forget."""
+    _memories_voice_on()
+    uid = _member_or_refuse(request, user)
+    await require_feature_access(db, user, feature="memories", action="review")
+    text = " ".join(str((body or {}).get("text") or "").split())
+    if not text or len(text) > 280:
+        raise HTTPException(status_code=422, detail="Say what's right in one short sentence.")
+    import memory_space
+
+    try:
+        outcome = await memory_space.correct_row(uid, memory_id, text, utterance=text, svc=_svc())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memories/mine correct failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="I couldn't change that just now. Try again in a moment.")
+    if outcome == "gone":
+        raise HTTPException(status_code=404, detail="Memory not found")
+    if outcome == "protected":
+        raise HTTPException(status_code=409, detail="A grown-up added this one, so only they can change it.")
+    if outcome == "off":
+        raise HTTPException(status_code=503, detail="Corrections are switched off right now.")
+    if outcome != "corrected":
+        raise HTTPException(status_code=409, detail="I couldn't change that one. Forget it and tell me the right thing instead.")
+    return JSONResponse(content={"corrected": True}, headers={"Cache-Control": "no-store"})
 
 
 _PROMPT_PACKET_MAX_FACTS = 12

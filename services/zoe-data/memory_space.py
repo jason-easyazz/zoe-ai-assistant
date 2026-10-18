@@ -99,6 +99,43 @@ def _when(epoch: Optional[float]) -> str:
         return ""
 
 
+#: how a row came to be held, in the member's words (``provenance``): the writer and the authority class decide, never a model
+PROVENANCE_LABELS = {
+    "day_review": "From your day review, approved by you",
+    "confirmed": "You confirmed this",
+    "told": "You told me",
+    "derived": "From something you said",
+    "inferred": "I worked this out",
+}
+
+
+def provenance_kind(it: Any) -> str:
+    """``day_review`` | ``confirmed`` | ``told`` | ``derived`` | ``inferred`` for a gathered item. Pure."""
+    import memory_authority as auth
+
+    origin = str(getattr(it, "origin", "") or "")
+    cls = str(getattr(it, "cls", "") or "")
+    if origin == "omi_review":
+        return "day_review"
+    if cls == auth.USER_CONFIRMED:
+        return "confirmed"
+    if not getattr(it, "inferred", True):
+        return "told"
+    if cls == auth.USER_STATED_DERIVED:
+        return "derived"
+    return "inferred"
+
+
+def provenance_label(it: Any) -> str:
+    """"You told me on 3 Oct" / "From your day review, approved by you on 3 Oct" / "I worked this out (3 Oct)". Pure."""
+    kind = provenance_kind(it)
+    day = _when(getattr(it, "epoch", None))
+    base = PROVENANCE_LABELS[kind]
+    if not day:
+        return base
+    return f"{base} ({day})" if kind == "inferred" else f"{base} on {day}"
+
+
 def _item(it: Any) -> dict:
     return {
         "id": it.id,
@@ -107,6 +144,8 @@ def _item(it: Any) -> dict:
         "epoch": it.epoch,
         # "told": the owner's own words (or a fact they stated); "inferred": Zoe picked it up from what they said
         "source": "inferred" if it.inferred else "told",
+        "provenance": provenance_kind(it),
+        "provenance_label": provenance_label(it),
     }
 
 
@@ -168,8 +207,31 @@ async def read_view(user_id: str, *, svc: Any = None) -> dict:
     return build_view(known)
 
 
+#: a curated row (``origin="curator"``, memories-space 2.3 / owner D7 + D9): only an ADULT member's own word changes it
+CURATED_ORIGIN = "curator"
+
+
+async def curated_locked(user_id: str, meta: Optional[dict]) -> bool:
+    """True when ``meta`` is a curated row and ``user_id`` is not known to be an adult member (owner D9, 2026-10-19: a child's
+    passing remark never overwrites what an admin curated for them). Fail-closed: an unreadable role locks a curated row. Rows
+    that are not curated are never locked (no read at all)."""
+    if str((meta or {}).get("origin") or "") != CURATED_ORIGIN:
+        return False
+    try:
+        from db_compat import get_compat_db
+
+        async with get_compat_db() as db:
+            async with db.execute("SELECT role FROM users WHERE id = ?", (user_id,)) as cur:
+                row = await cur.fetchone()
+        role = str((row[0] if row else "") or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        return True
+    return role in ("", "child", "guest")
+
+
 async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
-    """Forget ONE of the caller's rows: ``'forgotten'`` | ``'gone'`` (absent, someone else's, or already forgotten - one answer).
+    """Forget ONE of the caller's rows: ``'forgotten'`` | ``'gone'`` (absent, someone else's, or already forgotten - one answer)
+    | ``'protected'`` (a curated row a child may not remove, :func:`curated_locked`).
 
     The steps of ``provenance_answers.forget_it``: reject the row and its twins (one utterance leaves several), erase them for
     real when physical erase is on, remove the owner's verbatim words. RAISES when a step could not finish (the row may already
@@ -186,6 +248,8 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     status = str((ref.metadata or {}).get("status") or "approved").lower()
     if status not in ("approved", "rejected"):
         return "gone"          # pending / disputed / archived rows are not on the screen: nothing here to forget
+    if await curated_locked(user_id, ref.metadata):
+        return "protected"
     exp = mp.Explained(seq=0, row_id=rid, ts=0.0, text=ref.text or "")
     twins = await pa.twins_of(user_id, ref, svc=svc)
     if status == "approved":
@@ -209,3 +273,46 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     if status == "rejected" and len(gone) == 1 and not erased and not physical:
         return "gone"          # already forgotten earlier and nothing was left to remove
     return "forgotten"
+
+
+async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: str = "", session_id: Optional[str] = None,
+                      svc: Any = None) -> str:
+    """Correct ONE of the caller's rows to ``new_text`` through the EXISTING correction path
+    (``correction_apply.apply_row_correction``: ``MemoryService.review(edit)`` supersedes - the old row is kept as history with
+    ``superseded_by_id``, the new one carries the correcting words as its evidence under the user-class writer). The twin rows the
+    same utterance left are retired too (``provenance_answers.fix``'s rule), so the old value cannot come back through a sibling.
+
+    ``'corrected'`` | ``'gone'`` (absent / someone else's / not approved - one answer, no oracle) | ``'protected'`` (a curated
+    row, :func:`curated_locked`) | ``'off'`` (``ZOE_CORRECTION_APPLY`` is off) | ``'refused'`` (no change, an opt-out, or the
+    store refused the edit - e.g. it names a forgotten entity). Raises when the store cannot be read.
+    """
+    import correction_apply
+
+    svc = svc or pa._svc_default()
+    rid = str(row_id or "").strip()
+    new = " ".join(str(new_text or "").split())[:TEXT_MAX_CHARS]
+    if not rid:
+        return "gone"
+    ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S)
+    if ref is None or not pa._owns(ref.metadata or {}, user_id):
+        return "gone"
+    if str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
+        return "gone"
+    if await curated_locked(user_id, ref.metadata):
+        return "protected"
+    if not correction_apply.enabled():
+        return "off"
+    if not new:
+        return "refused"
+    twins = await pa.twins_of(user_id, ref, svc=svc)
+    res = await correction_apply.apply_row_correction(user_id, rid, new, utterance=utterance or new, session_id=session_id,
+                                                      svc=svc)
+    if res is None:
+        return "refused"
+    for tw in twins:
+        try:
+            await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction")
+        except Exception as exc:  # noqa: BLE001 - the corrected row already stands
+            logger.debug("memory_space: twin retire skipped (%s)", type(exc).__name__)
+    logger.info("MEMORY_SPACE_CORRECT user=%s twins=%d", user_id, len(twins))
+    return "corrected"
