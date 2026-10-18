@@ -3,7 +3,7 @@ type: Runbook
 title: Mac virtual panel (test the panel from a laptop, away from home)
 description: How to run the panel voice daemon natively on an Apple-silicon Mac as a second panel ("mac-dev") that reaches zoe-data through the Cloudflare tunnel - install, the Access/device-token wiring and its least-privilege option, what it can and cannot test (including the barge-in phase-1 lab), and what is unverified because it was built with no Mac in reach.
 tags: [voice, panel, macos, cloudflare-access, tunnel, barge-in, runbook]
-timestamp: 2026-10-05T09:00:00+08:00
+timestamp: 2026-10-18T20:30:00+08:00
 ---
 
 # Mac virtual panel
@@ -28,6 +28,26 @@ proven only against fakes (§9).
 | the barge-in **decide** logic: detector, grace, `_BargeDecider`, ledger, seed capture (§7) | Pi thermals, Pi CPU/RAM contention, ALSA/Pulse latency (aplay adds ~70-90 ms before first sound [src: `zoe_voice_daemon.py` barge comment]) |
 | the kiosk **UI** in a browser tab through the tunnel (`/touch/home.html?panel_id=mac-dev&kiosk=1`), including orb-tap: the touch page itself `fetch`es `POST http://localhost:7777/activate` with `mode:'no-cors'` [src: `touch/home.html`, `touch/js/touch-menu.js`], which on a Mac reaches the local daemon (guarded, §2; [unverified] end to end) | the Pi's on-box screen-wake agent: it listens on `127.0.0.1:8765` and only wakes the screen (`/wake`); it never starts a recording, and the Mac has none |
 | the Access + device-token plumbing a remote panel needs | the Pi's `/wake` call to that agent (skipped on the Mac) |
+
+### What the Mac panel IS allowed to be (security changes of 2026-10-17/18)
+
+Read this before testing anything personal from the Mac - three rules changed, and one test expectation follows from each.
+
+* **A device token is the PANEL, not a person** (#2089, `routers/panel_auth._resolve_device_token_user`) **[src]**. The `mac-dev` token resolves to a guest-class
+  PANEL principal stamped `panel_id=mac-dev` - never to the panel's bound `default` member, and never to an admin. Binding a `default_user_id` (§5 step 3) therefore
+  **no longer makes the daemon's turns that member**; it only sets whose panel it is for display on the LAN (not served over the tunnel at all) and who may appear in the sign-in picker. (`ZOE_DEVICE_TOKEN_BINDS_MEMBER=1` restores the
+  old binding; it is an operator rollback for the Pi kiosk, never a setting for the Mac.)
+* **A member is proven per turn** (#2097, `routers/voice_tts._resolve_fresh_panel_member`) **[src]**. A voice turn is attributed to a member only on a fresh signal: an accepted
+  voice-identification claim (the enrolled voice, ResNet34-gated), a fresh PIN panel session on `panel_id=mac-dev`, or an open verified voice session. Otherwise the turn is a
+  guest turn: it can ask general questions but reads no member's private lists, calendar or reminders and writes nothing to a member's memory. Until a turn is identified the Mac daemon is a guest: identify yourself by voice (enrolment is per microphone - the Mac mic is a different
+  microphone from the panel's, so whether an enrolled voice still matches is **[unverified]**) or by PIN in the UI tab.
+* **Cloudflare is the internet, never the panel** (`panel_principal.py`) **[src]**. A request that carries a Cloudflare edge header (`cf-ray`, `cf-connecting-ip`, `cf-visitor`)
+  is never recognised as the panel *by address or by kiosk credential*, and a signed-in member's own browser session is the only other way in. So the **browser UI tab**
+  (`panel_id=mac-dev`, a guest session through Access) is refused **home control** (`/api/ha/*`, the house-state reads) and the **household lists**, and shows "Sign in" because
+  the panel display identity is not served over the tunnel. **That is expected, not a bug.** The tunnel is for testing the voice path and the UI, not the house.
+  Caveat from reading the code **[src, no test covers it over Cloudflare, unverified live]**: the *daemon's* requests carry `X-Device-Token`, and
+  `is_panel_guest` accepts a device-token principal (path 1) **before** it looks for the tunnel header, so a voice turn from the daemon is likely still "the panel" and may be allowed
+  home control and household list items. Test it deliberately with a harmless entity before relying on either reading; recorded in `docs/knowledge/open-problems.md`.
 
 ## 2. How the code is arranged
 
@@ -102,7 +122,7 @@ operator (§5): the `DEVICE_TOKEN` for `mac-dev` and the Cloudflare Access servi
    (`caffeinate -i` keeps an idle Mac awake; closing the lid still sleeps it). Log: `~/.zoe-virtual-panel/voice.log`.
 6. `bash scripts/setup/mac_virtual_panel.sh ui` - opens `https://zoe.the411.life/touch/home.html?panel_id=mac-dev&kiosk=1`
    (the estate UI, same URL shape as the Pi kiosk [src: `scripts/setup/touchscreen/start-kiosk.sh`]). Sign in through Access
-   as yourself; the page boots as the kiosk guest and shows the who+PIN card as on the Pi.
+   as yourself; the page boots as the kiosk guest and shows the who+PIN card as on the Pi. Over the tunnel it is a plain guest session (§1): home control, house-state reads and household lists answer "Sign in" / 403, and the panel's display owner is not shown.
 7. Say the wake word (default model: **"Hey Jarvis"**; "Hey Zoe" needs a `.tflite` build: `HEY_ZOE_TFLITE=/path/hey_zoe.tflite bash scripts/setup/mac_virtual_panel.sh install`
    - the Mac daemon loads `scripts/setup/hey_zoe.tflite` if present; the file is untracked). If the wake word is dead, use `... ptt` (see above).
 8. Rollback: `bash scripts/setup/mac_virtual_panel.sh uninstall --yes` deletes `~/.zoe-virtual-panel/` (venv, Silero
@@ -147,6 +167,10 @@ the panel - Cloudflare Access blocks it with HTTP 302". An API client with no Ac
 `wake`, `turn_stream`, `turn_stream/speculation`, `turn`, `transcribe`, `speak`, `ambient`, `identify`, `profiles/sync`,
 `announcements`, `announcements/{id}/played`.
 
+**Identity over the tunnel (2026-10-17/18).** Everything the daemon sends carries `X-Device-Token`, which resolves to the PANEL principal (not the bound member, §1). A
+request that crossed Cloudflare is never recognised as the panel by address or kiosk credential, so the only panel signal the Mac has is the device token itself. Member
+identity for a turn needs a voice match or a PIN (§1); the Access service token proves nothing about who is speaking.
+
 **Does the tunnel expose them today?** Yes: they ride `/api/` through `zoe-ui`; **no `cloudflared` ingress change is needed**.
 The missing piece is on the Access side only: a way for a *non-browser* client to pass Access. Nothing else in the daemon is
 reachable-or-not by tunnel: the HA bridge (`HA_BRIDGE_URL`, unused here) and the on-box agent are local.
@@ -183,25 +207,34 @@ that sends no bytes for 100 s (HTTP 524) - the streaming turn starts emitting at
 
 ## 5. Operator steps (Jetson / Cloudflare side)
 
+`$Z` = zoe-data base (`http://127.0.0.1:8000` from the Jetson, or `https://192.168.1.218 -k` on the LAN); `$SID` = an **admin** `X-Session-ID`
+(every call below is `require_admin`). Run these from the Jetson or the owner's LAN, not through the tunnel.
+
 1. **Cloudflare**: create the service token and Access application of option A (§4). Hand the Client ID/Secret to the owner by a
    private channel; the secret is shown once.
-2. **Register the panel** (admin session, on the LAN or via the owner's signed-in browser; `$Z` = zoe-data base, `$SID` = an admin `X-Session-ID`):
+2. **Register the panel**:
    ```
    curl -sX POST $Z/api/panels/register -H "X-Session-ID: $SID" -H 'Content-Type: application/json' \
      -d '{"panel_id":"mac-dev","name":"Mac virtual panel","location":"Owner laptop","allow_guest":false}'
    ```
-3. **Bind a user** (an unbound device token resolves to **guest** - fail-closed - `routers/panel_auth.py:_resolve_device_token_user`):
+   Returns `409` if `mac-dev` already exists - then skip to step 3.
+3. **Bindings (optional)** - they no longer decide who the daemon acts as (§1: a device token is the panel, not the bound member). They set whose panel it is for the
+   display and who appears in the sign-in picker. Omit this step for a pure voice-path test:
    ```
    curl -sX PUT $Z/api/panels/mac-dev/bindings -H "X-Session-ID: $SID" -H 'Content-Type: application/json' \
      -d '{"default_user_id":"<owner-or-test-user>","allowed_user_ids":[]}'
    ```
-   Turns on the virtual panel are **real turns** (memory writes, tool calls). Bind a test user if you do not want them in the owner's record.
-4. **Issue the device token** (returned once; `expires_at` must be timezone-aware ISO - a naive value makes `lookup_device_token` raise):
+   An unbound or bound panel behaves the same for the token: guest-class panel principal. A turn becomes a member's only with a voice match or a PIN (§1).
+   Turns are still **real turns once a member is identified** (memory writes, tool calls) - identify as a test user if you do not want them in the owner's record.
+4. **Issue the device token** (returned once). The body is `{name?, role?, expires_at?}`; **do not send `scopes`** (a device token has none - the request is rejected with 400)
+   and **do not use an admin role** (`admin` / `family-admin` are rejected with 400). `role` is only a label. Without `expires_at` the token lives
+   `ZOE_DEVICE_TOKEN_TTL_DAYS` (default 365; `0` = never); a supplied `expires_at` must be ISO-8601 and in the future (a naive value is read as UTC):
    ```
    curl -sX POST $Z/api/panels/mac-dev/token -H "X-Session-ID: $SID" -H 'Content-Type: application/json' \
-     -d '{"name":"mac-virtual-panel","role":"voice-daemon","scopes":["voice"],"expires_at":"2027-01-05T00:00:00+00:00"}'
+     -d '{"name":"mac-virtual-panel","role":"voice-daemon"}'
    ```
-   Revoke any time: `DELETE /api/panels/mac-dev/token/<token_id>`.
+   The response carries `token`, `token_id` and `expires_at`. Revoke any time: `curl -sX DELETE $Z/api/panels/mac-dev/token/<token_id> -H "X-Session-ID: $SID"`.
+   The daemon cannot renew the token yet (`POST /api/panels/device-token/renew` exists, nothing calls it): note the `expires_at` and re-issue the token before it lapses.
 5. Hand `token` to the owner (private channel). **Do not** use the first-boot pairing flow (`/api/panels/provision/*` + `touch/pair.html`)
    for this: its pickup poll lives under `/api/panels/`, outside the Access path of option A, and it issues a `kiosk`-role token.
 
