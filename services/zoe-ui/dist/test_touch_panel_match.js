@@ -52,7 +52,9 @@ function makePanelFns({ statePanelId = '', urlPanelId = null, lsTouch = null, ls
   const panelMatches = eval('(' + extract('panelMatches') + ')');
   // eslint-disable-next-line no-eval
   const panelMatchesAuthTarget = eval('(' + extract('panelMatchesAuthTarget') + ')');
-  return { panelMatches, panelMatchesAuthTarget };
+  // eslint-disable-next-line no-eval
+  const panelMatchesStrict = eval('(' + extract('panelMatchesStrict') + ')');
+  return { panelMatches, panelMatchesAuthTarget, panelMatchesStrict };
 }
 
 function makePanelMatches(opts) {
@@ -85,9 +87,20 @@ assert.strictEqual(aliasOnlyFns.panelMatchesAuthTarget('zoe-touch-pi'), true, 'a
 const registeredShape = makePanelFns({ statePanelId: 'panel_abcd1234', lsPanel: 'panel_abcd1234', lsTouch: 'panel_abcd1234' });
 assert.strictEqual(registeredShape.panelMatchesAuthTarget('kitchen-panel-2'), false, 'registered id shaped like an alias must remain authoritative for auth');
 
-// Panel with no known identity at all → act rather than silently swallow.
+// Panel with no known identity at all: a frame addressed to a NAMED panel is refused (A11, 2026-10-18 - "act
+// rather than swallow" showed one panel's turn on every panel); an unaddressed (global) frame still acts.
 const unknown = makePanelMatches({ statePanelId: '', urlPanelId: null, lsTouch: null, lsPanel: null });
-assert.strictEqual(unknown('anything'), true, 'unknown identity → honour the action');
-assert.strictEqual(unknown(''), true, 'unknown identity + empty target → honour');
+assert.strictEqual(unknown('anything'), false, 'unknown identity must not claim a frame addressed to a named panel');
+assert.strictEqual(unknown(''), true, 'unknown identity + empty target (a global frame) → honour');
+
+// Per-panel frames (voice:*): absent or unknown is never "any panel".
+const strict = makePanelFns({ statePanelId: 'panel_0e3ko5bl', lsTouch: 'zoe-touch-pi', lsPanel: 'zoe-touch-pi' }).panelMatchesStrict;
+assert.strictEqual(strict('zoe-touch-pi'), true, 'strict: this panel matches');
+assert.strictEqual(strict('panel_0e3ko5bl'), true, 'strict: this panel\'s other alias matches');
+assert.strictEqual(strict(''), false, 'strict: an unaddressed per-panel frame is refused');
+assert.strictEqual(strict(undefined), false, 'strict: an absent panel id is refused');
+assert.strictEqual(strict('kitchen-panel-2'), false, 'strict: another panel is refused');
+const strictUnknown = makePanelFns({ statePanelId: '' }).panelMatchesStrict;
+assert.strictEqual(strictUnknown('zoe-touch-pi'), false, 'strict: a browser that cannot say which panel it is acts on nothing');
 
 console.log('panelMatches: all assertions passed');
