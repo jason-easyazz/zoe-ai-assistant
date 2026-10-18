@@ -57,7 +57,7 @@ Forget cannot rewrite a tarball or a Postgres dump, so the rule is: **backups ag
   MemPalace tarball 7 daily. Biometric table data (`learned_voiceprints`, `omi_segment_embeddings`, `omi_voice_clusters`, segments) is excluded from
   dumps; the enrolled `speaker_profiles` / `face_profiles` embeddings are in them for up to 35 days ([biometric policy](biometric-retention-policy.md)).
 - The plaintext JSON exports are redacted by the forget ledger, nightly and on demand (`scripts/maintenance/redact_backups.py`, `forget_redact.py`).
-- A one-off backup an owner script makes (`~/.zoe/backups/router-shadow-<ts>/` holds raw text, `migrate-hermes-env-<ts>/` holds secrets; mode 0700) is **deleted
+- A one-off backup an owner script makes (`~/.zoe/backups/router-shadow-<ts>/` holds raw text, `migrate-hermes-env-<ts>/` holds secrets, `dead-units-<ts>/` holds retired unit files; mode 0700) is **deleted
   within 14 days, enforced**: the hourly `zoe-log-rotate` job runs `local_text_logs.prune_adhoc_backups`, and the job exits 1 if it cannot (fail closed). Each
   script also prints the path and the `rm -r` line. Hand-made dumps in `~/.zoe-backups` older than that are a ledgered cleanup, not a policy.
 - After a restore from a backup older than a forget, **re-issue the forget**: the ledger table (`memory_forgotten`) is restored with the data it protects, but a

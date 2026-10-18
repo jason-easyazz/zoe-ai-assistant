@@ -96,6 +96,21 @@ def test_adhoc_backups_expire_after_14_days_and_only_ours(tmp_path, shadow):
     assert ltl.sweep(NOW)["adhoc_backups"] == 0
 
 
+def test_the_dead_units_backup_expires_too(tmp_path, shadow):
+    """``cleanup_dead_units.py --apply`` writes ``~/.zoe/backups/dead-units-<ts>/``; it must age out like the other owner-script
+    backups. Break: drop ``"dead-units-"`` from ``ADHOC_BACKUP_PREFIXES`` -> the old directory is never pruned."""
+    root = tmp_path / "adhoc"
+    old = root / "dead-units-20260101-000000"
+    fresh = root / "dead-units-20261017-000000"
+    for d in (old, fresh):
+        d.mkdir(parents=True)
+        (d / "zoe-dreaming.service").write_text("[Unit]")
+    os.utime(old, (NOW - 40 * DAY, NOW - 40 * DAY))
+    os.utime(fresh, (NOW - 2 * DAY, NOW - 2 * DAY))
+    assert ltl.prune_adhoc_backups(NOW) == 1
+    assert not old.exists() and fresh.exists()
+
+
 def test_the_backup_expiry_runs_even_when_text_retention_is_off(tmp_path, shadow, monkeypatch):
     d = tmp_path / "adhoc" / "router-shadow-20260101-000000"
     d.mkdir(parents=True)

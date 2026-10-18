@@ -101,9 +101,10 @@ def test_a_rewrite_whose_path_was_renamed_underneath_it_replaces_nothing(shadow)
     assert "brand new row" in shadow.read_text()
 
 
-def test_a_writer_in_another_process_blocks_on_the_pass_lock_and_no_rotation_interleaves(shadow, monkeypatch):
+def test_a_writer_in_another_process_skips_while_the_pass_holds_the_lock_and_no_rotation_interleaves(shadow, monkeypatch):
     """The writer is a SEPARATE PROCESS (the in-process lock cannot help it - this is the hourly-job-vs-zoe-data case).
-    Break: remove ``_shadow_file_lock`` from ``semantic_router._append_shadow_line`` (or the flock in ``locked``): the writer rotates
+    The writer NEVER waits (it is a live voice turn): it skips its observation while the pass holds the lock. Break: remove
+    ``_shadow_file_lock`` from ``semantic_router._append_shadow_line`` (or the flock in ``locked``): the writer rotates
     mid-pass, ``.3`` is renamed to ``.4`` unvisited and its text survives an erase that reports success."""
     import subprocess
     import sys
@@ -121,8 +122,7 @@ def test_a_writer_in_another_process_blocks_on_the_pass_lock_and_no_rotation_int
             "import os, time\n"
             "print('ready', flush=True)\n"
             "while not os.path.exists(%r): time.sleep(0.01)\n"
-            "sr._append_shadow_line(%r, %r)\n"
-            "print('done', flush=True)\n") % (svc, str(go), str(shadow), rec("w" * 12, "writer row"))
+            "print('done' if sr._append_shadow_line(%r, %r) else 'skipped', flush=True)\n") % (svc, str(go), str(shadow), rec("w" * 12, "writer row"))
     proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
     assert proc.stdout.readline().strip() == "ready"
     first = {"v": True}
@@ -132,17 +132,20 @@ def test_a_writer_in_another_process_blocks_on_the_pass_lock_and_no_rotation_int
         if first["v"]:
             first["v"] = False
             go.write_text("1")                                   # NOW the writer races the pass, which holds the lock
-            time.sleep(0.5)                                      # long enough for an unlocked writer to rotate
-            assert proc.poll() is None, "the writer got through while the pass held the lock"
+            deadline = time.monotonic() + 10
+            while proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert proc.poll() is not None, "the writer waited on the pass instead of skipping"
         return real_rewrite(path, fn)
 
     monkeypatch.setattr(ltl, "rewrite", rewrite_then_let_the_writer_try)
     ltl.erase_entity(re.compile("Marisol"))
     out, _ = proc.communicate(timeout=20)
-    assert "done" in out
+    assert "skipped" in out
     files = [p for p in shadow.parent.glob(shadow.name + "*") if p.suffix != ".lock"]
     assert all("Marisol" not in p.read_text() for p in files)
-    assert any("writer row" in p.read_text() for p in files)
+    assert not any("writer row" in p.read_text() for p in files)             # the observation was dropped, not queued behind the pass
+    assert not shadow.with_name(shadow.name + ".5").exists()                 # and nothing rotated mid-pass
 
 
 def test_lock_wait_fails_closed(shadow, monkeypatch):

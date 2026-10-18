@@ -25,8 +25,9 @@ What reaches them:
                 hold no words.
 
 A pass over the router log holds ``locked(log)``: the in-process append lock and an exclusive ``flock`` on ``<log>.lock``, the same
-two locks ``semantic_router._append_shadow_line`` takes (same order) around rotate + append. So in or out of process no append and
-no rotation interleaves with the pass, which enumerates EVERY existing numeric segment (``.5`` left over from a larger
+two locks ``semantic_router._append_shadow_line`` takes (same order) around rotate + append. The writer never WAITS for them (it
+runs inside ``route()`` on a live voice turn): while the pass holds them it skips that turn's observation. So in or out of process no
+append and no rotation interleaves with the pass, which enumerates EVERY existing numeric segment (``.5`` left over from a larger
 ``ZOE_ROUTER_SHADOW_KEEP`` included) inside the lock. Rewrites are atomic (fsynced temp file + ``os.replace`` + directory fsync)
 and keep the file mode. As defence against a writer that does not take the lock (the intent-miss log's writer): the old inode stays
 open, rows that reach it before the replace are put THROUGH the same transformation, the path is checked to still name that inode
@@ -321,7 +322,7 @@ def _apply(log: TextLog, **kw: Any) -> int:
 
 ADHOC_BACKUP_MAX_AGE_DAYS = 14
 #: directory-name prefixes under the backup root that owner scripts write and that hold words or secrets (docs/knowledge/forget-reach.md)
-ADHOC_BACKUP_PREFIXES = ("router-shadow-", "migrate-hermes-env-")
+ADHOC_BACKUP_PREFIXES = ("router-shadow-", "migrate-hermes-env-", "dead-units-")
 
 
 def adhoc_backup_root() -> Path:
