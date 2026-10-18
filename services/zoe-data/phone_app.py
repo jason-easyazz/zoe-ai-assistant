@@ -97,6 +97,17 @@ def _sha(value: str) -> str:
 
 _CODES: dict[str, tuple[str, float]] = {}   # sha256(code) -> (user_id, expires_at)
 _LOCK = threading.Lock()
+# zoe-data is one process: this serialises the device-cap count and the insert, so two completions cannot both see nine phones.
+_PAIR_LOCK: Optional["asyncio.Lock"] = None
+
+
+def _pair_lock():
+    global _PAIR_LOCK
+    import asyncio
+
+    if _PAIR_LOCK is None:
+        _PAIR_LOCK = asyncio.Lock()
+    return _PAIR_LOCK
 
 
 def _prune(now: float) -> None:
@@ -105,8 +116,10 @@ def _prune(now: float) -> None:
 
 
 def reset() -> None:
+    global _PAIR_LOCK
     with _LOCK:
         _CODES.clear()
+    _PAIR_LOCK = None
 
 
 def start_pairing(user_id: str, *, now: Optional[float] = None) -> dict[str, Any]:
@@ -147,12 +160,23 @@ def decode_payload(payload: str) -> dict[str, Any]:
 
 
 def valid_public_key(b64: str) -> bool:
-    """A P-256 public key as the Secure Enclave exports it: 65-byte X9.63 (0x04 || X || Y) or 91-byte SubjectPublicKeyInfo DER."""
+    """A P-256 public key as the Secure Enclave exports it - 65-byte X9.63 (0x04 || X || Y) or SubjectPublicKeyInfo DER - whose
+    point is ON the curve (``cryptography`` parses and checks it). Anything else is refused."""
     try:
         raw = base64.b64decode(b64 or "", validate=True)
     except (ValueError, TypeError):
         return False
-    return (len(raw) == 65 and raw[0] == 4) or (len(raw) == 91 and raw[:2] == b"\x30\x59")
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.serialization import load_der_public_key
+
+        if len(raw) == 65 and raw[0] == 4:
+            ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), raw)
+            return True
+        key = load_der_public_key(raw)
+        return isinstance(key, ec.EllipticCurvePublicKey) and isinstance(key.curve, ec.SECP256R1)
+    except Exception:  # noqa: BLE001 - not a point on P-256 / not a key
+        return False
 
 
 @dataclass(frozen=True)
@@ -176,6 +200,11 @@ async def complete_pairing(db, *, code: str, device_name: str, platform: str, pu
     user_id = _consume(code, now)
     if not user_id:
         raise PhoneAppError(401, "that pairing code is not valid any more; show a new one")
+    async with _pair_lock():
+        return await _insert_device(db, user_id, name, platform, public_key, app_version, now)
+
+
+async def _insert_device(db, user_id: str, name: str, platform: str, public_key: str, app_version: str, now: float) -> dict:
     async with db.execute("SELECT COUNT(*) FROM phone_devices WHERE user_id = ? AND revoked = 0", (user_id,)) as cur:
         row = await cur.fetchone()
     if row and int(row[0]) >= MAX_DEVICES_PER_MEMBER:

@@ -37,7 +37,16 @@ pytestmark = pytest.mark.ci_safe
 
 ADULT, KID = "ann-0001", "kid-0002"
 BUNDLE = "life.zoe.lab"
-PUBKEY = base64.b64encode(b"\x04" + bytes(range(64))).decode()   # shape of a Secure Enclave X9.63 P-256 public key
+def _p256_x963() -> str:
+    """A real P-256 public key in the X9.63 form the Secure Enclave exports (synthetic, made per run)."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    pub = ec.generate_private_key(ec.SECP256R1()).public_key()
+    return base64.b64encode(pub.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)).decode()
+
+
+PUBKEY = _p256_x963()
 APNS = "ab" * 32
 
 
@@ -154,6 +163,35 @@ def test_children_and_guests_cannot_pair(box):
     assert box["client"].post("/api/phone/pair/start").status_code == 403
 
 
+def _real_auth_app(box, principal):
+    """The router with the REAL require_member; only get_current_user (zoe-auth) is replaced by ``principal``."""
+    from auth import get_current_user
+    from routers.phone_app import router
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: principal
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("principal", [
+    {"user_id": "guest", "role": "guest"},
+    {"user_id": "guest-abc", "role": "guest"},
+    {"user_id": "zoe-panel-1", "role": "guest", "panel_id": "zoe-panel-1", "device_token_role": "voice-daemon"},
+    {"user_id": ADULT, "role": "user", "panel_id": "zoe-panel-1", "device_token_role": "voice-daemon"},  # token bound to a member
+])
+def test_the_panel_principal_and_guests_cannot_pair(box, principal):
+    c = _real_auth_app(box, principal)
+    assert c.post("/api/phone/pair/start").status_code == 403
+    assert c.get("/api/phone/devices").status_code == 403
+
+
+def test_a_point_off_the_curve_is_not_a_key():
+    assert phone_app.valid_public_key(PUBKEY)
+    assert not phone_app.valid_public_key(base64.b64encode(b"\x04" + bytes(range(64))).decode())
+    assert not phone_app.valid_public_key(base64.b64encode(b"\x30\x59" + b"\x00" * 89).decode())
+
+
 def test_no_secret_is_stored(box):
     code, r = _pair(box)
     token = r.json()["device_token"]
@@ -225,7 +263,12 @@ def test_flag_off_is_404_everywhere(box, monkeypatch, value):
     monkeypatch.setenv("ZOE_PHONE_APP", value)
     if value.strip().lower() == "on":
         pytest.skip("on")
-    c = box["client"]
+    # the REAL auth dependency and no DB override: the router-level gate answers first, so neither ever runs
+    from routers.phone_app import router
+
+    app = FastAPI()
+    app.include_router(router)
+    c = TestClient(app)
     for method, url in (("post", "/api/phone/pair/start"), ("post", "/api/phone/pair/complete"), ("get", "/api/phone/me"),
                         ("put", "/api/phone/push"), ("delete", "/api/phone/push/alert"), ("get", "/api/phone/devices"),
                         ("delete", "/api/phone/devices/x")):

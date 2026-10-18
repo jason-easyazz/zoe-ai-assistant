@@ -26,12 +26,14 @@ from panel_principal import require_member
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/phone", tags=["phone-app"])
-
-
 def _on() -> None:
+    """The flag gate. A ROUTER-level dependency, so it runs before every route's own dependencies (auth, DB): with the flag off an
+    unauthenticated caller gets the same 404 as everyone else and no DB connection is opened (cross-review #2146)."""
     if not phone_app.enabled():
         raise HTTPException(status_code=404, detail="Not Found")
+
+
+router = APIRouter(prefix="/api/phone", tags=["phone-app"], dependencies=[Depends(_on)])
 
 
 def _err(e: phone_app.PhoneAppError) -> HTTPException:
@@ -47,7 +49,6 @@ async def _device(db, token: str) -> phone_app.Device:
 
 @router.post("/pair/start")
 async def pair_start(request: Request, user: dict = Depends(require_member)):
-    _on()
     import manner_block
 
     uid = str(user.get("user_id") or "")
@@ -63,7 +64,6 @@ async def pair_start(request: Request, user: dict = Depends(require_member)):
 
 @router.post("/pair/complete")
 async def pair_complete(payload: dict, db=Depends(get_db)):
-    _on()
     try:
         out = await phone_app.complete_pairing(
             db, code=str(payload.get("code") or ""), device_name=str(payload.get("device_name") or ""),
@@ -78,7 +78,6 @@ async def pair_complete(payload: dict, db=Depends(get_db)):
 
 @router.get("/me")
 async def me(db=Depends(get_db), x_zoe_phone_token: str = Header(default="")):
-    _on()
     dev = await _device(db, x_zoe_phone_token)
     name = ""
     try:
@@ -93,7 +92,6 @@ async def me(db=Depends(get_db), x_zoe_phone_token: str = Header(default="")):
 
 @router.put("/push")
 async def register_push(payload: dict, db=Depends(get_db), x_zoe_phone_token: str = Header(default="")):
-    _on()
     dev = await _device(db, x_zoe_phone_token)
     try:
         await phone_app.register_push(db, dev, push_type=str(payload.get("push_type") or ""), token=str(payload.get("token") or ""),
@@ -105,20 +103,17 @@ async def register_push(payload: dict, db=Depends(get_db), x_zoe_phone_token: st
 
 @router.delete("/push/{push_type}")
 async def unregister_push(push_type: str, db=Depends(get_db), x_zoe_phone_token: str = Header(default="")):
-    _on()
     dev = await _device(db, x_zoe_phone_token)
     return {"ok": True, "removed": await phone_app.unregister_push(db, dev, push_type)}
 
 
 @router.get("/devices")
 async def devices(user: dict = Depends(require_member), db=Depends(get_db)):
-    _on()
     return {"devices": await phone_app.list_devices(db, str(user.get("user_id") or ""))}
 
 
 @router.delete("/devices/{device_id}")
 async def revoke(device_id: str, user: dict = Depends(require_member), db=Depends(get_db)):
-    _on()
     ok = await phone_app.revoke_device(db, device_id, user_id=str(user.get("user_id") or ""),
                                        is_admin=is_admin_role(user.get("role")))
     if not ok:
