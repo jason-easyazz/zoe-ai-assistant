@@ -5295,12 +5295,11 @@ async def voice_command(
                         if delta.startswith(_VOICE_ESCALATION_MARKERS):
                             try:
                                 is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
-                                # See the non-stream path: Hermes is retired, so
-                                # every escalation goes to the background runner.
-                                logger.info("voice/command stream escalation -> background (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
-                                from background_runner import enqueue_background_task
-                                _spawn_bg(enqueue_background_task(esc_prompt, effective_user, session_id))
-                                delta = "I'll work on that in the background and let you know when it's done."
+                                # Hermes is retired and the background executor is gone (it launched an
+                                # agent with auto-approve as the zoe user - deep dive S0-7): an escalation
+                                # is refused out loud, never queued.
+                                logger.info("voice/command stream escalation refused - no executor (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
+                                delta = "I can't run that kind of task any more, so I haven't started it."
                             except Exception as esc_exc:
                                 logger.warning("voice/command stream escalation failed: %s", esc_exc)
                                 delta = "I couldn't complete that advanced request right now. Please try again."
@@ -5424,15 +5423,11 @@ async def voice_command(
                 if delta.startswith(_VOICE_ESCALATION_MARKERS):
                     try:
                         is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
-                        # Hermes is retired, so there is no foreground escalation
-                        # engine — every escalation now goes to the background
-                        # runner, which is the path that still has one. Verified
-                        # never-fired before removal (operator-confirmed; zero
-                        # 'escalation ->' hits in the logs).
-                        logger.info("voice/command escalation -> background (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
-                        from background_runner import enqueue_background_task
-                        _spawn_bg(enqueue_background_task(esc_prompt, effective_user, session_id))
-                        delta = "I'll work on that in the background and let you know when it's done."
+                        # Hermes is retired and the background executor is gone (it launched an agent
+                        # with auto-approve as the zoe user - deep dive S0-7): an escalation is refused
+                        # out loud, never queued.
+                        logger.info("voice/command escalation refused - no executor (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
+                        delta = "I can't run that kind of task any more, so I haven't started it."
                     except Exception as esc_exc:
                         logger.warning("voice/command escalation failed: %s", esc_exc)
                         delta = "I couldn't complete that advanced request right now. Please try again."

@@ -347,7 +347,9 @@ def test_main_refuses_live_repo_root_without_override(tmp_path, monkeypatch):
         raise AssertionError("expected SystemExit for live-root CLI without override")
 
 
-def test_focused_checks_block_already_covered_clean_worktree(tmp_path, monkeypatch):
+def test_focused_checks_never_exec_hermes_even_when_already_covered(tmp_path, monkeypatch):
+    """The idempotent-and-clean case used to run `hermes kanban block <task>`; Hermes is retired and
+    nothing may exec it. The checks still run and the result still says nothing was blocked."""
     helper = _load_helper()
     calls = []
 
@@ -366,49 +368,12 @@ def test_focused_checks_block_already_covered_clean_worktree(tmp_path, monkeypat
     monkeypatch.setattr(helper, "_run_checked", fake_run_checked)
     monkeypatch.setattr(helper.subprocess, "run", fake_run)
 
-    focused = helper.run_focused_checks(
-        tmp_path,
-        {"idempotent": True, "changed": []},
-        kanban_task="t_123",
-        hermes_bin="/tmp/hermes",
-    )
+    focused = helper.run_focused_checks(tmp_path, {"idempotent": True, "changed": []})
 
-    assert focused["terminal_action"] == "kanban_block:ALREADY_COVERED"
+    assert focused["terminal_action"] is None
+    assert focused["git_diff_clean"] is True
     assert any(call[1][:3] == ["python3", "-m", "py_compile"] for call in calls)
     assert any(call[1][:4] == ["python3", "-m", "pytest", "-q"] for call in calls)
     assert ("run", ["git", "diff", "--quiet"], tmp_path) in calls
-    assert any(
-        call[1][:4] == ["/tmp/hermes", "kanban", "block", "t_123"]
-        and "BLOCKER=ALREADY_COVERED" in call[1][4]
-        for call in calls
-    )
-
-
-def test_focused_checks_do_not_block_when_helper_changed_files(tmp_path, monkeypatch):
-    helper = _load_helper()
-    calls = []
-
-    def fake_run_checked(cmd, *, cwd):
-        calls.append(("checked", cmd, cwd))
-        return object()
-
-    def fake_run(cmd, cwd):
-        calls.append(("run", cmd, cwd))
-
-        class Result:
-            returncode = 0
-
-        return Result()
-
-    monkeypatch.setattr(helper, "_run_checked", fake_run_checked)
-    monkeypatch.setattr(helper.subprocess, "run", fake_run)
-
-    focused = helper.run_focused_checks(
-        tmp_path,
-        {"idempotent": False, "changed": ["services/zoe-data/intent_router.py"]},
-        kanban_task="t_123",
-        hermes_bin="/tmp/hermes",
-    )
-
-    assert focused["terminal_action"] is None
-    assert not any(call[1][:3] == ["/tmp/hermes", "kanban", "block"] for call in calls)
+    assert not any("hermes" in str(call[1][0]) for call in calls)
+    assert "hermes_bin" not in helper.run_focused_checks.__code__.co_varnames

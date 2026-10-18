@@ -648,7 +648,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STT_STREAM_UPLOAD` | `'false'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_SUBPROCESS_QUEUE_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/async_subprocess.py` |
 | `ZOE_SYNTHETIC_USER_ALLOWLIST` | `''` | no | NO | `services/zoe-data/user_filters.py` |
-| `ZOE_TASK_TIMEOUT_S` | `-`, `dynamic` | yes | NO | `services/zoe-data/background_runner.py` |
+| `ZOE_TASK_TIMEOUT_S` | `3600.0` | yes | NO | `services/zoe-data/background_runner.py` |
 | `ZOE_TAVILY_DEPTH` | `'basic'` | yes | NO | `services/zoe-data/web_search_provider.py` |
 | `ZOE_TELEGRAM_BOT_TOKEN` | `-` | yes | NO | `services/zoe-data/auth_handoff.py` |
 | `ZOE_TELEGRAM_BOT_USERNAME` | `''` | no | NO | `services/zoe-data/telegram_link.py` |

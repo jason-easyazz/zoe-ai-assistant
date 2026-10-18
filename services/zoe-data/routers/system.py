@@ -1160,39 +1160,6 @@ class _EngineeringGuardRunRequest(BaseModel):
     packet_only: bool = False
 
 
-@_agent_card_router.post("/tasks")
-async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_a2a_caller)):
-    """
-    A2A task intake endpoint.
-
-    Accepts a natural-language task from another agent and routes it through
-    Zoe's standard pipeline (intent router -> Zoe Agent -> Hermes escalation).
-
-    Returns a task_id immediately. Results available via GET /api/agent/tasks/{task_id}.
-    For streaming, POST to /api/agent/tasks/stream instead.
-
-    Auth: ``Authorization: Bearer <ZOE_A2A_TOKEN>`` (A2A agents) or
-    ``X-Session-ID`` / ``X-Device-Token`` (UI/voice paths).
-    """
-    user_id = user.get("user_id", "a2a-agent")
-    session_id = body.session_id or f"a2a-{body.caller}-{__import__('uuid').uuid4().hex[:8]}"
-
-    logger.info(
-        "A2A task received: caller=%s user=%s task=%s",
-        body.caller, user_id, body.task[:80],
-    )
-
-    from background_runner import enqueue_background_task  # type: ignore[import]
-    task_id = await enqueue_background_task(body.task, user_id, session_id)
-    return {
-        "task_id": task_id,
-        "session_id": session_id,
-        "status": "queued",
-        "caller": body.caller,
-        "result_endpoint": f"/api/agent/tasks/{task_id}",
-    }
-
-
 @_agent_card_router.post("/tasks/stream")
 async def a2a_task_stream(body: _A2ATaskRequest, user: dict = Depends(get_a2a_caller)):
     """A2A streaming task — returns AG-UI SSE events (same format as /api/chat/).
@@ -1512,23 +1479,9 @@ async def delegate_to_agent(
         )
 
     if agent_name == "hermes":
-        from background_runner import enqueue_background_task  # type: ignore[import]
-        user_id = user.get("user_id", "unknown")
-        session_id = body.get("session_id") or None
-        task_id = await enqueue_background_task(
-            task,
-            user_id,
-            session_id=session_id,
-            request_depth=int(body.get("request_depth") or 0),
-        )
-        return {
-            "agent": agent_name,
-            "result": {
-                "status": "queued",
-                "task_id": task_id,
-                "result_endpoint": f"/api/agent/tasks/{task_id}",
-            },
-        }
+        # Hermes is retired and nothing may launch it (the old branch queued the task for
+        # `hermes --accept-hooks` with HERMES_YOLO_MODE as the zoe user - deep dive S0-7).
+        raise HTTPException(status_code=410, detail="Hermes is retired; no agent can be launched for this task.")
 
     registry = _load_registry()
     agent_info = registry.get("agents", {}).get(agent_name)

@@ -1,0 +1,15 @@
+#!/bin/sh
+# P0 de-root root helper (docs/architecture/p0-deroot.md). NOT installed by anything: the owner installs it
+# root:root 0755 at /usr/local/libexec/zoe-priv/zoe-nvmap-read, and sudoers.d/60-zoe-deroot lets `zoe` run it.
+# Replaces `sudo -n cat <debugfs file>` in scripts/night/night_window.py. Read-only, two fixed files, no paths
+# from the caller:
+#   free     /sys/kernel/debug/nvmap/iovmm/free_size   (the largest allocatable NvMap block)
+#   clients  /sys/kernel/debug/nvmap/iovmm/clients     (NvMap bytes per process)
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+if [ "$#" -ne 1 ]; then echo "usage: zoe-nvmap-read free|clients" >&2; exit 2; fi
+case "$1" in
+  free) exec cat /sys/kernel/debug/nvmap/iovmm/free_size ;;
+  clients) exec cat /sys/kernel/debug/nvmap/iovmm/clients ;;
+  *) echo "usage: zoe-nvmap-read free|clients" >&2; exit 2 ;;
+esac

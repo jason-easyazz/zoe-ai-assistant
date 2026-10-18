@@ -2380,17 +2380,10 @@ async def chat_stream_generator(
                                 ),
                             )
                     elif is_background:
-                        # Queue as a background task and ack immediately
-                        logger.info("chat: Zoe Agent background escalation — reason=%s", reason.strip())
-                        try:
-                            from background_runner import enqueue_background_task
-                            task_id = await enqueue_background_task(
-                                task=oc_task_text, user_id=user_id, session_id=session_id
-                            )
-                            ack_text = f"On it! I'll work on that in the background and let you know when it's done. (Task #{task_id})"
-                        except Exception as _bge:
-                            logger.warning("background task enqueue failed: %s", _bge)
-                            ack_text = "I'll get started on that. I'll let you know when I'm done!"
+                        # Background execution is gone (it launched an agent with auto-approve as the zoe
+                        # user - deep dive S0-7). Say so; never queue, never run anything.
+                        logger.info("chat: background escalation refused - no background executor (reason=%s)", reason.strip())
+                        ack_text = "I can't run background tasks any more, so I haven't started that."
                         yield emit(TextMessageChunkEvent(
                             type=EventType.TEXT_MESSAGE_CHUNK,
                             message_id=assistant_message_id,
@@ -3327,31 +3320,7 @@ async def submit_feedback(interaction_id: str, request: Request, feedback_type: 
     }
 
 
-# ── Background task endpoints ─────────────────────────────────────────────────
-
-@router.post("/task")
-async def create_background_task(request: Request, user: dict = Depends(get_current_user)):
-    """Queue a long-running task for background execution.
-
-    Body: {"message": "find the cheapest hotel in Perth under $150"}
-    Returns: {"task_id": 42, "ack": "On it! I'll let you know when done."}
-    """
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-    task_text = body.get("message", "").strip()
-    if not task_text:
-        return {"error": "message is required"}
-    from background_runner import enqueue_background_task
-    user_id = user["user_id"]
-    task_id = await enqueue_background_task(task=task_text, user_id=user_id)
-    return {
-        "task_id": task_id,
-        "ack": "On it! I'll work on that in the background and let you know when it's done.",
-    }
-
+# ── Background task results (read side only; there is no executor) ───────────
 
 @router.get("/tasks/pending")
 async def get_pending_tasks(user: dict = Depends(get_current_user)):

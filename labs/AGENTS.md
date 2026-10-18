@@ -422,3 +422,12 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   nginx listener are the next PR (interface in its README). `RUNBOOK-R1.md` is the
   docs-only plan for the the411 relay host (nothing in it has been run there). README
   and RUNBOOK are records, not contracts. Unit net: `labs/relay/run.sh unit` (Python 3.12).
+- `p0-deroot/` — **P0 de-root lab** (`docs/architecture/p0-deroot.md` section 6): one
+  no-network container booting systemd 249 (not `--privileged`) with the deliverables
+  of `scripts/setup/p0-deroot/` installed verbatim, three stand-in services probing
+  from inside their own sandbox (S cells), the `zoe` uid after P0-3 (Z cells) and
+  negative controls with today's rights (C cells). Fake dockerd, synthetic secrets;
+  touches no host user, sudoers rule, daemon or service. Hand-run via `run.sh`
+  (01:35-04:55 refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`,
+  asserts its own teardown). Host cgroup namespace (systemd will not boot otherwise),
+  not `--privileged`. 47/47 on 2026-10-18; README is the record.

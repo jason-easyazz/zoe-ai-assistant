@@ -35,7 +35,7 @@ import auth_handoff
 import music_service
 import music_setup
 import setup_qr
-from auth import get_current_user
+from panel_principal import require_member_or_panel
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +51,14 @@ def _setup_url(request: "Request", token: str, provider: str) -> str:
     return f"{_base_url(request)}/setup-music.html#provider={provider}&t={token}"
 
 
-@router.get("/catalogue")
-async def setup_catalogue(user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    """The 'Add music' list for the panel."""
+@router.get("/catalogue", dependencies=[Depends(require_member_or_panel)])
+async def setup_catalogue() -> dict[str, Any]:
+    """The 'Add music' list for the panel: which providers are connected is household music state, so a member or the panel."""
     return {"providers": await music_service.provider_catalogue()}
 
 
 @router.post("/start")
-async def setup_start(payload: dict, request: Request, user: dict = Depends(get_current_user)) -> dict[str, Any]:
+async def setup_start(payload: dict, request: Request, user: dict = Depends(require_member_or_panel)) -> dict[str, Any]:
     """Panel: mint a one-time setup token + QR for a provider."""
     provider = str((payload or {}).get("provider") or "").strip()
     form = await music_service.provider_setup_form(provider)
