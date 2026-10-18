@@ -33,7 +33,8 @@ async def _caller(request: Request) -> Optional[dict]:
         return None
 
 
-def _card(request: Request, caller: Optional[dict]) -> prc.Card:
+async def _require_card(request: Request, caller: Optional[dict] = Depends(_caller)) -> prc.Card:
+    """The auth dependency of every card route: the X-Panel-Card token, honoured only for its member (see the module doc)."""
     try:
         return prc.authorize(request.headers.get("X-Panel-Card", ""), caller)
     except prc.CardError as exc:
@@ -112,8 +113,7 @@ async def _act_voice(card: prc.Card, it: dict, body: _Act) -> dict:
 
 
 @router.post("/act")
-async def act(body: _Act, request: Request, caller: Optional[dict] = Depends(_caller)):
-    card = _card(request, caller)
+async def act(body: _Act, card: prc.Card = Depends(_require_card)):
     it = _item(card, body.item)
     handler = {"loop": _act_loop, "candidate": _act_candidate, "voice": _act_voice}[it["type"]]
     out = await handler(card, it, body)
@@ -123,10 +123,9 @@ async def act(body: _Act, request: Request, caller: Optional[dict] = Depends(_ca
 
 
 @router.get("/clip/{item}")
-async def clip(item: str, request: Request, caller: Optional[dict] = Depends(_caller)):
+async def clip(item: str, card: prc.Card = Depends(_require_card)):
     from routers import omi_voices as ov
 
-    card = _card(request, caller)
     it = _item(card, item)
     if it.get("type") != "voice" or not it.get("segment"):
         raise HTTPException(status_code=404, detail="no clip")
@@ -136,11 +135,10 @@ async def clip(item: str, request: Request, caller: Optional[dict] = Depends(_ca
 
 
 @router.get("/phone-qr")
-async def phone_qr(request: Request, caller: Optional[dict] = Depends(_caller)):
+async def phone_qr(request: Request, card: prc.Card = Depends(_require_card)):
     import auth_handoff
     import setup_qr
 
-    card = _card(request, caller)
     if card.kind != "day_review":
         raise HTTPException(status_code=404, detail="no phone hand-off on this card")
     svg = setup_qr.render_svg(f"{auth_handoff.phone_base_url(request)}/pendant.html")
