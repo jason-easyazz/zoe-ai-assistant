@@ -338,6 +338,8 @@ def load(tokens: dict[str, str], n_messages: int = 300) -> dict:
     for u, tok in tokens.items():
         s0 = time.monotonic()
         code, _ = http("GET", f"{HS}/_matrix/client/v3/sync?timeout=0", token=tok, timeout=60)
+        if code != 200:  # a failed sync is a failed cell, never a timing (Codex, #2147)
+            raise RuntimeError(f"initial sync {u}: {code}")
         sync_t[u] = round((time.monotonic() - s0) * 1000)
     send_t.sort()
     return {"room_id": rid, "seconds": round(time.monotonic() - t0, 1), "send_ms_p50": round(send_t[len(send_t) // 2] * 1000, 1),
@@ -522,6 +524,13 @@ def lab_leftovers() -> list[str]:
     return left
 
 
+def pull_images() -> None:
+    """Pull every pinned image BEFORE the report records digests, so a clean host's report carries real provenance (Codex,
+    #2147). A pull failure aborts the run: a lab whose images cannot be resolved has nothing to measure."""
+    for img in IMAGES.values():
+        sh(["docker", "pull", "-q", img], timeout=900)
+
+
 def image_digests() -> dict:
     out = {}
     for k, img in IMAGES.items():
@@ -550,8 +559,11 @@ def main() -> int:
                LK_KEY="labkey", LK_SECRET=secrets.token_hex(24), PG_PASSWORD=secrets.token_hex(16),
                REG_SECRET=secrets.token_hex(24), REG_TOKEN=secrets.token_hex(12), USER_PW=secrets.token_hex(12))
     report = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "host_mem_available_mb": mem_available_mb(),
-              "images": image_digests(), "results": []}
+              "images": {}, "results": []}
     try:
+        pull_images()
+        report["images"] = image_digests()
+        report["images_resolved"] = all(report["images"].values())
         render_common(run, env)
         for server in [s.strip() for s in a.servers.split(",") if s.strip()]:
             print(f"== {server}", file=sys.stderr, flush=True)
@@ -564,7 +576,8 @@ def main() -> int:
         res["verdict"] = verdict(res)
     report["teardown_leftovers"] = lab_leftovers()
     report["teardown_ok"] = not report["teardown_leftovers"] and not run.exists()
-    report["pass"] = report["teardown_ok"] and bool(report["results"]) and all(r["verdict"]["pass"] for r in report["results"])
+    report["pass"] = (report["teardown_ok"] and bool(report.get("images_resolved")) and bool(report["results"])
+                      and all(r["verdict"]["pass"] for r in report["results"]))
     report["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     text = json.dumps(report, indent=2)
     if a.report:

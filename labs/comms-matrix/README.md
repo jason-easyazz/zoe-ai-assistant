@@ -23,7 +23,8 @@ labs/comms-matrix/run.sh --servers synapse --report ...                         
 ```
 
 `run.sh` refuses while `night_busy.sh test` says pause, waits for `MemAvailable >= 2000 MB` before taking
-`flock /tmp/zoe-test-lane.lock`, and runs niced. `run_lab.py` re-checks the memory gate before each server, mints throwaway
+`flock /tmp/zoe-test-lane.lock`, and runs niced. `run_lab.py` pulls every pinned image first (so the report's digests are real on a clean host), re-checks the memory
+gate before each server, mints throwaway
 secrets per run (never printed), renders configs into a 0700 temp dir, always runs `compose down -v`, removes the temp dir and
 checks that no labelled container, network or volume is left.
 
@@ -52,18 +53,19 @@ SDK's livekit-ffi cannot open a PeerConnection on Tegra, deep dive 8.1); C6 chec
 
 ## Results (2026-10-19, Jetson Orin NX, arm64)
 
-Final run: `results/2026-10-19.json` (`pass: true`, `teardown_ok: true`). Two earlier runs the same morning used weaker cells
-(see the PR's review thread); their RAM figures are folded into the ranges below. The final report's `verdict` blocks were
-recomputed from its stored C7 summary after the `media_received` check was added (the summary was already in the report).
+Final runs, current code: `results/2026-10-19-tuwunel.json` and `results/2026-10-19-synapse.json` (each `pass: true`,
+`teardown_ok: true`, `images_resolved: true`; the Synapse cell ran separately because the box's free memory dipped under the
+2000 MB gate mid-run). Three earlier runs the same morning used weaker cells (see the PR's review threads); their RAM figures are
+folded into the ranges below.
 
 | | Tuwunel 1.9.4 | Synapse 1.163.0 + Postgres 17.6 |
 |---|---|---|
 | boot to serving | 1.0 s | 9-10 s |
-| homeserver RAM idle / after load (across runs) | 96-147 / 106-230 MB | 166-196 / 157-210 MB, + Postgres 56-101 / 96-117 MB |
+| homeserver RAM idle / after load (across runs) | 92-147 / 106-230 MB | 133-196 / 140-210 MB, + Postgres 55-101 / 78-117 MB |
 | sum of per-container peaks during C7 (not simultaneous; excludes the load generator) | about 180-320 MB | about 355-375 MB |
 | account creation | 45-68 ms | 385-431 ms |
-| send p50 / p95 | 2.4-2.6 / 3.3-4.7 ms | 53-55 / 71-80 ms |
-| initial sync (6 accounts) | 3-13 ms | 43-100 ms |
+| send p50 / p95 | 2.2-2.6 / 2.4-4.7 ms | 53-56 / 71-131 ms |
+| initial sync (6 accounts, each must return 200) | 2-13 ms | 43-108 ms |
 | federation OFF | all federation endpoints 403 | all 404 (no federation listener) |
 | **MSC4140 delayed events** | **NOT supported**: the delay parameter is ignored and the event is sent at once (200 with an `event_id`, no `delay_id`) | supported: scheduled, absent before, restart 200, present after |
 | MSC4143 focus | advertised (well-known + `rtc/transports`) | advertised (well-known) |
