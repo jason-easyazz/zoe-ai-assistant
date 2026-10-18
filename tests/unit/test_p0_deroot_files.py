@@ -166,7 +166,7 @@ def test_gpu_tier_can_reach_the_jetson_gpu():
     assert d.get("PrivateDevices", ["no"])[-1] != "yes" and "DevicePolicy" not in d
 
 
-@pytest.mark.parametrize("argv", [["zoe-mem-compact"], ["zoe-mem-compact", "2"], ["zoe-mem-compact", "3", "x"],
+@pytest.mark.parametrize("argv", [["zoe-mem-compact"], ["zoe-mem-compact", "2"], ["zoe-mem-compact", "-1"], ["zoe-mem-compact", "3", "x"],
                                   ["zoe-nvmap-read"], ["zoe-nvmap-read", "/etc/shadow"], ["zoe-nvmap-read", "free", "x"]])
 def test_helpers_refuse_arguments_outside_their_set(argv):
     r = subprocess.run(["sh", str(ROOT / "libexec" / argv[0]), *argv[1:]], capture_output=True, text=True)

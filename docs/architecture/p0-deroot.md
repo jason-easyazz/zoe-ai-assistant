@@ -63,7 +63,10 @@ uid, so a compromised service or coding agent can neither become root nor read a
 `night_window.py` (drop_caches + compact before the 12B, `cat` of two NvMap debugfs files), `bakeoff.py`,
 `brain_cold_start.sh` (llama-server `ExecStartPre`), `mtp_vocab_trim_window.sh`, and agents by hand (apt upgrades,
 container recreation, `npm -g` installs, system unit installs, drop_caches for 12B windows). Nothing in zoe-data calls
-sudo. Pi-only templates (`omi-sync`, `zoe-bluetooth`: `hcitool`) are out of scope (the panel Pi).
+sudo. Pi-only templates (`omi-sync`, `zoe-bluetooth`: `hcitool`) are out of scope (the panel Pi). All of these already
+degrade without sudo (`sudo -n true` probe first): the cold start logs one line and starts; the night window refuses a
+12B load on fragmented RAM; the bake-off falls back to a throwaway container, which the proxy will refuse. So the
+helpers are about keeping the night window working, not about anything breaking loudly.
 
 ### 2.5 The self-hosted runner
 
@@ -133,13 +136,14 @@ path any component of which an LLM-exposed uid can write.
 Allowed: `_ping`, `version`, `ps`; inspect `zoe-music-assistant` / `livekit` / `zoe-database`; start/stop of the
 first two; exec in `zoe-database` (named volume only, so exec-as-root reaches nothing on the host); exec start/inspect.
 Everything else is 403/405, including create, build, pull, restart, delete, and exec in any container with a
-zoe-writable bind (HA, Omnigent, zoe-ui). Clients set `DOCKER_HOST=unix:///run/zoe-docker-proxy/docker.sock`.
+zoe-writable bind (HA, Omnigent, zoe-ui). Clients set `DOCKER_HOST=unix:///run/zoe-docker-proxy/docker.sock`. The proxy matches the URL path only
+(`r.URL.Path` in its `handlehttprequest.go`), so query strings such as `?all=1&filters=...` do not change a verdict.
 The binary is copied out of `wollomatic/socket-proxy:1.13.1@sha256:3935b709...689002` into `/usr/local/bin`.
 
 ### 4.3 sudo
 
 `/etc/sudoers.d/zoe-temp` is deleted and `zoe` leaves the `sudo` group. `60-zoe-deroot` grants `zoe` exact argv
-only: `zoe-mem-compact 1|3`, `zoe-nvmap-read free|clients`, `systemctl start|stop|restart` of the three model units,
+only: `zoe-mem-compact 0|1|3` (compact only / drop page cache / drop all + compact), `zoe-nvmap-read free|clients`, `systemctl start|stop|restart` of the three model units,
 `systemctl restart` of the three service units (the last two groups match nothing until P0-4 makes them system units).
 `zoe-deploy` gets the service restarts. Helpers live root-owned in `/usr/local/libexec/zoe-priv/` and validate their
 one argument. **Owner path:** `zoe-admin` (SSH key + password sudo). **Agent path:** `zoe-ops request "<why>" -- <cmd>`
@@ -200,7 +204,7 @@ keep the voice guards. Each stand-in answers `/probe` from **inside its own sand
   (input read, state written); `/etc` read-only; voice guards kept (`MemorySwapMax=0`); the model tier is in `video`;
   zoe-data's stdout capture works through the bound `~/.zoe-logs`.
 - **Z cells (`zoe` after P0-3):** no sudo; the allowlist allows exactly its entries and refuses shells, other args,
-  `systemctl edit`, other units; no service secrets; raw socket EACCES; 18 proxy cases (traversal and `%2F` included);
+  `systemctl edit`, other units; no service secrets; raw socket EACCES; 20 proxy cases (traversal, `%2F` and query strings included);
   helpers refuse bad args; `zoe-admin` needs a password.
 - **C cells (instruments):** a `zoe-pre` user with today's rights CAN sudo and reach the socket (so the probes see
   power); the fake daemon saw only the allowed calls; `visudo -c` passes and catches a broken file;

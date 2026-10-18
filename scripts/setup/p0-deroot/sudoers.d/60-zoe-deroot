@@ -8,7 +8,8 @@
 #   - each helper under /usr/local/libexec/zoe-priv/ is root-owned, fixed-function and validates its argument.
 
 # Memory compaction and NvMap reads for the 12B night window, the bake-off and the brain cold start.
-Cmnd_Alias ZOE_MEM = /usr/local/libexec/zoe-priv/zoe-mem-compact 1, \
+Cmnd_Alias ZOE_MEM = /usr/local/libexec/zoe-priv/zoe-mem-compact 0, \
+                     /usr/local/libexec/zoe-priv/zoe-mem-compact 1, \
                      /usr/local/libexec/zoe-priv/zoe-mem-compact 3, \
                      /usr/local/libexec/zoe-priv/zoe-nvmap-read free, \
                      /usr/local/libexec/zoe-priv/zoe-nvmap-read clients

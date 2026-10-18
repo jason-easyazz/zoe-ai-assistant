@@ -99,6 +99,8 @@ cell("Z4-zoe-no-raw-docker", as_user("zoe", "GET", "/v1.47/containers/json", RAW
 cases = [("POST", "/v1.47/containers/zoe-music-assistant/start", 200), ("POST", "/containers/livekit/stop", 200),
          ("GET", "/v1.47/containers/zoe-database/json", 200), ("POST", "/v1.47/containers/zoe-database/exec", 200),
          ("POST", "/v1.47/exec/" + "a" * 64 + "/start", 200), ("HEAD", "/_ping", 200),
+         ("GET", "/v1.47/containers/json?all=1&filters=%7B%22name%22%3A%5B%22zoe%22%5D%7D", 200),
+         ("POST", "/v1.47/containers/create?name=zoe-music-assistant", 403),
          ("POST", "/v1.47/containers/create", 403), ("POST", "/v1.47/build", 403), ("POST", "/v1.47/images/create", 403),
          ("POST", "/v1.47/containers/homeassistant/exec", 403), ("POST", "/v1.47/containers/zoe-omnigent/exec", 403),
          ("POST", "/v1.47/containers/zoe-ui/restart", 403), ("GET", "/v1.47/containers/zoe-auth/json", 403),
