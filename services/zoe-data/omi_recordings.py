@@ -961,6 +961,7 @@ async def transcribe_pending(*, limit: int = 1, now: Optional[datetime] = None, 
                 await note_deferred(why)
                 break
             _clear_deferred()
+            stamp = _iso(now or _now())         # CLAIM time: a transcription takes minutes, so a later row may have expired meanwhile
             async with get_compat_db() as db:
                 r = None
                 while r is None:       # an expired row is marked and the next one taken: it never spends the pass's quota

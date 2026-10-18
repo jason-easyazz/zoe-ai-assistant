@@ -785,3 +785,21 @@ def test_near_duplicate_owner_facts_of_a_day_merge_with_both_quotes():
     marathon = next(m for m in merged if "marathon" in m.payload["fact"])
     assert len(marathon.evidence) == 2 and marathon.recording_ids == ["rec1", "rec2"]
     assert any("surfer" in m.payload["fact"] for m in merged)                          # control: an unrelated fact stays its own candidate
+
+
+def test_owner_facts_with_opposite_polarity_or_a_different_predicate_never_merge():
+    def cand(fact, rec):
+        return dr.Candidate(kind="owner_fact", payload={"fact": fact}, evidence=[{"line": "r1.1", "recording_id": rec, "quote": fact}],
+                            recording_ids=[rec], confidence=0.5, speaker="not_sure", dedup_key=dr.hashlib.sha256(fact.encode()).hexdigest()[:24])
+    apart = [("I like coffee.", "I hate coffee."), ("I like coffee.", "I dislike coffee."), ("I like coffee.", "I don't like coffee."),
+             ("I love my morning coffee.", "I never drink my morning coffee."), ("I work at the harbour office.", "I live at the harbour office."),
+             ("I'm not training for the half marathon in December.", "I'm training for the half marathon in December.")]
+    for x, y in apart:
+        merged = dr.merge([cand(x, "rec1"), cand(y, "rec2")])
+        assert len(merged) == 2, (x, y)                                   # two candidates, each with its own single quote
+        assert all(len(m.evidence) == 1 for m in merged)
+    # control: the same predicate and polarity in different words still merges, keeping both quotes
+    for x, y in (("I like coffee.", "I really love coffee."), ("I work at the harbour office.", "I work at the harbour office these days.")):
+        merged = dr.merge([cand(x, "rec1"), cand(y, "rec2")])
+        assert len(merged) == 1 and len(merged[0].evidence) == 2, (x, y)
+

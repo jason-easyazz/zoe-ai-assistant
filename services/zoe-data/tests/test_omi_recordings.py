@@ -789,6 +789,29 @@ def test_a_row_that_loses_the_race_with_the_clock_is_refused_by_the_claim_and_ma
     assert got["status"] == "failed" and got["audio_path"] == "" and not Path(wav).exists()
 
 
+def test_the_retention_clock_is_read_at_each_claim_not_once_per_pass(env, monkeypatch):
+    """A pass transcribes up to ``limit`` rows and each takes minutes: a later row can expire while an earlier one is being worked.
+    The claim stamp is taken per claim, so that row is marked, not transcribed. Negative control: hoist ``stamp = _iso(now or _now())``
+    in ``transcribe_pending`` back out of the ``for`` loop and the second row is transcribed."""
+    first = upload(env, make_wav(3.0), key="r1.0-9", started="2026-10-10T01:00:00Z").json()["id"]
+    second = upload(env, make_wav(3.0), key="r1.10-19", started="2026-10-10T02:00:00Z").json()["id"]
+    t0 = datetime.now(UTC)
+    clock = {"now": t0}
+    monkeypatch.setattr(omi, "_now", lambda: clock["now"])
+    env.db.conn.execute("UPDATE omi_recordings SET audio_expires_at = ? WHERE id = ?", ((t0 + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ"), second))
+    env.db.conn.commit()
+
+    async def slow_stt(path):                                            # the first transcription "takes" an hour
+        env.stt.append(path)
+        clock["now"] = t0 + timedelta(hours=1)
+        return "words"
+    monkeypatch.setattr(omi, "_transcribe_file", slow_stt)
+    run(omi.transcribe_pending(limit=2, pause_s=0))
+    got = {r["id"]: r for r in rows(env)}
+    assert got[first]["status"] == "done" and len(env.stt) == 1
+    assert got[second]["status"] == "failed" and got[second]["audio_path"] == "" and got[second]["attempts"] == 0
+
+
 def test_an_expired_held_recording_is_purged_not_requeued(env, monkeypatch):
     _held(env, monkeypatch, n=1)
     assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1

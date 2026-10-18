@@ -871,9 +871,29 @@ def merge(cands: Iterable[Candidate]) -> list[Candidate]:
     return list(out.values())
 
 
+#: predicate verbs of an owner fact, folded to a class (sentiment verbs by direction); two facts merge only on the SAME classes
+_PRED = {**dict.fromkeys(("like", "likes", "love", "loves", "enjoy", "enjoys", "adore", "adores", "prefer", "prefers"), "+"),
+         **dict.fromkeys(("hate", "hates", "dislike", "dislikes", "loathe", "loathes", "detest", "detests"), "-"),
+         **{w: w for w in ("work", "works", "live", "lives", "grew", "born", "studied", "manage", "manages", "run", "runs", "own", "owns",
+                           "play", "plays", "support", "supports", "eat", "eats", "drink", "drinks", "have", "has", "got", "married",
+                           "engaged", "divorced", "allergic", "vegetarian", "vegan", "retired", "based", "from", "training", "learning",
+                           "studying", "move", "moving", "start", "starting", "quit", "quitting", "stop", "stopping")}}
+_NEGATION = re.compile(r"\b(?:not|no|never|none|nothing|nobody|neither|nor|cannot|without|stopped|quit)\b|n't\b|\bnot\b", _I)
+
+
+def fact_predicate(text: str) -> tuple:
+    """(negated?, the set of predicate classes) of an owner fact. Different verbs, opposite sentiment or a negation mismatch all differ."""
+    toks = re.findall(r"[a-z']+", str(text or "").lower())
+    return bool(_NEGATION.search(str(text or ""))), frozenset(_PRED[t] for t in toks if t in _PRED)
+
+
 def near_duplicate(a: Candidate, b: Candidate) -> bool:
-    """Two owner facts of one day that say the same thing in different words (same subject and predicate, high token overlap)."""
-    x, y = set(_content(a.payload.get("fact", ""))), set(_content(b.payload.get("fact", "")))
+    """Two owner facts of one day that say the same thing in different words: the SAME predicate and polarity (``fact_predicate``) and
+    high token overlap. "I like coffee" and "I hate coffee" share a subject and most words, and must stay two candidates."""
+    fa, fb = a.payload.get("fact", ""), b.payload.get("fact", "")
+    if fact_predicate(fa) != fact_predicate(fb):
+        return False
+    x, y = set(_content(fa)), set(_content(fb))
     return bool(x and y) and len(x & y) / min(len(x), len(y)) >= 0.75 and len(x & y) / len(x | y) >= 0.5
 
 
