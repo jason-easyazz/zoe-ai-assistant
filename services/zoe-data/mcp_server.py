@@ -2860,6 +2860,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         title = args.get("title") or "Smart Home"
         dismiss_after = int(args.get("dismiss_after") or 30)
         # If no entities supplied, fetch from HA bridge
+        import panel_principal as _pp
+
+        if _pp.home_control_refused("mcp panel_show_smart_home"):   # home control on a turn (2026-10-18)
+            return {"error": _pp.HOME_CONTROL_REFUSAL}
         if not entities:
             _ha_bridge = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
             try:
@@ -2958,6 +2962,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": f"SSH exec failed: {exc}", "panel_id": target_panel_id}
 
     elif name == "media_get_now_playing":
+        import panel_principal as _pp
+
+        if _pp.home_control_refused("mcp media_get_now_playing"):   # home control on a turn (2026-10-18)
+            return {"error": _pp.HOME_CONTROL_REFUSAL}
         entity_id = str(args.get("entity_id") or "").strip()
         _ha_bridge = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
         try:

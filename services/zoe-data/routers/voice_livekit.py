@@ -58,6 +58,7 @@ from fastapi.responses import JSONResponse
 # module level so they are the SAME callables FastAPI keys `dependency_overrides`
 # on. `routers.voice_tts` never imports this module at module level (only lazily,
 # inside a function), so there is no cycle; `main.py` imports voice_tts first.
+import panel_principal
 from auth import get_current_user
 from routers.voice_tts import _validate_device_token
 
@@ -1573,6 +1574,9 @@ async def _require_livekit_media_auth(
         from routers.voice_tts import _resolve_fresh_panel_member
 
         acting_user_id = await _resolve_fresh_panel_member(str(device.get("panel_id") or ""))
+        # Home control on a turn (2026-10-18): this lane runs a full brain turn; the token is the panel.
+        await panel_principal.record_turn_home_control(
+            request, {"user_id": "guest", "role": "guest", "panel_id": device.get("panel_id")})
         return {
             "source": "device",
             "panel_id": device.get("panel_id"),
@@ -1580,6 +1584,7 @@ async def _require_livekit_media_auth(
             "role": device.get("role") or "voice-daemon",
         }
     if user.get("role") not in (None, "guest"):
+        await panel_principal.record_turn_home_control(request, user)
         return {"source": "session", "user_id": user.get("user_id"), "role": user.get("role")}
     if request.headers.get("X-Session-ID", "").strip():
         if user.get("auth_degraded"):
@@ -1587,6 +1592,8 @@ async def _require_livekit_media_auth(
                 status_code=503,
                 detail="Authentication service unavailable",
             )
+        # The estate kiosk's guest session: the panel only from a registered panel address / the kiosk credential.
+        await panel_principal.record_turn_home_control(request, user)
         return {
             "source": "guest-session",
             "user_id": user.get("user_id") or "guest",
