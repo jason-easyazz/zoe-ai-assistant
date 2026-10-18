@@ -580,6 +580,10 @@ def test_pending_maintenance_counts_new_events_and_proposals_with_aged_out_evide
     store(*genuine())
     assert run(sp.pending_maintenance(NOW - 2 * DAY * 10, now=NOW)) == 5, "five struggle events nobody has clustered yet (a guest's would count too)"
     assert run(sp.pending_maintenance(NOW + 1.0, now=NOW)) == 0, "nothing after the watermark, no proposals yet"
+    store(*[event(700 + i, user="test-user-1", ts=NOW - i * 100.0) for i in range(3)], *[event(710 + i, guest=True, ts=NOW - i * 100.0) for i in range(2)])
+    assert run(sp.pending_maintenance(NOW - 2 * DAY * 10, now=NOW)) == 7, "a harness user's three events are not work (the pass ignores them); a guest's two are"
+    env.db.conn.execute("DELETE FROM struggle_events WHERE id >= 'e700'")
+    env.db.conn.commit()
     run(sp.run_pass(now=NOW))
     assert run(sp.pending_maintenance(NOW + 1.0, now=NOW)) == 0, "a proposal whose evidence is inside the lookback needs nothing"
     later = NOW + 8 * DAY                                        # the default lookback is 7 days: every link is now older than it

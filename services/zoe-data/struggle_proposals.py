@@ -691,8 +691,10 @@ async def pending_maintenance(since: float, *, now: Optional[float] = None) -> i
     cutoff = (time.time() if now is None else now) - lookback_days() * DAY_S
     try:
         async with _ctx() as db:
-            cur = await db.execute("SELECT COUNT(*) FROM struggle_events WHERE ts > ?", (float(since),))
-            new_events = int((await cur.fetchone())[0] or 0)
+            cur = await db.execute("SELECT user_id, is_guest, COUNT(*) FROM struggle_events WHERE ts > ? GROUP BY user_id, is_guest", (float(since),))
+            # the pass ignores synthetic / harness users, so their events are not work for it (a harness logging every night would
+            # otherwise keep the window from ever being quiet); a guest's are
+            new_events = sum(int(n) for uid, guest, n in await cur.fetchall() if guest or not _synthetic(str(uid)))
             cur = await db.execute(
                 "SELECT COUNT(DISTINCT pe.proposal_id) FROM struggle_proposal_events pe JOIN struggle_proposals p ON p.id = pe.proposal_id "
                 "WHERE p.status = ? AND pe.ts < ?", (PROPOSED, float(cutoff)))
