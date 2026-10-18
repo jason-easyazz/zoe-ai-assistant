@@ -686,3 +686,27 @@ async def test_a_pr_open_for_months_is_announced_once():
     for day in range(0, 70, 5):
         await run(gh, bot, at("19:30") + timedelta(days=day))
     assert len([d for d in bot.delivered if "Raised, not merged" in d["text"]]) == 1
+
+
+async def test_the_may_not_have_reached_you_line_is_mentioned_at_most_once_even_if_it_times_out():
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot)
+    gh.raise_pr(83, "fix: x", labels=["needs-owner"])
+    bot.script = ["timeout"]
+    await run(gh, bot, at("12:00"))
+    bot.script = ["timeout"]  # the digest carrying the mention is lost too
+    await run(gh, bot, at("19:30"))
+    await run(gh, bot, at("19:30", day=20))
+    assert sum("may not have reached you" in d["text"] for d in bot.delivered) == 1
+    assert cn.load_state()["deliveries"]["u-owner|pr:83:decision"]["status"] == "uncertain_reported"
+
+
+async def test_a_merge_supersedes_a_decision_held_by_quiet_hours():
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot, at("20:00", day=18))
+    gh.raise_pr(84, "fix: x", labels=["needs-owner"])
+    await run(gh, bot, at("23:00", day=18))
+    gh.merge(84, "fix: x", at=at("01:00"))
+    await run(gh, bot, at("07:10"))
+    assert all("waiting on you" not in d["text"] for d in bot.delivered)
+    assert cn.load_state()["deliveries"]["u-owner|pr:84:decision"]["status"] == "superseded"

@@ -577,10 +577,10 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
                                           "merged_at": pr.get("mergedAt") or _iso(c.now),
                                           "summary": summarise(title, pr.get("body", "")),
                                           "category": category_for_title(title)}
-            # A merge supersedes its "raised" notice in any digest not yet sent (design 5.4).
+            # A merge supersedes its raised / waiting-on-you notice wherever it is still unsent: a digest line, or an
+            # instant one held by quiet hours or a retry backoff (design 5.4).
             for dkey, d in st["deliveries"].items():
-                if (dkey.endswith((f"|pr:{n}:raised", f"|pr:{n}:decision")) and d["status"] == "queued"
-                        and d["lane"] != "instant"):
+                if dkey.endswith((f"|pr:{n}:raised", f"|pr:{n}:decision")) and d["status"] == "queued":
                     d["status"] = "superseded"
     except Exception as exc:  # noqa: BLE001
         audit("source_error", source="merged", error=type(exc).__name__)
@@ -678,8 +678,8 @@ async def _send(c: Ctx, r: Recipient, msg: Message) -> str:
             d["sent_at"] = _iso(c.now)
         elif outcome == "refused":
             d["status"] = "refused"
-        elif outcome == "uncertain":
-            d["status"] = "uncertain"
+        elif outcome == "uncertain":  # the "may not have reached you" line itself is never mentioned a second time
+            d["status"] = "uncertain_reported" if d.get("uncertain") else "uncertain"
         else:  # retry: definitely not delivered
             d["attempts"] = int(d.get("attempts", 0)) + 1
             if d["attempts"] >= MAX_ATTEMPTS:
