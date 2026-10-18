@@ -187,7 +187,7 @@ def test_apply_copies_keeps_existing_backs_up_and_keeps_mode(mig, box, capsys):
         assert secret not in out.out + out.err                                  # --apply prints names/paths only too
     body = box["own"].read_text()
     assert f"OPENAI_API_KEY={SECRET_A}" in body and f"ZOE_DEVICE_TOKEN={SECRET_B}" in body
-    assert "export EXPORTED_KEY=expv" in body                                   # verbatim line copied
+    assert "\nEXPORTED_KEY=expv\n" in body and "export " not in body            # an `export` line is normalised (systemd ignores it)
     assert f"OWN_ALREADY={SECRET_OLD}" in body and SECRET_NEW not in body       # never overwritten
     assert "UNUSED_THING" not in body and "BROWSERBASE_PROXIES" not in body
     assert "KEEP=1\n" in body                                                   # a missing trailing newline did not glue lines together
@@ -230,3 +230,31 @@ def test_break_the_fix_overwrite_would_be_caught(mig, box):
     values = mig.parse_env(box["own"]).values
     assert values["OWN_ALREADY"] == SECRET_OLD
     assert values["OWN_ALREADY"] != SECRET_NEW
+
+
+def test_an_export_line_is_copied_as_a_plain_assignment_systemd_will_read(mig, box):
+    """systemd's EnvironmentFile= ignores ``export NAME=value`` lines, so a verbatim copy would be silently dead.
+    Break: copy ``raw`` for export lines again -> the written file keeps the ``export`` prefix and this fails."""
+    quoted = "synthetic value with spaces"
+    box["hermes"].write_text(
+        box["hermes"].read_text()
+        + f'export   SPACED_KEY = "{quoted}"\n'
+        + "  export SINGLE_QUOTED='sq-synthetic'\n")
+    (box["repo"] / "services" / "zoe-data" / "main.py").write_text(
+        'import os\nos.getenv("EXPORTED_KEY"); os.getenv("SPACED_KEY"); os.getenv("SINGLE_QUOTED")\n')
+    _apply(mig, box)
+    body = box["own"].read_text().splitlines()
+    assert "EXPORTED_KEY=expv" in body
+    assert f'SPACED_KEY="{quoted}"' in body                                      # quotes kept: systemd honours them
+    assert "SINGLE_QUOTED='sq-synthetic'" in body
+    assert not [ln for ln in body if ln.lstrip().startswith("export")]           # nothing systemd would skip
+    parsed = mig.parse_env(box["own"])
+    assert parsed.values["EXPORTED_KEY"] == "expv" and parsed.values["SPACED_KEY"] == f'"{quoted}"'
+
+
+def test_a_plain_line_is_still_copied_verbatim_negative_control(mig, box):
+    """The normalisation must touch only ``export`` lines: a plain line (odd spacing included) is carried over byte for byte."""
+    parsed = mig.parse_env(box["hermes"])
+    assert parsed.lines["OPENAI_API_KEY"] == f"OPENAI_API_KEY={SECRET_A}"
+    assert parsed.lines["EXPORTED_KEY"] == "EXPORTED_KEY=expv"
+    assert parsed.lines["EXPORTED_KEY"] != "export EXPORTED_KEY=expv"

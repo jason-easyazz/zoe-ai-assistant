@@ -39,7 +39,9 @@ A store can be reached by one path and not the other; that asymmetry is what `st
 
 - **Retention:** `ZOE_TEXT_LOG_RETENTION_DAYS`, default **30** (`keep` = no limit, `0` = keep none). The hourly `zoe-log-rotate` job applies it
   (`scripts/maintenance/rotate_service_logs.py`); `scripts/maintenance/redact_router_shadow.py` does the same once, with a backup and
-  `--dry-run`, and `--all` for the whole corpus.
+  `--dry-run`, and `--all` for the whole corpus. The sweep takes `ZOE_TEXT_LOG_RETENTION_DAYS` / `ZOE_ROUTER_HEAD_LOG` from the zoe-data env
+  files (`<repo>/.env`, `services/zoe-data/.env`; parsed by the script, and loaded by the unit's `EnvironmentFile=-`), so a `keep` set there
+  is honoured. `--drop-backup` exits non-zero and says the backup is still present when it cannot delete it.
 - **Why text is kept at all (router self-training):** the miner (`labs/router-selftrain`) reads `utt_text` directly, but it can also recover
   the words by re-hashing `chat_messages.content` and joining on the 12-hex hash (BOOTSTRAP). Stripping an old record therefore only loses
   the turns that never reached `chat_messages` (~40% in the first measured run). The loop is weekly and dark, so a 30-day window covers it; mine the

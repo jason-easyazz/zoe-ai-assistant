@@ -39,7 +39,9 @@ def _text_logs_off_the_live_files(tmp_path, monkeypatch):
     monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(tmp_path / "pinned-shadow.jsonl"))
     monkeypatch.setenv("ZOE_INTENT_MISS_LOG", str(tmp_path / "pinned-misses.jsonl"))
     monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(tmp_path / "pinned-adhoc"))
+    monkeypatch.setenv("ZOE_TEXT_LOG_RETENTION_DAYS", "30")       # set-then-delete so monkeypatch restores "absent" even if the sweep sets it
     monkeypatch.delenv("ZOE_TEXT_LOG_RETENTION_DAYS", raising=False)
+    monkeypatch.setattr(mod, "ENV_FILES", ())                     # never read the checkout's / host's real zoe-data env files
 
 
 def _fill(path: Path, nbytes: int, tag: bytes = b"line\n") -> None:
@@ -156,6 +158,9 @@ def test_timer_and_service_templates_exist_and_point_at_the_script():
     tmr = (ROOT / "scripts/setup/systemd/zoe-log-rotate.timer").read_text()
     assert "scripts/maintenance/rotate_service_logs.py" in svc
     assert "Type=oneshot" in svc
+    # the retention pass needs the owner's zoe-data settings (e.g. ZOE_TEXT_LOG_RETENTION_DAYS=keep); same files + order as zoe-data.service
+    assert "EnvironmentFile=-%h/assistant/.env" in svc and "EnvironmentFile=-%h/assistant/services/zoe-data/.env" in svc
+    assert svc.index("EnvironmentFile=-%h/assistant/.env") < svc.index("EnvironmentFile=-%h/assistant/services/zoe-data/.env")
     assert "OnUnitActiveSec=" in tmr and "WantedBy=timers.target" in tmr
 
 
@@ -267,3 +272,66 @@ def test_a_text_log_module_that_cannot_load_fails_the_job_closed(tmp_path, monke
     monkeypatch.setattr("importlib.util.spec_from_file_location", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
     assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log"]) == 1
     assert "FAILED" in capsys.readouterr().err
+
+
+def _old_new_shadow(path):
+    import json
+    import time
+
+    path.write_text(json.dumps({"ts": time.time() - 90 * 86400, "utt": "a" * 12, "utt_text": "ancient words"}) + "\n"
+                    + json.dumps({"ts": time.time(), "utt": "b" * 12, "utt_text": "fresh words"}) + "\n")
+
+
+def test_keep_in_the_zoe_data_env_file_is_honoured_by_the_sweep(tmp_path, monkeypatch):
+    """The hourly job's own environment has no ZOE_* settings; the owner's ``ZOE_TEXT_LOG_RETENTION_DAYS=keep`` lives in the
+    zoe-data env file. Break: drop ``apply_env_files()`` from ``sweep_text_logs`` -> the 90-day-old text is deleted anyway."""
+    env = tmp_path / "zoe-data.env"
+    env.write_text("# owner settings\nOTHER_SECRET=do-not-read\nZOE_TEXT_LOG_RETENTION_DAYS=keep\n")
+    monkeypatch.setattr(mod, "ENV_FILES", (env,))
+    shadow = tmp_path / "pinned-shadow.jsonl"
+    _old_new_shadow(shadow)
+    assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log"]) == 0
+    assert "ancient words" in shadow.read_text() and "fresh words" in shadow.read_text()
+    assert "OTHER_SECRET" not in os.environ                                           # only the retention names are ever taken
+
+
+def test_without_keep_in_the_env_file_the_same_sweep_strips_the_old_text_negative_control(tmp_path, monkeypatch):
+    env = tmp_path / "zoe-data.env"
+    env.write_text("OTHER_SECRET=do-not-read\nZOE_TEXT_LOG_RETENTION_DAYS=30\n")
+    monkeypatch.setattr(mod, "ENV_FILES", (env,))
+    shadow = tmp_path / "pinned-shadow.jsonl"
+    _old_new_shadow(shadow)
+    assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log"]) == 0
+    assert "ancient words" not in shadow.read_text() and "fresh words" in shadow.read_text()
+
+
+def test_the_process_environment_beats_the_env_file(tmp_path, monkeypatch):
+    env = tmp_path / "zoe-data.env"
+    env.write_text("ZOE_TEXT_LOG_RETENTION_DAYS=keep\n")
+    monkeypatch.setattr(mod, "ENV_FILES", (env,))
+    monkeypatch.setenv("ZOE_TEXT_LOG_RETENTION_DAYS", "30")                           # systemd Environment= / a one-off override
+    shadow = tmp_path / "pinned-shadow.jsonl"
+    _old_new_shadow(shadow)
+    assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log"]) == 0
+    assert "ancient words" not in shadow.read_text()
+
+
+def test_a_custom_router_log_path_from_the_env_file_is_the_one_swept(tmp_path, monkeypatch):
+    """Break: ignore ZOE_ROUTER_HEAD_LOG from the file -> the sweep looks at the default path and the custom log keeps its text."""
+    custom = tmp_path / "elsewhere.jsonl"
+    _old_new_shadow(custom)
+    env = tmp_path / "zoe-data.env"
+    env.write_text(f'export ZOE_ROUTER_HEAD_LOG="{custom}"\n')
+    monkeypatch.setattr(mod, "ENV_FILES", (env,))
+    monkeypatch.delenv("ZOE_ROUTER_HEAD_LOG")                                         # the autouse pin: the job's env has no such setting
+    assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log"]) == 0
+    assert "ancient words" not in custom.read_text() and "fresh words" in custom.read_text()
+
+
+def test_read_env_settings_parses_without_executing(tmp_path):
+    f1 = tmp_path / "a.env"
+    f2 = tmp_path / "b.env"
+    f1.write_text("ZOE_TEXT_LOG_RETENTION_DAYS=7\nZOE_INTENT_MISS_LOG='/x/y.jsonl'\n$(touch /tmp/never)=1\n")
+    f2.write_text("export ZOE_TEXT_LOG_RETENTION_DAYS=keep\n  # ZOE_ADHOC_BACKUP_DIR=/commented\nNOT_WANTED=1\n")
+    got = mod.read_env_settings((f1, f2, tmp_path / "missing.env"), mod.SWEEP_ENV_KEYS)
+    assert got == {"ZOE_TEXT_LOG_RETENTION_DAYS": "keep", "ZOE_INTENT_MISS_LOG": "/x/y.jsonl"}    # later file wins; quotes stripped

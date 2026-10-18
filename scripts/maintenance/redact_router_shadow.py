@@ -152,8 +152,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"{failed} file(s) failed the post-check: the backup is KEPT at {bdir}")
         return 1
     if ns.drop_backup:
-        shutil.rmtree(bdir, ignore_errors=True)
-        print("backup deleted (post-check passed).")
+        # The backup holds the RAW text: a deletion that did not happen must not read as done. No ignore_errors, and "deleted" is
+        # printed only once the path is verified gone.
+        try:
+            shutil.rmtree(bdir)
+        except OSError as exc:
+            print(f"ERROR: could not delete the backup ({type(exc).__name__}): it may STILL HOLD the raw utterance text at {bdir} "
+                  f"- delete it by hand:  rm -r {bdir}", file=sys.stderr)
+            return 1
+        if os.path.lexists(bdir):
+            print(f"ERROR: the backup is STILL PRESENT and holds the raw utterance text at {bdir} - delete it by hand:  "
+                  f"rm -r {bdir}", file=sys.stderr)
+            return 1
+        print("backup deleted (post-check passed; verified gone).")
     else:
         print(f"Post-check passed. Delete the backup when satisfied:  rm -r {bdir}")
     return 0

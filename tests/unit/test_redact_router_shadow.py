@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import stat
 import sys
 import time
@@ -112,3 +113,56 @@ def test_keep_without_days_selects_nothing(tool, logs, tmp_path, monkeypatch, ca
     monkeypatch.setenv("ZOE_TEXT_LOG_RETENTION_DAYS", "keep")
     assert run(tool, tmp_path, "--apply") == 0
     assert "nothing selected" in capsys.readouterr().out and "SECRET-OLD-ONE" in logs.read_text()
+
+
+def _backup_dirs(tmp_path):
+    return list((tmp_path / "bk").iterdir()) if (tmp_path / "bk").exists() else []
+
+
+def test_drop_backup_failing_to_delete_is_an_error_not_a_success(tool, logs, tmp_path, monkeypatch, capsys):
+    """The backup holds the raw words. Break: restore ``ignore_errors=True`` -> exit 0 and "backup deleted" while the text stays."""
+    def boom(path, *a, **k):
+        raise PermissionError(13, "synthetic: read-only")
+    monkeypatch.setattr(tool.shutil, "rmtree", boom)
+    assert run(tool, tmp_path, "--apply", "--all", "--drop-backup") == 1
+    cap = capsys.readouterr()
+    assert "deleted" not in cap.out.replace("Delete the backup", "")                  # never claims success
+    assert "STILL HOLD" in cap.err and str(_backup_dirs(tmp_path)[0]) in cap.err
+    assert "SECRET-OLD-ONE" not in cap.out + cap.err                                  # the words are never printed
+
+
+def test_drop_backup_that_silently_leaves_the_directory_is_still_an_error(tool, logs, tmp_path, monkeypatch, capsys):
+    """rmtree returning without raising is not proof: the path must be verified gone before "deleted" is printed."""
+    monkeypatch.setattr(tool.shutil, "rmtree", lambda *a, **k: None)
+    assert run(tool, tmp_path, "--apply", "--all", "--drop-backup") == 1
+    cap = capsys.readouterr()
+    assert "STILL PRESENT" in cap.err and "backup deleted" not in cap.out
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+def test_drop_backup_in_a_read_only_directory_fails_loudly(tool, logs, tmp_path, monkeypatch, capsys):
+    """A real (unmocked) failure: the backup's own directory is read-only after the copy, so its files cannot be unlinked."""
+    real_chmod = os.chmod
+    state = {}
+
+    def lock_after_copy(path, mode, *a, **k):
+        real_chmod(path, mode, *a, **k)
+        if Path(path).name.startswith("00-") and mode == 0o600:       # the last thing --apply does to a backup file
+            state["dir"] = Path(path).parent
+            real_chmod(state["dir"], 0o500)
+
+    monkeypatch.setattr(os, "chmod", lock_after_copy)
+    try:
+        code = run(tool, tmp_path, "--apply", "--all", "--drop-backup")
+    finally:
+        monkeypatch.undo()
+        if "dir" in state:
+            real_chmod(state["dir"], 0o700)
+    cap = capsys.readouterr()
+    assert code == 1 and "STILL" in cap.err and "backup deleted" not in cap.out
+    assert any(f.name.startswith("00-") for f in state["dir"].iterdir())               # the raw copy really is still on disk
+
+
+def test_drop_backup_that_works_still_exits_zero_and_says_verified_negative_control(tool, logs, tmp_path, capsys):
+    assert run(tool, tmp_path, "--apply", "--all", "--drop-backup") == 0
+    assert "verified gone" in capsys.readouterr().out and _backup_dirs(tmp_path) == []

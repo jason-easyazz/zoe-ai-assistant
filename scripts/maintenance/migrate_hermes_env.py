@@ -64,6 +64,7 @@ import time
 from pathlib import Path
 from typing import Iterable, Optional
 
+_EXPORT_RE = re.compile(r"^\s*export\s+")
 _NAME_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
 # Units that are retired (their removal is scripts/maintenance/cleanup_dead_units.py): never a migration target.
@@ -138,7 +139,10 @@ def parse_env(path: Path) -> EnvFile:
             continue
         name = m.group(1)
         values[name] = m.group(2).strip()
-        lines[name] = raw.rstrip("\n")
+        # systemd's EnvironmentFile= silently IGNORES an ``export NAME=value`` line (it is not a shell), so copying one verbatim
+        # would write a name the unit never sees. Emit the normalised ``NAME=value``; the value (and its quotes, which systemd
+        # honours) is carried over unchanged.
+        lines[name] = f"{name}={values[name]}" if _EXPORT_RE.match(raw) else raw.rstrip("\n")
     return EnvFile(path, values, lines)
 
 
