@@ -3017,6 +3017,13 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     await websocket.accept()
     ws_session_id = session_id or f"ws-voice-{_uuid_mod.uuid4().hex[:8]}"
     user_id = await _resolve_ws_user(session_id)
+    # Home control (2026-10-18): any LAN client reaches this socket; driving the house needs a member or the panel.
+    import panel_principal as _pp_ws
+
+    await _pp_ws.record_turn_home_control(
+        websocket,
+        {"user_id": user_id, "role": "guest" if _pp_ws.is_guest_id(user_id) else "member"},
+    )
 
     await websocket.send_json({"type": "state", "state": "ambient"})
 

@@ -2784,6 +2784,8 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
     # Anyone AT THE PANEL may use the household list (a fridge list). The verdict rides this request's context so the intent
     # executors can tell a panel guest from an anonymous LAN caller (who still touches no list).
     await panel_principal.mark_if_panel(request, user)
+    # Home control (2026-10-18): only a member or the panel drives the house from a chat turn (panel_principal).
+    await panel_principal.record_turn_home_control(request, user)
 
     # An explicit session_id is used as-is. With none (the estate ask-box sends none) the
     # user's last ask_ session within ZOE_STICKY_SESSION_MINUTES continues (never a web_
