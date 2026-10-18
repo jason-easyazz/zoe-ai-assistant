@@ -75,9 +75,9 @@ _WINDOW = 3  # lines either side: a multi-line call keeps the port and the clien
 # scripts included) except binaries / lockfiles / generated data; documentation, vendored
 # bundles and this test itself (it must name the ports) are skipped.
 _SKIP_SUFFIXES = (
-    ".md", ".rst", ".txt", ".json", ".lock", ".svg", ".map", ".min.js", ".csv", ".jsonl",
+    ".md", ".rst", ".lock", ".svg", ".map", ".min.js", ".csv", ".jsonl",
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".woff", ".woff2", ".ttf", ".wasm",
-    ".gz", ".zip", ".tar", ".onnx", ".gguf", ".bin", ".pdf", ".mp3", ".wav", ".ogg", ".sql",
+    ".gz", ".zip", ".tar", ".onnx", ".gguf", ".bin", ".pdf", ".mp3", ".wav", ".ogg",
 )
 _SKIP_PREFIXES = ("docs/", "services/zoe-ui/dist/lib/", "services/zoe-ui/node_modules/")
 _SKIP_FILES = ("services/zoe-data/tests/test_openclaw_hermes_removal.py",)
@@ -125,6 +125,22 @@ def _tracked_scan_files() -> list[str]:
     return [f for f in out if _is_scanned(f)]
 
 
+def test_tracked_enumeration_reaches_every_format():
+    # Not just the predicate on invented names: the REAL `git ls-files` walk must hand the scan
+    # service units, compose files, nginx confs, HTML and extensionless scripts, or a broken
+    # repo-root / ls-files call would leave the repo-wide test green over nothing.
+    files = _tracked_scan_files()
+    assert len(files) > 500
+    assert any(f.endswith(".service") for f in files)
+    assert any(f.endswith(".timer") for f in files)
+    assert any(f.startswith("docker-compose") and f.endswith(".yml") for f in files)
+    assert any(f.endswith(".conf") for f in files)
+    assert any(f.endswith(".html") for f in files)
+    assert any("." not in f.rsplit("/", 1)[-1] for f in files), "no extensionless tracked file"
+    assert "services/zoe-data/main.py" in files
+    assert "docs/PLANS.md" not in files
+
+
 def test_dead_port_scan_covers_service_conf_and_extensionless_files():
     # Negative control for COVERAGE (a dead-port line in an unscanned file format is invisible):
     # the formats the retired gateways actually shipped in must be scanned.
@@ -138,7 +154,7 @@ def test_dead_port_scan_covers_service_conf_and_extensionless_files():
         "scripts/x.py",
     ):
         assert _is_scanned(rel), rel
-    for rel in ("docs/knowledge/x.md", "services/zoe-ui/dist/lib/x.js", "package-lock.json", "a.png"):
+    for rel in ("docs/knowledge/x.md", "services/zoe-ui/dist/lib/x.js", "yarn.lock", "a.png"):
         assert not _is_scanned(rel), rel
     unit = "[Service]\nExecStart=/usr/bin/openclaw gateway --port 18789\nExecStartPost=/usr/bin/curl http://127.0.0.1:18789/health\n"
     assert _dead_port_hits(unit)
