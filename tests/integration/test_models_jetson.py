@@ -72,7 +72,8 @@ API_URL = "https://localhost/api/chat/"
 VERIFY_SSL = False  # Self-signed cert
 
 
-def test_model_via_api(model_name: str, conversation: Dict) -> Dict:
+# Renamed from test_model_via_api 2026-10-19: a hand-run probe helper, not a pytest test (it errored on a missing fixture every night).
+def probe_model_via_api(model_name: str, conversation: Dict) -> Dict:
     """Test a model through Zoe's chat API with conversation history"""
     print(f"\n{'='*60}")
     print(f"Testing: {conversation['name']}")
@@ -249,7 +250,7 @@ def main():
         model_results = []
         
         for conversation in TEST_CONVERSATIONS:
-            result = test_model_via_api(model['name'], conversation)
+            result = probe_model_via_api(model['name'], conversation)
             model_results.append(result)
             all_results.append(result)
             
