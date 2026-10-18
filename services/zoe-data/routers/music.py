@@ -3,10 +3,13 @@ Music Assistant proxy endpoints.
 
 Provides Zoe's frontend with MA status, configured providers, and available
 provider types — all forwarded from the local MA instance (default :8095).
-Auth: the READS stay session-free (the music page, settings and the kiosk need
-them). Every WRITE takes ``panel_principal.require_member_or_panel`` - a member or
-the wall panel, the ``/api/ha/*`` rule (#2089); until 2026-10-18 they took none.
-``/play`` and ``/play_media`` also take the phone jukebox token (music_jukebox.py).
+Auth: every route takes a principal. Reads and writes alike need ``panel_principal.require_member_or_panel`` - a member
+or the wall panel, the ``/api/ha/*`` rule (#2089); writes were gated by #2108, reads by this rule (a guest-Wi-Fi phone must
+not see what is playing, the queue, history or playlists). The one deliberate exception is the phone jukebox
+(music_jukebox.py): ``/play`` and ``/play_media`` plus the two reads its page needs, ``/now-playing`` and ``/search``,
+also take its short-lived ``X-Jukebox-Token`` (``require_member_panel_or_jukebox``) - never a queue, history, playlist or
+library read. ``jukebox_qr`` is the other non-principal route: a single-use unguessable handle, like the music-setup QR.
+tests/test_music_routes_declare_auth.py fails a music route that declares neither.
 """
 import logging
 import os
@@ -346,7 +349,7 @@ _KNOWN_PROVIDERS = [
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/status")
+@router.get("/status", dependencies=[Depends(require_member_or_panel)])
 async def music_status() -> dict[str, Any]:
     """
     Returns MA availability, version, player count, and configured providers.
@@ -373,7 +376,7 @@ async def music_status() -> dict[str, Any]:
     }
 
 
-@router.get("/providers")
+@router.get("/providers", dependencies=[Depends(require_member_or_panel)])
 async def music_providers() -> dict[str, Any]:
     """
     Returns the list of music providers currently configured in MA.
@@ -384,7 +387,7 @@ async def music_providers() -> dict[str, Any]:
     return {"available": True, "providers": providers}
 
 
-@router.get("/players")
+@router.get("/players", dependencies=[Depends(require_member_or_panel)])
 async def music_players() -> dict[str, Any]:
     """
     Returns the list of players currently registered in MA.
@@ -401,7 +404,7 @@ async def music_players() -> dict[str, Any]:
     return {"available": True, "players": players}
 
 
-@router.get("/queue/{queue_id}")
+@router.get("/queue/{queue_id}", dependencies=[Depends(require_member_or_panel)])
 async def music_queue(queue_id: str) -> dict[str, Any]:
     """
     Returns up to 50 queue items for the given player/queue ID.
@@ -412,7 +415,7 @@ async def music_queue(queue_id: str) -> dict[str, Any]:
     return {"available": True, "items": items}
 
 
-@router.get("/available-providers")
+@router.get("/available-providers", dependencies=[Depends(require_member_or_panel)])
 async def available_providers() -> dict[str, Any]:
     """
     Returns the full catalogue of provider types MA can use, merged with
@@ -434,7 +437,7 @@ async def available_providers() -> dict[str, Any]:
 # place that speaks MA). The panel primarily drives these via the Skybridge
 # resolver (data-sky-action), but these give a direct API surface too.
 
-@router.get("/now-playing")
+@router.get("/now-playing", dependencies=[Depends(require_member_panel_or_jukebox)])
 async def music_now_playing(player_id: str = "") -> dict[str, Any]:
     import music_service
     np = await music_service.now_playing(player_id)
@@ -468,7 +471,7 @@ async def music_seek(payload: dict) -> dict[str, Any]:
     return {"ok": ok, "position_seconds": pos}
 
 
-@router.get("/preferred-player")
+@router.get("/preferred-player", dependencies=[Depends(require_member_or_panel)])
 async def get_preferred_player() -> dict[str, Any]:
     """The household's remembered default speaker for new plays."""
     import music_service
@@ -509,7 +512,7 @@ async def music_transfer(payload: dict) -> dict[str, Any]:
     return {"ok": ok, "target_player_id": target}
 
 
-@router.get("/groups")
+@router.get("/groups", dependencies=[Depends(require_member_or_panel)])
 async def music_groups() -> dict[str, Any]:
     """Multi-room grouping state: who is grouped with whom, and who CAN group.
 
@@ -604,7 +607,7 @@ async def music_play(payload: dict) -> dict[str, Any]:
 
 # ── Browse: structured search + play-by-URI (the touch music page) ────────────
 
-@router.get("/search")
+@router.get("/search", dependencies=[Depends(require_member_panel_or_jukebox)])
 async def music_search(q: str = "", types: str = "", limit: int = 8) -> dict[str, Any]:
     """Search the connected providers, grouped by media type.
 
@@ -680,14 +683,14 @@ async def music_queue_save(payload: dict) -> dict[str, Any]:
     return {"ok": await music_service.queue_save_playlist(str(b.get("queue_id") or ""), str(b.get("name") or ""))}
 
 
-@router.get("/playlists")
+@router.get("/playlists", dependencies=[Depends(require_member_or_panel)])
 async def music_playlists() -> dict[str, Any]:
     """The user's playlist library."""
     import music_service
     return {"playlists": await music_service.list_playlists()}
 
 
-@router.get("/playlists/tracks")
+@router.get("/playlists/tracks", dependencies=[Depends(require_member_or_panel)])
 async def music_playlist_tracks(uri: str = "", limit: int = 100) -> dict[str, Any]:
     """Tracks in a playlist. ?uri=<playlist uri>."""
     import music_service
@@ -717,7 +720,7 @@ async def music_unfavorite(payload: dict) -> dict[str, Any]:
     return {"ok": await music_service.favorite_remove(str((payload or {}).get("uri") or ""))}
 
 
-@router.get("/recommendations")
+@router.get("/recommendations", dependencies=[Depends(require_member_or_panel)])
 async def music_recommendations() -> dict[str, Any]:
     """MA's native recommendation shelves ("Listen again", "Mixed for you", …),
     normalized to the same flat item shape as /search results."""
@@ -725,7 +728,7 @@ async def music_recommendations() -> dict[str, Any]:
     return await music_service.get_recommendations()
 
 
-@router.get("/recently-played")
+@router.get("/recently-played", dependencies=[Depends(require_member_or_panel)])
 async def music_recently_played(limit: int = 10, types: str = "") -> dict[str, Any]:
     """The household's recently played items from MA's play history.
     ?limit=10&types=track,album (optional comma list, same as /search)."""

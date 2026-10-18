@@ -1408,54 +1408,10 @@ intent, memories = await asyncio.gather(intent_task, memory_task)
 
 ---
 
-## 8. NEXT ACTIONS (Start This Week)
+## 8. Where the next action lives
 
-### Day 1-2: Implement P0-2 (Intent-Aware Context Validation)
-**Why first:** Highest impact/effort ratio, immediate hallucination reduction
-1. Create `intent_system/validation/context_validator.py`
-2. Update `chat.py` to call validator before context fetching
-3. Test with deterministic intents ("add milk to shopping list")
+The next action is **not** kept here any more: the one ordered list is [`docs/ROADMAP.md`](../ROADMAP.md) (Now / Next / Later). This document is a November 2025 study, long superseded; update it when a step lands, but do not add a new "next action" to it.
 
-**Success metric:** Tier 0 intents stay < 10ms without context fetching overhead
-
----
-
-### Day 3: Implement P0-3 (Confidence-Aware Uncertainty)
-**Why next:** User-facing improvement, builds trust immediately
-1. Create `intent_system/formatters/response_formatter.py`
-2. Update `chat.py` to format responses with confidence thresholds
-3. A/B test uncertainty language phrasing
-
-**Success metric:** Users report "Zoe feels more honest" in feedback
-
----
-
-### Day 4-6: Implement P0-1 (Behavioral Memory)
-**Why third:** Highest architectural impact, needs careful design
-1. Create `behavioral_memory.py` service
-2. Design SQL schema for behavioral patterns
-3. Implement LLM-based pattern extraction
-4. Add cron job for nightly extraction
-5. Integrate with context assembly in chat.py
-
-**Success metric:** 5-10 behavioral patterns extracted per user after 7 days
-
----
-
-### Week 2: Testing & Iteration
-1. Test all P0 features with production conversations
-2. Measure hallucination rate reduction (baseline vs after)
-3. Gather user feedback on uncertainty expression
-4. Monitor behavioral pattern quality
-
----
-
-### Week 3-4: Implement P1 (If P0 Succeeds)
-Only proceed if P0 features are stable and validated
-
-1. **P1-1:** Temporal-aware similarity scoring (1 day)
-2. **P1-3:** Platform-aware context budgets (1 day)
-3. **P1-2:** Response grounding verification (2-3 days)
 
 ---
 
