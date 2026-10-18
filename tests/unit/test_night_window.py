@@ -297,6 +297,7 @@ class FakeHost(nw.NightHost):
 def make(tmp_path, *, cfg_kw=None, argv=(), **host_kw):
     args = nw.build_parser().parse_args(list(argv))
     cfg_kw = {"night_mind_script": tmp_path / "absent" / "zoe-night-mind.py", "omi_day_review_script": tmp_path / "absent" / "zoe-omi-day-review.py",
+              "struggle_proposals_script": tmp_path / "absent" / "zoe-struggle-proposals.py",
               **(cfg_kw or {})}      # the optional entry points are absent unless a test brings its own (a plain skip, never a failed night)      # the real entry point lives on another branch: tests never depend on whether it is merged
     cfg = nw.NightCfg(lock_path=str(tmp_path / "brain.lock"), night_dir=tmp_path / "night", report_dir=tmp_path / "reports", buddyinfo=str(tmp_path / "buddyinfo"), meminfo=str(tmp_path / "meminfo"),
                       blackouts=((250, 292),), contig_min_blocks=64, health_wait_s=20.0, quiet_wait_max_min=2.0, quiet_poll_s=10.0, busy_wait_max_min=2.0, busy_poll_s=10.0,
@@ -1052,6 +1053,28 @@ def test_the_day_review_runs_last_on_the_12b_and_running_out_of_time_never_fails
     assert w3.run() == nw.EXIT_JOBS_FAILED                                                    # a real failure is still loud
 
 
+def test_the_struggle_proposals_job_runs_after_the_night_mind_before_the_day_review_and_never_fails_the_night_for_time(tmp_path):
+    spec = next(j for j in nw.build_jobs(nw.NightCfg(), 8192, 6.2, 150.0) if j.name == "struggle_proposals")
+    assert spec.best_effort and not spec.fallback_4b and not spec.skip_reason and spec.timeout_s == 480.0
+    assert spec.argv[1].endswith("zoe-struggle-proposals.py")
+    assert spec.argv[2:] == ["--model-url", "http://127.0.0.1:11500/v1", "--ctx-tokens", "8192", "--decode-tok-s", "6.20", "--prefill-tok-s", "150.0"]
+    names = [j.name for j in nw.build_jobs(nw.NightCfg())]
+    assert names.index("night_mind") < names.index("struggle_proposals") < names.index("omi_day_review")
+    assert next(j for j in nw.build_jobs(nw.NightCfg(struggle_proposals_script=tmp_path / "no.py")) if j.name == "struggle_proposals").skip_reason.startswith("no.py not found")
+    script = tmp_path / "zoe-struggle-proposals.py"
+    script.write_text("# stand-in")
+    w, host, _ = make(tmp_path, cfg_kw={"struggle_proposals_script": script})
+    assert w.run() == nw.EXIT_OK, w.outcome
+    ran = [j["name"] for j in host.jobs_run]
+    assert ran.index("zoe-struggle-proposals.py") > ran.index("zoe-nightly-dreaming.py")
+    sp = next(j for j in host.jobs_run if j["name"] == "zoe-struggle-proposals.py")
+    assert sp["env"]["GEMMA_SERVER_URL"] == "http://127.0.0.1:11500/v1" and "--all-members" not in sp["argv"]
+    w2, _, _ = make(tmp_path, cfg_kw={"struggle_proposals_script": script}, job_rc={"zoe-struggle-proposals.py": 124})
+    assert w2.run() == nw.EXIT_OK and any(j["name"] == "struggle_proposals" and j["status"] == "timeout" for j in w2.jobs)      # best-effort: tomorrow recomputes it
+    w3, _, _ = make(tmp_path, cfg_kw={"struggle_proposals_script": script}, job_rc={"zoe-struggle-proposals.py": 1})
+    assert w3.run() == nw.EXIT_JOBS_FAILED                                                    # a real failure is still loud
+
+
 def test_the_trial_also_scores_the_night_mind_cells_when_the_entry_point_exists(tmp_path):
     _trial_cells(tmp_path, pretty=True)
 
@@ -1517,7 +1540,7 @@ def test_the_real_night_command_in_the_unit_carries_every_lever_and_equals_the_c
     args = _exec_start_args()
     parsed = nw.build_parser().parse_args(args)                                   # every flag in the unit is a flag the script accepts
     cfg = nw.configure(parsed)
-    assert args[args.index("--jobs") + 1] == "digest,dreaming,night_mind,omi_day_review" and cfg.jobs == ("digest", "dreaming", "night_mind", "omi_day_review")
+    assert args[args.index("--jobs") + 1] == "digest,dreaming,night_mind,struggle_proposals,omi_day_review" and cfg.jobs == ("digest", "dreaming", "night_mind", "struggle_proposals", "omi_day_review")
     assert (cfg.ngl, cfg.ctx_choice, cfg.kv_choice) == (34, 8192, "q8_0") and "--ngl" in args and "--ctx" in args and "--kv" in args
     assert args[args.index("--end-by") + 1] == "03:55" and cfg.end_by == 3 * 60 + 55
     defaults = nw.configure(nw.build_parser().parse_args([]))                     # written-out levers == the code's defaults: a changed default cannot silently change the night
