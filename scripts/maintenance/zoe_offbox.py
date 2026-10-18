@@ -188,6 +188,9 @@ def secret_files(p: Paths) -> list[tuple[str, Path]]:
     return sorted(out.items())
 
 
+DRILL_ARTEFACT_GLOBS = ("*.gguf", "*.onnx")   # what the monthly drill restores from the artefacts tier
+
+
 def artefact_paths(p: Paths) -> list[Path]:
     # ~/.zoe/backups/panel: the panel's custom wake model (hey_zoe.onnx), in no git and on no other box (models.lock).
     # It is excluded from the household tier's ~/.zoe walk by "*backup*", so it rides here, with the other models.
@@ -686,11 +689,15 @@ def cmd_drill(p: Paths, cfg: Config, now: datetime, force: bool) -> int:
             target = scratch / tier
             args = ["restore", snap["id"], "--target", str(target)]
             if tier == "artefacts":
-                args += ["--include", "*.gguf"]     # a 1 GB checkpoint restore every month is not worth the WAN
+                # a 1 GB checkpoint restore every month is not worth the WAN; the served GGUF and the panel's
+                # wake model (its only copy off the panel) are small and are what a rebuild needs
+                for glob in DRILL_ARTEFACT_GLOBS:
+                    args += ["--include", glob]
             restic(cfg, *args)
             local = p.state_dir / "manifests" / f"{snap['id']}.json"
             if tier == "artefacts":
-                want = {k: v for k, v in json.loads(local.read_text())["files"].items() if k.endswith(".gguf")} \
+                want = {k: v for k, v in json.loads(local.read_text())["files"].items()
+                        if any(fnmatch.fnmatch(Path(k).name, g) for g in DRILL_ARTEFACT_GLOBS)} \
                     if local.exists() else {}
                 # restic restores an absolute source path P under <target>/P
                 got = {"/" + f.relative_to(target).as_posix(): sha256_file(f) for f in target.rglob("*")

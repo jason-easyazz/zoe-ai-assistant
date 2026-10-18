@@ -168,6 +168,24 @@ def test_the_wake_model_backup_rides_the_offbox_artefacts_tier(tmp_path):
     assert offbox.artefact_paths(p) == [tmp_path / ".zoe" / "backups" / "panel"]
     # ...and it is NOT in the household tier's ~/.zoe walk (the "*backup*" exclude), so it is not shipped twice.
     assert offbox.excluded(("backups", "panel", "hey_zoe.onnx"), offbox.ZOE_TREE_EXCLUDES)
+    # The monthly drill restores and checksums it (its only copy off the panel), with the served GGUF.
+    import fnmatch
+    for name in ("hey_zoe.onnx", "functiongemma-270m-zoe-functok-r2-Q8_0.gguf"):
+        assert any(fnmatch.fnmatch(name, g) for g in offbox.DRILL_ARTEFACT_GLOBS), name
+    assert not any(fnmatch.fnmatch("model.safetensors", g) for g in offbox.DRILL_ARTEFACT_GLOBS)
+
+
+def test_the_jetson_installer_starts_from_code_defaults(tmp_path):
+    # The template's active lines are the PANEL's tuned values; another host must not inherit them.
+    import subprocess
+    script = (SETUP / "install-voice-service.sh").read_text()
+    m = re.search(r"sed -E (-e '[^']+' -e '[^']+') \"\$ENV_EXAMPLE\"", script)
+    assert m, "the installer no longer renders the template"
+    out = subprocess.run(f"sed -E {m.group(1)} {drift.TEMPLATE}", shell=True, capture_output=True, text=True,
+                         check=True).stdout
+    active = {line.split("=", 1)[0] for line in out.splitlines() if re.match(r"^[A-Z][A-Z0-9_]*=", line)}
+    assert active == {"ZOE_URL", "PANEL_ID", "DEVICE_TOKEN"}
+    assert "#ZOE_SPEAKER_MODEL=resnet34" in out and "#AUDIO_DEVICE=pulse" in out
 
 
 # ── the daemon: build in /health, one keep-alive session ───────────────────────────────────────────────
