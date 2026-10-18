@@ -8,7 +8,7 @@
                                                    Each candidate also carries, for the review surface (the Pendant page),
                                                    ``editable`` (the fields an edit may change, ``omi_review_apply.EDITABLE``; [] =
                                                    not editable), per diarised evidence entry ``offset_ms`` + ``audio_kept`` (the clip
-                                                   route would play that line now; ``omi_recordings.segment_lines``), and on a pending
+                                                   route would play that line now; ``omi_day_review.annotate_evidence``), and on a pending
                                                    ``held_conflict`` a ``conflict`` = {``existing``, ``options``} read now
                                                    (``omi_review_apply.conflict_detail``; the owner's own row only).
   GET  /api/omi/day-review/candidates/{id}         one candidate (payload, quoted evidence, recording ids, provenance), annotated alike
@@ -57,19 +57,10 @@ MAX_CONFLICT_READS = 10
 async def _annotate(uid: str, cands: list) -> list:
     """The review surface's extras, all the caller's own: editable fields, where each quoted line sits and whether its audio is
     still kept, and what a held candidate contradicts. Pointers and the member's own text only - never an audio path."""
-    import omi_recordings
-
-    seg_ids = [e.get("segment_id") for c in cands for e in (c.get("evidence") or []) if isinstance(e, dict) and e.get("segment_id")]
-    lines = await omi_recordings.segment_lines(uid, seg_ids) if seg_ids else {}
+    await dr.annotate_evidence(uid, cands)
     reads = 0
     for c in cands:
         c["editable"] = list(apply.EDITABLE.get(c.get("kind"), ()))
-        for e in c.get("evidence") or []:
-            if isinstance(e, dict) and e.get("segment_id"):
-                got = lines.get(str(e["segment_id"])) or {}
-                e["audio_kept"] = bool(got.get("audio_kept"))
-                if "offset_ms" in got:
-                    e["offset_ms"] = got["offset_ms"]
         if c.get("status") == "pending" and c.get("write_error") == "held_conflict" and reads < MAX_CONFLICT_READS:
             reads += 1
             c["conflict"] = await apply.conflict_detail(uid, c)
