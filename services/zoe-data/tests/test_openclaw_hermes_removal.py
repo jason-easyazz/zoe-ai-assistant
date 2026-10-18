@@ -71,8 +71,14 @@ _NET_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 _WINDOW = 3  # lines either side: a multi-line call keeps the port and the client apart
-_SCANNED_SUFFIXES = (".py", ".sh", ".ts", ".js", ".yml", ".yaml")
-# Not scanned: documentation, vendored bundles, and this test itself (it must name the ports).
+# Every tracked text file is scanned (systemd units, nginx confs, Dockerfiles, HTML, extensionless
+# scripts included) except binaries / lockfiles / generated data; documentation, vendored
+# bundles and this test itself (it must name the ports) are skipped.
+_SKIP_SUFFIXES = (
+    ".md", ".rst", ".txt", ".json", ".lock", ".svg", ".map", ".min.js", ".csv", ".jsonl",
+    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".woff", ".woff2", ".ttf", ".wasm",
+    ".gz", ".zip", ".tar", ".onnx", ".gguf", ".bin", ".pdf", ".mp3", ".wav", ".ogg", ".sql",
+)
 _SKIP_PREFIXES = ("docs/", "services/zoe-ui/dist/lib/", "services/zoe-ui/node_modules/")
 _SKIP_FILES = ("services/zoe-data/tests/test_openclaw_hermes_removal.py",)
 
@@ -106,18 +112,36 @@ def _dead_port_hits(text: str) -> list[tuple[int, str]]:
     return hits
 
 
+def _is_scanned(rel: str) -> bool:
+    return not (rel.endswith(_SKIP_SUFFIXES) or rel.startswith(_SKIP_PREFIXES) or rel in _SKIP_FILES)
+
+
 def _tracked_scan_files() -> list[str]:
     import subprocess
 
     out = subprocess.run(
         ["git", "-C", str(_REPO), "ls-files"], capture_output=True, text=True, check=True
     ).stdout.splitlines()
-    return [
-        f for f in out
-        if f.endswith(_SCANNED_SUFFIXES)
-        and not f.startswith(_SKIP_PREFIXES)
-        and f not in _SKIP_FILES
-    ]
+    return [f for f in out if _is_scanned(f)]
+
+
+def test_dead_port_scan_covers_service_conf_and_extensionless_files():
+    # Negative control for COVERAGE (a dead-port line in an unscanned file format is invisible):
+    # the formats the retired gateways actually shipped in must be scanned.
+    for rel in (
+        "scripts/setup/systemd/openclaw-gateway.service",
+        "scripts/setup/systemd/hermes-agent.timer",
+        "services/zoe-ui/nginx.conf",
+        "Dockerfile",
+        "scripts/maintenance/probe_gateway",
+        "services/zoe-ui/dist/health.html",
+        "scripts/x.py",
+    ):
+        assert _is_scanned(rel), rel
+    for rel in ("docs/knowledge/x.md", "services/zoe-ui/dist/lib/x.js", "package-lock.json", "a.png"):
+        assert not _is_scanned(rel), rel
+    unit = "[Service]\nExecStart=/usr/bin/openclaw gateway --port 18789\nExecStartPost=/usr/bin/curl http://127.0.0.1:18789/health\n"
+    assert _dead_port_hits(unit)
 
 
 def test_dead_port_scan_catches_a_multiline_probe():
@@ -142,7 +166,9 @@ def test_dead_port_scan_catches_a_multiline_probe():
     assert not _dead_port_hits('PORT = 864200\nhttp://localhost:3579')
 
 
-def test_no_probe_of_dead_hermes_or_openclaw_ports_repo_wide():
+def test_dead_port_connections_only_where_allowlisted_repo_wide():
+    # An exception BUDGET, not a proof of zero: the REAL/dormant connections in _ALLOWED are named
+    # with reasons and may only shrink; any new one, or any unlisted file, fails.
     found: dict[str, list[tuple[int, str]]] = {}
     for rel in _tracked_scan_files():
         try:
@@ -195,10 +221,27 @@ _GATE_ENVS = (
 def test_no_env_gate_reads_in_chat_boot_or_mcp(rel: str):
     src = _src(rel)
     for name in _GATE_ENVS:
-        # A module may EXPLAIN the removal in a comment or docstring, but must not READ the
-        # variable: no environ/getenv expression names it.
-        read = re.search(r"(environ|getenv|env_str|env_bool|env_int)[^\n]*" + re.escape(name), src)
-        assert read is None, f"{rel} reads {name}: {read.group(0) if read else ''}"
+        read = _env_read(src, name)
+        assert read is None, f"{rel} reads {name}: {read}"
+
+
+# A module may EXPLAIN the removal in a comment or docstring, but must not READ the variable: an
+# environ/getenv/env_* expression names it, on the same line or on a following line of the same
+# call (`os.environ.get(\n "NAME")`). `#` ends the span so a trailing comment cannot match.
+_ENV_READ_RE = r"(?:environ|getenv|env_str|env_bool|env_int)\b[^#;]{0,80}?\b%s\b"
+
+
+def _env_read(src: str, name: str):
+    m = re.search(_ENV_READ_RE % re.escape(name), src, re.DOTALL)
+    return m.group(0) if m else None
+
+
+def test_env_read_guard_catches_a_multiline_read():
+    assert _env_read('x = os.environ.get(\n    "HERMES_FAST_PATH", "")', "HERMES_FAST_PATH")
+    assert _env_read("v = os.getenv('JETSON_AGENT_MODE')", "JETSON_AGENT_MODE")
+    assert _env_read('v = env_bool(\n  "OPENCLAW_GUARDED_AUTO", False)', "OPENCLAW_GUARDED_AUTO")
+    assert not _env_read("# removed: the HERMES_FAST_PATH gate\nx = os.environ.get('OTHER')", "HERMES_FAST_PATH")
+    assert not _env_read('"""HERMES_FAST_PATH is gone."""', "HERMES_FAST_PATH")
 
 
 def test_chat_lane_constants_are_pinned_to_the_live_values():
