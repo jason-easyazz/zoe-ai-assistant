@@ -100,6 +100,9 @@ def python_findings(source: str) -> list[str]:
             for bad in _FORBIDDEN_STRINGS:
                 if bad in n.value:
                     found.append(f"line {n.lineno}: string {bad!r}")
+            # the hermes binary's path in code, however the argv is later assembled (a variable argv[0])
+            if re.search(r"(^|/)(\.local/bin|bin)/hermes$", n.value.strip()):
+                found.append(f"line {n.lineno}: path to the hermes binary {n.value.strip()[:50]!r}")
         if isinstance(n, ast.Call):
             name = _call_name(n.func)
             # shutil.which("hermes") / which("hermes")
@@ -144,6 +147,7 @@ def python_findings(source: str) -> list[str]:
         'import subprocess\nsubprocess.run(["systemctl", "--user", "restart", "hermes-agent.service"])\n',
         'from background_runner import enqueue_background_task\n',
         'await asyncio.create_subprocess_exec("hermes", "chat")\n',
+        'HERMES = os.path.expanduser("~/.local/bin/hermes")\ncmd = [HERMES, "-z", p]\nsubprocess.run(cmd)\n',
         'import os\nos.popen("cd /tmp && hermes -z go")\n',
     ],
 )

@@ -377,3 +377,32 @@ def test_focused_checks_never_exec_hermes_even_when_already_covered(tmp_path, mo
     assert ("run", ["git", "diff", "--quiet"], tmp_path) in calls
     assert not any("hermes" in str(call[1][0]) for call in calls)
     assert "hermes_bin" not in helper.run_focused_checks.__code__.co_varnames
+
+
+def test_focused_checks_report_dirty_when_helper_changed_files(tmp_path, monkeypatch):
+    helper = _load_helper()
+    calls = []
+
+    def fake_run_checked(cmd, *, cwd):
+        calls.append(("checked", cmd, cwd))
+        return object()
+
+    def fake_run(cmd, cwd):
+        calls.append(("run", cmd, cwd))
+
+        class Result:
+            returncode = 1   # `git diff --quiet` exits 1 when the helper changed files
+
+        return Result()
+
+    monkeypatch.setattr(helper, "_run_checked", fake_run_checked)
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    focused = helper.run_focused_checks(
+        tmp_path,
+        {"idempotent": False, "changed": ["services/zoe-data/intent_router.py"]},
+    )
+
+    assert focused["terminal_action"] is None
+    assert focused["git_diff_clean"] is False
+    assert not any("hermes" in str(call[1][0]) for call in calls)
