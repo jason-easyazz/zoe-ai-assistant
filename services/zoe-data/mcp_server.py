@@ -37,7 +37,6 @@ _STDIO_WORKER = __name__ == "__main__"
 
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
-_OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
 _INTERNAL_TOKEN = env_str("ZOE_INTERNAL_TOKEN")
 # When true (rollout goal), tools/call without _user_id/user_id is rejected.
 # Until every legacy/tool caller is caught up, default false logs a warning and falls
@@ -48,7 +47,7 @@ import logging as _mcp_logging
 _mcp_log = _mcp_logging.getLogger("mcp_server")
 from browser_broker import create_default_browser_broker
 
-_BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
+_BROWSER_BROKER = create_default_browser_broker()
 
 
 async def _notify_ui(channel: str, event_type: str, data: dict):
@@ -70,20 +69,10 @@ async def _notify_ui(channel: str, event_type: str, data: dict):
 def _active_agents_list() -> list:
     """Derive the active-agent display list from env, mirroring chat.py routing logic.
 
-    - active_agents: tier-1 local model + Hermes (the default reasoning agent)
-    - OpenClaw is NOT included here; callers that need it should use available_fallback.
+    - active_agents: the tier-1 local model only. Hermes and OpenClaw are retired
+      (B3, 2026-10-18) and are no longer listed.
     """
-    agents: list = []
-    jetson = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
-    pi = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
-    if jetson:
-        agents.append("Jetson Agent (Gemma 4 GPU)")
-    elif pi:
-        agents.append("Zoe Agent (Gemma 4 CPU)")
-    else:
-        agents.append("Gemma Agent (local)")
-    agents.append("Hermes (reasoning/default)")
-    return agents
+    return ["Jetson Agent (Gemma 4 GPU)"]
 
 
 def _load_agents_registry() -> dict:
@@ -1947,7 +1936,6 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             cpu = None
         return {
             "active_agents": _active_agents_list(),
-            "available_fallback": ["OpenClaw (on-demand)"],
             "platform": platform.machine(),
             "python": platform.python_version(),
             "cpu_percent": cpu,
@@ -2141,9 +2129,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         services = [
             {"name": "zoe-data",         "port": 8000,  "up": _port_open("127.0.0.1", 8000)},
             {"name": "zoe-auth",         "port": 8002,  "up": _port_open("127.0.0.1", 8002)},
-            {"name": "hermes-agent",     "port": 8642,  "up": _port_open("127.0.0.1", 8642)},
             {"name": "llama-server",     "port": 11434, "up": _port_open("127.0.0.1", 11434)},
-            {"name": "openclaw-gateway", "port": 18789, "up": _port_open("127.0.0.1", 18789), "status": "available_not_default"},
             {"name": "nginx",            "port": 80,    "up": _port_open("127.0.0.1", 80)},
         ]
 

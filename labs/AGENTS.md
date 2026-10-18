@@ -3,9 +3,16 @@
 ## Purpose
 
 Throwaway-grade experiments and de-risking spikes that must run **isolated from
-the Zoe runtime**. Nothing here is imported, built, or executed by any production
-service, Docker image, or CI job. Lab work proves (or kills) an idea before any
-prod migration — per the Samantha guardrail: **lab-prove before prod**.
+the Zoe runtime**. Most of `labs/` is never imported, built, or executed by any
+production service, Docker image, or CI job — lab work proves (or kills) an idea
+before any prod migration, per the Samantha guardrail: **lab-prove before prod**.
+
+**Two lab directories are NOT lab-only: they are live production services.**
+`flue-zoe-brain-2x/` is the voice brain sidecar (:3579, `flue-zoe-brain-2x.service`,
+Pi on the Gemma 4 E4B+MTP rock) and `flue-zoe-telegram-2x/` is the Telegram bot
+(:3582, `flue-zoe-telegram.service`). Both are auto-deployed on any diff (see
+Forbidden). Treat edits there as production edits; they are lab-hosted until the
+architecture deep-dive task B1 promotes them to `services/`.
 
 ## Ownership
 

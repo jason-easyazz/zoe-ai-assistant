@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-695 flags; 645 not documented in `.env.example`.
+693 flags; 643 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -223,7 +223,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_HA_VOICE_TOKEN` | `''` | no | NO | `services/homeassistant-mcp-bridge/main.py` |
 | `ZOE_HEALTH_CHECK_SCRIPT` | `dynamic` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_HEALTH_CHECK_TIMEOUT_S` | `'120'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
-| `ZOE_HERMES_AUTO_ESCALATE` | `'true'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_HOLD_THE_FACT` | `-` | yes | NO | `services/zoe-data/hold_the_fact.py` |
 | `ZOE_HOME_SETUP_SECRET` | `-` | no | NO | `services/zoe-data/smart_home_setup.py` |
 | `ZOE_HOME_SETUP_TTL_S` | `'900'` | no | NO | `services/zoe-data/smart_home_setup.py` |
@@ -431,7 +430,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_OMNIGENT_CONTAINER` | `'zoe-omnigent'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_IMPLEMENT_TIMEOUT_S` | `'1800'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_URL` | `'http://127.0.0.1:6767'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
-| `ZOE_OPENCLAW_GW` | `'http://127.0.0.1:18789'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/chat.py` |
 | `ZOE_OTEL_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_OWN_FACT_PRECEDENCE` | `-` | no | NO | `services/zoe-data/semantic_router.py`<br>`services/zoe-data/zoe_flue_client.py` |
 | `ZOE_PANEL_AGENT_PORT` | `'8765'` | no | NO | `services/zoe-data/auth_handoff.py`<br>`services/zoe-data/routers/system.py` |

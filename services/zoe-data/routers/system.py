@@ -145,20 +145,6 @@ async def get_system_status(
     db=Depends(get_db),
 ):
     """System status for Zoe's active runtime services."""
-    gateway_status = "unknown"
-    gateway_model = None
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get("http://127.0.0.1:18789/health")
-            if r.status_code == 200:
-                gateway_status = "connected"
-                data = r.json()
-                gateway_model = data.get("model")
-            else:
-                gateway_status = "error"
-    except Exception:
-        gateway_status = "offline"
-
     db_status = "ok"
     try:
         cursor = await db.execute("SELECT 1")
@@ -218,10 +204,6 @@ async def get_system_status(
 
     return {
         "database": db_status,
-        "openclaw_gateway": gateway_status,
-        "openclaw_default_route": False,
-        "openclaw_manual_fallback": gateway_status == "connected",
-        "openclaw_model": gateway_model,
         "llama_server": llama_status,
         "llama_model": llama_model,
         "ha_bridge": ha_bridge_status,
@@ -1118,19 +1100,6 @@ def _build_agent_card() -> dict:
             "model": os.environ.get("ZOE_LOCAL_MODEL", "Gemma 4 E4B-QAT"),
             "status": "online" if _RUNTIME_HEALTH.get("local_llm") else "offline",
         },
-        {
-            "tier": 1.5,
-            "name": "hermes",
-            "model": "GPT-5.4/Codex",
-            "status": "online" if _RUNTIME_HEALTH.get("hermes") else "offline",
-        },
-        {
-            "tier": 2,
-            "name": "openclaw",
-            "model": "Gemma 4 E4B-QAT",
-            "browser": True,
-            "status": "online" if _RUNTIME_HEALTH.get("openclaw") else "offline",
-        },
     ]
 
     return {
@@ -1612,16 +1581,6 @@ async def get_agent_runtimes():
                 "port": 11434,
                 "description": "llama-server (Gemma 4 E4B-QAT, fast-path agent)",
                 "online": _RUNTIME_HEALTH.get("local_llm", False),
-            },
-            "hermes": {
-                "port": 8642,
-                "description": "Hermes Agent (GPT-5.4/Codex)",
-                "online": _RUNTIME_HEALTH.get("hermes", False),
-            },
-            "openclaw": {
-                "port": 18789,
-                "description": "OpenClaw Gateway (Gemma 4 E4B-QAT, browser/exec)",
-                "online": _RUNTIME_HEALTH.get("openclaw", False),
             },
         },
     }
