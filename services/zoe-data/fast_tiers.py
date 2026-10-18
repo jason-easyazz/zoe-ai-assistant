@@ -871,6 +871,17 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
             answered = None
         if answered is not None:
             return answered
+        # intercom (ZOE_INTERCOM, default OFF = returns before any work): "tell the kitchen dinner's ready", "announce: ...", "call the
+        # kitchen" - a member's words spoken on another panel, under the owner's call rules (guests never, quiet hours, adults drop in).
+        try:
+            import intercom as _ic
+
+            answered = await _ic.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                      extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
         # calculator: spoken arithmetic ("two plus two", "what about 3 times pi") and its follow-ups ("that one divided by 3.5", "times
         # three") against the conversation's last result (calc_speech). A safe closed-vocabulary parser; anything else returns None.
         answered = _calc_tier(text, user_id, session_id)
