@@ -1,20 +1,9 @@
-"""Voice-path identity + home control at every turn entry point (security fix 2026-10-18, fix/voice-path-identity).
+"""Voice-path identity + home control at every turn entry point (security fix 2026-10-18). Each case carries a negative control.
 
-Three live holes, each pinned here with a negative control (the same rig DOES allow the legitimate case):
-
-1. Anonymous home control through the turn entry points. ``/api/ha/control`` refused an anonymous LAN caller (#2089), but
-   "turn off the light" to ``POST /api/chat`` or ``/ws/voice/`` still reached Home Assistant through ``smart_home_service`` /
-   ``intent_router`` / the legacy agent's ``ha_control`` / the brain's intent dispatch. Each entry now records
-   ``panel_principal.may_control_home`` for its caller and every executor refuses politely at the moment it would act.
-2. The relay go-live blocker (#2095): the voice HTTP lanes took ``panel_id`` and ``identified_user_id`` from the device's own
-   payload. ``panel_id`` is now the device token's own panel (a ``replay-`` instrument id may narrow it, on the LAN only), a
-   raw ``identified_user_id`` is ignored unless the caller is the internal PIN replay, a member's own session never inherits
-   the fresh member of a panel it names, and over the relay the panel's own speaker claim / enrolment / adaptation is refused.
-3. (the panel daemon's ``/activate`` lives in tests/unit/test_voice_daemon_platform.py)
-
-Everything that is not under test is faked; the identity block of ``voice_command``, ``_lane_panel_id``,
-``_require_voice_auth``, ``panel_principal``, ``smart_home_service.resolve_smart_home`` and the chat / WebSocket / intent-dispatch
-entry points are REAL. All data is invented; addresses are TEST-NET.
+1. Every turn entry (chat, /ws/voice/, the voice lanes, LiveKit, the brain's intent dispatch) records may_control_home; every
+   Home Assistant executor refuses politely when it is False. 2. The relay blocker (#2095): the server decides a voice lane's
+   panel and member, never the payload. (The daemon's /activate lives in tests/unit/test_voice_daemon_platform.py.)
+The identity block, _lane_panel_id, _require_voice_auth, panel_principal and the entry points are REAL; data is invented.
 """
 from __future__ import annotations
 
@@ -78,22 +67,10 @@ def registry(monkeypatch):
     return db
 
 
-class _Resp:
-    def __init__(self, data):
-        self.status_code = 200
-        self._data = data
-
-    def json(self):
-        return self._data
-
-    def raise_for_status(self):
-        return None
-
-
-@pytest.fixture
-def bridge(monkeypatch):
-    """The HA bridge as ``smart_home_service`` / ``zoe_agent`` reach it (httpx). Records every call; answers an empty house."""
-    calls: list = []
+def _fake_httpx(calls: list):
+    """httpx as the HA executors use it: records every call, answers an empty house."""
+    def resp(data):
+        return types.SimpleNamespace(status_code=200, json=lambda: data, raise_for_status=lambda: None)
 
     class _Client:
         def __init__(self, *a, **k):
@@ -107,17 +84,22 @@ def bridge(monkeypatch):
 
         async def get(self, url, **k):
             calls.append(("GET", url))
-            return _Resp([])
+            return resp([])
 
         async def post(self, url, json=None, **k):
             calls.append(("POST", url, json))
-            return _Resp({"ok": True})
+            return resp({"ok": True})
 
-    fake = types.SimpleNamespace(AsyncClient=_Client, ConnectError=ConnectionError)
-    monkeypatch.setattr(smart_home_service, "httpx", fake)
+    return types.SimpleNamespace(AsyncClient=_Client, ConnectError=ConnectionError)
+
+
+@pytest.fixture
+def bridge(monkeypatch):
     import zoe_agent
 
-    monkeypatch.setattr(zoe_agent, "httpx", fake)
+    calls: list = []
+    monkeypatch.setattr(smart_home_service, "httpx", _fake_httpx(calls))
+    monkeypatch.setattr(zoe_agent, "httpx", _fake_httpx(calls))
     return calls
 
 
@@ -388,29 +370,14 @@ async def test_the_mcp_home_reads_obey_a_refused_turn(monkeypatch, tool):
 
     monkeypatch.setattr(mcp_server, "_resolve_mcp_actor", _actor)
     calls: list = []
-
-    class _Client:
-        def __init__(self, *a, **k):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return False
-
-        async def get(self, url, **k):
-            calls.append(url)
-            raise RuntimeError("stop here")   # the allowed path reached the bridge: that is all this control needs
-
-    monkeypatch.setattr(mcp_server, "httpx", types.SimpleNamespace(AsyncClient=_Client))
+    monkeypatch.setattr(mcp_server, "httpx", _fake_httpx(calls))
     panel_principal.record_home_control(False)
     assert await mcp_server._execute_tool(object(), tool, {}) == {"error": REFUSAL}
     assert calls == []
     panel_principal.record_home_control(True)   # NEGATIVE CONTROL
     try:
         await mcp_server._execute_tool(object(), tool, {})
-    except Exception:  # noqa: BLE001 - downstream of the bridge call is not under test
+    except Exception:  # noqa: BLE001 - downstream of the bridge read is not under test
         pass
     assert calls, "an allowed turn must reach the bridge"
 

@@ -249,13 +249,10 @@ async def may_control_home(request: Any, user: Mapping[str, Any] | None, db: Any
 
 # ── Home control on a TURN: chat, the voice WebSocket, the voice HTTP lanes, the brain's intent dispatch ─────────────────────
 #
-# Security fix 2026-10-18 (the turn half of the 2026-10-17 fix above): ``/api/ha/control`` refused an anonymous LAN caller, but
-# the same caller could say "turn off the lights" to ``POST /api/chat`` or ``/ws/voice/`` and reach Home Assistant through
-# ``intent_router`` / ``smart_home_service`` / the legacy agent's ``ha_control`` tool. Those executors take a bare ``user_id`` (a
-# guest at the panel and an anonymous phone are both ``guest``), so the verdict travels the way ``mark_panel_turn`` does: each
-# TURN ENTRY POINT records ``may_control_home`` for its caller (``record_turn_home_control``) and every Home Assistant executor
-# checks it at the moment it would act (``home_control_refused``). Tri-state: unset = not a turn (a scheduler, or an HTTP route
-# that gates itself such as ``/api/ha/control``) = unchanged; False = refuse; True = allow. Rollback: ZOE_HA_CONTROL_SCOPE=open.
+# Security fix 2026-10-18: "turn off the lights" to /api/chat or /ws/voice/ reached Home Assistant through executors that take a
+# bare ``user_id`` (a panel guest and an anonymous phone are both ``guest``). Each TURN ENTRY POINT records ``may_control_home``
+# (``record_turn_home_control``); every HA executor checks it right before it acts (``home_control_refused``). Unset = not a
+# turn (a scheduler, a self-gating route) = unchanged; False = refuse; True = allow. Rollback: ZOE_HA_CONTROL_SCOPE=open.
 
 HOME_CONTROL_REFUSAL = "I can only control the house for someone in the household. Sign in, or ask me from the wall panel."
 

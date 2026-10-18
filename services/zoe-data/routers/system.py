@@ -2812,9 +2812,8 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
         raise HTTPException(status_code=400, detail="user_id required")
     if intent_name not in _DISPATCHABLE_INTENTS:
         raise HTTPException(status_code=400, detail=f"intent not dispatchable: {intent_name}")
-    # Home control on a turn (2026-10-18): this internal hop carries only the turn's acting id, not its caller, so a guest id
-    # (an anonymous chat, or a sentinel the sidecar does not treat as a guest, e.g. ``voice-guest``) may not drive the house
-    # from here; a member id may. The executors read the verdict (panel_principal.home_control_refused).
+    # Home control (2026-10-18): this hop carries only the turn's acting id, so a guest id (incl. ``voice-guest``) may not drive
+    # the house from here; a member id may.
     import panel_principal as _pp
 
     _pp.record_home_control(not (_pp.is_guest_id(user_id) or user_id.lower() in ("anonymous", "voice-daemon")))

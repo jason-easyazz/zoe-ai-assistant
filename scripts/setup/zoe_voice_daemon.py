@@ -4433,22 +4433,13 @@ def _peer_is_loopback(peer: "str | None") -> bool:
 
 
 def _activate_request_allowed(host_header: "str | None", origin_header: "str | None", peer: "str | None") -> bool:
-    """May this request start a recording via POST /activate (or stop enrolment via POST /enroll/cancel)?
+    """May this request POST /activate (starts a recording) or /enroll/cancel? Only the kiosk browser on THIS machine may.
 
-    The only legitimate caller is the kiosk browser on THIS machine: the touch page POSTs
-    ``http://localhost:7777/activate`` (``mode:'no-cors'``, from the Zoe page's origin). So, on every platform:
-
-    * the TCP peer must be loopback. The Pi binds every interface (GET /health is read from the Jetson and the docs'
-      ``curl zoe-pi:7777/health``), and before 2026-10-18 any device on the panel's Wi-Fi could POST /activate and start a
-      recording the daemon then sent to Zoe with the panel's device token. A ``Host`` header is the caller's to write, so
-      the peer address is the check that a LAN device cannot forge;
-    * the ``Host`` must be a loopback name (a DNS-rebinding page reaches loopback under ITS own name);
-    * when the browser sent an ``Origin``, it must be ``ZOE_URL``'s origin or one listed in ``ACTIVATE_ALLOWED_ORIGINS``
-      (comma-separated). No Origin (curl, the shell on the panel) is allowed: a page cannot omit it on a cross-origin POST.
-
-    No shared secret: the kiosk page is served to every browser, so it cannot hold one. Rollback for a kiosk that loads Zoe
-    under another origin: add it to ``ACTIVATE_ALLOWED_ORIGINS``; ``ACTIVATE_GUARD=off`` restores the old Pi behaviour
-    (any caller) and is logged at startup."""
+    * a loopback TCP peer - the check a LAN device cannot forge (the Pi binds every interface for GET /health; before
+      2026-10-18 any device on its Wi-Fi could start a recording sent to Zoe with the panel's token);
+    * a loopback ``Host`` (a DNS-rebinding page reaches loopback under its own name);
+    * an ``Origin`` that is absent (a page cannot omit it cross-origin) or ``ZOE_URL``'s / in ``ACTIVATE_ALLOWED_ORIGINS``.
+    No shared secret: the kiosk page is served to every browser. ``ACTIVATE_GUARD=off`` = the old Pi behaviour (logged)."""
     if PANEL_PLATFORM != "mac" and os.environ.get("ACTIVATE_GUARD", "on").strip().lower() == "off":
         return True
     if not _peer_is_loopback(peer):

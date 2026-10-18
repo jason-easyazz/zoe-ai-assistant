@@ -836,8 +836,7 @@ async def _require_voice_auth(
     if device:
         # A provisioned device token IS the panel: a guest voice turn may use the household list (a fridge list).
         panel_principal.mark_panel_turn()
-        # Home control (2026-10-18): the same member-or-panel verdict every turn entry records. Judged on the validated TOKEN
-        # (the panel principal), not on get_current_user's view of it, so a zoe-auth outage cannot lock the panel's lights.
+        # Home control (2026-10-18): judged on the validated TOKEN (the panel), so a zoe-auth outage cannot lock the lights.
         await panel_principal.record_turn_home_control(
             request, {"user_id": "guest", "role": "guest", "panel_id": device.get("panel_id")})
         return {
@@ -855,13 +854,8 @@ async def _require_voice_auth(
 
 
 def _request_via_relay(request: Request) -> bool:
-    """True when the request came through the shared panel relay (panel-anywhere R1, ``relay_ingress``, flag-dark, #2095).
-
-    Over the relay a device token proves only WHICH panel (its client certificate is bound to one), not that anyone is
-    standing at it: a stolen panel works from anywhere. So a relayed voice turn never accepts the panel's own speaker
-    claim (a score the server did not compute) and never narrows to an instrument panel id - a member comes only from a
-    fresh PIN / voice session the server issued. On a box without ``relay_ingress`` (today's main) there is no relay: False.
-    A check that raises is treated as relayed (fail closed: it only ever takes privileges away)."""
+    """True when the request came through the panel relay (``relay_ingress``, #2095; absent module = no relay). Over the relay a
+    device token proves WHICH panel, not that anyone stands at it, so its own speaker claim is refused. Raises = relayed."""
     try:
         import relay_ingress  # type: ignore[import-not-found]  # lands with panel-anywhere R1 (#2095)
     except ImportError:
@@ -874,19 +868,11 @@ def _request_via_relay(request: Request) -> bool:
 
 
 def _lane_panel_id(payload: Optional[dict], caller: Optional[dict], lane: str) -> str:
-    """The panel a voice lane acts for, decided by the SERVER (relay blocker, 2026-10-18).
+    """The panel a voice lane acts for, decided by the SERVER (2026-10-18): it keys the panel's fresh PIN member and voice session.
 
-    The panel id keys the panel's fresh PIN session (its member), its voice session and its pending confirmations, so a
-    device that could name ANY panel in its payload could act as whoever is signed in at another panel. Rule:
-
-    * a device token: ITS OWN panel (``panel_auth`` binds every token to one ``panel_id``). A payload naming another panel
-      is overridden and logged. One narrowing is allowed on the LAN: a ``replay-`` instrument id (the replay gate's
-      ``panel_id="replay-harness"``), which resolves no member and suppresses every panel broadcast - it can only take
-      privileges away. Never over the relay.
-    * the PIN replay (``caller.source == "pin_resume"``, internal, built from the challenge row): the caller's panel.
-    * a member's own session: the payload's id, for display and session continuity only - such a caller is never given
-      the panel's member (``voice_command`` resolves the fresh panel member for panel callers only).
-    """
+    A device token: ITS OWN panel (a payload naming another is overridden + logged; on the LAN only, a ``replay-`` instrument id
+    may narrow it - no member, no broadcasts). The PIN replay: its panel. A member's own session: the payload id, for display
+    only (``voice_command`` never gives such a caller the panel's member)."""
     p = payload or {}
     c = caller or {}
     claimed = str(p.get("panel_id") or "").strip()
@@ -3450,11 +3436,8 @@ async def voice_command(
     with the reply text and synthesised audio (base64) so the Pi can play it back.
     """
     text = str((payload or {}).get("text", "")).strip()
-    # SERVER-DECIDED identity (relay blocker, 2026-10-18): the panel is the device token's own (``_lane_panel_id``), and a
-    # turn NAMES its member itself only on the internal PIN replay (``panel_auth.submit_pin`` calls this function with
-    # ``caller.source == "pin_resume"`` after the PIN was checked). Over HTTP ``identified_user_id`` is a raw payload field -
-    # no daemon sends it - so it is ignored: a device or a member's session could otherwise name ANY member. A member then
-    # comes only from a claim the server's gate accepts (below), a fresh PIN / voice session, or the caller's own session.
+    # SERVER-DECIDED identity (2026-10-18): the panel is the token's own (``_lane_panel_id``); ``identified_user_id`` counts only
+    # on the internal PIN replay (``panel_auth.submit_pin``, source ``pin_resume``). Over HTTP it is a raw payload field: ignored.
     panel_id = _lane_panel_id(payload, caller, "command")
     # Only a member's OWN session is not the panel; every in-process caller keeps the panel lookups it always had.
     _panel_caller = (caller or {}).get("source") != "session"
@@ -3510,8 +3493,7 @@ async def voice_command(
     try:
         import semantic_router as _sr
         if _sr.is_enabled():
-            # An in-process hand-over only (turn_stream's mishear guard): a JSON body can carry no SpacerTurn, so an HTTP
-            # caller cannot pick its own routing verdict.
+            # in-process hand-over only (turn_stream): a JSON body carries no SpacerTurn, so HTTP cannot pick the route
             from voice_spacer import SpacerTurn as _SpacerTurnRR
 
             _pre_rr = (payload or {}).get("_router_decision") if isinstance((payload or {}).get("_spacer"), _SpacerTurnRR) else None
@@ -3707,9 +3689,7 @@ async def voice_command(
             )
             effective_user = _panel_bound_user
 
-    # Home control: ``_require_voice_auth`` recorded the CALLER's verdict (the panel / a member's session: allowed). A turn
-    # whose member the server verified (a fresh PIN / voice session, an accepted claim) is a member's turn whatever the
-    # caller-level verdict said - e.g. a relayed panel (member-only there) with its owner freshly signed in.
+    # Home control: a turn whose member the server verified is a member's turn whatever the caller verdict said (a relayed panel).
     if _scope_identity_user and panel_principal.home_control_verdict() is False:
         panel_principal.record_home_control(True)
 
@@ -5786,7 +5766,6 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
         "_t_turn_start": t_turn_start,  # forwarded so voice_command can record end-to-end total
     }
     if (payload or {}).get("identified_user_id"):
-        # handed on only so voice_command can log that it IGNORES it (a raw payload field is never an identity, 2026-10-18)
         command_payload["identified_user_id"] = payload["identified_user_id"]
     for _claim_key in ("voice_user_id", "voice_score"):
         if (payload or {}).get(_claim_key) is not None:
@@ -6117,7 +6096,6 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         command_payload["_router_decision"] = _mc.router
         command_payload["_router_text"] = _mc_text
     if (payload or {}).get("identified_user_id"):
-        # handed on only so voice_command can log that it IGNORES it (a raw payload field is never an identity, 2026-10-18)
         command_payload["identified_user_id"] = payload["identified_user_id"]
     for _claim_key in ("voice_user_id", "voice_score"):
         if (payload or {}).get(_claim_key) is not None:

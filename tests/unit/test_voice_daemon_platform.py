@@ -720,7 +720,6 @@ def test_activate_over_real_http_on_the_pi_blocks_a_hostile_page(pi, monkeypatch
 
 
 def _lan_ipv4():
-    """A non-loopback address of this machine, or None (a sandbox with loopback only)."""
     import socket
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -735,8 +734,7 @@ def _lan_ipv4():
 
 @pytest.mark.parametrize("path", ["/activate", "/enroll/cancel"])
 def test_a_lan_peer_is_refused_over_real_http(pi, path):
-    """The live hole: the Pi binds every interface, so a device on its Wi-Fi reached /activate. Serve on this machine's
-    LAN address and connect FROM it: the peer is not loopback, so 403 and nothing starts - whatever Host it claims."""
+    """Serve on this machine's LAN address and connect FROM it: not loopback, so 403 whatever Host it claims."""
     import http.client
     import socketserver
     ip = _lan_ipv4()

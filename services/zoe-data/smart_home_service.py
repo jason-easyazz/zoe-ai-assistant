@@ -43,8 +43,7 @@ def _ha_url() -> str:
 
 
 def _turn_refused(what: str) -> bool:
-    """Home control on a turn (2026-10-18): True when this turn's entry point recorded a caller that is neither a member nor
-    the panel (``panel_principal.home_control_refused``). The executor-level backstop: nothing reaches the bridge then."""
+    """Home control on a turn (2026-10-18, ``panel_principal.home_control_refused``): nothing reaches the bridge then."""
     import panel_principal
 
     return panel_principal.home_control_refused(what)
@@ -629,8 +628,7 @@ async def resolve_smart_home(
     query = (getattr(intent, "query", "") or "").strip()
     entity_id = (getattr(intent, "entity_id", "") or "").strip()
 
-    # Home control on a turn (2026-10-18): a caller that is neither a member nor the panel gets a polite "sign in" - no read,
-    # no command, no device-setup QR. Checked first, so the refusal is spoken instead of an "I couldn't reach the hub".
+    # Home control on a turn (2026-10-18): checked first, so the refusal is spoken (no read, no command, no setup QR).
     import panel_principal
 
     if _turn_refused(f"smart_home {action}"):
