@@ -35,13 +35,12 @@ Read this before testing anything personal from the Mac - three rules changed, a
 
 * **A device token is the PANEL, not a person** (#2089, `routers/panel_auth._resolve_device_token_user`) **[src]**. The `mac-dev` token resolves to a guest-class
   PANEL principal stamped `panel_id=mac-dev` - never to the panel's bound `default` member, and never to an admin. Binding a `default_user_id` (§5 step 3) therefore
-  **no longer makes the daemon's turns that member**; it only sets whose panel it is for display and the sign-in picker. (`ZOE_DEVICE_TOKEN_BINDS_MEMBER=1` restores the
+  **no longer makes the daemon's turns that member**; it only sets whose panel it is for display on the LAN (not served over the tunnel at all) and who may appear in the sign-in picker. (`ZOE_DEVICE_TOKEN_BINDS_MEMBER=1` restores the
   old binding; it is an operator rollback for the Pi kiosk, never a setting for the Mac.)
 * **A member is proven per turn** (#2097, `routers/voice_tts._resolve_fresh_panel_member`) **[src]**. A voice turn is attributed to a member only on a fresh signal: an accepted
   voice-identification claim (the enrolled voice, ResNet34-gated), a fresh PIN panel session on `panel_id=mac-dev`, or an open verified voice session. Otherwise the turn is a
-  guest turn: it can ask general questions but reads no member's private lists, calendar or reminders and writes nothing to a member's memory. Expect "who is this?"-shaped
-  behaviour from the Mac until you identify yourself by voice (enrolment is per microphone - the Mac mic is a different acoustic cluster from the panel's, so a match is
-  **[unverified]**) or by PIN in the UI tab.
+  guest turn: it can ask general questions but reads no member's private lists, calendar or reminders and writes nothing to a member's memory. Until a turn is identified the Mac daemon is a guest: identify yourself by voice (enrolment is per microphone - the Mac mic is a different
+  microphone from the panel's, so whether an enrolled voice still matches is **[unverified]**) or by PIN in the UI tab.
 * **Cloudflare is the internet, never the panel** (`panel_principal.py`) **[src]**. A request that carries a Cloudflare edge header (`cf-ray`, `cf-connecting-ip`, `cf-visitor`)
   is never recognised as the panel *by address or by kiosk credential*, and a signed-in member's own browser session is the only other way in. So the **browser UI tab**
   (`panel_id=mac-dev`, a guest session through Access) is refused **home control** (`/api/ha/*`, the house-state reads) and the **household lists**, and shows "Sign in" because

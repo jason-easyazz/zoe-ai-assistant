@@ -80,7 +80,7 @@ action agent (research only); music discovery; router self-training `[default ZO
 **Operator steps waiting on the owner** (summarised from the private after-night ledger; no household details here): finish the remaining dependency batches once the age window
 passes and each is replay-probed; re-run the Omnigent container recreate after its pending PR lands; rotate any credential that was ever echoed into a transcript and
 revoke the long-lived tokens named in [`knowledge/open-problems.md`](knowledge/open-problems.md); recreate the HA bridge and database containers so they bind loopback as `main`'s compose already says;
-deploy the omi-sync Pi package by hand after its PRs merge; the pending brain-model re-upload swap in its own window; the TLS certificate renewal before 2026-11-24.
+deploy the omi-sync Pi package by hand after its PRs merge; the pending brain-model re-upload swap in its own window; the TLS certificate renewal before 2026-11-24; the owner call on the adaptive end-of-speech tail `[default ZOE_VAD_CLEAN_TAIL_MS=off]` (a value of 560 closes a clean stop about 160 ms earlier at a measured 2 percent mid-sentence cut, and a lost command is a bug, so it is Jason's decision).
 
 **Evidence and ledgers.** Open problems: [`knowledge/open-problems.md`](knowledge/open-problems.md) (triaged 2026-10-18; a line is deleted when its fix is verified).
 Ideas: [`IDEAS.md`](IDEAS.md). Research records: [`research/index.md`](research/index.md). Task list this roadmap derives from: deep dive section 10.
