@@ -72,14 +72,14 @@ out of scope here.
 ## Send to my phone (Telegram)
 
 The member needs a linked Telegram (`user_preferences.prefs.telegram_id`, set by
-the `telegram_link` flow). zoe-data needs the bot token in
-**`ZOE_TELEGRAM_BOT_TOKEN`**. This is the same token as the `flue-zoe-telegram`
-unit's `TELEGRAM_BOT_TOKEN`. Sending a message does not disturb the bot's long
-poll. If either is missing, `start` returns `channels: ["qr"]`, the card hides
-the button, and `send-to-phone` answers `unavailable`. zoe-data sends with Bot
-API `sendMessage` and an "Open on this phone" URL button. If Telegram refuses the
-button URL (it rejects some LAN hostnames), it retries once as plain text with
-the link. The link passes through Telegram's cloud. It is short-TTL, it still
+the `telegram_link` flow). zoe-data sends (A9, 2026-10-18) first **through the bot
+over loopback** — `POST http://127.0.0.1:3582/internal/notify` (`ZOE_TELEGRAM_NOTIFY_URL`;
+`off` disables), `Bearer $ZOE_INTERNAL_TOKEN`; the bot sends with the token the member
+linked with, loopback + linked members only (`labs/flue-zoe-telegram-2x/src/notify.ts`) —
+else **directly** with a held `ZOE_TELEGRAM_BOT_TOKEN` or `TELEGRAM_BOT_TOKEN` (both names
+accepted). With neither path, or no linked chat, `start` returns `channels: ["qr"]` and
+`send-to-phone` answers `unavailable`. The message has an "Open on this phone" URL button
+(retried once as plain text if Telegram refuses the URL). No token is ever logged. The link passes through Telegram's cloud. It is short-TTL, it still
 needs the provider token to be valid, and it only works on the home Wi-Fi.
 
 ## Music flows (the first kind)

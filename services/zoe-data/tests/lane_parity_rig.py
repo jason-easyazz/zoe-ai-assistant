@@ -472,7 +472,8 @@ class Rig:
 
         self._last_tier = None
         before, before_seam = len(self.brain_calls), self.seam_calls
-        payload = {"text": text, "panel_id": self.panel, "session_id": self.voice_session, "identified_user_id": self.user}
+        # the member is the SESSION caller itself; a payload identified_user_id is ignored by voice_command (2026-10-18)
+        payload = {"text": text, "panel_id": self.panel, "session_id": self.voice_session}
         caller = {"source": "session", "user_id": self.user, "role": "user", "panel_id": self.panel}
         res = await vt.voice_command(payload, caller, stream=False, db=self.db)
         res = res if isinstance(res, dict) else {}

@@ -33,12 +33,19 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 
 ## 💡 Ideas
 
+### Household communications: PA, intercom, messages, calls (in the house and between households), and the one Zoe app — 🔬 exploring
+- **Core:** calls, messages, PA announcements across panels, video calls and calls to other panels outside the house, with the411.life as the account, relay and backup home; owner, 2026-10-18. The call and video server from the early days was **LiveKit** (still in compose, on demand for the Ask card) beside a Matrix router that never had a homeserver; "we looked at Matrix and Element." Owner idea the same day: a Zoe phone app that combines pieces of the Omi app (pendant sync, day review, people tagging) with Matrix and Element (messages, calls).
+- **Record + recommendation:** [`architecture-deep-dive-2026-10-18.md`](research/architecture-deep-dive-2026-10-18.md) section 8: a hybrid (native Opus-over-WebSocket PA and push-to-talk on the LAN; Matrix on the411 with Element X and Element Call plus an E2EE LiveKit SFU for everything between people; restic to a rest-server on the411 for backups; the frp relay stays the panel path), phases P0 to P3, two decision gates (the411 RAM, a one-week ringing test), six owner decisions. Tracked in [PLANS.md](PLANS.md).
+
 ### Zoe as an action agent, at the level of Wajo's "Fo" — 🔬 exploring
 - **Core:** Zoe owns everyday tasks end to end — emails as herself, books online, phones businesses, pays with single-use capped cards, escalates to the owner when stuck, learns from corrections. Source: [wajo.ai](https://wajo.ai); owner, 2026-10-12: "be great to get zoe to this level."
 - **Record + plan:** [`docs/research/zoe-action-agent-2026-10.md`](research/zoe-action-agent-2026-10.md); tracked in [PLANS.md](PLANS.md). The piece to borrow first is Fo's benchmark shape (a simulated world graded world-state first), not its feature list.
 
 ### Users add abilities to Zoe — "connect my email" and she keeps an eye on it — 🔬 exploring
 - **Core:** a member says "Zoe, connect my email" (or Telegram, WhatsApp, calendar, SMS), gets a QR on the panel, finishes on their phone, and Zoe watches it and tells them what matters; owner, 2026-10-14. Record + design: [`zoe-abilities-connectors-2026-10.md`](research/zoe-abilities-connectors-2026-10.md), [`zoe-abilities.md`](architecture/zoe-abilities.md); tracked in [PLANS.md](PLANS.md).
+
+### A household password vault Zoe can use, without ever seeing a password — 🔬 exploring
+- **Core:** the family keeps logins in self-hosted Vaultwarden through the Bitwarden apps; members share chosen logins with Zoe, and a narrow broker signs her in on the matching site only, after the owner approves on their phone. Owner, 2026-10-18. Record + design: [`credential-vault-2026-10.md`](research/credential-vault-2026-10.md), [`credential-vault.md`](architecture/credential-vault.md); tracked in [PLANS.md](PLANS.md).
 
 ### Identity as a score card + "Zoe, this is Sam" — 🔬 exploring
 - **Core:** security is a score card (last login, left the room, phone in range, voice match, face match), each member picks how strict Zoe is in their own settings, and Zoe notices new voices and learns a visitor once introduced. Owner, 2026-10-14. Design: [`identity-presence-engine.md`](architecture/identity-presence-engine.md); research: [`identity-presence-scorecard-2026-10.md`](research/identity-presence-scorecard-2026-10.md); tracked in [PLANS.md](PLANS.md).

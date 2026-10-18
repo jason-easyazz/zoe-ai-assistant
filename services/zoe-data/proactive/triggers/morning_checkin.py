@@ -120,6 +120,17 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
     except Exception as exc:  # noqa: BLE001
         log.debug("morning_checkin: night items load failed (non-fatal): %s", exc)
 
+    # The pendant's health, if it needs a word (no sync for 36 h, nearly full, lost audio, low battery): at most ONE line, in the member's
+    # own brief, mentioned naturally on their first turn. [] with ZOE_OMI_HEALTH off, no pendant, or nothing wrong; never speech of its own.
+    try:
+        import omi_health
+
+        pendant = await omi_health.morning_items(user_id)
+        if pendant:
+            ctx["pendant_items"] = pendant
+    except Exception as exc:  # noqa: BLE001
+        log.debug("morning_checkin: pendant health load failed (non-fatal): %s", exc)
+
     # Portrait snippet (first 200 chars — enough for personal note)
     try:
         async with db.execute(
@@ -175,6 +186,15 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
                 ctx["struggle_line"] = line
         except Exception as exc:
             log.debug("morning_checkin: struggle line failed (non-fatal): %s", exc)
+        # The struggle PROPOSALS line (ZOE_STRUGGLE_PROPOSALS=on only; counts by kind, no words).
+        try:
+            import struggle_proposals
+
+            pline = await struggle_proposals.brief_line(user_id)
+            if pline:
+                ctx["struggle_proposals_line"] = pline
+        except Exception as exc:
+            log.debug("morning_checkin: struggle proposals line failed (non-fatal): %s", exc)
 
     return ctx
 
@@ -225,6 +245,8 @@ def _compose_morning_message(ctx: dict, user_name: str, day_str: str) -> str:
     # The struggle detector (admin-only, mode "on" only; set by _build_morning_context)
     if ctx.get("struggle_line"):
         parts.append(ctx["struggle_line"])
+    if ctx.get("struggle_proposals_line"):
+        parts.append(ctx["struggle_proposals_line"])
 
     # Portrait-informed personal note (fallback generic)
     portrait = ctx.get("portrait_snippet", "")

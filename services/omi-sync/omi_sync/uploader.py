@@ -76,6 +76,15 @@ def _error_code(body: bytes) -> str:
     return str(doc.get("error") or "") if isinstance(doc, dict) else ""
 
 
+def _answered_ok(body: bytes) -> bool:
+    """True only for a JSON object whose ``ok`` is the boolean ``true`` (not 1, "true" or a non-JSON body)."""
+    try:
+        doc = json.loads(body.decode("utf-8", "replace") or "null")
+    except ValueError:
+        return False
+    return isinstance(doc, dict) and doc.get("ok") is True
+
+
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -117,10 +126,10 @@ class HttpUploader:
             self._ctx.check_hostname = False
             self._ctx.verify_mode = ssl.CERT_NONE
 
-    def _post(self, path: str, data: bytes, headers: dict[str, str]) -> tuple[int, bytes]:
+    def _post(self, path: str, data: bytes, headers: dict[str, str], timeout: Optional[float] = None) -> tuple[int, bytes]:
         req = urllib.request.Request(self.base + path, data=data, method="POST", headers={"X-Device-Token": self.token, **headers})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout, context=self._ctx) as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
@@ -153,6 +162,26 @@ class HttpUploader:
                                     {"Content-Type": "application/json"})
         except Exception as exc:  # noqa: BLE001
             log.info("sync notice not sent: %s", type(exc).__name__)
+
+    async def report_health(self, report: dict) -> bool:
+        """Best-effort numbers-only health heartbeat (``POST /api/omi/device-status``). True only when Zoe answered 200 ``ok``. Never
+        raises and never waits long (15 s): it runs AFTER a visit's custody work and must not delay the next one. A 401/404/409 (token
+        wrong, Zoe older than this, pendant not assigned yet) is simply 'not delivered'."""
+        try:
+            status, body = await asyncio.to_thread(self._post, "/api/omi/device-status", json.dumps(report).encode(),
+                                                   {"Content-Type": "application/json"}, 15.0)
+        except Exception as exc:  # noqa: BLE001
+            log.info("health report not sent: %s", type(exc).__name__)
+            return False
+        if status != 200:
+            log.info("health report not accepted: HTTP %s %s", status, _error_code(body))
+            return False
+        # A 200 alone is not "Zoe stored it": a proxy, a captive portal or a stub answers 200 with some other page. Only Zoe's own
+        # ``{"ok": true}`` suppresses the retry (the reporter would otherwise wait out the whole heartbeat on a report nobody received).
+        if not _answered_ok(body):
+            log.info("health report not confirmed: HTTP 200 without ok=true")
+            return False
+        return True
 
     async def reachable(self) -> bool:
         def _get() -> bool:

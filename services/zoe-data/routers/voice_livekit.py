@@ -1,8 +1,16 @@
 """voice_livekit.py — Server-side LiveKit agent for voice.html?mode=livekit.
 
-Joins the "zoe-voice" LiveKit room as the "zoe-agent" participant, then runs
-server-side energy VAD on the incoming audio track to detect when the user has
-finished speaking.  No button press required — always listening.
+ONE ROOM PER SESSION (A10, 2026-10-18). Every `/livekit-token` mints a fresh room,
+`zoe-voice-<panel>-<random>` (`new_session_room`), and the grant names only that
+room; the agent joins exactly that room as the "zoe-agent" participant
+(`ensure_livekit_started(room_name=...)` -> `_ensure_room_agent`). There used to be
+ONE fixed room, "zoe-voice", that every token could publish and subscribe in: a
+latent party line where two open sessions heard each other and the agent's replies
+went to everyone. A room agent leaves (and its task ends) once the room has had no
+human participant for `_ROOM_IDLE_S`; at most `_MAX_ROOM_AGENTS` run at once (the
+oldest is dropped). In each room the agent runs server-side energy VAD on the
+incoming audio track to detect when the user has finished speaking.  No button
+press required — always listening.
 
 Pipeline per participant:
   IDLE → (speech energy detected) → LISTENING → (600ms silence) → PROCESSING
@@ -43,6 +51,8 @@ import json
 import logging
 import math
 import os
+import re
+import secrets
 import struct
 import tempfile
 import time
@@ -58,6 +68,7 @@ from fastapi.responses import JSONResponse
 # module level so they are the SAME callables FastAPI keys `dependency_overrides`
 # on. `routers.voice_tts` never imports this module at module level (only lazily,
 # inside a function), so there is no cycle; `main.py` imports voice_tts first.
+import panel_principal
 from auth import get_current_user
 from routers.voice_tts import _validate_device_token
 
@@ -66,8 +77,28 @@ logger = logging.getLogger(__name__)
 # ── Agent configuration ───────────────────────────────────────────────────────
 # Internal host:port — the agent connects server-to-server, not through nginx.
 _LIVEKIT_INTERNAL_URL = "ws://127.0.0.1:7880"
-_ROOM_NAME = "zoe-voice"
+# Per-session rooms: `zoe-voice-<panel slug>-<12 hex>`. The prefix is never a room on its own (no fixed room).
+_ROOM_PREFIX = "zoe-voice"
+_ROOM_RE = re.compile(r"^zoe-voice-[a-z0-9-]{1,32}-[0-9a-f]{12}$")
 _AGENT_IDENTITY = "zoe-agent"
+# A room agent leaves once its room has had no human participant this long (a page that never joined, or a session
+# that ended), so a forgotten token never pins a WebRTC peer.
+_ROOM_IDLE_S = 120.0
+# Concurrent room agents (one per open voice session). A household has a handful of panels; past this the oldest
+# room agent is dropped rather than letting the memory-tight box grow without bound.
+_MAX_ROOM_AGENTS = 4
+# How often a connected room agent re-checks its connection and occupancy.
+_ROOM_POLL_S = 5.0
+
+
+def new_session_room(panel_hint: Optional[str] = None) -> str:
+    """A fresh, unguessable room name for ONE voice session: ``zoe-voice-<panel>-<12 hex>``."""
+    slug = re.sub(r"[^a-z0-9-]+", "-", str(panel_hint or "").lower()).strip("-")[:32].strip("-") or "web"
+    return f"{_ROOM_PREFIX}-{slug}-{secrets.token_hex(6)}"
+
+
+def valid_session_room(room_name: object) -> bool:
+    return isinstance(room_name, str) and bool(_ROOM_RE.match(room_name))
 
 # ── VAD configuration (tunable via env) ──────────────────────────────────────
 # RMS energy threshold on int16 samples.  Ambient silence is typically 50–200;
@@ -168,7 +199,6 @@ _VOICE_HEALTH: dict = {
     "stage_latency_ms": {},
 }
 _INITIAL_VOICE_HEALTH = copy.deepcopy(_VOICE_HEALTH)
-_agent_running = False
 
 # ── On-demand lifecycle ───────────────────────────────────────────────────────
 # When ZOE_LIVEKIT_ONDEMAND=true (default) the LiveKit container is left stopped
@@ -176,9 +206,9 @@ _agent_running = False
 # after ZOE_LIVEKIT_IDLE_TIMEOUT_S of no participants.  This keeps the ~560MB
 # WebRTC server out of memory except while a voice page is actually in use.
 _CONTAINER_NAME = os.environ.get("ZOE_LIVEKIT_CONTAINER", "livekit").strip() or "livekit"
-_agent_task: Optional["asyncio.Task"] = None
+# room name -> that room's agent task (insertion order = age; see _ensure_room_agent)
+_room_tasks: "dict[str, asyncio.Task]" = {}
 _idle_task: Optional["asyncio.Task"] = None
-_cooldown_task: Optional["asyncio.Task"] = None
 _lifecycle_lock: Optional["asyncio.Lock"] = None
 _last_activity: float = 0.0
 _active_participant_sids: set = set()
@@ -257,20 +287,48 @@ async def _wait_port(host: str, port: int, timeout: float) -> bool:
     return False
 
 
-async def ensure_livekit_started(wait_ready: float = 8.0) -> bool:
-    """Start the LiveKit container + agent on demand. Returns True if :7880 is reachable.
+def _ensure_room_agent(room_name: str) -> None:
+    """Start the agent for ONE session room (idempotent). Drops the oldest room agent past ``_MAX_ROOM_AGENTS``."""
+    if not valid_session_room(room_name):
+        logger.warning("LiveKit: refusing to join a room that is not a session room: %r", str(room_name)[:60])
+        return
+    for name, task in list(_room_tasks.items()):
+        if task.done():
+            _room_tasks.pop(name, None)
+    task = _room_tasks.get(room_name)
+    if task is not None and not task.done():
+        return
+    while len(_room_tasks) >= _MAX_ROOM_AGENTS:
+        oldest, old_task = next(iter(_room_tasks.items()))
+        _room_tasks.pop(oldest, None)
+        old_task.cancel()
+        logger.warning("LiveKit: %d room agents running - dropping the oldest room", _MAX_ROOM_AGENTS)
+    _room_tasks[room_name] = asyncio.create_task(_agent_loop(room_name), name="livekit_agent_room")
 
-    Idempotent and safe to call on every /livekit-token request.  No-op (just a
-    reachability probe) when on-demand mode is disabled — boot already started the
-    always-on agent in that case.
+    def _forget(t: "asyncio.Task", _name: str = room_name) -> None:
+        if _room_tasks.get(_name) is t:
+            _room_tasks.pop(_name, None)
+
+    _room_tasks[room_name].add_done_callback(_forget)
+    logger.info("LiveKit: agent joining a session room (%d running)", len(_room_tasks))
+
+
+async def ensure_livekit_started(wait_ready: float = 8.0, room_name: Optional[str] = None) -> bool:
+    """Start the LiveKit container on demand and (with ``room_name``) the agent for that session room.
+
+    Returns True if :7880 is reachable. Idempotent and safe to call on every /livekit-token request. With on-demand
+    mode disabled the container is always up (boot), so this only probes it - and still joins ``room_name``, because
+    there is no fixed room an always-on agent could sit in.
     """
     note_voice_activity()
     if not os.environ.get("LIVEKIT_API_KEY", "").strip():
         return False
     if not _ondemand_enabled():
+        if room_name:
+            _ensure_room_agent(room_name)
         return await _wait_port("127.0.0.1", 7880, 1.0)
 
-    global _agent_task, _idle_task
+    global _idle_task
     async with _get_lifecycle_lock():
         if not await _container_running():
             logger.info("LiveKit on-demand: starting container '%s'", _CONTAINER_NAME)
@@ -281,9 +339,8 @@ async def ensure_livekit_started(wait_ready: float = 8.0) -> bool:
                     _CONTAINER_NAME, rc, out,
                 )
                 return False
-        if _agent_task is None or _agent_task.done():
-            _agent_task = asyncio.create_task(_agent_loop(), name="livekit_agent")
-            logger.info("LiveKit on-demand: agent task started")
+        if room_name:
+            _ensure_room_agent(room_name)
         if _idle_task is None or _idle_task.done():
             _idle_task = asyncio.create_task(_idle_monitor(), name="livekit_idle_monitor")
     ready = await _wait_port("127.0.0.1", 7880, wait_ready)
@@ -292,25 +349,22 @@ async def ensure_livekit_started(wait_ready: float = 8.0) -> bool:
 
 
 async def stop_livekit_ondemand(reason: str = "idle") -> None:
-    """Cancel the agent loop and stop the LiveKit container."""
-    global _agent_task, _idle_task, _cooldown_task
+    """Cancel every room agent and stop the LiveKit container."""
+    global _idle_task
     async with _get_lifecycle_lock():
-        task = _agent_task
-        _agent_task = None
-        if task is not None and not task.done():
-            task.cancel()
+        tasks = list(_room_tasks.values())
+        _room_tasks.clear()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            # each room loop cancels its own cooldown watchdog in its finally
             try:
                 await asyncio.wait_for(task, timeout=8.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
             except Exception:
                 pass
-        # Cancel the cooldown watchdog too — it's a forever `while True: sleep(1)`
-        # loop that the agent-task cancel above does NOT reach (separate task).
-        cooldown = _cooldown_task
-        _cooldown_task = None
-        if cooldown is not None and not cooldown.done():
-            cooldown.cancel()
         # Tear the idle monitor down too, so a later ensure_livekit_started()
         # recreates it. Skip when we're being called *from* the monitor itself
         # (the normal _reap_if_idle path) — that task returns naturally and must
@@ -396,9 +450,8 @@ def get_voice_health() -> dict:
         "idle_timeout_s": _idle_timeout_s(),
         "idle_age_s": round(idle_age, 1) if idle_age is not None else None,
         "active_participants": sorted(_active_participant_sids),
-        "agent_task_running": _agent_task is not None and not _agent_task.done(),
+        "room_agents": sum(1 for t in _room_tasks.values() if not t.done()),
         "idle_monitor_running": _idle_task is not None and not _idle_task.done(),
-        "cooldown_watchdog_running": _cooldown_task is not None and not _cooldown_task.done(),
         "force_aiortc": _force_aiortc,
     }
     return health
@@ -426,8 +479,8 @@ def _rms(frame_data: bytes) -> float:
     return math.sqrt(sum(s * s for s in samples) / n)
 
 
-def _mint_agent_token() -> str:
-    """Mint a LiveKit JWT for the server-side agent."""
+def _mint_agent_token(room_name: str) -> str:
+    """Mint a LiveKit JWT for the server-side agent, valid for ONE session room."""
     import jwt as _jwt
 
     api_key = os.environ.get("LIVEKIT_API_KEY", "").strip()
@@ -443,7 +496,7 @@ def _mint_agent_token() -> str:
         "jti": uuid.uuid4().hex,
         "video": {
             "roomJoin": True,
-            "room": _ROOM_NAME,
+            "room": room_name,
             "canPublish": True,
             "canSubscribe": True,
             "canPublishData": True,
@@ -1319,36 +1372,44 @@ def _build_room_handlers(room, participant_state: dict, audio_tasks: dict) -> No
             )
 
 
-async def _agent_loop() -> None:
-    """Main loop: connect to LiveKit room and manage VAD/audio for all participants.
+async def _agent_loop(room_name: str) -> None:
+    """One session room's agent: connect to ``room_name`` and manage VAD/audio for its participants.
+
+    Each room has its own participant state, audio tasks and cooldown watchdog, so two sessions share nothing.
+    Returns once the room has had no human participant for ``_ROOM_IDLE_S`` (connected or not).
 
     Tries livekit-ffi (native WebRTC) first.  On platforms where livekit-ffi
     cannot initialise a PeerConnection (e.g. Jetson ARM64 Tegra kernel), falls
     back automatically to the pure-Python aiortc backend.
     """
-    global _cooldown_task
     participant_state: dict[str, dict] = {}
     audio_tasks: dict[str, asyncio.Task] = {}
     backoff = 2.0
+    last_occupied = time.monotonic()
+
+    def _room_idle() -> bool:
+        """True once nobody but the agent has been in the room for _ROOM_IDLE_S."""
+        nonlocal last_occupied
+        now = time.monotonic()
+        if participant_state:
+            last_occupied = now
+            return False
+        return now - last_occupied >= _ROOM_IDLE_S
+
     # ZOE_LK_USE_AIORTC=1 skips livekit-ffi entirely (set in .env on Jetson).
     # _force_aiortc is sticky: once the native backend is proven broken (here or in
     # _collect_audio_stream) even a fresh agent loop goes straight to aiortc.
     use_aiortc = os.environ.get("ZOE_LK_USE_AIORTC", "0") == "1" or _force_aiortc
 
-    # Track the cooldown watchdog so it doesn't leak as a forever `while True:
-    # sleep(1)` task per start→idle cycle. Cancel any stale one first (a prior
-    # cycle whose agent task was cancelled out from under it) before replacing it;
-    # stop_livekit_ondemand cancels it on teardown.
-    if _cooldown_task is not None and not _cooldown_task.done():
-        _cooldown_task.cancel()
+    # This room's cooldown watchdog (a forever `while True: sleep(1)` loop): cancelled in the finally below on ANY
+    # exit, so it can never outlive the room.
     cooldown_task = asyncio.ensure_future(_cooldown_watchdog(participant_state))
-    _cooldown_task = cooldown_task
 
     try:
-        while True:
+        while not _room_idle():
             room = None
             try:
-                token = _mint_agent_token()
+                token = _mint_agent_token(room_name)
 
                 if use_aiortc:
                     # ── aiortc backend (pure Python, no livekit-ffi) ──────────
@@ -1356,7 +1417,7 @@ async def _agent_loop() -> None:
                     room = make_room()
                     _build_room_handlers(room, participant_state, audio_tasks)
                     logger.info("LiveKit agent connecting via aiortc backend to %s room=%s",
-                                _LIVEKIT_INTERNAL_URL, _ROOM_NAME)
+                                _LIVEKIT_INTERNAL_URL, room_name)
                     _health_update(status="connecting", backend="aiortc", connected=False)
                     await room.connect(_LIVEKIT_INTERNAL_URL, token)
                     logger.info("LiveKit agent connected (aiortc) as '%s'", _AGENT_IDENTITY)
@@ -1367,8 +1428,8 @@ async def _agent_loop() -> None:
                         if p.sid not in participant_state:
                             participant_state[p.sid] = _make_participant_state(p.sid)
 
-                    while room.connection_state == _ConnState.CONN_CONNECTED:
-                        await asyncio.sleep(5)
+                    while room.connection_state == _ConnState.CONN_CONNECTED and not _room_idle():
+                        await asyncio.sleep(_ROOM_POLL_S)
 
                 else:
                     # ── livekit-ffi native backend (preferred) ─────────────────
@@ -1384,7 +1445,7 @@ async def _agent_loop() -> None:
                     room = lk_rtc.Room()
                     _build_room_handlers(room, participant_state, audio_tasks)
                     logger.info("LiveKit agent connecting via livekit-ffi to %s room=%s",
-                                _LIVEKIT_INTERNAL_URL, _ROOM_NAME)
+                                _LIVEKIT_INTERNAL_URL, room_name)
                     _health_update(status="connecting", backend="livekit-ffi", connected=False)
                     await room.connect(_LIVEKIT_INTERNAL_URL, token)
                     logger.info("LiveKit agent connected (livekit-ffi) as '%s'", _AGENT_IDENTITY)
@@ -1395,8 +1456,8 @@ async def _agent_loop() -> None:
                         if p.sid not in participant_state:
                             participant_state[p.sid] = _make_participant_state(p.sid)
 
-                    while room.connection_state == lk_rtc.ConnectionState.CONN_CONNECTED:
-                        await asyncio.sleep(5)
+                    while room.connection_state == lk_rtc.ConnectionState.CONN_CONNECTED and not _room_idle():
+                        await asyncio.sleep(_ROOM_POLL_S)
                         if _force_aiortc:
                             # _collect_audio_stream proved native audio is broken on this
                             # host — drop the native room and reconnect via aiortc so the
@@ -1434,9 +1495,11 @@ async def _agent_loop() -> None:
                         connected=False,
                         last_disconnected_at=_utc_now(),
                     )
-                    # Room torn down → drop stale participant tracking so the idle
+                    # Room torn down → drop THIS room's participant tracking so the idle
                     # reaper isn't held open by sids that can no longer disconnect.
-                    _active_participant_sids.clear()
+                    for _sid in list(participant_state):
+                        _active_participant_sids.discard(_sid)
+                    participant_state.clear()
                 for task in list(audio_tasks.values()):
                     if not task.done():
                         task.cancel()
@@ -1447,21 +1510,19 @@ async def _agent_loop() -> None:
                     except Exception:
                         pass
 
+            if _room_idle():
+                break
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
+        logger.info("LiveKit: session room agent left (room empty %.0fs, or cancelled)", _ROOM_IDLE_S)
     finally:
-        # Cancel the cooldown watchdog on ANY loop teardown (incl. self-exit
-        # outside stop_livekit_ondemand) so it can't leak as a forever
-        # `while True: sleep(1)` task. Clear the module ref if it's still ours.
-        if _cooldown_task is not None and not _cooldown_task.done():
-            _cooldown_task.cancel()
-        if _cooldown_task is cooldown_task:
-            _cooldown_task = None
+        # Cancel this room's cooldown watchdog on ANY loop teardown (idle exit, cancel, error) so it cannot leak.
+        if not cooldown_task.done():
+            cooldown_task.cancel()
 
 
 async def start_livekit_agent() -> None:
     """Entry point called from main.py lifespan via asyncio.create_task()."""
-    global _agent_running
     api_key = os.environ.get("LIVEKIT_API_KEY", "").strip()
     if not api_key:
         _health_update(status="disabled", connected=False, last_error="LIVEKIT_API_KEY not set")
@@ -1469,7 +1530,7 @@ async def start_livekit_agent() -> None:
         return
     if _ondemand_enabled():
         # On-demand mode: leave the container stopped; ensure_livekit_started()
-        # spins it up (and the agent loop) on the first /livekit-token request.
+        # spins it up (and the session room's agent) on each /livekit-token request.
         # Start the idle monitor now so a container left running across a service
         # restart (orphaned, with no agent/monitor) still gets reaped.
         global _idle_task
@@ -1481,16 +1542,10 @@ async def start_livekit_agent() -> None:
             "LiveKit on-demand mode: agent will start on first /livekit-token request"
         )
         return
-    if _agent_running:
-        logger.warning("LiveKit voice agent already running; duplicate start ignored")
-        return
-    _agent_running = True
-    try:
-        logger.info("Starting LiveKit voice agent (VAD mode)")
-        await _agent_loop()
-    finally:
-        _agent_running = False
-        _health_update(status="stopped", connected=False)
+    # Always-on mode: the container is up from boot, and there is no fixed room to sit in - each /livekit-token
+    # mints a session room and ensure_livekit_started(room_name=...) joins it.
+    _health_update(status="ready", connected=False, last_error=None)
+    logger.info("LiveKit always-on mode: the agent joins each session room as its token is minted")
 
 
 # ── HTTP fallback endpoints ───────────────────────────────────────────────────
@@ -1573,6 +1628,9 @@ async def _require_livekit_media_auth(
         from routers.voice_tts import _resolve_fresh_panel_member
 
         acting_user_id = await _resolve_fresh_panel_member(str(device.get("panel_id") or ""))
+        # Home control on a turn (2026-10-18): this lane runs a full brain turn; the token is the panel.
+        await panel_principal.record_turn_home_control(
+            request, {"user_id": "guest", "role": "guest", "panel_id": device.get("panel_id")})
         return {
             "source": "device",
             "panel_id": device.get("panel_id"),
@@ -1580,6 +1638,7 @@ async def _require_livekit_media_auth(
             "role": device.get("role") or "voice-daemon",
         }
     if user.get("role") not in (None, "guest"):
+        await panel_principal.record_turn_home_control(request, user)
         return {"source": "session", "user_id": user.get("user_id"), "role": user.get("role")}
     if request.headers.get("X-Session-ID", "").strip():
         if user.get("auth_degraded"):
@@ -1587,6 +1646,8 @@ async def _require_livekit_media_auth(
                 status_code=503,
                 detail="Authentication service unavailable",
             )
+        # The estate kiosk's guest session: the panel only from a registered panel address / the kiosk credential.
+        await panel_principal.record_turn_home_control(request, user)
         return {
             "source": "guest-session",
             "user_id": user.get("user_id") or "guest",

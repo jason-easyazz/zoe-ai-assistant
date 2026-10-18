@@ -24,6 +24,9 @@ services:
     container_name: zoe-omnigent
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (idle peak 273 MB, a session adds codebase-memory ~1.3 GB; re-size from a sampled session; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 4096m
+    memswap_limit: 6144m
     # Run as host uid/gid 1000 (zoe), NOT root. The repo is bind-mounted at /workspace,
     # so a root container writes root-owned files straight into the host's live checkout:
     # on 2026-07-26 that meant 38 root-owned entries under /home/zoe/assistant/.git —
@@ -45,6 +48,24 @@ services:
     # DO NOT set ANTHROPIC_API_KEY or OPENAI_API_KEY here: if present, the CLIs bill the
     # metered API and silently ignore your subscription. Subscription tokens live in the
     # credential volumes below, created by a one-time login (see README → Auth).
+    #
+    # Claude credentials that must NOT live in this file or the repo come from an OPTIONAL
+    # env file OUTSIDE the repo (chmod 600), read at `up` time:
+    #   CLAUDE_CODE_OAUTH_TOKEN=<from `claude setup-token`>   one-year, never refreshed, so
+    #       the stored-OAuth refresh race ("another Claude Code process is refreshing it")
+    #       cannot occur. omnigent forwards it host->runner by default.
+    #   ZOE_OMNIGENT_ANTHROPIC_API_KEY=<dedicated Console key with its own spend limit>
+    #       for polly's claude-sdk brain ONLY. Deliberately NOT named ANTHROPIC_API_KEY:
+    #       the claude-sdk executor strips that name before spawning the CLI (to force
+    #       subscription auth), and in the container env it would flip every native Claude
+    #       worker to metered billing. It reaches the SDK harness through omnigent's
+    #       `auth: {type: api_key}` block (scripts/maintenance/omnigent_claude_auth_mode.py).
+    # Absent file = today's behaviour (stored /login credentials). `required: false` needs
+    # Compose >= 2.24 (the host runs 2.29.7). Owner runbook:
+    # docs/knowledge/omnigent-cross-review.md -> "Polly Claude auth".
+    env_file:
+      - path: ${OMNIGENT_CLAUDE_ENV_FILE:-/home/zoe/.config/zoe-omnigent/claude.env}
+        required: false
     environment:
       - NODE_NO_WARNINGS=1
       # No in-container self-update of the harness CLIs. They are root-owned global npm
@@ -132,7 +153,10 @@ services:
       # by default. Kept deliberately — it is a no-op when upstream forwards it anyway, and
       # it keeps the model pin working if upstream ever drops it again. OPENROUTER_API_KEY
       # is still NOT in that set, so it remains load-bearing.
-      - OMNIGENT_RUNNER_ENV_PASSTHROUGH=OPENROUTER_API_KEY,ANTHROPIC_MODEL
+      # ZOE_OMNIGENT_ANTHROPIC_API_KEY (from the optional env_file above) rides the same
+      # knob: `auth.api_key: $ZOE_OMNIGENT_ANTHROPIC_API_KEY` in config.yaml is expanded in
+      # the RUNNER, whose env is allowlisted. A no-op when the variable is unset.
+      - OMNIGENT_RUNNER_ENV_PASSTHROUGH=OPENROUTER_API_KEY,ANTHROPIC_MODEL,ZOE_OMNIGENT_ANTHROPIC_API_KEY
       # Reviewers override to Fable per-dispatch; the default stays implementation-tier.
       # ANTHROPIC_MODEL is Claude Code's default-model env; a per-dispatch `args.model`
       # from polly still wins (omnigent passes it as --model, which overrides the env).

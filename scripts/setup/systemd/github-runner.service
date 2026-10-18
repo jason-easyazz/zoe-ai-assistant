@@ -1,0 +1,17 @@
+# Self-hosted GitHub Actions runner (the Jetson lane: self-hosted-tests, deploy, voice-gate evidence). Tracked
+# 2026-10-18 from the live unit. The registration token / runner secrets stay in the runner's own files and the
+# EnvironmentFile below - never inline them here.
+[Unit]
+Description=GitHub Actions Runner (Zoe AI Assistant)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/actions-runner
+ExecStart=%h/actions-runner/run.sh
+Restart=always
+RestartSec=10
+EnvironmentFile=%h/actions-runner/.env
+
+[Install]
+WantedBy=default.target

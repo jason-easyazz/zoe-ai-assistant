@@ -79,10 +79,11 @@ Lost panel: revoke the gate's token (`DELETE /api/panels/zoe-touch-pi/token/TOKE
 - **SSH password login is on** (`PasswordAuthentication` unset = yes, `sshd_config.d` empty) on `0.0.0.0:22`. Key login via `zoe-pi`
   works. Fix once the tailnet SSH path is proven: a drop-in `PasswordAuthentication no` + `sshd -t` + reload. Ledger:
   [open-problems.md](open-problems.md).
-- **`/activate` on :7777 has no checks on the `pi` platform**: any device that can reach it starts a recording the daemon sends to
-  Zoe with the panel's device token. The firewall closes it everywhere except the home LAN and the tailnet (the tailnet ACL grants
-  nothing to :7777). The `Host`/`Origin` guard the Mac build has is not applied on the Pi. Ledger line.
-- **:8765 (screen-wake agent)** answers on all interfaces with no auth; same firewall scope.
+- **`/activate` on :7777** (fixed in code 2026-10-18, fix/voice-path-identity; live once the panel daemon is redeployed): the POSTs
+  answer only a loopback peer with a loopback `Host` and the Zoe page's `Origin` (`_activate_request_allowed`); `GET /health` still
+  answers the LAN. Before, any device that reached it started a recording the daemon sent to Zoe with the panel's device token.
+- **:8765 (screen-wake agent)** answers on all interfaces with no auth; same firewall scope. Its source is not in this repo and the
+  Jetson calls it over the LAN, so it cannot simply bind loopback. Ledger line 2026-10-18.
 
 ## Unverified until the lab cells run
 

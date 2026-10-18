@@ -89,7 +89,7 @@ Use `opensrc` for third-party library source before guessing API behavior.
 Rules:
 - Keep the global source cache outside the repo at `~/.opensrc/repos/`.
 - Prefer `opensrc path pypi:<package>@<version>` or `opensrc path owner/repo` to locate already-fetched source.
-- Pin the version to the one Zoe actually installs (for example `opensrc path pypi:chromadb@0.6.3`). A bare package name resolves to the latest published version (e.g. bare `chromadb` is 1.5.9), which can be a major-version mismatch from the running stack and will mislead you.
+- Pin the version to the one Zoe actually installs (for example `opensrc path pypi:chromadb@1.5.9`, the zoe-data py3.12 venv's pin). A bare package name resolves to the latest published version, which can be a major-version mismatch from the running stack and will mislead you.
 - Search package source directly when debugging integrations, for example:
   `rg "class FastAPI" "$(opensrc path pypi:fastapi)"`
 - When source context informs an implementation, report the package files, examples, or tests that were used.
@@ -209,6 +209,16 @@ the draft PR, and the reviewer that actually reads intent. **Flat-rate, so it is
 routine path, not the exceptional one.** Findings are hypotheses: verify each with a
 negative control, batch every fix into one push. Advisory to the machine, mandatory to
 the process — a PR should not be marked ready until it has had one.
+
+The script falls back **automatically**: polly (Omnigent) first; if polly cannot start or
+produce a provably cross-vendor report (runner start failure, Claude OAuth refresh
+contention, auth error, timeout), `codex exec` is run DIRECTLY in the `zoe-omnigent`
+container with the same contract; only if codex is unavailable (quota) does ONE lean,
+tool-less, size-capped `pi` pass run. **No backend is Claude** — a same-vendor review is
+never substituted — and if every cross-vendor option fails it exits **2** with
+`cross-review unavailable`, which means *not reviewed*, never "clean". Detail, the
+polly-auth root cause and the owner runbook:
+[docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
 
 Binding worker routing:
 

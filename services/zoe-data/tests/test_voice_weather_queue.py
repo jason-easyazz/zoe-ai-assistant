@@ -352,9 +352,10 @@ async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypa
         }
 
     class Broadcaster:
-        async def broadcast_to_panel(self, panel_id, event, payload):
-            assert panel_id == "panel-1"
-            broadcasts.append((panel_id, event, payload))
+        async def broadcast(self, channel, event, payload):
+            # A11: this panel's own channel only - never broadcast_to_panel's fallback to "all"
+            assert channel == "panel_panel-1"
+            broadcasts.append((channel, event, payload))
             return 1
 
     monkeypatch.setitem(sys.modules, "database", types.SimpleNamespace(get_db=get_db))
@@ -447,8 +448,9 @@ async def test_broadcast_skybridge_ui_skips_supersession_when_card_id_missing(mo
         }
 
     class Broadcaster:
-        async def broadcast_to_panel(self, panel_id, event, payload):
-            broadcasts.append((panel_id, event, payload))
+        async def broadcast(self, channel, event, payload):
+            assert channel == "panel_panel-1"
+            broadcasts.append((channel, event, payload))
             return 1
 
     monkeypatch.setitem(sys.modules, "database", types.SimpleNamespace(get_db=get_db))
@@ -579,8 +581,8 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, re
     assert calls["broadcast_skybridge_ui"]["panel_id"] == "panel-sky"
     assert calls["broadcast_skybridge_ui"]["utterance"] == resolver_text
     assert calls["synthesize"] == {"text": reply}
-    assert ("all", "voice:responding", {"panel_id": "panel-sky", "text": reply}) in calls["broadcast"]
-    assert ("all", "voice:done", {"panel_id": "panel-sky"}) in calls["broadcast"]
+    assert ("panel_panel-sky", "voice:responding", {"panel_id": "panel-sky", "text": reply}) in calls["broadcast"]
+    assert ("panel_panel-sky", "voice:done", {"panel_id": "panel-sky"}) in calls["broadcast"]
     assert calls["events"].index("synthesize") < calls["events"].index("voice:done")
     assert voice_tts._VOICE_SESSIONS["panel-sky"]["skybridge_context"] == {"domain": domain}
 
@@ -662,7 +664,7 @@ async def test_voice_command_emits_processing_cue_for_non_pi_fallback(monkeypatc
     assert response["ok"] is True
     assert response["reply"] == "Here is the calendar."
     assert (
-        "all",
+        "panel_panel-sky",
         "voice:responding",
         {
             "panel_id": "panel-sky",
@@ -914,7 +916,7 @@ async def test_voice_command_stream_emits_processing_ack_before_slow_response(mo
 
     assert first_line == {"processing_ack": True, "text": "Let me check.", "panel_id": "panel-stream"}
     assert (
-        "all",
+        "panel_panel-stream",
         "voice:responding",
         {"panel_id": "panel-stream", "text": "Let me check.", "processing_ack": True},
     ) in calls["broadcast"]
@@ -1013,7 +1015,7 @@ async def test_voice_command_uses_pi_hybrid_production_with_processing_cue(
     assert response["audio_base64"]
     assert calls["tts"] == [{"text": response_text}]
     assert (
-        "all",
+        "panel_panel-pi",
         "voice:responding",
         {
             "panel_id": "panel-pi",

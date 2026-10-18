@@ -311,7 +311,7 @@ const CONV_HOLD = 30000;
       setInterval: (fn, ms) => { const id = ++iseq; intervals.set(id, { fn, ms }); return id; },
       clearInterval: (id) => intervals.delete(id),
       console: { warn() {}, log() {} },
-      panelMatches: () => true, panelMatchesAuthTarget: () => true,
+      panelMatches: () => true, panelMatchesStrict: () => true, addressedToThisPanel: () => false, panelMatchesAuthTarget: () => true,
       setOrbMode() {}, showAmbientStatus: undefined, _attemptVoiceNavigation() {},
       VoiceOverlay: { onListeningStarted() {}, onTranscript() {}, onThinking() {}, onResponding() {}, onDone: (d) => done.push(d) },
     };

@@ -553,7 +553,7 @@ def test_unregistered_panel_gets_safe_defaults():
 
 # ── route-level contract (HTTP layer) ─────────────────────────────────────────
 #
-# A mini app mounting ONLY this router with `get_db`/`get_current_user`
+# A mini app mounting ONLY this router with `get_db` and the auth dependencies
 # overridden — NOT `TestClient(app)`, which starts the full FastAPI lifespan and
 # is Jetson-only (see tests/AGENTS.md). This keeps the lane slim-dep-green while
 # still exercising status codes, the auth dependency, the UPSERT parameters and
@@ -566,6 +566,7 @@ from fastapi.testclient import TestClient
 
 from auth import get_current_user
 from database import get_db
+from panel_principal import require_member, require_member_or_panel
 from routers import panel_config as pc
 
 
@@ -616,7 +617,12 @@ def _client(db, monkeypatch, user=None):
     app = FastAPI()
     app.include_router(pc.router)
     app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[get_current_user] = lambda: user or {"user_id": "jason"}
+    # These tests pin the config CONTRACT as a signed-in member; who may call the routes is pinned (over real HTTP and the
+    # real auth chain) by tests/test_house_state_routes_auth.py.
+    member = user or {"user_id": "jason", "role": "user"}
+    app.dependency_overrides[get_current_user] = lambda: member
+    app.dependency_overrides[require_member] = lambda: member
+    app.dependency_overrides[require_member_or_panel] = lambda: member
     return TestClient(app)
 
 
@@ -757,11 +763,12 @@ def test_a_deleted_room_degrades_to_no_room_rather_than_breaking_boot(sqlite_db,
     assert response.json()["room_name"] is None
 
 
-def test_route_get_is_reachable_without_auth_headers():
-    # The kiosk runs as a guest and polls this at boot — same posture as
-    # GET /api/system/display/preferences. A GET that needed a session would
-    # silently blank the dock on the panel.
-    assert get_current_user not in _route_dependencies(pc.get_panel_config)
+def test_route_get_takes_the_member_or_panel_rule():
+    # The kiosk polls this at boot as THE PANEL (registered address / kiosk
+    # credential / device token), never as an anonymous guest: the pins carry
+    # live HA state. The HTTP matrix is tests/test_house_state_routes_auth.py.
+    assert require_member_or_panel in _route_dependencies(pc.get_panel_config)
+    assert require_member_or_panel in _route_dependencies(pc.get_sleep_gate)
 
 
 def _route_dependencies(endpoint):
@@ -775,10 +782,10 @@ def _route_dependencies(endpoint):
     }
 
 
-def test_route_put_requires_the_same_auth_dependency_as_display_prefs():
-    # PUT is a write: it must go through get_current_user, matching
-    # PUT /api/system/display/preferences.
-    assert get_current_user in _route_dependencies(pc.put_panel_config)
+def test_route_put_needs_a_member():
+    # PUT re-targets which device a dock pin drives: a signed-in member only
+    # (get_current_user alone resolved an anonymous LAN caller to guest).
+    assert require_member in _route_dependencies(pc.put_panel_config)
 
 
 def test_route_get_returns_resolved_payload(monkeypatch):

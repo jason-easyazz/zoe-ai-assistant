@@ -74,6 +74,8 @@ async def face_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)
     from db_compat import get_compat_db as _get_compat_db
 
     payload = payload or {}
+    if caller.get("via_relay"):   # a face print names a member: never from a panel that may be anywhere (2026-10-18)
+        raise HTTPException(status_code=403, detail="face enrolment is not available through the relay")
     if not bool(payload.get("consent")):
         raise HTTPException(status_code=400, detail="explicit consent is required to enroll a face profile")
 

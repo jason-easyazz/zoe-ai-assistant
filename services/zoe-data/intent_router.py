@@ -5311,6 +5311,10 @@ async def _resolve_media_player_entity(ha_url: str, room: object = None) -> str 
 
 
 async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional[str]:
+    import panel_principal as _pp
+
+    if _pp.home_control_refused("music media_player"):   # executor backstop (2026-10-18); the intent already refused
+        return _pp.HOME_CONTROL_REFUSAL
     try:
         response = await client.post(f"{ha_url}/devices/control", json=payload)
     except Exception as exc:
@@ -5326,6 +5330,11 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
     """Route music intents to HA media_player via zoe-data HA bridge."""
     if (intent.slots or {}).get("delayed"):
         return command_shapes.DELAYED_COMMAND_REPLY  # nothing plays now, nothing is queued
+    if intent.name != "music_favorite":   # favouriting goes through Music Assistant, not the house's media players
+        import panel_principal as _pp   # home control on a turn (2026-10-18): the house's speakers via HA
+
+        if _pp.home_control_refused(f"music {intent.name}"):
+            return _pp.HOME_CONTROL_REFUSAL
     try:
         import os as _os, httpx as _httpx
         ha_url = _os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")

@@ -53,6 +53,7 @@ _ITEM_MAX_CHARS = 140
 _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})")
 _FOLLOW, _OVERDUE = "To follow up: ", "Overdue: "
 _MOMENT = "Recently on their mind (at most a gentle check-in): "
+_PENDANT = "About their pendant (mention it once, plainly, only if it fits): "
 _NIGHT = "From the last few days (mention it only if it fits; one gentle line): "
 
 # In-process throttles only; once-per-day correctness rests on the claim row.
@@ -233,6 +234,9 @@ def day_items(ctx: dict, local_now: datetime) -> tuple[list[str], list[str]]:
     for note in ((ctx or {}).get("night_items") or [])[:1]:      # the night mind's one raise (``leave`` threads never reach ctx)
         if _clean(note.get("text")):
             items.append(_NIGHT + _clean(note.get("text")))
+    for note in ((ctx or {}).get("pendant_items") or [])[:1]:      # the pendant's one health line (omi_health.morning_items); never time-critical
+        if _clean(note.get("text")):
+            items.append(_PENDANT + _clean(note.get("text")))
     critical = [soonest[1]] if soonest else ([overdue] if overdue else [])
     return items, critical
 

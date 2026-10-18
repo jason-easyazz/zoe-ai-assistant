@@ -1,0 +1,12 @@
+# Weekly opensrc cache refresh: align cached third-party source to the versions zoe-data RUNS (its py3.12 venv).
+# Tracked 2026-10-18; the live unit ran an untracked ~/bin/refresh-opensrc.sh, now scripts/maintenance/refresh_opensrc.sh.
+[Unit]
+Description=Weekly opensrc cache refresh (align cached source to installed versions)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/assistant/scripts/maintenance/refresh_opensrc.sh
+Nice=10

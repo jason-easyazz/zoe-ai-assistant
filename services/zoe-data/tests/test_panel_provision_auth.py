@@ -42,9 +42,12 @@ _SCHEMA = [
     """CREATE TABLE panels (
         panel_id TEXT PRIMARY KEY, name TEXT, location TEXT, panel_type TEXT,
         allow_guest INTEGER, ssh_user TEXT)""",
+    # The REAL column contract (alembic 0001): ``name`` is NOT NULL with no default - the provisioning INSERT used to omit it,
+    # which no fake schema could see (live Postgres refused every QR pairing). ``scopes`` stays in the table, unread.
     """CREATE TABLE device_tokens (
-        id TEXT PRIMARY KEY, panel_id TEXT, token_hash TEXT, role TEXT,
-        scopes TEXT, revoked INTEGER DEFAULT 0)""",
+        id TEXT PRIMARY KEY, panel_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'voice-daemon', scopes TEXT DEFAULT '["voice"]', expires_at TEXT,
+        revoked INTEGER DEFAULT 0, revoked_at TEXT)""",
     """CREATE TABLE panel_user_bindings (
         id TEXT PRIMARY KEY, panel_id TEXT, user_id TEXT, binding_type TEXT)""",
 ]
@@ -183,6 +186,29 @@ def test_member_or_admin_session_confirms_and_binds_that_user(client, db_path, s
     finally:
         con.close()
     assert bound == uid  # never the guest, never a hardcoded admin fallback
+
+
+def test_a_paired_panels_token_expires_and_carries_no_scopes(client, db_path, monkeypatch):
+    """Device-token hygiene (2026-10-18): a provisioned token used to be minted with NO expiry and a CSV ``scopes`` nothing read.
+    It now expires ``ZOE_DEVICE_TOKEN_TTL_DAYS`` after pairing (default 365), the cache entry the panel authenticates against
+    carries the same expiry, and the code writes no scopes (the column keeps its schema default, unread)."""
+    import routers.panel_auth as panel_auth
+
+    monkeypatch.delenv("ZOE_DEVICE_TOKEN_TTL_DAYS", raising=False)
+    monkeypatch.setattr(panel_auth, "_token_cache", {})
+    code = _start(client)["code"]
+    assert _confirm(client, code, headers={"X-Session-ID": "sess-member"}).status_code == 200
+    con = sqlite3.connect(db_path)
+    try:
+        name, role, scopes, expires_at = con.execute("SELECT name, role, scopes, expires_at FROM device_tokens").fetchone()
+    finally:
+        con.close()
+    assert (name, role) == ("kiosk", "kiosk")
+    assert scopes == '["voice"]'  # the untouched schema default - never the old 'chat,voice'
+    days = (panel_auth.parse_token_expiry(expires_at) - datetime.now(tz=timezone.utc)).total_seconds() / 86400
+    assert 364.9 < days <= 365
+    (cached,) = panel_auth._token_cache.values()
+    assert cached["expires_at"] == expires_at and "scopes" not in cached
 
 
 def test_confirm_on_expired_attempt_is_refused(client, db_path):
