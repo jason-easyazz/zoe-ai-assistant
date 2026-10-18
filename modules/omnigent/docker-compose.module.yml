@@ -24,6 +24,9 @@ services:
     container_name: zoe-omnigent
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (idle peak 273 MB, a session adds codebase-memory ~1.3 GB; re-size from a sampled session; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 4096m
+    memswap_limit: 6144m
     # Run as host uid/gid 1000 (zoe), NOT root. The repo is bind-mounted at /workspace,
     # so a root container writes root-owned files straight into the host's live checkout:
     # on 2026-07-26 that meant 38 root-owned entries under /home/zoe/assistant/.git —

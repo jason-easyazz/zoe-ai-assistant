@@ -212,4 +212,15 @@ fi
 gate="$HOME/.cache/zoe/voice_regression_last.json"
 [ -f "$gate" ] && dim "voice gate last: $(python3 -c "import json;d=json.load(open('$gate'));print(d.get('status'),'-',d.get('reason'))" 2>/dev/null || echo unreadable)"
 
+# ── Units: is every installed unit tracked, and did templates reach the box? ─
+# File parsing only (no systemctl), bounded. UNTRACKED > 0 = a live unit with no template and no
+# retirement reason (deep dive B9); drift > 0 = a merged template never copied over (runbook §24).
+hdr "UNITS (installed vs tracked templates)"
+_gt_units=$(timeout 5 python3 "$(dirname "$0")/unit_inventory.py" --summary 2>/dev/null)
+case "$_gt_units" in
+  "") dim "unit inventory unreadable (timeout or error)" ;;
+  *"+ 0 UNTRACKED"*"drift: 0 "*) ok "$_gt_units" ;;
+  *) bad "$_gt_units  — python3 scripts/maintenance/unit_inventory.py / unit_drift_check.py" ;;
+esac
+
 printf '\n%sread this BEFORE trusting a doc about what is live. what exists ≠ what runs.%s\n' "$C_DIM" "$C_0"

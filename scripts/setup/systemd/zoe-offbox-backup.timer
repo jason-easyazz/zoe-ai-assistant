@@ -1,0 +1,12 @@
+# 05:10 local: after the night window (01:35-04:55) and the 02:30 on-box dumps it ships.
+[Unit]
+Description=Nightly Zoe off-box encrypted backup, 05:10 local
+
+[Timer]
+OnCalendar=*-*-* 05:10:00
+RandomizedDelaySec=600
+Persistent=true
+Unit=zoe-offbox-backup.service
+
+[Install]
+WantedBy=timers.target

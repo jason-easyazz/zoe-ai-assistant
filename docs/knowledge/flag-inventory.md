@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-695 flags; 645 not documented in `.env.example`.
+696 flags; 646 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -665,6 +665,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VAD_SPEECH_THRESHOLD` | `'0.5'` | no | NO | `services/zoe-data/voice_vad.py` |
 | `ZOE_VAD_TAIL_DEEP_PROB` | `'0.10'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_VAD_TAIL_MS` | `0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_VAPID_KEY_PATH` | `-` | no | NO | `services/zoe-data/routers/push.py` |
 | `ZOE_VERIFY_ON_CHALLENGE` | `-` | no | NO | `services/zoe-data/verify_on_challenge.py` |
 | `ZOE_VOICE_ALERT_NON_PASS_RUNS` | `'3'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_BARGE_IN` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |

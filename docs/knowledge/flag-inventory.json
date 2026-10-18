@@ -6617,6 +6617,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_VAPID_KEY_PATH": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/push.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_VERIFY_ON_CHALLENGE": {
         "defaults": [
           "-"

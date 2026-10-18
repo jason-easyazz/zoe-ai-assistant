@@ -1,0 +1,10 @@
+[Unit]
+Description=Zoe local merge queue - run one cycle every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
