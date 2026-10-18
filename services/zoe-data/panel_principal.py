@@ -285,7 +285,12 @@ async def require_member_or_panel(request: Request, user: dict = Depends(get_cur
 
 async def require_member(request: Request, user: dict = Depends(get_current_user)) -> dict:
     """A signed-in household member (``is_member``): never a guest, the panel (device token, kiosk credential, registered
-    address), an auth-outage principal or the ``ZOE_UNAUTHENTICATED_ROLE`` promotion. 403 otherwise."""
-    if is_member(user):
+    address), an auth-outage principal or the ``ZOE_UNAUTHENTICATED_ROLE`` promotion. 403 otherwise.
+
+    A principal carrying device-token or panel identity (``device_token_role`` / ``panel_id``) is refused even when it has a
+    member role: under the ``ZOE_DEVICE_TOKEN_BINDS_MEMBER=1`` rollback a device token resolves to its bound member, and the
+    token on the panel's disk must still not re-target rooms or dock pins (cross-review, #2099)."""
+    u = user or {}
+    if "device_token_role" not in u and not u.get("panel_id") and is_member(u):
         return user
     raise _refuse("not a signed-in member", request, user, "Sign in to change this")

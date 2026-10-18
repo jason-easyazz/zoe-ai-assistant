@@ -237,6 +237,54 @@ def test_a_member_writes_rooms_and_panel_config(db, method, path, body, peer, he
     assert r.status_code == 200, (method, path, headers, r.text)
 
 
+@pytest.mark.parametrize("method,path,body", WRITES)
+def test_the_member_binding_rollback_does_not_let_the_panel_token_write(db, monkeypatch, method, path, body):
+    """Cross-review (codex, #2099): under ``ZOE_DEVICE_TOKEN_BINDS_MEMBER=1`` the panel's device token resolves to its bound
+    member with ``role: member``. It is still the token on the panel's disk, so it must not re-target rooms or dock pins."""
+    import db_pool
+    from contextlib import asynccontextmanager
+
+    class _Binding:
+        async def execute(self, sql, params=()):
+            class C:
+                async def fetchone(self_inner):
+                    return {"user_id": "casey"}
+            return C()
+
+    @asynccontextmanager
+    async def _ctx():
+        yield _Binding()
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", _ctx)
+    monkeypatch.setenv("ZOE_DEVICE_TOKEN_BINDS_MEMBER", "1")
+    before = (db.rooms(), db.con.execute("SELECT location FROM panels").fetchall()[0][0],
+              db.con.execute("SELECT COUNT(*) FROM room_devices").fetchone()[0])
+    r = _send(db, PHONE_IP, {"X-Device-Token": PANEL_TOKEN}, method, path, body)
+    assert r.status_code == 403, (method, path, r.text)
+    after = (db.rooms(), db.con.execute("SELECT location FROM panels").fetchall()[0][0],
+             db.con.execute("SELECT COUNT(*) FROM room_devices").fetchone()[0])
+    assert after == before
+    # ... while the same token still READS house state as the panel
+    assert _send(db, PHONE_IP, {"X-Device-Token": PANEL_TOKEN}, "GET", "/api/rooms").status_code == 200
+
+
+async def test_require_member_refuses_any_device_or_panel_identity():
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    req = Request({"type": "http", "method": "POST", "path": "/api/rooms", "headers": [], "client": (PHONE_IP, 1)})
+    for principal in (
+        {"user_id": "casey", "role": "member", "panel_id": "kitchen-panel", "device_token_role": "kiosk"},  # rollback shape
+        {"user_id": "casey", "role": "member", "device_token_role": "voice-daemon"},
+        {"user_id": "casey", "role": "member", "panel_id": "kitchen-panel"},
+    ):
+        with pytest.raises(HTTPException) as refused:
+            await panel_principal.require_member(req, principal)
+        assert refused.value.status_code == 403, principal
+    member = {"user_id": "casey", "role": "user", "username": "casey", "permissions": []}  # a real session principal
+    assert await panel_principal.require_member(req, member) is member
+
+
 def test_the_unauthenticated_admin_override_is_not_a_member_for_writes(db, monkeypatch):
     """``ZOE_UNAUTHENTICATED_ROLE=family-admin`` promotes a header-less caller; it must not rename rooms."""
     monkeypatch.setattr(auth, "_UNAUTH_ROLE", "family-admin")

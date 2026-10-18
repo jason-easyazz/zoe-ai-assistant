@@ -46,6 +46,99 @@ def test_the_page_fetches_only_routes_that_exist():
     assert missing == [], f"smart-home.html calls routes zoe-data does not serve: {missing}"
 
 
+# ---- the live house's own controls render and drive (cross-review, codex P1 on #2099) -----------------------------------------
+# Fixture = the LIVE /api/ha/entities shape read 2026-10-18 (only the fields the page reads). This house has ZERO light.* and
+# ZERO climate.*: its lights/fan/TV are switch.* / input_boolean.*, its thermostat is input_number.*.
+LIVE = [
+    {"entity_id": "switch.bedroom_1_switch_1", "state": "off", "attributes": {"friendly_name": "Bedroom Light", "icon": ""}},
+    {"entity_id": "input_boolean.fan", "state": "off", "attributes": {"friendly_name": "Ceiling Fan", "icon": "mdi:fan"}},
+    {"entity_id": "input_boolean.tv", "state": "on", "attributes": {"friendly_name": "TV", "icon": "mdi:television"}},
+    {"entity_id": "input_number.thermostat_temperature", "state": "21.0",
+     "attributes": {"friendly_name": "Thermostat", "min": 16.0, "max": 30.0, "step": 0.5, "unit_of_measurement": "°C",
+                    "icon": "mdi:thermostat", "mode": "box"}},
+    {"entity_id": "scene.movie_time", "state": "unknown", "attributes": {"friendly_name": "Movie Time"}},
+]
+
+# Runs the page's REAL inline script in a node VM with a minimal DOM: no browser, no network.
+HARNESS = r"""
+const fs = require('fs'), vm = require('vm');
+const [page, fixture] = [fs.readFileSync(process.argv[2], 'utf8'), JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))];
+const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+const src = scripts.find(s => s.includes('function createDeviceCard'));
+const els = {}, posts = [];
+function el(id) {
+  const e = { id, dataset: {}, className: '', innerHTML: '', textContent: '', hidden: false, children: [],
+    classList: { add() {}, remove() {}, toggle() { return true; }, contains() { return false; } },
+    appendChild(c) { this.children.push(c); }, querySelector() { return null; }, querySelectorAll() { return []; } };
+  if (id) els[id] = e;
+  return e;
+}
+['deviceGrid', 'roomTabs', 'scenesSection', 'scenesRow'].forEach(el);
+const ctx = {
+  console, JSON, Math, parseFloat, parseInt, isNaN, String, Set, Promise, setTimeout,
+  localStorage: { getItem() { return null; } },
+  TouchMenu: { init() {} },
+  document: { addEventListener() {}, createElement() { return el(null); }, getElementById(id) { return els[id] || null; },
+              querySelector() { return null; }, querySelectorAll() { return []; } },
+  fetch: async (url, opts) => { posts.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : null }); return { ok: true, json: async () => ({}) }; },
+};
+ctx.window = ctx;
+vm.createContext(ctx);
+vm.runInContext(src + '\n;globalThis.__t = { setAll(a) { allEntities = a; }, getVisibleEntities, createDeviceCard, renderDevices, adjustNumber };', ctx);
+(async () => {
+  const t = ctx.__t;
+  t.setAll(fixture);
+  const visible = t.getVisibleEntities().map(e => e.entity_id);
+  const cards = {};
+  for (const e of fixture) { const c = t.createDeviceCard(e); if (c) cards[e.entity_id] = c.innerHTML; }
+  t.renderDevices();
+  // the thermostat: the stepper the card painted, then one + press
+  const tid = 'num_input_number_thermostat_temperature';
+  const m = (cards['input_number.thermostat_temperature'] || '').match(/data-min="([^"]*)" data-max="([^"]*)" data-step="([^"]*)"[\s\S]*?data-value="([^"]*)"/);
+  if (m) Object.assign(el(tid).dataset, { min: m[1], max: m[2], step: m[3], unit: '°C', value: m[4] });
+  await t.adjustNumber('input_number.thermostat_temperature', +1);
+  els[tid].dataset.value = '30';
+  await t.adjustNumber('input_number.thermostat_temperature', +1);  // at max: clamps, sends nothing
+  console.log(JSON.stringify({ visible, cards, grid: els.deviceGrid.children.length, posts }));
+})();
+"""
+
+
+def _run_page(tmp_path):
+    import json
+    import os
+    import shutil
+    import subprocess
+
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        if os.environ.get("CI"):
+            pytest.fail("node is required in CI for the smart-home page harness")
+        pytest.skip("Node.js is not installed on this host")
+    harness, fixture = tmp_path / "harness.js", tmp_path / "live.json"
+    harness.write_text(HARNESS, encoding="utf-8")
+    fixture.write_text(json.dumps(LIVE), encoding="utf-8")
+    proc = subprocess.run([node, str(harness), str(PAGE), str(fixture)], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_the_live_houses_controls_render(tmp_path):
+    out = _run_page(tmp_path)
+    for eid in ("switch.bedroom_1_switch_1", "input_boolean.fan", "input_boolean.tv", "input_number.thermostat_temperature"):
+        assert eid in out["visible"], eid
+        assert eid in out["cards"], f"{eid} has no card renderer"
+    assert "toggleDevice('input_boolean.fan'" in out["cards"]["input_boolean.fan"]
+    assert "adjustNumber('input_number.thermostat_temperature'" in out["cards"]["input_number.thermostat_temperature"]
+    assert out["grid"] == 4  # the four real controls, and no invented demo devices
+
+
+def test_the_thermostat_sends_input_number_set_value_within_its_range(tmp_path):
+    out = _run_page(tmp_path)
+    assert out["posts"] == [{"url": "/api/ha/control", "body": {
+        "entity_id": "input_number.thermostat_temperature", "action": "set_value", "params": {"value": 21.5}}}]
+
+
 def test_actions_send_their_data_in_a_field_the_control_route_reads():
     # HAControlPayload reads `params` / `service_data`; an unknown key (the page used `value`) is accepted and DROPPED,
     # so brightness and temperature silently did nothing.

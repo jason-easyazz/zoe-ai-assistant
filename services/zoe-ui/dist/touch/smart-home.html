@@ -523,7 +523,9 @@ function selectRoom(roomId, el) {
   renderDevices();
 }
 
-const CONTROLLABLE_DOMAINS = ['light','switch','climate','sensor','binary_sensor','cover','fan'];
+// input_boolean / input_number are what THIS house uses for its lights, fan, TV and thermostat (live /api/ha/entities,
+// 2026-10-18: zero light.* and zero climate.*), so they must render, not just light/switch/climate.
+const CONTROLLABLE_DOMAINS = ['light','switch','input_boolean','input_number','climate','sensor','binary_sensor','cover','fan'];
 
 function getVisibleEntities() {
   let entities = allEntities;
@@ -544,10 +546,10 @@ function renderDevices() {
   const entities = getVisibleEntities();
   grid.innerHTML = '';
 
-  const toRender = entities.length > 0 ? entities : getDemoDevices();
+  // Real devices only: an empty room says so instead of painting invented demo devices.
   let hasContent = false;
 
-  toRender.forEach(entity => {
+  entities.forEach(entity => {
     const card = createDeviceCard(entity);
     if (card) { grid.appendChild(card); hasContent = true; }
   });
@@ -555,19 +557,6 @@ function renderDevices() {
   if (!hasContent) {
     grid.innerHTML = '<div class="error-state" style="grid-column:1/-1"><div class="error-icon">🏠</div><div class="error-title">No devices found</div><div class="error-msg">No controllable devices in this room</div></div>';
   }
-}
-
-function getDemoDevices() {
-  return [
-    { entity_id:'light.living_room_main',   state:'on',  attributes:{ friendly_name:'Living Room Light', brightness:204 }},
-    { entity_id:'light.bedroom_lamp',       state:'off', attributes:{ friendly_name:'Bedroom Lamp',       brightness:128 }},
-    { entity_id:'switch.coffee_machine',    state:'on',  attributes:{ friendly_name:'Coffee Machine' }},
-    { entity_id:'switch.garden_lights',     state:'off', attributes:{ friendly_name:'Garden Lights' }},
-    { entity_id:'climate.living_room',      state:'heat',attributes:{ friendly_name:'Thermostat',   temperature:21.5, current_temperature:20.2 }},
-    { entity_id:'light.kitchen_ceiling',    state:'on',  attributes:{ friendly_name:'Kitchen Ceiling', brightness:255 }},
-    { entity_id:'binary_sensor.front_door', state:'off', attributes:{ friendly_name:'Front Door',   device_class:'door' }},
-    { entity_id:'binary_sensor.motion_hall',state:'on',  attributes:{ friendly_name:'Hallway Motion',device_class:'motion' }},
-  ];
 }
 
 function createDeviceCard(entity) {
@@ -606,8 +595,12 @@ function createDeviceCard(entity) {
         <span class="brightness-icon">🔆</span>
       </div>`:''}`;
 
-  } else if (domain === 'switch' || domain === 'fan') {
-    const icon = domain === 'fan' ? '🌀' : '🔌';
+  } else if (domain === 'switch' || domain === 'fan' || domain === 'input_boolean') {
+    const mdi = String(entity.attributes?.icon || '');
+    const icon = (domain === 'fan' || mdi.includes('fan')) ? '🌀'
+               : mdi.includes('television') ? '📺'
+               : (mdi.includes('light') || mdi.includes('lamp') || /light|lamp/i.test(name)) ? '💡'
+               : '🔌';
     card.className = `device-card${isOn?' device-on':''}`;
     card.innerHTML = `
       <div class="device-header">
@@ -642,6 +635,30 @@ function createDeviceCard(entity) {
         <button class="temp-btn" onclick="adjustTemp('${entity.entity_id}',-0.5)">−</button>
         <span class="temp-display" id="temp_${safeId(entity.entity_id)}">${setTemp}°C</span>
         <button class="temp-btn" onclick="adjustTemp('${entity.entity_id}',+0.5)">+</button>
+      </div>`;
+
+  } else if (domain === 'input_number') {
+    // A numeric setpoint (this house's thermostat): HA's own min/max/step, controlled with input_number.set_value.
+    const a    = entity.attributes || {};
+    const unit = a.unit_of_measurement || '';
+    const val  = parseFloat(entity.state);
+    const shown = isNaN(val) ? '–' : val;
+    const step = parseFloat(a.step) || 1;
+    card.className = 'device-card';
+    card.innerHTML = `
+      <div class="device-header">
+        <div class="device-meta">
+          <div class="device-icon">${String(a.icon || '').includes('thermo') ? '🌡️' : '🎚️'}</div>
+          <div class="device-name">${escHtml(name)}</div>
+          <div class="device-status">${escHtml(String(shown))}${escHtml(unit)}</div>
+        </div>
+      </div>
+      <div class="climate-row">
+        <button class="temp-btn" onclick="adjustNumber('${entity.entity_id}',-1)">−</button>
+        <span class="temp-display" id="num_${safeId(entity.entity_id)}"
+              data-min="${parseFloat(a.min)}" data-max="${parseFloat(a.max)}" data-step="${step}"
+              data-unit="${escHtml(unit)}" data-value="${isNaN(val) ? '' : val}">${escHtml(String(shown))}${escHtml(unit)}</span>
+        <button class="temp-btn" onclick="adjustNumber('${entity.entity_id}',+1)">+</button>
       </div>`;
 
   } else if (domain === 'binary_sensor') {
@@ -736,6 +753,31 @@ async function adjustTemp(entityId, delta) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ entity_id: entityId, action: 'set_temperature', params: { temperature: temp }})
+    });
+  } catch(e) {}
+}
+
+// input_number.set_value {value}, clamped to the entity's own min/max and snapped to its step - the same call the
+// estate's thermostat tile makes (touch/home.html wireTempTile).
+async function adjustNumber(entityId, dir) {
+  const display = document.getElementById('num_' + safeId(entityId));
+  if (!display) return;
+  const step = parseFloat(display.dataset.step) || 1;
+  const min = parseFloat(display.dataset.min), max = parseFloat(display.dataset.max);
+  const cur = parseFloat(display.dataset.value);
+  if (isNaN(cur)) return;
+  let next = Math.round((cur + dir * step) / step) * step;
+  if (!isNaN(min)) next = Math.max(min, next);
+  if (!isNaN(max)) next = Math.min(max, next);
+  next = Math.round(next * 1000) / 1000;
+  if (next === cur) return;
+  display.dataset.value = String(next);
+  display.textContent = `${next}${display.dataset.unit || ''}`;
+  try {
+    await fetch('/api/ha/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entity_id: entityId, action: 'set_value', params: { value: next }})
     });
   } catch(e) {}
 }
