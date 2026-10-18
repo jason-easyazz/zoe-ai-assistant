@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-718 flags; 668 not documented in `.env.example`.
+720 flags; 670 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -503,6 +503,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PI_LAB_RESOURCE_GUARD_ENABLED` | `True` | no | NO | `services/zoe-data/routers/pi_intent_lab.py` |
 | `ZOE_POSTGRES_CONTAINER` | `'zoe-database'` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_PRESENCE_WINDOW_S` | `''` | no | yes | `services/zoe-data/proactive/presence.py` |
+| `ZOE_PRIVACY_CANARY_DIR` | `dynamic` | no | NO | `tools/audit/privacy_canary.py` |
+| `ZOE_PRIVACY_CANARY_KEY` | `''` | no | NO | `tools/audit/privacy_canary.py` |
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_LEDGER` | `''` | no | NO | `services/zoe-data/proactive/ledger.py` |

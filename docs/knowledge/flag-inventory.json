@@ -4966,6 +4966,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_PRIVACY_CANARY_DIR": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "tools/audit/privacy_canary.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PRIVACY_CANARY_KEY": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "tools/audit/privacy_canary.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PROACTIVE_ARRIVAL_RESPONSE_S": {
         "defaults": [
           "''"
