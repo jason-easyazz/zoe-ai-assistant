@@ -34,6 +34,7 @@ import voice_stt_stream as _stt_stream
 import voice_utterance_shape as _utterance_shape
 import speaker_adaptation
 import speaker_models
+import traffic_class
 from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
@@ -715,20 +716,10 @@ def _log_voice_timing(
             _ms(ctx_timings.get("memory_packet", 0.0)), _ms(ctx_timings.get("history", 0.0)),
             _ms(ctx_timings.get("memory", 0.0)), _ms(ctx_timings.get("domain", 0.0)),
             _ms(brain_ttft_s), _ms(llm_first_token_s),
-            packet_state, _traffic_class_now(),
+            packet_state, traffic_class.current(),
         )
     except Exception:  # instrumentation must never fail a turn
         pass
-
-
-def _traffic_class_now() -> str:
-    """The turn's traffic class (P-2, ``traffic_class.py``); household on any failure. Never raises."""
-    try:
-        import traffic_class
-
-        return traffic_class.current()
-    except Exception:  # noqa: BLE001
-        return "household"
 
 
 _VOICE_ESCALATION_MARKERS = ("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")
@@ -2742,7 +2733,7 @@ def _log_voice_stt_sample(
             "model": _stt_backend_var.get() or env_str("ZOE_STT_BACKEND", "moonshine"),
             "moonshine_arch": moonshine_arch(),
             # P-2: household | harness | probe | ci, server-derived (traffic_class.py) - NOT the body panel_id
-            "traffic_class": _traffic_class_now(),
+            "traffic_class": traffic_class.current(),
         }
         if error:
             record["error"] = error[:500]

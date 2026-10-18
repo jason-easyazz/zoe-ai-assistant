@@ -47,6 +47,7 @@ from collections import OrderedDict, deque
 from typing import Any, Optional
 
 import struggle_signals as sig
+import traffic_class
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +278,7 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
         if pid.startswith(SYNTHETIC_PANELS) or _synthetic(user_id):
             _count("skipped_synthetic")
             return False
-        if _traffic_class() != "household":
+        if not traffic_class.is_household():
             # P-2: the struggle capture is the HOUSEHOLD's failure record - a harness/probe/ci turn (server-derived
             # traffic class, traffic_class.py) is not one, even when it replays as a real member's id.
             _count("skipped_traffic")
@@ -296,15 +297,6 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
     except Exception:  # noqa: BLE001 - a detector bug never reaches the turn
         _count("hook_errors")
         return False
-
-
-def _traffic_class() -> str:
-    try:
-        import traffic_class
-
-        return traffic_class.current()
-    except Exception:  # noqa: BLE001
-        return "household"
 
 
 def _panel_from_session(session_id: str) -> str:

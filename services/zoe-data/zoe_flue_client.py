@@ -99,6 +99,7 @@ import re
 import time
 from typing import Any, AsyncIterator, Optional
 from urllib.parse import quote
+import traffic_class
 
 logger = logging.getLogger(__name__)
 
@@ -1605,12 +1606,7 @@ def _log_prompt_cache(session_id: str, terminal: dict) -> None:
         if not pairs:
             return
         first_prompt, first_cache = pairs[0]
-        try:
-            import traffic_class
-
-            traffic = traffic_class.current()
-        except Exception:  # noqa: BLE001
-            traffic = "household"
+        traffic = traffic_class.current()
         logger.info(
             "FLUE_PROMPT_CACHE session=%s rounds=%d first_prompt_n=%d first_cache_n=%d "
             "total_prompt_n=%d per_round=%s traffic=%s",
@@ -1645,13 +1641,7 @@ def _panel_kv_threshold() -> int:
 
 
 def _non_household_turns() -> int:
-    try:
-        import traffic_class
-
-        counts = traffic_class.brain_turn_counts()
-        return sum(n for c, n in counts.items() if c != traffic_class.HOUSEHOLD)
-    except Exception:  # noqa: BLE001
-        return 0
+    return sum(n for c, n in traffic_class.brain_turn_counts().items() if c != traffic_class.HOUSEHOLD)
 
 
 def _background_calls() -> int:

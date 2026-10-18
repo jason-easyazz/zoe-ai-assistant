@@ -36,8 +36,9 @@ finished and before this one started:
   `ZOE_BRAIN_SLOT_QUIET_S`, is 45 s).
 - The 7 misses with nothing between are deep prompt divergence (the previous turn's recall block elided,
   the tool block growing): 523-1,363 tokens re-prefilled, which no slot policy changes.
-- Harness turns inside zoe-data between ANY two panel turns: the zoe-data log shows no other conversation
-  session between warm panel turns at all; the slot trace's 5 "conversation" cases are the only ones.
+- zoe-data's own log shows no other Flue conversation (bar, Telegram, web) between any two warm panel turns;
+  the slot trace's 5 "conversation" cases (2 misses, 3 hits) came from callers outside zoe-data's logs - the
+  in-process replay probe or a bench script going straight to the sidecar or `:11434`.
 
 Scripts (read-only, counts only, not committed): `kv_miss_cause.py` (zoe-data log) and `kv_slot_trace.py` (the join).
 

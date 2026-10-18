@@ -372,6 +372,7 @@ from research_evidence import (
 from risk_policy import classify_request, is_whatsapp_connect_request
 from chat_session_title import derive_session_title, title_is_weak
 from session_continuity import mint as mint_session_id, resolve_session_id
+import traffic_class
 from ag_ui_stream import AgRunRecorder, iter_openclaw_text_chunks, iter_text_message_chunks, new_run_ids
 from ag_ui.core import (
     CustomEvent,
@@ -1209,12 +1210,7 @@ async def _save_chat_message(
         pass
     # P-2: the turn's traffic class (household | harness | probe | ci), server-derived (traffic_class.py), so a
     # reader of this table can tell the household's turns from the harness that was 97% of them (2026-10-19).
-    try:
-        import traffic_class
-
-        meta["traffic_class"] = traffic_class.current()
-    except Exception:  # noqa: BLE001 - bookkeeping must never lose a saved turn
-        pass
+    meta["traffic_class"] = traffic_class.current()
     metadata = json.dumps(meta) if meta else None
     # Use the context-managed pool acquire (deterministic release). The bare
     # `async for db in get_db(): ... break` form leaves the generator suspended
@@ -3223,13 +3219,7 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
     if isinstance(client_meta, dict):
         # The traffic class is the SERVER's (traffic_class.py): a client cannot claim one, household or not.
         client_meta = dict(client_meta)
-        client_meta.pop("traffic_class", None)
-        try:
-            import traffic_class
-
-            client_meta["traffic_class"] = traffic_class.current()
-        except Exception:  # noqa: BLE001
-            pass
+        client_meta["traffic_class"] = traffic_class.current()
     metadata = json.dumps(client_meta) if client_meta else None
     # get_db_ctx, not `async for db in get_db()`: exiting the generator
     # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).

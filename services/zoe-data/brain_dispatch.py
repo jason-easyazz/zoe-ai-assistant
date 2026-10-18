@@ -103,6 +103,7 @@ import os
 import sys
 import threading
 import time
+import traffic_class
 from typing import Any, AsyncIterator
 
 logger = logging.getLogger(__name__)
@@ -295,13 +296,8 @@ def _log_lane(
     has to answer, and a log line that only exists when failover is enabled
     cannot answer it for the lane that is live today.
     """
-    try:  # traffic class (P-2): household | harness | probe | ci - every turn line names it
-        import traffic_class
-
-        traffic = traffic_class.current()
-        traffic_class.note_brain_turn(traffic)
-    except Exception:  # noqa: BLE001
-        traffic = "household"
+    traffic = traffic_class.current()   # P-2: household | harness | probe | ci - every turn line names it
+    traffic_class.note_brain_turn(traffic)
     logger.info(
         "BRAIN_LANE lane_attempted=%s lane_served=%s outcome=%s reason=%s session=%s traffic=%s",
         attempted,

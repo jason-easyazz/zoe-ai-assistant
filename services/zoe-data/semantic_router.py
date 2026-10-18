@@ -29,6 +29,7 @@ import os
 import contextvars
 import threading
 import time
+import traffic_class
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -412,7 +413,7 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
             "actual_routed": routed,
             "agree": head_routed == routed,
             "head_ms": round((time.perf_counter() - t0) * 1000, 3),
-            "traffic": _traffic_class_now(),
+            "traffic": traffic_class.current(),
         }
         shadow_logger.info("router_head_shadow %s", json.dumps(rec, sort_keys=True))
         try:
@@ -470,18 +471,8 @@ def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
         "failed": decision is None,
         "two_stage_ms": d.get("ms"),
         "actual_routed": actual_routed,
-        "traffic": _traffic_class_now(),
+        "traffic": traffic_class.current(),   # P-2: reports filter on it
     }, text)
-
-
-def _traffic_class_now() -> str:
-    """The turn's traffic class (P-2, ``traffic_class.py``): reports filter the shadow log on it."""
-    try:
-        import traffic_class
-
-        return traffic_class.current()
-    except Exception:  # noqa: BLE001
-        return "household"
 
 
 def _two_stage_shadow2(text: str, v: np.ndarray, routed: str) -> None:
