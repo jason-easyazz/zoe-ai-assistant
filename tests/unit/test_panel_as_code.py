@@ -173,6 +173,13 @@ def test_the_wake_model_backup_rides_the_offbox_artefacts_tier(tmp_path):
     for name in ("hey_zoe.onnx", "functiongemma-270m-zoe-functok-r2-Q8_0.gguf"):
         assert any(fnmatch.fnmatch(name, g) for g in offbox.DRILL_ARTEFACT_GLOBS), name
     assert not any(fnmatch.fnmatch("model.safetensors", g) for g in offbox.DRILL_ARTEFACT_GLOBS)
+    # A backup run without the wake-model copy is a reported problem, never a silent skip.
+    router = tmp_path / "models" / "functiongemma-router"
+    router.mkdir(parents=True)
+    probs = offbox.artefact_problems(p, offbox.artefact_paths(p))
+    assert len(probs) == 1 and "wake-model backup" in probs[0]
+    (tmp_path / offbox.PANEL_WAKE_BACKUP).write_bytes(b"onnx")
+    assert offbox.artefact_problems(p, offbox.artefact_paths(p)) == []
 
 
 def test_the_jetson_installer_starts_from_code_defaults(tmp_path):

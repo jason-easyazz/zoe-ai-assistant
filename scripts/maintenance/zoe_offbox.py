@@ -189,6 +189,7 @@ def secret_files(p: Paths) -> list[tuple[str, Path]]:
 
 
 DRILL_ARTEFACT_GLOBS = ("*.gguf", "*.onnx")   # what the monthly drill restores from the artefacts tier
+PANEL_WAKE_BACKUP = ".zoe/backups/panel/hey_zoe.onnx"   # relative to home; a backup run without it is a problem
 
 
 def artefact_paths(p: Paths) -> list[Path]:
@@ -197,6 +198,18 @@ def artefact_paths(p: Paths) -> list[Path]:
     return [x for x in (p.checkout / "labs" / "functiongemma-finetune" / "runs" / "gen1" / "merged",
                         p.home / "models" / "functiongemma-router",
                         p.home / ".zoe" / "backups" / "panel") if x.exists()]
+
+
+def artefact_problems(p: Paths, arts: list[Path]) -> list[str]:
+    """Never a silent skip: a missing router source would let the drill compare an ever-older snapshot, and the
+    panel's wake model has no other copy off the panel."""
+    out: list[str] = []
+    if not any("functiongemma" in str(a) for a in arts):
+        out.append("artefacts: neither the router checkpoint nor the GGUF directory exists" + ("" if arts else " - no snapshot"))
+    if not (p.home / PANEL_WAKE_BACKUP).is_file():
+        out.append(f"artefacts: the panel wake-model backup ~/{PANEL_WAKE_BACKUP} is missing - "
+                   "re-copy it from the panel (models.lock has its sha256)")
+    return out
 
 
 # ── the age mirror ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -615,9 +628,7 @@ def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:
             print(f"{tier}: snapshot {sid[:8]} - {len(man)} files ({res.encrypted} re-encrypted, "
                   f"{res.kept} unchanged, {res.removed} removed)")
     arts = artefact_paths(p)
-    if not any("functiongemma" in str(a) for a in arts):  # never a silent skip: the drill would compare an ever-older snapshot
-        problems.append("artefacts: neither the router checkpoint nor the GGUF directory exists"
-                        + ("" if arts else " - no snapshot"))
+    problems += artefact_problems(p, arts)
     if arts:
         sid = backup_tier(cfg, "artefacts", arts)
         man = {}
