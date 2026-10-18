@@ -1718,8 +1718,15 @@ def detect_intent(
             _clean = _re.sub(r'\b\d[\d\s\-]{6,}\b', '[NUMBER]', _clean)
             _clean = _re.sub(r'[\w.+-]+@[\w-]+\.\w+', '[EMAIL]', _clean)
             _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
+            try:  # P-2: server-derived traffic class, so the weekly review can drop the harness's misses
+                import traffic_class as _tc
+
+                _traffic = _tc.current()
+            except Exception:  # noqa: BLE001
+                _traffic = "household"
             with open(_MISS_PATH, "a") as _f:
-                _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time()}) + "\n")
+                _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time(),
+                                      "traffic_class": _traffic}) + "\n")
         except Exception:
             pass  # Never let logging break intent routing
         try:

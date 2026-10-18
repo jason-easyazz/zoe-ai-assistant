@@ -295,14 +295,28 @@ def _log_lane(
     has to answer, and a log line that only exists when failover is enabled
     cannot answer it for the lane that is live today.
     """
+    try:  # traffic class (P-2): household | harness | probe | ci - every turn line names it
+        import traffic_class
+
+        traffic = traffic_class.current()
+        traffic_class.note_brain_turn(traffic)
+    except Exception:  # noqa: BLE001
+        traffic = "household"
     logger.info(
-        "BRAIN_LANE lane_attempted=%s lane_served=%s outcome=%s reason=%s session=%s",
+        "BRAIN_LANE lane_attempted=%s lane_served=%s outcome=%s reason=%s session=%s traffic=%s",
         attempted,
         served,
         outcome,
         reason or "-",
         (session_id or "-")[:64],
+        traffic,
     )
+    try:
+        from voice_metrics import brain_turn_count
+
+        brain_turn_count.labels(traffic_class=traffic, lane=str(served or "-")[:24]).inc()
+    except Exception:  # noqa: BLE001
+        pass
     try:  # the struggle detector: a brain lane served this session's turn (an O(1) deque append; never raises)
         import struggle_detector
 

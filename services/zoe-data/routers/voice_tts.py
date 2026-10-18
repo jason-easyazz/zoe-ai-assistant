@@ -710,15 +710,25 @@ def _log_voice_timing(
     try:
         logger.info(
             "VOICE TIMING turn=%s session=%s path=%s pre_brain_ms=%d memory_packet_ms=%d "
-            "(history=%d memory=%d domain=%d) brain_ttft_ms=%d llm_first_token_ms=%d packet=%s",
+            "(history=%d memory=%d domain=%d) brain_ttft_ms=%d llm_first_token_ms=%d packet=%s traffic=%s",
             turn, session_id, path, _ms(pre_brain_s),
             _ms(ctx_timings.get("memory_packet", 0.0)), _ms(ctx_timings.get("history", 0.0)),
             _ms(ctx_timings.get("memory", 0.0)), _ms(ctx_timings.get("domain", 0.0)),
             _ms(brain_ttft_s), _ms(llm_first_token_s),
-            packet_state,
+            packet_state, _traffic_class_now(),
         )
     except Exception:  # instrumentation must never fail a turn
         pass
+
+
+def _traffic_class_now() -> str:
+    """The turn's traffic class (P-2, ``traffic_class.py``); household on any failure. Never raises."""
+    try:
+        import traffic_class
+
+        return traffic_class.current()
+    except Exception:  # noqa: BLE001
+        return "household"
 
 
 _VOICE_ESCALATION_MARKERS = ("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")
@@ -2731,6 +2741,8 @@ def _log_voice_stt_sample(
             # Actual backend that produced this transcript (was hardcoded base.en).
             "model": _stt_backend_var.get() or env_str("ZOE_STT_BACKEND", "moonshine"),
             "moonshine_arch": moonshine_arch(),
+            # P-2: household | harness | probe | ci, server-derived (traffic_class.py) - NOT the body panel_id
+            "traffic_class": _traffic_class_now(),
         }
         if error:
             record["error"] = error[:500]

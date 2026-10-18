@@ -70,7 +70,8 @@ STORE_TIMEOUT_S = 5.0
 SYNTHETIC_PANELS = ("replay", "test", "probe", "ci-", "e2e", "bench")
 ACK_LINE = "Sorry about that. I've made a note of it."
 
-#: counters (process lifetime): observed / enqueued / dropped_off / dropped_full / skipped_synthetic / processed / events /
+#: counters (process lifetime): observed / enqueued / dropped_off / dropped_full / skipped_synthetic / skipped_traffic /
+#: processed / events /
 #: hook_errors / process_errors / store_errors / sweeps / swept
 _COUNTERS: dict[str, int] = {}
 
@@ -84,7 +85,8 @@ def stats() -> dict[str, Any]:
     q = _STATE.get("queue")
     return {"mode": mode(), "queue_depth": q.qsize() if q is not None else 0, "queue_max": queue_max(),
             **{k: _COUNTERS.get(k, 0) for k in ("observed", "enqueued", "dropped_off", "dropped_full",
-                                                 "skipped_synthetic", "processed", "events", "hook_errors",
+                                                 "skipped_synthetic", "skipped_traffic", "processed", "events",
+                                                 "hook_errors",
                                                  "process_errors", "store_errors", "sweeps", "swept")}}
 
 
@@ -275,6 +277,11 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
         if pid.startswith(SYNTHETIC_PANELS) or _synthetic(user_id):
             _count("skipped_synthetic")
             return False
+        if _traffic_class() != "household":
+            # P-2: the struggle capture is the HOUSEHOLD's failure record - a harness/probe/ci turn (server-derived
+            # traffic class, traffic_class.py) is not one, even when it replays as a real member's id.
+            _count("skipped_traffic")
+            return False
         uid = "guest" if speaker_verified is False else str(user_id or "")
         item = (time.time(), str(channel or "chat"), str(user_text or "")[:TEXT_CAP], str(reply or "")[:REPLY_CAP], uid,
                 str(session_id or ""), pid, bool(interrupted))
@@ -289,6 +296,15 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
     except Exception:  # noqa: BLE001 - a detector bug never reaches the turn
         _count("hook_errors")
         return False
+
+
+def _traffic_class() -> str:
+    try:
+        import traffic_class
+
+        return traffic_class.current()
+    except Exception:  # noqa: BLE001
+        return "household"
 
 
 def _panel_from_session(session_id: str) -> str:

@@ -1207,6 +1207,14 @@ async def _save_chat_message(
             meta["off_record"] = True
     except Exception:  # noqa: BLE001 - bookkeeping must never lose a saved turn
         pass
+    # P-2: the turn's traffic class (household | harness | probe | ci), server-derived (traffic_class.py), so a
+    # reader of this table can tell the household's turns from the harness that was 97% of them (2026-10-19).
+    try:
+        import traffic_class
+
+        meta["traffic_class"] = traffic_class.current()
+    except Exception:  # noqa: BLE001 - bookkeeping must never lose a saved turn
+        pass
     metadata = json.dumps(meta) if meta else None
     # Use the context-managed pool acquire (deterministic release). The bare
     # `async for db in get_db(): ... break` form leaves the generator suspended
@@ -3211,7 +3219,18 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
     msg_id = uuid.uuid4().hex[:12]
     role = body.get("role", "user")
     content = body.get("content", "")
-    metadata = json.dumps(body.get("metadata")) if body.get("metadata") else None
+    client_meta = body.get("metadata")
+    if isinstance(client_meta, dict):
+        # The traffic class is the SERVER's (traffic_class.py): a client cannot claim one, household or not.
+        client_meta = dict(client_meta)
+        client_meta.pop("traffic_class", None)
+        try:
+            import traffic_class
+
+            client_meta["traffic_class"] = traffic_class.current()
+        except Exception:  # noqa: BLE001
+            pass
+    metadata = json.dumps(client_meta) if client_meta else None
     # get_db_ctx, not `async for db in get_db()`: exiting the generator
     # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
     async with get_db_ctx() as db:
