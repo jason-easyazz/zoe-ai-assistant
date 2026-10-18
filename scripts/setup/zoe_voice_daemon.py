@@ -624,10 +624,13 @@ def _make_platform_backend(name: str):
 
 PANEL_PLATFORM = _resolve_panel_platform(os.environ.get("PANEL_PLATFORM"), platform.system())
 _PLATFORM = _make_platform_backend(PANEL_PLATFORM)
-# The health server also serves an unauthenticated POST /activate (it starts a
-# recording). Bound to every interface on the Pi's home LAN it is accepted; the
-# Mac backend defaults to loopback, because a laptop leaves the house.
+# The health server also serves POST /activate (it starts a recording) and POST /enroll/cancel. The Pi binds every
+# interface (GET /health is read from the Jetson), so those POSTs answer only a loopback peer with a loopback Host and the
+# Zoe page's Origin (_activate_request_allowed, 2026-10-18); the Mac backend also defaults to loopback, because a laptop
+# leaves the house.
 HEALTH_BIND = os.environ.get("HEALTH_BIND", _PLATFORM.default_health_bind)
+if os.environ.get("ACTIVATE_GUARD", "on").strip().lower() == "off" and PANEL_PLATFORM != "mac":
+    log.warning("ACTIVATE_GUARD=off: POST /activate and /enroll/cancel answer ANY caller that reaches port %s", os.environ.get("HEALTH_PORT", "7777"))
 if PANEL_PLATFORM != "pi":
     log.info("Platform backend: %s", PANEL_PLATFORM)
 # After a voice cycle or an announcement, ignore wake scores for this long.
@@ -4418,17 +4421,29 @@ _daemon_started_at = time.time()
 _orb_activate_event = threading.Event()
 
 
-def _activate_request_allowed(host_header: "str | None", origin_header: "str | None") -> bool:
-    """May this request start a recording via POST /activate?
+def _peer_is_loopback(peer: "str | None") -> bool:
+    """The TCP peer is this machine (127.0.0.0/8, ::1, or an IPv4-mapped loopback)."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(str(peer or "").strip())
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return bool((mapped or ip).is_loopback)
 
-    Pi: always (byte-identical to before; the panel's LAN is trusted). Mac: the
-    daemon listens on loopback, but ANY web page can POST there (the touch page does
-    exactly that, mode:no-cors), and a rebinding page can reach it under its own
-    name. So require a loopback Host, and, when the browser sent an Origin, the
-    configured ZOE_URL origin. No Origin (curl, the shell) is allowed: a page cannot
-    omit it on a cross-origin POST."""
-    if PANEL_PLATFORM != "mac":
+
+def _activate_request_allowed(host_header: "str | None", origin_header: "str | None", peer: "str | None") -> bool:
+    """May this request POST /activate (starts a recording) or /enroll/cancel? Only the kiosk browser on THIS machine may.
+
+    * a loopback TCP peer - the check a LAN device cannot forge (the Pi binds every interface for GET /health; before
+      2026-10-18 any device on its Wi-Fi could start a recording sent to Zoe with the panel's token);
+    * a loopback ``Host`` (a DNS-rebinding page reaches loopback under its own name);
+    * an ``Origin`` that is absent (a page cannot omit it cross-origin) or ``ZOE_URL``'s / in ``ACTIVATE_ALLOWED_ORIGINS``.
+    No shared secret: the kiosk page is served to every browser. ``ACTIVATE_GUARD=off`` = the old Pi behaviour (logged)."""
+    if PANEL_PLATFORM != "mac" and os.environ.get("ACTIVATE_GUARD", "on").strip().lower() == "off":
         return True
+    if not _peer_is_loopback(peer):
+        return False
     from urllib.parse import urlsplit
     host = (host_header or "").strip().lower()
     if host.startswith("["):
@@ -4441,9 +4456,14 @@ def _activate_request_allowed(host_header: "str | None", origin_header: "str | N
         return False
     if origin_header is None:
         return True
-    want = urlsplit(ZOE_URL)
     got = urlsplit(origin_header.strip())
-    return bool(want.scheme and want.netloc and (got.scheme, got.netloc.lower()) == (want.scheme, want.netloc.lower()))
+    got_key = (got.scheme, got.netloc.lower())
+    allowed = [ZOE_URL] + [o for o in os.environ.get("ACTIVATE_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+    for candidate in allowed:
+        want = urlsplit(candidate.strip())
+        if want.scheme and want.netloc and got_key == (want.scheme, want.netloc.lower()):
+            return True
+    return False
 
 
 def _health_payload() -> dict:
@@ -4482,7 +4502,9 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         """Handle orb-tap activation from the touch UI (POST /activate)."""
         if self.path == "/activate":
-            if not _activate_request_allowed(self.headers.get("Host"), self.headers.get("Origin")):
+            if not _activate_request_allowed(self.headers.get("Host"), self.headers.get("Origin"), self.client_address[0]):
+                log.warning("%s refused: peer=%s host=%r origin=%r", self.path, self.client_address[0],
+                            (self.headers.get("Host") or "")[:60], (self.headers.get("Origin") or "")[:80])
                 self.send_response(403)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -4495,8 +4517,10 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path == "/enroll/cancel":
-            # A tap on the panel's "stop" while enrolment mode is running (same trust as /activate: the panel's own LAN).
-            if not _activate_request_allowed(self.headers.get("Host"), self.headers.get("Origin")):
+            # A tap on the panel's "stop" while enrolment mode is running (same guard as /activate: the kiosk on this machine).
+            if not _activate_request_allowed(self.headers.get("Host"), self.headers.get("Origin"), self.client_address[0]):
+                log.warning("%s refused: peer=%s host=%r origin=%r", self.path, self.client_address[0],
+                            (self.headers.get("Host") or "")[:60], (self.headers.get("Origin") or "")[:80])
                 self.send_response(403)
                 self.send_header("Content-Length", "0")
                 self.end_headers()

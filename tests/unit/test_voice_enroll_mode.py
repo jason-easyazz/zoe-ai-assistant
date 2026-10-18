@@ -501,7 +501,7 @@ def test_an_offer_opens_a_listening_window_but_plain_speech_does_not(daemon, mon
 
 
 def test_a_cancel_tap_reaches_the_running_enrolment(daemon):
-    assert daemon._activate_request_allowed(None, None) in (True, False)
+    assert daemon._activate_request_allowed("localhost:7777", None, "127.0.0.1") is True   # the kiosk on the box
     daemon._enroll_cancel.set()
     assert daemon._enroll_cancel.is_set()
 

@@ -194,10 +194,17 @@ def _wire(monkeypatch, store: _PanelStore, *, skybridge_handles: bool = True):
     return seen
 
 
+def _pin_replay(member):
+    """What ``panel_auth.submit_pin`` passes on a correct PIN: the member in the payload AND the internal caller (the only
+    caller whose ``identified_user_id`` counts - a device's or a session's payload field is ignored, 2026-10-18)."""
+    return {"identified_user_id": member, "_caller": {"source": "pin_resume", "panel_id": PANEL, "user_id": member}}
+
+
 async def _turn(seen, text="what's on my calendar", **payload):
     # No session_id: the Pi daemon never sends one, so the panel's voice session (and its binding slot) is the server's.
+    caller = payload.pop("_caller", None) or dict(DEVICE)
     body = {"text": text, "panel_id": PANEL, **payload}
-    resp = await voice_command(body, caller=dict(DEVICE), stream=False, db=object())
+    resp = await voice_command(body, caller=caller, stream=False, db=object())
     if seen["spawned"]:
         await asyncio.gather(*seen["spawned"], return_exceptions=True)
         seen["spawned"].clear()
@@ -374,7 +381,7 @@ async def test_pin_sign_in_then_voice_is_the_member_within_its_session(monkeypat
         assert _last(seen, "skybridge_user") == ALICE
     assert store.heartbeats == []
     # The replayed turn after a correct PIN names its member itself (panel_auth.submit_pin).
-    await _turn(seen, identified_user_id=ALICE)
+    await _turn(seen, **_pin_replay(ALICE))
     assert _last(seen, "skybridge_user") == ALICE
     assert [h[:2] for h in store.heartbeats] == [(PANEL, ALICE)]
 
@@ -536,7 +543,7 @@ async def test_the_members_own_identification_extends_their_session(monkeypatch,
     if how == "accepted_claim":
         await _turn(seen, voice_user_id=ALICE, voice_score=0.99)
     else:
-        await _turn(seen, identified_user_id=ALICE)
+        await _turn(seen, **_pin_replay(ALICE))
 
     assert [h[:2] for h in store.heartbeats] == [(PANEL, ALICE)]
 

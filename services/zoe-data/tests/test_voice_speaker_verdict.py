@@ -138,9 +138,19 @@ async def test_a_claim_without_consent_is_unverified(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_turn_that_names_its_own_speaker_reports_no_verdict(monkeypatch):
-    """`identified_user_id` (a legacy / bridge path) is the caller's assertion, not the gate's."""
-    got = await _turn(monkeypatch, {"identified_user_id": "casey", "speaker": {"verified": False}})
+    """The PIN replay (`panel_auth.submit_pin`, caller `pin_resume`) names its member itself: the PIN decided, not the gate."""
+    got = await _turn(monkeypatch, {"identified_user_id": "casey", "speaker": {"verified": False}},
+                      caller={"source": "pin_resume", "panel_id": PANEL_ID, "user_id": "casey"})
     assert got["speaker_verified"] is None
+    assert got["user"] == "casey"
+
+
+@pytest.mark.asyncio
+async def test_a_device_payload_cannot_name_its_own_speaker(monkeypatch):
+    """2026-10-18: over HTTP `identified_user_id` is a raw payload field (no daemon sends it). It is ignored, so the
+    daemon's own `verified: false` stands and the turn is not the named member's."""
+    got = await _turn(monkeypatch, {"identified_user_id": "casey", "speaker": {"verified": False}})
+    assert got["speaker_verified"] is False
 
 
 @pytest.mark.asyncio
