@@ -18,7 +18,7 @@ pytestmark = pytest.mark.ci_safe
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIM = ROOT / "scripts" / "lib" / "node_listen_host.mjs"
-DROPINS = [ROOT / "scripts" / "setup" / "systemd" / f"{u}.service.d" / "60-loopback.conf"
+DROPINS = [ROOT / "scripts" / "setup" / "systemd" / f"{u}.service.d" / "zoe-loopback.conf"
            for u in ("flue-zoe-brain-2x", "flue-zoe-telegram")]
 NODE = shutil.which("node")
 
@@ -88,5 +88,6 @@ def test_a_unix_socket_listen_is_untouched(tmp_path):
 def test_the_dropins_preload_the_shim_onto_loopback(dropin):
     text = dropin.read_text()
     assert "Environment=ZOE_LISTEN_HOST=127.0.0.1" in text
-    assert "Environment=NODE_OPTIONS=--import=%h/assistant/scripts/lib/node_listen_host.mjs" in text
+    opts = [ln for ln in text.splitlines() if ln.startswith("Environment=NODE_OPTIONS=")]
+    assert len(opts) == 1 and "--import=%h/assistant/scripts/lib/node_listen_host.mjs" in opts[0]
     assert "ExecStart" not in text            # a drop-in only adds the environment; the unit's own command stays

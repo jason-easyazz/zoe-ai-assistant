@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-717 flags; 667 not documented in `.env.example`.
+719 flags; 669 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -39,6 +39,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ANNOUNCE_POLL_S` | `'5.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_ANNOUNCE_STRICT_PANEL` | `''` | no | yes | `services/zoe-data/voice_announce.py` |
 | `ZOE_ANNOUNCE_TTL_S` | `''` | no | yes | `services/zoe-data/voice_announce.py` |
+| `ZOE_API` | `'https://192.168.1.218'` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
 | `ZOE_APP_LOG` | `dynamic` | no | NO | `scripts/perf/user_model_ab.py` |
 | `ZOE_ASK_TO_REMEMBER` | `True` | yes | NO | `services/zoe-data/ask_to_remember.py` |
 | `ZOE_ASK_WHEN_AMBIGUOUS` | `-` | yes | NO | `services/zoe-data/ask_when_ambiguous.py` |
@@ -142,6 +143,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DEFAULT_MEDIA_PLAYER` | `'media_player.all'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DELIVERY_LEDGER` | `''` | yes | NO | `services/zoe-data/proactive/lines.py` |
 | `ZOE_DEPLOY_STATE_DIR` | `-` | yes | NO | `services/zoe-data/change_notices.py` |
+| `ZOE_DEVICE_ID` | `(required)` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
 | `ZOE_DEVICE_TOKEN` | `-` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_DEVICE_TOKEN_BINDS_MEMBER` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_DEVICE_TOKEN_TTL_DAYS` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
