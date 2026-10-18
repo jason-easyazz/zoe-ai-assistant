@@ -120,6 +120,17 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
     except Exception as exc:  # noqa: BLE001
         log.debug("morning_checkin: night items load failed (non-fatal): %s", exc)
 
+    # The pendant's health, if it needs a word (no sync for 36 h, nearly full, lost audio, low battery): at most ONE line, in the member's
+    # own brief, mentioned naturally on their first turn. [] with ZOE_OMI_HEALTH off, no pendant, or nothing wrong; never speech of its own.
+    try:
+        import omi_health
+
+        pendant = await omi_health.morning_items(user_id)
+        if pendant:
+            ctx["pendant_items"] = pendant
+    except Exception as exc:  # noqa: BLE001
+        log.debug("morning_checkin: pendant health load failed (non-fatal): %s", exc)
+
     # Portrait snippet (first 200 chars — enough for personal note)
     try:
         async with db.execute(
