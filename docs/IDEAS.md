@@ -33,6 +33,10 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 
 ## 💡 Ideas
 
+### Household communications: PA, intercom, messages, calls (in the house and between households), and the one Zoe app — 🔬 exploring
+- **Core:** calls, messages, PA announcements across panels, video calls and calls to other panels outside the house, with the411.life as the account, relay and backup home; owner, 2026-10-18. The call and video server from the early days was **LiveKit** (still in compose, on demand for the Ask card) beside a Matrix router that never had a homeserver; "we looked at Matrix and Element." Owner idea the same day: a Zoe phone app that combines pieces of the Omi app (pendant sync, day review, people tagging) with Matrix and Element (messages, calls).
+- **Record + recommendation:** [`architecture-deep-dive-2026-10-18.md`](research/architecture-deep-dive-2026-10-18.md) section 8: a hybrid (native Opus-over-WebSocket PA and push-to-talk on the LAN; Matrix on the411 with Element X and Element Call plus an E2EE LiveKit SFU for everything between people; restic to a rest-server on the411 for backups; the frp relay stays the panel path), phases P0 to P3, two decision gates (the411 RAM, a one-week ringing test), six owner decisions. Tracked in [PLANS.md](PLANS.md).
+
 ### Zoe as an action agent, at the level of Wajo's "Fo" — 🔬 exploring
 - **Core:** Zoe owns everyday tasks end to end — emails as herself, books online, phones businesses, pays with single-use capped cards, escalates to the owner when stuck, learns from corrections. Source: [wajo.ai](https://wajo.ai); owner, 2026-10-12: "be great to get zoe to this level."
 - **Record + plan:** [`docs/research/zoe-action-agent-2026-10.md`](research/zoe-action-agent-2026-10.md); tracked in [PLANS.md](PLANS.md). The piece to borrow first is Fo's benchmark shape (a simulated world graded world-state first), not its feature list.
