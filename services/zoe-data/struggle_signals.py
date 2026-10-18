@@ -453,6 +453,18 @@ def domains(t: Turn) -> set:
     return out
 
 
+def resolved_route(t: Turn) -> str:
+    """The fast domain that SUCCESSFULLY served ``t`` ('' = the brain answered, a can't-do / error reply, a cut-off reply, or no fast domain
+    is evidenced). This is the label a failed turn takes from the follow-up that worked (Phase 2: ``struggle_proposals``). Pure."""
+    if t.path != PATH_FAST or t.interrupted or cant_do(t.reply):
+        return ""
+    served = reply_domain(t.reply)
+    if served in FAST_DOMAINS:
+        return served
+    dom = t.two_stage_domain if t.two_stage_domain not in _NON_DOMAINS else t.domain()
+    return dom if dom in FAST_DOMAINS and dom in domains(t) else ""
+
+
 def _pair_fix(prev: Turn) -> str:
     """Why the previous turn failed, from how it was served."""
     if prev.path == PATH_BRAIN and prev.domain() in FAST_DOMAINS:

@@ -332,16 +332,18 @@ class NightCfg(bk.Cfg):
     busy_units: tuple = ("zoe-training.service", "zoe-backup.service", "zoe-backup-verify.service", "zoe-memory-export.service", "zoe-dreaming.service")
     busy_wait_max_min: float = 20.0
     busy_poll_s: float = 30.0
-    jobs: tuple = ("digest", "dreaming", "night_mind", "omi_day_review")
+    jobs: tuple = ("digest", "dreaming", "night_mind", "struggle_proposals", "omi_day_review")
     night_mind_cmd: str = os.environ.get("NIGHT_MIND_CMD", "")
     #: the night-mind pass's standalone entry point (its contract: the docstring of ``zoe-night-mind.py`` on feat/night-mind-v1-reflection-pass): used by default as soon as the file exists
     night_mind_script: Path = REPO / "scripts" / "maintenance" / "zoe-night-mind.py"
     #: the pendant day review's standalone entry point (services/zoe-data/omi_day_review.py): the window's LAST, best-effort job
     omi_day_review_script: Path = REPO / "scripts" / "maintenance" / "zoe-omi-day-review.py"
+    #: the struggle-proposals pass (services/zoe-data/struggle_proposals.py): clusters the week's struggle_events into proposals, the 12B rewords the counts
+    struggle_proposals_script: Path = REPO / "scripts" / "maintenance" / "zoe-struggle-proposals.py"
     fallback_4b: bool = True
     py: str = sys.executable
     trial: bool = False
-    job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "omi_day_review": 1200.0, "compaction": 900.0})
+    job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "struggle_proposals": 480.0, "omi_day_review": 1200.0, "compaction": 900.0})
     metrics_poll_s: float = 5.0
     live_health_port: int = 11434
 
@@ -592,6 +594,11 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
         jobs["night_mind"] = JobSpec("night_mind", argv, t["night_mind"])
     else:
         jobs["night_mind"] = JobSpec("night_mind", [], t["night_mind"], skip_reason=f"{cfg.night_mind_script.name} not found (night-mind v1 is not merged); set --night-mind-cmd / NIGHT_MIND_CMD to wire another entry point")
+    # The struggle proposals (services/zoe-data/struggle_proposals.py): code clusters the week's struggle_events, the 12B only rewords the counts as one
+    # sentence per proposal. Best-effort and quick (a no-op while ZOE_STRUGGLE_PROPOSALS is off); no 4B fallback - tomorrow night recomputes it all.
+    spr = [cfg.py, str(cfg.struggle_proposals_script), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens)] + (["--decode-tok-s", tps] if decode_tps else []) + (["--prefill-tok-s", pps] if prefill_tps else [])
+    jobs["struggle_proposals"] = JobSpec("struggle_proposals", spr if cfg.struggle_proposals_script.exists() else [], t.get("struggle_proposals", 480.0), best_effort=True,
+                                         skip_reason="" if cfg.struggle_proposals_script.exists() else f"{cfg.struggle_proposals_script.name} not found")
     # The pendant day review (services/zoe-data/omi_day_review.py): LAST, only with the time the night has left (exec_job clips its
     # timeout to the window and skips it under 2 min). A no-op while ZOE_OMI_DAY_REVIEW is off; no 4B fallback here - zoe-data's own
     # daytime lane picks up a day the night did not finish, only when the panel is idle.
@@ -2264,7 +2271,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--kv", choices=KV_OPTIONS, default=None, help="pin the KV cache type (default: q8_0, the measured winner: q4_0 OOMs at -ngl 38; NIGHT_KV)")
     ap.add_argument("--cap-min", type=float, default=None, help="hard cap in minutes (default 65; never past --end-by)")
     ap.add_argument("--end-by", default=None, help="HH:MM local; the window must be over (zoe-data back) by then (default 03:55)")
-    ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind,omi_day_review)")
+    ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind,struggle_proposals,omi_day_review)")
     ap.add_argument("--night-mind-cmd", default=None, help="the night-mind pass command line; {model_url} / {model_url_v1} are the 12B's base URL")
     ap.add_argument("--no-fallback", action="store_true", help="do not run a job on the live 4B after the restore when it did not finish on the 12B")
     ap.add_argument("--binary", default=None, help="llama-server binary other than the default b11194 build (flags are translated for any build but the parked unit's b9733)")
@@ -2344,9 +2351,9 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
         cfg.report_dir = args.report_dir
     if args.night_dir:
         cfg.night_dir = args.night_dir
-    unknown = [j for j in cfg.jobs if j not in ("digest", "dreaming", "night_mind", "omi_day_review")]
+    unknown = [j for j in cfg.jobs if j not in ("digest", "dreaming", "night_mind", "struggle_proposals", "omi_day_review")]
     if unknown:
-        raise Refused(f"unknown job(s) {', '.join(unknown)} (digest, dreaming, night_mind, omi_day_review)")
+        raise Refused(f"unknown job(s) {', '.join(unknown)} (digest, dreaming, night_mind, struggle_proposals, omi_day_review)")
     return cfg
 
 
