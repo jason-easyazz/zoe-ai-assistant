@@ -248,6 +248,10 @@ class FloorBreach(Exception):
     """A sweep config took the box under the MemAvailable floor: that config is stopped and recorded; the sweep goes on."""
 
 
+class Noop(Exception):
+    """A quiet night: no member has new turns (and no pendant day waits) since the last window that did its work. Nothing is stopped, the 12B is not loaded; the report says ``noop``."""
+
+
 class LoadFailed(Aborted):
     """The 12B never became healthy (cudaMalloc / NvMap, or the process died): the window ends, restores, and counts it (``load_failures.json``)."""
 
@@ -339,6 +343,15 @@ class NightCfg(bk.Cfg):
     #: the pendant day review's standalone entry point (services/zoe-data/omi_day_review.py): the window's LAST, best-effort job
     omi_day_review_script: Path = REPO / "scripts" / "maintenance" / "zoe-omi-day-review.py"
     fallback_4b: bool = True
+    #: a night with nothing new to think about (no member with a turn since the last window that did its work) skips the 12B entirely and reports ``noop`` (``--no-quiet-skip`` disables it)
+    skip_when_quiet: bool = True
+    #: the read-only SQL precheck behind that skip (counts only; fails OPEN: any doubt runs the window)
+    precheck_script: Path = REPO / "scripts" / "night" / "jobs" / "night_precheck.py"
+    #: ``--mode`` handed to zoe-night-mind.py. Its CLI default is enforce (the night has run in enforce since the window was installed); passing it explicitly means a changed CLI default can never silently change the night
+    night_mind_mode: str = "enforce"
+    #: a night whose steady 12B decode falls below this fraction of the trailing median of earlier nights writes a DECODE SLOW block into the morning ALARM file (never spoken)
+    decode_drop_ratio: float = 0.5
+    decode_history_nights: int = 7
     py: str = sys.executable
     trial: bool = False
     job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "omi_day_review": 1200.0, "compaction": 900.0})
@@ -588,7 +601,7 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
         cmd = (cfg.night_mind_cmd.replace("{model_url_v1}", base + "/v1").replace("{model_url}", base).replace("{ctx_tokens}", str(ctx_tokens)).replace("{decode_tps}", tps).replace("{prefill_tps}", pps))
         jobs["night_mind"] = JobSpec("night_mind", shlex.split(cmd), t["night_mind"])
     elif cfg.night_mind_script.exists():
-        argv = [cfg.py, str(cfg.night_mind_script), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens), "--all-members"] + (["--decode-tok-s", tps] if decode_tps else []) + (["--prefill-tok-s", pps] if prefill_tps else [])
+        argv = [cfg.py, str(cfg.night_mind_script), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens), "--all-members", "--mode", cfg.night_mind_mode] + (["--decode-tok-s", tps] if decode_tps else []) + (["--prefill-tok-s", pps] if prefill_tps else [])
         jobs["night_mind"] = JobSpec("night_mind", argv, t["night_mind"])
     else:
         jobs["night_mind"] = JobSpec("night_mind", [], t["night_mind"], skip_reason=f"{cfg.night_mind_script.name} not found (night-mind v1 is not merged); set --night-mind-cmd / NIGHT_MIND_CMD to wire another entry point")
@@ -755,7 +768,7 @@ def summary_line(rec: "dict[str, Any]") -> str:
     a = rec.get("arith") or {}
     outcome = re.sub(r"\s+", " ", str(rec.get("outcome", "?")))[:90]
     return (f"NIGHT_WINDOW_SUMMARY run={rec.get('run_id', '?')} outcome={outcome!r} exit={rec.get('exit', '?')} min={rec.get('elapsed_min', '?')}/{rec.get('cap_min', '?')} "
-            f"levers={a.get('chosen', '-')!r} decode_tps={sp.get('decode_tps', '-')} jobs={jobs} restore={str(rec.get('restore_status') or '-')[:60]!r}")
+            f"levers={a.get('chosen', '-')!r} decode_tps={sp.get('decode_tps', '-')}{' DECODE_SLOW' if rec.get('decode_alert') else ''} jobs={jobs} restore={str(rec.get('restore_status') or '-')[:60]!r}")
 
 
 def latest_night_summary(report_dir: Path) -> str:
@@ -962,6 +975,11 @@ class NightWindow(bk.Window):
         if cfg.night_only and not (cfg.night_hours[0] <= nm <= cfg.night_hours[1]):
             self.fallback_allowed = False
             self.refuse(f"it is {now:%H:%M}: a night window starts between 01:30 and 03:40 (a manual run at another hour needs --anytime: Zoe would go silent while the household is awake)")
+        quiet = self.quiet_night()
+        if quiet:
+            if not self.dry:
+                raise Noop(quiet)
+            self.log("DRY-RUN: a real run started now would be a NOOP (nothing stopped, no 12B): " + quiet)
         self.end_by_epoch = None
         self.cap_min = self.compute_cap()                                       # fixes the absolute deadline for this run
         need_min = min(30.0 if cfg.exploratory else 35.0, cfg.cap_min)         # an operator's own smaller --cap-min is not the end-by squeeze this check is about
@@ -1906,6 +1924,98 @@ class NightWindow(bk.Window):
             self.alarm(list(self.stopped) or [BRAIN])
             return False
 
+    # ── a quiet night, and a slow one ──
+    def night_reports(self) -> "list[dict[str, Any]]":
+        """Every REAL night report (mode ``night``) in the report dir, oldest first, each with ``started`` parsed to a datetime. Unreadable files are skipped; never raises."""
+        out: "list[dict[str, Any]]" = []
+        try:
+            files = sorted(self.cfg.report_dir.glob("*.json"))
+        except OSError:
+            return out
+        for f in files:
+            try:
+                d = json.loads(f.read_text())
+                started = dt.datetime.fromisoformat(str(d.get("started")))
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+            if isinstance(d, dict) and d.get("mode") == "night" and d.get("run_id") != self.run_id:
+                out.append({**d, "_started": started})
+        return sorted(out, key=lambda d: d["_started"])
+
+    def last_processed_start(self) -> "Optional[dt.datetime]":
+        """When the newest night that DID its work (outcome ``ok`` or ``noop``, exit 0) started: a refused, aborted or failed night processed nothing, so the turns it skipped still count as new."""
+        done = [d for d in self.night_reports() if d.get("outcome") in ("ok", "noop") and d.get("exit") == 0]
+        return done[-1]["_started"] if done else None
+
+    def quiet_night(self) -> str:
+        """'' when the window should run; else why it should not (no member has a new turn and no pendant day waits since the last window that did its work).
+        Fails OPEN: no earlier report, a missing or failing precheck, unparsable output, or any doubt at all runs the window exactly as before."""
+        cfg = self.cfg
+        if not (cfg.skip_when_quiet and cfg.night_only and self.mode == "night" and not cfg.exploratory):
+            return ""
+        since = self.last_processed_start()
+        if since is None:
+            self.rec["notes"].append("quiet-night precheck skipped: no earlier night report to measure 'new turns' against")
+            return ""
+        if not cfg.precheck_script.exists():
+            self.rec["notes"].append(f"quiet-night precheck skipped: {cfg.precheck_script.name} not found")
+            return ""
+        argv = [cfg.py, str(cfg.precheck_script), "--since", since.astimezone(dt.timezone.utc).isoformat(timespec="seconds")]
+        if "omi_day_review" in cfg.jobs:
+            argv.append("--omi")
+        res = self.host.run(argv, timeout=120.0, mutating=False)
+        line = next((ln for ln in res.out.splitlines() if ln.startswith("NIGHT_PRECHECK ")), "")
+        try:
+            got = json.loads(line[len("NIGHT_PRECHECK "):])
+            turns, omi = int(got["members_with_new_turns"]), got.get("omi_members")
+            if res.rc != 0 or turns < 0 or ("--omi" in argv and omi is None):
+                raise ValueError("incomplete")
+        except (ValueError, KeyError, TypeError):
+            self.rec["notes"].append(f"quiet-night precheck gave no usable answer (exit {res.rc}): running the window")
+            return ""
+        self.rec["precheck"] = {"since": since.isoformat(timespec="seconds"), "members_with_new_turns": turns, "omi_members": omi}
+        if turns or omi:
+            return ""
+        return f"no member has new turns since the last window ({since:%Y-%m-%d %H:%M}) and no pendant day waits for review"
+
+    def decode_history(self) -> "list[float]":
+        """The steady 12B decode (tok/s) of the last ``decode_history_nights`` earlier real nights that measured one, newest last."""
+        speeds: "list[float]" = []
+        for d in self.night_reports():
+            v = ((d.get("speed") or {}).get("12B") or {}).get("decode_tps")
+            if isinstance(v, (int, float)) and v > 0:
+                speeds.append(float(v))
+        return speeds[-self.cfg.decode_history_nights:]
+
+    def decode_drop_alarm(self) -> None:
+        """Tonight's steady decode under ``decode_drop_ratio`` of the trailing median (needs 3 earlier nights) is a sick night (2026-10-18 decoded 1.86 tok/s against a ~5.9 median and still reported ok):
+        append a DECODE SLOW block to the morning ALARM file (the window's existing notification path; nothing is ever spoken). Never raises."""
+        cfg = self.cfg
+        try:
+            if self.dry or self.mode != "night" or cfg.exploratory:
+                return
+            now = (self.speed or {}).get("decode_tps")
+            hist = self.decode_history()
+            if not isinstance(now, (int, float)) or now <= 0 or len(hist) < 3:
+                return
+            ordered = sorted(hist)
+            mid = len(ordered) // 2
+            median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
+            if now >= median * cfg.decode_drop_ratio:
+                return
+            msg = f"12B steady decode {now:g} tok/s tonight against a median of {median:.2f} over the last {len(hist)} nights (alert below {cfg.decode_drop_ratio:.0%})"
+            lines = ["*** DECODE SLOW: the 12B is much slower than usual ***", f"run {self.run_id} ({self.started_iso}): {msg}",
+                     "The jobs' time budgets scaled to the slow rate; a night mind that generated nothing on this run is not a quiet day. Look for thermal throttling, a power-mode change, a leftover process or a fragmented-RAM load (the run log, docs/knowledge/night-window.md).",
+                     "This file is removed by the next window or by --restore-only that finishes cleanly."]
+            self.log("DECODE SLOW: " + msg)
+            self.rec["decode_alert"] = msg
+            cfg.report_dir.mkdir(parents=True, exist_ok=True)
+            path = cfg.report_dir / "ALARM"
+            prior = path.read_text() + "\n" if path.exists() else ""
+            path.write_text(prior + "\n".join(lines) + "\n")
+        except Exception as exc:  # noqa: BLE001 - an alert must never fail a night
+            self.log(f"decode-drop alert failed: {type(exc).__name__}: {exc}")
+
     def digest_loop_missed(self) -> bool:
         """True when zoe-data was down across 03:00 (so its in-process digest loop sleeps until tomorrow): this window's digest, or its fallback, is then the night's only one."""
         t0 = self.stop_epoch.get(ZOE_DATA)
@@ -1980,6 +2090,11 @@ class NightWindow(bk.Window):
                     self.guard()
                     self.run_jobs()
             self.outcome = "ok"
+        except Noop as exc:
+            self.event(f"NOOP: {exc}")
+            self.outcome = "noop"
+            self.rec["noop"] = str(exc)[:300]
+            self.rec["notes"].append(f"noop: {exc}; nothing was stopped and the 12B was not loaded (the dreaming pass still runs on the live 4B, as after a refusal)")
         except Refused as exc:
             self.event(f"REFUSED: {exc}")
             self.outcome, rc = f"refused: {exc}", EXIT_REFUSED
@@ -2003,6 +2118,7 @@ class NightWindow(bk.Window):
                     self.restore_ok = True                          # nothing was stopped, the lock is ours and the box is idle: the fallbacks below may run
             if not restored:
                 rc = EXIT_RESTORE_FAILED
+            self.decode_drop_alarm()                        # also after the restore, for the same reason
             self.night_lost_alarm()                         # AFTER the restore: a clean restore deletes a stale ALARM, and this one must survive until the morning
             try:
                 self.after_restore()
@@ -2266,6 +2382,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--end-by", default=None, help="HH:MM local; the window must be over (zoe-data back) by then (default 03:55)")
     ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind,omi_day_review)")
     ap.add_argument("--night-mind-cmd", default=None, help="the night-mind pass command line; {model_url} / {model_url_v1} are the 12B's base URL")
+    ap.add_argument("--night-mind-mode", choices=("shadow", "enforce"), default=None, help="--mode handed to zoe-night-mind.py (default enforce: what the night has always run; shadow = calls and checks, nothing written)")
+    ap.add_argument("--no-quiet-skip", action="store_true", help="run the window even when no member has new turns since the last window (default: a quiet night is a noop that loads nothing)")
     ap.add_argument("--no-fallback", action="store_true", help="do not run a job on the live 4B after the restore when it did not finish on the 12B")
     ap.add_argument("--binary", default=None, help="llama-server binary other than the default b11194 build (flags are translated for any build but the parked unit's b9733)")
     ap.add_argument("--fit-off", action="store_true", help="add --fit off to the 12B command (the default since the 2026-10-09 sweep; see NightCfg.fit_off)")
@@ -2327,6 +2445,8 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
     if args.night_mind_cmd is not None:
         cfg.night_mind_cmd = args.night_mind_cmd
     cfg.fallback_4b = not args.no_fallback and not cfg.exploratory
+    cfg.skip_when_quiet = cfg.skip_when_quiet and not args.no_quiet_skip
+    cfg.night_mind_mode = args.night_mind_mode or cfg.night_mind_mode
     cfg.binary = args.binary or cfg.binary
     cfg.fit_off = (cfg.fit_off or args.fit_off) and not args.fit_default
     cfg.mlock = (cfg.mlock or args.mlock) and not args.no_mlock

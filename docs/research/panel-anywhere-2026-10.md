@@ -5,7 +5,7 @@ date: 2026-10-16
 status: research-only; nothing built, nothing changed on any live system. The design is docs/architecture/panel-anywhere.md.
 description: Research record behind the panel-anywhere design. It covers the Nabu Casa remote-UI pattern read from source (snitun 0.47.0, hass-nabucasa 2.7.0), the adopt candidates for a shared multi-tenant SNI-passthrough relay (frp, snitun, sish, rathole, zrok/OpenZiti, Pangolin/Newt, NetBird, inlets, piko, boringproxy, Cloudflare Tunnel, Headscale per household), certificates (ACME DNS-01 through a narrow relay API, TLS-ALPN-01, Let's Encrypt limits, the Public Suffix List, a private-use name no public CA issues for), pairing and identity on top of the #2082 device-token kiosk credential, the voice WAN budget through a Sydney relay, and why one relay should carry every inbound need.
 builds_on: docs/architecture/panel-remote-access.md + docs/research/panel-remote-access-2026-10.md (PR #2080, merged; owner-only link over Headscale), services/zoe-data/panel_kiosk_credential.py + routers/panel_kiosk.py (#2082), routers/panel_auth.py, routers/panel_provision.py, routers/ha_control.py
-depends_on: PR #2083 (still open) - scripts/setup/remote-access/headscale/ lands with #2083
+depends_on: PR #2083 was CLOSED unmerged on 2026-10-17 - scripts/setup/remote-access/headscale/ is on branch feature/headscale-bundle, not main (Headscale was removed from the live box 2026-10-18)
 ---
 
 # Panel anywhere: research (2026-10-16)
@@ -371,8 +371,8 @@ RTT + upload bytes / uplink + the first sentence's download.
   shared instance would put every household on one tailnet, and one per household multiplies control servers,
   public names and UDP listeners.
 - It still fits the **operator's own access**: SSH to the operator's boxes and the relay host, an admin path that does
-  not depend on the relay, and the owner's own panel as a stopgap. #2083's bundle (still open; it lands with #2083) is lab-proven (65/65 cells,
-  v0.29.4 pinned) and only needs deploying [verified: PR #2083 description].
+  not depend on the relay, and the owner's own panel as a stopgap. #2083's bundle (the PR was closed unmerged 2026-10-17; the bundle is only on branch `feature/headscale-bundle`, and Headscale was removed 2026-10-18) was lab-proven (65/65 cells,
+  v0.29.4 pinned) [verified: PR #2083 description].
 
 ## 8. One relay for every inbound need
 
