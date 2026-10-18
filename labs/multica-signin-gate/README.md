@@ -54,6 +54,6 @@ Teardown removes every container and the network and fails the run if anything i
 
 ## Record
 
-Not yet run: every attempt on 2026-10-19 (02:12 to 05:15) was refused by the `MemAvailable >= 2000 MB`
-gate (the box sat at 0.9 to 1.98 GB with the brain and Kokoro resident). Run it in a window with RAM
+Not yet run: every attempt on 2026-10-19 (02:12 to 04:52) was refused by the `MemAvailable >= 2000 MB`
+gate or the busy test-lane lock (the box sat at 0.9 to 2.0 GB with the brain and Kokoro resident; 16 jobs queued on the lock). Run it in a window with RAM
 headroom and record the cell table here.
