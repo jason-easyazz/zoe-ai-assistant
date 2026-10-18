@@ -2,7 +2,7 @@
 type: design
 title: Communication preferences and change notices - who hears what Zoe changed, where and when
 date: 2026-10-15
-status: design only; nothing built. Every phase ships flag-dark and is lab-proven before prod.
+status: P1 built 2026-10-18 (flag-dark, ZOE_CHANGE_NOTICES; see docs/knowledge/change-notices.md for what it built and where it differs from section 9); P2-P4 design only. Every phase ships flag-dark and is lab-proven before prod.
 evidence: docs/research/communication-preferences-2026-10.md (field research with sources and tags; survey of Zoe's outbound paths with file:line and the live state)
 builds_on: docs/architecture/zoe-abilities.md (PR #2029 - Flue channels, Apprise, the manifest notify block), docs/architecture/struggle-detector.md, docs/architecture/memories-space.md (5.1 never unprompted), docs/architecture/identity-presence-engine.md (crowded room, roles R9), docs/research/pull-not-push-inbox-2026-10-04.md
 ---
