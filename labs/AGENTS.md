@@ -412,4 +412,4 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   negative controls with today's rights (C cells). Fake dockerd, synthetic secrets;
   touches no host user, sudoers rule, daemon or service. Hand-run via `run.sh`
   (01:35-04:55 refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`,
-  asserts its own teardown). README and `last-result.json` are records.
+  asserts its own teardown). README is a record (its Result section says lab pending: memory).

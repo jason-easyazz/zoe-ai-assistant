@@ -196,7 +196,10 @@ P0-5/P0-6 independently. Nothing above is run by an agent.
 
 One container, no network, systemd 249 as PID 1 (Ubuntu 22.04, the Jetson's own), not `--privileged`. The
 deliverables are installed **verbatim**; three stand-in services carry the real drop-ins on top of base units that
-keep the voice guards. Each stand-in answers `/probe` from **inside its own sandbox**. Results: see the lab README.
+keep the voice guards. Each stand-in answers `/probe` from **inside its own sandbox**. **Status: lab pending
+(memory gate never met on 2026-10-18; one attempt booted but printed no cells, undiagnosed). The cells below are
+the DESIGN of the proof, not a result.** Static checks that did pass: `visudo -c`, `systemd-analyze verify` of the
+proxy unit and the three drop-ins (with a negative control), and the 44 pinning tests. See the lab README.
 
 - **S cells (per service):** its uid, not in `sudo`/`docker`; `sudo -n` fails; raw socket EACCES; zoe-data gets the
   proxy allowlist (MA start 200, create 403, HA exec 403), the others cannot reach the proxy; cannot read the other
