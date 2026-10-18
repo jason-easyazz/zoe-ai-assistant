@@ -67,6 +67,7 @@ _digest_bg_task = None
 _consolidation_bg_task = None
 _runtime_health_task = None
 _zoe_update_bg_task = None
+_loop_lag_task = None
 _skills_observer = None
 _memory_capture_health: dict[str, str] = {"status": "unknown", "detail": "startup pending"}
 
@@ -1106,7 +1107,7 @@ async def _run_router_selftrain() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task
+    global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task, _loop_lag_task
 
     # First thing at startup: without this the root logger has no handler, so
     # every logger.info() in the service is discarded and WARNING+ falls through
@@ -1206,6 +1207,13 @@ async def lifespan(app: FastAPI):
         except Exception as _exc:
             logger.warning("voice_stitch prewarm not started: %s", _exc)
     _zoe_update_bg_task = start_zoe_update_background_tasks()
+    # Event-loop lag gauge (A1): zoe_event_loop_lag_seconds on /metrics + an EVENT_LOOP_LAG warning when a blocking call
+    # holds the single worker. Never breaks startup.
+    try:
+        import event_loop_lag as _event_loop_lag
+        _loop_lag_task = _event_loop_lag.start()
+    except Exception as _lag_exc:  # noqa: BLE001
+        logger.warning("event-loop lag monitor unavailable (non-fatal): %s", _lag_exc)
 
     try:
         from routers.voice_tts import warm_moonshine
@@ -2060,7 +2068,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("zoe-core worker shutdown failed (non-fatal)", exc_info=True)
     for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task,
-                 _consolidation_bg_task, _runtime_health_task):
+                 _consolidation_bg_task, _runtime_health_task, _loop_lag_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -2417,7 +2425,7 @@ async def router_classify(text: str, _: None = Depends(require_internal_token)):
     to influence routing if the service were LAN-exposed."""
     import semantic_router as _sr
     return {"enabled": _sr.is_enabled(), "mode": _sr.mode(),
-            "threshold": _sr.threshold(), **_sr.route(text)}
+            "threshold": _sr.threshold(), **(await asyncio.to_thread(_sr.route, text))}
 
 
 @app.get("/api/settings")

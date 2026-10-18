@@ -231,12 +231,13 @@ async def broadcast_conversation_turn(
     """
     extra = {k: True for k in _CONVERSATION_FLAGS if (flags or {}).get(k)}
     try:
-        from push import broadcaster
+        from push import broadcaster, panel_channel
 
+        channel = panel_channel(panel_id)  # this panel only, never "all" (A11)
         if reply:
-            await broadcaster.broadcast("all", "voice:responding", {
+            await broadcaster.broadcast(channel, "voice:responding", {
                 "panel_id": panel_id, "text": str(reply)[:200], **extra,
             })
-        await broadcaster.broadcast("all", "voice:done", {"panel_id": panel_id, **extra})
+        await broadcaster.broadcast(channel, "voice:done", {"panel_id": panel_id, **extra})
     except Exception as exc:  # the UI push is never allowed to break the turn
         logger.debug("conversation fast-path UI broadcast failed (non-fatal): %s", exc)

@@ -37,6 +37,7 @@ detector) but changes nothing; ``on`` acts. Contract + corpus numbers: docs/know
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -468,13 +469,14 @@ def expert_may_claim(router_decision: Optional[dict]) -> bool:
         return True
 
 
-def route_for(text: str) -> Optional[dict]:
+async def route_for(text: str) -> Optional[dict]:
     """The router's verdict on the SNAPPED words (Skybridge's router veto must judge what will run). None when the router
-    is off or fails - Skybridge then applies no veto, as on any turn without a verdict. Never raises."""
+    is off or fails - Skybridge then applies no veto, as on any turn without a verdict. Off the event loop
+    (``asyncio.to_thread``, A1): the sidecar decode blocks ~400 ms. Never raises."""
     try:
         import semantic_router as _sr
 
-        return _sr.route(text) if _sr.is_enabled() else None
+        return await asyncio.to_thread(_sr.route, text) if _sr.is_enabled() else None
     except Exception:  # noqa: BLE001
         return None
 
