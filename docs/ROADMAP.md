@@ -42,8 +42,8 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
    still off because the flag is not set in zoe-data's environment (confirm with `scripts/maintenance/zoe_ground_truth.sh`). (c) Which shadow-mode features get flipped to enforce, each after its offline A/B: restraint
    `[default ZOE_RESTRAINT=unset]`, the recall gate `[default ZOE_RECALL_GATE=shadow]`, the struggle detector `[default ZOE_STRUGGLE_DETECT=unset]`, the delivery ledger
    `[default ZOE_DELIVERY_LEDGER=unset]` (for the first, third and fourth, unset means the reader runs `shadow`; see `PLANS.md`). Owner: owner. Record: deep dive section 8.5; [`PLANS.md`](PLANS.md) live flag block.
-5. **Landing the roadmap itself.** This file, `live-state.json`, `research/index.md`, the open-problems triage and the contract diet for `services/zoe-data/AGENTS.md`
-   (C1, C3, B10; this PR). Next after it: C2, decide whether to enforce the pace rule (2 to 4 coherent PRs a day) or rewrite it honestly (owner policy). Done already: A8 and
+5. **Landing the roadmap itself.** This file, `live-state.json`, `research/index.md`, and the open-problems triage
+   (C1, C3; this PR). Next after it: C2, decide whether to enforce the pace rule (2 to 4 coherent PRs a day) or rewrite it honestly (owner policy). Done already: A8 and
    C4 (#2107).
 
 ## Next (at most 10)
@@ -66,6 +66,8 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
 **Platform and structure** (deep dive B): [B2 harness out of zoe-data](research/architecture-deep-dive-2026-10-18/lane-C-brain-ops-roadmap.md), B5 tool schemas from one registry, B6 flag registry,
 B7 observability and `turn_id`, B9 ops hygiene (track every live unit, container caps, `.env` reaping), [tech-debt plan](architecture/tech-debt-remediation-plan.md) Wave 4
 (chat split, typed config; plan untouched since July), [desktop UI overhaul](architecture/desktop-ui-overhaul-plan.md) (function-first waves, not started).
+
+**Contract size.** `services/zoe-data/AGENTS.md` size: split it LOSSLESSLY into per-topic child `AGENTS.md` files (moving text verbatim, a mechanical move checked by a line-multiset equality test), not condensation; condensation dropped about 250 binding clauses and could not be proven complete (#2112 review, 8 rounds).
 
 **Household communications** (deep dive D, after the decisions in Now 4): D2 messages and backups on the411, D3 calls panel to phone, D4 household to household, D5 the one Zoe app, D6 Apple-parity pieces.
 Related designs: [panel anywhere](architecture/panel-anywhere.md), [panel remote access](architecture/panel-remote-access.md) (relay lab R1 is flag-dark with listed go-live blockers),
