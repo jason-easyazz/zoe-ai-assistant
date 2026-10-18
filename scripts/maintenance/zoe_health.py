@@ -132,18 +132,32 @@ def transitions(checks: list[Check], state: dict) -> tuple[list[str], dict]:
     return lines, new
 
 
-def send(lines: list[str]) -> None:
-    if not lines or os.environ.get("ZOE_HEALTH_NO_ALERT"):
-        return
+def send(lines: list[str]) -> bool:
+    """True when the lines were delivered (or there was nothing to send)."""
+    if not lines:
+        return True
+    if os.environ.get("ZOE_HEALTH_NO_ALERT"):
+        return True
     try:
         spec = importlib.util.spec_from_file_location("_clw", REPO_ROOT / "scripts" / "maintenance" /
                                                       "zoe_crash_loop_watch.py")
         mod = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(mod)
-        mod._telegram("Zoe health: " + "; ".join(lines))
+        return bool(mod._telegram("Zoe health: " + "; ".join(lines)))
     except Exception as exc:  # noqa: BLE001
         print(f"alert not delivered: {type(exc).__name__}", file=sys.stderr)
+        return False
+
+
+def undelivered(state_before: dict, state_after: dict) -> dict:
+    """The state to persist when this run's alerts were NOT delivered: a DOWN that did not reach anyone stays
+    pending (alerted=False) so the next run retries it, instead of being recorded as sent and never repeated."""
+    out = dict(state_after)
+    for name, s in state_after.items():
+        if s.get("alerted") and not state_before.get(name, {}).get("alerted"):
+            out[name] = {**s, "alerted": False}
+    return out
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -163,13 +177,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     except (OSError, ValueError):
         state = {}
     lines, new = transitions(checks, state)
+    for ln in lines:
+        print(f"[{stamp}] ALERT {ln}")
+    if not send(lines):          # deliver FIRST; persist "alerted" only for what actually went out
+        new = undelivered(state, new)
+        print(f"[{stamp}] alert NOT delivered - will retry next run", file=sys.stderr)
     STATE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATE.with_suffix(".tmp")
     tmp.write_text(json.dumps(new))
     os.replace(tmp, STATE)
-    for ln in lines:
-        print(f"[{stamp}] ALERT {ln}")
-    send(lines)
     return 0 if all(c.ok for c in checks) else 1
 
 

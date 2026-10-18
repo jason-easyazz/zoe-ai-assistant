@@ -132,6 +132,21 @@ def test_health_alerts_on_transitions_only():
     assert lines == []
 
 
+def test_an_undelivered_down_alert_stays_pending_and_is_retried():
+    """Codex review: 'alerted' was persisted before the send; a failed Telegram send meant the outage was never
+    reported. An undelivered DOWN stays pending so the next run sends it."""
+    down = [health.Check("zoe-data :8000", False, "URLError")]
+    _, st = health.transitions(down, {})
+    lines, st2 = health.transitions(down, st)
+    assert lines and st2["zoe-data :8000"]["alerted"]
+    kept = health.undelivered(st, st2)                 # the send failed
+    assert kept["zoe-data :8000"]["alerted"] is False
+    lines, _ = health.transitions(down, kept)
+    assert lines == ["DOWN: zoe-data :8000 (URLError)"], "the next run must retry the alert"
+    # an alert already delivered on an earlier run is not reset by a later failed send
+    assert health.undelivered(st2, st2)["zoe-data :8000"]["alerted"] is True
+
+
 def test_health_unit_needs_no_secret():
     text = (SYSTEMD / "zoe-health.service").read_text()
     body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
@@ -312,5 +327,14 @@ def test_vapid_migration_dry_run_apply_and_conflict(tmp_path):
     rc, msg = vapid.migrate(legacy, new, apply=True)
     assert rc == 1 and "DIFFERENT" in msg and legacy.exists(), "two keys = owner decision, never overwrite"
     _w(legacy, json.dumps(KEYS))
+    new.chmod(0o644)                                     # a hand-made identical copy, world-readable
     rc, _ = vapid.migrate(legacy, new, apply=True)
     assert rc == 0 and not legacy.exists()
+    assert stat.S_IMODE(new.stat().st_mode) == 0o600, "the surviving copy must be tightened before the legacy goes"
+
+
+def test_mempalace_archive_is_published_only_after_tar_succeeds():
+    text = (MAINT / "mempalace-nightly-backup.sh").read_text()
+    body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    assert 'tar -czf "$out"' not in body and body.count('tar -czf "$part"') == 2
+    assert 'mv "$part" "$out"' in body and '"$part"\' EXIT' in body

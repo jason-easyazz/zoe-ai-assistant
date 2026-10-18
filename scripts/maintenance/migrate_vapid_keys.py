@@ -46,8 +46,11 @@ def migrate(legacy: Path, new: Path, apply: bool) -> tuple[int, str]:
         if not same:
             return 1, f"refused: {new} already holds a DIFFERENT key; keep one (owner decision), then re-run"
         if apply:
+            os.chmod(new, 0o600)          # a hand-made copy may be 0644: tighten BEFORE the legacy one goes
+            os.chmod(new.parent, 0o700)
             legacy.unlink()
-        return 0, f"{'removed' if apply else 'would remove'} the legacy copy (identical key already at {new})"
+        return 0, (f"{'removed' if apply else 'would remove'} the legacy copy (identical key already at {new}; "
+                   f"{'tightened' if apply else 'would tighten'} it to 0600, dir 0700)")
     if not apply:
         return 0, f"would move {legacy} -> {new} (0600, dir 0700) and delete the legacy file"
     new.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

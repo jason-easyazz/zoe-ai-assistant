@@ -102,7 +102,8 @@ ZOE_TREE_EXCLUDES = (
     "compaction-salvage-*",    # transient emergency spill files
     "env", "secrets",          # the secrets tier owns these
 )
-SECRET_GLOBS = (".env", ".env.*", "services/*/.env*", "labs/*/.env*", "modules/*/.env*", "ssl/*", "config/*",
+# ssl/ and config/ are RECURSIVE: the relay's household CA and listener config live in ssl/relay/ (panel-anywhere R1).
+SECRET_GLOBS = (".env", ".env.*", "services/*/.env*", "labs/*/.env*", "modules/*/.env*", "ssl/**/*", "config/**/*",
                 "services/zoe-data/data/vapid_keys.json")
 SECRET_EXCLUDES = ("*.example", "*.bak*", "*.orig", "*.sample")
 AGE_IDENTITY_MARKER = b"AGE-SECRET-KEY-"
@@ -188,14 +189,26 @@ def excluded(rel_parts: Iterable[str], patterns: Iterable[str]) -> bool:
     return any(fnmatch.fnmatch(part, pat) for part in rel_parts for pat in pats)
 
 
-def walk_source(src: Source) -> list[tuple[str, Path]]:
-    """``(mirror-relative label path, file)`` for every regular file the source contributes."""
+def walk_source(src: Source, errors: Optional[list[str]] = None) -> list[tuple[str, Path]]:
+    """``(mirror-relative label path, file)`` for every regular file the source contributes. A directory that
+    cannot be listed is appended to ``errors`` as its label-relative prefix - never silently skipped, because the
+    mirror would otherwise read its absence as "deleted" and drop the files it already holds."""
     if src.path is None or not src.path.exists():
         return []
     if src.path.is_file():
         return [(src.label, src.path)]
     out = []
-    for dirpath, dirnames, filenames in os.walk(src.path, onerror=lambda e: None):
+
+    def on_error(e: OSError) -> None:
+        if errors is None:
+            return
+        try:
+            rel = Path(e.filename).relative_to(src.path).as_posix()
+        except (TypeError, ValueError):
+            rel = "."
+        errors.append(src.label if rel in ("", ".") else f"{src.label}/{rel}")
+
+    for dirpath, dirnames, filenames in os.walk(src.path, onerror=on_error):
         rel_dir = Path(dirpath).relative_to(src.path)
         dirnames[:] = sorted(d for d in dirnames
                              if not excluded(rel_dir.parts + (d,), src.excludes)
@@ -262,8 +275,9 @@ def mirror(sources: list[Source], stage: Path, state_file: Path, salt: bytes, en
         prev = {}
     res = MirrorResult()
     cur: dict[str, dict] = {}
+    dir_errors: list[str] = []
     for src in sources:
-        for rel, f in walk_source(src):
+        for rel, f in walk_source(src, dir_errors):
             try:
                 st = f.stat()
             except OSError:
@@ -287,7 +301,16 @@ def mirror(sources: list[Source], stage: Path, state_file: Path, salt: bytes, en
             os.replace(tmp, dst)
             cur[name] = {"rel": rel, "size": st.st_size, "fp": _fingerprint(st), "sha256": digest}
             res.encrypted += 1
+    res.unreadable += dir_errors
+    # A file or directory we could not READ this run is not a deleted one: keep its last good ciphertext (and
+    # report it) instead of dropping it from the backup.
+    unread = set(res.unreadable)
     for name in set(prev) - set(cur):
+        rel = prev[name].get("rel", "")
+        if (rel in unread or any(rel.startswith(u + "/") for u in unread)) and (stage / name).exists():
+            cur[name] = prev[name]
+            res.kept += 1
+            continue
         (stage / name).unlink(missing_ok=True)
         res.removed += 1
     for p in sorted(stage.rglob("*")):
@@ -563,7 +586,8 @@ def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:
             stage = p.stage_dir / tier
             res = mirror(srcs, stage, p.state_dir / f"mirror-{tier}.json", salt, enc, encb)
             if res.unreadable:
-                problems.append(f"{tier}: {len(res.unreadable)} unreadable file(s) skipped")
+                problems.append(f"{tier}: {len(res.unreadable)} unreadable file(s)/dir(s) - last good copy kept: "
+                                + ", ".join(sorted(res.unreadable)[:5]))
             man = manifest_of(stage)
             (stage / "MANIFEST.sha256").write_text("".join(f"{v}  {k}\n" for k, v in man.items()))
             sid = backup_tier(cfg, tier, [stage])
@@ -573,6 +597,8 @@ def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:
             print(f"{tier}: snapshot {sid[:8]} - {len(man)} files ({res.encrypted} re-encrypted, "
                   f"{res.kept} unchanged, {res.removed} removed)")
     arts = artefact_paths(p)
+    if not arts:      # never a silent skip: the drill would then compare an ever-older artefacts snapshot
+        problems.append("artefacts: neither the router checkpoint nor the GGUF directory exists - no snapshot")
     if arts:
         sid = backup_tier(cfg, "artefacts", arts)
         man = {}
@@ -599,9 +625,12 @@ def _prune_local_manifests(p: Paths, keep: int) -> None:
 
 
 def drill_due(p: Paths, now: datetime) -> bool:
+    """Due 28 days after the last PASSING drill. A failed drill does not advance the clock, so the next weekly
+    verify retries it instead of leaving a broken backup unchecked for a month."""
     try:
-        last = _parse_time(json.loads((p.state_dir / "last_drill.json").read_text())["time"])
-    except (OSError, ValueError, KeyError):
+        state = json.loads((p.state_dir / "last_drill.json").read_text())
+        last = _parse_time(state["last_ok"])
+    except (OSError, ValueError, KeyError, TypeError):
         return True
     return now - last >= timedelta(days=DRILL_INTERVAL_DAYS)
 
@@ -676,8 +705,14 @@ def cmd_drill(p: Paths, cfg: Config, now: datetime, force: bool) -> int:
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     hard = [f for f in findings if "in-snapshot manifest only" not in f]
+    try:
+        prev_ok = json.loads((p.state_dir / "last_drill.json").read_text()).get("last_ok")
+    except (OSError, ValueError, AttributeError):
+        prev_ok = None
+    stamp = now.isoformat(timespec="seconds")
     _atomic_write(p.state_dir / "last_drill.json",
-                  json.dumps({"time": now.isoformat(timespec="seconds"), "ok": not hard, "findings": findings}))
+                  json.dumps({"time": stamp, "ok": not hard, "last_ok": prev_ok if hard else stamp,
+                              "findings": findings}))
     for f in findings:
         print(f"FINDING: {f}")
     if hard:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -116,6 +117,66 @@ def test_same_size_same_mtime_rewrite_is_still_reencrypted(tmp_path):
     assert r.encrypted == 1, "a changed file with its old size and mtime kept stale ciphertext"
     # negative control: the size+mtime-only fingerprint would have kept it
     assert [st.st_size, st.st_mtime_ns] == ob._fingerprint(f.stat())[:2]
+
+
+def test_an_unreadable_directory_keeps_its_last_good_copy_and_is_reported(tmp_path, monkeypatch):
+    """Codex review: os.walk's error used to be swallowed, so an unreadable subtree looked DELETED and its
+    ciphertext was dropped from the next snapshot. It is now reported and its last good copy kept."""
+    tree(tmp_path / "src", {"keep/a": b"1", "locked/b": b"2"})
+    src = ob.Source("s", tmp_path / "src")
+    _mirror(tmp_path, src)
+    real_walk = os.walk
+
+    def walk(top, onerror=None, **kw):     # the 'locked' subtree raises like a permission error
+        for dirpath, dirnames, filenames in real_walk(top, **kw):
+            if dirpath.endswith("locked"):
+                onerror(PermissionError(13, "denied", dirpath))
+                dirnames[:] = []
+                continue
+            yield dirpath, dirnames, filenames
+    monkeypatch.setattr(ob.os, "walk", walk)
+    r = _mirror(tmp_path, src)
+    assert r.unreadable == ["s/locked"] and r.removed == 0
+    assert len([p for p in (tmp_path / "stage").rglob("*.age") if p.name != "index.json.age"]) == 2
+
+
+def test_secret_files_are_recursive_under_ssl_and_config(tmp_path):
+    tree(tmp_path, {"ssl/relay/household-ca.key": b"x", "config/sub/creds.json": b"x"})
+    p = ob.Paths(home=tmp_path / "h", checkout=tmp_path, config_dir=tmp_path / "c", state_dir=tmp_path / "s",
+                 stage_dir=tmp_path / "st")
+    got = {label for label, _ in ob.secret_files(p)}
+    assert {"checkout/ssl/relay/household-ca.key", "checkout/config/sub/creds.json"} <= got
+
+
+def test_a_failed_drill_does_not_advance_the_monthly_clock(tmp_path):
+    p = ob.Paths(home=tmp_path, checkout=tmp_path, config_dir=tmp_path / "c", state_dir=tmp_path / "s",
+                 stage_dir=tmp_path / "st")
+    now = datetime(2026, 10, 18, 6, tzinfo=timezone.utc)
+    (tmp_path / "s").mkdir()
+    f = tmp_path / "s" / "last_drill.json"
+    f.write_text(json.dumps({"time": now.isoformat(), "ok": False, "last_ok": (now - timedelta(days=40)).isoformat()}))
+    assert ob.drill_due(p, now), "a failed drill must be retried at the next weekly verify"
+    f.write_text(json.dumps({"time": now.isoformat(), "ok": True, "last_ok": now.isoformat()}))
+    assert not ob.drill_due(p, now + timedelta(days=7))
+    assert ob.drill_due(p, now + timedelta(days=28))
+
+
+def test_a_failing_drill_records_failure_without_moving_last_ok(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_OFFBOX_NO_ALERT", "1")
+    p = ob.Paths(home=tmp_path, checkout=tmp_path, config_dir=tmp_path / "c", state_dir=tmp_path / "s",
+                 stage_dir=tmp_path / "st")
+    (tmp_path / "s").mkdir()
+    old_ok = "2026-09-01T06:00:00+00:00"
+    (tmp_path / "s" / "last_drill.json").write_text(json.dumps({"time": old_ok, "ok": True, "last_ok": old_ok}))
+
+    def boom(*a, **k):
+        raise RuntimeError("restic snapshots exited 1")
+    monkeypatch.setattr(ob, "snapshots", boom)
+    now = datetime(2026, 10, 18, 6, tzinfo=timezone.utc)
+    assert ob.cmd_drill(p, None, now, force=True) == 1
+    state = json.loads((tmp_path / "s" / "last_drill.json").read_text())
+    assert state["ok"] is False and state["last_ok"] == old_ok
+    assert ob.drill_due(p, now)
 
 
 def test_mirror_names_hide_paths_and_strays_never_ship(tmp_path):

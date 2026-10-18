@@ -45,6 +45,10 @@ fi
 
 ts="$(date +%Y%m%d-%H%M%S)"
 out="$BACKUP_ROOT/mempalace-${ts}.tar.gz"
+# Written to a .partial name and renamed only on success (2026-10-18, review of the tracked copy): a tar that fails
+# mid-write must never leave a truncated mempalace-*.tar.gz that rotation, the verify and the off-box job read as
+# the newest good archive.
+part="$out.partial"
 
 # 2026-09-25: tar used to read the LIVE chroma.sqlite3 and failed with
 # "file changed as we read it" whenever zoe-data wrote mid-backup (exit 1 ->
@@ -54,7 +58,7 @@ out="$BACKUP_ROOT/mempalace-${ts}.tar.gz"
 # 2026-09-26 tar saw a rollback journal vanish mid-read ("File removed before we
 # read it", exit 1) — the snapshot is self-consistent without them.
 snap="$(mktemp -d)"
-trap 'rm -rf "$snap"' EXIT
+trap 'rm -rf "$snap" "$part"' EXIT
 base="$(basename "$MEMPALACE_DIR")"
 if [[ -f "$CHROMA_DB" ]]; then
   python3 - "$CHROMA_DB" "$snap/chroma.sqlite3" <<'PY'
@@ -63,15 +67,16 @@ src = sqlite3.connect(sys.argv[1]); dst = sqlite3.connect(sys.argv[2])
 with dst: src.backup(dst)
 dst.close(); src.close()
 PY
-  tar -czf "$out" --warning=no-file-changed \
+  tar -czf "$part" --warning=no-file-changed \
     -C "$(dirname "$MEMPALACE_DIR")" \
     --exclude="$base/chroma.sqlite3" --exclude="$base/chroma.sqlite3-journal" \
     --exclude="$base/chroma.sqlite3-wal" --exclude="$base/chroma.sqlite3-shm" \
     --warning=no-file-removed "$base" \
     -C "$snap" --transform="s#^chroma.sqlite3#$base/chroma.sqlite3#" chroma.sqlite3
 else
-  tar -czf "$out" --warning=no-file-changed -C "$(dirname "$MEMPALACE_DIR")" "$base"
+  tar -czf "$part" --warning=no-file-changed -C "$(dirname "$MEMPALACE_DIR")" "$base"
 fi
+mv "$part" "$out"
 size="$(du -h "$out" | awk '{print $1}')"
 echo "mempalace-nightly-backup: wrote $out ($size)"
 
