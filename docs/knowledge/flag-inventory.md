@@ -619,6 +619,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STRUCTURAL_READER` | `'shadow'` | yes | NO | `services/zoe-data/structural_reader.py` |
 | `ZOE_STRUCTURAL_VERIFIER` | `-` | no | NO | `services/zoe-data/structural_verifier.py` |
 | `ZOE_STRUGGLE_DETECT` | `-` | no | NO | `services/zoe-data/struggle_detector.py` |
+| `ZOE_STRUGGLE_PROPOSALS` | `-` | no | NO | `services/zoe-data/struggle_proposals.py` |
+| `ZOE_STRUGGLE_PROPOSAL_DAYS` | `7.0` | yes | NO | `services/zoe-data/struggle_proposals.py` |
+| `ZOE_STRUGGLE_PROPOSAL_MIN_EPISODES` | `3` | yes | NO | `services/zoe-data/struggle_proposals.py` |
 | `ZOE_STRUGGLE_QUEUE_MAX` | `256` | yes | NO | `services/zoe-data/struggle_detector.py` |
 | `ZOE_STRUGGLE_RETENTION_DAYS` | `90` | yes | NO | `services/zoe-data/struggle_detector.py` |
 | `ZOE_STRUGGLE_WINDOW_S` | `dynamic` | yes | NO | `services/zoe-data/struggle_detector.py` |
@@ -692,7 +695,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_PROFILE` | `'zoe_au_natural_v1'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_REPLAY_STT` | `'inprocess'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_RESULTS` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
-| `ZOE_VOICE_SAMPLE_DIR` | `-` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py` |
+| `ZOE_VOICE_SAMPLE_DIR` | `-` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/struggle_proposals.py` |
 | `ZOE_VOICE_SAVE_AUDIO` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_SESSION` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
 | `ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER` | `False` | yes | NO | `services/zoe-data/voice_session.py` |

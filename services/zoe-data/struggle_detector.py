@@ -29,7 +29,8 @@ PRIVACY (same rules as the transcript the turn already lives in, ``chat_messages
     only categories (signal, domain, the text-free ``pattern`` shape, numbers);
   * the digest shows example words only from the VIEWER's own rows - a member's words never reach another member's report;
   * ``erase_entity`` (the forget path) deletes the user's rows whose summary names the entity, ``delete_user`` (the audited
-    right-to-be-forgotten) every row of the user - both RAISE on a store failure so the forget is not confirmed;
+    right-to-be-forgotten) every row of the user - both RAISE on a store failure so the forget is not confirmed - and both first
+    take those rows out of the Phase 2 proposals (``struggle_proposals.forget_events`` / ``forget_user``);
   * rows older than ``ZOE_STRUGGLE_RETENTION_DAYS`` (default 90) are swept by the worker at most once an hour.
 
 Synthetic traffic is never recorded: the replay harness panel (``replay-*``) and synthetic users (``user_filters``).
@@ -488,16 +489,29 @@ async def _row(e: sig.Event) -> dict[str, Any]:
         "prev_turn_id": about.turn_id if about is not cur else "",
         "turn_id": cur.turn_id,
         "domain_predicted": about.domain(),
-        "domain_served": about.two_stage_domain or (about.domain() if about.path == sig.PATH_FAST else "chat"),
+        # the handler that actually answered: a fast reply's own phrasing first (the router's prediction can differ), else the old rule
+        "domain_served": ((sig.reply_domain(about.reply) if about.path == sig.PATH_FAST else "")
+                          or about.two_stage_domain or (about.domain() if about.path == sig.PATH_FAST else "chat")),
         "path_served": about.path + (f":{about.lane}" if about.lane else ""),
         "latency_ms": about.latency_ms,
         "stt_ms": about.stt_ms,
         "pattern": e.pattern[:120],
         "summary": summary,
-        "detail": json.dumps({"reasons": e.reasons, **{k: v for k, v in e.numbers.items() if v is not None}},
+        "detail": json.dumps({"reasons": e.reasons, **{k: v for k, v in e.numbers.items() if v is not None}, **_follow_up(e)},
                              sort_keys=True)[:1000],
         "mode": mode(),
     }
+
+
+def _follow_up(e: sig.Event) -> dict[str, Any]:
+    """Text-free facts about the turn that REVEALED a pair struggle, for the Phase 2 labelling: the fast domain that answered it
+    (``next_domain``, '' when the brain did or nothing is evidenced), how it was served, and when the failed turn finished
+    (``about_ts``, to find its saved audio). Only for a pair by ONE identity: across a guest/member flip the follow-up is not
+    provably the same person's."""
+    cur, about = e.turn, e.about
+    if about is cur or cur.is_guest or about.user_id != cur.user_id:      # a guest row keeps categories only: nothing to train on, nothing extra stored
+        return {}
+    return {"next_domain": sig.resolved_route(cur), "next_path": cur.path, "about_ts": round(float(about.ts), 3)}
 
 
 async def _maybe_sweep(now: float) -> None:
@@ -654,6 +668,11 @@ async def erase_entity(user_id: str, name: str) -> int:
             return 0
         raise
     ids = [rid for rid, summary in hits if pat.search(summary or "")]
+    if ids:
+        # the proposals built on these rows go FIRST (Phase 2): a failure raises with the rows still there, so a retry finds them again
+        import struggle_proposals
+
+        await struggle_proposals.forget_events(ids)
     return int(await backend.delete_ids(user_id, ids) or 0) if ids else 0
 
 
@@ -664,6 +683,9 @@ async def delete_user(user_id: str) -> int:
     _DELETED_AT[user_id] = time.time()    # turns still queued for this user are not recorded
     _forget_history(user_id)
     try:
+        import struggle_proposals
+
+        await struggle_proposals.forget_user(user_id)          # Phase 2 evidence first; the rows below are still there for a retry
         return int(await get_backend().delete_user(user_id) or 0)
     except Exception as exc:
         if _nothing_stored(exc):
