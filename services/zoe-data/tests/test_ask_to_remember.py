@@ -427,7 +427,7 @@ def test_resolve_with_the_flag_off_does_not_touch_it(svc, monkeypatch):
 def test_the_tier_runs_before_tier0_and_the_router_in_the_source():
     import inspect
     src = inspect.getsource(fast_tiers.resolve)
-    assert src.index("_ask_to_remember_tier") < src.index("_tier0(") < src.index("_sr.route(")
+    assert src.index("_ask_to_remember_tier") < src.index("_tier0(") < src.index("_sr.route, text")
 
 
 def test_resolve_ignores_a_turn_that_is_not_an_ask(svc, monkeypatch):

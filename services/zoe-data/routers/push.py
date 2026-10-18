@@ -15,10 +15,39 @@ from guest_policy import require_feature_access
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/push", tags=["push"])
 
-VAPID_KEY_PATH = Path(__file__).parent.parent / "data" / "vapid_keys.json"
+# The VAPID PRIVATE key lives OUTSIDE the checkout (architecture deep dive B9, 2026-10-18): a key file inside the
+# working tree is one `git add -f` / one tarball of the repo away from leaving the box. The legacy in-tree path is
+# still READ, so a box that has not run scripts/maintenance/migrate_vapid_keys.py keeps its key - regenerating it
+# would silently orphan every push subscription the household's browsers hold.
+LEGACY_VAPID_KEY_PATH = Path(__file__).parent.parent / "data" / "vapid_keys.json"
+DEFAULT_VAPID_KEY_PATH = "~/.zoe/secrets/vapid_keys.json"
 VAPID_CLAIMS = {"sub": "https://zoe.the411.life"}
 
 _vapid_keys = None
+
+
+def vapid_key_path() -> Path:
+    """Where the key is written (and read first): ZOE_VAPID_KEY_PATH, default ~/.zoe/secrets/vapid_keys.json."""
+    return Path(os.path.expanduser(os.environ.get("ZOE_VAPID_KEY_PATH") or DEFAULT_VAPID_KEY_PATH))
+
+
+def _vapid_read_path() -> Path | None:
+    new = vapid_key_path()
+    if new.exists():
+        return new
+    if LEGACY_VAPID_KEY_PATH.exists():
+        logger.warning("VAPID key is still inside the checkout (%s); move it with "
+                       "scripts/maintenance/migrate_vapid_keys.py --apply", LEGACY_VAPID_KEY_PATH)
+        return LEGACY_VAPID_KEY_PATH
+    return None
+
+
+def _write_private_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)          # an existing dir keeps its mode under mkdir(exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(data, fh, indent=2)
 
 
 def _get_vapid_keys():
@@ -26,8 +55,9 @@ def _get_vapid_keys():
     if _vapid_keys:
         return _vapid_keys
 
-    if VAPID_KEY_PATH.exists():
-        _vapid_keys = json.loads(VAPID_KEY_PATH.read_text())
+    existing = _vapid_read_path()
+    if existing is not None:
+        _vapid_keys = json.loads(existing.read_text())
         return _vapid_keys
 
     try:
@@ -42,8 +72,7 @@ def _get_vapid_keys():
             "public_key": base64.urlsafe_b64encode(pub_raw).decode().rstrip("="),
             "private_key": base64.urlsafe_b64encode(priv_raw).decode().rstrip("="),
         }
-        VAPID_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        VAPID_KEY_PATH.write_text(json.dumps(_vapid_keys, indent=2))
+        _write_private_json(vapid_key_path(), _vapid_keys)
         logger.info("Generated new VAPID keys")
         return _vapid_keys
     except Exception as e:

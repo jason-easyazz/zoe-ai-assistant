@@ -3,7 +3,7 @@ type: Reference
 title: Zoe Voice Pipeline
 description: The end-to-end voice path (STT → brain → TTS), how it's measured, and the regression corpus — plus the load-bearing caveat that the warm replay harness understates real live latency.
 tags: [voice, stt, tts, performance, testing]
-timestamp: 2026-09-28T00:00:00Z
+timestamp: 2026-10-18T00:00:00Z
 ---
 
 # Zoe Voice Pipeline
@@ -71,11 +71,29 @@ file per clip. So a Skybridge over-claim is invisible to said-vs-did; the classi
 by `services/zoe-data/tests/test_skybridge_router_veto.py` instead. The bug's audio,
 `~/.zoe-voice-samples/182627_117.wav`, is in the corpus and replays through the router → brain path.
 
+### Nothing on the turn path blocks the event loop (A1, 2026-10-18)
+
+zoe-data is ONE uvicorn worker on ONE asyncio loop. `semantic_router.route` is synchronous (bge embed plus a
+blocking `urlopen` to the FunctionGemma sidecar) and used to be called inline from `voice_command`, `fast_tiers.resolve`,
+the STT-snap re-route and `/api/router/classify`, so every routed turn froze every other request, push socket and voice
+stream for the router's whole decision. Measured in-process on the live sidecar (20 household utterances per arm, arms
+alternated, a 10 ms ticker beside each call; worst ticker gap = time the loop was blocked): **inline 346 ms median of loop blocked (p90 454, max 516) → off the
+loop 10 ms (p90 22, max 34)**, router time unchanged (345 ms). Every async caller now runs it via
+`await asyncio.to_thread(_sr.route, text)`. The gauge: `zoe_event_loop_lag_seconds` (histogram) and
+`zoe_event_loop_lag_max_seconds` on `:8000/metrics` (`event_loop_lag.py`, a 250 ms sleeper's lateness), plus one
+`EVENT_LOOP_LAG` WARNING per 10 s in `~/.zoe-logs/zoe-data.app.log` when a wake-up is 250 ms or more late. A new
+blocking call anywhere shows up there whoever made it. The replay harness calls `route()` itself before
+`fast_tiers.resolve(router_decision=...)`, so said-vs-did is unchanged by construction; the win is the OTHER work on the
+loop during a turn (a second panel, the push socket, `/health`).
+
 ### Panel text lifecycle — what the kiosk shows for a turn (2026-09-28)
 
 The panel's on-screen text for a turn is a separate channel from its audio: the daemon plays the
-`turn_stream` frames, while the estate (`touch/home.html`) draws from push events broadcast by
-`zoe-data` on `/ws/push` (the executor socket in `js/touch-ui-executor.js`):
+`turn_stream` frames, while the estate (`touch/home.html`) draws from push events sent by
+`zoe-data` on `/ws/push` (the executor socket in `js/touch-ui-executor.js`). **Since A11 (2026-10-18) every one of them
+goes to the originating panel's own channel (`push.panel_channel` → `panel_<id>`), never `"all"`**, and the executor acts
+on a `voice:*` frame only when it arrived on its own channel or names this panel: with two panels, a turn on one is
+never shown on the other, and desktop sockets no longer receive the household's voice turns:
 
 | event | from | estate shows |
 |---|---|---|
@@ -481,6 +499,13 @@ historical (the loader, not the file, was incompatible); it is the A/B candidate
 restored before that A/B.
 
 ### The gated set is NOT all equally evidenced — the LiveKit/WebRTC lane (read before believing a green)
+
+**One room per session (A10, 2026-10-18).** Each `/api/voice/livekit-token` mints a fresh
+`zoe-voice-<panel>-<12 hex>` room and the agent joins exactly that room (`routers/voice_livekit.py`,
+`_ensure_room_agent`; at most 4 room agents; a room agent leaves after 120 s with no human in it). There is no fixed
+`zoe-voice` room any more: every token used to publish and subscribe in it, so two open sessions heard each other.
+Pinned by `services/zoe-data/tests/test_livekit_session_rooms.py`; like the rest of this lane, the replay gate does not
+exercise it (below).
 
 **The replay corpus does not traverse the LiveKit lane.** `~/.zoe-voice-samples` is replayed through
 `POST /api/voice/transcribe` — the HTTP lane. The probe chain (`voice_regression_probe.py` →
@@ -1459,7 +1484,8 @@ mold cause" with no punctuation is complete and costs no extra wait or second tr
 wait, plus a second STT pass on the retry. Every other turn is byte-identical. **Known limit:** the
 mic is closed for the STT round trip (~0.5 s), so a word spoken in that gap is lost; the listen
 opens right after, and a pause after "and" is normally longer. The seamless fix is the under-speech
-STT stream (`ZOE_STT_STREAM_UNDER_SPEECH`, still flag-dark). Kill switch on the server:
+STT stream (`ZOE_STT_STREAM_UNDER_SPEECH`, still flag-dark; its per-session cap is 64 s since 2026-10-18, covering the
+conversation hard cap 60 s + 3 s snap, so a long conversation turn no longer breaks its stream). Kill switch on the server:
 `ZOE_VOICE_CONTINUATION_HOLD=off`; on the Pi: `ZOE_CONTINUE_WINDOW_S=0` (the daemon then never
 asks).
 

@@ -9,9 +9,10 @@ directions that matter:
   silently migrates its sysdb IN PLACE on first open, so the snapshot stops being a
   rollback.
 
-The system Python 3.10 site deliberately keeps chromadb 0.6.3 (it hosts the CUDA/Kokoro
-lane), while the zoe-data py3.12 venv carries 1.5.x. So every hand-run or timer script
-that opens the store goes through ``open_palace_client``. It reads the format from
+The system Python 3.10 site carries no chromadb since B9 (2026-10-18; it once kept the
+0.6.3 pair), while the zoe-data py3.12 venv carries 1.5.x. A host may still hold a stale
+0.6.3 install, so every hand-run or timer script that opens the store goes through
+``open_palace_client``, which also refuses an interpreter with no chromadb at all. It reads the format from
 SQLite (``mode=ro``, no chromadb) and refuses a mismatched client before chromadb can
 touch the file.
 
@@ -71,7 +72,13 @@ def check_client(palace_dir: str, chromadb_version: str) -> None:
 
 
 def open_palace_client(palace_dir: str):
-    import chromadb  # noqa: PLC0415 — only after the format check can it be trusted
+    try:
+        import chromadb  # noqa: PLC0415 — only after the format check can it be trusted
+    except ImportError:
+        raise SystemExit(
+            f"REFUSED: this interpreter has no chromadb (the system Python 3.10 lane carries none "
+            f"since B9). Run it with {VENV_PYTHON}."
+        ) from None
 
     check_client(palace_dir, chromadb.__version__)
     return chromadb.PersistentClient(path=os.path.expanduser(palace_dir))
