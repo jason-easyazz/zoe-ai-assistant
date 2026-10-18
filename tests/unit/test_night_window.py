@@ -2018,7 +2018,7 @@ def test_a_quiet_night_is_a_noop_that_stops_nothing_and_loads_no_12b(tmp_path):
     w, host, cfg, calls = quiet_window(tmp_path)
     assert w.run() == nw.EXIT_OK
     assert w.outcome == "noop" and "no member has new turns" in w.rec["noop"]
-    assert slept_or_loaded(host) == []                                      # Zoe never went to sleep: no stop, no start, no 12B
+    assert slept_or_loaded(host) == [] and w.lock_fd is None                # Zoe never went to sleep: no stop, no start, no 12B; and the brain-window lock is not left held
     assert not any(j["name"] in ("night_digest.py", "zoe-night-mind.py") for j in host.jobs_run)      # the 12B jobs did not run
     saved = json.loads(next(p for p in w.report_paths if p.suffix == ".json").read_text())
     assert saved["outcome"] == "noop" and saved["exit"] == 0 and saved["mode"] == "night"
