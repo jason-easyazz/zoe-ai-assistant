@@ -154,7 +154,13 @@ separate **episodes** (events of one user within 10 minutes are ONE episode - a 
 distinct user-days, with a mean event confidence of at least 0.6. A generic unrouted shape (no domain, no time orientation, no anchor)
 cannot be an `intent_gap`. Synthetic and harness users never count; guest rows count as wordless struggles. Reruns update the same
 proposal (fingerprint = hash of kind + key); a `proposed` one that stops recurring is withdrawn; a `rejected` one stays suppressed for 30
-days and returns only if it recurred since; an `accepted` / `applied` one is never reopened or re-decided, only re-counted.
+days and returns only if it recurred since; an `accepted` / `applied` one is never reopened or re-decided, only re-counted. The nightly cap
+(`MAX_PER_NIGHT`, 20) limits NEW proposals only: eligible clusters are ranked best first, the overflow is counted as `deferred` and created on a
+later night, and an eligible cluster that already has a `proposed` row is refreshed and kept however it ranks (ranking never withdraws).
+The 12B rewords a proposal's counts as placeholders (`{episodes}`, `{days}`, `{people}`, `{n:SIGNAL}`) that code renders from the proposal's
+own fields; a digit written by the model, a placeholder in front of another field's unit noun or an unknown signal falls back to the template.
+The quiet-night precheck (`night_precheck.py --struggle`) counts `struggle_proposals.pending_maintenance` - struggle events after the last
+window, a guest's included, plus `proposed` rows whose evidence aged out of the lookback - as work, so those nights are not skipped.
 
 **Failed -> success labelling (how a failed turn gets its label).** The detector records, in the text-free `detail` of a pair event by one
 member (`_follow_up`), the fast domain that answered the turn that REVEALED the struggle (`next_domain`; `resolved_route`: served by a fast
