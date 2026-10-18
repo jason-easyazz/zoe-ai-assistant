@@ -372,6 +372,7 @@ from research_evidence import (
 from risk_policy import classify_request, is_whatsapp_connect_request
 from chat_session_title import derive_session_title, title_is_weak
 from session_continuity import mint as mint_session_id, resolve_session_id
+import traffic_class
 from ag_ui_stream import AgRunRecorder, iter_openclaw_text_chunks, iter_text_message_chunks, new_run_ids
 from ag_ui.core import (
     CustomEvent,
@@ -1207,6 +1208,9 @@ async def _save_chat_message(
             meta["off_record"] = True
     except Exception:  # noqa: BLE001 - bookkeeping must never lose a saved turn
         pass
+    # P-2: the turn's traffic class (household | harness | probe | ci), server-derived (traffic_class.py), so a
+    # reader of this table can tell the household's turns from the harness that was 97% of them (2026-10-19).
+    meta["traffic_class"] = traffic_class.current()
     metadata = json.dumps(meta) if meta else None
     # Use the context-managed pool acquire (deterministic release). The bare
     # `async for db in get_db(): ... break` form leaves the generator suspended
@@ -3211,7 +3215,17 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
     msg_id = uuid.uuid4().hex[:12]
     role = body.get("role", "user")
     content = body.get("content", "")
-    metadata = json.dumps(body.get("metadata")) if body.get("metadata") else None
+    client_meta = body.get("metadata")
+    # The traffic class is the SERVER's (traffic_class.py): every row carries it and a client cannot claim one.
+    # A dict keeps its keys (its own traffic_class overwritten); any other shape is kept under "client".
+    if isinstance(client_meta, dict):
+        meta = dict(client_meta)
+    elif client_meta in (None, "", [], {}):
+        meta = {}
+    else:
+        meta = {"client": client_meta}
+    meta["traffic_class"] = traffic_class.current()
+    metadata = json.dumps(meta)
     # get_db_ctx, not `async for db in get_db()`: exiting the generator
     # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
     async with get_db_ctx() as db:
