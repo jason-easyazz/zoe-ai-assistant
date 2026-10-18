@@ -55,7 +55,7 @@ including words that were since forgotten.
 
 | tier | contents | encryption | retention |
 |---|---|---|---|
-| `household` | newest on-box Postgres dumps (`zoe`, `multica`; biometric table data already excluded by `postgres-nightly-backup.sh`), `pg_dumpall --globals-only`, newest MemPalace tarball, `~/.zoe` filtered, `~/.zoe-voice-samples` | age + restic | one per day for 7 days, one per week for **35 days**, no monthly |
+| `household` | newest on-box Postgres dumps (`zoe`, `multica`; biometric table data already excluded by `postgres-nightly-backup.sh`), `pg_dumpall --globals-only`, newest MemPalace tarball, `~/.zoe` filtered, `~/.zoe-voice-samples` | age + restic | one per day for 7 days, one per week for 34 days; **never older than 35 days**, no monthly |
 | `secrets` | the live checkout's `.env`, `.env.*`, `services|labs|modules/*/.env*` (never `*.example`, `*.bak*`), `ssl/`, `config/`, `~/.zoe/env`, `~/.zoe/secrets` | age + restic | 7 daily, 4 weekly, 6 monthly |
 | `artefacts` | `labs/functiongemma-finetune/runs/gen1/merged` (the router lineage checkpoint: NEVER delete) and `~/models/functiongemma-router` | restic | 7 daily, 4 weekly, 6 monthly |
 
@@ -79,10 +79,10 @@ The `household` tier is bounded at **35 days** instead, the same bound [forget-r
 rule 2026-10-06: forgotten means forever). A forget cannot rewrite a snapshot, so forgotten words leave the off-box copy only by
 ageing out, and six monthly snapshots would keep them for half a year.
 
-The bound is **time-based** (`--keep-within-daily 7d --keep-within-weekly 35d`), measured to matter: restic's count-based
+The bound is **time-based** (`--keep-within-daily 7d --keep-within-weekly 34d`: a 34-day window plus at most one day until the next daily prune = never more than 35 days), measured to matter: restic's count-based
 `--keep-weekly 4` keeps the last 4 weeks *that have snapshots*, so after a gap it kept a 40-day-old household snapshot (lab cell R2
 failed with it). The `within` windows count back from the **newest** snapshot, which is the right behaviour for disaster recovery:
-if the box dies, its last 35 days stay on the411 as the restore point instead of ageing out under the owner. While the box backs
+if the box dies, its last 34 days stay on the411 as the restore point instead of ageing out under the owner. While the box backs
 up nightly, nothing holding household words is older than 35 days.
 
 After a restore from a backup older than a forget, **re-issue the forget** (forget-reach: the `memory_forgotten` ledger comes back
@@ -94,7 +94,7 @@ tier time-bounded at 35 days on the411; restore => re-issue the forget") so the 
 - **Monthly** (the weekly `zoe-backup-verify` runs it once per 28 days, Sunday 05:45): for each tier, restore the newest snapshot
   from the411 into a scratch dir (`~/.cache/zoe-offbox/drill-*`, removed after), compare every file's sha256 with the manifest the
   box recorded when it SENT that snapshot, read one twelfth of the repo's data (`restic check --read-data-subset=<month>/12`, the
-  whole repo once a year), and check retention: a household snapshot more than 35 days older than the newest means the411's prune
+  whole repo once a year), and check retention: a household snapshot more than 35 days older than the newest (no slack) means the411's prune
   stopped; a newest snapshot older than 50 h means backups stopped landing. The artefacts tier restores only the GGUF (not the 1 GB
   checkpoint) monthly.
 - **Alerts** go over Telegram through the crash-loop watcher's sender (a process separate from zoe-data): a backup run with problems
@@ -162,19 +162,23 @@ All as root over SSH. Placeholders as in `labs/relay/RUNBOOK-R1.md` (this repo i
 **Disaster recovery** (new box): install the tools, recreate `offbox.env` + the box key (or `key add` a new one on the411), then on
 the machine holding the identity: `zoe_offbox.py restore --identity <file> --tier secrets --target /tmp/r` and `--tier
 household`; restore Postgres from `plain/pg/*.dump.gz`, the palace from `plain/palace/mempalace.tar.gz`, `~/.zoe` from `plain/zoe/`;
-**re-issue every forget newer than the snapshot**; then shred the plaintext.
+**re-issue every forget newer than the snapshot**; then shred the plaintext. `restore` refuses on a host where the
+`zoe-offbox-backup` unit is installed (the identity never touches a running box) and refuses an identity inside
+`~/.config/zoe-backup`; on a REPLACEMENT box before its units are installed, pass `--allow-on-box` and delete the identity
+afterwards. Every path in the decrypted index is checked to stay under the restore dir (the index is writable by anyone holding
+the public recipient, i.e. the box).
 
 ## 5. The lab
 
 `labs/offbox-backup/run.sh` (hand-run; the test-lane lock, refuses 01:35-04:55 and MemAvailable < 1500 MB): the rest-server image and
 OPTIONS parsed from `the411/compose.yaml`, the pinned restic and age, a synthetic box with canary values, the real backup script
-and the real `prune.sh`. **2026-10-18: 18/18 cells** - B1 three tagged snapshots; B2 household and secrets tiers exactly the policy,
+and the real `prune.sh`. **2026-10-18: 19/19 cells** - B1 three tagged snapshots; B2 household and secrets tiers exactly the policy,
 plaintext byte-identical after an owner restore with the off-box identity; B2b no canary in the stage; B3 drill restore + checksum;
 B4 second run re-encrypts nothing; B5 a deleted file is gone from the next snapshot; N1 wrong repo password refused; N2 append-only
 refuses `forget --prune` (exit 3) and a raw `DELETE` (403) with the box's valid credentials, snapshot count unchanged; N3 another
 household's login gets 401; N4 wrong rest-server password 401; N5 the drill goes red when a restored file differs from what was
 sent; N6 an age identity in the config dir refuses the run; N7 a wrong identity cannot decrypt; R1 the drill goes red on a 40-day
-household snapshot; R2 the411's prune ages it out and keeps the 40-day secrets snapshot (monthly); R3 the drill is green again;
+household snapshot; R1b (control) the owner's literal count-based 7 daily + 4 weekly would KEEP that snapshot; R2 the411's prune ages it out and keeps the 40-day secrets snapshot (monthly); R3 the drill is green again;
 teardown leaves nothing.
 
 ## 6. B9 owner steps (each small, each independent)

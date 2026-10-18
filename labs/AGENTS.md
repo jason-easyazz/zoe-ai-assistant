@@ -396,12 +396,12 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   section 5): a rest-server container (image + OPTIONS parsed from
   `scripts/setup/offbox-backup/the411/compose.yaml`, random loopback port, a throwaway
   volume), the sha256-pinned restic + age in `.bin/` (gitignored), a synthetic box with
-  canary values, and the REAL `zoe_offbox.py` and `the411/prune.sh`. 18 cells
+  canary values, and the REAL `zoe_offbox.py` and `the411/prune.sh`. 19 cells
   (backup, tier policy, ciphertext-only stage, drill checksum, dedup, forget propagation;
   negative controls: wrong password, append-only delete, cross-household, identity on the
   box, wrong identity, the 35-day retention bound). Hand-run via `run.sh` (01:35-04:55
   refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`, asserts its own
-  teardown). 18/18 on 2026-10-18.
+  teardown). 19/19 on 2026-10-18.
 - `relay/` — **F0 / R0 of panel anywhere** (`docs/architecture/panel-anywhere.md`
   section 10): a hermetic Docker lab (internal network, nothing published) with an nginx
   stream front + frp v0.71.0 `frps` behind a fail-closed preflight, a session-master

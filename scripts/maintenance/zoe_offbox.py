@@ -65,17 +65,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ── Retention: the ONE source of truth. the411's prune.sh carries the same flags; a ci_safe test pins them equal. ──
 # household is TIME-bounded, not count-bounded: restic's `--keep-weekly 4` keeps the last 4 weeks THAT HAVE
-# snapshots, so after a gap a 7d+4w policy keeps a snapshot of any age (measured in the lab, cell R2). The
+# snapshots, so after a gap a 7d+4w policy keeps a snapshot of any age (measured in the lab, cell R1b). The
 # `--keep-within-*` windows are relative to the NEWEST snapshot, which is right for disaster recovery: a dead box's
-# last 35 days are kept as its restore point instead of ageing out under it. While backups land nightly, nothing
-# holding household words is older than 35 days (forgotten means forever); the drill alerts on both conditions.
+# last weeks are kept as its restore point instead of ageing out under it. The window is 34 days, not 35: the411
+# prunes once a day, so a snapshot can sit up to one day past the window before the next prune - 34 + 1 keeps the
+# HARD bound at 35 days (forgotten means forever), and the drill alerts on anything past 35, with no slack.
 RETENTION: dict[str, dict[str, object]] = {
-    "household": {"within-daily": "7d", "within-weekly": "35d"},
+    "household": {"within-daily": "7d", "within-weekly": "34d"},
     "secrets": {"daily": 7, "weekly": 4, "monthly": 6},
     "artefacts": {"daily": 7, "weekly": 4, "monthly": 6},
 }
-HOUSEHOLD_MAX_AGE_DAYS = 35          # the forget-reach bound for anything holding household words
-PRUNE_SLACK_DAYS = 1                 # the411 prunes daily
+HOUSEHOLD_MAX_AGE_DAYS = 35          # the forget-reach bound for anything holding household words: never exceeded
+PRUNE_CADENCE_DAYS = 1               # the411 prunes daily; window + cadence must stay <= HOUSEHOLD_MAX_AGE_DAYS
 
 
 def forget_flags(tier: str) -> list[str]:
@@ -236,6 +237,14 @@ class MirrorResult:
     unreadable: list[str] = field(default_factory=list)
 
 
+def _fingerprint(st: os.stat_result) -> list[int]:
+    """What says "this file is unchanged": size, mtime AND ctime + inode. mtime alone is settable (``touch -d``,
+    ``cp -p``, ``tar`` restore), so a same-size rewrite with the old mtime put back would keep stale ciphertext
+    forever; ctime is set by the kernel on every write or utime and cannot be put back from user space, and a
+    replace-by-rename changes the inode."""
+    return [st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino]
+
+
 def _name_for(salt: bytes, rel: str) -> str:
     d = hmac.new(salt, rel.encode(), hashlib.sha256).hexdigest()[:40]
     return f"{d[:2]}/{d[2:]}.age"
@@ -263,7 +272,7 @@ def mirror(sources: list[Source], stage: Path, state_file: Path, salt: bytes, en
             name = _name_for(salt, rel)
             dst = stage / name
             old = prev.get(name)
-            if old and old["size"] == st.st_size and old["mtime_ns"] == st.st_mtime_ns and dst.exists():
+            if old and old.get("fp") == _fingerprint(st) and dst.exists():
                 cur[name] = old
                 res.kept += 1
                 continue
@@ -276,7 +285,7 @@ def mirror(sources: list[Source], stage: Path, state_file: Path, salt: bytes, en
                 res.unreadable.append(rel)
                 continue
             os.replace(tmp, dst)
-            cur[name] = {"rel": rel, "size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": digest}
+            cur[name] = {"rel": rel, "size": st.st_size, "fp": _fingerprint(st), "sha256": digest}
             res.encrypted += 1
     for name in set(prev) - set(cur):
         (stage / name).unlink(missing_ok=True)
@@ -606,7 +615,7 @@ def retention_findings(tier: str, snaps: list[dict], now: datetime) -> list[str]
         out.append(f"{tier}: newest snapshot is {(now - newest_t).days} day(s) old - backups are not landing")
     if tier == "household":
         oldest_t = _parse_time(snaps[0]["time"])
-        if newest_t - oldest_t > timedelta(days=HOUSEHOLD_MAX_AGE_DAYS + PRUNE_SLACK_DAYS):
+        if newest_t - oldest_t > timedelta(days=HOUSEHOLD_MAX_AGE_DAYS):     # hard bound, no slack
             out.append(f"household: oldest snapshot is {(newest_t - oldest_t).days} days older than the newest "
                        f"(> {HOUSEHOLD_MAX_AGE_DAYS}) - the411's prune is not running; "
                        "forgotten words outlive the forget")
@@ -678,9 +687,42 @@ def cmd_drill(p: Paths, cfg: Config, now: datetime, force: bool) -> int:
     return 0
 
 
-def cmd_restore(p: Paths, cfg: Config, identity: Path, tier: str, target: Path, snapshot: str) -> int:
+def safe_join(root: Path, rel: object) -> Optional[Path]:
+    """``root / rel`` only when ``rel`` is a non-empty RELATIVE path with no ``..`` and the result stays under
+    ``root`` (symlinks resolved); otherwise None."""
+    if not isinstance(rel, str) or not rel or "\x00" in rel:
+        return None
+    pp = Path(rel)
+    if pp.is_absolute() or ".." in pp.parts:
+        return None
+    out = (root / pp)
+    try:
+        out.resolve().relative_to(root.resolve())
+    except ValueError:
+        return None
+    return out
+
+
+def is_zoe_box(p: Paths) -> bool:
+    """This host RUNS the off-box backup: the unit is installed. The identity must never be used here."""
+    units = p.home / ".config" / "systemd" / "user"
+    return any((units / f"zoe-offbox-backup.{s}").exists() for s in ("service", "timer"))
+
+
+def cmd_restore(p: Paths, cfg: Config, identity: Path, tier: str, target: Path, snapshot: str,
+                allow_on_box: bool = False) -> int:
     """OWNER / disaster recovery: restic restore, then age-decrypt back to the original paths and verify each
-    plaintext sha256 against the encrypted index. Run where the identity is (never leave it on the box)."""
+    plaintext sha256 against the encrypted index. Run where the identity is - never on a box that runs the backup."""
+    if tier != "artefacts":
+        if is_zoe_box(p) and not allow_on_box:
+            raise Refused("this host runs zoe-offbox-backup: the age identity must never be used on the box (vault "
+                          "O5). Restore on the owner's machine; on a REPLACEMENT box before its units are installed, "
+                          "pass --allow-on-box and delete the identity afterwards", alert=False)
+        try:
+            identity.resolve().relative_to(p.config_dir.resolve())
+            raise Refused(f"{identity} is inside the backup config dir; the identity never lives there", alert=False)
+        except ValueError:
+            pass
     target.mkdir(parents=True, exist_ok=True)
     raw = Path(tempfile.mkdtemp(prefix="raw-", dir=target))
     restic(cfg, "restore", snapshot, "--target", str(raw), "--tag", f"zoe-{tier}", "--host", HOST_TAG)
@@ -698,9 +740,16 @@ def cmd_restore(p: Paths, cfg: Config, identity: Path, tier: str, target: Path, 
     bad = 0
     out_root = target / "plain"
     for name, meta in index.items():
-        dst = out_root / meta["rel"]
+        # The index is attacker-writable (anyone with the box has the PUBLIC recipient), so neither path is trusted:
+        # both must stay under their roots, or a forged index writes outside the restore dir on the owner's machine.
+        src = safe_join(stage, name)
+        dst = safe_join(out_root, meta["rel"])
+        if src is None or dst is None:
+            bad += 1
+            print(f"REFUSED unsafe path in the index: {name!r} -> {str(meta.get('rel'))!r}")
+            continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        r = subprocess.run([cfg.age, "-d", "-i", str(identity), "-o", str(dst), str(stage / name)],
+        r = subprocess.run([cfg.age, "-d", "-i", str(identity), "-o", str(dst), str(src)],
                            capture_output=True)
         if r.returncode != 0 or sha256_file(dst) != meta["sha256"]:
             bad += 1
@@ -726,6 +775,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     r.add_argument("--tier", choices=tuple(RETENTION), required=True)
     r.add_argument("--target", type=Path, required=True)
     r.add_argument("--snapshot", default="latest")
+    r.add_argument("--allow-on-box", action="store_true",
+                   help="disaster recovery on a REPLACEMENT box before its backup units are installed")
     ns = ap.parse_args(argv)
     if ns.cmd == "notify":
         alert(ns.text)
@@ -740,7 +791,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"secret files: {len(secret_files(p))}; artefacts: {[str(a) for a in artefact_paths(p)]}")
             return 0
         if ns.cmd == "restore":
-            return cmd_restore(p, cfg, ns.identity, ns.tier, ns.target, ns.snapshot)
+            return cmd_restore(p, cfg, ns.identity, ns.tier, ns.target, ns.snapshot, ns.allow_on_box)
         if not getattr(ns, "ignore_window", False):
             preflight(now, int(os.environ.get("ZOE_OFFBOX_MEM_FLOOR_MB", MEM_FLOOR_MB)))
         if ns.cmd == "backup":

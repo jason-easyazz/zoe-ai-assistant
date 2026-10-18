@@ -2,7 +2,7 @@
 the411 artefacts and the unit templates. Hermetic: a fake encryptor, temp trees, no network, no restic/age.
 
 The end-to-end proof (real restic + age against a real append-only rest-server) is the lab,
-``labs/offbox-backup/run.sh`` (18 cells). These tests pin the pieces CI can check on every PR, each with a
+``labs/offbox-backup/run.sh`` (19 cells). These tests pin the pieces CI can check on every PR, each with a
 break-the-fix negative control.
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ import re
 import shutil
 import stat
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -99,6 +100,24 @@ def test_mirror_encrypts_new_keeps_unchanged_reencrypts_changed_removes_deleted(
     assert len(names) == 2, "a deleted (forgotten) source must not stay in the stage"
 
 
+def test_same_size_same_mtime_rewrite_is_still_reencrypted(tmp_path):
+    """Codex review: mtime is settable (cp -p, tar, touch -d). A same-size rewrite with the old mtime put back must
+    still re-encrypt; the kernel-set ctime is what catches it."""
+    f = tmp_path / "src" / "a"
+    tree(tmp_path / "src", {"a": b"AAAA"})
+    src = ob.Source("s", tmp_path / "src")
+    _mirror(tmp_path, src)
+    st = f.stat()
+    time.sleep(0.05)      # ctime has kernel-tick granularity (<= 10 ms); a real rewrite is hours after the last run
+    f.write_bytes(b"BBBB")
+    os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert f.stat().st_size == st.st_size and f.stat().st_mtime_ns == st.st_mtime_ns
+    r = _mirror(tmp_path, src)
+    assert r.encrypted == 1, "a changed file with its old size and mtime kept stale ciphertext"
+    # negative control: the size+mtime-only fingerprint would have kept it
+    assert [st.st_size, st.st_mtime_ns] == ob._fingerprint(f.stat())[:2]
+
+
 def test_mirror_names_hide_paths_and_strays_never_ship(tmp_path):
     tree(tmp_path / "src", {"Dana-birthday-notes.txt": b"x"})
     stray = tmp_path / "stage" / "zz" / "leftover.tmp"
@@ -143,7 +162,8 @@ def household_bound_days(policy: dict) -> int | None:
 
 def test_household_tier_is_time_bounded_within_the_forget_reach_35_days():
     bound = household_bound_days(ob.RETENTION["household"])
-    assert bound is not None and bound <= ob.HOUSEHOLD_MAX_AGE_DAYS == 35
+    # the window plus the time until the next daily prune must never exceed the hard bound
+    assert bound is not None and bound + ob.PRUNE_CADENCE_DAYS <= ob.HOUSEHOLD_MAX_AGE_DAYS == 35
     assert not any("monthly" in k for k in ob.RETENTION["household"])
 
 
@@ -168,6 +188,10 @@ def test_retention_findings():
     assert ob.retention_findings("household", ok, now) == []
     stale_prune = [{"time": iso(40)}, {"time": iso(0.2)}]
     assert any("prune is not running" in f for f in ob.retention_findings("household", stale_prune, now))
+    # the 35-day bound is HARD: 35 days and one hour is already a finding, 34.9 days is not
+    just_over = [{"time": iso(35 + 1 / 24 + 0.2)}, {"time": iso(0.2)}]
+    assert ob.retention_findings("household", just_over, now) != []
+    assert ob.retention_findings("household", [{"time": iso(35.1)}, {"time": iso(0.2)}], now) == []
     assert ob.retention_findings("secrets", stale_prune, now) == []      # monthly keeps are fine there
     not_landing = [{"time": iso(3)}]
     assert any("not landing" in f for f in ob.retention_findings("secrets", not_landing, now))
@@ -239,6 +263,25 @@ def test_a_private_key_as_recipient_is_refused(configured):
     (configured.config_dir / "age-recipients.txt").write_text("not-a-recipient\n")
     with pytest.raises(ob.Refused, match="PUBLIC recipients"):
         ob.load_config(configured)
+
+
+@pytest.mark.parametrize("rel,ok", [("zoe/data/a.json", True), ("/etc/cron.d/x", False), ("../../.bashrc", False),
+                                    ("zoe/../../x", False), ("", False), (None, False)])
+def test_restore_paths_from_the_index_cannot_escape(tmp_path, rel, ok):
+    """Codex review: the index is attacker-writable (the recipient is public), so restore must not trust it."""
+    assert (ob.safe_join(tmp_path, rel) is not None) is ok
+
+
+def test_restore_refuses_on_a_box_that_runs_the_backup(configured, tmp_path):
+    units = configured.home / ".config/systemd/user"
+    units.mkdir(parents=True)
+    (units / "zoe-offbox-backup.timer").write_text("[Timer]\n")
+    cfg = ob.load_config(configured)
+    with pytest.raises(ob.Refused, match="never be used on the box"):
+        ob.cmd_restore(configured, cfg, tmp_path / "id.txt", "household", tmp_path / "out", "latest")
+    (units / "zoe-offbox-backup.timer").unlink()
+    with pytest.raises(ob.Refused, match="inside the backup config dir"):
+        ob.cmd_restore(configured, cfg, configured.config_dir / "id.txt", "household", tmp_path / "out", "latest")
 
 
 def test_unconfigured_is_exit_2_not_a_crash(tmp_path, monkeypatch):

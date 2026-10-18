@@ -259,6 +259,19 @@ def test_reaper_dry_run_deletes_nothing_and_apply_deletes_only_stale(tmp_path, m
     assert "K=v" not in capsys.readouterr().out          # values never print
 
 
+def test_reaper_apply_reports_failure_when_a_copy_survives(tmp_path, monkeypatch):
+    co = tmp_path / "assistant"
+    _w(co / ".env")
+    old = _w(co / ".env.bak-1", age_days=40)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def refuse(self, *a, **k):
+        raise PermissionError("read-only")
+    monkeypatch.setattr(Path, "unlink", refuse)
+    assert reap.main(["--checkout", str(co), "--apply"]) == 1, "a surviving secret copy must not report success"
+    assert old.exists()
+
+
 # ── secret file modes ────────────────────────────────────────────────────────────────────────────────────────────
 
 

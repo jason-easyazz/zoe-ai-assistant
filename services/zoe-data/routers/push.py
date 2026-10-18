@@ -44,6 +44,7 @@ def _vapid_read_path() -> Path | None:
 
 def _write_private_json(path: Path, data: dict) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)          # an existing dir keeps its mode under mkdir(exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         json.dump(data, fh, indent=2)

@@ -3,11 +3,11 @@
 # an APPEND-ONLY rest-server and cannot delete, so this job is the ONLY thing that ages snapshots out.
 #
 # The policy is the box's RETENTION table (scripts/maintenance/zoe_offbox.py); tests/unit/test_zoe_offbox.py
-# pins these flags equal to it. household = one per day for 7 days + one per week for 35 days, NO monthly, and
+# pins these flags equal to it. household = one per day for 7 days + one per week for 34 days, NO monthly, and
 # TIME-bounded (`--keep-within-*`, relative to the newest snapshot; a count-bounded `--keep-weekly 4` keeps the last
 # 4 weeks that HAVE snapshots, so after a gap it keeps anything): while the box backs up nightly, nothing holding
-# household words is older than 35 days, the bound in docs/knowledge/forget-reach.md ("forgotten means forever").
-# A box that stopped backing up keeps its last 35 days as its restore point. The box's monthly drill alerts on both.
+# household words is older than 35 days (34-day window + one day until the next daily prune), the bound in docs/knowledge/forget-reach.md ("forgotten means forever").
+# A box that stopped backing up keeps its last 34 days as its restore point. The box's monthly drill alerts on both.
 #
 # One key file per household: /keys/<hid>.pass (a restic key added for pruning, `restic key add`; never the
 # owner's master password). A household without a key file is skipped with a message, never guessed.
@@ -25,7 +25,7 @@ for keyfile in "$KEYS"/*.pass; do
   fi
   export RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD_FILE="$keyfile"
   echo "prune: $hid $(date -u +%FT%TZ)"
-  restic forget --tag zoe-household --group-by host,tags --keep-within-daily 7d --keep-within-weekly 35d || rc=1
+  restic forget --tag zoe-household --group-by host,tags --keep-within-daily 7d --keep-within-weekly 34d || rc=1
   restic forget --tag zoe-secrets --group-by host,tags --keep-daily 7 --keep-weekly 4 --keep-monthly 6 || rc=1
   restic forget --tag zoe-artefacts --group-by host,tags --keep-daily 7 --keep-weekly 4 --keep-monthly 6 || rc=1
   restic prune || rc=1

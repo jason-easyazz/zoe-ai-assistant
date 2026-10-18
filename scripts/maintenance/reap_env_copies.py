@@ -19,7 +19,7 @@ Classes (paths print home-relative; values never print, only ``same`` / ``differ
     python3 scripts/maintenance/reap_env_copies.py            # dry run: the table + what --apply would delete
     python3 scripts/maintenance/reap_env_copies.py --apply    # delete the STALE rows (owner step)
 
-Exit 0; 2 on bad invocation.
+Exit 0; 1 when --apply could not delete a stale copy; 2 on bad invocation.
 """
 from __future__ import annotations
 
@@ -204,13 +204,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not ns.apply:
         print("DRY RUN - pass --apply to delete the STALE rows")
         return 0
+    failed = 0
     for r in stale:
         try:
             r.path.unlink()
             print(f"deleted {show(r.path)}")
         except OSError as exc:
-            print(f"could not delete {show(r.path)}: {exc}", file=sys.stderr)
-    return 0
+            failed += 1
+            print(f"could not delete {show(r.path)}: {type(exc).__name__}", file=sys.stderr)
+    if failed:
+        print(f"{failed} stale copy(ies) could NOT be deleted - they still hold secrets", file=sys.stderr)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

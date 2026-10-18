@@ -57,6 +57,14 @@ def test_negative_control_without_the_legacy_fallback_a_new_key_would_be_minted(
     assert got and got != KEYS, "with the fallback removed the legacy key is ignored - the bug this guards"
 
 
+def test_an_existing_loose_parent_dir_is_tightened():
+    d = push.vapid_key_path().parent
+    d.mkdir(parents=True)
+    d.chmod(0o775)
+    push._write_private_json(push.vapid_key_path(), KEYS)
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700
+
+
 def test_generated_key_is_written_private_at_the_new_path():
     pytest.importorskip("py_vapid")
     keys = push._get_vapid_keys()
