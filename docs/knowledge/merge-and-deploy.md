@@ -171,8 +171,11 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
 2. **Probe the final head.** On the Jetson, in a clean worktree at the PR head sha, first copy the
    live env in (`cp -n /home/zoe/assistant/services/zoe-data/.env <worktree>/services/zoe-data/.env
    && chmod 600 <worktree>/services/zoe-data/.env` — without it the probe records an error, see
-   above), then in the Kokoro-paused window (tracker §0), under `flock /tmp/zoe-voice-harness.lock`,
-   with `--service-dir <worktree>/services/zoe-data`. The PR's `voice-gate` check re-runs green
+   above), then in the Kokoro-paused window, under `flock /tmp/zoe-voice-harness.lock`,
+   with `--service-dir <worktree>/services/zoe-data`. The window: `systemctl --user stop kokoro-tts`, run the probe, then
+   `systemctl --user start kokoro-tts`; afterwards `curl http://localhost:10201/health` must show `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
+   `dependencies.tts` must name the `kokoro-sidecar` provider (`tts.ok` alone is not enough: it also goes green on the espeak/edge fallback or a CPU-mode Kokoro).
+   The window frees ~2 GB; hold the other PRs (drop `auto-merge`) while a voice PR lands, or it goes behind again. The PR's `voice-gate` check re-runs green
    (`--expect-revision <head>`).
 3. **Nothing may overwrite the artifact** before the deploy reads it — it is a single shared slot
    (`~/.cache/zoe/voice_regression_last.json`): no other PR's probe, and not the nightly
