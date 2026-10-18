@@ -80,7 +80,7 @@ def test_file_mode_is_kept_and_no_temp_litter(shadow):
     write(shadow, rec("a" * 12, "old", 99), mode=0o600)
     ltl.sweep(NOW)
     assert stat.S_IMODE(shadow.stat().st_mode) == 0o600
-    assert sorted(p.name for p in shadow.parent.iterdir()) == [shadow.name]
+    assert sorted(p.name for p in shadow.parent.iterdir()) == [shadow.name, shadow.name + ".lock"]     # the lock file, and no .tmp litter
 
 
 def test_a_noop_sweep_does_not_touch_the_file(shadow):

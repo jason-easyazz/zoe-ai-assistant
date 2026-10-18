@@ -23,6 +23,8 @@ scripts/maintenance/router_shadow_report.py.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -185,13 +187,35 @@ def _rotate_shadow_log(path: str) -> None:
     os.replace(path, f"{path}.1")
 
 
+@contextlib.contextmanager
+def _shadow_file_lock(path: str):
+    """Cross-process exclusive lock (``<log>.lock``) around rotate + append, so the out-of-process retention rewrite
+    (`local_text_logs`, the hourly job, the owner script) can hold the whole multi-segment pass without a rotation or an append
+    interleaving. Taken AFTER `_shadow_write_lock` here and in `local_text_logs.locked` (same order, no deadlock). A lock file that
+    cannot be opened never breaks a turn: the append goes ahead unlocked."""
+    try:
+        fh = open(f"{path}.lock", "a")
+    except OSError:
+        yield
+        return
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
 def _append_shadow_line(path: str, line: str) -> None:
-    """Rotate-if-needed then append one JSON line, under the shadow write lock."""
+    """Rotate-if-needed then append one JSON line, under the shadow write lock (in-process) and the file lock (cross-process)."""
     with _shadow_write_lock:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        _rotate_shadow_log(path)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
+        with _shadow_file_lock(path):
+            _rotate_shadow_log(path)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
 
 
 def shadow_log_segments(path: str | None = None) -> list[str]:

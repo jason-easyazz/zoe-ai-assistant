@@ -78,6 +78,7 @@ TABLES: tuple[Store, ...] = (
     _t("omi_voice_clusters", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_settings", CONFIG, REACHED, member=_OMI_M),
     _t("omi_devices", METADATA, REACHED, member=_OMI_M),
+    _t("omi_device_health", METADATA, REACHED, member=_OMI_M),         # omi_health.forget_user, called from omi_recordings.forget_user
     _t("omi_day_reviews", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("omi_day_candidates", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("contact_fields", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),

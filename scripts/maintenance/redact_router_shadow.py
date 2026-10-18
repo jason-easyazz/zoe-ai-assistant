@@ -131,22 +131,23 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     failed = 0
     for log in logs:
-        for seg in ltl.segments(log):
-            before = _records(seg)
-            if not any(_selected(ltl, log, r, cutoff, ns.all) for r in before):
-                continue
-            if ns.all:
-                ltl.rewrite(seg, lambda line, _l=log: ltl._strip_or_drop(_l, line, everything=True))
-            else:
-                ltl.rewrite(seg, lambda line, _l=log: ltl._strip_or_drop(_l, line, older_than=cutoff))
-            after = _records(seg)
+        before = {seg: _records(seg) for seg in ltl.segments(log)}
+        kw = {"everything": True} if ns.all else {"older_than": cutoff}
+        try:
+            ltl._apply(log, **kw)                      # one pass over EVERY segment under the log's write lock (the router's own flock)
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            print(f"  FAILED {log.name}: {type(exc).__name__}: {exc}")
+            continue
+        for seg, recs in before.items():
+            after = _records(seg) if seg.exists() else []
             still = sum(_selected(ltl, log, r, cutoff, ns.all) for r in after)
             kept = len(after) if log.expire == "strip" else None
-            if still or (kept is not None and kept < len(before)):
+            if still or (kept is not None and kept < len(recs)):
                 failed += 1
-                print(f"  CHECK FAILED {seg}: {still} selected records still carry text, {len(before)} -> {len(after)} records")
+                print(f"  CHECK FAILED {seg}: {still} selected records still carry text, {len(recs)} -> {len(after)} records")
             else:
-                print(f"  ok {seg}: {len(before)} -> {len(after)} records, 0 selected remain")
+                print(f"  ok {seg}: {len(recs)} -> {len(after)} records, 0 selected remain")
     if failed:
         print(f"{failed} file(s) failed the post-check: the backup is KEPT at {bdir}")
         return 1

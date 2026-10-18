@@ -24,19 +24,22 @@ What reaches them:
                 (``MemoryService.delete_user``) clears the TEXT layer of every record household-wide. Hash-only rows stay: they
                 hold no words.
 
-Rewrites are atomic (fsynced temp file + ``os.replace`` + directory fsync) and keep the file mode. The writer opens the file
-afresh per append, so a line can land in the OLD inode after our last read: the rewrite keeps the old file open, and AFTER the
-replace waits a beat (``_SETTLE_S``) and re-appends whatever reached the old inode since (a writer would have to stall for longer
-than that between ``open`` and ``write`` to slip through). In a process that imported ``semantic_router`` the rewrite also takes
-its append lock; a separate process (the hourly job, the owner script) cannot, so a size rotation by the writer DURING a rewrite
-(the live file is a few MB against a 16 MB cap) could leave the pre-rotation content in two segments: duplicate rows in a
-statistics log, not a leak.
+A pass over the router log holds ``locked(log)``: the in-process append lock and an exclusive ``flock`` on ``<log>.lock``, the same
+two locks ``semantic_router._append_shadow_line`` takes (same order) around rotate + append. So in or out of process no append and
+no rotation interleaves with the pass, which enumerates EVERY existing numeric segment (``.5`` left over from a larger
+``ZOE_ROUTER_SHADOW_KEEP`` included) inside the lock. Rewrites are atomic (fsynced temp file + ``os.replace`` + directory fsync)
+and keep the file mode. As defence against a writer that does not take the lock (the intent-miss log's writer): the old inode stays
+open, rows that reach it before the replace are put THROUGH the same transformation, the path is checked to still name that inode
+(else ``RewriteRaced``, and the pass rescans), and after the replace a short settle (``_SETTLE_S``) then the late rows are
+transformed and re-appended. A row that names a forgotten entity is therefore never copied through.
 
 BACKUPS an owner script makes of these logs (``redact_router_shadow.py``: the raw copy) are not rewritten by a forget; they are
 DELETED by ``prune_adhoc_backups`` (hourly, with the sweep) once older than ``ADHOC_BACKUP_MAX_AGE_DAYS`` (14).
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -76,15 +79,14 @@ def log_path(log: TextLog) -> Path:
 
 
 def segments(log: TextLog) -> list[Path]:
-    """Every existing file of ``log``: the live file plus, for the router log, its rotated ``.1`` .. ``.KEEP`` segments."""
+    """Every existing file of ``log``, OLDEST first: the router log's rotated segments (EVERY numeric ``.N`` suffix that exists - a
+    segment above a since-lowered ``ZOE_ROUTER_SHADOW_KEEP`` is never rotated away again, so it must still be swept) then the live file."""
     base = log_path(log)
     out: list[Path] = []
-    if log is ROUTER_SHADOW:
-        try:
-            keep = int(os.environ.get("ZOE_ROUTER_SHADOW_KEEP", "4"))
-        except ValueError:
-            keep = 4
-        out += [Path(f"{base}.{n}") for n in range(max(keep, 1), 0, -1) if Path(f"{base}.{n}").exists()]
+    if log is ROUTER_SHADOW and base.parent.is_dir():
+        rotated = [(int(p.name[len(base.name) + 1:]), p) for p in base.parent.glob(base.name + ".*")
+                   if p.name[len(base.name) + 1:].isdigit()]
+        out += [p for _n, p in sorted(rotated, reverse=True)]
     if base.exists():
         out.append(base)
     return out
@@ -106,7 +108,7 @@ def retention_days() -> Optional[float]:
 
 
 def _append_lock():
-    """The router's own append lock when this process has it loaded (zoe-data); otherwise a no-op context."""
+    """The router's own in-process append lock when this process has it loaded (zoe-data); otherwise a no-op context."""
     mod = sys.modules.get("semantic_router")
     lock = getattr(mod, "_shadow_write_lock", None)
     if lock is not None:
@@ -122,7 +124,55 @@ def _append_lock():
     return _Null()
 
 
+LOCK_WAIT_S = 30.0
+
+
+def lock_path(log: TextLog) -> Path:
+    base = log_path(log)
+    return base.with_name(base.name + ".lock")
+
+
+@contextlib.contextmanager
+def locked(log: TextLog):
+    """Hold the log's write lock for a whole multi-segment pass: the in-process append lock, then (router log only) an exclusive
+    ``flock`` on ``<log>.lock`` - the SAME lock ``semantic_router._append_shadow_line`` takes around rotate + append, in the same order.
+    So no append and no rotation can interleave with the rewrite, in this process or another. Fails closed: if the flock cannot be
+    had within ``LOCK_WAIT_S`` it raises ``TimeoutError`` (the sweep reports -1, the cascade step fails and is retried). The intent-miss
+    log has no cooperating writer lock; the old-inode catch-up in ``rewrite`` covers it."""
+    with _append_lock():
+        if log is not ROUTER_SHADOW:
+            yield
+            return
+        path = lock_path(log)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(path, "a")
+        except OSError:
+            yield                                           # no lock file possible (read-only dir): nothing is being written there either
+            return
+        try:
+            deadline = time.monotonic() + LOCK_WAIT_S
+            while True:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() > deadline:
+                        raise TimeoutError(f"shadow-log write lock busy for {LOCK_WAIT_S:.0f}s") from None
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+        finally:
+            fh.close()
+
+
 _SETTLE_S = 0.05
+
+
+class RewriteRaced(Exception):
+    """The path no longer names the inode we read (a rotation renamed it). Nothing was replaced; the caller rescans."""
 
 
 def _fsync_dir(directory: Path) -> None:
@@ -136,44 +186,65 @@ def _fsync_dir(directory: Path) -> None:
         pass                                               # a directory that cannot be fsynced (some filesystems) is not a failure
 
 
+def _through(data: bytes, fn: Callable[[str], Optional[str]]) -> tuple[list[str], int]:
+    """``data`` line by line through ``fn``: ``(kept lines, how many changed or dropped)``."""
+    changed = 0
+    out: list[str] = []
+    for line in data.decode("utf-8", errors="surrogateescape").split("\n"):
+        if not line.strip():
+            continue
+        new = fn(line)
+        if new is None:
+            changed += 1
+            continue
+        if new is not line and new != line:
+            changed += 1
+        out.append(new)
+    return out, changed
+
+
+def _blob(lines: list[str]) -> bytes:
+    return ("\n".join(lines) + "\n" if lines else "").encode("utf-8", errors="surrogateescape")
+
+
 def rewrite(path: Path, fn: Callable[[str], Optional[str]]) -> int:
     """Rewrite ``path`` line by line. ``fn(line)`` returns the new line (the same object when unchanged) or None to drop it.
-    Returns how many lines changed or were dropped; the file is replaced only when that is non-zero."""
+    Returns how many lines changed or were dropped; the file is replaced only when that is non-zero.
+
+    The CALLER holds ``locked(log)`` for a cooperating writer (``_apply`` does). Without it, rows can still arrive in the old inode
+    while we work: every such row is put through ``fn`` too (the tail before the replace, and whatever a stalled writer adds after
+    it), so an appended row that names a forgotten entity is erased, not copied through. If the path stopped naming the inode we read
+    (a rotation renamed it) nothing is replaced and ``RewriteRaced`` is raised for the caller to rescan."""
     try:
-        with _append_lock(), open(path, "rb") as old:           # ``old`` stays open: it is the inode a late writer may still hit
-            raw = old.read()
-            size = len(raw)
-            mode = os.fstat(old.fileno()).st_mode & 0o777
-            changed = 0
-            out: list[str] = []
-            for line in raw.decode("utf-8", errors="surrogateescape").split("\n"):
-                if not line.strip():
-                    continue
-                new = fn(line)
-                if new is None:
-                    changed += 1
-                    continue
-                if new is not line and new != line:
-                    changed += 1
-                out.append(new)
+        with open(path, "rb") as old:                          # ``old`` stays open: it is the inode a late writer may still hit
+            st = os.fstat(old.fileno())
+            out, changed = _through(old.read(), fn)
+            mode = st.st_mode & 0o777
             if not changed:
                 return 0
             fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
             try:
                 with os.fdopen(fd, "wb") as fh:
-                    fh.write(("\n".join(out) + "\n" if out else "").encode("utf-8", errors="surrogateescape"))
-                    tail = old.read()                      # lines a writer appended while we worked
-                    fh.write(tail)
+                    tail, tchanged = _through(old.read(), fn)  # rows appended while we worked
+                    changed += tchanged
+                    fh.write(_blob(out + tail))
                     fh.flush()
                     os.fsync(fh.fileno())
                 os.chmod(tmp, mode)
+                try:
+                    cur = os.stat(path)
+                except FileNotFoundError:
+                    cur = None
+                if cur is None or (cur.st_ino, cur.st_dev) != (st.st_ino, st.st_dev):
+                    raise RewriteRaced(str(path))
                 os.replace(tmp, path)
                 _fsync_dir(path.parent)
-                time.sleep(_SETTLE_S)                      # a writer that opened the old inode before the replace finishes its append
-                late = old.read()
+                time.sleep(_SETTLE_S)                          # a writer that opened the old inode before the replace finishes its append
+                late, lchanged = _through(old.read(), fn)
+                changed += lchanged
                 if late:
                     with open(path, "ab") as fh:
-                        fh.write(late)
+                        fh.write(_blob(late))
                         fh.flush()
                         os.fsync(fh.fileno())
             except BaseException:
@@ -230,10 +301,22 @@ def _ts(rec: dict[str, Any], log: TextLog) -> float:
 
 
 def _apply(log: TextLog, **kw: Any) -> int:
-    n = 0
-    for seg in segments(log):
-        n += rewrite(seg, lambda line: _strip_or_drop(log, line, **kw))
-    return n
+    """One full pass over every file of ``log`` under its write lock; a segment that was renamed under us is retried after a rescan."""
+    def fn(line: str) -> Optional[str]:
+        return _strip_or_drop(log, line, **kw)
+
+    total = 0
+    with locked(log):
+        for _attempt in range(4):
+            raced = False
+            for seg in segments(log):
+                try:
+                    total += rewrite(seg, fn)
+                except RewriteRaced:
+                    raced = True
+            if not raced:
+                return total
+    raise RewriteRaced(f"{log.name}: still racing a rotation after 4 passes")
 
 
 ADHOC_BACKUP_MAX_AGE_DAYS = 14

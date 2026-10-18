@@ -11,7 +11,9 @@ A family is removed only when EVERY check passes; otherwise it is reported with 
   1. every unit of the family is not enabled (``disabled`` / ``static`` / ``masked`` / not found) and not active/activating;
   2. no OTHER live unit file names it in a dependency directive (Requires/Wants/BindsTo/PartOf/Upholds/OnFailure/OnSuccess/
      Conflicts/Before/After/Unit/Also), comments ignored;
-  3. nothing in ``<default|timers|sockets>.target.wants`` etc. still links to it.
+  3. no ``<unit>.wants/`` / ``.requires/`` / ``.upholds/`` link directory (``default.target.wants`` etc.) still links to it;
+  4. a dependency from a family that STAYS (blocked, active, or not selected with ``--only``) blocks it too, to a fixpoint: only
+     dependencies from families confirmed removable in this run are ignored.
 Tracked repo code that merely MENTIONS a unit name (a health check, an installer's rollback) is listed for information: those
 references degrade gracefully when the unit is absent and are not blockers.
 
@@ -84,21 +86,31 @@ def _directive_refs(text: str, unit_names: set[str]) -> list[str]:
     return hits
 
 
-def external_references(units_dir: Path, family: str) -> list[str]:
-    """Live unit files (and drop-ins) outside the retired set that name this family in a dependency directive, plus ``*.wants`` links."""
+DEP_DIR_SUFFIXES = (".wants", ".requires", ".upholds")
+
+
+def external_references(units_dir: Path, family: str, gone: set[str]) -> list[str]:
+    """Everything that stays on the box and depends on this family: unit files and drop-ins naming it in a dependency directive,
+    and ``<unit>.wants/`` / ``.requires/`` / ``.upholds/`` link directories holding a link to it. ``gone`` is the set of file names
+    being removed in this run: files of a family that is confirmed removable (and a dependency directory OWNED by a removed unit) do
+    not count, because they leave with it. A kept family - blocked, active, or not selected by ``--only`` - keeps counting."""
     names = set(FAMILIES[family][0])
-    # files of EVERY retired family are skipped: they are all dead, and one dead unit ordering itself After= another is not a live dependency
-    own = {p.name for fam in FAMILIES for p in family_files(units_dir, fam)}
     out: list[str] = []
     for p in sorted(units_dir.iterdir()):
-        if p.name in own or ".bak" in p.name or p.name.endswith(".disabled"):
+        if p.name in gone or ".bak" in p.name or p.name.endswith(".disabled"):
             continue
-        files = [p] if p.is_file() else (sorted(p.glob("*.conf")) if p.is_dir() and p.name.endswith(".d") else [])
-        if p.is_dir() and p.name.endswith(".wants"):
+        if p.is_dir() and p.name.endswith(DEP_DIR_SUFFIXES):
+            owner = p.name.rsplit(".", 1)[0]
+            if owner in gone:
+                continue
             out += [f"{p.name}/{l.name} (link)" for l in p.iterdir() if l.name in names]
             continue
-        if p.is_dir() and p.name.endswith(".d") and p.name[:-2] in own:
-            continue
+        if p.is_dir() and p.name.endswith(".d"):
+            if p.name[:-2] in gone:
+                continue
+            files = sorted(p.glob("*.conf"))
+        else:
+            files = [p] if p.is_file() else []
         for f in files:
             try:
                 refs = _directive_refs(f.read_text(encoding="utf-8", errors="replace"), names)
@@ -138,28 +150,46 @@ def repo_mentions(repo_root: Optional[Path], family: str) -> list[str]:
     return out
 
 
-def assess(units_dir: Path, family: str, state: StateFn, repo_root: Optional[Path] = None) -> dict:
-    files = family_files(units_dir, family)
-    blockers: list[str] = []
-    states = {}
-    for n in FAMILIES[family][0]:
-        if not (units_dir / n).exists():
-            continue
-        enabled, active = state(n)
-        states[n] = (enabled, active)
-        if enabled not in _DEAD_STATES_ENABLED:
-            blockers.append(f"{n} is {enabled!r} (enabled)")
-        if active in _LIVE_ACTIVE:
-            blockers.append(f"{n} is {active}")
-    refs = external_references(units_dir, family)
-    blockers += [f"referenced by {r}" for r in refs]
-    return {"family": family, "files": files, "states": states, "blockers": blockers,
-            "mentions": repo_mentions(repo_root, family)}
+def assess_all(units_dir: Path, families: list[str], state: StateFn, repo_root: Optional[Path] = None) -> list[dict]:
+    """State checks per family, then dependencies to a fixpoint: a family starts removable when its own units are disabled and
+    inactive; a dependency from a file that STAYS (a blocked family, or one outside ``families``) blocks it, and blocking it makes
+    ITS files stay too, which may block a third. Only dependencies from families confirmed removable in this run are ignored."""
+    results = []
+    for family in families:
+        files = family_files(units_dir, family)
+        blockers: list[str] = []
+        states = {}
+        for n in FAMILIES[family][0]:
+            if not (units_dir / n).exists():
+                continue
+            enabled, active = state(n)
+            states[n] = (enabled, active)
+            if enabled not in _DEAD_STATES_ENABLED:
+                blockers.append(f"{n} is {enabled!r} (enabled)")
+            if active in _LIVE_ACTIVE:
+                blockers.append(f"{n} is {active}")
+        results.append({"family": family, "files": files, "states": states, "blockers": blockers,
+                        "mentions": repo_mentions(repo_root, family)})
+    while True:
+        gone = {p.name for r in results if r["files"] and not r["blockers"] for p in r["files"]}
+        changed = False
+        for r in results:
+            if not r["files"] or r["blockers"]:
+                continue
+            refs = external_references(units_dir, r["family"], gone)
+            if refs:
+                r["blockers"] += [f"referenced by {x}" for x in refs]
+                changed = True
+        if not changed:
+            return results
 
 
 def apply_removal(units_dir: Path, results: list[dict], backup_root: Path, now: Optional[float] = None,
-                  ctl: Optional[Callable[[list[str]], int]] = None) -> list[str]:
+                  ctl: Optional[Callable[[list[str]], int]] = None) -> tuple[list[str], bool]:
+    """Move the removable families' files away, then reload systemd. Returns ``(report lines, ok)``; ``ok`` is False when
+    ``daemon-reload`` failed (the manager would keep the removed definitions in memory)."""
     out: list[str] = []
+    ok = True
     ts = time.strftime("%Y%m%d-%H%M%S", time.localtime(now or time.time()))
     ctl = ctl or (lambda argv: subprocess.run(["systemctl", "--user", *argv], timeout=60).returncode)
     moved_units: list[str] = []
@@ -176,12 +206,15 @@ def apply_removal(units_dir: Path, results: list[dict], backup_root: Path, now: 
             if f.name.endswith((".service", ".timer")):
                 moved_units.append(f.name)
     if moved_units:
-        ctl(["daemon-reload"])
-        for u in moved_units:
-            ctl(["reset-failed", u])
-        out.append(f"  daemon-reload + reset-failed for {len(moved_units)} unit(s)")
+        if ctl(["daemon-reload"]) != 0:
+            ok = False
+            out.append("  FAILED: systemctl --user daemon-reload returned non-zero; the manager may still hold the removed units")
+        else:
+            for u in moved_units:
+                ctl(["reset-failed", u])
+            out.append(f"  daemon-reload + reset-failed for {len(moved_units)} unit(s)")
         out.append(f"  restore with:  mv {bdir}/<file> {units_dir}/ && systemctl --user daemon-reload")
-    return out
+    return out, ok
 
 
 def main(argv: Optional[list[str]] = None, *, state: StateFn = systemctl_state,
@@ -199,7 +232,7 @@ def main(argv: Optional[list[str]] = None, *, state: StateFn = systemctl_state,
     if not ns.units_dir.is_dir():
         print(f"no such units dir: {ns.units_dir}", file=sys.stderr)
         return 1
-    results = [assess(ns.units_dir, f, state, ns.repo_root) for f in (ns.only or FAMILIES)]
+    results = assess_all(ns.units_dir, list(ns.only or FAMILIES), state, ns.repo_root)
     print(f"mode: {'APPLY' if ns.apply else 'DRY-RUN (default; pass --apply to move the files)'}   units dir: {ns.units_dir}")
     for r in results:
         if not r["files"]:
@@ -215,12 +248,14 @@ def main(argv: Optional[list[str]] = None, *, state: StateFn = systemctl_state,
             print(f"    BLOCKER: {b}")
         if r["mentions"]:
             print("    tracked code that mentions it (information; degrades gracefully, not a blocker): " + ", ".join(r["mentions"]))
+    reloaded = True
     if ns.apply:
-        for line in apply_removal(ns.units_dir, results, ns.backup_root, ctl=ctl):
+        lines, reloaded = apply_removal(ns.units_dir, results, ns.backup_root, ctl=ctl)
+        for line in lines:
             print(line)
     else:
         print("\nNothing was changed.")
-    return 1 if any(r["blockers"] for r in results) and ns.apply else 0
+    return 1 if ns.apply and (not reloaded or any(r["blockers"] for r in results)) else 0
 
 
 if __name__ == "__main__":

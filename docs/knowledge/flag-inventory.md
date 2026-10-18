@@ -561,7 +561,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_SELFTRAIN_DOW` | `'sat'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_ROUTER_SELFTRAIN_HOUR` | `'1'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_ROUTER_SELFTRAIN_TIMEOUT_S` | `'28800'` | no | NO | `services/zoe-data/main.py` |
-| `ZOE_ROUTER_SHADOW_KEEP` | `'4'`, `4` | no | NO | `services/zoe-data/local_text_logs.py`<br>`services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_SHADOW_KEEP` | `4` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SHADOW_MAX_BYTES` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SHADOW_TEXT` | `''` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SIDECAR_URL` | `-` | no | NO | `services/zoe-data/router_two_stage.py` |

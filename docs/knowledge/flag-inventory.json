@@ -5549,12 +5549,10 @@
       },
       "ZOE_ROUTER_SHADOW_KEEP": {
         "defaults": [
-          "'4'",
           "4"
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/local_text_logs.py",
           "services/zoe-data/semantic_router.py"
         ],
         "typed_env": false

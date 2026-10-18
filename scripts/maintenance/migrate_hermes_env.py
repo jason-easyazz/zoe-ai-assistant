@@ -429,7 +429,7 @@ def render_report(plans: list[UnitPlan], applied: bool) -> str:
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--home", type=Path, default=Path(os.environ.get("HOME", str(Path.home()))),
-                    help="the home that %h in the units, ~/.zoe and the default paths below resolve against")
+                    help="the home that %%h in the units, ~/.zoe and the default paths below resolve against")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="(default) show names and targets only")
     mode.add_argument("--apply", action="store_true", help="write the targets (after a backup)")
