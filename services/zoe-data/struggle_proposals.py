@@ -829,6 +829,9 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
       guest's; not a word that names a thing the member has forgotten), so a forget that erased the row has already removed the example and
       nothing outside ``struggle_events`` holds the words. Any doubt drops the example (a forget-ledger lookup that fails drops it).
     * ``split`` is the stable train / holdout assignment (by normalised text); ``audio_ref`` the saved recording's file name when one can be found unambiguously.
+    * Plus the failed turns the owner CONFIRMED in review (``turn_outcomes.confirmed_examples``: ``proposal_id`` / ``event_id`` =
+      ``turn:<row id>``, ``decided_by`` = ``owner:<id>``, ``label_origin``); their words come from the member's own failed-turn row under
+      the same rules, and pass the same forget check below.
     Consumers re-label with their own independent oracle before training."""
     if not sources:
         return []
@@ -857,6 +860,10 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
                 out.append({"proposal_id": pid, "event_id": str(eid), "user_id": str(uid), "label": label, "label_source": source,
                             "split": split_of(text), "text": text,
                             "audio_ref": audio_ref(parse_detail(detail).get("about_ts")) if str(channel) == "voice" else None})
+    # failure capture: failed turns the OWNER confirmed (``turn_outcomes``; a proposed / rejected / harness / guest row never comes back)
+    import turn_outcomes
+
+    out.extend(ex for ex in await turn_outcomes.confirmed_examples(limit) if ex["label_source"] in sources)
     kept: list[dict] = []
     try:
         import memory_forgotten

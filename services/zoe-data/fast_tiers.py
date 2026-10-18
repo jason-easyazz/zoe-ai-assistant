@@ -811,6 +811,18 @@ def _calc_tier(text: str, user_id: str, session_id: str):
 
 @_functools.wraps(_resolve_core)
 async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
+    res = await _resolve_tiers(text, user_id, session_id, **kwargs)
+    if res is not None:
+        try:  # failure capture (ZOE_STRUGGLE_OUTCOMES, default off): WHICH tier answered - one deque append, never raises
+            import struggle_detector as _sd
+
+            _sd.note_handler(session_id, user_id, "tier", f"{getattr(res, 'tier', '') or 'tier1.5'}/{getattr(res, 'intent', '') or '-'}")
+        except Exception:  # noqa: BLE001
+            pass
+    return res
+
+
+async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
     # (distress, provenance, feedback, self-model) are part of the conversation half, so they must not run - or count the turn - twice.
     if kwargs.get("phase") != "domain":

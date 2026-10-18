@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-717 flags; 667 not documented in `.env.example`.
+718 flags; 668 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -220,7 +220,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_GITHUB_REPO` | `'jason-easyazz/zoe-ai-assistant'` | yes | NO | `services/zoe-data/change_notices.py`<br>`services/zoe-data/greploop_guard.py`<br>`services/zoe-data/greptile_client.py` |
 | `ZOE_GRAPH_RECALL_BOOST` | `''` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_GRAPH_RECALL_WEIGHT` | `dynamic` | no | NO | `services/zoe-data/memory_service.py` |
-| `ZOE_HARNESS` | `-` | no | NO | `services/zoe-data/live_store_guard.py` |
+| `ZOE_HARNESS` | `-` | no | NO | `services/zoe-data/live_store_guard.py`<br>`services/zoe-data/traffic_class.py` |
 | `ZOE_HA_BRIDGE_URL` | `''`, `'http://127.0.0.1:8007'` | no | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_HA_CONTROL_SCOPE` | `'panel'` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_HA_URL` | `dynamic` | no | NO | `services/zoe-data/routers/stubs.py` |
@@ -636,6 +636,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STRUCTURAL_READER` | `'shadow'` | yes | NO | `services/zoe-data/structural_reader.py` |
 | `ZOE_STRUCTURAL_VERIFIER` | `-` | no | NO | `services/zoe-data/structural_verifier.py` |
 | `ZOE_STRUGGLE_DETECT` | `-` | no | NO | `services/zoe-data/struggle_detector.py` |
+| `ZOE_STRUGGLE_OUTCOMES` | `-` | no | NO | `services/zoe-data/turn_outcomes.py` |
 | `ZOE_STRUGGLE_PROPOSALS` | `-` | no | NO | `services/zoe-data/struggle_proposals.py` |
 | `ZOE_STRUGGLE_PROPOSAL_DAYS` | `7.0` | yes | NO | `services/zoe-data/struggle_proposals.py` |
 | `ZOE_STRUGGLE_PROPOSAL_MIN_EPISODES` | `3` | yes | NO | `services/zoe-data/struggle_proposals.py` |

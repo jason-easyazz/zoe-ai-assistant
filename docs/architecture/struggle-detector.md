@@ -1,9 +1,9 @@
 ---
 type: architecture
 title: Struggle detector - notice where Zoe struggled, propose how to fix it (Phases 1-2 of the self-correction loop; Phase 3 designed)
-status: phase-1 built (ZOE_STRUGGLE_DETECT default shadow); phase-2 built (ZOE_STRUGGLE_PROPOSALS default shadow); phase-3 designed here, not built
-owner: services/zoe-data (struggle_signals.py, struggle_detector.py, struggle_digest.py, struggle_proposals.py, routers/struggles.py)
-updated: 2026-10-18
+status: phase-1 built (ZOE_STRUGGLE_DETECT default shadow); phase-2 built (ZOE_STRUGGLE_PROPOSALS default shadow); phase-3 designed here, not built; failure capture built (ZOE_STRUGGLE_OUTCOMES default off)
+owner: services/zoe-data (struggle_signals.py, struggle_detector.py, struggle_digest.py, struggle_proposals.py, turn_outcomes.py, traffic_class.py, routers/struggles.py)
+updated: 2026-10-19
 ---
 
 # Struggle detector
@@ -271,6 +271,61 @@ having learned it. Mitigation: the delta set is rebuilt from the seam each run (
 are limited to the last two plus the lineage checkpoint, everything is local, and the next adopted generation supersedes. The A6
 router-log redaction work in flight covers the shadow log, not this path. (3) With one household the volume of strong labels is small; the
 gate's "not enough evidence" is the expected outcome for a while, and that is correct.
+
+## Failure capture - per-turn outcomes and the owner's label check (built, flag-dark: `ZOE_STRUGGLE_OUTCOMES`)
+
+**Why the loop had no fuel (measured 2026-10-19, counts only).** The detector went live 2026-10-14 ~12:00 (shadow) and saw ~2.5 days of
+household use before the owner went away: the app log holds 51 real-panel voice turns after that (10-14 26, 10-15 21, 10-16 4, none
+since), and the store took 4 events (3 voice, 1 chat). Four causes, in order of weight: (1) **little traffic** - no household turn after
+10-16; (2) **69% of those turns were attributed to `guest`** (35 of 51; voice identity recognised nobody until the 10-18 flip), and a guest
+row keeps no words and makes no router example, so even a caught struggle could not become a label; (3) **most use is conversation** (42
+of 51 turns had no routed domain, 35 went to the brain), so router failures are rare by construction; (4) the heaviest burst (10-14
+21:49-21:55) ran BEFORE the recall round (#2052, merged 23:01): replaying the same log with today's rules finds 10 events in that burst
+where the live detector stored 2. Phase 2 then needs 3 episodes on 2 user-days, so 1 router-training event proposes nothing. Beside those:
+no per-turn record existed (a turn that worked left no trace, so there was no denominator), the handler / tool that ran was never logged,
+`chat_feedback` has 0 rows (a guest cannot write one, and the panel's voice surface has no thumbs-down), and 97% of brain turns are the
+harness, which nothing tagged.
+
+**What is captured now, per turn** (`turn_outcomes.py`, migration `0058`, written by the detector's ONE worker after the reply - never on
+the reply path): the route (`route_domain` + `route_conf` + `route_source` two_stage | two_stage_failed | similarity, `head_top`); what
+EXECUTED it (`handler` = `tier:<tier>/<intent>` from `fast_tiers.resolve`, `intent:<name>` from `intent_router.execute_intent`,
+`skybridge:<domain>.<action>`; `tools` = the brain's tool NAMES from the Flue `__TOOL__` phase=start sentinels); the `outcome` (did |
+cant_do | fell_through | brain | error | interrupted); `path_served`, `latency_ms`; and `traffic` (`traffic_class`: household | harness - a
+harness panel, a harness session such as `replay-*`, a synthetic user, or a `ZOE_HARNESS=1` process). No audio, no reply text. In-turn
+cost: the hooks are deque appends behind two env reads (`test_note_overhead_is_tiny`, Jetson 2026-10-19: p50 0.008 ms, p99 0.009 ms for one
+handler + one tool note per turn); the row write is one INSERT (plus one UPDATE when a later turn reveals a failure) in the existing
+background worker, whose CPU per turn grows ~0.15 ms (p50 1.73 -> 1.88 ms with in-process stores; the DB round trip is async).
+
+**Failed turns and their labels.** A row is FAILED when its outcome is cant_do / fell_through / error or a struggle signal fires about it
+(an over-long answer alone does not count) - at once for a single-turn signal, or when a later turn reveals it: a re-ask, rephrase,
+correction, "that was wrong", or the chat **thumbs-down / correction button** (it marks the rated turn when that is the session's newest
+answer - an older one is not guessed at - and keeps its words only while the turn is still in the detector's 10-minute in-process
+history). A failed household member row keeps the member's own words under exactly the event `summary`
+rules (PII-scrubbed raw, display form, <= 160 chars; never a guest's, off-the-record, distress or forgotten-entity turn; never across two
+identities) and a PROPOSED route: the fast domain that answered the follow-up that worked (`followup`), else the router's own belief
+(`router`). Successful turns and harness rows hold no words.
+
+**Approve-before-train** (user-stated > confirmed > inferred). The owner reviews the week's failed turns - `GET /api/system/struggles/turns`
+(admin persons, own turns and words only), `scripts/maintenance/zoe-struggle-labels.py --user ID`, and one morning-brief line when some
+wait - and confirms the proposed route, gives the right one (a fast domain, or `chat` = the brain was right) or rejects it
+(`POST .../turns/{id}/confirm {label?}` / `.../reject`). **Only a confirmed row with a fast-domain label reaches the router**:
+`struggle_proposals.queued_router_examples` appends `turn_outcomes.confirmed_examples()` (`event_id` = `proposal_id` = `turn:<row id>`,
+`status` accepted, `decided_by` `owner:<id>`, `label_source` followup when the owner kept a follow-up-proven label, else router with a
+PERSON as decider - the shape the Phase 3 driver (#2128) treats as strong), and the seam's forget re-check applies. Phase 3's own policy
+feed of follow-up proposals is unchanged; this path adds owner-confirmed pairs beside it.
+
+**Walls** (`tests/test_turn_outcomes.py`, negative controls in its header): harness rows are text-free and can never be failed, reviewed,
+confirmed or handed out; a guest row cannot be confirmed; a member decides only their own rows (another member's reads as "no such
+turn"); a proposed or rejected label never reaches the seam; forget (`erase_entity`) and user delete reach the rows and fail closed, their
+seam ids leaving the proposals / retrain ledger first (`struggle_proposals.forget_events(["turn:<id>"])`); retention is the detector's
+`ZOE_STRUGGLE_RETENTION_DAYS` sweep.
+
+| flag | default | meaning |
+|---|---|---|
+| `ZOE_STRUGGLE_OUTCOMES` | `off` | `off` = no notes, no rows, nothing in review or the seam; `on` = the record above (needs `ZOE_STRUGGLE_DETECT` != off) + the morning-brief label line |
+
+VOICE-PATH file touched: `fast_tiers.py` (one note in the `resolve` wrapper after a tier answered) - replay-gated. `zoe_flue_client.py`,
+`intent_router.py`, `skybridge_service.py` and `routers/chat.py` carry one guarded note each.
 
 ## Known gaps (also in docs/knowledge/open-problems.md)
 

@@ -2134,6 +2134,12 @@ async def resolve_skybridge_request(
                 },
             }
 
+    try:  # failure capture (ZOE_STRUGGLE_OUTCOMES, default off): Skybridge takes this user's turn - a deque append, never raises
+        import struggle_detector
+
+        struggle_detector.note_handler("", user_id, "skybridge", f"{intent.domain}.{intent.action}")
+    except Exception:  # noqa: BLE001
+        pass
     if skybridge_intent_requires_identity(intent) and _is_guest_user(user_id):
         if (intent.domain == "lists" and intent.action in _GUEST_HOUSEHOLD_LIST_ACTIONS
                 and panel_principal.in_panel_turn()):

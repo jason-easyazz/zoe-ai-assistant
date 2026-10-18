@@ -3389,6 +3389,11 @@ async def submit_feedback(interaction_id: str, request: Request, feedback_type: 
 
     await record_feedback(user_id, interaction_id, feedback_type, corrected)
     logger.info(f"Feedback {feedback_type} from {user_id} on {interaction_id}")
+    if feedback_type in ("thumbs_down", "correction"):
+        # failure capture (ZOE_STRUGGLE_OUTCOMES, default off = returns at once): the rated turn's outcome row is marked failed, off the reply
+        import turn_outcomes
+
+        asyncio.ensure_future(turn_outcomes.note_feedback(user_id, interaction_id, feedback_type))
     messages = {
         "thumbs_up": "Thanks — glad that helped.",
         "thumbs_down": "Thanks — we'll use that to improve.",

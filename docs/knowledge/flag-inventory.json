@@ -2075,7 +2075,8 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/live_store_guard.py"
+          "services/zoe-data/live_store_guard.py",
+          "services/zoe-data/traffic_class.py"
         ],
         "typed_env": false
       },
@@ -6308,6 +6309,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/struggle_detector.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_STRUGGLE_OUTCOMES": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/turn_outcomes.py"
         ],
         "typed_env": false
       },
