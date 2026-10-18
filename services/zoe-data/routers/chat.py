@@ -3216,11 +3216,16 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
     role = body.get("role", "user")
     content = body.get("content", "")
     client_meta = body.get("metadata")
+    # The traffic class is the SERVER's (traffic_class.py): every row carries it and a client cannot claim one.
+    # A dict keeps its keys (its own traffic_class overwritten); any other shape is kept under "client".
     if isinstance(client_meta, dict):
-        # The traffic class is the SERVER's (traffic_class.py): a client cannot claim one, household or not.
-        client_meta = dict(client_meta)
-        client_meta["traffic_class"] = traffic_class.current()
-    metadata = json.dumps(client_meta) if client_meta else None
+        meta = dict(client_meta)
+    elif client_meta in (None, "", [], {}):
+        meta = {}
+    else:
+        meta = {"client": client_meta}
+    meta["traffic_class"] = traffic_class.current()
+    metadata = json.dumps(meta)
     # get_db_ctx, not `async for db in get_db()`: exiting the generator
     # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
     async with get_db_ctx() as db:

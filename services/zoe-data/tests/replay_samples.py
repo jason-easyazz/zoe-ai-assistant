@@ -382,9 +382,12 @@ def _yield_to_panel() -> None:
     """Between clips: when the probe runs under ``ZOE_HARNESS_YIELD_TO_PANEL=1`` (set by
     voice_regression_probe.py after its quiet-hours check), wait while the household is using the panel, so a
     gate run delays at most the clip in flight (scripts/maintenance/harness_quiet.py). Bounded by
-    ``ZOE_HARNESS_PANEL_WAIT_S`` (default 2700 s); never raises - a guard failure must not fail the gate."""
+    ``ZOE_HARNESS_PANEL_WAIT_S`` (default 2700 s). A panel STILL in use after that ABORTS the replay (exit 5): the
+    landing probe is exempt from the hours, never from the household, and an aborted run is a non-pass, so nothing
+    lands on it. A guard that cannot run (import error) does not fail the gate."""
     if os.environ.get("ZOE_HARNESS_YIELD_TO_PANEL") != "1":
         return
+    quiet = True
     try:
         # by FILE PATH, never via sys.path: scripts/maintenance holds names that shadow service modules
         import importlib.util
@@ -397,10 +400,14 @@ def _yield_to_panel() -> None:
             sys.modules["harness_quiet"] = harness_quiet
             spec.loader.exec_module(harness_quiet)
 
-        harness_quiet.wait_for_panel_quiet(float(os.environ.get("ZOE_HARNESS_PANEL_WAIT_S", "2700")),
-                                           log=lambda m: print(m, file=sys.stderr, flush=True))
+        quiet = harness_quiet.wait_for_panel_quiet(float(os.environ.get("ZOE_HARNESS_PANEL_WAIT_S", "2700")),
+                                                   log=lambda m: print(m, file=sys.stderr, flush=True))
     except Exception:  # noqa: BLE001
         return
+    if not quiet:
+        print("replay ABORTED: the panel stayed in use past ZOE_HARNESS_PANEL_WAIT_S - yielding to the household "
+              "(a non-pass; re-run when the panel is quiet)", file=sys.stderr, flush=True)
+        raise SystemExit(5)
 
 
 def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:

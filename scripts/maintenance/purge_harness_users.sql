@@ -64,8 +64,10 @@ DO $$
 DECLARE
   pat  text   := current_setting('zoe.synthetic_re');
   keep text[] := coalesce(string_to_array(nullif(current_setting('zoe.keep_ids'), ''), ','), ARRAY[]::text[]);
-  r    record;
-  n    bigint;
+  r      record;
+  n      bigint;
+  others text;
+  pred   text;
 BEGIN
   FOR r IN
     SELECT c.table_name, c.column_name
@@ -75,8 +77,16 @@ BEGIN
        AND c.column_name IN ('user_id', 'owner_user_id', 'zoe_user_id')
      ORDER BY 1, 2
   LOOP
-    EXECUTE format('SELECT count(*) FROM %I WHERE %I::text ~* $1 AND NOT (%I::text = ANY ($2))',
-                   r.table_name, r.column_name, r.column_name) INTO n USING pat, keep;
+    -- a row is the harness's only when EVERY owner column it has is empty or synthetic: a row a real user
+    -- also owns (owner_user_id = demo_*, user_id = a member) is never touched
+    SELECT string_agg(format('(%1$I IS NULL OR length(%1$I::text) = 0 OR (%1$I::text ~* $1 AND NOT (%1$I::text = ANY ($2))))',
+                             c2.column_name), ' AND ')
+      INTO others
+      FROM information_schema.columns c2
+     WHERE c2.table_schema = 'public' AND c2.table_name = r.table_name
+       AND c2.column_name IN ('user_id', 'owner_user_id', 'zoe_user_id') AND c2.column_name <> r.column_name;
+    pred := format('%1$I::text ~* $1 AND NOT (%1$I::text = ANY ($2))', r.column_name) || coalesce(' AND ' || others, '');
+    EXECUTE format('SELECT count(*) FROM %I WHERE ', r.table_name) || pred INTO n USING pat, keep;
     IF n > 0 THEN
       RAISE NOTICE 'dry-run  %.%  rows=%', r.table_name, r.column_name, n;
     END IF;
@@ -103,6 +113,8 @@ DECLARE
   pending text[];
   blocked text[];
   sessions text[];
+  others  text;
+  pred    text;
 BEGIN
   -- the sessions to take: owned by a synthetic id, and no turn in them names a real user
   SELECT coalesce(array_agg(s.id), ARRAY[]::text[]) INTO sessions FROM chat_sessions s
@@ -129,8 +141,16 @@ BEGIN
         IF r.tbl = 'chat_sessions' THEN
           DELETE FROM chat_sessions WHERE id = ANY (sessions);
         ELSE
-          EXECUTE format('DELETE FROM %I WHERE %I::text ~* $1 AND NOT (%I::text = ANY ($2))', r.tbl, r.col, r.col)
-            USING pat, keep;
+      -- a row is the harness's only when EVERY owner column it has is empty or synthetic: a row a real user
+      -- also owns (owner_user_id = demo_*, user_id = a member) is never touched
+      SELECT string_agg(format('(%1$I IS NULL OR length(%1$I::text) = 0 OR (%1$I::text ~* $1 AND NOT (%1$I::text = ANY ($2))))',
+                               c2.column_name), ' AND ')
+        INTO others
+        FROM information_schema.columns c2
+       WHERE c2.table_schema = 'public' AND c2.table_name = r.tbl
+         AND c2.column_name IN ('user_id', 'owner_user_id', 'zoe_user_id') AND c2.column_name <> r.col;
+      pred := format('%1$I::text ~* $1 AND NOT (%1$I::text = ANY ($2))', r.col) || coalesce(' AND ' || others, '');
+          EXECUTE format('DELETE FROM %I WHERE ', r.tbl) || pred USING pat, keep;
         END IF;
         GET DIAGNOSTICS n = ROW_COUNT;
         IF n > 0 THEN RAISE NOTICE 'purge    %.%  rows=%  (pass %)', r.tbl, r.col, n, pass; END IF;

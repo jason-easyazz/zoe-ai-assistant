@@ -168,3 +168,19 @@ def test_harnesses_call_the_guard(path, needle):
 @pytest.mark.parametrize("path", ["scripts/perf/samantha_day_sim.py", "scripts/perf/samantha_person.py"])
 def test_day_sim_and_person_bench_gate_through_user_model_ab(path):
     assert "uma._gates(args, live, log)" in (ROOT / path).read_text()
+
+
+def test_the_shared_harness_gate_really_refuses_at_noon(monkeypatch):
+    """Behavioural, not a source string: user_model_ab._gates (day-sim, person bench, the A/B) returns the quiet-hours
+    refusal BEFORE it touches the deploy check, the token or the live server."""
+    uma = _load("user_model_ab", ROOT / "scripts" / "perf" / "user_model_ab.py")
+    sb = uma.sb
+    monkeypatch.setattr(sb, "in_nightly_window", lambda now: False)
+    monkeypatch.setattr(sb, "deploy_in_progress", lambda: pytest.fail("the gate went past quiet hours"))
+    monkeypatch.setattr(hq, "in_waking_hours", lambda now=None: True)
+    monkeypatch.setitem(sys.modules, "harness_quiet", hq)
+    reason = uma._gates(None, None, print)
+    assert reason and "quiet hours" in reason
+    monkeypatch.setenv("ZOE_HARNESS_FORCE", "1")              # the deliberate override reaches the next gate
+    with pytest.raises(pytest.fail.Exception, match="went past quiet hours"):
+        uma._gates(None, None, print)

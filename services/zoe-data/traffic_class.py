@@ -187,6 +187,14 @@ def refine_for_user(user_id: Optional[str]) -> str:
     return current()
 
 
+def detached_task(loop: Any, coro: Any, *, name: Optional[str] = None) -> Any:
+    """``loop.create_task`` from an EMPTY context. A task copies the context it is created in, so a
+    process-lifetime worker started lazily inside a request (and 97% of requests were the harness) would carry
+    that request's class forever and tag every later household line it writes. Per-turn work keeps the plain
+    ``create_task`` - it SHOULD inherit its turn's class."""
+    return contextvars.Context().run(loop.create_task, coro, name=name)
+
+
 def is_household(cls: Optional[str] = None) -> bool:
     return (cls if cls is not None else current()) == HOUSEHOLD
 

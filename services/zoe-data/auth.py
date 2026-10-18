@@ -247,6 +247,7 @@ async def get_current_user(request: Request) -> dict:
         # a caller may branch on to refuse rather than trust. Do NOT cache this.
         degraded = {k: v for k, v in validated.items() if k != _DEGRADED_MARK}
         degraded["auth_degraded"] = True
+        _refine_traffic_class(degraded)
         return degraded
     _cache_set(session_id, validated)
     _refine_traffic_class(validated)

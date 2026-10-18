@@ -173,8 +173,12 @@ def test_brain_lane_line_names_the_class(caplog):
     lines = _app_log_lines(caplog)          # formatted while the class is bound, as the app-log handler does
     assert any(m.startswith("BRAIN_LANE ") and m.endswith(" traffic=probe") for m in lines)
     assert tc.brain_turn_counts()["probe"] == before + 1
-    tc.bind(tc.HOUSEHOLD)                   # NEGATIVE CONTROL: a household line is byte-identical to before
-    assert all("traffic=" not in m for m in _app_log_lines(caplog))
+    caplog.clear()                          # NEGATIVE CONTROL: a household turn's line is byte-identical to before
+    tc.bind(tc.HOUSEHOLD)
+    with caplog.at_level(logging.INFO, logger="brain_dispatch"):
+        brain_dispatch._log_lane(attempted="flue", served="flue", outcome="ok", session_id="voice-panel-x-1")
+    household = [m for m in _app_log_lines(caplog) if m.startswith("BRAIN_LANE ")]
+    assert household and all(m.endswith("session=voice-panel-x-1") for m in household)
 
 
 def _app_log_lines(caplog):
@@ -261,3 +265,115 @@ def test_prompt_cache_line_names_the_class(caplog):
     msgs = _app_log_lines(caplog)           # the app log's suffix, not the message
     assert any(m.startswith("FLUE_PROMPT_CACHE session=bar-pf-1 ") and m.endswith(" traffic=harness") for m in msgs)
     assert not any("PANEL_KV_MISS" in m for m in msgs)
+
+
+def test_a_detached_worker_never_inherits_the_request_that_started_it():
+    """A process-lifetime worker born inside a harness request must not tag household work as harness forever."""
+    async def go():
+        tc.bind(tc.HARNESS)
+        loop = asyncio.get_running_loop()
+
+        async def seen():
+            return tc.current()
+
+        inherited = await loop.create_task(seen())                 # per-turn work: inherits (correct)
+        detached = await tc.detached_task(loop, seen(), name="w")  # a worker: starts clean
+        return inherited, detached
+
+    assert asyncio.run(go()) == ("harness", "household")
+
+
+@pytest.mark.parametrize("client_meta,expected", [
+    ({"traffic_class": "household", "k": 1}, {"k": 1, "traffic_class": "harness"}),   # a claim is overwritten
+    (None, {"traffic_class": "harness"}),                                             # absent: still stamped
+    (["traffic_class", "household"], {"client": ["traffic_class", "household"], "traffic_class": "harness"}),
+    ("household", {"client": "household", "traffic_class": "harness"}),
+])
+def test_save_message_stamps_the_server_class_whatever_the_client_sent(monkeypatch, client_meta, expected):
+    """Cross-review finding: a non-dict / absent client metadata used to skip the stamp. NEGATIVE CONTROL: the
+    client's own "household" never survives as the row's class."""
+    import json as _json
+
+    from routers import chat as chat_router
+
+    writes = []
+
+    class _Db:
+        async def execute(self, sql, params=()):
+            writes.append((sql, params))
+
+        async def execute_fetchall(self, sql, params=()):
+            return [{"id": "s1"}] if "SELECT id FROM chat_sessions" in sql else []
+
+        async def commit(self):
+            pass
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Db()
+
+        async def __aexit__(self, *a):
+            return False
+
+    async def _touch(*a, **k):
+        return None
+
+    class _Req:
+        async def json(self):
+            return {"role": "user", "content": "hi", "metadata": client_meta}
+
+    monkeypatch.setattr(chat_router, "get_db_ctx", lambda: _Ctx())
+    monkeypatch.setattr(chat_router, "_touch_chat_session", _touch)
+
+    async def go():
+        tc.bind(tc.HARNESS)
+        await chat_router.save_message("s1", _Req(), {"user_id": "demo_bar_0a1b2c3d"})
+
+    asyncio.run(go())
+    insert = next(p for sql, p in writes if "INSERT INTO chat_messages" in sql)
+    assert _json.loads(insert[4]) == expected
+
+
+# ── the replay's between-clip yield (cross-review: a panel still busy after the wait must abort, not proceed) ──
+
+
+def _replay():
+    import os
+
+    cwd = os.getcwd()
+    try:
+        import replay_samples
+        return replay_samples
+    finally:
+        os.chdir(cwd)
+
+
+def test_replay_aborts_when_the_panel_stays_busy(monkeypatch):
+    import sys
+    import types
+
+    rs = _replay()
+    waits = []
+    fake = types.SimpleNamespace(wait_for_panel_quiet=lambda s, log=None: waits.append(s) or False)
+    monkeypatch.setitem(sys.modules, "harness_quiet", fake)
+    monkeypatch.setenv("ZOE_HARNESS_YIELD_TO_PANEL", "1")
+    monkeypatch.setenv("ZOE_HARNESS_PANEL_WAIT_S", "30")
+    with pytest.raises(SystemExit) as exc:
+        rs._yield_to_panel()
+    assert exc.value.code == 5 and waits == [30.0]
+    fake.wait_for_panel_quiet = lambda s, log=None: True
+    rs._yield_to_panel()                                  # a quiet panel: the clip proceeds
+    monkeypatch.delenv("ZOE_HARNESS_YIELD_TO_PANEL")
+    fake.wait_for_panel_quiet = lambda s, log=None: pytest.fail("no yield without the probe's flag")
+    rs._yield_to_panel()
+
+
+def test_replay_names_itself_probe_only_next_to_the_internal_token(monkeypatch):
+    rs = _replay()
+    monkeypatch.delenv("ZOE_INTERNAL_TOKEN", raising=False)
+    assert rs._remote_headers("dev") == {"Content-Type": "application/json", "X-Device-Token": "dev"}
+    monkeypatch.setenv("ZOE_INTERNAL_TOKEN", TOKEN)
+    monkeypatch.setenv("ZOE_TRAFFIC_CLASS", "probe")
+    h = rs._remote_headers("dev")
+    assert h["X-Internal-Token"] == TOKEN and h[tc.HEADER] == "probe"
+    assert tc.classify_headers(h) == "probe"

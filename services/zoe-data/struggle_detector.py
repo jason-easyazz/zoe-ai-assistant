@@ -258,7 +258,9 @@ def _queue() -> "asyncio.Queue":
         _STATE.update(queue=q, loop=loop, worker=None)
     w = _STATE.get("worker")
     if w is None or w.done():
-        _STATE["worker"] = loop.create_task(_worker(q), name="struggle-detector")
+        # A process-lifetime worker, born inside whichever request queued first: start it from an EMPTY context so
+        # it never inherits that request's traffic class (traffic_class.detached_task).
+        _STATE["worker"] = traffic_class.detached_task(loop, _worker(q), name="struggle-detector")
     return q
 
 

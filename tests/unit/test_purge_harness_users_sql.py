@@ -51,3 +51,10 @@ def test_keep_ids_are_excluded_everywhere_a_row_is_selected():
     for at in hits:
         window = SQL[at:at + 160]
         assert "keep" in window or "$2" in window, f"a selection ignores keep_ids: {SQL[at - 60:at + 60]!r}"
+
+
+def test_a_row_a_real_user_also_owns_is_never_selected():
+    """Cross-review finding: `owner_user_id = demo_*, user_id = jason` must survive. Both the dry run and the purge
+    build their predicate from EVERY owner column of the table (exercised on pg17: that row was kept)."""
+    assert SQL.count("c2.column_name <> ") == 2
+    assert SQL.count("coalesce(' AND ' || others, '')") == 2
