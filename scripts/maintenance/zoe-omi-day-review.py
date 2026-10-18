@@ -14,6 +14,8 @@ Flags
   --user ID | --all-members   one member, or every member with unanalysed pendant recordings (synthetic ids dropped).
   --date YYYY-MM-DD      only that household day (repeatable). Default: every past day not analysed yet (<= ZOE_OMI_DAY_REVIEW_MAX_AGE_DAYS).
   --as-of YYYY-MM-DD     judge "already past" against the END of that day instead of now (the lab: re-reading old days as the night after).
+  --budget-s S           the seconds this process may spend (the night window passes the time it has left): a day whose estimated cost
+                         at the measured rates does not fit what remains is not started (status ``no_time``; the next night retries it).
   --dry-run              run every call and check, write NOTHING (works with the flag off). Without it the flag must be on.
   --dump FILE            with --dry-run only: the proposed candidates WITH their quotes, as JSON, for a private quality review. Refused
                          inside the repository (it holds what people said).
@@ -29,6 +31,7 @@ import json
 import os
 import pathlib
 import sys
+import time
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "services" / "zoe-data"))
@@ -82,7 +85,9 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap.add_argument("--allow-remote", action="store_true")
     ap.add_argument("--yield-to-log", default="")
     ap.add_argument("--chunk-tokens", type=int, default=0)
+    ap.add_argument("--budget-s", type=float, default=0.0)
     args = ap.parse_args(argv)
+    started = time.monotonic()
 
     import omi_day_review as dr
 
@@ -100,6 +105,8 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
                              decode_tok_s=args.decode_tok_s or None, prefill_tok_s=args.prefill_tok_s or None, lane_name="night")
     if args.chunk_tokens:
         cfg.chunk_tokens = max(300, args.chunk_tokens)
+    if args.budget_s > 0:
+        cfg.deadline = started + args.budget_s
     if args.yield_to_log:
         cfg.cancel = _voice_log_watch(pathlib.Path(args.yield_to_log).expanduser())
     as_of = None
@@ -150,7 +157,7 @@ def main(argv: "list[str] | None" = None) -> int:
     print(json.dumps(summary, separators=(",", ":")))
     tot = summary.get("days") or []
     print(f"NIGHT_JOB omi_day_review status={summary['status']} days={len(tot)} calls={sum(d.get('calls', 0) for d in tot)} "
-          f"stored={sum(d.get('stored', 0) for d in tot)}", file=sys.stderr)
+          f"stored={sum(d.get('stored', 0) for d in tot)} no_time={sum(1 for d in tot if d.get('status') == 'no_time')}", file=sys.stderr)
     return code
 
 
