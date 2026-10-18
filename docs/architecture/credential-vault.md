@@ -681,8 +681,8 @@ broker, V1c-V4c with the client alone, plus H1 (no egress), M1/M2 and the measur
   socket is the alternative if latency matters in V3, at a resident ~150 MB.
 - **`bw`'s own URL matching ignores the scheme** (an `http://` URL matches), so nothing may rely on `bw list --url`;
   the broker's rule (6.3) is the only origin check.
-- **Vaultwarden is small:** 33-53 MB RSS with a 1,096-item family vault (sampled peak 48 MB), fine under a 256 MB cap.
-  The broker core is ~35 MB; the login browser peak brings the lab client to ~620 MB.
+- **Vaultwarden is small:** 33-53 MB RSS with a 1,096-item family vault (sampled peak 50 MB), fine under a 256 MB cap.
+  The broker core is ~35 MB; the login browser peak brings the lab client to ~600 MB.
 - **5.2 grew three verbs** that the table above now lists: `redeem` (the sealed handle, realised in memory), `notices`
   (links zoe-data forwards) and the phone unit's `card`.
 - **V17's control is a shared DevTools connection**, not a widened group: the launcher also checks SO_PEERCRED and

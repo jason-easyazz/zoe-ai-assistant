@@ -35,10 +35,11 @@ exactly one protection off (`substring`, `nopsl`, `inherit`, `logsecret`, `otp_v
 
 ## Result
 
-### 29/29 cells pass, every negative control red (2026-10-19, pieces 05:02-06:10, one lane-lock hold each)
+### 29/29 cells pass, every negative control red (2026-10-19, one lane-lock hold per piece)
 
-Run as seven pieces (v0, A-F), each 2.5-6 minutes inside one hold of the test-lane lock, `MemAvailable` 2005-3194 MB
-at the start of each. Every piece also re-proved H1. A cell whose negative control does not go red is reported as a
+Run as seven pieces (v0, A-F), each 2.5-6 minutes inside one hold of the test-lane lock, `MemAvailable` 2002-3303 MB
+at the start of each. v0 ran at 05:02 (it does not load the broker); A-F were re-run 06:21-07:11 on the broker as
+submitted, after the first review round (renamed module, atomic submit-target check, audit reason-code charset). Every piece also re-proved H1. A cell whose negative control does not go red is reported as a
 FAIL by `lab/common.py`, whatever its positive half says.
 
 | cell | piece | proves (green) | negative control (red) |
@@ -84,8 +85,8 @@ FAIL by `lab/common.py`, whatever its positive half says.
   (base-domain) item. The broker's rule refuses http (V2), so this matters only for anything that would trust bw's
   `--url` filter. A regex URI matches whatever its author wrote (V2c's control), which is why the broker refuses regex.
 - **Vaultwarden RSS with a family-sized vault** (5 accounts, 4 orgs, 1,096 items): 33-53 MB VmRSS, cgroup
-  `memory.current` 39-64 MB, sampled peak 44-48 MB, under a 256 MB cap.
-- **The lab client** (bw + the broker + Chromium + Python, one browser at a time): sampled peak 586-617 MB of 768 MB.
+  `memory.current` 39-64 MB, sampled peak 22-50 MB, under a 256 MB cap.
+- **The lab client** (bw + the broker + Chromium + Python, one browser at a time): sampled peak 506-603 MB of 768 MB (317 MB in the piece without a browser).
   The broker core itself: 35-43 MB VmHWM.
 - **fTPM unseal: [unverified, owner step].** Read-only probe: `/dev/tpm0` and `/dev/tpmrm0` exist (TPM 2.0, driver
   `ftpm-tee`, Jetson Linux R36.4.3), mode 0660 owned by `tss`; the `zoe` uid is not in their group, so a seal/unseal
@@ -111,6 +112,9 @@ FAIL by `lab/common.py`, whatever its positive half says.
   method for any other browser error (never a parameter value).
 - **DOM clobbering:** the fill reads form and document properties through the isolated world's pristine prototype
   getters, so `<input name=action>` cannot fake a form's submit target.
+- **From review:** the broker module was first named `core.py`, which the root `.gitignore` drops as a core dump
+  (`**/core.*`), so it never reached git; it is `broker.py` now (the unit is still called `core`). The form-target
+  check is now repeated inside the same script that submits, so a page timer cannot change the target in between.
 - **Vaultwarden needs `encryptedFor`** on every cipher write since web-v2025.6.0 (lab seeding), and a Docker volume
   mounted first by another image must be mounted `nocopy` or Docker resets its owner (lab plumbing).
 
