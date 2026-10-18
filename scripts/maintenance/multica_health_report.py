@@ -68,6 +68,28 @@ async def _probe(url: str, *, headers: dict[str, str] | None = None) -> dict:
         return {"ok": False, "url": url, "error": str(exc)}
 
 
+async def _probe_gated(url: str) -> dict:
+    """A board route through nginx. It sits behind Zoe's sign-in gate (nginx auth_request, zoe-data multica_ui_gate.py), so
+    an anonymous probe is EXPECTED to be refused: 401 / 403, or the 302 to the ``/board.html`` launcher on the page route.
+    That answer proves nginx and the gate are up; the upstream itself is ``backend_health`` / ``web_direct``. A 2xx means the
+    gate is OFF (``ZOE_MULTICA_UI_GATE=off``, the rollback) and is reported as ``gated: False``."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            response = await client.get(url)
+        location = response.headers.get("location", "")
+        refused = response.status_code in (401, 403) or (
+            response.status_code == 302 and location.startswith("/board.html")
+        )
+        return {
+            "ok": refused or 200 <= response.status_code < 300,
+            "gated": refused,
+            "status": response.status_code,
+            "url": url,
+        }
+    except Exception as exc:
+        return {"ok": False, "url": url, "error": str(exc)}
+
+
 async def run(*, ensure_shape: bool = False) -> dict:
     from multica_client import get_engineering_multica_agent_id, get_multica_client
 
@@ -103,10 +125,10 @@ async def run(*, ensure_shape: bool = False) -> dict:
     report["checks"]["web_direct"] = await _probe(
         os.environ.get("MULTICA_WEB_URL", "http://127.0.0.1:3000")
     )
-    report["checks"]["web_proxy"] = await _probe(
+    report["checks"]["web_proxy"] = await _probe_gated(
         os.environ.get("MULTICA_PROXY_URL", "http://127.0.0.1/multica/")
     )
-    report["checks"]["api_proxy"] = await _probe(
+    report["checks"]["api_proxy"] = await _probe_gated(
         os.environ.get("MULTICA_API_PROXY_HEALTH_URL", "http://127.0.0.1/multica-api/health")
     )
     report["checks"]["oidc_discovery"] = await _probe(
