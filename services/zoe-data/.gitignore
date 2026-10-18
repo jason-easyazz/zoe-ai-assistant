@@ -11,3 +11,8 @@ __pycache__/
 .coverage
 htmlcov/
 data/vapid_keys.json
+# Database copies and backups (2026-10-19: a pre-migration SQLite copy was tracked in this public repo)
+*.db.*
+*.sqlite
+*.sqlite3
+*.sqlite*
