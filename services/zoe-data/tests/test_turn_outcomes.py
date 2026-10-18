@@ -122,8 +122,18 @@ async def test_off_writes_no_rows_and_keeps_no_notes(monkeypatch, fresh):
     assert not sd._HANDLERS
     await failed_then_fixed()
     assert fresh.data == []
-    assert sd.observe("chat", "hi", "Hello.", A, "replay-0123456789ab") is False
+    assert sd.observe("chat", "hi", "Hello.", "demo_bar_ab12", "s9") is False
     assert sd._STATE.get("queue") is None, "off: a harness turn starts no worker"
+
+
+def test_off_keeps_the_detectors_old_skip_set(monkeypatch):
+    """Flag-dark: with the capture off the detector skips exactly what it always did (a harness panel, a synthetic user); the wider
+    traffic class (a harness SESSION, a declared harness process) applies only when the capture is on."""
+    monkeypatch.setenv(to.ENV, "off")
+    assert sd._traffic(A, "replay-0123456789ab", "") == "household"
+    assert sd._traffic(A, "s1", "replay-harness") == "harness"
+    monkeypatch.setenv(to.ENV, "on")
+    assert sd._traffic(A, "replay-0123456789ab", "") == "harness"
 
 
 async def test_detect_off_beats_outcomes_on(monkeypatch, fresh):
@@ -408,7 +418,9 @@ async def test_the_thumbs_down_button_marks_the_rated_turn(sql):
     q = "what's the capital of chad"
     await feed(item(q, "Lyon.", session="web_1"))
     sql.conn.execute("INSERT INTO chat_messages VALUES ('m1', 'web_1', 'assistant', 'Lyon.', '2026-10-19 10:00:00')")
-    assert await to.note_feedback(A, "m1", "thumbs_down") is True
+    assert sd.observe_feedback(A, "m1", "thumbs_up") is False, "only a wrong verdict marks a turn"
+    assert sd.observe_feedback(A, "m1", "thumbs_down") is True      # the button path: queued for the ONE worker that writes rows
+    await sd.drain(timeout=10)
     row = (await to.review(A))["items"][0]
     assert "NEGATIVE_FEEDBACK" in row["signals"] and row["words"] == q
     sql.conn.execute("INSERT INTO chat_messages VALUES ('m2', 'web_1', 'assistant', 'Paris.', '2026-10-19 10:05:00')")

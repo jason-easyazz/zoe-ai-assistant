@@ -298,9 +298,9 @@ background worker, whose CPU per turn grows ~0.15 ms (p50 1.73 -> 1.88 ms with i
 
 **Failed turns and their labels.** A row is FAILED when its outcome is cant_do / fell_through / error or a struggle signal fires about it
 (an over-long answer alone does not count) - at once for a single-turn signal, or when a later turn reveals it: a re-ask, rephrase,
-correction, "that was wrong", or the chat **thumbs-down / correction button** (it marks the rated turn when that is the session's newest
-answer - an older one is not guessed at - and keeps its words only while the turn is still in the detector's 10-minute in-process
-history). A failed household member row keeps the member's own words under exactly the event `summary`
+correction, "that was wrong", or the chat **thumbs-down / correction button** (queued to the same worker, which marks the rated turn
+when that is the session's newest answer - an older one is not guessed at - and keeps its words only while the turn is still in the
+detector's 10-minute in-process history). A failed household member row keeps the member's own words under exactly the event `summary`
 rules (PII-scrubbed raw, display form, <= 160 chars; never a guest's, off-the-record, distress or forgotten-entity turn; never across two
 identities) and a PROPOSED route: the fast domain that answered the follow-up that worked (`followup`), else the router's own belief
 (`router`). Successful turns and harness rows hold no words.
@@ -323,6 +323,11 @@ seam ids leaving the proposals / retrain ledger first (`struggle_proposals.forge
 | flag | default | meaning |
 |---|---|---|
 | `ZOE_STRUGGLE_OUTCOMES` | `off` | `off` = no notes, no rows, nothing in review or the seam; `on` = the record above (needs `ZOE_STRUGGLE_DETECT` != off) + the morning-brief label line |
+
+With the flag off the detector skips exactly what it always skipped (a harness panel, a synthetic user); the wider traffic class
+applies only when it is on. Known limit: `intent_router.execute_intent` knows the user but not the session, so its note is joined by
+user and could land on the wrong row when one member has two turns in flight at once (voice and chat); a tier, Skybridge or tool note is
+per session or per user as stated.
 
 VOICE-PATH file touched: `fast_tiers.py` (one note in the `resolve` wrapper after a tier answered) - replay-gated. `zoe_flue_client.py`,
 `intent_router.py`, `skybridge_service.py` and `routers/chat.py` carry one guarded note each.

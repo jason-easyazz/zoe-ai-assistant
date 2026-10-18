@@ -347,6 +347,23 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
         return False
 
 
+FEEDBACK_ITEM = "__feedback__"
+
+
+def observe_feedback(user_id: str, interaction_id: str, kind: str) -> bool:
+    """The thumbs-down / correction BUTTON (``routers/chat.submit_feedback``): queue it for the worker, which marks the rated turn's outcome
+    row (``turn_outcomes.note_feedback``) - the worker stays the one writer of those rows. ``ZOE_STRUGGLE_OUTCOMES`` on only. O(1), never
+    raises."""
+    try:
+        if mode() == "off" or not outcomes_on() or kind not in ("thumbs_down", "correction"):
+            return False
+        _queue().put_nowait((FEEDBACK_ITEM, str(user_id or ""), str(interaction_id or ""), str(kind)))
+        return True
+    except Exception:  # noqa: BLE001 - QueueFull included
+        _count("hook_errors")
+        return False
+
+
 def _panel_from_session(session_id: str) -> str:
     """``voice-panel-<panel>-<hex8>`` -> ``<panel>``."""
     sid = session_id or ""
@@ -361,6 +378,8 @@ def _traffic(user_id: str, session_id: str, panel_id: str) -> str:
     session id and a declared harness process. Any doubt is ``harness`` (it never trains)."""
     if panel_id.startswith(SYNTHETIC_PANELS) or _synthetic(user_id):
         return "harness"
+    if not outcomes_on():
+        return "household"      # flag-dark: with the capture off the detector skips exactly what it always skipped
     try:
         import traffic_class
 
@@ -457,6 +476,11 @@ def build_turn(item: tuple) -> sig.Turn:
 
 async def process(item: tuple) -> list[sig.Event]:
     """Detect and store the struggles of one queued turn. Returns the events (tests)."""
+    if item and item[0] == FEEDBACK_ITEM:
+        import turn_outcomes
+
+        await turn_outcomes.note_feedback(item[1], item[2], item[3])
+        return []
     cur = build_turn(item)
     if _erased_since(cur.user_id, cur.ts, _DELETED_AT):
         return []          # the user was deleted after this turn was queued: it is not recorded at all
