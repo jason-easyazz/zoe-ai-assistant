@@ -328,7 +328,7 @@ _STOP = frozenset((
     "i me my mine myself we us our ours you your yours he him his she her hers it its they them their theirs this that these those "
     "here there who whom whose what which when where why how a an the and or but so then than as if of to in on at by for with from "
     "up out off over about into onto is am are was were be been being do does did have has had will would can could should shall may "
-    "might must not no yes some any all each one ones thing things stuff something anything everything someone somebody just also "
+    "might must not no yes some any all each one ones thing things stuff something anything everything someone somebody else just also "
     "very really too again back more still yeah okay ok um uh well like gonna wanna gotta let lets now soon later").split())
 #: a verb on its own says nothing about WHAT ("look", "forget it", "check"): the title needs an object
 _GENERIC_VERBS = frozenset(("look check forget remember do get go see send make call ring text take put say tell ask try think find "
@@ -360,9 +360,10 @@ def vague_text(text: str) -> bool:
 
 
 def bad_name(name: str) -> bool:
-    """Not a proper noun: a pronoun, a stopword or a filler capitalised at the start of a sentence ("She", "Then")."""
+    """Not a proper noun: the name is WHOLLY pronouns / stopwords / fillers ("She", "Then", "Someone Else"). A real name that shares a
+    word with the stoplist ("Will Smith", "May Lee", "June") passes - the quote must still hold the exact name plus an interaction cue."""
     toks = _norm(name).split()
-    return not toks or any(t in _PRONOUN_NAMES or t in _STOP for t in toks)
+    return not toks or all(t in _PRONOUN_NAMES or t in _STOP for t in toks)
 
 
 def relation_of(name: str, span: str) -> str:

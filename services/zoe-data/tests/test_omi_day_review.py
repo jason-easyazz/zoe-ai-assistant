@@ -763,6 +763,10 @@ def test_a_pronoun_or_filler_is_never_a_person():
         assert got is None and counts.get("drop_bad_person") == 1, name
     got, _ = _verify("I had lunch with Priya Raman today.", {"kind": "person", "quote": "I had lunch with Priya Raman", "fields": {"name": "Priya Raman"}})
     assert got is not None and got.payload["name"] == "Priya Raman"                  # control
+    # only a name made WHOLLY of pronouns / fillers fails: a real name sharing a word with the stoplist passes (quote + interaction cue intact)
+    for name in ("Will Smith", "May Lee", "June", "Mark Hunt"):
+        got, counts = _verify(f"I had lunch with {name} today.", {"kind": "person", "quote": f"I had lunch with {name}", "fields": {"name": name}})
+        assert got is not None and got.payload["name"] == name, (name, counts)
 
 
 def test_a_relation_is_stored_only_from_an_explicit_pattern():

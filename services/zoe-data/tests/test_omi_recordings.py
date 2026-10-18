@@ -812,6 +812,31 @@ def test_the_retention_clock_is_read_at_each_claim_not_once_per_pass(env, monkey
     assert got[second]["status"] == "failed" and got[second]["audio_path"] == "" and got[second]["attempts"] == 0
 
 
+def test_the_retention_clock_is_refreshed_for_each_row_of_the_cleanup_loop(env, monkeypatch):
+    """Marking expired rows takes time too: the stamp is read again right before each row's retention check and claim, so a row that
+    expires while an earlier one is being cleaned up is marked, not claimed. Negative control: drop the ``stamp = _iso(now or _now())``
+    line inside the ``while r is None`` loop of ``transcribe_pending`` and the second row is transcribed."""
+    a = upload(env, make_wav(3.0), key="r1.0-9", started="2026-10-10T01:00:00Z").json()["id"]
+    b = upload(env, make_wav(3.0), key="r1.10-19", started="2026-10-10T02:00:00Z").json()["id"]
+    c = upload(env, make_wav(3.0), key="r1.20-29", started="2026-10-10T03:00:00Z").json()["id"]
+    t0 = datetime.now(UTC)
+    clock = {"now": t0}
+    monkeypatch.setattr(omi, "_now", lambda: clock["now"])
+    _expire(env, a)
+    env.db.conn.execute("UPDATE omi_recordings SET audio_expires_at = ? WHERE id = ?", ((t0 + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ"), b))
+    env.db.conn.commit()
+    real_expire = omi._expire_unclaimed
+
+    async def slow_expire(db, r, stamp):                                 # cleaning the first row "takes" an hour
+        out = await real_expire(db, r, stamp)
+        clock["now"] = t0 + timedelta(hours=1)
+        return out
+    monkeypatch.setattr(omi, "_expire_unclaimed", slow_expire)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    got = {r["id"]: r["status"] for r in rows(env)}
+    assert got == {a: "failed", b: "failed", c: "done"} and len(env.stt) == 1
+
+
 def test_an_expired_held_recording_is_purged_not_requeued(env, monkeypatch):
     _held(env, monkeypatch, n=1)
     assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1

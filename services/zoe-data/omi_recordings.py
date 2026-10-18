@@ -969,6 +969,7 @@ async def transcribe_pending(*, limit: int = 1, now: Optional[datetime] = None, 
                                             "AND attempts < ? ORDER BY created_at LIMIT 1", (MAX_ATTEMPTS,))
                     if not rows:
                         break
+                    stamp = _iso(now or _now())     # the clock AT this row's check and claim: the cleanup loop can run a while
                     if _retention_passed(rows[0]["audio_expires_at"], stamp):
                         if not await _expire_unclaimed(db, rows[0], stamp):
                             break                      # could not mark it: end this pass rather than spin on the same row
