@@ -2397,6 +2397,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_INTERCOM": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intercom.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_INTERNAL_TOKEN": {
         "defaults": [
           "''",
