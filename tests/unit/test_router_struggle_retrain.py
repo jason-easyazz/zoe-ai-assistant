@@ -447,3 +447,77 @@ def test_estimates_use_the_measured_run_once_there_is_one():
     assert rr.estimates({"runs": []}) == (rr.DEFAULT_EST_PEAK_MB, rr.DEFAULT_EST_MINUTES)
     peak, mins = rr.estimates({"runs": [{"measure": {"peak_rss_mb": 3000, "total_minutes": 50}}]})
     assert math.isclose(peak, 3450) and math.isclose(mins, 60)
+
+
+def test_a_forget_just_before_the_swap_still_stops_it(sandbox, monkeypatch):
+    calls = []
+    monkeypatch.setattr(rs, "deploy", lambda *a, **k: calls.append(a) or 0)
+    ex = _examples(1)
+    _record(examples=[])
+    ledger.forget(event_ids=[ex[0].event_id])                     # lands after decide_adoption said forget_clean
+    rec = {"stamp": "s1", "examples": [ex[0].ledger_row("train")]}
+    assert rr.act("on", decide(), rec, stamp="s1", cand_gguf=sandbox / "c.gguf", run_dir=sandbox / "run", inc_live=INC, train=[],
+                  journal={}) == "rejected" and calls == []
+
+
+# ── the replay gate replays the CANDIDATE, into its own artifact ────────────────
+class _Sidecar:
+    def __init__(self):
+        self.killed = False
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self):
+        return 0
+
+
+def test_the_replay_gate_points_the_probe_at_the_candidate_and_never_at_the_shared_artifact(tmp_path, monkeypatch):
+    seen = {}
+    side = _Sidecar()
+    results = tmp_path / "replay.json"
+
+    def fake_run(cmd, **kw):
+        seen["cmd"], seen["env"] = cmd, kw["env"]
+        results.write_text(json.dumps({"status": "pass", "summary": {"n_samples": 20, "ok_rate": 1.0}}))
+        return type("P", (), {"returncode": 0, "stdout": "probe ok", "stderr": ""})()
+    monkeypatch.setattr(rs, "http_ok", lambda url, timeout=5: True)
+    monkeypatch.setattr(rs, "_start_scratch_sidecar", lambda gguf, port: seen.update(sidecar=(str(gguf), port)) or side)
+    monkeypatch.setattr(rs.subprocess, "run", fake_run)
+    v = rs.replay_gate({}, candidate_gguf=tmp_path / "cand.gguf", results=results, trend=tmp_path / "trend.jsonl")
+    assert v.ran and v.passed and side.killed
+    assert seen["sidecar"] == (str(tmp_path / "cand.gguf"), rs.SCRATCH_PORT)
+    assert seen["env"]["ZOE_ROUTER_SIDECAR_URL"] == f"http://127.0.0.1:{rs.SCRATCH_PORT}"
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--results") + 1] == str(results) and "voice_regression_last.json" not in " ".join(cmd)
+    assert cmd[:2] == ["flock", "/tmp/zoe-voice-harness.lock"]
+    assert "voice_regression_last" not in str(rs.REPLAY_RESULTS)                       # the default is the loop's own file too
+
+
+def test_a_candidate_sidecar_that_cannot_start_is_did_not_run(tmp_path, monkeypatch):
+    def boom(gguf, port):
+        raise SystemExit("ABORT: something already listens on :11437")
+    monkeypatch.setattr(rs, "http_ok", lambda url, timeout=5: True)
+    monkeypatch.setattr(rs, "_start_scratch_sidecar", boom)
+    monkeypatch.setattr(rs.subprocess, "run", lambda *a, **k: pytest.fail("the probe must not run without the candidate"))
+    v = rs.replay_gate({}, candidate_gguf=tmp_path / "c.gguf", results=tmp_path / "r.json")
+    assert not v.ran and not v.passed
+
+
+def test_the_probe_accepts_the_results_and_trend_flags():
+    src = (REPO / "scripts" / "maintenance" / "voice_regression_probe.py").read_text()
+    assert 'ap.add_argument("--results"' in src and 'ap.add_argument("--trend"' in src
+
+
+def test_held_out_eval_results_keep_ids_and_verdicts_only(tmp_path, monkeypatch):
+    out = tmp_path / "h.json"
+
+    def fake_eval(gguf, port, out_path, launch, label, corpus=None):
+        out_path.write_text(json.dumps({"summary": {}, "cases": [
+            {"id": "h-abc", "style": "struggle", "text": "invented household words", "expected": ["get_weather"],
+             "predicted": "get_weather", "source": "two_stage", "args": {"location": "invented place"}, "ok": True}]}))
+        return INC
+    monkeypatch.setattr(rs, "run_eval", fake_eval)
+    _, payload = rr._eval(tmp_path / "g.gguf", 1, out, True, "x", corpus=tmp_path / "c.jsonl")
+    raw = out.read_text()
+    assert "invented" not in raw and payload["cases"][0]["ok"] is True and payload["cases"][0]["id"] == "h-abc"

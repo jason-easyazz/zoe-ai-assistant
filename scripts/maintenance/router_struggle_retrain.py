@@ -507,6 +507,7 @@ def train_candidate(train_file: Path, warm: Path, run_dir: Path, *, stop_brain: 
     watchdog terminates the trainer if MemAvailable falls under MEM_FLOOR_MB. A brain this run stopped is ALWAYS restarted."""
     log("=== TRAIN (continuation) ===")
     stopped = False
+    procs: list[subprocess.Popen] = []
     measure: dict[str, Any] = {"warm_start": str(warm), "mem_before_mb": rs.mem_available_mb()}
     try:
         if stop_brain and unit_active(rs.BRAIN_UNIT):
@@ -524,6 +525,7 @@ def train_candidate(train_file: Path, warm: Path, run_dir: Path, *, stop_brain: 
 
         t0 = time.time()
         proc = subprocess.Popen(cmd, cwd=str(REPO), preexec_fn=_deprioritize)
+        procs.append(proc)
         low = {"min": rs.mem_available_mb(), "killed": False}
         done = threading.Event()
 
@@ -549,6 +551,13 @@ def train_candidate(train_file: Path, warm: Path, run_dir: Path, *, stop_brain: 
         if proc.returncode != 0:
             raise SystemExit(f"ABORT: training failed rc={proc.returncode}")
     finally:
+        for p in procs:                       # a SIGTERM during wait4 unwinds here with the trainer still running: stop it first
+            if p.returncode is None and p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    p.kill()
         if stopped:
             log(f"restoring {rs.BRAIN_UNIT}")
             if not _restore_brain():
@@ -562,11 +571,15 @@ def train_candidate(train_file: Path, warm: Path, run_dir: Path, *, stop_brain: 
 def _eval(gguf: Path, port: int, out: Path, launch: bool, label: str, corpus: Optional[Path] = None) -> tuple["rs.EvalScore", dict]:
     score = rs.run_eval(gguf, port, out, launch=launch, label=label, corpus=corpus)
     payload = json.loads(out.read_text())
-    if corpus is not None:                 # the router's args are cut from household words: keep only ids + verdicts on disk
-        for c in payload.get("cases") or []:
-            c.pop("args", None)
+    if corpus is not None:
+        # the cases came from household words (and the router's args are cut from them): keep an ALLOWLIST of id / verdict fields on
+        # disk, so a future harness that echoes more (the text) cannot leak it into the persistent runs/ dir
+        payload["cases"] = [{k: c.get(k) for k in _CASE_KEEP} for c in payload.get("cases") or []]
         _write_private(out, json.dumps(payload, indent=1))
     return score, payload
+
+
+_CASE_KEEP = ("id", "style", "ok", "predicted", "source", "confidence", "latency_ms", "router_latency_ms")
 
 
 def _new_stamp() -> str:
@@ -710,7 +723,11 @@ def run(mode: str, *, collect_only: bool = False) -> int:
         if not warm.exists():
             raise SystemExit(f"ABORT: warm-start checkpoint {warm} is missing (the lineage rule: never cold-start silently)")
         run_dir = work / "run"
-        merged = train_candidate(train_file, warm, run_dir, stop_brain=must_stop, journal=journal)
+        try:
+            merged = train_candidate(train_file, warm, run_dir, stop_brain=must_stop, journal=journal)
+        finally:
+            if journal.get("train"):
+                rec["measure"] = dict(journal["train"])     # the measurement survives a run that fails later (the next plan uses it)
         train_file.unlink(missing_ok=True)     # the words leave disk as soon as the trainer has read them
         cand_gguf = rs.export_gguf(merged, stamp, journal, out=work / f"candidate_{stamp}-Q8_0.gguf")
 
@@ -792,6 +809,11 @@ def adopt_generation(rec: dict, *, stamp: str, cand_gguf: Path, run_dir: Path, i
     work dir (never deleted - the lineage rule), the ledger names it served and the old one previous (instant rollback), and the
     proposals it learned from move to applied."""
     gen = f"g{stamp}"
+    if ledger.tombstoned(rec.get("examples") or []):
+        # the gate's forget check is a snapshot; a forget that landed since must still stop the swap
+        rec.update(status="rejected", outcome="not adopted: an example this run used was forgotten just before the swap")
+        _record(rec)
+        return
     rc = rs.deploy(cand_gguf, stamp, inc_live, journal)
     if rc != 0:
         rec.update(status="rolled_back_at_deploy", outcome="post-deploy check failed: auto-rolled back to the last-known-good")
