@@ -663,7 +663,7 @@ candidates whose status is `approved` or `edited`, re-checked inside the owner's
 | calendar_event | `calendar_service.create_event_record`, `visibility='personal'` unless the owner chose otherwise | `metadata` JSON: `{"source":"pendant","day":..,"recording_ids":[..],"review_id":..,"approved_by":<owner>,"approved_at":..}` |
 | list_item | `list_service.add_item_to_list` (the existing dedup window) | the candidate row (below); `list_items` has no provenance column, and adding one is not needed |
 | reminder | `reminder_service.create_reminder_record` (the owner as `user`) | the candidate row |
-| follow_up | a reminder with no time, or an open loop (owner decision D5) | the candidate row |
+| follow_up | an open loop (`open_loops`, `context='pendant:<candidate>'`; owner decision D5, 2026-10-18: no alarm, never raised; `docs/knowledge/panel-review-cards.md`) | the candidate row |
 | person_memory | `MemoryService.ingest(user_id=owner, origin="omi_review", source="pendant", entity_id=<owner's people row>, ...)`, **ingest only, never `review(edit)`/supersede** | memory columns: `origin`, `turn_ref="omi_segment:<id>"`, the day; class `user_confirmed` (the approval) |
 
 - **What the apply module does around the raw write calls.** `create_event_record` does not notify, broadcast or touch
@@ -947,7 +947,7 @@ against `~/.zoe-voice-samples` per AGENTS.md.
    default)?
 3. **D3 Lane**: 4B evening (recommended) or 12B night, or both. The night window is already full.
 4. **D4 Untagged days**: analyse in the reduced form (recommended) or wait for pendant enrolment?
-5. **D5 Follow-ups**: a reminder with no time, or an open loop?
+5. **D5 Follow-ups**: DECIDED 2026-10-18 - an open loop (no alarm, nothing proactive), reviewed on the panel.
 6. **D6 Forget scope**: does "forget Sam" delete approved calendar events and list items naming Sam
    (recommendation: no, they are the owner's)?
 7. **D7 Children**: is every admin the implicit curator for every child, or is an explicit grant required?
