@@ -1,0 +1,17 @@
+#!/bin/sh
+# P0 de-root root helper (docs/architecture/p0-deroot.md). NOT installed by anything: the owner installs it
+# root:root 0755 at /usr/local/libexec/zoe-priv/zoe-mem-compact, and sudoers.d/60-zoe-deroot lets `zoe` run it.
+# Replaces the free-form `sudo -n sh -c 'sync; echo N > /proc/sys/vm/drop_caches ...'` calls of the night window,
+# the bake-off, mtp_vocab_trim_window.sh and brain_cold_start.sh. Fixed function, one argument:
+#   0  compact physical memory only               (bake-off COMPACT_ONLY, BAKEOFF_DROP_CACHES=0)
+#   1  sync + drop the page cache                     (brain_cold_start.sh, mtp_vocab_trim_window.sh)
+#   3  sync + drop page cache, dentries and inodes, then compact physical memory   (night window, bake-off)
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+if [ "$#" -ne 1 ]; then echo "usage: zoe-mem-compact 0|1|3" >&2; exit 2; fi
+case "$1" in
+  0|1|3) ;;
+  *) echo "usage: zoe-mem-compact 0|1|3" >&2; exit 2 ;;
+esac
+if [ "$1" != 0 ]; then sync; echo "$1" > /proc/sys/vm/drop_caches; fi
+if [ "$1" != 1 ]; then echo 1 > /proc/sys/vm/compact_memory; fi
