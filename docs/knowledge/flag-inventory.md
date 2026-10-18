@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-720 flags; 670 not documented in `.env.example`.
+723 flags; 673 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -364,6 +364,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MIRROR_GUARD` | `-` | yes | NO | `services/zoe-data/mirror_guard.py` |
 | `ZOE_MIRROR_INTENTS_TO_OPENCLAW` | `'false'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_MISHEAR_CLARIFY` | `'off'` | yes | NO | `services/zoe-data/mishear_clarify.py` |
+| `ZOE_MODELS_LOCK` | `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_MOONSHINE_ARCH` | `'MEDIUM_STREAMING'`, `'v2'` | yes | yes | `scripts/perf/measure_moonshine_vad_threshold.py`<br>`scripts/perf/measure_stt_under_speech.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MOONSHINE_KEYTERMS` | `-` | yes | yes | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MULTICA` | `'false'` | no | NO | `services/zoe-data/main.py` |
@@ -410,6 +411,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_NVM_NODE_BIN` | `-` | no | NO | `services/zoe-data/pi_intent_classifier.py` |
 | `ZOE_OFFBOX_CHECKOUT` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_CONFIG_DIR` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_CRONTAB_FILE` | `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_ETC_SYSTEMD` | `'/etc/systemd/system'` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_HOME` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_MEM_FLOOR_MB` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_NO_ALERT` | `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |

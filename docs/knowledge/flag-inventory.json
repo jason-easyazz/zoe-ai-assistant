@@ -3546,6 +3546,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_MODELS_LOCK": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MOONSHINE_ARCH": {
         "defaults": [
           "'MEDIUM_STREAMING'",
@@ -4005,6 +4015,26 @@
       "ZOE_OFFBOX_CONFIG_DIR": {
         "defaults": [
           "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_CRONTAB_FILE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_ETC_SYSTEMD": {
+        "defaults": [
+          "'/etc/systemd/system'"
         ],
         "in_env_example": false,
         "readers": [

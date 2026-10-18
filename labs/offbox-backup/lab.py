@@ -84,6 +84,21 @@ def build_box(root: Path) -> dict:
         "assistant/config/tunnel.json": b'{"CANARY":"tunnel"}',
         "assistant/labs/functiongemma-finetune/runs/gen1/merged/model.safetensors": rnd(300_000),
         "models/functiongemma-router/router-Q8_0.gguf": rnd(250_000),
+        # host sources (deep dive 2 S0-8)
+        "assistant/homeassistant/configuration.yaml": b"homeassistant:\n  name: canary home\n",
+        "assistant/homeassistant/secrets.yaml": b"token: CANARY_HA_SECRET\n",
+        "assistant/homeassistant/.storage/auth": b"EXCLUDED: arrives as the helper export",
+        "assistant/homeassistant/home-assistant.log": b"EXCLUDED log",
+        "assistant/homeassistant/home-assistant_v2.db": b"EXCLUDED recorder",
+        "assistant/services/zoe-data/data/music_prefs.json": b'{"canary":"prefs"}',
+        "assistant/services/zoe-data/data/router_head_shadow.jsonl": b'{"utt_text":"EXCLUDED raw words"}\n',
+        "assistant/services/zoe-data/data/zoe.db": b"EXCLUDED dead sqlite",
+        "assistant/services/zoe-data/data/vapid_keys.json": b'{"private":"CANARY_VAPID_LEGACY"}',
+        ".zoe-backups/host/ha-storage-20261019-023500.tar.gz": b"ha storage export canary",
+        ".zoe/backups/panel/hey_zoe.onnx": rnd(4096),
+        "models/models.lock": b'{"canary":"lock"}',
+        "bin/zoe-tool.sh": b"#!/bin/sh\nPGPASSWORD=CANARY_BIN\n",
+        ".config/systemd/user/zoe-data.service.d/10-lab.conf": b"[Service]\nEnvironment=CANARY_DROPIN=1\n",
     }
     for rel, data in files.items():
         p = home / rel
@@ -94,6 +109,11 @@ def build_box(root: Path) -> dict:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     for db in ("zoe", "multica"):
         (pg / f"{db}-{ts}.dump.gz").write_bytes(gzip.compress(b"PGDMP canary " + db.encode() + rnd(5000)))
+        (pg / f"{db}-{ts}.manifest.json").write_text(json.dumps({"db": db, "tables": {"public.canary": 1}}))
+    etc = root / "etc-systemd" / "user@.service.d"
+    etc.mkdir(parents=True)
+    (etc / "delegate.conf").write_bytes(b"[Service]\nDelegate=yes\n")
+    (root / "crontab.txt").write_bytes(b"*/5 * * * * /home/zoe/bin/zoe-tool.sh\n")
     mp = home / ".zoe-backups" / "mempalace"
     mp.mkdir(parents=True)
     pal = root / "palace"
@@ -173,7 +193,8 @@ def main() -> int:
         for f in cfgdir.iterdir():
             os.chmod(f, 0o600)
         env = {**os.environ, "ZOE_OFFBOX_HOME": str(home), "ZOE_OFFBOX_SKIP_PG_GLOBALS": "1",
-               "ZOE_OFFBOX_NO_ALERT": "1"}
+               "ZOE_OFFBOX_NO_ALERT": "1", "ZOE_OFFBOX_ETC_SYSTEMD": str(root / "etc-systemd"),
+               "ZOE_OFFBOX_CRONTAB_FILE": str(root / "crontab.txt")}
 
         def tool(*a, extra_env=None):
             return run(sys.executable, SCRIPT, *a, check=False, env={**env, **(extra_env or {})})
@@ -208,7 +229,10 @@ def main() -> int:
         hh = owner_restore("household")
         want_hh = {"zoe/data/pi-intents.jsonl", "zoe/memory-exports/export-1.json", "zoe/music-assistant/db.sqlite",
                    "voice-samples/000001_100.wav", "voice-samples/000002_200.wav", "pg/zoe.dump.gz",
-                   "pg/multica.dump.gz", "palace/mempalace.tar.gz"}
+                   "pg/multica.dump.gz", "palace/mempalace.tar.gz",
+                   # host sources (deep dive 2 S0-8): no .storage walk, log, recorder, shadow log, dead db, vapid
+                   "pg/zoe.manifest.json", "pg/multica.manifest.json", "ha/config/configuration.yaml",
+                   "ha/storage.tar.gz", "zoe-data/data/music_prefs.json", "panel/hey_zoe.onnx", "models.lock"}
         ok_bytes = all(hh[k] == box["files"][".zoe/" + k[4:]] for k in hh if k.startswith("zoe/")) and \
             all(hh[k] == box["files"][".zoe-voice-samples/" + k.split("/", 1)[1]] for k in hh
                 if k.startswith("voice-samples/"))
@@ -216,7 +240,11 @@ def main() -> int:
              set(hh) == want_hh and ok_bytes, f"extra={sorted(set(hh) - want_hh)} missing={sorted(want_hh - set(hh))}")
         sec = owner_restore("secrets")
         want_sec = {"checkout/.env", "checkout/labs/flue-x/.env", "checkout/ssl/zoe.key", "checkout/config/tunnel.json",
-                    "zoe-env/extra.env", "zoe-secrets/vapid_keys.json"}
+                    "zoe-env/extra.env", "zoe-secrets/vapid_keys.json",
+                    "checkout/services/zoe-data/data/vapid_keys.json",
+                    # host config (deep dive 2 S0-8)
+                    "ha/secrets.yaml", "systemd/user/zoe-data.service.d/10-lab.conf",
+                    "systemd/system/user@.service.d/delegate.conf", "bin/zoe-tool.sh", "crontab"}
         cell("B2 secrets tier = .env*/ssl/config/~/.zoe env+secrets, never .example/.bak", set(sec) == want_sec,
              f"got={sorted(sec)}")
 
