@@ -13,12 +13,14 @@ The nginx half (the headers are overwritten, a client without a certificate gets
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import importlib.util
 import re
 import sqlite3
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -557,6 +559,121 @@ def test_an_open_relayed_websocket_is_closed_when_its_certificate_is_revoked(reg
         with pytest.raises(WebSocketDisconnect):
             ws.receive_text()
     assert closed == [1008]
+
+
+# ── an IDLE / push-only relayed socket (N1 of the #2095 review) ───────────────────────────────────────────────────────────
+#
+# ``/ws/push`` sends and (almost) never receives, so a re-proof that only runs on an inbound frame never runs. These cells use a
+# push-only handler plus a broadcast route that behaves like ``broadcaster``: send to every open socket, drop the dead ones.
+
+SECRET = {"event": "secret"}
+IDLE_DEADLINE_S = 6.0   # the stub's own idle timeout: far past the shrunk re-proof interval, so only a missing fix reaches it
+
+
+def _push_app(reg):
+    app = make_app(reg)
+    socks: list = []
+
+    @app.websocket("/ws/idle")
+    async def idle(websocket: WebSocket):
+        await websocket.accept()
+        socks.append(websocket)
+        try:
+            while True:
+                await asyncio.wait_for(websocket.receive_text(), IDLE_DEADLINE_S)  # push-only: the client never sends a frame
+        except WebSocketDisconnect:
+            pass
+        except asyncio.TimeoutError:
+            await websocket.close(code=1000)  # a BROKEN fix ends here (1000, not 1008): the cell fails instead of hanging the suite
+        finally:
+            if websocket in socks:
+                socks.remove(websocket)
+
+    @app.post("/test/broadcast")
+    async def broadcast():
+        sent = 0
+        for sock in list(socks):
+            try:
+                await sock.send_json(SECRET)
+                sent += 1
+            except Exception:  # noqa: BLE001 - a dead socket is dropped, as the real broadcaster does
+                pass
+        return {"sent": sent}
+
+    return app
+
+
+def _revoke_cert_in_db(reg):
+    reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (FP_KITCHEN,))
+    reg.con.commit()
+
+
+def _revoke_token_in_cache():
+    panel_auth._token_cache[_hash(TOK_KITCHEN)]["revoked"] = 1
+
+
+@pytest.mark.parametrize("revoke", ["certificate", "device_token"])
+def test_an_idle_relayed_socket_is_closed_within_one_interval_of_a_revocation(reg, on, monkeypatch, revoke):
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.3)   # the 15 s production cadence, shrunk
+    monkeypatch.setattr(relay_ingress, "WS_SEND_PROOF_TTL_S", 3600.0)  # isolate the TIMER: the send-time check cannot be what closes it
+    with TestClient(_push_app(reg), client=(NGINX, 1)) as c:
+        with c.websocket_connect("/ws/idle", headers=relay_headers()) as ws:
+            assert c.post("/test/broadcast").json() == {"sent": 1}
+            assert ws.receive_json() == SECRET                  # POSITIVE: a proven socket gets the broadcast
+            # An OUT-OF-BAND revocation: no invalidate_cache() (another worker / a DB edit), so only the timer's registry read sees it.
+            _revoke_cert_in_db(reg) if revoke == "certificate" else _revoke_token_in_cache()
+            started = time.monotonic()
+            with pytest.raises(WebSocketDisconnect) as closed:
+                ws.receive_json()                               # the client sends nothing; the SERVER ends the socket
+            assert closed.value.code == 1008                   # policy violation, not a normal close
+            assert time.monotonic() - started < 0.3 + 2.0       # within one interval (plus scheduling slack)
+        assert c.post("/test/broadcast").json() == {"sent": 0}  # and it is gone from the broadcast set
+
+
+def test_a_broadcast_is_never_delivered_to_a_revoked_relayed_socket(reg, on, monkeypatch):
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 3600.0)  # isolate the SEND-time check: the timer cannot fire in this cell
+    with TestClient(_push_app(reg), client=(NGINX, 1)) as c:
+        with c.websocket_connect("/ws/idle", headers=relay_headers()) as ws:
+            assert c.post("/test/broadcast").json() == {"sent": 1}
+            assert ws.receive_json() == SECRET                  # POSITIVE
+            admin = {"X-Session-ID": SID_ADMIN}
+            assert c.delete(f"/api/panels/kitchen-panel/client-certs/{FP_KITCHEN}", headers=admin).status_code == 200
+            assert c.post("/test/broadcast").json() == {"sent": 0}       # refused before the frame left the box
+            with pytest.raises(WebSocketDisconnect) as closed:
+                ws.receive_json()                               # the very next thing the panel sees is the close, never the event
+            assert closed.value.code == 1008
+
+
+def test_a_lan_socket_is_not_guarded_or_closed(reg, on, monkeypatch):
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.2)
+    lan = {"X-Device-Token": TOK_KITCHEN}                       # through nginx's LAN block: the relay marker is always cleared there
+    with TestClient(_push_app(reg), client=(NGINX, 1)) as c:
+        with c.websocket_connect("/ws/idle", headers=lan) as lan_ws, c.websocket_connect("/ws/idle", headers=relay_headers()) as relayed_ws:
+            assert c.post("/test/broadcast").json() == {"sent": 2}
+            assert lan_ws.receive_json() == SECRET and relayed_ws.receive_json() == SECRET
+            _revoke_cert_in_db(reg)
+            relay_ingress.invalidate_cache()
+            _revoke_token_in_cache()                            # even its device token is revoked: the LAN rules never re-prove a socket
+            with pytest.raises(WebSocketDisconnect) as closed:
+                relayed_ws.receive_json()                       # CONTROL: the relayed one goes ...
+            assert closed.value.code == 1008
+            time.sleep(0.6)                                     # ... three more intervals, and the LAN one is untouched
+            assert c.post("/test/broadcast").json() == {"sent": 1}
+            assert lan_ws.receive_json() == SECRET
+
+
+def test_the_proof_lives_under_a_namespaced_scope_key_not_a_bare_relay_ctx(reg, on):
+    seen = []
+    app = make_app(reg)
+
+    @app.get("/test/state")
+    async def state(request: Request):
+        seen.append(dict(request.scope.get("state", {})))
+        return {}
+
+    client_ = TestClient(app, client=(NGINX, 1))
+    assert client_.get("/test/state", headers=relay_headers()).status_code == 200
+    assert relay_ingress._CTX_KEY in seen[0] and "relay_ctx" not in seen[0]   # an app's own `state["relay_ctx"]` cannot collide
 
 
 def test_the_nginx_auth_gate_answers_only_for_a_proven_relayed_request(reg, on):

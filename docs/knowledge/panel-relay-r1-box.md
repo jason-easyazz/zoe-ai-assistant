@@ -41,7 +41,7 @@ reach the upstream with the same headers as `origin/main`, except that a client-
 7. Panel side (see pending): switch the hosts mapping, install the CA root and client certificate, `VERIFY_SSL=true` with the CA pin, X-Device-Token as before.
 8. Replay gate and the L6 time-to-first-audio comparison before calling R1 live (design section 10).
 
-**Rollback:** `enable_relay_listener.py --disable` + `docker restart zoe-ui` removes the listener FIRST; only then unset `ZOE_RELAY_INGRESS` and restart zoe-data (the header becomes inert; the admin routes 404); revoke a single panel with `DELETE /api/panels/<panel_id>/client-certs/<fingerprint>` (HTTP at once, open websockets within 15 s, zoe-auth routes at once via the gate). Order matters when turning ON: flag first, then the listener. A revoked certificate still completes the TLS handshake (nginx has no CRL here); everything behind it answers 401.
+**Rollback:** `enable_relay_listener.py --disable` + `docker restart zoe-ui` removes the listener FIRST; only then unset `ZOE_RELAY_INGRESS` and restart zoe-data (the header becomes inert; the admin routes 404); revoke a single panel with `DELETE /api/panels/<panel_id>/client-certs/<fingerprint>` (HTTP at once, open websockets - idle push-only ones included - within 15 s and no broadcast to them after the revoke, zoe-auth routes at once via the gate; **single zoe-data worker only**: with several, the other workers see a certificate revocation within 5 s (HTTP) / 15 s (sockets) but a revoked device token only after they reload). Order matters when turning ON: flag first, then the listener. A revoked certificate still completes the TLS handshake (nginx has no CRL here); everything behind it answers 401.
 
 ## Still pending
 
