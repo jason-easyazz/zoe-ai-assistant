@@ -68,6 +68,7 @@ TABLES: tuple[Store, ...] = (
     _t("night_threads", WORDS, REACHED, member="night_mind.delete_user", entity="night_mind.erase_entity"),
     _t("night_runs", METADATA, REACHED, member="night_mind.delete_user"),
     _t("struggle_events", DERIVED, REACHED, member="struggle_detector.delete_user", entity="struggle_detector.erase_entity"),
+    _t("struggle_proposal_events", DERIVED, REACHED, member="struggle_detector.delete_user", entity="struggle_detector.erase_entity"),   # via struggle_proposals.forget_user / forget_events
     _t("restraint_mutes", DERIVED, REACHED, member="restraint.erase_user", entity="restraint.erase_entity"),
     _t("restraint_classes", DERIVED, REACHED, member="restraint.erase_user", entity="restraint.erase_entity"),
     _t("reply_sources", DERIVED, REACHED, member="reply_ledger.forget_user"),
