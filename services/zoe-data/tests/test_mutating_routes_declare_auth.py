@@ -25,6 +25,7 @@ AUTH_DEPENDENCIES = frozenset({
     "get_a2a_caller", "_require_voice_auth", "_require_owner", "_require_human_admin", "_require_device", "_member",
     "_require_member", "_require_member_session", "_require_caller", "_require_livekit_media_auth", "_require_livekit_auth",
     "_validate_device_token", "_require_multica_webhook_secret", "require_member_panel_or_jukebox",
+    "require_phone_device", "require_pairing_code",
     "_require_card",  # routers/panel_review_cards: the X-Panel-Card token, honoured only for its member's open voice session or own session
 })
 

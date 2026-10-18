@@ -142,6 +142,14 @@ def start_pairing(user_id: str, *, now: Optional[float] = None) -> dict[str, Any
     return {"pair_payload": payload, "expires_in_s": PAIR_TTL_S}
 
 
+def peek_code(code: str, *, now: Optional[float] = None) -> Optional[str]:
+    """The member a live code was minted for, WITHOUT spending it (the route's auth dependency). None when unknown or expired."""
+    now = time.time() if now is None else now
+    with _LOCK:
+        hit = _CODES.get(_sha(code or ""))
+    return hit[0] if hit and hit[1] > now else None
+
+
 def _consume(code: str, now: float) -> Optional[str]:
     with _LOCK:
         _prune(now)
@@ -254,12 +262,18 @@ async def register_push(db, device: Device, *, push_type: str, token: str, envir
     check_push_registration(push_type, token, environment, topic)
     now = time.time()
     await db.execute("DELETE FROM phone_push_tokens WHERE device_id = ? AND push_type = ?", (device.id, push_type))
-    await db.execute(
+    # Conditional on the device STILL being live, in the one statement: a revoke that lands between this request's auth and its
+    # insert (each statement auto-commits on asyncpg) leaves no token behind for the revoked phone (Codex, #2146).
+    async with db.execute(
         """INSERT INTO phone_push_tokens (device_id, push_type, token, environment, topic, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (device.id, push_type, token.lower(), environment, topic, now),
-    )
+           SELECT CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS DOUBLE PRECISION)
+           WHERE EXISTS (SELECT 1 FROM phone_devices WHERE id = ? AND revoked = 0)""",
+        (device.id, push_type, token.lower(), environment, topic, now, device.id),
+    ) as cur:
+        inserted = (getattr(cur, "rowcount", 0) or 0) > 0
     await db.commit()
+    if not inserted:
+        raise PhoneAppError(401, "This phone is not paired with Zoe")
 
 
 async def unregister_push(db, device: Device, push_type: str) -> bool:

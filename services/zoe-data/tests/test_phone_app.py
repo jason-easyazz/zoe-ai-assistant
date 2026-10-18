@@ -1,6 +1,6 @@
 """phone_app (M0 box side of Zoe's own iPhone app): pairing by QR code and push-token registration, flag-dark ZOE_PHONE_APP.
 
-Runs the real 0058 migration on SQLite and drives the real router through FastAPI with the auth dependency overridden. Synthetic
+Runs the real 0060 migration on SQLite and drives the real router through FastAPI with the auth dependency overridden. Synthetic
 accounts only. Falsifiable pins:
   * make a pairing code reusable -> test_a_code_pairs_one_phone_once goes red;
   * store the device credential instead of its hash -> test_no_secret_is_stored goes red;
@@ -52,7 +52,7 @@ APNS = "ab" * 32
 
 def _migrate(path: str) -> None:
     engine = sa.create_engine(f"sqlite:///{path}")
-    spec = importlib.util.spec_from_file_location("mig_0058", ROOT / "alembic/versions/0058_phone_app.py")
+    spec = importlib.util.spec_from_file_location("mig_0060", ROOT / "alembic/versions/0060_phone_app.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
@@ -247,6 +247,33 @@ def test_an_admin_may_revoke_any_phone(box):
     _, r = _pair(box)
     box["user"] = {"user_id": "owner-0009", "role": "admin"}
     assert box["client"].delete(f"/api/phone/devices/{r.json()['device_id']}").status_code == 200
+
+
+def test_a_push_registration_racing_a_revoke_stores_nothing(box):
+    """The request authenticated (it holds a Device), then the phone was revoked before its insert ran (Codex, #2146)."""
+    _, r = _pair(box)
+    dev_id = r.json()["device_id"]
+    dev = phone_app.Device(dev_id, ADULT, "Ann's iPhone", "ios")
+    assert box["client"].delete(f"/api/phone/devices/{dev_id}").status_code == 200
+
+    async def run():
+        async with aiosqlite.connect(box["path"]) as db:
+            with pytest.raises(phone_app.PhoneAppError) as e:
+                await phone_app.register_push(db, dev, push_type="alert", token=APNS, environment="production", topic=BUNDLE)
+            return e.value.status
+
+    assert asyncio.run(run()) == 401
+    with sqlite3.connect(box["path"]) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM phone_push_tokens").fetchone()[0] == 0
+
+
+def test_the_pairing_dependency_only_peeks(box):
+    """``require_pairing_code`` checks the code without spending it; only ``complete_pairing`` consumes it."""
+    out = phone_app.start_pairing(ADULT)
+    code = phone_app.decode_payload(out["pair_payload"])["c"]
+    assert phone_app.peek_code(code) == ADULT and phone_app.peek_code(code) == ADULT
+    assert phone_app.peek_code("nope") is None
+    assert phone_app.peek_code(code, now=10**12) is None
 
 
 def test_pending_codes_and_box_url_are_bounded(box, monkeypatch):

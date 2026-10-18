@@ -6,8 +6,9 @@ answers 404 (the app sees "this box has no phone app yet").
 Auth:
   POST /api/phone/pair/start       a signed-in ADULT member (``require_member`` + ``manner_block.eligible``); never the panel
                                    principal, a guest or a child
-  POST /api/phone/pair/complete    no session: the single-use pairing code IS the credential
-  GET  /api/phone/me               the phone's device credential (``X-Zoe-Phone-Token``)
+  POST /api/phone/pair/complete    ``require_pairing_code``: the single-use pairing code IS the credential (peeked, then
+                                   consumed atomically by ``complete_pairing``)
+  GET  /api/phone/me               ``require_phone_device`` (``X-Zoe-Phone-Token``)
   PUT  /api/phone/push             the phone's device credential
   DELETE /api/phone/push/{type}    the phone's device credential
   GET  /api/phone/devices          a signed-in member: their own phones
@@ -40,11 +41,26 @@ def _err(e: phone_app.PhoneAppError) -> HTTPException:
     return HTTPException(status_code=e.status, detail=e.reason)
 
 
-async def _device(db, token: str) -> phone_app.Device:
-    dev = await phone_app.device_for_token(db, token)
+async def require_phone_device(db=Depends(get_db), x_zoe_phone_token: str = Header(default="")) -> phone_app.Device:
+    """The PHONE principal: the live (unrevoked) paired device holding the credential in ``X-Zoe-Phone-Token``; 401 otherwise."""
+    dev = await phone_app.device_for_token(db, x_zoe_phone_token)
     if dev is None:
         raise HTTPException(status_code=401, detail="This phone is not paired with Zoe")
     return dev
+
+
+async def require_pairing_code(request: Request) -> str:
+    """The PAIRING principal: the member a live pairing code was minted for. It only PEEKS (the code stays unspent, so a bad key
+    or platform in the same body does not burn it); ``complete_pairing`` consumes it atomically. 401 for an unknown or expired code
+    - the same answer ``complete_pairing`` gives."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 - no JSON is no code
+        body = {}
+    member = phone_app.peek_code(str((body or {}).get("code") or "")) if isinstance(body, dict) else None
+    if not member:
+        raise HTTPException(status_code=401, detail="that pairing code is not valid any more; show a new one")
+    return member
 
 
 @router.post("/pair/start")
@@ -63,7 +79,7 @@ async def pair_start(request: Request, user: dict = Depends(require_member)):
 
 
 @router.post("/pair/complete")
-async def pair_complete(payload: dict, db=Depends(get_db)):
+async def pair_complete(payload: dict, db=Depends(get_db), _member: str = Depends(require_pairing_code)):
     try:
         out = await phone_app.complete_pairing(
             db, code=str(payload.get("code") or ""), device_name=str(payload.get("device_name") or ""),
@@ -77,8 +93,7 @@ async def pair_complete(payload: dict, db=Depends(get_db)):
 
 
 @router.get("/me")
-async def me(db=Depends(get_db), x_zoe_phone_token: str = Header(default="")):
-    dev = await _device(db, x_zoe_phone_token)
+async def me(dev: phone_app.Device = Depends(require_phone_device)):
     name = ""
     try:
         import identity_facts
@@ -91,8 +106,7 @@ async def me(db=Depends(get_db), x_zoe_phone_token: str = Header(default="")):
 
 
 @router.put("/push")
-async def register_push(payload: dict, db=Depends(get_db), x_zoe_phone_token: str = Header(default="")):
-    dev = await _device(db, x_zoe_phone_token)
+async def register_push(payload: dict, dev: phone_app.Device = Depends(require_phone_device), db=Depends(get_db)):
     try:
         await phone_app.register_push(db, dev, push_type=str(payload.get("push_type") or ""), token=str(payload.get("token") or ""),
                                       environment=str(payload.get("environment") or ""), topic=str(payload.get("topic") or ""))
@@ -102,8 +116,7 @@ async def register_push(payload: dict, db=Depends(get_db), x_zoe_phone_token: st
 
 
 @router.delete("/push/{push_type}")
-async def unregister_push(push_type: str, db=Depends(get_db), x_zoe_phone_token: str = Header(default="")):
-    dev = await _device(db, x_zoe_phone_token)
+async def unregister_push(push_type: str, dev: phone_app.Device = Depends(require_phone_device), db=Depends(get_db)):
     return {"ok": True, "removed": await phone_app.unregister_push(db, dev, push_type)}
 
 

@@ -103,6 +103,7 @@ import os
 import sys
 import threading
 import time
+import traffic_class
 from typing import Any, AsyncIterator
 
 logger = logging.getLogger(__name__)
@@ -295,6 +296,10 @@ def _log_lane(
     has to answer, and a log line that only exists when failover is enabled
     cannot answer it for the lane that is live today.
     """
+    # P-2: a non-household turn's line ends ` traffic=<class>` (logging_setup.TrafficClassFormatter); household
+    # lines are unchanged, so every parser of BRAIN_LANE keeps working
+    traffic = traffic_class.current()
+    traffic_class.note_brain_turn(traffic)
     logger.info(
         "BRAIN_LANE lane_attempted=%s lane_served=%s outcome=%s reason=%s session=%s",
         attempted,
@@ -303,6 +308,12 @@ def _log_lane(
         reason or "-",
         (session_id or "-")[:64],
     )
+    try:
+        from voice_metrics import brain_turn_count
+
+        brain_turn_count.labels(traffic_class=traffic, lane=str(served or "-")[:24]).inc()
+    except Exception:  # noqa: BLE001
+        pass
     try:  # the struggle detector: a brain lane served this session's turn (an O(1) deque append; never raises)
         import struggle_detector
 

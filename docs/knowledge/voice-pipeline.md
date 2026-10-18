@@ -215,6 +215,17 @@ It mirrors `zoe_latency_probe.py`: `--update-baseline` to set the bar, baseline 
 regression. It self-guards: **SKIPs if available memory is low** (never OOMs the box) and runs the
 harness under the shared flock.
 
+**Harness quiet hours (2026-10-19, `scripts/maintenance/harness_quiet.py`).** The probe shares the brain's one
+llama slot with the household, so an ad-hoc run REFUSES 07:00-22:00 local (exit 3, before its lock and before any
+artifact write - a refusal never overwrites the shared artifact) and, outside those hours, waits (up to
+`ZOE_HARNESS_PANEL_WAIT_S`, 2700 s) while the panel was used in the last 10 min. **The landing loop's probe is
+exempt from the hours** (`land_voice_pr.sh` exports `ZOE_HARNESS_LANDING=1`) and only yields to the panel; once it
+starts, the replay also waits between clips while the panel is in use (`ZOE_HARNESS_YIELD_TO_PANEL=1`).
+`ZOE_HARNESS_FORCE=1` is the deliberate override. The replay process tags itself `probe`
+(`ZOE_TRAFFIC_CLASS`, `services/zoe-data/traffic_class.py`), so its log lines and records are not the household's.
+A household panel turn that re-prefills more than 500 prompt tokens logs `PANEL_KV_MISS` (record:
+[panel-kv-residency-2026-10-19.md](panel-kv-residency-2026-10-19.md)).
+
 **The clip set is PINNED (2026-10-13).** The probe used to replay "the newest N clips by mtime", so every
 new recording silently changed the set and the speed bar with it (STT read ~400 ms against a 921 ms
 baseline recorded on another set; a 2x STT regression would have passed). Now the baseline stores

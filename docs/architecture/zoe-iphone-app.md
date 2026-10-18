@@ -53,7 +53,7 @@ The QR payload: `zoe-pair:v1:` + base64url (no padding) of `{"v": 1, "u": "<box 
 Configuration (operator, env of zoe-data): `ZOE_PHONE_APP` (off | on), `ZOE_PHONE_APP_BASE_URL`, `ZOE_PHONE_APP_CA_SHA256`,
 `ZOE_PHONE_APP_BUNDLE_ID`.
 
-Storage: alembic `0058_phone_app` - `phone_devices` (SHA-256 of the credential, the public key, timestamps, revoked) and
+Storage: alembic `0060_phone_app` - `phone_devices` (SHA-256 of the credential, the public key, timestamps, revoked) and
 `phone_push_tokens` (one per device and push type). Pairing codes live 300 s in the zoe-data process only, hashed, single use.
 
 ## 4. Security model

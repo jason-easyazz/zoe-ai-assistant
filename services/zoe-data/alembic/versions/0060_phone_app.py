@@ -1,4 +1,4 @@
-"""0058 - ``phone_devices`` + ``phone_push_tokens``: the box side of Zoe's own iPhone app, M0 (``phone_app.py``).
+"""0060 - ``phone_devices`` + ``phone_push_tokens``: the box side of Zoe's own iPhone app, M0 (``phone_app.py``).
 
 * ``phone_devices`` - one row per paired phone: the member, a display name, the platform, the SHA-256 of the device credential
   (``token_hash``, UNIQUE; the credential itself is shown to the phone once and never stored), the public half of the phone's
@@ -9,13 +9,14 @@
 
 Pairing codes are NOT stored here: they live five minutes in the zoe-data process, hashed.
 
-``IF NOT EXISTS`` makes a rerun safe and the statements run unchanged on PostgreSQL and SQLite. NOTE: other open PRs also add a
-0058; whichever lands second re-chains its ``down_revision`` (and number) onto the new head.
+``IF NOT EXISTS`` makes a rerun safe and the statements run unchanged on PostgreSQL and SQLite. Numbered 0060 because open PRs
+hold 0058 (#2141) and 0059 (#2095); ``down_revision`` is main's head when this was pushed and is re-chained onto whichever of
+those lands first.
 """
 
 from alembic import op
 
-revision = "0058"
+revision = "0060"
 down_revision = "0057"
 branch_labels = None
 depends_on = None
