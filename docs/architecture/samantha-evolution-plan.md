@@ -5,7 +5,7 @@
 > sequences everything *after* memory — ears, voice-first initiative, constant
 > presence — grounded in the 2026-07-06 capability audit, the ambient-voice ADR's
 > spike verdict, and the memory-pressure profile of the live host. A fresh session
-> reads this top-to-bottom, does the **§7 NEXT ACTION**, updates **§6**, repeats.
+> reads this top-to-bottom, takes the next item from [`docs/ROADMAP.md`](../ROADMAP.md), obeys the **§7 standing decisions**, updates **§6**, repeats.
 >
 > Companion docs: [`docs/VISION.md`](../VISION.md) (why) ·
 > [`zoe-memory-samantha-buildplan.md`](zoe-memory-samantha-buildplan.md) (pillar 1, done) ·
@@ -559,21 +559,16 @@ must stop reading "W1 DONE" as "conversation-grade voice at the panel".
   check the module docstring promised but `compare()` never implemented. Negative
   controls in `tests/unit/test_voice_regression_probe_scoring.py`.
 
-## 7. NEXT ACTION (always exactly one)
+## 7. Standing decisions (the next action lives in the roadmap)
 
-→ **W1.3 close-out: flip `ZOE_LIVEKIT_STREAM_TTS` in the lab, measure first-audio, replay-gate it** —
-the code merged 2026-07-21 (#1469, flag OFF), so what remains is the DoD, not the build —
-**plus M3/M4 measurements (packet P-W1.4, bars in §6).** W2 is **DONE and ear-verified** (2026-07-19, see §6 — including the W2.3 lesson: the kiosk browser was never a speaker; spoken delivery rides the Pi daemon's audio path via the `voice_announcements` queue). The 7:30am scheduled brief now speaks to whoever is present; watch-week running. After W1.3, **W4.1 is BLOCKED, not next.** This plan contradicts itself here and the contradiction
-is now resolved in favour of the gate: §W4 states W4.1's gate as "W3 first (RAM)", while §7 used to
-sequence W4.1 straight after W1.3. W3.3-3.5 are open, so the gate is not met. Today's box is the
-argument against waiving it quietly — 124 MB available on 2026-07-22, a brain CUDA-OOM crash, and
-three deploy-gate failures out of that same pressure; W3.1/W3.2 closing did not make this box roomy.
+The next action is **not** kept here any more: the one ordered list is [`docs/ROADMAP.md`](../ROADMAP.md). What stays here are the decisions below, which bind whoever picks the work up.
 
-So the step after W1.3 is one of exactly two. **DECIDED 2026-07-22 by Jason: (a).** The W3 gate
+**W4.1 is BLOCKED behind the W3 RAM gate, not next after W1.3.** W3.3-3.5 are open, so the gate is not met; the box (124 MB available on 2026-07-22, a brain CUDA-OOM crash, three deploy-gate failures out of that pressure) is the argument against waiving it quietly.
+
+The way past the gate is one of exactly two. **DECIDED 2026-07-22 by Jason: (a).** The W3 gate
 stands; no waiver. An agent may not revisit this.
 
-**Concretely, once W1.3's close-out is done, the NEXT ACTION becomes this ordered list — work it
-top-down, one at a time, and do not skip to the measurement before the reclaim work:**
+**The W3 order, top-down, one at a time (do not skip to the measurement before the reclaim work):**
   1. **W3.3** reap generalization (HA / music-assistant)
   2. **W3.4** zram rebalance (measure-first)
   3. **W3.5** harness fence-out (with tech-debt Wave 4)

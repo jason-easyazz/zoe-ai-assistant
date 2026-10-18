@@ -569,8 +569,8 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
 **Current order, refreshed 2026-09-29 04:10 AWST (the panel is ON; the 09-28 evening chain
 #1756 → #1770, 14 PRs, merged and deployed, live `269bb680` — list in the tracker §6; S1 and S4
 both PASS on the 03:56 Samantha compare and the bar was re-recorded at 04:00), after the
-afternoon chain and the 09-27 wave.** The authoritative NEXT ACTION is the
-[program tracker §0](../architecture/beat-the-bar-2026-program.md). The dated lists below are
+afternoon chain and the 09-27 wave.** The next action lives in
+[`docs/ROADMAP.md`](../ROADMAP.md). The dated lists below are
 the 2026-09-25 plan, kept with ✓ marks.
 
 1. 🧑 **Operator window.**
