@@ -437,3 +437,13 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   (01:35-04:55 refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`,
   asserts its own teardown). Host cgroup namespace (systemd will not boot otherwise),
   not `--privileged`. 47/47 on 2026-10-18; README is the record.
+- `credential-vault/` — **phases V0 + V1 of the credential vault** (`docs/architecture/credential-vault.md`
+  section 16): an internal Docker network (no route out, cell H1) with Vaultwarden 1.37.4 (digest-pinned, non-root,
+  256 MB), the test sites + witness (96 MB) and a client (768 MB) holding the official `bw` CLI 2026.9.1 (sha256-pinned
+  OSS build in `.bin/`, gitignored), a scripted synthetic family with canary values, and the REAL broker
+  `services/zoe-vaultd/` under its own uids (core, browser, phone; `zoe-svc` stands in for zoe-data). Negative
+  controls are monkeypatches in `lab/labcore.py`, never switches in the broker. Hand-run via `run.sh` in PIECES
+  (v0, A-F): each piece brings the lab up, seeds, runs one cell group and tears down inside ONE hold of
+  `flock /tmp/zoe-test-lane.lock` (watchdog cap 15 min), releasing the lane between pieces; refuses while
+  `night_busy.sh test|deploy` says pause and 02:05-02:45, waits for `MemAvailable` >= 2000 MB, asserts its teardown.
+  Unit net for the broker: `tests/unit/test_zoe_vaultd.py` (ci_safe). README is the record.
