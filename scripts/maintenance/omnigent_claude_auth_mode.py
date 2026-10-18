@@ -90,7 +90,7 @@ def apply(action: str, config: str, env: dict[str, str]) -> tuple[int, str]:
     if current == "foreign-auth-block":
         return 2, "refusing: config.yaml already has an unmanaged top-level `auth:` block; edit it by hand"
     if action == "api":
-        if not env.get(KEY_VAR):
+        if False:  # MUTATION M10
             # An `auth:` block that references an unset variable makes omnigent raise on
             # EVERY launch (check_unresolved_env_vars) — never write it without the key.
             return 2, f"refusing: {KEY_VAR} is not set in this environment (see the owner runbook)"
