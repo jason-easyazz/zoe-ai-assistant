@@ -3,8 +3,10 @@ Music Assistant proxy endpoints.
 
 Provides Zoe's frontend with MA status, configured providers, and available
 provider types — all forwarded from the local MA instance (default :8095).
-Auth is intentionally session-free here: the data is non-sensitive connection
-status that the music page and settings page both need without an extra auth hop.
+Auth: the READS stay session-free (the music page, settings and the kiosk need
+them). Every WRITE takes ``panel_principal.require_member_or_panel`` - a member or
+the wall panel, the ``/api/ha/*`` rule (#2089); until 2026-10-18 they took none.
+``/play`` and ``/play_media`` also take the phone jukebox token (music_jukebox.py).
 """
 import logging
 import os
@@ -12,9 +14,11 @@ import re
 from typing import Any
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from music_service import _first_image, _hi_res_art
+from music_jukebox import require_member_panel_or_jukebox
+from panel_principal import require_member_or_panel
 
 logger = logging.getLogger(__name__)
 
@@ -437,7 +441,7 @@ async def music_now_playing(player_id: str = "") -> dict[str, Any]:
     return {"available": np is not None, "now_playing": np or {}}
 
 
-@router.post("/control")
+@router.post("/control", dependencies=[Depends(require_member_or_panel)])
 async def music_control(payload: dict) -> dict[str, Any]:
     """action ∈ play|pause|play_pause|resume|stop|next|previous|volume_up|
     volume_down|volume_set (value); optional player_id."""
@@ -449,7 +453,7 @@ async def music_control(payload: dict) -> dict[str, Any]:
     return {"ok": ok, "action": action}
 
 
-@router.post("/seek")
+@router.post("/seek", dependencies=[Depends(require_member_or_panel)])
 async def music_seek(payload: dict) -> dict[str, Any]:
     """Seek the current track to an absolute position. body: {position_seconds,
     player_id?}. Drives the floating bar's scrubber via music_service.seek."""
@@ -471,13 +475,12 @@ async def get_preferred_player() -> dict[str, Any]:
     return {"player_id": music_service.get_preferred_player_id()}
 
 
-@router.post("/preferred-player")
+@router.post("/preferred-player", dependencies=[Depends(require_member_or_panel)])
 async def set_preferred_player(payload: dict) -> dict[str, Any]:
     """Remember a speaker as the default target for future plays.
     body: {player_id}. Set by the panel's speaker picker; voice plays that
-    explicitly target a speaker also update it. Household-shared, like the
-    rest of the music bridge (control/transfer/play are unauthenticated too).
-    Unknown ids are rejected against the live player list."""
+    explicitly target a speaker also update it. Household-shared: a member or
+    the panel, like every other music write. Unknown ids are rejected against the live player list."""
     import music_service
     pid = str((payload or {}).get("player_id") or "")
     if pid:
@@ -493,7 +496,7 @@ async def set_preferred_player(payload: dict) -> dict[str, Any]:
     return {"ok": True, "player_id": pid}
 
 
-@router.post("/transfer")
+@router.post("/transfer", dependencies=[Depends(require_member_or_panel)])
 async def music_transfer(payload: dict) -> dict[str, Any]:
     """Move current playback to another speaker. body: {target_player_id,
     source_player_id?}. source defaults to the active player MA is using now."""
@@ -544,7 +547,7 @@ async def music_groups() -> dict[str, Any]:
     return {"available": True, **view}
 
 
-@router.post("/group")
+@router.post("/group", dependencies=[Depends(require_member_or_panel)])
 async def music_group(payload: dict) -> dict[str, Any]:
     """Join and/or unjoin speakers to a target in one atomic call.
 
@@ -568,7 +571,7 @@ async def music_group(payload: dict) -> dict[str, Any]:
     )
 
 
-@router.post("/ungroup")
+@router.post("/ungroup", dependencies=[Depends(require_member_or_panel)])
 async def music_ungroup(payload: dict) -> dict[str, Any]:
     """Remove one speaker from whatever group it is in.
 
@@ -584,7 +587,7 @@ async def music_ungroup(payload: dict) -> dict[str, Any]:
     return await music_service.ungroup_player(str((payload or {}).get("player_id") or ""))
 
 
-@router.post("/play")
+@router.post("/play", dependencies=[Depends(require_member_panel_or_jukebox)])
 async def music_play(payload: dict) -> dict[str, Any]:
     """Search MA and play the top hit. body: {query, player_id?, radio?}.
     radio:true seeds an endless station of similar tracks from the hit
@@ -617,7 +620,7 @@ async def music_search(q: str = "", types: str = "", limit: int = 8) -> dict[str
     return await music_service.search(q, media_types=media_types, limit=n)
 
 
-@router.post("/play_media")
+@router.post("/play_media", dependencies=[Depends(require_member_panel_or_jukebox)])
 async def music_play_media(payload: dict) -> dict[str, Any]:
     """Play a specific search result on a chosen speaker.
 
@@ -637,7 +640,7 @@ async def music_play_media(payload: dict) -> dict[str, Any]:
 
 # ── Discovery: MA-native recommendations + play history ──────────────────────
 
-@router.post("/queue/move")
+@router.post("/queue/move", dependencies=[Depends(require_member_or_panel)])
 async def music_queue_move(payload: dict) -> dict[str, Any]:
     """Reorder the queue. body: {queue_id, item_id, to_index}."""
     import music_service
@@ -646,7 +649,7 @@ async def music_queue_move(payload: dict) -> dict[str, Any]:
     return {"ok": ok}
 
 
-@router.post("/queue/remove")
+@router.post("/queue/remove", dependencies=[Depends(require_member_or_panel)])
 async def music_queue_remove(payload: dict) -> dict[str, Any]:
     """Remove a track from the queue. body: {queue_id, item_id}."""
     import music_service
@@ -654,14 +657,14 @@ async def music_queue_remove(payload: dict) -> dict[str, Any]:
     return {"ok": await music_service.queue_remove(str(b.get("queue_id") or ""), str(b.get("item_id") or ""))}
 
 
-@router.post("/queue/clear")
+@router.post("/queue/clear", dependencies=[Depends(require_member_or_panel)])
 async def music_queue_clear(payload: dict) -> dict[str, Any]:
     """Clear the queue. body: {queue_id}."""
     import music_service
     return {"ok": await music_service.queue_clear(str((payload or {}).get("queue_id") or ""))}
 
 
-@router.post("/queue/play-index")
+@router.post("/queue/play-index", dependencies=[Depends(require_member_or_panel)])
 async def music_queue_play_index(payload: dict) -> dict[str, Any]:
     """Jump to a queue position. body: {queue_id, index}."""
     import music_service
@@ -669,7 +672,7 @@ async def music_queue_play_index(payload: dict) -> dict[str, Any]:
     return {"ok": await music_service.queue_play_index(str(b.get("queue_id") or ""), int(b.get("index") or 0))}
 
 
-@router.post("/queue/save")
+@router.post("/queue/save", dependencies=[Depends(require_member_or_panel)])
 async def music_queue_save(payload: dict) -> dict[str, Any]:
     """Save the current queue as a playlist. body: {queue_id, name}."""
     import music_service
@@ -691,7 +694,7 @@ async def music_playlist_tracks(uri: str = "", limit: int = 100) -> dict[str, An
     return {"tracks": await music_service.playlist_tracks(uri, limit=limit)}
 
 
-@router.post("/playlists/add")
+@router.post("/playlists/add", dependencies=[Depends(require_member_or_panel)])
 async def music_playlist_add(payload: dict) -> dict[str, Any]:
     """Add a track to a playlist. body: {playlist_uri, track_uri}."""
     import music_service
@@ -699,14 +702,14 @@ async def music_playlist_add(payload: dict) -> dict[str, Any]:
     return {"ok": await music_service.playlist_add(str(b.get("playlist_uri") or ""), str(b.get("track_uri") or ""))}
 
 
-@router.post("/favorite")
+@router.post("/favorite", dependencies=[Depends(require_member_or_panel)])
 async def music_favorite(payload: dict) -> dict[str, Any]:
     """Favorite / add-to-library a media item. body: {uri}."""
     import music_service
     return {"ok": await music_service.favorite_add(str((payload or {}).get("uri") or ""))}
 
 
-@router.post("/unfavorite")
+@router.post("/unfavorite", dependencies=[Depends(require_member_or_panel)])
 async def music_unfavorite(payload: dict) -> dict[str, Any]:
     """Un-favorite a media item. body: {uri}. The other half of /favorite —
     without it the panel's heart could only ever be turned ON."""
@@ -731,7 +734,7 @@ async def music_recently_played(limit: int = 10, types: str = "") -> dict[str, A
     return await music_service.get_recently_played(limit=limit, media_types=media_types)
 
 
-@router.post("/dont-stop")
+@router.post("/dont-stop", dependencies=[Depends(require_member_or_panel)])
 async def music_dont_stop(payload: dict) -> dict[str, Any]:
     """Toggle MA's "Don't stop the music" (auto-continue with similar tracks).
     body: {enabled: bool, player_id?}."""
@@ -740,3 +743,38 @@ async def music_dont_stop(payload: dict) -> dict[str, Any]:
     player_id = str((payload or {}).get("player_id") or "")
     ok = await music_service.set_dont_stop_the_music(enabled, player_id=player_id)
     return {"ok": ok, "enabled": enabled}
+
+
+# ── The phone jukebox (music_jukebox.py) ──────────────────────────────────────
+
+@router.post("/jukebox/start")
+async def jukebox_start(payload: dict, user: dict = Depends(require_member_or_panel)) -> dict[str, Any]:
+    """Panel: mint a jukebox token bound to this panel + a single-use QR handle for it.
+    body: {panel_id}; a device token's own panel wins over the body."""
+    import music_jukebox
+    import panel_principal
+    import setup_qr
+
+    panel_id = str((user or {}).get("panel_id") or (payload or {}).get("panel_id") or "").strip()
+    if not panel_id or not await panel_principal._with_registry(
+            None, panel_principal._kiosk_panel_allows_guest, panel_id):
+        raise HTTPException(status_code=400, detail="an active panel that allows guests is required")
+    minted = music_jukebox.mint(panel_id)
+    handle = setup_qr.issue("jukebox", token=minted["token"])
+    return {"ok": True, "qr_path": f"/api/music/jukebox/qr/{handle}", "expires_in": minted["expires_in"]}
+
+
+@router.get("/jukebox/qr/{handle}")
+async def jukebox_qr(handle: str, request: Request) -> Response:
+    """The QR (SVG) for ``<origin>/jukebox.html#t=<token>``; redeems the single-use handle, so the
+    token never sits in a URL a server logs."""
+    import auth_handoff
+    import music_jukebox
+    import setup_qr
+
+    held = setup_qr.redeem("jukebox", handle)
+    if held is None or not music_jukebox.panel_of(held["token"]):
+        return Response(status_code=404)
+    url = f"{auth_handoff.phone_base_url(request)}/jukebox.html#t={held['token']}"
+    return Response(content=setup_qr.render_svg(url), media_type="image/svg+xml",
+                    headers={"Cache-Control": "no-store"})

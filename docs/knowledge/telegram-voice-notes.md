@@ -25,7 +25,7 @@ loop and ignored; `/talk` falls through to the brain as text).
 | 5 | `services/zoe-data/routers/telegram_media.py` | ffmpeg `-ac 1 -ar 16000 -sample_fmt s16 -f wav` (clipped at max+1 s) → `routers.voice_tts._transcribe_audio(path, capture=False)` → `{ok, text, duration_s}` — **no `voice:transcript` broadcast, no panel corpus** |
 | 6 | `src/brain.ts` `askZoeAs` | the SAME `/api/chat?stream=false` turn as text: `X-Zoe-User-Id` + `X-Internal-Token`, `channel: 'telegram'`, the chat's session id |
 | 7 | `src/voice.ts` `deliverReply` | per `ZOE_TELEGRAM_VOICE_REPLY`: `voice` (default) → `POST /api/system/telegram/synthesize` (Kokoro WAV → ffmpeg `libopus 32k 48 kHz mono voip` → `audio/ogg`) → `sendVoice`; `both` adds the text; `text` sends text only. A 503 (Kokoro down, ffmpeg missing, router off) falls back to text — Zoe is never silent |
-| `/talk` | `src/voice.ts` `handleTalk` | when `ZOE_BASE_URL` is set: one inline URL button "Talk to Zoe" → `<base>/voice.html`, the existing push-to-talk page (VISION principle 8, zero new infrastructure). Linked senders only |
+| `/talk` | `src/voice.ts` `handleTalk` | when `ZOE_PUBLIC_URL` (or `ZOE_BASE_URL`) is set: one inline URL button "Talk to Zoe" → `<base>/voice.html`, the existing push-to-talk page (VISION principle 8, zero new infrastructure). Linked senders only |
 
 Why not `/api/voice/transcribe` or `/livekit-audio`: the first broadcasts to every panel and
 captures into the panel corpus; the second attributes the turn to the device token's principal,
@@ -46,15 +46,17 @@ bot (its unit is `MemoryMax=1G`).
 | `ZOE_TELEGRAM_VOICE_REPLY` | bot | `voice` | `voice` (in kind) / `text` / `both` |
 | `ZOE_TELEGRAM_VOICE_MAX_S` | bot **and** zoe-data | 60 | longest note; the bot checks Telegram's declared duration before download, zoe-data re-checks the DECODED audio (413) — keep both equal |
 | `ZOE_TELEGRAM_ALLOW_FORWARDED` | bot | off | forwarded notes are someone else's words; on = accepted, framed as a quote, never as the member's command |
-| `ZOE_BASE_URL` | bot | unset | public base URL; set = `/talk` command + button to `voice.html` |
+| `ZOE_PUBLIC_URL` / `ZOE_BASE_URL` | bot | unset | public base URL (`ZOE_PUBLIC_URL` wins); set = `/talk` command + button to `voice.html`. A LAN-IP / `.local` base is answered with "home Wi-Fi only" |
 | `ZOE_TELEGRAM_MEDIA` | zoe-data | off | mount the `telegram_media` router (off = 404) |
 | `ZOE_TELEGRAM_FFMPEG` | zoe-data | auto | ffmpeg path; auto = PATH → `~/.local/bin/ffmpeg` (the box's static libopus build; the unit's PATH does not include it) |
 | `ZOE_TELEGRAM_FFMPEG_TIMEOUT_S` | zoe-data | 20 | per ffmpeg run; a timeout kills it and answers 504 |
 | `ZOE_TELEGRAM_STT_CAPTURE_DIR` | zoe-data | unset | copy phone-mic clips + transcripts into a SEPARATE corpus. Never `~/.zoe-voice-samples` |
 
 The bot reads its flags from `labs/flue-zoe-telegram-2x/.env` (the unit's `EnvironmentFile`);
-zoe-data from its own env. Two processes, two files. The bot token lives in both files under
-different names (`TELEGRAM_BOT_TOKEN`, `ZOE_TELEGRAM_BOT_TOKEN`) — names only here.
+zoe-data from its own env. Two processes, two files. The bot's token is `TELEGRAM_BOT_TOKEN` in
+the bot's file; zoe-data reaches members through the bot's loopback `/internal/notify` and only
+falls back to a token of its own (`ZOE_TELEGRAM_BOT_TOKEN` or `TELEGRAM_BOT_TOKEN`) — names only
+here; see [app-connection-handoff.md](app-connection-handoff.md).
 
 ## Operator apply (zoe-data first, then the bot)
 
@@ -72,7 +74,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8000/api/syste
 cat >> labs/flue-zoe-telegram-2x/.env <<'EOF'
 ZOE_TELEGRAM_VOICE_NOTES=1
 ZOE_TELEGRAM_VOICE_REPLY=voice
-ZOE_BASE_URL=https://<the tunnel hostname>
+ZOE_PUBLIC_URL=https://<the tunnel hostname>
 EOF
 systemctl --user restart flue-zoe-telegram.service
 curl -fsS http://127.0.0.1:3582/health

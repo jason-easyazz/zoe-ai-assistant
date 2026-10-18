@@ -2299,8 +2299,29 @@
           "services/zoe-data/auth.py",
           "services/zoe-data/auth_handoff.py",
           "services/zoe-data/mcp_server.py",
+          "services/zoe-data/music_jukebox.py",
           "services/zoe-data/panel_kiosk_credential.py",
           "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_JUKEBOX_SECRET": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_jukebox.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_JUKEBOX_TTL_S": {
+        "defaults": [
+          "7200"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_jukebox.py"
         ],
         "typed_env": true
       },
@@ -6290,13 +6311,13 @@
       },
       "ZOE_TELEGRAM_BOT_TOKEN": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/auth_handoff.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_TELEGRAM_BOT_USERNAME": {
         "defaults": [
@@ -6347,6 +6368,16 @@
           "services/zoe-data/routers/telegram_media.py"
         ],
         "typed_env": false
+      },
+      "ZOE_TELEGRAM_NOTIFY_URL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth_handoff.py"
+        ],
+        "typed_env": true
       },
       "ZOE_TELEGRAM_STT_CAPTURE_DIR": {
         "defaults": [
