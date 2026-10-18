@@ -228,10 +228,21 @@ location ^~ /modules/music-assistant/ {
     proxy_send_timeout 3600s;
 }
 
-# Requires zoe-ui extra_hosts host.docker.internal:host-gateway (see docker-compose.yml).
+# Multica (board) -- reached over zoe-network BY CONTAINER NAME, never through the host.
+# Both containers publish on 127.0.0.1 only (docker-compose.modules.yml), which the docker0
+# gateway (host.docker.internal) cannot reach; the nginx path is the only LAN route to the
+# board. The upstreams are held in variables + Docker's embedded resolver so nginx still
+# STARTS when the opt-in Multica containers are down or being recreated (a literal
+# `proxy_pass http://zoe-multica-backend:8080` resolves at load and would refuse to boot
+# the whole UI with "host not found in upstream"). A variable proxy_pass does not strip the
+# location prefix, hence the explicit rewrite. Pinned by tests/unit/test_nginx_delivery_layer.py.
+resolver 127.0.0.11 valid=10s ipv6=off;
+
 location ^~ /multica-api/ {
     gzip off;
-    proxy_pass http://host.docker.internal:8080/;
+    set $multica_backend zoe-multica-backend:8080;
+    rewrite ^/multica-api/(.*)$ /$1 break;
+    proxy_pass http://$multica_backend;
     proxy_set_header Host $http_host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -244,18 +255,21 @@ location ^~ /multica-api/ {
 # Route /_next/ asset requests (JS/CSS chunks) to multica-web.
 # Next.js embeds root-relative /_next/ paths in its HTML when no basePath is configured.
 location ^~ /_next/ {
-    proxy_pass        http://host.docker.internal:3000/_next/;
+    set $multica_web zoe-multica-web:3000;
+    proxy_pass        http://$multica_web;
     proxy_http_version 1.1;
     proxy_set_header   Host        $host;
 }
 
 location ^~ /multica/ {
-    proxy_pass        http://host.docker.internal:3000/;
+    set $multica_web zoe-multica-web:3000;
+    rewrite ^/multica/(.*)$ /$1 break;
+    proxy_pass        http://$multica_web;
     proxy_http_version 1.1;
     proxy_set_header   Upgrade     $http_upgrade;
     proxy_set_header   Connection  $connection_upgrade;
     proxy_set_header   Host        $host;
-    # Rewrite server-side redirects so /login → /multica/login (not Zoe's login)
+    # Rewrite server-side redirects so /login -> /multica/login (not Zoe's login)
     proxy_redirect     /login      /multica/login;
     proxy_redirect     /register   /multica/register;
 }

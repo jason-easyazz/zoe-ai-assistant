@@ -214,6 +214,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_API": {
+        "defaults": [
+          "'https://192.168.1.218'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/touchscreen/zoe-panel-agent.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_APP_LOG": {
         "defaults": [
           "dynamic"
@@ -1267,6 +1277,16 @@
           "services/zoe-data/change_notices.py"
         ],
         "typed_env": true
+      },
+      "ZOE_DEVICE_ID": {
+        "defaults": [
+          "(required)"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/touchscreen/zoe-panel-agent.py"
+        ],
+        "typed_env": false
       },
       "ZOE_DEVICE_TOKEN": {
         "defaults": [
