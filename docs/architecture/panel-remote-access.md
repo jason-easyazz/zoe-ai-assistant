@@ -2,7 +2,7 @@
 type: design
 title: Panel remote access - the touch panel on another Wi-Fi, linked back to Zoe over a private mesh with no new account
 date: 2026-10-16
-status: design only; nothing built, nothing changed on the panel or the Jetson. Every phase is lab-proven on a lab node before the live panel, and each Zoe-side code change ships flag-dark.
+status: design only; nothing built, nothing changed on the panel or the Jetson. SUPERSEDED in part 2026-10-17/18 - the Headscale link (its PR #2083 closed unmerged, bundle on branch feature/headscale-bundle; Headscale removed 2026-10-18) was replaced by the relay in panel-anywhere.md; the Wi-Fi onboarding, away mode and panel-firewall sections still stand. Every phase is lab-proven on a lab node before the live panel, and each Zoe-side code change ships flag-dark.
 evidence: docs/research/panel-remote-access-2026-10.md (field research with sources tagged verified/secondary, plus the code survey and the read-only live state)
 builds_on: docs/knowledge/mac-virtual-panel.md (the one remote panel that exists - over the Cloudflare tunnel), services/zoe-data/panel_principal.py (#2068), services/zoe-data/routers/panel_auth.py + services/zoe-data/routers/panel_provision.py (device tokens, QR pairing), docs/architecture/identity-presence-engine.md (panel = room), docs/architecture/samantha-evolution-plan.md W12 (the direct link)
 ---
