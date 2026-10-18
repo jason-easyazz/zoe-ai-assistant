@@ -3,9 +3,11 @@
 
 homeassistant:
   name: Home
-  latitude: -31.9505
-  longitude: 115.8605
-  elevation: 26
+  # The home's location (latitude / longitude / elevation) is NOT set here: this file is
+  # tracked in a PUBLIC repository. Home Assistant keeps it in its own UI storage
+  # (Settings > System > General, saved in the untracked .storage/core.config). Never add
+  # coordinates back to this file; tests/unit/test_privacy_canary.py fails if a household
+  # canary appears in any tracked file.
   unit_system: metric
   currency: AUD
   country: AU

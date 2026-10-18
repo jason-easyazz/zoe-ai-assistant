@@ -188,6 +188,10 @@ CELLS: list[Cell] = [
 ]
 
 
+#: the lanes beyond the two the parity verdict is defined on (A4, 2026-10-19): measured and reported, not part of ``parity``
+EXTRA_LANES = ("chat_ns", "livekit")
+
+
 @dataclass
 class CellResult:
     cid: str
@@ -197,6 +201,8 @@ class CellResult:
     chat_detail: str
     voice_detail: str
     voice_only: bool = False
+    #: lane -> (ok, detail) for each extra lane that was run (``run_cells(..., extra_lanes=EXTRA_LANES)``)
+    extra: dict = field(default_factory=dict)
 
     @property
     def parity(self) -> bool:
@@ -206,20 +212,24 @@ class CellResult:
 async def run_lane(cell: Cell, lane: str, monkeypatch, *, user_suffix: str = "", flags: Optional[dict] = None) -> tuple[bool, str]:
     # a fresh identity per run: the throwaway palace outlives one run inside a process, and a note left by an earlier run is state
     rig = Rig(user=f"demo_lane_parity_{lane}_{cell.cid}_{uuid.uuid4().hex[:6]}{user_suffix}").install(monkeypatch, flags=flags)
-    script = cell.chat if lane == "chat" else cell.voice
+    # typed lanes run the typed script; spoken lanes the spoken one (a spoken write is read back first on the panel lane)
+    script = cell.chat if lane in ("chat", "chat_ns") else cell.voice
+    drive = {"chat": rig.chat, "voice": rig.voice, "chat_ns": rig.chat_ns, "livekit": rig.livekit}[lane]
     if cell.setup is not None:
         cell.setup(rig)
     outs: list[Outcome] = []
     for utt in script:
         rig.brain_reply = (cell.brain_reply or {}).get(utt, BRAIN_SENTINEL)
         rig.serve_on_brain = utt in cell.serve
-        outs.append(await (rig.chat(utt) if lane == "chat" else rig.voice(utt)))
+        outs.append(await drive(utt))
     return await cell.check(rig, outs, lane)
 
 
-async def run_cells(monkeypatch_factory, only: Optional[set] = None, flags: Optional[dict] = None) -> list[CellResult]:
+async def run_cells(monkeypatch_factory, only: Optional[set] = None, flags: Optional[dict] = None,
+                    extra_lanes: tuple = ()) -> list[CellResult]:
     """Every cell, both lanes, each in a fresh rig (fresh fake store, fresh demo identity). ``flags`` overrides the live flag mirror
-    (the instrument's negative controls turn a tier OFF and the cell it guards must go red)."""
+    (the instrument's negative controls turn a tier OFF and the cell it guards must go red). ``extra_lanes`` (from EXTRA_LANES) also
+    runs those lanes; a spoken-lane safety row is n/a on them, as on typed chat."""
     results = []
     for cell in CELLS:
         if only and cell.cid not in only:
@@ -234,7 +244,17 @@ async def run_cells(monkeypatch_factory, only: Optional[set] = None, flags: Opti
             v_ok, v_detail = await run_lane(cell, "voice", mp, flags=flags)
         finally:
             mp.undo()
-        results.append(CellResult(cell.cid, cell.title, c_ok, v_ok, c_detail, v_detail, cell.voice_only))
+        extra = {}
+        for lane in extra_lanes:
+            if cell.voice_only:
+                extra[lane] = (None, "n/a (spoken-lane safety row)")
+                continue
+            mp = monkeypatch_factory()
+            try:
+                extra[lane] = await run_lane(cell, lane, mp, flags=flags)
+            finally:
+                mp.undo()
+        results.append(CellResult(cell.cid, cell.title, c_ok, v_ok, c_detail, v_detail, cell.voice_only, extra))
     return results
 
 
@@ -242,9 +262,16 @@ def render(results: list[CellResult]) -> str:
     def mark(v):
         return "n/a " if v is None else ("PASS" if v else "FAIL")
 
-    lines = [f"{'cell':22} {'chat':5} {'voice':5} parity", "-" * 44]
+    extra = [lane for lane in EXTRA_LANES if any(lane in r.extra for r in results)]
+    head = f"{'cell':22} {'chat':5} {'voice':5} parity" + "".join(f" {lane:8}" for lane in extra)
+    lines = [head, "-" * len(head)]
     for r in results:
-        lines.append(f"{r.cid:22} {mark(r.chat_ok):5} {mark(r.voice_ok):5} {'YES' if r.parity else 'NO'}")
+        lines.append(f"{r.cid:22} {mark(r.chat_ok):5} {mark(r.voice_ok):5} {'YES' if r.parity else 'NO ':6}"
+                     + "".join(f" {mark(r.extra.get(lane, (None, ''))[0]):8}" for lane in extra))
     n = sum(1 for r in results if r.parity)
     lines.append(f"parity {n}/{len(results)}")
+    for lane in extra:
+        ok = sum(1 for r in results if r.extra.get(lane, (None,))[0])
+        scored = sum(1 for r in results if r.extra.get(lane, (None,))[0] is not None)
+        lines.append(f"{lane}: {ok}/{scored} cells")
     return "\n".join(lines)

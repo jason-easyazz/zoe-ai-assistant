@@ -305,7 +305,6 @@
         "readers": [
           "services/zoe-auth/touch_panel/quick_auth.py",
           "services/zoe-data/auth.py",
-          "services/zoe-data/main.py",
           "services/zoe-data/routers/auth.py",
           "services/zoe-data/routers/panel_auth.py"
         ],
@@ -961,16 +960,6 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/ui_compose.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_COMPOSE_VOICE_BUDGET_S": {
-        "defaults": [
-          "'8'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/main.py"
         ],
         "typed_env": false
       },
@@ -3329,7 +3318,7 @@
       },
       "ZOE_MCP_STRICT_USER_ID": {
         "defaults": [
-          "'false'"
+          "'true'"
         ],
         "in_env_example": false,
         "readers": [
@@ -4622,6 +4611,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PANEL_TOKEN_VIA_CF": {
+        "defaults": [
+          "'guest'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PERF": {
         "defaults": [
           "-"
@@ -5055,6 +5054,26 @@
         "in_env_example": true,
         "readers": [
           "services/zoe-data/proactive/presence.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PRIVACY_CANARY_DIR": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "tools/audit/privacy_canary.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PRIVACY_CANARY_KEY": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "tools/audit/privacy_canary.py"
         ],
         "typed_env": false
       },
@@ -5509,6 +5528,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/repo_paths.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RESTORE_USER_IDS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "tools/restore_lists_data.py"
         ],
         "typed_env": false
       },

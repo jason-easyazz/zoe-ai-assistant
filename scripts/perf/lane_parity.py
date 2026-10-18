@@ -18,6 +18,7 @@ Usage (service interpreter or any python with the zoe-data deps; pytest is NOT n
     python3 scripts/perf/lane_parity.py --only correction,contact_list
     python3 scripts/perf/lane_parity.py --details       # why each cell passed or failed
     python3 scripts/perf/lane_parity.py --controls      # the instrument's own proof: a tier OFF must turn its cell red (exit 2 if not)
+    python3 scripts/perf/lane_parity.py --all-lanes     # also the non-stream chat (Telegram) and LiveKit (Ask card) lanes, reported
     python3 scripts/perf/lane_parity.py --json out.json
 
 Exit: 0 every cell has parity (and, with --controls, every control went red) | 1 a cell lacks parity | 2 an instrument control stayed green.
@@ -76,11 +77,13 @@ async def _main(args) -> int:
         if only and not only <= known:
             print(f"unknown cell(s): {sorted(only - known)}; known: {sorted(known)}", file=sys.stderr)
             return 2
-        results = await lpc.run_cells(MiniPatch, only=only)
+        results = await lpc.run_cells(MiniPatch, only=only, extra_lanes=lpc.EXTRA_LANES if args.all_lanes else ())
         print(lpc.render(results))
         if args.details:
             for r in results:
                 print(f"\n[{r.cid}] {r.title}\n  chat : {r.chat_detail}\n  voice: {r.voice_detail}")
+                for lane, (_ok, detail) in r.extra.items():
+                    print(f"  {lane}: {detail}")
         bad_controls = []
         if args.controls:
             print("\ninstrument controls (a tier turned OFF must turn its cells red):")
@@ -91,7 +94,7 @@ async def _main(args) -> int:
                 if not red:
                     bad_controls.append(flags)
         if args.json:
-            Path(args.json).write_text(json.dumps([r.__dict__ | {"parity": r.parity} for r in results], indent=2))
+            Path(args.json).write_text(json.dumps([r.__dict__ | {"parity": r.parity} for r in results], indent=2, default=list))
         if bad_controls:
             return 2
         return 0 if all(r.parity for r in results) else 1
@@ -104,6 +107,7 @@ def main() -> None:
     ap.add_argument("--only", help="comma-separated cell ids")
     ap.add_argument("--details", action="store_true")
     ap.add_argument("--controls", action="store_true")
+    ap.add_argument("--all-lanes", action="store_true", help="also run the extra lanes (reported; parity stays chat vs voice)")
     ap.add_argument("--json")
     args = ap.parse_args()
     import logging
