@@ -182,8 +182,14 @@ authentication"); the native `claude` CLI harness on a subscription login is exp
   deliberately omits it); the key would have to reach the SDK harness alone (e.g. an
   omnigent provider entry with an `env:` ref plus `OMNIGENT_RUNNER_ENV_PASSTHROUGH`, the pattern
   the `pi`/OpenRouter seed uses).
-- **Status:** policy decision pending with the operator; not implemented by B0.11. Until it is
-  decided, the login renewal above keeps the lane running.
+- **Status (2026-10-18):** decided and built, awaiting the owner's key. The key is named
+  `ZOE_OMNIGENT_ANTHROPIC_API_KEY` (never `ANTHROPIC_API_KEY`), lives in an out-of-repo env
+  file read by compose `env_file`, and reaches the SDK harness through omnigent's
+  `auth: {type: api_key, api_key: $VAR}` block, toggled by
+  `scripts/maintenance/omnigent_claude_auth_mode.py` — exactly the "env: ref plus
+  `OMNIGENT_RUNNER_ENV_PASSTHROUGH`" shape above. Owner steps and the measured root cause of the
+  OAuth refresh failures: [omnigent-cross-review.md](omnigent-cross-review.md#polly-claude-auth--root-cause-and-the-fix-2026-10-18).
+  The stored-login renewal above stays valid as the fallback credential.
 
 Related: [Omnigent cross-review](omnigent-cross-review.md) (what polly does),
 [omp builder-lane fence](omp-builder-fence-install.md) (the other in-container harness fence),
