@@ -210,6 +210,16 @@ routine path, not the exceptional one.** Findings are hypotheses: verify each wi
 negative control, batch every fix into one push. Advisory to the machine, mandatory to
 the process — a PR should not be marked ready until it has had one.
 
+The script falls back **automatically**: polly (Omnigent) first; if polly cannot start or
+produce a provably cross-vendor report (runner start failure, Claude OAuth refresh
+contention, auth error, timeout), `codex exec` is run DIRECTLY in the `zoe-omnigent`
+container with the same contract; only if codex is unavailable (quota) does ONE lean,
+tool-less, size-capped `pi` pass run. **No backend is Claude** — a same-vendor review is
+never substituted — and if every cross-vendor option fails it exits **2** with
+`cross-review unavailable`, which means *not reviewed*, never "clean". Detail, the
+polly-auth root cause and the owner runbook:
+[docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
+
 Binding worker routing:
 
 - **`claude_code` (Claude Max, flat-rate):** primary implementer. Sonnet-tier for routine
