@@ -4203,6 +4203,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_KEEP_AUDIO_FOR_TAGGING": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMI_LEARN_VOICES": {
         "defaults": [
           "False"

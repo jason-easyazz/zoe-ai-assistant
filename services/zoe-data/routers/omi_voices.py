@@ -10,9 +10,18 @@ query filters on THAT member: there is no admin override and no way to name anot
                                                     its lines (and later matching ones) leave suggestions and the day review
   POST   /api/omi/segments/{segment_id}/tag          ``{"person_id"} | {"name"}`` one line
   PATCH  /api/omi/segments/{segment_id}              ``{"owner_label": "you" | "other" | null}`` "that was me" / "not me";
-                                                    ``{"not_person": kind | null}`` "that was Zoe / the TV"
+                                                    ``{"not_person": kind | null}`` "that was Zoe / the TV"; a label may come
+                                                    with ``not_person: null`` (un-mark + label, one request), never with a kind
   POST   /api/omi/segments/{segment_id}/suggestion   ``{"answer": "yes" | "no" | "someone_else"}`` on "Sounds like Sam?"
-  GET    /api/omi/voices                             the voices Zoe has learned for me + my learning switch
+  POST   /api/omi/voices/unknown/{cluster_id}/me     "that voice is me" (the pendant can hear the wearer as someone else): every
+                                                    line becomes ``owner_label='you'``, the voice and its held embeddings go
+  GET    /api/omi/voices/people                      my OWN people (id, name) for the "Who is this?" picker
+  GET    /api/omi/segments/{segment_id}/clip         a few seconds (<= 8 s) of one of my lines as audio/wav, while its recording's
+                                                    WAV is still held (``ZOE_OMI_KEEP_AUDIO_FOR_TAGGING`` / ``keep_audio``); 404 otherwise
+
+After every change that can finish naming a recording, ``omi_recordings.release_tagged_audio`` drops the WAVs held only for tagging
+in which nothing needs a name any more.
+  GET    /api/omi/voices                             the voices Zoe has learned for me + my learning switch + the tagging mode
   PATCH  /api/omi/voices/{voice_id}                  ``{"learning_enabled": bool}`` stop / resume learning this voice
   DELETE /api/omi/voices/{voice_id}                  forget this voice (the person and my tags stay)
   PUT    /api/omi/voices/settings                    ``{"learning_enabled": bool}`` stop learning voices at all
@@ -25,8 +34,11 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
+import omi_diarize
+import omi_recordings
 import omi_voices as voices
 from routers.omi_recordings import _require_owner
 
@@ -67,6 +79,11 @@ class _Learning(BaseModel):
     learning_enabled: bool
 
 
+async def _released(user: dict, out):
+    await omi_recordings.release_tagged_audio(user["user_id"])     # never raises: a release failure never fails the tag
+    return out
+
+
 def _found(ok: bool) -> dict:
     if not ok:
         raise HTTPException(status_code=404, detail="not found")
@@ -80,17 +97,36 @@ async def unknown_voices(user: dict = Depends(_require_owner)):
 
 @router.post("/voices/unknown/{cluster_id}/tag")
 async def tag_voice(cluster_id: str, body: _Tag, user: dict = Depends(_require_owner)):
-    return await _call(voices.tag, user["user_id"], person_id=body.person_id, name=body.name, cluster_id=cluster_id)
+    return await _released(user, await _call(voices.tag, user["user_id"], person_id=body.person_id, name=body.name, cluster_id=cluster_id))
 
 
 @router.post("/voices/unknown/{cluster_id}/not-a-person")
 async def not_a_person_voice(cluster_id: str, body: _Kind, user: dict = Depends(_require_owner)):
-    return {"ok": True, "segments": await _call(voices.mark_not_a_person, user["user_id"], kind=body.kind, cluster_id=cluster_id)}
+    return await _released(user, {"ok": True, "segments": await _call(voices.mark_not_a_person, user["user_id"], kind=body.kind,
+                                                                    cluster_id=cluster_id)})
+
+
+@router.post("/voices/unknown/{cluster_id}/me")
+async def voice_is_me(cluster_id: str, user: dict = Depends(_require_owner)):
+    return await _released(user, {"ok": True, "segments": await _call(voices.cluster_is_me, user["user_id"], cluster_id)})
+
+
+@router.get("/voices/people")
+async def my_people(user: dict = Depends(_require_owner)):
+    return {"people": await _call(voices.own_people, user["user_id"])}
+
+
+@router.get("/segments/{segment_id}/clip")
+async def segment_clip(segment_id: str, user: dict = Depends(_require_owner)):
+    wav = await omi_recordings.segment_clip(user["user_id"], segment_id)
+    if wav is None:
+        raise HTTPException(status_code=404, detail="no audio is kept for that line")
+    return Response(content=wav, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/segments/{segment_id}/tag")
 async def tag_segment(segment_id: str, body: _Tag, user: dict = Depends(_require_owner)):
-    return await _call(voices.tag, user["user_id"], person_id=body.person_id, name=body.name, segment_id=segment_id)
+    return await _released(user, await _call(voices.tag, user["user_id"], person_id=body.person_id, name=body.name, segment_id=segment_id))
 
 
 @router.patch("/segments/{segment_id}")
@@ -99,9 +135,11 @@ async def label_segment(segment_id: str, body: _Label, user: dict = Depends(_req
     if not given:
         raise HTTPException(status_code=400, detail="give owner_label and/or not_person")
     # validate the WHOLE payload before either change: a 400 must mean nothing was applied
-    if "owner_label" in given and "not_person" in given:
+    if "owner_label" in given and "not_person" in given and body.not_person is not None:
         # "that was me" and "that was not a person" contradict each other (the second would untag what the first just set, or the
-        # first would un-mark what the second just marked): one change per request, nothing applied
+        # first would un-mark what the second just marked): nothing applied. CLEARING a mark with a label is one correction
+        # ("that was not the TV, it was me / someone else") and must be ONE request: two would let the held audio be released
+        # between them, when the line briefly needs no name.
         raise HTTPException(status_code=400, detail="send owner_label or not_person, not both")
     if "owner_label" in given and body.owner_label not in (None, "you", "other"):
         raise HTTPException(status_code=400, detail="owner_label is you, other or null")
@@ -110,19 +148,20 @@ async def label_segment(segment_id: str, body: _Label, user: dict = Depends(_req
     if "not_person" in given:
         await _call(voices.mark_not_a_person, user["user_id"], kind=body.not_person, segment_id=segment_id)
     if "owner_label" in given:
-        return _found(await _call(voices.set_owner_label, user["user_id"], segment_id, body.owner_label))
-    return {"ok": True}
+        return await _released(user, _found(await _call(voices.set_owner_label, user["user_id"], segment_id, body.owner_label)))
+    return await _released(user, {"ok": True})
 
 
 @router.post("/segments/{segment_id}/suggestion")
 async def answer_suggestion(segment_id: str, body: _Answer, user: dict = Depends(_require_owner)):
-    return await _call(voices.answer_suggestion, user["user_id"], segment_id, body.answer)
+    return await _released(user, await _call(voices.answer_suggestion, user["user_id"], segment_id, body.answer))
 
 
 @router.get("/voices")
 async def learned_voices(user: dict = Depends(_require_owner)):
     return {"voices": await _call(voices.list_learned, user["user_id"]),
-            "learning_enabled": await _call(voices.member_learning, user["user_id"]), "feature_on": voices.learn_enabled()}
+            "learning_enabled": await _call(voices.member_learning, user["user_id"]), "feature_on": voices.learn_enabled(),
+            "speaker_tag": omi_diarize.mode()}
 
 
 @router.put("/voices/settings")

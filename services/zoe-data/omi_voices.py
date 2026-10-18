@@ -342,7 +342,8 @@ async def list_unknown(db, user_id: str, *, samples: int = 3) -> list[dict]:
     out = []
     for cid, seq, first, last in await _all(db, "SELECT id, seq, first_heard_at, last_heard_at FROM omi_voice_clusters "
                                                 "WHERE user_id = ? AND status = 'open' ORDER BY last_heard_at DESC", (user_id,)):
-        segs = await _all(db, "SELECT s.id, s.recording_id, s.start_ms, s.end_ms, r.started_at FROM omi_segments s JOIN omi_recordings r "
+        segs = await _all(db, "SELECT s.id, s.recording_id, s.start_ms, s.end_ms, r.started_at, s.text, r.audio_path FROM omi_segments s "
+                              "JOIN omi_recordings r "
                               "ON r.id = s.recording_id WHERE s.user_id = ? AND s.voice_cluster_id = ? AND s.tagged_person_id IS NULL "
                               "AND s.not_person IS NULL AND r.status = 'done' ORDER BY s.end_ms - s.start_ms DESC", (user_id, cid))
         if not segs:
@@ -351,8 +352,37 @@ async def list_unknown(db, user_id: str, *, samples: int = 3) -> list[dict]:
         days = {str(s[4])[:10] for s in segs if s[4]}
         out.append({"id": cid, "name": f"Voice {seq}", "segments": len(segs), "recordings": len(recs), "days": len(days),
                     "first_heard_at": first, "last_heard_at": last,
-                    "samples": [{"segment_id": s[0], "recording_id": s[1], "start_ms": s[2], "end_ms": s[3]} for s in segs[:samples]]})
+                    "samples": [{"segment_id": s[0], "recording_id": s[1], "start_ms": s[2], "end_ms": s[3], "started_at": s[4],
+                                 "text": s[5] or "", "has_audio": bool(s[6])} for s in segs[:samples]]})
     return out
+
+
+async def own_people(db, user_id: str) -> list[dict]:
+    """The member's OWN live people (id, name) for the "Who is this?" picker - never another member's rows, family-visible or not
+    (a tag may only name a person ``_resolve_person`` would accept)."""
+    rows = await _all(db, "SELECT id, name FROM people WHERE user_id = ? AND (deleted = 0 OR deleted IS NULL) ORDER BY name", (user_id,))
+    return [{"id": r[0], "name": r[1]} for r in rows if str(r[1] or "").strip()]
+
+
+async def cluster_is_me(db, user_id: str, cluster_id: str) -> int:
+    """"That voice is me" on a whole unknown voice: the pendant channel can score the wearer's own voice as ``other`` (the panel
+    profile is a different microphone), so the wearer's voice lands in an unknown voice. Every line of it becomes the wearer's own
+    (``owner_label='you'``, the same ground truth as the per-line "That was me"), its held embeddings go (the wearer's voice is
+    never held as a bystander's) and the voice itself goes. Nothing is learned. Returns the lines changed."""
+    if not await _all(db, "SELECT id FROM omi_voice_clusters WHERE id = ? AND user_id = ? AND status = 'open'", (cluster_id, user_id)):
+        raise VoiceError("not found", 404)
+    seg_ids = [r[0] for r in await _all(db, "SELECT id FROM omi_segments WHERE user_id = ? AND voice_cluster_id = ?", (user_id, cluster_id))]
+    now = _iso(_now())
+    if seg_ids:
+        await _release_contributions(db, user_id, seg_ids)
+        await _run(db, f"DELETE FROM omi_segment_embeddings WHERE user_id = ? AND segment_id IN ({_qs(len(seg_ids))})", (user_id, *seg_ids))
+        await _run(db, f"UPDATE omi_segments SET owner_label = 'you', owner_labelled_at = ?, voice_cluster_id = NULL, "
+                       f"suggested_person_id = NULL, suggested_score = NULL, tagged_person_id = NULL, tag_source = NULL, tagged_at = NULL "
+                       f"WHERE user_id = ? AND id IN ({_qs(len(seg_ids))})", (now, user_id, *seg_ids))
+    await _run(db, "DELETE FROM omi_voice_clusters WHERE id = ? AND user_id = ?", (cluster_id, user_id))
+    await db.commit()
+    logger.info("OMI_VOICE_IS_WEARER segments=%d", len(seg_ids))
+    return len(seg_ids)
 
 
 async def _resolve_person(db, user_id: str, person_id: Optional[str], name: Optional[str], ref: str) -> dict:
@@ -366,6 +396,12 @@ async def _resolve_person(db, user_id: str, person_id: Optional[str], name: Opti
     clean = re.sub(r"\s+", " ", str(name or "")).strip()[:80]
     if not clean:
         raise VoiceError("give person_id or a name")
+    key = cs.fold(clean)              # a typed name that IS one of the member's own people links to them, never a duplicate row
+    same = [p for p in await own_people(db, user_id) if key and cs.fold(p["name"]) == key]
+    if len(same) == 1:
+        return await _resolve_person(db, user_id, same[0]["id"], None, ref)
+    if same:
+        raise VoiceError("more than one of your people has that name - pick one", 409)
     now = cs.now_iso()
     pid = await cs._create_person(db, user_id, clean, now=now)      # visibility 'personal': layer 2, never the household's
     await cs.add_field(db, user_id, pid, kind="name", value=clean, provenance="entered_by_member", provenance_ref=ref)
