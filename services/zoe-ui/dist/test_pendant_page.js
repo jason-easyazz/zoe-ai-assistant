@@ -112,8 +112,12 @@ function makeEnv(opts = {}) {
         return { ok: true, status: 200, json: async () => ({ ok: true, learning: 'learning' }) };
     };
     const played = [];
-    function Audio(src) { this.src = src; }
-    Audio.prototype.play = async function () { played.push(this.src); };
+    function Audio(src) { this.src = src || ''; }
+    Audio.prototype.play = function () {
+        played.push(this.src);
+        if (opts.gestureLost && !String(this.src).startsWith('data:')) return Promise.reject(new Error('NotAllowedError'));
+        return Promise.resolve();
+    };
     Audio.prototype.pause = function () {};
     const URL = { createObjectURL: (b) => 'blob:' + b.type, revokeObjectURL: () => {} };
     const win = { fetch, setTimeout: () => 0, Date, encodeURIComponent, JSON, Promise, String, Math, isNaN, isFinite, console, Audio, URL };
@@ -243,7 +247,8 @@ async function check(label, fn) {
         e.calls.length = 0;
         await byText(e.doc.ids.pendantUnknown, '▶ Play')[0].click();
         assert.deepStrictEqual(e.calls.map(c => c.method + ' ' + c.url), ['GET /api/omi/segments/s-9/clip']);
-        assert.deepStrictEqual(e.played, ['blob:audio/wav']);
+        assert(e.played[0].startsWith('data:audio/wav'), 'the element is unlocked inside the tap, before the fetch');
+        assert.deepStrictEqual(e.played.slice(1), ['blob:audio/wav']);
         const rec = e.doc.ids.pendantRecordings.children[0];
         await rec.children[0].click();
         await new Promise(r => setImmediate(r));
@@ -256,11 +261,25 @@ async function check(label, fn) {
         assert.strictEqual(byText(old, '▶ Play').length, 0, 'no audio held -> no play button');
     });
 
+    await check('iOS: the unlock play() runs synchronously in the tap; a refused clip falls back to native controls', async () => {
+        const e = makeEnv({ gestureLost: true });
+        await e.Z.init(e.doc);
+        const btn = byText(e.doc.ids.pendantUnknown, '▶ Play')[0];
+        const pending = btn.click();
+        assert.strictEqual(e.played.length, 1, 'play() must be called before the first await (iOS gesture rule)');
+        await pending;
+        await new Promise(r => setImmediate(r));
+        const audios = e.doc.ids.pendantUnknown.all(n => n.tagName === 'AUDIO');
+        assert.strictEqual(audios.length, 1);
+        assert.strictEqual(audios[0].getAttribute('src'), 'blob:audio/wav');
+        assert.strictEqual(audios[0].getAttribute('controls'), '');
+    });
+
     await check('a clip that is no longer kept says so and plays nothing', async () => {
         const e = makeEnv({ clipStatus: 404 });
         await e.Z.init(e.doc);
         await byText(e.doc.ids.pendantUnknown, '▶ Play')[0].click();
-        assert.deepStrictEqual(e.played, []);
+        assert.deepStrictEqual(e.played.filter(s => !s.startsWith('data:')), []);
         assert(/no longer kept/.test(e.doc.ids.pendantToast.textContent), e.doc.ids.pendantToast.textContent);
     });
 

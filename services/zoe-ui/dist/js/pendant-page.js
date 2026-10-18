@@ -153,7 +153,22 @@
     }
 
     /* A few seconds of that voice: fetched with the member's session (an <audio src> cannot carry it), played from a blob URL. */
-    async function play(segmentId) {
+    // a 0-sample WAV: played synchronously inside the tap so iOS Safari unlocks the element for the real clip after the fetch
+    const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+
+    function play(segmentId, host) {
+        // SYNCHRONOUS part, still inside the click: iOS only lets media start from the gesture itself, and the fetch below
+        // would lose it. Unlock (or reuse) the one element now; the clip is swapped in when it arrives.
+        if (!state.audio) state.audio = new root.Audio();
+        try {
+            state.audio.src = SILENT_WAV;
+            const p = state.audio.play();
+            if (p && p.catch) p.catch(() => {});
+        } catch (_e) { /* the fallback below still offers native controls */ }
+        return fetchAndPlay(segmentId, host);
+    }
+
+    async function fetchAndPlay(segmentId, host) {
         let res;
         try {
             res = await root.fetch('/api/omi/segments/' + encodeURIComponent(segmentId) + '/clip', { method: 'GET', headers: {} });
@@ -165,14 +180,24 @@
             toast(res.status === 404 ? 'The audio for this one is no longer kept.' : 'Could not play it (' + res.status + ').', true);
             return;
         }
+        let url;
         try {
-            if (state.audio) state.audio.pause();
             if (state.audioUrl && root.URL && root.URL.revokeObjectURL) root.URL.revokeObjectURL(state.audioUrl);
-            state.audioUrl = root.URL.createObjectURL(await res.blob());
-            state.audio = new root.Audio(state.audioUrl);
+            url = state.audioUrl = root.URL.createObjectURL(await res.blob());
+            state.audio.pause();
+            state.audio.src = url;
             await state.audio.play();
         } catch (_e) {
-            toast('This browser would not play the clip.', true);
+            // the browser still refused (gesture lost): give it native controls, which play on the next tap
+            if (url && host) {
+                const a = el('audio', 'clip');
+                a.setAttribute('controls', '');
+                a.setAttribute('src', url);
+                host.appendChild(a);
+                toast('Tap play on the clip below.');
+            } else {
+                toast('This browser would not play the clip.', true);
+            }
         }
     }
 
@@ -249,7 +274,7 @@
         (v.samples || []).forEach(s => {
             const q = el('blockquote', 'sample', s.text ? '"' + s.text + '"' : '(no words)');
             q.appendChild(el('span', 'at', ' ' + when(s.started_at)));
-            if (s.has_audio) q.appendChild(button('▶ Play', 'small play', () => play(s.segment_id)));
+            if (s.has_audio) q.appendChild(button('▶ Play', 'small play', () => play(s.segment_id, q)));
             card.appendChild(q);
         });
         const actions = el('div', 'row');
@@ -288,7 +313,7 @@
         head.appendChild(el('span', 'at', mmss(seg.start_ms)));
         row.appendChild(head);
         row.appendChild(el('p', 'seg-text', seg.text || '(no words)'));
-        if (hasAudio) head.appendChild(button('▶ Play', 'small play', () => play(seg.id)));
+        if (hasAudio) head.appendChild(button('▶ Play', 'small play', () => play(seg.id, row)));
         const done = async (p) => {
             try { await p; } catch (e) { failed(e); }
             await reload();

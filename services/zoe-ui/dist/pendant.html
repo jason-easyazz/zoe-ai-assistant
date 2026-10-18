@@ -69,6 +69,7 @@
                  color: #fff; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s; }
         .toast.show { opacity: 1; }
         .toast.bad { background: var(--p-bad); }
+        audio.clip { display: block; width: 100%; margin-top: 8px; }
         [hidden] { display: none !important; }
     </style>
 </head>
@@ -94,7 +95,7 @@
         <div id="pendantKnown"></div>
     </main>
     <div class="toast" id="pendantToast" role="status"></div>
-    <script src="/js/pendant-page.js?v=3"></script>
+    <script src="/js/pendant-page.js?v=4"></script>
     <script>
         // auth.js's synchronous desktop gate may already be redirecting to sign-in: send nothing from this page meanwhile
         if (window.ZoePendant && !window.__zoeAuthRedirecting) window.ZoePendant.init(document);
