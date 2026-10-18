@@ -344,3 +344,31 @@ def test_effective_default_normalisation_is_spelling_blind_but_value_sensitive()
     assert len(flag_inventory.distinct_defaults([d("'http://a'"), d("'http://b'")])) == 2
     assert len(flag_inventory.distinct_defaults([d("False"), d("-")])) == 1   # off == unset for a flag
     assert len(flag_inventory.distinct_defaults([d("'x'"), d("-")])) == 2     # a value vs unset is a real difference
+
+
+def test_aliased_reads_keyword_names_and_setdefault_are_seen(tmp_path):
+    """Review of #2116: an alias must not hide a read. ``from os import environ as E``, ``getenv as ge``, ``env = os.environ``,
+    ``env_bool(key="ZOE_X")`` and ``environ.setdefault`` are all reads; a setdefault VALUE is not a reader's default."""
+    (tmp_path / "m.py").write_text(
+        "import os\n"
+        "from os import environ as E, getenv as ge\n"
+        "env = os.environ\n"
+        'A = E.get("ZOE_VIA_ALIAS", "1")\n'
+        'B = ge("ZOE_VIA_GETENV_ALIAS", "2")\n'
+        'C = env.get("ZOE_VIA_ASSIGNED", "3")\n'
+        'D = env_bool(key="ZOE_VIA_KEYWORD", default=True)\n'
+        'os.environ.setdefault("ZOE_VIA_SETDEFAULT", "child-value")\n'
+        'F = E["ZOE_VIA_ALIAS_SUBSCRIPT"]\n'
+    )
+    prod = flag_inventory.scan_repo(tmp_path, files=["m.py"])["flags"]["prod"]
+    assert set(prod) == {"ZOE_VIA_ALIAS", "ZOE_VIA_GETENV_ALIAS", "ZOE_VIA_ASSIGNED", "ZOE_VIA_KEYWORD",
+                         "ZOE_VIA_SETDEFAULT", "ZOE_VIA_ALIAS_SUBSCRIPT"}
+    assert prod["ZOE_VIA_KEYWORD"]["typed_env"] is True and prod["ZOE_VIA_KEYWORD"]["defaults"] == ["True"]
+    assert prod["ZOE_VIA_SETDEFAULT"]["defaults"] == ["dynamic"]
+
+
+def test_nan_and_inf_defaults_are_words_not_numbers():
+    d = flag_inventory.effective_default
+    assert d("'nan'") == "nan" and d("'nan'") == d("'nan'")   # nan != nan would make a flag conflict with itself
+    assert d("'inf'") == "inf"
+    assert d("'1.5'") == 1.5

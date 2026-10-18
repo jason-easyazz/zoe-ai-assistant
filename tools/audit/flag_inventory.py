@@ -171,6 +171,23 @@ def _module_literals(tree: ast.AST) -> dict[str, ast.expr]:
     return out
 
 
+def _environ_aliases(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
+    """Names this module binds to ``os.environ`` / ``os.getenv`` (``from os import environ as E``, ``getenv as ge``,
+    ``env = os.environ``), so an aliased read is still a read. Computed names and loop variables stay invisible."""
+    environ_names, getenv_names = {"environ"}, {"getenv"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "os":
+            for a in node.names:
+                if a.name == "environ":
+                    environ_names.add(a.asname or a.name)
+                elif a.name == "getenv":
+                    getenv_names.add(a.asname or a.name)
+        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Attribute) and node.value.attr == "environ":
+            environ_names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return frozenset(environ_names), frozenset(getenv_names)
+
+
+_NAME_KWARGS = ("key", "name", "var", "env", "env_var")
 _PEEL_ATTRS = {"strip", "lower", "upper", "casefold", "rstrip", "lstrip"}
 
 
@@ -183,7 +200,9 @@ def _peel(v: ast.expr) -> ast.expr:
 
 class _FlagVisitor(ast.NodeVisitor):
     def __init__(self, typed_delegators: frozenset[str] = frozenset(), flag_constants: dict[str, str] | None = None,
-                 literals: dict[str, ast.expr] | None = None) -> None:
+                 literals: dict[str, ast.expr] | None = None,
+                 aliases: tuple[frozenset[str], frozenset[str]] | None = None) -> None:
+        self._environ_names, self._getenv_names = aliases or (frozenset({"environ"}), frozenset({"getenv"}))
         self._consts = flag_constants or {}
         self._lits = literals or {}
         # id(env-read Call) -> the literal on the right of ``read or <literal>`` (the effective default)
@@ -214,13 +233,12 @@ class _FlagVisitor(ast.NodeVisitor):
             return func.id
         return ""
 
-    @staticmethod
-    def _is_environ_get(func: ast.expr) -> bool:
-        # os.environ.get(...) or (from os import environ) environ.get(...)
-        if not (isinstance(func, ast.Attribute) and func.attr == "get"):
+    def _is_environ_get(self, func: ast.expr) -> bool:
+        # os.environ.get(...) / .setdefault(...) or an alias (``from os import environ as E``) of it
+        if not (isinstance(func, ast.Attribute) and func.attr in ("get", "setdefault")):
             return False
         v = func.value
-        return (isinstance(v, ast.Attribute) and v.attr == "environ") or (isinstance(v, ast.Name) and v.id == "environ")
+        return (isinstance(v, ast.Attribute) and v.attr == "environ") or (isinstance(v, ast.Name) and v.id in self._environ_names)
 
     def _record(self, name: str, default: str, typed: bool) -> None:
         (self.reads if FLAG_RE.match(name) else self.other).append((name, default, typed))
@@ -255,12 +273,13 @@ class _FlagVisitor(ast.NodeVisitor):
         # ZOE_* string-constant filter below skips any non-constant first arg —
         # so a name can be on this list even when another module reuses it for
         # a different shape.
-        strict_get = name == "getenv" or self._is_environ_get(node.func)
+        strict_get = name in self._getenv_names or self._is_environ_get(node.func)
         wrapper_get = name in ("_int_env", "_float_env", "_env",
                                "_env_int", "_env_float", "_env_bool", "_env_flag",
                                "_env_enabled", "_int_from_env")
-        if (typed or strict_get or wrapper_get) and node.args:
-            env = self._env_name(node.args[0])
+        first = node.args[0] if node.args else next((kw.value for kw in node.keywords if kw.arg in _NAME_KWARGS), None)
+        if (typed or strict_get or wrapper_get) and first is not None:
+            env = self._env_name(first)
             # Loose wrappers only count for ZOE_* names: a generic `_env("FOO")`
             # helper for something else must not flood the non-ZOE list.
             if env and (FLAG_RE.match(env) or typed or strict_get):
@@ -277,7 +296,9 @@ class _FlagVisitor(ast.NodeVisitor):
                     default = ord_
                 if isinstance(default, ast.Name) and default.id in self._lits:
                     default = self._lits[default.id]
-                self._record(env, _literal_repr(default), typed)
+                # ``environ.setdefault("X", v)`` SETS v for child processes: it is not a reader's default, so not comparable.
+                is_set = isinstance(node.func, ast.Attribute) and node.func.attr == "setdefault"
+                self._record(env, DYNAMIC if is_set else _literal_repr(default), typed)
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
@@ -289,7 +310,7 @@ class _FlagVisitor(ast.NodeVisitor):
             self.generic_visit(node)
             return
         v = node.value
-        if (isinstance(v, ast.Attribute) and v.attr == "environ") or (isinstance(v, ast.Name) and v.id == "environ"):
+        if (isinstance(v, ast.Attribute) and v.attr == "environ") or (isinstance(v, ast.Name) and v.id in self._environ_names):
             env = self._env_name(node.slice)
             if env:
                 self._record(env, REQUIRED, False)
@@ -371,9 +392,10 @@ def normalize_default(v: object) -> object:
             return int(s)
         except ValueError:
             try:
-                return float(s)
+                f = float(s)
             except ValueError:
                 return s
+            return f if f == f and f not in (float("inf"), float("-inf")) else s  # 'nan'/'inf' are words, not numbers
     if isinstance(v, (list, tuple)):
         return tuple(v) or None
     if isinstance(v, dict):
@@ -491,7 +513,7 @@ def scan_repo(repo: Path, files: list[str] | None = None, registry: dict[str, di
                 tree = ast.parse(text)
             except SyntaxError:
                 continue
-            visitor = _FlagVisitor(_typed_delegators(tree), _flag_constants(tree), _module_literals(tree))
+            visitor = _FlagVisitor(_typed_delegators(tree), _flag_constants(tree), _module_literals(tree), _environ_aliases(tree))
             visitor.visit(tree)
             reads, others = visitor.reads, visitor.other
         elif _ts_scannable(rel):
@@ -908,6 +930,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sync-registry", action="store_true", help="Add newly-read flags to the registry (existing entries untouched)")
     ap.add_argument("--tighten-ratchet", action="store_true", help="Lower flag-ratchet.json to the current legacy-read counts")
     args = ap.parse_args(argv)
+    if args.check_only and (args.sync_registry or args.tighten_ratchet):
+        ap.error("--check-only writes nothing; drop --sync-registry / --tighten-ratchet or drop --check-only")
 
     files = _tracked_files(args.repo)
     if args.sync_registry:

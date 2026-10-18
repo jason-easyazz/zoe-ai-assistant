@@ -4,7 +4,6 @@
 # there anyway, and a missed week is better than an evidence run on a box that is busy dreaming.
 [Unit]
 Description=Zoe weekly Samantha evidence run timer (Sunday 05:30, after the night window)
-Requires=zoe-samantha-weekly.service
 
 [Timer]
 OnCalendar=Sun *-*-* 05:30:00

@@ -13,17 +13,17 @@ After=network-online.target zoe-data.service
 
 [Service]
 Type=oneshot
-# bar (~30 min) + day-sim (~30 min) + up to 2 h of lock/memory/deploy waiting; --with-person adds ~1 h.
-TimeoutStartSec=14400
+# bar (~30 min) + day-sim (~30 min) + up to 2 h of lock waiting EACH; --with-person adds ~1 h.
+TimeoutStartSec=28800
 WorkingDirectory=%h/assistant
 # The harnesses read the internal token + DSN from the live service .env themselves (service-dir); this is only for PATH/HOME.
 Environment=HOME=%h
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-# ZOE_BAR_ADMIN_SESSION (optional: admin teardown path) comes from the operator's own env file, never inlined here.
-EnvironmentFile=-%h/.hermes/.env
+# ZOE_BAR_ADMIN_SESSION (optional: the admin teardown path) must come from an env file the operator adds; never inline it here.
 ExecStartPre=/usr/bin/mkdir -p %h/.zoe-logs
 ExecStart=/bin/bash %h/assistant/scripts/maintenance/samantha_weekly.sh
-# 1 = a regression vs the baseline, 3 = the shared lock was busy, 4 = refused inside the night window: results, not unit failures.
+# 1 = a regression vs the baseline (a harness crash also exits 1: read the log), 3 = the shared lock was busy, 4 = refused inside
+# the night window: results, not unit failures.
 SuccessExitStatus=1 3 4
 StandardOutput=append:%h/.zoe-logs/samantha-weekly.log
 StandardError=append:%h/.zoe-logs/samantha-weekly.log

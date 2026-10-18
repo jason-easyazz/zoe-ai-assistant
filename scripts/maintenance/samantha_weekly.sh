@@ -21,13 +21,14 @@
 #     scripts/maintenance/samantha_weekly.sh --dry-run       # print the plan: commit, paths, steps; run nothing
 #     scripts/maintenance/samantha_weekly.sh --record-baseline   # the bar becomes the baseline (bound runs only)
 #
-# Exit: 0 all steps ran | 1 a regression vs the baseline | 2 refused/error (incl. unbound evidence) |
-#       3 the shared harness lock was held | 4 not allowed to run now (inside the night window).
+# Exit: 0 all steps ran | 1 a regression vs the baseline (a Python crash also exits 1: read the log) |
+#       2 refused/error (incl. unbound evidence) | 3 the shared harness lock was held | 4 not allowed to run now
+#       (inside the night window).
 # Template unit (NOT installed): scripts/setup/systemd/zoe-samantha-weekly.{service,timer}.
 set -uo pipefail
 
 LIVE="${ZOE_ASSISTANT_ROOT:-$HOME/assistant}"
-CACHE="${ZOE_CACHE_DIR:-$HOME/.cache/zoe}"
+CACHE="$HOME/.cache/zoe"   # fixed: the harnesses write here and do not honour an override
 LOCK=/tmp/zoe-voice-harness.lock
 WITH_PERSON=0
 DRY=0
@@ -43,8 +44,12 @@ for a in "$@"; do
 done
 
 # The night window: never run tests/evidence inside 01:50-04:55 local (the 12B and the dreaming jobs own the box).
-now_min=$((10#$(date +%H) * 60 + 10#$(date +%M)))
-if [ "$DRY" -eq 0 ] && [ "$now_min" -ge $((1 * 60 + 50)) ] && [ "$now_min" -lt $((4 * 60 + 55)) ]; then
+# Checked before EVERY step too: a step can wait up to 2 h for the shared lock and must not start inside the window.
+in_night_window() {
+  local m=$((10#$(date +%H) * 60 + 10#$(date +%M)))
+  [ "$m" -ge $((1 * 60 + 50)) ] && [ "$m" -lt $((4 * 60 + 55)) ]
+}
+if [ "$DRY" -eq 0 ] && in_night_window; then
   echo "samantha_weekly: inside the night window (01:50-04:55) - not starting" >&2
   exit 4
 fi
@@ -71,6 +76,7 @@ git -C "$WORK/repo" checkout --quiet --detach "$COMMIT" || { echo "samantha_week
 echo "samantha_weekly: harness checkout $WORK/repo at ${COMMIT:0:12} (service: $LIVE)"
 
 export ZOE_PERF=1
+STARTED="$(date +%s)"   # the summary only reports artifacts written by THIS run (a step that exits 3 writes nothing)
 worst=0
 for s in "${STEPS[@]}"; do
   extra=()
@@ -79,6 +85,11 @@ for s in "${STEPS[@]}"; do
       if [ "$RECORD" -eq 1 ]; then extra+=(--record-baseline)
       elif [ -f "$CACHE/samantha_bar_baseline.json" ]; then extra+=(--compare-baseline); fi ;;
   esac
+  if in_night_window; then
+    echo "samantha_weekly: the night window opened before $s - stopping" >&2
+    [ 4 -gt "$worst" ] && worst=4
+    break
+  fi
   echo "samantha_weekly: === $s ==="
   flock -E 3 -w 7200 "$LOCK" nice -n 5 python3 "$WORK/repo/$s" --require-bound --service-dir "$LIVE" ${extra[@]+"${extra[@]}"}
   rc=$?
@@ -87,13 +98,15 @@ for s in "${STEPS[@]}"; do
 done
 
 # One summary line a human (or the next agent) can read without opening three artifacts.
-python3 - "$COMMIT" "$CACHE" "$worst" <<'PY'
+python3 - "$COMMIT" "$CACHE" "$worst" "$STARTED" <<'PY'
 import json, sys, time
 from pathlib import Path
-commit, cache, worst = sys.argv[1], Path(sys.argv[2]), int(sys.argv[3])
+commit, cache, worst, started = sys.argv[1], Path(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 out = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "commit": commit, "worst_exit": worst, "runs": {}}
 for name, f in (("bar", "samantha_bar_last.json"), ("day_sim", "samantha_day_sim_last.json"), ("person", "samantha_person_last.json")):
     try:
+        if (cache / f).stat().st_mtime < started:
+            continue   # left over from an earlier run: not this run's result
         d = json.loads((cache / f).read_text())
     except (OSError, ValueError):
         continue

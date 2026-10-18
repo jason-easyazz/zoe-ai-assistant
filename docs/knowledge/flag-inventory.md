@@ -27,9 +27,9 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 ## Summary
 
 - 705 prod flags; 160 read through `typed_env`.
-- 697 legacy direct read sites in prod code across 203 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
+- 702 legacy direct read sites in prod code across 206 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 14 flags whose readers hard-code different effective defaults (table below).
-- 245 non-`ZOE_` env names read by prod code (table below).
+- 255 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 281 prod flags with no owner doc yet.
 - 0 registered flags with no reader in the scanned sources.
@@ -53,7 +53,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PANEL_ID` | `'zoe-touch-pi'` | `'post-merge-probe'`, `'zoe-touch-pi'` | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_SPEAKER_MODEL` | `'resemblyzer'` | `'resemblyzer'`, `unset` | `scripts/setup/zoe_enroll_flow.py`, `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_TIMEZONE` | `'Australia/Perth'` | `'Australia/Perth'`, `unset` | `services/zoe-data/identity_facts.py` |
-| `ZOE_URL` | `'https://zoe.local'` | `'http://127.0.0.1:8000'`, `'https://zoe.local'` | `scripts/maintenance/zoe_latency_probe.py` |
+| `ZOE_URL` | `'https://zoe.local'` | `'http://127.0.0.1:8000'`, `'https://zoe.local'`, `unset` | `scripts/maintenance/zoe_latency_probe.py` |
 
 ## Production flags
 
@@ -250,7 +250,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_FLUE_WIRE` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `-` | no | yes | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FOLLOWUP_ADDRESSED` | str | `'off'` | `off`, `on`, `strict` | `docs/knowledge/voice-pipeline.md` | `'off'` | no | NO | `services/zoe-data/voice_utterance_shape.py` |
 | `ZOE_FORGET_ALIAS_SWEEP` | str | `''` | - | `services/zoe-data/AGENTS.md` | `-` | no | NO | `services/zoe-data/memory_forget_alias.py` |
-| `ZOE_FORGET_LEDGER_SALT` | str | `''` | - | `docs/knowledge/live-acceptance-2026-10.md` | `-` | no | yes | `services/zoe-data/memory_forgotten.py` |
+| `ZOE_FORGET_LEDGER_SALT` | str | `''` | - | `docs/knowledge/live-acceptance-2026-10.md` | `-`, `dynamic` | no | yes | `scripts/perf/zmb/arms/zma.py`<br>`services/zoe-data/memory_forgotten.py` |
 | `ZOE_FORGET_NEAR` | str | `''` | - | `docs/knowledge/memory-authority.md` | `-` | no | NO | `services/zoe-data/memory_forgotten.py` |
 | `ZOE_FORGET_REDACT` | str | `''` | - | `docs/knowledge/memory-authority.md` | `-` | no | NO | `services/zoe-data/forget_redact.py` |
 | `ZOE_FORGOTTEN_SHIELD_DAYS` | str | `''` | - | `docs/knowledge/memory-authority.md` | `-` | no | yes | `services/zoe-data/memory_forgotten.py` |
@@ -259,7 +259,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_GITHUB_REPO` | str | `'jason-easyazz/zoe-ai-assistant'` | - | - | `'jason-easyazz/zoe-ai-assistant'` | no | NO | `services/zoe-data/greploop_guard.py`<br>`services/zoe-data/greptile_client.py` |
 | `ZOE_GRAPH_RECALL_BOOST` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `''` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_GRAPH_RECALL_WEIGHT` | float | `0.3` | - | `services/zoe-data/AGENTS.md` | `0.3` | no | NO | `services/zoe-data/memory_service.py` |
-| `ZOE_HARNESS` | str | `''` | - | `docs/knowledge/memory-loss-audit-2026-10-05.md` | `-` | no | NO | `services/zoe-data/live_store_guard.py` |
+| `ZOE_HARNESS` | str | `''` | - | `docs/knowledge/memory-loss-audit-2026-10-05.md` | `-`, `dynamic` | no | NO | `scripts/perf/zmb/lab_driver.py`<br>`services/zoe-data/live_store_guard.py` |
 | `ZOE_HA_BRIDGE_URL` | str | `'http://127.0.0.1:8007'` | - | `docs/knowledge/operator-skills/openclaw/ha-patterns/SKILL.md` | `''`, `'http://127.0.0.1:8007'` | no | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_HA_CONTROL_SCOPE` | str | `'panel'` | - | `services/zoe-data/AGENTS.md` | `'panel'` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_HA_URL` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/routers/stubs.py` |
@@ -586,7 +586,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_ROSTER_NEUTRAL_ASK` | bool | `False` | - | `docs/knowledge/contacts-people-memory.md` | `False` | yes | NO | `services/zoe-data/fast_tiers.py` |
 | `ZOE_ROUTER_ARCHIVE_KEEP` | int | `3` | - | `docs/knowledge/router-selftrain-loop.md` | `'3'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_BASE_HF` | str | `'/home/zoe/models/lab/functiongemma-270m-it-hf'` | - | - | `'/home/zoe/models/lab/functiongemma-270m-it-hf'` | no | NO | `scripts/maintenance/router_selftrain.py` |
-| `ZOE_ROUTER_ENABLED` | bool | `True` | - | - | `'1'` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_ENABLED` | bool | `True` | - | - | `'1'`, `dynamic` | no | NO | `scripts/perf/measure_first_sound.py`<br>`services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_EVENT_TIME_PRECEDENCE` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `-` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEAD` | str | `'off'` | `off`, `shadow`, `active` | `docs/knowledge/two-stage-router-rollout.md` | `'off'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEADS_BACKEND` | str | `'numpy'` | - | `docs/knowledge/numpy2-jetson-migration.md` | `'numpy'` | no | NO | `services/zoe-data/router_heads_numpy.py` |
@@ -698,7 +698,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_TTS_TRIM_SILENCE` | bool | `True` | - | - | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_UNAUTHENTICATED_ROLE` | str | `'guest'` | - | `docs/architecture/panel-anywhere.md` | `'guest'` | no | yes | `services/zoe-data/auth.py` |
 | `ZOE_UPDATE_CHECK_ENABLED` | bool | `True` | - | - | `'true'` | no | NO | `services/zoe-data/system_updates.py` |
-| `ZOE_URL` | str | `'https://zoe.local'` | - | `docs/knowledge/mac-virtual-panel.md` | `'http://127.0.0.1:8000'`, `'https://zoe.local'`, `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_URL` | str | `'https://zoe.local'` | - | `docs/knowledge/mac-virtual-panel.md` | `''`, `'http://127.0.0.1:8000'`, `'https://zoe.local'`, `-`, `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`scripts/setup/mac_panel/preflight.py`<br>`scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_USER_MODEL_BLOCK` | str | `''` | - | `docs/knowledge/user-model-ab.md` | `-` | no | yes | `services/zoe-data/user_portrait.py` |
 | `ZOE_USE_CORE_BRAIN` | bool | `True` | - | `docs/knowledge/persona-layer.md` | `'true'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_USE_OMNIGENT_EXECUTOR` | bool | `False` | - | `docs/research/agent-sessions-off-box-2026-10-04.md` | `'0'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
@@ -815,7 +815,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-245 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+255 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -825,8 +825,10 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `AMBIENT_MIN_SPEECH_MS` | `'500'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `AMBIENT_SILENCE_PAD_MS` | `'800'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `AMBIENT_VAD_THRESHOLD` | `'0.4'` | no | yes | `scripts/setup/zoe_voice_daemon.py` |
+| `ANONYMIZED_TELEMETRY` | `dynamic` | no | NO | `scripts/maintenance/check_emotional_thread.py` |
 | `API_SERVER_KEY` | `-` | no | NO | `services/zoe-data/chat_hermes_stream.py`<br>`services/zoe-data/hermes_http.py` |
-| `AUDIO_OUTPUT_DEVICE` | `dynamic` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `AUDIO_DEVICE` | `'default'` | no | NO | `scripts/setup/mac_panel/preflight.py` |
+| `AUDIO_OUTPUT_DEVICE` | `'default'`, `dynamic` | no | NO | `scripts/setup/mac_panel/preflight.py`<br>`scripts/setup/zoe_voice_daemon.py` |
 | `BAKEOFF_BLACKOUTS` | `-` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BAKEOFF_BUDDYINFO` | `'/proc/buddyinfo'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BAKEOFF_CAP_MIN` | `'90'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
@@ -859,10 +861,11 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `BARGE_DUCK_ENABLED` | `'false'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `BARGE_IN_ENABLED` | `'true'` | no | yes | `scripts/setup/zoe_voice_daemon.py` |
 | `BARGE_SEED_NEXT_TURN` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
-| `CF_ACCESS_CLIENT_ID` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
-| `CF_ACCESS_CLIENT_SECRET` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `CF_ACCESS_CLIENT_ID` | `''`, `-` | no | NO | `scripts/setup/mac_panel/preflight.py`<br>`scripts/setup/zoe_voice_daemon.py` |
+| `CF_ACCESS_CLIENT_SECRET` | `''`, `-` | no | NO | `scripts/setup/mac_panel/preflight.py`<br>`scripts/setup/zoe_voice_daemon.py` |
 | `CHROME_PATH` | `dynamic` | no | NO | `scripts/maintenance/panel_screenshots.py` |
 | `CHUNK_SIZE` | `'1280'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `CLOAKBROWSER_AUTO_UPDATE` | `dynamic` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `CONV_BEEP` | `'first'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `CONV_MAX_S` | `'300'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `CONV_MAX_TURNS` | `'40'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -870,7 +873,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `CONV_WINDOW_S` | `'12.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `DATABASE_PATH` | `'/app/data/zoe.db'`, `'/home/zoe/assistant/data/zoe.db'` | no | NO | `scripts/maintenance/migrate_lists_enhancements.py`<br>`scripts/maintenance/migrate_project_lists.py` |
 | `DESKTOP_GATE_PIN` | `(required)` | no | NO | `scripts/maintenance/desktop_browser_verify.py` |
-| `DEVICE_TOKEN` | `''`, `-`, `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |
+| `DEVICE_TOKEN` | `''`, `-`, `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`scripts/setup/mac_panel/preflight.py`<br>`scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |
 | `EGRESS_AUDIT_LOG` | `'/home/zoe/.zoe/bakeoff-2026-10/egress-audit.log'` | no | NO | `scripts/perf/zmb/egress_audit/sitecustomize.py` |
 | `ENVIRONMENT` | `-` | no | NO | `services/zoe-auth/main.py` |
 | `FACE_CAMERA_INDEX` | `'0'` | no | NO | `scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_face_id.py` |
@@ -911,6 +914,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `HERMES_KANBAN_DB` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
 | `HERMES_MODEL` | `''`, `'hermes'`, `'hermes-agent'` | no | NO | `services/zoe-data/background_runner.py`<br>`services/zoe-data/chat_hermes_stream.py`<br>`services/zoe-data/proactive/triggers/openclaw_trigger.py`<br>`services/zoe-data/routers/system.py` |
 | `HERMES_MULTICA_AGENT_ID` | `''` | no | NO | `services/zoe-data/multica_client.py` |
+| `HF_HUB_OFFLINE` | `dynamic` | no | NO | `scripts/perf/zmb/embed_shim.py`<br>`scripts/perf/zmb/lab_driver.py`<br>`scripts/perf/zmb/pilot/embed_quality_probe.py` |
 | `HOME` | `''`, `'/'`, `'/home/zoe'`, `'~'` | no | NO | `scripts/night/night_window.py`<br>`scripts/perf/manner_block_ab.py`<br>`scripts/perf/zmb/arms/mpa_palace.py`<br>`scripts/perf/zmb/bakeoff.py`<br>`scripts/perf/zmb/bakeoff_measure.py`<br>`scripts/perf/zmb/embed_shim.py` |
 | `JETSON_AGENT_MODE` | `'false'` | no | NO | `services/zoe-data/main.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/chat.py`<br>`services/zoe-data/zoe_agent.py` |
 | `KOKORO_PROBE_HEALTH_URL` | `'http://127.0.0.1:10201/health'` | no | NO | `scripts/perf/kokoro_first_chunk_probe.py` |
@@ -932,6 +936,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `MEMORY_DIGEST_ENABLED` | `'true'` | no | NO | `services/zoe-data/routers/system.py` |
 | `MEMORY_DIGEST_MODEL` | `''`, `'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'` | no | NO | `scripts/maintenance/zoe-struggle-proposals.py`<br>`services/zoe-data/contact_backfill.py`<br>`services/zoe-data/latent_intent_detector.py`<br>`services/zoe-data/memory_authority.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/memory_retire.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/person_extractor_llm.py`<br>`services/zoe-data/structural_reader.py`<br>`services/zoe-data/structural_verifier.py`<br>`services/zoe-data/user_portrait.py` |
 | `MEMPALACE_DATA_DIR` | `'~/.mempalace'`, `(required)`, `-`, `dynamic` | no | NO | `scripts/maintenance/memory_authority_backfill.py`<br>`scripts/perf/recall_gate_replay.py`<br>`services/zoe-data/live_store_guard.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/memory_service.py`<br>`services/zoe-data/zoe_agent.py` |
+| `MEMPALACE_KNOWN_ENTITIES` | `dynamic` | no | NO | `scripts/perf/zmb/pilot/mempalace_deepdive.py` |
 | `MEMPALACE_PATH` | `'/home/zoe/.mempalace'` | no | NO | `scripts/maintenance/check_emotional_thread.py` |
 | `MIN_WAKE_INTERVAL_S` | `'3.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `MULTICA_API_PROXY_HEALTH_URL` | `'http://127.0.0.1/multica-api/health'` | no | NO | `scripts/maintenance/multica_health_report.py` |
@@ -989,6 +994,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `OPENCLAW_UPGRADE_ENABLED` | `'true'` | no | yes | `services/zoe-data/routers/system.py` |
 | `OPENROUTER_API_KEY` | `-` | no | NO | `scripts/maintenance/zoe_cheap_pr_agent.py` |
 | `OPENWEATHERMAP_API_KEY` | `''` | no | yes | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
+| `ORT_DISABLE_GPU` | `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `'http://localhost:6006/v1/traces'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `PANEL_ID` | `'zoe-touch-pi'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `PANEL_PLATFORM` | `-` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -1003,6 +1009,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `PREROLL_CHUNKS` | `'20'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `PYTEST_CURRENT_TEST` | `dynamic` | no | NO | `services/zoe-data/live_store_guard.py` |
 | `PYTHONMALLOC` | `-` | no | NO | `scripts/perf/zmb/arms/mempalace_verbatim.py` |
+| `PYTORCH_CUDA_ALLOC_CONF` | `dynamic` | no | NO | `scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/setup/kokoro_sidecar.py` |
 | `RECORD_SILENCE_AMPLITUDE` | `'300'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `REDIS_HOST` | `'zoe-redis'` | no | NO | `services/zoe-auth/api/dependencies.py` |
 | `REDIS_PORT` | `'6379'` | no | NO | `services/zoe-auth/api/dependencies.py` |
@@ -1036,16 +1043,19 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `SPEAKER_SHADOW_WARMUP` | `'3'` | no | NO | `scripts/voice/speaker_shadow_embed.py` |
 | `SQLITE_PATH` | `'./data/zoe.db'` | no | NO | `scripts/setup/migrate_auth_data.py` |
 | `TAVILY_API_KEY` | `''` | yes | yes | `services/zoe-data/web_search_provider.py` |
+| `TOKENIZERS_PARALLELISM` | `dynamic` | no | NO | `scripts/perf/speaker_bakeoff.py` |
+| `TRANSFORMERS_OFFLINE` | `dynamic` | no | NO | `scripts/perf/zmb/embed_shim.py` |
 | `VAD_ENDPOINT_ENABLED` | `'false'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VAD_ENDPOINT_SILENCE_S` | `'0.8'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VAD_ENDPOINT_THRESHOLD` | `'0.35'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
-| `VERIFY_SSL` | `'true'` | no | NO | `scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |
+| `VERIFY_SSL` | `'true'` | no | NO | `scripts/setup/mac_panel/preflight.py`<br>`scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |
 | `VOICE_API_MAX_RETRIES` | `'2'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VOICE_API_RETRY_BACKOFF_S` | `'0.35'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VOICE_IGNORE_TRANSCRIPTS` | `'yes,yeah,yep,yup,no,ok,okay,thank you,thanks,hi,hello,hmm,um'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VOICE_ROUTE_MODE` | `'direct'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKEWORD_DEBUG` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKEWORD_FRAMEWORK` | `''` | no | NO | `scripts/setup/mac_panel/mac_backend.py` |
+| `WAKEWORD_TEST_CLIP` | `''` | no | NO | `scripts/setup/mac_panel/preflight.py` |
 | `WAKE_BEEP_DURATION_MS` | `'120'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKE_BEEP_ENABLED` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKE_BEEP_FREQ_HZ` | `'1046'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |

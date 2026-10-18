@@ -122,7 +122,8 @@ def flag(name: str):
     nothing to hard-code at the call site, so two readers cannot disagree on the default. Same rules as the
     typed accessors above: read at CALL time, canonical bool table, unparseable → the declared default plus one
     journal warning. A mode flag (``allowed`` values) is matched case-insensitively and an unlisted value falls
-    back to the declared default (never a silent flip). Blank/whitespace = unset = the default, as ``env_str``.
+    back to the declared default (never a silent flip). Blank/whitespace is the default for str/int/float/list
+    (as ``env_str``) but **False for a bool flag** (``KEY=`` is the explicit "off" state, as ``env_bool``).
     An unregistered name raises ``KeyError``: declare it with
     ``python3 tools/audit/flag_inventory.py --sync-registry``.
     """

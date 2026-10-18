@@ -11,7 +11,7 @@ drawers, as (module, enclosing function, kind):
   unique to MemoryService, so ANY receiver counts - an alias cannot hide a writer) and ``review`` /
   ``delete_user`` (generic names: only on a recognised MemoryService receiver such as ``svc`` or
   ``get_memory_service()``).
-- raw drawer-collection writes - ``<col>.upsert(...)`` on a Chroma collection handle. Inside ``memory_service.py``
+- raw drawer-collection writes - ``<col>.upsert/update/delete/add(...)`` on a Chroma collection handle. Inside ``memory_service.py``
   itself these are the storage layer's own writes (the funnel); anywhere else they BYPASS the funnel's guards
   and are the riskiest kind.
 
@@ -43,12 +43,18 @@ FUNNEL = f"{SERVICE_DIR}/memory_service.py"
 UNIQUE_METHODS = frozenset({
     "ingest", "record_candidate", "supersede_by", "restore_superseded", "archive_duplicate",
     "archive_by_entity", "sweep_soft_archive", "forget_last",
+    "retire_with_quote", "erase_rows", "relink_entity", "scrub_residue", "compact_index", "edit_outranked",
+    "tick_access", "tick_consolidation",
 })
 # Generic names: only counted on a recognised MemoryService receiver.
 GENERIC_METHODS = frozenset({"review", "delete_user"})
 SVC_RECEIVER = re.compile(r"^(svc|service|self\.service|self\._svc|get_memory_service\(\)|_svc\(\)|memory_service|ms)$")
 # A Chroma collection handle: the names the codebase uses for a drawers collection.
-RAW_RECEIVER = re.compile(r"^(col|ncol|rcol|ca|cb|collection|drawers|self\.col|self\._raw)$")
+RAW_RECEIVER = re.compile(
+    r"^(col|coll|ncol|rcol|ca|cb|collection|drawers|self\.(_?col|_?coll|_?collection|_raw)"
+    r"|(get_drawers_collection|leased_drawers|get_collection)\(.*\))$"
+)
+RAW_METHODS = frozenset({"upsert", "update", "delete", "add"})
 
 
 class _Walker(ast.NodeVisitor):
@@ -68,8 +74,8 @@ class _Walker(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute):
             attr, recv = node.func.attr, ast.unparse(node.func.value)
             kind = None
-            if attr == "upsert" and RAW_RECEIVER.match(recv):
-                kind = "raw_upsert"
+            if attr in RAW_METHODS and RAW_RECEIVER.match(recv):
+                kind = "raw_" + attr
             elif not self.is_funnel:  # inside memory_service.py the service API is the implementation, not a caller
                 if attr in UNIQUE_METHODS:
                     kind = attr
@@ -129,7 +135,7 @@ def render(writers: dict, notes: dict[str, str]) -> str:
         for kinds in fns.values():
             for k in kinds:
                 by_kind[k] = by_kind.get(k, 0) + 1
-    raw_outside = sorted(m for m, fns in writers.items() if m != FUNNEL and any("raw_upsert" in k for k in fns.values()))
+    raw_outside = sorted(m for m, fns in writers.items() if m != FUNNEL and any(x.startswith("raw_") for k in fns.values() for x in k))
     lines = [
         "---",
         "type: Reference",
@@ -153,9 +159,10 @@ def render(writers: dict, notes: dict[str, str]) -> str:
         "## What counts",
         "",
         "- `MemoryService` write methods: `ingest`, `record_candidate`, `supersede_by`, `restore_superseded`, `archive_duplicate`,",
-        "  `archive_by_entity`, `sweep_soft_archive`, `forget_last` (any receiver) and `review`, `delete_user` (on a recognised",
+        "  `archive_by_entity`, `sweep_soft_archive`, `forget_last`, `retire_with_quote`, `erase_rows`, `relink_entity`, `scrub_residue`,",
+        "  `compact_index`, `edit_outranked`, `tick_access`, `tick_consolidation` (any receiver) and `review`, `delete_user` (on a recognised",
         "  `MemoryService` receiver).",
-        "- `raw_upsert`: `<collection>.upsert(...)` on a drawers collection. In `memory_service.py` these are the storage",
+        "- `raw_upsert` / `raw_update` / `raw_delete` / `raw_add`: a direct write on a drawers collection handle. In `memory_service.py` these are the storage",
         "  layer's own writes (the funnel). Anywhere else they **bypass the funnel's guards** (authority, tombstones, audit):",
         "  " + (", ".join(f"`{m.removeprefix(SERVICE_DIR + '/')}`" for m in raw_outside) or "none") + ".",
         "",

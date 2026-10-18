@@ -106,6 +106,18 @@ def test_control_a_raw_collection_upsert_is_a_writer_but_other_stores_are_not(tm
     assert mwm.collect(repo, files)["services/zoe-data/raw.py"] == {"f": ["raw_upsert"]}
 
 
+def test_control_every_memoryservice_write_method_and_every_raw_write_verb_is_seen(tmp_path):
+    repo, files = _repo(
+        tmp_path,
+        **{"more.py": "async def a(x):\n    await x.erase_rows(['i'])\n    await x.retire_with_quote('i')\n    await x.relink_entity('a', 'b')\n"
+                      "def b(coll, self):\n    coll.upsert(ids=[1])\n    coll.delete(ids=[1])\n    self._col.update(ids=[1])\n"
+                      "    get_drawers_collection('p').add(ids=[1])\n"},
+    )
+    w = mwm.collect(repo, files)["services/zoe-data/more.py"]
+    assert w["a"] == ["erase_rows", "relink_entity", "retire_with_quote"]
+    assert w["b"] == ["raw_add", "raw_delete", "raw_update", "raw_upsert"]
+
+
 def test_control_the_funnel_counts_only_its_own_raw_writes(tmp_path):
     repo, files = _repo(
         tmp_path,

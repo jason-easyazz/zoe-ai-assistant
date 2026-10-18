@@ -40,7 +40,7 @@ Existing `env_bool("ZOE_X", False)` / `os.environ.get(...)` call sites are untou
    `dynamic` is skipped) must carry `divergent_ok`; (b) a reader whose literal default differs from the declared one is a
    failure unless acknowledged. A reader that hard-codes no value (`''`, unset) asserts nothing, so it cannot contradict.
 3. **Legacy direct reads only go down.** `docs/knowledge/flag-ratchet.json` holds a per-file ceiling for prod `ZOE_*` reads
-   that bypass `typed_env` (697 sites in 203 files at landing). A file over its ceiling, or a new file with a direct read, fails.
+   that bypass `typed_env` (702 sites in 206 files at landing). A file over its ceiling, or a new file with a direct read, fails.
    Lock in a migration with `python3 tools/audit/flag_inventory.py --tighten-ratchet`. A file that drops below its ceiling is
    not forced to tighten (a deletion must not freeze `main`); the pre-merge habit is to run `--tighten-ratchet`.
 
@@ -52,7 +52,7 @@ matching test red; removing each restores green (recorded in the PR).
 
 Shell scripts and systemd `Environment=` lines set or default flags but are not scanned; `in os.environ` membership tests are
 not reads; a dynamically built name (`f"ZOE_{x}"`) is invisible. TS reads count (the live brain under `labs/flue-zoe-brain-2x`
-and `services/zoe-core`: 44 flags are read from TS, 40 of them only from TS). Non-`ZOE_` names are inventoried (245; 73 are read by `services/`) but not registered.
+and `services/zoe-core`: 44 flags are read from TS, 40 of them only from TS). Non-`ZOE_` names are inventoried (255; 75 are read by `services/`) but not registered.
 
 ## The 14 conflicting read defaults (decisions)
 

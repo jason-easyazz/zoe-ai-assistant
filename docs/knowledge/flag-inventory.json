@@ -292,11 +292,16 @@
       "acknowledged": true,
       "effective": [
         "'http://127.0.0.1:8000'",
-        "'https://zoe.local'"
+        "'https://zoe.local'",
+        "unset"
       ],
       "sites": {
         "scripts/maintenance/zoe_latency_probe.py": [
           "'http://127.0.0.1:8000'"
+        ],
+        "scripts/setup/mac_panel/preflight.py": [
+          "''",
+          "-"
         ],
         "scripts/setup/zoe_enroll_flow.py": [
           "'https://zoe.local'",
@@ -4768,10 +4773,12 @@
       },
       "ZOE_FORGET_LEDGER_SALT": {
         "defaults": [
-          "-"
+          "-",
+          "dynamic"
         ],
         "in_env_example": true,
         "readers": [
+          "scripts/perf/zmb/arms/zma.py",
           "services/zoe-data/memory_forgotten.py"
         ],
         "registered": true,
@@ -4940,10 +4947,12 @@
       },
       "ZOE_HARNESS": {
         "defaults": [
-          "-"
+          "-",
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/zmb/lab_driver.py",
           "services/zoe-data/live_store_guard.py"
         ],
         "registered": true,
@@ -11280,10 +11289,12 @@
       },
       "ZOE_ROUTER_ENABLED": {
         "defaults": [
-          "'1'"
+          "'1'",
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/measure_first_sound.py",
           "services/zoe-data/semantic_router.py"
         ],
         "registered": true,
@@ -13476,13 +13487,16 @@
       },
       "ZOE_URL": {
         "defaults": [
+          "''",
           "'http://127.0.0.1:8000'",
           "'https://zoe.local'",
+          "-",
           "dynamic"
         ],
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/zoe_latency_probe.py",
+          "scripts/setup/mac_panel/preflight.py",
           "scripts/setup/zoe_enroll_flow.py",
           "scripts/setup/zoe_face_id.py",
           "scripts/setup/zoe_voice_daemon.py"
@@ -14815,7 +14829,7 @@
     "scripts/perf/engine_bench.py": 1,
     "scripts/perf/hop_placement_ab.py": 2,
     "scripts/perf/kokoro_first_chunk_probe.py": 1,
-    "scripts/perf/measure_first_sound.py": 1,
+    "scripts/perf/measure_first_sound.py": 2,
     "scripts/perf/measure_moonshine_vad_threshold.py": 1,
     "scripts/perf/measure_speed.py": 1,
     "scripts/perf/measure_stt_under_speech.py": 1,
@@ -14831,8 +14845,11 @@
     "scripts/perf/tool_use_bench.py": 1,
     "scripts/perf/user_model_ab.py": 4,
     "scripts/perf/zmb/arms/z0.py": 1,
+    "scripts/perf/zmb/arms/zma.py": 1,
+    "scripts/perf/zmb/lab_driver.py": 1,
     "scripts/setup/kokoro_import_block.py": 1,
     "scripts/setup/kokoro_sidecar.py": 10,
+    "scripts/setup/mac_panel/preflight.py": 2,
     "scripts/setup/touchscreen/zoe-kiosk-gate.py": 1,
     "scripts/setup/zoe_enroll_flow.py": 3,
     "scripts/setup/zoe_face_id.py": 1,
@@ -15054,6 +15071,16 @@
       ],
       "typed_env": false
     },
+    "ANONYMIZED_TELEMETRY": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/maintenance/check_emotional_thread.py"
+      ],
+      "typed_env": false
+    },
     "API_SERVER_KEY": {
       "defaults": [
         "-"
@@ -15065,12 +15092,24 @@
       ],
       "typed_env": false
     },
+    "AUDIO_DEVICE": {
+      "defaults": [
+        "'default'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/mac_panel/preflight.py"
+      ],
+      "typed_env": false
+    },
     "AUDIO_OUTPUT_DEVICE": {
       "defaults": [
+        "'default'",
         "dynamic"
       ],
       "in_env_example": false,
       "readers": [
+        "scripts/setup/mac_panel/preflight.py",
         "scripts/setup/zoe_voice_daemon.py"
       ],
       "typed_env": false
@@ -15398,20 +15437,24 @@
     },
     "CF_ACCESS_CLIENT_ID": {
       "defaults": [
-        "''"
+        "''",
+        "-"
       ],
       "in_env_example": false,
       "readers": [
+        "scripts/setup/mac_panel/preflight.py",
         "scripts/setup/zoe_voice_daemon.py"
       ],
       "typed_env": false
     },
     "CF_ACCESS_CLIENT_SECRET": {
       "defaults": [
-        "''"
+        "''",
+        "-"
       ],
       "in_env_example": false,
       "readers": [
+        "scripts/setup/mac_panel/preflight.py",
         "scripts/setup/zoe_voice_daemon.py"
       ],
       "typed_env": false
@@ -15433,6 +15476,16 @@
       "in_env_example": false,
       "readers": [
         "scripts/setup/zoe_voice_daemon.py"
+      ],
+      "typed_env": false
+    },
+    "CLOAKBROWSER_AUTO_UPDATE": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "services/zoe-data/ytmusic_signin.py"
       ],
       "typed_env": false
     },
@@ -15517,6 +15570,7 @@
       "in_env_example": false,
       "readers": [
         "scripts/maintenance/zoe_latency_probe.py",
+        "scripts/setup/mac_panel/preflight.py",
         "scripts/setup/zoe_enroll_flow.py",
         "scripts/setup/zoe_face_id.py",
         "scripts/setup/zoe_voice_daemon.py"
@@ -15954,6 +16008,18 @@
       ],
       "typed_env": false
     },
+    "HF_HUB_OFFLINE": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/perf/zmb/embed_shim.py",
+        "scripts/perf/zmb/lab_driver.py",
+        "scripts/perf/zmb/pilot/embed_quality_probe.py"
+      ],
+      "typed_env": false
+    },
     "HOME": {
       "defaults": [
         "''",
@@ -16205,6 +16271,16 @@
         "services/zoe-data/mcp_server.py",
         "services/zoe-data/memory_service.py",
         "services/zoe-data/zoe_agent.py"
+      ],
+      "typed_env": false
+    },
+    "MEMPALACE_KNOWN_ENTITIES": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/perf/zmb/pilot/mempalace_deepdive.py"
       ],
       "typed_env": false
     },
@@ -16817,6 +16893,16 @@
       ],
       "typed_env": false
     },
+    "ORT_DISABLE_GPU": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "services/zoe-data/zoe_agent.py"
+      ],
+      "typed_env": false
+    },
     "OTEL_EXPORTER_OTLP_ENDPOINT": {
       "defaults": [
         "'http://localhost:6006/v1/traces'"
@@ -16969,6 +17055,17 @@
       "in_env_example": false,
       "readers": [
         "scripts/perf/zmb/arms/mempalace_verbatim.py"
+      ],
+      "typed_env": false
+    },
+    "PYTORCH_CUDA_ALLOC_CONF": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/perf/kokoro_first_chunk_probe.py",
+        "scripts/setup/kokoro_sidecar.py"
       ],
       "typed_env": false
     },
@@ -17303,6 +17400,26 @@
       ],
       "typed_env": true
     },
+    "TOKENIZERS_PARALLELISM": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/perf/speaker_bakeoff.py"
+      ],
+      "typed_env": false
+    },
+    "TRANSFORMERS_OFFLINE": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/perf/zmb/embed_shim.py"
+      ],
+      "typed_env": false
+    },
     "VAD_ENDPOINT_ENABLED": {
       "defaults": [
         "'false'"
@@ -17339,6 +17456,7 @@
       ],
       "in_env_example": false,
       "readers": [
+        "scripts/setup/mac_panel/preflight.py",
         "scripts/setup/zoe_enroll_flow.py",
         "scripts/setup/zoe_face_id.py",
         "scripts/setup/zoe_voice_daemon.py"
@@ -17402,6 +17520,16 @@
       "in_env_example": false,
       "readers": [
         "scripts/setup/mac_panel/mac_backend.py"
+      ],
+      "typed_env": false
+    },
+    "WAKEWORD_TEST_CLIP": {
+      "defaults": [
+        "''"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/mac_panel/preflight.py"
       ],
       "typed_env": false
     },
