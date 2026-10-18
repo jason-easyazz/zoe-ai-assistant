@@ -19,6 +19,10 @@
 import { defineTool } from '@flue/runtime';
 import { Bot } from 'grammy';
 import * as v from 'valibot';
+import { installConsoleRedaction } from './redact.ts';
+
+// Before the bot (and its token) exists: nothing this process prints may carry the token (src/redact.ts).
+installConsoleRedaction();
 
 export function requiredEnv(name: string): string {
   const value = process.env[name];

@@ -27,6 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
 import panel_principal
+import untrusted_content
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
 from browser_broker import create_default_browser_broker
 from conversation_context import ConversationContext as _CC
@@ -372,6 +373,7 @@ from research_evidence import (
 from risk_policy import classify_request, is_whatsapp_connect_request
 from chat_session_title import derive_session_title, title_is_weak
 from session_continuity import mint as mint_session_id, resolve_session_id
+import traffic_class
 from ag_ui_stream import AgRunRecorder, iter_openclaw_text_chunks, iter_text_message_chunks, new_run_ids
 from ag_ui.core import (
     CustomEvent,
@@ -1207,6 +1209,9 @@ async def _save_chat_message(
             meta["off_record"] = True
     except Exception:  # noqa: BLE001 - bookkeeping must never lose a saved turn
         pass
+    # P-2: the turn's traffic class (household | harness | probe | ci), server-derived (traffic_class.py), so a
+    # reader of this table can tell the household's turns from the harness that was 97% of them (2026-10-19).
+    meta["traffic_class"] = traffic_class.current()
     metadata = json.dumps(meta) if meta else None
     # Use the context-managed pool acquire (deterministic release). The bare
     # `async for db in get_db(): ... break` form leaves the generator suspended
@@ -1754,7 +1759,8 @@ async def chat_stream_generator(
             await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id)
             return
 
-        if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
+        if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing) \
+                and not untrusted_content.untrusted_source_in(message_for_processing):
             yield emit(
                 CustomEvent(
                     name="zoe.run_log",
@@ -1786,6 +1792,10 @@ async def chat_stream_generator(
         if message_for_processing.startswith("/openclaw "):
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
             force_openclaw = True
+            use_intent_fast_path = False
+        if untrusted_content.untrusted_source_in(message_for_processing):
+            # Someone else's words, fenced by the producer (a forwarded Telegram message): never run a command written
+            # inside the quote here - only the brain answers it, and it refuses writes for this turn (untrusted_content.py).
             use_intent_fast_path = False
 
         _chat_ctx = _CHAT_CONTEXTS.get(session_id) or _CC()
@@ -2915,6 +2925,8 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                 message_for_processing = message_for_processing[len("/openclaw ") :].strip()
                 force_openclaw = True
                 use_intent_fast_path = False
+            if untrusted_content.untrusted_source_in(message_for_processing):
+                use_intent_fast_path = False  # fenced third-party text: the brain only (see the stream path)
 
             if use_intent_fast_path:
                 # Tier-1.5 channel-agnostic fast path (the SAME core voice uses): answer
@@ -3013,7 +3025,8 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                     asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
                     await _save_chat_message(session_id, "assistant", result, user_id=user_id)
                     return {"response": result, "session_id": session_id}
-            if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
+            if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing) \
+                and not untrusted_content.untrusted_source_in(message_for_processing):
                 message_for_processing = (
                     "Connect WhatsApp integration for user with full guided flow: preflight checks, "
                     "credential/session validation, qr/session setup, webhook test, remediation."
@@ -3211,7 +3224,17 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
     msg_id = uuid.uuid4().hex[:12]
     role = body.get("role", "user")
     content = body.get("content", "")
-    metadata = json.dumps(body.get("metadata")) if body.get("metadata") else None
+    client_meta = body.get("metadata")
+    # The traffic class is the SERVER's (traffic_class.py): every row carries it and a client cannot claim one.
+    # A dict keeps its keys (its own traffic_class overwritten); any other shape is kept under "client".
+    if isinstance(client_meta, dict):
+        meta = dict(client_meta)
+    elif client_meta in (None, "", [], {}):
+        meta = {}
+    else:
+        meta = {"client": client_meta}
+    meta["traffic_class"] = traffic_class.current()
+    metadata = json.dumps(meta)
     # get_db_ctx, not `async for db in get_db()`: exiting the generator
     # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
     async with get_db_ctx() as db:
