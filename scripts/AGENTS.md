@@ -136,8 +136,22 @@ No child AGENTS.md files yet.
 
 ### cross_review.sh (maintenance)
 
-`scripts/maintenance/cross_review.sh <PR#> "<contract>"` kicks an Omnigent polly
-cross-review of a PR and prints the structured report. Constraints: the flock
+`scripts/maintenance/cross_review.sh <PR#> "<contract>"` is the DISPATCHER: it runs
+`cross_review_polly.sh` (the polly lifecycle below), and when polly cannot produce a
+provably cross-vendor report (non-zero exit, empty report, no non-Anthropic
+`REVIEWER-VENDOR:` attestation, or the `CROSS-VENDOR-REVIEW-UNAVAILABLE` sentinel) it falls
+back to `codex exec` run directly in the `zoe-omnigent` container, then to ONE tool-less,
+diff-capped `pi` pass (only when codex is unavailable). There is NO Claude backend, and when
+every backend fails it exits **2** `cross-review unavailable` — never a skip, never a clean
+review. Phase timeouts are clamped to what remains of the caller's 2500 s
+(`CALLER_TIMEOUT_S`, mirrored from `pipeline_cross_review.py`). Offline tests with stubbed
+polly/codex/pi/gh: `tests/unit/test_cross_review_fallback.py`. The text below documents the
+polly backend, `cross_review_polly.sh`, which kicks an Omnigent polly
+cross-review of a PR and prints the structured report. Its Claude auth is repaired by the
+owner runbook in `docs/knowledge/omnigent-cross-review.md` (out-of-repo env file read by
+the omnigent compose `env_file`; `omnigent_claude_auth_mode.py` switches polly's SDK brain
+between subscription and a dedicated API key without a restart and never writes the key
+value into config). Constraints: the flock
 (`/tmp/zoe-cross-review.lock`) serializes THIS wrapper only — other polly
 launch paths (omnigent_issue_executor, the Flue heavy lane) do not take it,
 so operators must still avoid overlapping those manually; advisory
