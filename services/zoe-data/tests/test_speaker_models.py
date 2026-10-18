@@ -38,7 +38,7 @@ from test_speaker_adaptation import ANCHOR, DIM, NOW, SqliteCompat, World, at_an
 SVC = Path(__file__).resolve().parents[1]
 REPO = SVC.parents[1]
 R34 = sm.RESNET34_MODEL_ID
-DEVICE = dict(source="device", panel_id="panel1")
+DEVICE = dict(source="device", panel_id="panel1", via_relay=False, via_tunnel=False)
 
 
 def _b64(v) -> str:
@@ -743,3 +743,9 @@ async def test_self_model_knows_a_voice_only_if_the_acting_model_does_rollback_c
     world.db.conn.execute("UPDATE speaker_profiles SET consent_at = NULL")  # unconsented never counts
     world.db.conn.commit()
     assert (await self_model._enrolment("jason"))[0] is False
+
+
+@pytest.fixture(autouse=True)
+def _member_signed_in_at_the_panel(jason_signed_in_at_the_panel):
+    """A device-token enrolment writes ONLY a member the server verified at the panel (biometric_scope, 2026-10-19); these tests
+    are about the payload, so "jason" is PIN-signed-in. The identity rule itself: test_biometric_ownership_scope.py."""

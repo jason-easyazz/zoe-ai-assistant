@@ -708,11 +708,56 @@ def test_a_device_token_owns_nothing_but_may_report_a_result(client, env):
     client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
     assert client.get("/api/enrollment/state").status_code == 403
     assert client.get("/api/enrollment/household").status_code == 403
+    _grant()
     assert client.post("/api/enrollment/result", json={"status": "done", "user_id": ADULT, "samples": 3}).json() == {"ok": True}
     assert not run(es.get_state(ADULT)).declined_now(NOW)                       # only "cancelled" changes anything
+    _grant()
     assert client.post("/api/enrollment/result", json={"status": "cancelled", "user_id": ADULT, "reason": "said_stop"}).status_code == 200
     assert run(es.get_state(ADULT)).declined_now(NOW)                           # the person said stop: no re-offer tomorrow
     assert client.post("/api/enrollment/result", json={"status": "weird", "user_id": ADULT}).status_code == 400
+
+
+def _grant(member=ADULT, panel="zoe-touch-pi"):
+    import biometric_scope
+
+    biometric_scope.grant_enrolment(panel, member, ttl_s=300)
+
+
+def test_a_result_without_a_grant_records_nothing_and_each_result_closes_the_grant(client, env):
+    """2026-10-19: a copied panel token cannot put a member into the 60-day quiet period. Only the member Zoe granted at
+    THAT panel can be recorded as having said stop, and the run's result closes the grant (a second report is ignored)."""
+    import biometric_scope
+
+    biometric_scope.reset_enrolment_grants()
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
+    stop = {"status": "cancelled", "user_id": ADULT, "reason": "said_stop"}
+    assert client.post("/api/enrollment/result", json=stop).status_code == 200
+    assert not run(es.get_state(ADULT)).declined_now(NOW)                       # no grant: nothing recorded
+    _grant(panel="zoe-touch-hall")                                              # a grant at ANOTHER panel does not count
+    assert client.post("/api/enrollment/result", json=stop).status_code == 200
+    assert not run(es.get_state(ADULT)).declined_now(NOW)
+    _grant(member="someone-else")                                               # nor a grant for another member
+    assert client.post("/api/enrollment/result", json=stop).status_code == 200
+    assert not run(es.get_state(ADULT)).declined_now(NOW)
+    assert biometric_scope.granted_member("zoe-touch-pi") is None               # ...and that report closed the grant
+    _grant()
+    assert client.post("/api/enrollment/result", json=stop).status_code == 200
+    assert run(es.get_state(ADULT)).declined_now(NOW)                           # positive control: the granted member's stop
+    assert biometric_scope.granted_member("zoe-touch-pi") is None
+
+
+def test_start_enrollment_grants_only_that_member_at_that_panel(env, monkeypatch):
+    """The enrol command's server-side half: queuing it for ADULT at zoe-touch-pi opens a grant for exactly that pair."""
+    import biometric_scope
+
+    biometric_scope.reset_enrolment_grants()
+    on(monkeypatch)
+    assert run(ve.start_enrollment(ADULT, "zoe-touch-pi", "en")) is True
+    assert biometric_scope.granted_member("zoe-touch-pi") == ADULT
+    assert biometric_scope.granted_member("zoe-touch-hall") is None
+    assert biometric_scope.granted_member("zoe-touch-pi", "face") is None      # a voice command never grants a face
+    assert run(ve.start_enrollment(ADULT, "zoe-touch-old", "en")) is False      # nothing queued -> no grant
+    assert biometric_scope.granted_member("zoe-touch-old") is None
 
 
 def test_a_session_cannot_post_a_result(client):
@@ -872,6 +917,7 @@ def test_only_the_person_stopping_it_is_a_decline_a_daemon_shutdown_is_not(clien
     client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
 
     def post(**kw):
+        _grant()                                                                   # every run is its own granted command
         return client.post("/api/enrollment/result", json={"status": "cancelled", "user_id": ADULT, **kw})
 
     for kw in ({"reason": "shutdown"}, {"reason": "stopped"}, {}, {"reason": "crashed"}):
