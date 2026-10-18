@@ -316,7 +316,7 @@
     "lab": {
       "ZOE_BITEMPORAL_SUPERSEDE": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -1998,7 +1998,6 @@
       },
       "ZOE_BRAIN_TOKEN": {
         "defaults": [
-          "''",
           "-"
         ],
         "in_env_example": false,
@@ -3322,7 +3321,7 @@
       },
       "ZOE_DATE_ORDER": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -4632,7 +4631,7 @@
       },
       "ZOE_FLUE_ABORT_ON_CANCEL": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": true,
         "readers": [
@@ -4689,7 +4688,7 @@
       },
       "ZOE_FLUE_STREAM_ENABLED": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": true,
         "readers": [
@@ -4708,7 +4707,7 @@
       },
       "ZOE_FLUE_WIRE": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": true,
         "readers": [
@@ -4750,7 +4749,7 @@
       },
       "ZOE_FORGET_ALIAS_SWEEP": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -4769,7 +4768,7 @@
       },
       "ZOE_FORGET_LEDGER_SALT": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": true,
         "readers": [
@@ -4788,7 +4787,7 @@
       },
       "ZOE_FORGET_NEAR": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -4807,7 +4806,7 @@
       },
       "ZOE_FORGET_REDACT": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -4826,7 +4825,7 @@
       },
       "ZOE_FORGOTTEN_SHIELD_DAYS": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": true,
         "readers": [
@@ -7241,7 +7240,7 @@
       },
       "ZOE_MEMORY_DIGEST_LOOKBACK_HOURS": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -8442,7 +8441,7 @@
       },
       "ZOE_NIGHT_MIND_SCHEMA": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -8556,7 +8555,7 @@
       },
       "ZOE_OMI_DAY_REVIEW": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -9190,7 +9189,7 @@
       },
       "ZOE_OWN_FACT_PRECEDENCE": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -10029,7 +10028,7 @@
       },
       "ZOE_PI_INTENT_PROMOTED_GROUPS": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -10911,7 +10910,7 @@
       },
       "ZOE_RECALL_PRESENT_STATE_SHAPES": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -11025,7 +11024,6 @@
       },
       "ZOE_RESTRAINT": {
         "defaults": [
-          "''",
           "-"
         ],
         "in_env_example": false,
@@ -11145,7 +11143,7 @@
       },
       "ZOE_RIG_USER_AGENT": {
         "defaults": [
-          "None"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -11206,7 +11204,7 @@
       },
       "ZOE_ROLE_GUESS_GUARD": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -11301,7 +11299,7 @@
       },
       "ZOE_ROUTER_EVENT_TIME_PRECEDENCE": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -11799,7 +11797,7 @@
       },
       "ZOE_SEAM_CONTINUITY_DEBUG": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -11837,7 +11835,7 @@
       },
       "ZOE_SEAM_OFFER_INJECT": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -11856,7 +11854,7 @@
       },
       "ZOE_SEAM_RECALL_INJECT": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -12636,7 +12634,7 @@
       },
       "ZOE_STRIP_NARRATION": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -12724,7 +12722,7 @@
       },
       "ZOE_STRUGGLE_DETECT": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -12747,7 +12745,7 @@
       },
       "ZOE_STRUGGLE_PROPOSALS": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -13079,7 +13077,7 @@
       },
       "ZOE_TELEGRAM_BOT_USERNAME": {
         "defaults": [
-          "None"
+          "''"
         ],
         "in_env_example": false,
         "readers": [
@@ -13325,7 +13323,7 @@
       },
       "ZOE_TRIVIA_HEDGE": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -13504,7 +13502,7 @@
       },
       "ZOE_USER_MODEL_BLOCK": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": true,
         "readers": [
@@ -13713,7 +13711,7 @@
       },
       "ZOE_VERIFY_ON_CHALLENGE": {
         "defaults": [
-          "''"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -15058,7 +15056,7 @@
     },
     "API_SERVER_KEY": {
       "defaults": [
-        "''"
+        "-"
       ],
       "in_env_example": false,
       "readers": [
@@ -15513,6 +15511,7 @@
     "DEVICE_TOKEN": {
       "defaults": [
         "''",
+        "-",
         "dynamic"
       ],
       "in_env_example": false,
@@ -15691,6 +15690,7 @@
         "''",
         "'http://127.0.0.1:11434'",
         "'http://127.0.0.1:11434/v1'",
+        "-",
         "dynamic"
       ],
       "in_env_example": false,
@@ -15721,7 +15721,7 @@
     },
     "GREPTILE_API_KEY": {
       "defaults": [
-        "''"
+        "-"
       ],
       "in_env_example": false,
       "readers": [

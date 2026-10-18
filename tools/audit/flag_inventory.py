@@ -230,6 +230,8 @@ class _FlagVisitor(ast.NodeVisitor):
             for left, right in zip(node.values, node.values[1:]):
                 inner = _peel(left)
                 lit = self._lits.get(right.id, right) if isinstance(right, ast.Name) else right
+                if isinstance(lit, ast.Constant) and lit.value in ("", None):
+                    continue  # ``x or ''`` adds no default: unset stays unset
                 if isinstance(inner, ast.Call):
                     self._or_default[id(inner)] = lit
         self.generic_visit(node)
