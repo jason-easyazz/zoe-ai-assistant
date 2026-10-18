@@ -3245,6 +3245,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MCP_STRICT_USER_ID": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MCP_USER_ID": {
         "defaults": [
           "-"

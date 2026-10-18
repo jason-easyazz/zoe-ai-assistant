@@ -80,7 +80,7 @@ Measured on the A4 branch (rig, live flag mirror):
 | chat (stream) | 12 / 12 | - |
 | voice (`voice_command`) | 14 / 14 | - |
 | chat_ns (Telegram) | 12 / 12 | `chat()` still re-implements the generator block by block, but every cell agrees; `tests/test_voice_lane_parity.py::test_non_stream_chat_matches_the_stream` pins it per cell until the two are collapsed |
-| livekit (Ask card) | 2 / 12 | brain-first by design: `fast_tiers` runs only under `ZOE_LIVEKIT_FAST_TIERS` (off live), so correction, contacts, feedback, provenance, forget and identity all go to the model; only `exact_words` and `ack_after_offer` (brain cells) pass. The control: with the flag on, `feedback_up` passes |
+| livekit (Ask card) | 2 / 12 | brain-first by design: `fast_tiers` runs only under `ZOE_LIVEKIT_FAST_TIERS` (off live), so correction, contacts, feedback, provenance, forget and identity all go to the model; only `exact_words` and `ack_after_offer` (brain cells) pass. With the flag ON it measures 5 / 12 (correction, provenance and forget join; feedback, contacts and identity still go to the model, because the lane keeps no transcript of its own and `fast_tiers` answers less on `channel=livekit`) |
 
 The `/ws/voice/` lane the rig never covered is retired (A4): the phone/desktop page now posts each turn to `/api/voice/turn`, i.e.
 `voice_command`, the `voice` column.

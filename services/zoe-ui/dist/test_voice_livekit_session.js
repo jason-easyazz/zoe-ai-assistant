@@ -214,8 +214,11 @@ function laneContext({ stored, samples, responder }) {
       async startRendering() { return { getChannelData: () => Float32Array.from(samples) }; }
     },
     btoa: (bin) => Buffer.from(bin, 'binary').toString('base64'),
-    setOrbState: () => {}, scheduleAutoListen: () => {},
+    // setOrbState writes its own status line in the page: record it, so a message it would bury is caught
+    setOrbState: (st) => statuses.push('orb:' + st), scheduleAutoListen: () => {}, startRecording: () => {},
     setStatus: (t) => statuses.push(t),
+    setTimeout: () => 0, clearTimeout: () => {}, AbortController,
+    document: { getElementById: () => ({ classList: { remove() {} } }) },
     addTranscriptLine: (role, text) => transcript.push([role, text]),
     playAudioBase64: (b64, type, done) => { played.push([b64, type]); if (done) done(); },
     console: { error: () => {}, warn: () => {}, log: () => {} },
@@ -225,7 +228,8 @@ function laneContext({ stored, samples, responder }) {
   vm.createContext(ctx);
   vm.runInContext(
     LANE_SRC + '\nvar voiceReady = true, serverBusy = false, convMode = false, _silentCycles = 0;' +
-    '\nvar maxRecordedRms = 0.5, audioChunks = [], mediaRecorder = { mimeType: "audio/webm" };',
+    '\nvar maxRecordedRms = 0.5, audioChunks = [], mediaRecorder = { mimeType: "audio/webm" };' +
+    '\nvar autoListenTimer = null, speaking = false, isRecording = false;',
     ctx,
   );
   return { ctx, calls, statuses, transcript, played, offlineArgs, store };
@@ -268,12 +272,23 @@ await check('a member turn posts ONE 16 kHz mono PCM16 WAV to /api/voice/turn an
   assert.strictEqual(vm.runInContext('serverBusy', env.ctx), false, 'the turn must release the mic');
 });
 
-await check('a signed-out phone sends nothing and is asked to sign in (no guest is minted)', async () => {
+await check('a signed-out phone sends nothing, is asked to sign in (no guest is minted) and leaves conversation mode', async () => {
   const env = laneContext({ stored: null, samples: [0.1], responder: () => ok({}) });
+  vm.runInContext('convMode = true', env.ctx);
   await sendOneTurn(env);
   assert.strictEqual(env.calls.length, 0, 'no request: the voice lane answers members only');
-  assert(env.statuses.some((t) => /sign in/i.test(t)));
+  assert(/sign in/i.test(env.statuses[env.statuses.length - 1]), `the sign-in line must be the LAST status: ${env.statuses}`);
   assert.strictEqual(vm.runInContext('serverBusy', env.ctx), false);
+  assert.strictEqual(vm.runInContext('convMode', env.ctx), false, 'a sign-in problem must not re-arm the mic on every noise');
+});
+
+await check('an empty transcript counts toward the back-off instead of re-listening at once', async () => {
+  const env = laneContext({ stored: { session_id: 'm', role: 'member' }, samples: [0.1],
+    responder: () => ok({ ok: true, text: '', reply: '', audio_base64: null }) });
+  vm.runInContext('convMode = true', env.ctx);
+  await sendOneTurn(env);
+  assert.strictEqual(vm.runInContext('_silentCycles', env.ctx), 1);
+  assert.deepStrictEqual(env.transcript, []);
 });
 
 await check('a guest session sends nothing either', async () => {
@@ -287,7 +302,7 @@ await check('a 401 from the lane asks for sign-in and is NOT retried', async () 
   const env = laneContext({ stored: { session_id: 'expired', role: 'member' }, samples: [0.1], responder: () => unauthorized() });
   await sendOneTurn(env);
   assert.strictEqual(env.calls.length, 1, 'no retry, no guest re-provision');
-  assert(env.statuses.some((t) => /sign in/i.test(t)));
+  assert(/sign in/i.test(env.statuses[env.statuses.length - 1]), `the sign-in line must be the LAST status: ${env.statuses}`);
   assert(env.store.has('zoe_session'), 'a member session is never cleared or downgraded here');
 });
 

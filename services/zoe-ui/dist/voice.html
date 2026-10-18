@@ -554,10 +554,33 @@ function bufferToBase64(buf) {
   return btoa(bin);
 }
 
-function endLocalTurn() {
+// Ends a local turn. `msg` is shown AFTER the orb state (setOrbState writes its own status line).
+// `stopConv`: a sign-in problem ends conversation mode, so a stale session never re-sends on every noise.
+// A failed or empty turn counts toward the same back-off as a silent recording.
+const LOCAL_TURN_TIMEOUT_MS = 45000;
+function endLocalTurn(msg, { stopConv = false, failed = false } = {}) {
   serverBusy = false;
   setOrbState('ambient');
-  if (convMode) scheduleAutoListen();
+  if (msg) setStatus(msg);
+  if (stopConv && convMode) {
+    convMode = false;
+    const badge = document.getElementById('convBadge');
+    if (badge) badge.classList.remove('active');
+  }
+  if (!convMode) return;
+  if (!failed) { _silentCycles = 0; scheduleAutoListen(); return; }
+  _silentCycles++;
+  clearTimeout(autoListenTimer);
+  autoListenTimer = setTimeout(() => {
+    if (!speaking && !isRecording && !serverBusy) startRecording();
+  }, _silentCycles >= 3 ? 10000 : 600);
+}
+
+// The recorder type: WebM/Opus where it exists, MP4 (Safari) otherwise, else the browser's default.
+function pickRecorderOptions() {
+  const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+  const t = types.find((x) => window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(x));
+  return t ? { mimeType: t } : {};
 }
 
 function handleVoiceEvent(msg) {
@@ -722,9 +745,7 @@ async function startRecording() {
       if (localMicTrack && localMicTrack.isMuted) localMicTrack.unmute().catch(() => {});
       // Start MediaRecorder to capture audio for HTTP upload
       audioChunks = [];
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus' : 'audio/webm';
-      mediaRecorder = new MediaRecorder(micStream, { mimeType });
+      mediaRecorder = new MediaRecorder(micStream, pickRecorderOptions());
       mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
       mediaRecorder.start(100);
       isRecording = true;
@@ -749,9 +770,7 @@ async function startRecording() {
     source.connect(analyser);
 
     audioChunks = [];
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus' : 'audio/webm';
-    mediaRecorder = new MediaRecorder(micStream, { mimeType });
+    mediaRecorder = new MediaRecorder(micStream, pickRecorderOptions());
     mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
     mediaRecorder.onstop = sendRecordingToServer;
     mediaRecorder.start(100);
@@ -823,7 +842,7 @@ function startSilenceDetection() {
 }
 
 async function sendRecordingToServer() {
-  if (audioChunks.length === 0 || !voiceReady) return;
+  if (audioChunks.length === 0 || !voiceReady) { setOrbState('ambient'); return; }
 
   // Silence filter: discard ambient noise / accidental mic triggers.
   if (maxRecordedRms < 0.008) {
@@ -848,37 +867,40 @@ async function sendRecordingToServer() {
   const sid = getSessionId();
   if (!sid || isStoredSessionGuest()) {
     // Never mint a guest here: the voice lane answers members only, so a guest retry is a wasted turn.
-    setStatus(SIGN_IN_TEXT);
-    endLocalTurn();
+    endLocalTurn(SIGN_IN_TEXT, { stopConv: true });
     return;
   }
   let data = null;
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), LOCAL_TURN_TIMEOUT_MS);
   try {
     const wav = await recordingToWav16k(blob);
     const resp = await fetch('/api/voice/turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid },
       body: JSON.stringify({ audio_base64: bufferToBase64(wav) }),
+      signal: abort.signal,
     });
     if (resp.status === 401 || resp.status === 403) {
-      setStatus(SIGN_IN_TEXT);
-      endLocalTurn();
+      endLocalTurn(SIGN_IN_TEXT, { stopConv: true });
       return;
     }
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    data = await resp.json();
+    data = (await resp.json()) || {};
   } catch(e) {
     console.error('Voice turn failed:', e);
-    setStatus('Zoe could not hear that — try again.');
-    endLocalTurn();
+    endLocalTurn('Zoe could not hear that — try again.', { failed: true });
     return;
+  } finally {
+    clearTimeout(timer);
   }
   setStatus('');
-  if (data.text) addTranscriptLine('user', data.text);
+  if (!data.text) { endLocalTurn('', { failed: true }); return; }
+  addTranscriptLine('user', data.text);
   if (data.reply) addTranscriptLine('zoe', data.reply);
   if (data.audio_base64) {
     serverBusy = false;
-    playAudioBase64(data.audio_base64, data.content_type || 'audio/wav', endLocalTurn);
+    playAudioBase64(data.audio_base64, data.content_type || 'audio/wav', () => endLocalTurn());
   } else {
     endLocalTurn();
   }

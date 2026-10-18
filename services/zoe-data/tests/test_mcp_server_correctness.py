@@ -205,11 +205,11 @@ async def test_transaction_list_clamps_limit(raw_limit, expected):
 # --------------------------------------------------------------------------
 def test_strict_user_id_is_the_default():
     """A3 (2026-10-19): a tools/call that names no user is refused unless the env says exactly ``false``."""
-    assert mcp_server._mcp_strict_user_id({}) is True
-    assert mcp_server._mcp_strict_user_id({"ZOE_MCP_STRICT_USER_ID": "true"}) is True
-    assert mcp_server._mcp_strict_user_id({"ZOE_MCP_STRICT_USER_ID": ""}) is True
-    assert mcp_server._mcp_strict_user_id({"ZOE_MCP_STRICT_USER_ID": "flase"}) is True
-    assert mcp_server._mcp_strict_user_id({"ZOE_MCP_STRICT_USER_ID": "False"}) is False
+    assert mcp_server._mcp_strict_user_id(None) is True
+    assert mcp_server._mcp_strict_user_id("true") is True
+    assert mcp_server._mcp_strict_user_id("") is True
+    assert mcp_server._mcp_strict_user_id("flase") is True
+    assert mcp_server._mcp_strict_user_id(" False ") is False
 
 
 @pytest.mark.asyncio

@@ -45,17 +45,6 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
 Per-stage timings are exported to Prometheus as `zoe_voice_stage_seconds`
 (`services/zoe-data/voice_metrics.py`), scraped at `:8000/metrics`.
 
-**Who reaches it (A4, 2026-10-19).** Two spoken lanes run the full `voice_command` stack (fast tiers,
-guest policy, scope gate): the panel daemon (`/api/voice/turn_stream`, `/turn`) and the phone/desktop
-page `zoe-ui/dist/voice.html` (one `/api/voice/turn` per push-to-talk turn — the Telegram `/talk`
-target). The page records WebM/Opus and re-encodes it to 16 kHz mono PCM WAV in the browser, because
-step 1 reads WAV only (`moonshine_voice.utils.load_wav_file`); it is members-only. The old
-`/ws/voice/` socket ran a private sequence with no `fast_tiers` and sent WebM straight to Moonshine,
-so it could not hear a browser at all — it and the orphaned `touch/voice.html` are retired. The
-LiveKit room agent (`voice_livekit._run_pipeline`, the estate Ask card) is brain-first by design
-(`fast_tiers` only under `ZOE_LIVEKIT_FAST_TIERS`); the lane-parity rig's `livekit` column measures
-what that costs (`docs/knowledge/voice-lane-parity.md`).
-
 ### The Skybridge fast path defers to the router (2026-09-28)
 
 Before the router/brain, `voice_command` offers the turn to the **Skybridge fast path**
@@ -570,7 +559,7 @@ becoming an understatement.
   deterministically.
 - **Deliberately ungated — the browser side, all of it.** The vendored publisher
   `services/zoe-ui/dist/lib/livekit/livekit-client.umd.min.js`, and equally the pages that drive it:
-  `dist/voice.html` and `dist/js/auth.js` (#1652 changed both, and the since-retired `touch/voice.html`). They run in
+  `dist/voice.html`, `dist/touch/voice.html`, `dist/js/auth.js` (#1652 changed all three). They run in
   the panel's browser, not on the Jetson, so a deploy gate on the box governs nothing about them and
   no probe on the box could exercise them. Their verification is the node harness
   `dist/test_voice_livekit_session.js`, run in `validate` by `test_voice_livekit_session_harness.py` —

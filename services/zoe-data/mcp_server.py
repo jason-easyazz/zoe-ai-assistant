@@ -42,12 +42,12 @@ _INTERNAL_TOKEN = env_str("ZOE_INTERNAL_TOKEN")
 # A tools/call that names no user is REFUSED (A3, 2026-10-19: strict is the default). The one caller that relied on the
 # family-admin fallback - intent_router's mcporter subprocess, which sent no user and so wrote as family-admin - is gone;
 # in-process callers pass `_user_id`. ZOE_MCP_STRICT_USER_ID=false is the explicit, logged loosening for a local tool.
-def _mcp_strict_user_id(environ=os.environ) -> bool:
-    """Strict unless the env says exactly ``false`` (a typo or empty value keeps it strict)."""
-    return environ.get("ZOE_MCP_STRICT_USER_ID", "true").strip().lower() != "false"
+def _mcp_strict_user_id(value: str | None) -> bool:
+    """Strict unless the value is exactly ``false`` (a typo or empty value keeps it strict)."""
+    return (value if value is not None else "true").strip().lower() != "false"
 
 
-_MCP_STRICT_USER_ID = _mcp_strict_user_id()
+_MCP_STRICT_USER_ID = _mcp_strict_user_id(os.environ.get("ZOE_MCP_STRICT_USER_ID", "true"))
 
 import logging as _mcp_logging
 _mcp_log = _mcp_logging.getLogger("mcp_server")

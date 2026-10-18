@@ -528,15 +528,6 @@ async def test_the_lane_that_does_not_persist_its_turns_hands_in_its_own_last_re
     assert await intent_router.ack_answers_offer(intent_router.Intent("time_query", {}), "u", previous=OFFERS[0]) is False
 
 
-def test_the_voice_websocket_instant_path_asks_the_same_question():
-    """main.py is not importable on the slim lane: pin the wiring in the source (the behaviour is ``ack_answers_offer`` above)."""
-    import pathlib
-
-    src = (pathlib.Path(intent_router.__file__).parent / "main.py").read_text(encoding="utf-8")
-    assert "ack_answers_offer as _fp_ack_offer" in src and "previous=_ws_last_reply" in src
-    assert src.count("_ws_last_reply = ") >= 3          # initial, instant reply, brain reply
-
-
 # ── 7. "turn it back on again" after "turn the light off" ──────────────────────────────────────────────────────────────────────
 # Live 2026-10-12: intent_miss, then a brain reply about "getting back to chatting". The last on/off command's target rides in the
 # panel's Skybridge context (and the keyword lane's ConversationContext) for ~60 s; a bare pronoun command resolves to it.

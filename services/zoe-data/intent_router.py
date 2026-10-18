@@ -4722,6 +4722,8 @@ def _in_process_tool_call(intent: Intent) -> Optional[tuple[str, dict]]:
     return None
 
 
+# A write here records NO write_receipt (nor did the mcporter path it replaced): a brain recap that claims one is still
+# blocked by the write-claim guard. Add a receipt kind before routing a write the brain may describe through here.
 _IN_PROCESS_WRITES = frozenset({"transaction_create"})
 
 

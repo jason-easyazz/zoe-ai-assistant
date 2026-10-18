@@ -114,13 +114,27 @@ async def test_non_stream_chat_matches_the_stream(cell):
     assert ok == r.chat_ok, f"chat_ns {ok} vs chat {r.chat_ok} on {cell.cid}: {detail} | {r.chat_detail}"
 
 
-async def test_the_livekit_lane_is_measured_and_its_fast_tier_is_visible():
+async def test_the_livekit_lane_is_measured_and_its_fast_tier_is_visible(monkeypatch):
     """LiveKit is brain-first by design (``ZOE_LIVEKIT_FAST_TIERS`` off live): a lookup cell FAILS there and a brain cell passes.
-    Control: with the opt-in fast tier ON the same lookup cell passes - the rig sees the lane's one switch."""
-    off = {r.cid: r.extra["livekit"][0] for r in await lpc.run_cells(MonkeyPatch, only={"feedback_up", "exact_words"},
+    Control: with the opt-in fast tier ON, a fast-tier answer reaches the lane - the rig sees the lane's one switch. (The answer is
+    stubbed so the control does not depend on the memory store; measured live-mirror numbers are in voice-lane-parity.md.)"""
+    import types
+
+    import fast_tiers
+
+    real = fast_tiers.resolve
+
+    async def stub(text, user_id, session_id, **kw):
+        if kw.get("channel") == "livekit" and "my name" in text.lower():
+            return types.SimpleNamespace(reply=f"Your name is {lpc.ACCOUNT_NAME}.", tier="identity", intent="identity_name",
+                                         domain="identity")
+        return await real(text, user_id, session_id, **kw)
+
+    monkeypatch.setattr(fast_tiers, "resolve", stub)
+    off = {r.cid: r.extra["livekit"][0] for r in await lpc.run_cells(MonkeyPatch, only={"identity_name", "exact_words"},
                                                                      extra_lanes=("livekit",))}
-    assert off == {"feedback_up": False, "exact_words": True}, off
-    [on] = await lpc.run_cells(MonkeyPatch, only={"feedback_up"}, extra_lanes=("livekit",), flags={"ZOE_LIVEKIT_FAST_TIERS": "1"})
+    assert off == {"identity_name": False, "exact_words": True}, off
+    [on] = await lpc.run_cells(MonkeyPatch, only={"identity_name"}, extra_lanes=("livekit",), flags={"ZOE_LIVEKIT_FAST_TIERS": "1"})
     assert on.extra["livekit"][0] is True, on.extra["livekit"][1]
 
 
