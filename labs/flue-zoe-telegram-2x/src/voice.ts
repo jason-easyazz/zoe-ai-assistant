@@ -54,10 +54,29 @@ export function allowForwarded(env: NodeJS.ProcessEnv = process.env): boolean {
   return truthy(env.ZOE_TELEGRAM_ALLOW_FORWARDED);
 }
 
-/** `ZOE_BASE_URL` → the existing push-to-talk page, or null (no /talk). */
+/** The push-to-talk page for `/talk`, or null (no /talk). `ZOE_PUBLIC_URL` (zoe-data's name for the
+ *  public origin) wins over `ZOE_BASE_URL`, which held a LAN IP live (A9, 2026-10-18). */
 export function talkPageUrl(env: NodeJS.ProcessEnv = process.env): string | null {
-  const base = (env.ZOE_BASE_URL ?? '').trim().replace(/\/$/, '');
+  const raw = (env.ZOE_PUBLIC_URL ?? '').trim() || (env.ZOE_BASE_URL ?? '').trim();
+  const base = raw.replace(/\/+$/, '');
   return base ? `${base}/voice.html` : null;
+}
+
+/** True when `url`'s host is a private/LAN address or a `.local` name: reachable on home Wi-Fi only. */
+export function isHomeOnlyUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
+    return false;
+  }
+  if (host === 'localhost' || host.endsWith('.local') || host === '::1') return true;
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    return a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254);
+  }
+  return /^f[cd][0-9a-f]{2}:/.test(host) || host.startsWith('fe80:');
 }
 
 export interface VoiceNote {
@@ -224,5 +243,6 @@ export async function handleTalk(telegramId: number, url: string, deps: TalkDeps
     await deps.reply('Please link your Zoe account first (Zoe settings → Telegram).');
     return;
   }
-  await deps.replyWithLink('Tap below, then press and hold to talk to me from your phone.', 'Talk to Zoe', url);
+  const where = isHomeOnlyUrl(url) ? ' (This link works on the home Wi-Fi only.)' : '';
+  await deps.replyWithLink(`Tap below, then press and hold to talk to me from your phone.${where}`, 'Talk to Zoe', url);
 }

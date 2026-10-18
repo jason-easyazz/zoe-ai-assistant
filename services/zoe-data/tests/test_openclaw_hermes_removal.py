@@ -59,15 +59,107 @@ def test_triggers_package_does_not_export_openclaw_trigger():
 
 # -- no probe of a dead port ----------------------------------------------------------------
 
-_PROBED_FILES = ("main.py", "routers/system.py", "mcp_server.py", "zoe_agent.py", "routers/chat.py")
-# A probe is a connect / port-check / health GET that names either port. Prose that still
-# mentions the ports (the soul text, the unreachable-by-default review URL) is not a probe.
-_PROBE_RE = re.compile(r"(create_connection|open_connection|_check_port|_port_open|client\.get\(|client\.post\()[^\n]*\b(8642|18789)\b")
+_REPO = ROOT.parents[1]
+_DEAD_PORT_RE = re.compile(r"(?<![\w.])(8642|18789)(?!\w)")
+# Anything that makes a nearby port literal a CONNECTION target rather than prose: a URL
+# scheme / host, a socket or HTTP-client call, a health-port key, a shell port listing.
+_NET_CONTEXT_RE = re.compile(
+    r"https?://|wss?://|localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal"
+    r"|create_connection|open_connection|socket\b|httpx|requests\.|urlopen|aiohttp"
+    r"|\bcurl\b|/dev/tcp|\bnc\b|connect\(|base_url|health_port|_URL\b|proxy_pass"
+    r"|\bss -|\.get\(|\.post\(|\.stream\(|_check_port|_port_open",
+    re.IGNORECASE,
+)
+_WINDOW = 3  # lines either side: a multi-line call keeps the port and the client apart
+_SCANNED_SUFFIXES = (".py", ".sh", ".ts", ".js", ".yml", ".yaml")
+# Not scanned: documentation, vendored bundles, and this test itself (it must name the ports).
+_SKIP_PREFIXES = ("docs/", "services/zoe-ui/dist/lib/", "services/zoe-ui/node_modules/")
+_SKIP_FILES = ("services/zoe-data/tests/test_openclaw_hermes_removal.py",)
+
+# Files that still carry a port-literal-near-network-context hit, each with the reason it is
+# tolerated. The scan also fails when an entry no longer hits, so this list can only shrink.
+_ALLOWED = {
+    "scripts/maintenance/zoe_ground_truth.sh": "inverse check: reports if a Hermes gateway is unexpectedly LISTENING on :8642 (ss, no connect)",
+    "services/zoe-data/agents_registry.yml": "legacy peer-agent registry: /agent/registry lists base_url but never dials it (status comes from _RUNTIME_HEALTH, which no longer holds these agents); follow-up: drop the retired entries",
+    "services/zoe-data/chat_hermes_stream.py": "REAL but dormant: HERMES_API_URL default for the retired Hermes stream; reached only via the __ESCALATE_HERMES__ signal, which cannot fire (zoe_agent._hermes_available() is False); follow-up: delete the module and its shim test",
+    "services/zoe-data/openclaw_maintenance.py": "REAL: fetch_gateway_status() GETs :18789/health and reports 'offline' (live, fails closed to offline; follow-up: remove with the /api/system openclaw update surface)",
+    "services/zoe-data/routers/system.py": "REAL: _hermes_review_proposal() POSTs to :8642 on evolution-approve; it fails open on connection refused (live; removing it changes the approve flow, so it is left for its own PR)",
+    "services/zoe-data/zoe_agent.py": "docstring/comment prose and a self-summary string (not a connection)",
+    "services/zoe-data/tests/test_nginx_security_headers_helper.py": "nginx fixture text for the security-header helper",
+}
 
 
-@pytest.mark.parametrize("rel", _PROBED_FILES)
-def test_no_probe_of_dead_hermes_or_openclaw_ports(rel: str):
-    assert not _PROBE_RE.search(_src(rel)), f"{rel} still probes a retired gateway port"
+def _dead_port_hits(text: str) -> list[tuple[int, str]]:
+    """Lines naming a retired port as a connection target (multi-line aware).
+
+    A literal on a pure comment line is documentation, not a call, so it never counts;
+    every other occurrence counts when a network context appears within `_WINDOW` lines.
+    """
+    lines = text.splitlines()
+    hits = []
+    for i, line in enumerate(lines):
+        if not _DEAD_PORT_RE.search(line) or line.lstrip().startswith(("#", "//", "*")):
+            continue
+        window = "\n".join(lines[max(0, i - _WINDOW) : i + _WINDOW + 1])
+        if _NET_CONTEXT_RE.search(window):
+            hits.append((i + 1, line.strip()))
+    return hits
+
+
+def _tracked_scan_files() -> list[str]:
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "-C", str(_REPO), "ls-files"], capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    return [
+        f for f in out
+        if f.endswith(_SCANNED_SUFFIXES)
+        and not f.startswith(_SKIP_PREFIXES)
+        and f not in _SKIP_FILES
+    ]
+
+
+def test_dead_port_scan_catches_a_multiline_probe():
+    # Negative control: the scan MUST flag these, including a call whose port sits on a
+    # different line from the client, or the repo-wide test below proves nothing.
+    multiline = (
+        "async with httpx.AsyncClient() as client:\n"
+        "    r = await client.get(\n"
+        '        f"{BASE}/health",\n'
+        "        params={},\n"
+        "    )\n"
+        "BASE = os.environ.get('HERMES_URL',\n"
+        "                      '127.0.0.1:8642')\n"
+    )
+    assert _dead_port_hits(multiline)
+    assert _dead_port_hits('sock = socket.create_connection(("localhost", 18789))')
+    assert _dead_port_hits("curl -fsS http://127.0.0.1:18789/health || true")
+    assert _dead_port_hits("ss -tln | grep -c ':8642 '")
+    # ...and must not flag prose, comments, or look-alike numbers.
+    assert not _dead_port_hits("# Hermes (:8642) is retired, see the migration doc")
+    assert not _dead_port_hits('NOTE = "ticket 18789 closed"')
+    assert not _dead_port_hits('PORT = 864200\nhttp://localhost:3579')
+
+
+def test_no_probe_of_dead_hermes_or_openclaw_ports_repo_wide():
+    found: dict[str, list[tuple[int, str]]] = {}
+    for rel in _tracked_scan_files():
+        try:
+            text = (_REPO / rel).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        hits = _dead_port_hits(text)
+        if hits:
+            found[rel] = hits
+    unexplained = {f: h for f, h in found.items() if f not in _ALLOWED}
+    assert not unexplained, (
+        "retired gateway port (:8642 Hermes / :18789 OpenClaw) used as a connection target; "
+        "remove it or add an allowlist entry WITH a reason: "
+        + "; ".join(f"{f}:{h[0][0]} {h[0][1][:80]}" for f, h in unexplained.items())
+    )
+    stale = sorted(set(_ALLOWED) - set(found))
+    assert not stale, f"allowlist entries that no longer hit (delete them): {stale}"
 
 
 def test_runtime_health_tracks_only_the_local_llm():

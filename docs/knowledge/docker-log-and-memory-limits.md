@@ -8,6 +8,12 @@ timestamp: 2026-10-03T23:00:00+08:00
 
 # Docker log rotation and container memory limits (A8 + A9)
 
+> **Status 2026-10-18** (architecture deep dive B9): the A9 caps below are now in the compose files (`mem_limit` / `memswap_limit`
+> for every compose service except `zoe-database` and the never-run `keeper`; omnigent 4096m/6144m as a generous backstop; livekit
+> in its own PR), pinned by `tests/unit/test_ops_hygiene_b9.py` to at least 1.3 x the measured peak. They reach a container on its
+> next re-create, or live via the `docker update` lines below; the 2026-10-18 table and owner steps are in
+> [offbox-backup.md](offbox-backup.md) section 6.
+>
 > **Status 2026-10-04** (evidence in [log-review-docker-2026-10-04.md](log-review-docker-2026-10-04.md)): A8 step 1 is DONE. `daemon.json` carries the log-opts (edited 10:32 AWST) and dockerd was restarted at 14:35 AWST, so the default is armed; only `zoe-ui` and `zoe-auth` have been re-created since, the other ten containers still show `map[]`. The compose `x-logging` anchor (the "repo follow-up" below) has landed for all 13 services. A9 (memory caps) is NOT applied: every `memory.max` is `max`. The text below is the 2026-10-03 original, kept unchanged, including its "nothing applied" statements and the `daemon.json` ground truth, which describe that earlier date.
 
 Source: the infrastructure audit, `docs/research/infra-data-config-2026-10-03.md` §2 D4/D5 and

@@ -87,35 +87,28 @@ PyJWT==2.15.1
 ag-ui-protocol==0.1.19
 python-json-logger>=4.1.0
 
-# ── Vector memory store (3.10 LANE — NOT the live palace client) ────────────
-# B0.8 (2026-09-27): the live palace is chromadb 1.5.x format and zoe-data opens it
-# from the py3.12 venv (`requirements-py312.txt`: chromadb 1.5.9 / mempalace
-# 3.10.0). THIS manifest is the system Python 3.10 lane, whose user site also hosts
-# the CUDA/Kokoro packages, and it deliberately stays on the 0.6.3 pair:
-#
-# * No 3.10 program may open the palace. The 0.6.3 client dies on the 1.x format
-#   (`KeyError: '_type'`), and every store opener goes through a format guard
-#   (`scripts/lib/palace_client.py`, `memory_service._check_palace_format`) that
-#   refuses a mismatched client before chromadb touches the file.
-# * Moving zoe-data back to 3.10 (removing the B0.7 drop-in) now REQUIRES the B0.8
-#   rollback too: restore the pre-B0.8 palace directory. See
-#   docs/knowledge/chroma-1-5-migration.md.
-# * Keep the pair exact: mempalace 3.3.1 declares only `chromadb>=0.5.0`, and its
-#   `_fix_blob_seq_ids` misreads the 1.x sysdb (silent drawer-write drops).
-mempalace==3.3.1
-chromadb==0.6.3
+# ── Vector memory store: NOT in this manifest (B9, 2026-10-18) ──────────────
+# The live palace is chromadb 1.5.x format (B0.8, 2026-09-27) and only the py3.12
+# venv opens it (`requirements-py312.txt`: chromadb 1.5.9 / mempalace 3.10.0).
+# This system Python 3.10 lane carries NO chromadb and NO mempalace: the old
+# 0.6.3 / 3.3.1 pair dies on the 1.x format (`KeyError: '_type'`), and 3.3.1's
+# `_fix_blob_seq_ids` misreads the 1.x sysdb (silent drawer-write drops), so the
+# pair could only ever do harm here. A 3.10 script that tries to open the palace
+# is refused by `scripts/lib/palace_client.py` with the venv to use instead.
+# Do not re-add either package; `tests/unit/test_jetson_agent_install_pins.py`
+# fails if this manifest or the Jetson installer does.
+# Rolling zoe-data back to 3.10 (removing the B0.7 drop-in) now needs the B0.8
+# rollback too: restore the pre-B0.8 palace directory AND re-pin the 0.6.3 /
+# 3.3.1 pair. See docs/knowledge/chroma-1-5-migration.md.
 
 # ── Voice dependencies (Jetson/server-side) ───────────────────────────────
 # `numpy<2` guards MORE than the voice path — do not relax or relocate it as
 # part of a voice-only change. Jetson torch/ctranslate2 wheels fail at runtime
-# on NumPy 2.x, AND chromadb 0.6.3 declares a bare unbounded `numpy`, so this
-# ceiling is the only thing stopping a memory-store install from pulling NumPy
-# 2.x (verified 2026-08-02: `mempalace==3.3.1 chromadb==0.6.3` alone resolves to
-# numpy 2.2.6; adding this line pins it back to 1.26.4). NumPy 2 is a C-ABI
+# on NumPy 2.x, and several packages here declare a bare unbounded `numpy`, so
+# this ceiling is what stops a resolver pulling NumPy 2.x. NumPy 2 is a C-ABI
 # break, and the packages compiled against 1.x here are kokoro, moonshine-voice,
-# chroma-hnswlib, ctranslate2, soundfile, soxr and Resemblyzer — i.e. both
-# canonical rocks plus the vector index. On aarch64 the realistic failure is
-# "no matching wheel" and a dead voice path.
+# ctranslate2, soundfile, soxr and Resemblyzer — i.e. both canonical rocks. On
+# aarch64 the realistic failure is "no matching wheel" and a dead voice path.
 numpy<2
 # ONNX Runtime is a DIRECT dependency, not merely a transitive one: `voice_vad.py`
 # and `voice_turn.py` both `import onnxruntime` to run the Silero VAD .onnx (v6.0

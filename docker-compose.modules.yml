@@ -85,6 +85,9 @@ services:
     - ${ZOE_MA_DATA:-/home/zoe/.zoe/music-assistant}:/data
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 833 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 1280m
+    memswap_limit: 1920m
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8095/info"]
       interval: 30s
@@ -144,6 +147,9 @@ services:
     - "127.0.0.1:4416:4416"
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 213 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 512m
+    memswap_limit: 768m
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4416/ping',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
@@ -207,6 +213,9 @@ services:
         - backend
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 26 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 256m
+    memswap_limit: 384m
     profiles:
     - multica
     healthcheck:
@@ -229,6 +238,9 @@ services:
     - zoe-network
     restart: unless-stopped
     logging: *default-logging
+    # Memory: a leak backstop, not a working limit (peak 98 MB; sizing in docs/knowledge/docker-log-and-memory-limits.md)
+    mem_limit: 256m
+    memswap_limit: 384m
     profiles:
     - multica
     depends_on:

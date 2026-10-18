@@ -44,6 +44,13 @@ def _livekit_env(monkeypatch):
     monkeypatch.setenv("LIVEKIT_API_KEY", _KEY)
     monkeypatch.setenv("LIVEKIT_API_SECRET", _SECRET)
     monkeypatch.setenv("ZOE_LIVEKIT_ONDEMAND", "false")
+    # Never start a real room agent (it would dial :7880): record the room the token names instead.
+    import routers.voice_livekit as voice_livekit
+
+    async def _no_agent(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(voice_livekit, "ensure_livekit_started", _no_agent)
 
 
 def _app(*, device=None, user=None) -> FastAPI:
@@ -146,7 +153,9 @@ def test_identity_comes_from_the_principal_not_the_request():
     assert resp.status_code == 200
     claims = _claims(resp.json())
     assert claims["sub"] == "jason", "identity must track the authenticated principal"
-    assert claims["video"]["room"] == "zoe-voice", "room is fixed server-side"
+    room = claims["video"]["room"]
+    assert room != "other" and room != "zoe-voice", "room is chosen server-side, per session (A10)"
+    assert room.startswith("zoe-voice-") and room == resp.json()["room"]
 
 
 def test_device_token_identity_is_the_bound_user():

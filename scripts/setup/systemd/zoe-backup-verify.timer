@@ -1,0 +1,12 @@
+# Sunday 05:45, moved from 03:30: the off-box drill refuses to run inside the night window (01:35-04:55).
+[Unit]
+Description=Weekly restore-verify of Zoe backups (Sunday 05:45 local)
+
+[Timer]
+OnCalendar=Sun *-*-* 05:45:00
+RandomizedDelaySec=600
+Persistent=true
+Unit=zoe-backup-verify.service
+
+[Install]
+WantedBy=timers.target

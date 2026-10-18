@@ -1967,8 +1967,7 @@ async def chat_stream_generator(
                             f"**{message_for_processing[:80]}**\n\n"
                             f"Est. 5–15 min · Will appear on the Multica board.\n\n"
                             f"[Start now](/api/agent/board/approve?task_id={_board_task_id}) | "
-                            f"[Review first](/api/agent/board/review?task_id={_board_task_id}) | "
-                            f"[Cancel](/api/agent/board/cancel?task_id={_board_task_id})"
+                            f"[Review first](/api/agent/board/review?task_id={_board_task_id})"
                         )
                         yield emit(TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
                         async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, _card_text):
