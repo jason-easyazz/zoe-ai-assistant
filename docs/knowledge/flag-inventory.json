@@ -4724,6 +4724,46 @@
         ],
         "typed_env": false
       },
+      "ZOE_PHONE_APP": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/phone_app.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_PHONE_APP_BASE_URL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/phone_app.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_PHONE_APP_BUNDLE_ID": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/phone_app.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_PHONE_APP_CA_SHA256": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/phone_app.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_PIN_CHALLENGE_TTL_S": {
         "defaults": [
           "'120'"
