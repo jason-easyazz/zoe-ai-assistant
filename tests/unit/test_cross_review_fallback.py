@@ -29,7 +29,7 @@ _POLLY = _REPO_ROOT / "scripts" / "maintenance" / "cross_review_polly.sh"
 _CALLER = _REPO_ROOT / "services" / "zoe-data" / "pipeline_cross_review.py"
 
 _STUB_POLLY = r"""#!/usr/bin/env bash
-echo "polly $*" >> "$STUB_LOG"
+echo "polly $* T=${CROSS_REVIEW_TIMEOUT_S:-}" >> "$STUB_LOG"
 case "${STUB_POLLY:-ok}" in
   ok)          printf 'REVIEWER-VENDOR: openai/codex\nblocking: none\nCLEAN\n' ;;
   claude)      printf 'REVIEWER-VENDOR: anthropic/claude-opus-4-8\nCLEAN\n' ;;
@@ -55,6 +55,7 @@ echo "pi $*" >> "$STUB_LOG"
 cat > "$STUB_DIR/pi.stdin"
 case "${STUB_PI:-ok}" in
   ok)      printf 'VERDICT: CLEAN (pi)\npadding to clear the minimum report size ........................\n' ;;
+  short)   printf 'VERDICT: PARTIAL (diff only; 1 file reviewed)\n' ;;
   partial) printf '1. blocking: first finding, streamed before the cut-off ...................\n'; sleep 30 ;;
   quota)   echo "429 Too Many Requests: spend limit exceeded" >&2; exit 1 ;;
 esac
@@ -229,6 +230,41 @@ def test_diff_fetch_failure_is_reported_not_swallowed(rig):
     assert r.returncode == 2
     assert "could not fetch the PR diff" in r.stderr
     assert "codex" not in rig.calls() and "pi" not in rig.calls()
+
+
+# ------------------------------------------------------- time budget (polly last) ---
+
+def test_polly_window_is_clamped_to_what_the_caller_timeout_leaves(rig):
+    # polly's worst-case wall is its poll window + ~570 s of bounded phases. Started late
+    # (non-default order) with too little left, it must be SKIPPED, never started and then
+    # killed by the caller mid-review (that orphans the detached worker).
+    r = rig.run(
+        CROSS_REVIEW_BACKENDS="codex pi polly", STUB_CODEX="quota", STUB_PI="quota",
+        CROSS_REVIEW_CALLER_TIMEOUT_S=700,
+    )
+    assert r.returncode == 2
+    assert "polly" not in rig.calls(), "polly must not start with less than its overhead + minimum window left"
+    assert "polly unavailable — insufficient time budget" in r.stderr
+
+
+def test_polly_window_shrinks_to_fit_but_never_exceeds_its_default(rig):
+    full = rig.run(STUB_POLLY="ok")
+    assert "T=1200" in rig.call_lines("polly")[0], "default window is 1200 s"
+    tight = rig.run(
+        CROSS_REVIEW_BACKENDS="codex pi polly", STUB_CODEX="quota", STUB_PI="quota",
+        CROSS_REVIEW_CALLER_TIMEOUT_S=1700,
+    )
+    assert full.returncode == 0 and tight.returncode == 0, tight.stderr
+    t = int(re.search(r"T=(\d+)", rig.call_lines("polly")[1]).group(1))
+    # 1700 - 20 margin - 600 polly overhead - a second or two already spent
+    assert 1070 <= t <= 1080, t
+
+
+def test_a_short_pi_report_below_the_old_80_byte_bar_is_still_kept(rig):
+    # Review finding on this PR: an 80-byte floor discarded a genuine short/PARTIAL report.
+    r = rig.run(STUB_POLLY="authfail", STUB_CODEX="quota", STUB_PI="short")
+    assert r.returncode == 0, r.stderr
+    assert "VERDICT: PARTIAL" in r.stdout
 
 
 # ------------------------------------------------ wiring that tests cannot exercise ---

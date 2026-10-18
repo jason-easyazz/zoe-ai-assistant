@@ -56,7 +56,7 @@ services:
     #       the claude-sdk executor strips that name before spawning the CLI (to force
     #       subscription auth), and in the container env it would flip every native Claude
     #       worker to metered billing. It reaches the SDK harness through omnigent's
-    #       `auth: {type: api_key}` block (scripts/maintenance/omnigent_claude_auth_mode.sh).
+    #       `auth: {type: api_key}` block (scripts/maintenance/omnigent_claude_auth_mode.py).
     # Absent file = today's behaviour (stored /login credentials). Owner runbook:
     # docs/knowledge/omnigent-cross-review.md -> "Polly Claude auth".
     env_file:

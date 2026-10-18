@@ -44,7 +44,7 @@ order, and stops at the first cross-vendor report:
    error, timeout, or a report that is not provably cross-vendor. No `--model`: the
    ChatGPT-account Codex rejects invented ids (`gpt-5-codex`, `gpt-5.1-codex` -> HTTP 400;
    polly's brief now says to omit `args.model` for the codex worker too).
-3. **pi, one lean pass** — only when codex is unavailable (quota, auth, timeout):
+3. **pi, one lean pass** — only when codex is unavailable (quota, auth, crash, timeout):
    `pi --provider openrouter --model z-ai/glm-5.2 --no-tools --no-session`, diff on stdin.
 
 If all three fail it exits **2** with `ALARM: cross-review unavailable` and each backend's

@@ -54,9 +54,20 @@ BACKENDS="${CROSS_REVIEW_BACKENDS:-polly codex pi}"
 PI_MODEL="${CROSS_REVIEW_PI_MODEL:-z-ai/glm-5.2}"
 
 CALLER_TIMEOUT_S=2500   # mirrors _CROSS_REVIEW_TIMEOUT_S; pinned by tests/unit/test_cross_review_fallback.py
+# Test seam only (it can lower the budget, never be relied on to raise the real caller's).
+CALLER_TIMEOUT_S="${CROSS_REVIEW_CALLER_TIMEOUT_S:-$CALLER_TIMEOUT_S}"
 MARGIN_S=20             # headroom kept below the caller's timeout
 MIN_PHASE_S=120         # a fallback with less than this left is skipped, not started
 KILL_AFTER_S=10         # timeout -k: escalate to KILL when TERM is ignored
+# Output shorter than this is noise (an error banner, a stray newline), not a report. It is
+# deliberately below a one-line verdict so a genuinely short or cut-off PARTIAL pi report
+# is kept rather than discarded as "no usable output".
+MIN_REPORT_BYTES=40
+# Polly's own bounded phases (lock wait, create, register, kick, report fetch, teardown,
+# kill escalation) added on top of its poll window; mirrors the OVERHEAD_S sum in
+# cross_review_polly.sh (570 s) with a little slack. Polly's worst-case wall is
+# poll window + this, so the window is clamped to what the caller's timeout leaves.
+POLLY_OVERHEAD_S=600
 DIFF_FETCH_MAX_S=60
 
 POLLY_TIMEOUT_S="${CROSS_REVIEW_POLLY_TIMEOUT_S:-1200}"
@@ -121,11 +132,15 @@ ANTHROPIC_RE='anthropic|claude|opus|sonnet|haiku|fable'
 
 # ---------------------------------------------------------------- backend: polly ---
 try_polly() {
-  local budget out="$WORK/polly.out" rc vendor
-  budget=$(phase_budget "$POLLY_TIMEOUT_S")
-  if [ "$budget" -eq 0 ]; then note polly "insufficient time budget"; return 1; fi
-  # Keep polly's own poll window below the clamp so its worst-case wall (poll + bounded
-  # phases) is not what eats the fallbacks' budget.
+  local budget left out="$WORK/polly.out" rc vendor
+  # polly's worst-case wall is its poll window PLUS its bounded phases, so clamp the window
+  # to what the caller's timeout leaves after them — otherwise a non-default order
+  # (e.g. "codex pi polly") could start polly with less time than it can need and be
+  # killed by the caller mid-review, orphaning the detached worker.
+  left=$(( $(remaining) - POLLY_OVERHEAD_S ))
+  budget=$POLLY_TIMEOUT_S
+  [ "$left" -lt "$budget" ] && budget=$left
+  if [ "$budget" -lt "$MIN_PHASE_S" ]; then note polly "insufficient time budget"; return 1; fi
   CROSS_REVIEW_TIMEOUT_S="$budget" "$POLLY_SCRIPT" "$PR" "$CONTRACT" > "$out" &
   CHILD=$!
   wait "$CHILD"; rc=$?
@@ -206,7 +221,7 @@ try_codex() {
   timeout -k "$KILL_AFTER_S" "$budget" "${CODEX[@]}" exec -s read-only --skip-git-repo-check --ephemeral -C /workspace - \
     < "$WORK/prompt.codex" > "$out" 2> "$err"
   rc=$?
-  if [ "$rc" -eq 0 ] && [ "$(wc -c < "$out")" -ge 80 ]; then
+  if [ "$rc" -eq 0 ] && [ "$(wc -c < "$out")" -ge "$MIN_REPORT_BYTES" ]; then
     echo "cross-review: reviewed via codex exec (direct fallback)" >&2
     { echo "REVIEWER-VENDOR: openai/codex (codex exec, direct fallback)"; [ -n "$TRUNC_NOTE" ] && echo "COVERAGE: $TRUNC_NOTE"; cat "$out"; }
     return 0
@@ -230,12 +245,12 @@ try_pi() {
     < "$WORK/prompt.pi" > "$out" 2> "$err"
   rc=$?
   size=$(wc -c < "$out")
-  if [ "$rc" -eq 0 ] && [ "$size" -ge 80 ]; then
+  if [ "$rc" -eq 0 ] && [ "$size" -ge "$MIN_REPORT_BYTES" ]; then
     echo "cross-review: reviewed via pi (lean fallback, tool-less single pass)" >&2
     { echo "REVIEWER-VENDOR: $PI_MODEL (pi direct via OpenRouter, tool-less single pass)"; [ -n "$TRUNC_NOTE" ] && echo "COVERAGE: $TRUNC_NOTE"; cat "$out"; }
     return 0
   fi
-  if { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; } && [ "$size" -ge 80 ]; then
+  if { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; } && [ "$size" -ge "$MIN_REPORT_BYTES" ]; then
     # Out of time with a partial report: a partial verdict beats nothing.
     echo "cross-review: pi ran out of time; returning its PARTIAL output" >&2
     { echo "REVIEWER-VENDOR: $PI_MODEL (pi direct via OpenRouter, tool-less single pass)"
