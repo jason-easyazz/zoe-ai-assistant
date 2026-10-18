@@ -1,0 +1,57 @@
+# the411 side of the off-box backup (architecture deep dive A5). NOT DEPLOYED by anything in this repo: the owner
+# copies this directory to the411 (/opt/zoe-backup) and runs it - docs/knowledge/offbox-backup.md section 3.
+#
+#   rest-server: APPEND-ONLY (a box can add snapshots, never delete or rewrite one: a stolen or compromised box
+#                cannot destroy its own history), PRIVATE REPOS (htpasswd user <hid> reaches only /<hid>/), loopback
+#                only - the411's host nginx terminates TLS for backup.the411.life and proxies here (nginx-backup.conf).
+#   prune:       applies retention ON THE SERVER with a per-household prune key (restic `key add`), because the box's
+#                credential cannot delete. Daily 04:00 UTC (12:00 AWST), clear of the box's 05:10 AWST backup.
+#
+# Versions are >= 14 days old at pin time (restic 0.19.1 released 2026-07-05, rest-server 0.14.0 2025-05-31) and pinned
+# by multi-arch INDEX digest (`docker image inspect --format '{{index .RepoDigests 0}}'`, read 2026-10-18). Bump both
+# halves together; the box's restic (install_tools.sh) carries the same version.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  rest-server:
+    image: restic/rest-server:0.14.0@sha256:d2aff06f47eb38637dff580c3e6bce4af98f386c396a25d32eb6727ec96214a5
+    container_name: zoe-backup-rest-server
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      # The image's entrypoint runs: rest-server --path $DATA_DIRECTORY --htpasswd-file $PASSWORD_FILE $OPTIONS
+      - DATA_DIRECTORY=/data
+      - PASSWORD_FILE=/data/.htpasswd
+      - OPTIONS=--append-only --private-repos --listen :8000 --log -
+    ports:
+      - "127.0.0.1:8730:8000"          # loopback only; never publish this port beyond the host
+    volumes:
+      - /srv/zoe-backup/data:/data
+    mem_limit: 256m
+    memswap_limit: 256m
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  prune:
+    image: restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510
+    container_name: zoe-backup-prune
+    restart: unless-stopped
+    logging: *default-logging
+    network_mode: none                 # works on the repo files directly; needs no network
+    environment:
+      - TZ=UTC
+      - DATA_DIRECTORY=/data
+      - PRUNE_KEYS=/keys
+    entrypoint: ["/bin/sh", "-c", "echo '0 4 * * * /prune.sh >>/proc/1/fd/1 2>&1' | crontab - && exec crond -f -l 8"]
+    volumes:
+      - /srv/zoe-backup/data:/data
+      - /srv/zoe-backup/prune-keys:/keys:ro   # <hid>.pass per household, mode 600, root-owned
+      - ./prune.sh:/prune.sh:ro
+    mem_limit: 1g
+    memswap_limit: 1g

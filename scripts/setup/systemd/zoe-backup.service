@@ -1,0 +1,20 @@
+# Nightly ON-BOX backup: Postgres dumps (biometric table data excluded) + the MemPalace tarball, to ~/.zoe-backups.
+# Tracked 2026-10-18 (architecture deep dive B9); the live unit ran the MemPalace step from an untracked
+# ~/scripts/maintenance copy, now scripts/maintenance/mempalace-nightly-backup.sh. Retention <= 35 days
+# (docs/knowledge/forget-reach.md). The off-box copy is zoe-offbox-backup.service, which ships these dumps.
+#
+# Install: cp scripts/setup/systemd/zoe-backup.{service,timer} ~/.config/systemd/user/ && systemctl --user daemon-reload
+[Unit]
+Description=Zoe nightly backup (Postgres dumps + MemPalace tarball, on-box)
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Postgres first: it is the source of truth, and a MemPalace tar hiccup must never skip it (09-21, 09-25, 09-26).
+ExecStart=%h/assistant/scripts/maintenance/postgres-nightly-backup.sh
+ExecStart=%h/assistant/scripts/maintenance/mempalace-nightly-backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=append:%h/.zoe-logs/backup.log
+StandardError=append:%h/.zoe-logs/backup.log

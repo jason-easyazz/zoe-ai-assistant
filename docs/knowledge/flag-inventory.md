@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-703 flags; 653 not documented in `.env.example`.
+716 flags; 666 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -228,6 +228,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_HA_VOICE_TOKEN` | `''` | no | NO | `services/homeassistant-mcp-bridge/main.py` |
 | `ZOE_HEALTH_CHECK_SCRIPT` | `dynamic` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_HEALTH_CHECK_TIMEOUT_S` | `'120'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
+| `ZOE_HEALTH_NO_ALERT` | `-` | no | NO | `scripts/maintenance/zoe_health.py` |
+| `ZOE_HEALTH_STATE` | `dynamic` | no | NO | `scripts/maintenance/zoe_health.py` |
 | `ZOE_HERMES_AUTO_ESCALATE` | `'true'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_HOLD_THE_FACT` | `-` | yes | NO | `services/zoe-data/hold_the_fact.py` |
 | `ZOE_HOME_SETUP_SECRET` | `-` | no | NO | `services/zoe-data/smart_home_setup.py` |
@@ -404,6 +406,15 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_NIGHT_MIND_SCHEMA` | `-` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_URL` | `-` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NVM_NODE_BIN` | `-` | no | NO | `services/zoe-data/pi_intent_classifier.py` |
+| `ZOE_OFFBOX_CHECKOUT` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_CONFIG_DIR` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_HOME` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_MEM_FLOOR_MB` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_NO_ALERT` | `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_SKIP_PG_GLOBALS` | `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_SNAPSHOT_TIME` | `(required)`, `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_STAGE_DIR` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_STATE_DIR` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OMI_AUDIO_DIR` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIO_RETENTION_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIT_PATH` | `''` | yes | NO | `services/zoe-data/omi_devices.py` |
@@ -489,6 +500,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PI_LAB_MIN_AVAILABLE_MB` | `2048.0` | no | NO | `services/zoe-data/routers/pi_intent_lab.py` |
 | `ZOE_PI_LAB_MIN_SWAP_FREE_MB` | `256.0` | no | NO | `services/zoe-data/routers/pi_intent_lab.py` |
 | `ZOE_PI_LAB_RESOURCE_GUARD_ENABLED` | `True` | no | NO | `services/zoe-data/routers/pi_intent_lab.py` |
+| `ZOE_POSTGRES_CONTAINER` | `'zoe-database'` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_PRESENCE_WINDOW_S` | `''` | no | yes | `services/zoe-data/proactive/presence.py` |
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
@@ -673,6 +685,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VAD_SPEECH_THRESHOLD` | `'0.5'` | no | NO | `services/zoe-data/voice_vad.py` |
 | `ZOE_VAD_TAIL_DEEP_PROB` | `'0.10'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_VAD_TAIL_MS` | `0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_VAPID_KEY_PATH` | `-` | no | NO | `scripts/maintenance/migrate_vapid_keys.py`<br>`services/zoe-data/routers/push.py` |
 | `ZOE_VERIFY_ON_CHALLENGE` | `-` | no | NO | `services/zoe-data/verify_on_challenge.py` |
 | `ZOE_VOICE_ALERT_NON_PASS_RUNS` | `'3'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_BARGE_IN` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
