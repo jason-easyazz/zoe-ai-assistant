@@ -913,7 +913,9 @@ def test_nothing_else_reads_pendant_transcripts():
                "omi_devices.py", "omi_day_review.py",      # the day review (0054): proposals the owner approves, never a write of its own
                # speaker turns + learned voices (0055): the diariser imports GateClosed, the voice store joins a recording's status
                # and day, its router reuses the owner rule. ``omi_voices.review_segments`` is the ONE seam the day review reads.
-               "omi_diarize.py", "omi_voices.py", "routers/omi_voices.py"}
+               "omi_diarize.py", "omi_voices.py", "routers/omi_voices.py",
+               # the forget-reach inventory (A6) only NAMES the table as a store key; it opens nothing
+               "forget_reach.py"}
     hits = set()
     for p in SVC.rglob("*.py"):
         rel = str(p.relative_to(SVC))

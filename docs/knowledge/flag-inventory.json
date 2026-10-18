@@ -2227,6 +2227,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_INTENT_MISS_LOG": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/local_text_logs.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_INTENT_ROUTER_GATE": {
         "defaults": [
           "'1'"
@@ -5063,10 +5073,12 @@
       },
       "ZOE_REPO_ROOT": {
         "defaults": [
-          "''"
+          "''",
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/maintenance/migrate_hermes_env.py",
           "services/zoe-data/repo_paths.py"
         ],
         "typed_env": false
@@ -5243,10 +5255,12 @@
       },
       "ZOE_ROUTER_HEAD_LOG": {
         "defaults": [
+          "-",
           "dynamic"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/local_text_logs.py",
           "services/zoe-data/semantic_router.py"
         ],
         "typed_env": false
@@ -5383,10 +5397,12 @@
       },
       "ZOE_ROUTER_SHADOW_KEEP": {
         "defaults": [
+          "'4'",
           "4"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/local_text_logs.py",
           "services/zoe-data/semantic_router.py"
         ],
         "typed_env": false
@@ -6152,6 +6168,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_TEXT_LOG_RETENTION_DAYS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/local_text_logs.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_TIMEZONE": {
         "defaults": [
           "''",
@@ -6206,6 +6232,16 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/pi_touch_hybrid_production_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TRAINING_FEEDBACK_LOG": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": false
       },

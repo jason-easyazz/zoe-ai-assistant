@@ -55,6 +55,10 @@ os.environ["ZOE_BRAIN_SLOT_GUARD"] = "off"
 # 2026-10-13: three CI-runner pytest runs (118 lines each) and one agent worktree run put 355 synthetic-user ``memory_forget_cascade:
 # no database`` / ``NOT erased`` warnings into it, indistinguishable from a real half-done forget. Read at call time, so this pin holds.
 os.environ["ZOE_LOG_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "logs")
+# The local utterance-text logs (local_text_logs): the forget cascade and MemoryService.delete_user REWRITE them, so unpinned a unit test of
+# either would strip the household's real router shadow log / intent-miss log. Read at call time, so this pin holds.
+os.environ["ZOE_ROUTER_HEAD_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "router_head_shadow.jsonl")
+os.environ["ZOE_INTENT_MISS_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "intent-misses.jsonl")
 
 
 import pytest  # noqa: E402

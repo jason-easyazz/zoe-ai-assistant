@@ -823,7 +823,9 @@ ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_recordings.py", "routers/omi_
            "memory_forget_cascade.py",
            # the day review names the ``omi_segments`` vocabulary in its seam (``lines_for_day(segments=)``); it never touches a
            # voice table - its input is ``review_segments`` output (confirmed labels, no suggestions) handed in by the caller
-           "omi_day_review.py"}
+           "omi_day_review.py",
+           # the forget-reach inventory (A6) lists the voice tables as store keys; it imports and opens nothing
+           "forget_reach.py"}
 NEEDLES = ("learned_voiceprint", "omi_segment", "omi_voice_cluster", "omi_voice_settings", "omi_voices")
 
 

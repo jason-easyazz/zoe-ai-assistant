@@ -33,6 +33,14 @@ mod = _load()
 MB = 1024 * 1024
 
 
+@pytest.fixture(autouse=True)
+def _text_logs_off_the_live_files(tmp_path, monkeypatch):
+    """``main`` also runs the utterance-text retention pass (local_text_logs). Pin its two logs off the checkout's real ones."""
+    monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(tmp_path / "pinned-shadow.jsonl"))
+    monkeypatch.setenv("ZOE_INTENT_MISS_LOG", str(tmp_path / "pinned-misses.jsonl"))
+    monkeypatch.delenv("ZOE_TEXT_LOG_RETENTION_DAYS", raising=False)
+
+
 def _fill(path: Path, nbytes: int, tag: bytes = b"line\n") -> None:
     path.write_bytes((tag * (nbytes // len(tag) + 1))[:nbytes])
 
@@ -209,3 +217,31 @@ def test_main_reports_a_failed_rotation_and_exits_nonzero(tmp_path, monkeypatch,
     assert rc == 1
     assert "FAILED" in capsys.readouterr().err
     assert log.stat().st_size == 3 * MB
+
+
+def test_main_also_applies_text_log_retention_and_never_changes_the_exit_status(tmp_path, capsys, monkeypatch):
+    """Deep dive A6: the hourly pass strips utterance text older than the retention window from the router shadow log.
+    Break: drop the ``sweep_text_logs`` call in ``main`` -> the old text stays."""
+    import json
+    import time
+
+    shadow = tmp_path / "pinned-shadow.jsonl"
+    old = time.time() - 90 * 86400
+    shadow.write_text(json.dumps({"ts": old, "utt": "a" * 12, "utt_text": "ancient words"}) + "\n"
+                      + json.dumps({"ts": time.time(), "utt": "b" * 12, "utt_text": "fresh words"}) + "\n")
+    assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log"]) == 0
+    text = shadow.read_text()
+    assert "ancient words" not in text and "fresh words" in text
+    assert "text-log retention" in capsys.readouterr().out
+    # --no-text-sweep leaves it alone; a dry run reports counts and changes nothing
+    shadow.write_text(json.dumps({"ts": old, "utt": "a" * 12, "utt_text": "ancient words"}) + "\n")
+    assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log", "--no-text-sweep"]) == 0
+    assert "ancient words" in shadow.read_text()
+    assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log", "--dry-run"]) == 0
+    assert "ancient words" in shadow.read_text() and "1/1 records carry text" in capsys.readouterr().out
+
+
+def test_a_broken_text_log_pass_does_not_fail_the_rotation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("importlib.util.spec_from_file_location", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log"]) == 0
+    assert "skipped" in capsys.readouterr().err

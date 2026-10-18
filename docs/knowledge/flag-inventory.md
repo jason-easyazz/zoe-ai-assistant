@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-674 flags; 672 not documented in `.env.example`.
+677 flags; 675 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -235,6 +235,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_IDLE_CONSOLIDATION_LOOKBACK_S` | `3600` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
 | `ZOE_IDLE_CONSOLIDATION_MIN_TURNS` | `2` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
 | `ZOE_INTENT_DISPATCH_REQUIRE_TOKEN` | `''` | no | NO | `services/zoe-data/auth.py` |
+| `ZOE_INTENT_MISS_LOG` | `-` | no | NO | `services/zoe-data/local_text_logs.py` |
 | `ZOE_INTENT_ROUTER_GATE` | `'1'` | no | NO | `services/zoe-data/fast_tiers.py` |
 | `ZOE_INTERNAL_TOKEN` | `''`, `-` | yes | NO | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/maintenance/zoe-nightly-dreaming.py`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/auth_handoff.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/panel_kiosk_credential.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_KANBAN_BACKEND` | `'executor'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
@@ -513,7 +514,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_REMINDER_DEFAULT_TIME` | `''` | no | NO | `services/zoe-data/proactive/triggers/reminder_scan.py` |
 | `ZOE_REMINDER_MAX_ATTEMPTS` | `'5'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_REMINDER_STUCK_CLAIM_S` | `'600'` | no | NO | `services/zoe-data/proactive/triggers/reminders.py` |
-| `ZOE_REPO_ROOT` | `''` | no | NO | `services/zoe-data/repo_paths.py` |
+| `ZOE_REPO_ROOT` | `''`, `dynamic` | no | NO | `scripts/maintenance/migrate_hermes_env.py`<br>`services/zoe-data/repo_paths.py` |
 | `ZOE_RESTRAINT` | `-` | no | NO | `scripts/perf/samantha_person.py` |
 | `ZOE_RIG_BIND` | `-` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_DISPLAY` | `':99'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
@@ -531,7 +532,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_EVENT_TIME_PRECEDENCE` | `-` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEAD` | `'off'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEADS_BACKEND` | `'numpy'` | no | NO | `services/zoe-data/router_heads_numpy.py` |
-| `ZOE_ROUTER_HEAD_LOG` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_HEAD_LOG` | `-`, `dynamic` | no | NO | `services/zoe-data/local_text_logs.py`<br>`services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEAD_MIN_CONF` | `'0.70'` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_HEAD_MLP_PATH` | `dynamic` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_HEAD_PATH` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
@@ -545,7 +546,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_SELFTRAIN_DOW` | `'sat'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_ROUTER_SELFTRAIN_HOUR` | `'1'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_ROUTER_SELFTRAIN_TIMEOUT_S` | `'28800'` | no | NO | `services/zoe-data/main.py` |
-| `ZOE_ROUTER_SHADOW_KEEP` | `4` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_SHADOW_KEEP` | `'4'`, `4` | no | NO | `services/zoe-data/local_text_logs.py`<br>`services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SHADOW_MAX_BYTES` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SHADOW_TEXT` | `''` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SIDECAR_URL` | `-` | no | NO | `services/zoe-data/router_two_stage.py` |
@@ -621,10 +622,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_TELEGRAM_STT_CAPTURE_DIR` | `''` | no | NO | `services/zoe-data/routers/telegram_media.py` |
 | `ZOE_TELEGRAM_VOICE_MAX_S` | `'60'` | no | NO | `services/zoe-data/routers/telegram_media.py` |
 | `ZOE_TEMPORAL_RELATIONSHIPS_ENABLED` | `''` | no | NO | `services/zoe-data/person_extractor.py` |
+| `ZOE_TEXT_LOG_RETENTION_DAYS` | `-` | no | NO | `services/zoe-data/local_text_logs.py` |
 | `ZOE_TIMEZONE` | `''`, `'Australia/Perth'`, `-` | no | NO | `services/zoe-data/calendar_ical.py`<br>`services/zoe-data/identity_facts.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/multica_autopilot_sync.py`<br>`services/zoe-data/proactive/arrival.py`<br>`services/zoe-data/proactive/engine.py`<br>`services/zoe-data/proactive/triggers/emotional_followup.py`<br>`services/zoe-data/proactive/triggers/evening_windown.py`<br>`services/zoe-data/proactive/triggers/evolution_weekly_digest.py`<br>`services/zoe-data/proactive/triggers/people_birthday.py`<br>`services/zoe-data/proactive/triggers/people_health.py`<br>`services/zoe-data/proactive/triggers/reminder_scan.py`<br>`services/zoe-data/routers/weather.py`<br>`services/zoe-data/time_utils.py`<br>`services/zoe-data/voice_greeting.py` |
 | `ZOE_TOUCH_PANEL_OFFLINE_CACHE` | `'0'` | no | NO | `services/zoe-auth/touch_panel/quick_auth.py` |
 | `ZOE_TOUCH_PROBE_DEVICE_TOKEN` | `''` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |
 | `ZOE_TOUCH_PROBE_PANEL_ID` | `'zoe-touch-pi'` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |
+| `ZOE_TRAINING_FEEDBACK_LOG` | `-` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_TRIVIA_HEDGE` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_TRUSTED_PROXY_NETS` | `dynamic` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_TTS_KEEP_TAIL_MS` | `130` | no | NO | `scripts/setup/zoe_voice_daemon.py` |

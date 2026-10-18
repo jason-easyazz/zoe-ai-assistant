@@ -3433,7 +3433,12 @@ async def _log_feedback_triple(
     format so they can be used directly in Phase 2 training without conversion.
 
     Non-blocking: failures are silently ignored so the user response is unaffected.
+
+    OFF by default (``ZOE_TRAINING_FEEDBACK_LOG=1`` opts in). The file holds the member's message AND Zoe's reply verbatim, outside
+    the forget cascade and with no retention; the LoRA training it fed is retired, so nothing reads it any more (deep dive A6).
     """
+    if (os.environ.get("ZOE_TRAINING_FEEDBACK_LOG") or "").strip().lower() not in ("1", "true", "yes", "on"):
+        return
     try:
         import datetime as _dt
         record = {

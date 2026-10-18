@@ -39,6 +39,12 @@ SAFETY
     * rotated segments are written 0640 (the logs hold household conversation);
     * ``--dry-run`` reports what it would do and changes nothing.
 
+TEXT-LOG RETENTION (deep dive A6)
+    The same hourly pass also applies the retention window to the local logs that keep utterance TEXT (the router shadow log
+    and the intent-miss log): text older than ``ZOE_TEXT_LOG_RETENTION_DAYS`` (default 30) is stripped or dropped. The logic lives
+    in ``services/zoe-data/local_text_logs.py`` (stdlib only); this job only schedules it. It never changes the exit status.
+    ``--no-text-sweep`` skips it.
+
 Exit status 0 on success (including "nothing to do"), 1 if any file failed.
 """
 from __future__ import annotations
@@ -181,6 +187,29 @@ def run(directory: Path, files: tuple[str, ...], *, max_bytes: int, keep: int, d
             lock.close()
 
 
+def sweep_text_logs(dry_run: bool) -> None:
+    """Apply ``local_text_logs`` retention. Best effort: a failure here is reported and never fails the log rotation."""
+    try:
+        import importlib.util
+
+        mod_path = Path(__file__).resolve().parents[2] / "services" / "zoe-data" / "local_text_logs.py"
+        spec = importlib.util.spec_from_file_location("local_text_logs", mod_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        if dry_run:
+            for log in module.LOGS:
+                total, with_text = module.count_text(log)
+                print(f"rotate_service_logs: text log {log.name}: {with_text}/{total} records carry text (dry-run, retention "
+                      f"{module.retention_days()} days)")
+            return
+        swept = {k: v for k, v in module.sweep().items() if v}
+        if swept:
+            print("rotate_service_logs: text-log retention: " + " ".join(f"{k}={v}" for k, v in swept.items()))
+    except Exception as exc:  # noqa: BLE001
+        print(f"rotate_service_logs: text-log retention skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dir", default=DEFAULT_DIR, help=f"log directory (default {DEFAULT_DIR})")
@@ -188,17 +217,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--keep", type=int, default=DEFAULT_KEEP, help="compressed segments to retain")
     ap.add_argument("--file", action="append", dest="files", help="file name inside --dir (repeatable)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-text-sweep", action="store_true", help="skip the utterance-text log retention pass")
     args = ap.parse_args(argv)
     if args.keep < 1 or args.max_mb <= 0:
         ap.error("--keep must be >= 1 and --max-mb > 0")
     files = tuple(args.files) if args.files else DEFAULT_FILES
-    return run(
+    status = run(
         Path(args.dir),
         files,
         max_bytes=int(args.max_mb * 1024 * 1024),
         keep=args.keep,
         dry_run=args.dry_run,
     )
+    if not args.no_text_sweep:
+        sweep_text_logs(args.dry_run)
+    return status
 
 
 if __name__ == "__main__":
