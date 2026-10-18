@@ -128,6 +128,7 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | 14 | life of a held bystander embedding and an unknown voice |
 | `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` | 30 / 365 | learned-voice expiry |
 | `ZOE_OMI_TAG_MODEL_DIR` | `~/.cache/zoe-speaker-resnet34` | where `fetch_speaker_models.sh build` wrote the INT8 file |
+| `ZOE_OMI_KEEP_AUDIO_FOR_TAGGING` | off | hold a split recording's WAV while a line still needs a name, so the Pendant page can play a clip; released when nothing needs a name, never past `ZOE_OMI_AUDIO_RETENTION_DAYS` (7) |
 
 ## Operator steps (none needed for the merge; all are owner decisions)
 
@@ -146,5 +147,13 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
 - A pendant enrolment (`pendant_speaker_profiles`, the section 3.4 flow).
 - The TTS-playback log behind `zoe_spoken_spans`.
 - Household-member detection for D12.
-- The UI: the desktop Pendant tab and the panel "Who is this?".
-- The day review (P5, a sibling branch) reads `review_segments`.
+- The panel "Who is this?" (touch).
+- Facts ABOUT a tagged person from what they said: the day review reads a tagged line as `someone_else` and does not carry the
+  person, so no `person_memory` candidate is proposed yet (memories-space section 2.4, "Populating a contact").
+
+## The Pendant page (built 2026-10-18)
+
+`services/zoe-ui/dist/pendant.html` (desktop UI, phone-first; linked from Memories). Status, "Voices to name" (That's me /
+Name them / TV-radio-Zoe-media, Play), recordings opening to their lines (Me / Not me / Who? / TV, suggestion Yes / No) and
+the learned voices (Forget). Recordings transcribed before `ZOE_OMI_SPEAKER_TAG` was on have no turns and no audio: they show
+their joined transcript and cannot be tagged. Play needs `ZOE_OMI_KEEP_AUDIO_FOR_TAGGING=1` (or `keep_audio`).
