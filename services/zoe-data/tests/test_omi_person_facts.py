@@ -628,3 +628,15 @@ def test_searching_what_people_said_is_words_only_and_private(env):
     env.who["user"] = {"user_id": B, "role": "admin"}
     assert client.get("/api/omi/segments/search", params={"q": "bali"}).json()["lines"] == []       # another member, even an admin
     assert client.get("/api/omi/segments/search", params={"person_id": pid}).status_code == 404     # and A's person is not B's
+
+
+def test_a_relationship_cannot_be_edited_away_from_its_quote(env):
+    """Cross-review round 2 (pi): an edited relationship would carry provenance its quote does not support. Negative control: make
+    ``person_relation`` editable again in ``EDITABLE``."""
+    sids, pid = sam_day(env, ("I'm your cousin, remember the wedding?", "other"))
+    tag(env, sids[2], SAM)
+    review(env, [("I'm your cousin", {"kind": "person_fact", "fields": {"name": "Sam", "fact": "is your cousin"}})])
+    (c,) = cands(env, "person_relation")
+    r = env.client.post(f"/api/omi/day-review/candidates/{c['id']}/approve", json={"fields": {"relation": "my brother"}})
+    assert r.status_code == 422 and r.json()["detail"] == "field_not_editable:relation"
+    assert env.db.rows("SELECT relationship FROM people WHERE id = ?", (pid,))[0]["relationship"] is None

@@ -1073,9 +1073,10 @@ def verify_person_fact(fields: dict, about: str, cited: Sequence[Line], line: Li
       * ``stated_by = "owner_stated"``: the quoted line is one the wearer is KNOWN to have said (their own label, or ``ZOE_OMI_SPEAKER_TAG=on``)
         and names one of their people (one unique match; ambiguous or unknown names are dropped - a new name is a ``person``).
 
-    An unlabelled line (``not_sure``: no tag, no enrolment - D4's reduced form) never yields a fact about a person. Then the floors:
-    the fact must come from the quote's own words, be lasting (not "today"), carry no sensitive class (``restraint`` + D11's list),
-    no identity claim, and not be about someone who may be a child."""
+    An unlabelled line (``not_sure``: no tag, no enrolment - D4's reduced form) never yields a fact about a person. After the source
+    checks (hearsay, the subject's own words, the "I'm your cousin" relationship) the floors run, sensitive classes FIRST
+    (``restraint`` + D11's list), then: the fact must come from the quote's own words, be lasting (not "today"), carry no identity
+    claim, and not be about someone who may be a child."""
     def drop(reason: str) -> None:
         counts[f"drop_{reason}"] = counts.get(f"drop_{reason}", 0) + 1
 

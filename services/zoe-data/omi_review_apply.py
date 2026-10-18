@@ -49,7 +49,9 @@ logger = logging.getLogger(__name__)
 STALE_CLAIM_S = 600
 EDITABLE = {"calendar_event": ("title", "date", "time"), "list_item": ("item", "list"), "reminder": ("title", "date", "time"),
             "follow_up": ("title",), "person": ("name", "relation"), "owner_fact": ("fact",), "person_fact": ("fact",),
-            "person_relation": ("relation",)}
+            # a relationship is NOT editable: the candidate is the quoted words, and an edited one would carry provenance its quote
+            # does not support (dismiss it, and set the relationship on the person instead)
+            "person_relation": ()}
 VIAS = ("voice", "panel_touch", "desktop", "phone")
 
 
@@ -89,8 +91,6 @@ def apply_edits(kind: str, payload: dict, fields: Optional[dict]) -> dict:
                 raise ApplyError("bad_time", 422)
         elif k == "list" and v not in ("shopping", "tasks"):
             raise ApplyError("bad_list", 422)
-        elif kind == "person_relation" and not v:
-            raise ApplyError("empty_field:relation", 422)
         out[k] = v
         if kind in dr.PERSON_KINDS and v != payload.get(k):
             out["edited_by_owner"] = True      # no longer the exact words: the row says the owner changed it

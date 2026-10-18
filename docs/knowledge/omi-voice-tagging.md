@@ -190,7 +190,8 @@ docstring).
     "Any row" means one the subject said, one the owner said, or one the owner said in chat. So a `stated_by_subject` fact and an
     `owner_stated` one never overwrite each other. The same fact already there is linked (`known:memory:<id>`).
   - A relationship fills an EMPTY `people.relationship`, and only on a personal row. A different one already set is
-    `held_conflict`. A family-visible row is refused (`shared_person`).
+    `held_conflict`. A family-visible row is refused (`shared_person`). A relationship candidate cannot be edited: dismiss it
+    and set the relationship on the person instead.
 - **Forget.** These all erase the memory row (`MemoryService.erase_rows`) and clear the relationship, then delete the candidate:
   - "forget <name>": the cascade's `omi_day_review` step, by name and by the person ids it resolved;
   - deleting the recording the fact came from;
