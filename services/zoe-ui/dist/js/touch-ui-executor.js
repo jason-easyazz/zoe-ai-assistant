@@ -66,6 +66,10 @@
         pushRetry: null,
         pushAttempts: 0,
         pushLastRxAt: 0,
+        // The panel id the SERVER subscribed this push socket under (its "connected" frame). A frame on
+        // channel `panel_<that id>` was addressed to this panel by the server (A11), whatever alias the
+        // browser itself knows; anything else arrived on the shared "all" channel.
+        pushPanelId: '',
         unloading: false,
         unloadGuard: null,
         autoHomeTimer: null,
@@ -281,8 +285,27 @@
         const wanted = String(targetPanelId || '').trim();
         if (!wanted) return true;
         const identity = collectPanelIdentity();
-        if (!identity.known.size) return true; // unknown identity -> act rather than swallow
+        // A frame addressed to a named panel is never acted on by a browser that cannot say which panel it
+        // is (A11, 2026-10-18): with a second panel, "act rather than swallow" showed one panel's turn on both.
+        if (!identity.known.size) return false;
         return identity.known.has(wanted);
+    }
+
+    // Per-panel frames (voice:*, panel_state): a turn on ONE panel. Unlike ui_action, an absent or unknown
+    // panel id is NOT "any panel" - the frame is refused unless it names this panel (A11, 2026-10-18).
+    // Household-wide frames (panel:announce, notifications) are other types and are not filtered here.
+    function panelMatchesStrict(targetPanelId) {
+        const wanted = String(targetPanelId || '').trim();
+        if (!wanted) return false;
+        return panelMatches(wanted);
+    }
+
+    // The server routes every per-turn UI frame to the originating panel's own channel (`panel_<id>`, see
+    // zoe-data push.panel_channel). A frame on THIS socket's panel channel is therefore addressed to this
+    // panel by the server, which is the authority on which panel a voice turn came from.
+    function addressedToThisPanel(msg) {
+        const channel = String((msg && msg.channel) || '');
+        return !!state.pushPanelId && channel === 'panel_' + state.pushPanelId;
     }
 
     function panelMatchesAuthTarget(targetPanelId) {
@@ -1178,6 +1201,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 state.pushLastRxAt = Date.now();   // any frame (a pong included) proves the socket is alive
                 try {
                     const msg = JSON.parse(event.data);
+                    if (msg.type === 'connected') {
+                        state.pushPanelId = String(msg.panel_id || '').trim();
+                    }
                     if (msg.type === 'panel_pin_request' && msg.data) {
                         const d = (msg.data && msg.data.data) ? msg.data.data : msg.data;
                         const actionId = String((d && d.challenge_id) || '').trim() || ('push_pin_' + Date.now());
@@ -1216,7 +1242,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     // Back-compat bridge: panel_state events from either legacy daemon or HA ingress.
                     if (msg.type === 'panel_state' && msg.data) {
                         const d = msg.data;
-                        if (panelMatches(d.panel_id)) {
+                        if (addressedToThisPanel(msg) || panelMatchesStrict(d.panel_id)) {
                             if (d.state === 'listening') {
                                 setOrbMode('listening');
                                 VoiceOverlay.onListeningStarted();
@@ -1253,11 +1279,13 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                         }
                     }
                     // Voice state machine — drive orb + conversation overlay from backend events.
-                    // Panel-ID filter: only react to voice events from our own panel (or global ones without panel_id).
+                    // Panel-ID filter (A11): a voice:* frame is a turn on ONE panel. Act only when the server sent it
+                    // on this panel's own channel, or it names this panel. A missing or unknown panel id is refused,
+                    // never "any panel" - with a second panel that showed panel B's transcripts on panel A.
                     if (msg.type && msg.type.startsWith('voice:')) {
                         const _vPanel = msg.data && msg.data.panel_id;
-                        if (!panelMatches(_vPanel)) {
-                            // Event belongs to a different panel — ignore entirely.
+                        if (!(addressedToThisPanel(msg) || panelMatchesStrict(_vPanel))) {
+                            // Event belongs to a different (or an unnamed) panel — ignore entirely.
                         } else {
                             if (msg.type === 'voice:listening_started') {
                                 setOrbMode('listening');
@@ -1294,7 +1322,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                         // Panel-ID filter: ignore events targeting a different panel.
                         // Events with no panel_id are global and always processed.
                         const _uiActionPanel = (action && action.panel_id) || (msg.data && msg.data.panel_id);
-                        if (!panelMatches(_uiActionPanel)) {
+                        if (!(addressedToThisPanel(msg) || panelMatches(_uiActionPanel))) {
                             // Event belongs to a different panel — ignore entirely.
                         } else if (action && action.action_type) {
                             if (!action.id) action.id = 'push_' + Date.now();
