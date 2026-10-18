@@ -798,7 +798,7 @@ for a *party* to the conversation requires the **consent, express or implied, of
 principal parties** (implied consent needs awareness *and* the knowledge one may
 object); s9 separately prohibits publishing such a record; individuals face up to
 $5,000 / 12 months ([Lavan](https://www.lavan.com.au/publications/lights-camera-illegal-evidence-should-you-be-recording-a-private-conversation/),
-[Andrew Williams](https://www.andrewwilliamslawyer.com.au/can-you-record-someone-without-permission.html),
+[a WA criminal lawyer](https://www.andrewwilliamslawyer.com.au/can-you-record-someone-without-permission.html),
 [TechSafety WA guide](https://techsafety.org.au/blog/legal_articles/legal-guide-to-surveillance-legislation-in-wa/),
 [Act text](https://www.legislation.wa.gov.au/legislation/statutes.nsf/law_a1919.html)).
 Two consequences for the design, neither of which is legal advice:

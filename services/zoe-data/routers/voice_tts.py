@@ -34,6 +34,7 @@ import voice_stt_stream as _stt_stream
 import voice_utterance_shape as _utterance_shape
 import speaker_adaptation
 import speaker_models
+import traffic_class
 from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
@@ -836,8 +837,10 @@ async def _require_voice_auth(
 ) -> dict:
     """Allow voice endpoints if caller has a valid device token OR is authenticated."""
     if device:
-        # A provisioned device token IS the panel: a guest voice turn may use the household list (a fridge list).
-        panel_principal.mark_panel_turn()
+        # A provisioned device token IS the panel: a guest voice turn may use the household list (a fridge list). Over the
+        # Cloudflare tunnel it is NOT (owner decision 2026-10-19; escape hatch ZOE_PANEL_TOKEN_VIA_CF=panel).
+        if panel_principal.device_token_is_panel(request):
+            panel_principal.mark_panel_turn()
         # Home control (2026-10-18): judged on the validated TOKEN (the panel), so a zoe-auth outage cannot lock the lights.
         await panel_principal.record_turn_home_control(
             request, {"user_id": "guest", "role": "guest", "panel_id": device.get("panel_id")})
@@ -847,12 +850,26 @@ async def _require_voice_auth(
             "user_id": device.get("user_id", "voice-daemon"),
             "raw_token": device.get("raw_token", ""),
             "via_relay": _request_via_relay(request),
+            # Crossed the Cloudflare tunnel: the token came from the internet, not from the panel on the LAN. The biometric
+            # feeds and enrolment refuse it (biometric_scope, 2026-10-19).
+            "via_tunnel": _request_via_tunnel(request),
         }
     if user.get("role") not in (None, "guest"):
         await panel_principal.record_turn_home_control(request, user)
         return {"source": "session", "user_id": user.get("user_id"), "role": user.get("role"),
                 "via_relay": _request_via_relay(request)}
     raise HTTPException(status_code=401, detail="Voice endpoints require authentication or a device token")
+
+
+def _request_via_tunnel(request: Request) -> bool:
+    """True when the request carries a Cloudflare edge header (``panel_kiosk_credential.via_public_tunnel``). Fails closed."""
+    try:
+        import panel_kiosk_credential
+
+        return bool(panel_kiosk_credential.via_public_tunnel(request))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("voice auth: tunnel check failed (%s) - treating the request as tunnelled", type(exc).__name__)
+        return True
 
 
 def _request_via_relay(request: Request) -> bool:
@@ -2608,6 +2625,8 @@ def _log_voice_stt_sample(
             # Actual backend that produced this transcript (was hardcoded base.en).
             "model": _stt_backend_var.get() or env_str("ZOE_STT_BACKEND", "moonshine"),
             "moonshine_arch": moonshine_arch(),
+            # P-2: household | harness | probe | ci, server-derived (traffic_class.py) - NOT the body panel_id
+            "traffic_class": traffic_class.current(),
         }
         if error:
             record["error"] = error[:500]
@@ -6696,10 +6715,11 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     user, raw_score = _claim_fields(payload)
     if not user:
         return None
-    if (caller or {}).get("via_relay"):
+    if (caller or {}).get("via_relay") or (caller or {}).get("via_tunnel"):
         # The score was computed on the panel, so the server's gate here trusts the device for it. On the LAN that device
-        # is the panel on the wall; over the relay it may be a stolen one anywhere (2026-10-18): no claim, a PIN instead.
-        logger.info("voice claim rejected: the request came through the relay (a member needs a fresh PIN session there)")
+        # is the panel on the wall; over the relay (2026-10-18) or the Cloudflare tunnel (2026-10-19: a copied token from
+        # the internet, which the panel never uses) it may be anywhere: no claim, a PIN instead.
+        logger.info("voice claim rejected: the request came through the relay or the tunnel (a member needs a fresh PIN session)")
         return None
     try:
         score = float(raw_score)
@@ -6799,12 +6819,10 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
         raise HTTPException(status_code=400, detail="model_id must be a non-empty string")
     if not speaker_models.is_known(model_id):
         raise HTTPException(status_code=400, detail="unknown model_id")
-    # A session caller may only enrol ITSELF (admins excepted). Taking the
-    # payload's user_id verbatim let any household member enrol their own voice
-    # under someone else's id — identity takeover, not just a bad row. A device
-    # token still enrols on behalf of the person at the panel; when it names
-    # nobody the pre-existing caller fallback stands.
-    _target = resolve_enroll_target(payload.get("user_id"), caller)
+    # A session caller may only enrol ITSELF (admins excepted). A device token only the member the SERVER verified at its
+    # panel - the enrolment grant Zoe minted when she queued the command, or a fresh PIN sign-in (2026-10-19) - never the
+    # payload's user_id: a voiceprint is a password, and a copied panel token used to enrol any voice onto any member.
+    _target = await resolve_enroll_target(payload.get("user_id"), caller, kind="voice")
     user_id = str(_target or caller.get("user_id", "unknown"))
     display_name = str(payload.get("display_name", user_id)).strip() or user_id
     panel_id = "" if not (payload.get("panel_id") or caller.get("panel_id")) else _lane_panel_id(payload, caller, "enroll")
@@ -7065,6 +7083,11 @@ async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depen
     """
     if caller.get("source") != "device":
         raise HTTPException(status_code=403, detail="device token required")
+    # A copied panel token must not export every member's voiceprint from the internet (2026-10-19). Over the relay the
+    # panel's own claims are refused anyway, so the feed would serve nothing it could use.
+    from biometric_scope import require_local_panel
+
+    require_local_panel(caller, "the voice profile feed")
     from db_compat import get_compat_db as _get_compat_db
 
     try:

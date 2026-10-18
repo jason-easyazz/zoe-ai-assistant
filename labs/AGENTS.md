@@ -242,7 +242,16 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   (`src/speculative-turn.ts`, `test/speculative_turn.test.ts`; the prefix is
   pinned equal to `zoe_flue_client._SPECULATIVE_ENVELOPE_PREFIX` by zoe-data's
   `test_voice_speculation_write_deferral.py`).
-  Regression net (hand-run, not CI-wired): `npm test` — 30 `test/*.test.ts` files
+  **Untrusted content is fenced and taints the turn** (`src/untrusted-content.ts`): web
+  results (`web`) and, since 2026-10-19, quoted third-party text a producer fenced inside
+  the member's own message - a FORWARDED Telegram message (`telegram`), pendant transcript
+  text (`omi`). The provider (`bindIdentityForRound`) taints a turn whose NEWEST user
+  message carries a quote fence's BEGIN line, from the first round; every write and
+  `web_search` then refuses for that turn. The markers and neutraliser are mirrored in the
+  Telegram bot (`src/untrusted.ts`) and zoe-data (`untrusted_content.py`) and pinned equal
+  by `tests/unit/test_untrusted_fence_markers.py`: change all three or none
+  (`test/quoted_untrusted.test.ts`).
+  Regression net (hand-run, not CI-wired): `npm test` — 35 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a
@@ -284,7 +293,11 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `git log --all -- labs/flue-zoe-telegram` if ever needed.
   Since the cutover the AUTO-DEPLOYED pathspec is `labs/flue-zoe-telegram-2x/` —
   breaking work on the LIVE bot needs its own sibling (the same rule that
-  protected the beta). Regression net: `npm test` (70 tests, fully offline — a mock Telegram Bot
+  protected the beta). **Nothing it logs may carry the bot token** (`src/redact.ts`: every
+  error is logged through `describeError`, and `installConsoleRedaction()` at module load
+  redacts every `console.*` line); **a FORWARDED text message or voice note reaches the brain
+  fenced as untrusted data** (`src/untrusted.ts`), never as the member's own command
+  (`test/redact_and_forward.test.ts`). Regression net: `npm test` (84 tests, fully offline — a mock Telegram Bot
   API and a mock zoe-data on loopback, so no bot token, no real sends, and no
   metered model call) plus `npm run typecheck`, `npm run build`, and
   `./smoke-built.sh` (the only check that exercises the built artifact, because

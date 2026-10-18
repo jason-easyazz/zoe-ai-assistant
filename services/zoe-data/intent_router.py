@@ -27,6 +27,7 @@ import calc_speech as _calc_speech
 import command_shapes
 import contacts_conversation as _cc
 import panel_principal
+import traffic_class
 from list_service import HouseholdListUnavailable
 from time_utils import today_for_zoe_tz
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
@@ -1710,8 +1711,9 @@ def detect_intent(
             _clean = _re.sub(r'\b\d[\d\s\-]{6,}\b', '[NUMBER]', _clean)
             _clean = _re.sub(r'[\w.+-]+@[\w-]+\.\w+', '[EMAIL]', _clean)
             _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
-            with open(_MISS_PATH, "a") as _f:
-                _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time()}) + "\n")
+            with open(_MISS_PATH, "a") as _f:   # traffic_class (P-2): the weekly review drops the harness's misses
+                _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time(),
+                                      "traffic_class": traffic_class.current()}) + "\n")
         except Exception:
             pass  # Never let logging break intent routing
         try:
