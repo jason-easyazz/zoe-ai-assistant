@@ -200,8 +200,8 @@ def judge_main(o):
     for who, want, why in (("kid", 403, "child role"), ("minor", 403, "adult role but member_modes says minor"),
                            ("odd", 403, "unknown role"), ("guest", 401, "a guest session")):
         mint, page, api, send = o[f"{who}_mint"], o[f"{who}_page"], o[f"{who}_api"], o[f"{who}_login"]
-        cell(f"C {who} ({why}): mint {want}, no cookie; page -> launcher; API and code login -> gate {want}",
-             mint["status"] == want and not mint["set_cookie"] and page["status"] == 302
+        cell(f"C {who} ({why}): mint 403 (require_member / adults-only), no cookie; page -> launcher; API and code login -> gate {want}",
+             mint["status"] == 403 and not mint["set_cookie"] and page["status"] == 302
              and "/board.html" in page["location"] and api["status"] == want and nx(api)
              and send["status"] == want and nx(send),
              json.dumps({"mint": mint["status"], "page": page["status"], "api": api["status"], "send": send["status"]}))

@@ -122,7 +122,9 @@ def test_adult_members_pass(sid):
 def test_strangers_and_the_panel_are_401(headers):
     assert _gate(headers).status_code == 401
     r = _client().post("/api/multica-ui/session", headers=headers)
-    assert r.status_code == 401 and not r.headers.get_list("set-cookie")
+    # the mint is behind require_member: 403 for a stranger, 401 only for an invalid session (get_current_user's)
+    assert r.status_code == (401 if headers.get("X-Session-ID") == "not-a-session" else 403)
+    assert not r.headers.get_list("set-cookie")
 
 
 @pytest.mark.parametrize("sid", ["sid-mia", "sid-kid", "sid-odd", "sid-ghost"])
@@ -144,7 +146,7 @@ def test_no_unauthenticated_role_setting_is_a_sign_in(monkeypatch, role):
     other value of that setting."""
     monkeypatch.setattr(auth, "_UNAUTH_ROLE", role)
     assert _gate().status_code == 401
-    assert _client().post("/api/multica-ui/session").status_code == 401
+    assert _client().post("/api/multica-ui/session").status_code == 403
 
 
 def test_zoe_auth_down_is_closed(monkeypatch):
@@ -203,7 +205,7 @@ def test_the_cookie_is_secure_over_https():
     assert all("secure" in [p.strip().lower() for p in c.split(";")] for c in r.headers.get_list("set-cookie"))
 
 
-@pytest.mark.parametrize("sid,want", [("sid-mia", 403), ("sid-kid", 403), ("sid-guest", 401), (None, 401),
+@pytest.mark.parametrize("sid,want", [("sid-mia", 403), ("sid-kid", 403), ("sid-odd", 403), ("sid-guest", 403), (None, 403),
                                       ("not-a-session", 401)])
 def test_nobody_else_can_mint_the_cookie(sid, want):
     r = _client().post("/api/multica-ui/session", headers={"X-Session-ID": sid} if sid else {})
@@ -213,7 +215,7 @@ def test_nobody_else_can_mint_the_cookie(sid, want):
 
 def test_the_panel_cannot_mint_the_cookie():
     r = _client().post("/api/multica-ui/session", headers={"X-Device-Token": PANEL_TOKEN})
-    assert r.status_code == 401 and not r.headers.get_list("set-cookie")
+    assert r.status_code == 403 and not r.headers.get_list("set-cookie")
 
 
 def _forge(claims, ttl=600, key="test-multica-ui-secret"):

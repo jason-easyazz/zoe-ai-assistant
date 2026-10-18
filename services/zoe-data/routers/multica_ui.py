@@ -4,7 +4,8 @@
                                 cookie or an adult member's own session, 401 for no / an invalid / a guest credential, 403 for
                                 a signed-in member who may not use the board (a child, an unknown role, the panel). Never
                                 returns a body or a secret.
-- POST /api/multica-ui/session  an adult member (normal credentials) -> sets the path-scoped cookies the gate accepts.
+- POST /api/multica-ui/session  an adult member (normal credentials) -> sets the path-scoped cookies the gate accepts; 403 for
+                                anyone else (``require_member``, then the adults-only check), 401 for an invalid session.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 import multica_ui_gate
 from auth import get_current_user
+from panel_principal import require_member
 
 router = APIRouter(prefix="/api/multica-ui", tags=["multica"])
 
@@ -40,7 +42,8 @@ async def gate(request: Request) -> Response:
 
 
 @router.post("/session")
-async def session(request: Request, response: Response, user: dict = Depends(get_current_user)) -> dict:
-    """Set the board cookies for an adult member."""
+async def session(request: Request, response: Response, user: dict = Depends(require_member)) -> dict:
+    """Set the board cookies for an adult member. ``require_member`` refuses (403) a guest, an anonymous caller, the panel and
+    the unauthenticated-role promotion before the handler runs; an invalid session is still 401 (``get_current_user``)."""
     await _decide(request, user)
     return multica_ui_gate.GATE.set_cookies(request, response, str((user or {}).get("user_id") or ""))

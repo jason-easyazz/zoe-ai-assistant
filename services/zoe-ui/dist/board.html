@@ -62,7 +62,7 @@
             location.replace('/index.html');
             return;
         }
-        if (r.status === 403) {
+        if (r.status === 403) {   // signed in, but not an adult household member (auth.js already sent guests to sign in)
             title.textContent = 'The board is for adult household members';
             msg.textContent = 'Your Zoe account cannot open it. Ask the household admin if that is wrong.';
             return;
