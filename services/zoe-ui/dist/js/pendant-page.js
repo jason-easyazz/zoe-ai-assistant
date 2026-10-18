@@ -330,7 +330,7 @@
         clear(body);
         const segs = (d && d.segments) || [];
         if (segs.length) {
-            const reload = async () => { await renderDetail(rec, body); await renderUnknown(); };
+            const reload = async () => { await loadPeople(); await renderDetail(rec, body); await renderUnknown(); };
             segs.forEach(s => body.appendChild(segmentRow(s, reload, !!d.has_audio)));
             return;
         }

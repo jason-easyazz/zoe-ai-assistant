@@ -126,8 +126,8 @@ def needs_name(seg: dict) -> bool:
     return (seg.get("speaker") in NEEDS_NAME_SPEAKERS and not seg.get("not_person")) and bool(str(seg.get("text") or "").strip())
 
 
-_NEEDS_NAME_SQL = ("tagged_person_id IS NULL AND not_person IS NULL AND text != '' AND COALESCE(owner_label, speaker) IN ('other', 'unsure', "
-                   "'mixed')")
+_NEEDS_NAME_SQL = ("tagged_person_id IS NULL AND not_person IS NULL AND TRIM(text) != '' AND COALESCE(owner_label, speaker) IN ('other', "
+                   "'unsure', 'mixed')")
 
 
 #: Default RAM floor for STARTING a recording, MB of ``MemAvailable``. See ``docs/architecture/omi-integration-plan.md`` section 4
@@ -1298,10 +1298,12 @@ async def release_tagged_audio(user_id: Optional[str] = None) -> int:
                         left = []
                     if left and int(left[0]["n"]):
                         continue
-                _unlink(r["audio_path"])
-                await db.execute("UPDATE omi_recordings SET audio_path = '', audio_bytes = 0, audio_expires_at = NULL WHERE id = ? AND keep_audio = 0",
-                                 (r["id"],))
-                n += 1
+                # the row first, re-checking keep_audio: a "keep this" that lands meanwhile wins and the WAV stays
+                cur = await db.execute("UPDATE omi_recordings SET audio_path = '', audio_bytes = 0, audio_expires_at = NULL WHERE id = ? "
+                                       "AND keep_audio = 0 AND audio_path = ?", (r["id"], r["audio_path"]))
+                if getattr(cur, "rowcount", 1):
+                    _unlink(r["audio_path"])
+                    n += 1
             if n:
                 await db.commit()
                 logger.info("OMI_TAGGING_AUDIO_RELEASED count=%d", n)
@@ -1317,8 +1319,9 @@ async def segment_clip(user_id: str, segment_id: str, *, max_s: float = CLIP_MAX
     from db_compat import get_compat_db
     async with get_compat_db() as db:
         rows = await _fetch(db, "SELECT s.start_ms, s.end_ms, r.audio_path FROM omi_segments s JOIN omi_recordings r ON r.id = s.recording_id "
-                                "WHERE s.id = ? AND s.user_id = ? AND r.user_id = ? AND r.status = 'done' AND r.audio_path != ''",
-                            (segment_id, user_id, user_id))
+                                "WHERE s.id = ? AND s.user_id = ? AND r.user_id = ? AND r.status = 'done' AND r.audio_path != '' "
+                                "AND (r.audio_expires_at IS NULL OR r.audio_expires_at > ?)",      # past retention: never served, even
+                            (segment_id, user_id, user_id, _iso(_now())))                               # before the hourly purge runs
     if not rows:
         return None
     path = Path(rows[0]["audio_path"])

@@ -71,7 +71,7 @@ def test_every_api_literal_on_the_page_is_a_served_omi_route(monkeypatch):
     monkeypatch.setenv("ZOE_OMI_SYNC_ENABLED", "1")
     app = FastAPI()
     assert omi_router.register(app) is True
-    routes = [(m, r.path) for r in app.routes for m in getattr(r, "methods", ()) or ()]
+    routes = [(m.upper(), path) for path, ops in app.openapi()["paths"].items() for m in ops]     # survives nested included routers
     pats = [(m, re.compile("^" + re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(p)) + "$")) for m, p in routes]
     src = MODULE.read_text(encoding="utf-8")
     calls = re.findall(r"api\('(GET|POST|PATCH|PUT|DELETE)', '(/api/[^']+)'(?: \+ [^',+ ]+(?: \+ '([^']*)')?)?", src)

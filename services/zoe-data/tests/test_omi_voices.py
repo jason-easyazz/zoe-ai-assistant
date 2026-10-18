@@ -1317,8 +1317,11 @@ def test_held_audio_never_outlives_its_retention_and_a_clip_never_leaves_the_aud
     (sid,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (rid,))]
     monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp / "elsewhere"))
     assert env.client.get(f"/api/omi/segments/{sid}/clip").status_code == 404     # a path outside the audio dir is never read
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp))
+    assert env.client.get(f"/api/omi/segments/{sid}/clip").status_code == 200
     env.db.conn.execute("UPDATE omi_recordings SET audio_expires_at = '2000-01-01T00:00:00Z' WHERE id = ?", (rid,))
     env.db.conn.commit()
+    assert env.client.get(f"/api/omi/segments/{sid}/clip").status_code == 404     # past retention: not served even before the purge
     assert run(omi.purge_expired_audio()) == 1 and not _held(env, rid)
 
 
