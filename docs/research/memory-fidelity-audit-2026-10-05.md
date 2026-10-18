@@ -171,7 +171,7 @@ Observations that are not in the table:
   digest / voice regex): written, never readable.
 * Three of the five accounts have no memory at all: the palace has rows for `jason`, `family-admin` (a
   legacy / startup-probe id, `main.py:808`, not an account), `guest` and one stray `u`. The other three
-  accounts (`andrew`, `asya`, `teneeka`) have **no rows**, and Postgres shows only `jason` with chat turns in
+  member accounts have **no rows**, and Postgres shows only `jason` with chat turns in
   the last 60 days (226 user turns). The memory system has been exercised by one person.
 
 ## 2. Authority analysis

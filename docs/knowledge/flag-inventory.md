@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-727 flags; 677 not documented in `.env.example`.
+730 flags; 680 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -512,6 +512,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PI_LAB_RESOURCE_GUARD_ENABLED` | `True` | no | NO | `services/zoe-data/routers/pi_intent_lab.py` |
 | `ZOE_POSTGRES_CONTAINER` | `'zoe-database'` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_PRESENCE_WINDOW_S` | `''` | no | yes | `services/zoe-data/proactive/presence.py` |
+| `ZOE_PRIVACY_CANARY_DIR` | `dynamic` | no | NO | `tools/audit/privacy_canary.py` |
+| `ZOE_PRIVACY_CANARY_KEY` | `''` | no | NO | `tools/audit/privacy_canary.py` |
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_LEDGER` | `''` | no | NO | `services/zoe-data/proactive/ledger.py` |
@@ -557,6 +559,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_REMINDER_MAX_ATTEMPTS` | `'5'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_REMINDER_STUCK_CLAIM_S` | `'600'` | no | NO | `services/zoe-data/proactive/triggers/reminders.py` |
 | `ZOE_REPO_ROOT` | `''` | no | NO | `services/zoe-data/repo_paths.py` |
+| `ZOE_RESTORE_USER_IDS` | `''` | no | NO | `tools/restore_lists_data.py` |
 | `ZOE_RESTRAINT` | `-` | no | NO | `scripts/perf/samantha_person.py`<br>`services/zoe-data/restraint.py` |
 | `ZOE_RIG_BIND` | `-` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_DISPLAY` | `':99'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
