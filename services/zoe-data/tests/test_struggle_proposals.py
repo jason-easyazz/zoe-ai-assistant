@@ -329,19 +329,22 @@ def test_the_template_and_the_model_facts_hold_counts_and_a_fixed_vocabulary_onl
 def test_a_model_sentence_is_used_only_when_it_adds_no_number_and_no_markup():
     facts = {"kind": "intent_gap", "domain": "weather", "shape": "what-questions", "signals": {"RE_ASK": 3}, "episodes": 5, "days": 3, "people": 2,
              "suggestion": "x"}
-    assert sp.valid_summary("Weather questions were asked again 3 times over 5 episodes.", facts)
+    assert sp.valid_summary("Weather questions were asked again {n:RE_ASK} times over {episodes} episodes.", facts) == \
+        "Weather questions were asked again 3 times over 5 episodes."                                              # rendered FROM the fields
     assert sp.valid_summary("Weather questions kept being asked again over 40 episodes.", facts) is None        # an invented number
+    assert sp.valid_summary("Weather questions were asked again 3 times over 5 episodes.", facts) is None       # even a RIGHT digit: the model never writes one
     assert sp.valid_summary("See https://example.invalid for the weather problem that kept recurring.", facts) is None
     assert sp.valid_summary("{\"summary\": \"weather\"}", facts) is None and sp.valid_summary("too short", facts) is None
     assert sp.valid_summary("x" * 400, facts) is None and sp.valid_summary(None, facts) is None
-    assert sp.valid_summary("\n\nWeather questions kept being asked again over 5 episodes.\nSecond line ignored.", facts).endswith("5 episodes.")
+    assert sp.valid_summary("\n\nWeather questions kept being asked again over {episodes} episodes.\nSecond line ignored.", facts).endswith("5 episodes.")
 
 
 def test_the_model_can_rearrange_the_counts_but_cannot_introduce_a_name_a_place_or_a_cause():
     facts = {"kind": "intent_gap", "domain": "weather", "shape": "what-questions about the future", "signals": {"RE_ASK": 3, "CORRECTION": 2},
              "episodes": 5, "days": 3, "people": 2, "suggestion": "Candidate: a missing or incomplete handler for this request."}
     ok = "Weather what-questions about the future were asked again 3 times and corrected 2 times over 5 episodes."
-    assert sp.valid_summary(ok, facts) == ok
+    template = ok.replace("3 times", "{n:RE_ASK} times").replace("2 times", "{n:CORRECTION} times").replace("5 episodes", "{episodes} episodes")
+    assert sp.valid_summary(template, facts) == ok
     for bad in (
         "Weather questions were asked again 3 times because Quentin's router was broken at the Fremantle house.",          # a name, a place, a cause
         "Weather questions were asked again 3 times and the household password was disclosed over 5 episodes.",             # an invented claim
@@ -352,6 +355,25 @@ def test_the_model_can_rearrange_the_counts_but_cannot_introduce_a_name_a_place_
     # and through the pass: such a sentence never reaches the row
     assert "quentin" not in " ".join(p.lower() for p in [ok]) and sp.allowed_words(facts) >= {"weather", "episodes", "asked", "corrected"}
     assert "quentin" not in sp.allowed_words(facts) and "password" not in sp.allowed_words(facts)
+
+
+def test_each_count_is_bound_to_its_own_field_not_just_to_a_number_the_facts_happen_to_hold():
+    """Follow-up (#2109): the old check accepted any digit that equalled SOME count, so "over 3 episodes" passed when 3 was the days. A count
+    is now a placeholder rendered from the field it names, and a placeholder in front of another field's unit noun is refused."""
+    facts = {"kind": "intent_gap", "domain": "weather", "shape": "what-questions", "signals": {"RE_ASK": 3}, "episodes": 5, "days": 3, "people": 2,
+             "suggestion": "x"}
+    assert sp.valid_summary("Weather questions were asked again over {days} days by {people} people.", facts) == \
+        "Weather questions were asked again over 3 days by 2 people."
+    for mis_bound in (
+        "Weather questions were asked again over {days} episodes by {people} people.",          # the days count on the episodes noun
+        "Weather questions were asked again over {episodes} days by {people} people.",
+        "Weather questions were asked again over {episodes} episodes by {days} people.",
+        "Weather questions were asked again {n:RE_ASK} episodes by {people} people.",           # a signal count on a unit noun
+        "Weather questions were asked again {n:CORRECTION} times over {episodes} episodes.",    # a signal this problem never had
+        "Weather questions were asked again {bogus} times over {episodes} episodes.",           # an unknown placeholder
+        "Weather questions were asked again over 3 episodes by 2 people.",                      # a digit whose number equals the DAYS, on episodes
+    ):
+        assert sp.valid_summary(mis_bound, facts) is None, mis_bound
 
 
 # ── the pass: store, idempotence, no auto-apply ──────────────────────────────
@@ -440,7 +462,7 @@ def test_the_model_rewords_counts_and_a_bad_sentence_falls_back_to_the_template(
 
     async def good(messages, max_tokens):
         seen.append(messages)
-        return "Weather questions about the future were asked again 3 times and corrected 2 times over 5 episodes."
+        return "Weather questions about the future were asked again {n:RE_ASK} times and corrected {n:CORRECTION} times over {episodes} episodes."
 
     r = run(sp.run_pass(now=NOW, llm=good))
     p = rows_of(env)[0]
@@ -472,7 +494,7 @@ def test_no_household_word_reaches_any_proposal_column_or_evidence_row(env):
           *genuine(start=60, fix=sig.FIX_CAPABILITY_GAP, pattern="time|what:now:none", domain="time", summary=f"what time is it {MARK}"))
 
     async def echo(messages, max_tokens):
-        return "Weather requests were asked again over 5 episodes on 3 user-days; this is a candidate."
+        return "Weather requests were asked again over {episodes} episodes on {days} user-days; this is a candidate."
     run(sp.run_pass(now=NOW, llm=echo))
     dump = json.dumps([rows_of(env), rows_of(env, "struggle_proposal_events")], default=str)
     assert MARK not in dump and "high today" not in dump
@@ -494,6 +516,104 @@ async def _with_ledger_clear(coro):
         return await coro
     finally:
         memory_forgotten.matches = orig
+
+
+def _proposal_ids(env):
+    return {p["pattern"]: p["id"] for p in rows_of(env)}
+
+
+def _kill_events_of(env, pid):
+    ids = [r["event_id"] for r in env.db.rows("SELECT event_id FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))]
+    env.db.conn.executemany("DELETE FROM struggle_events WHERE id = ?", [(i,) for i in ids])          # the links stay: an unreconciled orphan
+    env.db.conn.commit()
+
+
+def test_live_evidence_is_joined_before_the_limit_so_an_orphan_cannot_hide_a_live_proposal(env):
+    """Follow-up (#2109): ``list_proposals`` applied ORDER BY ... LIMIT and filtered the orphans afterwards, so the best-ranked proposals with
+    no live evidence used up the page and a live one below them vanished from the list (and from ``counts``)."""
+    store(*genuine(), *genuine(start=50, pattern="time|what:now:none", domain="time"), *genuine(start=90, pattern="lists|what:none:none", domain="lists"))
+    run(sp.run_pass(now=NOW))
+    pids = _proposal_ids(env)
+    for pat, conf in (("weather|what:future:today", 0.99), ("time|what:now:none", 0.9), ("lists|what:none:none", 0.5)):
+        env.db.conn.execute("UPDATE struggle_proposals SET confidence = ? WHERE pattern = ?", (conf, pat))
+    env.db.conn.commit()
+    assert [p["pattern"] for p in run(sp.list_proposals(limit=1))] == ["weather|what:future:today"], "control arm: evidence intact, the best leads"
+    _kill_events_of(env, pids["weather|what:future:today"])
+    _kill_events_of(env, pids["time|what:now:none"])                                  # the two best-ranked now have no live evidence
+    got = run(sp.list_proposals(limit=1))
+    assert [p["pattern"] for p in got] == ["lists|what:none:none"], "the one live proposal fills the page"
+    assert run(sp.counts()) == {"proposed": {"intent_gap": 1}}
+
+
+def test_the_router_example_page_is_not_used_up_by_a_proposal_whose_evidence_is_gone(env):
+    store(*followed(summary="what will the high be"), *followed(start=60, pattern="unrouted|what:now:none", summary="what time is it"))
+    run(sp.run_pass(now=NOW))
+    pids = _proposal_ids(env)
+    for pid in pids.values():
+        run(sp.decide(pid, "accept", "admin-1"))
+    env.db.conn.execute("UPDATE struggle_proposals SET decided_at = ? WHERE pattern = ?", (NOW + 100.0, "unrouted|what:now:none"))          # the newest decision
+    env.db.conn.execute("UPDATE struggle_proposals SET decided_at = ? WHERE pattern = ?", (NOW, "unrouted|what:future:today"))
+    env.db.conn.commit()
+    assert {e["proposal_id"] for e in run(_with_ledger_clear(sp.queued_router_examples(limit=1)))} == {pids["unrouted|what:now:none"]}, "control arm: newest first"
+    _kill_events_of(env, pids["unrouted|what:now:none"])
+    ex = run(_with_ledger_clear(sp.queued_router_examples(limit=1)))
+    assert ex and {e["proposal_id"] for e in ex} == {pids["unrouted|what:future:today"]}, "limit counts proposals that can yield an example"
+    assert run(_with_ledger_clear(sp.queued_router_examples(limit=1, sources=()))) == []
+
+
+def test_clusters_beyond_the_nightly_cap_are_ranked_not_withdrawn(env, monkeypatch):
+    """Follow-up (#2109): the cap sliced the cluster list, and the withdraw step then deleted every ``proposed`` row that was not in the
+    slice - an eligible pattern vanished just for ranking 21st. The cap now limits NEW proposals only."""
+    patterns = [(f"p{i}|what:none:none", f"d{i}") for i in range(3)]
+    store(*[r for i, (pat, dom) in enumerate(patterns) for r in genuine(start=100 * i, pattern=pat, domain=dom)])
+    first = run(sp.run_pass(now=NOW))
+    assert first["created"] == 3 and first["deferred"] == 0 and len(rows_of(env)) == 3
+    ids = {p["id"] for p in rows_of(env)}
+    monkeypatch.setattr(sp, "MAX_PER_NIGHT", 1)
+    again = run(sp.run_pass(now=NOW))
+    assert again["withdrawn"] == 0 and again["updated"] == 3 and {p["id"] for p in rows_of(env)} == ids, "still eligible: kept and refreshed"
+    assert len(rows_of(env, "struggle_proposal_events")) == 15
+
+
+def test_pending_maintenance_counts_new_events_and_proposals_with_aged_out_evidence(env, monkeypatch):
+    """What the quiet-night precheck asks: is there proposal work for the night pass even though no member spoke? Falls to 0 after the pass."""
+    store(*genuine())
+    assert run(sp.pending_maintenance(NOW - 2 * DAY * 10, now=NOW)) == 5, "five struggle events nobody has clustered yet (a guest's would count too)"
+    assert run(sp.pending_maintenance(NOW + 1.0, now=NOW)) == 0, "nothing after the watermark, no proposals yet"
+    store(*[event(700 + i, user="test-user-1", ts=NOW - i * 100.0) for i in range(3)], *[event(710 + i, guest=True, ts=NOW - i * 100.0) for i in range(2)])
+    assert run(sp.pending_maintenance(NOW - 2 * DAY * 10, now=NOW)) == 7, "a harness user's three events are not work (the pass ignores them); a guest's two are"
+    env.db.conn.execute("DELETE FROM struggle_events WHERE id >= 'e700'")
+    env.db.conn.commit()
+    run(sp.run_pass(now=NOW))
+    assert run(sp.pending_maintenance(NOW + 1.0, now=NOW)) == 0, "a proposal whose evidence is inside the lookback needs nothing"
+    later = NOW + 8 * DAY                                        # the default lookback is 7 days: every link is now older than it
+    assert run(sp.pending_maintenance(later, now=later)) == 1, "the pass would recount and withdraw it: that is work"
+    res = run(sp.run_pass(now=later))
+    assert res["withdrawn"] == 1 and run(sp.pending_maintenance(later, now=later)) == 0, "and once it has run there is none (idempotent)"
+    # a DECIDED proposal is the admin's record, not pending maintenance
+    store(*genuine(start=100, pattern="time|what:now:none", domain="time", shift_days=-8))        # events inside THIS week's lookback
+    run(sp.run_pass(now=later))
+    (pid,) = [p["id"] for p in rows_of(env) if p["pattern"] == "time|what:now:none"]
+    run(sp.decide(pid, "accept", "admin-1"))
+    much_later = later + 30 * DAY
+    assert run(sp.pending_maintenance(much_later, now=much_later)) == 0
+    monkeypatch.setenv("ZOE_STRUGGLE_PROPOSALS", "off")
+    assert run(sp.pending_maintenance(0.0, now=NOW)) == 0, "the pass is a no-op while the flag is off: nothing is waiting for it"
+
+
+def test_the_cap_limits_new_proposals_best_first_and_the_rest_wait_for_a_later_night(env, monkeypatch):
+    monkeypatch.setattr(sp, "MAX_PER_NIGHT", 2)
+    rows = [r for i in range(3) for r in genuine(start=100 * i, pattern=f"p{i}|what:none:none", domain=f"d{i}")]
+    # the first pattern recurs more (higher confidence): it must be among the two created
+    rows += [event(900 + i, user=A if i % 2 else B, ts=NOW - (i + 1) * 4000.0 - (i % 3) * DAY, pattern="p0|what:none:none", domain="d0") for i in range(4)]
+    store(*rows)
+    night1 = run(sp.run_pass(now=NOW))
+    assert night1["created"] == 2 and night1["deferred"] == 1 and sum(night1["clusters_by_kind"].values()) == 3
+    made = {p["pattern"] for p in rows_of(env)}
+    assert "p0|what:none:none" in made and len(made) == 2
+    night2 = run(sp.run_pass(now=NOW))
+    assert night2["created"] == 1 and night2["deferred"] == 0 and night2["updated"] == 2 and len(rows_of(env)) == 3, "the deferred one is picked up"
+    assert "deferred=0" in sp.summary_line(night2)
 
 
 # ── the privacy cascade: forget / delete / orphaned evidence ─────────────────

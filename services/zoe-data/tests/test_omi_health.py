@@ -614,6 +614,130 @@ def test_a_reassigned_pendant_tells_the_new_owner_even_when_the_old_one_was_alre
     assert len(env.bells()) == 2, "control arm: and once he is told it is not repeated"
 
 
+def test_a_new_owner_starts_a_fresh_overwrite_baseline_and_inherits_none_of_the_old_history(env):
+    """Follow-up (#2098): the new owner of a pendant inherited the previous owner's overwrite total, last-overwrite time and warning (and was
+    told about audio lost on someone else's watch). The first report under the new owner is a baseline, like a first-ever one."""
+    register(env, DEV_A, "ann")
+    env.post(body(dropped_total=900))
+    env.now = T0 + timedelta(hours=1)
+    env.post(body(dropped_total=900 + 16_364))
+    assert env.rows()[DEV_A]["overwritten_records_total"] == 16_364 and [(b[0], b[2]) for b in env.bells()] == [("ann", "overwrite")]
+    register(env, DEV_A, "ben")
+    env.now = T0 + timedelta(hours=2)
+    env.post(body(dropped_total=900 + 16_364))               # the same cumulative counter, now reported under ben
+    row = env.rows()[DEV_A]
+    assert row["user_id"] == "ben" and row["overwritten_records_total"] == 0 and row["last_overwritten_records"] == 0
+    assert row["last_overwrite_at"] is None and row["dropped_total"] == 900 + 16_364, "history gone, the pendant's own counter is the new baseline"
+    assert [(b[0], b[2]) for b in env.bells()] == [("ann", "overwrite")], "ben is not told about audio lost before he owned it"
+    env.as_(BEN)
+    (p,) = env.get().json()["pendants"]
+    assert p["overwritten"] == {"records_total": 0, "last_minutes": 0.0, "last_at": None} and p["warnings"] == []
+    env.now = T0 + timedelta(hours=3)
+    env.post(body(dropped_total=900 + 16_364 + 500))         # control arm: an overwrite on ben's watch counts and rings
+    assert env.rows()[DEV_A]["overwritten_records_total"] == 500 and [(b[0], b[2]) for b in env.bells()][-1] == ("ben", "overwrite")
+    # the battery / ring / sync facts describe the hardware and stay
+    assert env.rows()[DEV_A]["battery_pct"] == 80
+
+
+def test_the_same_owner_reporting_again_keeps_the_overwrite_history(env):
+    register(env, DEV_A, "ann")
+    env.post(body(dropped_total=900))
+    env.now = T0 + timedelta(hours=1)
+    env.post(body(dropped_total=900 + 16_364))
+    env.now = T0 + timedelta(hours=2)
+    env.post(body(dropped_total=900 + 16_364))
+    assert env.rows()[DEV_A]["overwritten_records_total"] == 16_364, "no owner change, no rebaseline"
+    register(env, DEV_A, "ann")                              # a relabel of the same owner is not a change of owner either
+    env.now = T0 + timedelta(hours=3)
+    env.post(body(dropped_total=900 + 16_364))
+    assert env.rows()[DEV_A]["overwritten_records_total"] == 16_364
+
+
+def _scenario(env, parked_call, racer):
+    """Park ``oh._get_row`` (inside the device-locked section of ``parked_call``), run ``racer`` meanwhile, and report whether ``racer`` was
+    held back while the parked call was between its owner check and its write."""
+    async def go():
+        entered, release = asyncio.Event(), asyncio.Event()
+        real = oh._get_row
+
+        async def parked(db, device_id):
+            entered.set()
+            await release.wait()
+            return await real(db, device_id)
+        env.mp.setattr(oh, "_get_row", parked)
+        first = asyncio.create_task(parked_call())
+        await asyncio.wait_for(entered.wait(), 5)
+        second = asyncio.create_task(racer())
+        for _ in range(30):
+            await asyncio.sleep(0)
+        held_back = not second.done()
+        release.set()
+        out = await asyncio.gather(first, second, return_exceptions=True)
+        env.mp.setattr(oh, "_get_row", real)
+        return held_back, out
+    return asyncio.run(go())
+
+
+def test_a_reassignment_cannot_land_between_a_heartbeats_owner_check_and_its_save(env):
+    """Follow-up (#2098): ``record_report`` checked the owner, a reassignment landed, and the save wrote the previous owner's id on the row.
+    ``assign`` / ``unassign`` and the report now share a per-device lock."""
+    register(env, DEV_A, "ann")
+    env.post(body())
+    held_back, out = _scenario(env, lambda: oh.record_report("ann", DEV_A, rep(battery_pct=33)),
+                               lambda: omi_devices.assign(DEV_A, "ben", label=None, actor=ADM))
+    assert held_back, "assign waits for the heartbeat that is mid-write"
+    assert not any(isinstance(o, BaseException) for o in out)
+    assert env.rows()[DEV_A]["user_id"] == "ann" and env.rows()[DEV_A]["battery_pct"] == 33 and env.registry_owner(DEV_A) == "ben"
+    # unassign is serialised the same way
+    register(env, DEV_B, "ann")
+    env.post(body(DEV_B))
+    held_back, out = _scenario(env, lambda: oh.record_report("ann", DEV_B, rep(battery_pct=44)), lambda: omi_devices.unassign(DEV_B, actor=ADM))
+    assert held_back and out[1] is True and env.registry_owner(DEV_B) == ""
+
+
+def test_the_sweep_holds_the_same_device_lock(env):
+    register(env, DEV_A, "ann")
+    env.post(body())
+    held_back, out = _scenario(env, lambda: oh.sweep(now=T0 + timedelta(hours=5)), lambda: omi_devices.assign(DEV_A, "ben", label=None, actor=ADM))
+    assert held_back and not any(isinstance(o, BaseException) for o in out)
+    assert [b[0] for b in env.bells()] == ["ann"], "the bell went to the owner who owned the pendant when the sweep decided"
+
+
+def test_a_heartbeat_waiting_on_a_reassignment_is_refused_afterwards(env):
+    """The other order: the device lock is held by the reassignment, so the heartbeat re-reads the owner AFTER it and is refused."""
+    register(env, DEV_A, "ann")
+    env.post(body())
+
+    async def go():
+        async with omi_devices.device_lock(DEV_A):
+            report = asyncio.create_task(oh.record_report("ann", DEV_A, rep(battery_pct=5)))
+            for _ in range(30):
+                await asyncio.sleep(0)
+            waiting = not report.done()
+            env.db.conn.execute("UPDATE omi_devices SET user_id = 'ben' WHERE device_id = ?", (DEV_A,))      # the reassignment, under the lock
+            env.db.conn.commit()
+        return waiting, (await asyncio.gather(report, return_exceptions=True))[0]
+    waiting, outcome = asyncio.run(go())
+    assert waiting and isinstance(outcome, oh.NotTheOwner)
+    assert env.rows()[DEV_A]["user_id"] == "ann" and env.rows()[DEV_A]["battery_pct"] == 80, "nothing of the refused heartbeat was stored"
+
+
+def test_the_kill_switch_hides_the_status_and_warnings_from_the_read_too(env):
+    """Follow-up (#2098): ``public_view`` kept evaluating warnings (and a status of 'attention') with ``ZOE_OMI_HEALTH=0``."""
+    register(env, DEV_A, "ann")
+    env.post(body(battery_pct=5, ring_fill_pct=99.0))
+    env.as_(ANN)
+    on = env.get().json()
+    assert on["pendants"][0]["status"] == "attention" and {w["kind"] for w in on["pendants"][0]["warnings"]} == {"battery_low", "ring_fill"}
+    env.mp.setenv("ZOE_OMI_HEALTH", "0")
+    off = env.get().json()
+    (p,) = off["pendants"]
+    assert off["warnings_enabled"] is False and p["warnings"] == [] and p["status"] == "warnings_off", "not 'ok': nothing is being checked"
+    assert p["battery"]["pct"] == 5 and p["ring"]["fill_pct"] == 99.0, "the numbers are still read"
+    env.mp.delenv("ZOE_OMI_HEALTH")
+    assert env.get().json()["pendants"][0]["status"] == "attention", "control arm: back on"
+
+
 def test_the_sweep_leaves_state_untouched_when_its_bell_cannot_be_written(env):
     register(env, DEV_A, "ann")
     env.post(body())

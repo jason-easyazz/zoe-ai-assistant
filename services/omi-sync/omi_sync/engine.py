@@ -180,6 +180,10 @@ class Drain:
         res, link, cfg = self.res, self.link, self.cfg
         try:
             fw = await link.firmware()
+            # Recorded BEFORE the firmware gates below: a pendant on unsupported firmware is refused, but its firmware and battery are
+            # exactly what the health report should tell Zoe (a refused visit used to report neither).
+            res.firmware = fw
+            await self._read_battery()
             ver = rp.parse_firmware(fw)
             if rp.supports_ring(fw):
                 res.path = "ring"
@@ -192,8 +196,6 @@ class Drain:
             else:
                 res.refused = f"firmware {fw!r} is below {'.'.join(map(str, rp.MIN_RING_FIRMWARE))} (no ring protocol)"
                 return res
-            res.firmware = fw
-            await self._read_battery()
             reported = await link.codec()
             codec = reported if reported in rp.FRAME_SAMPLES_BY_CODEC else cfg.assume_codec
             if codec not in rp.FRAME_SAMPLES_BY_CODEC:
