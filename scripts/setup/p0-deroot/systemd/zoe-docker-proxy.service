@@ -1,0 +1,51 @@
+# P0 de-root: the ONLY Docker API that `zoe` and the service users can reach (docs/architecture/p0-deroot.md).
+# SYSTEM unit, NOT installed by anything. Owner install (from zoe-admin):
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin --gid zoe-dockerproxy zoe-sockproxy
+#   sudo install -m 0755 -o root -g root <binary> /usr/local/bin/socket-proxy   (copied out of the pinned image:
+#     wollomatic/socket-proxy:1.13.1@sha256:3935b709275e4ec35d6ed5a5c4a1f0d01ed31eec5e7234efc3357ecd47689002)
+#   sudo install -m 0644 zoe-docker-proxy.service /etc/systemd/system/ && sudo systemctl enable --now zoe-docker-proxy
+# Clients: DOCKER_HOST=unix:///run/zoe-docker-proxy/docker.sock, member of group zoe-dockerproxy.
+# The proxy anchors every pattern (^...$) and matches the URL PATH. It cannot see request bodies, so the list
+# below never allows container create, build, image pull, restart, delete, or exec into a container that has a
+# bind mount from a path `zoe` controls (exec can ask for User=root). Patterns use [.] not \. (systemd escapes).
+# Allowed today: inspect/start/stop of the two on-demand containers (zoe-data's ma_ondemand + voice_livekit,
+# ma_idle_reap), ps, inspect + exec of zoe-database (backup, backup-verify, multica heartbeat, health check).
+[Unit]
+Description=Allowlisted Docker API socket for Zoe (P0 de-root)
+After=docker.service
+Requires=docker.service
+
+[Service]
+User=zoe-sockproxy
+Group=zoe-dockerproxy
+SupplementaryGroups=docker
+RuntimeDirectory=zoe-docker-proxy
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/bin/socket-proxy \
+  -socketpath=/var/run/docker.sock \
+  -proxysocketendpoint=/run/zoe-docker-proxy/docker.sock \
+  -proxysocketendpointfilemode=0660 \
+  -allowHEAD=(/v1[.][0-9]+)?/_ping \
+  -allowGET=(/v1[.][0-9]+)?/(_ping|version|containers/json) \
+  -allowGET=(/v1[.][0-9]+)?/containers/(zoe-music-assistant|livekit|zoe-database)/json \
+  -allowGET=(/v1[.][0-9]+)?/exec/[0-9a-f]{64}/json \
+  -allowPOST=(/v1[.][0-9]+)?/containers/(zoe-music-assistant|livekit)/(start|stop) \
+  -allowPOST=(/v1[.][0-9]+)?/containers/zoe-database/exec \
+  -allowPOST=(/v1[.][0-9]+)?/exec/[0-9a-f]{64}/(start|resize)
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+MemoryMax=64M
+MemorySwapMax=0
+
+[Install]
+WantedBy=multi-user.target

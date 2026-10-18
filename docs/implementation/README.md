@@ -285,5 +285,5 @@ python3 config.py
 
 **Status:** ✓ Day 0 Complete - Ready to Begin Phase 1
 
-**Next Action:** Start Days 1-2 Architecture Audit
+**Next action:** see [`docs/ROADMAP.md`](../ROADMAP.md).
 

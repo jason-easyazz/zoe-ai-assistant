@@ -53,13 +53,14 @@
   var out=document.getElementById('out'),q=document.getElementById('q'),np=document.getElementById('np');
   var toastEl=document.getElementById('toast'),toastT=null;
   // The panel's QR carries a short-lived play/queue-only token in the #fragment (never
-  // sent to a server log); keep it for this tab and send it as X-Jukebox-Token.
+  // sent to a server log); keep it for this tab and send it as X-Jukebox-Token on every call (the
+  // now-playing + search reads too: music reads need a member, the panel, or this token).
   var jt='';try{var m=/(?:^|[#&])t=([^&]+)/.exec(location.hash||'');
     if(m){jt=decodeURIComponent(m[1]);sessionStorage.setItem('zoe_jukebox_token',jt);history.replaceState(null,'',location.pathname);}
     else jt=sessionStorage.getItem('zoe_jukebox_token')||'';}catch(e){}
   function esc(s){var d=document.createElement('div');d.textContent=String(s==null?'':s);return d.innerHTML;}
   function toast(t){toastEl.textContent=t;toastEl.classList.add('on');clearTimeout(toastT);toastT=setTimeout(function(){toastEl.classList.remove('on');},2400);}
-  function loadNP(){fetch('/api/music/now-playing').then(function(r){return r.json();}).then(function(d){
+  function loadNP(){fetch('/api/music/now-playing',{headers:{'X-Jukebox-Token':jt}}).then(function(r){return r.json();}).then(function(d){
     var n=d&&d.now_playing;
     if(!n||!n.title){np.innerHTML='<div class="empty" style="padding:0">Nothing playing</div>';return;}
     np.innerHTML=(n.image&&/^https?:/.test(n.image)?'<img alt="" src="'+esc(n.image)+'">':'')
@@ -78,7 +79,7 @@
   function search(){
     var term=(q.value||'').trim();if(!term)return;
     out.innerHTML='<div class="empty">Searching…</div>';
-    fetch('/api/music/search?q='+encodeURIComponent(term)+'&limit=6').then(function(r){return r.json();}).then(function(d){
+    fetch('/api/music/search?q='+encodeURIComponent(term)+'&limit=6',{headers:{'X-Jukebox-Token':jt}}).then(function(r){return r.json();}).then(function(d){
       var html='',groups=[['tracks','Songs'],['artists','Artists'],['albums','Albums'],['playlists','Playlists'],['radio','Radio']];
       groups.forEach(function(g){
         var items=(d&&d.results&&d.results[g[0]])||(d&&d[g[0]])||[];

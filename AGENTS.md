@@ -2,6 +2,7 @@
 
 - **[docs/VISION.md](docs/VISION.md)** — Zoe's north star, direction & core principles (the *why*). Read this first; every decision aligns to it (the rocks; local/private/fast; lab-prove-before-prod; build-to-stick; capture-don't-lose).
 - **[docs/CANONICAL.md](docs/CANONICAL.md)** — the **locked-in truth**: what's actually live, and what's settled (the rocks: Gemma 4 E4B-QAT+MTP brain, Moonshine STT, Kokoro TTS). If a system isn't listed canonical there, it's **not load-bearing** — don't extend or resurrect it. Swapping a rock fails CI (`test_canonical_invariants.py`) by design.
+- **[docs/ROADMAP.md](docs/ROADMAP.md)** — the ONE ordered list of what is next (Now / Next / Later). Start here to pick work; no other plan carries a "NEXT ACTION".
 - **[docs/PLANS.md](docs/PLANS.md)** — what we're building + status. Before starting work, check it; after finishing a step, update it.
 - **[docs/IDEAS.md](docs/IDEAS.md)** — the pin-it-so-we-don't-lose-it board. When Jason says *"pin this / put a pin in it / remember this idea"*, add a one-line entry there. Never drop an idea on the floor.
 
@@ -89,7 +90,7 @@ Use `opensrc` for third-party library source before guessing API behavior.
 Rules:
 - Keep the global source cache outside the repo at `~/.opensrc/repos/`.
 - Prefer `opensrc path pypi:<package>@<version>` or `opensrc path owner/repo` to locate already-fetched source.
-- Pin the version to the one Zoe actually installs (for example `opensrc path pypi:chromadb@0.6.3`). A bare package name resolves to the latest published version (e.g. bare `chromadb` is 1.5.9), which can be a major-version mismatch from the running stack and will mislead you.
+- Pin the version to the one Zoe actually installs (for example `opensrc path pypi:chromadb@1.5.9`, the zoe-data py3.12 venv's pin). A bare package name resolves to the latest published version, which can be a major-version mismatch from the running stack and will mislead you.
 - Search package source directly when debugging integrations, for example:
   `rg "class FastAPI" "$(opensrc path pypi:fastapi)"`
 - When source context informs an implementation, report the package files, examples, or tests that were used.

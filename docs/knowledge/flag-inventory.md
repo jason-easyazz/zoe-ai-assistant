@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-18T00:00:00Z
+timestamp: 2026-10-19T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-18T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-18. The table body is deterministic (sorted, no
+Last generated: 2026-10-19. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-716 flags; 666 not documented in `.env.example`.
+720 flags; 670 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -39,6 +39,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ANNOUNCE_POLL_S` | `'5.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_ANNOUNCE_STRICT_PANEL` | `''` | no | yes | `services/zoe-data/voice_announce.py` |
 | `ZOE_ANNOUNCE_TTL_S` | `''` | no | yes | `services/zoe-data/voice_announce.py` |
+| `ZOE_API` | `'https://192.168.1.218'` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
 | `ZOE_APP_LOG` | `dynamic` | no | NO | `scripts/perf/user_model_ab.py` |
 | `ZOE_ASK_TO_REMEMBER` | `True` | yes | NO | `services/zoe-data/ask_to_remember.py` |
 | `ZOE_ASK_WHEN_AMBIGUOUS` | `-` | yes | NO | `services/zoe-data/ask_when_ambiguous.py` |
@@ -142,6 +143,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DEFAULT_MEDIA_PLAYER` | `'media_player.all'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DELIVERY_LEDGER` | `''` | yes | NO | `services/zoe-data/proactive/lines.py` |
 | `ZOE_DEPLOY_STATE_DIR` | `-` | yes | NO | `services/zoe-data/change_notices.py` |
+| `ZOE_DEVICE_ID` | `(required)` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
 | `ZOE_DEVICE_TOKEN` | `-` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_DEVICE_TOKEN_BINDS_MEMBER` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_DEVICE_TOKEN_TTL_DAYS` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
@@ -429,6 +431,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_OMI_HEALTH` | `True` | yes | NO | `services/zoe-data/omi_health.py` |
 | `ZOE_OMI_IDLE_S` | `120` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_KEEP_AUDIO` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_KEEP_AUDIO_FOR_TAGGING` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_LEARN_VOICES` | `False` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_MIN_MEM_MB` | `dynamic` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_OWNER_USER_ID` | `''` | yes | NO | `services/zoe-data/omi_devices.py`<br>`services/zoe-data/omi_recordings.py` |
@@ -436,7 +439,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_OMI_SPEAKER_TAG` | `'off'` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_SUGGEST_MARGIN` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_SUGGEST_MIN` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
-| `ZOE_OMI_SYNC_ENABLED` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_SYNC_ENABLED` | `False` | yes | NO | `services/zoe-data/omi_recordings.py`<br>`services/zoe-data/panel_review_cards.py` |
 | `ZOE_OMI_TAG_MODEL_DIR` | `''` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_TAG_OTHER_MAX` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_TAG_YOU_MIN` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
@@ -459,6 +462,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PANEL_KIOSK_CREDENTIAL_TTL_S` | `dynamic` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
 | `ZOE_PANEL_KIOSK_SECRET` | `-` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
 | `ZOE_PANEL_KIOSK_TICKET_TTL_S` | `60` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
+| `ZOE_PANEL_REVIEW_CARDS` | `False` | yes | NO | `services/zoe-data/panel_review_cards.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PERF` | `-` | no | NO | `scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_PERSONALISATION_HOP` | `True` | yes | NO | `services/zoe-data/personalisation_hop.py` |
