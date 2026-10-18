@@ -100,7 +100,7 @@ PICK_JS = r"""
 """
 
 # The form's resolved submit targets and methods, read fresh every time (a page script may change them at any moment).
-TARGETS_JS = r"""
+TARGETS_JS_FN = r"""
 (() => {
   const G = globalThis.__zvG;
   const form = globalThis.__zvForm;
@@ -115,8 +115,9 @@ TARGETS_JS = r"""
     }
   }
   return JSON.stringify({form: true, actions, methods, connected: G.connected.call(form)});
-})()
+})
 """
+TARGETS_JS = "(" + TARGETS_JS_FN.strip() + ")()"
 
 FOCUSED_JS = r"""
 ((which) => {
@@ -138,16 +139,23 @@ LANDED_JS = r"""
 })
 """
 
-SUBMIT_JS = r"""
-(() => {
+_SUBMIT_JS = r"""
+((checked) => {
   const G = globalThis.__zvG;
   const form = globalThis.__zvForm;
   if (!form) return 'nokey';
+  // Atomic with the submit: a page timer cannot change the target between the broker's check and this call.
+  const now = JSON.parse((TARGETS_JS_FN)());
+  if (JSON.stringify(now.actions) !== JSON.stringify(checked.actions) ||
+      JSON.stringify(now.methods) !== JSON.stringify(checked.methods)) return 'changed';
   if (typeof G.requestSubmit === 'function') { G.requestSubmit.call(form); return 'requested'; }
   G.submit.call(form);
   return 'submitted';
-})()
+})
 """
+# A submit handler on the page could still change the action while requestSubmit runs; that is page code of the
+# approved origin, which can read the filled value anyway (6.4: a compromised legitimate site is out of scope).
+SUBMIT_JS = _SUBMIT_JS.replace("(TARGETS_JS_FN)", "(" + TARGETS_JS_FN.strip() + ")")
 
 
 class Refusal(Exception):
@@ -370,7 +378,7 @@ class LoginRun:
             raise Refusal("origin_not_approved", str(o))
         return o
 
-    def check_targets(self, f: _Frame, ctx: int, frame_origin: originmod.Origin) -> None:
+    def check_targets(self, f: _Frame, ctx: int, frame_origin: originmod.Origin) -> dict:
         t = self._eval(f.session, ctx, TARGETS_JS)
         if t.get("form") and not t.get("connected", False):
             raise Refusal("navigated")
@@ -382,6 +390,7 @@ class LoginRun:
                                                        lab_profile=self.lab_profile)
             if not ok:
                 raise Refusal(reason, str(frame_origin))
+        return t
 
     # -- the binding ---------------------------------------------------------------------------------------------
     def bind(self, f: _Frame, ctx: int, ancestors: list[_Frame], index: int) -> Binding:
@@ -499,7 +508,7 @@ class LoginRun:
                 self.insert(b, f, which, value, frame_origin)
             if not self.binding_valid(b) or not self.frame_unchanged(b):
                 raise Refusal("navigated", str(frame_origin))
-            self.check_targets(f, ctx, frame_origin)
+            checked = self.check_targets(f, ctx, frame_origin)
         except (CDPError, Refusal) as exc:
             # A DevTools call that fails because the page moved under us (its context destroyed, its frame gone) is
             # a navigation, and is reported as one; anything else keeps its own reason.
@@ -509,9 +518,14 @@ class LoginRun:
                 raise Refusal("navigated", str(frame_origin)) from None
             raise
         start = self.cdp.event_count()
-        how = self.cdp.send("Runtime.evaluate", {"expression": SUBMIT_JS, "contextId": ctx, "returnByValue": True},
-                            session=f.session)
-        if ((how.get("result") or {}).get("value")) == "nokey":
+        how = self.cdp.send("Runtime.evaluate", {"expression": f"({SUBMIT_JS})({json.dumps(checked)})",
+                                                 "contextId": ctx, "returnByValue": True}, session=f.session)
+        verdict = (how.get("result") or {}).get("value")
+        if verdict == "changed":
+            raise Refusal("form_action_mismatch", str(frame_origin))
+        if verdict not in ("nokey", "requested", "submitted"):
+            raise Refusal("frame_script_failed", str(frame_origin))
+        if verdict == "nokey":
             for kind in ("keyDown", "keyUp"):
                 self.cdp.send("Input.dispatchKeyEvent", {"type": kind, "key": "Enter", "code": "Enter",
                                                           "windowsVirtualKeyCode": 13, "text": "\r"},

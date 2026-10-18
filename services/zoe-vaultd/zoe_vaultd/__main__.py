@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
 
     if args.cmd == "core":
-        from .core import Config, Core, serve
+        from .broker import Config, Core, serve
         from .peer import harden_process
         hardening = harden_process()
         cfg = Config.load(args.config)

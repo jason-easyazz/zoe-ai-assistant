@@ -18,7 +18,7 @@ code / unlock pages).
 - `zoe_vaultd/fill.py` + `cdp.py` — login mode (6.1, 6.2): per-frame isolated-world field finder, the binding, the
   re-check before every insert, outcome, cookie export.
 - `zoe_vaultd/browser.py` — the login-browser launcher (one fresh Chromium per connection, 1:1 pipe bridge).
-- `zoe_vaultd/core.py` + `policy.py` — the socket API, roles, proposals, capabilities, U3 unlock gate, rate limits.
+- `zoe_vaultd/broker.py` (the `core` unit; not `core.py`, which the root `.gitignore` drops as a core dump) + `policy.py` — the socket API, roles, proposals, capabilities, U3 unlock gate, rate limits.
 - `zoe_vaultd/vault.py` — the adopted `bw` CLI wrapper (session key only in env, never argv).
 - `zoe_vaultd/audit.py` — the hash-chained, field-allowlisted audit log.
 - `zoe_vaultd/phone.py` — the three phone pages.

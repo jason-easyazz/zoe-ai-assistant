@@ -229,7 +229,7 @@ only after P0 do sections 10.2's A3 and A6 rows hold.
 
 The phone unit's uid may use only `card` (the approval card the broker builds), `approve` (approve / deny /
 deny-and-lock), `otp`, `unlock` and `lock`. Roles come from SO_PEERCRED; the two uid lists are disjoint and never
-root. Implemented in `services/zoe-vaultd/zoe_vaultd/core.py`.
+root. Implemented in `services/zoe-vaultd/zoe_vaultd/broker.py`.
 
 There is **no verb that returns a username, password, note, TOTP seed or custom field value.** A test enumerates the
 socket's verbs and fails if one is added that returns item content (cell V7). A bare item id, errand id or "approved"

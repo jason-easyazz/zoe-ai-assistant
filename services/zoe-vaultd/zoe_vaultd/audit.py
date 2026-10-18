@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -27,6 +28,9 @@ FIELDS = frozenset({
 })
 
 MAX_VALUE_LEN = 300
+# Free-text fields are reason codes and short diagnostics, never data: only these characters may appear in them.
+SAFE_TEXT = re.compile(r"^[A-Za-z0-9 ._:/-]*$")
+SAFE_TEXT_FIELDS = frozenset({"reason", "detail", "decision", "mode", "verb"})
 
 
 class AuditError(RuntimeError):
@@ -39,25 +43,31 @@ def _line_hash(line: bytes) -> str:
 
 def verify(path: str | Path) -> tuple[bool, int, str]:
     """(ok, lines checked, problem). An absent or empty log verifies as ok with 0 lines."""
+    ok, n, problem, _ = _walk(path)
+    return ok, n, problem
+
+
+def _walk(path: str | Path) -> tuple[bool, int, str, str]:
+    """verify() plus the hash of the last line (the chain head), in ONE read."""
     p = Path(path)
     if not p.exists():
-        return True, 0, ""
+        return True, 0, "", GENESIS
     prev = GENESIS
     n = 0
     with p.open("rb") as fh:
         for raw in fh:
             n += 1
             if not raw.endswith(b"\n"):
-                return False, n, "truncated line"
+                return False, n, "truncated line", ""
             body = raw[:-1]
             try:
                 obj = json.loads(body)
             except ValueError:
-                return False, n, "not json"
+                return False, n, "not json", ""
             if not isinstance(obj, dict) or obj.get("prev") != prev:
-                return False, n, "chain broken"
+                return False, n, "chain broken", ""
             prev = _line_hash(body)
-    return True, n, ""
+    return True, n, "", prev
 
 
 class AuditLog:
@@ -65,15 +75,14 @@ class AuditLog:
         self.path = Path(path)
         self._clock = clock
         self._lock = threading.Lock()
-        ok, n, problem = verify(self.path)
+        # Open first, then read the chain head once: the broker is the only writer of this file.
+        self._fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        ok, n, problem, head = _walk(self.path)
         if not ok:
+            os.close(self._fd)
             # Fail closed: a broker whose audit trail was tampered with does not start.
             raise AuditError(f"audit chain broken at line {n}: {problem}")
-        self._prev = GENESIS
-        if n:
-            last = self.path.read_bytes().rstrip(b"\n").rsplit(b"\n", 1)[-1]
-            self._prev = _line_hash(last)
-        self._fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        self._prev = head
 
     def write(self, event: str, **fields) -> None:
         if event not in EVENTS:
@@ -89,6 +98,8 @@ class AuditLog:
             elif isinstance(value, float):
                 record[key] = round(value, 3)
             elif isinstance(value, str):
+                if key in SAFE_TEXT_FIELDS and not SAFE_TEXT.match(value):
+                    raise AuditError(f"audit field {key!r} carries characters outside the reason-code set")
                 record[key] = value[:MAX_VALUE_LEN]
             else:
                 raise AuditError(f"audit field {key!r} must be a scalar")

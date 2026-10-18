@@ -16,7 +16,7 @@ import socketserver
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs
 
-from .core import request
+from .broker import request
 
 ROUTE = re.compile(r"^/v/(approve|code|unlock)/([A-Za-z0-9_-]{20,80})$")
 MAX_BODY = 4096

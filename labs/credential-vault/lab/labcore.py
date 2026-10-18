@@ -12,7 +12,8 @@ import sys
 
 sys.path.insert(0, "/opt/zoe-vaultd")
 
-from zoe_vaultd import browser, core, fill, origin, policy, vault  # noqa: E402
+from zoe_vaultd import browser, fill, origin, policy, vault  # noqa: E402
+from zoe_vaultd import broker as core  # noqa: E402
 from zoe_vaultd.__main__ import main  # noqa: E402
 
 

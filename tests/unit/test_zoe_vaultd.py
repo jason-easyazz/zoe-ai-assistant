@@ -24,7 +24,8 @@ pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "zoe-vaultd"))
 
-from zoe_vaultd import audit, core, origin, policy  # noqa: E402
+from zoe_vaultd import audit, origin, policy  # noqa: E402
+from zoe_vaultd import broker as core  # noqa: E402  (the module is broker.py: the root .gitignore drops core.*)
 from zoe_vaultd.fill import LoginResult  # noqa: E402
 from zoe_vaultd.psl import PublicSuffixList  # noqa: E402
 from zoe_vaultd.vault import VaultError, item_meta  # noqa: E402
@@ -237,6 +238,8 @@ def test_audit_refuses_unknown_fields_and_values(tmp_path):
         log.write("login", detail={"nested": CANARY})
     with pytest.raises(audit.AuditError):
         log.write("reveal")
+    with pytest.raises(audit.AuditError):
+        log.write("refuse", detail="value={\"x\": 1}")     # free text carries reason codes only
     assert CANARY not in (tmp_path / "a.jsonl").read_text()
 
 
@@ -625,4 +628,5 @@ def test_lab_pins():
     assert "--internal" in driver and "--memory-swap" in driver
     assert "@sha256:" in (lab / "Dockerfile").read_text()
     run = (lab / "run.sh").read_text()
-    assert "2000" in run and "night_busy.sh" in run and "zoe-test-lane.lock" in run
+    assert '-lt 2000 ]' in run and "night_busy.sh" in run and "zoe-test-lane.lock" in run
+    assert "PIECE_MAX_S" in driver and "--init" in driver

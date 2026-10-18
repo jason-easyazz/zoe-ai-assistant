@@ -448,7 +448,7 @@ def run(groups: str) -> None:
     if "E" in groups:
         # -- V7 no reveal verb -------------------------------------------------------------------------------------
         sys.path.insert(0, "/opt/zoe-vaultd")
-        from zoe_vaultd import core as corem
+        from zoe_vaultd import broker as corem
         probe = {v: svc({"verb": v, "item": IDS["lib"]}).get("error") for v in PROBE_VERBS}
         phone_from_client = {v: svc({"verb": v}).get("error") for v in sorted(DOCUMENTED_PHONE - DOCUMENTED_CLIENT)}
         verbs_ok = set(corem.CLIENT_VERBS) == DOCUMENTED_CLIENT and set(corem.PHONE_VERBS) == DOCUMENTED_PHONE
@@ -538,7 +538,10 @@ def run(groups: str) -> None:
         pos = att.get("pos") or {}
         cell("V17 no DevTools for zoe-data",
              pos.get("unix") in ("PermissionError", "FileNotFoundError") and pos.get("tcp") != "open"
-             and not pos.get("found_canary") and bool(r_hold.get("ok")) and cookie_clean,
+             and not pos.get("found_canary") and bool(r_hold.get("ok")) and cookie_clean
+             # the launcher's own SO_PEERCRED check, with the socket opened to every uid, must still refuse
+             and (att.get("group") or {}).get("unix") in ("ConnectionResetError", "connected, closed by the launcher")
+             and not (att.get("group") or {}).get("found_canary"),
              f"from zoe-data's uid during a sign-in: the DevTools socket -> {pos.get('unix')}, TCP 9222 -> {pos.get('tcp')}; "
              f"the cookies zoe-data redeems carry no canary; with the socket's mode widened to everyone the launcher's "
              f"own peer check still refuses ({(att.get('group') or {}).get('unix')})",
