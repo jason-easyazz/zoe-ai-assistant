@@ -50,7 +50,8 @@ async def _require_member(user: dict = Depends(require_signed_in)) -> dict:
     return user
 
 
-#: at most this many held candidates get their conflict read per request (each is a memory read; holds are rare)
+#: at most this many held candidates get their conflict READ per request (each is a memory read; holds are rare). Past it a held
+#: candidate is still marked held (existing unknown, no retry), so the surface never offers a plain Approve that would only 409.
 MAX_CONFLICT_READS = 10
 
 
@@ -61,9 +62,12 @@ async def _annotate(uid: str, cands: list) -> list:
     reads = 0
     for c in cands:
         c["editable"] = list(apply.EDITABLE.get(c.get("kind"), ()))
-        if c.get("status") == "pending" and c.get("write_error") == "held_conflict" and reads < MAX_CONFLICT_READS:
-            reads += 1
-            c["conflict"] = await apply.conflict_detail(uid, c)
+        if c.get("status") == "pending" and c.get("write_error") == "held_conflict":
+            if reads < MAX_CONFLICT_READS:
+                reads += 1
+                c["conflict"] = await apply.conflict_detail(uid, c)
+            else:
+                c["conflict"] = {"existing": None, "options": [apply.KEEP_EXISTING] + ([apply.EDIT] if c["editable"] else [])}
     return cands
 
 

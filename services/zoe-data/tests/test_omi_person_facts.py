@@ -630,7 +630,7 @@ def test_searching_what_people_said_is_words_only_and_private(env):
     assert client.get("/api/omi/segments/search", params={"person_id": pid}).status_code == 404     # and A's person is not B's
 
 
-def test_the_review_surface_shows_what_a_held_fact_contradicts_and_the_owners_options(env):
+def test_the_review_surface_shows_what_a_held_fact_contradicts_and_the_owners_options(env, monkeypatch):
     """The Pendant page's "Review your day" (owner 2026-10-19): a held candidate says WHAT it contradicts, read now from the owner's
     OWN approved rows, plus the options the server allows. Negative controls: make ``conflict_detail`` return ``existing=None``
     always -> red; read the rows of ``member-b`` instead of the caller in ``conflict_detail`` -> red (B's row is not A's)."""
@@ -648,6 +648,10 @@ def test_the_review_surface_shows_what_a_held_fact_contradicts_and_the_owners_op
     env.col.rows.clear()
     (got,) = env.client.get("/api/omi/day-review/candidates").json()["candidates"]
     assert got["conflict"] == {"existing": None, "options": ["retry", "keep_existing", "edit"]}
+    # past the per-request read budget a held candidate is STILL marked held (no read, no retry): never a plain Approve that 409s
+    monkeypatch.setattr(dr_router, "MAX_CONFLICT_READS", 0)
+    (got,) = env.client.get("/api/omi/day-review/candidates").json()["candidates"]
+    assert got["conflict"] == {"existing": None, "options": ["keep_existing", "edit"]}
     # another member never sees it, conflict or not
     env.who["user"] = {"user_id": B, "role": "admin"}
     assert env.client.get("/api/omi/day-review/candidates").json()["candidates"] == []
