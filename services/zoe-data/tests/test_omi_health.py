@@ -215,6 +215,10 @@ class Env:
     def rows(self):
         return {r["device_id"]: dict(r) for r in self.db.rows("SELECT * FROM omi_device_health")}
 
+    def registry_owner(self, dev):
+        rows = self.db.rows("SELECT user_id FROM omi_devices WHERE device_id = ?", (dev,))
+        return rows[0]["user_id"] if rows else None
+
     def bells(self):
         return [(r["user_id"], r["message"], json.loads(r["data"])["kind"]) for r in self.db.rows("SELECT * FROM notifications ORDER BY created_at, id")]
 
@@ -466,6 +470,45 @@ def test_a_bell_that_failed_to_ring_is_retried_not_treated_as_delivered(env):
     assert "retry" not in json.loads(env.rows()[DEV_A]["warn_state"])["battery_low"]
 
 
+def test_a_committed_bell_is_never_inserted_again_when_only_the_push_failed(env):
+    """The notifications row committed; the live broadcast raised. The bell exists, so it counts as delivered: no retry, no duplicate."""
+    register(env, DEV_A, "ann")
+
+    class _Down:
+        async def broadcast(self, *a, **k):
+            raise ConnectionError("websocket hub down")
+
+    import push
+    env.mp.setattr(push, "broadcaster", _Down())
+    env.post(body(battery_pct=10))
+    assert [b[2] for b in env.bells()] == ["battery_low"], "the row is there"
+    assert "retry" not in json.loads(env.rows()[DEV_A]["warn_state"])["battery_low"]
+    for k in range(1, 4):
+        env.now = T0 + timedelta(minutes=15 * k)
+        env.post(body(battery_pct=10))
+    assert len(env.bells()) == 1, "and four reports later it is still ONE bell"
+    # control arm: an INSERT failure (no row) is what retries
+    assert run(oh._notify("ann", {"kind": "ring_fill", "text": "x"})) is True
+    env.db.conn.execute("DROP TABLE notifications")
+    env.db.conn.commit()
+    assert run(oh._notify("ann", {"kind": "ring_fill", "text": "x"})) is False
+
+
+def test_a_reassigned_pendant_tells_the_new_owner_even_when_the_old_one_was_already_told(env):
+    register(env, DEV_A, "ann")
+    env.post(body(battery_pct=10))
+    assert [(b[0], b[2]) for b in env.bells()] == [("ann", "battery_low")]
+    register(env, DEV_A, "ben")
+    env.now = T0 + timedelta(minutes=15)
+    env.post(body(battery_pct=10))                           # the same low battery, now ben's pendant
+    assert [(b[0], b[2]) for b in env.bells()] == [("ann", "battery_low"), ("ben", "battery_low")]
+    state = json.loads(env.rows()[DEV_A]["warn_state"])
+    assert state["battery_low"]["since"] == oh._iso(env.now), "ben's warning starts when HE was first told, not ann's timestamp"
+    env.now = T0 + timedelta(minutes=30)
+    env.post(body(battery_pct=10))
+    assert len(env.bells()) == 2, "control arm: and once he is told it is not repeated"
+
+
 def test_the_sweep_retries_a_failed_bell_too(env):
     register(env, DEV_A, "ann")
     env.post(body())
@@ -573,6 +616,67 @@ def test_erasing_a_member_erases_their_health_rows(env):
     env.post(body(DEV_B))
     run(omi.forget_user("ann"))
     assert list(env.rows()) == [DEV_B], "ann's row is gone; ben's stays (control arm)"
+
+
+def _plain(db):
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+    return ctx
+
+
+def test_a_health_erase_failure_fails_closed_but_a_missing_table_does_not(env, caplog):
+    """Only 'no such table' (0056 not applied: nothing was ever stored) is nothing to erase. Any other failure leaves the member's rows
+    behind, so forget_user RAISES - after the recordings and the registrations are done - and the caller retries."""
+    register(env, DEV_A, "ann")
+    env.post(body())
+    real = oh.forget_user
+
+    async def boom(user_id):
+        raise PermissionError("permission denied for table omi_device_health")
+
+    env.mp.setattr(oh, "forget_user", boom)
+    caplog.set_level("ERROR")
+    with pytest.raises(omi.HealthEraseIncomplete):
+        run(omi.forget_user("ann"))
+    assert issubclass(omi.HealthEraseIncomplete, omi.VoiceEraseIncomplete)
+    assert "OMI_HEALTH_ERASE_INCOMPLETE" in caplog.text
+    assert env.registry_owner(DEV_A) == "", "the rest of the erase still ran (the registration is unassigned)"
+    assert DEV_A in env.rows(), "and the unerased row is exactly what the raise reports"
+    # control arm: the real function erases it, and an unmigrated table is not an error
+    env.mp.setattr(oh, "forget_user", real)
+    run(omi.forget_user("ann"))
+    assert env.rows() == {}
+    env.db.conn.execute("DROP TABLE omi_device_health")
+    env.db.conn.commit()
+    assert run(oh.forget_user("ann")) == 0
+    run(omi.forget_user("ann"))                                # and the whole erase still completes without the table
+
+
+def test_the_health_delete_itself_raises_on_anything_but_a_missing_table(env):
+    register(env, DEV_A, "ann")
+    env.post(body())
+    real_db = env.db
+
+    class Denied:
+        def execute(self, sql, params=()):
+            if sql.startswith("DELETE FROM omi_device_health"):
+                raise PermissionError("permission denied for table omi_device_health")
+            return real_db.execute(sql, params)
+
+        async def commit(self):
+            await real_db.commit()
+
+    @contextlib.asynccontextmanager
+    async def denied():
+        yield Denied()
+
+    env.mp.setattr(db_compat, "get_compat_db", denied)
+    with pytest.raises(PermissionError):
+        run(oh.forget_user("ann"))
+    env.mp.setattr(db_compat, "get_compat_db", _plain(real_db))
+    assert list(env.rows()) == [DEV_A], "the row survived the failed delete, and the raise said so"
+    assert run(oh.forget_user("ann")) == 1
 
 
 def test_migration_0056_is_reversible_and_rerunnable(env):

@@ -288,6 +288,8 @@ async def record_report(owner: str, device_id: str, rep: Report, *, now: Optiona
         row = merge(prev, rep, when)
         row["user_id"] = owner
         old_state = (prev or {}).get("warn_state") or "{}"
+        if prev is not None and prev.get("user_id") != owner:
+            old_state = "{}"        # reassigned: the new owner inherits none of the previous owner's "already told" / cooldown state
         if enabled():
             active = evaluate(row, when)
             state, notify = transition({"warn_state": old_state}, active, when)
@@ -346,36 +348,53 @@ async def list_for(user_id: str, *, now: Optional[datetime] = None) -> list[dict
 
 
 async def forget_user(user_id: str) -> int:
-    """Erase cascade: the member's health rows go with them (called from the member's Omi erase)."""
+    """Erase cascade: the member's health rows go with them (called from the member's Omi erase). Only a MISSING table (migration 0056 not
+    applied: nothing was ever stored) counts as nothing to erase and returns 0; every other failure RAISES so the erase cannot read as
+    complete while the rows (user id, timestamps, pendant metadata) remain."""
     from db_compat import get_compat_db
 
-    async with get_compat_db() as db:
-        cur = await db.execute("DELETE FROM omi_device_health WHERE user_id = ?", (user_id,))
-        n = getattr(cur, "rowcount", 0) or 0
-        await db.commit()
+    try:
+        async with get_compat_db() as db:
+            cur = await db.execute("DELETE FROM omi_device_health WHERE user_id = ?", (user_id,))
+            n = getattr(cur, "rowcount", 0) or 0
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        if _table_missing(exc):
+            return 0
+        raise
     return max(0, n)
+
+
+def _table_missing(exc: BaseException) -> bool:
+    return type(exc).__name__ == "UndefinedTableError" or "no such table" in str(exc).lower()
 
 
 # --- notifications + the first-turn line -----------------------------------------------------------------------------------------------------------
 async def _notify(user_id: str, warning: dict) -> bool:
     """One bell notice (the existing ``notifications`` row + broadcast path, as the "N recordings synced" notice). Never raises."""
+    nid = str(uuid.uuid4())
+    title = "Pendant"
     try:
         from db_pool import get_db_ctx
-        from push import broadcaster
 
-        nid = str(uuid.uuid4())
-        title = "Pendant"
         async with get_db_ctx() as db:
             await db.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) "
                              "VALUES (?, ?, 'omi_health', ?, ?, ?, 0, NOW())",
                              (nid, user_id, title, warning["text"], json.dumps({"kind": warning["kind"]})))
             await db.commit()
-        await broadcaster.broadcast("all", "notification_created", {"id": nid, "type": "omi_health", "title": title,
-                                                                     "message": warning["text"], "delivered": False}, user_id=user_id)
-        return True
-    except Exception as exc:  # noqa: BLE001 - losing a bell loses nothing: the warning stays on GET /api/omi/health
+    except Exception as exc:  # noqa: BLE001 - losing a bell loses nothing: the warning stays on GET /api/omi/health (and is retried)
         logger.warning("omi_health: notification failed (%s)", type(exc).__name__)
         return False
+    # The row is COMMITTED: the bell exists (it shows in the notification list) and must never be inserted again. The live push is a
+    # separate best-effort step; its failure is logged and does NOT make the caller retry.
+    try:
+        from push import broadcaster
+
+        await broadcaster.broadcast("all", "notification_created", {"id": nid, "type": "omi_health", "title": title,
+                                                                     "message": warning["text"], "delivered": False}, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("omi_health: live push of a committed notification failed (%s)", type(exc).__name__)
+    return True
 
 
 async def morning_items(user_id: str, *, now: Optional[datetime] = None) -> list[dict]:
