@@ -5,7 +5,7 @@ every named harness actually calls it. No network, no ssh (the panel check is in
 from __future__ import annotations
 
 import datetime as dt
-import importlib
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -15,8 +15,21 @@ import pytest
 pytestmark = pytest.mark.ci_safe
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "scripts" / "maintenance"))
-hq = importlib.import_module("harness_quiet")
+# by FILE PATH, never sys.path: scripts/maintenance/pi_runtime_probe.py would shadow the service module of that
+# name for every later test in the session (it did: test_brain_dispatch broke)
+
+
+def _load(name: str, path: Path):
+    mod = sys.modules.get(name)
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+hq = _load("harness_quiet", ROOT / "scripts" / "maintenance" / "harness_quiet.py")
 
 NOON = dt.datetime(2026, 10, 19, 12, 0)
 NIGHT = dt.datetime(2026, 10, 19, 23, 30)
@@ -109,7 +122,7 @@ def test_cli_exit_codes(monkeypatch, capsys):
 
 
 def _probe():
-    return importlib.import_module("voice_regression_probe")
+    return _load("voice_regression_probe", ROOT / "scripts" / "maintenance" / "voice_regression_probe.py")
 
 
 def test_probe_refuses_during_waking_hours_without_touching_the_artifact():
@@ -120,7 +133,12 @@ def test_probe_refuses_during_waking_hours_without_touching_the_artifact():
     assert os.environ.get("ZOE_HARNESS_YIELD_TO_PANEL") is None
     src = (ROOT / "scripts" / "maintenance" / "voice_regression_probe.py").read_text()
     main = src[src.index("def main("):]
-    assert main.index("_harness_quiet_refusal()") < main.index("_acquire_harness_lock()") < main.index("emit_result(")
+    guard, lock = main.index("_harness_quiet_refusal()"), main.index("_acquire_harness_lock()")
+    assert guard < lock
+    refusal_branch = main[guard:main.index("return 3", guard)]
+    assert "emit_result(" not in refusal_branch and "write" not in refusal_branch   # a refusal writes no artifact
+    # every artifact write on the run path comes after the guard (the only earlier one is the interpreter-error exit)
+    assert main.count("emit_result(", 0, guard) == 1 and "interpreter:" in main[:guard]
 
 
 def test_probe_waits_out_a_busy_panel_then_tells_the_replay_to_yield(monkeypatch):

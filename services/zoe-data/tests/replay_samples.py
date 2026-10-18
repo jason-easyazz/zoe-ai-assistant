@@ -386,8 +386,16 @@ def _yield_to_panel() -> None:
     if os.environ.get("ZOE_HARNESS_YIELD_TO_PANEL") != "1":
         return
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(ROOT)), "scripts", "maintenance"))
-        import harness_quiet
+        # by FILE PATH, never via sys.path: scripts/maintenance holds names that shadow service modules
+        import importlib.util
+
+        harness_quiet = sys.modules.get("harness_quiet")
+        if harness_quiet is None:
+            spec = importlib.util.spec_from_file_location("harness_quiet", os.path.join(
+                os.path.dirname(os.path.dirname(ROOT)), "scripts", "maintenance", "harness_quiet.py"))
+            harness_quiet = importlib.util.module_from_spec(spec)
+            sys.modules["harness_quiet"] = harness_quiet
+            spec.loader.exec_module(harness_quiet)
 
         harness_quiet.wait_for_panel_quiet(float(os.environ.get("ZOE_HARNESS_PANEL_WAIT_S", "2700")),
                                            log=lambda m: print(m, file=sys.stderr, flush=True))

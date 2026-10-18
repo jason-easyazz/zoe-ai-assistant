@@ -1606,12 +1606,12 @@ def _log_prompt_cache(session_id: str, terminal: dict) -> None:
         if not pairs:
             return
         first_prompt, first_cache = pairs[0]
-        traffic = traffic_class.current()
+        traffic = traffic_class.current()   # a non-household line gets the formatter's ` traffic=` suffix
         logger.info(
             "FLUE_PROMPT_CACHE session=%s rounds=%d first_prompt_n=%d first_cache_n=%d "
-            "total_prompt_n=%d per_round=%s traffic=%s",
+            "total_prompt_n=%d per_round=%s",
             session_id, len(pairs), first_prompt, first_cache,
-            sum(p for p, _ in pairs), ",".join(f"{p}/{c}" for p, c in pairs), traffic,
+            sum(p for p, _ in pairs), ",".join(f"{p}/{c}" for p, c in pairs),
         )
         _panel_kv_alarm(session_id, first_prompt, first_cache, traffic)
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn

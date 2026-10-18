@@ -100,13 +100,16 @@ between every two panel turns. First turn excluded.
 |---|---|---|---|---|---|
 | scratch 270M (CPU) | guarded | 0% | 34.8% | 37 / 1,244 | projected live 215 / 2,014 ms |
 | scratch 270M (CPU) | harness | 0% | 52.2% | 502 / 1,236 | projected live 908 / 2,002 ms |
-| live 4B | guarded | LIVE_GUARDED_MISS | LIVE_GUARDED_GT500 | LIVE_GUARDED_FP | LIVE_GUARDED_TTFT |
-| live 4B | harness | LIVE_HARNESS_MISS | LIVE_HARNESS_GT500 | LIVE_HARNESS_FP | LIVE_HARNESS_TTFT |
+| **live 4B** (`:11434`, 2026-10-19 04:57-05:05 AWST, brain-window lock held, panel idle since 10-16) | **guarded** (harness quiet) | 0% | 34.8% | 37 / 1,251 | **measured 151 / 2,015 ms** |
+| **live 4B** | **harness** interleaved | 0% | 47.8% | 496 / 1,233 | **measured 926 / 2,381 ms** |
 
-Reading: a harness turn that shares the system + tool block does NOT force a full re-prefill (the panel's prompt
-resumes from the host cache when its next prompt only extends it), but it does turn the panel's cheap 37-token
-resumes into ~500-token ones on every turn - the shape of the 0.7k partial misses above. The 34.8% floor is the
-recall-block elision and tool growth, which no slot policy removes.
+Reading: on the live brain, a harness conversation running while the household talks takes the panel's median
+first token from **151 ms to 926 ms** (6x) and its p95 from 2.0 s to 2.4 s, and lifts the share of turns that
+re-prefill more than 500 tokens from 34.8% to 47.8%. It does NOT force full re-prefills here (the harness shares
+the system + tool block, so the panel's prompt resumes from the host cache when its next prompt only extends it):
+it turns cheap ~37-token resumes into ~500-token ones - the shape of the two ~0.7k partial misses in section 1.
+That is what quiet hours buy. The 34.8% floor is the recall-block elision and tool growth, which no slot policy
+removes. (The deep dive's 5.9 s p90 is mostly the full misses of 10-12, before `brain_slot_guard`.)
 
 ## Not done, and why
 

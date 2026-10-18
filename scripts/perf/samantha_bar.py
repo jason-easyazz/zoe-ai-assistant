@@ -1308,8 +1308,17 @@ def harness_quiet_refusal(name: str | None = None) -> str | None:
     """Harness quiet hours (P-2, ``scripts/maintenance/harness_quiet.py``): the reason this harness may NOT
     start now (waking hours, or the panel used in the last 10 min), else None. One rule for every harness
     built on this module (the bar, day-sim, person bench, user-model A/B, recall-evidence probe)."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "maintenance"))
-    import harness_quiet  # noqa: E402
+    # load by FILE PATH, never via sys.path: scripts/maintenance holds names that shadow service modules
+    # (pi_runtime_probe.py exists in both), and this runs inside processes that import service code
+    import importlib.util
+
+    harness_quiet = sys.modules.get("harness_quiet")
+    if harness_quiet is None:
+        spec = importlib.util.spec_from_file_location(
+            "harness_quiet", Path(__file__).resolve().parents[1] / "maintenance" / "harness_quiet.py")
+        harness_quiet = importlib.util.module_from_spec(spec)
+        sys.modules["harness_quiet"] = harness_quiet
+        spec.loader.exec_module(harness_quiet)
 
     verdict = harness_quiet.check(name or Path(sys.argv[0]).stem or "harness")
     print(verdict.reason, flush=True)

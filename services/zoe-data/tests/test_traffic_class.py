@@ -170,8 +170,18 @@ def test_brain_lane_line_names_the_class(caplog):
     before = tc.brain_turn_counts()["probe"]
     with caplog.at_level(logging.INFO, logger="brain_dispatch"):
         brain_dispatch._log_lane(attempted="flue", served="flue", outcome="ok", session_id="replay-abc")
-    assert any("BRAIN_LANE" in r.getMessage() and r.getMessage().endswith("traffic=probe") for r in caplog.records)
+    lines = _app_log_lines(caplog)          # formatted while the class is bound, as the app-log handler does
+    assert any(m.startswith("BRAIN_LANE ") and m.endswith(" traffic=probe") for m in lines)
     assert tc.brain_turn_counts()["probe"] == before + 1
+    tc.bind(tc.HOUSEHOLD)                   # NEGATIVE CONTROL: a household line is byte-identical to before
+    assert all("traffic=" not in m for m in _app_log_lines(caplog))
+
+
+def _app_log_lines(caplog):
+    from logging_setup import TrafficClassFormatter
+
+    fmt = TrafficClassFormatter("%(message)s")
+    return [fmt.format(r) for r in caplog.records]
 
 
 def test_router_shadow_record_names_the_class():
@@ -248,6 +258,6 @@ def test_prompt_cache_line_names_the_class(caplog):
     tc.bind(tc.HARNESS)
     with caplog.at_level(logging.INFO, logger="zoe_flue_client"):
         zf._log_prompt_cache("bar-pf-1", {"prompt_cache": [{"prompt_n": 3000, "cache_n": 0}]})
-    msgs = [r.getMessage() for r in caplog.records]
-    assert any(m.startswith("FLUE_PROMPT_CACHE session=bar-pf-1 ") and m.endswith("traffic=harness") for m in msgs)
+    msgs = _app_log_lines(caplog)           # the app log's suffix, not the message
+    assert any(m.startswith("FLUE_PROMPT_CACHE session=bar-pf-1 ") and m.endswith(" traffic=harness") for m in msgs)
     assert not any("PANEL_KV_MISS" in m for m in msgs)

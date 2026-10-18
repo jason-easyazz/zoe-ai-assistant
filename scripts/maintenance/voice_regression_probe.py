@@ -1348,8 +1348,16 @@ def _reexec_if_needed(python: str, source: str) -> None:
 def _harness_quiet_refusal(*, check=None, wait=None) -> "str | None":
     """None when the probe may start; else why not. Hours refuse at once; a busy panel is waited out for up to
     ``ZOE_HARNESS_PANEL_WAIT_S`` (default 2700 s) first. On a go, the replay is told to yield between clips."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import harness_quiet
+    # load by FILE PATH, never via sys.path: scripts/maintenance holds names that shadow service modules
+    # (pi_runtime_probe.py exists in both), and this runs inside processes that import service code
+    import importlib.util
+
+    harness_quiet = sys.modules.get("harness_quiet")
+    if harness_quiet is None:
+        spec = importlib.util.spec_from_file_location("harness_quiet", Path(__file__).resolve().parent / "harness_quiet.py")
+        harness_quiet = importlib.util.module_from_spec(spec)
+        sys.modules["harness_quiet"] = harness_quiet
+        spec.loader.exec_module(harness_quiet)
 
     check = check or harness_quiet.check
     wait = wait or harness_quiet.wait_for_panel_quiet

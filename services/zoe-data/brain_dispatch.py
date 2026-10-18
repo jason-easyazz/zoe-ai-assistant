@@ -296,16 +296,17 @@ def _log_lane(
     has to answer, and a log line that only exists when failover is enabled
     cannot answer it for the lane that is live today.
     """
-    traffic = traffic_class.current()   # P-2: household | harness | probe | ci - every turn line names it
+    # P-2: a non-household turn's line ends ` traffic=<class>` (logging_setup.TrafficClassFormatter); household
+    # lines are unchanged, so every parser of BRAIN_LANE keeps working
+    traffic = traffic_class.current()
     traffic_class.note_brain_turn(traffic)
     logger.info(
-        "BRAIN_LANE lane_attempted=%s lane_served=%s outcome=%s reason=%s session=%s traffic=%s",
+        "BRAIN_LANE lane_attempted=%s lane_served=%s outcome=%s reason=%s session=%s",
         attempted,
         served,
         outcome,
         reason or "-",
         (session_id or "-")[:64],
-        traffic,
     )
     try:
         from voice_metrics import brain_turn_count

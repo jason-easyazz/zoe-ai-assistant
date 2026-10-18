@@ -711,12 +711,12 @@ def _log_voice_timing(
     try:
         logger.info(
             "VOICE TIMING turn=%s session=%s path=%s pre_brain_ms=%d memory_packet_ms=%d "
-            "(history=%d memory=%d domain=%d) brain_ttft_ms=%d llm_first_token_ms=%d packet=%s traffic=%s",
+            "(history=%d memory=%d domain=%d) brain_ttft_ms=%d llm_first_token_ms=%d packet=%s",
             turn, session_id, path, _ms(pre_brain_s),
             _ms(ctx_timings.get("memory_packet", 0.0)), _ms(ctx_timings.get("history", 0.0)),
             _ms(ctx_timings.get("memory", 0.0)), _ms(ctx_timings.get("domain", 0.0)),
             _ms(brain_ttft_s), _ms(llm_first_token_s),
-            packet_state, traffic_class.current(),
+            packet_state,
         )
     except Exception:  # instrumentation must never fail a turn
         pass
