@@ -15,6 +15,8 @@ database, the live palace or the live backups (T1 checks the live database's dat
   the new sources, the HA helper export), D1 (the drill green on good backups), N1-N8 (negative controls: a corrupted
   dump, a dump corrupted before its manifest, a dump missing a table, a restore image with another pgvector, a palace
   without its HNSW files, a tampered host-archive file, the HA helper never following a planted symlink, the memory
-  floor, the helper's argument set), T1 (teardown). Each prints PASS/FAIL; exit 1 on any FAIL.
+  floor, the helper's argument set), N9 (a container planted under the drill's name is refused and left untouched),
+  S5 + N10 (local encryption with the A5 lab's pinned age: intact, then truncated), T1 (teardown, incl. no leaked
+  anonymous volume). Each prints PASS/FAIL; exit 1 on any FAIL. S5/N10 need `labs/offbox-backup/.bin` (run that lab once).
 
-Record (2026-10-19, Jetson): 15/15 cells PASS; details in `docs/knowledge/offbox-backup.md` section 7.5.
+Record (2026-10-19, Jetson): 18/18 cells PASS; details in `docs/knowledge/offbox-backup.md` section 7.5.

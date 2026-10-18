@@ -131,6 +131,7 @@ ZOE_DATA_DATA_EXCLUDES = (
 # The models LOCK, never the 80 GB of weights: paths + sha256 + source URLs (the panel-as-code work, V-3, writes
 # it). The first existing candidate is shipped; ZOE_MODELS_LOCK names another.
 MODELS_LOCK_CANDIDATES = ("assistant/models.lock", "models/models.lock", ".zoe/models.lock")
+ETC_SYSTEMD_EXCLUDES = ("snap-*", "snap.*")   # snapd regenerates its own units (one per snap revision)
 HOST_BACKUP_DIR = (".zoe-backups", "host")   # zoe_host_snapshot.py: the HA export + the on-box host archive
 
 
@@ -209,15 +210,14 @@ def host_onbox_only_sources(p: Paths) -> list[Source]:
 
 def host_secret_sources(p: Paths) -> list[Source]:
     """Host config that carries credentials (the secrets tier): drop-in env lines, ``~/bin`` (one script holds a
-    DB password), HA's secrets.yaml, the system drop-ins. The crontab is added at run time (``crontab_source``)."""
-    srcs = [Source("ha/secrets.yaml", p.checkout / "homeassistant" / "secrets.yaml"),
+    DB password), HA's secrets.yaml, the system units + drop-ins. The crontab is added at run time
+    (``crontab_source``)."""
+    return [Source("ha/secrets.yaml", p.checkout / "homeassistant" / "secrets.yaml"),
             Source("systemd/user", p.home / ".config" / "systemd" / "user"),
+            # every regular file under /etc/systemd/system: unit files (serena-bridge, the Jetson's nv*) and
+            # *.d drop-ins; the *.wants symlinks are skipped by the walk, snapd's generated units by the excludes
+            Source("systemd/system", p.etc_systemd, ETC_SYSTEMD_EXCLUDES),
             Source("bin", p.home / "bin")]
-    try:
-        dropins = sorted(d for d in p.etc_systemd.glob("*.d") if d.is_dir() and not d.is_symlink())
-    except OSError:
-        dropins = []
-    return srcs + [Source(f"systemd/system/{d.name}", d) for d in dropins]
 
 
 def crontab_source(out_dir: Path) -> Optional[Source]:

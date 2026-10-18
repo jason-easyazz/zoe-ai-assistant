@@ -173,17 +173,24 @@ def test_sandbox_is_isolated_capped_and_never_the_live_container():
     code = "\n".join(ln for ln in h.splitlines() if not ln.lstrip().startswith("#"))
     assert "zoe-database" not in code                         # no command ever names the live container
     up = h[h.index("docker run"): h.index("# The image's init")]
-    assert "--network \"$NET\"" in up and "--internal" in h and "--memory \"$MEM\"" in up and "--memory-swap" in up
-    assert "--cap-drop ALL" in up and "no-new-privileges" in up
-    for forbidden in (" -v ", "--volume", " -p ", "--publish", "--privileged", "--network host"):
+    assert "--network \"$(recorded network)\"" in up and "--internal" in h and "--memory \"$MEM\"" in up
+    assert "--memory-swap" in up and "--cap-drop ALL" in up and "no-new-privileges" in up
+    for forbidden in (" -v ", "--volume", "--mount", " -p ", "--publish", "--privileged", "--network host"):
         assert forbidden not in up, forbidden
+    # objects are trusted by the id `up` RECORDED, never by name: a planted container is never exec'd or removed
+    assert not re.search(r'docker (exec|rm)[^\n]*"\$NAME"', code)
+    assert 'docker rm -f -v "$c"' in code                     # -v: the anonymous data volume goes with it
+    assert "did not create; refusing" in code
     src = (MAINT / "zoe_restore_drill.py").read_text()
     assert not re.search(r'"exec"[^\n]*LIVE_DB_CONTAINER|LIVE_DB_CONTAINER[^\n]*"exec"', src)
     assert re.findall(r"LIVE_DB_CONTAINER\b", src).__len__() == 2   # the constant + one read-only inspect
 
 
 def test_root_helpers_honour_overrides_only_when_not_root():
-    assert 'if [ "$(id -u)" != 0 ] && [ -n "${ZOE_DRILL_PG_IMAGE:-}" ]' in _helper()
+    h = _helper()
+    root_branch = h[h.index('if [ "$(id -u)" = 0 ]; then'): h.index("else", h.index('if [ "$(id -u)" = 0 ]; then'))]
+    assert "ZOE_DRILL_PG_IMAGE" not in root_branch and "STATE=/run/zoe-restore-drill" in root_branch
+    assert h.index("ZOE_DRILL_PG_IMAGE") > h.index('if [ "$(id -u)" = 0 ]; then')  # only in the non-root branch
     assert 'if os.getuid() != 0 and os.environ.get("ZOE_HA_CONFIG_DIR")' in (LIBEXEC / "zoe-ha-config-export").read_text()
 
 
@@ -264,11 +271,14 @@ def _box(tmp_path: Path) -> "ob.Paths":
         co / "services/zoe-data/data/router_head_shadow.jsonl": "words", co / "services/zoe-data/data/zoe.db": "d",
         home / ".zoe/backups/panel/hey_zoe.onnx": "w", home / "bin/t.sh": "b",
         home / ".config/systemd/user/zoe-data.service.d/10.conf": "c", home / "models/models.lock": "{}",
-        tmp_path / "etc/user@.service.d/delegate.conf": "d",
+        tmp_path / "etc/user@.service.d/delegate.conf": "d", tmp_path / "etc/serena-bridge.service": "u",
+        tmp_path / "etc/snap-core22-1.mount": "snapd's own",
     }
     for p, data in files.items():
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(data)
+    (tmp_path / "etc/multi-user.target.wants").mkdir()
+    os.symlink(tmp_path / "etc/serena-bridge.service", tmp_path / "etc/multi-user.target.wants/serena-bridge.service")
     return ob.Paths(home=home, checkout=co, config_dir=tmp_path / "c", state_dir=tmp_path / "s",
                     stage_dir=tmp_path / "st", etc_systemd=tmp_path / "etc")
 
@@ -285,7 +295,7 @@ def test_host_sources_ship_the_new_stores_and_keep_the_exclusions(tmp_path):
     assert _rels(ob.host_onbox_only_sources(p)) == {"panel/hey_zoe.onnx"}
     assert "panel" not in {s.label for s in ob.household_sources(p)}
     assert sec == {"ha/secrets.yaml", "bin/t.sh", "systemd/user/zoe-data.service.d/10.conf",
-                   "systemd/system/user@.service.d/delegate.conf"}
+                   "systemd/system/user@.service.d/delegate.conf", "systemd/system/serena-bridge.service"}
     # both host lists reach the off-box tiers
     assert {s.label for s in ob.host_household_sources(p)} <= {s.label for s in ob.household_sources(p)}
     assert {s.label for s in ob.host_secret_sources(p)} <= {s.label for s in ob.secret_sources(p)}
@@ -316,7 +326,9 @@ def test_od3_pendant_transcripts_are_kept_audio_is_not():
     up to 35 days); pendant AUDIO stays out (~/.zoe/omi-recordings)."""
     bio = re.search(r'^BIOMETRIC_TABLES="([^"]+)"', (MAINT / "postgres-nightly-backup.sh").read_text(), re.M)
     excluded = set(bio.group(1).split())
+    migrations = "\n".join(f.read_text() for f in (REPO / "services/zoe-data/alembic/versions").glob("*.py"))
     for kept in ("omi_recordings", "omi_segments", "omi_day_reviews", "omi_day_candidates"):
+        assert f"CREATE TABLE IF NOT EXISTS {kept}" in migrations, kept   # a real table, so "not excluded" means kept
         assert kept not in excluded, kept
     assert "omi-recordings" in ob.ZOE_TREE_EXCLUDES
 
@@ -354,12 +366,26 @@ def test_a_tampered_host_archive_goes_red(tmp_path):
     assert any("differ from its manifest: bin/t.sh" in f for f in findings)
 
 
-def test_an_encrypted_host_archive_is_checked_for_its_header_only(tmp_path):
+def test_an_encrypted_host_archive_needs_an_intact_ciphertext_and_a_verified_plaintext(tmp_path):
     a = tmp_path / "host-1.tar.gz.age"
-    a.write_bytes(b"age-encryption.org/v1\n-> X25519 x\n")
+    a.write_bytes(b"age-encryption.org/v1\n-> X25519 x\npayload")
+    side = tmp_path / "host-1.tar.gz.age.sha256"
+    assert drill.check_host_archive(a, tmp_path)[0]                      # no sidecar: integrity unknown = red
+    side.write_text(json.dumps({"sha256": hb._sha256(a), "files": 3, "verified_plain": True}))
     assert drill.check_host_archive(a, tmp_path)[0] == []
+    a.write_bytes(b"age-encryption.org/v1\n-> X25519 x\npay")           # truncated after it was written
+    assert any("truncated" in f for f in drill.check_host_archive(a, tmp_path)[0])
     a.write_bytes(b"not age")
     assert drill.check_host_archive(a, tmp_path)[0]
+
+
+def test_snapshot_verifies_the_plaintext_before_encrypting(tmp_path):
+    a = _archive(tmp_path)
+    with tarfile.open(a) as t:
+        man = json.loads(t.extractfile("MANIFEST.json").read())
+    assert hb.verify_archive(a, man) == []
+    man["files"]["bin/t.sh"] = "0" * 64
+    assert hb.verify_archive(a, man) == ["bin/t.sh"]
 
 
 def test_local_encryption_takes_only_public_recipients(tmp_path, monkeypatch):

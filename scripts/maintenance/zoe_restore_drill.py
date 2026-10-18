@@ -317,12 +317,28 @@ def safe_extract(tar_path: Path, dest: Path) -> None:
 def check_host_archive(path: Path, scratch: Path) -> tuple[list[str], list[str]]:
     findings, notes = [], []
     if path.name.endswith(".age"):
-        head = path.read_bytes()[:64]
+        # The box cannot decrypt it (the identity is off the box, by design). What it CAN prove: the plaintext was
+        # checked against its manifest just before encryption (the sidecar says so), and the ciphertext on disk is
+        # still byte-identical to what was written (no truncation, no bit rot).
+        with open(path, "rb") as fh:
+            head = fh.read(64)
+        side = path.with_name(path.name + ".sha256")
+        try:
+            meta = json.loads(side.read_text())
+        except (OSError, ValueError):
+            meta = None
         if not head.startswith(b"age-encryption.org/v1"):
             findings.append(f"host archive {path.name} is not an age file")
+        elif not isinstance(meta, dict):
+            findings.append(f"host archive {path.name} has no readable .sha256 sidecar - its integrity is unknown")
+        elif meta.get("sha256") != _sha256(path):
+            findings.append(f"host archive {path.name} differs from the ciphertext that was written (truncated or "
+                            "corrupted)")
+        elif not meta.get("verified_plain"):
+            findings.append(f"host archive {path.name}: the plaintext was not verified before encryption")
         else:
-            notes.append(f"host archive {path.name} is age-encrypted (contents verifiable only with the "
-                         "owner's identity, by design)")
+            notes.append(f"host archive {path.name}: age-encrypted, ciphertext intact, {meta.get('files')} file(s) "
+                         "verified before encryption (contents readable only with the owner's identity)")
         return findings, notes
     dest = scratch / "host"
     dest.mkdir()
@@ -514,7 +530,9 @@ def run_drill(p, backup_root: Path, now: datetime, sb: Sandbox, python: str) -> 
             f, n = check_palace(pal, scratch, python)
             res.findings += f
             res.notes += n
-        host = newest(backup_root / "host", "host-*.tar.gz*")
+        hosts = [f for f in (backup_root / "host").glob("host-*.tar.gz*")
+                 if f.is_file() and f.name.endswith((".tar.gz", ".tar.gz.age"))]   # not sidecars / .partial
+        host = max(hosts, key=lambda f: f.stat().st_mtime) if hosts else None
         if host is None:
             res.findings.append("host archive: none in ~/.zoe-backups/host (zoe_host_snapshot.py not running?)")
         else:

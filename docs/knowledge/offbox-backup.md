@@ -263,7 +263,7 @@ mirrors the same sources file by file (so restic de-duplicates them).
 | HA `.storage` + `.cloud` (integrations, auth, device/area registries; several files `0600 root`) | household | **root helper** `zoe-ha-config-export storage` through `sudo -n` (7.4) -> `~/.zoe-backups/host/ha-storage-<ts>.tar.gz` | until the owner installs the helper: not captured, reported (backup log line; weekly drill finding) |
 | HA `secrets.yaml` (`zoe`-owned) | secrets | walked | |
 | `services/zoe-data/data/` (`music_discovery/`, `music_prefs.json`, anything new) | household | walked | `router_head_shadow.jsonl*` (raw utterance text; #2110 strips it at 30 days and it regenerates), `vapid_keys.json` (already in the secrets tier), `zoe.db*` (the dead pre-Postgres SQLite, deep dive 2 D-2) |
-| `~/.config/systemd/user` (units + the ~25 drop-ins) and `/etc/systemd/system/*.d` | secrets | walked (drop-ins carry env lines) | symlinks (`*.wants`) |
+| `~/.config/systemd/user` (units + the ~25 drop-ins) and `/etc/systemd/system` (system units such as `serena-bridge` and the Jetson's `nv*`, plus `*.d` drop-ins) | secrets | walked (drop-ins carry env lines) | symlinks (`*.wants`), snapd's generated `snap-*` / `snap.*` units |
 | `~/bin` | secrets | walked (one script holds a DB password) | |
 | crontab | secrets | `crontab -l` at run time | |
 | `~/.zoe/backups/panel/` (panel config + `hey_zoe.onnx`, written by the panel-as-code work, V-3) | on-box host archive only; off the box it rides in the `artefacts` tier (#2142), not twice | walked (the `~/.zoe` tree excludes `*backup*`, so it is its own source) | |
@@ -290,8 +290,12 @@ HNSW index, and ran at 03:30 inside the night window. Now:
    connection), so the counts are exactly what the dump holds; plus, from the live catalog (SELECTs only), the table set, the
    extension versions and the Alembic revision. A live table missing from the dump is flagged on the spot.
 2. **Throwaway sandbox.** `zoe-restore-drill-pg up` starts `zoe-restore-drill`: the same image digest as the live `zoe-database`
-   (test-pinned to compose), its own `--internal` network, no volume, no published port, 512 MB memory+swap, 256 pids, caps
-   dropped, trust auth inside that network only. `down` removes container + network (also the unit's `ExecStopPost`).
+   (test-pinned to compose), its own `--internal` network, no bind and no named volume (only the image's own anonymous data
+   volume), no published port, 512 MB memory+swap, 256 pids, caps dropped, trust auth inside that network only. The helper
+   trusts objects by the ids `up` RECORDED (root-owned state under `/run` once installed), never by name: a container or
+   network planted under the drill's name is refused, never exec'd into or removed (lab N9). `down` removes the recorded
+   container WITH its anonymous volume (`rm -v`: the restored household data) and network; it is also the unit's
+   `ExecStopPost`.
 3. **Checks** (each a finding on failure): the dump's sha256 vs its manifest and a full gunzip; `pg_restore --exit-on-error`
    into the sandbox; **every table's `count(*) FROM ONLY`** equal to the manifest, no table missing or extra, the dump's table
    set equal to the live catalog's at backup time; the **pgvector extension version** equal to the dump's; the Alembic revision;
@@ -316,8 +320,10 @@ Never touched: the live database (the drill only reads its image name), the live
   secrets and auth), and old copies of rotated secrets are what a stolen disk or a copied backup dir leaks. Set
   `Environment=ZOE_LOCAL_BACKUP_ENCRYPT=1` in a `zoe-backup.service` drop-in: the archive becomes `host-<ts>.tar.gz.age`, to the
   SAME public recipient as the off-box tiers (`~/.config/zoe-backup/age-recipients.txt`). Cost: the box can no longer read it
-  (the identity never lives here), so the weekly drill only checks the age header, and a local restore of host config needs the
-  owner's identity.
+  (the identity never lives here). So the plaintext is checked against its manifest just BEFORE encryption, and a
+  `host-<ts>.tar.gz.age.sha256` sidecar records the ciphertext's sha256; the weekly drill checks the age header and that
+  sha256 (a truncated or bit-rotted archive goes red, lab N10) and says the contents are readable only with the owner's
+  identity. A local restore of host config then needs that identity.
 - **Postgres dumps and the palace tarball: no.** Their job is a fast local restore (a bad migration, a corrupted palace) without
   the owner's vault, and the drill must be able to restore them. Whoever can read `~/.zoe-backups` (0700) can already read the live
   database. The protection that actually covers a stolen box is full-disk encryption (LUKS on the NVMe), an owner decision with
@@ -347,7 +353,7 @@ real chromadb 1.5.9, a synthetic box, and the REAL scripts end to end: `postgres
 `mempalace-nightly-backup.sh`, `zoe_host_snapshot.py` + `zoe-ha-config-export`, `zoe_restore_drill.py` + `zoe-restore-drill-pg`.
 Gates: `night_busy.sh test`, 01:35-04:55, MemAvailable >= 2000 MB, the test-lane lock.
 
-**2026-10-19: 15/15 cells** (Jetson, pgvector 0.8.6-pg17 pinned digest, chromadb 1.5.9). S1 the real nightly script's manifest:
+**2026-10-19: 18/18 cells** (Jetson, pgvector 0.8.6-pg17 pinned digest, chromadb 1.5.9). S1 the real nightly script's manifest:
 1,234 multi-line rows counted exactly, a quoted table name, a partitioned parent (0) and its partition (40), the biometric
 table listed as data-excluded, pgvector 0.8.6, Alembic 0057, live table set equal; S2 the real palace tarball; S3 the host
 archive holds exactly the new sources and none of the exclusions (shadow log, VAPID key, dead `zoe.db`, HA log, recorder,
@@ -360,6 +366,9 @@ image as the sandbox (pgvector 0.8.2 vs the dump's 0.8.6); **N4** a palace tarba
 `Error finding id`); **N5** one host file changed (differs from the manifest); **N6** the HA helper refuses a symlinked
 `.storage`, skips a symlinked file inside it and refuses a symlinked parent; **N7** a memory floor above MemAvailable
 refuses (exit 3) before any container exists; **N8** the drill helper refuses five out-of-set argument lists (exit 2);
-**T1** teardown leaves no container, network or scratch dir, and the live database's database list is unchanged.
+**N9** a container planted under the drill's name is refused and left exactly as it was (never started, exec'd or
+removed); **S5** with `ZOE_LOCAL_BACKUP_ENCRYPT=1` the host archive is age-encrypted (pinned age v1.3.2), the drill finds
+the ciphertext intact and an off-box identity opens it; **N10** the same archive truncated goes red; **T1** teardown
+leaves no container, network, anonymous volume or scratch dir, and the live database's database list is unchanged.
 The A5 lab (`labs/offbox-backup`) was re-run with the host sources in its synthetic box: 19/19 (B2 ships exactly the
 new sources to each tier; B4 an unchanged crontab re-encrypts nothing).

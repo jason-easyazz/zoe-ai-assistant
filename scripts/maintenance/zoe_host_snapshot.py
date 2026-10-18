@@ -168,10 +168,39 @@ def age_recipients(p) -> Optional[Path]:
     return rec
 
 
+def verify_archive(path: Path, manifest: dict) -> list[str]:
+    """Re-open the plaintext archive and check every member against the manifest (before it is encrypted: after
+    that the box can no longer read it)."""
+    bad = []
+    with tarfile.open(path, "r:gz") as t:
+        seen = set()
+        for m in t.getmembers():
+            if m.name == "MANIFEST.json" or not m.isfile():
+                continue
+            fh = t.extractfile(m)
+            seen.add(m.name)
+            if fh is None or hashlib.sha256(fh.read()).hexdigest() != manifest["files"].get(m.name):
+                bad.append(m.name)
+        bad += sorted(set(manifest["files"]) - seen)
+    return bad
+
+
+def archives(out_dir: Path) -> list[Path]:
+    """The host archives, newest first (``.sha256`` sidecars and ``.partial`` files are not archives)."""
+    return sorted((f for f in out_dir.glob("host-*.tar.gz*") if f.name.endswith((".tar.gz", ".tar.gz.age"))),
+                  key=lambda f: f.stat().st_mtime, reverse=True)
+
+
 def rotate(out_dir: Path, pattern: str, keep: int = KEEP) -> None:
     files = sorted(out_dir.glob(pattern), key=lambda f: f.stat().st_mtime, reverse=True)
     for f in files[keep:]:
         f.unlink(missing_ok=True)
+
+
+def rotate_archives(out_dir: Path, keep: int = KEEP) -> None:
+    for f in archives(out_dir)[keep:]:
+        f.unlink(missing_ok=True)
+        f.with_name(f.name + ".sha256").unlink(missing_ok=True)
 
 
 def main() -> int:
@@ -189,6 +218,10 @@ def main() -> int:
         man = build_archive(srcs, part)
         final = out_dir / f"host-{ts}.tar.gz"
         if rec is not None:
+            bad = verify_archive(part, man)          # the last moment the box can read it
+            if bad:
+                print(f"zoe-host-snapshot: archive does not match its manifest: {bad[:5]}", file=sys.stderr)
+                return 1
             age = shutil.which("age") or str(p.home / ".local" / "bin" / "age")
             enc = Path(td) / "host.tar.gz.age"
             r = subprocess.run([age, "-R", str(rec), "-o", str(enc), str(part)], capture_output=True)
@@ -196,12 +229,16 @@ def main() -> int:
                 print(f"zoe-host-snapshot: age failed: {r.stderr.decode(errors='replace')[-200:]}", file=sys.stderr)
                 return 1
             part, final = enc, out_dir / f"host-{ts}.tar.gz.age"
+            # the drill cannot decrypt it, so it checks the CIPHERTEXT against this (truncation, bit rot)
+            side = final.with_name(final.name + ".sha256")
+            side.write_text(json.dumps({"sha256": _sha256(enc), "files": len(man["files"]), "verified_plain": True}))
+            os.chmod(side, 0o600)
         tmp_final = final.with_name(final.name + ".partial")
         shutil.copyfile(part, tmp_final)
         os.chmod(tmp_final, 0o600)
         os.replace(tmp_final, final)
     rotate(out_dir, "ha-storage-*.tar.gz")
-    rotate(out_dir, "host-*.tar.gz*")
+    rotate_archives(out_dir)
     missing = sorted(k for k, v in man["labels"].items() if v["missing"])
     print(f"zoe-host-snapshot: {final.name}: {len(man['files'])} files from {len(man['labels'])} sources"
           + (f"; missing: {', '.join(missing)}" if missing else ""))

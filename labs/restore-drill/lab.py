@@ -12,6 +12,7 @@ the live backups. Every cell prints PASS/FAIL; negative controls break one thing
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import os
 import re
@@ -45,6 +46,15 @@ def run(*args, check=True, **kw) -> subprocess.CompletedProcess:
     if check and r.returncode != 0:
         raise RuntimeError(f"{args[0]} {args[1] if len(args) > 1 else ''} rc={r.returncode}: {r.stderr[-600:]}")
     return r
+
+
+def anon_volumes() -> list[str]:
+    """Dangling anonymous volumes (a removed postgres container without -v leaves its data dir behind as one)."""
+    ids = run("docker", "volume", "ls", "-q", "-f", "dangling=true", check=False).stdout.split()
+    if not ids:
+        return []
+    info = json.loads(run("docker", "volume", "inspect", *ids, check=False).stdout or "[]")
+    return [v["Name"] for v in info if "com.docker.volume.anonymous" in (v.get("Labels") or {})]
 
 
 def pinned_image() -> str:
@@ -150,6 +160,7 @@ def main() -> int:
 
     live_dbs_before = run("docker", "exec", "zoe-database", "psql", "-U", "zoe", "-XAtc",
                           "SELECT string_agg(datname, ',' ORDER BY datname) FROM pg_database", check=False).stdout
+    anon_before = set(anon_volumes())
     snapshot = root / "pristine-backups"
     try:
         # ── the source database (synthetic), dumped by the REAL nightly script
@@ -182,7 +193,7 @@ def main() -> int:
         p = subprocess.run(["docker", "exec", SRC, "pg_dump", "-U", "zoe", "-Fc",
                             "--exclude-table=public.chat_messages", "--exclude-table-data=learned_voiceprints", "zoe"], capture_output=True)
         missing_dump.write_bytes(gzip.compress(p.stdout))
-        run("docker", "rm", "-f", SRC)
+        run("docker", "rm", "-f", "-v", SRC)
 
         # ── the palace (real chromadb 1.5.9) and its REAL nightly tarball
         palace = home / ".mempalace"
@@ -344,9 +355,51 @@ def main() -> int:
         rcs = [subprocess.run(["sh", LIBEXEC / "zoe-restore-drill-pg", *a], capture_output=True).returncode
                for a in bad]
         cell("N8 the drill helper refuses every argument outside its set", rcs == [2] * len(bad), str(rcs))
+
+        # ── N9 a container PLANTED under the drill's name (as one mounting a live volume would be) is never used
+        reset()
+        run("docker", "create", "--name", "zoe-restore-drill", "--network", "none", "--label", "lab-planted=1",
+            image)
+        planted = run("docker", "inspect", "-f", "{{.Id}}", "zoe-restore-drill").stdout.strip()
+        r = drill()
+        still = run("docker", "inspect", "-f", "{{.Id}} {{.State.Status}}", "zoe-restore-drill", check=False).stdout.split()
+        cell("N9 a planted container with the drill's name: refused, never started, exec'd or removed",
+             r.returncode == 1 and "did not create" in (r.stdout + r.stderr)
+             and still == [planted, "created"], f"{tail(r)} planted={still}")
+        run("docker", "rm", "-f", "-v", "zoe-restore-drill", check=False)
+
+        # ── S5 / N10 local encryption at rest, with the pinned age from the A5 lab
+        age_bin = REPO / "labs" / "offbox-backup" / ".bin"
+        if (age_bin / "age").is_file():
+            reset()
+            cfg = home / ".config" / "zoe-backup"
+            cfg.mkdir(parents=True, exist_ok=True)
+            run(age_bin / "age-keygen", "-o", root / "owner-identity.txt")     # stays OUTSIDE the box's config
+            rcp = run(age_bin / "age-keygen", "-y", root / "owner-identity.txt").stdout.strip()
+            (cfg / "age-recipients.txt").write_text(rcp + "\n")
+            enc_env = {**base_env, **ha_env, "ZOE_LOCAL_BACKUP_ENCRYPT": "1",
+                       "PATH": f"{age_bin}:{os.environ['PATH']}"}
+            r1 = run(sys.executable, MAINT / "zoe_host_snapshot.py", check=False, env=enc_env)
+            enc = sorted((backups / "host").glob("host-*.tar.gz.age"))
+            r = drill()
+            ok_note = "ciphertext intact" in r.stdout
+            dec = subprocess.run([str(age_bin / "age"), "-d", "-i", str(root / "owner-identity.txt"), str(enc[-1])],
+                                 capture_output=True) if enc else None
+            plain_ok = dec is not None and dec.returncode == 0 and tarfile.is_tarfile(io.BytesIO(dec.stdout))
+            cell("S5 ZOE_LOCAL_BACKUP_ENCRYPT=1: the host archive is age-encrypted, the drill finds the ciphertext "
+                 "intact, the owner's identity opens it", r1.returncode == 0 and bool(enc) and r.returncode == 0
+                 and ok_note and plain_ok, f"snapshot rc={r1.returncode} drill rc={r.returncode} {tail(r)}")
+            data = enc[-1].read_bytes()
+            enc[-1].write_bytes(data[: len(data) // 2])
+            r = drill()
+            cell("N10 a truncated encrypted host archive goes red", r.returncode == 1 and "truncated" in tail(r),
+                 tail(r))
+        else:
+            cell("S5/N10 local encryption", False, f"no pinned age in {age_bin} (run labs/offbox-backup first)")
     finally:
-        run("docker", "rm", "-f", SRC, check=False)
+        run("docker", "rm", "-f", "-v", SRC, check=False)
         run("sh", LIBEXEC / "zoe-restore-drill-pg", "down", check=False)
+        leaked = sorted(set(anon_volumes()) - anon_before)
         live_dbs_after = run("docker", "exec", "zoe-database", "psql", "-U", "zoe", "-XAtc",
                              "SELECT string_agg(datname, ',' ORDER BY datname) FROM pg_database", check=False).stdout
         left = run("docker", "ps", "-a", "--filter", "name=zoe-restore-drill", "--format", "{{.Names}}",
@@ -355,9 +408,10 @@ def main() -> int:
                    check=False).stdout.strip()
         scratch = list((home / ".cache" / "zoe-restore-drill").glob("drill-*")) if home.exists() else []
         shutil.rmtree(root, ignore_errors=True)
-        cell("T1 teardown: no drill/lab container or network left, no drill scratch dir, the live database's "
-             "database list unchanged", not left and not nets and not scratch and live_dbs_before == live_dbs_after
-             and not root.exists(), f"containers={left!r} networks={nets!r} scratch={len(scratch)} "
+        cell("T1 teardown: no drill/lab container, network, anonymous volume or scratch dir left, the live "
+             "database's database list unchanged", not left and not nets and not scratch and not leaked
+             and live_dbs_before == live_dbs_after and not root.exists(),
+             f"containers={left!r} networks={nets!r} volumes={len(leaked)} scratch={len(scratch)} "
              f"live dbs unchanged={live_dbs_before == live_dbs_after}")
     failed = [n for n, ok, _ in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} cells PASS" + (f"; FAILED: {failed}" if failed else ""))
