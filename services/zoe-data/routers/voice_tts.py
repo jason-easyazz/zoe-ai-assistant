@@ -23,6 +23,8 @@ from fastapi.responses import StreamingResponse
 from auth import get_current_user
 import panel_principal
 from database import get_db
+# Every per-turn UI push goes to the ORIGINATING panel's channel only (A11, 2026-10-18), never "all".
+from push import panel_channel as _panel_channel
 from stt_wake_strip import _strip_wake_word
 from typed_env import env_bool, env_float, env_int, env_list, env_str
 from user_filters import is_unidentified as _is_unidentified
@@ -898,10 +900,10 @@ async def _require_livekit_auth(
 ) -> dict:
     """Gate for the LiveKit join token — never anonymous.
 
-    A `/livekit-token` response is a signed room-join grant for ``zoe-voice``,
-    the house voice room: whoever holds it can publish a mic track, subscribe to
-    Zoe's replies to everyone else in the room, and publish data. So the caller
-    must present SOMETHING. ``Depends(get_current_user)`` alone does not achieve
+    A `/livekit-token` response is a signed room-join grant for a fresh per-session
+    room (``zoe-voice-<panel>-<random>``, A10): whoever holds it can publish a mic
+    track, hear Zoe's replies in that room, and publish data. So the caller must
+    present SOMETHING. ``Depends(get_current_user)`` alone does not achieve
     that — it RESOLVES an identity (guest for a credential-less request) but
     never enforces one, so the endpoint handed a valid token to any LAN client.
 
@@ -1382,8 +1384,8 @@ async def _broadcast_weather_ui(
                     )
             try:
                 from push import broadcaster
-                await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
-                await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+                await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": nav_action})
+                await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": card_action})
             except Exception as exc:
                 logger.debug("voice weather ui broadcast failed (non-fatal): %s", exc)
             break
@@ -1430,8 +1432,8 @@ async def _broadcast_calendar_ui(
     }
     try:
         from push import broadcaster
-        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
-        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+        await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": nav_action})
+        await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": card_action})
     except Exception as exc:
         logger.debug("voice calendar ui broadcast failed (non-fatal): %s", exc)
     try:
@@ -1577,8 +1579,8 @@ async def _broadcast_skybridge_ui(
                     panel_id, _panel_user_id, _sup_exc,
                 )
             await _db.commit()
-            nav_delivered = await broadcaster.broadcast_to_panel(
-                panel_id,
+            nav_delivered = await broadcaster.broadcast(
+                _panel_channel(panel_id),
                 "ui_action",
                 {**nav_message, "payload": nav_payload},
             )
@@ -1632,10 +1634,10 @@ async def _broadcast_lets_talk_ui(panel_id: str, turn_key: Optional[str] = None)
     try:
         from push import broadcaster
         # Broadcast nav action (handled by touch-ui-executor).
-        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+        await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": nav_action})
         # Also broadcast a transient start-conversation signal — NOT enqueued in DB.
         # The voice page handles this to begin auto-listening after a short delay.
-        await broadcaster.broadcast("all", "voice:start_conversation", {
+        await broadcaster.broadcast(_panel_channel(panel_id), "voice:start_conversation", {
             "panel_id": panel_id,
             "delay_ms": 2500,   # wait for TTS echo to settle before opening mic
         })
@@ -1786,7 +1788,7 @@ async def _broadcast_action_form_panel(
     }
     try:
         from push import broadcaster
-        await broadcaster.broadcast("all", "ui_action", {"action": form_action})
+        await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": form_action})
     except Exception as exc:
         logger.debug("_broadcast_action_form_panel broadcast failed (non-fatal): %s", exc)
     try:
@@ -1853,8 +1855,8 @@ async def _broadcast_reminder_ui(
     }
     try:
         from push import broadcaster
-        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
-        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+        await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": nav_action})
+        await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": card_action})
     except Exception as exc:
         logger.debug("voice reminder ui broadcast failed (non-fatal): %s", exc)
     try:
@@ -1917,7 +1919,7 @@ async def _request_auth_ui(panel_id: str, challenge_id: str, reason: str) -> boo
     delivered = False
     try:
         from push import broadcaster as _bc_auth
-        await _bc_auth.broadcast("all", "ui_action", {"action": auth_action})
+        await _bc_auth.broadcast(_panel_channel(panel_id), "ui_action", {"action": auth_action})
         delivered = True
     except Exception as exc:
         logger.debug("voice auth ui broadcast failed (non-fatal): %s", exc)
@@ -2044,8 +2046,8 @@ async def _request_voice_identity_challenge(
         pass
     try:
         from push import broadcaster as _bc_auth_state
-        await _bc_auth_state.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _pin_phrase[:200]})
-        await _bc_auth_state.broadcast("all", "voice:done", {"panel_id": panel_id})
+        await _bc_auth_state.broadcast(_panel_channel(panel_id), "voice:responding", {"panel_id": panel_id, "text": _pin_phrase[:200]})
+        await _bc_auth_state.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
     except Exception:
         pass
     return {
@@ -3116,7 +3118,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         if stripped and not is_instrument:
             try:
                 from push import broadcaster
-                await broadcaster.broadcast("all", "voice:transcript", {
+                await broadcaster.broadcast(_panel_channel(panel_id), "voice:transcript", {
                     "panel_id": panel_id,
                     "text": stripped,
                 })
@@ -3126,7 +3128,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         if not is_instrument:
             try:
                 from push import broadcaster
-                await broadcaster.broadcast("all", "voice:thinking", {"panel_id": panel_id})
+                await broadcaster.broadcast(_panel_channel(panel_id), "voice:thinking", {"panel_id": panel_id})
             except Exception:
                 pass
         return {"ok": True, "panel_id": panel_id, "text": stripped}
@@ -3211,7 +3213,7 @@ async def _handle_introduce_intent(
     # Navigate touch panel to their people card
     try:
         from push import broadcaster as _bc_intro
-        await _bc_intro.broadcast("all", "ui_action", {
+        await _bc_intro.broadcast(_panel_channel(panel_id), "ui_action", {
             "action": {
                 "action": "panel_navigate",
                 # Estate is the sole kiosk: land on home.html; the estate opens the
@@ -3498,7 +3500,9 @@ async def voice_command(
 
             _pre_rr = (payload or {}).get("_router_decision") if isinstance((payload or {}).get("_spacer"), _SpacerTurnRR) else None
             # reuse a verdict the mishear guard computed on this exact text (turn_stream); otherwise route here as always
-            _rr = _pre_rr if isinstance(_pre_rr, dict) and (payload or {}).get("_router_text") == text else _sr.route(text)
+            # off the loop (A1): the two-stage sidecar decode blocks ~400 ms on the one uvicorn worker
+            _rr = (_pre_rr if isinstance(_pre_rr, dict) and (payload or {}).get("_router_text") == text
+                   else await asyncio.to_thread(_sr.route, text))
             _router_decision = _rr
             logger.warning("ROUTER_SHADOW text=%r -> routed=%s (best=%s %.2f) %.1fms scores=%s",
                            text[:70], _rr["routed"], _rr["domain"], _rr["score"], _rr["ms"], _rr["scores"])
@@ -3715,8 +3719,8 @@ async def voice_command(
                 logger.warning("voice/command lock reply TTS failed: %s", _lock_exc)
         try:
             from push import broadcaster as _bc_lock
-            await _bc_lock.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _lock_reply})
-            await _bc_lock.broadcast("all", "voice:done", {"panel_id": panel_id})
+            await _bc_lock.broadcast(_panel_channel(panel_id), "voice:responding", {"panel_id": panel_id, "text": _lock_reply})
+            await _bc_lock.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
         except Exception:
             pass
         return {"ok": True, "panel_id": panel_id, "reply": _lock_reply, "audio_base64": _lock_b64,
@@ -3811,7 +3815,7 @@ async def voice_command(
                 clear_active_form(panel_id)
                 try:
                     from push import broadcaster as _bc_af
-                    await _bc_af.broadcast("all", "ui_action", {
+                    await _bc_af.broadcast(_panel_channel(panel_id), "ui_action", {
                         "action": {
                             "id": f"voice_form_close_{panel_id}_{_turn_key}",
                             "action_type": "panel_close_action_form",
@@ -3879,7 +3883,7 @@ async def voice_command(
                 clear_active_form(panel_id)
                 try:
                     from push import broadcaster as _bc_conf
-                    await _bc_conf.broadcast("all", "ui_action", {
+                    await _bc_conf.broadcast(_panel_channel(panel_id), "ui_action", {
                         "action": {
                             "id": f"voice_form_close_{panel_id}_{_turn_key}",
                             "action_type": "panel_close_action_form",
@@ -3912,7 +3916,7 @@ async def voice_command(
                         else:
                             _af_payload["field"] = _fname
                             _af_payload["value"] = _fval
-                        await _bc_af2.broadcast("all", "ui_action", {
+                        await _bc_af2.broadcast(_panel_channel(panel_id), "ui_action", {
                             "action": {
                                 "id": f"voice_field_{panel_id}_{_fname}_{_turn_key}",
                                 "action_type": _af_action_type,
@@ -3985,7 +3989,7 @@ async def voice_command(
                 try:
                     import stt_snap as _stt_snap_yes
 
-                    _router_decision = _stt_snap_yes.route_for(text)
+                    _router_decision = await _stt_snap_yes.route_for(text)
                     logger.warning("STT_SNAP from=%s to=%s outcome=confirmed", pending.get("stt_snap_from", ""),
                                    pending.get("stt_snap_intent", ""))
                 except Exception as _snap_yes_exc:
@@ -4018,7 +4022,7 @@ async def voice_command(
                     ct_conf = "audio/wav"
                 try:
                     from push import broadcaster as _bc_conf
-                    await _bc_conf.broadcast("all", "voice:done", {"panel_id": panel_id})
+                    await _bc_conf.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
                 except Exception:
                     pass
                 await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
@@ -4037,7 +4041,7 @@ async def voice_command(
                     ct_can = "audio/wav"
                 try:
                     from push import broadcaster as _bc_can
-                    await _bc_can.broadcast("all", "voice:done", {"panel_id": panel_id})
+                    await _bc_can.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
                 except Exception:
                     pass
                 return {"ok": True, "panel_id": panel_id, "reply": reply_text,
@@ -4048,14 +4052,14 @@ async def voice_command(
     try:
         from push import broadcaster as _bc
         _warn_if_panel_deaf(panel_id)
-        await _bc.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": text})
+        await _bc.broadcast(_panel_channel(panel_id), "voice:transcript", {"panel_id": panel_id, "text": text})
     except Exception:
         pass
 
     # Broadcast thinking state so orb shows processing animation.
     try:
         from push import broadcaster as _bc
-        await _bc.broadcast("all", "voice:thinking", {"panel_id": panel_id})
+        await _bc.broadcast(_panel_channel(panel_id), "voice:thinking", {"panel_id": panel_id})
     except Exception:
         pass
 
@@ -4080,8 +4084,8 @@ async def voice_command(
             _xct = _xaudio.media_type
         try:
             from push import broadcaster as _bc_xd
-            await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text})
-            await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
+            await _bc_xd.broadcast(_panel_channel(panel_id), "voice:responding", {"panel_id": panel_id, "text": reply_text})
+            await _bc_xd.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
         except Exception:
             pass
         await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
@@ -4164,7 +4168,7 @@ async def voice_command(
                     _stt_snap.log_line(_snap, "acted", guest=_snap_guest)
                     text = _snap.text
                     _spacer.text = text
-                    _router_decision = _stt_snap.route_for(text)
+                    _router_decision = await _stt_snap.route_for(text)
                     _stt_snap.note_struggle(_snap, "acted", turn_text=text)
     except Exception as _snap_exc:
         logger.warning("voice/command stt snap failed (non-fatal): %s", _snap_exc)
@@ -4188,7 +4192,7 @@ async def voice_command(
                     try:
                         from push import broadcaster as _bc_pi_hybrid
 
-                        await _bc_pi_hybrid.broadcast("all", "voice:responding", {
+                        await _bc_pi_hybrid.broadcast(_panel_channel(panel_id), "voice:responding", {
                             "panel_id": panel_id,
                             "text": _ack_text,
                             "processing_ack": True,
@@ -4211,14 +4215,14 @@ async def voice_command(
                     try:
                         from push import broadcaster as _bc_pi_done
 
-                        await _bc_pi_done.broadcast("all", "voice:responding", {
+                        await _bc_pi_done.broadcast(_panel_channel(panel_id), "voice:responding", {
                             "panel_id": panel_id,
                             "text": reply_text,
                             "pi_hybrid": True,
                         })
                         if str(_pi_hybrid.get("intent") or "") == "weather":
                             await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
-                        await _bc_pi_done.broadcast("all", "voice:done", {"panel_id": panel_id})
+                        await _bc_pi_done.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
                     except Exception:
                         pass
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
@@ -4251,7 +4255,7 @@ async def voice_command(
             _fallback_cue = await processing_cue_packet(text=text)
             _fallback_ack_text = str(_fallback_cue.get("text") or "").strip()
             if _fallback_ack_text:
-                await _bc_voice_fallback.broadcast("all", "voice:responding", {
+                await _bc_voice_fallback.broadcast(_panel_channel(panel_id), "voice:responding", {
                     "panel_id": panel_id,
                     "text": _fallback_ack_text,
                     "processing_ack": True,
@@ -4371,8 +4375,8 @@ async def voice_command(
                         _sky_t_resolve, _bcast_dt, time.monotonic() - _synth_t0, stream, _skybridge_reply[:50])
             try:
                 from push import broadcaster as _bc_sky
-                await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply})
-                await _bc_sky.broadcast("all", "voice:done", {"panel_id": panel_id})
+                await _bc_sky.broadcast(_panel_channel(panel_id), "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply})
+                await _bc_sky.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
             except Exception:
                 pass
             await _schedule_voice_chat_save(session_id, text, _skybridge_reply, _skybridge_user, speaker_verified=_speaker_verified)
@@ -4789,11 +4793,11 @@ async def voice_command(
                 ct_confirm = "audio/wav"
             try:
                 from push import broadcaster as _bc_pend
-                await _bc_pend.broadcast("all", "voice:responding", {
+                await _bc_pend.broadcast(_panel_channel(panel_id), "voice:responding", {
                     "panel_id": panel_id,
                     "text": confirm_phrase[:200],
                 })
-                await _bc_pend.broadcast("all", "voice:done", {"panel_id": panel_id})
+                await _bc_pend.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
             except Exception:
                 pass
             return {"ok": True, "panel_id": panel_id, "reply": confirm_phrase,
@@ -4867,14 +4871,14 @@ async def voice_command(
                     pass
                 try:
                     from push import broadcaster as _bc_pub
-                    await _bc_pub.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _pub_reply})
+                    await _bc_pub.broadcast(_panel_channel(panel_id), "voice:responding", {"panel_id": panel_id, "text": _pub_reply})
                 except Exception:
                     pass
                 _pub_audio_resp = await synthesize({"text": _pub_reply}, caller=caller)
                 _pub_audio_b64 = base64.b64encode(_pub_audio_resp.body).decode("ascii")
                 try:
                     from push import broadcaster as _bc_pub2
-                    await _bc_pub2.broadcast("all", "voice:done", {"panel_id": panel_id})
+                    await _bc_pub2.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
                 except Exception:
                     pass
                 try:
@@ -5107,7 +5111,7 @@ async def voice_command(
                         return
                     if reply and not _card_sent:
                         try:
-                            await _bc_stream.broadcast("all", "ui_action", {
+                            await _bc_stream.broadcast(_panel_channel(panel_id), "ui_action", {
                                 "action": {
                                     "id": f"voice_card_{panel_id}",
                                     "action_type": "show_card",
@@ -5122,7 +5126,7 @@ async def voice_command(
                             pass
                     _card_sent = True
                     try:
-                        await _bc_stream.broadcast("all", "voice:done", {"panel_id": panel_id})
+                        await _bc_stream.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
                     except Exception:
                         pass
                     _screen_finished = True
@@ -5153,7 +5157,7 @@ async def voice_command(
                         # acknowledgement, not part of what Zoe actually answered).
                         if record:
                             full_reply_parts.append(s)
-                        await _bc_stream.broadcast("all", "voice:responding", {
+                        await _bc_stream.broadcast(_panel_channel(panel_id), "voice:responding", {
                             "panel_id": panel_id,
                             "text": s,
                         })
@@ -5210,7 +5214,7 @@ async def voice_command(
                         if ack_event:
                             ack_text = str(ack_event.get("text") or "").strip()
                             if ack_text:
-                                await _bc_stream.broadcast("all", "voice:responding", {
+                                await _bc_stream.broadcast(_panel_channel(panel_id), "voice:responding", {
                                     "panel_id": panel_id,
                                     "text": ack_text,
                                     "processing_ack": True,
@@ -5497,7 +5501,7 @@ async def voice_command(
                                 else:
                                     _lf_payload["field"] = _lf_name
                                     _lf_payload["value"] = _lf_val
-                                await _bc_llm_ff.broadcast("all", "ui_action", {
+                                await _bc_llm_ff.broadcast(_panel_channel(panel_id), "ui_action", {
                                     "action": {
                                         "id": f"llm_field_{panel_id}_{_lf_name}_{_turn_key}",
                                         "action_type": _lf_action_type,
@@ -5552,7 +5556,7 @@ async def voice_command(
         audio_b64, content_type = await _make_fallback_audio()
         try:
             from push import broadcaster as _bc_err
-            await _bc_err.broadcast("all", "voice:done", {"panel_id": panel_id})
+            await _bc_err.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
         except Exception:
             pass
         return {
@@ -5575,11 +5579,11 @@ async def voice_command(
         async def _broadcast_response():
             try:
                 from push import broadcaster as _bc2
-                await _bc2.broadcast("all", "voice:responding", {
+                await _bc2.broadcast(_panel_channel(panel_id), "voice:responding", {
                     "panel_id": panel_id,
                     "text": reply_text,
                 })
-                await _bc2.broadcast("all", "ui_action", {
+                await _bc2.broadcast(_panel_channel(panel_id), "ui_action", {
                     "action": {
                         "id": f"voice_card_{panel_id}",
                         "action_type": "show_card",
@@ -5624,7 +5628,7 @@ async def voice_command(
     # Broadcast done so orb returns to idle.
     try:
         from push import broadcaster as _bc3
-        await _bc3.broadcast("all", "voice:done", {"panel_id": panel_id})
+        await _bc3.broadcast(_panel_channel(panel_id), "voice:done", {"panel_id": panel_id})
     except Exception:
         pass
 
@@ -5755,7 +5759,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     try:
         from push import broadcaster as _bc_t
         _warn_if_panel_deaf(panel_id)
-        await _bc_t.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": transcript})
+        await _bc_t.broadcast(_panel_channel(panel_id), "voice:transcript", {"panel_id": panel_id, "text": transcript})
     except Exception:
         pass
 
@@ -5975,7 +5979,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             def _mc_route(_t: str):
                 import semantic_router as _sr_mc
                 return _sr_mc.route(_t) if _sr_mc.is_enabled() else None
-            _mc = _mishear.evaluate(
+            # evaluate() may call the router (sync, ~400 ms with the sidecar): run it off the event loop (A1)
+            _mc = await asyncio.to_thread(
+                _mishear.evaluate,
                 _mc_text,
                 panel_id=panel_id,
                 clip_s=duration_s or _mishear.wav_seconds(raw),
@@ -6015,7 +6021,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     try:
         from push import broadcaster as _bc_t
         _warn_if_panel_deaf(panel_id)
-        await _bc_t.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": transcript})
+        await _bc_t.broadcast(_panel_channel(panel_id), "voice:transcript", {"panel_id": panel_id, "text": transcript})
     except Exception:
         pass
 
@@ -6598,7 +6604,7 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
     # Broadcast voice state so the touch UI orb shows the listening state.
     try:
         from push import broadcaster
-        await broadcaster.broadcast("all", "voice:listening_started", {
+        await broadcaster.broadcast(_panel_channel(panel_id), "voice:listening_started", {
             "panel_id": panel_id,
             "source": "wake_word",
         })
@@ -7341,11 +7347,17 @@ async def get_livekit_token(request: Request, caller: dict = Depends(_require_li
     # On-demand: spin up the LiveKit container + agent before handing back a token,
     # so the browser's WebRTC connect succeeds.  Best-effort and bounded — never
     # blocks token issuance if the container is slow or docker is unavailable.
+    #
+    # ONE ROOM PER SESSION (A10, 2026-10-18): this token's room is fresh and unguessable, and the agent joins exactly
+    # it. Every token used to name the fixed room "zoe-voice" with publish + subscribe - a party line where two open
+    # sessions heard each other and the agent's replies reached everyone. The panel id is only a label in the name
+    # (the device token's own panel, else the page's ?panel_id=, else "web"); the random half is what isolates.
+    from routers.voice_livekit import ensure_livekit_started, new_session_room
+
+    room_name = new_session_room(caller.get("panel_id") or request.query_params.get("panel_id") or "web")
     livekit_ready: bool = True
     try:
-        from routers.voice_livekit import ensure_livekit_started, _ondemand_enabled
-        if _ondemand_enabled():
-            livekit_ready = await ensure_livekit_started()
+        livekit_ready = await ensure_livekit_started(room_name=room_name)
     except Exception as _lk_exc:  # pragma: no cover - defensive
         logger.warning("livekit on-demand start failed (non-fatal): %s", _lk_exc)
 
@@ -7386,7 +7398,7 @@ async def get_livekit_token(request: Request, caller: dict = Depends(_require_li
         "jti": _uuid.uuid4().hex,
         "video": {
             "roomJoin": True,
-            "room": "zoe-voice",
+            "room": room_name,  # this session only - a LiveKit grant is valid for the one room it names
             "canPublish": True,
             "canSubscribe": True,
             "canPublishData": True,
@@ -7413,7 +7425,7 @@ async def get_livekit_token(request: Request, caller: dict = Depends(_require_li
 
     logger.debug("livekit-token: user=%s url=%s origin=%s lan_ip=%s lk_avail=%s",
                  user_id, livekit_url, origin, _cf_ip, livekit_available)
-    return {"token": token, "url": livekit_url, "livekit_available": livekit_available}
+    return {"token": token, "url": livekit_url, "livekit_available": livekit_available, "room": room_name}
 
 
 # ── Voice confirmation state ───────────────────────────────────────────────

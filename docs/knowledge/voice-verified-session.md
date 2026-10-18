@@ -137,7 +137,7 @@ on open). Never audio, never a score.
 2. Lift the panel's speaker shadow so claims reach the server: `SPEAKER_ID_SHADOW=0` in the Pi's `.env.voice`, restart
    `zoe-voice` (only after the shadow week's false-accept / false-reject numbers are reviewed, per W5).
 3. Set `ZOE_VOICE_SESSION=1` (optionally `ZOE_VOICE_SESSION_TTL_S`) in zoe-data's env and restart zoe-data; deploy the
-   UI (`touch/home.html` loads `js/touch-voice-session.js`; the executor is cache-busted `?v=estate-10-heal`).
+   UI (`touch/home.html` loads `js/touch-voice-session.js`; the executor is cache-busted `?v=estate-11-panel-target`).
 4. Verify: ask "what's on my calendar" by voice - the badge "<name> · voice" appears, the events show and are read out;
    a second voice (or "lock") removes both; "unlock the front door" asks for the PIN; `grep VOICE_SESSION` in
    `~/.zoe-logs/zoe-data.app.log` shows the open / close lines.

@@ -17,6 +17,7 @@ Design notes (see docs/architecture/stage-a-channel-agnostic-core.md):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, Optional
@@ -615,7 +616,8 @@ async def resolve(
             # rather than silently embedding anyway.
             if not _sr.is_enabled():
                 return None
-            rr = _sr.route(text)
+            # off the loop (A1): route() blocks ~400 ms on the sidecar decode; zoe-data is ONE uvicorn worker
+            rr = await asyncio.to_thread(_sr.route, text)
         domain = rr.get("domain") if rr else None
         if domain in (None, "chat"):
             return None
