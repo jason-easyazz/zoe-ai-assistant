@@ -90,28 +90,101 @@ def test_a_table_without_a_member_column_is_not_swept_in(tmp_path):
 
 # ── 2. every other store ───────────────────────────────────────────────────────────────────
 
-_FILE_LITERAL = re.compile(r"""["']([^"'\s]+\.(?:jsonl|sqlite3?|db))["']""")
+_SINK_EXTS = (".jsonl", ".sqlite3", ".sqlite", ".db")
+_CHROMA_CALLS = {"get_or_create_collection", "get_collection", "create_collection"}
+
+
+def _sink_literals(source: str) -> list[str]:
+    """File-sink names in one module, by AST: a string constant with a name before a sink extension (``"x.jsonl"``,
+    ``"~/.zoe/data/x.jsonl"``), or a BARE extension used to BUILD a path (``f"{stem}.jsonl"``, ``base + ".db"``, ``p.with_suffix(".db")``).
+    A bare extension in a comparison (``p.suffix == ".jsonl"``) is a type check, not a sink."""
+    import ast
+
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    out = []
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Constant) and isinstance(n.value, str)):
+            continue
+        v = n.value
+        if any(v.endswith(e) and len(v) > len(e) for e in _SINK_EXTS):
+            out.append(v)
+        elif v in _SINK_EXTS:
+            par = parents.get(n)
+            if isinstance(par, (ast.JoinedStr, ast.BinOp)) or (
+                    isinstance(par, ast.Call) and isinstance(par.func, ast.Attribute) and par.func.attr in ("with_suffix", "with_name")):
+                out.append(v)
+    return out
+
+
+def _chroma_calls(source: str) -> list[tuple[str, str]]:
+    """``(kind, value)`` for each Chroma collection open: kind ``const`` (a string literal), ``name`` (a variable) or ``dynamic``."""
+    import ast
+
+    out = []
+    for n in ast.walk(ast.parse(source)):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in _CHROMA_CALLS:
+            arg = n.args[0] if n.args else next((k.value for k in n.keywords if k.arg == "name"), None)
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                out.append(("const", arg.value))
+            elif isinstance(arg, ast.Name):
+                out.append(("name", arg.id))
+            else:
+                out.append(("dynamic", ast.dump(arg) if arg is not None else ""))
+    return out
 
 
 def test_every_file_sink_in_the_service_is_covered_by_a_marker():
     markers = [m for s in fr.OTHER for m in s.markers]
     uncovered = {}
     for py in _service_py():
-        for lit in _FILE_LITERAL.findall(py.read_text(encoding="utf-8", errors="replace")):
-            if not any(m in lit for m in markers):
+        for lit in _sink_literals(py.read_text(encoding="utf-8", errors="replace")):
+            if not any(m in lit or lit in m for m in markers):
                 uncovered.setdefault(lit, py.name)
     assert not uncovered, (
         f"new file sink(s) {uncovered}: decide what forget does about them and add a Store (markers=...) to forget_reach.OTHER")
 
 
-def test_every_chroma_collection_is_an_inventory_marker():
+def test_sink_discovery_sees_constructed_paths_and_ignores_type_checks():
+    """Break-the-fix control for the scan itself (codex finding 5): constructed and suffix-built sinks are found, a suffix test is not."""
+    src = ('import os\nfrom pathlib import Path\n'
+           'A = "/tmp/new-diary.jsonl"\nB = f"{os.environ[\'X\']}/log" + ".db"\nC = Path(x).with_suffix(".sqlite")\n'
+           'D = f"{stem}.jsonl"\nE = p.suffix == ".jsonl"\nF = name.endswith(".db")\n')
+    found = _sink_literals(src)
+    assert "/tmp/new-diary.jsonl" in found and found.count(".db") == 1 and ".sqlite" in found and ".jsonl" in found
+    assert _sink_literals('x = p.suffix == ".jsonl" or n.endswith(".db")') == []
+
+
+def test_every_chroma_collection_open_is_an_inventory_entry():
     chroma = next(s for s in fr.OTHER if s.kind == "chroma")
-    names = set()
+    consts: dict[str, str] = {}
+    sites = []
     for py in _service_py():
-        names.update(re.findall(r'^_[A-Z_]*COLLECTION\s*=\s*(?:os\.environ\.get\([^,]+,\s*)?"([^"]+)"',
-                                py.read_text(encoding="utf-8", errors="replace"), re.M))
-    assert {"mempalace_drawers", "mempalace_audit"} <= names                 # the scan sees the palace's two collections
-    assert names <= set(chroma.markers), f"collection(s) {names - set(chroma.markers)} are not in the chroma inventory entry"
+        text = py.read_text(encoding="utf-8", errors="replace")
+        for var, val in re.findall(r'^(_[A-Z_]*COLLECTION)\s*=\s*(?:os\.environ\.get\([^,]+,\s*)?"([^"]+)"', text, re.M):
+            consts[var] = val
+        if _chroma_calls(text):
+            sites.append((py.name, _chroma_calls(text)))
+    assert {"mempalace_drawers", "mempalace_audit"} <= set(consts.values())      # the scan sees the palace's two collections
+    problems = []
+    for fname, calls in sites:
+        if fname not in chroma.markers:
+            problems.append(f"{fname}: opens a Chroma collection but is not a call site named in the chroma entry's markers")
+        for kind, val in calls:
+            if kind == "const" and val not in chroma.markers:
+                problems.append(f"{fname}: collection {val!r} is not an inventory marker")
+            elif kind == "name" and val not in consts:
+                problems.append(f"{fname}: collection variable {val} is not a module-level *_COLLECTION constant")
+            elif kind == "dynamic":
+                problems.append(f"{fname}: a collection opened with a computed name - make it a named constant")
+    assert not problems, problems
+    assert set(consts.values()) <= set(chroma.markers)
+
+
+def test_chroma_scan_catches_a_new_collection_call():
+    """Break-the-fix control: a literal, a variable and a computed name each show up."""
+    got = _chroma_calls('c = client.get_or_create_collection(name="diary")\nd = client.get_collection(NAME)\ne = c.create_collection(f"x_{u}")')
+    assert [k for k, _ in got] == ["const", "name", "dynamic"]
 
 
 def test_every_marker_is_still_in_the_code():
@@ -136,22 +209,50 @@ def _module_file(mod: str) -> Path:
 
 
 def _references(site: Path, mod: str, func: str, within: str | None = None) -> bool:
-    """Does ``site`` use ``mod.func`` - a call OR a reference handed to another callable (``asyncio.to_thread(mod.func)``)? By AST, so a
-    comment, a string or an ``import`` line that merely names it does not count. ``within`` limits the search to one function."""
+    """Does ``site`` really use ``mod.func`` - a call OR a reference handed to another callable (``asyncio.to_thread(mod.func)``)? By AST,
+    so a comment, a string or an ``import`` line that merely names it does not count. ``within`` limits the search to one function.
+    In the store's OWN module the eraser is a method/function called there (``self._delete_ids(...)`` / ``_run(...)``): the module
+    being the call site is not enough. An eraser that IS the entry point of its own module is only checked for existence."""
     import ast
 
+    own = site.stem == mod
+    if own and func == within:
+        return True
     tree = ast.parse(site.read_text(encoding="utf-8"))
     scope: list = [tree]
     if within:
         scope = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == within]
         assert scope, f"{site.name} has no function {within}"
-    return any(isinstance(n, ast.Attribute) and n.attr == func and isinstance(n.value, ast.Name) and n.value.id == mod
-               for root in scope for n in ast.walk(root))
+    receivers = {mod} | ({"self", "cls"} if own else set())
+    for root in scope:
+        for n in ast.walk(root):
+            if isinstance(n, ast.Attribute) and n.attr == func and isinstance(n.value, ast.Name) and n.value.id in receivers:
+                return True
+            if own and isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == func:
+                return True
+    return False
 
 
 def _called_from(ref: str, sites: tuple[Path, ...], within: str | None = None) -> bool:
     mod, func = ref.split(".", 1)[0], ref.split(".")[-1]
-    return any(site.stem == mod or _references(site, mod, func, within) for site in sites)
+    return any(_references(site, mod, func, within) for site in sites)
+
+
+def test_the_reference_check_is_not_vacuous(tmp_path):
+    """Break-the-fix control for the verifier itself (codex finding 4): removing the real call must turn it red, in a foreign module
+    and in the store's own module, and a comment or string naming the call must not satisfy it."""
+    real = MEMBER_SITE.read_text(encoding="utf-8")
+    assert _references(MEMBER_SITE, "memory_service", "_delete_ids", "delete_user")             # the real own-module call
+    assert _references(MEMBER_SITE, "exact_words", "delete_user", "delete_user")
+    d = tmp_path / "src"
+    d.mkdir()
+    site = d / "memory_service.py"
+    site.write_text(real.replace("self._delete_ids", "self._NOT_THE_ERASER"), encoding="utf-8")
+    assert not _references(site, "memory_service", "_delete_ids", "delete_user")                # own-module call removed -> red
+    site.write_text(real.replace("await night_mind.delete_user(user_id)", "pass  # night_mind.delete_user(user_id)"), encoding="utf-8")
+    assert not _references(site, "night_mind", "delete_user", "delete_user")                    # a comment is not a call
+    site.write_text(real.replace("await restraint.erase_user(user_id)", 'pass; _ = "restraint.erase_user"'), encoding="utf-8")
+    assert not _references(site, "restraint", "erase_user", "delete_user")                      # nor is a string
 
 
 def test_reached_stores_name_a_real_eraser_that_the_forget_path_calls():

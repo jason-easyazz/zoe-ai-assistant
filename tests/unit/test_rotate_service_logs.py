@@ -38,6 +38,7 @@ def _text_logs_off_the_live_files(tmp_path, monkeypatch):
     """``main`` also runs the utterance-text retention pass (local_text_logs). Pin its two logs off the checkout's real ones."""
     monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(tmp_path / "pinned-shadow.jsonl"))
     monkeypatch.setenv("ZOE_INTENT_MISS_LOG", str(tmp_path / "pinned-misses.jsonl"))
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(tmp_path / "pinned-adhoc"))
     monkeypatch.delenv("ZOE_TEXT_LOG_RETENTION_DAYS", raising=False)
 
 
@@ -241,7 +242,28 @@ def test_main_also_applies_text_log_retention_and_never_changes_the_exit_status(
     assert "ancient words" in shadow.read_text() and "1/1 records carry text" in capsys.readouterr().out
 
 
-def test_a_broken_text_log_pass_does_not_fail_the_rotation(tmp_path, monkeypatch, capsys):
+def test_a_failing_text_log_part_fails_the_job_closed(tmp_path, monkeypatch, capsys):
+    """A retention pass that stopped working must show red, after the rotation itself ran.
+    Break: make ``sweep_text_logs`` ignore a -1 part -> exit 0."""
+    import time
+
+    big = tmp_path / "zoe-data.stderr.log"
+    _fill(big, 2 * MB)
+    root = tmp_path / "pinned-adhoc"
+    old = root / "router-shadow-20260101-000000"
+    old.mkdir(parents=True)
+    (old / "x").write_text("raw words")
+    os.utime(old, (time.time() - 40 * 86400,) * 2)
+    root.chmod(0o500)                                      # the expiry cannot delete: a permission failure is the realistic one
+    try:
+        rc = mod.main(["--dir", str(tmp_path), "--max-mb", "1", "--file", "zoe-data.stderr.log"])
+    finally:
+        root.chmod(0o700)
+    assert rc == 1 and "retention FAILED for adhoc_backups" in capsys.readouterr().err
+    assert (tmp_path / "zoe-data.stderr.1.log.gz").exists()     # the rotation itself still ran
+
+
+def test_a_text_log_module_that_cannot_load_fails_the_job_closed(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("importlib.util.spec_from_file_location", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
-    assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log"]) == 0
-    assert "skipped" in capsys.readouterr().err
+    assert mod.main(["--dir", str(tmp_path), "--file", "zoe-data.stderr.log"]) == 1
+    assert "FAILED" in capsys.readouterr().err

@@ -113,6 +113,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_ADHOC_BACKUP_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/local_text_logs.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_AFFECT_CONSENT_GATE": {
         "defaults": [
           "-"

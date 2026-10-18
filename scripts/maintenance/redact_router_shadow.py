@@ -19,7 +19,8 @@ SAFETY
   * dry run is the default; nothing is written without ``--apply``;
   * ``--apply`` first copies every file it will touch into ``~/.zoe/backups/router-shadow-<ts>/`` (dir 0700, files 0600). THAT
     BACKUP STILL HOLDS THE TEXT: check the result, then delete it (``--drop-backup`` does it for you once the check passes, or
-    ``rm -r`` the printed path). A forgotten backup is the very leak this removes;
+    ``rm -r`` the printed path). A forgotten backup is the very leak this removes, so the hourly zoe-log-rotate job DELETES
+    ``router-shadow-*`` backups older than 14 days (``local_text_logs.prune_adhoc_backups``) and goes red if it cannot;
   * after the rewrite it re-reads every file and checks that the record count is unchanged and that no record selected for
     stripping still carries text; a failed check keeps the backup and exits 1;
   * file modes are kept; rewrites are atomic and re-append lines a writer added meanwhile;

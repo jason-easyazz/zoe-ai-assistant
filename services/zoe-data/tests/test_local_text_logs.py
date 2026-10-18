@@ -44,6 +44,7 @@ def shadow(tmp_path, monkeypatch):
     p = tmp_path / "data" / "router_head_shadow.jsonl"
     monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(p))
     monkeypatch.setenv("ZOE_INTENT_MISS_LOG", str(tmp_path / "misses.jsonl"))
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(tmp_path / "adhoc"))
     monkeypatch.delenv("ZOE_TEXT_LOG_RETENTION_DAYS", raising=False)
     monkeypatch.delenv("ZOE_ROUTER_SHADOW_KEEP", raising=False)
     return p
@@ -51,7 +52,7 @@ def shadow(tmp_path, monkeypatch):
 
 def test_retention_strips_old_text_keeps_hash_and_features(shadow):
     write(shadow, rec("a" * 12, "turn the lamp on", 45), rec("b" * 12, "what is the weather", 2), rec("c" * 12, None, 90))
-    assert ltl.sweep(NOW) == {"router_shadow": 1, "intent_misses": 0}
+    assert ltl.sweep(NOW) == {"adhoc_backups": 0, "router_shadow": 1, "intent_misses": 0}
     old, fresh, hashonly = load(shadow)
     assert "utt_text" not in old and old["utt"] == "a" * 12 and old["head_conf"] == 0.9 and old["actual_routed"] == "chat"
     assert fresh["utt_text"] == "what is the weather"                 # inside the window: untouched
@@ -100,7 +101,7 @@ def test_retention_env_parsing(monkeypatch):
 def test_keep_disables_the_sweep_and_zero_keeps_nothing(shadow, monkeypatch):
     write(shadow, rec("a" * 12, "old", 400), rec("b" * 12, "fresh", 0))
     monkeypatch.setenv("ZOE_TEXT_LOG_RETENTION_DAYS", "keep")
-    assert ltl.sweep(NOW) == {} and "old" in shadow.read_text()
+    assert ltl.sweep(NOW) == {"adhoc_backups": 0} and "old" in shadow.read_text()
     monkeypatch.setenv("ZOE_TEXT_LOG_RETENTION_DAYS", "0")
     ltl.sweep(NOW + 1)
     assert "utt_text" not in shadow.read_text()
@@ -150,7 +151,7 @@ def test_garbage_lines_and_missing_files_are_left_alone(shadow):
     ltl.sweep(NOW)
     assert shadow.read_text().splitlines()[0] == "not json at all"
     shadow.unlink()
-    assert ltl.sweep(NOW) == {"router_shadow": 0, "intent_misses": 0} and ltl.erase_all_text() == 0
+    assert ltl.sweep(NOW) == {"adhoc_backups": 0, "router_shadow": 0, "intent_misses": 0} and ltl.erase_all_text() == 0
 
 
 # ── the cascade step ────────────────────────────────────────────────────────────────

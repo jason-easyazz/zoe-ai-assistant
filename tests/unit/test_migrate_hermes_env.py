@@ -214,6 +214,8 @@ def test_apply_preserves_a_looser_existing_mode(mig, box):
     box["own"].chmod(0o640)
     _apply(mig, box)
     assert stat.S_IMODE(box["own"].stat().st_mode) == 0o640                      # keeps the file's mode; never silently widens or narrows
+    (backup,) = list((box["home"] / "bk").glob("migrate-hermes-env-*/.env"))
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600                          # the backup copy of a secret is never wider than its source
 
 
 def test_missing_hermes_env_is_a_clean_noop(mig, box, capsys):

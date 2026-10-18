@@ -173,7 +173,7 @@ OTHER: tuple[Store, ...] = (
           member="memory_service.delete_user", entity="memory_residue.scrub_sqlite", markers=("chroma.sqlite3",)),
     Store("chroma_collections", "chroma", WORDS, REACHED, "The palace's Chroma collections (drawers/audit) are the same store: rows deleted by id, "
           "then physically erased and verified.", member="memory_service._delete_ids", entity="memory_residue.scrub_sqlite",
-          markers=("mempalace_drawers", "mempalace_audit")),
+          markers=("mempalace_drawers", "mempalace_audit", "memory_service.py")),   # the last is the ONE module allowed to open a collection
     Store("router_shadow_log", "file", WORDS, REACHED, "Utterance text ages out after ZOE_TEXT_LOG_RETENTION_DAYS (default 30), a record naming a forgotten "
           "entity is dropped (cascade step text_logs), a member erase clears the text layer. Hash-only rows hold no words.",
           member="local_text_logs.erase_all_text", entity="local_text_logs.erase_entity", markers=("router_head_shadow.jsonl",)),
@@ -208,8 +208,9 @@ OTHER: tuple[Store, ...] = (
     Store("backup_json_exports", "backup", WORDS, REACHED, "Palace JSON exports and compaction backups are redacted by the forget ledger "
           "(forget_redact.redact_export, scripts/maintenance/redact_backups.py).", entity="forget_redact.redact_export",
           markers=("memory-exports", "palace-backups")),
-    Store("backup_adhoc", "backup", WORDS, OUT_OF_SCOPE, "One-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700): delete within "
-          "ADHOC_BACKUP_MAX_AGE_DAYS (14). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup, not a policy.",
+    Store("backup_adhoc", "backup", WORDS, OUT_OF_SCOPE, "One-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, "
+          "the env one holds secrets): ENFORCED deletion after ADHOC_BACKUP_MAX_AGE_DAYS (14) by the hourly sweep "
+          "(local_text_logs.prune_adhoc_backups, fails the job if it cannot). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup.",
           markers=("migrate-hermes-env-", "router-shadow-", "dead-units-")),
 )
 

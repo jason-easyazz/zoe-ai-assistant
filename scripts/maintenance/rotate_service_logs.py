@@ -42,7 +42,9 @@ SAFETY
 TEXT-LOG RETENTION (deep dive A6)
     The same hourly pass also applies the retention window to the local logs that keep utterance TEXT (the router shadow log
     and the intent-miss log): text older than ``ZOE_TEXT_LOG_RETENTION_DAYS`` (default 30) is stripped or dropped. The logic lives
-    in ``services/zoe-data/local_text_logs.py`` (stdlib only); this job only schedules it. It never changes the exit status.
+    in ``services/zoe-data/local_text_logs.py`` (stdlib only); this job only schedules it. It also deletes the owner scripts'
+    one-off backups past 14 days (``prune_adhoc_backups``). It FAILS CLOSED: if the pass raises or any part reports failure the job
+    exits 1 (after the rotation ran), so a retention pass that stopped working shows red.
     ``--no-text-sweep`` skips it.
 
 Exit status 0 on success (including "nothing to do"), 1 if any file failed.
@@ -187,8 +189,9 @@ def run(directory: Path, files: tuple[str, ...], *, max_bytes: int, keep: int, d
             lock.close()
 
 
-def sweep_text_logs(dry_run: bool) -> None:
-    """Apply ``local_text_logs`` retention. Best effort: a failure here is reported and never fails the log rotation."""
+def sweep_text_logs(dry_run: bool) -> int:
+    """Apply ``local_text_logs`` retention and expire the owner scripts' one-off backups. Returns 0, or 1 when any part FAILED
+    (fail closed: a retention pass that did not run leaves words on disk, so the job must go red, not stay quietly green)."""
     try:
         import importlib.util
 
@@ -202,12 +205,19 @@ def sweep_text_logs(dry_run: bool) -> None:
                 total, with_text = module.count_text(log)
                 print(f"rotate_service_logs: text log {log.name}: {with_text}/{total} records carry text (dry-run, retention "
                       f"{module.retention_days()} days)")
-            return
-        swept = {k: v for k, v in module.sweep().items() if v}
+            return 0
+        result = module.sweep()
+        swept = {k: v for k, v in result.items() if v}
         if swept:
             print("rotate_service_logs: text-log retention: " + " ".join(f"{k}={v}" for k, v in swept.items()))
+        failed = sorted(k for k, v in result.items() if v < 0)
+        if failed:
+            print(f"rotate_service_logs: text-log retention FAILED for {', '.join(failed)}", file=sys.stderr)
+            return 1
+        return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"rotate_service_logs: text-log retention skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"rotate_service_logs: text-log retention FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -229,8 +239,8 @@ def main(argv: list[str] | None = None) -> int:
         keep=args.keep,
         dry_run=args.dry_run,
     )
-    if not args.no_text_sweep:
-        sweep_text_logs(args.dry_run)
+    if not args.no_text_sweep and sweep_text_logs(args.dry_run):
+        status = 1                      # fail closed, AFTER the rotation above ran
     return status
 
 

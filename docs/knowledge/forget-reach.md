@@ -57,8 +57,9 @@ Forget cannot rewrite a tarball or a Postgres dump, so the rule is: **backups ag
   MemPalace tarball 7 daily. Biometric table data (`learned_voiceprints`, `omi_segment_embeddings`, `omi_voice_clusters`, segments) is excluded from
   dumps; the enrolled `speaker_profiles` / `face_profiles` embeddings are in them for up to 35 days ([biometric policy](biometric-retention-policy.md)).
 - The plaintext JSON exports are redacted by the forget ledger, nightly and on demand (`scripts/maintenance/redact_backups.py`, `forget_redact.py`).
-- A one-off backup an owner script makes (`~/.zoe/backups/<tool>-<ts>/`, mode 0700) is **deleted within 14 days**; each such script prints the path and the
-  `rm -r` line. Hand-made dumps in `~/.zoe-backups` older than that are a ledgered cleanup, not a policy.
+- A one-off backup an owner script makes (`~/.zoe/backups/router-shadow-<ts>/` holds raw text, `migrate-hermes-env-<ts>/` holds secrets; mode 0700) is **deleted
+  within 14 days, enforced**: the hourly `zoe-log-rotate` job runs `local_text_logs.prune_adhoc_backups`, and the job exits 1 if it cannot (fail closed). Each
+  script also prints the path and the `rm -r` line. Hand-made dumps in `~/.zoe-backups` older than that are a ledgered cleanup, not a policy.
 - After a restore from a backup older than a forget, **re-issue the forget**: the ledger table (`memory_forgotten`) is restored with the data it protects, but a
   restore from before the forget has neither.
 - Off-box backups do not exist yet (deep dive finding 5); when they do, they inherit this rule and the 35-day bound.
@@ -178,6 +179,6 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `backup_postgres` | backup | words | out_of_scope | - | Nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within BACKUP_MAX_AGE_DAYS (35). Forget cannot rewrite a dump; biometric table data is excluded from them. Restore => re-issue the forget. |
 | `backup_palace_tar` | backup | words | out_of_scope | - | Nightly MemPalace tarball, 7 kept (<= 7 days). Not rewritten; the JSON exports beside it are redacted by the ledger (redact_backups.py). |
 | `backup_json_exports` | backup | words | reached | entity: `forget_redact.redact_export` | Palace JSON exports and compaction backups are redacted by the forget ledger (forget_redact.redact_export, scripts/maintenance/redact_backups.py). |
-| `backup_adhoc` | backup | words | out_of_scope | - | One-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700): delete within ADHOC_BACKUP_MAX_AGE_DAYS (14). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup, not a policy. |
+| `backup_adhoc` | backup | words | out_of_scope | - | One-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, the env one holds secrets): ENFORCED deletion after ADHOC_BACKUP_MAX_AGE_DAYS (14) by the hourly sweep (local_text_logs.prune_adhoc_backups, fails the job if it cannot). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup. |
 
 <!-- END GENERATED -->

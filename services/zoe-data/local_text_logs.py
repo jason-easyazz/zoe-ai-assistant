@@ -24,11 +24,16 @@ What reaches them:
                 (``MemoryService.delete_user``) clears the TEXT layer of every record household-wide. Hash-only rows stay: they
                 hold no words.
 
-Rewrites are atomic (temp file + ``os.replace``), keep the file mode, and re-append anything the writer added while the
-rewrite ran. The residual window is the gap between that last read and the replace (microseconds); a shadow-log line lost in it
-is a statistic, never a memory. In a process that imported ``semantic_router`` the rewrite also takes its append lock; a
-separate process (the hourly job, the owner script) cannot, so a size rotation by the writer DURING a rewrite (the live file is a few
-MB against a 16 MB cap) could leave the pre-rotation content in two segments: duplicate rows in a statistics log, not a leak.
+Rewrites are atomic (fsynced temp file + ``os.replace`` + directory fsync) and keep the file mode. The writer opens the file
+afresh per append, so a line can land in the OLD inode after our last read: the rewrite keeps the old file open, and AFTER the
+replace waits a beat (``_SETTLE_S``) and re-appends whatever reached the old inode since (a writer would have to stall for longer
+than that between ``open`` and ``write`` to slip through). In a process that imported ``semantic_router`` the rewrite also takes
+its append lock; a separate process (the hourly job, the owner script) cannot, so a size rotation by the writer DURING a rewrite
+(the live file is a few MB against a 16 MB cap) could leave the pre-rotation content in two segments: duplicate rows in a
+statistics log, not a leak.
+
+BACKUPS an owner script makes of these logs (``redact_router_shadow.py``: the raw copy) are not rewritten by a forget; they are
+DELETED by ``prune_adhoc_backups`` (hourly, with the sweep) once older than ``ADHOC_BACKUP_MAX_AGE_DAYS`` (14).
 """
 from __future__ import annotations
 
@@ -117,14 +122,28 @@ def _append_lock():
     return _Null()
 
 
+_SETTLE_S = 0.05
+
+
+def _fsync_dir(directory: Path) -> None:
+    try:
+        fd = os.open(str(directory), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass                                               # a directory that cannot be fsynced (some filesystems) is not a failure
+
+
 def rewrite(path: Path, fn: Callable[[str], Optional[str]]) -> int:
     """Rewrite ``path`` line by line. ``fn(line)`` returns the new line (the same object when unchanged) or None to drop it.
     Returns how many lines changed or were dropped; the file is replaced only when that is non-zero."""
     try:
-        with _append_lock():
-            raw = path.read_bytes()
+        with _append_lock(), open(path, "rb") as old:           # ``old`` stays open: it is the inode a late writer may still hit
+            raw = old.read()
             size = len(raw)
-            mode = path.stat().st_mode & 0o777
+            mode = os.fstat(old.fileno()).st_mode & 0o777
             changed = 0
             out: list[str] = []
             for line in raw.decode("utf-8", errors="surrogateescape").split("\n"):
@@ -143,11 +162,20 @@ def rewrite(path: Path, fn: Callable[[str], Optional[str]]) -> int:
             try:
                 with os.fdopen(fd, "wb") as fh:
                     fh.write(("\n".join(out) + "\n" if out else "").encode("utf-8", errors="surrogateescape"))
-                    with open(path, "rb") as cur:        # lines a writer appended while we worked
-                        cur.seek(size)
-                        fh.write(cur.read())
+                    tail = old.read()                      # lines a writer appended while we worked
+                    fh.write(tail)
+                    fh.flush()
+                    os.fsync(fh.fileno())
                 os.chmod(tmp, mode)
                 os.replace(tmp, path)
+                _fsync_dir(path.parent)
+                time.sleep(_SETTLE_S)                      # a writer that opened the old inode before the replace finishes its append
+                late = old.read()
+                if late:
+                    with open(path, "ab") as fh:
+                        fh.write(late)
+                        fh.flush()
+                        os.fsync(fh.fileno())
             except BaseException:
                 try:
                     os.unlink(tmp)
@@ -208,10 +236,44 @@ def _apply(log: TextLog, **kw: Any) -> int:
     return n
 
 
+ADHOC_BACKUP_MAX_AGE_DAYS = 14
+#: directory-name prefixes under the backup root that owner scripts write and that hold words or secrets (docs/knowledge/forget-reach.md)
+ADHOC_BACKUP_PREFIXES = ("router-shadow-", "migrate-hermes-env-")
+
+
+def adhoc_backup_root() -> Path:
+    return Path(os.environ.get("ZOE_ADHOC_BACKUP_DIR") or (Path.home() / ".zoe" / "backups"))
+
+
+def prune_adhoc_backups(now: Optional[float] = None) -> int:
+    """Delete the owner scripts' one-off backups (raw text, copies of env files) older than ``ADHOC_BACKUP_MAX_AGE_DAYS``. A forget
+    cannot rewrite them, so their age bound is the whole guarantee - it is ENFORCED here, not left to a note. Returns the count
+    removed. Raises on a failure to delete (the sweep reports it)."""
+    import shutil
+
+    root = adhoc_backup_root()
+    if not root.is_dir():
+        return 0
+    cutoff = (now if now is not None else time.time()) - ADHOC_BACKUP_MAX_AGE_DAYS * 86400.0
+    removed = 0
+    for d in sorted(root.iterdir()):
+        if d.is_dir() and not d.is_symlink() and d.name.startswith(ADHOC_BACKUP_PREFIXES) and d.stat().st_mtime < cutoff:
+            shutil.rmtree(d)
+            removed += 1
+    return removed
+
+
 def sweep(now: Optional[float] = None) -> dict[str, int]:
-    """Apply the retention window to every registered log. ``{log name: records stripped or dropped}``. Never raises."""
-    days = retention_days()
+    """Apply the retention window to every registered log, and expire the owner scripts' one-off backups.
+    ``{name: records stripped or dropped | backups removed}``; a value of -1 means that part FAILED (the hosting job must fail
+    too: a retention pass that silently did not run leaves words behind). Never raises."""
     out: dict[str, int] = {}
+    try:
+        out["adhoc_backups"] = prune_adhoc_backups(now)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("local_text_logs: backup expiry failed (%s)", type(exc).__name__)
+        out["adhoc_backups"] = -1
+    days = retention_days()
     if days is None:
         return out
     cutoff = (now if now is not None else time.time()) - days * 86400.0

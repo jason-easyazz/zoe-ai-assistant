@@ -59,6 +59,8 @@ os.environ["ZOE_LOG_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "logs")
 # either would strip the household's real router shadow log / intent-miss log. Read at call time, so this pin holds.
 os.environ["ZOE_ROUTER_HEAD_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "router_head_shadow.jsonl")
 os.environ["ZOE_INTENT_MISS_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "intent-misses.jsonl")
+# ... and ``local_text_logs.sweep()`` DELETES the owner scripts' one-off backups (router-shadow-*, migrate-hermes-env-*) past 14 days.
+os.environ["ZOE_ADHOC_BACKUP_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "adhoc-backups")
 
 
 import pytest  # noqa: E402

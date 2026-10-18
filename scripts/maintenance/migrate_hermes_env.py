@@ -13,10 +13,12 @@ CONTRACT.
     (Whether a shadowed value DIFFERS is reported as a yes/no, computed from digests.)
   * ``--dry-run`` is the default; ``--apply`` writes. Re-running is a no-op (idempotent).
   * Never overwrites: a name the target already defines (any value) is kept as-is.
-  * Before touching an existing target it writes a mode-600 backup into
+  * Before touching an existing target it writes a backup into
     ``~/.zoe/backups/migrate-hermes-env-<ts>/`` (a private dir - NOT a ``.env.bak`` beside the
     live file, which is the sprawl the deep dive flagged) and keeps the target's file mode.
-    A target created here is mode 600.
+    The BACKUP is always mode 600 inside a 0700 dir, deliberately never looser than the source (a
+    secret copy must not be wider than its original). A target created here is mode 600. The
+    hourly zoe-log-rotate job deletes these backups after 14 days (local_text_logs).
   * "Only from hermes" is computed per unit against everything else the unit gets: its other
     ``EnvironmentFile=`` lines, inline ``Environment=`` lines (unit + ``.d/*.conf`` drop-ins) and
     names already planned for the same target earlier in the run.
@@ -337,8 +339,15 @@ def _atomic_write(path: Path, text: str, mode: int) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.chmod(tmp, mode)
         os.replace(tmp, path)
+        dfd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
     except BaseException:
         try:
             os.unlink(tmp)
