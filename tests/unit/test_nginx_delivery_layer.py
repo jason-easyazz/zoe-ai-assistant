@@ -261,3 +261,28 @@ def test_the_access_log_never_writes_a_query_string():
     for leaky in ("$request ", '$request"', "$request_uri", "$args", "$query_string", "$arg_"):
         assert leaky not in fmt, leaky
     assert " main " not in "".join(re.findall(r"access_log[^;]*;", CONF)), "an access_log still uses the stock main format"
+
+
+def test_multica_is_proxied_by_container_name_not_the_host_gateway():
+    """Multica publishes on 127.0.0.1 only, which host.docker.internal (docker0) cannot
+    reach — nginx must go to the containers by name on zoe-network, and resolve them at
+    request time so a stopped (opt-in) Multica never stops the whole UI from booting."""
+    assert not re.search(r"host\.docker\.internal:(8080|3000)\b", LOCATIONS)
+    blocks = dict(_location_blocks(LOCATIONS))
+    expect = {
+        "^~ /multica-api/": ("$multica_backend", "zoe-multica-backend:8080"),
+        "^~ /_next/": ("$multica_web", "zoe-multica-web:3000"),
+        "^~ /multica/": ("$multica_web", "zoe-multica-web:3000"),
+    }
+    for key, (var, target) in expect.items():
+        body = blocks[key]
+        assert f"set {var} {target};" in body, key
+        assert f"proxy_pass http://{var};" in " ".join(body.split()), key
+    # A variable proxy_pass does not strip the location prefix: the rewrite must.
+    assert "rewrite ^/multica-api/(.*)$ /$1 break;" in blocks["^~ /multica-api/"]
+    assert "rewrite ^/multica/(.*)$ /$1 break;" in blocks["^~ /multica/"]
+    # Variables only resolve at request time through an explicit resolver.
+    assert re.search(r"^resolver 127\.0\.0\.11\b", LOCATIONS, re.M)
+    # No literal container-name proxy_pass (would fail nginx boot when Multica is down).
+    assert not re.search(r"proxy_pass\s+http://zoe-multica", "\n".join(_active(LOCATIONS)))
+

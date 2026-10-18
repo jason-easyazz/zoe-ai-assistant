@@ -860,6 +860,17 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
             answered = None
         if answered is not None:
             return answered
+        # panel review cards (ZOE_PANEL_REVIEW_CARDS, default OFF = returns before any work): "what's on my plate?", "I've done the
+        # plumber one", "review my day" - the member's own open loops / day review, read back + a private card on THIS panel only.
+        try:
+            import panel_review_cards as _prc
+
+            answered = await _prc.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                       extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
         # calculator: spoken arithmetic ("two plus two", "what about 3 times pi") and its follow-ups ("that one divided by 3.5", "times
         # three") against the conversation's last result (calc_speech). A safe closed-vocabulary parser; anything else returns None.
         answered = _calc_tier(text, user_id, session_id)
