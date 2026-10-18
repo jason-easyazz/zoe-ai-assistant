@@ -349,6 +349,10 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
   never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
+  `prod_path_eval.py` (the frozen corpus through the real production router) is
+  the eval both router loops call; `--corpus` swaps in another cases file of
+  the same shape (the struggle-fed retrain scores its held-out failures with it;
+  its results then carry ids + verdicts only, the caller strips `args`).
 - `b3-1-supersession/` — B3.1 lab: **bi-temporal supersession + keep-the-richer-fact
   reconciliation**, pure Python, no model, no I/O, flag-dark
   (`ZOE_BITEMPORAL_SUPERSEDE`, default off, read by nothing in prod). Graphiti's

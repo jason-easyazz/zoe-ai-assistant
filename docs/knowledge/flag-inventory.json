@@ -5781,6 +5781,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_ROUTER_TRAIN_PYTHON": {
+        "defaults": [
+          "'/usr/bin/python3'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_selftrain.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_ROUTER_TWO_STAGE_GATE": {
         "defaults": [
           "'0.5'"
