@@ -3,7 +3,7 @@
 **Status:** plan + lab proof, nothing applied (2026-10-18). **Owner decision:** "Fix the admin-rights problem (P0)
 first: yes." This is phase P0 of the credential vault design (`credential-vault.md` section 11, PR #2100), gate G-P0.
 **Deliverables (not installed by anything):** `scripts/setup/p0-deroot/` (sudoers allowlist, two root helpers, the
-Docker proxy unit, three service drop-ins), pinned by `tests/unit/test_p0_deroot_files.py`, proven in
+Docker proxy unit, three service drop-ins, a tmpfiles fragment), pinned by `tests/unit/test_p0_deroot_files.py`, proven in
 `labs/p0-deroot/`.
 
 ## 1. Decision in one paragraph
@@ -183,7 +183,7 @@ change; another uid cannot read it (lab S5, Z3). Phase 2: `LoadCredential=` per 
 | **P0-1** route callers | `DOCKER_HOST` for the user manager (`environment.d`), shells and the runner `.env`; scripts call the helpers instead of `sudo sh -c`; deploy.yml calls `zoe-compose-deploy`; run 48 h and read the proxy's 403/405 log | one zoe-data restart (about 60 s) | unset `DOCKER_HOST`, revert the PR | `/health`; voice replay probe; MA on-demand play; a backup; a night window; a deploy touching zoe-auth |
 | **P0-2** close 2.6 | move HA config, zoe-auth data, zoe-ui ssl/dist, cloudflared config, MA data, smb-drop, the MCP bridge code to `/srv/zoe/<name>` (root or the container's uid); recreate each container; Omnigent kick via a `-u 1000:1000` helper; digarr behind a helper or off; `system_updates` install and router self-train out of zoe-data | seconds per container; none on the voice path | old bind paths are untouched until a week later; recreate with the old compose | HA automations, login, panel, tunnel, music |
 | **P0-3** de-root `zoe` (**G-P0**) | `rm /etc/sudoers.d/zoe-temp`; `gpasswd -d zoe sudo`; `gpasswd -d zoe docker`; reboot (the user manager keeps old groups until restarted) | one reboot, about 3-5 min | as `zoe-admin`: re-add the groups, restore `zoe-temp` from `/root/zoe-temp.bak`, reboot | `sudo -n true` fails as `zoe`; `/var/run/docker.sock` EACCES; `/health`; voice probe; night window (next 02:50, or `--dry-run`); a deploy |
-| **P0-4** isolate | per service, smallest first: model tier, then Flue, then zoe-data: port the unit to `/etc/systemd/system`, add the drop-in + `/etc/zoe/env`, `systemctl --user disable --now X && systemctl enable --now X`; runner to `zoe-deploy`, checkout to `/srv/zoe/assistant` | about 15-60 s per service (brain 11 s, stack 50-60 s measured) | `systemctl disable --now X; systemctl --user enable --now X` | per service: `/health`, voice probe (said-vs-did + per-stage speed), `cat /proc/<pid>/status` uid, swap 0, night window, deploy |
+| **P0-4** isolate | per service, smallest first: model tier, then Flue, then zoe-data: port the unit to `/etc/systemd/system`, add the drop-in + `/etc/zoe/env` (zoe-data also the `tmpfiles.d` fragment, applied with `systemd-tmpfiles --create`), `systemctl --user disable --now X && systemctl enable --now X`; runner to `zoe-deploy`, checkout to `/srv/zoe/assistant` | about 15-60 s per service (brain 11 s, stack 50-60 s measured) | `systemctl disable --now X; systemctl --user enable --now X` | per service: `/health`, voice probe (said-vs-did + per-stage speed), `cat /proc/<pid>/status` uid, swap 0, night window, deploy |
 | **P0-5** agents' labs | rootless Docker for `zoe` (`uidmap`, `rootlesskit`, `slirp4netns`; subuids exist) | none | uninstall | `labs/relay/run.sh lab` |
 | **P0-6** HA de-privilege | replace `privileged` with explicit `devices` | HA restart | re-add `privileged` | HA integrations |
 
@@ -194,12 +194,13 @@ P0-5/P0-6 independently. Nothing above is run by an agent.
 
 ## 6. Lab proof (`labs/p0-deroot/`)
 
-One container, no network, systemd 249 as PID 1 (Ubuntu 22.04, the Jetson's own), not `--privileged`. The
-deliverables are installed **verbatim**; three stand-in services carry the real drop-ins on top of base units that
-keep the voice guards. Each stand-in answers `/probe` from **inside its own sandbox**. **Status: lab pending
-(memory gate never met on 2026-10-18; one attempt booted but printed no cells, undiagnosed). The cells below are
-the DESIGN of the proof, not a result.** Static checks that did pass: `visudo -c`, `systemd-analyze verify` of the
-proxy unit and the three drop-ins (with a negative control), and the 44 pinning tests. See the lab README.
+One container, no network, systemd 249 as PID 1 (Ubuntu 22.04, the Jetson's own), not `--privileged`. It does share
+the host cgroup namespace with a read-write `/sys/fs/cgroup`, because systemd does not boot otherwise (lab README).
+The deliverables are installed **verbatim**; three stand-in services carry the real drop-ins on top of base units that
+keep the voice guards. Each stand-in answers `/probe` from **inside its own sandbox**. **Result: 47/47 cells pass
+(2026-10-18 20:14).** The lab also caught one real defect: `StandardOutput=append:` is opened before the namespace
+and before `LogsDirectory=`, so the drop-in moves zoe-data's capture to `/var/log/zoe-data/` and
+`tmpfiles.d/zoe-p0-deroot.conf` pre-creates it.
 
 - **S cells (per service):** its uid, not in `sudo`/`docker`; `sudo -n` fails; raw socket EACCES; zoe-data gets the
   proxy allowlist (MA start 200, create 403, HA exec 403), the others cannot reach the proxy; cannot read the other

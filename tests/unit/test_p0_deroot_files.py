@@ -160,6 +160,13 @@ def test_no_bind_source_under_home(unit):
             assert not source.startswith("/home/"), f"{unit}: {key} source {source} is under /home"
 
 
+def test_zoe_data_output_capture_is_outside_home():
+    """systemd opens `append:` targets before building the namespace: a /home path fails the unit (lab S13)."""
+    d = directives(DROPINS["zoe-data"])
+    for key in ("StandardOutput", "StandardError"):
+        assert d[key][-1].startswith("append:/var/log/zoe-data/"), key
+
+
 def test_gpu_tier_can_reach_the_jetson_gpu():
     d = directives(DROPINS["llama-server"])
     assert "video" in " ".join(d["SupplementaryGroups"]).split()

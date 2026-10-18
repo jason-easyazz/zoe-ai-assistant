@@ -34,7 +34,7 @@ def unix_http(path, method, url):
 
 def can_read(path):
     try:
-        with open(path) as f:
+        with open(path, "rb") as f:  # binary: a model file is not text
             f.read(1)
         return True
     except OSError as e:

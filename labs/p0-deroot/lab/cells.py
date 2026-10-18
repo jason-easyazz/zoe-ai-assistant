@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """P0 de-root lab cells (root, inside the lab container, after every unit is up). Prints `CELL <id> PASS|FAIL ...`
-lines and one `P0LAB-RESULT {json}` line on the console; run.sh reads them from `docker logs`. Lab-only."""
+lines and one `P0LAB-RESULT {json}` line to /run/p0lab-cells.txt; run.sh reads it with `docker exec`. Lab-only."""
 import json
 import subprocess
 import sys
@@ -14,13 +14,13 @@ PROXY, RAW = "/run/zoe-docker-proxy/docker.sock", "/var/run/docker.sock"
 HELPER = "/usr/local/libexec/zoe-priv/"
 EXPECT = {"zoe-data": (8000, "zoe-svc"), "flue-zoe-brain-2x": (3579, "zoe-flue"), "llama-server": (11434, "zoe-model")}
 results = []
-CONSOLE = open("/proc/1/fd/1", "w")  # PID 1's stdout IS `docker logs`; the journal is not reachable from the host
+OUT = open("/run/p0lab-cells.txt", "w")  # run.sh reads it with `docker exec`; /run/p0lab-cells.done marks the end
 
 
 def say(line):
     print(line, flush=True)
-    CONSOLE.write(line + "\n")
-    CONSOLE.flush()
+    OUT.write(line + "\n")
+    OUT.flush()
 
 
 def cell(cid, ok, detail=""):
@@ -71,7 +71,9 @@ for unit, (port, user) in EXPECT.items():
         cell(f"S4-{unit}-no-proxy", p["proxy_ma_start"] == "PermissionError", p["proxy_ma_start"])
     cell(f"S5-{unit}-no-other-secrets", all(denied(v) for v in p["other_secrets"].values()), p["other_secrets"])
     cell(f"S6-{unit}-real-home-hidden", denied(p["real_home_ssh"]), p["real_home_ssh"])
-    cell(f"S7-{unit}-checkout-ro", p["checkout_read"] is True and denied(p["checkout_write"]),
+    # zoe-data and Flue read the checkout read-only; the model tier is not given it at all (no bind)
+    sees = p["checkout_read"] is True if unit != "llama-server" else p["checkout_read"] == "FileNotFoundError"
+    cell(f"S7-{unit}-checkout-ro", sees and denied(p["checkout_write"]),
          f"read={p['checkout_read']} write={p['checkout_write']}")
     cell(f"S8-{unit}-own-secret", p["own_secret"] is (unit != "llama-server"), f"own_secret={p['own_secret']}")
     cell(f"S9-{unit}-does-its-job", p["job_input"] is True and p["state_write"] in (True, None),
@@ -134,3 +136,5 @@ cell("C5-systemd-analyze-verify", ver.returncode == 0, (ver.stderr or "clean").s
 
 say("P0LAB-RESULT " + json.dumps({"pass": sum(r["pass"] for r in results), "total": len(results),
                                   "cells": results, "probes": probes}))
+OUT.close()
+open("/run/p0lab-cells.done", "w").close()
