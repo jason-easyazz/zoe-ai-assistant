@@ -2,7 +2,7 @@
 type: design
 title: Credential vault - the household keeps its website logins in Vaultwarden, and Zoe uses the few she is given through a narrow broker that never shows a secret to the model
 date: 2026-10-18
-status: design only; nothing built, nothing installed, nothing changed on any live system. Every phase is lab-proven in a hermetic lab first, and each Zoe-side code change ships flag-dark.
+status: phases V0 and V1 built and proven in the hermetic lab `labs/credential-vault/` (2026-10-19; the broker is `services/zoe-vaultd/`, lab-only); nothing installed, nothing changed on any live system. Every phase is lab-proven in a hermetic lab first, and each Zoe-side code change ships flag-dark.
 evidence: docs/research/credential-vault-2026-10.md (sources tagged verified/secondary/unverified, plus a read-only survey of the live box on 2026-10-18)
 builds_on: docs/research/zoe-action-agent-2026-10.md (errands, approvals object, tiers T0-T5, untrusted-third-party rule, Phase 4 web tasks), docs/architecture/zoe-abilities.md section 5 (the proposed `account_secrets` vault for connector tokens), docs/architecture/panel-anywhere.md (the relay, D11), docs/knowledge/voice-verified-session.md (voice is a password), docs/knowledge/app-connection-handoff.md (QR / send-to-phone), services/zoe-data/browser_broker.py (CloakBrowser, SSRF guard)
 ---
@@ -222,8 +222,14 @@ only after P0 do sections 10.2's A3 and A6 rows hold.
 | `propose` | acting member, errand id, the errand's goal in the owner's words, and its sign-in steps as (step id, item id) | a proposal id; the broker builds the approval page itself (section 7) | nothing is usable yet |
 | `capabilities` | proposal id | once the member approved on the broker's page: one opaque capability per step, else `pending` / `denied` / `expired` | each capability is single use and bound to (member, item, errand, step, operation, expected origin, expiry, nonce), held only in the broker's memory |
 | `login` | a capability | `ok` + a sealed handle to the resulting browser storage state, or a refusal reason | section 6.1; the only verb that uses a credential |
+| `redeem` | the sealed handle from `login` | the item-domain cookies, once | V1 realises the "sealed handle" as a single-use, 5-minute, in-memory handle that only the uid that ran the `login` can redeem; nothing is written to disk, so no encryption is needed |
 | `lock` | none | `locked` | wipes keys from memory; needs an unlock to resume |
 | `status` | none | locked/unlocked, last sync, vault reachable, counters | no item data |
+| `notices` | none | the links zoe-data forwards to a phone (approve, code, U3 unlock) | each link carries a single-use token; residual until V5 below |
+
+The phone unit's uid may use only `card` (the approval card the broker builds), `approve` (approve / deny /
+deny-and-lock), `otp`, `unlock` and `lock`. Roles come from SO_PEERCRED; the two uid lists are disjoint and never
+root. Implemented in `services/zoe-vaultd/zoe_vaultd/core.py`.
 
 There is **no verb that returns a username, password, note, TOTP seed or custom field value.** A test enumerates the
 socket's verbs and fails if one is added that returns item content (cell V7). A bare item id, errand id or "approved"
@@ -659,6 +665,33 @@ must go red.
 | **V17 no DevTools for zoe-data** | from zoe-data's uid, opening the login browser's DevTools socket fails, and no browser that zoe-data drives ever receives a canary password | widen the socket's group to include zoe-data: the cell attaches and reads the filled canary, red |
 | **V18 unlock is narrow** | U3: a locked core unlocks once through the phone page; a reused token, an expired token, an unlock while already unlocked, and an unlock from zoe-data's uid are all refused; three bad attempts lock the verb | allow `unlock` for zoe-data's peer uid: the call from zoe-data succeeds, red |
 | **V16 RAM floor** | below the floor, `login` waits or refuses and the voice stack is untouched | remove the floor check: the context launches |
+
+### 16.1 What V0 and V1 showed (lab, 2026-10-19)
+
+The record is [`labs/credential-vault/README.md`](../../labs/credential-vault/README.md); the broker is
+`services/zoe-vaultd/` (lab-only). **29/29 cells green, every negative control red**: V1-V9, V13, V17, V18 with the
+broker, V1c-V4c with the client alone, plus H1 (no egress), M1/M2 and the measurements. What changes the plan:
+
+- **Section 4's quick stop works:** Vaultwarden 1.37.4 hides an item left unassigned in the member's sharing
+  organisation from a "can view" Zoe, and the member keeps it. Trash: unset `TRASH_AUTO_DELETE_DAYS` keeps trash
+  forever; `=30` purges exactly the items older than 30 days.
+- **The `bw` CLI is heavy per call:** every call is a new ~140-180 MB process taking 3.5-6 s on the Jetson (sync 5.9 s),
+  so a sign-in spends ~10 s in the client before the browser starts. `propose` therefore reads the cached vault and
+  only `login` syncs (5.4 still holds: `login` refuses `item_unavailable` / `origin_changed`). `bw serve` on a private
+  socket is the alternative if latency matters in V3, at a resident ~150 MB.
+- **`bw`'s own URL matching ignores the scheme** (an `http://` URL matches), so nothing may rely on `bw list --url`;
+  the broker's rule (6.3) is the only origin check.
+- **Vaultwarden is small:** 33-53 MB RSS with a 1,096-item family vault (sampled peak 48 MB), fine under a 256 MB cap.
+  The broker core is ~35 MB; the login browser peak brings the lab client to ~620 MB.
+- **5.2 grew three verbs** that the table above now lists: `redeem` (the sealed handle, realised in memory), `notices`
+  (links zoe-data forwards) and the phone unit's `card`.
+- **V17's control is a shared DevTools connection**, not a widened group: the launcher also checks SO_PEERCRED and
+  bridges one client per browser, so widening the socket's group alone is still refused (shown in the cell).
+- **U2 (fTPM) is unproven:** the devices are `tss`-owned and an unseal needs root; it is an owner step (README).
+  The phones' acceptance of a household CA is desk research only (Android source trusts user CAs; iOS uses the system
+  trust store) and is checked on real phones in V2.
+- **Lab hygiene that V2 inherits:** the login browser's uid runs nothing else, so the launcher kills every process of
+  that uid after a session, and each Chromium gets its own `TMPDIR` inside the throwaway profile.
 
 ## 17. Owner decisions
 
