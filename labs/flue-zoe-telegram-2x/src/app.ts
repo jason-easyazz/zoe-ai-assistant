@@ -283,10 +283,10 @@ export function createApp(health: PollHealth = pollHealth): Hono {
   // zoe-data → a linked member's chat ("send to my phone"), sent with THIS bot's
   // token. Shared-secret + linked-member gated; see src/notify.ts.
   app.post('/internal/notify', async (c) => {
-    // We listen on every interface: require a loopback socket when the adapter exposes it.
+    // We listen on every interface: a loopback socket is required (unknown = refused).
     const remote = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket
       ?.remoteAddress;
-    if (remote !== undefined && !isLoopbackAddress(remote)) return c.json({ ok: false, error: 'loopback only' }, 403);
+    if (!remote || !isLoopbackAddress(remote)) return c.json({ ok: false, error: 'loopback only' }, 403);
     const body = await c.req.json().catch(() => null);
     const result = await handleNotify(c.req.header('authorization'), body, {
       token: process.env.ZOE_INTERNAL_TOKEN,

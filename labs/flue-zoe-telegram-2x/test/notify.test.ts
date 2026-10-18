@@ -71,7 +71,7 @@ describe('the real route map', () => {
     await h.stop();
   });
 
-  const send = (auth: string, body: unknown, remoteAddress?: string) =>
+  const send = (auth: string, body: unknown, remoteAddress: string | null = '127.0.0.1') =>
     h.app.fetch(new Request('http://telegram.test/internal/notify', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: auth },
@@ -92,6 +92,7 @@ describe('the real route map', () => {
     assert.equal((await send('Bearer nope', { telegram_id: '99999', text: 'hi' })).status, 401);
     assert.equal((await send('Bearer seekrit', { telegram_id: '424242', text: 'hi' })).status, 403);
     assert.equal((await send('Bearer seekrit', { telegram_id: '99999', text: 'hi' }, '192.168.1.61')).status, 403);
+    assert.equal((await send('Bearer seekrit', { telegram_id: '99999', text: 'hi' }, null)).status, 403);  // unknown peer
     assert.equal(h.telegram.sent.length, before);
   });
 });

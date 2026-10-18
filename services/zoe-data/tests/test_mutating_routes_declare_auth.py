@@ -116,6 +116,14 @@ def test_every_mutating_route_declares_auth_or_is_allowlisted():
         "require_member_or_panel / auth.require_admin ...), or add a JUSTIFIED entry to ALLOWLIST:\n  " + "\n  ".join(bare))
 
 
+def test_no_imperative_route_registration_hides_from_the_scan():
+    """``add_api_route`` / ``add_route`` calls are invisible to the decorator scan: none may exist until it covers them."""
+    files = [ROOT / "main.py", *sorted((ROOT / "routers").glob("*.py"))]
+    hits = [f"{f.name}:{n.lineno}" for f in files for n in ast.walk(ast.parse(f.read_text()))
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", "") in ("add_api_route", "add_route")]
+    assert not hits, hits
+
+
 def test_the_allowlist_does_not_rot():
     by_key = {(rel, name): deps for rel, name, _path, deps in _all_routes()}
     stale = [k for k in ALLOWLIST if k not in by_key or by_key[k]]

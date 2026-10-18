@@ -4,7 +4,7 @@
  * bot the family links with is this one, so zoe-data's "send to my phone" hands
  * the message over loopback and we send it with our own token.
  *
- * Gate, all fail-closed: a loopback socket (app.ts, when the adapter exposes it);
+ * Gate, all fail-closed: a loopback socket (app.ts; unknown = refused);
  * `Authorization: Bearer <ZOE_INTERNAL_TOKEN>` (the secret zoe-data already shares;
  * unset = 503, wrong = 401, constant-time); a LINKED recipient only (zoe-data's
  * resolver), so it cannot message arbitrary chats; bounded text, http(s) URL only.
