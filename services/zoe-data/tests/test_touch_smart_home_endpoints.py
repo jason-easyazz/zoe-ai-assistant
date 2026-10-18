@@ -84,7 +84,8 @@ const ctx = {
 };
 ctx.window = ctx;
 vm.createContext(ctx);
-vm.runInContext(src + '\n;globalThis.__t = { setAll(a) { allEntities = a; }, getVisibleEntities, createDeviceCard, renderDevices, adjustNumber };', ctx);
+vm.runInContext(src + '\n;globalThis.__t = { setAll(a) { allEntities = a; }, getVisibleEntities, createDeviceCard, renderDevices, adjustNumber,'
+  + ' pickRoom(list, id) { rooms = list; currentRoom = id; } };', ctx);
 (async () => {
   const t = ctx.__t;
   t.setAll(fixture);
@@ -92,6 +93,7 @@ vm.runInContext(src + '\n;globalThis.__t = { setAll(a) { allEntities = a; }, get
   const cards = {};
   for (const e of fixture) { const c = t.createDeviceCard(e); if (c) cards[e.entity_id] = c.innerHTML; }
   t.renderDevices();
+  const gridAll = els.deviceGrid.children.length;
   // the thermostat: the stepper the card painted, then one + press
   const tid = 'num_input_number_thermostat_temperature';
   const m = (cards['input_number.thermostat_temperature'] || '').match(/data-min="([^"]*)" data-max="([^"]*)" data-step="([^"]*)"[\s\S]*?data-value="([^"]*)"/);
@@ -99,7 +101,18 @@ vm.runInContext(src + '\n;globalThis.__t = { setAll(a) { allEntities = a; }, get
   await t.adjustNumber('input_number.thermostat_temperature', +1);
   els[tid].dataset.value = '30';
   await t.adjustNumber('input_number.thermostat_temperature', +1);  // at max: clamps, sends nothing
-  console.log(JSON.stringify({ visible, cards, grid: els.deviceGrid.children.length, posts }));
+  // Room tabs: a room with no matching devices must show ITS empty state, never every device in the house.
+  const roomList = [{ id: 'r-spare', name: 'Spare', devices: new Set() },
+                    { id: 'r-bed', name: 'Bedroom', devices: new Set(['switch.bedroom_1_switch_1']) }];
+  const room = {};
+  for (const id of ['r-spare', 'r-bed']) {
+    t.pickRoom(roomList, id);
+    els.deviceGrid.children = []; els.deviceGrid.innerHTML = '';
+    const v = t.getVisibleEntities().map(e => e.entity_id);
+    t.renderDevices();
+    room[id] = { visible: v, cards: els.deviceGrid.children.length, html: els.deviceGrid.innerHTML };
+  }
+  console.log(JSON.stringify({ visible, cards, grid: gridAll, posts, room }));
 })();
 """
 
@@ -137,6 +150,15 @@ def test_the_thermostat_sends_input_number_set_value_within_its_range(tmp_path):
     out = _run_page(tmp_path)
     assert out["posts"] == [{"url": "/api/ha/control", "body": {
         "entity_id": "input_number.thermostat_temperature", "action": "set_value", "params": {"value": 21.5}}}]
+
+
+def test_a_selected_room_never_falls_back_to_every_device(tmp_path):
+    """Cross-review (codex, #2099): a room tab with no matching devices used to show EVERY device, so a tap in "Spare" could
+    switch another room's light. A selected room shows only its own devices, or its own empty state."""
+    room = _run_page(tmp_path)["room"]
+    assert room["r-spare"]["visible"] == [] and room["r-spare"]["cards"] == 0
+    assert "No devices in this room yet" in room["r-spare"]["html"]
+    assert room["r-bed"]["visible"] == ["switch.bedroom_1_switch_1"] and room["r-bed"]["cards"] == 1
 
 
 def test_actions_send_their_data_in_a_field_the_control_route_reads():

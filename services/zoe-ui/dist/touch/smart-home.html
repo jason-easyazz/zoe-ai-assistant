@@ -529,6 +529,8 @@ const CONTROLLABLE_DOMAINS = ['light','switch','input_boolean','input_number','c
 
 function getVisibleEntities() {
   let entities = allEntities;
+  // A selected room shows ONLY its own devices - never every device as a fallback, or a tap in "Bedroom" could switch
+  // the kitchen's light (cross-review, #2099). An empty room gets its own empty state (renderDevices).
   if (currentRoom !== 'all') {
     const room = rooms.find(r => r.id === currentRoom);
     const filtered = entities.filter(e =>
@@ -536,7 +538,7 @@ function getVisibleEntities() {
       e.attributes?.area === currentRoom ||
       e.attributes?.room === currentRoom
     );
-    if (filtered.length > 0) entities = filtered;
+    entities = filtered;
   }
   return entities.filter(e => CONTROLLABLE_DOMAINS.includes(e.entity_id?.split('.')[0]));
 }
@@ -555,7 +557,9 @@ function renderDevices() {
   });
 
   if (!hasContent) {
-    grid.innerHTML = '<div class="error-state" style="grid-column:1/-1"><div class="error-icon">🏠</div><div class="error-title">No devices found</div><div class="error-msg">No controllable devices in this room</div></div>';
+    grid.innerHTML = currentRoom !== 'all'
+      ? '<div class="error-state" style="grid-column:1/-1"><div class="error-icon">🏠</div><div class="error-title">No devices in this room yet</div><div class="error-msg">Add devices to this room in Rooms</div></div>'
+      : '<div class="error-state" style="grid-column:1/-1"><div class="error-icon">🏠</div><div class="error-title">No devices found</div><div class="error-msg">No controllable devices in this house</div></div>';
   }
 }
 
