@@ -397,14 +397,18 @@ async def provision_confirm(
         (panel_id, name, location),
     )
 
-    # Issue device token
+    # Issue device token. It expires (``panel_auth.new_token_expiry``, ``ZOE_DEVICE_TOKEN_TTL_DAYS``) and carries no scopes
+    # (never enforced; see the lifecycle block in ``panel_auth``). ``name`` is NOT NULL in the schema.
+    from routers.panel_auth import new_token_expiry
+
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     token_id = str(uuid.uuid4())
+    token_expires_at = new_token_expiry()
     await db.execute(
-        """INSERT INTO device_tokens (id, panel_id, token_hash, role, scopes, revoked)
-           VALUES (?, ?, ?, 'kiosk', 'chat,voice', 0)""",
-        (token_id, panel_id, token_hash),
+        """INSERT INTO device_tokens (id, panel_id, token_hash, name, role, expires_at, revoked)
+           VALUES (?, ?, ?, 'kiosk', 'kiosk', ?, 0)""",
+        (token_id, panel_id, token_hash, token_expires_at),
     )
 
     # Bind confirming user as default user for this panel
@@ -432,8 +436,7 @@ async def provision_confirm(
         _token_cache[token_hash] = {
             "panel_id": panel_id,
             "role": "kiosk",
-            "scopes": "chat,voice",
-            "expires_at": None,
+            "expires_at": token_expires_at,
             "revoked": 0,
         }
     except Exception:

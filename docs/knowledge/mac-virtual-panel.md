@@ -165,7 +165,7 @@ reachable-or-not by tunnel: the HA bridge (`HA_BRIDGE_URL`, unused here) and the
   `/api/voice/*` after the owner's first login, re-visit once or fall back to B.
 * **B - fallback: add the Service Auth policy to the existing `zoe.the411.life` application.** Simpler, no overlap, but the
   token then passes Access for the whole host (still gated by device token / sessions where endpoints require auth, but several
-  endpoints are intentionally unauthenticated for the guest kiosk, e.g. `GET /api/panels/{id}/config`).
+  endpoints are intentionally unauthenticated for the guest kiosk, e.g. `GET /api/panels/{id}/public`).
 * **C - rejected: a Bypass policy on the path.** Opens the voice endpoints to the internet with only the device token between.
 
 Env keys (daemon): `ZOE_URL=https://zoe.the411.life`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` (both or neither - a lone half
