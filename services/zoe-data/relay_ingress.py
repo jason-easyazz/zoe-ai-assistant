@@ -472,7 +472,11 @@ class _SocketGuard:
 
     A failed proof closes the socket with 1008 (policy violation), wakes the handler blocked in ``receive`` with a disconnect, and
     turns every later send into ``OSError`` (Starlette maps it to ``WebSocketDisconnect``, which the broadcaster already treats as a
-    dead socket). A LAN socket never gets a guard. A transient registry failure (503) also closes: fail closed, the panel reconnects."""
+    dead socket). A LAN socket never gets a guard. A transient registry failure (503) also closes: fail closed, the panel reconnects.
+
+    Residual race, by construction: a send that passed its proof an instant BEFORE a concurrent revocation can still put that one
+    frame on the wire (proof and send are not atomic). Any broadcast that STARTS after the revoke returned is stopped (the epoch
+    forces a re-proof), and the timer closes the socket within one interval."""
 
     def __init__(self, conn: Any, scope: dict, receive: Any, send: Any, *, require_credential: bool):
         self._conn, self._scope, self._receive, self._send = conn, scope, receive, send
@@ -496,10 +500,15 @@ class _SocketGuard:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001 - the timer is ours; its end is not the request's problem
                 pass
 
-    async def _prove(self, *, fresh: bool) -> bool:
+    def _stale(self) -> bool:
+        return _epoch != self._proved_epoch or time.monotonic() - self._proved_at >= WS_SEND_PROOF_TTL_S
+
+    async def _prove(self, *, fresh: bool, only_if_stale: bool = False) -> bool:
         async with self._prove_lock:
             if self._dead.is_set():
                 return False
+            if only_if_stale and not self._stale():
+                return True  # a concurrent send already re-proved while this one waited for the lock
             epoch = _epoch
             self._scope.get("state", {}).pop(_CTX_KEY, None)
             try:
@@ -507,6 +516,11 @@ class _SocketGuard:
             except RelayRefused as refused:
                 log_throttled(logger, logging.WARNING, f"relay-ws-revoked:{refused.code}",
                               "relay_ingress: closing open websocket %s (%s)", self._scope.get("path"), refused.code)
+                await self._kill()
+                return False
+            except Exception as exc:  # noqa: BLE001 - a proof that cannot be completed is not a proof: fail closed, and say why
+                logger.warning("relay_ingress: re-proof of open websocket %s failed unexpectedly (%s) - closing it",
+                               self._scope.get("path"), type(exc).__name__)
                 await self._kill()
                 return False
             self._scope.setdefault("state", {})[_CTX_KEY] = ctx
@@ -531,17 +545,23 @@ class _SocketGuard:
 
     async def send(self, message: dict) -> None:
         kind = message.get("type")
+        if self._dead.is_set():
+            # Already closed by the guard (1008): a data frame is refused (OSError -> WebSocketDisconnect in Starlette, which the
+            # broadcaster treats as a dead socket); the app's own accept/close that races the revocation is swallowed, since the
+            # server would raise on a second close.
+            if kind == "websocket.send":
+                raise OSError("relayed websocket revoked")
+            return
         if kind == "websocket.close":
             self._finished = True
-        elif kind == "websocket.send":
-            if self._dead.is_set():
+        elif kind == "websocket.send" and self._stale():
+            if not await self._prove(fresh=False, only_if_stale=True):
                 raise OSError("relayed websocket revoked")
-            if _epoch != self._proved_epoch or time.monotonic() - self._proved_at >= WS_SEND_PROOF_TTL_S:
-                if not await self._prove(fresh=False):
-                    raise OSError("relayed websocket revoked")
         async with self._send_lock:
-            if kind == "websocket.send" and self._dead.is_set():
-                raise OSError("relayed websocket revoked")
+            if self._dead.is_set():  # revoked while waiting for the lock
+                if kind == "websocket.send":
+                    raise OSError("relayed websocket revoked")
+                return
             await self._send(message)
 
     async def receive(self) -> dict:
@@ -555,6 +575,7 @@ class _SocketGuard:
             gone.cancel()
         if not pending.done():
             pending.cancel()  # revoked while idle: hand the handler a disconnect instead of leaving it parked
+            pending.add_done_callback(lambda t: t.cancelled() or t.exception())  # retrieve any late error: no "never retrieved" noise
             return {"type": "websocket.disconnect", "code": 1008}
         message = pending.result()
         kind = message.get("type")

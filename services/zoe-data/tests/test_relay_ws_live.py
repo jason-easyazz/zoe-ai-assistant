@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import relay_ingress  # noqa: E402
-from test_relay_ingress import FRESH, NGINX, SID_CASEY, TOK_KITCHEN, _env, on, relay_headers, reg  # noqa: E402,F401
+from test_relay_ingress import FP_KITCHEN, FRESH, NGINX, SID_CASEY, TOK_KITCHEN, _env, on, relay_headers, reg  # noqa: E402,F401
 
 
 @pytest.fixture(scope="module")
@@ -91,7 +91,7 @@ def test_an_idle_push_socket_of_a_revoked_certificate_is_closed_by_the_real_hand
     with client.websocket_connect("/ws/push?panel_id=kitchen-panel", headers=relay_headers()) as ws:
         assert ws.receive_json()["type"] == "connected"                         # POSITIVE: subscribed, then idle
         assert broadcaster.panel_subscriber_count("kitchen-panel") == before + 1
-        reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", ("a" * 40,))
+        reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (FP_KITCHEN,))
         reg.con.commit()
         started = time.monotonic()
         with pytest.raises(WebSocketDisconnect) as closed:
