@@ -287,7 +287,8 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
 
     ``'corrected'`` | ``'gone'`` (absent / someone else's / not approved - one answer, no oracle) | ``'protected'`` (a curated
     row, :func:`curated_locked`) | ``'off'`` (``ZOE_CORRECTION_APPLY`` is off) | ``'refused'`` (no change, an opt-out, or the
-    store refused the edit - e.g. it names a forgotten entity). Raises when the store cannot be read.
+    store refused the edit - e.g. it names a forgotten entity). Raises when the store cannot be read, or when a twin could not be
+    retired (the same call again finishes it: a superseded row whose successor already holds ``new_text`` retires the rest).
     """
     import correction_apply
 
@@ -299,7 +300,19 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
     ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S)
     if ref is None or not pa._owns(ref.metadata or {}, user_id):
         return "gone"
-    if str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
+    status = str((ref.metadata or {}).get("status") or "approved").lower()
+    if status == "superseded" and new:
+        # a RETRY of this very correction whose twin retire did not finish: the successor already holds ``new`` - finish the twins
+        succ_id = str((ref.metadata or {}).get("superseded_by_id") or "")
+        succ = await asyncio.wait_for(svc.get(succ_id), pa.READ_BUDGET_S) if succ_id else None
+        if (succ is not None and pa._owns(succ.metadata or {}, user_id)
+                and " ".join((succ.text or "").split()) == new and correction_apply.enabled()):
+            twins = [tw for tw in await pa.twins_of(user_id, ref, svc=svc) if tw.id != succ_id]
+            await _retire_twins(user_id, twins, svc)
+            logger.info("MEMORY_SPACE_CORRECT user=%s twins=%d (retry finished)", user_id, len(twins))
+            return "corrected"
+        return "gone"
+    if status != "approved":
         return "gone"
     if await curated_locked(user_id, ref.metadata):
         return "protected"
@@ -312,10 +325,22 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
                                                       svc=svc)
     if res is None:
         return "refused"
-    for tw in twins:
-        try:
-            await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction")
-        except Exception as exc:  # noqa: BLE001 - the corrected row already stands
-            logger.debug("memory_space: twin retire skipped (%s)", type(exc).__name__)
+    await _retire_twins(user_id, twins, svc)
     logger.info("MEMORY_SPACE_CORRECT user=%s twins=%d", user_id, len(twins))
     return "corrected"
+
+
+async def _retire_twins(user_id: str, twins: list, svc: Any) -> None:
+    """Reject every twin that still holds the old value. RAISES when one could not be retired (the store refused or failed): a
+    correction is not acknowledged while a sibling still recalls the old value; calling :func:`correct_row` again with the same
+    words finishes the remaining twins (its superseded-retry path)."""
+    failed = 0
+    for tw in twins:
+        try:
+            if await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction") is None:
+                failed += 1
+        except Exception as exc:  # noqa: BLE001 - counted; the caller hears "not finished"
+            logger.warning("memory_space: twin retire failed (%s)", type(exc).__name__)
+            failed += 1
+    if failed:
+        raise RuntimeError(f"memory store did not retire {failed} twin row(s) of a correction")

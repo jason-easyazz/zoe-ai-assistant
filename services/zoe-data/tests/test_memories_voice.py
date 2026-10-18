@@ -521,6 +521,37 @@ def test_an_adult_may_change_their_own_curated_row(env):
     assert run(memory_space.forget_row(ME, rid)) == "forgotten"
 
 
+def test_a_correction_is_not_acknowledged_while_a_twin_still_holds_the_old_value(env, monkeypatch):
+    # Codex P1 on #2144: a twin whose retire the store refused left the old value approved while the API said "corrected"; and the
+    # superseded primary then answered "gone", so the partial write could never be finished. Now: raise, then the retry finishes.
+    put(env, "I keep my bike in the shed.")
+    put(env, "My bike lives in the shed behind the garage.")
+    ra, rb = row_id(env, "keep my bike"), row_id(env, "bike lives")
+
+    async def twins(user_id, ref, *, svc=None):
+        b = await env.svc.get(rb)
+        return [b] if ref.id == ra and b is not None and (b.metadata or {}).get("status", "approved") == "approved" else []
+
+    monkeypatch.setattr(pa, "twins_of", twins)
+    real_review, refuse = env.svc.review, {"on": True}
+
+    async def review(mem_id, *a, **kw):
+        if refuse["on"] and mem_id == rb and kw.get("decision") == "reject":
+            return None                                  # the store refused the twin's retire
+        return await real_review(mem_id, *a, **kw)
+
+    monkeypatch.setattr(env.svc, "review", review)
+    with pytest.raises(RuntimeError):
+        run(memory_space.correct_row(ME, ra, "I keep my bike in the garage."))
+    assert any("bike lives" in t for t in approved(env)), "the twin still recalls the old value"
+    refuse["on"] = False
+    assert run(memory_space.correct_row(ME, ra, "I keep my bike in the garage.")) == "corrected"   # the retry finishes it
+    assert not any("bike lives" in t for t in approved(env))
+    assert any("in the garage" in t for t in approved(env))
+    # a superseded row asked for DIFFERENT words is not a retry of this correction: one answer, gone
+    assert run(memory_space.correct_row(ME, ra, "I keep my bike at work.")) == "gone"
+
+
 def test_a_child_whose_users_mirror_says_member_is_still_locked(env):
     # _ensure_user_and_chat_session writes role='member' to the data-plane users mirror for EVERY chatting account, a child's
     # included - the lock must read the authoritative account, not the mirror (Codex P1 on #2144).
