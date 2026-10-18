@@ -6103,6 +6103,36 @@
         ],
         "typed_env": false
       },
+      "ZOE_STRUGGLE_PROPOSALS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/struggle_proposals.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_STRUGGLE_PROPOSAL_DAYS": {
+        "defaults": [
+          "7.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/struggle_proposals.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_STRUGGLE_PROPOSAL_MIN_EPISODES": {
+        "defaults": [
+          "3"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/struggle_proposals.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_STRUGGLE_QUEUE_MAX": {
         "defaults": [
           "256"
@@ -6869,7 +6899,8 @@
           "scripts/maintenance/curate_voice_corpus.py",
           "scripts/maintenance/stt_accuracy_report.py",
           "scripts/maintenance/voice_regression_probe.py",
-          "services/zoe-data/routers/voice_tts.py"
+          "services/zoe-data/routers/voice_tts.py",
+          "services/zoe-data/struggle_proposals.py"
         ],
         "typed_env": false
       },
