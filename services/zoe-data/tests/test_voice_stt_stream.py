@@ -104,6 +104,35 @@ def test_oversize_audio_breaks_the_session():
     assert not sess.feed(0, pcm(ss.MAX_SAMPLES + 2))
 
 
+def _daemon_default(pattern: str) -> float:
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[3] / "scripts" / "setup" / "zoe_voice_daemon.py").read_text(encoding="utf-8")
+    m = re.search(pattern, src)
+    assert m, f"daemon default not found: {pattern}"
+    return float(m.group(1))
+
+
+def test_the_cap_covers_the_longest_turn_the_daemon_sends():
+    """A conversation window records up to CONV_RECORD_SECONDS_HARD_MAX plus the RECORD_SNAP_S tail (60 + 3 s by
+    default). The cap was 30 s, so every longer conversation turn broke its stream and fell back to batch STT. Drift
+    pin: raising the daemon's defaults without the server cap goes red here (break-the-fix: MAX_TURN_AUDIO_S = 30)."""
+    conv = _daemon_default(r'_count_env\("CONV_RECORD_SECONDS_HARD_MAX",\s*(\d+)')
+    snap = _daemon_default(r'_float_env\("RECORD_SNAP_S",\s*([\d.]+)\)')
+    longest = (conv + snap) * ss.SAMPLE_RATE
+    assert ss.MAX_SAMPLES >= longest, (ss.MAX_SAMPLES, longest)
+    # and one such turn, fed the way the daemon sends it (0.32 s batches), is accepted end to end
+    sess, _ = open_session()
+    step = int(0.32 * ss.SAMPLE_RATE)
+    total, seq = int(longest), 0
+    for start in range(0, total, step):
+        assert sess.feed(seq, pcm(min(step, total - start))), f"chunk {seq} refused at {start / ss.SAMPLE_RATE:.1f}s"
+        seq += 1
+    assert sess.samples_fed == total and sess.broken is None
+    sess.abort()
+
+
 def test_registry_is_bounded_single_use_and_opens_only_at_seq0():
     lock = threading.Lock()
     assert ss.get_or_open("b" * 16, 1, FakeStream, lock) is None  # mid-stream id never opens
