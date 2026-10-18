@@ -8,8 +8,10 @@ pattern as the music setup QR), and the phone page keeps the token in its ``#fra
 The token is: signed (``auth_handoff.SignedTokens``, with a key DERIVED for this purpose so a music-setup or Telegram-link
 token can never verify here, nor this one there); bound to the panel that showed it (refused once that panel is inactive or
 stops allowing guests); expiring (``ZOE_JUKEBOX_TTL_S``, default 2 h); multi-use within that window (a phone queues several
-songs); accepted ONLY by ``/api/music/play_media`` and ``/api/music/play`` (``require_member_panel_or_jukebox``), never by a
-queue edit, a library write or a speaker change; and never over the Cloudflare tunnel unless a member is signed in.
+songs); accepted ONLY by ``/api/music/play_media`` and ``/api/music/play`` plus the two reads its page shows, ``/api/music/now-playing``
+and ``/api/music/search`` (``require_member_panel_or_jukebox``) - never by a queue edit, a library write, a speaker change, or
+any other read (queue, recently played, playlists, players: those are a member or the panel, like every music read); and never
+over the Cloudflare tunnel unless a member is signed in.
 """
 from __future__ import annotations
 
@@ -61,7 +63,7 @@ def panel_of(token: str) -> Optional[str]:
 
 async def require_member_panel_or_jukebox(request: Request, user: dict = Depends(get_current_user)) -> dict:
     """A member or the panel (``require_member_or_panel``'s rule), or a phone holding a valid jukebox token for an active,
-    guest-allowing panel - never over the tunnel. For play / queue-a-song only."""
+    guest-allowing panel - never over the tunnel. For play / queue-a-song and the jukebox page's now-playing + search only."""
     if await panel_principal.may_control_home(request, user):
         return user
     pid = panel_of(str(request.headers.get(HEADER, "") or "").strip())
