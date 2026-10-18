@@ -507,15 +507,24 @@ def test_serve_reads_what_the_night_window_wrote_and_never_runs_the_pass_itself(
     assert res["status"] == "off" and rec.brain.calls == 0 and len(lab.obs_rows) == written   # serve never writes a second night
 
 
-def test_under_serve_a_held_quote_and_a_forgotten_name_are_never_served(lab, monkeypatch):
+def test_under_serve_a_held_hedge_is_never_served(lab, monkeypatch):
+    night(life_transcript(), mode="enforce")
+    monkeypatch.setenv(nm.ENV, "serve")
+    nm.invalidate()
+    held = obs(lab, state="held")
+    assert any("might look around" in o["quote"] for o in held)                                # the hedge really was held (else the checks below are vacuous)
+    for ask in ("how has my week been", "should I look around for a new job", "what's going on with work"):
+        block = run(nm.prompt_block(UID, ask, now=NOW))
+        assert not any(o["quote"] in block for o in held)                                      # a hedge is held, never served
+    assert all("might look around" not in i["text"] for i in run(nm.morning_items(UID, now=NOW)))
+
+
+def test_under_serve_a_forgotten_name_is_never_served(lab, monkeypatch):
     night(transcript([("I might look around for a new job, not sure yet.", 2), ("Maybe I will look around for a new job after the review.", 1),
                       ("Rowan has a school concert at Thornby on the 20th and he is nervous.", 3), ("Rowan is learning the viola for the concert at Thornby.", 1)]),
           mode="enforce")
     monkeypatch.setenv(nm.ENV, "serve")
     nm.invalidate()
-    held = [o for o in lab.obs_rows.values() if o["state"] == "held"]
-    week = run(nm.prompt_block(UID, "how has my week been", now=NOW))
-    assert all(o["quote"] not in week for o in held)                                           # a hedge is held, never served
     assert "Rowan" in run(nm.prompt_block(UID, "how is Rowan going with the concert", now=NOW))
     import memory_tombstones
     memory_tombstones.add(UID, "Rowan")
