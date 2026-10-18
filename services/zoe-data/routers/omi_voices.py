@@ -99,6 +99,10 @@ async def label_segment(segment_id: str, body: _Label, user: dict = Depends(_req
     if not given:
         raise HTTPException(status_code=400, detail="give owner_label and/or not_person")
     # validate the WHOLE payload before either change: a 400 must mean nothing was applied
+    if "owner_label" in given and "not_person" in given:
+        # "that was me" and "that was not a person" contradict each other (the second would untag what the first just set, or the
+        # first would un-mark what the second just marked): one change per request, nothing applied
+        raise HTTPException(status_code=400, detail="send owner_label or not_person, not both")
     if "owner_label" in given and body.owner_label not in (None, "you", "other"):
         raise HTTPException(status_code=400, detail="owner_label is you, other or null")
     if "not_person" in given and body.not_person is not None and body.not_person not in voices.NOT_PERSON_KINDS:

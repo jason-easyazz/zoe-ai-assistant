@@ -967,3 +967,247 @@ def test_someone_else_clears_the_suggestion_and_learns_nothing(env, monkeypatch)
     assert env.client.post(f"/api/omi/segments/{seg['id']}/suggestion", json={"answer": "someone_else"}).status_code == 200
     assert env.db.q("SELECT rejections, n_segments FROM learned_voiceprints") == [(1, 2)]
     assert segs_of(env, rid)[1][2:4] == (None, None)
+
+
+# --- the day review reads the voice labels (omi_day_review.voice_segments / segment_map) --------------------------------------
+# Negative controls (re-run by Edit, watch the named test go red):
+#   map           make ``someone_else`` / ``person`` read ``not_sure`` in ``_VOICE_SPEAKER``     -> the someone_else / tagged-contact tests
+#   not-a-person  drop the ``not_a_person`` skip in ``segment_map``                              -> the adapter unit test
+#   no fallback   pass ``()`` instead of ``have`` to ``segment_map`` in ``voice_segments``       -> the not-a-person test (joined transcript leaks)
+#   shadow        return ``trusted = True`` from ``review_segments``                             -> the shadow test
+#   wiring        drop the ``segments is None`` loader in ``review_day``                         -> every end-to-end test here
+#   fail closed   swallow every exception in ``voice_segments``                                  -> the unreadable-segments test
+import json  # noqa: E402
+
+import omi_day_review as dr  # noqa: E402
+
+DAY_REVIEWED = "2026-10-10"
+AS_OF = datetime(2026, 10, 11, 23, 59, tzinfo=UTC)
+SURFER, MARATHON, SYDNEY = "I'm a keen surfer.", "I'm training for the half marathon in December.", "Sam said he is moving to Sydney next year."
+FACT_RULES = [("I'm a keen surfer", {"kind": "owner_fact", "fields": {"fact": "I'm a keen surfer."}}),
+              ("I'm training for the half marathon in December", {"kind": "owner_fact", "fields": {"fact": "I'm training for the half marathon in December."}})]
+
+
+def speaks(monkeypatch, table):
+    async def stt(path):
+        with wave.open(path) as w:
+            n = w.getnframes() // 16000
+        return table.get(n, f"said{n}s")
+    monkeypatch.setattr(omi, "_transcribe_file", stt)
+
+
+def review_day(monkeypatch, rules, *, dry=True, mode=None):
+    """Run the REAL day review over the member's day with a model that points at lines by substring; returns (result, what it saw)."""
+    monkeypatch.setenv("ZOE_OMI_DAY_REVIEW", "shadow")
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")
+    if mode:
+        monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", mode)
+
+    async def no_ledger(user_id, text):
+        return False
+    monkeypatch.setattr(dr, "_forgotten", no_ledger)
+    seen: list = []
+
+    def llm(messages, max_tokens):
+        data = messages[-1]["content"].split("DATA>>>", 1)[1].rsplit("<<<DATA", 1)[0]
+        seen.append(data)
+        items = []
+        for line in data.strip().splitlines():
+            m = re.match(r"\[(r\d+\.\d+) [\d:-]+\] (.*)$", line)
+            for needle, item in rules if m else ():
+                if needle in m.group(2):
+                    items.append({"ids": [m.group(1)], "quote": needle, "heard_from": "conversation", "about": "me", **item})
+        return json.dumps({"items": items})
+    dr.set_llm(llm)
+    try:
+        return run(dr.review_day(A, DAY_REVIEWED, dr.Config(lane="night"), as_of=AS_OF, dry_run=dry)), "\n".join(seen)
+    finally:
+        dr.set_llm(None)
+
+
+def surfer_and_marathon(env, monkeypatch, other="other", **kw):
+    """One recording: the wearer says SURFER (3 s), another voice says MARATHON (4 s). Returns the recording id."""
+    speaks(monkeypatch, {3: SURFER, 4: MARATHON})
+    return transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 7, other, 0.0, near(SAM, 1, 0.3))), seconds=8, **kw)
+
+
+def test_the_adapter_maps_voice_labels_to_the_review_vocabulary():
+    seg = lambda rid, label, text: {"recording_id": rid, "label": label, "text": text}        # noqa: E731
+    got = dr.segment_map([seg("r1", "you", "a"), seg("r1", "someone_else", "b"), seg("r1", "person", "c"), seg("r1", "not_sure", "d"),
+                          seg("r1", "unverified", "e"), seg("r1", "weird", "f"), seg("r1", "not_a_person", "TV line"),
+                          seg("r2", "not_a_person", "Zoe's reply")], segmented=["r1", "r2", "r3"])
+    assert got["r1"] == [("a", "you"), ("b", "someone_else"), ("c", "someone_else"), ("d", "not_sure"), ("e", "not_sure"), ("f", "not_sure")]
+    assert got["r2"] == [] and got["r3"] == []                       # a recording of only excluded lines is present and EMPTY, not absent
+    assert "TV line" not in json.dumps(got) and "Zoe's reply" not in json.dumps(got)
+    assert dr.segment_map([]) == {}
+
+
+def test_a_line_someone_else_said_never_becomes_an_owner_fact_but_the_wearers_own_can(env, monkeypatch):
+    surfer_and_marathon(env, monkeypatch)
+    res, seen = review_day(monkeypatch, FACT_RULES, mode="on")
+    assert SURFER in seen and MARATHON in seen                                           # both lines reach the model, with their labels
+    got = {c["payload"]["fact"]: c for c in res["candidates"]}
+    assert set(got) == {"I'm a keen surfer."}, got                                       # the other voice's first-person line is dropped
+    assert got["I'm a keen surfer."]["speaker"] == "you" and got["I'm a keen surfer."]["confidence"] == 0.8
+    assert res["counts"]["drop_not_owner_words"] == 1
+
+
+def test_a_tagged_contacts_line_is_someone_else_to_the_review(env, monkeypatch):
+    rid = surfer_and_marathon(env, monkeypatch)
+    (sid,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (rid,))]
+    assert env.client.post(f"/api/omi/segments/{sid}/tag", json={"name": "Sam"}).status_code == 200
+    res, seen = review_day(monkeypatch, FACT_RULES)                                      # shadow: the member's tag still counts
+    assert MARATHON in seen
+    assert {c["payload"]["fact"] for c in res["candidates"]} == {"I'm a keen surfer."}, res["candidates"]    # Sam's first person is not the wearer's fact
+
+
+def test_shadow_labels_do_not_unlock_owner_facts_but_the_members_word_does(env, monkeypatch):
+    rid = surfer_and_marathon(env, monkeypatch)
+    res, _ = review_day(monkeypatch, FACT_RULES)                                         # ZOE_OMI_SPEAKER_TAG=shadow (the fixture)
+    assert len(res["candidates"]) == 2
+    assert {c["speaker"] for c in res["candidates"]} == {"not_sure"}, res["candidates"]  # a model-only "you" is not a "you"
+    assert all(c["confidence"] <= 0.5 for c in res["candidates"])
+    sid = {r[1]: r[0] for r in env.db.q("SELECT id, speaker FROM omi_segments WHERE recording_id = ?", (rid,))}
+    assert env.client.patch(f"/api/omi/segments/{sid['you']}", json={"owner_label": "you"}).status_code == 200
+    assert env.client.patch(f"/api/omi/segments/{sid['other']}", json={"owner_label": "other"}).status_code == 200
+    res, _ = review_day(monkeypatch, FACT_RULES)
+    assert [(c["payload"]["fact"], c["speaker"]) for c in res["candidates"]] == [("I'm a keen surfer.", "you")]
+
+
+def test_not_a_person_lines_never_reach_the_model_or_become_candidates(env, monkeypatch):
+    speaks(monkeypatch, {3: SURFER, 4: MARATHON, 5: SYDNEY})
+    r1 = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 7, "other", 0.0, near(TV, 1, 0.3))), seconds=8,
+                    started="2026-10-10T01:00:00Z")
+    r2 = transcribe(env, monkeypatch, turns((0, 5, "other", 0.0, near(TV, 2, 0.3))), seconds=6, started="2026-10-10T02:00:00Z")
+    for rid in (r1, r2):
+        (sid,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (rid,))]
+        assert env.client.patch(f"/api/omi/segments/{sid}", json={"not_person": "tv"}).status_code == 200
+    # the joined transcripts still hold the TV text: only the exclusion keeps it away from the model
+    assert MARATHON in env.db.q("SELECT transcript FROM omi_recordings WHERE id = ?", (r1,))[0][0]
+    assert SYDNEY in env.db.q("SELECT transcript FROM omi_recordings WHERE id = ?", (r2,))[0][0]
+    res, seen = review_day(monkeypatch, FACT_RULES + [("Sydney", {"kind": "owner_fact", "fields": {"fact": "I am moving to Sydney."}})], mode="on")
+    assert SURFER in seen and MARATHON not in seen and "Sydney" not in seen             # r2 has ONLY an excluded line: no joined-transcript fallback
+    assert {c["payload"]["fact"] for c in res["candidates"]} == {"I'm a keen surfer."}
+
+
+def test_a_recording_without_segments_keeps_the_joined_transcript(env, monkeypatch):
+    env.db.conn.execute("INSERT INTO omi_recordings (id, user_id, device_id, recording_key, started_at, status, transcript, created_at) "
+                        "VALUES ('plain', ?, 'dev', 'plain', '2026-10-10T01:00:00Z', 'done', ?, '2026-10-10T01:00:00Z')", (A, SURFER + " " + MARATHON))
+    env.db.conn.commit()
+    res, seen = review_day(monkeypatch, FACT_RULES, mode="on")
+    assert SURFER in seen and MARATHON in seen
+    assert {c["speaker"] for c in res["candidates"]} == {"not_sure"}                     # no labels: every line is not_sure, as before
+
+
+def test_unreadable_segments_stop_the_review_before_the_claim_but_a_missing_table_does_not(env, monkeypatch):
+    _migrate(env.engine, "0054_omi_day_review.py")
+    surfer_and_marathon(env, monkeypatch)
+
+    async def broken(db, user_id, ids):
+        raise RuntimeError("connection reset")
+    monkeypatch.setattr(ov, "review_segments", broken)
+    res, seen = review_day(monkeypatch, FACT_RULES, dry=False)
+    assert res["status"] == "error" and res["reason"] == "segments_RuntimeError" and seen == ""   # the model was never called
+    assert env.db.q("SELECT COUNT(*) FROM omi_day_reviews") == [(0,)]                              # and no claim is left behind
+    assert env.db.q("SELECT day_review_id FROM omi_recordings") == [(None,)]
+
+    async def missing(db, user_id, ids):
+        raise sqlite3.OperationalError("no such table: omi_segments")                          # a database before migration 0055
+    monkeypatch.setattr(ov, "review_segments", missing)
+    res, seen = review_day(monkeypatch, FACT_RULES)
+    assert res["status"] == "ok" and SURFER in seen and MARATHON in seen                         # joined-transcript path
+
+
+# --- follow-ups (2026-10-18). Negative controls:
+#   b  drop the owner_label+not_person check in ``label_segment``                              -> the both-fields test
+#   c  drop ``AND learning_enabled = 1`` from the rejection UPDATE in ``answer_suggestion``     -> the stopped-voice test
+#   d  scope by ``people_id`` only (drop the model clause of ``_withdraw_orphaned_suggestions``) -> the model-scoped cleanup tests;
+#      or scope by model only (drop ``model_id IS NULL``)                                       -> the safe-side assertion
+#   e  return every manifest entry from ``one_variant_per_clip``                                -> the calibration leakage test
+def test_a_patch_with_both_not_person_and_owner_label_is_rejected_and_applies_nothing(env, monkeypatch):
+    for i in range(2):
+        transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
+    sid = env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")[0][0]
+    for body in ({"not_person": "tv", "owner_label": "you"}, {"not_person": "tv", "owner_label": "other"},
+                 {"not_person": None, "owner_label": "you"}, {"owner_label": None, "not_person": "radio"}):
+        r = env.client.patch(f"/api/omi/segments/{sid}", json=body)
+        assert r.status_code == 400, body
+        assert env.db.q("SELECT not_person, owner_label FROM omi_segments WHERE id = ?", (sid,)) == [(None, None)], body
+    # control: each field alone is still accepted, so the 400 is the combination and not "PATCH is broken"
+    assert env.client.patch(f"/api/omi/segments/{sid}", json={"owner_label": "other"}).status_code == 200
+    assert env.client.patch(f"/api/omi/segments/{sid}", json={"not_person": "tv"}).status_code == 200
+    assert env.db.q("SELECT not_person FROM omi_segments WHERE id = ?", (sid,)) == [("tv",)]
+
+
+def test_a_no_on_a_stopped_voice_does_not_move_its_rejection_count(env, monkeypatch):
+    pid, sid = _suggested(env, monkeypatch)
+    (vp,) = [v["id"] for v in env.client.get("/api/omi/voices").json()["voices"]]
+    assert env.client.post(f"/api/omi/segments/{sid}/suggestion", json={"answer": "no"}).status_code == 200
+    assert env.db.q("SELECT rejections FROM learned_voiceprints") == [(1,)]               # control: a live voice counts the no
+    assert env.client.patch(f"/api/omi/voices/{vp}", json={"learning_enabled": False}).status_code == 200
+    env.db.conn.execute("UPDATE omi_segments SET suggested_person_id = ? WHERE id = ?", (pid, sid))      # a suggestion that outlived the stop
+    env.db.conn.commit()
+    assert env.client.post(f"/api/omi/segments/{sid}/suggestion", json={"answer": "no"}).status_code == 200
+    assert env.db.q("SELECT rejections, learning_enabled FROM learned_voiceprints") == [(1, 0)]       # frozen: not 2
+    assert env.db.q("SELECT suggested_person_id FROM omi_segments WHERE id = ?", (sid,)) == [(None,)]  # the suggestion itself is still cleared
+
+
+def _three_suggestions(env, monkeypatch):
+    """Sam (an adult, tagged) with a print under the real model and a second print under ``other-model``; three lines suggest Sam:
+    one made by the real model, one by ``other-model``, one with no recorded model."""
+    pid, sid = _suggested(env, monkeypatch)
+    env.db.conn.execute("INSERT INTO learned_voiceprints (id, owner_user_id, people_id, model_id, channel, embedding, n_segments, "
+                        "n_recordings, status, learning_enabled, created_at, updated_at, expires_at) VALUES ('vp-other', ?, ?, "
+                        "'other-model', 'pendant', ?, 5, 5, 'provisional', 1, '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z', "
+                        "'2999-01-01T00:00:00Z')", (A, pid, sqlite3.Binary(np.zeros(256, dtype="<f4").tobytes())))
+    spare = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE id != ? AND speaker = 'other' ORDER BY id", (sid,))]
+    s_other, s_null = spare[0], spare[1]
+    env.db.conn.execute("UPDATE omi_segments SET model_id = 'other-model', suggested_person_id = ? WHERE id = ?", (pid, s_other))
+    env.db.conn.execute("UPDATE omi_segments SET model_id = NULL, suggested_person_id = ? WHERE id = ?", (pid, s_null))
+    env.db.conn.commit()
+    (vp_main,) = [r[0] for r in env.db.q("SELECT id FROM learned_voiceprints WHERE model_id = ?", (MID,))]
+    return pid, {"main": sid, "other": s_other, "null": s_null}, vp_main
+
+
+def _suggesting(env):
+    return {r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE suggested_person_id IS NOT NULL")}
+
+
+def test_forgetting_a_voice_withdraws_only_the_suggestions_its_model_made(env, monkeypatch):
+    pid, seg, vp_main = _three_suggestions(env, monkeypatch)
+    assert _suggesting(env) == set(seg.values())
+    assert env.client.delete(f"/api/omi/voices/{vp_main}").status_code == 200
+    # the real model's suggestion goes; a line with NO recorded model goes too (safe side); the other model's print still stands behind its own
+    assert _suggesting(env) == {seg["other"]}
+    assert env.client.delete("/api/omi/voices/vp-other").status_code == 200
+    assert _suggesting(env) == set()                                                       # no print left for Sam: nothing may still suggest him
+
+
+def test_an_expired_voice_withdraws_only_the_suggestions_its_model_made(env, monkeypatch):
+    pid, seg, vp_main = _three_suggestions(env, monkeypatch)
+    env.db.conn.execute("UPDATE learned_voiceprints SET expires_at = '2020-01-01T00:00:00Z' WHERE id = ?", (vp_main,))
+    env.db.conn.commit()
+    run(_sweep(datetime.now(UTC)))
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprints WHERE id = ?", (vp_main,)) == [(0,)]
+    assert _suggesting(env) == {seg["other"]}                                              # same rule as forgetting it
+    env.db.conn.execute("UPDATE learned_voiceprints SET expires_at = '2020-01-01T00:00:00Z' WHERE id = 'vp-other'")
+    env.db.conn.commit()
+    run(_sweep(datetime.now(UTC)))
+    assert _suggesting(env) == set()
+
+
+def test_calibration_keeps_one_variant_per_source_clip(tmp_path):
+    """The public manifest lists a clip twice (clean + farfield of the same utterance); using both let a voiceprint be scored against
+    its own twin. One variant per (speaker, file name): farfield preferred, the other kept only when it is all there is."""
+    cal = _calibrate_module()
+    man = [{"source": "libri", "speaker": "11", "variant": "farfield", "path": "libri/farfield/11_e0.wav"},
+           {"source": "libri", "speaker": "11", "variant": "clean", "path": "libri/clean/11_e0.wav"},
+           {"source": "libri", "speaker": "11", "variant": "clean", "path": "libri/clean/11_e1.wav"},
+           {"source": "libri", "speaker": "22", "variant": "clean", "path": "libri/clean/22_e0.wav"},
+           {"source": "libri", "speaker": "22", "variant": "farfield", "path": "libri/farfield/22_e0.wav"},
+           {"source": "kokoro", "speaker": "k", "variant": "clean", "path": "kokoro/clean/k_e0.wav"}]
+    got = cal.one_variant_per_clip(man)
+    assert got == {"11": ["libri/farfield/11_e0.wav", "libri/clean/11_e1.wav"], "22": ["libri/farfield/22_e0.wav"]}
+    stems = [(spk, Path(p).name) for spk, ps in got.items() for p in ps]
+    assert len(stems) == len(set(stems))                                                   # no source clip appears twice
+    assert cal.one_variant_per_clip(man, prefer="clean")["11"] == ["libri/clean/11_e0.wav", "libri/clean/11_e1.wav"]
