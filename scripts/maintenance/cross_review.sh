@@ -76,7 +76,7 @@ PI_TIMEOUT_S="${CROSS_REVIEW_PI_TIMEOUT_S:-420}"
 CODEX_DIFF_MAX_BYTES="${CROSS_REVIEW_CODEX_DIFF_MAX_BYTES:-600000}"
 PI_DIFF_MAX_BYTES="${CROSS_REVIEW_PI_DIFF_MAX_BYTES:-200000}"
 
-for v in POLLY_TIMEOUT_S CODEX_TIMEOUT_S PI_TIMEOUT_S CODEX_DIFF_MAX_BYTES PI_DIFF_MAX_BYTES; do
+for v in CALLER_TIMEOUT_S POLLY_TIMEOUT_S CODEX_TIMEOUT_S PI_TIMEOUT_S CODEX_DIFF_MAX_BYTES PI_DIFF_MAX_BYTES; do
   case "${!v}" in (*[!0-9]*|''|0) echo "ALARM: $v must be a positive integer, got: ${!v}" >&2; exit 1;; esac
 done
 
@@ -253,6 +253,9 @@ try_pi() {
   if { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; } && [ "$size" -ge "$MIN_REPORT_BYTES" ]; then
     # Out of time with a partial report: a partial verdict beats nothing.
     echo "cross-review: pi ran out of time; returning its PARTIAL output" >&2
+    # Whatever verdict line pi streamed before the cut-off is not a verdict on the whole diff.
+    # shellcheck disable=SC2016  # the backtick is a literal in the regex
+    sed -i -E 's/^([*` ]*VERDICT:[*` ]*)(NOT CLEAN|CLEAN)/\1PARTIAL (cut off; pi had said: \2)/I' "$out"
     { echo "REVIEWER-VENDOR: $PI_MODEL (pi direct via OpenRouter, tool-less single pass)"
       echo "COVERAGE: PARTIAL — pi timed out after ${budget}s; the report below is cut off and is NOT a complete verdict"
       [ -n "$TRUNC_NOTE" ] && echo "COVERAGE: $TRUNC_NOTE"
@@ -265,13 +268,19 @@ try_pi() {
   return 1
 }
 
-# pi is reached only after every earlier backend failed, i.e. as the lean last resort for
-# an unavailable codex — never as a routine extra pass (the default order enforces it).
+# pi is the lean last resort for an unavailable codex — never a routine extra pass.
+CODEX_TRIED=""
 for backend in $BACKENDS; do
   case "$backend" in
     polly) try_polly && exit 0 ;;
-    codex) try_codex && exit 0 ;;
-    pi)    try_pi && exit 0 ;;
+    codex) CODEX_TRIED=1; try_codex && exit 0 ;;
+    pi)
+      # Hard guard, not just the default order: with codex in the list, pi never runs
+      # before codex has been tried and failed ("polly pi codex" would make it routine).
+      case " $BACKENDS " in
+        *" codex "*) [ -n "$CODEX_TRIED" ] || { note pi "skipped: codex has not been tried yet (pi is the last resort after codex)"; continue; } ;;
+      esac
+      try_pi && exit 0 ;;
   esac
 done
 

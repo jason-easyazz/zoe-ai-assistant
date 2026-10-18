@@ -118,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         rc, msg = apply(ns.action, ns.config, dict(os.environ))
         print(msg, file=sys.stderr if rc else sys.stdout)
         return rc
+    # --config is deliberately NOT forwarded: DEFAULT_CONFIG must expand ~ INSIDE the
+    # container (HOME=/root there); a host-expanded path would point at the wrong file.
     with open(__file__, "rb") as fh:
         src = fh.read()
     proc = subprocess.run(

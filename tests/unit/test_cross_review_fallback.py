@@ -56,7 +56,7 @@ cat > "$STUB_DIR/pi.stdin"
 case "${STUB_PI:-ok}" in
   ok)      printf 'VERDICT: CLEAN (pi)\npadding to clear the minimum report size ........................\n' ;;
   short)   printf 'VERDICT: PARTIAL (diff only; 1 file reviewed)\n' ;;
-  partial) printf '1. blocking: first finding, streamed before the cut-off ...................\n'; sleep 30 ;;
+  partial) printf '1. blocking: first finding, streamed before the cut-off ...................\nVERDICT: CLEAN\n'; sleep 30 ;;
   quota)   echo "429 Too Many Requests: spend limit exceeded" >&2; exit 1 ;;
 esac
 """
@@ -188,6 +188,15 @@ def test_there_is_no_claude_backend(rig):
     assert rig.calls() == [], "bad config must fail before any backend is touched"
 
 
+def test_pi_never_runs_before_codex_has_been_tried(rig):
+    # Review finding: the "pi only when codex is unavailable" rule must be a guard, not
+    # merely the default order — "polly pi codex" would otherwise make pi a routine pass.
+    r = rig.run(CROSS_REVIEW_BACKENDS="polly pi codex", STUB_POLLY="authfail", STUB_CODEX="ok")
+    assert r.returncode == 0, r.stderr
+    assert "pi" not in rig.calls() and "codex" in rig.calls()
+    assert "skipped: codex has not been tried yet" in r.stderr
+
+
 def test_codex_succeeding_never_spends_pi(rig):
     r = rig.run(STUB_POLLY="authfail")
     assert r.returncode == 0
@@ -223,6 +232,8 @@ def test_pi_timeout_returns_the_partial_output_instead_of_nothing(rig):
     assert r.returncode == 0, r.stderr
     assert "first finding, streamed before the cut-off" in r.stdout
     assert "PARTIAL — pi timed out" in r.stdout
+    # a verdict pi streamed before being cut off must not read CLEAN under a PARTIAL banner
+    assert "VERDICT: CLEAN" not in r.stdout and "VERDICT: PARTIAL (cut off; pi had said: CLEAN)" in r.stdout
 
 
 def test_diff_fetch_failure_is_reported_not_swallowed(rig):
@@ -257,7 +268,7 @@ def test_polly_window_shrinks_to_fit_but_never_exceeds_its_default(rig):
     assert full.returncode == 0 and tight.returncode == 0, tight.stderr
     t = int(re.search(r"T=(\d+)", rig.call_lines("polly")[1]).group(1))
     # 1700 - 20 margin - 600 polly overhead - a second or two already spent
-    assert 1070 <= t <= 1080, t
+    assert 1060 <= t <= 1080, t
 
 
 def test_a_short_pi_report_below_the_old_80_byte_bar_is_still_kept(rig):

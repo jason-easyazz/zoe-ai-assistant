@@ -57,7 +57,8 @@ services:
     #       subscription auth), and in the container env it would flip every native Claude
     #       worker to metered billing. It reaches the SDK harness through omnigent's
     #       `auth: {type: api_key}` block (scripts/maintenance/omnigent_claude_auth_mode.py).
-    # Absent file = today's behaviour (stored /login credentials). Owner runbook:
+    # Absent file = today's behaviour (stored /login credentials). `required: false` needs
+    # Compose >= 2.24 (the host runs 2.29.7). Owner runbook:
     # docs/knowledge/omnigent-cross-review.md -> "Polly Claude auth".
     env_file:
       - path: ${OMNIGENT_CLAUDE_ENV_FILE:-/home/zoe/.config/zoe-omnigent/claude.env}
