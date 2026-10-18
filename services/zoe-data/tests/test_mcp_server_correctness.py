@@ -203,8 +203,34 @@ async def test_transaction_list_clamps_limit(raw_limit, expected):
 # MCP actor authorization — tools/call must trust transport/session context,
 # not caller-supplied _user_id/user_id arguments.
 # --------------------------------------------------------------------------
+def test_strict_user_id_is_the_default():
+    """A3 (2026-10-19): a tools/call that names no user is refused unless the env says exactly ``false``."""
+    assert mcp_server._mcp_strict_user_id({}) is True
+    assert mcp_server._mcp_strict_user_id({"ZOE_MCP_STRICT_USER_ID": "true"}) is True
+    assert mcp_server._mcp_strict_user_id({"ZOE_MCP_STRICT_USER_ID": ""}) is True
+    assert mcp_server._mcp_strict_user_id({"ZOE_MCP_STRICT_USER_ID": "flase"}) is True
+    assert mcp_server._mcp_strict_user_id({"ZOE_MCP_STRICT_USER_ID": "False"}) is False
+
+
 @pytest.mark.asyncio
-async def test_stdio_no_context_still_falls_back_to_family_admin_for_local_calls():
+async def test_stdio_no_context_is_refused_when_strict(monkeypatch):
+    monkeypatch.setattr(mcp_server, "_MCP_STRICT_USER_ID", True)
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    with pytest.raises(mcp_server._MissingUserId):
+        await mcp_server._execute_tool(
+            db=db,
+            name="dashboard_get_layout",
+            args={},
+            actor_context={},
+        )
+
+    assert not any("FROM dashboard_layouts" in sql for sql, _ in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_stdio_no_context_falls_back_to_family_admin_only_when_loosened(monkeypatch):
+    monkeypatch.setattr(mcp_server, "_MCP_STRICT_USER_ID", False)
     db = _RoutingDb({"dashboard_layouts": []})
 
     await mcp_server._execute_tool(
@@ -220,7 +246,8 @@ async def test_stdio_no_context_still_falls_back_to_family_admin_for_local_calls
 
 
 @pytest.mark.asyncio
-async def test_stdio_no_context_fallback_family_admin_can_target_other_users():
+async def test_stdio_no_context_fallback_family_admin_can_target_other_users(monkeypatch):
+    monkeypatch.setattr(mcp_server, "_MCP_STRICT_USER_ID", False)
     db = _RoutingDb({"dashboard_layouts": []})
 
     await mcp_server._execute_tool(

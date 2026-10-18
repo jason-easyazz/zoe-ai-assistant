@@ -1155,64 +1155,6 @@ def _voice_tool_name_from_sentinel(delta: str) -> "Optional[str]":
     return str(name) if name else None
 
 
-def _voice_activity_frame(delta: str, tool_names: "Optional[dict]" = None) -> "Optional[dict]":
-    """Convert a brain ``__TOOL__:`` sentinel into a lightweight activity frame.
-
-    The touch panel's live-activity strip shows "what Zoe is DOING" during brain
-    turns from these frames: ``{"type": "activity", "phase": "start"|"result",
-    "tool": "<name>"}``. Only the tool NAME and PHASE cross the wire — args and
-    result payloads stay server-side (they can carry user data and the strip
-    doesn't need them). ``tool_names`` is an optional caller-owned id→name map
-    (one per turn) so the result phase — which often omits the name (see
-    zoe_core_client._tool_result_sentinel) — resolves to the tool that started.
-    Returns None for args phases, ``__THINKING__:`` markers, and malformed
-    sentinels: a bad frame must never break the voice turn.
-    """
-    if not delta.startswith("__TOOL__:"):
-        return None
-    try:
-        import json as _json
-        tc = _json.loads(delta[len("__TOOL__:"):])
-    except Exception:
-        return None
-    if not isinstance(tc, dict):
-        return None
-    phase = tc.get("phase")
-    if phase not in ("start", "result"):
-        return None
-    tc_id = str(tc.get("id") or "")
-    name = str(tc.get("name") or "")
-    if tool_names is not None and tc_id:
-        if phase == "start" and name:
-            tool_names[tc_id] = name
-        elif not name:
-            name = str(tool_names.get(tc_id) or "")
-    if phase == "start" and not name:
-        return None
-    return {"type": "activity", "phase": phase, "tool": name}
-
-
-async def _forward_voice_activity(delta: str, send_json, tool_names: dict) -> bool:
-    """Consume a brain sentinel delta on the ``/ws/voice/`` panel lane.
-
-    Returns True when ``delta`` is a sentinel (``__TOOL__:`` / ``__THINKING__:``)
-    — the caller must then skip it entirely (never buffer it toward TTS, where
-    Kokoro would read raw JSON aloud). Tool start/result sentinels are
-    additionally forwarded to the panel as lightweight ``activity`` frames via
-    ``send_json`` (the websocket's send_json). Forwarding is best-effort: a
-    send failure never breaks the spoken turn.
-    """
-    if not delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
-        return False
-    frame = _voice_activity_frame(delta, tool_names)
-    if frame is not None:
-        try:
-            await send_json(frame)
-        except Exception as exc:  # noqa: BLE001 - activity is cosmetic, speech is not
-            logger.debug("voice activity frame send failed (non-fatal): %s", exc)
-    return True
-
-
 def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
     """Pull the FIRST speakable unit out of a streaming buffer as early as possible.
 
@@ -1605,71 +1547,6 @@ async def _broadcast_skybridge_ui(
             "voice skybridge ui_actions enqueue failed for panel=%s — skybridge card/navigate dropped (non-fatal): %s",
             panel_id, exc,
         )
-
-
-async def _broadcast_lets_talk_ui(panel_id: str, turn_key: Optional[str] = None) -> None:
-    """Navigate the touch panel browser to voice conversation mode.
-
-    Navigation target is /touch/voice.html (no ?conv=1) so the executor's
-    same-URL check always fires when already on the voice page, preventing
-    re-navigation loops when the queued action isn't acked in time.
-
-    The auto-start listening signal is sent as a separate transient push event
-    (voice:start_conversation) which the voice page handles directly — it is
-    never enqueued in the DB, so it cannot create a replay loop.
-    """
-    if _skybridge_only():
-        return
-    delivery_key = turn_key or str(time.monotonic_ns())
-    # Navigation: no ?conv=1 so the action is skipped when panel is already on voice page.
-    nav_action = {
-        "id": f"voice_letstalk_nav_{panel_id}_{delivery_key}",
-        "action_type": "panel_navigate",
-        "payload": {
-            "url": "/touch/voice.html",
-            "label": "Opening voice",
-            "panel_id": panel_id,
-        },
-    }
-    try:
-        from push import broadcaster
-        # Broadcast nav action (handled by touch-ui-executor).
-        await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": nav_action})
-        # Also broadcast a transient start-conversation signal — NOT enqueued in DB.
-        # The voice page handles this to begin auto-listening after a short delay.
-        await broadcaster.broadcast(_panel_channel(panel_id), "voice:start_conversation", {
-            "panel_id": panel_id,
-            "delay_ms": 2500,   # wait for TTS echo to settle before opening mic
-        })
-    except Exception as exc:
-        logger.debug("voice lets_talk ui broadcast failed (non-fatal): %s", exc)
-    try:
-        from database import get_db as _get_db
-        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
-        async for _db in _get_db():
-            _panel_user_id = "family-admin"
-            try:
-                _cur = await _db.execute(
-                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
-                    (panel_id,),
-                )
-                _row = await _cur.fetchone()
-                if _row and _row["user_id"]:
-                    _panel_user_id = str(_row["user_id"])
-            except Exception:
-                pass
-            await _enqueue_ui_action(
-                _db,
-                user_id=_panel_user_id,
-                panel_id=panel_id,
-                action_type="panel_navigate",
-                payload=nav_action["payload"],
-                requested_by="voice",
-                idempotency_key=f"voice_letstalk_nav_{panel_id}_{delivery_key}",
-            )
-            break
-    except Exception as exc:
-        logger.debug("voice lets_talk ui enqueue failed (non-fatal): %s", exc)
 
 
 def _parse_voice_form_field(text: str, panel_type: str) -> dict:
@@ -4860,8 +4737,6 @@ async def voice_command(
                     await _broadcast_weather_ui(panel_id, _pub_reply, turn_key=_turn_key)
                 if _pub_intent.name in {"calendar_show", "daily_briefing"}:
                     await _broadcast_calendar_ui(panel_id, _pub_reply, turn_key=_turn_key)
-                if _pub_intent.name == "lets_talk":
-                    await _broadcast_lets_talk_ui(panel_id, turn_key=_turn_key)
                 try:
                     from voice_metrics import voice_stage_seconds, voice_turn_count, voice_intent_hit_count
                     voice_stage_seconds.labels(stage="llm_first_token").observe(0.0)

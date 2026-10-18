@@ -479,10 +479,14 @@ async function voiceFetchWithSession(url, buildInit) {
     return await fetch(url, buildInit(fresh));
 }
 
-// ── LOCAL WebSocket voice session ─────────────────────────────────────────
-let localWS = null;
-let wsReconnectTimer = null;
-let wsReady = false;
+// ── Local push-to-talk lane (A4, 2026-10-19) ───────────────────────────────
+// A spoken turn is ONE request to POST /api/voice/turn — the same voice_command
+// path (fast tiers, guest policy, scope gate) the wall panel's daemon uses. It
+// replaced the old /ws/voice/ socket, which ran its own private sequence and
+// could not hear a browser at all: Moonshine reads WAV only and MediaRecorder
+// records WebM/Opus, so the clip is re-encoded here as 16 kHz mono PCM WAV.
+// The lane is members-only: a signed-out (or guest) phone is told to sign in.
+let voiceReady = false;
 
 // ── LiveKit WebRTC session ────────────────────────────────────────────────
 let liveKitRoom = null;
@@ -506,36 +510,54 @@ let speaking = false;      // true while Zoe TTS is playing
 let serverBusy = false;    // true while server is processing a turn
 let _silentCycles = 0;     // consecutive silent-discarded recordings
 
-// ── WebSocket connection ──────────────────────────────────────────────────
-function connectLocalVoice() {
-  if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const wsUrl  = `${proto}://${location.host}/ws/voice/?session_id=${getSessionId()}`;
-  localWS = new WebSocket(wsUrl);
-  localWS.binaryType = 'arraybuffer';
+const SIGN_IN_TEXT = 'Sign in to Zoe on this device to talk to her.';
 
-  localWS.onopen = () => {
-    wsReady = true;
-    setOrbState('ambient');
-    showPttButton();
-  };
+function startLocalVoice() {
+  voiceReady = true;
+  serverBusy = false;
+  setOrbState('ambient');
+  setStatus(isStoredSessionGuest() ? SIGN_IN_TEXT : '');
+  showPttButton();
+}
 
-  localWS.onclose = () => {
-    wsReady = false;
-    serverBusy = false;    // safety: unblock in case server was mid-response
-    setOrbState('ambient');
-    setStatus('Reconnecting…');
-    wsReconnectTimer = setTimeout(connectLocalVoice, 3000);
-  };
+// Decode the recorded clip and render it to 16 kHz mono PCM16 WAV (what the STT reads).
+async function recordingToWav16k(blob) {
+  const encoded = await blob.arrayBuffer();
+  const decodeCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await new Promise((resolve, reject) => decodeCtx.decodeAudioData(encoded, resolve, reject));
+  const rate = 16000;
+  const frames = Math.max(1, Math.ceil(decoded.duration * rate));
+  const Offline = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const offline = new Offline(1, frames, rate);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start(0);
+  const pcm = (await offline.startRendering()).getChannelData(0);
+  const view = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+  const ascii = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+  ascii(0, 'RIFF'); view.setUint32(4, 36 + pcm.length * 2, true); ascii(8, 'WAVE');
+  ascii(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ascii(36, 'data'); view.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) {
+    const x = Math.max(-1, Math.min(1, pcm[i]));
+    view.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+  }
+  return view.buffer;
+}
 
-  localWS.onmessage = (ev) => {
-    try {
-      const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : null;
-      if (msg) handleVoiceEvent(msg);
-    } catch(e) {}
-  };
+function bufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
 
-  localWS.onerror = () => { wsReady = false; };
+function endLocalTurn() {
+  serverBusy = false;
+  setOrbState('ambient');
+  if (convMode) scheduleAutoListen();
 }
 
 function handleVoiceEvent(msg) {
@@ -715,7 +737,7 @@ async function startRecording() {
     return;
   }
 
-  // ── Local WebSocket mode ───────────────────────────────────────────────
+  // ── Local push-to-talk mode ────────────────────────────────────────────
   try {
     if (!micStream) {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -770,7 +792,7 @@ function stopRecording() {
     return;
   }
 
-  // ── Local WebSocket mode ───────────────────────────────────────────────
+  // ── Local push-to-talk mode ────────────────────────────────────────────
   if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
   setOrbState('thinking');
 }
@@ -801,7 +823,7 @@ function startSilenceDetection() {
 }
 
 async function sendRecordingToServer() {
-  if (audioChunks.length === 0 || !wsReady) return;
+  if (audioChunks.length === 0 || !voiceReady) return;
 
   // Silence filter: discard ambient noise / accidental mic triggers.
   if (maxRecordedRms < 0.008) {
@@ -821,16 +843,45 @@ async function sendRecordingToServer() {
 
   setOrbState('thinking');
   serverBusy = true;
-  try {
-    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
-    const arrayBuf = await blob.arrayBuffer();
-    localWS.send(arrayBuf);
-  } catch(e) {
-    console.error('Failed to send audio:', e);
-    serverBusy = false;
-    setOrbState('ambient');
-  }
+  const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
   audioChunks = [];
+  const sid = getSessionId();
+  if (!sid || isStoredSessionGuest()) {
+    // Never mint a guest here: the voice lane answers members only, so a guest retry is a wasted turn.
+    setStatus(SIGN_IN_TEXT);
+    endLocalTurn();
+    return;
+  }
+  let data = null;
+  try {
+    const wav = await recordingToWav16k(blob);
+    const resp = await fetch('/api/voice/turn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid },
+      body: JSON.stringify({ audio_base64: bufferToBase64(wav) }),
+    });
+    if (resp.status === 401 || resp.status === 403) {
+      setStatus(SIGN_IN_TEXT);
+      endLocalTurn();
+      return;
+    }
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    data = await resp.json();
+  } catch(e) {
+    console.error('Voice turn failed:', e);
+    setStatus('Zoe could not hear that — try again.');
+    endLocalTurn();
+    return;
+  }
+  setStatus('');
+  if (data.text) addTranscriptLine('user', data.text);
+  if (data.reply) addTranscriptLine('zoe', data.reply);
+  if (data.audio_base64) {
+    serverBusy = false;
+    playAudioBase64(data.audio_base64, data.content_type || 'audio/wav', endLocalTurn);
+  } else {
+    endLocalTurn();
+  }
 }
 
 // ── LiveKit HTTP audio upload ─────────────────────────────────────────────
@@ -911,8 +962,8 @@ function toggleConvMode() {
 function showPttButton() {
   const btn = document.getElementById('pttBtn');
   btn.style.display = 'flex';
-  // Guard: attach listeners only once — showPttButton() is called on every WS reconnect
-  // and without this guard each reconnect stacks duplicate listeners causing double recordings.
+  // Guard: attach listeners only once — showPttButton() runs on every (re)start
+  // and without this guard each call stacks duplicate listeners causing double recordings.
   if (btn._pttListenersAttached) return;
   btn._pttListenersAttached = true;
 
@@ -934,8 +985,8 @@ function showPttButton() {
 // ── LiveKit WebRTC voice session ──────────────────────────────────────────
 async function connectLiveKitVoice() {
   if (typeof LivekitClient === 'undefined') {
-    console.warn('LiveKit client library unavailable, falling back to local WS');
-    connectLocalVoice();
+    console.warn('LiveKit client library unavailable, falling back to local mode');
+    startLocalVoice();
     return;
   }
   try {
@@ -982,7 +1033,7 @@ async function connectLiveKitVoice() {
     });
 
     room.on(LivekitClient.RoomEvent.Disconnected, () => {
-      wsReady = false;
+      voiceReady = false;
       liveKitRoom = null;
       localMicTrack = null;
       setStatus('Reconnecting…');
@@ -1015,19 +1066,19 @@ async function connectLiveKitVoice() {
     micStream = new MediaStream([localMicTrack.mediaStreamTrack]);
 
     liveKitRoom = room;
-    wsReady = true;
+    voiceReady = true;
     setOrbState('ambient');
     setStatus('');
     // In livekit mode: hide PTT button (VAD is always-on, no button needed)
-    // In local WS mode: showPttButton() is called by connectLocalVoice
+    // In local mode: showPttButton() is called by startLocalVoice
     if (MODE !== 'livekit') showPttButton();
     else document.getElementById('pttBtn').style.display = 'none';
     // Auto-start recording immediately in livekit mode (always-on VAD)
     if (MODE === 'livekit') setTimeout(() => startRecording(), 500);
   } catch(e) {
-    console.warn('LiveKit connect failed, falling back to local WS:', e);
+    console.warn('LiveKit connect failed, falling back to local mode:', e);
     setStatus('Falling back to local mode…');
-    setTimeout(connectLocalVoice, 1000);
+    setTimeout(startLocalVoice, 1000);
   }
 }
 
@@ -1037,7 +1088,7 @@ function startVoice() {
   if (MODE === 'livekit') {
     connectLiveKitVoice();
   } else {
-    connectLocalVoice();
+    startLocalVoice();
   }
 }
 
@@ -1058,29 +1109,6 @@ document.addEventListener('keyup', (e) => {
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 if (!isIOS) { startVoice(); }
 
-// ── Handle server-pushed auto-start (e.g. from "let's chat" wake word) ────
-window.handleStartConversation = function(delayMs) {
-  const delay = typeof delayMs === 'number' ? delayMs : 2500;
-  setTimeout(() => {
-    if (convMode && !isRecording && !serverBusy && !speaking) {
-      _silentCycles = 0;
-      startRecording();
-    }
-  }, delay);
-};
-
-// ── Broadcast channel: voice events + start_conversation signals ──────────
-try {
-  const bc = new BroadcastChannel('zoe-voice');
-  bc.onmessage = (ev) => {
-    const d = ev.data || {};
-    if (d.type === 'voice:start_conversation') {
-      window.handleStartConversation(d.delay_ms);
-    } else {
-      handleVoiceEvent(d);
-    }
-  };
-} catch(e) {}
 </script>
 
 

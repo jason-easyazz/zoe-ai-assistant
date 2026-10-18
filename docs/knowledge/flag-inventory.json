@@ -295,7 +295,6 @@
         "readers": [
           "services/zoe-auth/touch_panel/quick_auth.py",
           "services/zoe-data/auth.py",
-          "services/zoe-data/main.py",
           "services/zoe-data/routers/auth.py",
           "services/zoe-data/routers/panel_auth.py"
         ],
@@ -951,16 +950,6 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/ui_compose.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_COMPOSE_VOICE_BUDGET_S": {
-        "defaults": [
-          "'8'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/main.py"
         ],
         "typed_env": false
       },
@@ -3249,16 +3238,6 @@
       "ZOE_MCP_ACTOR_USER_ID": {
         "defaults": [
           "-"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/mcp_server.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_MCP_STRICT_USER_ID": {
-        "defaults": [
-          "'false'"
         ],
         "in_env_example": false,
         "readers": [

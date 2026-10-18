@@ -807,16 +807,3 @@ def test_voice_command_marks_the_arrival_row_only_from_a_confirmed_insert_and_re
     assert "_USER_TURN_SAVED.set(None)" in src and "_USER_TURN_SAVED.set(_arrival)" in src
     assert src.index("_USER_TURN_SAVED.set(None)") < src.index("_USER_TURN_SAVED.set(_arrival)")
     assert "_arrival.saved = bool(await _svc_user_turn(" in src and "_arrival.settled.set()" in src
-
-
-# ── 5b. the voice WebSocket's "last reply" follows EVERY spoken reply ────────────────────────────────────────────────────────
-def test_the_voice_websocket_updates_its_last_reply_on_every_reply_path():
-    """Codex #2001 P2 (the behaviour test is tests/test_voice_ws_last_reply.py, which needs the full app): the handled-Skybridge reply
-    and the conversation-opener ack both ``continue``d without touching it, so "sounds good" after a card turn accepted a stale offer."""
-    import pathlib
-
-    src = (pathlib.Path(intent_router.__file__).parent / "main.py").read_text(encoding="utf-8")
-    body = src[src.index("async def websocket_voice"):]
-    assert body.count("_ws_last_reply = ") >= 6                  # init, opener, skybridge, brain reset, instant reply, brain reply
-    skybridge = body[body.index("if skybridge_result.get(\"handled\")"):body.index("skybridge_context = {}")]
-    assert "_ws_last_reply = spoken_summary" in skybridge and skybridge.index("_ws_last_reply") < skybridge.index("continue")
