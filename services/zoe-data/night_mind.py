@@ -34,11 +34,13 @@ open is 2. The cap is enforced in code. Prompts are sized with a conservative to
 NEVER HALF A NIGHT: the pass computes the whole night in memory and writes at the end. A model that is unreachable, or a transport error on any
 call, aborts the member-night with NOTHING written (not even a run row).
 
-READERS (``enforce`` only; each fail-open, bounded, no I/O when the flag is off): ``prompt_block`` (the recall packet's "What I've noticed", <= 3
+READERS (``enforce`` or ``serve``; each fail-open, bounded, no I/O when the flag is off): ``prompt_block`` (the recall packet's "What I've noticed", <= 3
 lines, only when the message names a story or is an open check-in), ``morning_items`` (<= 1 line for the first-turn day brief, the ``raise`` thread,
 keyed ``night_threads:<id>`` so the brief's ``mentioned()`` marks it), ``lookup`` (the bench's and the card's ranking).
 
-``ZOE_NIGHT_MIND`` = off (default) | shadow (the calls and every check run, counts only, NOTHING written) | enforce (or 1/true/on).
+``ZOE_NIGHT_MIND`` = off (default) | shadow (the calls and every check run, counts only, NOTHING written) | enforce (or 1/true/on: the pass
+runs, writes and is served) | serve (the READERS serve what another process wrote and THIS process never runs the pass: zoe-data's value
+while the 12B night window is the writer, so the 03:00 digest on the 4B does not write a second, weaker night over the 12B's).
 Standalone: ``scripts/maintenance/zoe-night-mind.py --model-url http://127.0.0.1:11500/v1 --ctx-tokens 16384 --all-members``.
 """
 from __future__ import annotations
@@ -190,18 +192,25 @@ def fault(name: str) -> bool:
 # ═══ config ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 def mode() -> str:
-    """``off`` (default; unset, empty, 0/false/no/off or anything unrecognised) | ``shadow`` | ``enforce`` (1/true/yes/on/enforce). Per-call env read."""
+    """``off`` (default; unset, empty, 0/false/no/off or anything unrecognised) | ``shadow`` | ``enforce`` (1/true/yes/on/enforce) | ``serve``.
+    Per-call env read."""
     v = (os.environ.get(ENV) or "").strip().lower()
-    if v == "shadow":
-        return "shadow"
+    if v in ("shadow", "serve"):
+        return v
     if v in ("1", "true", "yes", "on", "enforce"):
         return "enforce"
     return "off"
 
 
 def enabled() -> bool:
-    """Is the layer SERVING (``enforce``)? Shadow writes nothing, so there is nothing to serve."""
-    return mode() == "enforce"
+    """Is the layer SERVING (``enforce``, or ``serve`` = read what the night window wrote)? Shadow writes nothing, so there is nothing to serve."""
+    return mode() in ("enforce", "serve")
+
+
+def runs_pass() -> bool:
+    """Does THIS process run the pass (the digest hook, the day-sim)? ``shadow`` and ``enforce`` do; ``serve`` never does: there the 12B night
+    window (``zoe-night-mind.py --mode enforce``) is the only writer."""
+    return mode() in ("shadow", "enforce")
 
 
 def _int_env(name: str, default: int, lo: int, hi: int) -> int:
@@ -1363,7 +1372,7 @@ async def run_for_user(user_id: str, transcript: Any, svc: Any = None, *, now: "
     ``force_mode`` overrides the env (the CLI and the bench); ``cfg`` points the calls at another server / context size."""
     m = force_mode or mode()
     res: "dict[str, Any]" = {"status": "off", "mode": m, "user_id": user_id}
-    if m == "off":
+    if m not in ("shadow", "enforce"):          # off, or ``serve``: this process only reads what the night window wrote
         return res
     now = now or _dt.datetime.now(_dt.timezone.utc)
     cfg = cfg or _CONFIG or config_from_env()

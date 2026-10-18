@@ -1,4 +1,4 @@
-"""0058 - the relay client-certificate registry (``relay_ingress.py``, ``routers/panel_relay.py``; flag ``ZOE_RELAY_INGRESS``,
+"""0059 - the relay client-certificate registry (``relay_ingress.py``, ``routers/panel_relay.py``; flag ``ZOE_RELAY_INGRESS``,
 default off). Design: ``docs/architecture/panel-anywhere.md`` sections 5.2 and 6.1.
 
 ONE new table, so a deploy that has not run this migration degrades to "a relayed request is refused (503)" - the relay is
@@ -13,11 +13,15 @@ the rest of the panel tables, so the SQLite unit lane runs it. ``IF NOT EXISTS``
 REVISION CHAIN NOTE: ``down_revision`` is ``0057`` (#2109, struggle proposals), after ``0055`` (#2092) and ``0056`` (#2098, omi device
 health). If #2109 has not merged when this lands, the chain shows two heads and ``tests/test_relay_ingress.py::test_migration_chain``
 is red until it does; do not change ``down_revision`` to make it green.
+
+RENUMBERED 0058 -> 0059 (2026-10-19, landing train): #2141 (``0058_turn_outcomes``) and #2146 (``0058_phone_app``) also took
+0058. Revision ids are now distinct; ``down_revision`` stays on main's head (``0057``). Whichever of them lands FIRST, the next
+one re-chains its ``down_revision`` onto it (the single-head test goes red until it does).
 """
 
 from alembic import op
 
-revision = "0058"
+revision = "0059"
 down_revision = "0057"
 branch_labels = None
 depends_on = None

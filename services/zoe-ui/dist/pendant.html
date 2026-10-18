@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script>
+    (function(){var s=localStorage.getItem('zoe_theme')||'auto';var dark=s==='dark'||(s==='auto'&&(new Date().getHours()<7||new Date().getHours()>=19));if(dark){document.documentElement.classList.add('dark-mode');}})();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="theme-color" content="#7B61FF">
+    <title>Zoe – Pendant</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <script src="/js/sw-registration.js" defer></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
+    <script src="/js/auth.js"></script>
+    <style>
+        :root {
+            --p-bg: #fafbfc; --p-card: #ffffff; --p-text: #1f2937; --p-muted: #6b7280; --p-line: rgba(0,0,0,0.08);
+            --p-accent: #7B61FF; --p-accent-soft: rgba(123,97,255,0.12); --p-warn: #b45309; --p-bad: #dc2626;
+        }
+        html.dark-mode {
+            --p-bg: #060610; --p-card: #111122; --p-text: rgba(255,255,255,0.93); --p-muted: rgba(255,255,255,0.6);
+            --p-line: rgba(255,255,255,0.1); --p-accent-soft: rgba(123,97,255,0.22); --p-warn: #fbbf24; --p-bad: #f87171;
+        }
+        *, *::before, *::after { box-sizing: border-box; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; background: var(--p-bg); color: var(--p-text); }
+        .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+               background: var(--p-bg); border-bottom: 1px solid var(--p-line); }
+        .top h1 { margin: 0; font-size: 20px; flex: 1; }
+        .top a { color: var(--p-accent); text-decoration: none; font-size: 15px; }
+        main { max-width: 760px; margin: 0 auto; padding: 8px 16px 64px; }
+        h2 { font-size: 17px; margin: 24px 0 8px; }
+        h3 { font-size: 16px; margin: 0 0 4px; }
+        .card { background: var(--p-card); border: 1px solid var(--p-line); border-radius: 14px; padding: 12px 14px; margin: 10px 0; }
+        .line { margin: 4px 0; font-size: 14px; }
+        .warn { color: var(--p-warn); }
+        .meta, .hint, .at { color: var(--p-muted); font-size: 13px; }
+        .empty { color: var(--p-muted); font-size: 14px; }
+        .sample { margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--p-accent); background: var(--p-accent-soft);
+                  border-radius: 6px; font-size: 14px; }
+        .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+        .pb { min-height: 44px; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--p-line); background: var(--p-card);
+              color: var(--p-text); font-size: 15px; cursor: pointer; }
+        .pb.primary { background: var(--p-accent); border-color: var(--p-accent); color: #fff; }
+        .pb.ghost { background: transparent; }
+        .pb.danger { background: var(--p-bad); border-color: var(--p-bad); color: #fff; }
+        .pb.small { min-height: 40px; padding: 6px 12px; font-size: 14px; }
+        .pb.chip { min-height: 36px; padding: 4px 12px; border-radius: 18px; background: var(--p-accent-soft); }
+        .chip { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; background: var(--p-accent-soft); }
+        .chip.lab.you { background: rgba(16,185,129,0.18); }
+        .chip.lab.person { background: rgba(59,130,246,0.2); }
+        .chip.lab.not_a_person { background: rgba(107,114,128,0.2); }
+        .who { margin-top: 8px; }
+        .who-in { width: 100%; min-height: 44px; font-size: 16px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--p-line);
+                  background: var(--p-bg); color: var(--p-text); }
+        .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .rec-head { width: 100%; display: flex; gap: 10px; align-items: center; text-align: left; border: 0; background: transparent; padding: 4px 0; }
+        .rec-when { flex: 1; }
+        .rec-len { color: var(--p-muted); font-size: 13px; }
+        .rec-body { border-top: 1px solid var(--p-line); margin-top: 8px; padding-top: 4px; }
+        .seg { padding: 10px 0; border-bottom: 1px solid var(--p-line); }
+        .seg-head { display: flex; gap: 8px; align-items: center; }
+        .seg-text { margin: 6px 0 0; font-size: 15px; line-height: 1.4; white-space: pre-wrap; }
+        .suggest .hint { font-weight: 600; color: var(--p-accent); }
+        .toast { position: fixed; left: 16px; right: 16px; bottom: 16px; padding: 12px 14px; border-radius: 12px; background: #111827;
+                 color: #fff; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s; }
+        .toast.show { opacity: 1; }
+        .toast.bad { background: var(--p-bad); }
+        audio.clip { display: block; width: 100%; margin-top: 8px; }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="top">
+        <a href="memories.html">← Memories</a>
+        <h1>Pendant</h1>
+        <a href="chat.html">Chat</a>
+    </div>
+    <main>
+        <section class="card" id="pendantStatus" aria-live="polite"><p class="empty">Loading…</p></section>
+
+        <h2>Voices to name</h2>
+        <p class="hint">Voices Zoe heard on your pendant that she does not know yet. Tell her who each one is.</p>
+        <div id="pendantUnknown"></div>
+
+        <h2>Recordings</h2>
+        <p class="hint">Tap one to read it and fix who said each line.</p>
+        <div id="pendantRecordings"></div>
+
+        <h2>Voices Zoe knows</h2>
+        <p class="hint">Learned from your tags, used only to suggest names in your own recordings.</p>
+        <div id="pendantKnown"></div>
+    </main>
+    <div class="toast" id="pendantToast" role="status"></div>
+    <script src="/js/pendant-page.js?v=5"></script>
+    <script>
+        // auth.js's synchronous desktop gate may already be redirecting to sign-in: send nothing from this page meanwhile
+        if (window.ZoePendant && !window.__zoeAuthRedirecting) window.ZoePendant.init(document);
+    </script>
+</body>
+</html>

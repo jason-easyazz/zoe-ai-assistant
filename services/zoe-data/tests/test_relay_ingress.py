@@ -4,7 +4,7 @@ no address, resolves to the PANEL principal only, and is bound to its client cer
 Cells (design docs/architecture/panel-anywhere.md section 10): T5 (header trust, no address match), T10 (no device credential ->
 401, home control refused, LAN control), T11 (a bound token is the panel and nothing more; a member needs a fresh sign-in), the
 fingerprint binding, and "flag off = the relay header is inert". They go over REAL HTTP (``TestClient``) through the REAL
-``RelayIngressMiddleware``, ``auth.get_current_user``, ``panel_principal`` and the REAL panel/certificate SQL (alembic 0058 run on
+``RelayIngressMiddleware``, ``auth.get_current_user``, ``panel_principal`` and the REAL panel/certificate SQL (alembic 0059 run on
 in-memory SQLite). Only zoe-auth, the HA bridge and the voice lane's freshness lookup are faked. Every positive control is next
 to its negative: the LAN request without the relay marker proves the probe reaches the route. All data is invented.
 
@@ -75,7 +75,7 @@ def relay_headers(fp=FP_KITCHEN, token=TOK_KITCHEN, session=None, extra=None):
     return h
 
 
-# ── the registry: real alembic 0058 on SQLite ────────────────────────────────────────────────────────────────────────────
+# ── the registry: real alembic 0059 on SQLite ────────────────────────────────────────────────────────────────────────────
 
 
 class _Cur:
@@ -90,7 +90,7 @@ class _Cur:
 
 
 class Registry:
-    """The AsyncpgCompat surface the panel code uses (``execute(sql, params)`` + ``?``), over SQLite with the REAL 0058 schema."""
+    """The AsyncpgCompat surface the panel code uses (``execute(sql, params)`` + ``?``), over SQLite with the REAL 0059 schema."""
 
     def __init__(self):
         self.con = sqlite3.connect(":memory:", check_same_thread=False)
@@ -119,8 +119,8 @@ def _migration(fn, con):
     from alembic.operations import Operations
     import sqlalchemy as sa
 
-    path = ROOT / "alembic/versions/0058_panel_client_certs.py"
-    spec = importlib.util.spec_from_file_location("mig_0058", path)
+    path = ROOT / "alembic/versions/0059_panel_client_certs.py"
+    spec = importlib.util.spec_from_file_location("mig_0059", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     engine = sa.create_engine("sqlite://", creator=lambda: con)
@@ -761,8 +761,8 @@ def test_migration_chain_is_linear_and_rerun_safe():
         if d:
             downs.add(d.group(1))
     heads = set(revs) - downs
-    assert len(heads) == 1, f"more than one alembic head {sorted(heads)}: 0058 chains onto 0057 (#2109); expected until #2109 is on main - see the migration docstring"
-    assert "0058" in revs
+    assert len(heads) == 1, f"more than one alembic head {sorted(heads)}: 0059 chains onto 0057 (#2109); expected until #2109 is on main - see the migration docstring"
+    assert "0059" in revs
     con = sqlite3.connect(":memory:")
     con.execute("PRAGMA foreign_keys = ON")
     con.execute("CREATE TABLE panels (panel_id TEXT PRIMARY KEY)")
