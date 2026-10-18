@@ -76,6 +76,15 @@ def _error_code(body: bytes) -> str:
     return str(doc.get("error") or "") if isinstance(doc, dict) else ""
 
 
+def _answered_ok(body: bytes) -> bool:
+    """True only for a JSON object whose ``ok`` is the boolean ``true`` (not 1, "true" or a non-JSON body)."""
+    try:
+        doc = json.loads(body.decode("utf-8", "replace") or "null")
+    except ValueError:
+        return False
+    return isinstance(doc, dict) and doc.get("ok") is True
+
+
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -166,6 +175,11 @@ class HttpUploader:
             return False
         if status != 200:
             log.info("health report not accepted: HTTP %s %s", status, _error_code(body))
+            return False
+        # A 200 alone is not "Zoe stored it": a proxy, a captive portal or a stub answers 200 with some other page. Only Zoe's own
+        # ``{"ok": true}`` suppresses the retry (the reporter would otherwise wait out the whole heartbeat on a report nobody received).
+        if not _answered_ok(body):
+            log.info("health report not confirmed: HTTP 200 without ok=true")
             return False
         return True
 
