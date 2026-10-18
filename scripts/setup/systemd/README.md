@@ -23,6 +23,11 @@ Secrets are never inlined — they are read from `.env` files.
 | `zoe-agents-sampler.{service,timer}` | — | 5-minute JSONL sample of the engineering cgroups (`~/.zoe-logs/agents-sampler.jsonl`) — operator opt-in; install first |
 | `zoe-samantha-weekly.{service,timer}` | — | Weekly commit-bound Samantha evidence run (`scripts/maintenance/samantha_weekly.sh`; Sunday 05:30, after the night window) — **template, NOT installed, operator opt-in**; see `docs/knowledge/samantha-bar.md` |
 | `zoe-agents.slice`         | —     | **Slice, not a service** (the `*.service` glob does not copy it): the 3G / swap-0 aggregate for every engineering cgroup — install by hand, FIRST |
+| `zoe-backup.{service,timer}` | — | Nightly ON-BOX backup (Postgres dumps + MemPalace tarball, 02:30); tracked 2026-10-18 from the live unit |
+| `zoe-backup-verify.{service,timer}` | — | Weekly on-box restore check + the MONTHLY off-box restore drill (Sunday 05:45) |
+| `zoe-offbox-backup.{service,timer}` | — | Nightly OFF-BOX encrypted backup to the411 (restic append-only + age, 05:10) — **install only after `~/.config/zoe-backup/offbox.env` exists**; runbook `docs/knowledge/offbox-backup.md` |
+| `zoe-health.{service,timer}` | — | The ONE spine health check (every 5 min, Telegram on transitions); replaces the untracked unit of the same name AND the `zoe-watchdog.sh` crontab line |
+| `zoe-merge-queue.{service,timer}`, `zoe-opensrc-refresh.{service,timer}`, `github-runner.service` | — | Tracked 2026-10-18 from the live units (B9); `python3 scripts/maintenance/unit_inventory.py` lists any installed unit still without a template |
 
 Everything in this directory is a **user** unit. The `system/` subdirectory holds
 the few that must run as **root** (`/etc/systemd/system/`) because they use

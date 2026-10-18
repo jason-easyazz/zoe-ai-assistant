@@ -1,0 +1,13 @@
+# Unchanged from the live timer (02:30). It sits inside the night window; moving it is part of the one-nightly-
+# schedule item (deep dive section 5, "Quiet hours"), not this tracking change.
+[Unit]
+Description=Nightly Zoe on-box backup, 02:30 local
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=600
+Persistent=true
+Unit=zoe-backup.service
+
+[Install]
+WantedBy=timers.target

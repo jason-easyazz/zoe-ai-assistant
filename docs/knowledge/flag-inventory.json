@@ -845,12 +845,14 @@
       },
       "ZOE_INTERNAL_TOKEN": {
         "defaults": [
-          "''"
+          "''",
+          "-"
         ],
         "in_env_example": true,
         "readers": [
           "labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts",
           "labs/flue-zoe-brain-2x/src/user-model.ts",
+          "labs/flue-zoe-telegram-2x/src/app.ts",
           "labs/flue-zoe-telegram-2x/src/brain.ts"
         ],
         "registered": true,
@@ -2367,6 +2369,82 @@
         },
         "typed_env": true
       },
+      "ZOE_CHANGE_NOTICES": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/change_notices.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "False",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/change-notices.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_CHANGE_NOTICES_INTERVAL_S": {
+        "defaults": [
+          "600"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/change_notices.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 600,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/change-notices.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_CHANGE_NOTICES_STALE_MIN": {
+        "defaults": [
+          "60"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/change_notices.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 60,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/change-notices.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_CHANGE_NOTICES_STATE_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/change_notices.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_CHAT_CONTEXT_MAX_SESSIONS": {
         "defaults": [
           "'2000'"
@@ -3419,6 +3497,25 @@
           "divergent_ok": {},
           "note": "live: unset (code default in force)",
           "owner_doc": "docs/knowledge/synthetic-users-and-proactive-recipients.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_DEPLOY_STATE_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/change_notices.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
           "type": "str"
         },
         "typed_env": true
@@ -4893,6 +4990,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/change_notices.py",
           "services/zoe-data/greploop_guard.py",
           "services/zoe-data/greptile_client.py"
         ],
@@ -4905,7 +5003,7 @@
           "owner_doc": "",
           "type": "str"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_GRAPH_RECALL_BOOST": {
         "defaults": [
@@ -5105,6 +5203,44 @@
           "note": "",
           "owner_doc": "",
           "type": "int"
+        },
+        "typed_env": false
+      },
+      "ZOE_HEALTH_NO_ALERT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_health.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": false
+      },
+      "ZOE_HEALTH_STATE": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_health.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
         },
         "typed_env": false
       },
@@ -5436,7 +5572,9 @@
           "services/zoe-data/auth.py",
           "services/zoe-data/auth_handoff.py",
           "services/zoe-data/mcp_server.py",
+          "services/zoe-data/music_jukebox.py",
           "services/zoe-data/panel_kiosk_credential.py",
+          "services/zoe-data/telegram_notify.py",
           "services/zoe-data/zoe_core_client.py"
         ],
         "registered": true,
@@ -5447,6 +5585,44 @@
           "note": "",
           "owner_doc": "docs/knowledge/incident-runbook.md",
           "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_JUKEBOX_SECRET": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_jukebox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_JUKEBOX_TTL_S": {
+        "defaults": [
+          "7200"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_jukebox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 7200,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "int"
         },
         "typed_env": true
       },
@@ -8505,6 +8681,178 @@
         },
         "typed_env": false
       },
+      "ZOE_OFFBOX_CHECKOUT": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_CONFIG_DIR": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_HOME": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_MEM_FLOOR_MB": {
+        "defaults": [
+          "1500"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 1500,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "int"
+        },
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_NO_ALERT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_SKIP_PG_GLOBALS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_SNAPSHOT_TIME": {
+        "defaults": [
+          "(required)",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_STAGE_DIR": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_STATE_DIR": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": false
+      },
       "ZOE_OMI_AUDIO_DIR": {
         "defaults": [
           "''"
@@ -8757,6 +9105,25 @@
         "typed_env": true
       },
       "ZOE_OMI_KEEP_AUDIO": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-voice-tagging.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_OMI_KEEP_AUDIO_FOR_TAGGING": {
         "defaults": [
           "False"
         ],
@@ -10149,6 +10516,25 @@
         },
         "typed_env": false
       },
+      "ZOE_POSTGRES_CONTAINER": {
+        "defaults": [
+          "'zoe-database'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "zoe-database",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": false
+      },
       "ZOE_PRESENCE_WINDOW_S": {
         "defaults": [
           "''"
@@ -10759,10 +11145,12 @@
       },
       "ZOE_QUIET_END_HOUR": {
         "defaults": [
-          "'7'"
+          "'7'",
+          "7"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/comm_prefs.py",
           "services/zoe-data/proactive/engine.py"
         ],
         "registered": true,
@@ -10774,14 +11162,16 @@
           "owner_doc": "docs/architecture/zoe-abilities.md",
           "type": "int"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_QUIET_START_HOUR": {
         "defaults": [
-          "'22'"
+          "'22'",
+          "22"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/comm_prefs.py",
           "services/zoe-data/proactive/engine.py"
         ],
         "registered": true,
@@ -10793,7 +11183,7 @@
           "owner_doc": "docs/architecture/communication-preferences.md",
           "type": "int"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_QUOTE_RETIRE": {
         "defaults": [
@@ -13069,7 +13459,7 @@
       },
       "ZOE_TELEGRAM_BOT_TOKEN": {
         "defaults": [
-          "''"
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
@@ -13084,7 +13474,7 @@
           "owner_doc": "docs/knowledge/app-connection-handoff.md",
           "type": "str"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_TELEGRAM_BOT_USERNAME": {
         "defaults": [
@@ -13180,6 +13570,26 @@
           "type": "bool"
         },
         "typed_env": false
+      },
+      "ZOE_TELEGRAM_NOTIFY_URL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth_handoff.py",
+          "services/zoe-data/telegram_notify.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/app-connection-handoff.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_TELEGRAM_STT_CAPTURE_DIR": {
         "defaults": [
@@ -13720,6 +14130,26 @@
           "note": "",
           "owner_doc": "docs/knowledge/voice-pipeline.md",
           "type": "int"
+        },
+        "typed_env": false
+      },
+      "ZOE_VAPID_KEY_PATH": {
+        "defaults": [
+          "'~/.zoe/secrets/vapid_keys.json'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/migrate_vapid_keys.py",
+          "services/zoe-data/routers/push.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "~/.zoe/secrets/vapid_keys.json",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/offbox-backup.md",
+          "type": "str"
         },
         "typed_env": false
       },
@@ -14808,6 +15238,7 @@
     "scripts/maintenance/curate_voice_corpus.py": 2,
     "scripts/maintenance/engineering_harness_loop.py": 1,
     "scripts/maintenance/ma_idle_reap.py": 6,
+    "scripts/maintenance/migrate_vapid_keys.py": 1,
     "scripts/maintenance/multica_health_report.py": 1,
     "scripts/maintenance/music_discovery_batch.py": 13,
     "scripts/maintenance/pi_intent_probe.py": 1,
@@ -14824,7 +15255,9 @@
     "scripts/maintenance/zoe-nightly-dreaming.py": 3,
     "scripts/maintenance/zoe_apply_intent_gap_contract.py": 1,
     "scripts/maintenance/zoe_cheap_pr_agent.py": 3,
+    "scripts/maintenance/zoe_health.py": 2,
     "scripts/maintenance/zoe_latency_probe.py": 10,
+    "scripts/maintenance/zoe_offbox.py": 11,
     "scripts/night/jobs/night_digest.py": 1,
     "scripts/perf/engine_bench.py": 1,
     "scripts/perf/hop_placement_ab.py": 2,
@@ -14872,7 +15305,7 @@
     "services/zoe-data/a2a_client.py": 1,
     "services/zoe-data/agent_safety.py": 1,
     "services/zoe-data/auth.py": 6,
-    "services/zoe-data/auth_handoff.py": 5,
+    "services/zoe-data/auth_handoff.py": 4,
     "services/zoe-data/background_runner.py": 1,
     "services/zoe-data/brain_dispatch.py": 4,
     "services/zoe-data/brain_slot_guard.py": 3,
@@ -14968,6 +15401,7 @@
     "services/zoe-data/routers/panel_auth.py": 6,
     "services/zoe-data/routers/panel_provision.py": 3,
     "services/zoe-data/routers/pi_intent_lab.py": 3,
+    "services/zoe-data/routers/push.py": 1,
     "services/zoe-data/routers/stubs.py": 2,
     "services/zoe-data/routers/system.py": 11,
     "services/zoe-data/routers/telegram_media.py": 5,
@@ -16025,10 +16459,15 @@
         "''",
         "'/'",
         "'/home/zoe'",
-        "'~'"
+        "'~'",
+        "dynamic"
       ],
       "in_env_example": false,
       "readers": [
+        "scripts/maintenance/fix_secret_perms.py",
+        "scripts/maintenance/reap_env_copies.py",
+        "scripts/maintenance/zoe_health.py",
+        "scripts/maintenance/zoe_offbox.py",
         "scripts/night/night_window.py",
         "scripts/perf/manner_block_ab.py",
         "scripts/perf/zmb/arms/mpa_palace.py",
@@ -16551,6 +16990,7 @@
       ],
       "in_env_example": false,
       "readers": [
+        "scripts/maintenance/zoe_health.py",
         "scripts/night/night_window.py",
         "scripts/perf/tool_use_bench.py",
         "services/zoe-data/self_model.py"
@@ -17397,6 +17837,16 @@
       "in_env_example": true,
       "readers": [
         "services/zoe-data/web_search_provider.py"
+      ],
+      "typed_env": true
+    },
+    "TELEGRAM_BOT_TOKEN": {
+      "defaults": [
+        "-"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "services/zoe-data/auth_handoff.py"
       ],
       "typed_env": true
     },

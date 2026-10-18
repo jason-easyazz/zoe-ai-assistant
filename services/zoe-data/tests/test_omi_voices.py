@@ -1129,7 +1129,7 @@ def test_a_patch_with_both_not_person_and_owner_label_is_rejected_and_applies_no
         transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(SAM, i, 0.3))))
     sid = env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' ORDER BY id")[0][0]
     for body in ({"not_person": "tv", "owner_label": "you"}, {"not_person": "tv", "owner_label": "other"},
-                 {"not_person": None, "owner_label": "you"}, {"owner_label": None, "not_person": "radio"}):
+                 {"owner_label": None, "not_person": "radio"}):
         r = env.client.patch(f"/api/omi/segments/{sid}", json=body)
         assert r.status_code == 400, body
         assert env.db.q("SELECT not_person, owner_label FROM omi_segments WHERE id = ?", (sid,)) == [(None, None)], body
@@ -1211,3 +1211,158 @@ def test_calibration_keeps_one_variant_per_source_clip(tmp_path):
     stems = [(spk, Path(p).name) for spk, ps in got.items() for p in ps]
     assert len(stems) == len(set(stems))                                                   # no source clip appears twice
     assert cal.one_variant_per_clip(man, prefer="clean")["11"] == ["libri/clean/11_e0.wav", "libri/clean/11_e1.wav"]
+
+
+# --- the Pendant page's glue (desktop/phone tagging, 2026-10-18) -------------------------------------------------------------
+def test_unknown_voices_carry_their_sample_lines_so_the_page_needs_no_extra_reads(env, monkeypatch):
+    """Mutation: drop ``s.text`` from ``list_unknown``'s select -> the sample has no words."""
+    _sam_cluster(env, monkeypatch)
+    (v,) = env.client.get("/api/omi/voices/unknown").json()["voices"]
+    assert v["samples"] and all(s["text"] == "said3s" and s["started_at"] for s in v["samples"])
+
+
+def test_that_voice_is_me_relabels_every_line_as_the_wearer_and_learns_nothing(env, monkeypatch):
+    """The pendant can hear the wearer as 'other'. Mutation: skip the embedding delete in ``cluster_is_me`` -> the wearer's own
+    voice stays held as a bystander's (red); drop ``user_id = ?`` from its cluster check -> member B can relabel A's voice (red)."""
+    cid = _sam_cluster(env, monkeypatch)
+    env.who["user"] = {"user_id": B, "role": "admin"}
+    assert env.client.post(f"/api/omi/voices/unknown/{cid}/me").status_code == 404            # another member, even an admin
+    env.who["user"] = {"user_id": A, "role": "member"}
+    out = env.client.post(f"/api/omi/voices/unknown/{cid}/me").json()
+    assert out == {"ok": True, "segments": 2}
+    assert env.db.q("SELECT COUNT(*) FROM omi_segments WHERE owner_label = 'you' AND voice_cluster_id IS NULL") == [(2,)]
+    assert env.db.q("SELECT COUNT(*) FROM omi_segment_embeddings") == [(0,)]
+    assert env.db.q("SELECT COUNT(*) FROM omi_voice_clusters") == [(0,)]
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)] and env.db.q("SELECT COUNT(*) FROM people") == [(0,)]
+    assert env.client.get("/api/omi/voices/unknown").json()["voices"] == []
+    assert env.client.post(f"/api/omi/voices/unknown/{cid}/me").status_code == 404            # gone
+
+
+def test_the_picker_lists_only_my_own_people(env, monkeypatch):
+    """Mutation: drop ``user_id = ?`` from ``own_people`` -> member B's family-visible contact shows in A's picker (red)."""
+    env.db.conn.executemany("INSERT INTO people (id, user_id, name, visibility, deleted) VALUES (?, ?, ?, ?, ?)",
+                            [("pa", A, "Robin", "personal", 0), ("pb", B, "Casey", "family", 0), ("pg", A, "Gone", "personal", 1)])
+    env.db.conn.commit()
+    assert env.client.get("/api/omi/voices/people").json() == {"people": [{"id": "pa", "name": "Robin"}]}
+    env.who["user"] = {"user_id": B, "role": "admin"}
+    assert env.client.get("/api/omi/voices/people").json() == {"people": [{"id": "pb", "name": "Casey"}]}
+
+
+def test_a_typed_name_that_is_already_my_person_links_them_and_an_ambiguous_one_asks(env, monkeypatch):
+    """Mutation: drop the fold match in ``_resolve_person`` -> a second 'Sam' row is created (red)."""
+    cid = _sam_cluster(env, monkeypatch)
+    env.db.conn.execute("INSERT INTO people (id, user_id, name, visibility, deleted) VALUES ('p-sam', ?, 'Sam', 'personal', 0)", (A,))
+    env.db.conn.commit()
+    out = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "  sam "}).json()
+    assert out["person_id"] == "p-sam" and out["person_created"] is False
+    assert env.db.q("SELECT COUNT(*) FROM people") == [(1,)]
+    env.db.conn.execute("INSERT INTO people (id, user_id, name, visibility, deleted) VALUES ('p-sam2', ?, 'SAM', 'personal', 0)", (A,))
+    env.db.conn.commit()
+    (sid,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE speaker = 'other' LIMIT 1")]
+    r = env.client.post(f"/api/omi/segments/{sid}/tag", json={"name": "Sam"})
+    assert r.status_code == 409 and env.db.q("SELECT COUNT(*) FROM people") == [(2,)]
+
+
+def _held(env, rid):
+    (row,) = env.db.q("SELECT audio_path FROM omi_recordings WHERE id = ?", (rid,))
+    return bool(row[0]) and (env.tmp / f"{rid}.wav").exists()
+
+
+def test_audio_is_held_for_tagging_only_while_a_line_needs_a_name(env, monkeypatch):
+    """``ZOE_OMI_KEEP_AUDIO_FOR_TAGGING``: the WAV stays while a someone-else line is unnamed and goes the moment it is named.
+    Mutations: drop ``needs_name`` from the hold -> the you-only recording is held (red); skip ``_released`` on the tag route -> the
+    named recording keeps its audio (red)."""
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp))
+    spec = turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, SAM))
+    rid_off = transcribe(env, monkeypatch, spec)                                    # flag off (default): deleted at transcription
+    assert not _held(env, rid_off)
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO_FOR_TAGGING", "1")
+    rid_me = transcribe(env, monkeypatch, turns((0, 6, "you", 0.6, WEARER)))
+    assert not _held(env, rid_me)                                                  # nothing to name: nothing held
+    rid = transcribe(env, monkeypatch, spec)
+    assert _held(env, rid)
+    (sid,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (rid,))]
+    clip = env.client.get(f"/api/omi/segments/{sid}/clip")
+    assert clip.status_code == 200 and clip.headers["content-type"] == "audio/wav" and clip.headers["cache-control"] == "no-store"
+    with wave.open(io.BytesIO(clip.content)) as w:
+        assert w.getframerate() == 16000 and w.getnframes() == 3 * 16000         # exactly that turn (3 s, under the 8 s cap)
+    env.who["user"] = {"user_id": B, "role": "admin"}
+    assert env.client.get(f"/api/omi/segments/{sid}/clip").status_code == 404     # another member's line, even an admin
+    env.who["user"] = {"user_id": A, "role": "member"}
+    assert env.client.post(f"/api/omi/segments/{sid}/tag", json={"name": "Sam"}).status_code == 200
+    assert not _held(env, rid)                                                     # named: the WAV is gone at once
+    assert env.client.get(f"/api/omi/segments/{sid}/clip").status_code == 404
+
+
+def test_held_audio_goes_on_me_or_not_a_person_and_when_the_flag_is_turned_off(env, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp))
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO_FOR_TAGGING", "1")
+    a = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, SAM)))
+    b = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, TV)))
+    c = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "unsure", 0.1, near(SAM, 3))))
+    assert _held(env, a) and _held(env, b) and _held(env, c)
+    (sa,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (a,))]
+    (sb,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (b,))]
+    assert env.client.patch(f"/api/omi/segments/{sa}", json={"owner_label": "you"}).status_code == 200
+    assert env.client.patch(f"/api/omi/segments/{sb}", json={"not_person": "tv"}).status_code == 200
+    assert not _held(env, a) and not _held(env, b) and _held(env, c)
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO_FOR_TAGGING", "0")
+    assert run(omi.release_tagged_audio()) == 1 and not _held(env, c)             # the retention loop's backstop
+
+
+def test_a_line_learn_marks_not_a_person_releases_the_held_audio_at_once(env, monkeypatch):
+    """Codex review on #2118: the hold is decided before ``learn`` runs, and ``learn`` marks a line matching a voice the member
+    called TV as not-a-person. Mutation: drop the post-transcription ``release_tagged_audio`` -> the WAV stays held (red)."""
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp))
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO_FOR_TAGGING", "1")
+    first = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(TV, 1, 0.3))))
+    (cid,) = [v["id"] for v in env.client.get("/api/omi/voices/unknown").json()["voices"]]
+    assert env.client.post(f"/api/omi/voices/unknown/{cid}/not-a-person", json={"kind": "tv"}).status_code == 200
+    assert not _held(env, first)
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, near(TV, 2, 0.3))))
+    assert env.db.q("SELECT not_person FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (rid,)) == [("tv",)]
+    assert not _held(env, rid)
+
+
+def test_un_marking_a_tv_line_as_not_me_is_one_request_and_keeps_the_audio(env, monkeypatch):
+    """Codex review on #2118: a TV-marked line the model called ``you`` is corrected to "not me". As two requests, the un-mark
+    alone left nothing needing a name and released the WAV before the label made the line nameable again. One request
+    ``{"not_person": null, "owner_label": "other"}`` does both, then releases. Mutation: reject that combination again (red)."""
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp))
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO_FOR_TAGGING", "1")
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, SAM)))
+    (you_sid,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'you'", (rid,))]
+    (sam_sid,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (rid,))]
+    assert env.client.patch(f"/api/omi/segments/{you_sid}", json={"not_person": "tv"}).status_code == 200
+    assert _held(env, rid)                                                         # Sam's line still needs a name
+    env.db.conn.execute("UPDATE omi_segments SET not_person = 'radio' WHERE id = ?", (sam_sid,))   # nothing needs a name now, but
+    env.db.conn.commit()                                                                          # no release has run yet
+    assert env.client.patch(f"/api/omi/segments/{you_sid}", json={"not_person": None, "owner_label": "other"}).status_code == 200
+    assert env.db.q("SELECT not_person, owner_label FROM omi_segments WHERE id = ?", (you_sid,)) == [(None, "other")]
+    assert _held(env, rid)                                                         # the corrected line needs a name: still playable
+    clip = env.client.get(f"/api/omi/segments/{you_sid}/clip")
+    assert clip.status_code == 200
+    r = env.client.patch(f"/api/omi/segments/{you_sid}", json={"not_person": None, "owner_label": "you"})
+    assert r.status_code == 200 and env.db.q("SELECT owner_label FROM omi_segments WHERE id = ?", (you_sid,)) == [("you",)]
+    assert not _held(env, rid)                                                     # now nothing needs a name: released
+
+
+def test_held_audio_never_outlives_its_retention_and_a_clip_never_leaves_the_audio_dir(env, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp))
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO_FOR_TAGGING", "1")
+    rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, SAM)))
+    (sid,) = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE recording_id = ? AND speaker = 'other'", (rid,))]
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp / "elsewhere"))
+    assert env.client.get(f"/api/omi/segments/{sid}/clip").status_code == 404     # a path outside the audio dir is never read
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(env.tmp))
+    assert env.client.get(f"/api/omi/segments/{sid}/clip").status_code == 200
+    env.db.conn.execute("UPDATE omi_recordings SET audio_expires_at = '2000-01-01T00:00:00Z' WHERE id = ?", (rid,))
+    env.db.conn.commit()
+    assert env.client.get(f"/api/omi/segments/{sid}/clip").status_code == 404     # past retention: not served even before the purge
+    assert run(omi.purge_expired_audio()) == 1 and not _held(env, rid)
+
+
+def test_the_voices_read_says_which_tagging_mode_is_live(env, monkeypatch):
+    assert env.client.get("/api/omi/voices").json()["speaker_tag"] == "shadow"
+    monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", "bogus")
+    assert env.client.get("/api/omi/voices").json()["speaker_tag"] == "off"

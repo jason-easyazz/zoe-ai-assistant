@@ -1,0 +1,23 @@
+# ONE health check on the canonical spine (architecture deep dive B9): zoe-data :8000, llama-server :11434, the Flue
+# 2.x brain :3579, Kokoro :10201, the router :11436, Postgres, unhealthy containers, failed user units, disk, memory.
+# Alerts over Telegram on transitions only (two consecutive failures; one "recovered"). Skips the spine while the
+# night window is open. scripts/maintenance/zoe_health.py has the rationale.
+#
+# REPLACES the untracked live unit of the same name (it ran ~/bin/zoe-health-check.sh, which probed retired Hermes
+# :8642, never :3579/:10201, loaded ~/.hermes/.env and held a literal DB password) AND the crontab line
+# `*/5 * * * * ~/bin/zoe-watchdog.sh`. Owner step: install both files, `crontab -e` to drop that line.
+# No EnvironmentFile: the probe needs no secret (the Telegram sender reads the bot's own env file).
+[Unit]
+Description=Zoe health check (canonical spine)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=XDG_RUNTIME_DIR=%t
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/zoe_health.py
+# exit 1 = a check is failing: reported (and alerted on transition), not a failure of the checker itself
+SuccessExitStatus=1
+Nice=5
+TimeoutStartSec=60
+StandardOutput=append:%h/.zoe-logs/health.log
+StandardError=append:%h/.zoe-logs/health.log
