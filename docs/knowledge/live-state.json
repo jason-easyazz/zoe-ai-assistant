@@ -182,7 +182,7 @@
     "dynamic"
    ],
    "kind": "unknown",
-   "readers": 1
+   "readers": 2
   },
   "ZOE_BARGE_MIN_MS": {
    "defaults": [
@@ -784,6 +784,20 @@
    "kind": "str",
    "readers": 1
   },
+  "ZOE_DAY_REVIEW_RAISE": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_DAY_REVIEW_RAISE_SNOOZE_DAYS": {
+   "defaults": [
+    "3"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
   "ZOE_DB_ACQUIRE_TIMEOUT_S": {
    "defaults": [
     "unset"
@@ -1022,6 +1036,28 @@
     "all"
    ],
    "kind": "str",
+   "readers": 1
+  },
+  "ZOE_DRILL_HELPER": {
+   "defaults": [
+    "required",
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_DRILL_MEM_FLOOR_MB": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_DRILL_PYTHON": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "unknown",
    "readers": 1
   },
   "ZOE_EDGE_TTS_TIMEOUT_S": {
@@ -1433,6 +1469,35 @@
    "kind": "str",
    "readers": 1
   },
+  "ZOE_HA_EXPORT_CMD": {
+   "defaults": [
+    "required",
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_HA_UI_GATE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_HA_UI_SECRET": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_HA_UI_TTL_S": {
+   "defaults": [
+    "28800"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
   "ZOE_HA_URL": {
    "defaults": [
     "dynamic"
@@ -1607,7 +1672,7 @@
     "unset"
    ],
    "kind": "bool",
-   "readers": 10
+   "readers": 12
   },
   "ZOE_JUKEBOX_SECRET": {
    "defaults": [
@@ -1869,6 +1934,13 @@
    "kind": "unknown",
    "readers": 1
   },
+  "ZOE_LAN_HOSTS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
   "ZOE_LATENCY_BASELINE": {
    "defaults": [
     "dynamic"
@@ -2035,6 +2107,13 @@
     "gemma"
    ],
    "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LOCAL_BACKUP_ENCRYPT": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
    "readers": 1
   },
   "ZOE_LOCAL_MODEL": {
@@ -2213,6 +2292,27 @@
   "ZOE_MA_START_TIMEOUT_S": {
    "defaults": [
     "25"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MA_UI_GATE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MA_UI_SECRET": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_MA_UI_TTL_S": {
+   "defaults": [
+    "43200"
    ],
    "kind": "number",
    "readers": 1
@@ -2418,6 +2518,13 @@
     "off"
    ],
    "kind": "str",
+   "readers": 1
+  },
+  "ZOE_MODELS_LOCK": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
    "readers": 1
   },
   "ZOE_MOONSHINE_ARCH": {
@@ -2739,6 +2846,20 @@
   "ZOE_OFFBOX_CONFIG_DIR": {
    "defaults": [
     "dynamic"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_CRONTAB_FILE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_OFFBOX_ETC_SYSTEMD": {
+   "defaults": [
+    "/etc/systemd/system"
    ],
    "kind": "unknown",
    "readers": 1
@@ -3117,6 +3238,13 @@
    "kind": "number",
    "readers": 1
   },
+  "ZOE_PANEL_PUSH_PROOF": {
+   "defaults": [
+    "enforce"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
   "ZOE_PANEL_REVIEW_CARDS": {
    "defaults": [
     "off"
@@ -3241,6 +3369,34 @@
     "unset"
    ],
    "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PHONE_APP": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_PHONE_APP_BASE_URL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_PHONE_APP_BUNDLE_ID": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_PHONE_APP_CA_SHA256": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
    "readers": 1
   },
   "ZOE_PIN_CHALLENGE_TTL_S": {
@@ -3653,8 +3809,8 @@
    "defaults": [
     "unset"
    ],
-   "kind": "unknown",
-   "readers": 1
+   "kind": "str",
+   "readers": 2
   },
   "ZOE_PULL_NOT_PUSH": {
    "defaults": [
@@ -3731,6 +3887,27 @@
     "unset"
    ],
    "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_RELAY_HOSTNAME": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_RELAY_INGRESS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_RELAY_TRUSTED_PEER": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
    "readers": 1
   },
   "ZOE_REMINDER_DEFAULT_TIME": {
@@ -3889,10 +4066,11 @@
   },
   "ZOE_ROUTER_HEAD_LOG": {
    "defaults": [
-    "dynamic"
+    "dynamic",
+    "unset"
    ],
    "kind": "unknown",
-   "readers": 1
+   "readers": 2
   },
   "ZOE_ROUTER_HEAD_MIN_CONF": {
    "defaults": [
@@ -3948,6 +4126,55 @@
     "/home/zoe/models/functiongemma-router"
    ],
    "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_RETRAIN_DELTA_REPEAT": {
+   "defaults": [
+    "2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_RETRAIN_DIR": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_ROUTER_RETRAIN_EPOCHS": {
+   "defaults": [
+    "1.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_RETRAIN_HOLDOUT_FRAC": {
+   "defaults": [
+    "0.2"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_RETRAIN_LR": {
+   "defaults": [
+    "0.0001"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_RETRAIN_REPLAY": {
+   "defaults": [
+    "300"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_RETRAIN_STOP_BRAIN": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
    "readers": 1
   },
   "ZOE_ROUTER_SCRATCH_PORT": {
@@ -4018,6 +4245,13 @@
     "0.62"
    ],
    "kind": "number",
+   "readers": 1
+  },
+  "ZOE_ROUTER_TRAIN_PYTHON": {
+   "defaults": [
+    "/usr/bin/python3"
+   ],
+   "kind": "unknown",
    "readers": 1
   },
   "ZOE_ROUTER_TWO_STAGE_GATE": {
@@ -4948,7 +5182,7 @@
     "unset"
    ],
    "kind": "unknown",
-   "readers": 5
+   "readers": 6
   },
   "ZOE_VOICE_SAVE_AUDIO": {
    "defaults": [
@@ -5149,6 +5383,6 @@
  },
  "kind": "code-defaults",
  "note": "GENERATED by tools/audit/live_state.py from docs/knowledge/flag-inventory.json. These are the flag DEFAULTS as the code ships them, not the values set on the running box (read those with scripts/maintenance/zoe_ground_truth.sh). 'unset' = no default argument or an empty-string default; it is compatible with a claim of 'off'. A default of 1 or 0 is written 'on' / 'off' ONLY for a flag the code reads as a boolean; on a flag read as a number, or whose reader shape is not recognised, it stays the literal 1 or 0. 'kind' says which: bool | number | str | unknown.",
- "prod_flag_count": 731,
+ "prod_flag_count": 764,
  "source": "docs/knowledge/flag-inventory.json"
 }

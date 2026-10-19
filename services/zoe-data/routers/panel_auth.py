@@ -26,6 +26,7 @@ from typing import Optional
 
 import asyncio
 import httpx
+import relay_ingress
 from fastapi import APIRouter, Depends, HTTPException, Request
 from auth import get_current_user, require_admin
 from database import get_db
@@ -679,6 +680,9 @@ async def revoke_token(panel_id: str, token_id: str, admin: dict = Depends(requi
     h = row["token_hash"]
     if h in _token_cache:
         _token_cache[h]["revoked"] = 1
+    # Bump the relay epoch: an open relayed socket of this panel re-proves before its next send instead of trusting a proof that
+    # predates the revocation (the certificate endpoints do the same).
+    relay_ingress.invalidate_cache()
     logger.info("panel_auth: revoked token %s for panel %s", token_id, panel_id)
     return {"ok": True, "token_id": token_id, "revoked": True}
 

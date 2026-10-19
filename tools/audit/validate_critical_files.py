@@ -78,6 +78,7 @@ CRITICAL_FILES = {
         'services/zoe-data/main.py',
         'services/zoe-data/database.py',
         'services/zoe-data/auth.py',
+        'services/zoe-data/relay_ingress.py',  # imported by auth.py / panel_principal.py / main.py: a missing file is a zoe-data boot failure
         # 'services/zoe-data/openclaw_ws.py' — REMOVED from critical list 2026-07-22:
         # OpenClaw is being retired (multica-executor-migration.md §5); the file is a
         # gated deletion target and the validator must not block its deletion PR.
@@ -91,6 +92,11 @@ CRITICAL_FILES = {
         'services/zoe-ui/nginx.conf',
         'services/zoe-ui/nginx.d/locations.inc',
         'services/zoe-ui/nginx.d/security-headers.inc',
+        # locations.inc / nginx.conf include these: a missing one fails `nginx -t` and takes the UI down.
+        'services/zoe-ui/nginx.d/ingress-lan.inc',
+        'services/zoe-ui/nginx.d/ingress-headers.inc',
+        'services/zoe-ui/nginx.d/lan-only.inc',
+        'services/zoe-ui/nginx.d/relay-listener.conf',
     ]
 }
 
