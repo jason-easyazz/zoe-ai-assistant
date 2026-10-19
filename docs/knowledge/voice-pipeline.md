@@ -312,7 +312,7 @@ smart home / weather-time / notes / people-memory / chat, and writes clip ids + 
 `~/.zoe/voice-gate/proposed_pins.json` (mode 600; counts printed, never audio or text). Adopt deliberately:
 `voice_regression_probe.py --update-baseline --pin-from <that file>`, then a normal run (a re-pin run is
 judged against the OLD profile and its artifact is written `status: "skip"` with a re-pin reason, so it can
-never be deploy evidence; the follow-up normal run against the completed new profile is). A night job: ~1 s of STT per clip over ~1,500 clips.
+never be deploy evidence; the follow-up normal run against the completed new profile is). ~1.5 s per clip over ~1,500 clips (~40 min), so run it in the evening, NOT overnight: the dry replay takes the harness lock and refuses a start inside the 01:50-04:55 brain window, or one whose clip-count budget (`--budget-min` to override) would still be alive at 01:50, before the lock is taken (`--force` does not skip it; `--from-json` is never gated).
 
 **STT mode — `--stt remote` is the nightly default** (unit template sets
 `ZOE_VOICE_REPLAY_STT=remote`). In-process mode lazy-loads a SECOND Moonshine next to the live

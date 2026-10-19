@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -81,3 +82,79 @@ def test_proposal_is_content_free(tmp_path):
     p = vcs.propose(rows, _cid, 6)
     blob = json.dumps(p)
     assert ".wav" not in blob                                        # ids and categories only
+
+
+# ---- the 01:50-04:55 brain window guards the REPLAY path (before the lock), never --from-json ------------------------------
+
+import datetime as dt  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+_hq_spec = importlib.util.spec_from_file_location("harness_quiet_for_strata", REPO / "scripts/maintenance/harness_quiet.py")
+_hq = importlib.util.module_from_spec(_hq_spec)
+sys.modules["harness_quiet_for_strata"] = _hq        # a dataclass in the module resolves its own module by name
+_hq_spec.loader.exec_module(_hq)
+
+
+def _at(h, m=0):
+    return dt.datetime(2026, 10, 20, h, m)
+
+
+class _Rig:
+    """main() with its collaborators faked: a fixed clock for the brain window, a lock spy, a replay spy."""
+
+    def __init__(self, monkeypatch, when):
+        self.locks, self.replays = [], []
+        self.hq = SimpleNamespace(
+            brain_window_verdict=lambda name, budget_min=45: _hq.brain_window_verdict(name, budget_min=budget_min, now=when),
+            check=lambda name: SimpleNamespace(allowed=True, reason="ok"))
+        vrp = SimpleNamespace(_row_clip_id=lambda r, d: "x" + r["file"][1:5].rjust(11, "0"),
+                              _acquire_harness_lock=lambda: self.locks.append(1), CLIP_ID_SCHEME="t")
+        monkeypatch.setattr(vcs, "_load", lambda name: {"harness_quiet": self.hq}.get(name, vrp))
+        monkeypatch.setattr(vcs, "_run_replay", lambda args, out: self.replays.append(out) or 2)
+
+
+def _corpus(tmp_path, n):
+    d = tmp_path / "samples"
+    d.mkdir()
+    for i in range(n):
+        (d / f"{i:06d}_000.wav").write_bytes(b"")
+    (d / "quarantine-x").mkdir()
+    (d / "quarantine-x" / "q.wav").write_bytes(b"")      # the replay's glob is top-level: not counted
+    return d
+
+
+def test_corpus_count_is_the_replays_top_level_glob_capped_by_last(tmp_path):
+    d = _corpus(tmp_path, 12)
+    assert vcs.corpus_clip_count(str(d)) == 12 and vcs.corpus_clip_count(str(d), 5) == 5
+    assert vcs.corpus_clip_count(str(tmp_path / "missing")) == 0
+    assert vcs.estimate_budget_min(0) == vcs.OVERHEAD_MIN and vcs.estimate_budget_min(1485) >= 37
+
+
+def test_replay_inside_the_brain_window_is_refused_before_the_lock(monkeypatch, tmp_path, capsys):
+    rig = _Rig(monkeypatch, _at(3, 0))
+    d = _corpus(tmp_path, 3)
+    assert vcs.main(["--sample-dir", str(d), "--out", str(tmp_path / "o.json")]) == 3
+    assert "brain window" in capsys.readouterr().out
+    assert rig.locks == [] and rig.replays == []                       # the harness lock was never taken
+
+
+def test_a_replay_whose_budget_would_cross_0150_is_refused(monkeypatch, tmp_path):
+    rig = _Rig(monkeypatch, _at(1, 30))
+    d = _corpus(tmp_path, 1000)                                        # 1000 clips = 30 min estimated: still alive at 01:50
+    assert vcs.main(["--sample-dir", str(d), "--out", str(tmp_path / "o.json")]) == 3
+    assert rig.locks == [] and rig.replays == []
+    # a narrower corpus (--last) fits the same slot, an explicit budget is honoured, and a bigger one is refused
+    assert vcs.main(["--sample-dir", str(d), "--last", "10", "--out", str(tmp_path / "o.json")]) == 2      # reached the replay
+    assert rig.locks == [1] and len(rig.replays) == 1
+    assert vcs.main(["--sample-dir", str(d), "--budget-min", "10", "--out", str(tmp_path / "o.json")]) == 2
+    assert vcs.main(["--sample-dir", str(d), "--budget-min", "25", "--out", str(tmp_path / "o.json")]) == 3
+    assert len(rig.locks) == 2
+
+
+def test_from_json_is_never_gated_by_the_window(monkeypatch, tmp_path):
+    rig = _Rig(monkeypatch, _at(3, 0))
+    dump = tmp_path / "replay.json"
+    dump.write_text(json.dumps({"rows": _rows({"chat": 4, "lists": 4})}))
+    out = tmp_path / "o.json"
+    assert vcs.main(["--from-json", str(dump), "--total", "4", "--out", str(out)]) == 0
+    assert out.exists() and rig.locks == [] and rig.replays == []

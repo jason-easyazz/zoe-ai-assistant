@@ -22,8 +22,10 @@ Two ways to label the corpus:
   --from-json REPLAY.json   classify an existing replay dump (replay_samples.py --json)
   (default)                 run the replay itself: DRY, no brain (labels come from STT,
                             the router and the fast tiers only), under the harness lock
-                            and the harness quiet hours. ~1 s of STT per clip: the whole
-                            corpus is a night job (--last N narrows it).
+                            the harness quiet hours and the 01:50-04:55 brain window (a start
+                            inside it, or one whose clip-count budget would still be alive at
+                            01:50, is refused; --budget-min overrides the estimate). ~1 s of STT
+                            per clip: the whole corpus is a late-evening job (--last N narrows it).
 
 Stdlib only (the replay runs in the service interpreter as a subprocess).
 """
@@ -67,6 +69,24 @@ def _load(name: str):
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+SEC_PER_CLIP = 1.5   # ~1 s of in-process STT per clip (the docstring) plus the router and the fast tiers, rounded up
+OVERHEAD_MIN = 5     # the service interpreter, its models, the router
+
+
+def corpus_clip_count(sample_dir: str, last: int | None = None) -> int:
+    """How many clips the dry replay will label: the top-level ``*.wav`` files (the replay's own glob), or ``--last N``."""
+    try:
+        n = sum(1 for e in os.scandir(sample_dir) if e.is_file() and e.name.lower().endswith(".wav"))
+    except OSError:
+        n = 0
+    return min(n, last) if last else n
+
+
+def estimate_budget_min(n_clips: int) -> int:
+    """Minutes a dry replay over ``n_clips`` clips is expected to take, for the brain-window start guard."""
+    return int(-(-max(0, n_clips) * SEC_PER_CLIP // 60)) + OVERHEAD_MIN
 
 
 def category(labels: dict[str, Any] | None) -> str:
@@ -153,6 +173,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--user", default=os.environ.get("ZOE_VOICE_PROBE_USER", "jason"))
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     ap.add_argument("--seed", default="v8")
+    ap.add_argument("--budget-min", type=int, default=0,
+                    help="expected replay length for the brain-window start check (default: estimated from the clip count)")
     args = ap.parse_args(argv)
     vrp_ids = _load("voice_regression_probe")
 
@@ -164,6 +186,14 @@ def main(argv: list[str] | None = None) -> int:
         src = args.from_json
     else:
         hq = _load("harness_quiet")
+        # the 01:50-04:55 brain window (scripts/AGENTS.md "Brain-window quiet hours"), BEFORE the lock is taken: a start inside
+        # it, or one whose budget would still be alive at 01:50, would make the 12B night window / nightly voice gate refuse.
+        # Not bypassable (the shared helper ignores ZOE_HARNESS_FORCE); --from-json never reaches this branch.
+        budget = args.budget_min or estimate_budget_min(corpus_clip_count(args.sample_dir, args.last))
+        window = hq.brain_window_verdict("voice_corpus_strata", budget_min=budget)
+        print(window.reason)
+        if not window.allowed:
+            return 3
         verdict = hq.check("voice_corpus_strata")
         print(verdict.reason)
         if not verdict.allowed:
