@@ -4693,6 +4693,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PANEL_PUSH_PROOF": {
+        "defaults": [
+          "'enforce'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PANEL_REVIEW_CARDS": {
         "defaults": [
           "False"

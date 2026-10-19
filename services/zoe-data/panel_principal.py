@@ -254,6 +254,60 @@ async def mark_if_panel(request: Any, user: Mapping[str, Any] | None, db: Any = 
     return False
 
 
+# ── The panel's push channel: who may subscribe to ``panel_<id>`` (security follow-up 2026-10-19) ───────────────────────────
+#
+# ``/ws/push?panel_id=<id>`` admitted ANY socket without a session to a registered panel that allows guests, so anyone on the home
+# Wi-Fi could join ``panel_zoe-touch-pi`` and receive the per-turn voice text, member cards and forms the panel shows while a
+# member's voice session is open. Rule: a socket with no member session must prove it is THAT panel - its device token (the voice
+# daemon, probes; checked where the socket is accepted), its kiosk credential naming the panel, or the panel's own registered
+# address (nginx's X-Real-IP from a trusted proxy). The live kiosk browser connects with no session from its registered address,
+# so it keeps working with no kiosk-side change.
+
+
+def panel_push_mode() -> str:
+    """``ZOE_PANEL_PUSH_PROOF``: ``enforce`` (default; anything unknown is enforce) refuses an unproven panel subscriber,
+    ``shadow`` admits it and logs "would refuse", ``off`` skips the check (the pre-2026-10-19 behaviour, a ROLLBACK). Per call."""
+    mode = os.environ.get("ZOE_PANEL_PUSH_PROOF", "enforce").strip().lower()
+    return mode if mode in ("shadow", "off") else "enforce"
+
+
+async def _panel_at_address(db: Any, key: str) -> bool:
+    panel_id, _, client_ip = key.partition("\n")
+    if not panel_id or not client_ip:
+        return False
+    try:
+        cur = await db.execute(
+            "SELECT 1 FROM panels WHERE panel_id = ? AND ip_address = ? AND is_active = 1 LIMIT 1",
+            (panel_id, client_ip))
+        return await cur.fetchone() is not None
+    except Exception as exc:  # noqa: BLE001 - fail closed, but say so
+        logger.warning("panel_principal: panel address lookup failed (%s) - treating the caller as not-the-panel", type(exc).__name__)
+        return False
+
+
+async def _panel_is_active(db: Any, panel_id: str) -> bool:
+    return await _registry_has(db, "SELECT 1 FROM panels WHERE panel_id = ? AND is_active = 1 LIMIT 1", panel_id)
+
+
+async def request_is_this_panel(request: Any, panel_id: str, db: Any = None) -> bool:
+    """True only when ``request`` (an HTTP request or a WebSocket handshake) is demonstrably the panel ``panel_id`` itself - not
+    merely "a panel": its kiosk credential names ``panel_id``, or its trusted client address is ``panel_id``'s registered
+    ``ip_address``; the row must be active. Never over the Cloudflare tunnel. Never raises. This is IDENTITY only: whether a
+    guest may use the panel (``allow_guest``) stays the caller's policy (a guest bound to a members-only panel still proves it)."""
+    try:
+        pid = str(panel_id or "").strip()
+        if not pid or request is None or _via_public_tunnel(request):
+            return False
+        kiosk_panel = panel_kiosk_credential.credential_panel_id(request)
+        if kiosk_panel and kiosk_panel == pid and await _with_registry(db, _panel_is_active, pid):
+            return True
+        client_ip = trusted_client_ip(request)
+        return bool(client_ip) and await _with_registry(db, _panel_at_address, f"{pid}\n{client_ip}")
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        logger.warning("panel_principal: panel proof failed (%s) - refusing", type(exc).__name__)
+        return False
+
+
 # ── Home control: who may drive Home Assistant (lights, switches, covers, locks, media) ─────────────────────────────────────
 #
 # Security fix 2026-10-17: ``POST /api/ha/control`` accepted ANY principal, and ``get_current_user`` resolves a credential-less

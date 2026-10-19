@@ -2486,7 +2486,63 @@ def _is_ws_guest(user: dict) -> bool:
     return str(user.get("user_id") or "") == GUEST_USER_ID or str(user.get("role") or "").lower() == "guest"
 
 
-async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> str | None:
+def _push_channel_is_panel(channel: str) -> bool:
+    """``panel_<id>`` and ``push.NO_PANEL_CHANNEL`` (``panel:none``): channels only a panel's own socket joins."""
+    return str(channel or "").strip().lower().startswith(("panel_", "panel:"))
+
+
+def _device_token_may_join(device_info: dict, panel_id: str) -> bool:
+    """A device token joins only ITS OWN panel's channel (``ZOE_PANEL_PUSH_PROOF``: enforce refuses another
+    panel's, shadow admits and logs, off skips). A token row without a panel id names no panel: refused too."""
+    import panel_principal
+
+    token_panel = str((device_info or {}).get("panel_id") or "").strip()
+    if token_panel and token_panel == str(panel_id or "").strip():
+        return True
+    mode = panel_principal.panel_push_mode()
+    if mode == "off":
+        return True
+    log_throttled(
+        logger, logging.WARNING, f"panel-push-token:{token_panel}:{panel_id}",
+        "panel push: %s panel %s's device token joining panel %s",
+        "WOULD REFUSE (shadow)" if mode == "shadow" else "refused", token_panel[:64], str(panel_id)[:64],
+    )
+    return mode == "shadow"
+
+
+async def _panel_push_proven(websocket, panel_id: str) -> bool:
+    """A socket WITHOUT a member session may join ``panel_<panel_id>`` only when it proves it IS that
+    panel (``panel_principal.request_is_this_panel``: the kiosk credential naming it, or its registered
+    address via nginx's X-Real-IP). The device-token path is checked in ``websocket_push`` itself.
+
+    ``ZOE_PANEL_PUSH_PROOF`` (per call): ``enforce`` (default) refuses, ``shadow`` admits and logs
+    "would refuse", ``off`` skips the check. No socket (a direct call) cannot prove anything: refused
+    under enforce. Never raises."""
+    import panel_principal
+
+    mode = panel_principal.panel_push_mode()
+    if mode == "off":
+        return True
+    try:
+        proven = websocket is not None and await panel_principal.request_is_this_panel(websocket, panel_id)
+    except Exception:  # noqa: BLE001 - fail closed
+        proven = False
+    if proven:
+        return True
+    try:
+        peer = panel_principal.trusted_client_ip(websocket) if websocket is not None else ""
+    except Exception:  # noqa: BLE001
+        peer = ""
+    log_throttled(
+        logger, logging.WARNING, f"panel-push-proof:{panel_id}:{peer}",
+        "panel push: %s a subscriber for panel %s from %s without the panel's credential (no member session, "
+        "no device token, kiosk credential or registered address)",
+        "WOULD REFUSE (shadow)" if mode == "shadow" else "refused", str(panel_id)[:64], str(peer)[:64],
+    )
+    return mode == "shadow"
+
+
+async def _resolve_subscribable_panel(panel_id: str, session_id: str | None, websocket=None) -> str | None:
     """Resolve the *canonical* panel channel a browser push socket may subscribe to.
 
     Returns the panel_id whose ``panel_{id}`` channel the socket should join, or
@@ -2521,12 +2577,14 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
       * a VALID guest session (role/user_id ``guest``) uses its bound row when it has one,
         else the SAME registered-panel guest policy (``panels.allow_guest``) -- no wider
         than a session-less socket, so the member->guest reclaim window cannot deafen it.
+      * a socket with NO member session (none, invalid, or a guest) must ALSO prove it is the
+        panel it joins (``_panel_push_proven``; ``websocket`` is the handshake it is judged by).
     A user can never reach a panel their session/account isn't bound to (every
     query filters on ``user_id``).
     """
     user = await _resolve_ws_session(session_id)
     if user is None:
-        if panel_id and await _panel_allows_guest_push(panel_id):
+        if panel_id and await _panel_allows_guest_push(panel_id) and await _panel_push_proven(websocket, panel_id):
             return panel_id
         return None
     user_id = str(user.get("user_id") or "")
@@ -2534,6 +2592,9 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     if not user_id:
         return None
     if _is_ws_guest(user):
+        # A guest session is not evidence of anything (POST /api/auth/guest mints one for any
+        # caller), so every panel channel a guest reaches - its bound row or the guest policy -
+        # also needs the panel's own proof (_panel_push_proven, 2026-10-19).
         # A VALID guest session (a kiosk that recovered from an expired PIN session mints one).
         # Its own ui_panel_sessions row does not exist yet while the panel is still owned by the
         # member it replaced (routers/ui_actions._authorize_panel refuses the guest's bind with
@@ -2548,8 +2609,8 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
             return None
         resolved = await _resolve_bound_panel(user_id, session_id, panel_id)
         if resolved:
-            return resolved
-        if await _panel_allows_guest_push(panel_id):
+            return resolved if await _panel_push_proven(websocket, resolved) else None
+        if await _panel_allows_guest_push(panel_id) and await _panel_push_proven(websocket, panel_id):
             return panel_id
         return None
     if role in {"admin", "agent"}:
@@ -2720,8 +2781,11 @@ async def websocket_push(
         # socket joins the channel pushes are actually sent to even when the client
         # connected under a different alias id.
         subscribe_panel_id = panel_id
+        if device_info and not _device_token_may_join(device_info, panel_id):
+            await websocket.close(1008, "Device token is for another panel")
+            return
         if not device_info:
-            subscribe_panel_id = await _resolve_subscribable_panel(panel_id, session_id)
+            subscribe_panel_id = await _resolve_subscribable_panel(panel_id, session_id, websocket)
             if not subscribe_panel_id:
                 await websocket.close(1008, "Invalid device token")
                 return
@@ -2760,6 +2824,20 @@ async def websocket_push(
         if not _ws_role_signed_in(user):
             await websocket.close(1008, "Insufficient privileges")
             return
+        # A panel's channel is joined through ?panel_id= (the panel's own proof, above), never
+        # by NAME: ?channel=panel_<id> let any signed-in socket read another panel's per-turn
+        # cards and counted as a live panel subscriber. Admin/agent keep it (as with panel_id).
+        if _push_channel_is_panel(channel) and not _ws_may_subscribe_for_anyone(user):
+            import panel_principal
+
+            if panel_principal.panel_push_mode() == "enforce":
+                await websocket.close(1008, "Panel channels need the panel")
+                return
+            if panel_principal.panel_push_mode() == "shadow":
+                log_throttled(
+                    logger, logging.WARNING, f"panel-push-by-name:{channel}",
+                    "panel push: WOULD REFUSE (shadow) a member socket joining %s by name", str(channel)[:64],
+                )
         # Auth OK – connect to requested channel
         await broadcaster.connect(
             websocket, channel, user_id=str(user.get("user_id") or "")
