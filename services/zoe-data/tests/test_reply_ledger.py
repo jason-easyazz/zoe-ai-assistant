@@ -380,7 +380,8 @@ def test_the_migration_is_the_next_one_and_single_headed():
         text = p.read_text()
         revs[re.search(r'^revision = "(\w+)"', text, re.M).group(1)] = re.search(r'^down_revision = "?(\w+)"?', text, re.M).group(1)
     heads = set(revs) - set(revs.values())
-    assert heads == {max(revs)} and revs["0044"] == "0043"
+    assert len(heads) == 1, f"more than one alembic head: {sorted(heads)}"   # the head need not be the HIGHEST id: ids are unique, not sorted by chain
+    assert revs["0044"] == "0043"
 
 
 # ── review round 1 (Greptile on #1981): each test fails when its fix is reverted ─────────────────
