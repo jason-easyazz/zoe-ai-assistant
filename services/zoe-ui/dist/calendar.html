@@ -1802,10 +1802,6 @@
                     <div class="more-item-icon">⚙️</div>
                     <div class="more-item-label">Settings</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('developer/index.html')">
-                    <div class="more-item-icon">👨‍💻</div>
-                    <div class="more-item-label">Developer</div>
-                </div>
             </div>
         </div>
     </div>
@@ -1837,17 +1833,6 @@
     </div>
     <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
 
-    <!-- Notifications Panel -->
-    <div class="notifications-panel" id="notificationsPanel">
-        <div class="notifications-header">
-            <h3 class="notifications-title">💬 Notifications</h3>
-            <button class="notifications-close" onclick="closeNotifications()">×</button>
-            </div>
-        <div class="notifications-content" id="notificationsContent">
-            <div class="no-notifications">No notifications</div>
-            </div>
-            </div>
-    
     <div class="app-container month-view-active">
         <!-- Main Content -->
         <div class="main-content">
@@ -2198,9 +2183,6 @@
             });
             on('[data-toggle-prep-id]', 'click', el => {
                 togglePrepItemComplete(el.dataset.togglePrepId);
-            });
-            on('[data-notification-id]', 'click', el => {
-                handleNotificationClick(el.dataset.notificationId);
             });
         }
 
@@ -4670,27 +4652,6 @@
             window.location.href = page;
         }
         
-        // Notification toggle function
-        function toggleNotifications() {
-            showNotification('Notifications feature coming soon!');
-        }
-        
-        // Notifications functions
-        function openNotifications() {
-            document.getElementById('notificationsPanel').classList.add('open');
-            loadNotifications();
-            
-            // Clear notification indicator when panel is opened
-            const notificationBtn = document.querySelector('.notifications-btn');
-            if (notificationBtn) {
-                notificationBtn.classList.remove('has-notifications');
-            }
-        }
-        
-        function closeNotifications() {
-            document.getElementById('notificationsPanel').classList.remove('open');
-        }
-
         // Mobile menu toggle
         function toggleMobileMenu() {
             if (window.innerWidth > 768) { window.location.href = 'chat.html'; return; }
@@ -4709,72 +4670,6 @@
                 localStorage.removeItem('zoe_session');
                 window.location.href = '/';
             }
-        }
-        
-        async function loadNotifications() {
-            try {
-                const response = await apiRequest('/reminders/notifications/pending');
-                const notifications = response.notifications || [];
-                displayNotifications(notifications);
-                } catch (error) {
-                console.error('Failed to load notifications:', error);
-                displayNotifications([]);
-            }
-        }
-        
-        function displayNotifications(notifications) {
-            const notificationsContent = document.getElementById('notificationsContent');
-            const notificationBtn = document.querySelector('.notifications-btn');
-            
-            // Update notification button indicator
-            if (notifications.length > 0 && notificationBtn) {
-                notificationBtn.classList.add('has-notifications');
-            } else if (notificationBtn) {
-                notificationBtn.classList.remove('has-notifications');
-            }
-            
-            if (notifications.length === 0) {
-                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
-                return;
-            }
-            
-            notificationsContent.innerHTML = notifications.map(notification => `
-                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}"
-                     data-notification-id="${escapeHtml(notification.id)}">
-                    <div class="notification-title">${escapeHtml(notification.message)}</div>
-                    <div class="notification-meta">
-                        <span class="notification-time">${escapeHtml(formatNotificationTime(notification.notification_time))}</span>
-                    </div>
-                </div>
-            `).join('');
-
-            bindDataHandlers(notificationsContent);
-        }
-
-        function formatNotificationTime(timeStr) {
-            const date = new Date(timeStr);
-            const now = new Date();
-            const diff = now - date;
-            const minutes = Math.floor(diff / 60000);
-            const hours = Math.floor(minutes / 60);
-            const days = Math.floor(hours / 24);
-            
-            if (minutes < 1) return 'Just now';
-            if (minutes < 60) return `${minutes}m ago`;
-            if (hours < 24) return `${hours}h ago`;
-            return `${days}d ago`;
-        }
-        
-        async function handleNotificationClick(notificationId) {
-            try {
-                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
-                    method: 'POST'
-                });
-                loadNotifications();
-            } catch (error) {
-                console.error('Failed to acknowledge notification:', error);
-            }
-            closeNotifications();
         }
         
         // Update time/date display
@@ -4810,7 +4705,6 @@
             await loadLists();
             await loadEvents();
             await loadPeopleList(); // Load people for attendees dropdown
-            loadNotifications();
             
             // Update time/date display
             updateNavTime();
