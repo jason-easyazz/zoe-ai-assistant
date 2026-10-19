@@ -220,6 +220,21 @@ def test_person_bench_records_then_compares(monkeypatch, tmp_path):
     assert res["status"] == "regression" and res["compare"]["regressions"] == ["P6"]
 
 
+def test_person_compare_treats_a_stable_known_failure_as_green(monkeypatch, tmp_path):
+    """A cell FAIL in the baseline and still FAIL is not a regression (status stays ok); exit_code used to return 1 for the
+    failed half anyway, so a known failure failed the gate (the bar and day-sim return 0). A newly failing cell still exits 1."""
+    cells = {c: "PASS" for c in sp.CELLS}
+    cells["P6"] = "FAIL"
+    calls, args = _person_gates(monkeypatch, tmp_path, cells)
+    assert sp.main(args + ["--record-baseline"]) == 1                       # recording reports the run itself: P6 failed
+    assert json.loads((tmp_path / "pb.json").read_text())["cells"]["P6"] == "FAIL"
+    assert sp.main(args + ["--compare-baseline"]) == 0
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["status"] == "ok" and res["summary"]["failed_halves"] == ["P6.x"]
+    _person_gates(monkeypatch, tmp_path, dict(cells, P7="FAIL"))                 # a cell that PASSED in the baseline now fails
+    assert sp.main(args + ["--compare-baseline"]) == 1
+
+
 def test_person_bench_refuses_a_capped_comparison_or_a_dirty_record(monkeypatch, tmp_path):
     cells = {c: "PASS" for c in sp.CELLS}
     calls, args = _person_gates(monkeypatch, tmp_path, cells)

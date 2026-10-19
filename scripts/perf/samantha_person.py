@@ -2769,6 +2769,10 @@ def main(argv: list[str] | None = None) -> int:
             f"improvements={cmp['improvements']}")
         if status == "regression":
             return 2 if (summary.get("errored_halves") or summary.get("unexercised_halves")) else 1
+        # compare mode (as samantha_bar / samantha_day_sim): only a cell that PASSED in the baseline can turn the gate red,
+        # so a half that FAILED in the baseline and still fails is a known state, not a new failure. An errored /
+        # unexercised half (2) and a Tier-1 red line (1) are absolute and still count.
+        return exit_code(status, {**summary, "failed_halves": []})
     return exit_code(status, summary)
 
 

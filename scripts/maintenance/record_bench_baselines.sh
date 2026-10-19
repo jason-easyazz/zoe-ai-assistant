@@ -59,9 +59,12 @@ rc=0
 set -o pipefail   # a step's exit code, not tee's
 step() {
   echo "== $(date -Is) $*" | tee -a "$LOG"
-  # The brain-window re-check runs INSIDE the lock, after any wait for it (a step can sit behind the lock for up to
-  # 30 min), so the step only starts if it can still finish before 01:50 / starts after 04:55. Exit 3 = refused.
-  flock -w 1800 "$LOCK" bash -c 'python3 "$1" brain-window record_bench_baselines --budget-min "$2" || exit 3
+  # Bound the queue for the lock so the WAIT cannot cross 01:50 (brain-window-wait = min(30 min, time to the window - the
+  # step's budget), 0 = try once). The brain-window re-check then runs INSIDE the lock, after any wait, so the step only
+  # starts if it can still finish before 01:50 / starts after 04:55. Exit 3 = refused.
+  local wait_s
+  wait_s="$(python3 "$REPO/scripts/maintenance/harness_quiet.py" brain-window-wait --budget-min "$STEP_MIN" --cap-s 1800)" || wait_s=0
+  flock -w "${wait_s:-0}" "$LOCK" bash -c 'python3 "$1" brain-window record_bench_baselines --budget-min "$2" || exit 3
 shift 2; exec nice -n 5 "$@"' _ "$REPO/scripts/maintenance/harness_quiet.py" "$STEP_MIN" "$@" 2>&1 | tee -a "$LOG" || rc=1
 }
 

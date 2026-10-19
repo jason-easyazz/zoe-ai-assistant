@@ -229,6 +229,9 @@ def _stub_tree(tmp_path, refuse_after):
     (m / "harness_quiet.py").write_text(
         "import sys, pathlib\n"
         f"n = pathlib.Path({str(tmp_path / 'calls')!r})\n"
+        "if sys.argv[1] == 'brain-window-wait':\n"
+        "    print(7)\n"
+        "    sys.exit(0)\n"
         "if sys.argv[1] == 'brain-window':\n"
         "    c = int(n.read_text()) if n.exists() else 0\n"
         "    n.write_text(str(c + 1))\n"
@@ -264,3 +267,32 @@ def test_orchestrator_rechecks_inside_the_lock_before_each_step(tmp_path):
 def test_orchestrator_positive_control_runs_every_step_when_clear(tmp_path):
     r, ran = _run_orchestrator(tmp_path, refuse_after=99)
     assert r.returncode == 0 and len(ran) == 4, (ran, r.stdout, r.stderr)
+
+
+@pytest.mark.parametrize("when,secs", [
+    (_at(1, 20), 600),        # 30 min to the window - the 20-min step budget = 10 min, not the 30-min cap
+    (_at(1, 30), 0),          # the step cannot finish in time: never queue
+    (_at(1, 0), 1800),        # plenty of time: the cap
+    (_at(2, 51), 0),          # inside the window
+    (_at(4, 55), 1800), (_at(23, 0), 1800),
+])
+def test_lock_wait_cannot_cross_the_brain_window(when, secs):
+    assert hq.lock_wait_s(20, now=when) == secs
+
+
+def test_orchestrator_bounds_each_lock_wait_by_the_brain_window(tmp_path):
+    """Codex P1: the in-lock re-check runs only AFTER ``flock -w`` returns, so a start just before the cutoff could queue up
+    to 30 min inside the protected window. Every step must pass the brain-window-wait value (the stub says 7) to flock -w."""
+    import subprocess
+    sh = _stub_tree(tmp_path, refuse_after=99)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    real = subprocess.run(["which", "flock"], capture_output=True, text=True).stdout.strip()
+    stub = bindir / "flock"
+    stub.write_text(f'#!/bin/bash\necho "$2" >> {tmp_path}/flock-waits\nexec {real} "$@"\n')
+    stub.chmod(0o755)
+    env = {**os.environ, "HOME": str(tmp_path), "ZOE_HARNESS_LOCK": str(tmp_path / "lock"),
+           "PATH": f"{bindir}:{os.environ['PATH']}"}
+    r = subprocess.run(["bash", str(sh)], env=env, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert (tmp_path / "flock-waits").read_text().split() == ["7"] * 4
