@@ -380,8 +380,8 @@ describe('one harness per turn: a mid-turn reload never moves a later round', ()
     harness.resetHarnessForTests();
     try {
       // Zoe() renders the turn's instructions from v1 ...
-      const renderedFrom = harness.harnessForRender();
-      const systemPrompt = renderedFrom.instructions;
+      const systemPrompt = harness.renderHarnessPrompt();
+      const renderedFrom = harness.harnessRenderedInto(systemPrompt) ?? harness.COMPILED_HARNESS;
       // ... a SIGHUP lands before the first provider round ...
       process.env.ZOE_BRAIN_HARNESS_DIR = v2;
       harness.reloadHarness(() => {}, () => {});
@@ -394,14 +394,95 @@ describe('one harness per turn: a mid-turn reload never moves a later round', ()
       assert.equal(turn, renderedFrom, 'bound the harness the prompt was rendered from');
       assert.equal(harness.harnessForTurn(signal), turn, 'later rounds keep it');
       const sent = applyPolicies({ systemPrompt, messages: [user('hi')], tools: [] } as never, '', turn) as { systemPrompt: string };
-      assert.equal(sent.systemPrompt, systemPrompt, 'instructions stay v1');
+      assert.equal(sent.systemPrompt, renderedFrom.instructions, 'instructions stay v1, and the render mark never reaches the wire');
       assert.equal(harness.harnessManner(harness.COMPILED_MANNER_EN, turn), harness.COMPILED_MANNER_EN, 'manner is v1 too');
       assert.equal(harness.harnessManner(harness.COMPILED_MANNER_EN, now), 'Be brief and kind.', 'control: v2 differs');
       // The next turn renders after the reload and binds v2.
-      const next = harness.harnessForRender();
-      assert.equal(harness.harnessForTurn(new AbortController().signal, next.instructions), now);
+      const nextPrompt = harness.renderHarnessPrompt();
+      assert.equal(harness.harnessForTurn(new AbortController().signal, nextPrompt), now);
       // v1's first round arriving AFTER another turn rendered v2 still gets v1.
       assert.equal(harness.harnessForTurn(new AbortController().signal, systemPrompt), renderedFrom);
+    } finally {
+      delete process.env.ZOE_BRAIN_HARNESS_DIR;
+      harness.resetHarnessForTests();
+    }
+  });
+
+  it('two renders with IDENTICAL instruction text are told apart exactly (manner-only reload)', () => {
+    const v1 = rendered();
+    const mannerText = "Be brief and kind.";
+    const v2 = overlay({ 'manner.md': mannerText });
+    process.env.ZOE_BRAIN_HARNESS_DIR = v1;
+    harness.resetHarnessForTests();
+    try {
+      // Turn A renders under v1, the reload lands, turn B renders under v2, THEN the first round of A runs.
+      const promptA = harness.renderHarnessPrompt();
+      const a = harness.harnessRenderedInto(promptA) ?? harness.COMPILED_HARNESS;
+      process.env.ZOE_BRAIN_HARNESS_DIR = v2;
+      harness.reloadHarness(() => {}, () => {});
+      const promptB = harness.renderHarnessPrompt();
+      const b = harness.harnessRenderedInto(promptB) ?? harness.COMPILED_HARNESS;
+      assert.notEqual(a, b);
+      assert.equal(a.instructions, b.instructions, 'control: the instruction text is identical');
+      assert.notEqual(promptA, promptB, 'the render marks differ');
+      assert.equal(harness.harnessForTurn(new AbortController().signal, promptA), a, 'A binds its own render, not the newer one');
+      assert.equal(harness.harnessForTurn(new AbortController().signal, promptB), b);
+      assert.equal(harness.stripRenderMark({ systemPrompt: promptA }).systemPrompt, a.instructions);
+      assert.equal(harness.stripRenderMark({ systemPrompt: promptB }).systemPrompt, a.instructions);
+    } finally {
+      delete process.env.ZOE_BRAIN_HARNESS_DIR;
+      harness.resetHarnessForTests();
+    }
+  });
+
+  it('flag unset: the render is the bare instructions and the strip is the identity', () => {
+    assert.equal(harness.renderHarnessPrompt(), ZOE_INSTRUCTIONS);
+    const c = { systemPrompt: ZOE_INSTRUCTIONS };
+    assert.equal(harness.stripRenderMark(c), c);
+    assert.equal(harness.harnessRenderedInto(ZOE_INSTRUCTIONS), null);
+  });
+
+  it('the per-turn log reports the harness the turn was rendered from, not the one open at admission', async () => {
+    const { NDJSON_CONTENT_TYPE, seamAStreamingMiddleware } = await import('../src/streaming.ts');
+    const v1 = rendered();
+    const v2 = overlay({ 'doctrines/voice-delivery.md': 'Two short sentences at most.' });
+    process.env.ZOE_BRAIN_HARNESS_DIR = v1;
+    harness.resetHarnessForTests();
+    try {
+      const opened = harness.activeHarness();
+      let observer: ((event: unknown, ctx: { id?: string }) => void) | null = null;
+      const logs: string[] = [];
+      const mw = seamAStreamingMiddleware({
+        observeFn: ((cb: typeof observer) => ((observer = cb), () => {})) as never,
+        timeoutMs: 5000,
+        earlyTextSubscribe: () => () => {},
+        log: (line: string) => logs.push(line),
+      });
+      let promptSent = String();
+      const accepts = (name: string) => (name.toLowerCase() === "accept" ? NDJSON_CONTENT_TYPE : undefined);
+      const ctx = {
+        req: { method: "POST", url: "http://sidecar.local/agents/zoe/sess-1", header: accepts },
+        res: undefined as unknown as Response,
+        set: () => {},
+      };
+      await mw(ctx as never, async () => {
+        // Admission: the stream has opened under v1. The reload lands, THEN Flue renders the agent.
+        process.env.ZOE_BRAIN_HARNESS_DIR = v2;
+        harness.reloadHarness(() => {}, () => {});
+        promptSent = harness.renderHarnessPrompt();
+        ctx.res = new Response(JSON.stringify({ submissionId: "sub-1" }), { status: 202 });
+      });
+      const turned = harness.activeHarness();
+      assert.notEqual(opened, turned);
+      const send = (ev: Record<string, unknown>) => (observer as unknown as (e: unknown, c: object) => void)({ instanceId: "sess-1", ...ev }, {});
+      send({ type: "operation_start", operationKind: "prompt", operationId: "op-1" });
+      send({ type: "turn_request", purpose: "agent", operationId: "op-1", turnId: "t1", request: { input: { systemPrompt: promptSent, messages: [] } } });
+      send({ type: "operation", operationKind: "prompt", operationId: "op-1" });
+      await ctx.res.text();
+      const line = logs.find((l) => l.startsWith("FLUE_EARLY_TEXT")) ?? String();
+      assert.ok(line.endsWith(turned.logSuffix), line);
+      assert.ok(!line.includes(opened.logSuffix), "not the harness open at admission");
+      assert.ok(!line.includes("harness_reloaded_mid_turn"), line);
     } finally {
       delete process.env.ZOE_BRAIN_HARNESS_DIR;
       harness.resetHarnessForTests();

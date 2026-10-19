@@ -113,7 +113,7 @@ import {
 import { elideStaleBlocks, elideStaleBlocksEnabled } from '../context-blocks.ts';
 import { cachedUserModelSuffix, turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
 import { markTurnUntrusted, untrustedSourceInMessages } from '../untrusted-content.ts';
-import { activeHarness, harnessForTurn, harnessManner, withToolGuidance, withTurnInstructions, type Harness } from '../harness.ts';
+import { activeHarness, harnessForTurn, harnessManner, stripRenderMark, withToolGuidance, withTurnInstructions, type Harness } from '../harness.ts';
 
 /** Provider id the sidecar registers; the agent binds to `zoe/local`. */
 export const ZOE_PROVIDER_ID = 'zoe';
@@ -225,7 +225,7 @@ export function applyPolicies(context: Context, userModelSuffix = '', turnHarnes
   // on its first round, so a mid-turn reload never moves a later round), or the active one. With the
   // flag unset it is the compiled-in harness and every application below is identity.
   const harness = turnHarness ?? activeHarness();
-  context = withTurnInstructions(context, harness);
+  context = withTurnInstructions(stripRenderMark(context), harness);
   // Strip the control envelopes BEFORE any other policy so the model — and every
   // downstream transform — only ever sees the human-authored message text. The
   // replay marker rides AHEAD of the identity line on the wire (both parsers are

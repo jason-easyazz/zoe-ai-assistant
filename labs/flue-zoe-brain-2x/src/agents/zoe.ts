@@ -62,7 +62,7 @@
 import { useModel, useTool } from '@flue/runtime';
 // .ts extensions so the offline strip-types tests can resolve these too (see
 // the note in zoe-tools.ts; the Vite build resolves .ts specifiers fine).
-import { harnessForRender } from '../harness.ts';
+import { renderHarnessPrompt } from '../harness.ts';
 import { ZOE_MODEL_SPECIFIER } from '../providers/capped-completions.ts';
 import { optionalZoeTools, zoeTools } from '../tools/zoe-tools.ts';
 
@@ -123,7 +123,7 @@ export function Zoe(): string {
   // execution of a tool the model called from an earlier round's schema set.
   // B10.1: `optionalZoeTools()` is the flag-gated web_search (ZOE_WEB_SEARCH_TOOL=1); [] by default.
   for (const tool of [...zoeTools, ...optionalZoeTools()]) useTool(tool);
-  return harnessForRender().instructions;
+  return renderHarnessPrompt();
 }
 
 Zoe.agentName = 'zoe';

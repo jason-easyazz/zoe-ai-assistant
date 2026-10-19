@@ -95,7 +95,7 @@
 import { observe } from '@flue/runtime';
 import type { Context } from '@earendil-works/pi-ai';
 import type { MiddlewareHandler } from 'hono';
-import { activeHarness } from './harness.ts';
+import { activeHarness, harnessRenderedInto, type Harness } from './harness.ts';
 import { promptSections, type PromptSections } from './providers/capped-completions.ts';
 import {
   EarlyTextReconciler,
@@ -545,8 +545,11 @@ function openTurnStream(
   opts: TurnStreamOptions,
 ): TurnStream {
   const encoder = new TextEncoder();
-  // The harness in force when the turn opened: what its per-turn log line reports.
+  // The harness in force when the turn opened: the per-turn log line's fallback. The line reports the
+  // harness the turn's first model round was RENDERED from (read off its turn_request, below), because
+  // Flue renders Zoe() after this point and a SIGHUP can land in between.
   const openHarness = activeHarness();
+  let turnHarness: Harness | null = null;
   const state = newSeamAState();
   const pending: string[] = [];
   let wake: (() => void) | null = null;
@@ -612,8 +615,8 @@ function openTurnStream(
         // The harness overlay this turn started under (src/harness.ts): label@overlay sha and each
         // loaded file's sha256 prefix, plus a marker if a reload landed while it ran. '' with
         // ZOE_BRAIN_HARNESS_DIR unset, so the line is byte-identical to today.
-        + openHarness.logSuffix
-        + (activeHarness() !== openHarness ? ' harness_reloaded_mid_turn=1' : ''),
+        + (turnHarness ?? openHarness).logSuffix
+        + (activeHarness() !== (turnHarness ?? openHarness) ? ' harness_reloaded_mid_turn=1' : ''),
       );
     } catch {
       /* logging must never break the stream */
@@ -746,6 +749,11 @@ function openTurnStream(
           finishOk();
         }
         return;
+      }
+      if (turnHarness === null && event.type === 'turn_request' && event.purpose === 'agent'
+        && event.operationId === latchedOperationId) {
+        const input = (event.request as { input?: { systemPrompt?: unknown } } | undefined)?.input;
+        turnHarness = harnessRenderedInto(input?.systemPrompt);
       }
       if (earlyText) {
         if (event.type === 'turn_request' && event.purpose === 'agent'

@@ -544,47 +544,65 @@ export function initHarness(): Harness {
 const turnHarness = new WeakMap<AbortSignal, Harness>();
 
 /**
- * The harnesses `Zoe()` rendered recently (newest last). `Zoe()` has no handle on the turn's
- * AbortSignal, so the render cannot bind the harness itself; it leaves the object here and the
- * turn's first model round claims it by matching the instructions in the system prompt it was
- * handed. A handful is plenty: only a reload landing between a render and its first round makes the
- * render and the active harness differ. Flag unset: nothing is ever stored.
+ * THE RENDER MARK. Zoe() has no handle on the turn's AbortSignal, so a render cannot bind its
+ * harness to the turn directly. Instead the rendered system prompt carries the identity of the
+ * harness it was rendered from, as one trailing line (render-mark prefix plus an id); the provider
+ * (the turn's first model round) and the per-turn log both read it back, and applyPolicies strips
+ * it before anything reaches the wire. The id is per harness OBJECT (one per load), so two renders
+ * whose instruction text is identical (a reload that changed only manner.md, tool-guidance.md or
+ * recall-shape.json) are still told apart exactly. Flag unset: no mark, the prompt is today's bytes.
  */
-const RENDER_MEMORY = 4;
-const rendered: Harness[] = [];
+const RENDER_MARK_PREFIX = '[[zoe-harness-render:';
+const RENDER_MARK_RE = /\n?\[\[zoe-harness-render:[0-9a-z-]+\]\]/g;
+const RENDER_MARK_ID_RE = /\[\[zoe-harness-render:([0-9a-z-]+)\]\]/;
+const RENDER_MEMORY = 8;
+const renderIds = new WeakMap<Harness, string>();
+/** id -> harness, newest last: only what a still-running turn could have been rendered from. */
+const rendered = new Map<string, Harness>();
+let renderSeq = 0;
 
 /**
- * The harness `Zoe()` renders the turn's system prompt from: the active one, remembered so the
- * turn's first round binds THIS object even when a SIGHUP lands between the render and that round
- * (otherwise the new overlay's manner, tool guidance and recall shape ride under the old render).
+ * The system prompt Zoe() renders: the active harness's instructions plus its render mark. The
+ * harness is remembered so the turn's first round binds THIS object even when a SIGHUP lands between
+ * the render and that round (otherwise the new overlay's manner, tool guidance and recall shape ride
+ * under the old render). Flag unset: exactly the instructions, nothing stored.
  */
-export function harnessForRender(): Harness {
+export function renderHarnessPrompt(): string {
   const h = activeHarness();
-  if (!h.enabled) return h;
-  const at = rendered.indexOf(h);
-  if (at !== -1) rendered.splice(at, 1);
-  rendered.push(h);
-  if (rendered.length > RENDER_MEMORY) rendered.shift();
-  return h;
+  if (!h.enabled) return h.instructions;
+  let id = renderIds.get(h);
+  if (id === undefined) {
+    id = `${++renderSeq}`;
+    renderIds.set(h, id);
+  }
+  rendered.delete(id);
+  rendered.set(id, h);
+  if (rendered.size > RENDER_MEMORY) rendered.delete(rendered.keys().next().value as string);
+  return `${h.instructions}\n${RENDER_MARK_PREFIX}${id}]]`;
 }
 
-/**
- * The newest remembered render whose instructions sit in `systemPrompt`, else null. (Two harnesses
- * with byte-identical instructions are indistinguishable here; the newest wins, and the prompt is
- * the same either way.)
- */
-function renderedInto(systemPrompt: string | undefined): Harness | null {
-  if (!systemPrompt) return null;
-  for (let i = rendered.length - 1; i >= 0; i--) {
-    if (systemPrompt.includes(rendered[i].instructions)) return rendered[i];
+/** The harness a rendered system prompt (or the turn_request event carrying it) was rendered from. */
+export function harnessRenderedInto(systemPrompt: unknown): Harness | null {
+  if (typeof systemPrompt === 'string' && systemPrompt.includes(RENDER_MARK_PREFIX)) {
+    const m = systemPrompt.match(RENDER_MARK_ID_RE);
+    if (m) return rendered.get(m[1]) ?? null;
   }
   return null;
+}
+
+/** The same context minus the render mark: the SAME object when there is none (always, flag unset). */
+export function stripRenderMark<C extends { systemPrompt?: string }>(context: C): C {
+  const system = context.systemPrompt;
+  if (system && system.includes(RENDER_MARK_PREFIX)) {
+    return { ...context, systemPrompt: system.replace(RENDER_MARK_RE, String()) };
+  }
+  return context;
 }
 
 /**
  * The harness a TURN runs under, bound to the turn's AbortSignal on its first model round (the same
  * keying as the acting identity, request-identity.ts). It is the harness the turn's system prompt
- * was RENDERED from when `systemPrompt` identifies it (see `harnessForRender`), else the active
+ * was RENDERED from when `systemPrompt` identifies it (see `renderHarnessPrompt`), else the active
  * one. A SIGHUP that lands mid-turn therefore never changes a turn's later tool rounds, nor mixes
  * two versions into the first: the reload takes effect from the next turn. Flag unset (or no
  * signal): the active harness, nothing stored.
@@ -594,7 +612,7 @@ export function harnessForTurn(signal?: AbortSignal, systemPrompt?: string): Har
   if (!now.enabled || !signal) return now;
   const bound = turnHarness.get(signal);
   if (bound) return bound;
-  const turn = renderedInto(systemPrompt) ?? now;
+  const turn = harnessRenderedInto(systemPrompt) ?? now;
   turnHarness.set(signal, turn);
   return turn;
 }
@@ -615,7 +633,7 @@ export function withTurnInstructions<C extends { systemPrompt?: string }>(contex
 /** Test seam: forget the active harness so the next read reloads from the environment. */
 export function resetHarnessForTests(): void {
   active = null;
-  rendered.length = 0;
+  rendered.clear();
 }
 
 /** The `/health` body field; only called when the flag is set. */
