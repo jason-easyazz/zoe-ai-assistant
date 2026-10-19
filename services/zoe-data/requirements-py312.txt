@@ -27,7 +27,7 @@
 # cap, APScheduler 3.10.4 pickled-pytz jobstore, chromadb 0.6.3 palace format,
 # aiortc/av moving together) are not repeated; they still apply.
 # ═══════════════════════════════════════════════════════════════════════════
-fastapi==0.143.0
+fastapi==0.143.3
 # 0.53.0 since 2026-09-27 (voice path, replay-gated). From 0.50 `--ws auto`
 # resolves to uvicorn.protocols.websockets.websockets_sansio_impl — the SAME
 # `websockets` library (16.1.1 below; `wsproto` is NOT installed) driven through
@@ -48,7 +48,7 @@ aiohttp==3.14.5
 websockets==16.1.1
 PyJWT==2.15.1
 # 1.0.0 since 2026-09-27: emitted SSE is byte-identical to 0.1.19 (see requirements.txt).
-ag-ui-protocol==1.0.0
+ag-ui-protocol==0.1.22
 python-json-logger==4.2.0
 
 # ── Vector memory store (B0.8, 2026-09-27: moved TOGETHER with the palace) ──
@@ -73,7 +73,7 @@ chromadb==1.5.9
 numpy==1.26.4
 # 1.23.2 ships a cp312 wheel; 1.30.0 (>=3.11 only) is the runbook's step-up.
 onnxruntime==1.23.2
-edge-tts==7.2.8
+edge-tts==7.3.1
 # py3-none aarch64 wheels (manylinux_2_31 and _2_34; glibc 2.35 takes either):
 # ABI-independent (ctypes-loaded .so), the SAME wheel the 3.10 box runs — the STT
 # rock does not move. Follows requirements.txt: 0.1.3 since #1714 (B1.10,
@@ -91,9 +91,9 @@ scikit-learn==1.7.2
 joblib==1.5.3
 APScheduler==3.10.4
 tzlocal==2.1
-SQLAlchemy==2.0.54
+SQLAlchemy==2.0.55
 pywebpush==2.5.0
-py-vapid==1.9.4
+py-vapid==1.9.6
 # DIRECT, UNGUARDED module-level imports (memory_metrics.py, voice_metrics.py,
 # guest_policy.py) that no manifest declared — found by an AST scan of every
 # third-party import in zoe-data against this venv (the only way to find what a
@@ -123,7 +123,7 @@ librosa==0.11.0
 scipy==1.17.1
 
 # ── WebRTC / LiveKit ──────────────────────────────────────────────────────
-livekit==1.1.20
+livekit==1.1.21
 # `livekit_aiortc.py` does `from livekit.protocol import rtc` — a SEPARATE
 # distribution (`livekit-protocol`) that `livekit` does not depend on; it only
 # ever arrived via the unused livekit-agents. CI already installs it by hand
