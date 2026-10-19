@@ -46,7 +46,7 @@ import uuid
 import wave
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 import user_erase_gate as erase_gate
 from typed_env import env_bool, env_int, env_str
@@ -1316,6 +1316,31 @@ async def release_tagged_audio(user_id: Optional[str] = None) -> int:
     return n
 
 
+#: when ``segment_clip`` serves a line's audio: its recording is done, still holds a WAV, and is inside retention (past retention a
+#: clip is never served, even before the hourly purge runs). ONE predicate for the clip and for ``segment_lines``' ``audio_kept``.
+_CLIP_HELD = "r.status = 'done' AND r.audio_path != '' AND (r.audio_expires_at IS NULL OR r.audio_expires_at > ?)"
+
+
+async def segment_lines(user_id: str, segment_ids: Iterable[str]) -> dict[str, dict]:
+    """``{segment_id: {"offset_ms", "audio_kept"}}`` for the member's OWN lines among ``segment_ids`` (anyone else's id = absent):
+    where the line starts in its recording, and whether ``segment_clip`` would play it now (the same ``_CLIP_HELD`` predicate). For
+    the day review's quotes on the Pendant page; never the audio path. Fail-soft: an unreadable store = {}."""
+    ids = sorted({str(s) for s in segment_ids if s})[:200]
+    if not ids:
+        return {}
+    from db_compat import get_compat_db
+    base = ("FROM omi_segments s JOIN omi_recordings r ON r.id = s.recording_id WHERE s.user_id = ? AND r.user_id = ? "
+            "AND s.id IN (%s)" % ",".join("?" * len(ids)))
+    try:
+        async with get_compat_db() as db:
+            rows = await _fetch(db, "SELECT s.id, s.start_ms " + base, (user_id, user_id, *ids))
+            held = {r["id"] for r in await _fetch(db, f"SELECT s.id {base} AND {_CLIP_HELD}", (user_id, user_id, *ids, _iso(_now())))}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("omi_recordings: segment_lines unavailable (%s)", type(exc).__name__)
+        return {}
+    return {r["id"]: {"offset_ms": max(0, int(r["start_ms"] or 0)), "audio_kept": r["id"] in held} for r in rows}
+
+
 async def segment_clip(user_id: str, segment_id: str, *, max_s: float = CLIP_MAX_S) -> Optional[bytes]:
     """A short WAV (at most ``max_s``, from the start of the turn) of one of the member's OWN lines, cut from its recording's
     still-held WAV; None when the line is not theirs, its recording is not done, or no audio is held. The file must sit inside
@@ -1323,9 +1348,8 @@ async def segment_clip(user_id: str, segment_id: str, *, max_s: float = CLIP_MAX
     from db_compat import get_compat_db
     async with get_compat_db() as db:
         rows = await _fetch(db, "SELECT s.start_ms, s.end_ms, r.audio_path FROM omi_segments s JOIN omi_recordings r ON r.id = s.recording_id "
-                                "WHERE s.id = ? AND s.user_id = ? AND r.user_id = ? AND r.status = 'done' AND r.audio_path != '' "
-                                "AND (r.audio_expires_at IS NULL OR r.audio_expires_at > ?)",      # past retention: never served, even
-                            (segment_id, user_id, user_id, _iso(_now())))                               # before the hourly purge runs
+                                f"WHERE s.id = ? AND s.user_id = ? AND r.user_id = ? AND {_CLIP_HELD}",
+                            (segment_id, user_id, user_id, _iso(_now())))
     if not rows:
         return None
     path = Path(rows[0]["audio_path"])
