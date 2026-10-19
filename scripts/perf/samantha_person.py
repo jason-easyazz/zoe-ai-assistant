@@ -84,6 +84,7 @@ sys.path.insert(0, str(HERE))
 import samantha_bar as sb  # noqa: E402
 import samantha_day_sim as ds  # noqa: E402
 import samantha_person_bank as bank  # noqa: E402
+import bench_baseline  # noqa: E402  (T-4: complete, clean, commit-bound baselines)
 
 uma = ds.uma
 HARNESS_VERSION = "0.1"
@@ -91,6 +92,11 @@ CACHE = sb.CACHE
 DEFAULT_RESULTS = CACHE / "samantha_person_last.json"
 DEFAULT_TREND = CACHE / "samantha_person_trend.jsonl"
 DEFAULT_PENDING = CACHE / "samantha_person_pending_teardown.json"
+# The baseline is the LIVE arm's ("none": the path as it is today) cell table; a candidate
+# arm is judged against it. Regression = a cell that was PASS and is not PASS now.
+DEFAULT_BASELINE = CACHE / "samantha_person_baseline.json"
+BASELINE_ARM = "none"
+CELL_VERDICTS = ("PASS", "FAIL", "INCONCLUSIVE", "ERROR", "SKIP", "TARGET", "REPORT")
 BASE_SEED = "zmb-v1"
 ARMS = ("none", "system", "oracle")
 
@@ -2568,6 +2574,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pending", type=Path, default=DEFAULT_PENDING)
     ap.add_argument("--mem-wait-s", type=int, default=900)
     ap.add_argument("--ready-wait-s", type=int, default=1200)
+    ap.add_argument("--record-baseline", action="store_true",
+                    help=f"save the {BASELINE_ARM!r} arm's cell table as the baseline (a FULL run: no --only / "
+                         "--n-cap, status ok, instrument proof green, no errored or unexercised half, CLEAN tree)")
+    ap.add_argument("--compare-baseline", action="store_true",
+                    help=f"exit 1 when a cell that PASSED in the baseline is not PASS in the {BASELINE_ARM!r} arm; "
+                         "refuses (exit 2) without a valid baseline that holds every cell this run scores")
+    ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     args = ap.parse_args(argv)
     if args.samples < 1 or args.samples % 2 == 0:
         ap.error("--samples must be a positive odd number (majority vote)")
@@ -2581,6 +2594,12 @@ def main(argv: list[str] | None = None) -> int:
     bad_arms = [a for a in arms if a not in LIVE_ARMS]
     if bad_arms or not arms:
         ap.error(f"unknown arm(s) {bad_arms or ['(none)']}; live arms: {', '.join(LIVE_ARMS)}")
+    if (args.record_baseline or args.compare_baseline) and BASELINE_ARM not in arms:
+        ap.error(f"--record-baseline / --compare-baseline judge the {BASELINE_ARM!r} arm: include it in --arms")
+    if args.record_baseline and args.compare_baseline:
+        ap.error("--record-baseline and --compare-baseline are mutually exclusive")
+    if args.record_baseline and is_partial(selected, args.n_cap):
+        ap.error("--record-baseline is refused with --only / --n-cap: a partial run never records a baseline")
     partial = is_partial(selected, args.n_cap)
     sel = selected or frozenset(CELLS)
     seeds = tuple(s.strip() for s in args.seeds.split(",") if s.strip())
@@ -2637,6 +2656,17 @@ def main(argv: list[str] | None = None) -> int:
     live = PersonLive(sb.env_file_value(service_dir, "ZOE_INTERNAL_TOKEN"), "",
                       sb.env_file_value(service_dir, "POSTGRES_URL"), args.keep_replies)
     live.admin = os.environ.get("ZOE_BAR_ADMIN_SESSION", "").strip()
+    baseline = None
+    if args.compare_baseline:
+        baseline, problem = bench_baseline.load(args.baseline, CELL_VERDICTS)
+        problem = problem or person_baseline_mismatch(baseline, sel, args, seeds)
+        if problem:
+            return _refuse(args.results, f"--compare-baseline: {problem}", revision)
+    if args.record_baseline:
+        why = bench_baseline.record_problem(revision, status="ok", partial=False,
+                                            verdicts={c: "PASS" for c in CELLS}, cells=CELLS)
+        if why:
+            return _refuse(args.results, f"--record-baseline: {why}", revision)
     refusal = uma._gates(args, live, log)
     if refusal:
         return _refuse(args.results, refusal, revision)
@@ -2686,7 +2716,15 @@ def main(argv: list[str] | None = None) -> int:
         else ("partial" if partial else "ok")
     if {"none", "system", "oracle"} <= set(arm_results):
         body["capture_ratio"] = capture_ratios(arm_results)
+    live_cells = {c: v["verdict"] for c, v in ((arm_results.get(BASELINE_ARM) or {}).get("cells") or {}).items()}
+    cmp = None
+    if args.compare_baseline:
+        cmp = bench_baseline.compare(live_cells, baseline, sel)
+        if status in ("ok", "partial") and cmp["red"]:
+            status = "regression"
     payload = {"harness_version": HARNESS_VERSION, "status": status, "partial": partial,
+               "compare": cmp, "baseline_ref": {"path": str(args.baseline), "arm": BASELINE_ARM,
+                                                "commit": (cmp or {}).get("baseline_commit")},
                "selected": sorted(sel) if sel != frozenset(CELLS) else None, "run_error": run_error,
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -2710,7 +2748,47 @@ def main(argv: list[str] | None = None) -> int:
     if summary.get("unexercised_halves"):
         log(f"\nNOT EXERCISED (the instrument, not a result - exit 2): {summary['unexercised_halves']}")
     log(f"\nstatus={status} failed_halves={summary.get('failed_halves')} results={args.results}")
+    if args.record_baseline:
+        why = bench_baseline.record_problem(revision, status=status, partial=partial, verdicts=live_cells,
+                                            cells=CELLS)
+        if not why and not proof["ok"]:
+            why = "the instrument proof is not green"
+        if not why and (summary.get("errored_halves") or summary.get("unexercised_halves")):
+            why = "a gating half errored or was not exercised: the instrument, not a result"
+        if why:
+            log(f"baseline NOT recorded: {why}")
+        else:
+            bench_baseline.write(args.baseline, bench_baseline.make(
+                "samantha_person", HARNESS_VERSION, live_cells, revision, arm=BASELINE_ARM,
+                halves={h["id"]: h["verdict"] for h in arm_results[BASELINE_ARM]["halves"]},
+                prereg_sha256=PREREG_SHA256, judge_prompt_sha256=JUDGE_PROMPT_SHA256, judge_samples=args.samples,
+                seeds=list(seeds), p12_sessions=args.p12_sessions, n_cap=args.n_cap))
+            log(f"baseline recorded: {args.baseline} (arm {BASELINE_ARM}, commit {revision.get('commit', '?')[:10]})")
+    if cmp is not None:
+        log(f"vs baseline {str(cmp.get('baseline_commit') or '?')[:10]}: regressions={cmp['regressions']} "
+            f"improvements={cmp['improvements']}")
+        if status == "regression":
+            return 2 if (summary.get("errored_halves") or summary.get("unexercised_halves")) else 1
     return exit_code(status, summary)
+
+
+def person_baseline_mismatch(baseline: dict[str, Any] | None, sel: frozenset, args, seeds: tuple) -> str | None:
+    """Why this baseline cannot judge this run, or None: the bars, the judge rubric, the judge
+    sample count, the world seed or the P12 replay count changed, or a scored cell is missing."""
+    if baseline is None:
+        return "no baseline"
+    for key, cur, what in (("prereg_sha256", PREREG_SHA256, "the pre-registered bars"),
+                           ("judge_prompt_sha256", JUDGE_PROMPT_SHA256, "the judge rubric"),
+                           ("judge_samples", args.samples, "--samples"),
+                           ("seeds", list(seeds), "--seeds"),
+                           ("p12_sessions", args.p12_sessions, "--p12-sessions"),
+                           ("n_cap", args.n_cap, "--n-cap (a capped run has less power: PASS needs a Wilson bound)")):
+        if baseline.get(key) != cur:
+            return f"{what} changed since the baseline ({key}) - re-record it or match it"
+    lacking = bench_baseline.missing_cells(baseline, sel)
+    if lacking:
+        return f"the baseline lacks cell(s) {', '.join(lacking)} - re-record a full baseline"
+    return None
 
 
 if __name__ == "__main__":

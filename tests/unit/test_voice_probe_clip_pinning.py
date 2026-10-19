@@ -69,7 +69,8 @@ def _corpus(root: Path, durations: list[float]) -> Path:
 
 
 def _rows(names: list[str], stt_ms: int = 100) -> list[dict]:
-    return [dict(file=n, stt_ms=stt_ms) for n in names]
+    # verdict + route/heard hashes as measure_voice writes them: the per-clip checks (T-3) judge every pinned clip
+    return [dict(file=n, stt_ms=stt_ms, verdict="OK", route_hash="r0", heard_hash="h0", via_brain=True) for n in names]
 
 
 def _names(d: Path) -> list[str]:

@@ -110,6 +110,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_dir import resolve_service_dir  # noqa: E402
 import self_model_cells  # noqa: E402  (S28-S31: the self-awareness cells, judged against the generated self-model)
 import promise_cells  # noqa: E402  (S32-S33: the persisted provenance ledger and the commitment tracker; in-process cells)
+import bench_baseline  # noqa: E402  (T-4: complete, clean, commit-bound baselines; refuse a comparison with missing cells)
 
 HARNESS_VERSION = "0.1"
 DATA_BASE = os.environ.get("ZOE_DATA_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -1262,8 +1263,14 @@ def compare_baseline(current: dict[str, str], baseline: dict[str, Any] | None) -
         notes.append("judge rubric changed since the baseline — judged verdicts are not comparable")
     if base and "PASS" not in base.values():
         notes.append("baseline holds no PASS verdict — nothing can regress against it")
+    if base and new:
+        # T-4: a scored cell the baseline does not hold is UNMEASURED, and unmeasured is
+        # never green (the live baseline held S1-S8, so 15 cells could not regress).
+        notes.append(f"baseline lacks {', '.join(new)} — those cells cannot be judged; "
+                     "re-record a full baseline")
     return {"has_baseline": bool(base), "regressions": regressions,
-            "improvements": improvements, "new": new, "red": bool(regressions), "notes": notes}
+            "improvements": improvements, "new": new,
+            "red": bool(regressions) or bool(base and new), "notes": notes}
 
 
 def restrict_baseline(baseline: dict[str, Any] | None, selected: "frozenset[str] | None") -> dict[str, Any] | None:
@@ -1278,7 +1285,8 @@ def restrict_baseline(baseline: dict[str, Any] | None, selected: "frozenset[str]
 def make_baseline(results: list[dict], revision: dict | None, samples: int) -> dict[str, Any]:
     return {"harness_version": HARNESS_VERSION,
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-            "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
+            "revision": revision, "commit": (revision or {}).get("commit"),
+            "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
             "samples": samples, "scenarios": verdict_map(results)}
 
 
@@ -2540,6 +2548,22 @@ def main(argv: list[str] | None = None) -> int:
     if baseline_problem and args.baseline.exists():
         log(f"baseline ignored ({baseline_problem})")
     if args.compare_baseline:
+        # T-4: refuse BEFORE the run when the baseline lacks a cell this run will score
+        # (each such cell would be "new", i.e. unmeasured, and could never regress).
+        wanted = selected if selected is not None else frozenset(SCENARIO_IDS)
+        lacking = bench_baseline.missing_cells(baseline, wanted, key="scenarios")
+        if lacking:
+            return _refuse(args, f"the baseline lacks {len(lacking)} of the {len(wanted)} scenario(s) this run "
+                                 f"scores ({', '.join(lacking)}): they cannot regress against it, so the "
+                                 "comparison would be partly vacuous — re-record a FULL baseline on a clean tree "
+                                 "(--record-baseline --samples 3)", revision)
+    if args.record_baseline:
+        # ...and a dirty / unverifiable tree can never become the bar: refuse before spending a run.
+        why = bench_baseline.record_problem(revision, status="ok", partial=False,
+                                            verdicts={s: "PASS" for s in SCENARIO_IDS}, cells=SCENARIO_IDS)
+        if why:
+            return _refuse(args, f"--record-baseline: {why}", revision)
+    if args.compare_baseline:
         # A majority-of-3 bar compared against a single stochastic answer is not a
         # comparison: inherit the baseline's count, refuse an explicit mismatch.
         base_samples = (baseline or {}).get("samples")
@@ -2640,11 +2664,14 @@ def main(argv: list[str] | None = None) -> int:
                                 "commit": ((baseline or {}).get("revision") or {}).get("commit")}}
     write_json(args.results, payload)
     append_trend(args.trend, payload)
-    if args.record_baseline and status == "ok" and not partial:  # a partial run NEVER records
+    record_why = bench_baseline.record_problem(revision, status=status, partial=partial,
+                                               verdicts=verdict_map(results), cells=SCENARIO_IDS)
+    if args.record_baseline and not record_why:  # a partial / errored / dirty / incomplete run NEVER records
         write_json(args.baseline, make_baseline(results, revision, args.samples))
-        log(f"baseline recorded: {args.baseline}")
+        log(f"baseline recorded: {args.baseline} (commit {(revision or {}).get('commit', '?')[:10]}, "
+            f"{len(results)} scenarios)")
     elif args.record_baseline:
-        log("baseline NOT recorded: the run errored or its teardown is unproven")
+        log(f"baseline NOT recorded: {record_why}")
 
     for r in results:
         exp = f"  (expected {r['expected']}: a target)" if r.get("expected") else ""

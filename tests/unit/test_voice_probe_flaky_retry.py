@@ -278,7 +278,10 @@ def test_legacy_baseline_without_a_clip_profile_still_gets_the_tolerance(tmp_pat
     run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
     ok = [_row(names[2])]
     rc, art, calls = _drive(tmp_path, monkeypatch, d, legacy, [run1, ok, ok])
-    assert (rc, art["status"]) == (0, "pass") and len(calls) == 3
+    assert len(calls) == 3 and art["flaky_clips"][0]["regressed"] is False   # the tolerance still applies...
+    # ...but since T-3 a baseline with no per-clip profile judges no clip, and judging nothing is never a pass
+    assert (rc, art["status"]) == (1, "fail")
+    assert any("no pinned clip has a per-clip expectation" in w for w in art["said_vs_did_regressions"])
     # ...but a deterministic non-brain failure on a legacy baseline (which had 0 fails) is hard
     rc2, art2, calls2 = _drive(tmp_path, monkeypatch, d, legacy,
                                [_with(names, **{"2": dict(verdict="CANT_DO"), "4": dict(verdict="ERROR")}), ok])
@@ -336,7 +339,8 @@ def test_a_regressed_clip_does_not_show_as_tolerated_in_the_gate_message(tmp_pat
     run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
     rc, art, _ = _drive(tmp_path, monkeypatch, d, base, [run1, [_row(names[2], "CANT_DO")]])
     assert art["status"] == "fail"
-    forced = dict(art, status="pass")
+    # forced past BOTH the status and the per-clip block (which would refuse the failed clip on its own)
+    forced = dict(art, status="pass", clip_checks=False)
     ok, why = vgc.evaluate(forced, now_epoch=time.time(), max_age_s=3600, baseline=None)
     assert ok and "tolerated" not in why                     # only non-regressed clips are reported tolerated
 

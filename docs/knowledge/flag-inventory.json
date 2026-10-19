@@ -5892,6 +5892,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_ROUTER_SHADOW_TEXT_UNTIL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_ROUTER_SIDECAR_URL": {
         "defaults": [
           "-"

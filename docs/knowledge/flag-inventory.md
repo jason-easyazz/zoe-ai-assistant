@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-731 flags; 681 not documented in `.env.example`.
+732 flags; 682 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -595,6 +595,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_SHADOW_KEEP` | `4` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SHADOW_MAX_BYTES` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SHADOW_TEXT` | `''` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_SHADOW_TEXT_UNTIL` | `''` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SIDECAR_URL` | `-` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_THRESHOLD` | `'0.62'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_TWO_STAGE_GATE` | `'0.5'` | no | NO | `services/zoe-data/router_two_stage.py` |

@@ -66,6 +66,25 @@ opinion", not a pass. It is cheap (~100 MB, a few seconds), so it also runs on
 the memory-skip path: a known VAD failure turns that run's status into "fail"
 instead of hiding behind "skip".
 
+PER-CLIP OUTCOME CHECKS (T-3, deep dive 2): "OK" used to mean "not empty, not an
+error, not a refusal phrase", so a clip that confidently did the WRONG thing passed.
+Every pinned clip is now held to an expectation (scripts/maintenance/
+voice_clip_checks.py): the baseline's per-clip profile, or an owner label kept OFF
+the repo (--expectations). A clip that was OK must still be heard (newly EMPTY is a
+regression), still be OK, and take the same route: the lane and fast-path
+tier:domain:intent, plus (baselines recorded after T-3) the router's domain + tool
+and the Tier-0 intent. Any failing clip fails the run; the artifact carries
+`clip_checks: true`, `clip_summary` and `clip_results` (ids, hashes and code labels
+only), and voice_gate_check.py re-derives the verdict from them. A pinned set with no
+expectation at all judges nothing and is a FUNCTION failure, never a pass.
+
+SELF-TEST (--self-test): the negative control. Replays the pinned clips with each
+injected fault (blank STT; a router that moves every clip to another domain) and
+exits 0 only if the per-clip checks go red on every one. It writes
+~/.cache/zoe/voice_probe_selftest.json and NEVER the shared artifact, trend or
+baseline (the deploy gate reads the shared one); a normal run strips any inherited
+ZOE_REPLAY_FAULT and refuses a report that carries one.
+
 SKIP-STREAK ALARM ("a gate that can skip forever under green timers is not a
 gate"): every run records `non_pass_streak` — the count of consecutive runs
 whose status != "pass" (a real pass resets it to 0). Once the streak reaches
@@ -81,6 +100,10 @@ Examples:
     python3 scripts/maintenance/voice_regression_probe.py --update-baseline
     # routine check (exits non-zero on a function or speed regression):
     python3 scripts/maintenance/voice_regression_probe.py --samples 20
+    # the negative control (exit 0 only when every injected fault went red):
+    python3 scripts/maintenance/voice_regression_probe.py --self-test
+    # adopt a stratified pinned set proposed by voice_corpus_strata.py:
+    python3 scripts/maintenance/voice_regression_probe.py --update-baseline --pin-from ~/.zoe/voice-gate/proposed_pins.json
 """
 from __future__ import annotations
 
@@ -112,12 +135,32 @@ from service_python import (  # noqa: E402
     same_python,
 )
 
+
+def _sibling(name: str):
+    """Load a scripts/maintenance sibling BY FILE PATH (never via sys.path: that
+    directory holds names that shadow service modules)."""
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+vcc = _sibling("voice_clip_checks")   # T-3: per-clip outcome assertions + the self-test verdicts
+
 REPO = Path(__file__).resolve().parents[2]
 MEASURE = REPO / "scripts" / "perf" / "measure_voice.py"
 LOCK = "/tmp/zoe-voice-harness.lock"  # shared with all voice harness runs — no concurrent Kokoro OOM
 DEFAULT_BASELINE = Path.home() / ".cache" / "zoe" / "voice_regression_baseline.json"
 DEFAULT_RESULTS = Path.home() / ".cache" / "zoe" / "voice_regression_last.json"
 DEFAULT_TREND = Path.home() / ".cache" / "zoe" / "voice_regression_trend.jsonl"
+# --self-test writes HERE and never to the shared artifact / trend / baseline above:
+# the deploy gate reads the shared artifact, and a self-test is red by design.
+DEFAULT_SELFTEST_RESULTS = Path.home() / ".cache" / "zoe" / "voice_probe_selftest.json"
+DEFAULT_SELFTEST_TREND = Path.home() / ".cache" / "zoe" / "voice_probe_selftest_trend.jsonl"
+FAULT_ENV = "ZOE_REPLAY_FAULT"
 RATIO_FLOOR_MS = 100.0  # below this absolute delta, a high ratio is treated as noise
 # Same default + env override as the replay harness (replay_samples.py main()).
 DEFAULT_SAMPLE_DIR = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
@@ -252,16 +295,17 @@ def _row_clip_id(row: dict[str, Any], sample_dir: str) -> str | None:
 
 
 def clip_profile(rows: list[dict[str, Any]], sample_dir: str) -> dict[str, dict[str, Any]]:
-    """Per-clip {verdict, via_brain, route, heard}, keyed by clip id. Content-free
-    (the hashes measure_voice already records, never a name, transcript or reply).
-    A baseline that carries it lets a later run tell WHICH clips were OK before and
-    whether a failing clip still takes the same route with the same transcript."""
+    """Per-clip {verdict, via_brain, route, heard[, sig, labels]}, keyed by clip id.
+    Content-free (hashes and code labels, never a name, transcript or reply). A
+    baseline that carries it is the per-clip EXPECTATION (voice_clip_checks): every
+    clip OK here must stay OK on the same route; ``sig``/``labels`` (T-3, from a
+    replay that records route labels) make "the same route" include the router's
+    domain + tool and the Tier-0 intent, not only tier:domain:intent."""
     out: dict[str, dict[str, Any]] = {}
     for r in rows or []:
         cid = _row_clip_id(r, sample_dir)
         if cid and isinstance(r.get("verdict"), str):
-            out[cid] = dict(verdict=r["verdict"], via_brain=r.get("via_brain") is True,
-                            route=r.get("route_hash"), heard=r.get("heard_hash"))
+            out[cid] = vcc.profile_entry(r)
     return out
 
 
@@ -295,7 +339,13 @@ def flaky_candidates(report: dict[str, Any], baseline: dict[str, Any] | None,
 
     eligible     [(clip_id, basename)]: CANT_DO via the brain with the same route and
                  transcript as a baseline OK (on a legacy baseline with no per-clip
-                 profile: brain CANT_DO only; route change cannot be checked)
+                 profile: brain CANT_DO only; route change cannot be checked); and
+                 (T-3) a clip OK in the baseline profile that is EMPTY now, or OK on
+                 ANOTHER route. The per-clip checks count both as regressions, and
+                 both were measured as transient on the pinned set (2026-10-15..18,
+                 44 runs: one empty transcript; one clip OK on a different route in
+                 2 isolated runs, e.g. a router sidecar timeout falling back to the
+                 similarity route). A real route regression fails every run.
     hard         failures that are not brain wording, or whose route / transcript
                  differs from the baseline: deterministic, never retried
     pre_existing failing in the baseline too: not a regression, not retried
@@ -305,6 +355,13 @@ def flaky_candidates(report: dict[str, Any], baseline: dict[str, Any] | None,
     hard: list[str] = []
     pre_existing: list[str] = []
     for i, r in enumerate(report.get("rows") or []):
+        if r.get("verdict") in ("EMPTY", "OK"):
+            real_id = _row_clip_id(r, sample_dir)
+            b = (prof or {}).get(real_id) if real_id else None
+            if isinstance(b, dict) and b.get("verdict") == "OK" and (
+                    r.get("verdict") == "EMPTY" or _route_differs(b, r)):
+                eligible.append((real_id, os.path.basename(r["file"])))
+            continue
         if r.get("verdict") not in ("CANT_DO", "ERROR"):
             continue
         real_id = _row_clip_id(r, sample_dir)
@@ -338,15 +395,28 @@ def _recount(rows: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
-def _retry_verdict(first_row: dict[str, Any], row: dict[str, Any] | None) -> str:
-    """One retry's verdict for a clip: OK only on positive evidence (an OK verdict
-    via the brain on the same route as the first run); otherwise the failure."""
+def _route_differs(expect: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Did ``row`` take another route than the profile entry ``expect``? The full
+    signature when both carry one (voice_clip_checks), else the legacy route hash."""
+    if expect.get("sig") and row.get("route_sig"):
+        return expect["sig"] != row["route_sig"]
+    return expect.get("route") is not None and expect.get("route") != row.get("route_hash")
+
+
+def _retry_verdict(ref_row: dict[str, Any], row: dict[str, Any] | None) -> str:
+    """One retry's verdict for a clip: OK only on positive evidence (an OK verdict on
+    the reference lane + route: the first run's for a brain-wording CANT_DO, the
+    baseline's for a transient EMPTY or route flip); otherwise the failure."""
     if not row:
         return "ERROR"
     v = row.get("verdict")
     if v != "OK":
         return v if isinstance(v, str) else "ERROR"
-    if row.get("via_brain") is True and row.get("route_hash") == first_row.get("route_hash"):
+    if ref_row.get("sig") and row.get("route_sig"):
+        same = ref_row["sig"] == row["route_sig"]
+    else:
+        same = row.get("route_hash") == ref_row.get("route_hash")
+    if same and (row.get("via_brain") is True) == (ref_row.get("via_brain") is True):
         return "OK"
     return "ROUTE-CHANGED"
 
@@ -380,14 +450,27 @@ def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | Non
                            f"baseline had {base_fail} failure(s): deterministic, not retried")
             return out
     if len(cand["eligible"]) > max_clips:
-        out["note"] = (f"{len(cand['eligible'])} brain-wording failures exceed the retry cap of "
+        out["note"] = (f"{len(cand['eligible'])} retry-eligible failures exceed the retry cap of "
                        f"{max_clips}: counted as a regression, not retried")
         return out
 
     rows = report.get("rows") or []
     first = {c: r for r in rows if (c := _row_clip_id(r, sample_dir))}
     names = dict(cand["eligible"])
-    runs: dict[str, list[str]] = {cid: ["CANT_DO"] for cid in names}
+    # A first-run OK in this list came back on ANOTHER route: that run counts as a failure.
+    runs: dict[str, list[str]] = {
+        cid: ["ROUTE-CHANGED" if first[cid].get("verdict") == "OK" else str(first[cid].get("verdict"))]
+        for cid in names}
+    # The lane + route a retry must come back on: the first run's for a brain-wording
+    # CANT_DO (already checked equal to the baseline's), the BASELINE's for an EMPTY (an
+    # empty transcript has no route of its own) or a route flip.
+    prof = _profile_of(baseline) or {}
+    ref = {cid: (dict(route_hash=prof[cid].get("route"), sig=prof[cid].get("sig"),
+                      via_brain=prof[cid].get("via_brain"))
+                 if first[cid].get("verdict") in ("EMPTY", "OK") and isinstance(prof.get(cid), dict)
+                 else first[cid])
+           for cid in names}
+    passing: dict[str, dict[str, Any]] = {}
     problems: list[str] = []
     for _ in range(extra_runs):
         pending = [cid for cid, v in runs.items() if sum(x != "OK" for x in v) < FLAKY_FAIL_MIN]
@@ -405,7 +488,10 @@ def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | Non
             continue
         got = {c: r for r in rep.get("rows") or [] if (c := _row_clip_id(r, sample_dir))}
         for cid in pending:
-            runs[cid].append(_retry_verdict(first[cid], got.get(cid)))
+            v = _retry_verdict(ref[cid], got.get(cid))
+            runs[cid].append(v)
+            if v == "OK":
+                passing.setdefault(cid, got[cid])
 
     clips: list[dict[str, Any]] = []
     adjusted = [dict(r) for r in rows]
@@ -416,13 +502,20 @@ def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | Non
         fails = sum(v != "OK" for v in runs[cid])
         total = len(runs[cid])
         regressed = fails >= FLAKY_FAIL_MIN
+        kind = {"EMPTY": "EMPTY (transient STT)",
+                "ROUTE-CHANGED": "route flip (transient router)"}.get(runs[cid][0], "CANT_DO (brain wording)")
         if not regressed:
             r["verdict"], r["flaky"] = "OK", True
+            # The per-clip checks read the route of the run that PASSED (first-run timings
+            # are kept): an EMPTY first run has no route of its own to be judged on.
+            for k in ("route_hash", "route_sig", "route", "heard_hash", "via_brain"):
+                if k in passing.get(cid, {}):
+                    r[k] = passing[cid][k]
         clips.append(dict(
             clip_id=cid, runs=runs[cid], failures=fails, of=total, regressed=regressed,
             note=(f"clip {cid} regressed: {fails}/{total} runs failed {runs[cid]}: counted"
                   if regressed else
-                  f"clip {cid} flaky: {fails}/{total} CANT_DO (brain wording): not counted")))
+                  f"clip {cid} flaky: {fails}/{total} {kind}: not counted")))
     new_report = dict(report, rows=adjusted, verdicts=_recount(adjusted),
                       first_run_verdicts=report.get("verdicts"))
     return dict(retried=True, report=new_report, clips=clips, note="; ".join(problems),
@@ -1034,7 +1127,8 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
                 baseline: dict[str, Any], reason: str = "",
                 vad: dict[str, Any] | None = None,
                 speed_comparison: str = "not-applicable",
-                flaky: dict[str, Any] | None = None) -> dict[str, Any]:
+                flaky: dict[str, Any] | None = None,
+                clip_eval: dict[str, Any] | None = None) -> dict[str, Any]:
     """Write the durable, machine-readable RESULT ARTIFACT — on EVERY exit path.
 
     This is the whole point of the gate's hardening: a skip / timeout / error
@@ -1090,6 +1184,16 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
         # "no opinion on VAD", so pre-stage artifacts keep working.
         "vad_stage": True,
         "vad": vad if isinstance(vad, dict) else vad_not_run("VAD stage not run on this exit path"),
+        # PER-CLIP OUTCOME ASSERTIONS (T-3, voice_clip_checks). `clip_checks: true` is this
+        # artifact's CLAIM that every pinned clip was held to its expectation; the deploy
+        # checker then re-derives the verdict from `clip_summary` (a pass with a failed or
+        # zero checked clips is refused). `clip_results` carries per clip: clip id, result
+        # (pass | fail | unchecked), verdict, route hashes and code labels; never a name,
+        # transcript or reply. On exit paths that never replayed, the summary is None.
+        "clip_checks": True,
+        "clip_summary": (clip_eval or {}).get("summary"),
+        "clip_results": list((clip_eval or {}).get("results") or []),
+        "self_test": bool(getattr(args, "self_test", False)),
     }
     write_json(args.results, payload)
     try:
@@ -1377,6 +1481,126 @@ def _harness_quiet_refusal(*, check=None, wait=None) -> "str | None":
     return None
 
 
+def load_pin_ids(path: Path) -> list[str]:
+    """Clip ids to pin: a JSON list, or an object with 'clip_ids' (voice_corpus_strata.py's
+    proposal). Raises ValueError on anything else."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    ids = data.get("clip_ids") if isinstance(data, dict) else data
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and len(i) == CLIP_ID_LEN for i in ids):
+        raise ValueError(f"{path}: expected a non-empty list of {CLIP_ID_LEN}-char clip ids")
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"{path}: duplicate clip ids")
+    return ids
+
+
+def plan_from_pin_file(path: Path, sample_dir: str) -> dict[str, Any]:
+    """The plan for ``--update-baseline --pin-from``: exactly the named clips, never
+    speed-compared (a new set), refused when any is missing or the file is bad."""
+    try:
+        ids = load_pin_ids(path)
+    except (OSError, ValueError) as exc:
+        return dict(mode="missing", names=None, speed_ok=False, warn=True, note=f"--pin-from: {exc}")
+    names, missing = resolve_pinned(ids, sample_dir)
+    if missing:
+        return dict(mode="missing", names=None, speed_ok=False, warn=True,
+                    note=f"--pin-from: {len(missing)} of {len(ids)} clip ids are not in {sample_dir}")
+    return dict(mode="repin", names=names, speed_ok=False, warn=False,
+                note=f"--pin-from re-pins the clip set to {len(names)} chosen clips; speed is not "
+                     "compared across sets")
+
+
+# The negative controls --self-test injects; MUST equal replay_samples.REPLAY_FAULTS
+# (pinned by tests/unit/test_voice_probe_clip_checks.py).
+SELF_TEST_FAULTS = ("blank_stt", "misroute")
+
+
+def run_self_test(args, baseline: dict[str, Any]) -> int:
+    """THE PROBE'S NEGATIVE CONTROL (T-3). Replays the baseline's pinned clips once per
+    injected fault (replay_samples ZOE_REPLAY_FAULT) and judges each run with the SAME
+    per-clip checks a gate run uses. Exit 0 only when every fault went red
+    (voice_clip_checks.fault_caught); 1 when a fault stayed green (the instrument is
+    broken: a gate that cannot see a blank STT or a misrouting router is not a gate);
+    2 when it could not run. Writes ONLY args.results (the self-test file, never the
+    shared artifact: main() redirected it), never a baseline, and no flaky retries."""
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    faults: dict[str, Any] = {}
+
+    def _finish(status: str, reason: str) -> int:
+        payload = {"self_test": True, "status": f"self-test-{status}", "self_test_status": status,
+                   "timestamp": ts, "reason": reason, "faults": faults,
+                   "revision": service_revision(args.service_dir),
+                   "baseline_ref": {"path": str(args.baseline),
+                                    "created_at": (baseline or {}).get("created_at"),
+                                    "clip_set_size": len(baseline_clip_ids(baseline) or [])},
+                   "expectations": str(args.expectations), "clip_checks": False}
+        write_json(args.results, payload)
+        try:
+            args.trend.parent.mkdir(parents=True, exist_ok=True)
+            with open(args.trend, "a") as fh:
+                fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        except OSError:
+            pass
+        print(f"SELF-TEST {status.upper()}: {reason}")
+        print(f"Results: {args.results}")
+        return {"pass": 0, "fail": 1}.get(status, 2)
+
+    owner_labels, problem = vcc.load_expectations(args.expectations)
+    if problem:
+        return _finish("error", f"clip expectations: {problem}")
+    plan = plan_clip_set(baseline, args.sample_dir, False)
+    if not baseline or plan["mode"] != "pinned":
+        return _finish("error", "the self-test needs a baseline whose pinned clips are all present "
+                                f"({plan.get('note') or 'no baseline'})")
+    pinned = baseline_clip_ids(baseline) or []
+    prof = vcc.baseline_profile(baseline)
+    expected_ok = sum(1 for c in pinned if c in owner_labels or (prof.get(c) or {}).get("verdict") == "OK")
+    if expected_ok == 0:
+        return _finish("error", "no pinned clip has an expectation (baseline without a clip profile, no "
+                                "owner labels): there is nothing for a fault to violate")
+    avail = mem_available_mb()
+    if avail < args.min_mem_mb:
+        return _finish("error", f"available memory {avail}MB < {args.min_mem_mb}MB - not run")
+    os.environ["ZOE_VOICE_SAMPLE_DIR"] = args.sample_dir
+    run_started_utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    try:
+        for fault in SELF_TEST_FAULTS:
+            print(f"self-test: replaying {len(plan['names'])} pinned clips with fault={fault}", flush=True)
+            os.environ[FAULT_ENV] = fault
+            try:
+                rep = run_measure(args.samples, args.service_dir, args.user, args.timeout, args.stt,
+                                  python=args.python, names=plan["names"])
+            except Exception as exc:  # noqa: BLE001 - recorded, never a pass
+                faults[fault] = {"caught": None, "error": f"replay could not run: {str(exc)[:300]}"}
+                continue
+            finally:
+                os.environ.pop(FAULT_ENV, None)
+            if rep.get("fault") != fault:
+                faults[fault] = {"caught": None,
+                                 "error": f"the replay under {args.service_dir} did not apply the fault "
+                                          f"(reported {rep.get('fault')!r}; it predates fault injection)"}
+                continue
+            ce = vcc.evaluate(rep.get("rows") or [], baseline, owner_labels, pinned,
+                              lambda r: _row_clip_id(r, args.sample_dir))
+            caught, note = vcc.fault_caught(fault, ce, expected_ok)
+            kinds: dict[str, int] = {}
+            for r in ce["results"]:
+                if r["result"] == "fail":
+                    kinds[r["kind"]] = kinds.get(r["kind"], 0) + 1
+            faults[fault] = {"caught": caught, "note": note, "clip_summary": ce["summary"],
+                             "failed_kinds": kinds, "verdicts": rep.get("verdicts")}
+            print(f"self-test: fault={fault} -> {'RED (caught)' if caught else 'GREEN (MISSED)'}: {note}")
+    finally:
+        cleanup_replay_artifacts(run_started_utc, args)
+    if any(f.get("caught") is None for f in faults.values()):
+        return _finish("error", "; ".join(f"{k}: {v['error']}" for k, v in faults.items() if v.get("caught") is None))
+    missed = [k for k, v in faults.items() if not v["caught"]]
+    if missed:
+        return _finish("fail", f"the per-clip checks stayed GREEN on injected fault(s) {missed} - the "
+                               "instrument is broken; do not trust a pass until this is fixed")
+    notes = ", ".join(f"{k}: {v['note']}" for k, v in faults.items())
+    return _finish("pass", f"every injected fault went red ({notes})")
+
+
 def main(reexec: bool = False) -> int:
     ap = argparse.ArgumentParser(description="Zoe voice regression + speed probe.")
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
@@ -1426,7 +1650,35 @@ def main(reexec: bool = False) -> int:
                          "probe re-executes itself on it, so VAD + replay match the service.")
     ap.add_argument("--no-cleanup", action="store_true",
                     help="skip the post-run replay-artifact cleanup (soft-delete of rows created during the replay window)")
+    ap.add_argument("--expectations", type=Path, default=vcc.default_expectations(),
+                    help="owner per-clip labels (OFF the repo; default ~/.zoe/voice-gate/clip_expectations.json, "
+                         "env ZOE_VOICE_CLIP_EXPECTATIONS). Absent = the baseline's per-clip profile is the bar.")
+    ap.add_argument("--self-test", action="store_true",
+                    help="the NEGATIVE CONTROL: replay the pinned clips with each injected fault (blank STT, a "
+                         "misrouting router) and exit 0 only if the per-clip checks go red on every one. Writes "
+                         "--self-test-results, never the shared artifact, trend or baseline.")
+    ap.add_argument("--self-test-results", type=Path, default=DEFAULT_SELFTEST_RESULTS)
+    ap.add_argument("--pin-from", type=Path, default=None,
+                    help="with --update-baseline: pin EXACTLY these clip ids (a JSON list, or a JSON object with "
+                         "'clip_ids', e.g. voice_corpus_strata.py's proposal) instead of the newest --samples")
     args = ap.parse_args()
+    if args.pin_from and not args.update_baseline:
+        ap.error("--pin-from re-pins the clip set: use it with --update-baseline")
+    if args.self_test and args.update_baseline:
+        ap.error("--self-test never writes a baseline")
+    # A fault in the environment is only ever the self-test's own, per replay: a normal
+    # run strips it so an inherited ZOE_REPLAY_FAULT can never shape gate evidence.
+    stray_fault = os.environ.pop(FAULT_ENV, None)
+    if stray_fault:
+        print(f"NOTE: ignoring {FAULT_ENV}={stray_fault!r} from the environment (only --self-test injects faults)",
+              file=sys.stderr)
+    if args.self_test:
+        shared = Path(os.environ.get("ZOE_VOICE_RESULTS", DEFAULT_RESULTS))
+        if args.self_test_results.resolve() in (shared.resolve(), DEFAULT_RESULTS.resolve()):
+            ap.error("--self-test-results must not be the shared voice-gate artifact")
+        # Every exit path below writes args.results: point it (and the trend) away from
+        # the deploy gate's file BEFORE anything can write.
+        args.results, args.trend = args.self_test_results, DEFAULT_SELFTEST_TREND
     # Resolve BEFORE anything reads it: _resolve_dsn and run_measure both consume
     # args.service_dir, and both must see the same live dir.
     args.service_dir = str(_resolve_service_dir(args.service_dir))
@@ -1463,6 +1715,9 @@ def main(reexec: bool = False) -> int:
 
     if args.min_mem_mb is None:
         args.min_mem_mb = resolve_min_mem(args.stt)
+
+    if args.self_test:
+        return run_self_test(args, baseline)
 
     avail = mem_available_mb()
     if avail < args.min_mem_mb:
@@ -1503,6 +1758,8 @@ def main(reexec: bool = False) -> int:
     # newest today" (see the pinned clip set block above).
     os.environ["ZOE_VOICE_SAMPLE_DIR"] = args.sample_dir   # replay and probe read ONE corpus
     plan = plan_clip_set(baseline, args.sample_dir, args.update_baseline)
+    if args.pin_from:
+        plan = plan_from_pin_file(args.pin_from, args.sample_dir)
     if plan["mode"] == "missing":
         reason = f"BASELINE-SET: {plan['note']}"
         print(f"ERROR: {reason}", file=sys.stderr)
@@ -1534,18 +1791,44 @@ def main(reexec: bool = False) -> int:
 
     summary = summarize(report)
     summary.update(clip_set_summary(report, args.sample_dir))
+    # A report that carries an injected fault is never evidence (the self-test's own
+    # replays go through run_self_test, not here).
+    fault_error = (f"the replay reported an injected fault ({report.get('fault')!r}) on a normal run - "
+                   "NOT evidence" if report.get("fault") else None)
+    owner_labels, exp_problem = vcc.load_expectations(args.expectations)
     speed_ok, speed_note, speed_warn = plan["speed_ok"], plan["note"], plan["warn"]
     if plan["mode"] == "pinned" and set(summary["clip_ids"]) != set(baseline_clip_ids(baseline) or []):
         # The replay silently dropped or swapped a clip: not the baseline's set.
         speed_ok, speed_warn = False, True
         speed_note = (f"replayed {len(summary['clip_ids'])} clips but the baseline pinned "
                       f"{len(baseline_clip_ids(baseline) or [])}; the sets differ, so speed is not comparable")
-    warnings = compare(summary, baseline, args.warn_ratio, args.warn_ms, compare_speed=speed_ok)
+
+    def _judge(rep: dict[str, Any]) -> tuple[list[str], dict[str, Any] | None]:
+        """Function + speed warnings plus the PER-CLIP outcome checks (T-3)."""
+        summ = summarize(rep)
+        summ.update(clip_set_summary(rep, args.sample_dir))
+        warns = compare(summ, baseline, args.warn_ratio, args.warn_ms, compare_speed=speed_ok)
+        ce = None
+        if baseline:
+            # A re-pin judges the clips its OLD baseline knew (possibly none); a normal run
+            # judges exactly the pinned set, and a run whose pinned clips carry no
+            # expectation at all has judged nothing, which is never a pass.
+            ids = summ.get("clip_ids") if args.update_baseline else (baseline_clip_ids(baseline) or summ.get("clip_ids"))
+            ce = vcc.evaluate(rep.get("rows") or [], baseline, owner_labels, ids,
+                              lambda r: _row_clip_id(r, args.sample_dir))
+            warns += ce["regressions"]
+            if not args.update_baseline and ce["summary"]["checked"] == 0:
+                warns.append("FUNCTION: no pinned clip has a per-clip expectation (the baseline carries no "
+                             "clip profile) - re-baseline with --update-baseline")
+        return warns, ce
+
+    warnings, clip_eval = _judge(report)
     flaky: dict[str, Any] | None = None
     if (any(w.startswith("FUNCTION") for w in warnings) and baseline
-            and not args.update_baseline and recall_gate(summary) is None):
-        # Same code, same harness: re-run only the brain-wording failures (<= 2 more
-        # times, <= 3 clips). Anything deterministic stays a first-run failure.
+            and not args.update_baseline and recall_gate(summary) is None and not fault_error):
+        # Same code, same harness: re-run only the brain-wording failures and the clips
+        # that came back EMPTY after being OK (<= 2 more times, <= 3 clips). Anything
+        # deterministic (a route change, an ERROR) stays a first-run failure.
         flaky = apply_flaky_tolerance(
             report, baseline,
             lambda names: run_measure(args.samples, args.service_dir, args.user, args.timeout,
@@ -1555,7 +1838,7 @@ def main(reexec: bool = False) -> int:
             report = flaky["report"]
             summary = summarize(report)
             summary.update(clip_set_summary(report, args.sample_dir))
-            warnings = compare(summary, baseline, args.warn_ratio, args.warn_ms, compare_speed=speed_ok)
+            warnings, clip_eval = _judge(report)
         if flaky["note"]:
             print(f"NOTE flaky tolerance: {flaky['note']}")
         for c in flaky["clips"]:
@@ -1575,6 +1858,14 @@ def main(reexec: bool = False) -> int:
           f"OK {summary['ok']}/{summary['scoreable']} ({_rate}), "
           f"fail={summary['fail']}, empty={summary['empty']}/{summary['total']}")
     print(f"  medians: STT={m.get('stt_ms')}  brain={m.get('brain_ms')}  e2e={m.get('e2e_ms')}  (ms; warm-harness, relative only)")
+    if clip_eval is not None:
+        cs = clip_eval["summary"]
+        print(f"  per-clip: {cs['passed']}/{cs['checked']} held their expected outcome "
+              f"({cs['failed']} failed, {cs['unchecked']} unchecked, {cs['owner_labelled']} owner-labelled; "
+              f"compared by {', '.join(cs['compared']) or 'n/a'})")
+        for r in clip_eval["results"]:
+            if r["result"] == "fail":
+                print(f"    FAIL clip {r['clip_id']}: {r['why']}")
     for w in warnings:
         print(f"WARN {w}")
     interp = summary.get("interpreter") or {}
@@ -1590,7 +1881,9 @@ def main(reexec: bool = False) -> int:
     if (args.update_baseline or not args.baseline.exists()) and not summary.get("clip_ids"):
         # A baseline with no pinned set re-opens the very drift this guards.
         pin_error = "no replayed clip could be identified; refusing to write a baseline with no pinned set"
-    if recall_error:
+    if fault_error:
+        print(f"ERROR: {fault_error}", file=sys.stderr)
+    elif recall_error:
         # NEVER write a recall-off run as the bar, and never call it a pass.
         print(f"ERROR: {recall_error}", file=sys.stderr)
     elif pin_error:
@@ -1617,19 +1910,26 @@ def main(reexec: bool = False) -> int:
     # calendar/lists are dirty and the systemd unit shows non-zero.
     status = fold_vad_status("pass" if (not warnings and cleanup_ok) else "fail", vad)
     reason_parts = list(warnings)
-    if recall_error:
+    if fault_error:
+        status = "error"
+        reason_parts.insert(0, fault_error)
+    elif recall_error:
         status = "error"
         reason_parts.insert(0, recall_error)
     elif pin_error:
         status = "error"
         reason_parts.insert(0, pin_error)
+    if exp_problem:
+        # An owner's labels that cannot be read must not silently stop being checked.
+        status = "error"
+        reason_parts.insert(0, f"clip expectations: {exp_problem}")
     if not cleanup_ok:
         reason_parts.append("replay-artifact cleanup FAILED (calendar/lists may be dirty)")
     if vad.get("status") in ("fail", "error"):
         reason_parts.append(f"VAD {vad['status'].upper()}: {vad.get('reason')}")
     emit_result(args, status=status, summary=summary, said_vs_did=said_vs_did,
                 speed_deltas=speed_deltas, baseline=baseline, reason="; ".join(reason_parts),
-                vad=vad, speed_comparison=speed_comparison, flaky=flaky)
+                vad=vad, speed_comparison=speed_comparison, flaky=flaky, clip_eval=clip_eval)
 
     print(f"Results: {args.results}  Trend: {args.trend}  (status={status})")
     if status == "error":

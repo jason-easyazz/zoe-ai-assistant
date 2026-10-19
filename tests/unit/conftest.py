@@ -129,3 +129,23 @@ def _verbatim_and_night_stores_in_process():
         for mod, be in installed:
             if getattr(mod, "_backend", None) is be:
                 mod.set_backend(None)
+
+
+@pytest.fixture(autouse=True)
+def _harness_quiet_hours_not_wall_clock(monkeypatch):
+    """Harness quiet hours (``scripts/maintenance/harness_quiet.py``, #2145) refuse the probe, the bar, the day-sim
+    and the person bench 07:00-22:00 LOCAL, and ssh to the panel to yield to it. A unit test that drives one of
+    their ``main()``s must depend on neither: measured 2026-10-19, 21 such ``ci_safe`` tests (probe, bar, gate
+    check) fail 07:00-22:00 on this box, and 07:00-22:00 UTC on a GitHub runner, so the REQUIRED ``validate``
+    lane would go red every afternoon, Perth time. ``ZOE_HARNESS_FORCE`` is the guard's own deliberate override
+    (both checks skipped, no ssh). ``test_harness_quiet.py`` clears it in its own autouse fixture, which runs
+    after this one, so the real hours and panel rules are still tested there."""
+    monkeypatch.setenv("ZOE_HARNESS_FORCE", "1")
+
+
+@pytest.fixture(autouse=True)
+def _no_owner_voice_clip_expectations(monkeypatch, tmp_path):
+    """The voice probe's owner labels live OFF the repo (~/.zoe/voice-gate/clip_expectations.json, T-3) and are
+    read by default; a unit test must never pick up the household's file. Point it at an absent temp path (a test
+    that wants labels writes its own and passes ``--expectations``)."""
+    monkeypatch.setenv("ZOE_VOICE_CLIP_EXPECTATIONS", str(tmp_path / "no-owner-clip-expectations.json"))
