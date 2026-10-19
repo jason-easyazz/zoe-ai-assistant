@@ -1436,7 +1436,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.compare_baseline:
         cmp = bench_baseline.compare(verdicts, baseline, only or ASK_IDS)
         cmp["uncovered"] = sorted(a for a, v in ((baseline or {}).get("cells") or {}).items() if v != "PASS")
-        if status == "ok" and cmp["red"]:
+        if status in ("ok", "partial") and cmp["red"]:
             status = "regression"
     payload = {"harness_version": HARNESS_VERSION, "status": status, "mode": mode, "run_error": run_error,
                "started_at": started.isoformat(timespec="seconds"),

@@ -157,6 +157,24 @@ def test_day_sim_records_then_compares(monkeypatch, tmp_path):
     assert res["status"] == "regression" and res["compare"]["regressions"] == [first]
 
 
+def test_day_sim_partial_compare_is_a_regression_when_the_selected_ask_goes_red(monkeypatch, tmp_path):
+    """--only keeps status `partial` for a clean run, but a red comparison must still exit 1."""
+    calls, args = _day_gates(monkeypatch, tmp_path, {})
+    assert ds.main(args + ["--record-baseline"]) == 0
+    verdicts = {"S9a": "PASS"}
+
+    def only_run(live, user, only, samples, log):
+        return {"asks": [{"id": a_, "verdict": verdicts[a_], "title": a_} for a_ in sorted(only)]}
+    monkeypatch.setattr(ds, "run_only", only_run)
+    cmp_args = args + ["--only", "9a", "--compare-baseline"]
+    assert ds.main(cmp_args) == 0
+    assert json.loads((tmp_path / "r.json").read_text())["status"] == "partial"
+    verdicts["S9a"] = "FAIL"            # negative control: a PASS-in-baseline ask now FAILS
+    assert ds.main(cmp_args) == 1
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["status"] == "regression" and res["compare"]["regressions"] == ["S9a"]
+
+
 def test_day_sim_compare_refuses_a_baseline_for_another_mode_or_missing_asks(monkeypatch, tmp_path):
     calls, args = _day_gates(monkeypatch, tmp_path, {})
     bb.write(tmp_path / "db.json", bb.make("samantha_day_sim", "0.1", {a: "PASS" for a in ds.ASK_IDS}, CLEAN,

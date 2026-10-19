@@ -169,6 +169,14 @@ def check_clip(cid: str, row: dict[str, Any] | None, expect_base: dict[str, Any]
                     res["expected_labels"] = b_lab
                     if actual is not None:
                         res["changed_fields"] = [k for k in LABEL_FIELDS if b_lab.get(k) != actual.get(k)]
+        elif b_sig:
+            # A signature baseline is only ever held to the signature. The replay lacking
+            # one (an instrumentation regression) must NOT fall back to the coarser route
+            # hash, which can pass with router_domain/router_tool/tier0 never observed.
+            res["compared"] = "route_sig"
+            res["sig_expected"] = b_sig
+            problems.append(("route-sig-missing", "the baseline carries a route signature but the replay "
+                                                  "recorded none (route labels not observed)"))
         else:
             res["compared"] = "route_hash"
             res["route_expected"] = expect_base.get("route")

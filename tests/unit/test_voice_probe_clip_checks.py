@@ -171,6 +171,14 @@ def test_check_clip(label, row, base, result, kind):
     assert r.get("kind") == kind
 
 
+def test_a_signature_baseline_never_falls_back_to_the_route_hash_when_the_replay_has_no_signature():
+    """An instrumentation regression (replay drops route_sig) must fail the clip, not pass on the coarse hash."""
+    r = vcc.check_clip("abc", _row("x", labels=FAST, sig=False), _prof(), None)
+    assert (r["result"], r["kind"], r["compared"]) == ("fail", "route-sig-missing", "route_sig")
+    # a legacy baseline WITHOUT a sig may still use the hash against a sig'd replay
+    assert vcc.check_clip("abc", _row("x", labels=FAST), _prof(sig=False), None)["result"] == "pass"
+
+
 def test_a_signature_baseline_compares_the_signature_and_names_the_changed_fields():
     r = vcc.check_clip("abc", _row("x", labels=dict(FAST, tier0="list_add")), _prof(), None)
     assert (r["result"], r["compared"], r["changed_fields"]) == ("fail", "route_sig", ["tier0"])
