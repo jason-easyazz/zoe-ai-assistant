@@ -42,7 +42,9 @@ DEFAULT_LOG = os.path.join(
 # size cap. Import the router's own segment contract rather than re-deriving the
 # naming here, so this report can't drift from the writer.
 sys.path.insert(0, os.path.join(REPO, "services", "zoe-data"))
-from semantic_router import shadow_log_segments  # noqa: E402
+from semantic_router import (  # noqa: E402
+    SHADOW_TRAFFIC_CHOICES, filter_shadow_traffic, shadow_log_segments, shadow_traffic_breakdown,
+)
 
 # `two_stage_domain` is the field the live router (semantic_router.py) actually
 # writes for the would-be shadow2/active decision; the others are tolerated for
@@ -173,13 +175,23 @@ def report(recs: list[dict]) -> str:
     return "\n".join(out)
 
 
-def main() -> int:
-    path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_LOG
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0] or None)
+    ap.add_argument("path", nargs="?", default=DEFAULT_LOG)
+    ap.add_argument("--traffic", choices=SHADOW_TRAFFIC_CHOICES, default="all",
+                    help="only one traffic class (P-2): household | harness | probe | ci | untagged "
+                         "(rows written before 2026-10-19); default all")
+    args = ap.parse_args(argv)
+    path = args.path
     if not os.path.exists(path):
         print(f"no shadow2 log at {path}", file=sys.stderr)
         return 1
     print(f"# two-stage router shadow2 report — {path}")
-    print(report(load(path)))
+    recs = load(path)
+    print(shadow_traffic_breakdown(recs) + f"  (reporting: {args.traffic})")
+    print(report(filter_shadow_traffic(recs, args.traffic)))
     return 0
 
 

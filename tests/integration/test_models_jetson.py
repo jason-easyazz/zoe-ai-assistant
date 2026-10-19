@@ -36,7 +36,7 @@ TEST_CONVERSATIONS = [
             "Tell me a joke",
             "That's funny! Can you explain why it's funny?"
         ],
-        "hallucination_check": ["Teneeka", "my friend", "I met"]
+        "hallucination_check": ["Morgan", "my friend", "I met"]
     }
 ]
 

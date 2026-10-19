@@ -96,7 +96,7 @@ bugs above were all found *by* this E2E pass, not by unit tests.
   Live-kiosk render verification (@192.168.1.61) is the operator step. Detail:
   [contacts-people-memory §skybridge-card](../knowledge/contacts-people-memory.md).
 - **P5 — Deterministic propose-on-mention.** ✅ **shipped.** E2E found the LLM detector is
-  unreliable on the 4B model (fired for "my niece Teneeka", missed "my brother Daniel" + casual
+  unreliable on the 4B model (fired for "my niece Morgan", missed "my brother Daniel" + casual
   mentions). `detect_and_store` now also runs `_deterministic_person_proposals` — a regex over
   "my &lt;rel&gt; &lt;Name&gt;" / "&lt;Name&gt;, my &lt;rel&gt;" — so the everyday case reliably
   produces a `person_create` proposal, deduped against the LLM's + existing contacts. Gated by the

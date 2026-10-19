@@ -112,6 +112,7 @@ import {
 } from '../context-window.ts';
 import { elideStaleBlocks, elideStaleBlocksEnabled } from '../context-blocks.ts';
 import { cachedUserModelSuffix, turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
+import { markTurnUntrusted, untrustedSourceInMessages } from '../untrusted-content.ts';
 
 /** Provider id the sidecar registers; the agent binds to `zoe/local`. */
 export const ZOE_PROVIDER_ID = 'zoe';
@@ -319,6 +320,12 @@ export function bindIdentityForRound(context: Context, signal?: AbortSignal): vo
   const specStripped = stripSpeculativeEnvelope(context.messages);
   bindTurnReplayMode(signal, forwardedReplayFromMessages(specStripped));
   bindTurnUserId(signal, forwardedIdentityFromMessages(stripMannerEnvelope(stripPersonaEnvelope(stripReplayEnvelope(specStripped)))));
+  // Quoted third-party text (a forwarded Telegram message, a pendant transcript) fenced
+  // by its producer taints the turn from its FIRST round, before any tool can run:
+  // writes and web_search refuse exactly as after a web result (src/untrusted-content.ts).
+  // Only this turn's (the newest) user message is read; a forged fence only restricts.
+  const quoted = untrustedSourceInMessages(specStripped);
+  if (quoted) markTurnUntrusted(signal, quoted);
 }
 
 const DEFAULT_TEMPERATURE = 0.5;
