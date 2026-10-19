@@ -162,6 +162,9 @@ export const FORBIDDEN_MARKERS: readonly string[] = Object.freeze([
   '<end_of_turn',
   '<|',
   '|>',
+  // The per-render mark (renderHarnessPrompt) is code-appended after the instructions; an overlay carrying it could be
+  // mistaken for the authoritative one and bind an older harness.
+  '[[zoe-harness-render:',
 ]);
 
 // ─── the loaded harness ───────────────────────────────────────────────────────
@@ -560,7 +563,7 @@ const turnHarness = new WeakMap<AbortSignal, Harness>();
  */
 const RENDER_MARK_PREFIX = '[[zoe-harness-render:';
 const RENDER_MARK_RE = /\n?\[\[zoe-harness-render:[0-9a-z-]+\]\]/g;
-const RENDER_MARK_ID_RE = /\[\[zoe-harness-render:([0-9a-z-]+)\]\]/;
+const RENDER_MARK_ID_RE = /\[\[zoe-harness-render:([0-9a-z-]+)\]\]/g;
 const RENDER_MEMORY = 8;
 const renderIds = new WeakMap<Harness, string>();
 /** id -> harness, newest last: only what a still-running turn could have been rendered from. */
@@ -590,7 +593,10 @@ export function renderHarnessPrompt(): string {
 /** The harness a rendered system prompt (or the turn_request event carrying it) was rendered from. */
 export function harnessRenderedInto(systemPrompt: unknown): Harness | null {
   if (typeof systemPrompt === 'string' && systemPrompt.includes(RENDER_MARK_PREFIX)) {
-    const m = systemPrompt.match(RENDER_MARK_ID_RE);
+    // The code-appended mark is the LAST one (renderHarnessPrompt appends it after the instructions); any earlier look-alike
+    // is overlay text (also refused at load via FORBIDDEN_MARKERS) and must not win.
+    const all = [...systemPrompt.matchAll(RENDER_MARK_ID_RE)];
+    const m = all[all.length - 1];
     if (m) return rendered.get(m[1]) ?? null;
   }
   return null;
