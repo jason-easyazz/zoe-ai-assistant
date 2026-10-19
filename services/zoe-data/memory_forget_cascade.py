@@ -189,7 +189,10 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
     async def omi_review() -> int:
         import omi_day_review
 
-        return await omi_day_review.erase_entity(user_id, rx, strict=True)
+        n = await omi_day_review.erase_entity(user_id, rx, strict=True)
+        # the facts / relationships the day review learned ABOUT the forgotten people, by id (with what their approval wrote): a
+        # candidate whose text no longer names them - the person was renamed since - still goes. The name pass above covers a retry.
+        return n + await omi_day_review.forget_people(user_id, res.person_ids)
 
     if want("restraint_mutes"):
         await _step("restraint_mutes", mutes, res)

@@ -55,6 +55,9 @@ os.environ["ZOE_BRAIN_SLOT_GUARD"] = "off"
 # 2026-10-13: three CI-runner pytest runs (118 lines each) and one agent worktree run put 355 synthetic-user ``memory_forget_cascade:
 # no database`` / ``NOT erased`` warnings into it, indistinguishable from a real half-done forget. Read at call time, so this pin holds.
 os.environ["ZOE_LOG_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "logs")
+# The router retrain ledger (router_retrain_ledger, Phase 3 of the struggle loop) lives under ~/.zoe/router_retrain by default, and every
+# forget / user delete reaches it (struggle_proposals.forget_events / forget_user): a test's forget must never edit the live ledger.
+os.environ["ZOE_ROUTER_RETRAIN_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "router_retrain")
 
 
 import pytest  # noqa: E402

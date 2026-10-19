@@ -460,6 +460,12 @@ async def answer(text: str, user_id: str, *, channel: str, extra_ctx: Optional[d
                 pass
         return PRIVATE_REPLY
     if kind == "day":
+        try:                                              # the member took the day review up: the raise's "ignored" count resets
+            import day_review_raise
+
+            await day_review_raise.note_engaged(member, dry=not allow_writes)
+        except Exception:  # noqa: BLE001
+            pass
         cands, voices, people = await day_parts(member)
         if panel_id:
             await _push(day_card(panel_id, member, cands, voices, people))
