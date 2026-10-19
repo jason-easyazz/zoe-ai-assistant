@@ -130,15 +130,15 @@ def _sheet():
 
 
 def test_rates_at_the_live_thresholds_and_a_global_what_if():
-    r = sfa.rates(_sheet())
+    r = sfa.rates(_sheet(), owner="alex")
     assert r["owner"] == "alex" and (r["n_me"], r["n_not_me"]) == (20, 10)
     assert (r["false_rejects"], r["unscored_me"], r["false_accepts"]) == (2, 1, 1)
     assert r["frr"] == pytest.approx(0.10) and r["far"] == pytest.approx(0.10)
     lo, hi = r["far_ci"]
     assert lo < 0.10 < hi
-    strict = sfa.rates(_sheet(), global_threshold=0.35)
+    strict = sfa.rates(_sheet(), owner="alex", global_threshold=0.35)
     assert strict["false_accepts"] == 0 and strict["false_rejects"] == 2
-    loose = sfa.rates(_sheet(), global_threshold=0.20)
+    loose = sfa.rates(_sheet(), owner="alex", global_threshold=0.20)
     assert loose["false_accepts"] == 1 and loose["false_rejects"] == 1
 
 
@@ -146,6 +146,15 @@ def test_a_me_row_claimed_as_someone_else_is_a_false_reject():
     rows = [dict(turn_id="1", label="me", claimed_user="sam", group="long", score="0.9"),
             dict(turn_id="2", label="me", claimed_user="alex", group="long", score="0.9")]
     assert sfa.rates(rows, owner="alex")["false_rejects"] == 1
+    with pytest.raises(ValueError):                          # never inferred from the claims being graded
+        sfa.rates(rows, owner=None)
+
+
+def test_the_player_must_be_an_audio_player():
+    assert sfa.player_argv("aplay -q") == ["aplay", "-q"]
+    for bad in ("rm -f", "", "sh -c", "/bin/rm"):
+        with pytest.raises(SystemExit):
+            sfa.player_argv(bad)
 
 
 def test_disagreement_flags_a_panel_accept_the_server_did_not_honour():
@@ -157,8 +166,11 @@ def test_disagreement_flags_a_panel_accept_the_server_did_not_honour():
 
 def test_sheet_is_private_and_round_trips(tmp_path):
     with pytest.raises(SystemExit):
-        sfa.private_dir(REPO / "scripts")
-    d = sfa.private_dir(tmp_path / "speaker-fa")
+        sfa.private_dir(REPO / "scripts", root=REPO)
+    with pytest.raises(SystemExit):
+        sfa.private_dir(tmp_path / "speaker-fa")              # outside ~/.zoe/voice-gate
+    assert sfa.DEFAULT_DIR.parent == sfa.VOICE_GATE_ROOT
+    d = sfa.private_dir(tmp_path / "speaker-fa", root=tmp_path)
     rows = _rows()
     sfa.write_sheet(d / "sheet.csv", rows)
     assert (os.stat(d).st_mode & 0o777) == 0o700 and (os.stat(d / "sheet.csv").st_mode & 0o777) == 0o600

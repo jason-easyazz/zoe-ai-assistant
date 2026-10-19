@@ -26,12 +26,12 @@ FA = a "not me" row the gate accepted; FR = a "me" row the gate did not accept a
 no claim, counts as a reject - the household felt it as a guest turn).
 
 Nothing here changes a live system. The sheet holds household data (transcript snippets, clip paths): it is written
-mode 600 in a mode 700 directory and the tool refuses any path inside the repo. Runbook:
+mode 600 (never through a symlink) in a mode 700 directory, only under ~/.zoe/voice-gate/ and never inside the repo. Runbook:
 docs/knowledge/wake-and-speaker-fa-instruments.md.
 
     python3 scripts/maintenance/speaker_fa_review.py collect
     python3 scripts/maintenance/speaker_fa_review.py label --play
-    python3 scripts/maintenance/speaker_fa_review.py score
+    python3 scripts/maintenance/speaker_fa_review.py score --owner <enrolled member id>
     flock -x -w 3600 /tmp/zoe-voice-harness.lock nice -n 10 python3 scripts/maintenance/speaker_fa_review.py offline-fa
 """
 from __future__ import annotations
@@ -58,7 +58,9 @@ sys.path.insert(0, str(HERE.parent))
 import panel_voice_log as pvl  # noqa: E402
 
 HOME = Path.home()
-DEFAULT_DIR = HOME / ".zoe" / "voice-gate" / "speaker-fa"
+VOICE_GATE_ROOT = HOME / ".zoe" / "voice-gate"     # the ONLY place the sheet and results may land
+DEFAULT_DIR = VOICE_GATE_ROOT / "speaker-fa"
+PLAYERS = ("aplay", "paplay", "pw-play", "ffplay", "play")   # --play-cmd must start with one of these
 APP_LOGS = str(HOME / ".zoe-logs" / "zoe-data.app.log*")
 PANEL_ID = "zoe-touch-pi"
 SHORT_MAX_S = 2.0
@@ -196,9 +198,11 @@ def build_rows(tns: Sequence, sev: Sequence, clips: dict, *, since: dt.datetime,
             kind=t.trigger, seconds="" if t.duration_s is None else f"{t.duration_s:.2f}", group=group, threshold=f"{thr:.3f}", model=model,
             claimed_user="" if user in (None, "None") else user, score=_fmt(score),
             panel_accept=_fmt(score is not None and score >= thr),
+            notes=("" if t.dual_accept is None or t.dual_accept == (score is not None and score >= thr)
+                   else f"panel logged accept={t.dual_accept} (threshold then differed)"),
             server_identified=srv.get("identified") or ("" if not srv else "none"),
             server_verified=_fmt(srv.get("verified")), outcome=t.outcome,
-            transcript=(t.transcript or "")[:transcript_chars], clip=clip.path if clip else "", label="", notes=""))
+            transcript=(t.transcript or "")[:transcript_chars], clip=clip.path if clip else "", label=""))
     return rows
 
 
@@ -219,7 +223,7 @@ def merge(old: Sequence[dict], new: Sequence[dict]) -> list:
     for r in new:
         prev = keep.pop(r["turn_id"], None)
         if prev:
-            r = dict(r, label=prev.get("label", ""), notes=prev.get("notes", ""))
+            r = dict(r, label=prev.get("label", ""), notes=prev.get("notes") or r.get("notes", ""))
         out.append(r)
     out.extend(keep.values())
     out.sort(key=lambda r: r["turn_id"])
@@ -229,17 +233,19 @@ def merge(old: Sequence[dict], new: Sequence[dict]) -> list:
 
 # --------------------------------------------------------------------------------------------- the private sheet
 
-def private_dir(d: Path) -> Path:
+def private_dir(d: Path, root: Path = VOICE_GATE_ROOT) -> Path:
+    """``d`` created 700, but only at or under ``root`` (~/.zoe/voice-gate) and never inside the checkout."""
     d = Path(d).expanduser().resolve()
-    if d == REPO or REPO in d.parents:
-        raise SystemExit(f"refusing to keep household data inside the repo: {d}")
+    root = Path(root).expanduser().resolve()
+    if d == REPO or REPO in d.parents or not (d == root or root in d.parents):
+        raise SystemExit(f"refusing to keep household data outside {root} (or inside the repo): {d}")
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
     return d
 
 
 def write_private(path: Path, text: str) -> None:
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)   # never through a symlink
     with os.fdopen(fd, "w", newline="") as fh:
         fh.write(text)
     os.chmod(path, 0o600)
@@ -282,15 +288,15 @@ def _float(v) -> Optional[float]:
     return f if math.isfinite(f) else None
 
 
-def rates(rows: Sequence[dict], *, owner: Optional[str] = None, thresholds: Optional[dict] = None,
+def rates(rows: Sequence[dict], *, owner: str, thresholds: Optional[dict] = None,
           global_threshold: Optional[float] = None) -> dict:
     """FA / FR over labelled rows. A row is ACCEPTED when its score clears the threshold of its length group (the
     live pair by default, or one ``global_threshold``). FA = accepted "not me" rows; FR = "me" rows not accepted AS
-    the owner. ``owner`` defaults to the user most often claimed on "me" rows."""
+    the owner. ``owner`` is ground truth from the operator (the enrolled member id), never inferred from the claims
+    being scored - that would let a systematic misidentification grade itself."""
+    if not owner:
+        raise ValueError("owner is required (the enrolled member id the me rows belong to)")
     lab = [r for r in rows if norm_label(r.get("label")) in ("me", "not me")]
-    if owner is None:
-        users = [r.get("claimed_user") for r in lab if norm_label(r.get("label")) == "me" and r.get("claimed_user")]
-        owner = max(set(users), key=users.count) if users else None
     thr = thresholds or LIVE_THRESHOLDS
     fa = fr = n_me = n_not = unscored_me = 0
     for r in lab:
@@ -300,7 +306,7 @@ def rates(rows: Sequence[dict], *, owner: Optional[str] = None, thresholds: Opti
         if norm_label(r["label"]) == "me":
             n_me += 1
             unscored_me += score is None
-            fr += not (accepted and (owner is None or r.get("claimed_user") == owner))
+            fr += not (accepted and r.get("claimed_user") == owner)
         else:
             n_not += 1
             fa += accepted
@@ -443,7 +449,17 @@ def cmd_collect(args) -> int:
     return 0
 
 
+def player_argv(play_cmd: str) -> list:
+    """The player command as argv, refused unless it is a known audio player (it receives a household clip path)."""
+    argv = play_cmd.split()
+    if not argv or Path(argv[0]).name not in PLAYERS:
+        raise SystemExit(f"--play-cmd must start with one of {', '.join(PLAYERS)}")
+    return argv
+
+
 def cmd_label(args) -> int:
+    if args.play:
+        player_argv(args.play_cmd)
     sheet = private_dir(Path(args.dir)) / "sheet.csv"
     rows = read_sheet(sheet)
     todo = [r for r in rows if not norm_label(r.get("label"))]
@@ -454,7 +470,7 @@ def cmd_label(args) -> int:
         if r.get("transcript"):
             print(f"  heard: {r['transcript']}")
         if args.play and r.get("clip") and Path(r["clip"]).is_file():
-            subprocess.run(args.play_cmd.split() + [r["clip"]], check=False)
+            subprocess.run(player_argv(args.play_cmd) + [r["clip"]], check=False)
         try:
             ans = input("  me / not me / skip / quit [m/n/s/q]: ").strip().lower()
         except EOFError:
@@ -555,7 +571,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     lb.add_argument("--play", action="store_true", help="play each clip before asking")
     lb.add_argument("--play-cmd", default="aplay -q")
     s = sub.add_parser("score", help="FA / FR at the live thresholds from the labelled rows")
-    s.add_argument("--owner", help="the enrolled member the me rows belong to (default: most claimed on me rows)")
+    s.add_argument("--owner", required=True, help="the enrolled member id the me rows belong to (ground truth)")
     s.add_argument("--acting-only", action="store_true", help="only rows where ResNet34 was the acting model")
     o = sub.add_parser("offline-fa", help="public impostors vs the live enrolled profile (loads the model; guarded)")
     o.add_argument("--profiles", help="a local copy of speaker_profiles.json (default: the Pi, read-only)")

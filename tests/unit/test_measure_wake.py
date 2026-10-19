@@ -104,10 +104,18 @@ def test_recommend_is_the_highest_threshold_within_budget_with_tv_clean():
 
 def test_recommend_cancels_the_replays_own_losses_and_refuses_tiny_sets():
     pos = [_clip("positive", 0.30)] * 10 + [_clip("positive", 0.80)] * 30   # 25 % lost even at the live threshold
+    pos = pos + [_clip("tv", 0.10)]
     rec = mw.recommend(mw.curve(pos, mw.GRID), live_threshold=0.45, frr_budget=0.0)
     assert rec["live_frr"] == pytest.approx(0.25) and rec["threshold"] == pytest.approx(0.80)
-    small = mw.recommend(mw.curve(pos[:5], mw.GRID), live_threshold=0.45)
+    small = mw.recommend(mw.curve(pos[:5] + pos[-1:], mw.GRID), live_threshold=0.45)
     assert small["threshold"] is None and "too few" in small["reason"]
+
+
+def test_no_recommendation_without_the_tv_set():
+    # zero TV clips measured is NOT "TV 0/N": a missing or misspelled directory must not yield a recommendation
+    pos = [_clip("positive", 0.80)] * 40
+    rec = mw.recommend(mw.curve(pos, mw.GRID), live_threshold=0.45)
+    assert rec["threshold"] is None and "TV" in rec["reason"]
 
 
 def test_render_does_not_crash_on_partial_sets():
@@ -278,10 +286,18 @@ def test_the_repo_lock_pins_all_three_wake_files():
         assert entry and len(entry["sha256"]) == 64
 
 
-def test_private_outputs_never_land_in_the_repo(tmp_path):
+def test_private_outputs_land_only_under_the_voice_gate_root(tmp_path):
     with pytest.raises(SystemExit):
-        mw._private_dir(REPO / "docs")
-    d = mw._private_dir(tmp_path / "wake")
+        mw._private_dir(REPO / "docs", root=REPO)            # inside the checkout, even if named as the root
+    with pytest.raises(SystemExit):
+        mw._private_dir(tmp_path / "elsewhere")              # outside ~/.zoe/voice-gate
+    assert mw.DEFAULT_OUT.parent == mw.VOICE_GATE_ROOT
+    d = mw._private_dir(tmp_path / "wake", root=tmp_path)
+    (tmp_path / "victim").write_text("keep")
+    os.symlink(tmp_path / "victim", d / "link.json")
+    with pytest.raises(OSError):
+        mw._write_private(d / "link.json", "{}")             # never written through a symlink
+    assert (tmp_path / "victim").read_text() == "keep"
     mw._write_private(d / "x.json", "{}")
     assert (os.stat(d).st_mode & 0o777) == 0o700
     assert (os.stat(d / "x.json").st_mode & 0o777) == 0o600

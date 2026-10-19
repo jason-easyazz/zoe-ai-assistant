@@ -74,16 +74,17 @@ PREROLL_20_SINCE = dt.datetime(2026, 7, 16)   # #1326 (07-15): 1.6 s pre-roll; b
 NEARMISS_SINCE = dt.datetime(2026, 10, 16)
 
 HOME = Path.home()
-DEFAULT_OUT = HOME / ".zoe" / "voice-gate" / "wake"
+VOICE_GATE_ROOT = HOME / ".zoe" / "voice-gate"     # the ONLY place outputs may land (household-derived data)
+DEFAULT_OUT = VOICE_GATE_ROOT / "wake"
 DEFAULT_MODEL = HOME / ".zoe" / "backups" / "panel" / "hey_zoe.onnx"
 DEFAULT_FEATURES = HOME / ".cache" / "zoe-wake-fa" / "features"
 DEFAULT_OWW_PATH = HOME / ".cache" / "zoe-wake-fa" / "pylib"
 CORPUS = Path(pvl.CORPUS_DIR)
-BAKEOFF = HOME / ".cache" / "zoe-speaker-bakeoff" / "impostors"
+BAKEOFF = HOME / ".cache" / "zoe-speaker-bakeoff"
 DEFAULT_NEGATIVES = (
     ("tv", CORPUS / "quarantine-tv-falsewakes-20260719"),
-    ("libri", BAKEOFF / "libri"),
-    ("kokoro", BAKEOFF / "kokoro"),
+    ("libri", BAKEOFF / "src" / "LibriSpeech"),           # dev-clean + test-clean, whole utterances (about 10.8 h)
+    ("kokoro", BAKEOFF / "impostors" / "kokoro"),
     ("omi", HOME / ".zoe" / "omi-recordings"),
 )
 POOLED = ("libri", "kokoro", "omi")          # the FA-per-hour objective; tv is a hard 0/N constraint
@@ -171,7 +172,8 @@ MIN_POSITIVES = 30
 def highest_within(rows: Sequence[dict], base: dict, budget: float) -> Optional[dict]:
     """The highest-threshold row whose FRR exceeds ``base``'s by at most ``budget`` and that wakes on no ``tv`` clip."""
     ok = [r for r in rows
-          if not (r["sets"].get("tv") or {}).get("clips_woke") and r["frr"] - base["frr"] <= budget + 1e-12]
+          if (r["sets"].get("tv") or {}).get("n") and not r["sets"]["tv"]["clips_woke"]
+          and r["frr"] - base["frr"] <= budget + 1e-12]
     return max(ok, key=lambda r: r["threshold"]) if ok else None
 
 
@@ -184,6 +186,9 @@ def recommend(rows: Sequence[dict], *, live_threshold: float = LIVE["threshold"]
     if base is None or math.isnan(base["frr"]):
         return dict(threshold=None, reason="no positive clips scored at the live threshold - nothing to compare")
     n_pos = base["sets"]["positive"]["n"]
+    if not (base["sets"].get("tv") or {}).get("n"):
+        return dict(threshold=None, live_threshold=live_threshold, live_frr=base["frr"], live_tv="n/a",
+                    reason="no TV false-wake clips were measured - the TV 0/N constraint cannot be checked")
     if n_pos < min_positives:
         return dict(threshold=None, live_threshold=live_threshold, live_frr=base["frr"], live_tv=_tv(base),
                     reason=f"only {n_pos} positive clips (need {min_positives}) - too few to move a live threshold")
@@ -464,17 +469,19 @@ def _options(opts: Optional[dict]) -> str:
 
 # --------------------------------------------------------------------------------------------- commands
 
-def _private_dir(d: Path) -> Path:
+def _private_dir(d: Path, root: Path = VOICE_GATE_ROOT) -> Path:
+    """``d`` created 700, but only at or under ``root`` (~/.zoe/voice-gate) and never inside the checkout."""
     d = Path(d).expanduser().resolve()
-    if d == REPO or REPO in d.parents:
-        raise SystemExit(f"refusing to write household-derived data inside the repo: {d}")
+    root = Path(root).expanduser().resolve()
+    if d == REPO or REPO in d.parents or not (d == root or root in d.parents):
+        raise SystemExit(f"refusing to write household-derived data outside {root} (or inside the repo): {d}")
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
     return d
 
 
 def _write_private(path: Path, text: str) -> None:
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)   # never through a symlink
     with os.fdopen(fd, "w") as fh:
         fh.write(text)
     os.chmod(path, 0o600)
@@ -502,7 +509,7 @@ def cmd_nearmiss(args) -> int:
     s = nearmiss_summary(pvl.events(lines), since=args.since)
     print(render_nearmiss(s))
     if args.json:
-        out = _private_dir(Path(args.json).parent)
+        out = _private_dir(Path(args.json).expanduser().parent)
         _write_private(out / Path(args.json).name, json.dumps(s, indent=1, default=str))
     return 0
 
@@ -553,12 +560,11 @@ def cmd_run(args) -> int:
         return 3
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     model, feats = Path(args.model).expanduser(), Path(args.features_dir).expanduser()
-    if not args.allow_unpinned:
-        for f in (model, feats / "melspectrogram.onnx", feats / "embedding_model.onnx"):
-            bad = verify_pinned(f)
-            if bad:
-                print(f"measure_wake: refused - {bad} (see the module docstring for setup)", file=sys.stderr)
-                return 2
+    for f in (model, feats / "melspectrogram.onnx", feats / "embedding_model.onnx"):
+        bad = verify_pinned(f)
+        if bad:
+            print(f"measure_wake: refused - {bad} (see the module docstring for setup)", file=sys.stderr)
+            return 2
     sys.path.insert(0, str(Path(args.oww_path).expanduser()))
     out = _private_dir(Path(args.out))
     lines = pvl.fetch_lines(args.voice_log)
@@ -646,7 +652,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     r.add_argument("--out", default=str(DEFAULT_OUT))
     r.add_argument("--min-avail-mb", type=float, default=1500.0)
     r.add_argument("--force", action="store_true", help="skip the harness quiet hours (deliberate)")
-    r.add_argument("--allow-unpinned", action="store_true", help="replay files that do not match models.lock")
 
     rp = sub.add_parser("report", help="re-render a saved run (no model)")
     common(rp, live=True)

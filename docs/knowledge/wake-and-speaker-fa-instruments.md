@@ -18,7 +18,7 @@ Deep dive 2 (lane I, items V-4 and V-1 / master todo 10) found two live voice ri
   household turns.
 
 Both tools are **read-only on every live system**. Household audio and transcripts never enter the repo: outputs live
-under `~/.zoe/voice-gate/` (directory 700, files 600), and both tools refuse a path inside the checkout. Neither tool
+under `~/.zoe/voice-gate/` (directory 700, files 600, never written through a symlink), and both tools refuse any other output path. The wake replay refuses model files whose sha differs from `models.lock` (there is no override). Neither tool
 changes a threshold. Moving one is an owner voice-path step, replay-gated like any other.
 
 ## 1. Wake word: `scripts/perf/measure_wake.py`
@@ -37,7 +37,7 @@ changes a threshold. Moving one is an owner voice-path step, replay-gated like a
 - `followup`: the panel follow-up turns. This is household speech at the panel mic with no wake phrase needed. It is
   reported, but it is not part of the FA objective (a mid-sentence "Zoe" is legitimate there).
 - `tv`: `quarantine-tv-falsewakes-20260719`. These 5 clips did false-wake live, and a recommended threshold must wake on 0 of them.
-- `libri`, `kokoro`: the speaker bake-off public impostor crops (`~/.cache/zoe-speaker-bakeoff/impostors`).
+- `libri`: LibriSpeech dev-clean and test-clean, whole utterances, about 10.8 h of public read speech (`~/.cache/zoe-speaker-bakeoff/src/LibriSpeech`, fetched by the speaker bake-off). `kokoro`: the bake-off Kokoro TTS voice crops (`~/.cache/zoe-speaker-bakeoff/impostors/kokoro`).
 - `omi`: the Omi pendant recordings (`~/.zoe/omi-recordings`), which are household conversation on another mic.
   `libri` + `kokoro` + `omi` are pooled into the FA-per-hour objective.
 
@@ -47,7 +47,7 @@ changes a threshold. Moving one is an owner voice-path step, replay-gated like a
   wake live, so the replay cannot see attempts that never woke. The near-miss retry proxy is the only window on those.
 - The recommendation compares FRR against the live threshold **in the same replay**, so the replay's own losses cancel.
   The rule: the highest threshold whose FRR is within `--frr-budget` (default 5 percentage points) of the live threshold
-  and that wakes on 0 of the TV clips, with 30 or more positives required. The report also gives the answer at budgets
+  and that wakes on 0 of the TV clips, with 30 or more positives required. If no TV clip was measured, it gives no recommendation (an empty set is not 0/N). The report also gives the answer at budgets
   of 1, 2 and 5 points.
 - **The near-miss logging understates the band.** The daemon logs the FIRST frame of at least 0.18 after a 12 s
   cooldown, not the peak of the episode. A frame that crosses the threshold but fails the 3-hit confirmation is not
@@ -71,7 +71,7 @@ changes a threshold. Moving one is an owner voice-path step, replay-gated like a
 |---|---|
 | `collect` | panel turns since `--since` (default 2026-10-13, the start of the dual-mode ResNet34 lines) -> `~/.zoe/voice-gate/speaker-fa/sheet.csv`. It takes the score, length, outcome and transcript snippet from the Pi `voice.log` (read-only ssh), and the server verdict from `~/.zoe-logs/zoe-data.app.log*` (NOT journald). It links the corpus clip of the turn when `ZOE_VOICE_SAVE_AUDIO` kept one. Re-running merges, and existing labels are kept. |
 | `label` | walks the unlabelled rows: `m` = me, `n` = not me, `s` = skip, `q` = quit. `--play` plays each clip first. Editing the CSV `label` column by hand works too. |
-| `score` | false accept = a "not me" row the gate accepted. False reject = a "me" row not accepted as the owner, and an unscored turn counts as a reject. Both come with 95 % Wilson intervals at the live thresholds, plus a what-if sweep of one global threshold. Fewer than 30 labelled rows are anecdotes, not rates. |
+| `score --owner <member id>` | the owner id is ground truth from the operator, never inferred from the claims being graded. False accept = a "not me" row the gate accepted. False reject = a "me" row not accepted as the owner, and an unscored turn counts as a reject. Both come with 95 % Wilson intervals at the live thresholds, plus a what-if sweep of one global threshold. Fewer than 30 labelled rows are anecdotes, not rates. |
 | `offline-fa` | the public impostors (bake-off LibriSpeech and Kokoro, clean and far-field) against the LIVE enrolled ResNet34 profile, using the panel embedder (`scripts/setup/zoe_speaker_resnet34.py`, sha-pinned, self-tested). The profile is read from the Pi and held in memory only. It is guarded like a voice harness. |
 
 Rows by era: `resnet34-dual` rows come from the dual week (ResNet34 was logged but did not act; the server verdict was
@@ -79,7 +79,7 @@ Resemblyzer). `resnet34` rows come after the flip (the `Speaker claim` line is t
 keeps only the second kind. `collect` also lists the rows where the panel-side accept and the server identity disagree.
 They share thresholds, so a disagreement means a consent, model-id or join problem.
 
-**How the owner uses it:** run `collect` every few days, label new rows with `label --play`, then run `score`. Once 30
+**How the owner uses it:** run `collect` every few days, label new rows with `label --play` (`--play-cmd` must be an audio player: aplay, paplay, pw-play, ffplay or play), then run `score --owner <member id>`. Once 30
 or more labelled rows exist, compare FA and FR at the live pair with the sweep. A threshold change is
 `ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT/_LONG` on both hosts, which is an owner step.
 
