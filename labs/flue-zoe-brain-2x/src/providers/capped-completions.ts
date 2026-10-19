@@ -113,6 +113,7 @@ import {
 import { elideStaleBlocks, elideStaleBlocksEnabled } from '../context-blocks.ts';
 import { cachedUserModelSuffix, turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
 import { markTurnUntrusted, untrustedSourceInMessages } from '../untrusted-content.ts';
+import { activeHarness, harnessManner, withToolGuidance } from '../harness.ts';
 
 /** Provider id the sidecar registers; the agent binds to `zoe/local`. */
 export const ZOE_PROVIDER_ID = 'zoe';
@@ -233,7 +234,11 @@ export function applyPolicies(context: Context, userModelSuffix = ''): Context {
   const persona = forwardedPersonaFromMessages(unwrapped);
   // The manner block (src/manner.ts) rides between the persona and identity lines; same read-then-strip.
   const afterPersona = stripPersonaEnvelope(unwrapped);
-  const manner = forwardedMannerFromMessages(afterPersona);
+  // The harness overlay (src/harness.ts, flag-dark ZOE_BRAIN_HARNESS_DIR) is read ONCE per round:
+  // with the flag unset it is the compiled-in harness and both applications below are identity.
+  const harness = activeHarness();
+  // An overlay manner.md replaces only the English block zoe-data already chose to send.
+  const manner = harnessManner(forwardedMannerFromMessages(afterPersona), harness);
   const clean = { ...context, messages: stripIdentityEnvelope(stripMannerEnvelope(afterPersona)) };
   // ZOE_BRAIN_ELIDE_STALE_BLOCKS (src/context-blocks.ts): older user messages lose
   // their injected blocks before windowing. Disclosure below still reads `clean`,
@@ -245,7 +250,9 @@ export function applyPolicies(context: Context, userModelSuffix = ''): Context {
   // The persona swap and the manner block happen BEFORE windowing too, so the history budget is charged for them.
   // The manner block goes ahead of the user-model card: the bytes up to the card are the same for every member.
   const prepared = withUserModelBlock(withMannerBlock(withPersonaBlock(sent, persona), manner), userModelSuffix);
-  const safe = stripCodingBuiltins(prepared);
+  // Overlay tool guidance replaces DESCRIPTIONS only (never schemas, groups or permissions), before
+  // disclosure and windowing so the budget is charged for the text actually sent.
+  const safe = withToolGuidance(stripCodingBuiltins(prepared), harness);
   const disclosed = progressiveToolsEnabled()
     ? discloseTools(safe, clean.messages)
     : safe;

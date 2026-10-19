@@ -2,8 +2,16 @@
  * Zoe's soul, split at the PERSONA seam (flag-dark `ZOE_PERSONA_LAYER`, zoe-data
  * `persona_layer.py`; the sidecar half is src/persona.ts).
  *
- * The soul is a verbatim copy of services/zoe-core/SOUL.md (see agents/zoe.ts). It is
- * held here as named paragraphs so the persona paragraphs - the ones the household
+ * SOURCE OF TRUTH. This file is the live brain's soul. It is services/zoe-core/SOUL.md
+ * (the dormant core lane's soul) paragraph for paragraph, PLUS one flue-only paragraph,
+ * RECALL, that SOUL.md does not carry (`FLUE_ONLY_SOUL_PARAGRAPHS`). It was described as
+ * a "verbatim copy" while it was not; test/soul_source.test.ts now pins the exact
+ * relationship (SOUL.md == this soul minus the declared flue-only paragraphs), so an
+ * edit to either side fails the lab suite until the other is reconciled. The harness
+ * overlay (src/harness.ts) renders `soul.md` from `ZOE_SOUL`, so the overlay, SOUL.md
+ * and this file cannot drift apart unseen.
+ *
+ * It is held here as named paragraphs so the persona paragraphs - the ones the household
  * persona replaces - can be located by construction rather than by string search, with
  * the JOINED bytes unchanged: `ZOE_SOUL` below is byte-for-byte what `agents/zoe.ts`
  * carried before this split (pinned by test/persona_layer.test.ts, sha256 of the full
@@ -50,6 +58,13 @@ export const ZOE_PERSONA_FIXED = [LEAD, '', KNOWS_YOU, '', VOICE, '', ACKNOWLEDG
  * asked to change.
  */
 export const ZOE_PERSONA_KEEP = [KNOWS_YOU, '', HELP_IS].join('\n');
+
+/**
+ * The paragraphs this soul carries that services/zoe-core/SOUL.md does not (the measured
+ * 2026-10-18 drift, now declared instead of hidden). test/soul_source.test.ts asserts that
+ * removing exactly these from `ZOE_SOUL` yields SOUL.md byte for byte.
+ */
+export const FLUE_ONLY_SOUL_PARAGRAPHS: readonly string[] = [RECALL];
 
 /** The full soul: the persona paragraphs, then the capability paragraphs. */
 export const ZOE_SOUL = [ZOE_PERSONA_FIXED, '', EVERYDAY, '', RECALL].join('\n');

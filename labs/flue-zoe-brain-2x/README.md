@@ -369,6 +369,69 @@ first_sentence_ms=… deltas=… deduped=… enabled=…` line per streamed turn
 Pinned by `test/early_text.test.ts` (real runtime, real flush, flag-off
 negative control). Measurements: docs/knowledge/voice-pipeline.md.
 
+## Harness overlay (flag-dark `ZOE_BRAIN_HARNESS_DIR`)
+
+Phase 0, item S-M, of the nightly self-evolution loop
+(`docs/architecture/self-evolution-nightly-loop.md` 3.1): the words around the Gemma rock as
+FILES the loop may edit, instead of TypeScript constants that need a rebuild. The loop edits an
+overlay; it never edits code. Loader: `src/harness.ts`. Control: `scripts/harness-overlay.ts`
+(`npm run harness -- <command>`).
+
+**Unset (the shipped default) = today, byte for byte**: nothing is read, logged or installed,
+`/health` and the per-turn line are unchanged, and the instructions ARE `ZOE_INSTRUCTIONS`
+(pinned by sha256). Set, every file the overlay does not carry falls back to the compiled-in text.
+
+| Overlay file | Replaces | Rules |
+| --- | --- | --- |
+| `soul.md` | `ZOE_SOUL` | must OPEN with the code-held persona + identity paragraphs byte for byte |
+| `doctrines/<slot>.md` | one doctrine; slots `voice-delivery`, `activator`, `in-session-context`, `recall-precedence`, `personal-recall`, `emotional-recall`, `emotional-capture` | `activator.md` must keep the code-derived group catalogue |
+| `manner.md` | zoe-data's ENGLISH manner block | applied only when zoe-data already sent that block (its flag on, an adult member) |
+| `tool-guidance.md` | tool DESCRIPTIONS, `## <tool>` sections | 21 tools; `web_search` and `memory_retire` are code-held |
+| `recall-shape.json` | `recall_memory` packet size / query cap | exactly `{"version":1,"recall_tool":{"limit":1..48,"query_max_chars":50..2000}}` |
+
+**Fail closed.** An unknown file, slot, key or tool section, a symlink inside the overlay, a size
+cap, invalid UTF-8, a control character, a chat-template token or an untrusted-content fence
+marker refuses the WHOLE overlay: the compiled-in harness is served, `HARNESS overlay REFUSED (…)`
+goes to stderr, and `/health` shows `harness.status: "refused"` with the reason.
+
+**The hard boundary.** Restraint, memory authority, forgetting, guest policy, identity, the
+untrusted-content fence and tool permissions stay in code: identity and prompt confidentiality
+are appended from code, last; schemas, groups, permissions and write gates are untouched; the
+policies that decide WHO gets a manner block, a persona or a write live in zoe-data.
+`test/harness_boundary.test.ts` fails if `OVERLAY_SCHEMA` ever gains a key touching them.
+
+**Observability.** Each loaded file's sha256 is on `/health` (`harness.components`, plus
+`overlay_sha256` and `instructions_sha256`), and the per-turn `FLUE_EARLY_TEXT` line gains
+` harness=<version>@<overlay sha16> instructions=<sha16> <file>=<sha16>…`.
+
+**Versions, ledger, revert.** `<root>/current` is a relative symlink to `<root>/<version>`;
+`ZOE_BRAIN_HARNESS_DIR` points at `<root>/current`. `switch` validates the target (a refused
+overlay is never switched to), re-points the link atomically, appends `<root>/ledger.jsonl`
+(`ts`, `who`, `from`/`to`, both overlay sha256s, `reason`), then hot-reloads: SIGHUP to the unit's
+main pid and a `/health` poll until the new sha is reported. `revert` switches back to the latest
+ledger line's `from` (refusing if the ledger and the link disagree). Measured on the built sidecar
+(scratch port, 2026-10-19): **signal → confirmed in 6–7 ms**; the whole `revert` command, node
+start included, **~0.95 s**; no restart, no dropped turn. The full-restart alternative is ~1.0 s
+to `/health` plus every in-flight turn. The signal is sent only when `/health` shows the brain
+was started WITH the flag (Node's default SIGHUP action is to exit).
+
+```sh
+npm run harness -- init     --root ~/.zoe/brain-harness --who owner        # v0 = the compiled harness
+npm run harness -- validate ~/.zoe/brain-harness/<version>
+npm run harness -- switch   --root ~/.zoe/brain-harness --to <version> --who night-loop --reason "proposal 12"
+npm run harness -- revert   --root ~/.zoe/brain-harness --who owner --reason "undo that"
+npm run harness -- status   --root ~/.zoe/brain-harness
+```
+
+Per-round cost (measured): flag unset ~10 ns; a full overlay ~7 µs on a ~28 µs `applyPolicies`
+(21 description overrides), against a multi-second turn. Loading the full overlay takes ~5 ms.
+Tests: `test/harness_overlay.test.ts` (parity, fail-closed, sha256s, SIGHUP),
+`test/harness_boundary.test.ts`, `test/harness_ctl.test.ts`, `test/soul_source.test.ts`.
+
+**The soul's source of truth** is `src/soul.ts`: it is `services/zoe-core/SOUL.md` plus the
+declared flue-only RECALL paragraph (`FLUE_ONLY_SOUL_PARAGRAPHS`), pinned byte for byte by
+`test/soul_source.test.ts` (it used to claim to be a verbatim copy while it was not).
+
 ## Build / typecheck / test
 
 ```sh
@@ -400,6 +463,7 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_STREAM_TIMEOUT_S` | `180` | streamed-turn deadline (mirrors prod `ZOE_CORE_TIMEOUT_S`) |
 | `ZOE_BRAIN_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible brain endpoint |
 | `ZOE_BRAIN_API_KEY` | `local-no-key` | placeholder key for the completions client |
+| `ZOE_BRAIN_HARNESS_DIR` | *(unset)* | the harness overlay directory (normally `<root>/current`); unset = the compiled-in harness, byte for byte. See "Harness overlay" |
 | `ZOE_BRAIN_DB` | `<package>/data/zoe-brain.db` | Flue durability sqlite path — **leave unset**, see the storage note under "Run as a service" |
 | `PORT` | `3000` | HTTP port (`flue-zoe-brain-2x.service` sets **`3579`**, the live brain) |
 

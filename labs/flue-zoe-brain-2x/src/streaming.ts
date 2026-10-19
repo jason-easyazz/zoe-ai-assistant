@@ -95,6 +95,7 @@
 import { observe } from '@flue/runtime';
 import type { Context } from '@earendil-works/pi-ai';
 import type { MiddlewareHandler } from 'hono';
+import { activeHarness } from './harness.ts';
 import { promptSections, type PromptSections } from './providers/capped-completions.ts';
 import {
   EarlyTextReconciler,
@@ -605,7 +606,10 @@ function openTurnStream(
         `FLUE_EARLY_TEXT first_delta_ms=${firstDeltaMs} first_sentence_ms=${firstSentenceMs}`
         + ` deltas=${textFrames} deduped=${earlyText?.deduped ?? 0}`
         + ` enabled=${earlyText ? 1 : 0}`
-        + (earlyText?.diverged ? ` diverged=${earlyText.diverged}` : ''),
+        + (earlyText?.diverged ? ` diverged=${earlyText.diverged}` : '')
+        // The harness overlay in force (src/harness.ts): label@overlay sha and each loaded file's
+        // sha256 prefix. '' with ZOE_BRAIN_HARNESS_DIR unset, so the line is byte-identical to today.
+        + activeHarness().logSuffix,
       );
     } catch {
       /* logging must never break the stream */
