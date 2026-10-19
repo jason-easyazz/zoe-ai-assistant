@@ -32,5 +32,17 @@ Cmnd_Alias ZOE_SVC_UNITS = /usr/bin/systemctl restart zoe-data.service, \
                            /usr/bin/systemctl restart flue-zoe-brain-2x.service, \
                            /usr/bin/systemctl restart flue-zoe-telegram.service
 
-zoe ALL=(root) NOPASSWD: ZOE_MEM, ZOE_MODEL_UNITS, ZOE_SVC_UNITS
+# Backups (deep dive 2 S0-8, docs/knowledge/offbox-backup.md section 7): read Home Assistant's root-owned .storage
+# and .cloud without following anything zoe planted, and run the weekly restore drill's THROWAWAY Postgres (after
+# P0-3 zoe cannot create a container; the helper creates exactly one, pinned image, no binds, internal network).
+Cmnd_Alias ZOE_BACKUP = /usr/local/libexec/zoe-priv/zoe-ha-config-export storage, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg up, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg down, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg restore zoe, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg restore multica, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg psql zoe, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg psql multica, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg psql drill
+
+zoe ALL=(root) NOPASSWD: ZOE_MEM, ZOE_MODEL_UNITS, ZOE_SVC_UNITS, ZOE_BACKUP
 zoe-deploy ALL=(root) NOPASSWD: ZOE_SVC_UNITS

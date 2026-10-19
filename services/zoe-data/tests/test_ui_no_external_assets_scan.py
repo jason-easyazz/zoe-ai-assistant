@@ -85,23 +85,8 @@ _EXTERNAL_RE = re.compile(r"^(?:https?:)?//", re.IGNORECASE)
 # Every entry is an external load that is knowingly tolerated. Keep this short;
 # a growing allowlist means the docroot is drifting back off-box.
 ALLOWLIST: dict[tuple[str, str], str] = {
-    # Decorative stock photos hardcoded into journal.html's static demo timeline
-    # (the real timeline is rendered by js/journal-api.js from Zoe's own data).
-    # They are <img> placeholders, not libraries: offline they render as broken
-    # images rather than breaking a feature. Replacing them is a design call,
-    # tracked as a follow-up to the CDN vendoring PR.
-    (
-        "journal.html",
-        "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=400&fit=crop",
-    ): "static demo placeholder photo — decorative, follow-up to replace",
-    (
-        "journal.html",
-        "https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=800&h=400&fit=crop",
-    ): "static demo placeholder photo — decorative, follow-up to replace",
-    (
-        "journal.html",
-        "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1200&h=600&fit=crop",
-    ): "static demo placeholder photo — decorative, follow-up to replace",
+    # Empty since 2026-10-19: the last entries were three stock photos hot-linked into
+    # journal.html's fake demo timeline, removed with the timeline itself.
 }
 
 
