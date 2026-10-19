@@ -242,7 +242,7 @@ async def detect(
 
 # ── Deterministic propose-on-mention ────────────────────────────────────────
 # The LLM detector is inconsistent on a 4B model — it fired for "my niece
-# Teneeka" but missed "my brother Daniel" / casual mentions in E2E testing. A
+# Morgan" but missed "my brother Daniel" / casual mentions in E2E testing. A
 # regex over the common "my <rel> <Name>" / "<Name>, my <rel>" forms gives a
 # RELIABLE proposal for the everyday case (research: pair a passive extractor
 # with the agent path). Names are capitalised; relationships lower-case.

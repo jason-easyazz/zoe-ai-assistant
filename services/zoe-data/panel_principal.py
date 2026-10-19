@@ -9,7 +9,9 @@ unforgeable from the open LAN. The panel kiosk is a browser whose only credentia
 mints one for any caller, so "a guest session" is not evidence of a panel. In order of strength, a request is the panel when:
 
   1. its principal came from a provisioned device token (``get_current_user`` resolves EVERY device token to a guest stamped
-     with ``panel_id`` since 2026-10-17 - the token is the device, never its bound member) - the voice daemon / kiosk gate; or
+     with ``panel_id`` since 2026-10-17 - the token is the device, never its bound member) - the voice daemon / kiosk gate.
+     NOT over the Cloudflare tunnel (owner decision 2026-10-19: there the token is a plain guest; the relay is the way in
+     from outside; escape hatch ``ZOE_PANEL_TOKEN_VIA_CF=panel``); or
   1b. it carries the KIOSK CREDENTIAL (``panel_kiosk_credential``, flag ``ZOE_PANEL_KIOSK_CREDENTIAL``, default off): an
      HttpOnly cookie the panel's loopback gate obtains with the device token, naming an ACTIVE panel that allows guests. This is
      what keeps the kiosk browser "the panel" when its address changes (private link home, another Wi-Fi); or
@@ -69,6 +71,30 @@ _panel_turn: contextvars.ContextVar[bool] = contextvars.ContextVar("zoe_panel_tu
 def scope_mode() -> str:
     mode = os.environ.get("ZOE_HOUSEHOLD_LISTS_PANEL_SCOPE", "registered").strip().lower()
     return mode if mode in ("registered", "lan", "off") else "registered"
+
+
+def device_token_via_cf_is_panel() -> bool:
+    """``ZOE_PANEL_TOKEN_VIA_CF`` (read per call): may a DEVICE TOKEN presented over the Cloudflare tunnel count as the panel?
+
+    Owner decision 2026-10-19 (decisions-page card ``cf-device-token``): NO. Over Cloudflare a device token is a plain GUEST -
+    no home control, no household lists, no music; the way in from outside is the relay (#2095, mTLS + the token), a separate
+    ingress with no Cloudflare header, so it is unaffected, and so is the LAN (the panel reaches zoe-data there, never through
+    the tunnel). Before this a copy of the panel's token controlled the house from anywhere on the internet.
+
+    ``guest`` is the CODE DEFAULT; anything other than the exact word ``panel`` reads as ``guest`` (a typo never opens the
+    house). ``panel`` is an explicit operator ESCAPE HATCH that restores the old behaviour (the token is the panel wherever it
+    is presented)."""
+    return os.environ.get("ZOE_PANEL_TOKEN_VIA_CF", "guest").strip().lower() == "panel"
+
+
+def device_token_is_panel(request: Any) -> bool:
+    """For entry points that hold a VALIDATED device token but no principal dict (``_require_voice_auth``): does it count as
+    the panel for THIS request? False over Cloudflare (unless the ``ZOE_PANEL_TOKEN_VIA_CF=panel`` escape hatch). Never raises."""
+    try:
+        return not (_via_public_tunnel(request) and not device_token_via_cf_is_panel())
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        logger.warning("panel_principal: device-token tunnel check failed (%s) - not the panel", type(exc).__name__)
+        return False
 
 
 def mark_panel_turn() -> None:
@@ -179,7 +205,9 @@ async def is_panel_guest(request: Any, user: Mapping[str, Any] | None, db: Any =
     if (user or {}).get("auth_degraded"):
         return False  # an auth outage resolves ANY header to a guest: never evidence of anything
     if (user or {}).get("panel_id"):
-        return True  # device token, no bound member
+        # Device token, no bound member. Over the Cloudflare tunnel it is a plain guest (owner decision 2026-10-19), unless
+        # the ZOE_PANEL_TOKEN_VIA_CF=panel escape hatch restores the old rule.
+        return device_token_is_panel(request)       # fail-closed wrapper
     if _via_public_tunnel(request):
         return False  # a request that crossed Cloudflare is the internet, never the kiosk on the LAN
     # Path 1b: the kiosk browser's credential minted from the device token (flag-dark; None whenever the flag is off).

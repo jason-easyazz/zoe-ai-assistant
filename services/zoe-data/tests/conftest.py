@@ -93,3 +93,19 @@ def _db_pool_never_initialised(monkeypatch):
         return
     monkeypatch.setattr(db_pool, "_ever_initialised", False, raising=False)
     yield
+
+
+@pytest.fixture
+def jason_signed_in_at_the_panel(monkeypatch):
+    """OPT-IN (never autouse): "jason" holds a fresh PIN sign-in at whatever panel asks, so a DEVICE-token biometric enrolment
+    has a server-verified member to write (``biometric_scope.resolve_enroll_target``, 2026-10-19). Enrolment-shape tests that
+    are not about WHO is enrolled use it; the identity tests in ``test_biometric_ownership_scope.py`` set their own."""
+    import biometric_scope
+
+    async def _pin(_panel_id):
+        return "jason"
+
+    biometric_scope.reset_enrolment_grants()
+    monkeypatch.setattr(biometric_scope, "_fresh_panel_member", _pin)
+    yield
+    biometric_scope.reset_enrolment_grants()

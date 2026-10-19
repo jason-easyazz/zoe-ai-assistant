@@ -622,7 +622,7 @@ def test_seed_frames_are_bounded_by_the_decide_ceiling(daemon, duck, monkeypatch
     stop growing at lookback + ceiling/chunk + 1, whatever the window does."""
     captured, fed = {}, []
     monkeypatch.setattr(daemon._BargeMonitor, "_capture_seed",
-                        lambda self, stream, frames: captured.setdefault("n", len(frames)))
+                        lambda self, stream, frames, vad=None: captured.setdefault("n", len(frames)))
     # A decider that ignores its ceiling: 400 undecided chunks, then a commit.
     monkeypatch.setattr(daemon._BargeDecider, "feed",
                         lambda self, prob, at: fed.append(at) or ("commit" if len(fed) == 400 else ""))
