@@ -1635,7 +1635,7 @@
     "unset"
    ],
    "kind": "bool",
-   "readers": 10
+   "readers": 11
   },
   "ZOE_JUKEBOX_SECRET": {
    "defaults": [
@@ -1891,6 +1891,13 @@
    "readers": 2
   },
   "ZOE_KOKORO_VOICES": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_LAN_HOSTS": {
    "defaults": [
     "unset"
    ],
@@ -2241,6 +2248,27 @@
   "ZOE_MA_START_TIMEOUT_S": {
    "defaults": [
     "25"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_MA_UI_GATE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_MA_UI_SECRET": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_MA_UI_TTL_S": {
+   "defaults": [
+    "43200"
    ],
    "kind": "number",
    "readers": 1
