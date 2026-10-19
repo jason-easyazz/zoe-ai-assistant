@@ -713,3 +713,32 @@ def test_a_real_shuffled_label_control_fails_gate_a_through_the_pipeline():
     assert real.adopt and real.numbers["fixed"] >= 30
     assert not control.adopt and control.checks["fixes_known_failures"] is False
     assert control.numbers["fixed"] < control.numbers["needed"]
+
+
+# ── Codex round 2 (2026-10-19) ─────────────────────────────────────────────────
+def test_a_forget_by_wording_alone_deletes_a_running_runs_words():
+    """An older event is forgotten while a run holds the SAME wording under a new event id and user: the wording key in ids.json is
+    what lets the forget delete those words at once (not at the run's own cleanup)."""
+    ex = _examples(1)[0]
+    work = ledger.root() / ledger.WORK / "s9"
+    work.mkdir(parents=True)
+    (work / ledger.IDS_FILE).write_text(json.dumps({"event_ids": ["e-new"], "user_keys": ["u-other"], "text_keys": [ex.text_key]}))
+    (work / f"train{ledger.TEXT_SUFFIX}").write_text("invented words\n")
+    assert ledger.forget(event_ids=["e-old"], text_keys=[ex.text_key])["texts_deleted"] == 1
+    assert not list(work.glob("*" + ledger.TEXT_SUFFIX))
+
+
+def test_the_adoption_marker_is_durable_before_the_swap(sandbox, monkeypatch):
+    """The marker is the only thing a host crash after the swap leaves: file AND directory are fsynced before deploy() runs."""
+    import os as _os
+    events = []
+    real_fsync = _os.fsync
+    monkeypatch.setattr(_os, "fsync", lambda fd: events.append("fsync") or real_fsync(fd))
+
+    def deploy(*a, **k):
+        events.append("deploy:marker" if rr.adopt_marker().exists() else "deploy:no-marker")
+        return 1
+    monkeypatch.setattr(rs, "deploy", deploy)
+    rr.act("on", decide(), {"stamp": "s1"}, stamp="s1", cand_gguf=sandbox / "c.gguf", run_dir=sandbox / "run", inc_live=INC,
+           train=[], journal={})
+    assert events[:3] == ["fsync", "fsync", "deploy:marker"]

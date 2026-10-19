@@ -926,9 +926,10 @@ def _failed_words(summary: Any, prev: Any) -> str:
     return str(summary or "").split(" -> ")[0].strip() if prev else str(summary or "").strip()
 
 
-async def _wording_keys(ids: list[str]) -> set[str]:
-    """The retrain ledger's wording keys of these struggle rows, read WHILE THEY STILL EXIST (the forget path calls this before the rows
-    go). RAISES on a store failure: a forget that cannot tombstone the wording must not be confirmed."""
+async def _wording_keys(ids: Optional[list[str]] = None, *, user_id: Optional[str] = None) -> set[str]:
+    """The retrain ledger's wording keys of these struggle rows (by event id, or every row of ``user_id``), read WHILE THEY STILL EXIST
+    (the forget path calls this before the rows go). RAISES on a store failure: a forget that cannot tombstone the wording must not be
+    confirmed."""
     import router_retrain_ledger
     import struggle_detector as sd
 
@@ -936,7 +937,10 @@ async def _wording_keys(ids: list[str]) -> set[str]:
     if _sql_events():
         try:
             async with _ctx() as db:
-                for part in _chunks(ids):
+                if user_id is not None:
+                    cur = await db.execute("SELECT summary, prev_turn_id FROM struggle_events WHERE user_id = ?", (user_id,))
+                    texts += [_failed_words(r[0], r[1]) for r in await cur.fetchall()]
+                for part in _chunks(list(ids or [])):
                     cur = await db.execute(f"SELECT summary, prev_turn_id FROM struggle_events WHERE id IN ({_marks(len(part))})", tuple(part))
                     texts += [_failed_words(r[0], r[1]) for r in await cur.fetchall()]
         except Exception as exc:
@@ -944,9 +948,10 @@ async def _wording_keys(ids: list[str]) -> set[str]:
                 return set()
             raise
     else:
-        want = set(ids)
+        want = set(ids or [])
         texts = [_failed_words(r.get("summary"), r.get("prev_turn_id"))
-                 for r in await sd.get_backend().rows(0.0, None, limit=ROW_LIMIT) if str(r.get("id")) in want]
+                 for r in await sd.get_backend().rows(0.0, None, limit=ROW_LIMIT)
+                 if str(r.get("id")) in want or (user_id is not None and r.get("user_id") == user_id)]
     return {router_retrain_ledger.text_key(t) for t in texts if t}
 
 
@@ -987,7 +992,7 @@ async def forget_user(user_id: str) -> int:
     """Take every event of ``user_id`` out of every proposal (the audited user delete). RAISES on a store failure."""
     if not (user_id or "").strip():
         return 0
-    _forget_in_retrain(user_id=user_id)
+    _forget_in_retrain(user_id=user_id, text_keys=await _wording_keys(user_id=user_id))
     if not _sql_events():
         return 0
     try:

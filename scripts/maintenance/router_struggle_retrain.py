@@ -375,11 +375,20 @@ log = rs.log
 
 
 def _write_private(path: Path, text: str) -> None:
+    """0600 file in a 0700 dir, DURABLE before it returns (file and directory fsync): the adoption marker is the only thing a crash
+    after the swap leaves behind, so it must be on disk before the swap starts."""
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    dfd = os.open(str(path.parent), os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
 
 
 def _jsonl(rows: Iterable[dict]) -> str:
@@ -716,7 +725,8 @@ def run(mode: str, *, collect_only: bool = False) -> int:
     os.chmod(work, 0o700)
     texts_used = train + holdout
     _write_private(work / ledger.IDS_FILE, json.dumps({"event_ids": sorted({e.event_id for e in texts_used}),
-                                                       "user_keys": sorted({e.user_key for e in texts_used})}))
+                                                       "user_keys": sorted({e.user_key for e in texts_used}),
+                                                       "text_keys": sorted({e.text_key for e in texts_used})}))
     try:
         # ---- 2. ORACLE --------------------------------------------------------
         train, n_tr_drop = oracle_filter(train)

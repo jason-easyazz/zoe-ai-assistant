@@ -1049,3 +1049,16 @@ def test_a_turn_forgotten_before_any_retrain_run_is_tombstoned_by_its_wording(en
     t = rl.load()["tombstones"]
     assert rl.text_key(f"call quentin about {MARK}") in t["text_keys"]               # the FAILED turn's words, as the seam hands them out
     assert {"e0", "e1"} <= set(t["event_ids"]) and MARK not in json.dumps(rl.load())
+
+
+
+def test_a_user_delete_before_any_retrain_run_tombstones_their_wordings(env, monkeypatch, tmp_path):
+    """Codex round 2 on #2128: a deleted member's failed turns must be tombstoned by WORDING too (not only the user key), so the same words
+    from another member never re-enter - read from their struggle rows while those still exist."""
+    import router_retrain_ledger as rl
+
+    monkeypatch.setenv("ZOE_ROUTER_RETRAIN_DIR", str(tmp_path / "rr"))
+    store(*[event(i, user=B, ts=NOW - i * DAY, summary=f"what is the {MARK} forecast", fix=sig.FIX_ROUTER_TRAINING) for i in range(2)])
+    run(sd.delete_user(B))
+    t = rl.load()["tombstones"]
+    assert rl.text_key(f"what is the {MARK} forecast") in t["text_keys"] and rl.user_key(B) in t["user_keys"]
