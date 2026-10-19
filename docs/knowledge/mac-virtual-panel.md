@@ -45,6 +45,9 @@ Read this before testing anything personal from the Mac - three rules changed, a
   is never recognised as the panel *by address or by kiosk credential*, and a signed-in member's own browser session is the only other way in. So the **browser UI tab**
   (`panel_id=mac-dev`, a guest session through Access) is refused **home control** (`/api/ha/*`, the house-state reads) and the **household lists**, and shows "Sign in" because
   the panel display identity is not served over the tunnel. **That is expected, not a bug.** The tunnel is for testing the voice path and the UI, not the house.
+  Since 2026-10-19 the same tab also gets **no panel push channel** (`/ws/push?panel_id=mac-dev` without a member session must prove it is the panel by
+  registered address or kiosk credential, and neither works over Cloudflare; `ZOE_PANEL_PUSH_PROOF`, `services/zoe-data/AGENTS.md`), so voice text and cards do not
+  appear in it. The daemon's own requests are unaffected (it does not use the push socket).
   Caveat from reading the code **[src, no test covers it over Cloudflare, unverified live]**: the *daemon's* requests carry `X-Device-Token`, and
   `is_panel_guest` accepts a device-token principal (path 1) **before** it looks for the tunnel header, so a voice turn from the daemon is likely still "the panel" and may be allowed
   home control and household list items. Test it deliberately with a harmless entity before relying on either reading; recorded in `docs/knowledge/open-problems.md`.
