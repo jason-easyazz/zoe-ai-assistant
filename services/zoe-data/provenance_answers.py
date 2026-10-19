@@ -333,6 +333,12 @@ def sensitive_classes(text: str, meta: Optional[dict] = None) -> frozenset:
             out.add("mood")
     except Exception:  # noqa: BLE001
         pass
+    # a curated row filed under a sensitive category (memories-space P7, owner D10 / D11) is private whatever its words say
+    cat = str(meta.get("curated_category") or "").lower()
+    if cat in ("health", "medication"):
+        out.add("health")
+    elif cat == "money":
+        out.add("money")
     t = text or ""
     if _HEALTH_RE.search(t):
         out.add("health")
@@ -576,6 +582,7 @@ class Item:
     mtype: str = ""             # the row's memory_type (a derived person-projection row is "person")
     origin: str = ""            # the writer that stored it (``origin``, else ``source``): "omi_review" = approved from the day review
     cls: str = ""               # the authority class (``memory_authority.row_class``): user_stated / user_confirmed / ...
+    curated_by: str = ""        # a curated row (origin "curator", memories-space P7): the name of who added it
 
 
 @dataclass
@@ -647,8 +654,10 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
             continue
         classes = sensitive_classes(text, meta)
         primary = next((c for c in _CLASS_ORDER if c in classes), "")
+        origin = str(meta.get("origin") or meta.get("source") or "")
         it = Item(ref.id, text, _row_epoch(meta), group_of(text, meta), primary, inferred, classes,
-                  str(meta.get("memory_type") or "").lower(), str(meta.get("origin") or meta.get("source") or ""), cls)
+                  str(meta.get("memory_type") or "").lower(), origin, cls,
+                  str(meta.get("curated_by_name") or "")[:40] if origin == "curator" else "")
         known.total += 1
         if it.sensitive:
             known.private.setdefault(it.sensitive, []).append(it)

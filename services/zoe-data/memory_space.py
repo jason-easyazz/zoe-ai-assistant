@@ -101,6 +101,7 @@ def _when(epoch: Optional[float]) -> str:
 
 #: how a row came to be held, in the member's words (``provenance``): the writer and the authority class decide, never a model
 PROVENANCE_LABELS = {
+    "curated": "Added for you",
     "day_review": "From your day review, approved by you",
     "confirmed": "You confirmed this",
     "told": "You told me",
@@ -110,11 +111,13 @@ PROVENANCE_LABELS = {
 
 
 def provenance_kind(it: Any) -> str:
-    """``day_review`` | ``confirmed`` | ``told`` | ``derived`` | ``inferred`` for a gathered item. Pure."""
+    """``curated`` | ``day_review`` | ``confirmed`` | ``told`` | ``derived`` | ``inferred`` for a gathered item. Pure."""
     import memory_authority as auth
 
     origin = str(getattr(it, "origin", "") or "")
     cls = str(getattr(it, "cls", "") or "")
+    if origin == CURATED_ORIGIN:
+        return "curated"
     if origin == "omi_review":
         return "day_review"
     if cls == auth.USER_CONFIRMED:
@@ -131,6 +134,8 @@ def provenance_label(it: Any) -> str:
     kind = provenance_kind(it)
     day = _when(getattr(it, "epoch", None))
     base = PROVENANCE_LABELS[kind]
+    if kind == "curated" and getattr(it, "curated_by", ""):
+        base = f"Added for you by {it.curated_by}"
     if not day:
         return base
     return f"{base} ({day})" if kind == "inferred" else f"{base} on {day}"
@@ -221,6 +226,10 @@ async def curated_locked(user_id: str, meta: Optional[dict]) -> bool:
     ``member`` for every chatting account, children included."""
     if str((meta or {}).get("origin") or "") != CURATED_ORIGIN:
         return False
+    import memory_authority as auth
+
+    if str((meta or {}).get("authority_class") or "") == auth.CURATED:
+        return True            # protected (a child, or an adult who opted this category in): a curator changes it (P7)
     try:
         import manner_block
         from db_compat import get_compat_db
