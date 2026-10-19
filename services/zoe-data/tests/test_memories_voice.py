@@ -632,7 +632,9 @@ def test_phone_correct_refuses_guests_and_other_members_rows(seeded):
     r = c.post(f"/api/memories/mine/{rid}/correct", json={"text": "My neighbour keeps a cat."}, headers=H)
     assert r.status_code == 404
     assert any("Biscuit" in t for t in approved(seeded, OTHER))
-    for guest in ({"user_id": "guest", "role": "guest"}, {"user_id": ME, "role": "guest"}):
+    for guest in ({"user_id": "guest", "role": "guest"}, {"user_id": ME, "role": "guest"},
+                  {"user_id": ME, "role": "user", "device_token_role": "panel"},          # the panel device token
+                  {"user_id": ME, "role": "user", "auth_degraded": True}):              # an auth outage
         mine = row_id(seeded, "14 March")
         assert _phone(guest).post(f"/api/memories/mine/{mine}/correct", json={"text": "x y z w"},
                                   headers=H).status_code in (401, 403)

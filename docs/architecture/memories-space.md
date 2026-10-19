@@ -255,6 +255,8 @@ flag-off 404 hides it):
   that conversation. They are written on approval to the **owner's layer 2** (a memory row with
   `entity_id = <people id>`) and never to the directory or the person's own layer 3. The restraint rules of §5.5
   rule 4 apply: candidates whose content falls in a restraint class are not proposed (§6.4).
+  **Built 2026-10-19** as the kinds `person_fact` (`stated_by_subject` | `owner_stated`) and `person_relation`; the record is
+  [omi-voice-tagging.md](../knowledge/omi-voice-tagging.md), "Facts about tagged people".
 
 **Touch** (the panel `memories` surface, "Pendant" section; touch phase P6):
 
@@ -303,9 +305,9 @@ is bounded by five guardrails, each enforced in code and pinned by a test (§10,
   sets `learning_enabled = false` for that person).
 - **States.** The voiceprint starts `provisional`. It becomes `confirmed` once it holds at least 3 segments from at
   least 2 recordings **and** the member has said yes to at least one of its own suggestions.
-- **Expiry.** A `provisional` voiceprint that is never confirmed expires after `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS`
-  (30). A confirmed one expires after `ZOE_OMI_VOICEPRINT_IDLE_DAYS` (365) with no new confirmation (owner decision
-  D15).
+- **Expiry.** None. A learned voiceprint is kept until it is forgotten (owner decision D15, decided 2026-10-19).
+  `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` default to 0, meaning keep. A positive value brings back the old
+  30 / 365-day sweep as an explicit, bounded expiry.
 - **Corrections.** A "No" to a suggestion is kept as a negative example for that pair: it raises the margin needed
   for that person on that member's recordings. It is never used as a training clip.
 
@@ -828,7 +830,7 @@ omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_con
 | `ZOE_OMI_CANDIDATE_RETENTION_DAYS` | 14 | candidate text retention after close |
 | `ZOE_OMI_LEARN_VOICES` | off | learned voiceprints from member tags + suggestions (§2.6) |
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | 14 | life of an untagged segment embedding |
-| `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` | 30 / 365 | learned-voice expiry (D15) |
+| `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` | 0 / 0 | learned-voice expiry; 0 = kept until forgotten (D15) |
 | `ZOE_OMI_SUGGEST_MIN` / `_MARGIN` | measured in the shadow fortnight | suggestion threshold and runner-up margin |
 | `ZOE_MEMORIES_CURATORS` | off | caregiver curation: the `/api/memories/curation/*` routes and the Family memories page (off = 404) |
 
@@ -943,7 +945,7 @@ CI cells are `ci_safe` and use a deterministic fake embedder and a fake model. L
 | V3 | statically, `voice_session`, `routers/voice_tts` (sync / identify), `speaker_adaptation` and the identity engine never name `learned_voiceprints`; it is absent from `/api/memories/export` and the memory export job | add a reader: red |
 | V4 | "forget Sam" deletes the voiceprint, the tags, the suggestions and the stored embeddings tagged to Sam; a failed step is fail-loud | skip the step: the cascade reports incomplete |
 | V5 | Stop learning freezes it (no adds, no suggestions); Forget this voice deletes it and keeps the person and the tags | |
-| V6 | a provisional voiceprint expires at 30 days; untagged segment embeddings expire at 14 | shift the clock without the purge: red |
+| V6 | a learned voiceprint is kept until forgotten (D15), expiring only when an expiry is configured; untagged segment embeddings expire at 14 days | shift the clock without the purge: red; drop the `voiceprints_expire()` gate: the default-keep test goes red |
 | V7 | no embedding of the wearer's own `you` segments is stored; with `ZOE_OMI_LEARN_VOICES` off no segment embedding is stored at all | store all segments: red |
 | V7b | a wearer segment scored `unsure` near `θ_you`, then tagged as Sam, does not enter Sam's voiceprint | drop the low-margin rule: red |
 | V9 | soft-deleting a person (forget cascade and People panel) purges their voiceprint, contributions and suggestions; deleting a recording removes its contributions and recomputes the mean | rely on the FK cascade: red |
@@ -988,6 +990,23 @@ against `~/.zoe-voice-samples` per AGENTS.md.
 **Decided by the owner (2026-10-14).** Tagging a person teaches Zoe their voice for suggestions. This is not gated
 on that person's spoken consent, and is bounded by the guardrails of §2.6. It differs on purpose from the identity
 design's visitor profile (§5.2), which stays consent-gated because it confers recognition on every panel.
+
+**Decided by the owner (2026-10-18 / 2026-10-19).**
+
+- **D4.** Untagged days are analysed in the reduced form.
+- **D6.** "Forget Sam" does not delete the owner's own calendar and list items that name Sam. It does erase the facts derived
+  about Sam and Sam's voiceprints.
+- **D7 / D9.** Every adult admin curates the children's memories. A child's passing remark never overwrites a curated row.
+- **D10.** Sensitive topics (health, medication, money) may be curated if opted in.
+- **D11.** The owner's own day review never PROPOSES a sensitive class.
+- **D14.** A child may wear a pendant with the owner's approval.
+- **D15.** Learned voices are kept until forgotten.
+- **D16.** Learning a child's voice from tags was not re-decided and stays OFF.
+- **OD4.** Transcripts are kept until deleted: Zoe judges what matters rather than expiring them.
+- **OD5.** Searching what other people said is allowed: words only, shown privately to the wearer.
+
+Built by #2126: D15 (`omi_voices`), OD5 (`GET /api/omi/segments/search`), and D4 / D6 / D11 for facts about tagged people.
+D7 / D9 / D10 (curation) and D14 (a child's pendant) are not built yet.
 
 ## 12. Unverified, and risks
 
