@@ -6,6 +6,13 @@
 
 const WidgetManager = {
     modules: {},
+    // Widget INSTANCES, one per card on the board (Wave 4b, 2026-10-19). `modules`
+    // holds ONE object per type, and the dashboard used to init() that same object
+    // for every card of the type - two weather cards shared one `this.element` and
+    // one update timer, so the second clobbered the first. The dashboard now asks
+    // createInstance() for a fresh object per card and tracks it here by its uid.
+    // Pages that still use `modules` directly (lists) are unchanged.
+    instances: new Map(),
     manifest: null,
     manifestLoaded: false,
     
@@ -35,6 +42,72 @@ const WidgetManager = {
     register(module) {
         this.modules[module.type] = module;
         console.log(`✓ Registered widget: ${module.type}`);
+    },
+
+    /**
+     * A NEW widget object of this type - never the shared `modules[type]`.
+     * Falls back to the registered object only for a module that is not a class
+     * instance (a plain object cannot be constructed again).
+     */
+    createInstance(type) {
+        const proto = this.modules[type];
+        if (!proto) return null;
+        const Ctor = proto.constructor;
+        if (typeof Ctor === 'function' && Ctor !== Object) {
+            try { return new Ctor(); } catch (e) {
+                console.error('Could not create a ' + type + ' widget:', e);
+                return null;
+            }
+        }
+        return proto;
+    },
+
+    trackInstance(uid, instance) {
+        if (uid && instance) this.instances.set(uid, instance);
+    },
+
+    /** Stop a card's timers/listeners and forget it. */
+    releaseInstance(uid) {
+        const inst = this.instances.get(uid);
+        if (!inst) return;
+        this.instances.delete(uid);
+        if (typeof inst.destroy === 'function') {
+            try { inst.destroy(); } catch (e) { console.warn('widget destroy failed:', e); }
+        }
+    },
+
+    releaseAll() {
+        Array.from(this.instances.keys()).forEach(uid => this.releaseInstance(uid));
+    },
+
+    /**
+     * Every live object of this type. On a page that tracks instances (the
+     * dashboard) that is its cards of the type - possibly none; the registered
+     * module there is a never-init()ed template. Elsewhere it is the module.
+     */
+    liveOfType(type) {
+        if (this.instances.size) {
+            const out = [];
+            this.instances.forEach(inst => { if (inst && inst.type === type) out.push(inst); });
+            return out;
+        }
+        return this.modules[type] ? [this.modules[type]] : [];
+    },
+
+    /**
+     * Refresh every live card of a type. Returns true when the refresh is handled
+     * (always, on a page that tracks instances - a type with no card has nothing
+     * to refresh), so a caller never falls back to the template module.
+     */
+    updateType(type) {
+        let handled = this.instances.size > 0;
+        this.liveOfType(type).forEach(inst => {
+            if (inst && typeof inst.update === 'function') {
+                handled = true;
+                try { inst.update(); } catch (e) { console.error('Failed to update ' + type + ':', e); }
+            }
+        });
+        return handled;
     },
     
     /**
@@ -109,9 +182,13 @@ const WidgetManager = {
     },
     
     updateAll() {
-        // Update all registered widget modules that have an update method
+        // Update every live card. With tracked instances (the dashboard) those are
+        // the cards; the registered `modules` are never init()ed there, so updating
+        // them would fetch into a null element. Pages without instances keep the
+        // old behaviour.
         console.log('🔄 Updating all widgets...');
-        Object.values(this.modules).forEach(module => {
+        const live = this.instances.size ? Array.from(this.instances.values()) : Object.values(this.modules);
+        live.forEach(module => {
             if (module && typeof module.update === 'function') {
                 try {
                     module.update();
