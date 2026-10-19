@@ -80,6 +80,10 @@
      server sends only a count). Hidden while the orb is busy/listening; the voice states win. */
   #orb.has::after{content:"";position:absolute;top:1px;right:1px;width:14px;height:14px;border-radius:50%;background:#ffd27a;border:2px solid rgba(10,12,28,.6);box-shadow:0 0 9px rgba(255,210,122,.8);pointer-events:none}
   #orb.busy.has::after,#orb.listening.has::after,#orb.hide.has::after{display:none}
+  /* the pendant day review is waiting (ZOE_DAY_REVIEW_RAISE): a thin, still ring - no count, no words, no sound, no motion.
+     Asking ("what did you find in my day?") or the card is how it clears. Hidden while the orb is busy/listening/hidden. */
+  #orb.review::before{content:"";position:absolute;inset:-7px;border-radius:50%;border:2px solid rgba(150,232,214,.55);pointer-events:none}
+  #orb.busy.review::before,#orb.listening.review::before,#orb.hide.review::before{display:none}
   /* ask-Zoe command bar (orb tap) */
   #cmdbar{position:absolute;left:50%;bottom:126px;transform:translateX(-50%) translateY(12px);width:620px;display:none;z-index:55;opacity:0;transition:.25s}
   #cmdbar.on{display:flex;opacity:1;transform:translateX(-50%)}
@@ -4785,12 +4789,12 @@
   // coarse class - never what is pending - and only for a signed-in member (guest, empty, quiet hours and the
   // flag off all read "no dot"). Asking ("what's up?") is how it clears; nothing here speaks or toasts.
   (function(){
-    function paint(on){orb.classList.toggle('has',!!on);}
+    function paint(on,review){orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
     function poll(){
-      var s=sid();if(!s){paint(false);return;}
+      var s=sid();if(!s){paint(false,false);return;}
       fetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include'})
         .then(function(r){return r.ok?r.json():null;})
-        .then(function(d){paint(!!(d&&d.enabled&&d.count>0&&!d.quiet));})
+        .then(function(d){paint(!!(d&&d.enabled&&d.count>0&&!d.quiet),!!(d&&d.review===true&&!d.quiet));})
         .catch(function(){});
     }
     poll();setInterval(poll,60000);

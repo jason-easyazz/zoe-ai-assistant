@@ -29,18 +29,6 @@ def is_wake_text(text: str | None) -> bool:
     return bool(_WAKE_TEXT_RE.match(str(text or "")))
 
 
-def is_wake_payload(payload: Mapping[str, Any] | None) -> bool:
-    """Return True for explicit wake payloads or text payload wake phrases."""
-    if not isinstance(payload, Mapping):
-        return False
-    payload_type = str(payload.get("type") or "").strip().lower()
-    if payload_type == "wake":
-        return True
-    if payload_type == "text":
-        return is_wake_text(str(payload.get("message") or ""))
-    return False
-
-
 def _split_variants(value: str | None) -> list[str]:
     return [item.strip() for item in str(value or "").split("|") if item.strip()]
 
@@ -265,13 +253,6 @@ def wake_presence_events(*, ack_phrase: str = "", ack_audio: Mapping[str, Any] |
         ]
     )
     return events
-
-
-def wake_ack_events(env: Mapping[str, str] | None = None, *, now: datetime | None = None) -> list[dict[str, Any]]:
-    """Build wake presence events from the selected configured variant."""
-    variant = wake_ack_variant(env, now=now)
-    audio = wake_ack_audio_payload(env, audio_path=variant.get("audio_path"))
-    return wake_presence_events(ack_phrase=str(variant.get("phrase") or ""), ack_audio=audio)
 
 
 def processing_ack_event(env: Mapping[str, str] | None = None, *, index: int | None = None) -> dict[str, Any] | None:

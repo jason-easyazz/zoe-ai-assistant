@@ -592,6 +592,9 @@ def sidecar_recall_fired(user: str, prompt: str, nonce: str, i: int) -> bool | N
 def _gates(args, live: ProbeLive, log) -> str | None:
     if sb.in_nightly_window(dt.datetime.now()):
         return "inside (or within 30 min of) the 01:45-03:15 nightly window"
+    quiet = sb.harness_quiet_refusal()  # P-2: waking hours / panel in use (day-sim, person bench, this A/B)
+    if quiet:
+        return quiet
     busy, detail = sb.deploy_in_progress()
     if busy is None or busy:
         return f"deploy check: {detail}"

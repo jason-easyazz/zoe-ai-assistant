@@ -108,7 +108,7 @@ def _wire(monkeypatch, enc, rows=()):
 
 
 _AUDIO = base64.b64encode(b"RIFF-fake-wav").decode()
-_DEVICE = {"source": "device", "user_id": "voice-daemon"}
+_DEVICE = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi", "via_relay": False, "via_tunnel": False}
 
 
 @pytest.mark.asyncio
@@ -161,3 +161,9 @@ async def test_unavailable_encoder_still_503s(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await voice_tts.voice_identify({"audio_base64": _AUDIO}, caller=_DEVICE)
     assert exc.value.status_code == 503
+
+
+@pytest.fixture(autouse=True)
+def _member_signed_in_at_the_panel(jason_signed_in_at_the_panel):
+    """A device-token enrolment writes ONLY a member the server verified at the panel (biometric_scope, 2026-10-19); these tests
+    are about the payload, so "jason" is PIN-signed-in. The identity rule itself: test_biometric_ownership_scope.py."""

@@ -13,7 +13,8 @@ signed-in member sees only their own row; an admin sees the household, explicitl
 ``POST /result`` changes exactly one thing: a run that ENDED BY THE PERSON SAYING OR TAPPING STOP (``status=cancelled`` AND
 ``reason`` = ``said_stop`` | ``tapped_stop``) starts the same quiet period as a "no", so Zoe does not offer again tomorrow. Every other
 outcome - done / partial / failed / timeout, and a ``cancelled`` run caused by a daemon ``shutdown`` (or an older daemon that sends no
-reason) - is logged and changes nothing.
+reason) - is logged and changes nothing. Every result closes the panel's enrolment grant (``biometric_scope``), and a result for a member
+the server did not grant at that panel records nothing.
 
 ``POST /screen`` is the on-screen half of "Zoe, learn my voice": the person only HEARS each phrase, which is hard to remember, so the
 daemon also has the panel show it (``voice_enroll`` push frame -> ``js/touch-voice-enroll.js``). It is a TRANSIENT push, never queued or
@@ -27,6 +28,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException
 
+import biometric_scope
 import enrollment_state as es
 from biometric_scope import require_person_scope
 from routers.voice_tts import _require_voice_auth
@@ -80,6 +82,8 @@ async def enrollment_household(caller: dict = Depends(_require_voice_auth)):
 async def enrollment_result(payload: dict, caller: dict = Depends(_require_voice_auth)):
     if caller.get("source") != "device":
         raise HTTPException(status_code=403, detail="enrolment results come from the panel daemon (device token)")
+    # Off the LAN a copied token could close the panel's live grant or record a "no" for the granted member (2026-10-19).
+    biometric_scope.require_local_panel(caller, "an enrolment result")
     body = payload or {}
     status = str(body.get("status") or "").strip().lower()
     uid = str(body.get("user_id") or "").strip()
@@ -91,6 +95,12 @@ async def enrollment_result(payload: dict, caller: dict = Depends(_require_voice
         samples = 0
     reason = str(body.get("reason") or "").strip().lower()[:32]
     logger.info("ENROLL_RESULT status=%s reason=%s samples=%d", status, reason or "-", samples)
+    # The run is over: close THIS panel's enrolment grant (the token's own panel, never the body's). Only the member the
+    # server granted can be recorded as having said "no" - a copied panel token cannot put a member into the quiet period.
+    granted = biometric_scope.close_enrolment_grant(str(caller.get("panel_id") or ""), reason=status)
+    if granted != uid:
+        logger.warning("ENROLL_RESULT ignored: no live enrolment grant for that member at this panel")
+        return {"ok": True}
     # ONLY the person stopping it is a "no". A daemon shutdown / restart also ends the run as ``cancelled`` but says ``shutdown``
     # (or says nothing: an older daemon) - that must not start a 60-day quiet period for someone who never declined.
     if status == "cancelled" and reason in _PERSON_STOPPED:
