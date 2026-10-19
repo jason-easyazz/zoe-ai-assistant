@@ -487,7 +487,8 @@ class _SocketGuard:
         self._proved_at = time.monotonic()
         self._proved_epoch = _epoch
         self._dead = asyncio.Event()
-        self._finished = False  # the app (or the peer) already ended the socket: nothing left to close
+        self._finished = False  # the app (or the peer) already ended the socket: nothing left to close. Set only once the close REACHED
+                                # the transport - a close still queued behind a stalled frame leaves the socket open, so the timer lives on
         self._send_lock = asyncio.Lock()
         self._inflight: Optional[asyncio.Future] = None  # the frame currently being written, if any (cancelled on revocation)
         self._prove_lock = asyncio.Lock()
@@ -548,6 +549,8 @@ class _SocketGuard:
 
     async def _send_close(self) -> None:
         async with self._send_lock:
+            if self._finished:  # the application close got through first
+                return
             await self._send({"type": "websocket.close", "code": 1008})
 
     async def _send_frame(self, message: dict) -> None:
@@ -581,9 +584,7 @@ class _SocketGuard:
             if kind == "websocket.send":
                 raise OSError("relayed websocket revoked")
             return
-        if kind == "websocket.close":
-            self._finished = True
-        elif kind == "websocket.send" and self._stale():
+        if kind == "websocket.send" and self._stale():
             if not await self._prove(fresh=False, only_if_stale=True):
                 raise OSError("relayed websocket revoked")
         async with self._send_lock:
@@ -592,6 +593,8 @@ class _SocketGuard:
                     raise OSError("relayed websocket revoked")
                 return
             await self._send_frame(message)
+            if kind == "websocket.close":
+                self._finished = True  # only now: the close has left, so nothing is left for the timer to revoke
 
     async def receive(self) -> dict:
         if self._dead.is_set():
