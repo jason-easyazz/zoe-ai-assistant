@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-752 flags; 702 not documented in `.env.example`.
+753 flags; 703 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -474,6 +474,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PANEL_KIOSK_SECRET` | `-` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
 | `ZOE_PANEL_KIOSK_TICKET_TTL_S` | `60` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
 | `ZOE_PANEL_KV_MISS_TOKENS` | `'500'` | no | NO | `services/zoe-data/zoe_flue_client.py` |
+| `ZOE_PANEL_PUSH_PROOF` | `'enforce'` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_PANEL_REVIEW_CARDS` | `False` | yes | NO | `services/zoe-data/panel_review_cards.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PANEL_TOKEN_VIA_CF` | `'guest'` | no | NO | `services/zoe-data/panel_principal.py` |
