@@ -1670,10 +1670,6 @@
                     <div class="more-item-icon">⚙️</div>
                     <div class="more-item-label">Settings</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('developer/index.html')">
-                    <div class="more-item-icon">👨‍💻</div>
-                    <div class="more-item-label">Developer</div>
-                </div>
             </div>
         </div>
     </div>
@@ -1740,80 +1736,8 @@
         <!-- Timeline View -->
         <div class="timeline-view active" id="timelineView">
             <div class="timeline-line"></div>
-            
-            <div class="timeline-month-separator">
-                <div class="month-label">October 2025</div>
-                </div>
-            
-            <div class="timeline-entry">
-                <div class="entry-spacer"></div>
-                <div class="timeline-dot-container">
-                    <div class="timeline-dot"></div>
-                    <div class="timeline-date">Oct 9<br>Today</div>
-            </div>
-                <div class="entry-card" onclick="openReadEntry()">
-                    <img src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=400&fit=crop" alt="Mountain" class="entry-image">
-                    <div class="entry-content">
-                        <div class="entry-header">
-                            <div>
-                                <div class="entry-title">Summit Views</div>
-                                <div class="entry-time">7:30 AM · 8 min read</div>
-        </div>
-                </div>
-                        <div class="entry-text">
-                            Reached the peak at sunrise this morning. The climb was challenging, but standing above the clouds watching the world wake up made every step worth it.
-            </div>
-                        <div class="entry-footer">
-                            <div class="entry-tags">
-                                <span class="tag">Adventure</span>
-                                <span class="tag person-tag">👤 Alex</span>
-                                <span class="tag place-tag">📍 Eagle Peak</span>
-                    </div>
-                            <div class="privacy-badge">
-                                <div class="privacy-icon">
-                                    <div class="privacy-inner-circle"></div>
-                </div>
-                                <span>Inner Circle</span>
-            </div>
-        </div>
-                    </div>
-                    </div>
-                </div>
-                
-            <div class="timeline-entry">
-                <div class="entry-card">
-                    <img src="https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=800&h=400&fit=crop" alt="Books" class="entry-image">
-                    <div class="entry-content">
-                        <div class="entry-header">
-                            <div>
-                                <div class="entry-title">Sunday Reading</div>
-                                <div class="entry-time">Oct 6 · 5 min read</div>
-                        </div>
-                    </div>
-                        <div class="entry-text">
-                            Rainy Sunday = perfect reading weather. Finished "Atomic Habits" today. The 1% improvement philosophy really resonates.
-                </div>
-                        <div class="entry-footer">
-                            <div class="entry-tags">
-                                <span class="tag">Books</span>
-                                <span class="tag">Self-Improvement</span>
-                                <span class="tag place-tag">📍 Home</span>
-            </div>
-                            <div class="privacy-badge">
-                                <div class="privacy-icon">
-                                    <div class="privacy-private"></div>
-        </div>
-                                <span>Private</span>
-    </div>
-            </div>
-                </div>
-                </div>
-                <div class="timeline-dot-container">
-                    <div class="timeline-dot"></div>
-                    <div class="timeline-date">Oct 6</div>
-                </div>
-                <div class="entry-spacer"></div>
-                </div>
+            <!-- Entries render here from GET /api/journal/entries. No placeholder entries: two fake
+                 cards with hotlinked third-party photos used to flash on every load. -->
             </div>
 
         <!-- Journeys View -->
@@ -1826,24 +1750,13 @@
     <div class="entry-modal" id="readEntryModal">
         <div class="entry-modal-content">
             <div class="read-modal-header">
-                <img src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1200&h=600&fit=crop" alt="Mountain" class="read-modal-image">
+                <img alt="" class="read-modal-image" style="display:none">
                 <button class="entry-modal-close" onclick="closeReadEntry()">×</button>
                         </div>
             <div class="read-modal-body">
-                <div class="read-modal-title">Summit Views</div>
-                <div class="read-modal-meta">
-                    <span>📅 October 9, 2025</span>
-                    <span>🕐 7:30 AM</span>
-                    <span>📍 Eagle Peak</span>
-                    <span>📖 8 min read</span>
-                    </div>
-                <div class="read-modal-text">
-                    <p>Reached the peak at sunrise this morning. The climb was challenging, but standing above the clouds watching the world wake up made every step worth it. There's something profound about being this high up—it puts everything into perspective.</p>
-                    
-                    <p>Started the climb at 4:30 AM with headlamps cutting through the darkness. The trail was steep, and my legs were burning by mile two. But then, slowly, the sky started to lightening. First just a hint of blue, then streaks of orange and pink painting the horizon.</p>
-                    
-                    <p>When we finally broke through the tree line and saw the summit, that's when it hit me—all the training, the early mornings, the sore muscles—it was all for this moment.</p>
-                    </div>
+                <div class="read-modal-title"></div>
+                <div class="read-modal-meta"></div>
+                <div class="read-modal-text"></div>
                 <div class="read-modal-tags"></div>
                 
                 <div class="read-modal-actions">

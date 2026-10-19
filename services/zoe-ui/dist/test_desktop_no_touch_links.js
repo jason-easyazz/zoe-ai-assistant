@@ -13,9 +13,10 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
 for (const page of desktopPages) {
   const src = fs.readFileSync(path.join(root, page), 'utf8');
   // hrefs / redirects / assignments into /touch/ — attribute values and JS string literals
-  // navigation only: anchors, meta refresh, location writes. A <link>/<script> to a shared
+  // navigation only: anchors, meta refresh, location writes, window.open (settings.html opened
+  // /touch/pair.html to pair a panel until 2026-10-19). A <link>/<script> to a shared
   // asset under /touch/css or /touch/js is a dependency, not a route (chat.html's compose.css).
-  const hits = [...src.matchAll(/(?:<a\b[^>]*\bhref=|location(?:\.href)?\s*=|location\.(?:assign|replace)\(|content="0; url=)\s*['"]?\/?touch\//g)];
+  const hits = [...src.matchAll(/(?:<a\b[^>]*\bhref=|location(?:\.href)?\s*=|location\.(?:assign|replace)\(|window\.open\(|content="0; url=)\s*['"`]?\/?touch\//g)];
   assert.strictEqual(hits.length, 0, page + ' still routes into /touch/: ' + hits.length + ' site(s)');
   for (const dead of ['cooking.html', 'smart-home.html', 'games.html', 'week_planner_widget.html', 'js/navigation.js', 'widget-registry.js', 'module-widget-loader.js', 'widgets-enhanced.css', 'memories-enhanced.css']) {
     assert(!src.includes(dead), page + ' references the removed ' + dead);
