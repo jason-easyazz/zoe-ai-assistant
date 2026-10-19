@@ -508,8 +508,13 @@ class ScratchStack:
         return self
 
     def __exit__(self, *exc) -> None:
-        self.state["ram_at_end"] = measure(self.state) if self.state else None
-        down(self.tag, log=self.log)
+        try:
+            self.state["ram_at_end"] = measure(self.state) if self.state else None
+        except Exception as e:  # measurement is evidence, never a reason to leak the stack
+            self.state["ram_at_end"] = {"error": f"{type(e).__name__}: {e}"}
+            self.log(f"end-of-run measure failed (teardown continues): {type(e).__name__}: {e}")
+        finally:
+            down(self.tag, log=self.log)
 
     @property
     def dsn(self) -> str:

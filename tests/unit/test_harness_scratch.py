@@ -188,6 +188,22 @@ def test_public_carries_no_dsn_and_no_token():
     assert st.public()["ram"] == {"total_mb": 1.0}
 
 
+def test_a_failing_end_of_run_measure_still_tears_the_stack_down(monkeypatch):
+    """The end-of-run ``docker stats`` can raise; the scratch postgres/network/zoe-data/Flue must still be removed."""
+    downed = []
+
+    def boom(state):
+        raise RuntimeError("docker stats unavailable")
+
+    monkeypatch.setattr(hs, "measure", boom)
+    monkeypatch.setattr(hs, "down", lambda tag, log=print, **kw: downed.append(tag) or True)
+    st = hs.ScratchStack(Path("/x"), tag="t2", log=lambda *a, **k: None)
+    st.state = {"tag": "t2", "dsn": LIVE}
+    st.__exit__(None, None, None)                      # must not raise
+    assert downed == ["t2"]
+    assert "docker stats unavailable" in st.state["ram_at_end"]["error"]
+
+
 # -- the wiring of the three harness mains ------------------------------------------
 
 HARNESSES = {"samantha_bar.py": "Live(", "samantha_day_sim.py": "DayLive(", "samantha_person.py": "PersonLive("}
