@@ -815,3 +815,59 @@ def test_control_without_the_owner_filter_another_members_row_would_be_forgotten
     assert reply != mv.NOT_FOUND_REPLY, "own-rows-only reading is what kept another member's row out of reach"
     # the store's own owner check is a second wall: the reject is refused, so the row survives even then
     assert any("Biscuit" in t for t in approved(seeded, OTHER))
+
+
+# ── Codex round 3 on #2144 ──────────────────────────────────────────────────────────────────────
+
+def test_covers_matches_true_inflections_only_never_a_prefix():
+    tok = mv._tokens
+    assert mv._covers(tok("I like plans"), tok("I like planned trips and plans"))
+    assert not mv._covers(tok("I like plans"), tok("I like planets")), "plan is a prefix of planet, not a variant of it"
+    assert not mv._covers(tok("I like plant"), tok("I like plans")) and not mv._covers(tok("I like plan"), tok("I like plant"))
+    for a, b in (("plan", "plans"), ("love", "loves"), ("love", "loved"), ("love", "loving"), ("plan", "planned"), ("walk", "walking")):
+        assert mv._covers(tok(a), tok(b)) and mv._covers(tok(b), tok(a)), (a, b)
+    for a, b in (("plan", "planet"), ("mat", "matter"), ("walk", "walnut"), ("cart", "carton")):
+        assert not mv._covers(tok(a), tok(b)), (a, b)
+
+
+def test_forget_that_i_like_plans_does_not_erase_planets(env):
+    put(env, "I like planets and telescopes")
+    assert say("forget that I like plans", ME) == mv.NOT_FOUND_REPLY
+    assert any("planets" in t for t in approved(env)), "forgetting is permanent: a near-miss word must not take the row"
+    put(env, "I like plans on Sundays")
+    assert say("forget that I like plans", ME).startswith("Done")
+    assert any("planets" in t for t in approved(env)) and not any("plans on Sundays" in t for t in approved(env))
+
+
+def test_a_tapped_correction_whose_preflight_read_fails_keeps_the_tap_armed(env, monkeypatch):
+    put(env, "Swimming is on Friday at 9")
+    rid = row_id(env, "Swimming")
+    real, down = env.svc.get, {"on": True}
+
+    async def flaky(row):
+        if down["on"]:
+            raise RuntimeError("store hiccup")
+        return await real(row)
+
+    monkeypatch.setattr(env.svc, "get", flaky)
+    mv.tap(PANEL, ME, rid, "Swimming is on Friday at 9")
+    assert say("it's on Saturday", ME) == pa.STORE_DOWN_REPLY, "said, not silently dropped to another tier"
+    assert "Swimming is on Friday at 9" in approved(env)
+    down["on"] = False
+    assert say("it's on Saturday", ME).startswith("Fixed"), "the tap stayed armed: the retry finishes the same row"
+
+
+@pytest.mark.parametrize("question", ["what do you know about me?", "what did you learn about me this week", "what do you remember about Marisol"])
+def test_the_reply_only_says_it_is_on_the_screen_if_a_card_was_delivered(seeded, monkeypatch, question):
+    put(seeded, "I like quiet mornings", when=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))   # inside "this week", whenever this runs
+    assert "on the screen" in say(question, ME)                       # delivered (the fixture's push returns 1)
+    sent: list = []
+
+    async def nowhere(frame):
+        sent.append(frame)
+        return 0                                                      # no live socket on that panel
+
+    monkeypatch.setattr(voice_cards, "push", nowhere)
+    reply = say(question, ME)
+    assert sent and reply, "a card was attempted"
+    assert "screen" not in reply.lower() and "tap one" not in reply.lower(), reply

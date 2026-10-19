@@ -60,6 +60,7 @@ def test_about_me_harness_passes():
     ("        if (!state.section) return false;\n        try {",
      "        if (!state.section) return false;\n        { const n0 = state.doc.getElementById('aboutMeNav'); if (n0) n0.hidden = false; }\n        try {"),
                                                                                                   # menu link shown while the flag is off
+    ("        state.section.hidden = true;\n        clearHash();\n", "        state.section.hidden = true;\n"),         # close leaves #about-me: the menu link can't reopen
 ])
 def test_about_me_negative_controls(tmp_path, old, new):
     src = ABOUT.read_text(encoding="utf-8")

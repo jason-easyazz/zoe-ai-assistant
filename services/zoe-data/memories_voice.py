@@ -163,9 +163,27 @@ def _norm(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9']+", str(text or "").lower().replace("\u2019", "'")))
 
 
+_SUFFIXES = (("ing", 3), ("ed", 3), ("es", 3), ("er", 4), ("ly", 4), ("s", 3))   # (suffix, shortest stem left after stripping it)
+
+
+def _stem(w: str) -> str:
+    """A word reduced to its inflectional stem so only TRUE variants compare equal (plan/plans/planned, love/loves/loved/loving) -
+    never a bare prefix: "plan" is not "planet", and forgetting is permanent. Pure."""
+    cut = ""
+    for suf, keep in _SUFFIXES:
+        if w.endswith(suf) and not (suf == "s" and w.endswith("ss")) and len(w) - len(suf) >= keep:
+            w, cut = w[: -len(suf)], suf
+            break
+    if len(w) > 3 and w.endswith("e"):
+        w = w[:-1]
+    if cut in ("ing", "ed") and len(w) > 3 and w[-1] == w[-2] and w[-1] not in "aeiou":
+        w = w[:-1]                                        # planned -> plann -> plan (but matter is not mat)
+    return w
+
+
 def _covers(want: set, have: set) -> bool:
-    return bool(want) and all(any(t == u or (min(len(t), len(u)) >= 4 and (t.startswith(u) or u.startswith(t))) for u in have)
-                              for t in want)
+    stems = {_stem(u) for u in have}
+    return bool(want) and all(t in have or _stem(t) in stems for t in want)
 
 
 _FIRST_PERSON = ((re.compile(r"^i['’]m\b", re.I), "you're"), (re.compile(r"^i\s+am\b", re.I), "you are"),
@@ -426,7 +444,12 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
     m = _ON_WHEN_RE.match(value)
     if m:
         value = m.group("v")                              # "on Saturday" / "at 10am": the value, not the preposition
-    ref = await asyncio.wait_for((svc or pa._svc_default()).get(tp.row_id), pa.READ_BUDGET_S)
+    try:
+        ref = await asyncio.wait_for((svc or pa._svc_default()).get(tp.row_id), pa.READ_BUDGET_S)
+    except Exception as exc:  # noqa: BLE001 - the tap was spent before this read: keep it armed, the retry finishes the fix
+        logger.warning("memories_voice: preflight read failed (%s)", type(exc).__name__)
+        tap(panel_id, member, tp.row_id, tp.text)
+        return pa.STORE_DOWN_REPLY
     if ref is not None and await memory_space.curated_locked(member, ref.metadata):
         return CURATED_REPLY
     exp = mp.Explained(seq=0, row_id=tp.row_id, ts=time.time(), text=tp.text)
@@ -499,13 +522,14 @@ async def forget_person(member: str, name: str) -> str:
 
 
 # -- the turn ------------------------------------------------------------------------------------------------------------------------
-async def _push(frame: Optional[dict]) -> None:
+async def _push(frame: Optional[dict]) -> int:
+    """Send the card; how many screens got it (0 = none, so the reply must not say "it's on the screen")."""
     try:
         import voice_cards
 
-        await voice_cards.push(frame)
+        return int(await voice_cards.push(frame) or 0)
     except Exception:  # noqa: BLE001 - the card is an addition to the spoken answer
-        pass
+        return 0
 
 
 async def answer(text: str, user_id: str, session_id: str = "", *, channel: str, extra_ctx: Optional[dict],
@@ -561,21 +585,24 @@ async def answer(text: str, user_id: str, session_id: str = "", *, channel: str,
         e = await _find_person(member, wall, ask.value)
         if e is None or not e.facts:
             return None                                   # not one of MY people (or nothing to say): the recall path answers
+        shown = True                                      # a dry turn pushes nothing and claims nothing it cannot check
         if allow_writes:
-            await _push(build_card(panel_id, member, wall, title=TITLES["person"].format(name=e.label()), people=[e], items=[]))
+            shown = await _push(build_card(panel_id, member, wall, title=TITLES["person"].format(name=e.label()), people=[e], items=[])) > 0
         logger.info("MEMORIES_VOICE read=person user=%s", member)
-        return spoken_person(e)
+        return spoken_person(e, on_screen=shown)
     if ask.kind == "recent":
         people, items = recent_rows(wall, ask.value)
+        shown = True
         if allow_writes:
             when = "today" if ask.value == "today" else "this month" if ask.value == "this month" else "this week"
-            await _push(build_card(panel_id, member, wall, title=TITLES["recent"].format(when=when), people=people, items=items))
+            shown = await _push(build_card(panel_id, member, wall, title=TITLES["recent"].format(when=when), people=people, items=items)) > 0
         logger.info("MEMORIES_VOICE read=recent user=%s", member)
-        return spoken_recent(people, items, ask.value)
+        return spoken_recent(people, items, ask.value, on_screen=shown)
+    shown = True
     if allow_writes:
-        await _push(build_card(panel_id, member, wall, title=TITLES["me"]))
+        shown = await _push(build_card(panel_id, member, wall, title=TITLES["me"])) > 0
     logger.info("MEMORIES_VOICE read=me user=%s", member)
-    return spoken_me(wall)
+    return spoken_me(wall, on_screen=shown)
 
 
 async def tier(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None,

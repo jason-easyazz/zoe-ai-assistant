@@ -86,10 +86,23 @@ function makeEnv(opts = {}) {
         if (/\/forget$/.test(url)) return reply(200, { forgotten: true });
         return reply(404, { detail: 'not found' });
     };
-    const win = { fetch, location: { hash: opts.hash || '' }, encodeURIComponent, JSON, Promise, String, Number, Object, Array };
+    const listeners = [];
+    const location = { hash: opts.hash || '', pathname: '/memories.html', search: '' };
+    const replaced = [];
+    const history = { replaceState: (_s, _t, url) => { replaced.push(url); location.hash = ''; } };   // a real replaceState drops the fragment
+    const addEventListener = (type, fn) => listeners.push({ type, fn });
+    const win = { fetch, location, history, addEventListener, encodeURIComponent, JSON, Promise, String, Number, Object, Array };
     win.window = win;
     vm.runInContext(fs.readFileSync(SRC, 'utf8'), vm.createContext(win), { filename: 'memories-about-me.js' });
-    return { ids, doc, calls, Z: win.ZoeAboutMe };
+    // the phone menu's link: sets the fragment, and the browser fires hashchange only if the fragment actually changed
+    const tapNav = async (hash) => {
+        if (location.hash === hash) return false;
+        location.hash = hash;
+        listeners.filter(l => l.type === 'hashchange').forEach(l => l.fn());
+        await new Promise(r => setTimeout(r, 0));
+        return true;
+    };
+    return { ids, doc, calls, replaced, location, tapNav, Z: win.ZoeAboutMe };
 }
 
 const byText = (root, text) => root.all(n => n.tagName === 'BUTTON' && n._text === text);
@@ -193,6 +206,17 @@ async function check(label, fn) {
         await byText(e.ids.aboutMe, 'Close')[0].click();
         assert.strictEqual(e.ids.aboutMe.hidden, true);
         assert.strictEqual(e.ids.aboutMe.textContent, '');
+    });
+
+    await check('close drops the #about-me fragment so the menu link can reopen the section', async () => {
+        const e = makeEnv({ hash: '#about-me' });
+        await e.Z.init(e.doc);
+        assert.strictEqual(e.ids.aboutMe.hidden, false);
+        await byText(e.ids.aboutMe, 'Close')[0].click();
+        assert.strictEqual(e.location.hash, '', 'the fragment must be gone after close');
+        assert.deepStrictEqual(e.replaced, ['/memories.html'], 'replaceState keeps the path, drops the fragment');
+        assert.strictEqual(await e.tapNav('#about-me'), true, 'the second tap now changes the hash');
+        assert.strictEqual(e.ids.aboutMe.hidden, false, 'and reopens the section');
     });
 
     await check('the page loads the module after auth.js and is gated', async () => {
