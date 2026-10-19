@@ -302,10 +302,21 @@ def queuegate_nostale() -> None:
     core.Core._stale = lambda self, epoch: False
 
 
+def allowpopups() -> None:
+    """V2 NC: fill in popups too."""
+    fill.LoginRun.in_popup = lambda self, sid: False
+
+
+def rawcategory() -> None:
+    """V3 NC: echo zoe:category as the member typed it."""
+    core.safe_category = lambda fields: fields.get("zoe:category")
+
+
 PATCHES = {f.__name__: f for f in (substring, nopsl, inherit, logsecret, otp_via_client, nosync, timeout_allow,
                                    trust_approval_id, debug_get, nopeer, norecheck, unlock_for_client,
                                    shared_devtools, group_widened, nodevice, nohops, oldlock, nopolicypin,
-                                   psl_hops, queuegate, queuegate_nostale)}
+                                   psl_hops, queuegate, queuegate_nostale, allowpopups,
+                                   rawcategory)}
 
 if __name__ == "__main__":
     args = sys.argv[1:]

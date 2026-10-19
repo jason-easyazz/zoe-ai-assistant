@@ -215,6 +215,7 @@ class LoginRun:
         self.context_id: str | None = None
         self.sessions: dict[str, dict] = {}     # sessionId -> {target_id, type, parent_frame_id, url}
         self._new_sessions: list[str] = []
+        self._new_popups: list[str] = []
         # every URL the TOP frame's document went through (each redirect hop and each committed navigation)
         self.hops: list[str] = []
         self._submit_hop_index = 0
@@ -232,6 +233,12 @@ class LoginRun:
                 self._new_sessions.append(child)
         elif method == "Target.detachedFromTarget":
             self.sessions.pop(params.get("sessionId"), None)
+        elif method == "Target.targetCreated":
+            # A window the page opened (a popup) is attached so the broker SEES it, and is then never filled.
+            info = params.get("targetInfo") or {}
+            if info.get("type") == "page" and (info.get("openerId") or info.get("openerFrameId")) \
+                    and info.get("browserContextId") == self.context_id:
+                self._new_popups.append(info.get("targetId"))
         elif sid is not None and sid == self.top_session:
             if method == "Network.requestWillBeSent" and params.get("type") == "Document" \
                     and params.get("frameId") == self.top_target:
@@ -239,7 +246,33 @@ class LoginRun:
             elif method == "Page.frameNavigated" and not (params.get("frame") or {}).get("parentId"):
                 self.hops.append((params.get("frame") or {}).get("url") or "")
 
+    def in_popup(self, sid: str) -> bool:
+        """True when the session belongs to any page target other than the one the broker opened."""
+        seen = 0
+        while sid and seen < 16:
+            seen += 1
+            if sid == self.top_session:
+                return False
+            info = self.sessions.get(sid) or {}
+            if info.get("popup") or (info.get("type") == "page" and sid != self.top_session):
+                return True
+            sid = info.get("parent_session")
+        return True
+
     def _service_sessions(self) -> None:
+        while self._new_popups:
+            tid = self._new_popups.pop(0)
+            if tid == self.top_target:          # the page the broker created is never its own popup
+                continue
+            try:
+                sid = self.cdp.send("Target.attachToTarget", {"targetId": tid, "flatten": True})["sessionId"]
+            except CDPError:
+                continue
+            self.sessions.setdefault(sid, {"target_id": tid, "type": "page", "parent_frame_id": None, "url": "",
+                                           "parent_session": None})
+            self.sessions[sid]["popup"] = True
+            if sid not in self._new_sessions:
+                self._new_sessions.append(sid)
         while self._new_sessions:
             sid = self._new_sessions.pop(0)
             try:
@@ -373,6 +406,10 @@ class LoginRun:
             count = facts.get("otp" if mode == "otp" else "pw", 0)
             if count:
                 hits.append((f, ctx, facts))
+        if any(self.in_popup(f.session) for f, _, _ in hits):
+            # Only the page the broker opened is ever filled (round-3 review): a popup has its own history of hops
+            # and its own top document, and the simplest rule that cannot be bypassed is to never fill one.
+            raise Refusal("popup_refused")
         if not hits:
             raise Refusal("no_login_form")
         if len(hits) > 1:

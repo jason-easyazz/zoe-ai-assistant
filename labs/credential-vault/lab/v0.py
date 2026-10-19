@@ -104,6 +104,8 @@ def seed() -> None:
         org_id, okey, coll, owner = orgs[org]
         username = f"u-{key}-{marker}-U"
         password = f"{marker}-P-{key}-{secrets.token_urlsafe(9)}"
+        if category == "CANARY":
+            category = f"{marker}-C-{key}"
         fields = [("zoe:category", category, 0), ("zoe:login_url", login_url, 0), ("pin", f"{marker}-F-{key}", 1)]
         item_id = owner.create_login(name=f"lab {key}", username=username, password=password, uris=uris,
                                      fields=fields, notes=f"{marker}-N-{key}", org=(org_id, okey), collections=[coll])

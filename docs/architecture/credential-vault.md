@@ -177,7 +177,8 @@ Out of scope, and why:
     *base domain* only when the member chose it. It treats *starts with* as *exact* and refuses *regular
     expression* (a regex on a security boundary is a foot-gun). See section 6.3.
   - A custom field **`zoe:category`** holds one of `money`, `government`, `health`, `email`, `shopping`, `utility`,
-    `school` or `other`. If it is missing, the broker treats the item as **sensitive** (fail closed).
+    `school` or `other`. If it is missing or anything else, the broker treats the item as **sensitive** (fail closed)
+    and never repeats the typed value anywhere.
   - An optional **`zoe:login_url`** holds the page where sign-in starts. Login mode navigates there. It must match
     the item's URIs.
   - Do **not** put a TOTP seed on an item shared with Zoe unless the member wants autonomous codes (section 9).
@@ -377,7 +378,7 @@ The browser's committed origin is `scheme://host:port`. The broker compares it w
 | Opaque and special origins | refused: `about:blank` and `srcdoc` frames (even when they inherit an origin), `data:`, `blob:`, `file:`, sandboxed frames with an opaque (`null`) origin, a frame still loading (no committed document), and anything that does not parse as `https://host[:port]` |
 | Redirects | every hop counts: the broker records each document request and navigation of the top frame (CDP `Network.requestWillBeSent` incl. redirects, `Page.frameNavigated`) during the login navigation and after the submit, and refuses (`redirect_hop`) unless EVERY hop is the approved origin or an origin an item URI names exactly, even a hop that bounces back to the right site (lab review 2026-10-19, cell V2 `lk_bounce`). A base-domain rule is never honoured for a hop: a redirect has no committed document, so the browser cannot cross-check it (V2 `lk_basehop`). The fill check itself still runs on the committed origin at fill time |
 | Service workers | they can answer a request but cannot change a document's committed origin, so the rule is unaffected; the origin and the form action are still re-read immediately before every insert (6.2, step 5) |
-| Popups | a sign-in in a new window is a new target; the check runs on it like any other |
+| Popups | never filled: only the page the broker opened is (`popup_refused`, lab V2 `pop`). A site that signs in only in a popup goes to the phone takeover |
 
 **On a mismatch** the broker refuses, writes an audit line with both origins, and returns `origin_mismatch`. The
 errand goes to `needs_owner` with the reason "the page asking for your library login is not the library's site".

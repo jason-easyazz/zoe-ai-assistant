@@ -46,6 +46,8 @@ ZOE_ITEMS = {
     "lk_basehop": ("A", [(f"https://{BASE_WWW}", BASE)],
                    f"https://{BASE_LOGIN}/go?to=https://{BASE_WWW}/go?to=https://{BASE_LOGIN}/login", "other",
                    BASE_LOGIN, False),
+    # post-cap: the password form only in a POPUP the login page opens (never filled: popup_refused)
+    "pop": ("A", [(R, None)], f"{R}/popup-login", "other", RIGHT, False),
     "lk_redirect": ("A", [(R, None)], go(f"https://{EVIL}/login"), "other", EVIL, False),
     # 6.4 form checks
     "fa_action": ("A", [(R, None)], f"{R}/login-formaction", "other", RIGHT, False),
@@ -64,6 +66,8 @@ ZOE_ITEMS = {
     "rev_e": ("A", [(R, None)], f"{R}/login", "other", RIGHT, False),
     "rev_f": ("A", [(R, None)], f"{R}/login", "other", RIGHT, False),
     # round 3: approved with one URI, then the owner adds evil.test; its login page bounces through evil.test
+    # post-cap: a canary typed into the visible zoe:category field ("CANARY" = the seeder writes the run marker)
+    "catleak": ("A", [(R, None)], f"{R}/login", "CANARY", RIGHT, False),
     "cap_d": ("A", [(R, None)], go(f"https://{EVIL}/go?to={R}/login"), "other", RIGHT, False),
     "cap_a": ("A", [(R, None)], f"{R}/login", "other", RIGHT, False),
     "cap_b": ("A", [(R, None)], f"{R}/login", "other", RIGHT, False),

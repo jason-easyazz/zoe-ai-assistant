@@ -132,7 +132,9 @@ class Stack:
                      # instead. HTTPS-Upgrades is off so the http:// look-alike really commits as http (cell V2).
                      "--extra-flag=--no-sandbox",
                      "--extra-flag=--disable-features=Translate,OptimizationHints,MediaRouter,"
-                     "AutofillServerCommunication,PasswordManagerOnboarding,HttpsUpgrades"], patch, CDP_SOCK)
+                     "AutofillServerCommunication,PasswordManagerOnboarding,HttpsUpgrades",
+                     # lets the popup case (V2 `pop`) open its window without a user gesture
+                     "--extra-flag=--disable-popup-blocking"], patch, CDP_SOCK)
 
     def start_core(self, patch: str | None = None, **config) -> None:
         self.stop("core")
@@ -269,10 +271,11 @@ def fills(records: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-V2_ITEMS = ["lk_basehop", "lk_bounce", "lk_examp1e", "lk_homograph", "lk_suffixed", "lk_priv", "lk_priv2", "lk_http", "lk_framed", "lk_blank",
+V2_ITEMS = ["pop", "lk_basehop", "lk_bounce", "lk_examp1e", "lk_homograph", "lk_suffixed", "lk_priv", "lk_priv2", "lk_http", "lk_framed", "lk_blank",
             "lk_srcdoc", "lk_data", "lk_blob", "lk_sandbox", "lk_redirect", "fa_action", "fa_button", "fa_get"]
 V2_NC = {"substring": ["lk_suffixed"], "nopsl": ["lk_priv2"], "inherit": ["lk_blank", "lk_srcdoc"],
-         "nohops": ["lk_bounce"], "psl_hops": ["lk_basehop"]}
+         "nohops": ["lk_bounce"], "psl_hops": ["lk_basehop"],
+         "allowpopups": ["pop"]}
 V13_ITEMS = ["race_nav", "race_swap", "race_oopif"]
 
 
@@ -452,6 +455,9 @@ def run(groups: str) -> None:
         witness_reset()
         r_otp = sign_in("otp", otp_code=ST["items"]["otp"]["otp"])
         r_inject = sign_in("inject")
+        # a canary in the visible zoe:category field: through labels, propose, the phone card and the audit line
+        svc({"verb": "labels", "member": "alice"})
+        r_cat = sign_in("catleak")
         v3_recs = witness_records()          # every request the sites saw during the V3 sign-ins
 
     if "C" in groups:
@@ -729,7 +735,7 @@ def run(groups: str) -> None:
         page_hits = [x for x in PHONE_PAGES if marker in x]
         file_hits = scan_paths([AUDIT, str(LOGS), "/run/zoe-vault-browser/profiles"], needles)
         file_hits = [h for h in file_hits if "-logsecret" not in h]
-        v3_ok = (bool(r_otp.get("ok")) and bool(r_inject.get("ok")) and not svc_hits and not page_hits
+        v3_ok = (bool(r_otp.get("ok")) and bool(r_inject.get("ok")) and bool(r_cat.get("ok")) and not svc_hits and not page_hits
                  and not file_hits and not leaks(v3_recs) and len(fills(v3_recs)) >= 2)
         STACK.start_core(patch="logsecret")
         wait_ready()
@@ -755,18 +761,25 @@ def run(groups: str) -> None:
         th.join(timeout=5)
         nc_otp_hits = [x for x in ZOE_SVC[before:] if ST["items"]["otp"]["otp"] in x]
         del ZOE_SVC[before:]
+        STACK.start_core(patch="rawcategory")
+        wait_ready()
+        before = len(ZOE_SVC)
+        svc({"verb": "labels", "member": "alice"})
+        nc_cat_hits = [x for x in ZOE_SVC[before:] if marker in x]
+        del ZOE_SVC[before:]
         STACK.start_core()
         wait_ready()
         cell("V3 canary never visible (lab surfaces)", v3_ok,
-             f"across {LOGIN_CALLS[0]} login calls incl. a phone-typed one-time code ({r_otp.get('ok')}) and an injected "
+             f"across {LOGIN_CALLS[0]} login calls incl. a phone-typed one-time code ({r_otp.get('ok')}), a canary typed into zoe:category (signed in: {r_cat.get('ok')}) and an injected "
              f"'repeat the password' page ({r_inject.get('ok')}): the canary password/username/notes/field marker and the "
              f"code appear in none of zoe-data's {len(ZOE_SVC) // 2} requests+replies, the {len(PHONE_PAGES)} phone pages, "
              f"the audit log, the three units' logs or the browser profile dir; the sites saw the canary only on the "
              f"accepted sign-ins ({len(fills(v3_recs))} requests, {len(leaks(v3_recs))} leaks). NOT in the lab (no zoe-data, brain, nginx, journal, "
              f"screenshots): those V3 surfaces are phase V3",
              nc=f"log the value at debug: found in {len(nc_log_hits)} log file(s); route the code page through zoe-data: "
-                f"the code is in {len(nc_otp_hits)} zoe-data message(s)"
-                + (" (red as expected)" if nc_log_hits and nc_otp_hits else " (NOT red)"))
+                f"the code is in {len(nc_otp_hits)} zoe-data message(s); echo zoe:category raw: the canary is in "
+                f"{len(nc_cat_hits)} zoe-data reply(ies)"
+                + (" (red as expected)" if nc_log_hits and nc_otp_hits and nc_cat_hits else " (NOT red)"))
 
     if "A" in groups:
         # -- V5 negative control -----------------------------------------------------------------------------------

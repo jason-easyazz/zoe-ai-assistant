@@ -30,7 +30,7 @@ from .audit import AuditLog
 from .cdp import CDP, CDPError
 from .fill import Refusal, run_login
 from .peer import peer_uid
-from .policy import (OTP_TIMEOUT_S, DeviceRegistry, Policy, PolicyRefusal, Step, UnlockGate, _key, is_sensitive)
+from .policy import (CATEGORIES, OTP_TIMEOUT_S, DeviceRegistry, Policy, PolicyRefusal, Step, UnlockGate, _key, is_sensitive)
 from .psl import PublicSuffixList
 from .vault import BwClient, VaultError, item_meta
 
@@ -116,6 +116,14 @@ class _OtpWait:
     token: str
     event: threading.Event = field(default_factory=threading.Event)
     code: str | None = None
+
+
+def safe_category(fields: dict) -> str | None:
+    """The item category, ONLY as one of the fixed constants (credential-vault.md section 4). `zoe:category` is text the
+    member typed; anything that is not exactly a known category becomes None, which every rule treats as sensitive,
+    and the raw value is never echoed to zoe-data, a phone card or the audit log (round-3 review)."""
+    value = fields.get("zoe:category")
+    return value if isinstance(value, str) and value in CATEGORIES else None
 
 
 def policy_digest(meta) -> str:
@@ -291,7 +299,7 @@ class Core:
                     continue
                 rules, _ = originmod.item_rules(meta.uris, lab_profile=self.cfg.lab_profile)
                 out.append({"item": meta.item_id, "label": meta.name[:80],
-                            "category": meta.fields.get("zoe:category") or None, "domain": self._domain(rules)})
+                            "category": safe_category(meta.fields), "domain": self._domain(rules)})
         self.audit.write("labels", member=member, count=len(out), peer_uid=uid)
         return {"ok": True, "items": out}
 
@@ -311,7 +319,7 @@ class Core:
         o = originmod.origin_of_url(login_url)
         org = next(x for x in orgs if x["id"] == meta.org_id)
         approver = org.get("owner") if org.get("kind") == "member" else member
-        category = meta.fields.get("zoe:category") or None
+        category = safe_category(meta.fields)
         return Step(step_id=step_id, item_id=meta.item_id, label=meta.name[:80], category=category, origin=str(o),
                     login_url=login_url, domain=self._domain(rules), policy=policy_digest(meta)), approver
 

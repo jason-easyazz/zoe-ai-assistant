@@ -39,6 +39,8 @@ code / unlock pages).
   comes only from the admin role.
 - **Every redirect hop of the top document is checked** (`fill.LoginRun.hops_ok`), not just the final page; a hop
   must be the approved origin or an exactly listed host (base-domain rules never apply to hops).
+- **Only the page the broker opened is ever filled** (`popup_refused`), and `zoe:category` leaves the broker only as
+  one of the fixed constants (`broker.safe_category`).
 - **A capability is pinned to the item policy the owner approved** (`broker.policy_digest`): any change to URIs,
   match types or zoe: fields after approval is `policy_changed`.
 - **`lock` stops in-flight work:** it closes a running sign-in's DevTools connection, and a sign-in that started

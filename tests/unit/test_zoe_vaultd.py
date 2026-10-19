@@ -894,3 +894,52 @@ def test_base_domain_rules_are_not_honoured_for_redirect_hops():
     o = origin.origin_of_url("https://other.example.org/x")      # the old, self-cross-checked PSL rule said yes
     assert origin.origin_allowed(o, base, psl=PSL, browser_registrable=PSL.registrable_domain(o.host),
                                  lab_profile=False)[0]
+
+
+def test_category_is_only_ever_a_fixed_constant(make_core, monkeypatch):
+    """Post-cap triage: zoe:category is member-typed text; anything but a known category becomes None (sensitive) and
+    the raw value reaches neither zoe-data, the phone card nor the audit log. Negative control: echo it raw."""
+    def run(c):
+        out = [c.dispatch("client", ME, {"verb": "labels", "member": "alice"})]
+        p = c.dispatch("client", ME, {"verb": "propose", "member": "alice", "errand": "e1", "goal": "g",
+                                      "steps": [{"step": "s1", "item": "IC"}]})
+        n = p["path"].rsplit("/", 1)[1]
+        out += [p, c.dispatch("phone", PHONE_UID, {"verb": "card", "notice": n, "device": c.phones["alice"]})]
+        return json.dumps(out) + Path(c.cfg.audit_path).read_text()
+    leak = CANARY + "-C"
+    items = [raw_item("I1", "A", "ZA"), raw_item("IC", "A", "ZA", category=leak)]
+    c, _ = make_core(items=items)
+    seen = run(c)
+    assert leak not in seen
+    labels = c.dispatch("client", ME, {"verb": "labels", "member": "alice"})["items"]
+    assert {i["item"]: i["category"] for i in labels} == {"I1": "other", "IC": None}
+    assert policy.is_sensitive(None)
+    monkeypatch.setattr(core, "safe_category", lambda fields: fields.get("zoe:category"))
+    c2, _ = make_core(items=items)
+    assert leak in run(c2)                              # red: the raw value went out
+
+
+def test_only_the_page_the_broker_opened_is_ever_filled():
+    """Post-cap triage: a popup (any other page target) is refused, including its out-of-process frames."""
+    from zoe_vaultd import fill
+
+    class NoCDP:
+        def on_event(self, fn):
+            pass
+    run = fill.LoginRun(NoCDP(), psl=PSL, rules=RIGHT_RULES, approved_origin="https://login.example.test",
+                        lab_profile=False)
+    run.top_session = "TOP"
+    run.sessions = {"TOP": {"type": "page", "parent_session": None},
+                    "IFR": {"type": "iframe", "parent_session": "TOP"},
+                    "POP": {"type": "page", "parent_session": None, "popup": True},
+                    "POPIFR": {"type": "iframe", "parent_session": "POP"},
+                    "ORPHAN": {"type": "iframe", "parent_session": None}}
+    assert not run.in_popup("TOP") and not run.in_popup("IFR")
+    assert run.in_popup("POP") and run.in_popup("POPIFR") and run.in_popup("ORPHAN")
+    # only a page something OPENED is a popup: the broker's own page (created over CDP, no opener) never is
+    run.context_id = "CTX"
+    run._on_event("Target.targetCreated", {"targetInfo": {"type": "page", "targetId": "T1",
+                                                          "browserContextId": "CTX"}}, None)
+    run._on_event("Target.targetCreated", {"targetInfo": {"type": "page", "targetId": "T2", "openerId": "T1",
+                                                          "browserContextId": "CTX"}}, None)
+    assert run._new_popups == ["T2"]

