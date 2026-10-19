@@ -131,7 +131,8 @@ async def send_chat_message(message: str, stream: bool = False, session_id: str 
                     "tool_calls": []
                 }
 
-async def test_prompt(prompt: str, expected_pattern: str = None, session_id: str = None):
+# Renamed from test_prompt 2026-10-19: this is a HAND-RUN probe helper (needs arguments, hits the live chat), not a pytest test - collected, it ERRORED on a missing fixture every night.
+async def probe_prompt(prompt: str, expected_pattern: str = None, session_id: str = None):
     """Test a natural language prompt"""
     print(f"\n{'='*70}")
     print(f"📝 Testing: {prompt}")
@@ -231,7 +232,7 @@ async def main():
         print(f"\n\n🧪 Test Case {i}/{len(test_cases)}: {test_case['description']}")
         
         try:
-            result = await test_prompt(test_case["prompt"], test_case.get("expected"), session_id)
+            result = await probe_prompt(test_case["prompt"], test_case.get("expected"), session_id)
             results.append(result)
             
             # Small delay between tests
