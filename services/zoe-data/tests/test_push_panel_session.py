@@ -29,6 +29,21 @@ import main  # noqa: E402
 pytestmark = pytest.mark.ci_safe
 
 
+def _proven(monkeypatch) -> list:
+    """The socket proves it IS the panel (device token / kiosk credential / registered address). Since
+    2026-10-19 every session-less or guest admission also needs that proof; THIS file tests the
+    row/guest-policy rules on top of it, and test_push_panel_proof.py tests the proof itself (and that
+    each admission below is refused without it). Returns the panel ids the proof was asked about."""
+    asked: list = []
+
+    async def proven(_websocket, panel_id):
+        asked.append(panel_id)
+        return True
+
+    monkeypatch.setattr(main, "_panel_push_proven", proven)
+    return asked
+
+
 class _Cursor:
     def __init__(self, row=None, rows=None):
         self._row = row
@@ -344,10 +359,12 @@ async def test_allows_registered_guest_panel_without_valid_session(monkeypatch):
         return None
 
     monkeypatch.setattr(main, "_resolve_ws_session", resolve)
+    asked = _proven(monkeypatch)
     assert (
         await main._resolve_subscribable_panel("zoe-touch-pi", "stale-guest-session")
         == "zoe-touch-pi"
     )
+    assert asked == ["zoe-touch-pi"]
     assert "FROM panels WHERE panel_id = ?" in db.calls[0][0]
     assert db.calls[0][1] == ("zoe-touch-pi",)
 
@@ -441,7 +458,9 @@ async def test_valid_guest_session_joins_allow_guest_panel_in_reclaim_window(mon
     conn = await _install_reclaim_window_db(monkeypatch)
     try:
         _guest(monkeypatch)
+        asked = _proven(monkeypatch)
         assert await main._resolve_subscribable_panel("zoe-touch-pi", "guest-session") == "zoe-touch-pi"
+        assert asked == ["zoe-touch-pi"]
     finally:
         await conn.close()
 
@@ -485,7 +504,9 @@ async def test_bound_guest_row_still_resolves_on_a_panel_that_disallows_guests(m
     conn = await _install_reclaim_window_db(monkeypatch, allow_guest=0, guest_row=True)
     try:
         _guest(monkeypatch)
+        asked = _proven(monkeypatch)
         assert await main._resolve_subscribable_panel("zoe-touch-pi", "guest-session") == "zoe-touch-pi"
+        assert asked == ["zoe-touch-pi"]
     finally:
         await conn.close()
 
@@ -542,7 +563,7 @@ async def test_websocket_push_disconnects_under_resolved_panel_channel(monkeypat
     bc = _RecordingBroadcaster()
     monkeypatch.setattr(main, "broadcaster", bc)
 
-    async def _resolve(_panel_id, _session_id):
+    async def _resolve(_panel_id, _session_id, _websocket=None):
         return "zoe-touch-pi"  # resolved id differs from the connecting alias
 
     monkeypatch.setattr(main, "_resolve_subscribable_panel", _resolve)
