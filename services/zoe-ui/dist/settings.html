@@ -2067,6 +2067,9 @@ async function confirmPanelCode() {
   const input = document.getElementById('panel-code-input');
   const msgEl = document.getElementById('panel-code-msg');
   const code = (input.value || '').trim().toUpperCase();
+  // Every lookup starts clean: a stale code from an earlier lookup must never be the one paired.
+  _panelPairCode = '';
+  document.getElementById('panel-pair-form').style.display = 'none';
   if (code.length !== 6) { msgEl.textContent = 'Enter a 6-character code'; return; }
   msgEl.textContent = 'Looking up…';
   try {

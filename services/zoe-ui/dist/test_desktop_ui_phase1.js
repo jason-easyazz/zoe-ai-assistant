@@ -108,6 +108,18 @@ async function pairing() {
   assert.strictEqual(reloaded, 1, 'the panel list is not refreshed after pairing');
   assert.strictEqual(el('panel-pair-form').style.display, 'none');
   assert(/paired/.test(el('panel-code-msg').textContent), 'no success message: ' + el('panel-code-msg').textContent);
+  // SAME state: a pending lookup, then an expired one - the expired lookup must clear the earlier
+  // code, so the next Pair click cannot submit the stale code (Codex, #2161).
+  ctx.apiCall = async (method, url, body) => { calls.push({ method, url, body }); return { status: url.includes('OLDOK1') ? 'pending' : 'expired' }; };
+  el('panel-code-input').value = 'OLDOK1';
+  await api.confirmPanelCode();
+  assert.strictEqual(el('panel-pair-form').style.display, 'flex');
+  el('panel-code-input').value = 'NEWEX2';
+  await api.confirmPanelCode();
+  assert.strictEqual(el('panel-pair-form').style.display, 'none', 'an expired lookup left the earlier pairing form up');
+  calls.length = 0;
+  await api.pairPanelHere();
+  assert(!calls.some(c => c.method === 'POST'), 'a stale code was paired after a newer lookup failed');
   // an expired code never shows the form, and nothing posts without a looked-up code
   calls.length = 0;
   const ctx2 = Object.assign({}, ctx, { apiCall: async (method, url) => { calls.push({ method, url }); return { status: 'expired' }; } });
