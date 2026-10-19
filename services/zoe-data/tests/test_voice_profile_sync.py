@@ -35,7 +35,7 @@ from routers.voice_tts import _accept_panel_voice_claim, voice_profiles_sync
 
 # ── 1. claim gate ──────────────────────────────────────────────────────────
 
-DEVICE_CALLER = {"source": "device", "panel_id": "zoe-touch-pi", "user_id": "voice-daemon"}
+DEVICE_CALLER = {"source": "device", "panel_id": "zoe-touch-pi", "user_id": "voice-daemon", "via_relay": False, "via_tunnel": False}
 
 
 def test_claim_accepted_at_threshold(monkeypatch):
@@ -219,7 +219,7 @@ async def test_sync_returns_consented_profiles_and_threshold(monkeypatch):
         ("zoe-kid", "Kiddo", EMB_ZOE, None),
     ])
 
-    out = await voice_profiles_sync(caller={"source": "device", "panel_id": "zoe-touch-pi"})
+    out = await voice_profiles_sync(caller=dict(DEVICE_CALLER))
 
     assert out["ok"] is True
     assert out["threshold"] == pytest.approx(0.87)
@@ -295,7 +295,7 @@ async def test_enroll_insert_stamps_consent_only_when_given(monkeypatch, consent
     _wire_enroll(monkeypatch, db)
 
     out = await voice_tts.voice_enroll(
-        _enroll_payload(consent), caller={"source": "device", "user_id": "voice-daemon"})
+        _enroll_payload(consent), caller=dict(DEVICE_CALLER))
 
     assert out["ok"] is True
     inserts = [q for q in db.queries if "INSERT INTO speaker_profiles" in q]
@@ -317,7 +317,7 @@ async def test_reenroll_consent_stamp_revoke_untouched(monkeypatch, consent, exp
     _wire_enroll(monkeypatch, db)
 
     out = await voice_tts.voice_enroll(
-        _enroll_payload(consent), caller={"source": "device", "user_id": "voice-daemon"})
+        _enroll_payload(consent), caller=dict(DEVICE_CALLER))
 
     assert out["ok"] is True and out["profile_id"] == "pid-old"
     consent_updates = [q for q in db.queries if "SET consent_at" in q]
@@ -327,3 +327,9 @@ async def test_reenroll_consent_stamp_revoke_untouched(monkeypatch, consent, exp
         assert len(consent_updates) == 1 and "consent_at=NULL" in consent_updates[0]
     else:
         assert consent_updates == []
+
+
+@pytest.fixture(autouse=True)
+def _member_signed_in_at_the_panel(jason_signed_in_at_the_panel):
+    """A device-token enrolment writes ONLY a member the server verified at the panel (biometric_scope, 2026-10-19); these tests
+    are about the payload, so "jason" is PIN-signed-in. The identity rule itself: test_biometric_ownership_scope.py."""

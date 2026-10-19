@@ -26,10 +26,15 @@
 # the target paths and installs it; it refuses when a unit already exists
 # unless `--force-unit` is also given (a timestamped backup is kept first).
 #
+# BUILD.json: before the restart it writes ${PI_DAEMON_DIR}/BUILD.json - the git sha
+# it ships from (<sha>-dirty when a shipped file differs from that commit, "unknown"
+# outside git) and the time - which the daemon reads at start and reports in /health
+# (build, beside code_sha256 and wake_model_sha256).
+#
 # After the restart the script VERIFIES on the Pi (unit active within
-# ${VERIFY_TIMEOUT_S:-20}s, /health answers on 127.0.0.1:7777, md5 of every
-# shipped file equals the local copy) and exits non-zero, printing the
-# rollback, if anything is off. With ZOE_SPEAKER_MODEL=resnet34 on the Pi it also waits
+# ${VERIFY_TIMEOUT_S:-20}s, /health answers on 127.0.0.1:7777 and reports the
+# build just shipped, md5 of every shipped file equals the local copy) and exits
+# non-zero, printing the rollback, if anything is off. With ZOE_SPEAKER_MODEL=resnet34 on the Pi it also waits
 # (RESNET34_READY_TIMEOUT_S) for /health's speaker_resnet34 to be ready and fails otherwise.
 #
 # Env: PI_HOST PI_USER PI_DAEMON_DIR PI_VENV VERIFY_TIMEOUT_S HEALTH_PORT RESNET34_READY_TIMEOUT_S
@@ -75,6 +80,15 @@ fi
 
 TS="$(date +%Y%m%d-%H%M%S)"
 BAK_SUFFIX=".bak-${TS}"
+
+# The build the daemon will report in /health (written to the Pi as BUILD.json below).
+BUILD_SHA="$(git -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || true)"
+if [ -z "${BUILD_SHA}" ]; then
+  BUILD_SHA="unknown"
+elif [ -n "$(git -C "${SRC_DIR}" status --porcelain -- "${SHIPPED_FILES[@]}" 2>/dev/null)" ]; then
+  BUILD_SHA="${BUILD_SHA}-dirty"
+fi
+BUILD_JSON="{\"sha\": \"${BUILD_SHA}\", \"deployed_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 SSH_TARGET="${PI_USER}@${PI_HOST}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10)
 
@@ -136,6 +150,7 @@ print_rollback() {
     if [ "$INSTALL_UNIT" = 1 ]; then
       echo "  [ -f ${REMOTE_UNIT}${BAK_SUFFIX} ] && cp -p ${REMOTE_UNIT}${BAK_SUFFIX} ${REMOTE_UNIT}   # exists only if a unit was replaced"
     fi
+    echo "  rm -f ${PI_DAEMON_DIR}/BUILD.json   # it names the build just shipped; without it /health says 'unknown'"
     echo "  systemctl --user daemon-reload && systemctl --user restart zoe-voice"
     echo "  # known-good unit copy if the live one is damaged: ${PI_DAEMON_DIR}/zoe-voice.service.pi-20261004"
     echo "  # see docs/knowledge/incident-runbook.md ('Pi deploy broke the unit')"
@@ -156,6 +171,7 @@ if [ "$INSTALL_UNIT" = 1 ]; then
 fi
 echo "==> Deploying Zoe voice daemon to ${SSH_TARGET}:${PI_DAEMON_DIR}"
 echo "    files: ${SHIPPED_FILES[*]}"
+echo "    build: ${BUILD_SHA}"
 echo "    unit : ${unit_mode}"
 
 # --- 0. Render + sanity-check the unit locally (before touching the Pi) -----
@@ -176,7 +192,8 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "==> DRY_RUN: would install this unit (refuses if one exists unless --force-unit):"
     cat "${RENDER_DIR}/zoe-voice.service"
   fi
-  echo "==> DRY_RUN: would restart zoe-voice and verify active/health/md5"
+  echo "==> DRY_RUN: would write ${PI_DAEMON_DIR}/BUILD.json: ${BUILD_JSON}"
+  echo "==> DRY_RUN: would restart zoe-voice and verify active/health/build/md5"
   exit 0
 fi
 
@@ -210,6 +227,10 @@ rsync -avz --backup --suffix="${BAK_SUFFIX}" \
   "${src_files[@]}" \
   "${SSH_TARGET}:${PI_DAEMON_DIR}/" || { echo "ERROR: rsync failed" >&2; exit 5; }
 
+# --- 2b. BUILD.json: what /health will report after the restart ---------------
+rssh "printf '%s\\n' '${BUILD_JSON}' > ${PI_DAEMON_DIR}/BUILD.json.tmp && mv ${PI_DAEMON_DIR}/BUILD.json.tmp ${PI_DAEMON_DIR}/BUILD.json" \
+  || { echo "ERROR: could not write BUILD.json on the Pi" >&2; exit 5; }
+
 # --- 3. Python dependencies --------------------------------------------------
 echo "==> Installing Python dependencies on Pi..."
 rssh "cd ${PI_DAEMON_DIR} && { ${PI_VENV}/bin/pip install -r pi-requirements.txt --quiet || python3 -m pip install -r pi-requirements.txt --quiet; } && echo 'Dependencies installed.'" \
@@ -241,6 +262,13 @@ if ! rssh "for i in \$(seq 1 ${VERIFY_TIMEOUT_S}); do (curl -fsS --max-time 3 ${
   fail_verify "${health_url} did not answer within ${VERIFY_TIMEOUT_S}s"
 fi
 echo "    /health answers"
+
+# The daemon that answers must be the build just shipped (BUILD.json is read at start).
+health_body="$(rssh "printf 'HEALTH_OK '; curl -fsS --max-time 3 ${health_url} 2>/dev/null || ${PI_VENV}/bin/python3 -c \"import sys, urllib.request; sys.stdout.write(urllib.request.urlopen('${health_url}', timeout=3).read().decode())\"" 2>/dev/null)" || health_body=""
+case "$health_body" in
+  *"\"build\": \"${BUILD_SHA}\""*) echo "    /health reports build ${BUILD_SHA}" ;;
+  *) fail_verify "/health does not report build ${BUILD_SHA} - the daemon that answered is not the one just shipped" ;;
+esac
 
 # The speaker model must be READY when it is the acting one (ZOE_SPEAKER_MODEL=resnet34): /health answers even when the ResNet34
 # embedder was refused (missing file, pin or self-test drift), so the deploy reads its state - bounded wait - and fails on not-ready.

@@ -779,13 +779,41 @@ def test_the_failed_turns_saved_audio_is_found_by_time_and_never_guessed(tmp_pat
     wav("old.wav", NOW - 3600)
     assert sp.audio_ref(NOW, sample_dir=str(tmp_path)) is None                                              # nothing near the turn
     wav("120001_500.wav", NOW - 12)
-    assert sp.audio_ref(NOW, sample_dir=str(tmp_path)) == {"file": "120001_500.wav", "age_s": 12.0}         # one clip just before it finished
+    got = sp.audio_ref(NOW, sample_dir=str(tmp_path))
+    assert {k: got[k] for k in ("file", "age_s")} == {"file": "120001_500.wav", "age_s": 12.0}             # one clip just before it finished
+    assert got["mtime"] == round(NOW - 12, 3) and got["size"] == 4                                          # identity: the names repeat daily
     wav("115950_100.wav", NOW - 14)
-    assert sp.audio_ref(NOW, sample_dir=str(tmp_path)) is None                                              # two clips within 5 s: ambiguous, so none
+    assert sp.audio_ref(NOW, sample_dir=str(tmp_path)) is None                                              # two clips: ambiguous, so none
     wav("115900_000.wav", NOW - 60)
     (tmp_path / "notes.txt").write_text("x")
     assert sp.audio_ref(NOW - 1000, sample_dir=str(tmp_path)) is None and sp.audio_ref("junk", sample_dir=str(tmp_path)) is None
     assert sp.audio_ref(NOW, sample_dir=str(tmp_path / "missing")) is None
+
+
+def test_another_panels_capture_while_the_turn_was_answered_withholds_the_audio(tmp_path):
+    """The #2109 Phase 3 blocker: a failed turn's clip is saved at T, the brain answers until T + 20 s, and ANOTHER panel captures an
+    utterance at T + 12 s. The old rule took the newest clip in the window - the other panel's - and the 5 s ambiguity guard did not
+    fire (12 s apart). Now any second clip in the guard window withholds the reference, and with the turn's latency known the clip
+    must predate the turn's routing."""
+    import os
+
+    def wav(name, mtime):
+        f = tmp_path / name
+        f.write_bytes(b"RIFF")
+        os.utime(f, (mtime, mtime))
+    finished = NOW
+    wav("failed_turn.wav", finished - 20.5)                                       # STT done, then 20 s of brain
+    assert sp.audio_ref(finished, latency_ms=20000, sample_dir=str(tmp_path))["file"] == "failed_turn.wav"
+    wav("other_panel.wav", finished - 8)                                          # another panel, mid-answer
+    assert sp.audio_ref(finished, latency_ms=20000, sample_dir=str(tmp_path)) is None
+    assert sp.audio_ref(finished, sample_dir=str(tmp_path)) is None               # and without the latency too (control: the OLD rule chose it)
+    os.remove(tmp_path / "failed_turn.wav")
+    assert sp.audio_ref(finished, latency_ms=20000, sample_dir=str(tmp_path)) is None   # a lone clip written AFTER routing began is not this turn's
+    os.remove(tmp_path / "other_panel.wav")
+    wav("prev_turn.wav", finished - 80)                                           # the previous turn, well before this one started
+    wav("failed_turn.wav", finished - 20.5)
+    assert sp.audio_ref(finished, latency_ms=20000, sample_dir=str(tmp_path))["file"] == "failed_turn.wav"   # the tight window excludes it
+    assert sp.audio_ref(finished, sample_dir=str(tmp_path)) is None               # without the latency the 90 s window cannot tell: withheld
 
 
 def test_the_seam_names_the_saved_audio_of_a_voice_turn_only(env, tmp_path, monkeypatch):
@@ -803,7 +831,8 @@ def test_the_seam_names_the_saved_audio_of_a_voice_turn_only(env, tmp_path, monk
     run(sp.run_pass(now=NOW))
     run(sp.decide(rows_of(env)[0]["id"], "accept", "admin-1"))
     q = {x["event_id"]: x for x in run(_with_ledger_clear(sp.queued_router_examples()))}
-    assert q["e0"]["audio_ref"] == {"file": "clip0.wav", "age_s": 10.0} and q["e4"]["audio_ref"] is None            # a typed turn has no recording
+    assert {k: q["e0"]["audio_ref"][k] for k in ("file", "age_s")} == {"file": "clip0.wav", "age_s": 10.0}
+    assert q["e4"]["audio_ref"] is None                                                                              # a typed turn has no recording
     assert "\\" not in json.dumps(q) and str(tmp_path) not in json.dumps(q)                                          # a file NAME, never a path
 
 
@@ -958,3 +987,78 @@ def test_the_flag_defaults_to_shadow_and_reads_per_call(monkeypatch):
     for raw, want in (("off", "off"), ("0", "off"), ("on", "on"), ("enforce", "on"), ("garbage", "shadow")):
         monkeypatch.setenv("ZOE_STRUGGLE_PROPOSALS", raw)
         assert sp.mode() == want
+
+
+# ── Phase 3: the seam's statuses / time, and the forget reaching the router retrain ledger ──
+
+def test_the_seam_hands_out_proposed_rows_only_when_asked_and_a_rejected_one_never(env):
+    pid = seed_router_proposal(env)
+    assert run(_with_ledger_clear(sp.queued_router_examples())) == []                                       # default: accepted only
+    got = run(_with_ledger_clear(sp.queued_router_examples(statuses=sp.SEAM_STATUSES)))
+    assert len(got) == 5 and {g["status"] for g in got} == {"proposed"} and {g["decided_by"] for g in got} == {""}
+    rows = {r["id"]: r for r in env.db.rows("SELECT * FROM struggle_events")}
+    assert all(g["ts"] == round(json.loads(rows[g["event_id"]]["detail"])["about_ts"], 3) for g in got)     # when the FAILED turn finished
+    run(sp.decide(pid, "reject", "admin-1", "wrong_label"))
+    assert run(_with_ledger_clear(sp.queued_router_examples(statuses=sp.SEAM_STATUSES + ("rejected",)))) == []   # the admin said no
+
+
+def test_a_forget_reaches_the_router_retrain_ledger_and_flags_the_served_generation(env, monkeypatch, tmp_path):
+    import router_retrain_ledger as rl
+
+    monkeypatch.setenv("ZOE_ROUTER_RETRAIN_DIR", str(tmp_path / "rr"))
+    store(*[event(i, user=A, ts=NOW - i * DAY, summary=f"call quentin about {MARK}", fix=sig.FIX_ROUTER_TRAINING) for i in range(3)],
+          *[event(10 + i, user=B, ts=NOW - i * DAY, summary="add milk to the list", fix=sig.FIX_ROUTER_TRAINING) for i in range(2)])
+
+    def seed(d):
+        d["runs"].append({"gen": "g1", "status": "adopted", "examples": [
+            {"e": "e0", "u": rl.user_key(A), "k": rl.text_key(f"call quentin about {MARK}"), "s": "train"},
+            {"e": "e10", "u": rl.user_key(B), "k": rl.text_key("add milk to the list"), "s": "train"}]})
+        d["served"] = "g1"
+    rl.update(seed)
+    assert run(sd.erase_entity(A, "Quentin")) == 3
+    data = rl.load()
+    g1 = data["runs"][0]
+    assert g1["needs_retrain"] is True and [x["e"] for x in g1["examples"]] == ["e10"]
+    assert {"e0", "e1", "e2"} <= set(data["tombstones"]["event_ids"]) and MARK not in json.dumps(data)
+    run(sd.delete_user(B))
+    assert rl.user_key(B) in rl.load()["tombstones"]["user_keys"] and rl.load()["runs"][0]["examples"] == []
+
+
+def test_a_retrain_ledger_that_cannot_be_updated_fails_the_forget_closed(env, monkeypatch, tmp_path):
+    import router_retrain_ledger as rl
+
+    monkeypatch.setenv("ZOE_ROUTER_RETRAIN_DIR", str(tmp_path / "rr"))
+    rl.root().mkdir(parents=True)
+    (rl.root() / rl.LEDGER).write_text("{corrupt")
+    store(*[event(i, user=A, ts=NOW - i * DAY, summary="call quentin now", fix=sig.FIX_ROUTER_TRAINING) for i in range(3)])
+    with pytest.raises(ValueError):
+        run(sd.erase_entity(A, "Quentin"))
+    assert len(env.db.rows("SELECT * FROM struggle_events")) == 3                     # not confirmed, nothing half-done: a retry finds them
+
+
+def test_a_turn_forgotten_before_any_retrain_run_is_tombstoned_by_its_wording(env, monkeypatch, tmp_path):
+    """Codex #4 on #2128: no retrain run has recorded these turns yet (no ledger at all). The forget must still tombstone the failed
+    turn's WORDING - read from the struggle row while it still exists - so the same words under a new event id never re-enter."""
+    import router_retrain_ledger as rl
+
+    monkeypatch.setenv("ZOE_ROUTER_RETRAIN_DIR", str(tmp_path / "rr"))
+    assert not rl.root().exists()
+    store(*[event(i, user=A, ts=NOW - i * DAY, summary=f"call quentin about {MARK} -> no I said quentin", prev=f"bad-{i}",
+                  fix=sig.FIX_ROUTER_TRAINING) for i in range(2)])
+    assert run(sd.erase_entity(A, "Quentin")) == 2
+    t = rl.load()["tombstones"]
+    assert rl.text_key(f"call quentin about {MARK}") in t["text_keys"]               # the FAILED turn's words, as the seam hands them out
+    assert {"e0", "e1"} <= set(t["event_ids"]) and MARK not in json.dumps(rl.load())
+
+
+
+def test_a_user_delete_before_any_retrain_run_tombstones_their_wordings(env, monkeypatch, tmp_path):
+    """Codex round 2 on #2128: a deleted member's failed turns must be tombstoned by WORDING too (not only the user key), so the same words
+    from another member never re-enter - read from their struggle rows while those still exist."""
+    import router_retrain_ledger as rl
+
+    monkeypatch.setenv("ZOE_ROUTER_RETRAIN_DIR", str(tmp_path / "rr"))
+    store(*[event(i, user=B, ts=NOW - i * DAY, summary=f"what is the {MARK} forecast", fix=sig.FIX_ROUTER_TRAINING) for i in range(2)])
+    run(sd.delete_user(B))
+    t = rl.load()["tombstones"]
+    assert rl.text_key(f"what is the {MARK} forecast") in t["text_keys"] and rl.user_key(B) in t["user_keys"]

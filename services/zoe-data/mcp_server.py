@@ -18,7 +18,7 @@ from time_utils import today_for_zoe_tz
 from typed_env import env_str  # reads env at CALL time — importing it reads nothing
 
 # Load .env secrets ONLY when running as the spawned stdio worker (`python
-# mcp_server.py` via mcporter has no systemd EnvironmentFile). Guarded so that
+# mcp_server.py` as a local agent's stdio MCP server has no systemd EnvironmentFile). Guarded so that
 # merely IMPORTING this module (intent_router's lazy _notify_ui, zoe_agent,
 # tests) does not inject the production environment into the host process —
 # an unguarded call here leaked the real POSTGRES_URL into pytest, silently
@@ -29,7 +29,7 @@ from typed_env import env_str  # reads env at CALL time — importing it reads n
 if __name__ == "__main__":
     bootstrap_runtime_env()
 
-# True only in the spawned `python mcp_server.py` stdio worker (mcporter).
+# True only in the spawned `python mcp_server.py` stdio worker.
 # In-process importers (zoe_agent, intent_router, tests) see False. Used to
 # decide whether a service-layer broadcaster.broadcast could actually reach
 # UI clients (they live in the zoe-data server process, not this worker).
@@ -38,10 +38,15 @@ _STDIO_WORKER = __name__ == "__main__"
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
 _INTERNAL_TOKEN = env_str("ZOE_INTERNAL_TOKEN")
-# When true (rollout goal), tools/call without _user_id/user_id is rejected.
-# Until every legacy/tool caller is caught up, default false logs a warning and falls
-# back to family-admin so existing workflows don't break silently.
-_MCP_STRICT_USER_ID = os.environ.get("ZOE_MCP_STRICT_USER_ID", "false").strip().lower() == "true"
+# A tools/call that names no user is REFUSED (A3, 2026-10-19: strict is the default). The one caller that relied on the
+# family-admin fallback - intent_router's mcporter subprocess, which sent no user and so wrote as family-admin - is gone;
+# in-process callers pass `_user_id`. ZOE_MCP_STRICT_USER_ID=false is the explicit, logged loosening for a local tool.
+def _mcp_strict_user_id(value: str | None) -> bool:
+    """Strict unless the value is exactly ``false`` (a typo or empty value keeps it strict)."""
+    return (value if value is not None else "true").strip().lower() != "false"
+
+
+_MCP_STRICT_USER_ID = _mcp_strict_user_id(os.environ.get("ZOE_MCP_STRICT_USER_ID", "true"))
 
 import logging as _mcp_logging
 _mcp_log = _mcp_logging.getLogger("mcp_server")
@@ -1418,8 +1423,8 @@ async def _resolve_mcp_actor(db, name: str, args: dict, actor_context: dict | No
                 f"tool '{name}' requires explicit _user_id (strict mode enabled)"
             )
         _mcp_log.warning(
-            "mcp tool '%s' called without user_id — falling back to family-admin. "
-            "Set ZOE_MCP_STRICT_USER_ID=true once all callers pass _user_id.",
+            "mcp tool '%s' called without user_id — falling back to family-admin "
+            "because ZOE_MCP_STRICT_USER_ID=false loosened the default.",
             name,
         )
         user_id = "family-admin"
@@ -3394,19 +3399,17 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
 async def run_stdio_server():
     """Run as an MCP stdio server for Hermes and local agent integrations."""
-    # Initialize the DB pool when running standalone (mcporter/stdio mode).
+    # Initialize the DB pool when running standalone (stdio mode).
     # In FastAPI mode this is done by main.py's lifespan; here we do it ourselves.
     try:
         from db_pool import init_pool, close_pool
         await init_pool()
     except Exception as _pool_err:
         # Fail LOUD and exit non-zero. Limping on used to crash mid-call on
-        # get_pool() instead, which mcporter surfaced as a generic "Connection
-        # closed" → intent_router mapped to None → ok:false while the user heard
-        # "done" (the #960/#993/#995 bug class). Exiting here puts the real
-        # cause (e.g. a stale rotated DB password) in stderr, which
-        # _run_mcporter logs. POSTGRES_URL comes from bootstrap_runtime_env();
-        # never bake it into agent configs like ~/.mcporter/mcporter.json —
+        # get_pool() instead, which the client saw as a generic "Connection
+        # closed" (the #960/#993/#995 bug class). Exiting here puts the real
+        # cause (e.g. a stale rotated DB password) in stderr. POSTGRES_URL comes
+        # from bootstrap_runtime_env(); never bake it into an agent's MCP config —
         # a pre-set env value blocks the bootstrap and rots on rotation.
         import sys as _sys
         print(f"[mcp_server] DB pool init failed: {_pool_err}", file=_sys.stderr)

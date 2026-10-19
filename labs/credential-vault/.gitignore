@@ -1,0 +1,4 @@
+.bin/
+last-result*.json
+last-console.log
+__pycache__/

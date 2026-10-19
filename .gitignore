@@ -165,6 +165,9 @@ aider_env/
 !labs/needle-benchmark/setup.sh
 !labs/p0-deroot/run.sh
 !labs/p0-deroot/lab/provision.sh
+!labs/omi-firmware/*.sh
+!labs/credential-vault/run.sh
+!labs/credential-vault/lab/provision.sh
 !RESTART_SERVICES.sh
 !start-zoe.sh
 !stop-zoe.sh
@@ -212,6 +215,8 @@ credentials/
 # generated flag inventory (tools/audit/flag_inventory.py) — no secrets, names+defaults only
 !docs/knowledge/flag-inventory.json
 !docs/knowledge/live-state.json
+# household-data canary: keyed digests only, no values (tools/audit/privacy_canary.py; the key and the list live outside the repo)
+!tools/audit/privacy_canary_digests.json
 # zoe-data test fixtures: golden recordings replayed by ci_safe tests. Contract
 # data only, no secrets. Without this, a new .json fixture is silently ignored
 # and CI fails on a file the author can see locally.
@@ -474,3 +479,6 @@ modules/omnigent/wheels/
 # The ResNet34 speaker embedder's PUBLIC artifacts (cohort centring vector from LibriSpeech, self-test reference of a synthetic signal):
 # the panel daemon refuses to run without it, so it must be tracked. No voiceprint, no household data.
 !scripts/setup/zoe_speaker_resnet34_artifacts.json
+
+# Relay listener (panel-anywhere R1): the household CA / leaf and the rendered nginx listener live on the box only.
+ssl/relay/

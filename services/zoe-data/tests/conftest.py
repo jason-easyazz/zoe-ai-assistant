@@ -55,6 +55,9 @@ os.environ["ZOE_BRAIN_SLOT_GUARD"] = "off"
 # 2026-10-13: three CI-runner pytest runs (118 lines each) and one agent worktree run put 355 synthetic-user ``memory_forget_cascade:
 # no database`` / ``NOT erased`` warnings into it, indistinguishable from a real half-done forget. Read at call time, so this pin holds.
 os.environ["ZOE_LOG_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "logs")
+# The router retrain ledger (router_retrain_ledger, Phase 3 of the struggle loop) lives under ~/.zoe/router_retrain by default, and every
+# forget / user delete reaches it (struggle_proposals.forget_events / forget_user): a test's forget must never edit the live ledger.
+os.environ["ZOE_ROUTER_RETRAIN_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "router_retrain")
 
 
 import pytest  # noqa: E402
@@ -90,3 +93,19 @@ def _db_pool_never_initialised(monkeypatch):
         return
     monkeypatch.setattr(db_pool, "_ever_initialised", False, raising=False)
     yield
+
+
+@pytest.fixture
+def jason_signed_in_at_the_panel(monkeypatch):
+    """OPT-IN (never autouse): "jason" holds a fresh PIN sign-in at whatever panel asks, so a DEVICE-token biometric enrolment
+    has a server-verified member to write (``biometric_scope.resolve_enroll_target``, 2026-10-19). Enrolment-shape tests that
+    are not about WHO is enrolled use it; the identity tests in ``test_biometric_ownership_scope.py`` set their own."""
+    import biometric_scope
+
+    async def _pin(_panel_id):
+        return "jason"
+
+    biometric_scope.reset_enrolment_grants()
+    monkeypatch.setattr(biometric_scope, "_fresh_panel_member", _pin)
+    yield
+    biometric_scope.reset_enrolment_grants()
