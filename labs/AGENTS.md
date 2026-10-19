@@ -436,6 +436,16 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   box, wrong identity, the 35-day retention bound). Hand-run via `run.sh` (01:35-04:55
   refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`, asserts its own
   teardown). 19/19 on 2026-10-18.
+- `comms-matrix/` — **household comms gates 1 and 2** (deep dive 2026-10-18 section 8): a hermetic
+  Docker lab (internal network, nothing published, every container memory-capped, homeservers
+  on 2 CPUs) running Tuwunel 1.9.4 or Synapse 1.163.0 + Postgres one at a time, an nginx TLS
+  front as `hs.lab`, LiveKit + lk-jwt-service (the MatrixRTC focus) and `lk load-test`. Cells:
+  boot/idle RAM, synthetic accounts, federation off, a room + DMs + 300 messages, MSC4140
+  delayed events, MSC4143 focus, OpenID -> LiveKit token, a 20 s two-party audio call. Hand-run
+  via `run.sh` (refuses while `night_busy.sh test` says pause, `MemAvailable` >= 2000 MB before
+  the lock, `flock /tmp/zoe-test-lane.lock`, tears down with `compose down -v`). README holds the
+  2026-10-19 results and the Matrix vs Plan B recommendation (a record, not a contract); raw
+  reports in `results/`. Never deployed to the411.
 - `relay/` — **F0 / R0 of panel anywhere** (`docs/architecture/panel-anywhere.md`
   section 10): a hermetic Docker lab (internal network, nothing published) with an nginx
   stream front + frp v0.71.0 `frps` behind a fail-closed preflight, a session-master
