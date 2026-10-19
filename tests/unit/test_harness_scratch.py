@@ -325,6 +325,55 @@ def test_up_applies_the_auth_ddl_after_alembic_and_before_serving():
     assert [name for _, name in sorted(order)] == ["alembic", "apply_auth_ddl", "_serve"]
 
 
+def _fake_serve_tree(tmp_path, monkeypatch, spawn):
+    svc = tmp_path / "services" / "zoe-data"
+    svc.mkdir(parents=True)
+    (tmp_path / "labs" / "flue-zoe-brain-2x" / "dist").mkdir(parents=True)
+    (tmp_path / "labs" / "flue-zoe-brain-2x" / "dist" / "server.mjs").write_text("")
+    monkeypatch.setattr(hs.shutil, "which", lambda *a, **k: "/usr/bin/node")
+    monkeypatch.setattr(hs, "parse_env_file", lambda p: {})
+    monkeypatch.setattr(hs, "flue_env", lambda *a, **k: {})
+    monkeypatch.setattr(hs, "harness_env", lambda *a, **k: {"POSTGRES_URL": "postgresql://scratch"})
+    monkeypatch.setattr(hs, "assert_not_live", lambda *a, **k: None)
+    monkeypatch.setattr(hs, "_spawn", spawn)
+    writes = []
+    monkeypatch.setattr(hs, "_write_state", lambda st: writes.append(sorted(st.get("procs", {}))))
+    root = tmp_path / "root"
+    root.mkdir()
+    return svc, {"tag": "t", "root": str(root), "dsn": "postgresql://scratch", "procs": {}}, writes
+
+
+def test_serve_refuses_when_the_flue_sidecar_never_answers(tmp_path, monkeypatch):
+    """A Flue that died at start must fail the readiness gate even though zoe-data's /health is green.
+    Negative control: drop the flue_url /health wait from _serve() -> red."""
+    svc, state, _ = _fake_serve_tree(tmp_path, monkeypatch, lambda *a, **k: {"pid": 1, "start": 1, "cmd": []})
+    ports = iter([4001, 4002])                         # zoe-data, then flue
+    monkeypatch.setattr(hs, "free_port", lambda: next(ports))
+    monkeypatch.setattr(hs, "_http_ok", lambda url: url.startswith("http://127.0.0.1:4001"))   # only zoe-data answers
+
+    def wait(pred, timeout_s, what):
+        if not pred():
+            raise hs.Refused(f"{what} not ready")
+    monkeypatch.setattr(hs, "_wait", wait)
+    with pytest.raises(hs.Refused, match="Flue"):
+        hs._serve(state, service_dir=svc, live_env={}, python="python3", log=lambda *_: None)
+
+
+def test_serve_persists_each_process_so_a_failed_second_spawn_can_still_stop_the_first(tmp_path, monkeypatch):
+    """Negative control: write the state only once after both spawns (the old shape) -> red."""
+    count = []
+
+    def spawn(cmd, **kw):
+        if count:
+            raise OSError("zoe-data failed to start")
+        count.append(1)
+        return {"pid": 1, "start": 1, "cmd": []}
+    svc, state, writes = _fake_serve_tree(tmp_path, monkeypatch, spawn)
+    with pytest.raises(OSError):
+        hs._serve(state, service_dir=svc, live_env={}, python="python3", log=lambda *_: None)
+    assert writes and writes[-1] == ["flue"], "Flue's pid must already be on disk when the next spawn fails"
+
+
 # -- the real stack (opt-in: docker, ~40 MB, ~20 s) ------------------------------------
 
 @pytest.mark.skipif(os.environ.get("ZOE_SCRATCH_PG_TEST") != "1", reason="opt-in: ZOE_SCRATCH_PG_TEST=1 (docker, a throwaway pg17)")

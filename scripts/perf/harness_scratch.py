@@ -434,13 +434,18 @@ def _serve(state: dict, *, service_dir: Path, live_env: dict, python: str, log=p
         raise Refused("the Flue sidecar build (labs/flue-zoe-brain-2x/dist) or node is missing")
     fenv = flue_env(parse_env_file(flue_dir / ".env"), root=root, port=fport, data_url=self_url, token=token, brain_token=brain_token)
     state["procs"]["flue"] = _spawn([node, "dist/server.mjs"], env=fenv, cwd=flue_dir, log=root / "logs" / "flue.log")
+    _write_state(state)                        # persist per spawn: if the next spawn fails, down() must still find (and stop) this one
     zenv = harness_env(live_env, root=root, dsn=state["dsn"], token=token, brain_token=brain_token, flue_url=flue_url,
                        self_url=self_url)
     assert_not_live(zenv["POSTGRES_URL"], live_env.get("POSTGRES_URL"))
     state["procs"]["zoe_data"] = _spawn([python, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(zport)],
                                         env=zenv, cwd=Path(service_dir), log=root / "logs" / "zoe-data.log")
+    _write_state(state)
     state.update(base_url=self_url, flue_url=flue_url, token=token, brain_token=brain_token, zoe_data_port=zport, flue_port=fport)
     _write_state(state)
+    # Both must answer: zoe-data's /health says nothing about the brain, and a Flue that died at start (bad build, missing dep,
+    # port collision) would leave the harness measuring fallback replies from a dead brain.
+    _wait(lambda: _http_ok(flue_url + "/health"), 120, "scratch Flue sidecar")
     _wait(lambda: _http_ok(self_url + "/health"), 240, "scratch zoe-data")
     log(f"scratch zoe-data on {self_url}, scratch Flue on {flue_url}")
 
