@@ -1460,7 +1460,7 @@
     "unset"
    ],
    "kind": "unknown",
-   "readers": 7
+   "readers": 8
   },
   "ZOE_HA_CONTROL_SCOPE": {
    "defaults": [
@@ -1917,7 +1917,7 @@
     "http://127.0.0.1:10201"
    ],
    "kind": "unknown",
-   "readers": 3
+   "readers": 4
   },
   "ZOE_KOKORO_VOICE": {
    "defaults": [
@@ -2100,7 +2100,7 @@
     "http://127.0.0.1:11434"
    ],
    "kind": "unknown",
-   "readers": 1
+   "readers": 2
   },
   "ZOE_LLM_MODEL": {
    "defaults": [

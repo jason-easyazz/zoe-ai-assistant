@@ -23,7 +23,7 @@
     <link rel="stylesheet" href="lib/gridstack/gridstack-extra.min.css" />
     
     <!-- Premium Widget Styles with Advanced Responsive Design -->
-    <link rel="stylesheet" href="css/widgets-premium.css" />
+    <link rel="stylesheet" href="css/widgets-premium.css?v=dash-4b-1" />
     <link rel="stylesheet" href="css/widgets-fluid.css" />
     
     <style>
@@ -45,14 +45,43 @@
             --touch-target: 44px;
             --touch-large: 56px;
             
-            /* Theme colors */
+            /* Design tokens - the same --clr-* set chat.html defines; dark-mode-shared.css
+               swaps them under html.dark-mode, so everything below follows the theme
+               (Wave 4b, 2026-10-19: the cards used fixed light values and stayed light
+               in dark mode). */
+            --clr-primary: #7B61FF;
+            --clr-glass-bg: rgba(255,255,255,0.9);
+            --clr-glass-border: rgba(255,255,255,0.3);
+            --clr-border: rgba(0,0,0,0.08);
+            --clr-surface: #ffffff;
+            --clr-surface-2: #f8f9fb;
+            --clr-text: #333;
+            --clr-text-2: #666;
+            --clr-text-3: #999;
+            --clr-success: #10b981;
+            --clr-error: #b91c1c;
+            --clr-warning: #f59e0b;
+            --clr-warning-bg: rgba(245,158,11,0.1);
+
+            /* Theme colors (the page's own names, mapped onto the tokens) */
             --background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
-            --surface: rgba(255, 255, 255, 0.9);
+            --surface: var(--clr-glass-bg);
             --surface-hover: rgba(255, 255, 255, 0.95);
-            --text-primary: #333;
-            --text-secondary: #666;
-            --border: rgba(255, 255, 255, 0.3);
+            --text-primary: var(--clr-text);
+            --text-secondary: var(--clr-text-2);
+            --border: var(--clr-glass-border);
         }
+
+        /* Dark mode: the tokens are swapped by dark-mode-shared.css; these are the
+           values that have no shared token. */
+        html.dark-mode {
+            --surface-hover: rgba(255, 255, 255, 0.09);
+            --widget-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+            --widget-shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.55);
+            --clr-error: #f87171;
+            --clr-warning-bg: rgba(245,158,11,0.16);
+        }
+        html.dark-mode .task-item { color: var(--clr-text) !important; }
 
         * {
             margin: 0;
@@ -1900,20 +1929,20 @@
 
     <script src="js/common.js"></script>
     <script src="/js/notifications-panel.js"></script>
-    <script src="js/websocket-sync.js?v=estate-10-heal"></script>
+    <script src="js/websocket-sync.js?v=dash-4b-1"></script>
     
     <!-- Widget System Core -->
     <script src="js/widget-base.js"></script>
-    <script src="js/widget-system.js"></script>
+    <script src="js/widget-system.js?v=dash-4b-1"></script>
     
     <!-- Core Widgets -->
-    <script src="js/widgets/core/events.js"></script>
-    <script src="js/widgets/core/tasks.js"></script>
+    <script src="js/widgets/core/events.js?v=dash-4b-1"></script>
+    <script src="js/widgets/core/tasks.js?v=dash-4b-1"></script>
     <script src="js/widgets/core/time.js"></script>
-    <script src="js/widgets/core/weather.js"></script>
-    <script src="js/widgets/core/home.js"></script>
-    <script src="js/widgets/core/system.js"></script>
-    <script src="js/widgets/core/notes.js"></script>
+    <script src="js/widgets/core/weather.js?v=dash-4b-1"></script>
+    <script src="js/widgets/core/home.js?v=dash-4b-1"></script>
+    <script src="js/widgets/core/system.js?v=dash-4b-1"></script>
+    <script src="js/widgets/core/notes.js?v=dash-4b-1"></script>
     <script src="js/widgets/core/zoe-orb.js"></script>
     <script src="js/widgets/core/journal.js"></script>
     <script src="js/widgets/core/multica-board.js"></script>
@@ -2294,7 +2323,7 @@
     <script src="lib/gridstack/gridstack-all.js"></script>
     
     <!-- Clean Dashboard Implementation (Native Gridstack) -->
-    <script src="js/dashboard.js"></script>
+    <script src="js/dashboard.js?v=dash-4b-2"></script>
     
     <!-- Register all widgets AFTER dashboard.js has set up its listener -->
     <script>

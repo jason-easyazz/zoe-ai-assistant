@@ -35,12 +35,12 @@ class NotesWidget extends WidgetModule {
                     <textarea class="notes-content" rows="2" placeholder="Write a note…"
                         style="width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid rgba(0,0,0,0.15); border-radius:6px; font-size:13px; resize:vertical;"></textarea>
                     <div style="display:flex; gap:6px; margin-top:6px; justify-content:flex-end;">
-                        <button class="notes-cancel" style="padding:4px 10px; border:1px solid rgba(0,0,0,0.15); background:white; border-radius:6px; font-size:12px; cursor:pointer;">Cancel</button>
+                        <button class="notes-cancel" style="padding:4px 10px; border:1px solid var(--clr-border, rgba(0,0,0,0.15)); background:var(--clr-surface, white); color:var(--clr-text, #333); border-radius:6px; font-size:12px; cursor:pointer;">Cancel</button>
                         <button class="notes-save" style="padding:4px 10px; border:none; background:var(--primary-gradient); color:white; border-radius:6px; font-size:12px; cursor:pointer;">Save</button>
                     </div>
                 </div>
                 <div class="notes-list" style="max-height: 300px; overflow-y: auto;">
-                    <div class="notes-empty" style="padding:16px; text-align:center; color:#888; font-size:12px;">Loading…</div>
+                    <div class="notes-empty zw-state zw-loading" role="status">Loading…</div>
                 </div>
             </div>
         `;
@@ -110,7 +110,7 @@ class NotesWidget extends WidgetModule {
         if (!list) return;
 
         if (notes.length === 0) {
-            list.innerHTML = '<div class="notes-empty" style="padding:20px; text-align:center; color:#888; font-style:italic; font-size:12px;">No notes yet</div>';
+            list.innerHTML = '<div class="notes-empty zw-state zw-empty" role="status">No notes yet</div>';
             return;
         }
 
@@ -126,7 +126,7 @@ class NotesWidget extends WidgetModule {
     renderError() {
         const list = this.element?.querySelector('.notes-list');
         if (!list) return;
-        list.innerHTML = '<div style="padding:20px; text-align:center; color:#c0392b; font-size:12px;">Couldn\'t load notes</div>';
+        list.innerHTML = '<div class="zw-state zw-error" role="status">Couldn\'t load notes</div>';
     }
 
     _renderNote(note) {
@@ -135,12 +135,12 @@ class NotesWidget extends WidgetModule {
         const when = this._formatTime(note.updated_at || note.created_at);
         const id = this._esc(note.id || '');
         return `
-            <div class="notes-item" data-note-id="${id}" style="padding:8px; border-bottom:1px solid rgba(0,0,0,0.08); font-size:13px; position:relative;">
+            <div class="notes-item" data-note-id="${id}" style="padding:8px; border-bottom:1px solid var(--clr-border, rgba(0,0,0,0.08)); font-size:13px; position:relative;">
                 ${title ? `<div style="font-weight:600; margin-bottom:2px; padding-right:22px;">${title}</div>` : ''}
-                <div style="color:#444; font-size:12px; white-space:pre-wrap; word-break:break-word;${title ? '' : ' padding-right:22px;'}">${content}</div>
-                ${when ? `<div style="color:#999; font-size:10px; margin-top:3px;">${this._esc(when)}</div>` : ''}
+                <div style="color:var(--clr-text-2, #444); font-size:12px; white-space:pre-wrap; word-break:break-word;${title ? '' : ' padding-right:22px;'}">${content}</div>
+                ${when ? `<div style="color:var(--clr-text-3, #999); font-size:10px; margin-top:3px;">${this._esc(when)}</div>` : ''}
                 <button data-note-delete="${id}" title="Delete"
-                    style="position:absolute; top:6px; right:6px; border:none; background:transparent; color:#bbb; cursor:pointer; font-size:14px; line-height:1; padding:2px 4px;">×</button>
+                    style="position:absolute; top:6px; right:6px; border:none; background:transparent; color:var(--clr-text-3, #bbb); cursor:pointer; font-size:14px; line-height:1; padding:2px 4px;">×</button>
             </div>`;
     }
 

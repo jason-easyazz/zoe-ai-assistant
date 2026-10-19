@@ -2275,6 +2275,9 @@ from routers.panel_config import router as panel_config_router
 app.include_router(panel_config_router)
 from routers.rooms import router as rooms_router
 app.include_router(rooms_router)
+# GET /api/system/stats - the desktop dashboard's System card (member-only, read-only).
+from routers.system_stats import router as system_stats_router
+app.include_router(system_stats_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
 from routers.music_setup import router as music_setup_router
