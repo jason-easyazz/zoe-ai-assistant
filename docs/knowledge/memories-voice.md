@@ -82,7 +82,7 @@ exactly one of the member's own people with something wall-safe to say; any othe
 
 1. Land through the voice landing loop (replay probe against the merged commit).
 2. Set `ZOE_MEMORIES_VOICE=1` in zoe-data's env and restart zoe-data. Deploy the UI: `touch/home.html` loads
-   `touch-review-cards.js?v=rc-2`, `memories.html` loads `memories-about-me.js?v=am-1`; nothing is precached, no `SW_VERSION` bump.
+   `touch-review-cards.js?v=rc-2`, `memories.html` loads `memories-about-me.js?v=am-2`; nothing is precached, no `SW_VERSION` bump.
 3. Needs `ZOE_VOICE_SESSION=1` (live) for the voice-session view and `ZOE_CORRECTION_APPLY=1` (live) for corrections.
    `ZOE_MEMORY_PROVENANCE_ANSWERS` must stay on (default): the tier runs inside it.
 4. Verify at the panel with a verified voice (badge "<name> · voice"): "what do you know about me?" -> the card; tap That's wrong ->

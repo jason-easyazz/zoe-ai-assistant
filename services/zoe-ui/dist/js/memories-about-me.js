@@ -222,6 +222,8 @@
             state.trigger.hidden = false;
             state.trigger.addEventListener('click', open);
         }
+        const nav = state.doc.getElementById('aboutMeNav');   // the phone menu's deep link: only once the server has offered the list
+        if (nav) nav.hidden = false;
         const hash = opts.hash !== undefined ? opts.hash : (root.location && root.location.hash) || '';
         if (hash === '#about-me') await open();
         return true;

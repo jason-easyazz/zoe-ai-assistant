@@ -56,6 +56,10 @@ def test_about_me_harness_passes():
      "    function forgetPane(it, row, pane, note) {\n        api('POST', '/api/memories/mine/' + encodeURIComponent(it.id)"
      " + '/forget');\n        clear(pane);"),                                                     # forget before the confirm
     ("            if (!text) { note.textContent = 'Type what’s right first.'; return; }", ""),     # an empty fix is sent
+    ("        if (nav) nav.hidden = false;\n", ""),                                                 # phone menu link never appears
+    ("        if (!state.section) return false;\n        try {",
+     "        if (!state.section) return false;\n        { const n0 = state.doc.getElementById('aboutMeNav'); if (n0) n0.hidden = false; }\n        try {"),
+                                                                                                  # menu link shown while the flag is off
 ])
 def test_about_me_negative_controls(tmp_path, old, new):
     src = ABOUT.read_text(encoding="utf-8")

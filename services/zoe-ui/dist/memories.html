@@ -952,6 +952,7 @@
             color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
             border-radius: 12px; transition: all 0.3s ease;
         }
+        .mobile-nav-item[hidden] { display: none; }   /* the About-me link stays hidden until the server offers it */
         .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
         .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
         .mobile-nav-item.logout { color: #ff4444; }
@@ -1350,7 +1351,7 @@
             <a href="people.html" class="mobile-nav-item">👥 People</a>
             <a href="memories.html" class="mobile-nav-item active">🧠 Memories</a>
             <a href="pendant.html" class="mobile-nav-item">🎙️ Pendant</a>
-            <a href="memories.html#about-me" class="mobile-nav-item">🙋 What Zoe knows about me</a>
+            <a href="memories.html#about-me" id="aboutMeNav" class="mobile-nav-item" hidden>🙋 What Zoe knows about me</a>
             <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
 
 
@@ -1424,7 +1425,7 @@
     <script src="js/common.js"></script>
     <script src="/js/notifications-panel.js"></script>
     <script src="js/ai-processor.js"></script>
-    <script src="/js/memories-about-me.js?v=am-1"></script>
+    <script src="/js/memories-about-me.js?v=am-2"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function () { if (window.ZoeAboutMe) window.ZoeAboutMe.init(document); });
         window.addEventListener('hashchange', function () {

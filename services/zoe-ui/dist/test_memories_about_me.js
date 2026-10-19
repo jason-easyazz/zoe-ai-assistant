@@ -66,8 +66,9 @@ const VIEW = {
 };
 
 function makeEnv(opts = {}) {
-    const ids = { aboutMe: new Node('section'), aboutMeOpen: new Node('button') };
+    const ids = { aboutMe: new Node('section'), aboutMeOpen: new Node('button'), aboutMeNav: new Node('a') };
     ids.aboutMe.hidden = true;
+    ids.aboutMeNav.hidden = true;
     ids.aboutMeOpen.hidden = true;
     const doc = { createElement: (t) => new Node(t), getElementById: (id) => ids[id] || null };
     const calls = [];
@@ -107,6 +108,7 @@ async function check(label, fn) {
         const e = makeEnv({ actions: 404, hash: '#about-me' });
         assert.strictEqual(await e.Z.init(e.doc), false);
         assert.strictEqual(e.ids.aboutMeOpen.hidden, true);
+        assert.strictEqual(e.ids.aboutMeNav.hidden, true, 'the phone menu link stays hidden while the flag is off');
         assert.strictEqual(e.ids.aboutMe.hidden, true);
         assert.deepStrictEqual(e.calls.map(c => c.url), ['/api/memories/mine/actions']);
     });
@@ -115,6 +117,7 @@ async function check(label, fn) {
         const e = makeEnv({ hash: '#about-me' });
         assert.strictEqual(await e.Z.init(e.doc), true);
         assert.strictEqual(e.ids.aboutMeOpen.hidden, false);
+        assert.strictEqual(e.ids.aboutMeNav.hidden, false, 'the phone menu link appears once the server offers the list');
         assert.strictEqual(e.ids.aboutMe.hidden, false);
         const txt = e.ids.aboutMe.textContent;
         assert(txt.includes('Robin (sister)') && txt.includes('lives in Eastvale'), 'people');
@@ -198,6 +201,8 @@ async function check(label, fn) {
         const mod = html.indexOf('/js/memories-about-me.js?v=');
         assert(auth > 0 && mod > auth, 'module after auth.js');
         assert(html.includes('id="aboutMe"') && html.includes('id="aboutMeOpen"'));
+        assert(/id="aboutMeNav"[^>]*\shidden/.test(html), 'the phone menu deep link ships hidden');
+        assert(html.includes('.mobile-nav-item[hidden]'), 'display:flex must not override hidden on the menu link');
     });
 
     if (failures.length) {
