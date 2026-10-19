@@ -6,7 +6,8 @@ embeddings only - no model, no household data. Each guardrail test names the sou
   V2  my voices are mine                drop ``owner_user_id = ?`` / ``user_id = ?`` from a list / tag / suggestion query
   V3  never auth                        name ``learned_voiceprints`` from ``auth.py`` or ``voice_session.py``
   V4  forget erases everything          skip ``omi_voices.purge_people`` in ``contacts_store.forget_voiceprints``
-  V6  unconfirmed prints expire         drop the voiceprint loop in ``sweep``
+  V6  unconfirmed prints expire         drop the voiceprint loop in ``sweep`` (with an expiry configured)
+  V6b D15: kept until forgotten         drop the ``voiceprints_expire()`` gate in ``sweep``
   V7  no wearer / no flag = nothing     store every segment in ``learn`` (drop ``learnable``)
   V7b the wearer's unsure never leaks   drop the ``LOW_MARGIN`` rule
   V8  children                          drop ``person_may_be_child`` from ``tag`` / ``manner_block.eligible`` from ``may_learn``
@@ -591,6 +592,7 @@ def test_forget_voice_keeps_the_person_and_tags_and_stop_learning_lets_go(env, m
 
 
 def test_unconfirmed_voices_and_held_embeddings_expire(env, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS", "30")          # an explicit expiry (D15 default: kept until forgotten)
     cid = _sam_cluster(env, monkeypatch)
     env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
     transcribe(env, monkeypatch, turns((0, 6, "other", 0.0, TV)))
@@ -601,6 +603,25 @@ def test_unconfirmed_voices_and_held_embeddings_expire(env, monkeypatch):
     assert env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(1,)]
     assert run(_sweep(now + timedelta(days=31)))["voiceprints"] == 1
     assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments") == [(0,)]
+
+
+def test_a_learned_voice_is_kept_until_forgotten_by_default(env, monkeypatch):
+    """Owner D15 (2026-10-19): no 30 / 365-day expiry. A print - even one learned before D15, carrying an old date - survives every
+    sweep; forgetting the person still erases it. Negative control: drop the ``voiceprints_expire()`` gate in ``sweep``."""
+    monkeypatch.delenv("ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS", raising=False)
+    monkeypatch.delenv("ZOE_OMI_VOICEPRINT_IDLE_DAYS", raising=False)
+    cid = _sam_cluster(env, monkeypatch)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    assert env.db.q("SELECT expires_at FROM learned_voiceprints") == [(ov.KEEP_UNTIL_FORGOTTEN,)]
+    assert env.client.get("/api/omi/voices").json()["voices"][0]["expires_at"] is None
+    env.db.conn.execute("UPDATE learned_voiceprints SET expires_at = '2000-01-01T00:00:00Z'")      # learned under the old rule
+    env.db.conn.commit()
+    assert run(_sweep(datetime.now(UTC) + timedelta(days=4000)))["voiceprints"] == 0
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(1,)]
+    async def forget():
+        async with db_compat.get_compat_db() as db:
+            return await ov.purge_people(db, A, [pid])
+    assert run(forget()) > 0 and env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
 
 
 async def _sweep(now):
@@ -643,6 +664,7 @@ def test_deleting_a_recording_rebuilds_or_drops_the_unknown_voice_it_fed(env, mo
 
 
 def test_an_expired_voice_takes_its_suggestions_with_it(env, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS", "30")          # an explicit expiry (D15 default: kept until forgotten)
     cid = _sam_cluster(env, monkeypatch)
     pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
     rid = transcribe(env, monkeypatch, turns((0, 6, "other", 0.0, TV)))
@@ -710,6 +732,7 @@ def test_a_failed_voice_cleanup_leaves_the_recording_deletable_again(env, monkey
 
 def test_the_expiry_sweep_runs_with_the_sync_flag_off(env, monkeypatch):
     """Turning ZOE_OMI_SYNC_ENABLED off stops the transcription loop, not the retention of biometrics already held."""
+    monkeypatch.setenv("ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS", "30")          # an explicit expiry (D15 default: kept until forgotten)
     cid = _sam_cluster(env, monkeypatch)
     env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
     env.db.conn.execute("UPDATE learned_voiceprints SET expires_at = '2000-01-01T00:00:00Z'")
@@ -823,7 +846,10 @@ ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_recordings.py", "routers/omi_
            "memory_forget_cascade.py",
            # the day review names the ``omi_segments`` vocabulary in its seam (``lines_for_day(segments=)``); it never touches a
            # voice table - its input is ``review_segments`` output (confirmed labels, no suggestions) handed in by the caller
-           "omi_day_review.py"}
+           "omi_day_review.py",
+           # the panel day review card lists / tags unknown voices ONLY by calling the owner-checked ``routers/omi_voices`` handlers
+           # in-process (no SQL on a voice table); a learned print never authenticates anyone through it
+           "panel_review_cards.py", "routers/panel_review_cards.py"}
 NEEDLES = ("learned_voiceprint", "omi_segment", "omi_voice_cluster", "omi_voice_settings", "omi_voices")
 
 
@@ -1036,7 +1062,9 @@ def test_the_adapter_maps_voice_labels_to_the_review_vocabulary():
     got = dr.segment_map([seg("r1", "you", "a"), seg("r1", "someone_else", "b"), seg("r1", "person", "c"), seg("r1", "not_sure", "d"),
                           seg("r1", "unverified", "e"), seg("r1", "weird", "f"), seg("r1", "not_a_person", "TV line"),
                           seg("r2", "not_a_person", "Zoe's reply")], segmented=["r1", "r2", "r3"])
-    assert got["r1"] == [("a", "you"), ("b", "someone_else"), ("c", "someone_else"), ("d", "not_sure"), ("e", "not_sure"), ("f", "not_sure")]
+    assert [tuple(t)[:2] for t in got["r1"]] == [("a", "you"), ("b", "someone_else"), ("c", "someone_else"), ("d", "not_sure"),
+                                                ("e", "not_sure"), ("f", "not_sure")]
+    assert all(t.person_id == "" for t in got["r1"])                 # a tag with no person row of the member's own carries nobody
     assert got["r2"] == [] and got["r3"] == []                       # a recording of only excluded lines is present and EMPTY, not absent
     assert "TV line" not in json.dumps(got) and "Zoe's reply" not in json.dumps(got)
     assert dr.segment_map([]) == {}
@@ -1184,6 +1212,7 @@ def test_forgetting_a_voice_withdraws_only_the_suggestions_its_model_made(env, m
 
 
 def test_an_expired_voice_withdraws_only_the_suggestions_its_model_made(env, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS", "30")          # an explicit expiry (D15 default: kept until forgotten)
     pid, seg, vp_main = _three_suggestions(env, monkeypatch)
     env.db.conn.execute("UPDATE learned_voiceprints SET expires_at = '2020-01-01T00:00:00Z' WHERE id = ?", (vp_main,))
     env.db.conn.commit()

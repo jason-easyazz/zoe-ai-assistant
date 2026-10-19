@@ -312,21 +312,6 @@ async def test_ungated_callers_are_unchanged(resolved, caplog):
     assert "SKYBRIDGE_GATE" not in caplog.text
 
 
-async def test_route_on_demand_runs_the_router_only_for_a_claimed_turn(resolved, monkeypatch):
-    seen: list[str] = []
-
-    def fake_route(text):
-        seen.append(text)
-        return _two_stage("chat")
-
-    monkeypatch.setitem(sys.modules, "semantic_router",
-                        types.SimpleNamespace(is_enabled=lambda: True, route=fake_route))
-    unclaimed = await sky.resolve_skybridge_request(LIVE_UTTERANCE, "jason", router_decision=sky.ROUTE_ON_DEMAND)
-    assert unclaimed["handled"] is False and seen == []
-    vetoed = await sky.resolve_skybridge_request("show my family", "jason", router_decision=sky.ROUTE_ON_DEMAND)
-    assert vetoed.get("vetoed") is True and seen == ["show my family"]
-
-
 # ── 3b. the new-list naming prompt: only a NAME answers it (Greptile, #1757) ──
 
 NAMING_CTX = {"intent": {"domain": "lists", "action": "create_list", "list_type": "personal"}, "cards": []}

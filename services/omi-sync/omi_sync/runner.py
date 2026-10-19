@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional, Sequence
 
 from . import config, health
-from .ble_link import ConnectError
+from .ble_link import ConnectError, InsecureLink, NotBonded
 from .engine import Drain, SyncConfig
 from .recordings import OpusDecoder
 from .spool import Spool
@@ -130,7 +130,8 @@ class Runner:
         try:
             # No scan: at the panel's range the pendant's adverts arrive once per 20-40 s, so a scan mostly misses it. A direct
             # connection attempt (hcitool lecc: 32 s supervision timeout) is both the presence test and the connection.
-            async with self.connect(t.address, lecc=s.lecc, lecc_prefix=s.lecc_prefix, addr_type=s.addr_type, attempts=2) as link:
+            async with self.connect(t.address, lecc=s.lecc, lecc_prefix=s.lecc_prefix, addr_type=s.addr_type, attempts=2,
+                                    require_bond=s.requires_bond(t.address), adapter=s.bluez_adapter) as link:
                 reachable = True
                 t.misses = 0                                # it answered: the away back-off starts over
                 res = await self.drain_factory(link, self._cfg(t)).run()
@@ -159,7 +160,10 @@ class Runner:
                 t.misses += 1
                 # away: ease off exponentially (30 s, 60 s, ... up to the cap) instead of ~85 failed attempts an hour
                 wait = health.away_wait(t.misses, s.scan_interval_s, s.away_backoff_max_s)
-            log.debug("pendant %s not reachable: %s (misses=%d, next try in %.0f s)", t.device_id[:6], exc, t.misses, wait)
+            if isinstance(exc, (NotBonded, InsecureLink)):    # phase-2 firmware refused fail-closed: say so, never quietly
+                log.warning("pendant %s refused: %s (next try in %.0f s)", t.device_id[:6], exc, wait)
+            else:
+                log.debug("pendant %s not reachable: %s (misses=%d, next try in %.0f s)", t.device_id[:6], exc, t.misses, wait)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - BLE/BlueZ faults are routine; log the class and try again

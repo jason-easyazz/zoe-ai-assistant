@@ -451,6 +451,7 @@ def test_the_day_lane_waits_for_quiet_and_a_cancelled_day_is_released(env, monke
     monkeypatch.setattr(omi, "mem_available_mb", lambda: 4000.0)
     monkeypatch.setattr(omi, "last_voice_age_s", lambda now_mono=None: 30.0)
     noon = datetime(2026, 10, 14, 4, 0, tzinfo=timezone.utc)
+    monkeypatch.setenv("ZOE_OMI_DAY_REVIEW_LANE", "both")           # the 4B day lane is an owner opt-in since 2026-10-18
     assert dr.day_gate(noon) == "voice_recent"
     monkeypatch.setattr(omi, "last_voice_age_s", lambda now_mono=None: None)
     assert dr.day_gate(noon) == "" and dr.day_gate(datetime(2026, 10, 13, 19, 0, tzinfo=timezone.utc)) == "night_hours"   # 03:00 local
@@ -463,6 +464,67 @@ def test_the_day_lane_waits_for_quiet_and_a_cancelled_day_is_released(env, monke
     res = run(dr.review_day(OWNER, DAY, cfg, as_of=AS_OF))
     assert res["status"] == "deferred" and cands(env) == [] and env.db.rows("SELECT * FROM omi_day_reviews") == []
     assert env.db.rows("SELECT day_review_id FROM omi_recordings")[0]["day_review_id"] is None      # retried later from scratch
+
+
+# --- owner decision 2026-10-18: the 12B overnight, not the 4B ---------------------------------------------------------------
+@pytest.mark.parametrize("raw,want", [(None, "night"), ("", "night"), ("typo", "night"), ("night", "night"), ("day", "day"), ("BOTH", "both")])
+def test_the_night_is_the_default_lane_and_the_4b_day_lane_is_an_opt_in(monkeypatch, raw, want):
+    if raw is None:
+        monkeypatch.delenv("ZOE_OMI_DAY_REVIEW_LANE", raising=False)
+    else:
+        monkeypatch.setenv("ZOE_OMI_DAY_REVIEW_LANE", raw)
+    assert dr.lane() == want
+    monkeypatch.setenv("ZOE_OMI_DAY_REVIEW", "shadow")
+    assert (dr.day_gate(datetime(2026, 10, 14, 4, 0, tzinfo=timezone.utc)) == "lane_night_only") == (want == "night")
+
+
+def test_the_live_flag_without_a_lane_starts_no_4b_loop(monkeypatch):
+    """zoe-data's .env carries ZOE_OMI_DAY_REVIEW=shadow and no lane: main.py's start condition must now leave the 4B loop off."""
+    monkeypatch.setenv("ZOE_OMI_DAY_REVIEW", "shadow")
+    monkeypatch.delenv("ZOE_OMI_DAY_REVIEW_LANE", raising=False)
+    assert dr.enabled() and dr.lane() == "night"
+    main_src = (Path(dr.__file__).parent / "main.py").read_text()
+    assert '_omi_dr.enabled() and _omi_dr.lane() != "night"' in main_src
+    assert run(dr.run_day_lane_once()) == []
+
+
+def test_a_day_that_cannot_finish_before_the_deadline_is_not_started(env):
+    """The night lane's budget: a day whose estimated cost does not fit is skipped BEFORE the claim (no call, no row, recordings unmarked:
+    the next night retries it). Control arm: the same day with time to spare is reviewed."""
+    import time as _time
+    add_rec(env, "rec1", GOLDEN)
+    model = fake_model(GOLDEN_RULES)
+    dr.set_llm(model)
+    slow = dr.Config(lane="night", decode_tok_s=2.0, prefill_tok_s=200.0, deadline=_time.monotonic() + 60.0)    # one call ~ 270 s at 2 tok/s
+    res = run(dr.review_day(OWNER, DAY, slow, as_of=AS_OF))
+    assert res["status"] == "no_time" and res["calls"] == 0 and res["calls_planned"] == 1 and res["need_s"] > res["left_s"]
+    assert model.seen == [] and cands(env) == [] and env.db.rows("SELECT * FROM omi_day_reviews") == []
+    assert env.db.rows("SELECT day_review_id FROM omi_recordings")[0]["day_review_id"] is None
+    roomy = dr.Config(lane="night", decode_tok_s=2.0, prefill_tok_s=200.0, deadline=_time.monotonic() + 3600.0)
+    res = run(dr.review_day(OWNER, DAY, roomy, as_of=AS_OF))
+    assert res["status"] == "ok" and res["calls"] == 1 and len(cands(env)) == 5
+
+
+def test_a_no_time_day_does_not_stop_the_members_later_days(monkeypatch):
+    seen: list = []
+
+    async def fake_day(user_id, day, cfg, **kw):
+        seen.append(day)
+        return {"status": "no_time" if day == "2026-10-12" else "ok", "day": day}
+    monkeypatch.setattr(dr, "review_day", fake_day)
+    out = run(dr.review_member(OWNER, dr.Config(), days=["2026-10-12", "2026-10-13"]))
+    assert seen == ["2026-10-12", "2026-10-13"] and [r["status"] for r in out] == ["no_time", "ok"]
+
+
+def test_the_day_cost_estimate_uses_the_measured_rates():
+    lines = [dr.Line(id=f"r1.{i}", recording_id="r1", at="10:00", text="I need to call the plumber about the leak tomorrow at nine", speaker="you")
+             for i in range(20)]
+    fast = dr.Config(decode_tok_s=6.0, prefill_tok_s=200.0)
+    slow = dr.Config(decode_tok_s=2.0, prefill_tok_s=200.0)
+    one = dr.call_cost_s(lines, fast)
+    prompt = sum(dr.est_tokens(m["content"]) for m in dr.messages_for(lines))
+    assert one == pytest.approx(prompt / 200.0 + dr.PLAN_OUT_FRACTION * dr.ITEM_MAX_TOKENS / 6.0)
+    assert dr.call_cost_s(lines, slow) > one and dr.day_cost_s([lines, lines], fast) == pytest.approx(2 * one)
 
 
 # --- the memory floors (gap audit P0-3): distress, forget ledger at create AND at write, restraint, trust order --------------
