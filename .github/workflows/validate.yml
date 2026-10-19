@@ -381,6 +381,8 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/services/zoe-data
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"
+          # Same env as the required lane minus the database (tests/unit/test_ci_instrument_honesty.py pins it).
+          ZOE_PRIVACY_CANARY_KEY: ${{ secrets.ZOE_PRIVACY_CANARY_KEY }}
 
   # Are the dependency manifests still SATISFIABLE, and do their load-bearing
   # ceilings still hold?
