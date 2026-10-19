@@ -165,6 +165,7 @@ aider_env/
 !labs/needle-benchmark/setup.sh
 !labs/p0-deroot/run.sh
 !labs/p0-deroot/lab/provision.sh
+!labs/omi-firmware/*.sh
 !RESTART_SERVICES.sh
 !start-zoe.sh
 !stop-zoe.sh
