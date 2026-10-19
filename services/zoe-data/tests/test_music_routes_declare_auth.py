@@ -33,12 +33,16 @@ ALLOWLIST = {
     ("routers/music_setup.py", "browser_start"): "phone: one-time signed setup token in the body",
     ("routers/music_setup.py", "browser_status"): "phone: one-time signed setup token header",
     ("routers/music_setup.py", "browser_cancel"): "phone: one-time signed setup token in the body",
+    ("routers/music_ma_ui.py", "gate"): "nginx auth_request target: it IS the credential check (cookie, member or panel; 401 otherwise)",
+    ("routers/music_ma_ui.py", "session"): "member-or-panel checked in the body via ma_ui_gate.principal_ok - deliberately NOT "
+                                           "require_member_or_panel, whose ZOE_HA_CONTROL_SCOPE=open rollback must not open MA's UI",
 }
 
 # Router files that import ``music_service`` (the sole Music Assistant client) but serve no ``/api/music`` route of their own:
 # each one's routes were reviewed for who may reach MA state through them. A NEW file importing it fails until reviewed.
 REVIEWED_MUSIC_STATE_ROUTERS = {
     "music.py", "music_setup.py",
+    "music_ma_ui.py",   # the gate in front of Music Assistant's own web UI (ma_ui_gate.py); serves no MA state itself
     "handoff.py",       # /api/handoff/*: token/nonce-bound app-connection handoffs
     "panel_config.py",  # /api/panels/*: member-or-panel (#2099); music_service only validates/gets the default speaker
 }

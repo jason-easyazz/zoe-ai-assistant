@@ -313,19 +313,23 @@ check('ws: no session at all → no query, and a warning (the server will refuse
 // fake fetch/WebSocket/timers. statusReplies are consumed one per /api/music/status call.
 const musicHtml = read('music.html');
 function musicSandbox(statusReplies, S = {}) {
-  const calls = { ws: 0, setup: [], players: 0, offline: [], reconnectIn: [], watcher: null, cleared: 0 };
+  const calls = { ws: 0, setup: [], players: 0, offline: [], reconnectIn: [], watcher: null, cleared: 0, order: [] };
   const ctx = {
     S: Object.assign({ ws: null, wsRetries: 0, wsRetryDelay: 2000, wsRetryTimer: null, maAvailable: false }, S),
     MA_WS: 'wss://zoe.local/modules/music-assistant/ws', zoeHdrs: () => ({}),
-    fetch: async () => { const r = statusReplies.shift() || { ok: false }; return { ok: !!r.ok, json: async () => r.json }; },
-    WebSocket: class { constructor() { calls.ws++; } close() {} },
+    // /api/music/ma-ui/session (the MA-UI gate cookie, see maUiSession) is not a status reply: record it, never consume one
+    fetch: async (url) => {
+      if (String(url).includes('/api/music/ma-ui/session')) { calls.order.push('session'); return { ok: true, json: async () => ({}) }; }
+      const r = statusReplies.shift() || { ok: false }; return { ok: !!r.ok, json: async () => r.json };
+    },
+    WebSocket: class { constructor() { calls.ws++; calls.order.push('ws'); } close() {} },
     showOffline: (k) => calls.offline.push(k), showSetup: (ids) => calls.setup.push([...ids]), hideSetup: () => { calls.hideSetup = (calls.hideSetup || 0) + 1; },
     fetchPlayersFromBackend: async () => { calls.players++; }, onWSOpen() {}, onWSMsg() {},
     setTimeout: (fn, ms) => { calls.reconnectIn.push(ms); return 1; }, clearTimeout() {},
     setInterval: (fn, ms) => { calls.watcher = fn; calls.watcherMs = ms; return 7; }, clearInterval: () => { calls.cleared++; },
     Set, Math, JSON, console: { log() {}, warn() {} },
   };
-  const code = ['refreshMAStatus', 'goOffline', 'onMAUp', 'connectWS', 'onWSClose', 'watchForMA'].map(n => extractFunction(musicHtml, n)).join('\n')
+  const code = ['refreshMAStatus', 'goOffline', 'onMAUp', 'maUiSession', 'connectWS', 'onWSClose', 'watchForMA'].map(n => extractFunction(musicHtml, n)).join('\n')
     + '\nlet _maWatchTimer = null;\n; ({ refreshMAStatus, goOffline, onMAUp, connectWS, onWSClose, watchForMA })';
   return { fns: vm.runInNewContext(code, ctx), calls, S: ctx.S };
 }
@@ -368,6 +372,13 @@ function musicSandbox(statusReplies, S = {}) {
     const { fns, calls } = musicSandbox([{ ok: true, json: { available: true, provider_count: 1 } }]);
     fns.watchForMA(); await calls.watcher();
     assert.strictEqual(calls.players, 1); assert.strictEqual(calls.ws, 1); assert.deepStrictEqual(calls.setup, []);
+  });
+  check('music: the MA-UI gate cookie is requested BEFORE every socket handshake (the gate would 401 a cookie-less one)', async () => {
+    const { fns, calls } = musicSandbox([{ ok: true, json: { available: true, provider_count: 1 } }]);
+    fns.watchForMA(); await calls.watcher();
+    assert.deepStrictEqual(calls.order, ['session', 'ws']);
+    await fns.connectWS();                                   // a reconnect refreshes it again
+    assert.deepStrictEqual(calls.order, ['session', 'ws', 'session', 'ws']);
   });
   check('music: watcher tick while MA is still down opens nothing and keeps watching', async () => {
     const { fns, calls } = musicSandbox([{ ok: true, json: { available: false } }, { ok: false }]);
