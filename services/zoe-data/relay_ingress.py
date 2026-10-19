@@ -93,6 +93,9 @@ WS_CLOSE_TIMEOUT_S = 2.0
 #: command (up to 30 s) - far past ``WS_RECHECK_S`` - so without a bound an idle revoked socket could outlive the revocation promise.
 #: A proof that does not finish in time is not a proof: the socket is closed 1008 (fail closed; the panel reconnects).
 WS_PROOF_TIMEOUT_S = 5.0
+#: Clock and sleep of the revocation timer only (``_SocketGuard._tick``), module-level so a test can drive a fake clock.
+_monotonic = time.monotonic
+_sleep = asyncio.sleep
 #: The panel a RELAYED request was proven to be, for code that has no ``Request`` in hand (the websocket session resolvers in main.py).
 _relay_panel: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("zoe_relay_panel", default=None)
 
@@ -500,11 +503,18 @@ class _SocketGuard:
         self._inflight: Optional[asyncio.Future] = None  # the frame currently being written, if any (cancelled on revocation)
         self._prove_lock = asyncio.Lock()
         self._timer: Optional[asyncio.Future] = None
+        self._closer: Optional[asyncio.Future] = None  # the 1008 close of a revoked socket, a task of its own so cancelling the caller cannot cut it
 
     def start(self) -> None:
         self._timer = asyncio.ensure_future(self._tick())
 
     async def stop(self) -> None:
+        # A revocation close already in progress is allowed to finish (it is bounded by ``WS_CLOSE_TIMEOUT_S`` on its own): the
+        # handler returning after ``_kill`` set ``_dead`` must not cancel the timer mid-``_send_close``, or the client sees an
+        # abnormal teardown instead of the 1008 policy close.
+        closer = self._closer
+        if closer is not None and not closer.done():
+            await asyncio.wait({closer})
         if self._timer is not None:
             self._timer.cancel()
             try:
@@ -550,6 +560,12 @@ class _SocketGuard:
         inflight = self._inflight
         if inflight is not None and not inflight.done():
             inflight.cancel()
+        if self._closer is None:
+            self._closer = asyncio.ensure_future(self._close_bounded())
+        # Shielded: the caller (the timer) may be cancelled by ``stop()`` when the handler returns; the close finishes anyway.
+        await asyncio.shield(self._closer)
+
+    async def _close_bounded(self) -> None:
         try:
             await asyncio.wait_for(self._send_close(), WS_CLOSE_TIMEOUT_S)
         except Exception:  # noqa: BLE001 - already closing/closed by the app or the peer, or the close itself stalled (the timeout);
@@ -578,10 +594,16 @@ class _SocketGuard:
         inflight.result()
 
     async def _tick(self) -> None:
+        # Proofs are scheduled against an ABSOLUTE deadline, not "sleep after each proof": a proof can take up to
+        # ``WS_PROOF_TIMEOUT_S``, and sleeping the full interval after it would stretch the documented revocation bound to
+        # interval + proof time. A proof that overruns its slot starts the next one at once (never a burst of catch-ups).
+        interval = max(WS_RECHECK_S, 0.05)
+        deadline = _monotonic() + interval
         while not self._dead.is_set() and not self._finished:
-            await asyncio.sleep(max(WS_RECHECK_S, 0.05))
+            await _sleep(max(deadline - _monotonic(), 0.0))
             if self._finished or not await self._prove(fresh=True):
                 return
+            deadline = max(deadline + interval, _monotonic())
 
     async def send(self, message: dict) -> None:
         kind = message.get("type")

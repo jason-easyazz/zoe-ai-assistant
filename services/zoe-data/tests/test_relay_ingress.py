@@ -880,6 +880,90 @@ async def test_a_stalled_registry_read_closes_an_idle_socket_within_the_proof_bo
         await asyncio.gather(task, return_exceptions=True)
 
 
+async def test_the_revocation_timer_keeps_its_cadence_when_a_proof_takes_time(monkeypatch):
+    """Codex P1 on #2115: the timer slept a fixed interval AFTER each proof, so a proof that took up to WS_PROOF_TIMEOUT_S stretched the
+    documented revocation bound to interval + proof. Proofs now start on an absolute schedule (fake clock, fake proof)."""
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 15.0)
+    now = [1000.0]
+    starts = []
+
+    async def fake_sleep(delay):
+        now[0] += delay
+
+    monkeypatch.setattr(relay_ingress, "_monotonic", lambda: now[0])
+    monkeypatch.setattr(relay_ingress, "_sleep", fake_sleep)
+    guard = relay_ingress._SocketGuard(None, {}, None, None, require_credential=False)
+
+    async def slow_proof(*, fresh, only_if_stale=False):
+        starts.append(now[0] - 1000.0)
+        now[0] += 5.0                                  # each proof takes the full WS_PROOF_TIMEOUT_S
+        if len(starts) == 4:
+            guard._dead.set()
+        return True
+
+    guard._prove = slow_proof
+    await guard._tick()
+    assert starts == [15.0, 30.0, 45.0, 60.0]          # a sleep-after-proof loop gives 15, 35, 55, 75
+
+    # a proof that overruns the whole slot starts the next one at once, not as a burst of missed ticks
+    now[0], starts[:] = 1000.0, []
+    guard._dead.clear()
+
+    async def overrunning_proof(*, fresh, only_if_stale=False):
+        starts.append(now[0] - 1000.0)
+        now[0] += 40.0
+        if len(starts) == 3:
+            guard._dead.set()
+        return True
+
+    guard._prove = overrunning_proof
+    await guard._tick()
+    assert starts == [15.0, 55.0, 95.0]
+
+
+async def test_a_handler_returning_after_a_revocation_does_not_cut_the_1008_close_short(reg, on, monkeypatch):
+    """Codex P2 on #2115: ``_kill`` sets ``_dead`` (which hands the handler a disconnect), the handler returns, the middleware's
+    ``stop()`` cancelled the timer task mid-``_send_close`` and the client saw an abnormal teardown instead of the 1008 policy close.
+    The close is now a shielded task that ``stop()`` waits for (bounded by WS_CLOSE_TIMEOUT_S). The transport's close is slow here."""
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.2)
+    sent, finished = [], []
+
+    async def app(scope, receive, send):
+        await receive()                                                   # websocket.connect
+        await send({"type": "websocket.accept"})
+        while (await receive())["type"] != "websocket.disconnect":        # returns the moment the guard hands it the disconnect
+            pass
+
+    async def receive():
+        if not sent:
+            sent.append("connect")
+            return {"type": "websocket.connect"}
+        await asyncio.sleep(3600)
+
+    async def send(message):
+        sent.append(message["type"])
+        if message["type"] == "websocket.close":
+            await asyncio.sleep(0.3)                                      # the close takes real time to reach the transport
+            sent.append(("code", message["code"]))
+            finished.append(True)
+
+    scope = {
+        "type": "websocket", "path": "/ws/idle", "raw_path": b"/ws/idle", "query_string": b"", "scheme": "wss", "root_path": "",
+        "client": (NGINX, 1), "server": ("zoe", 8000), "subprotocols": [],
+        "headers": [(k.lower().encode(), v.encode()) for k, v in relay_headers().items()],
+    }
+    task = asyncio.ensure_future(relay_ingress.RelayIngressMiddleware(app)(scope, receive, send))
+    try:
+        await asyncio.sleep(0.05)                                         # accepted and proven
+        reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (FP_KITCHEN,))
+        reg.con.commit()
+        await asyncio.wait_for(task, 0.2 + 0.3 + 3.0)                     # the whole ASGI call returns once the close is out
+        assert finished and ("code", 1008) in sent
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 def test_the_proof_lives_under_a_namespaced_scope_key_not_a_bare_relay_ctx(reg, on):
     seen = []
     app = make_app(reg)
