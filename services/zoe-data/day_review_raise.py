@@ -26,8 +26,8 @@ another member get nothing - not even the count. A voice turn with no note (an u
 CROWDED ROOM (identity-presence-engine section 2.1: another voice heard on this panel in the last 10 minutes). The raise is
 not made (it waits for another day). A pull says nothing private aloud: the count goes to the member's linked Telegram
 (``telegram_notify``: the count + the Pendant page link, no item text) and the panel gets the locked card. Honest limits: only
-voices the speaker gate judged count (an unverified voice, or another member's) - a silent person is invisible; a turn with no
-verdict is not evidence; for the first 10 minutes after a restart nothing is known, so the room counts as crowded.
+spoken turns count (an unverified voice, a turn with NO verdict, or another member's voice) - a silent person is invisible;
+for the first 10 minutes after a restart nothing is known, so the room counts as crowded.
 
 READ-ONLY on the household's data. Raising and pulling never write a candidate, a list, a reminder, an event or a memory: the
 day review's approve-before-write stays the only writer (``omi_review_apply``). This module keeps only its own small state
@@ -195,8 +195,7 @@ class _VoiceTurn:
 
 _TURNS: dict[str, _VoiceTurn] = {}
 _HEARD: dict[str, list[tuple[float, str]]] = {}    # panel -> [(monotonic, member id | "?")]
-_STARTED: list[float] = []                          # when this process first noted a voice turn (crowding unknown for 10 min)
-_RAISED_AT: dict[str, float] = {}                   # member -> monotonic of the last raise this process made (the decline window)
+_STARTED: list[float] = [time.monotonic()]          # when this process started: who is in the room is unknown for 10 min
 _PHONE_AT: dict[str, float] = {}
 
 
@@ -210,18 +209,16 @@ def note_voice_turn(session_id: str, panel_id: str, *, scope_user: Optional[str]
 
     ``scope_user`` is the member this turn may act for (an accepted voice claim / an open voice session / a FRESH PIN; None =
     nobody). ``verdict`` + ``claimed`` feed the crowd log: a voice the gate judged and did NOT confirm is "someone", another
-    member's confirmed voice is that member; a turn with no verdict is not evidence either way."""
+    member's confirmed voice is that member, and a turn with NO verdict is an unknown voice too (unknown is never the member)."""
     try:
         if not enabled():
             return
         now = _clock()
-        if not _STARTED:
-            _STARTED.append(now)
         if session_id:
             _TURNS[str(session_id)] = _VoiceTurn(str(panel_id or ""), (scope_user or None), now)
             for sid in [s for s, t in _TURNS.items() if now - t.at > TURN_TTL_S]:
                 _TURNS.pop(sid, None)
-        who = str(claimed) if (verdict is True and claimed) else ("?" if verdict is False else "")
+        who = str(claimed) if (verdict is True and claimed) else "?"
         if panel_id and who:
             log = [e for e in _HEARD.get(str(panel_id), []) if now - e[0] <= CROWD_WINDOW_S]
             log.append((now, who))
@@ -232,7 +229,7 @@ def note_voice_turn(session_id: str, panel_id: str, *, scope_user: Optional[str]
 
 def others_present(panel_id: str, member: str) -> bool:
     """True when anyone but ``member`` was heard on ``panel_id`` in the last 10 minutes - or when that cannot be known yet
-    (no voice noted since this process started, or within its first 10 minutes): unknown is crowded."""
+    (within this process's first 10 minutes): unknown is crowded."""
     now = _clock()
     if not _STARTED or now - _STARTED[0] < CROWD_WINDOW_S:
         return True
@@ -282,6 +279,14 @@ def _local_day(now: datetime) -> str:
     from time_utils import zoe_timezone
 
     return now.astimezone(zoe_timezone()).date().isoformat()
+
+
+def _day_of(stamp: str) -> str:
+    """The household day of a stored UTC stamp; "" when unreadable."""
+    try:
+        return _local_day(datetime.strptime(stamp, _TS).replace(tzinfo=timezone.utc))
+    except ValueError:
+        return ""
 
 
 async def _load_state(uid: str) -> tuple[dict, str]:
@@ -364,6 +369,8 @@ async def prepare(user_id: str, session_id: str, *, now: Optional[datetime] = No
         state, engaged_at = await _load_state(uid)
         if state.get("day") == _local_day(now):
             return None                                           # at most once a household day
+        if engaged_at and _day_of(engaged_at) == _local_day(now):
+            return None                                           # he already asked or looked today: nothing to mention
         facts = await _facts(uid, str(state.get("at") or ""))
         counts = facts.get("counts") or {}
         if total(counts) <= 0:
@@ -383,12 +390,11 @@ async def prepare(user_id: str, session_id: str, *, now: Optional[datetime] = No
 async def settle(raised: Optional[Raise]) -> None:
     """The brief that carried the line produced a reply: today is used, and the raise counts as unanswered until the member
     takes it up. NEVER raises."""
-    if raised is None:
-        return
+    if raised is None or not enabled():
+        return                                                    # switched off mid-turn: no write (the rollback is instant)
     try:
         await _save(raised.user_id, STATE_KEY, {"day": _local_day(raised.now), "at": _iso(raised.now),
                                                 "unanswered": raised.streak + 1})
-        _RAISED_AT[raised.user_id] = _clock()
         logger.info("DAY_REVIEW_RAISE user=%s raised=1 unanswered=%d", raised.user_id, raised.streak + 1)
     except Exception as exc:  # noqa: BLE001
         logger.warning("day_review_raise: raise not recorded for user=%s: %s", raised.user_id, type(exc).__name__)
@@ -400,19 +406,23 @@ async def note_engaged(member: str, *, dry: bool = False) -> None:
         return
     try:
         await _save(member, ENGAGED_KEY, _iso(_now()))
-        _RAISED_AT.pop(member, None)
     except Exception as exc:  # noqa: BLE001
         logger.debug("day_review_raise: engaged not recorded: %s", type(exc).__name__)
 
 
 async def note_declined(member: str) -> bool:
-    """"Not now" right after a raise: snooze it now (the state two ignores reach). True when it was about a raise."""
-    at = _RAISED_AT.get(member)
-    if at is None or _clock() - at > DECLINE_WINDOW_S:
+    """"Not now" within ``DECLINE_WINDOW_S`` of a raise: snooze it now (the state two ignores reach). The STORED raise time is
+    the authority, so a restart in between does not lose the decline. True when it was about a raise."""
+    if not enabled():
         return False
-    _RAISED_AT.pop(member, None)
     try:
         state, _engaged = await _load_state(member)
+        try:
+            raised_at = datetime.strptime(str(state.get("at") or ""), _TS).replace(tzinfo=timezone.utc)
+        except ValueError:
+            return False
+        if not timedelta(0) <= _now() - raised_at <= timedelta(seconds=DECLINE_WINDOW_S):
+            return False
         state = dict(state)
         state["unanswered"] = MAX_UNANSWERED
         await _save(member, STATE_KEY, state)
@@ -596,6 +606,5 @@ def reset() -> None:
     """Tests: forget the in-process notes."""
     _TURNS.clear()
     _HEARD.clear()
-    _STARTED.clear()
-    _RAISED_AT.clear()
+    _STARTED[:] = [_clock()]
     _PHONE_AT.clear()

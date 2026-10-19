@@ -36,7 +36,8 @@ sign-in). No kinds, no words from the day.
 - **Taking it up** = a pull ("what did you find..."), "review my day" (the card), or approving / dismissing ANY item anywhere
   (desktop, phone, card) after the raise. That resets the count.
 - **Two raises in a row not taken up**, or one **decline** within 10 minutes of a raise ("not now", "leave it", "maybe later",
-  "no thanks", "don't mention it again", "stop telling me about my day") = SNOOZED. A decline is only recorded; the turn still
+  "no thanks", "don't mention it again", "stop telling me about my day"; the STORED raise time decides, so a restart in between
+  does not lose it) = SNOOZED. A decline is only recorded; the turn still
   goes on to the pull's own "not now" handling and the brain.
 - A snooze lifts only when a NEWER review is waiting AND `ZOE_DAY_REVIEW_RAISE_SNOOZE_DAYS` (3) have passed since the last
   raise. The same old items are never raised a third time; they wait on the card, the orb and the pull.
@@ -58,8 +59,9 @@ counts only B's candidates.
 member's confirmed voice. A crowded raise is simply not made (a raise is unasked; sending a Telegram unasked would be a push). A
 crowded pull goes to the phone and the wall gets the locked card. At most one phone send per member per 10 minutes.
 
-Honest limits: a silent person is invisible (voice-only presence); a turn with no verdict is not evidence; the owner's own
-unverified turn counts as "someone" (fail-safe); for the first 10 minutes after a zoe-data restart presence is unknown and the room
+A spoken turn with NO speaker verdict (for example a fresh-PIN turn the gate did not judge) is an unknown voice and counts too.
+Honest limits: a silent person is invisible (voice-only presence); the owner's own unverified or unjudged turn counts as
+"someone" (fail-safe); for the first 10 minutes after a zoe-data restart presence is unknown and the room
 counts as crowded.
 
 ## Read-only

@@ -348,6 +348,18 @@ async def test_taking_it_up_resets_the_count(env):
     assert b.day_review is not None and b.day_review.streak == 0
 
 
+async def test_after_he_asked_today_the_brief_does_not_repeat_it(env):
+    seed(env)
+    env["now"] = at(20, 6)
+    assert await drr.tier("anything from today?", OWNER, channel="chat") is not None      # he pulled it at 06:00
+    env["now"] = at(20, 8)
+    b = await brief(env)
+    assert b is None or b.day_review is None                                             # the 08:00 brief does not say it again
+    env["now"] = at(21, 8)
+    bft._reset_state()
+    assert (await brief(env)).day_review is not None                                     # the next day it may
+
+
 async def test_a_decline_right_after_the_raise_snoozes_it_and_steals_nothing(env):
     seed(env)
     await bft.settle(await brief(env), produced=True)
@@ -356,6 +368,33 @@ async def test_a_decline_right_after_the_raise_snoozes_it_and_steals_nothing(env
     env["now"] = at(21, 8)
     bft._reset_state()
     assert await brief(env) is None
+
+
+async def test_a_decline_survives_a_restart_between_the_raise_and_the_not_now(env):
+    seed(env)
+    await bft.settle(await brief(env), produced=True)
+    drr.reset()                                                           # zoe-data restarted after the raise
+    env["now"] = at(20, 8, 5)
+    assert await drr.tier("not now", OWNER, channel="chat") is None
+    assert env["prefs"][OWNER][drr.STATE_KEY]["unanswered"] == drr.MAX_UNANSWERED
+
+
+async def test_a_late_not_now_is_not_about_the_raise(env):
+    seed(env)
+    await bft.settle(await brief(env), produced=True)
+    env["now"] = at(20, 8, 30)                                            # 30 minutes later: about something else
+    await drr.tier("not now", OWNER, channel="chat")
+    assert env["prefs"][OWNER][drr.STATE_KEY]["unanswered"] == 1
+
+
+@pytest.mark.parametrize("flag,value", [("ZOE_DAY_REVIEW_RAISE", "0"), ("ZOE_OMI_DAY_REVIEW", "shadow")])
+async def test_switched_off_between_prepare_and_settle_writes_nothing(env, monkeypatch, flag, value):
+    seed(env)
+    b = await brief(env)
+    assert b.day_review is not None
+    monkeypatch.setenv(flag, value)
+    await bft.settle(b, produced=True)
+    assert env["prefs"] == dict()
 
 
 async def test_a_not_now_with_no_recent_raise_records_nothing(env):
@@ -373,13 +412,14 @@ async def test_a_verified_voice_alone_hears_it(env):
     assert b is not None and b.day_review is not None
 
 
-@pytest.mark.parametrize("scope,verdict", [(None, None), (OTHER, None), (None, False), (OTHER, True)])
-async def test_a_guest_or_another_member_never_hears_it(env, scope, verdict):
-    # verdict None = no speaker evidence at all (a device turn with no verdict, another member's PIN): only the scope rule
-    # stands between the turn and the owner's count; with a verdict the crowd rule refuses it too.
+@pytest.mark.parametrize("scope,verdict,claimed", [
+    (None, True, OWNER),      # the owner's voice matched but the session refused it (model gate): ONLY the scope rule stops it
+    (None, None, None), (OTHER, None, None), (None, False, None), (OTHER, True, OTHER),
+])
+async def test_a_guest_or_another_member_never_hears_it(env, scope, verdict, claimed):
     seed(env)
     warm(env)
-    heard(env, scope=scope, verdict=verdict, claimed=scope if verdict else None)
+    heard(env, scope=scope, verdict=verdict, claimed=claimed)
     b = await brief(env, sid=VSID)                    # the brain turn is attributed to the owner (a stale binding) ...
     assert b is None or b.day_review is None          # ... but the turn did not identify them: nothing, not even the count
     assert "pendant day review" not in (b.body if b else "")
@@ -426,6 +466,17 @@ async def test_a_second_voice_stops_the_raise(env):
     env["clk"][0] += drr.CROWD_WINDOW_S + 1                                                     # ten quiet minutes later
     heard(env)
     assert (await brief(env, sid=VSID)).day_review is not None
+
+
+async def test_a_fresh_pin_turn_with_no_voice_verdict_is_an_unknown_voice(env):
+    # scoped to the owner by a fresh PIN, but the speaker gate said nothing: whoever spoke is unknown, so the room is crowded
+    seed(env)
+    warm(env)
+    heard(env, scope=OWNER, verdict=None, claimed=None)
+    b = await brief(env, sid=VSID)
+    assert b is None or b.day_review is None
+    res = await drr.tier("what did you find in my day?", OWNER, channel="voice", extra_ctx=vctx())
+    assert res.reply == drr.CROWDED_SENT
 
 
 async def test_unknown_presence_after_a_restart_is_crowded(env):
