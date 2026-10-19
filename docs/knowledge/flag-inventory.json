@@ -346,7 +346,8 @@
         ],
         "in_env_example": false,
         "readers": [
-          "scripts/maintenance/reset_engineering_boards.py"
+          "scripts/maintenance/reset_engineering_boards.py",
+          "scripts/maintenance/zoe_restore_drill.py"
         ],
         "typed_env": false
       },
@@ -1591,6 +1592,37 @@
         ],
         "typed_env": true
       },
+      "ZOE_DRILL_HELPER": {
+        "defaults": [
+          "(required)",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_restore_drill.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DRILL_MEM_FLOOR_MB": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_restore_drill.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DRILL_PYTHON": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_restore_drill.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_EDGE_TTS_TIMEOUT_S": {
         "defaults": [
           "'5'"
@@ -2186,6 +2218,47 @@
         ],
         "typed_env": false
       },
+      "ZOE_HA_EXPORT_CMD": {
+        "defaults": [
+          "(required)",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_host_snapshot.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HA_UI_GATE": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/ha_ui.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_HA_UI_SECRET": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/ha_ui.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_HA_UI_TTL_S": {
+        "defaults": [
+          "28800"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/ha_ui.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_HA_URL": {
         "defaults": [
           "dynamic"
@@ -2439,9 +2512,11 @@
           "scripts/maintenance/zoe-nightly-dreaming.py",
           "services/zoe-data/auth.py",
           "services/zoe-data/auth_handoff.py",
+          "services/zoe-data/ma_ui_gate.py",
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/music_jukebox.py",
           "services/zoe-data/panel_kiosk_credential.py",
+          "services/zoe-data/routers/ha_ui.py",
           "services/zoe-data/telegram_notify.py",
           "services/zoe-data/traffic_class.py",
           "services/zoe-data/zoe_core_client.py"
@@ -2823,6 +2898,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LAN_HOSTS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth_handoff.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LATENCY_BASELINE": {
         "defaults": [
           "dynamic"
@@ -3061,6 +3146,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/memory_digest.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOCAL_BACKUP_ENCRYPT": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_host_snapshot.py"
         ],
         "typed_env": false
       },
@@ -3328,6 +3423,36 @@
           "services/zoe-data/ma_ondemand.py"
         ],
         "typed_env": false
+      },
+      "ZOE_MA_UI_GATE": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ma_ui_gate.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MA_UI_SECRET": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ma_ui_gate.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MA_UI_TTL_S": {
+        "defaults": [
+          "43200"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ma_ui_gate.py"
+        ],
+        "typed_env": true
       },
       "ZOE_MCP_ACTOR_ROLE": {
         "defaults": [
@@ -3618,6 +3743,16 @@
           "services/zoe-data/mishear_clarify.py"
         ],
         "typed_env": true
+      },
+      "ZOE_MODELS_LOCK": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "typed_env": false
       },
       "ZOE_MOONSHINE_ARCH": {
         "defaults": [
@@ -4078,6 +4213,26 @@
       "ZOE_OFFBOX_CONFIG_DIR": {
         "defaults": [
           "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_CRONTAB_FILE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_offbox.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OFFBOX_ETC_SYSTEMD": {
+        "defaults": [
+          "'/etc/systemd/system'"
         ],
         "in_env_example": false,
         "readers": [
@@ -4621,6 +4776,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_PUSH_PROOF": {
+        "defaults": [
+          "'enforce'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
         ],
         "typed_env": false
       },

@@ -14,12 +14,17 @@ refuses to run if an age identity is found in its config directory.
 Tiers (one restic snapshot each, tagged ``zoe-<tier>``):
 
 * ``household`` - age-encrypted: the newest on-box Postgres dumps (biometric table data already excluded by
-  ``postgres-nightly-backup.sh``), ``pg_dumpall --globals-only``, the newest MemPalace tarball, ``~/.zoe`` minus
-  caches, logs, backups, pendant audio and secrets, and the voice regression corpus. Retention one per day for 7
+  ``postgres-nightly-backup.sh``) with their manifests, ``pg_dumpall --globals-only``, the newest MemPalace
+  tarball, ``~/.zoe`` minus caches, logs, backups, pendant audio and secrets, the voice regression corpus, and the
+  HOST sources a dead disk lost even with this backup installed (deep dive 2 S0-8, ``host_household_sources``):
+  Home Assistant's config (its root-owned ``.storage`` via the newest helper export), ``services/zoe-data/data/``,
+  and the models lock (the panel backup rides in the artefacts tier). Retention one per day for 7
   days and one per week for 35 days, NO monthly: gone within 35 days, the same bound as the on-box backups
   (``docs/knowledge/forget-reach.md``: forgotten means forever). See RETENTION for why it is time-bounded.
 * ``secrets`` - age-encrypted: the live checkout's ``.env*`` files (never ``.example`` / ``.bak*``), ``ssl/``,
-  ``config/``, ``~/.zoe/env`` and ``~/.zoe/secrets`` (the VAPID key's new home). Retention 7 / 4 / 6 monthly.
+  ``config/``, ``~/.zoe/env`` and ``~/.zoe/secrets`` (the VAPID key's new home), and the host config that carries
+  credentials (``host_secret_sources``): HA ``secrets.yaml``, the systemd user units + drop-ins, the system
+  drop-ins, ``~/bin`` and the crontab. Retention 7 / 4 / 6 monthly.
 * ``artefacts`` - restic only: the router's lineage checkpoint and stage-2 GGUF (trained on the committed corpus;
   no household words). Retention 7 / 4 / 6 monthly.
 
@@ -109,6 +114,26 @@ SECRET_EXCLUDES = ("*.example", "*.bak*", "*.orig", "*.sample")
 SECRET_TREES = ("ssl", "config")
 AGE_IDENTITY_MARKER = b"AGE-SECRET-KEY-"
 
+# ── host sources (deep dive 2 S0-8, lane J 6.3: what a dead NVMe lost even with this backup installed) ──────────
+# Home Assistant's config dir. `.storage` / `.cloud` are written by HA as root (several files 0600): they arrive as
+# the newest export by the root helper `zoe-ha-config-export` (zoe_host_snapshot.py, nightly), never by walking.
+# NOT backed up, by choice: the recorder DB (state history; a live root-owned SQLite HA rebuilds), deps / tts /
+# .cache (re-downloaded), logs.
+HA_DIR_EXCLUDES = (".storage", ".cloud", ".cache", "deps", "tts", "__pycache__", ".ha_run.lock",
+                   "home-assistant.log*", "*.log", "home-assistant_v2.db*",
+                   "secrets.yaml")                 # the secrets tier owns it
+# services/zoe-data/data: music_discovery/, music_prefs.json, and whatever lands there next. Out:
+ZOE_DATA_DATA_EXCLUDES = (
+    "router_head_shadow.jsonl*",   # raw utterance text; #2110 strips it after 30 days; it regenerates from chat
+    "vapid_keys.json",             # the secrets tier owns it (SECRET_GLOBS)
+    "zoe.db", "zoe.db-*", "zoe.db.*",   # the dead pre-Postgres SQLite (deep dive 2 D-2): never read at runtime
+)
+# The models LOCK, never the 80 GB of weights: paths + sha256 + source URLs (the panel-as-code work, V-3, writes
+# it). The first existing candidate is shipped; ZOE_MODELS_LOCK names another.
+MODELS_LOCK_CANDIDATES = ("assistant/models.lock", "models/models.lock", ".zoe/models.lock")
+ETC_SYSTEMD_EXCLUDES = ("snap-*", "snap.*")   # snapd regenerates its own units (one per snap revision)
+HOST_BACKUP_DIR = (".zoe-backups", "host")   # zoe_host_snapshot.py: the HA export + the on-box host archive
+
 
 # ── paths ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -120,6 +145,7 @@ class Paths:
     config_dir: Path
     state_dir: Path
     stage_dir: Path
+    etc_systemd: Path = Path("/etc/systemd/system")
 
     @classmethod
     def from_env(cls) -> "Paths":
@@ -130,6 +156,7 @@ class Paths:
             config_dir=Path(os.environ.get("ZOE_OFFBOX_CONFIG_DIR", str(home / ".config" / "zoe-backup"))),
             state_dir=Path(os.environ.get("ZOE_OFFBOX_STATE_DIR", str(home / ".local" / "state" / "zoe-offbox"))),
             stage_dir=Path(os.environ.get("ZOE_OFFBOX_STAGE_DIR", str(home / ".cache" / "zoe-offbox" / "stage"))),
+            etc_systemd=Path(os.environ.get("ZOE_OFFBOX_ETC_SYSTEMD", "/etc/systemd/system")),
         )
 
 
@@ -148,18 +175,93 @@ def newest(pattern_dir: Path, glob: str, skip: str = "-weekly-") -> Optional[Pat
     return max(cands, key=lambda p: p.stat().st_mtime) if cands else None
 
 
+def manifest_for(dump: Optional[Path]) -> Optional[Path]:
+    """The manifest ``pg_dump_manifest.py`` wrote beside a dump (the row counts the restore drill checks)."""
+    if dump is None:
+        return None
+    m = dump.with_name(dump.name.replace(".dump.gz", ".manifest.json"))
+    return m if m.is_file() else None
+
+
+def models_lock(p: Paths) -> Optional[Path]:
+    env = os.environ.get("ZOE_MODELS_LOCK")
+    cands = [Path(env)] if env else [p.home / c for c in MODELS_LOCK_CANDIDATES]
+    return next((c for c in cands if c.is_file()), None)
+
+
+def host_household_sources(p: Paths) -> list[Source]:
+    """Host sources holding household words (the 35-day tier). None is ``required``: the on-box host archive
+    (zoe_host_snapshot.py) and the weekly restore drill report a missing one, so an owner step that has not been taken
+    yet (the HA helper) is a weekly finding, not a nightly off-box alert."""
+    return [
+        Source("ha/config", p.checkout / "homeassistant", HA_DIR_EXCLUDES),
+        Source("ha/storage.tar.gz", newest(p.home.joinpath(*HOST_BACKUP_DIR), "ha-storage-*.tar.gz"),
+               max_age_hours=SOURCE_DUMP_MAX_AGE_HOURS),
+        Source("zoe-data/data", p.checkout / "services" / "zoe-data" / "data", ZOE_DATA_DATA_EXCLUDES),
+        Source("models.lock", models_lock(p)),
+    ]
+
+
+def host_onbox_only_sources(p: Paths) -> list[Source]:
+    """In the ON-BOX host archive only: the panel backup (config + ``hey_zoe.onnx``, panel-as-code V-3) goes off the
+    box in the ARTEFACTS tier (``artefact_paths``, #2142), so the household tier does not ship it twice."""
+    return [Source("panel", p.home / ".zoe" / "backups" / "panel")]
+
+
+def host_secret_sources(p: Paths) -> list[Source]:
+    """Host config that carries credentials (the secrets tier): drop-in env lines, ``~/bin`` (one script holds a
+    DB password), HA's secrets.yaml, the system units + drop-ins. The crontab is added at run time
+    (``crontab_source``)."""
+    return [Source("ha/secrets.yaml", p.checkout / "homeassistant" / "secrets.yaml"),
+            Source("systemd/user", p.home / ".config" / "systemd" / "user"),
+            # every regular file under /etc/systemd/system: unit files (serena-bridge, the Jetson's nv*) and
+            # *.d drop-ins; the *.wants symlinks are skipped by the walk, snapd's generated units by the excludes
+            Source("systemd/system", p.etc_systemd, ETC_SYSTEMD_EXCLUDES),
+            Source("bin", p.home / "bin")]
+
+
+def crontab_source(out_dir: Path) -> Optional[Source]:
+    """``crontab -l`` as ``<out_dir>/crontab.txt`` (no crontab = no file). The file is rewritten only when the text
+    CHANGED, so an unchanged crontab keeps its inode and ctime and the age mirror re-encrypts nothing (lab B4).
+    ZOE_OFFBOX_CRONTAB_FILE replaces the call (lab, tests)."""
+    fake = os.environ.get("ZOE_OFFBOX_CRONTAB_FILE")
+    if fake:
+        if not Path(fake).is_file():
+            return None
+        text = Path(fake).read_bytes()
+    else:
+        try:
+            r = subprocess.run(["crontab", "-l"], capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if r.returncode != 0:          # "no crontab for zoe"
+            return None
+        text = r.stdout
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / "crontab.txt"
+    try:
+        same = out.read_bytes() == text
+    except OSError:
+        same = False
+    if not same:
+        _atomic_write(out, text.decode(errors="replace"))      # 0600; never chmod an unchanged file (ctime)
+    return Source("crontab", out)
+
+
 def household_sources(p: Paths) -> list[Source]:
     bk = p.home / ".zoe-backups"
+    zoe_dump = newest(bk / "postgres", "zoe-*.dump.gz")
+    multica_dump = newest(bk / "postgres", "multica-*.dump.gz")
     return [
-        Source("pg/zoe.dump.gz", newest(bk / "postgres", "zoe-*.dump.gz"), required=True,
-               max_age_hours=SOURCE_DUMP_MAX_AGE_HOURS),
-        Source("pg/multica.dump.gz", newest(bk / "postgres", "multica-*.dump.gz"), required=False,
-               max_age_hours=SOURCE_DUMP_MAX_AGE_HOURS),
+        Source("pg/zoe.dump.gz", zoe_dump, required=True, max_age_hours=SOURCE_DUMP_MAX_AGE_HOURS),
+        Source("pg/zoe.manifest.json", manifest_for(zoe_dump)),
+        Source("pg/multica.dump.gz", multica_dump, required=False, max_age_hours=SOURCE_DUMP_MAX_AGE_HOURS),
+        Source("pg/multica.manifest.json", manifest_for(multica_dump)),
         Source("palace/mempalace.tar.gz", newest(bk / "mempalace", "mempalace-*.tar.gz"), required=True,
                max_age_hours=SOURCE_DUMP_MAX_AGE_HOURS),
         Source("zoe", p.home / ".zoe", ZOE_TREE_EXCLUDES, required=True),
         Source("voice-samples", p.home / ".zoe-voice-samples"),
-    ]
+    ] + host_household_sources(p)
 
 
 def _secret_glob_files(p: Paths) -> list[tuple[str, Path]]:
@@ -177,7 +279,7 @@ def secret_sources(p: Paths) -> list[Source]:
     srcs = [Source(label, f) for label, f in _secret_glob_files(p)]
     srcs += [Source(f"checkout/{t}", p.checkout / t, SECRET_EXCLUDES) for t in SECRET_TREES]
     srcs += [Source("zoe-env", p.home / ".zoe" / "env"), Source("zoe-secrets", p.home / ".zoe" / "secrets")]
-    return srcs
+    return srcs + host_secret_sources(p)
 
 
 def secret_files(p: Paths) -> list[tuple[str, Path]]:
@@ -612,7 +714,11 @@ def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:
         g = _globals_dump(cfg, Path(td))
         if g:
             hh.append(g)
-        tiers = {"household": hh, "secrets": secret_sources(p)}
+        sec = secret_sources(p)
+        ct = crontab_source(p.state_dir)
+        if ct:
+            sec.append(ct)
+        tiers = {"household": hh, "secrets": sec}
         for tier, srcs in tiers.items():
             stage = p.stage_dir / tier
             res = mirror(srcs, stage, p.state_dir / f"mirror-{tier}.json", salt, enc, encb)
