@@ -273,18 +273,21 @@ def test_scorer_feeds_daemon_sized_chunks_with_lead_and_tail_and_is_deterministi
     assert max(f1[:25]) == 0.0 and f1[25] == pytest.approx(0.5)   # the lead-in is silence, then the clip
 
 
+CLEAR = lambda budget: None   # noqa: E731 - a brain-window check that never refuses (the real one reads the wall clock)
+
+
 def test_guard_refuses_quiet_hours_and_low_memory():
     no = lambda name, force=None: SimpleNamespace(allowed=False, reason="quiet hours")   # noqa: E731
     yes = lambda name, force=None: SimpleNamespace(allowed=True, reason="ok")           # noqa: E731
-    assert mw.guard(force=False, min_avail_mb=1500, check=no, mem=lambda: 9999) == "quiet hours"
-    assert "MemAvailable" in mw.guard(force=False, min_avail_mb=1500, check=yes, mem=lambda: 1200)
-    assert mw.guard(force=False, min_avail_mb=1500, check=yes, mem=lambda: 2000) is None
+    assert mw.guard(force=False, min_avail_mb=1500, check=no, mem=lambda: 9999, window=CLEAR) == "quiet hours"
+    assert "MemAvailable" in mw.guard(force=False, min_avail_mb=1500, check=yes, mem=lambda: 1200, window=CLEAR)
+    assert mw.guard(force=False, min_avail_mb=1500, check=yes, mem=lambda: 2000, window=CLEAR) is None
     seen = {}
 
     def spy(name, force=None):
         seen["force"] = force
         return SimpleNamespace(allowed=True, reason="")
-    mw.guard(force=True, min_avail_mb=0, check=spy, mem=lambda: None)
+    mw.guard(force=True, min_avail_mb=0, check=spy, mem=lambda: None, window=CLEAR)
     assert seen["force"] is True
 
 
@@ -294,10 +297,10 @@ def test_guard_uses_the_shared_quiet_hours_rule(monkeypatch):
     monkeypatch.delenv("ZOE_HARNESS_LANDING", raising=False)
     monkeypatch.setattr(harness_quiet, "panel_quiet", lambda now=None, **kw: True)
     monkeypatch.setattr(harness_quiet, "in_waking_hours", lambda now=None: True)
-    assert "quiet hours" in mw.guard(force=False, min_avail_mb=0, mem=lambda: None)
-    assert mw.guard(force=True, min_avail_mb=0, mem=lambda: None) is None
+    assert "quiet hours" in mw.guard(force=False, min_avail_mb=0, mem=lambda: None, window=CLEAR)
+    assert mw.guard(force=True, min_avail_mb=0, mem=lambda: None, window=CLEAR) is None
     monkeypatch.setattr(harness_quiet, "in_waking_hours", lambda now=None: False)
-    assert mw.guard(force=False, min_avail_mb=0, mem=lambda: None) is None
+    assert mw.guard(force=False, min_avail_mb=0, mem=lambda: None, window=CLEAR) is None
 
 
 def test_verify_pinned_against_a_lock(tmp_path):
@@ -332,3 +335,149 @@ def test_private_outputs_land_only_under_the_voice_gate_root(tmp_path):
     mw._write_private(d / "x.json", "{}")
     assert (os.stat(d).st_mode & 0o777) == 0o700
     assert (os.stat(d / "x.json").st_mode & 0o777) == 0o600
+
+
+# ------------------------------------------------------------------ the brain window (01:50-04:55), fake clocks
+
+import harness_quiet as _hq   # noqa: E402 - on sys.path via measure_wake (scripts/maintenance)
+
+_REAL_BWV = _hq.brain_window_verdict   # captured once: _clock re-patches the module attribute within a test
+
+
+def _at(h: int, m: int = 0) -> dt.datetime:
+    return dt.datetime(2026, 10, 20, h, m)
+
+
+def _clock(monkeypatch, when: dt.datetime):
+    """Pin harness_quiet's brain-window verdict to ``when`` (the real one reads the wall clock)."""
+    import harness_quiet
+    monkeypatch.setattr(harness_quiet, "brain_window_verdict",
+                        lambda name, budget_min=45, now=None: _REAL_BWV(name, budget_min=budget_min, now=when))
+    return harness_quiet
+
+
+def test_window_refusal_uses_the_shared_brain_window_rule(monkeypatch):
+    _clock(monkeypatch, _at(2, 0))
+    assert "brain window" in mw.window_refusal(0)                       # inside 01:50-04:55
+    _clock(monkeypatch, _at(1, 30))
+    assert mw.window_refusal(10) is None                                # a 10-minute run is over by 01:50
+    assert "brain window" in mw.window_refusal(45)                      # a 45-minute run would still be alive at 01:50
+    _clock(monkeypatch, _at(4, 55))
+    assert mw.window_refusal(45) is None                                # the window is over at 04:55
+
+
+def test_estimate_budget_scales_with_the_clip_count():
+    assert mw.estimate_budget_min(0) == mw.OVERHEAD_MIN
+    assert mw.estimate_budget_min(2870) >= 35                           # the measured 2026-10-19 run was 35 min
+    assert mw.estimate_budget_min(120) < mw.estimate_budget_min(2870)
+
+
+def test_guard_refuses_the_brain_window_even_when_forced():
+    yes = lambda name, force=None: SimpleNamespace(allowed=True, reason="ok")   # noqa: E731
+    shut = lambda budget: "inside the 01:50-04:55 brain window"                 # noqa: E731
+    for force in (False, True):
+        assert mw.guard(force=force, min_avail_mb=0, check=yes, mem=lambda: None, window=shut) == shut(0)
+
+
+def _run_args(tmp_path, **kw):
+    base = dict(force=True, min_avail_mb=0.0, model=str(tmp_path / "m.onnx"), features_dir=str(tmp_path),
+                oww_path=str(tmp_path), out=str(tmp_path / "out"), voice_log=None, lead_s=2.0, tail_s=1.0,
+                since=dt.datetime(2026, 10, 16), threshold=0.45, confirm_count=3, confirm_window=1.0, min_interval=5.0,
+                frr_budget=0.05, budget_min=0)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_run_refuses_a_start_inside_the_window_with_force(monkeypatch, tmp_path, capsys):
+    harness_quiet = _clock(monkeypatch, _at(3, 0))
+    monkeypatch.setattr(harness_quiet, "check", lambda *a, **k: SimpleNamespace(allowed=True, reason="ok"))
+    monkeypatch.setattr(mw, "mem_available_mb", lambda: 99999.0)
+    monkeypatch.setattr(mw, "OwwScorer", lambda *a, **k: pytest.fail("the model must not load inside the window"))
+    assert mw.cmd_run(_run_args(tmp_path)) == 3
+    assert "brain window" in capsys.readouterr().err
+
+
+def test_run_refuses_a_start_whose_estimated_length_crosses_0150(monkeypatch, tmp_path, capsys):
+    harness_quiet = _clock(monkeypatch, _at(1, 30))                     # fine for 0 minutes, not for ~1,500 clips (30 min)
+    monkeypatch.setattr(harness_quiet, "check", lambda *a, **k: SimpleNamespace(allowed=True, reason="ok"))
+    monkeypatch.setattr(mw, "mem_available_mb", lambda: 99999.0)
+    monkeypatch.setattr(mw, "verify_pinned", lambda f: None)
+    monkeypatch.setattr(mw, "_private_dir", lambda d: tmp_path)
+    monkeypatch.setattr(mw.pvl, "fetch_lines", lambda *_a, **_k: [])
+    monkeypatch.setattr(mw, "_sets", lambda args, lines: ([("libri", f"c{i}") for i in range(1500)], {}))
+    monkeypatch.setattr(mw, "OwwScorer", lambda *a, **k: pytest.fail("the model must not load"))
+    assert mw.cmd_run(_run_args(tmp_path)) == 3
+    assert "brain window" in capsys.readouterr().err
+
+
+class _FakeScorer:
+    def __init__(self):
+        self.n = 0
+
+    def frames(self, x, **kw):
+        self.n += 1
+        return [0.0, 0.1]
+
+
+def test_score_clips_aborts_when_memory_stays_low_and_says_so():
+    sc = _FakeScorer()
+    todo = [("libri", f"c{i}") for i in range(60)]
+    clips, aborted = mw.score_clips(todo, sc, {}, lead_s=2.0, tail_s=1.0, min_avail_mb=1500,
+                                    mem=lambda: 100.0 if sc.n >= 25 else 9999.0, sleep=lambda s: None,
+                                    window=CLEAR, load=lambda p: [0.0] * mw.SR, log=lambda m: None)
+    assert len(clips) == 25 and aborted["reason"] == "memory"
+    assert (aborted["clips_scored"], aborted["clips_planned"]) == (25, 60)
+
+
+def test_score_clips_stops_when_the_window_is_about_to_open():
+    sc = _FakeScorer()
+    todo = [("libri", f"c{i}") for i in range(60)]
+    clips, aborted = mw.score_clips(todo, sc, {}, lead_s=2.0, tail_s=1.0, min_avail_mb=0, mem=lambda: 9999.0,
+                                    window=lambda b: "too close to the brain window" if sc.n >= 50 else None,
+                                    load=lambda p: [0.0] * mw.SR, log=lambda m: None)
+    assert len(clips) == 50 and aborted["reason"] == "brain-window"
+
+
+def test_a_complete_score_has_no_abort():
+    sc = _FakeScorer()
+    clips, aborted = mw.score_clips([("libri", "a"), ("libri", "b")], sc, {}, lead_s=2.0, tail_s=1.0, min_avail_mb=0,
+                                    mem=lambda: 9999.0, window=CLEAR, load=lambda p: [0.0] * mw.SR, log=lambda m: None)
+    assert len(clips) == 2 and aborted is None
+
+
+def test_a_memory_aborted_run_is_marked_incomplete_withholds_the_recommendation_and_exits_nonzero(monkeypatch, tmp_path):
+    sc = _FakeScorer()
+    monkeypatch.setattr(mw, "guard", lambda **kw: None)
+    monkeypatch.setattr(mw, "window_refusal", lambda budget: None)
+    monkeypatch.setattr(mw, "verify_pinned", lambda f: None)
+    monkeypatch.setattr(mw, "sha256", lambda p: "0" * 64)
+    monkeypatch.setattr(mw, "_private_dir", lambda d: (Path(d).mkdir(parents=True, exist_ok=True), Path(d))[1])
+    monkeypatch.setattr(mw.pvl, "fetch_lines", lambda *_a, **_k: [])
+    monkeypatch.setattr(mw, "_sets", lambda args, lines: ([("positive", f"p{i}") for i in range(60)], {}))
+    monkeypatch.setattr(mw, "OwwScorer", lambda *a, **k: sc)
+    monkeypatch.setattr(mw, "load_audio", lambda p: [0.0] * mw.SR)
+    monkeypatch.setattr(mw, "mem_available_mb", lambda: 100.0 if sc.n >= 25 else 9999.0)
+    monkeypatch.setattr(mw.time, "sleep", lambda s: None)
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(__version__="0.0-test"))
+    args = _run_args(tmp_path, force=False, min_avail_mb=1500.0)
+    assert mw.cmd_run(args) == mw.EXIT_INCOMPLETE
+    out = tmp_path / "out"
+    scores = json.loads((out / "scores.json").read_text())
+    assert scores["meta"]["notes"]["aborted"]["reason"] == "memory" and len(scores["clips"]) == 25
+    rep = json.loads((out / "report.json").read_text())
+    assert rep["recommendation"]["threshold"] is None and "incomplete" in rep["recommendation"]["reason"]
+    assert "INCOMPLETE RUN" in (out / "report.md").read_text()
+    # re-rendering the saved partial run stays incomplete (and non-zero) instead of recommending from a prefix
+    rargs = SimpleNamespace(scores=str(out / "scores.json"), no_nearmiss=True, voice_log=None, since=args.since,
+                            threshold=0.45, confirm_count=3, confirm_window=1.0, min_interval=5.0, frr_budget=0.05)
+    assert mw.cmd_report(rargs) == mw.EXIT_INCOMPLETE
+
+
+def test_build_report_marks_a_partial_run_and_gives_no_threshold():
+    clips = [dict(set="positive", path=f"p{i}", seconds=1.0, frames=[0.9] * 20) for i in range(300)] + \
+            [dict(set="tv", path="t", seconds=1.0, frames=[0.0] * 20)]
+    _rows, rec, md = mw.build_report(clips, live=mw.LIVE, frr_budget=0.05)
+    complete_has_threshold = rec["threshold"] is not None
+    _rows, rec2, md2 = mw.build_report(clips, live=mw.LIVE, frr_budget=0.05,
+                                       aborted=dict(reason="memory", detail="x", clips_scored=301, clips_planned=900))
+    assert complete_has_threshold and rec2["threshold"] is None and "INCOMPLETE RUN" in md2 and "INCOMPLETE" not in md

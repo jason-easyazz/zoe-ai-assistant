@@ -32,7 +32,12 @@ docs/knowledge/wake-and-speaker-fa-instruments.md.
     python3 scripts/maintenance/speaker_fa_review.py collect
     python3 scripts/maintenance/speaker_fa_review.py label --play
     python3 scripts/maintenance/speaker_fa_review.py score --owner <enrolled member id>
-    flock -x -w 3600 /tmp/zoe-voice-harness.lock nice -n 10 python3 scripts/maintenance/speaker_fa_review.py offline-fa
+    flock -x -w "$(python3 scripts/maintenance/harness_quiet.py brain-window-wait --budget-min 35)" \\
+        /tmp/zoe-voice-harness.lock nice -n 10 python3 scripts/maintenance/speaker_fa_review.py offline-fa
+
+``offline-fa`` also holds the 01:50-04:55 brain window (``harness_quiet.brain_window_verdict``, scripts/AGENTS.md "Brain-window
+quiet hours"): it refuses a start inside it and a start whose expected length (clip count, or ``--budget-min``) would still be
+alive at 01:50. ``--force`` skips the quiet hours, never the window.
 """
 from __future__ import annotations
 
@@ -129,9 +134,12 @@ def read_app_logs(pattern: str = APP_LOGS) -> list:
 
 
 def join_server(turn_ts: dt.datetime, sev: Sequence, used: set, *, before_s: float = 2.0,
-                after_s: float = 60.0) -> dict:
-    """The first unused panel command line in [turn - before_s, turn + after_s], plus the verdict / rejection logged
-    within 3 s before it (they are logged on the way into the same handler). Second-resolution server clock."""
+                after_s: float = 60.0, until: Optional[dt.datetime] = None) -> dict:
+    """The first unused panel command line in [turn - before_s, min(turn + after_s, until)), plus the verdict / rejection
+    logged within 3 s before it (they are logged on the way into the same handler). Second-resolution server clock.
+
+    ``until`` is the next panel turn's trigger: a turn's command is logged before the next turn starts, so a turn that
+    made no command (empty, rejected, retried) must not consume the NEXT turn's command inside the 60 s window."""
     out: dict = {}
     for i, (ts, kind, data) in enumerate(sev):
         if kind != "command" or i in used:
@@ -139,7 +147,7 @@ def join_server(turn_ts: dt.datetime, sev: Sequence, used: set, *, before_s: flo
         gap = (ts - turn_ts).total_seconds()
         if gap < -before_s:
             continue
-        if gap > after_s:
+        if gap > after_s or (until is not None and ts >= until):
             break
         used.add(i)
         out["identified"] = data["identified"]
@@ -191,7 +199,10 @@ def build_rows(tns: Sequence, sev: Sequence, clips: dict, *, since: dt.datetime,
         model, user, score = sc
         group = length_group(t.duration_s)
         thr = live_threshold(group, thresholds)
-        srv = join_server(t.recorded_ts or t.trigger_ts, sev, used)
+        # "Command too short" is rejected on the panel before any /voice/command; every other outcome may have reached the
+        # server, so those are bounded by the next panel turn instead (join_server ``until``)
+        nxt = tns[ti + 1].trigger_ts if ti + 1 < len(tns) else None
+        srv = {} if t.outcome == "too_short" else join_server(t.recorded_ts or t.trigger_ts, sev, used, until=nxt)
         clip = clips.get(ti)
         rows.append(dict(
             turn_id=t.trigger_ts.isoformat(timespec="milliseconds"), time=t.trigger_ts.strftime("%Y-%m-%d %H:%M:%S"),
@@ -401,8 +412,35 @@ def mem_available_mb(path: str = "/proc/meminfo") -> Optional[float]:
     return None
 
 
+SEC_PER_CLIP = 1.0     # one ResNet34 embedding per impostor clip, rounded up (the panel logs 192 ms on a Pi)
+OVERHEAD_MIN = 5       # embedder load, the ssh profile read, the report
+
+
+def estimate_budget_min(n_clips: int) -> int:
+    """Minutes an offline-fa over ``n_clips`` clips is expected to take, for the brain-window start guard."""
+    return int(math.ceil(max(0, n_clips) * SEC_PER_CLIP / 60.0)) + OVERHEAD_MIN
+
+
+def window_refusal(budget_min: int, *, verdict: Optional[Callable] = None) -> Optional[str]:
+    """None when a run of ``budget_min`` minutes starting now stays clear of the 01:50-04:55 brain window
+    (scripts/AGENTS.md "Brain-window quiet hours"), else the refusal. The shared rule is
+    ``harness_quiet.brain_window_verdict``; ``--force`` / ``ZOE_HARNESS_FORCE`` do NOT reach it."""
+    if verdict is None:
+        import harness_quiet
+        verdict = harness_quiet.brain_window_verdict
+    v = verdict("speaker_fa_review", budget_min=budget_min)
+    return None if v.allowed else v.reason
+
+
 def guard(*, force: bool, min_avail_mb: float, check: Optional[Callable] = None,
-          mem: Optional[Callable[[], Optional[float]]] = None) -> Optional[str]:
+          mem: Optional[Callable[[], Optional[float]]] = None, budget_min: int = 0,
+          window: Optional[Callable[[int], Optional[str]]] = None) -> Optional[str]:
+    """None when an offline-fa may start now, else the refusal: the brain window (never forced), harness quiet hours /
+    panel in use, then memory. ``budget_min`` = 0 refuses only a start inside the window; ``cmd_offline_fa`` re-checks
+    with the clip-count estimate once the manifest is read."""
+    why = (window or window_refusal)(budget_min)
+    if why:
+        return why
     if check is None:
         import harness_quiet
         check = harness_quiet.check
@@ -518,6 +556,14 @@ def cmd_offline_fa(args) -> int:
         print(f"speaker_fa_review offline-fa: refused - {why}", file=sys.stderr)
         return 3
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    base = Path(args.impostors).expanduser()
+    items = json.loads((base / "manifest.json").read_text())
+    if args.limit:
+        items = items[: args.limit]
+    why = window_refusal(args.budget_min or estimate_budget_min(len(items)))   # the count is known: refuse a run into 01:50
+    if why:
+        print(f"speaker_fa_review offline-fa: refused - {why}", file=sys.stderr)
+        return 3
     sys.path.insert(0, str(REPO / "scripts" / "setup"))
     import zoe_speaker_resnet34 as rn34
     if dict(rn34.THRESHOLDS["far1"]) != LIVE_THRESHOLDS:
@@ -531,10 +577,6 @@ def cmd_offline_fa(args) -> int:
     # file would be refused by the pin anyway, so name the repo one explicitly
     emb = rn34.Resnet34Embedder.load(str(Path(args.model_dir).expanduser()),
                                      artifacts_path=str(REPO / "scripts" / "setup" / rn34.ARTIFACTS_FILENAME))
-    base = Path(args.impostors).expanduser()
-    items = json.loads((base / "manifest.json").read_text())
-    if args.limit:
-        items = items[: args.limit]
     t0 = time.time()
     results, skipped = score_impostors(items, profiles, base=base, embed_wav=emb.embed_wav,
                                        match=lambda v, ps: rn34.match_profiles(v, ps, rn34.MODEL_ID),
@@ -582,7 +624,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     o.add_argument("--model-dir", default=str(MODEL_DIR))
     o.add_argument("--limit", type=int, default=0)
     o.add_argument("--min-avail-mb", type=float, default=1500.0)
-    o.add_argument("--force", action="store_true", help="skip the harness quiet hours (deliberate)")
+    o.add_argument("--force", action="store_true",
+                   help="skip the harness quiet hours (deliberate); the 01:50-04:55 brain window is NEVER skipped")
+    o.add_argument("--budget-min", type=int, default=0,
+                   help="expected run length for the brain-window start check (default: estimated from the clip count)")
     args = ap.parse_args(argv)
     return dict(collect=cmd_collect, label=cmd_label, score=cmd_score, **{"offline-fa": cmd_offline_fa})[args.cmd](args)
 

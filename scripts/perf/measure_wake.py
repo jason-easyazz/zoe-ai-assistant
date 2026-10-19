@@ -27,12 +27,18 @@ Sub-commands:
     run        replay the model; writes scores.json under --out (outside the repo, mode 600), then reports
     report     re-render the curve + recommendation from a saved scores.json (no model)
 
-Guards for ``run`` (this box runs the live voice brain): CUDA hidden; harness quiet hours (07:00-22:00,
-``scripts/maintenance/harness_quiet.py``; ``--force`` / ``ZOE_HARNESS_FORCE=1`` to override deliberately);
-``MemAvailable`` >= ``--min-avail-mb`` (default 1500); the model and feature files must match ``models.lock``. Run it
-niced inside the voice-harness lock:
+Guards for ``run`` (this box runs the live voice brain): CUDA hidden; the 01:50-04:55 BRAIN WINDOW
+(``harness_quiet.brain_window_verdict``: refuses a start inside it and a start whose expected length, estimated from the
+clip count or ``--budget-min``, would still be alive at 01:50; ``--force`` does NOT skip it; re-checked every 25 clips);
+harness quiet hours (07:00-22:00, ``scripts/maintenance/harness_quiet.py``; ``--force`` / ``ZOE_HARNESS_FORCE=1`` to
+override deliberately); ``MemAvailable`` >= ``--min-avail-mb`` (default 1500); the model and feature files must match
+``models.lock``. Run it niced inside the voice-harness lock, queueing no longer than the window allows:
 
-    flock -x -w 3600 /tmp/zoe-voice-harness.lock nice -n 10 python3 scripts/perf/measure_wake.py run
+    flock -x -w "$(python3 scripts/maintenance/harness_quiet.py brain-window-wait --budget-min 45)" \\
+        /tmp/zoe-voice-harness.lock nice -n 10 python3 scripts/perf/measure_wake.py run
+
+A run that stops early (memory below the floor for 10 min, or the window about to open) writes its artifacts marked
+``notes.aborted``, withholds the threshold recommendation and exits 4: a partial replay is not a result.
 
 One-time setup (outside the repo; the feature models are the PANEL's bytes, sha-pinned in models.lock):
 
@@ -69,6 +75,7 @@ CHUNK = 1280                      # the daemon's CHUNK_SIZE: one openWakeWord fr
 FRAME_S = CHUNK / SR
 LIVE = dict(threshold=0.45, confirm_count=3, confirm_window_s=1.0, min_interval_s=5.0)   # Pi .env.voice, 2026-10-19
 GRID = tuple(round(0.20 + 0.01 * i, 2) for i in range(61))                             # 0.20 .. 0.80
+EXIT_INCOMPLETE = 4                  # the run stopped early (memory floor / brain window): artifacts say so, no recommendation
 SHOW = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70)
 PREROLL_20_SINCE = dt.datetime(2026, 7, 16)   # #1326 (07-15): 1.6 s pre-roll; before it 0.96 s began inside the phrase
 NEARMISS_SINCE = dt.datetime(2026, 10, 16)
@@ -382,9 +389,35 @@ def mem_available_mb(path: str = "/proc/meminfo") -> Optional[float]:
     return None
 
 
+SEC_PER_CLIP = 1.0     # measured 0.73 s/clip (2026-10-19: ~2,870 clips in 35 min on the Jetson, niced), rounded up
+OVERHEAD_MIN = 5       # model + feature load, the ssh log read, the report
+
+
+def estimate_budget_min(n_clips: int) -> int:
+    """Minutes a replay of ``n_clips`` clips is expected to take, for the brain-window start guard."""
+    return int(math.ceil(max(0, n_clips) * SEC_PER_CLIP / 60.0)) + OVERHEAD_MIN
+
+
+def window_refusal(budget_min: int, *, verdict: Optional[Callable] = None) -> Optional[str]:
+    """None when a run of ``budget_min`` minutes starting now stays clear of the 01:50-04:55 brain window
+    (scripts/AGENTS.md "Brain-window quiet hours"), else the refusal. The shared rule is
+    ``harness_quiet.brain_window_verdict``; ``--force`` / ``ZOE_HARNESS_FORCE`` do NOT reach it."""
+    if verdict is None:
+        import harness_quiet
+        verdict = harness_quiet.brain_window_verdict
+    v = verdict("measure_wake", budget_min=budget_min)
+    return None if v.allowed else v.reason
+
+
 def guard(*, force: bool, min_avail_mb: float, check: Optional[Callable] = None,
-          mem: Optional[Callable[[], Optional[float]]] = None) -> Optional[str]:
-    """None when a replay may start now, else the refusal: harness quiet hours / panel in use, then memory."""
+          mem: Optional[Callable[[], Optional[float]]] = None, budget_min: int = 0,
+          window: Optional[Callable[[int], Optional[str]]] = None) -> Optional[str]:
+    """None when a replay may start now, else the refusal: the brain window (never forced), harness quiet hours / panel
+    in use, then memory. ``budget_min`` = 0 refuses only a start inside the window; ``cmd_run`` re-checks with the
+    clip-count estimate once the sets are known."""
+    why = (window or window_refusal)(budget_min)
+    if why:
+        return why
     if check is None:
         import harness_quiet
         check = harness_quiet.check
@@ -396,6 +429,50 @@ def guard(*, force: bool, min_avail_mb: float, check: Optional[Callable] = None,
         return f"MemAvailable {m:.0f} MB < {min_avail_mb:.0f} MB - the live voice stack comes first"
     return None
 
+
+def score_clips(todo: Sequence, scorer, notes: dict, *, lead_s: float, tail_s: float, min_avail_mb: float,
+                mem: Optional[Callable[[], Optional[float]]] = None, sleep: Optional[Callable[[float], None]] = None,
+                window: Optional[Callable[[int], Optional[str]]] = None, load: Optional[Callable] = None,
+                log: Callable[[str], None] = lambda m: print(m, file=sys.stderr)) -> tuple:
+    """Score ``todo`` clip by clip; returns (clips, aborted). ``aborted`` is None for a complete run, else a dict naming
+    why it stopped early (memory below the floor for 10 min, or the brain window about to open) and how far it got:
+    a partial run is NOT a result, so the caller records it and withholds the threshold recommendation."""
+    mem = mem or mem_available_mb
+    sleep = sleep or time.sleep
+    window = window or window_refusal
+    load = load or load_audio
+    clips: list = []
+    aborted: Optional[dict] = None
+    t0 = time.time()
+    for i, (name, path) in enumerate(todo):
+        if i % 25 == 0:
+            why = window(1)                      # one minute of margin before 01:50
+            if why:
+                aborted = dict(reason="brain-window", detail=why, clips_scored=i, clips_planned=len(todo))
+                log(f"measure_wake: {why} - stopping")
+                break
+            waited = 0
+            while (mem() or 1e9) < min_avail_mb:
+                if waited >= 600:
+                    aborted = dict(reason="memory", detail=f"MemAvailable stayed below {min_avail_mb:.0f} MB for 10 min",
+                                   clips_scored=i, clips_planned=len(todo))
+                    log("measure_wake: memory stayed low for 10 min - stopping, INCOMPLETE run")
+                    break
+                sleep(30)
+                waited += 30
+            if aborted:
+                break
+            log(f"  {i}/{len(todo)} clips, {time.time() - t0:.0f}s")
+        try:
+            x = load(path)
+        except Exception as exc:  # noqa: BLE001 - one unreadable file must not cost the run
+            notes.setdefault("unreadable", 0)
+            notes["unreadable"] += 1
+            log(f"  skip unreadable {Path(path).name}: {type(exc).__name__}")
+            continue
+        clips.append(dict(set=name, path=path, seconds=round(len(x) / SR, 3),
+                          frames=scorer.frames(x, lead_s=lead_s, tail_s=tail_s)))
+    return clips, aborted
 
 
 # --------------------------------------------------------------------------------------------- reporting
@@ -522,13 +599,26 @@ def _live_from(args) -> dict:
                 min_interval_s=args.min_interval)
 
 
-def build_report(clips: Sequence[dict], *, live: dict, frr_budget: float, near: Optional[dict] = None) -> tuple:
+def incomplete_banner(aborted: dict) -> str:
+    return (f"**INCOMPLETE RUN - NOT A RESULT.** Stopped early ({aborted.get('reason')}: {aborted.get('detail')}) after "
+            f"{aborted.get('clips_scored')} of {aborted.get('clips_planned')} planned clips. The negative sets are cut off at an "
+            "arbitrary point, so the false-accept rates below describe a prefix, not the corpus. Re-run it.")
+
+
+def build_report(clips: Sequence[dict], *, live: dict, frr_budget: float, near: Optional[dict] = None,
+                 aborted: Optional[dict] = None) -> tuple:
     rows = curve(clips, GRID, live=live)
-    rec = recommend(rows, live_threshold=live["threshold"], frr_budget=frr_budget)
-    md = ["## Wake word FAR/FRR (hey_zoe.onnx replay)", "",
-          f"Confirmation as live: {live['confirm_count']} hits within {live['confirm_window_s']} s, "
-          f"{live['min_interval_s']} s between wakes.", "", render_curve(rows), "", "### Clip peak scores", "",
-          render_peaks(clips), "", "### Recommendation", "", render_recommendation(rec)]
+    if aborted:    # a partial replay never yields a threshold: say why instead
+        rec = dict(threshold=None, reason="the run was incomplete (" + str(aborted.get("reason")) + ") - no recommendation "
+                                          "from partial data")
+    else:
+        rec = recommend(rows, live_threshold=live["threshold"], frr_budget=frr_budget)
+    md = ["## Wake word FAR/FRR (hey_zoe.onnx replay)", ""]
+    if aborted:
+        md += [incomplete_banner(aborted), ""]
+    md += [f"Confirmation as live: {live['confirm_count']} hits within {live['confirm_window_s']} s, "
+           f"{live['min_interval_s']} s between wakes.", "", render_curve(rows), "", "### Clip peak scores", "",
+           render_peaks(clips), "", "### Recommendation", "", render_recommendation(rec)]
     if near:
         md += ["", "### Live near-misses (panel voice.log)", "", render_nearmiss(near)]
     return rows, rec, "\n".join(md)
@@ -552,9 +642,11 @@ def cmd_report(args) -> int:
             near = nearmiss_summary(pvl.events(pvl.fetch_lines(args.voice_log)), since=args.since)
         except (RuntimeError, OSError) as exc:
             print(f"(near-miss section skipped: {exc})", file=sys.stderr)
-    _rows, rec, md = build_report(data["clips"], live=_live_from(args), frr_budget=args.frr_budget, near=near)
+    aborted = ((data.get("meta") or {}).get("notes") or {}).get("aborted")    # a saved partial run stays partial
+    _rows, rec, md = build_report(data["clips"], live=_live_from(args), frr_budget=args.frr_budget, near=near,
+                                  aborted=aborted)
     print(md)
-    return 0
+    return EXIT_INCOMPLETE if aborted else 0
 
 
 
@@ -599,31 +691,17 @@ def cmd_run(args) -> int:
     out = _private_dir(Path(args.out))
     lines = pvl.fetch_lines(args.voice_log)
     todo, notes = _sets(args, lines)
+    budget = args.budget_min or estimate_budget_min(len(todo))
+    why = window_refusal(budget)       # the clip count is known now: refuse a start that would run into 01:50
+    if why:
+        print(f"measure_wake: refused - {why}", file=sys.stderr)
+        return 3
     scorer = OwwScorer(model, feats)
-    clips: list = []
     t0 = time.time()
-    for i, (name, path) in enumerate(todo):
-        if i % 25 == 0:
-            waited = 0
-            while (mem_available_mb() or 1e9) < args.min_avail_mb:
-                if waited >= 600:
-                    print("measure_wake: memory stayed low for 10 min - stopping, partial results kept", file=sys.stderr)
-                    todo = todo[:i]
-                    break
-                time.sleep(30)
-                waited += 30
-            if i >= len(todo):
-                break
-            print(f"  {i}/{len(todo)} clips, {time.time() - t0:.0f}s", file=sys.stderr)
-        try:
-            x = load_audio(path)
-        except Exception as exc:  # noqa: BLE001 - one unreadable file must not cost the run
-            notes.setdefault("unreadable", 0)
-            notes["unreadable"] += 1
-            print(f"  skip unreadable {Path(path).name}: {type(exc).__name__}", file=sys.stderr)
-            continue
-        clips.append(dict(set=name, path=path, seconds=round(len(x) / SR, 3),
-                          frames=scorer.frames(x, lead_s=args.lead_s, tail_s=args.tail_s)))
+    clips, aborted = score_clips(todo, scorer, notes, lead_s=args.lead_s, tail_s=args.tail_s,
+                                 min_avail_mb=args.min_avail_mb)
+    if aborted:
+        notes["aborted"] = aborted
     import onnxruntime
     meta = dict(model_sha256=sha256(model), melspec_sha256=sha256(feats / "melspectrogram.onnx"),
                 embedding_sha256=sha256(feats / "embedding_model.onnx"), onnxruntime=onnxruntime.__version__,
@@ -631,13 +709,16 @@ def cmd_run(args) -> int:
                 finished=dt.datetime.now().isoformat(timespec="seconds"), notes=notes)
     _write_private(out / "scores.json", json.dumps(dict(meta=meta, clips=clips)))
     near = nearmiss_summary(pvl.events(lines), since=args.since)
-    rows, rec, md = build_report(clips, live=_live_from(args), frr_budget=args.frr_budget, near=near)
+    rows, rec, md = build_report(clips, live=_live_from(args), frr_budget=args.frr_budget, near=near, aborted=aborted)
     md += "\n\nRun: " + json.dumps(meta, default=str)
     _write_private(out / "report.md", md + "\n")
     _write_private(out / "report.json", json.dumps(dict(meta=meta, recommendation=rec, nearmiss=near,
                                                         curve=rows), default=str, indent=1))
     print(md)
     print(f"\nwrote {out}/scores.json, report.md, report.json", file=sys.stderr)
+    if aborted:
+        print(f"measure_wake: INCOMPLETE ({aborted['reason']}) - exit {EXIT_INCOMPLETE}, no recommendation", file=sys.stderr)
+        return EXIT_INCOMPLETE
     return 0
 
 
@@ -681,7 +762,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     r.add_argument("--tail-s", type=float, default=1.0)
     r.add_argument("--out", default=str(DEFAULT_OUT))
     r.add_argument("--min-avail-mb", type=float, default=1500.0)
-    r.add_argument("--force", action="store_true", help="skip the harness quiet hours (deliberate)")
+    r.add_argument("--force", action="store_true",
+                   help="skip the harness quiet hours (deliberate); the 01:50-04:55 brain window is NEVER skipped")
+    r.add_argument("--budget-min", type=int, default=0,
+                   help="expected run length for the brain-window start check (default: estimated from the clip count)")
 
     rp = sub.add_parser("report", help="re-render a saved run (no model)")
     common(rp, live=True)

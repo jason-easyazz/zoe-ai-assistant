@@ -37,16 +37,16 @@ def pi(ts: str, msg: str) -> str:
 
 
 PI_LOG = [
+    # Resemblyzer era with no dual line: no ResNet34 meaning -> not a row
+    pi("2026-10-14 10:00:00", "Wake word detected! Notifying Jetson and waking screen..."),
+    pi("2026-10-14 10:00:03", "Recorded command: duration=2.00s chunks=25 stop=silence"),
+    pi("2026-10-14 10:00:04", "Speaker claim: alex (0.810)"),
     # dual era: Resemblyzer acts, ResNet34 logged beside it
     pi("2026-10-16 06:49:45", "Wake word detected! Notifying Jetson and waking screen..."),
     pi("2026-10-16 06:49:48", "Recorded command: duration=4.56s chunks=57 stop=silence"),
     pi("2026-10-16 06:49:49", "Speaker ID (shadow): alex (0.719) - logged, not acted on"),
     pi("2026-10-16 06:49:49", "Speaker ID (dual, ResNet34): alex score=0.4167 accept=True source=local 192.2ms"),
     pi("2026-10-16 06:49:56", "turn_stream TTFA=0.59s transcript='how are you going'"),
-    # Resemblyzer era with no dual line: no ResNet34 meaning -> not a row
-    pi("2026-10-14 10:00:00", "Wake word detected! Notifying Jetson and waking screen..."),
-    pi("2026-10-14 10:00:03", "Recorded command: duration=2.00s chunks=25 stop=silence"),
-    pi("2026-10-14 10:00:04", "Speaker claim: alex (0.810)"),
     # ResNet34 acting: the claim line is the ResNet34 claim
     pi("2026-10-19 20:00:00", "Wake word detected! Notifying Jetson and waking screen..."),
     pi("2026-10-19 20:00:03", "Recorded command: duration=1.84s chunks=23 stop=silence"),
@@ -225,6 +225,110 @@ def test_profiles_come_from_the_pi_read_only_or_fail_loudly(tmp_path):
 def test_offline_fa_is_guarded_like_a_voice_harness():
     no = lambda name, force=None: SimpleNamespace(allowed=False, reason="quiet hours")   # noqa: E731
     yes = lambda name, force=None: SimpleNamespace(allowed=True, reason="ok")           # noqa: E731
-    assert sfa.guard(force=False, min_avail_mb=1500, check=no, mem=lambda: 9000) == "quiet hours"
-    assert "MemAvailable" in sfa.guard(force=False, min_avail_mb=1500, check=yes, mem=lambda: 900)
-    assert sfa.guard(force=False, min_avail_mb=1500, check=yes, mem=lambda: 1600) is None
+    clear = lambda budget: None   # noqa: E731 - the real brain-window check reads the wall clock
+    assert sfa.guard(force=False, min_avail_mb=1500, check=no, mem=lambda: 9000, window=clear) == "quiet hours"
+    assert "MemAvailable" in sfa.guard(force=False, min_avail_mb=1500, check=yes, mem=lambda: 900, window=clear)
+    assert sfa.guard(force=False, min_avail_mb=1500, check=yes, mem=lambda: 1600, window=clear) is None
+
+
+# ------------------------------------------------------------------ the brain window (01:50-04:55), fake clocks
+
+import harness_quiet as _hq   # noqa: E402 - on sys.path via speaker_fa_review (scripts/maintenance)
+
+_REAL_BWV = _hq.brain_window_verdict   # captured once: _clock re-patches the module attribute within a test
+
+
+def _clock(monkeypatch, when: dt.datetime):
+    """Pin harness_quiet's brain-window verdict to ``when`` (the real one reads the wall clock)."""
+    import harness_quiet
+    monkeypatch.setattr(harness_quiet, "brain_window_verdict",
+                        lambda name, budget_min=45, now=None: _REAL_BWV(name, budget_min=budget_min, now=when))
+    monkeypatch.setattr(harness_quiet, "check", lambda *a, **k: SimpleNamespace(allowed=True, reason="ok"))
+    return harness_quiet
+
+
+def _fa_args(tmp_path, n_items: int, **kw):
+    (tmp_path / "manifest.json").write_text(json.dumps([dict(file=f"c{i}.wav") for i in range(n_items)]))
+    base = dict(force=True, min_avail_mb=0.0, impostors=str(tmp_path), limit=0, budget_min=0, profiles=None,
+                model_dir=str(tmp_path), dir=str(tmp_path / "out"))
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_window_refusal_follows_the_shared_rule(monkeypatch):
+    _clock(monkeypatch, dt.datetime(2026, 10, 20, 2, 0))
+    assert "brain window" in sfa.window_refusal(0)
+    _clock(monkeypatch, dt.datetime(2026, 10, 20, 23, 0))
+    assert sfa.window_refusal(45) is None
+
+
+def test_offline_fa_refuses_a_start_inside_the_window_even_with_force(monkeypatch, tmp_path, capsys):
+    _clock(monkeypatch, dt.datetime(2026, 10, 20, 3, 0))
+    monkeypatch.setattr(sfa, "mem_available_mb", lambda: 99999.0)
+    assert sfa.cmd_offline_fa(_fa_args(tmp_path, 10)) == 3
+    assert "brain window" in capsys.readouterr().err
+
+
+def test_offline_fa_refuses_a_run_that_would_still_be_alive_at_0150(monkeypatch, tmp_path, capsys):
+    _clock(monkeypatch, dt.datetime(2026, 10, 20, 1, 30))              # fine for 0 minutes; 1,672 clips is ~33 min
+    monkeypatch.setattr(sfa, "mem_available_mb", lambda: 99999.0)
+    assert sfa.cmd_offline_fa(_fa_args(tmp_path, 1672)) == 3
+    assert "brain window" in capsys.readouterr().err
+    # a small smoke run (--limit 5) fits before 01:50
+    assert sfa.window_refusal(sfa.estimate_budget_min(5)) is None
+
+
+# ------------------------------------------------------------------ the server join stops at the next panel turn
+
+RETRY_PI = [
+    pi("2026-10-20 20:00:00", "Wake word detected! Notifying Jetson and waking screen..."),
+    pi("2026-10-20 20:00:02", "Recorded command: duration=1.20s chunks=15 stop=silence"),
+    pi("2026-10-20 20:00:02", "Speaker claim: alex (0.250)"),
+    pi("2026-10-20 20:00:04", "Empty transcript with no audio - retry chime."),
+    pi("2026-10-20 20:00:15", "Wake word detected! Notifying Jetson and waking screen..."),
+    pi("2026-10-20 20:00:18", "Recorded command: duration=3.00s chunks=38 stop=silence"),
+    pi("2026-10-20 20:00:18", "Speaker claim: alex (0.400)"),
+    pi("2026-10-20 20:00:21", "turn_stream TTFA=0.70s transcript='what is on today'"),
+]
+RETRY_APP = [
+    "2026-10-20T20:00:19+0800 INFO     routers.voice_tts: voice speaker verdict panel=zoe-touch-pi verified=True",
+    "2026-10-20T20:00:19+0800 INFO     routers.voice_tts: voice/command panel=zoe-touch-pi session=s2 user=alex len=17 "
+    "[identity: identified=alex bound=None panel_recent=None scope_user=alex has_scope=True]",
+]
+
+
+def _join(pi_lines, app_lines):
+    tns = pvl.turns(pvl.events(pi_lines))
+    return sfa.build_rows(tns, sfa.server_events(app_lines), {}, since=dt.datetime(2026, 10, 13))
+
+
+def test_a_turn_with_no_command_does_not_consume_the_next_turns_server_event():
+    empty, retry = _join(RETRY_PI, RETRY_APP)
+    assert (empty["outcome"], empty["server_identified"], empty["server_verified"]) == ("empty", "", "")
+    assert (retry["outcome"], retry["server_identified"], retry["server_verified"]) == ("turn", "alex", "yes")
+
+
+def test_a_command_too_short_for_the_panel_never_joins_a_server_event():
+    lines = [pi("2026-10-20 20:00:00", "Wake word detected! Notifying Jetson and waking screen..."),
+             pi("2026-10-20 20:00:01", "Recorded command: duration=0.20s chunks=3 stop=silence"),
+             pi("2026-10-20 20:00:01", "Speaker claim: alex (0.250)"),
+             pi("2026-10-20 20:00:01", "Command too short, ignoring.")] + RETRY_PI[4:]
+    short, retry = _join(lines, RETRY_APP)
+    assert (short["outcome"], short["server_identified"]) == ("too_short", "")
+    assert retry["server_identified"] == "alex"
+
+
+def test_each_turn_still_joins_its_own_command_in_order():
+    pi_lines = RETRY_PI[:3] + [RETRY_PI[3].replace("Empty transcript with no audio - retry chime.",
+                                                  "turn_stream TTFA=0.70s transcript='hello there'")] + RETRY_PI[4:]
+    app = [RETRY_APP[0].replace("20:00:19", "20:00:03"), RETRY_APP[1].replace("20:00:19", "20:00:03").replace("alex", "bob")
+           .replace("session=s2", "session=s1")] + RETRY_APP
+    first, second = _join(pi_lines, app)
+    assert (first["server_identified"], second["server_identified"]) == ("bob", "alex")
+
+
+def test_join_server_honours_an_upper_bound():
+    t0 = dt.datetime(2026, 10, 20, 20, 0, 0)
+    sev = [(dt.datetime(2026, 10, 20, 20, 0, 19), "command", dict(user="alex", identified="alex"))]
+    assert sfa.join_server(t0, sev, set()) == dict(identified="alex")                       # unbounded: the old behaviour
+    assert sfa.join_server(t0, sev, set(), until=dt.datetime(2026, 10, 20, 20, 0, 15)) == {}

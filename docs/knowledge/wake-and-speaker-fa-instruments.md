@@ -60,8 +60,13 @@ changes a threshold. Moving one is an owner voice-path step, replay-gated like a
    `melspectrogram.onnx` and `embedding_model.onnx` from the panel venv
    (`.zoe-voice/venv/lib/python3.11/site-packages/openwakeword/resources/models/`) to `~/.cache/zoe-wake-fa/features/`.
    The model comes from the backup `~/.zoe/backups/panel/hey_zoe.onnx`. A sha mismatch is refused.
-2. Run it after 22:00: `flock -x -w 3600 /tmp/zoe-voice-harness.lock nice -n 10 python3 scripts/perf/measure_wake.py run`.
-   It refuses during the harness quiet hours and below 1500 MB `MemAvailable`.
+2. Run it after 22:00: `flock -x -w "$(python3 scripts/maintenance/harness_quiet.py brain-window-wait --budget-min 45)" /tmp/zoe-voice-harness.lock nice -n 10 python3 scripts/perf/measure_wake.py run`.
+   It refuses during the harness quiet hours and below 1500 MB `MemAvailable`. It also holds the 01:50-04:55 brain window
+   (`harness_quiet.brain_window_verdict`, `--force` does not skip it): it refuses a start inside it or one whose estimated
+   length (clip count, or `--budget-min`) would still be alive at 01:50, and stops at a 25-clip checkpoint if the window is
+   about to open. A run that stops early (memory under the floor for 10 min, or the window) marks `notes.aborted` in
+   `scores.json` / `report.json`, prints an INCOMPLETE banner, gives no threshold recommendation and exits 4; `report`
+   keeps it incomplete when re-rendering. `speaker_fa_review.py offline-fa` takes the same window guard.
 3. To move the threshold, edit `WAKEWORD_THRESHOLD` in the Pi `.env.voice`, restart `zoe-voice`, and watch a week of
    `nearmiss` (empty-chime share, near-miss band, retry proxy). That is a voice-path change and it belongs to the owner.
 
