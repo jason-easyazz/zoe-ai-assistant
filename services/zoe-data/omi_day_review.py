@@ -1679,6 +1679,21 @@ async def pending_counts(user_id: str) -> dict:
         return {}
 
 
+async def raise_facts(user_id: str, since: str = "") -> dict:
+    """``{counts: {kind: n}, newest, decided_since}`` - the SEAM for the day-review raise (``day_review_raise``): counts and
+    timestamps only, never text. ``newest`` is the created_at of the newest pending candidate; ``decided_since`` = the member
+    approved or dismissed any candidate at or after ``since`` (they took the review up). RAISES on a read error, so the raise
+    fails closed."""
+    async with _db() as db:
+        rows = await _fetch(db, "SELECT kind, COUNT(*) AS n, MAX(created_at) AS newest FROM omi_day_candidates "
+                                "WHERE user_id = ? AND status = 'pending' GROUP BY kind", (user_id,))
+        decided = bool(since) and bool(await _fetch(
+            db, "SELECT 1 FROM omi_day_candidates WHERE user_id = ? AND decided_at IS NOT NULL AND decided_at >= ? LIMIT 1",
+            (user_id, since)))
+    return {"counts": {r["kind"]: int(r["n"]) for r in rows},
+            "newest": max((str(r["newest"] or "") for r in rows), default=""), "decided_since": decided}
+
+
 # --- forgetting ---------------------------------------------------------------------------------------------------
 async def forget_user(user_id: str) -> int:
     """Right to be forgotten: every review and candidate of the member. Returns the candidates deleted. RAISES when they could not be

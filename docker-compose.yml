@@ -28,6 +28,9 @@ services:
     ports:
     - 80:80
     - 443:443
+    # Relay listener (panel-anywhere R1): host LOOPBACK only, for frpc on this host. Nothing listens behind it until
+    # scripts/setup/relay/enable_relay_listener.py installs ssl/relay/listener.conf (connection refused until then).
+    - 127.0.0.1:9443:9443
     volumes:
     - ./services/zoe-ui/dist:/usr/share/nginx/html
     # nginx.conf is a single-FILE mount: pinned to an inode, so a git sync that replaces the

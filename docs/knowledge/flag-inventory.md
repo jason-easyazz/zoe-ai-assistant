@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-739 flags; 689 not documented in `.env.example`.
+748 flags; 698 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -137,6 +137,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DATA_URL` | `'http://127.0.0.1:8000'`, `-` | no | NO | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/maintenance/zoe-nightly-dreaming.py`<br>`scripts/perf/samantha_bar.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_DATE_HINT` | `True` | yes | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_DATE_ORDER` | `-` | no | NO | `services/zoe-data/date_locale.py` |
+| `ZOE_DAY_REVIEW_RAISE` | `False` | yes | NO | `services/zoe-data/day_review_raise.py` |
+| `ZOE_DAY_REVIEW_RAISE_SNOOZE_DAYS` | `3` | yes | NO | `services/zoe-data/day_review_raise.py` |
 | `ZOE_DB_ACQUIRE_TIMEOUT_S` | `''` | no | NO | `services/zoe-data/db_pool.py` |
 | `ZOE_DB_CONTAINER` | `'zoe-database'` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
 | `ZOE_DEFAULT_MEDIA_PLAYER` | `'media_player.all'` | no | NO | `services/zoe-data/intent_router.py` |
@@ -486,6 +488,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PERSON_MERGE_ENABLED` | `''` | no | NO | `services/zoe-data/person_merge.py` |
 | `ZOE_PERSON_RECALL_FLOOR` | `-` | no | NO | `services/zoe-data/memory_gate.py` |
 | `ZOE_PERSON_SUGGEST_ENABLED` | `''` | no | NO | `services/zoe-data/pending_suggestions.py` |
+| `ZOE_PHONE_APP` | `'off'` | yes | NO | `services/zoe-data/phone_app.py` |
+| `ZOE_PHONE_APP_BASE_URL` | `''` | yes | NO | `services/zoe-data/phone_app.py` |
+| `ZOE_PHONE_APP_BUNDLE_ID` | `''` | yes | NO | `services/zoe-data/phone_app.py` |
+| `ZOE_PHONE_APP_CA_SHA256` | `''` | yes | NO | `services/zoe-data/phone_app.py` |
 | `ZOE_PIN_CHALLENGE_TTL_S` | `'120'` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_PIN_LOCKOUT_S` | `'300'` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_PIN_MAX_ATTEMPTS` | `'5'` | no | NO | `services/zoe-data/routers/panel_auth.py` |
@@ -544,7 +550,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PR_GUARD_STATE_DIR` | `'/home/zoe/assistant/.cursor/tmp/pr_guard'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_TRIGGER_COOLDOWN_SECONDS` | `'900'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_UPDATE_BRANCH_COOLDOWN_SECONDS` | `'300'` | no | NO | `services/zoe-data/greploop_guard.py` |
-| `ZOE_PUBLIC_URL` | `''` | no | NO | `services/zoe-data/auth_handoff.py` |
+| `ZOE_PUBLIC_URL` | `''`, `-` | yes | NO | `services/zoe-data/auth_handoff.py`<br>`services/zoe-data/day_review_raise.py` |
 | `ZOE_PULL_NOT_PUSH` | `''` | yes | NO | `services/zoe-data/proactive/pull.py` |
 | `ZOE_QUIET_END_HOUR` | `'7'`, `7` | yes | NO | `services/zoe-data/comm_prefs.py`<br>`services/zoe-data/proactive/engine.py` |
 | `ZOE_QUIET_START_HOUR` | `'22'`, `22` | yes | NO | `services/zoe-data/comm_prefs.py`<br>`services/zoe-data/proactive/engine.py` |
@@ -556,6 +562,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_RECALL_GATE` | `'shadow'` | yes | NO | `services/zoe-data/recall_gate.py` |
 | `ZOE_RECALL_PRESENT_STATE_SHAPES` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_RELATIONSHIP_GRAPH_ENABLED` | `''` | no | NO | `services/zoe-data/relationship_graph.py` |
+| `ZOE_RELAY_HOSTNAME` | `''` | no | NO | `services/zoe-data/relay_ingress.py` |
+| `ZOE_RELAY_INGRESS` | `''` | no | NO | `services/zoe-data/relay_ingress.py` |
+| `ZOE_RELAY_TRUSTED_PEER` | `''` | no | NO | `services/zoe-data/relay_ingress.py` |
 | `ZOE_REMINDER_DEFAULT_TIME` | `''` | no | NO | `services/zoe-data/proactive/triggers/reminder_scan.py` |
 | `ZOE_REMINDER_MAX_ATTEMPTS` | `'5'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_REMINDER_STUCK_CLAIM_S` | `'600'` | no | NO | `services/zoe-data/proactive/triggers/reminders.py` |
