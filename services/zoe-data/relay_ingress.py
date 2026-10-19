@@ -244,11 +244,14 @@ async def bound_panel(fingerprint: str, *, fresh: bool = False) -> Optional[str]
     hit = None if fresh else _bound_cache.get(fingerprint)
     if hit and hit[1] > now:
         return hit[0]
+    epoch = _epoch  # a revocation that lands while the SELECT is in flight must not be undone by this (older) result
     try:
         panel = await _fetch_bound_panel(fingerprint)
     except Exception as exc:  # noqa: BLE001 - fail closed, but say why
         logger.warning("relay_ingress: certificate registry lookup failed (%s) - refusing", type(exc).__name__)
         raise RelayRefused(503, "relay_registry_unavailable") from exc
+    if epoch != _epoch:
+        return panel  # invalidate_cache() ran during the fetch: answer this caller, but never cache a possibly pre-revocation row
     if len(_bound_cache) > 512:
         _bound_cache.clear()
     _bound_cache[fingerprint] = (panel, now + _BOUND_CACHE_TTL_S)

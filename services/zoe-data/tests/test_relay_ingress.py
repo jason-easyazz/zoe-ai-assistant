@@ -809,6 +809,30 @@ async def test_a_close_queued_behind_a_stalled_frame_does_not_stop_the_revocatio
         await asyncio.gather(task, return_exceptions=True)
 
 
+async def test_a_registry_read_that_races_an_invalidation_never_refills_the_cache(reg, on, monkeypatch):
+    """Codex P1 on #2115: a lookup whose SELECT began before an admin revocation used to store its pre-revocation row after
+    invalidate_cache() had cleared the cache, so the next lookup reused it and the revoked certificate stayed proven for the TTL."""
+    calls = []
+
+    async def racing_fetch(fingerprint):
+        calls.append(fingerprint)
+        stale = "kitchen-panel"                       # what the SELECT saw before the revocation committed
+        relay_ingress.invalidate_cache()              # the admin revocation lands while the read is in flight
+        return stale
+
+    monkeypatch.setattr(relay_ingress, "_fetch_bound_panel", racing_fetch)
+    assert await relay_ingress.bound_panel(FP_KITCHEN, fresh=True) == "kitchen-panel"   # this caller started before the revoke
+    assert FP_KITCHEN not in relay_ingress._bound_cache                                # ... but its result was not cached
+    monkeypatch.setattr(relay_ingress, "_fetch_bound_panel", lambda fp: _revoked(calls, fp))
+    assert await relay_ingress.bound_panel(FP_KITCHEN) is None                         # the next proof reads the registry again
+    assert len(calls) == 2
+
+
+async def _revoked(calls, fp):
+    calls.append(fp)
+    return None
+
+
 def test_the_proof_lives_under_a_namespaced_scope_key_not_a_bare_relay_ctx(reg, on):
     seen = []
     app = make_app(reg)
