@@ -2171,6 +2171,7 @@
           "services/zoe-data/routers/stubs.py",
           "services/zoe-data/routers/system.py",
           "services/zoe-data/smart_home_service.py",
+          "services/zoe-data/system_stats.py",
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": false
@@ -2795,6 +2796,7 @@
         "readers": [
           "scripts/perf/measure_tts.py",
           "services/zoe-data/main.py",
+          "services/zoe-data/system_stats.py",
           "services/zoe-data/tts_waterfall.py"
         ],
         "typed_env": false
@@ -3047,7 +3049,8 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/routers/system.py"
+          "services/zoe-data/routers/system.py",
+          "services/zoe-data/system_stats.py"
         ],
         "typed_env": false
       },

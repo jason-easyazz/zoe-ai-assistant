@@ -229,7 +229,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_HARNESS_PANEL_WAIT_S` | `'2700'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_HARNESS_QUIET_END` | `dynamic` | no | NO | `scripts/maintenance/harness_quiet.py` |
 | `ZOE_HARNESS_QUIET_START` | `dynamic` | no | NO | `scripts/maintenance/harness_quiet.py` |
-| `ZOE_HA_BRIDGE_URL` | `''`, `'http://127.0.0.1:8007'` | no | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_HA_BRIDGE_URL` | `''`, `'http://127.0.0.1:8007'` | no | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/system_stats.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_HA_CONTROL_SCOPE` | `'panel'` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_HA_URL` | `dynamic` | no | NO | `services/zoe-data/routers/stubs.py` |
 | `ZOE_HA_VOICE_INGRESS_URL` | `'http://host.docker.internal:8000'` | no | NO | `services/homeassistant-mcp-bridge/main.py` |
@@ -290,7 +290,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_KOKORO_CACHE_PERSIST` | `True` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_CUDA_ATTEMPTS` | `'3'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_CUDA_RETRY_DELAY_S` | `'6'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
-| `ZOE_KOKORO_SIDECAR_URL` | `'http://127.0.0.1:10201'` | no | NO | `scripts/perf/measure_tts.py`<br>`services/zoe-data/main.py`<br>`services/zoe-data/tts_waterfall.py` |
+| `ZOE_KOKORO_SIDECAR_URL` | `'http://127.0.0.1:10201'` | no | NO | `scripts/perf/measure_tts.py`<br>`services/zoe-data/main.py`<br>`services/zoe-data/system_stats.py`<br>`services/zoe-data/tts_waterfall.py` |
 | `ZOE_KOKORO_VOICE` | `''`, `'af_sky'` | no | yes | `scripts/perf/measure_tts.py`<br>`services/zoe-data/voice_settings.py` |
 | `ZOE_KOKORO_VOICES` | `''` | no | NO | `services/zoe-data/voice_settings.py` |
 | `ZOE_LATENCY_BASELINE` | `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
@@ -315,7 +315,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LK_MIN_SPEECH_FRAMES` | `'5'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_LK_SILENCE_FRAMES` | `'20'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_LK_USE_AIORTC` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
-| `ZOE_LLAMA_URL` | `'http://127.0.0.1:11434'` | no | NO | `services/zoe-data/routers/system.py` |
+| `ZOE_LLAMA_URL` | `'http://127.0.0.1:11434'` | no | NO | `services/zoe-data/routers/system.py`<br>`services/zoe-data/system_stats.py` |
 | `ZOE_LLM_MODEL` | `'gemma'` | no | NO | `services/zoe-data/memory_digest.py` |
 | `ZOE_LOCAL_MODEL` | `'Gemma 4 E4B-QAT'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_LOCAL_TTS_URL` | `''` | no | yes | `services/zoe-data/routers/voice_tts.py` |
