@@ -236,7 +236,7 @@ member's own `struggle_events.summary` (forget-gated, member-only, the failed tu
 `label_source = followup` examples of `proposed` / `accepted` / `applied` proposals (a `rejected` one never), and a `label_source = router`
 example only when a PERSON accepted it (an owner correction; the loop's own policy accept never upgrades a weak label). Dropped and
 counted: forget tombstones, frozen-corpus texts, bad labels. One row per normalised wording (a wording with two labels is dropped). **Time
-split, no leakage:** the newest 20% of wordings the incumbent cannot have learned are the held-out "known failures"; every older wording -
+split, no leakage:** a wording's time is its NEWEST failure; the newest 20% of wordings the incumbent cannot have learned are the held-out "known failures"; every older wording -
 and any wording the incumbent MAY have learned: the served and previous generations' WHOLE warm-start lineage (`parent` links; a generation
 holds what every ancestor learned) and the committed corpus every generation descends from - is train, so every held-out failure happened
 after every new trained one and never shares a wording with it. The training rows are rebuilt with every held-out wording removed from

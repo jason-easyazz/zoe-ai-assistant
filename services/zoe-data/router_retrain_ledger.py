@@ -113,9 +113,17 @@ def _write(d: Path, data: dict[str, Any]) -> None:
             pruned.append(r)
         data["runs"] = pruned
     tmp = d / f".{LEDGER}.tmp"
-    tmp.write_text(json.dumps(data, sort_keys=True, indent=1))
+    with open(tmp, "w") as fh:
+        fh.write(json.dumps(data, sort_keys=True, indent=1))
+        fh.flush()
+        os.fsync(fh.fileno())             # DURABLE: the adoption commit must be on disk before its recovery marker is removed
     os.chmod(tmp, 0o600)
     os.replace(tmp, d / LEDGER)
+    dfd = os.open(str(d), os.O_RDONLY)
+    try:
+        os.fsync(dfd)                     # ... and the rename too
+    finally:
+        os.close(dfd)
 
 
 def load() -> dict[str, Any]:

@@ -197,7 +197,7 @@ def group_and_split(examples: list[Example], *, trained_keys: set, frac: float =
             info["conflicting_label"] += len(exs)
             continue
         rep = max(exs, key=lambda e: e.ts)
-        reps.append((min(e.ts for e in exs), rep))
+        reps.append((rep.ts, rep))          # a wording's time is its NEWEST failure: a repeat after the cutoff is never trained
         info["duplicates_folded"] += len(exs) - 1
     reps.sort(key=lambda t: (t[0], t[1].text_key))
     fresh = [(t, e) for t, e in reps if e.text_key not in trained_keys]
@@ -853,7 +853,7 @@ def adopt_generation(rec: dict, *, stamp: str, cand_gguf: Path, run_dir: Path, i
     def _reserve(d: dict) -> None:
         if ledger.tombstoned(rec.get("examples") or [], d):
             return
-        rec.update(status="adopting", gen=gen, lkg=str(lkg))
+        rec.update(status="adopting", gen=gen, lkg=str(lkg), prev_served=d.get("served"), prev_previous=d.get("previous"))
         d["runs"].append(dict(rec))
         reserved["ok"] = True
     ledger.update(_reserve)
@@ -919,10 +919,14 @@ def adopt_marker() -> Path:
 
 
 def _settle(gen: str, status: str, outcome: str) -> None:
+    """Close a reservation that did not stand - including one whose commit was WRITTEN but could not be made durable: ``served`` /
+    ``previous`` go back to what they were when it was reserved."""
     def _f(d: dict) -> None:
         for r in d["runs"]:
-            if r.get("gen") == gen and r.get("status") == "adopting":
+            if r.get("gen") == gen and r.get("status") in ("adopting", "adopted"):
                 r.update(status=status, outcome=outcome)
+                if d.get("served") == gen:
+                    d["served"], d["previous"] = r.get("prev_served"), r.get("prev_previous")
     ledger.update(_f)
 
 

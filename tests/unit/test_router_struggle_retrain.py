@@ -733,7 +733,7 @@ def test_the_adoption_marker_is_durable_before_the_swap(sandbox, monkeypatch):
     import os as _os
     events = []
     real_fsync = _os.fsync
-    monkeypatch.setattr(_os, "fsync", lambda fd: events.append("fsync") or real_fsync(fd))
+    monkeypatch.setattr(_os, "fsync", lambda fd: events.append(_os.readlink(f"/proc/self/fd/{fd}")) or real_fsync(fd))
 
     def deploy(*a, **k):
         events.append("deploy:marker" if rr.adopt_marker().exists() else "deploy:no-marker")
@@ -741,4 +741,56 @@ def test_the_adoption_marker_is_durable_before_the_swap(sandbox, monkeypatch):
     monkeypatch.setattr(rs, "deploy", deploy)
     rr.act("on", decide(), {"stamp": "s1"}, stamp="s1", cand_gguf=sandbox / "c.gguf", run_dir=sandbox / "run", inc_live=INC,
            train=[], journal={})
-    assert events[:3] == ["fsync", "fsync", "deploy:marker"]
+    i = events.index("deploy:marker")
+    marker = str(rr.adopt_marker().parent.resolve() / rr.adopt_marker().name)
+    assert events[i - 2:i] == [marker, str(ledger.root().resolve())]          # the marker file, then its directory, then the swap
+
+
+
+# ── Codex round 3 (2026-10-19) ─────────────────────────────────────────────────
+def test_a_wording_repeated_after_the_cutoff_is_held_out_not_trained():
+    """A wording first failed early and AGAIN after every other failure: its time is its newest failure, so it is held out - a failure
+    newer than a held-out one is never trained on."""
+    rows = [row(i, f"invented weather ask number {i} please", ts=1000.0 + i) for i in range(50)]
+    rows.append(row(99, "invented weather ask number 0 please", ts=9999.0))       # the oldest wording, repeated last
+    ex, _ = rr.select_examples(rows, tombstones={}, frozen=set(), normalize=NORM)
+    train, hold, _ = rr.group_and_split(ex, trained_keys=set())
+    assert max(e.ts for e in train) < min(e.ts for e in hold)
+    assert ledger.text_key("invented weather ask number 0 please") in {e.text_key for e in hold}
+
+
+def test_the_ledger_write_is_fsynced_file_and_directory(monkeypatch):
+    import os as _os
+    seen = []
+    real = _os.fsync
+
+    def rec(fd):
+        seen.append(_os.readlink(f"/proc/self/fd/{fd}"))
+        return real(fd)
+    monkeypatch.setattr(_os, "fsync", rec)
+    ledger.update(lambda d: d.update(served=None))
+    root = str(ledger.root().resolve())
+    assert any(p.endswith(f".{ledger.LEDGER}.tmp") for p in seen) and seen[-1] == root
+
+
+def test_a_commit_that_cannot_be_made_durable_is_rolled_back(sandbox, monkeypatch):
+    """Fault injection: the publication commit is written but its fsync fails (the host could lose it). The marker must not be dropped
+    over an unproven commit: the previous model goes back and served / previous return to what they were."""
+    _fake_gguf(rs.SERVED_GGUF, b"INCUMBENT")
+    run_dir = sandbox / "run"
+    (run_dir / "merged").mkdir(parents=True)
+    real_write = ledger._write
+
+    def lossy(d, data):
+        real_write(d, data)
+        if data.get("served") == "gs1":
+            raise OSError("fsync failed: the commit is not durable")
+    monkeypatch.setattr(ledger, "_write", lossy)
+    with pytest.raises(OSError):
+        rr.act("on", decide(), {"stamp": "s1"}, stamp="s1", cand_gguf=_fake_gguf(sandbox / "cand.gguf", b"CANDIDATE"), run_dir=run_dir,
+               inc_live=INC, train=[], journal={})
+    monkeypatch.setattr(ledger, "_write", real_write)
+    data = ledger.load()
+    assert rs.SERVED_GGUF.read_bytes()[:13] == b"GGUFINCUMBENT" and data["served"] is None
+    assert next(r for r in data["runs"] if r.get("gen") == "gs1")["status"] == "rolled_back_at_publish"
+    assert not rr.adopt_marker().exists()
