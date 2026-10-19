@@ -208,19 +208,26 @@ def _blob(lines: list[str]) -> bytes:
     return ("\n".join(lines) + "\n" if lines else "").encode("utf-8", errors="surrogateescape")
 
 
-def rewrite(path: Path, fn: Callable[[str], Optional[str]]) -> int:
+def rewrite(path: Path, fn: Callable[[str], Optional[str]], *, unlocked_writer: bool = False) -> int:
     """Rewrite ``path`` line by line. ``fn(line)`` returns the new line (the same object when unchanged) or None to drop it.
     Returns how many lines changed or were dropped; the file is replaced only when that is non-zero.
 
     The CALLER holds ``locked(log)`` for a cooperating writer (``_apply`` does). Without it, rows can still arrive in the old inode
     while we work: every such row is put through ``fn`` too (the tail before the replace, and whatever a stalled writer adds after
     it), so an appended row that names a forgotten entity is erased, not copied through. If the path stopped naming the inode we read
-    (a rotation renamed it) nothing is replaced and ``RewriteRaced`` is raised for the caller to rescan."""
+    (a rotation renamed it) nothing is replaced and ``RewriteRaced`` is raised for the caller to rescan.
+
+    ``unlocked_writer`` (the intent-miss log, whose writer ``intent_router.detect_intent`` takes no lock): a pass that found nothing to
+    change still settles and re-reads the old inode before it reports 0, so a row appended while we read is judged too."""
     try:
         with open(path, "rb") as old:                          # ``old`` stays open: it is the inode a late writer may still hit
             st = os.fstat(old.fileno())
             out, changed = _through(old.read(), fn)
             mode = st.st_mode & 0o777
+            if not changed and unlocked_writer:
+                time.sleep(_SETTLE_S)                          # a writer mid-append when we read finishes it
+                more, changed = _through(old.read(), fn)
+                out += more
             if not changed:
                 return 0
             fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
@@ -312,7 +319,7 @@ def _apply(log: TextLog, **kw: Any) -> int:
             raced = False
             for seg in segments(log):
                 try:
-                    total += rewrite(seg, fn)
+                    total += rewrite(seg, fn, unlocked_writer=log is not ROUTER_SHADOW)
                 except RewriteRaced:
                     raced = True
             if not raced:

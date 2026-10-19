@@ -128,7 +128,7 @@ def test_a_writer_in_another_process_skips_while_the_pass_holds_the_lock_and_no_
     first = {"v": True}
     real_rewrite = ltl.rewrite
 
-    def rewrite_then_let_the_writer_try(path, fn):
+    def rewrite_then_let_the_writer_try(path, fn, **kw):
         if first["v"]:
             first["v"] = False
             go.write_text("1")                                   # NOW the writer races the pass, which holds the lock
@@ -136,7 +136,7 @@ def test_a_writer_in_another_process_skips_while_the_pass_holds_the_lock_and_no_
             while proc.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.02)
             assert proc.poll() is not None, "the writer waited on the pass instead of skipping"
-        return real_rewrite(path, fn)
+        return real_rewrite(path, fn, **kw)
 
     monkeypatch.setattr(ltl, "rewrite", rewrite_then_let_the_writer_try)
     ltl.erase_entity(re.compile("Marisol"))

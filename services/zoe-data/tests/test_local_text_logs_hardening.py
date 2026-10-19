@@ -70,6 +70,30 @@ def test_a_writer_holding_the_old_inode_across_the_replace_is_caught_too(shadow,
     assert [x["utt"] for x in load(shadow)] == ["a" * 12, "y" * 12]
 
 
+def test_an_unlocked_miss_append_during_a_no_change_pass_is_judged_too(shadow, tmp_path, monkeypatch):
+    """The intent-miss writer (intent_router.detect_intent) takes no lock and opens the path per append, so a miss naming the
+    forgotten entity can land in the file while a pass that found nothing to change is reading it (Codex, #2110).
+    Break: drop the ``unlocked_writer`` settle-and-reread in ``rewrite`` -> the Marisol miss survives the erase."""
+    import re
+
+    misses = tmp_path / "misses.jsonl"
+    misses.write_text(json.dumps({"text": "what is the weather", "ts": NOW}) + "\n")
+    real_sleep = ltl.time.sleep
+    landed = []
+
+    def writer_lands_during_settle(seconds):
+        if not landed:
+            with open(misses, "a") as fh:
+                fh.write(json.dumps({"text": "remind me to call Marisol", "ts": NOW}) + "\n")
+            landed.append(True)
+        real_sleep(0)
+
+    monkeypatch.setattr(ltl.time, "sleep", writer_lands_during_settle)
+    assert ltl.erase_entity(re.compile(r"\bMarisol\b")) == 1
+    assert landed and "Marisol" not in misses.read_text()
+    assert [r["text"] for r in load(misses)] == ["what is the weather"]
+
+
 def test_the_rewrite_fsyncs_the_temp_file_and_the_directory(shadow, monkeypatch):
     synced = []
     real = os.fsync

@@ -17,7 +17,8 @@ Two forget paths exist and a store can be reached by either or both:
 
 BACKUP POLICY (decided 2026-10-18; ``BACKUP_MAX_AGE_DAYS``). Forget cannot rewrite a tarball or a Postgres dump, so the rule is:
 backups AGE OUT, and nothing is restored without re-applying the forget. Automated backups are bounded at 35 days (Postgres:
-7 daily + 4 weekly; MemPalace tar: 7 daily); the plaintext JSON exports are redacted by the ledger (``redact_backups.py``); biometric
+7 daily + 4 weekly; MemPalace tar: 7 daily) while their nightly jobs succeed (they prune by count after a new backup, so a failing
+job keeps its old ones: both are ledgered gaps until an age alarm exists); the plaintext JSON exports are redacted by the ledger (``redact_backups.py``); biometric
 table DATA is excluded from dumps (``BIOMETRIC_TABLES`` in ``postgres-nightly-backup.sh``). A one-off backup an owner script makes
 (``~/.zoe/backups/<tool>-<ts>/``) is deleted within ``ADHOC_BACKUP_MAX_AGE_DAYS``. After a restore from a backup older than a
 forget, re-issue the forget (the ledger table is restored with the data it protects).
@@ -208,10 +209,13 @@ OTHER: tuple[Store, ...] = (
           markers=("zoe.db",)),
     Store("app_logs", "file", WORDS, GAP, "~/.zoe-logs/zoe-data.*: the service log. Message text is logged at INFO in a few places (e.g. intent_miss: <text>); "
           "rotated by size (50 MB x4), not by age, outside the cascade.", markers=("intent_miss:",)),
-    Store("backup_postgres", "backup", WORDS, OUT_OF_SCOPE, "Nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within "
-          "BACKUP_MAX_AGE_DAYS (35). Forget cannot rewrite a dump; biometric table data is excluded from them. Restore => re-issue the forget.",
+    Store("backup_postgres", "backup", WORDS, GAP, "Nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within "
+          "BACKUP_MAX_AGE_DAYS (35) - WHILE the nightly job succeeds: it prunes by count after a new dump, so a job that keeps failing "
+          "keeps its old dumps (an age alarm is the fix; a time prune must never delete the last good copy). Forget cannot rewrite a dump; "
+          "biometric table data is excluded from them. Restore => re-issue the forget.",
           markers=("postgres-nightly-backup.sh",)),
-    Store("backup_palace_tar", "backup", WORDS, OUT_OF_SCOPE, "Nightly MemPalace tarball, 7 kept (<= 7 days). Not rewritten; the JSON exports beside it are redacted "
+    Store("backup_palace_tar", "backup", WORDS, GAP, "Nightly MemPalace tarball, 7 kept (<= 7 days WHILE the nightly job succeeds: it prunes by "
+          "count after a new tarball, so a failing job keeps its old ones). Not rewritten; the JSON exports beside it are redacted "
           "by the ledger (redact_backups.py).", markers=("mempalace-nightly-backup.sh",)),
     Store("backup_json_exports", "backup", WORDS, REACHED, "Palace JSON exports and compaction backups are redacted by the forget ledger "
           "(forget_redact.redact_export, scripts/maintenance/redact_backups.py).", entity="forget_redact.redact_export",
