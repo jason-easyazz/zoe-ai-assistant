@@ -89,7 +89,10 @@ def snooze_days() -> int:
 # -- the words (code-composed from counts; never a name, a quote or a time) --------------------------------------------------
 _KINDS = (("calendar_event", "event", "events"), ("list_item", "thing for your lists", "things for your lists"),
           ("reminder", "reminder", "reminders"), ("follow_up", "thing to do", "things to do"),
-          ("person", "person to remember", "people to remember"), ("owner_fact", "thing about you", "things about you"))
+          ("person", "person to remember", "people to remember"), ("owner_fact", "thing about you", "things about you"),
+          ("person_fact", "thing about someone you know", "things about people you know"))
+# kinds that are said together (a relationship is a fact about someone the member knows)
+_SAME_AS = {"person_relation": "person_fact"}
 _NUM = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
 
 
@@ -110,6 +113,10 @@ def _count(v: Any) -> int:
 
 def breakdown(counts: dict) -> str:
     """"two events, three things for your lists and one reminder". Pure. Unknown kinds are "other things"."""
+    merged: dict = {}
+    for k, v in (counts or {}).items():
+        merged[_SAME_AS.get(k, k)] = merged.get(_SAME_AS.get(k, k), 0) + _count(v)
+    counts = merged
     parts, known = [], {k for k, _s, _p in _KINDS}
     for kind, one, many in _KINDS:
         n = _count((counts or {}).get(kind))

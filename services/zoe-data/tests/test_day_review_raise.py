@@ -194,6 +194,9 @@ def test_the_lines_are_counts_only():
     assert drr.phone_text(counts) == "I went through your day: four things are waiting for you to look at."
     assert drr.summary(dict(person=1, owner_fact=3, mystery=2)) == (
         "I went through your day and found one person to remember, three things about you and two other things.")
+    # #2126's kinds: a fact or a relationship about a tagged person is said as one group, never by name
+    assert drr.summary(dict(person_fact=1, person_relation=2)) == (
+        "I went through your day and found three things about people you know.")
 
 
 @pytest.mark.parametrize("text", [
