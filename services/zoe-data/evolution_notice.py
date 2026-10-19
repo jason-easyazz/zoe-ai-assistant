@@ -5,7 +5,8 @@ NOTICE phase of the self-evolution loop:
 2. LLM errors: detect agent tiers with >10% error rate in 24h
 3. Frustration signals: picked up inline in chat.py, stored as proposals directly
 
-All proposals go to evolution_proposals table. Deduplication prevents repeat entries.
+All proposals go to the single evolution proposal queue (evolution_proposals, written ONLY through evolution_queue.py: class code,
+risk tier 3, legal status moves enforced there). Deduplication prevents repeat entries.
 """
 from __future__ import annotations
 
@@ -15,6 +16,8 @@ import os
 import time
 import uuid
 from pathlib import Path
+
+import evolution_queue
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +85,7 @@ async def _proposal_exists(title: str, prop_type: str, db) -> bool:
     rows = await db.fetch(
         """SELECT id FROM evolution_proposals
            WHERE type=$1 AND title=$2
-           AND status NOT IN ('rejected','validated','failed')""",
+           AND status NOT IN ('rejected','kept','reverted')""",
         prop_type, title,
     )
     return len(rows) > 0
@@ -242,26 +245,19 @@ async def run_evolution_notice() -> dict:
             # autonomy_class/approval_required/risk are stamped by the DB trigger
             # (migration 0027) from the proposal type — no per-INSERT columns, so
             # this stays safe across the deploy window before the migration runs.
-            await db.execute(
-                """INSERT INTO evolution_proposals
-                   (id, type, title, description, evidence, target_patterns, status, proposed_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)""",
-                row["id"],
-                row["type"],
-                row["title"],
-                row["description"],
-                row["evidence"],
-                row["target_patterns"],
-                time.time(),
+            await evolution_queue.propose(
+                db, source="evolution_notice:intent_miss_cluster", change_class="code", component="intent_router",
+                proposal_id=row["id"], legacy_type=row["type"], title=row["title"], description=row["description"],
+                legacy_evidence=row["evidence"], target_patterns=row["target_patterns"],
+                evidence={"signal": {"kind": "intent_miss_cluster", "miss_count": len(members)}},
             )
             created += 1
             logger.info("evolution_notice: proposed intent gap '%s' (%d hits)", rep[:60], len(members))
 
             # Auto-approve if cluster is large enough and threshold is set
             if _AUTO_APPROVE_THRESHOLD > 0 and len(members) >= _AUTO_APPROVE_THRESHOLD:
-                await db.execute(
-                    "UPDATE evolution_proposals SET status='approved' WHERE id=$1", prop_id
-                )
+                await evolution_queue.decide(db, prop_id, "approved", actor="evolution_notice:auto_approve",
+                                             note=f"cluster of {len(members)} >= {_AUTO_APPROVE_THRESHOLD}")
                 logger.info("evolution_notice: auto-approved '%s' (%d hits >= threshold %d)",
                             rep[:60], len(members), _AUTO_APPROVE_THRESHOLD)
 
@@ -359,16 +355,12 @@ async def run_evolution_notice() -> dict:
                 title=title,
                 signal=signal,
             )
-            await db.execute(
-                """INSERT INTO evolution_proposals
-                   (id, type, title, description, evidence, target_patterns, status, proposed_at)
-                   VALUES ($1,'agent_health',$2,$3,$4,$5,'pending',$6)""",
-                row_payload["id"],
-                row_payload["title"],
-                row_payload["description"],
-                row_payload["evidence"],
-                row_payload["target_patterns"],
-                time.time(),
+            await evolution_queue.propose(
+                db, source="evolution_notice:agent_health", change_class="code", component="brain",
+                proposal_id=row_payload["id"], legacy_type="agent_health", title=row_payload["title"],
+                description=row_payload["description"], legacy_evidence=row_payload["evidence"],
+                target_patterns=row_payload["target_patterns"],
+                evidence={"signal": {"kind": "agent_health", "agent_tier": tier, "total": total, "errors": errors}},
             )
             created += 1
 
@@ -401,7 +393,7 @@ async def record_frustration_signal(
         rows = await db.fetch(
             """SELECT id FROM evolution_proposals
                WHERE type='user_frustration' AND title=$1
-               AND status NOT IN ('rejected','validated','failed')""",
+               AND status NOT IN ('rejected','kept','reverted')""",
             title,
         )
         if rows:
@@ -480,16 +472,11 @@ async def record_frustration_signal(
             signal=signal,
         )
         # autonomy_class is stamped by the DB trigger (migration 0027) from the type.
-        await db.execute(
-            """INSERT INTO evolution_proposals
-               (id, type, title, description, evidence, target_patterns, status, proposed_at)
-               VALUES ($1,'user_frustration',$2,$3,$4,$5,'pending',$6)""",
-            row["id"],
-            row["title"],
-            row["description"],
-            row["evidence"],
-            row["target_patterns"],
-            time.time(),
+        await evolution_queue.propose(
+            db, source="evolution_notice:user_frustration", change_class="code", component="chat",
+            proposal_id=row["id"], legacy_type="user_frustration", title=row["title"], description=row["description"],
+            legacy_evidence=row["evidence"], target_patterns=row["target_patterns"],
+            evidence={"signal": {"kind": "user_frustration", "repeat_count": repeat_count}},
         )
         logger.info(
             "evolution_notice: frustration signal for user=%s message='%s' repeats=%d",
@@ -523,7 +510,7 @@ async def record_user_issue(message: str, user_id: str) -> None:
         rows = await db.fetch(
             """SELECT id FROM evolution_proposals
                WHERE type='user_issue_report' AND title=$1
-               AND status NOT IN ('rejected','validated','failed')""",
+               AND status NOT IN ('rejected','kept','reverted')""",
             title,
         )
         if rows:
@@ -594,16 +581,11 @@ async def record_user_issue(message: str, user_id: str) -> None:
             title=title,
             signal=signal,
         )
-        await db.execute(
-            """INSERT INTO evolution_proposals
-               (id, type, title, description, evidence, target_patterns, status, proposed_at)
-               VALUES ($1,'user_issue_report',$2,$3,$4,$5,'pending',$6)""",
-            row["id"],
-            row["title"],
-            row["description"],
-            row["evidence"],
-            row["target_patterns"],
-            time.time(),
+        await evolution_queue.propose(
+            db, source="evolution_notice:user_issue_report", change_class="code", component="chat",
+            proposal_id=row["id"], legacy_type="user_issue_report", title=row["title"], description=row["description"],
+            legacy_evidence=row["evidence"], target_patterns=row["target_patterns"],
+            evidence={"signal": {"kind": "user_issue_report"}},
         )
         logger.info(
             "evolution_notice: user issue report from user=%s message='%s'",
@@ -662,7 +644,7 @@ async def run_measure_phase() -> dict:
         rows = await db.fetch(
             """SELECT id, type, title, target_patterns, deployed_at
                FROM evolution_proposals
-               WHERE status='deployed'
+               WHERE status='applied'
                  AND validation_result IS NULL
                  AND deployed_at IS NOT NULL
                  AND deployed_at < $1""",
@@ -722,12 +704,20 @@ async def run_measure_phase() -> dict:
                 "measured_at": now,
             }
 
-            new_status = verdict  # 'validated' or 'failed'
+            new_status = verdict  # the board word: 'validated' or 'failed'
+            # the status move is the queue (applied -> kept | reverted, the one legal move here), FIRST: a row the queue refuses
+            # keeps a NULL validation_result, so the next pass measures it again instead of leaving it stuck as measured-but-applied
+            try:
+                await evolution_queue.transition(
+                    db, proposal_id, "kept" if verdict == "validated" else "reverted", actor="evolution_notice:measure",
+                    frm="applied", note="measured: " + verdict,
+                    evidence={"before": {"misses_48h": miss_before}, "after": {"misses_48h": miss_after}},
+                )
+            except evolution_queue.QueueError as exc:
+                logger.warning("evolution_measure: proposal %s not moved: %s", proposal_id, exc)
+                continue
             await db.execute(
-                """UPDATE evolution_proposals
-                   SET status=$1, validation_result=$2
-                   WHERE id=$3""",
-                new_status,
+                "UPDATE evolution_proposals SET validation_result=$1 WHERE id=$2",
                 json.dumps(validation_result),
                 proposal_id,
             )

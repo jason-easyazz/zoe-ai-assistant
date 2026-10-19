@@ -38,15 +38,20 @@ def test_live_proposal_writers_do_not_use_legacy_contract_dumpers():
 
 
 def test_live_evolution_proposal_inserts_use_runtime_intake():
+    """Since the single queue (migration 0062) the ONLY insert is ``evolution_queue.propose`` (the one-writer rule is pinned in
+    ``test_evolution_queue.py``). The intake rule moved with it: every legacy writer - a ``propose`` call that carries the legacy
+    signal record (``legacy_evidence=``) - builds it through the runtime intake in the same scope.
+    Negative control: drop the intake builder from ``record_user_issue`` -> red."""
     intake_markers = (
         "build_runtime_evolution_proposal_intake",
         "build_mcp_runtime_evolution_proposal_intake",
     )
     offenders: list[str] = []
+    legacy_calls = 0
 
     for path in _live_python_files():
         text = path.read_text(errors="replace")
-        if "INSERT INTO evolution_proposals" not in text:
+        if ".propose(" not in text:
             continue
         tree = ast.parse(text)
         parents: dict[ast.AST, ast.AST] = {}
@@ -54,16 +59,17 @@ def test_live_evolution_proposal_inserts_use_runtime_intake():
             for child in ast.iter_child_nodes(parent):
                 parents[child] = parent
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "propose"):
                 continue
-            if "INSERT INTO evolution_proposals" not in node.value:
+            if not any(kw.arg == "legacy_evidence" for kw in node.keywords):
                 continue
+            legacy_calls += 1
             scope = _enclosing_scope(node, parents)
             source = ast.get_source_segment(text, scope) or text
             if not any(marker in source for marker in intake_markers):
-                location = f"{path.relative_to(DATA_ROOT)}:{getattr(node, 'lineno', 1)}"
-                offenders.append(location)
+                offenders.append(f"{path.relative_to(DATA_ROOT)}:{node.lineno}")
 
+    assert legacy_calls >= 5, "the four evolution_notice writers and the MCP tool all write through evolution_queue.propose"
     assert offenders == []
 
 

@@ -87,6 +87,7 @@ def env(monkeypatch, tmp_path):
     engine = sa.create_engine(f"sqlite:///{path}")
     _migrate(engine, "0050_struggle_events.py")
     _migrate(engine, "0057_struggle_proposals.py")
+    _migrate(engine, "0062_evolution_proposal_queue.py")       # the single queue: status / decision live there since 0062
     db = _Sqlite(path)
 
     @contextlib.asynccontextmanager
@@ -379,7 +380,13 @@ def test_each_count_is_bound_to_its_own_field_not_just_to_a_number_the_facts_hap
 # ── the pass: store, idempotence, no auto-apply ──────────────────────────────
 
 def rows_of(env, table="struggle_proposals"):
+    if table == "struggle_proposals":     # since 0062 the status / decision live in the queue: read the module view (detail JOIN queue)
+        return [dict(zip(sp._PCOLS, tuple(r.values()))) for r in env.db.rows(f"SELECT {sp._SEL} FROM {sp._FROM}")]
     return env.db.rows(f"SELECT * FROM {table}")
+
+
+def queue_of(env, source="struggle"):
+    return env.db.rows("SELECT * FROM evolution_proposals WHERE source = ?", (source,))
 
 
 def test_a_pass_stores_a_proposal_with_evidence_and_a_rerun_updates_it_in_place(env):
@@ -551,8 +558,9 @@ def test_the_router_example_page_is_not_used_up_by_a_proposal_whose_evidence_is_
     pids = _proposal_ids(env)
     for pid in pids.values():
         run(sp.decide(pid, "accept", "admin-1"))
-    env.db.conn.execute("UPDATE struggle_proposals SET decided_at = ? WHERE pattern = ?", (NOW + 100.0, "unrouted|what:now:none"))          # the newest decision
-    env.db.conn.execute("UPDATE struggle_proposals SET decided_at = ? WHERE pattern = ?", (NOW, "unrouted|what:future:today"))
+    decided = "UPDATE evolution_proposals SET reviewed_at = ? WHERE id IN (SELECT id FROM struggle_proposals WHERE pattern = ?)"
+    env.db.conn.execute(decided, (NOW + 100.0, "unrouted|what:now:none"))          # the newest decision
+    env.db.conn.execute(decided, (NOW, "unrouted|what:future:today"))
     env.db.conn.commit()
     assert {e["proposal_id"] for e in run(_with_ledger_clear(sp.queued_router_examples(limit=1)))} == {pids["unrouted|what:now:none"]}, "control arm: newest first"
     _kill_events_of(env, pids["unrouted|what:now:none"])
@@ -1062,3 +1070,53 @@ def test_a_user_delete_before_any_retrain_run_tombstones_their_wordings(env, mon
     run(sd.delete_user(B))
     t = rl.load()["tombstones"]
     assert rl.text_key(f"what is the {MARK} forecast") in t["text_keys"] and rl.user_key(B) in t["user_keys"]
+
+
+# ── the one queue (migration 0062): every proposal is a row of evolution_proposals ──
+
+def test_a_struggle_proposal_is_a_queue_row_its_decisions_are_queue_moves_and_a_delete_takes_it_out(env):
+    """The struggle writer lands in the single evolution queue (same id, source struggle): class / component / tier by kind, COUNTS-only
+    evidence, the decisions as the queue's legal moves with history, and a member delete removes the queue row too.
+    Negative controls: make ``_drop`` skip ``eq.delete`` -> the deleted member's proposal stays queued (red); add ``row["summary"]`` of
+    an event to ``_signal`` -> the marker word reaches the queue (red)."""
+    store(*genuine(), *followed(start=50, summary=f"what will the {MARK} be"))
+    run(sp.run_pass(now=NOW))
+    props = dict((p["id"], p) for p in rows_of(env))
+    queued = dict((r["id"], r) for r in queue_of(env))
+    assert set(queued) == set(props) and len(props) == 2
+    for pid, p in props.items():
+        row = queued[pid]
+        cls, comp, tier = sp.QUEUE_CLASS[p["kind"]]
+        assert (row["status"], row["decision"], row["change_class"], row["component"], row["risk_tier"]) == ("proposed", "", cls, comp, tier)
+        signal = json.loads(row["evidence_json"])["signal"]
+        assert (signal["kind"], signal["episodes"], signal["events"], signal["user_days"]) == (p["kind"], p["episode_count"], p["event_count"], p["day_count"])
+        assert row["title"] == p["summary"]
+    assert MARK not in json.dumps(queue_of(env)) and MARK not in json.dumps(env.db.rows("SELECT * FROM evolution_proposal_history"))
+    router = [pid for pid, p in props.items() if p["kind"] == sp.KIND_ROUTER_EXAMPLE][0]
+    gap = [pid for pid, p in props.items() if p["kind"] == sp.KIND_INTENT_GAP][0]
+    run(sp.decide(router, "accept", "admin-1"))
+    run(sp.decide(gap, "reject", "admin-1", "not_now"))
+    queued = dict((r["id"], r) for r in queue_of(env))
+    assert (queued[router]["status"], queued[router]["decision"], queued[router]["decided_by"]) == ("proposed", "approved", "admin-1")
+    assert (queued[gap]["status"], queued[gap]["decision_note"]) == ("rejected", "not_now")
+    run(sp.mark_applied(router, "gen-7"))
+    assert queue_of(env) and dict((r["id"], r["status"]) for r in queue_of(env))[router] == "applied"
+    moves = [(h["from_status"], h["to_status"], h["decision"]) for h in
+             env.db.rows("SELECT * FROM evolution_proposal_history WHERE proposal_id = ? ORDER BY at, rowid", (router,))]
+    assert moves == [(None, "proposed", ""), (None, None, "approved"), ("proposed", "applied", "")]
+    run(sd.delete_user(A))
+    run(sd.delete_user(B))
+    assert rows_of(env) == [] and queue_of(env) == []
+    assert not env.db.rows("SELECT 1 FROM evolution_proposal_history WHERE proposal_id IN (?, ?)", (router, gap))
+
+
+def test_a_queue_row_left_without_its_detail_is_pruned(env):
+    """A crash between the two inserts leaves a queue row with no struggle detail; the next pass removes it."""
+    store(*genuine())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    env.db.conn.execute("DELETE FROM struggle_proposals WHERE id = ?", (pid,))
+    env.db.conn.commit()
+    assert [r["id"] for r in queue_of(env)] == [pid]
+    run(sp.run_pass(now=NOW))
+    assert pid not in [r["id"] for r in queue_of(env)] and len(rows_of(env)) == 1      # the orphan is gone, the pattern re-proposed
