@@ -1,6 +1,7 @@
 /* Zoe phase-2 firmware: the pure half of the ring encryption (no Zephyr includes; host-tested). See zoe_ring_crypt.h. */
 #include "zoe_ring_crypt.h"
 
+#include <errno.h>
 #include <string.h>
 
 #define ZRC_MAX_PACKET 512U
@@ -50,5 +51,37 @@ int zrc_rekey(uint8_t *packets, size_t stride, size_t packet_len, uint64_t first
             return rc;
         }
     }
+    return 0;
+}
+
+bool zrc_needs_new_key(bool wipe_pending, bool key_found, bool epoch_found, uint32_t epoch)
+{
+    /* A pending wipe ALWAYS wins: the old key is never loaded again. A key without its salt reservation is never used. */
+    return wipe_pending || !key_found || !epoch_found || epoch == 0U;
+}
+
+void zrc_epoch_resume(struct zrc_epoch *e, uint32_t persisted_limit)
+{
+    e->next = persisted_limit > 0U ? persisted_limit : 1U; /* 0 is never a salt (stock headers carry 0) */
+    e->limit = e->next;                                   /* nothing reserved yet in this boot */
+}
+
+int zrc_epoch_take(struct zrc_epoch *e, zrc_persist_fn persist, void *ctx, uint32_t *salt)
+{
+    if (e->next == 0U) {
+        return -EINVAL;
+    }
+    if (e->next >= e->limit) {
+        if (e->limit > UINT32_MAX - ZRC_EPOCH_BLOCK) {
+            return -ENOSPC;
+        }
+        uint32_t reserve = e->limit + ZRC_EPOCH_BLOCK;
+        int rc = persist(reserve, ctx); /* persisted BEFORE any value below it is handed out */
+        if (rc != 0) {
+            return rc < 0 ? rc : -EIO;
+        }
+        e->limit = reserve;
+    }
+    *salt = e->next++;
     return 0;
 }

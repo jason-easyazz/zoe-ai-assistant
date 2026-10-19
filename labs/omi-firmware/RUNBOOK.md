@@ -60,18 +60,29 @@ flashes, pairs or connects to the owner's pendant. Read [README.md](README.md) s
 - The update itself does not need a bond: stock SMP is open. Every update **after** it does need one.
 
 ## E. First pairing (panel and pendant side by side)
+**Pairing a pendant WIPES it.** Every new or replacement bond crypto-wipes the pendant: its audio key is destroyed and its
+ring emptied. **Sync before re-pairing**: let `omi-sync` finish a clean visit first. The panel refuses while omi-sync still
+holds unsynced recordings, unless forced.
+
+**The Settings "Pair securely" button is not built yet** (follow-up). Until it is, this step is the owner driving the
+admin API. It is not a household flow.
 1. On the Pi, set `PANEL_BT_BOND_ENABLED=1` in `~/.zoe-bluetooth/.env.bluetooth` for the session, then restart
-   `zoe-bluetooth`.
-2. The pendant has no bond yet, so its pairing window is open for **2 minutes after it boots**. Otherwise, **tap it twice,
-   then twice again**: a short buzz means the window is open for 60 s.
-3. Settings > Bluetooth > the pendant > **Pair securely** (`omi_bond`, `confirm`). A long buzz from the pendant means it
-   bonded.
-   - The panel answers `bonded: true, encrypted: true`.
-   - "Did not accept pairing" means the window was shut: do the taps again.
-   - "The bond did not hold" after an earlier pairing means you should choose replace.
-4. On the Pi, in `~/.zoe-omi-sync/.env.omi`, set `OMI_SYNC_REQUIRE_BOND=all`. Restart `omi-sync`.
-5. Run `python -m omi_sync check`. It must report `require_bond: true` and a normal ring status.
-6. Set `PANEL_BT_BOND_ENABLED=0` again (or leave it on if you want the button in Settings), then restart `zoe-bluetooth`.
+   `zoe-bluetooth`. On the Jetson, `ZOE_BLUETOOTH_SETTINGS=1`.
+2. Find the panel and the pendant's device id with an admin session (the `X-Session-ID` of a signed-in admin):
+   `GET /api/bluetooth/panels`, then `GET /api/bluetooth/panels/<panel>`.
+3. **Tap the pendant twice, then twice again** (four quick taps). A short buzz means its pairing window is open for 60 s.
+   There is no automatic window, not even for a freshly flashed pendant.
+4. Within the minute:
+   `POST /api/bluetooth/panels/<panel>/devices/<id>/omi_bond` with body
+   `{"confirm": true, "ack_wipe": true}`. Add `"replace": true` if this Pi paired it before, and `"force": true` only to
+   pair despite unsynced recordings.
+   - Poll `GET /api/bluetooth/panels/<panel>/jobs/<job>`.
+   - A long buzz from the pendant means it bonded (and wiped). The job answers `bonded: true, encrypted: true`.
+   - "Did not accept pairing" means the window was shut: tap again.
+   - "Waiting to sync" means let omi-sync finish.
+5. On the Pi, in `~/.zoe-omi-sync/.env.omi`, set `OMI_SYNC_REQUIRE_BOND=all`. Restart `omi-sync`.
+6. Run `python -m omi_sync check`. It must report `require_bond: true` and a normal (empty) ring status.
+7. Set `PANEL_BT_BOND_ENABLED=0` again, then restart `zoe-bluetooth`.
 
 ## F. Prove it (the acceptance test, owner present)
 - From a phone running a generic BLE app (nRF Connect), with the Pi's sync stopped (`systemctl --user stop omi-sync`):
@@ -86,9 +97,10 @@ flashes, pairs or connects to the owner's pendant. Read [README.md](README.md) s
 ## G. Recovery
 | Symptom | Do |
 |---|---|
-| Sync logs `refused: no bond` | Do E again (the gesture, then Pair securely with replace) |
+| Sync logs `refused: no bond` | Do E again (sync first; the gesture, then `omi_bond` with `replace`). Re-pairing wipes the pendant |
 | Sync logs `refused: ... not encrypted` | Is the pendant really yours (address)? Was it re-flashed? Re-pair with replace |
-| Pairing never succeeds, or the pendant never buzzes for the gesture | Power-cycle it (3 s hold, then press). With no bond it opens the 2-minute window at boot. With a bond and a broken gesture: SWD (D1) |
+| Pairing never succeeds, or the pendant never buzzes for the gesture | Power-cycle it (3 s hold, then press) and try the four taps again. There is no automatic window: if the gesture does not work, SWD (D1) |
+| No adverts after the FIRST boot of a flash, plus a 2 s buzz | The stock-era bond wipe failed and the pendant refuses to advertise (fail closed). Power-cycle once. If it persists: SWD (D1) |
 | No adverts, a reboot loop, or no BLE at all after a flash | SWD: `nrfjprog --recover`, then flash stock 3.0.21 `merged_CPUNET.hex` + `merged.hex` (or this build's) |
 | Want stock back | SWD as above. Over BLE only while bonded, and only with the app-only mode, never the Omi phone app |
-| A lost or stolen pendant | Drop its bond on the Pi (owner, at the Pi: `bluetoothctl remove <address>`). Its ring is encrypted with a key the thief cannot read without SWD and the APPROTECT decision |
+| A lost or stolen pendant | A thief who pairs it gets an empty, freshly keyed pendant: pairing wipes it. Without pairing they cannot read it. Physical extraction over SWD is out of scope unless APPROTECT is on. Drop its bond on the Pi (owner, at the Pi: `bluetoothctl remove <address>`) |

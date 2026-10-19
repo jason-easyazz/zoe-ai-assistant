@@ -17,10 +17,10 @@ index 4a4de28..56dd578 100644
  target_include_directories(app PRIVATE
      ${CMAKE_CURRENT_SOURCE_DIR}/src
 diff --git a/omi/firmware/omi/Kconfig b/omi/firmware/omi/Kconfig
-index 9e48615..946b3f6 100644
+index 9e48615..530a214 100644
 --- a/omi/firmware/omi/Kconfig
 +++ b/omi/firmware/omi/Kconfig
-@@ -2,6 +2,28 @@ source "Kconfig.zephyr"
+@@ -2,6 +2,24 @@ source "Kconfig.zephyr"
  
  menu "Omi Features Configuration"
  
@@ -32,10 +32,6 @@ index 9e48615..946b3f6 100644
 +config ZOE_PAIRING_WINDOW_S
 +    int "Zoe: seconds the pairing window stays open after the gesture"
 +    default 60
-+
-+config ZOE_FIRST_SETUP_WINDOW_S
-+    int "Zoe: seconds the pairing window is open after boot while NO bond exists"
-+    default 120
 +
 +config ZOE_UNENCRYPTED_KICK_S
 +    int "Zoe: seconds an unencrypted connection may stay outside the pairing window"
@@ -252,7 +248,7 @@ index 3196ce0..0392789 100644
      log_local_ble_addresses();
  
 diff --git a/omi/firmware/omi/src/sd_card.c b/omi/firmware/omi/src/sd_card.c
-index 70d4370..042b4ff 100644
+index 70d4370..0b4b2b9 100644
 --- a/omi/firmware/omi/src/sd_card.c
 +++ b/omi/firmware/omi/src/sd_card.c
 @@ -14,6 +14,9 @@
@@ -286,24 +282,29 @@ index 70d4370..042b4ff 100644
  static uint64_t cached_read_batch_base_seq = UINT64_MAX;
  static struct raw_batch_header cached_read_batch_header;
  static bool current_batch_loaded;
-@@ -256,6 +265,9 @@ static void start_empty_batch(uint64_t base_seq)
+@@ -256,6 +265,14 @@ static void start_empty_batch(uint64_t base_seq)
      memset(current_batch, 0, sizeof(current_batch));
      current_batch_base_seq = base_seq;
      current_batch_packets = 0;
 +#ifdef CONFIG_ZOE_RING_ENCRYPT
-+    current_batch_salt = zrc_backend_new_salt();
++    if (zrc_backend_new_salt(&current_batch_salt) != 0) {
++        /* No salt that is provably unused: store nothing (zrc_xcrypt_packet refuses salt 0) until a reboot. */
++        current_batch_salt = 0U;
++        sd_write_blocked = true;
++        LOG_ERR("no unique ring nonce: ring writes stopped");
++    }
 +#endif
      current_batch_loaded = true;
      current_batch_dirty = false;
  }
-@@ -468,6 +480,23 @@ static int restore_tail_batch(void)
+@@ -468,6 +485,23 @@ static int restore_tail_batch(void)
          (void) persist_ring_metadata();
      }
  
 +#ifdef CONFIG_ZOE_RING_ENCRYPT
 +    /* Re-key the re-opened tail to a fresh salt, so no (salt, seq) pair can ever cover two plaintexts. */
-+    uint32_t new_salt = zrc_backend_new_salt();
-+    if (header.reserved0 == 0U || header.reserved0 == new_salt ||
++    uint32_t new_salt = 0U;
++    if (header.reserved0 == 0U || zrc_backend_new_salt(&new_salt) != 0 ||
 +        zrc_rekey(current_batch + RAW_BATCH_HEADER_BYTES, RAW_AUDIO_PACKET_BYTES, RAW_AUDIO_PACKET_BYTES, header.start_seq,
 +                  header.packet_count, header.reserved0, new_salt) != 0) {
 +        LOG_ERR("tail batch could not be re-keyed: dropping it");
@@ -320,7 +321,7 @@ index 70d4370..042b4ff 100644
      current_batch_base_seq = header.start_seq;
      current_batch_packets = header.packet_count;
      current_batch_loaded = true;
-@@ -496,6 +525,7 @@ static int flush_current_batch(bool sync_requested)
+@@ -496,6 +530,7 @@ static int flush_current_batch(bool sync_requested)
          .packet_count = current_batch_packets,
          .generation = meta_generation + 1U,
          .start_seq = current_batch_base_seq,
@@ -328,7 +329,7 @@ index 70d4370..042b4ff 100644
      };
      memcpy(current_batch, &header, sizeof(header));
  
-@@ -633,6 +663,16 @@ static int read_packets_internal(uint64_t start_seq,
+@@ -633,6 +668,16 @@ static int read_packets_internal(uint64_t start_seq,
          size_t src_offset = RAW_BATCH_HEADER_BYTES + ((size_t) packet_offset * RAW_AUDIO_PACKET_BYTES);
          size_t copy_bytes = (size_t) copy_packets * RAW_AUDIO_PACKET_BYTES;
          memcpy(out_buf + (*bytes_read), batch_read_buffer + src_offset, copy_bytes);
@@ -345,7 +346,7 @@ index 70d4370..042b4ff 100644
  
          *bytes_read += (uint32_t) copy_bytes;
          copied_packets += copy_packets;
-@@ -697,6 +737,15 @@ static void process_write_data_req(const sd_req_t *req)
+@@ -697,6 +742,15 @@ static void process_write_data_req(const sd_req_t *req)
      size_t dst_offset = RAW_BATCH_HEADER_BYTES + ((size_t) current_batch_packets * RAW_AUDIO_PACKET_BYTES);
      sys_put_be32(timestamp, current_batch + dst_offset);
      memcpy(current_batch + dst_offset + RAW_AUDIO_TIMESTAMP_BYTES, req->u.write.buf, MAX_WRITE_SIZE);
@@ -361,7 +362,7 @@ index 70d4370..042b4ff 100644
      current_batch_packets++;
      current_batch_dirty = true;
      last_batch_activity_ms = k_uptime_get();
-@@ -855,6 +904,15 @@ static int sd_mount(void)
+@@ -855,6 +909,15 @@ static int sd_mount(void)
  
      ring_state.capacity_packets = data_batch_count * RAW_PACKETS_PER_BATCH;
  
@@ -377,7 +378,7 @@ index 70d4370..042b4ff 100644
      ret = load_ring_metadata();
      if (ret < 0) {
          LOG_ERR("failed to load raw ring metadata: %d", ret);
-@@ -862,7 +920,17 @@ static int sd_mount(void)
+@@ -862,7 +925,19 @@ static int sd_mount(void)
          return ret;
      }
  
@@ -385,7 +386,9 @@ index 70d4370..042b4ff 100644
 +    if (key_state == 1) {
 +        /* A new key cannot read the old ring: start it empty rather than serve undecryptable audio. */
 +        LOG_WRN("new ring key: clearing the unreadable ring");
-+        (void) clear_ring_internal(true);
++        if (clear_ring_internal(true) == 0) {
++            zrc_backend_wipe_done(); /* only now may a pending new-bond wipe be marked finished */
++        }
 +    } else {
 +        (void) restore_tail_batch();
 +    }
@@ -395,3 +398,45 @@ index 70d4370..042b4ff 100644
      is_mounted = true;
  
      LOG_INF("Raw SD ring mounted: sectors=%u, batches=%u, capacity=%u packets",
+@@ -908,6 +983,29 @@ static int get_packet_name_for_seq(uint64_t seq, char *buf, size_t buf_size)
+     return 0;
+ }
+ 
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++/* A new bond is being made (zoe_ble_sec.c): the old key is already unusable and erased from flash. Destroy it in PSA, drop
++ * the open batch (old-key ciphertext), make a fresh key from the CSPRNG and empty the ring under it. If the SD is off, the
++ * next mount does the same (no key in flash -> new key -> clear). No CSPRNG -> nothing more is ever stored this boot. */
++static void zoe_ring_rekey_now(void)
++{
++    zrc_backend_destroy();
++    current_batch_dirty = false;
++    current_batch_packets = 0;
++    if (!is_mounted) {
++        return;
++    }
++    int key_state = zrc_backend_init();
++    if (key_state != 1 || clear_ring_internal(true) != 0) {
++        LOG_ERR("re-key after a new bond failed (%d): ring writes stopped", key_state);
++        sd_write_blocked = true;
++        return;
++    }
++    zrc_backend_wipe_done();
++    LOG_WRN("new bond: ring emptied under a fresh key");
++}
++#endif
++
+ void sd_worker_thread(void)
+ {
+     sd_req_t req;
+@@ -924,6 +1022,11 @@ void sd_worker_thread(void)
+     sd_set_io_low_power(true);
+ 
+     while (1) {
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++        if (zrc_backend_rekey_pending()) {
++            zoe_ring_rekey_now();
++        }
++#endif
+         if (atomic_cas(&pending_flush_on_ble_connect, 1, 0)) {
+             req.type = REQ_FLUSH;
+             req.u.status.resp = NULL;

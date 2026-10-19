@@ -10,10 +10,15 @@
 
 #include "haptic.h"
 #include "zoe_gesture.h"
+#ifdef CONFIG_ZOE_RING_ENCRYPT
+#include "zoe_ring_crypt.h"
+#endif
 
 LOG_MODULE_REGISTER(zoe_ble_sec, CONFIG_LOG_DEFAULT_LEVEL);
 
-#define ZOE_BOND_WIPE_KEY "zoe/bw"
+#define ZOE_BOND_WIPE_KEY "zoe/bw"   /* marker: the stock-era bonds were deleted once */
+#define ZOE_NEW_BOND_WIPE "zoe/wb"   /* a new bond is being made: every OTHER bond must go (finished at boot if cut off) */
+#define ZOE_MAX_BONDS_SEEN 4
 #define ZOE_SMP_AUTH_BONDING 0x01 /* AuthReq bit 0, Core Vol 3 Part H 3.5.1 (Zephyr keeps it in a private header) */
 
 static struct k_spinlock lock;
@@ -61,9 +66,71 @@ void zoe_ble_sec_on_double_tap(void)
 
 /* ---- pairing gate ---------------------------------------------------------------------------------------------- */
 
+struct bond_list {
+    bt_addr_le_t addr[ZOE_MAX_BONDS_SEEN];
+    int n;
+};
+
+static void collect_bond(const struct bt_bond_info *info, void *user_data)
+{
+    struct bond_list *bl = user_data;
+    if (bl->n < ZOE_MAX_BONDS_SEEN) {
+        bl->addr[bl->n++] = info->addr;
+    }
+}
+
+/* Delete every bond except `keep` (NULL = all). The peer pairing right now is kept: its keys are overwritten by the new
+ * pairing (CONFIG_BT_SMP_ALLOW_UNAUTH_OVERWRITE), and bt_unpair would disconnect it mid-pairing. */
+static int delete_bonds_except(const bt_addr_le_t *keep)
+{
+    struct bond_list bl = {0};
+    bt_foreach_bond(BT_ID_DEFAULT, collect_bond, &bl);
+    for (int i = 0; i < bl.n; i++) {
+        if (keep != NULL && bt_addr_le_eq(&bl.addr[i], keep)) {
+            continue;
+        }
+        int err = bt_unpair(BT_ID_DEFAULT, &bl.addr[i]);
+        if (err) {
+            return err;
+        }
+    }
+    return 0;
+}
+
+/* CRYPTO-WIPE ON NEW BOND (owner decision 2026-10-19: "if it's stolen and someone tries to pair it, wipe it").
+ * Runs BEFORE a new or replacement bond is allowed; a reconnect with the existing bond never reaches here (no pairing).
+ * Order is the guarantee - a power cut at any step leaves NO usable old key next to a new bond:
+ *   1. persist the intents (key wipe, bond wipe): from here on the boot finishes whatever this misses;
+ *   2. revoke the at-rest audio key: unusable in RAM at once, erased from flash (the SD worker then destroys it in PSA,
+ *      makes a fresh key from the CSPRNG and empties the ring under it, and only then clears the key-wipe intent);
+ *   3. delete every previous bond, then clear the bond-wipe intent.
+ * Only then may the pairing go on. Any failure refuses the pairing (what was already done stays done). */
+static int wipe_for_new_bond(struct bt_conn *conn)
+{
+    const uint8_t one = 1;
+#ifdef CONFIG_ZOE_RING_ENCRYPT
+    if (settings_save_one(ZRC_WIPE_SETTING, &one, sizeof(one))) {
+        return -EIO;
+    }
+#endif
+    if (settings_save_one(ZOE_NEW_BOND_WIPE, &one, sizeof(one))) {
+        return -EIO;
+    }
+#ifdef CONFIG_ZOE_RING_ENCRYPT
+    if (zrc_backend_revoke()) {
+        return -EIO;
+    }
+#endif
+    if (delete_bonds_except(bt_conn_get_dst(conn))) {
+        return -EIO;
+    }
+    (void) settings_delete(ZOE_NEW_BOND_WIPE);
+    LOG_WRN("new bond: stored audio key destroyed, previous bonds deleted");
+    return 0;
+}
+
 static enum bt_security_err pairing_accept(struct bt_conn *conn, const struct bt_conn_pairing_feat *const feat)
 {
-    ARG_UNUSED(conn);
     if (!zoe_ble_sec_pairing_open()) {
         LOG_WRN("pairing refused: window closed");
         return BT_SECURITY_ERR_PAIR_NOT_ALLOWED;
@@ -72,6 +139,10 @@ static enum bt_security_err pairing_accept(struct bt_conn *conn, const struct bt
         /* A session-only pairing would be an encrypted, readable link outside the one-bond model: bond or nothing. */
         LOG_WRN("pairing refused: not a bonding request");
         return BT_SECURITY_ERR_AUTH_REQUIREMENT;
+    }
+    if (wipe_for_new_bond(conn) != 0) {
+        LOG_ERR("pairing refused: the wipe before a new bond did not complete");
+        return BT_SECURITY_ERR_UNSPECIFIED;
     }
     return BT_SECURITY_ERR_SUCCESS;
 }
@@ -208,6 +279,28 @@ static int marker_cb(const char *key, size_t len, settings_read_cb read_cb, void
     return 0;
 }
 
+#define ZOE_WIPE_ATTEMPTS 3
+
+/* A new-bond wipe that a power cut interrupted before its bonds were deleted: delete them all now, before advertising. */
+static int finish_new_bond_wipe(void)
+{
+    bool pending = false;
+    (void) settings_load_subtree_direct(ZOE_NEW_BOND_WIPE, marker_cb, &pending);
+    if (!pending) {
+        return 0;
+    }
+    int err = delete_bonds_except(NULL);
+    if (err) {
+        LOG_ERR("interrupted new-bond wipe: bonds not deleted (%d)", err);
+        return err;
+    }
+    (void) settings_delete(ZOE_NEW_BOND_WIPE);
+    LOG_WRN("interrupted new-bond wipe finished: all bonds deleted");
+    return 0;
+}
+
+/* 0 = no stock-era bond can remain (already marked, or bt_unpair succeeded). A failed marker save is only logged: the bonds
+ * are gone, and the next boot wipes again (fail-safe). A failed bt_unpair is returned: the caller must not advertise. */
 static int wipe_stock_bonds_once(void)
 {
     bool done = false;
@@ -215,15 +308,20 @@ static int wipe_stock_bonds_once(void)
     if (done) {
         return 0;
     }
-    int err = bt_unpair(BT_ID_DEFAULT, NULL);
+    int err = -EIO;
+    for (int attempt = 0; attempt < ZOE_WIPE_ATTEMPTS && err; attempt++) {
+        err = bt_unpair(BT_ID_DEFAULT, NULL);
+    }
     if (err) {
         LOG_ERR("could not delete stock-era bonds (%d)", err);
         return err;
     }
     const uint8_t one = 1;
-    err = settings_save_one(ZOE_BOND_WIPE_KEY, &one, sizeof(one));
-    LOG_INF("stock-era bonds deleted (marker save %d)", err);
-    return err;
+    int serr = settings_save_one(ZOE_BOND_WIPE_KEY, &one, sizeof(one));
+    if (serr) {
+        LOG_WRN("stock-era bonds deleted; marker not saved (%d): the next boot deletes again", serr);
+    }
+    return 0;
 }
 
 int zoe_ble_sec_init(void)
@@ -238,9 +336,16 @@ int zoe_ble_sec_init(void)
         LOG_ERR("auth info callbacks not registered (%d)", err);
         return err;
     }
-    (void) wipe_stock_bonds_once();
-    if (bond_count() == 0) {
-        open_window(CONFIG_ZOE_FIRST_SETUP_WINDOW_S, "no bond yet: first setup");
+    err = wipe_stock_bonds_once();
+    if (!err) {
+        err = finish_new_bond_wipe();
     }
+    if (err) {
+        /* Fail closed: a stock-era phone bond could still encrypt and read. Do not advertise; a long buzz says why. */
+        LOG_ERR("security init failed: NOT advertising");
+        play_haptic_milli(2000);
+        return err;
+    }
+    /* No automatic window, not even for first setup: pairing ALWAYS needs the physical gesture. */
     return 0;
 }

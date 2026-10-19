@@ -54,7 +54,7 @@ TERMINAL = ("succeeded", "failed", "cancelled")
 
 
 #: the only params each op forwards to the panel (anything else the browser sends is dropped)
-FORWARDED_PARAMS = {"update_start": ("confirm", "ack_no_undo"), "omi_bond": ("confirm", "replace")}
+FORWARDED_PARAMS = {"update_start": ("confirm", "ack_no_undo"), "omi_bond": ("confirm", "ack_wipe", "replace", "force")}
 
 
 def _forwarded_params(op: str, params: dict) -> dict:
@@ -295,8 +295,8 @@ class Broker:
         params = clean(params) if isinstance(params, dict) else {}
         if op == "update_start" and not (params.get("confirm") is True and params.get("ack_no_undo") is True):
             raise BrokerError(400, "A firmware update must be confirmed, including that it cannot be undone.")
-        if op == "omi_bond" and params.get("confirm") is not True:
-            raise BrokerError(400, "Secure pairing must be confirmed.")
+        if op == "omi_bond" and not (params.get("confirm") is True and params.get("ack_wipe") is True):
+            raise BrokerError(400, "Secure pairing must be confirmed, including that the pendant erases its stored audio.")
         if op not in ("status", "update_cancel"):
             busy = self.active_job(panel_id)
             if busy is not None:

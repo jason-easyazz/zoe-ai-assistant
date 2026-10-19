@@ -14,7 +14,7 @@ Evidence tags: **[V]** read in source or run this session, **[S]** secondary, **
 |---|---|
 | Firmware patch (`patches/zoe-phase2.patch`: Kconfig, CMake and 5 upstream sources) + new sources (`overlay/`) on upstream `Omi_CV1_v3.0.21` (`f12031d1`) | **written; applies cleanly** to a fresh fetch [V] |
 | Compile in the pinned toolchain (`build.sh`: Zephyr CI image `v0.26.13`, NCS v2.9.0, sysbuild + MCUboot, on this aarch64 box) | **compiled, all four images, no warnings in our code** (section 5) [V] |
-| Host tests of the pure firmware code (`host-test/`: ring-crypt IV layout, CTR against an independent reference, re-key; the pairing gesture) | **8/8** [V] |
+| Host tests (`host-test/`): the pure ring-crypt code (IV layout, CTR against an independent reference, re-key, the persisted monotonic salt allocator) and the REAL `zoe_ble_sec.c` against stubbed Zephyr (gesture-only pairing, fail-closed stock wipe, crypto-wipe on new bond with a power cut before every persistent step, reconnect never wipes) | **20/20**; 16 source mutations all red [V] |
 | Pi: `omi-sync` bonded-only mode (`OMI_SYNC_REQUIRE_BOND`), panel-bluetooth `omi_bond`, zoe-data broker op | built, unit-tested, flag-dark |
 | Panel UI button + spoken guidance for the pairing | **not built** (follow-up; the op and the API exist) |
 | App-only OTA "custom pin" mode in panel-bluetooth (needed for the OTA flash path) | **not built** (follow-up) |
@@ -53,11 +53,13 @@ use the ring protocol (`ring_protocol.supports_ring`) [V].
 
 **Recovery.** A bad image that still boots with working BLE can be fixed with another OTA. One that breaks BLE or SMP, or
 reboot-loops, can **only** be recovered over SWD: `nrfjprog --recover`, then flash both cores' hex files from one build.
-That is why the owner needs a probe before the first flash. Phase-2 firmware adds one way to get locked out: if the
-**bond is lost and the gesture is broken**, SMP refuses the Pi as well, so SWD is the only way back. Two things soften
-this:
-- The first-setup window: while the pendant holds no bond at all, pairing is open for 120 s after every boot.
-- The host-tested gesture.
+That is why the owner needs a probe before the first flash. Phase-2 firmware adds ways to get locked out, each recoverable
+only over SWD:
+- the **bond is lost and the gesture is broken**: SMP refuses the Pi as well. There is no automatic pairing window, not
+  even for first setup (a deliberate choice: a stolen or reset pendant must not be pairable without its button), so the
+  host-tested gesture is the only way to pair.
+- the **stock-era bond wipe fails at first boot**: the pendant then refuses to advertise at all (fail closed, a 2 s buzz)
+  rather than run with a phone bond that could still read it.
 
 **The Pi** (read-only reads, 2026-10-19) [V]: panel Pi 5, kernel 6.12, BlueZ 5.66.
 - The adapter supports LE Secure Connections (`btmgmt info`: `secure-conn`).
@@ -73,13 +75,28 @@ this:
   gain, set the clock or push an image signed with the public key. DIS and Battery stay open, as on stock.
 - **LE Secure Connections only** (`CONFIG_BT_SMP_SC_PAIR_ONLY`). **Pairing is refused unless the window is open**
   (`CONFIG_BT_SMP_APP_PAIRING_ACCEPT`, callback `pairing_accept`). The window opens in two cases:
-  - the **gesture**: two double-taps within 2.5 s (four quick taps). It opens for 60 s with a short buzz; bonding gives a
-    long buzz.
-  - **first setup**: while the pendant holds no bond at all, the window is open for 120 s after boot.
+  - the **gesture** only: two double-taps within 2.5 s (four quick taps). It opens for 60 s with a short buzz; bonding gives
+    a long buzz. **There is no automatic window, not even for first setup.**
 
   A pairing request that does not ask to bond is refused, and a session-only pairing is disconnected: it is bond or nothing. One bond (`MAX_PAIRED=1`). A new pairing in the window replaces the old one (`CONFIG_BT_KEYS_OVERWRITE_OLDEST`).
 - **The first boot of this firmware deletes every stock-era bond**, for example a phone the Omi app once paired. A
-  settings marker makes this happen once.
+  settings marker makes this happen once. If the deletion fails, the pendant does not advertise.
+- **Crypto-wipe on every new bond** (owner decision 2026-10-19: *"the pendant can only pair with one device; if it's stolen
+  and someone tries to pair it, wipe it as part of the process"*). When a pairing that would create or replace the bond is
+  accepted, and before it may complete, `zoe_ble_sec.c` runs these steps in order:
+  1. persist two intents ("the audio key must go", "the other bonds must go");
+  2. revoke the stored-audio key: unusable in RAM at once, erased from flash;
+  3. delete every other bond;
+  4. clear the bond intent.
+
+  The SD worker then destroys the key in PSA, generates a fresh one from the CSPRNG (no CSPRNG means nothing more is ever
+  stored), empties the ring under it, and only then clears the key intent. A boot with an intent still set finishes the
+  wipe before advertising or loading the old key. So after a power cut at any step the pendant never holds the old key
+  alongside a new bond. Host-tested by cutting power before every persistent operation.
+  - A reconnect with the existing bond never wipes, because no pairing happens.
+  - **A thief who pairs gets an empty, freshly keyed pendant.** So does the owner on every re-pair: **sync before
+    re-pairing.**
+  - Physical extraction (SWD without APPROTECT) stays out of scope.
 - **When a bond exists, the pendant asks every central to encrypt** (a Security Request). The bonded Pi encrypts with its
   stored key; anyone else is refused pairing. A connection that has not encrypted within 30 s, outside the window, is
   dropped. So a stranger cannot sit on the single connection and lock the Pi out (`CONFIG_ZOE_UNENCRYPTED_KICK_S`).
@@ -96,9 +113,15 @@ this:
   Measuring on the device is part of the runbook [U].
 - **AES-128-CTR**, with a 16-byte device key generated on the pendant at first use and kept in the internal-flash settings
   store. It is never sent anywhere.
-  - IV = `salt(4) || seq(8) || block(4)`. The salt is a fresh random value per batch, stored in the batch header's
-    `reserved0`. `seq` is the ring sequence.
-  - A batch re-opened after a reboot is **re-keyed** to a new salt. So one (salt, seq) pair never covers two plaintexts,
+  - IV = `salt(4) || seq(8) || block(4)`. The salt is **not random**: it is a per-key **monotonic epoch counter**, one
+    value per batch, stored in the batch header's `reserved0`. Values are reserved in blocks of 1024, and each block's
+    upper bound is persisted **before** any value in it is used. So after any crash the next salt is above every salt ever
+    handed out, and the counter only moves up, across keys too. `seq` is the ring sequence.
+  - If the reservation cannot be persisted, no salt is issued and ring writes stop. There is no weak fallback: the salt
+    used to fall back to `k_cycle_get_32()`, which could repeat.
+  - Losing the reservation record forces a new key.
+  - A batch re-opened after a reboot is **re-keyed** to a new salt. So, under one key, a (salt, seq) pair covers exactly
+    one plaintext. This is guaranteed by construction, not probable. It holds
     not after a CLEAR, a truncated tail or a torn write either. `host-test/` proves the hazard and the fix.
 - Fail closed:
   - no key, no mount: nothing is written in plaintext.
@@ -124,15 +147,18 @@ this:
 
   Anything else tears the link down before one storage command, and is logged as a refusal (`NotBonded` /
   `InsecureLink`). It never falls back to an open link.
-- **`services/panel-bluetooth`**, op **`omi_bond`** (`PANEL_BT_BOND_ENABLED`, off, plus a `confirm`). This is the one place
+- **`services/panel-bluetooth`**, op **`omi_bond`** (`PANEL_BT_BOND_ENABLED`, off, plus `confirm` and `ack_wipe`: the
+  owner acknowledges that the pendant erases its stored audio when it pairs). It is refused while omi-sync still holds
+  unsynced records, unless `force` is given. This is the one place
   a bond is made (`panel_bt/bond.py`):
   - it refuses a pendant that does not report Zoe firmware.
-  - it makes the adapter pairable only for this pairing: `PairableTimeout` 60, then `Pairable` true, then false again.
+  - it makes the adapter pairable only for this pairing: `PairableTimeout` 60 is written and **read back**; if that
+    fails, the adapter is never made pairable. Then `Pairable` true, then false again.
   - it pairs with no agent: LE SC "Just Works" from the initiator.
   - it counts success only when BlueZ reads `Paired` and `Bonded` true **and** the link is encrypted.
   - `replace` removes this pendant's old BlueZ entry and nothing else.
-- **`services/zoe-data`**: the broker accepts `omi_bond` (admin only, audited, `confirm` required; it forwards only
-  `confirm` and `replace`).
+- **`services/zoe-data`**: the broker accepts `omi_bond` (admin only, audited, `confirm` and `ack_wipe` required; it
+  forwards only `confirm`, `ack_wipe`, `replace` and `force`).
 
 ### 2.4 Who holds which key
 - **The ring key**: generated on the pendant, never leaves it, and lives in no repository.
@@ -177,28 +203,31 @@ for OTA), `merged.hex`, `merged_CPUNET.hex` (for SWD) and `app.config`. The cont
 To change the series: edit the fetched tree under `~/.cache/zoe-omi-fw/src`, regenerate the matching patch from there
 with a plain diff, and keep `overlay/` as the source of the new files.
 
-## 5. Compile result (2026-10-19 03:46, this box, aarch64, `build.sh` defaults, upstream public dev key)
-- **All four images built**: MCUboot, the app (ours), the net core `ipc_radio` and `b0n`. Our sources compiled with
-  **no warnings**. The warnings in the log are upstream's own (`battery.c`, `transport.c`, `imu.c`). No Kconfig warning
-  touches a symbol this patch sets.
+## 5. Compile result (latest: 2026-10-19 09:09, this box, aarch64, `build.sh` defaults, upstream public dev key)
+- **All four images built**: MCUboot, the app (ours), the net core `ipc_radio` and `b0n`. Our sources
+  (`zoe_ble_sec.c`, `zoe_ring_crypt*.c` and the `sd_card.c` / `transport.c` hunks) compiled with **no warnings**. The
+  warnings in the log are upstream's own (`battery.c`, `transport.c`, `imu.c`). No Kconfig warning touches a symbol this
+  patch sets.
+- This rebuild includes the crypto-wipe on new bond, the persisted salt allocator, the gesture-only pairing and the
+  fail-closed stock wipe. A first build at 03:46 had compiled the earlier revision.
 - `app.config` shows every symbol as set:
-  - `CONFIG_ZOE_BLE_BONDED_ONLY=y` and `CONFIG_ZOE_RING_ENCRYPT=y`
+  - `CONFIG_ZOE_BLE_BONDED_ONLY=y` and `CONFIG_ZOE_RING_ENCRYPT=y` (no `ZOE_FIRST_SETUP_WINDOW_S`: that window is gone)
   - `CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW_ENCRYPT=y`
-  - `CONFIG_BT_SMP_SC_PAIR_ONLY=y` and `CONFIG_BT_SMP_APP_PAIRING_ACCEPT=y`
+  - `CONFIG_BT_SMP_SC_PAIR_ONLY=y`, `CONFIG_BT_SMP_APP_PAIRING_ACCEPT=y` and `CONFIG_BT_SMP_ALLOW_UNAUTH_OVERWRITE=y`
   - `CONFIG_BT_SETTINGS=y`, `CONFIG_BT_KEYS_OVERWRITE_OLDEST=y` and `CONFIG_BT_MAX_PAIRED=1`
   - `CONFIG_NRF_SECURITY=y` and `CONFIG_PSA_WANT_ALG_CTR=y`
   - `CONFIG_BT_DIS_FW_REV_STR="3.0.21.1"`
-- **App image** `omi.signed.bin`: 259 652 bytes (stock 3.0.21: 248 644), with a 258 804-byte payload.
-  - The MCUboot primary slot is 0x10000-0x100000 (960 KB). App flash use is 27.5 %; app RAM is 75.3 %.
-  - TLVs checked: magic `0x96f3b83d`, the image hash verifies, and the key-hash TLV is
-    `fc5701dc6135e1323847bdc40f04d2e5bee5833b23c29f93593d00018cfa9994`. That is the public dev key the stock bootloader
-    trusts, so this is an OTA-acceptable image.
-- Output SHA-256 sums (the first 8 hex digits; the full sums are in `~/.cache/zoe-omi-fw/out/SHA256SUMS`):
-  `omi.signed.bin` `10e36631`, `dfu_application.zip` `dfffe230`, `merged.hex` `3b2e70f8`, `merged_CPUNET.hex` `5ac6d59c`.
+- **App image** `omi.signed.bin`: 260 600 bytes (stock 3.0.21: 248 644), with a 259 752-byte payload.
+  - App flash use is 27.4 % of the 960 KB MCUboot primary slot; app RAM is 75.3 %.
+  - TLVs (checked on the 03:46 build, same signing path): magic `0x96f3b83d`, the image hash verifies, and the key-hash
+    TLV is `fc5701dc…`. That is the public dev key the stock bootloader trusts, so this is an OTA-acceptable image.
+- Output SHA-256 sums, first 8 hex digits (the full sums are in `~/.cache/zoe-omi-fw/out/SHA256SUMS`): `omi.signed.bin`
+  `fbe997b4`, `dfu_application.zip` `eee7e9dd`, `merged.hex` `89669963`, `merged_CPUNET.hex` `345faf9c`.
   - Builds are not byte-reproducible: timestamps differ between runs.
   - `dfu_application.zip` also carries a net-core image from this build. **Never push that net-core image over the air**
     (README section 1).
-- About 10 minutes cold on this box, with 2 ninja jobs in a 1.5 GB container.
+- About 10 minutes cold on this box, with 2 ninja jobs in a 1.5 GB container. The `MemAvailable >= 2000 MB` gate
+  refused it for hours: daytime and night memory on the Jetson sits around 1.5-2.0 GB.
 
 ## 6. Unverified until the device is used
 - That Just Works pairing from BlueZ 5.66 completes with no agent once the adapter is made pairable.

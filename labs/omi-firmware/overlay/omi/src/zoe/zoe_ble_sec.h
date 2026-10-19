@@ -5,10 +5,10 @@
  *   service require an ENCRYPTED link (Zephyr BT_GATT_PERM_*_ENCRYPT; CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW_ENCRYPT). DIS and
  *   Battery stay readable, as on stock.
  * - Pairing is LE Secure Connections only (CONFIG_BT_SMP_SC_PAIR_ONLY) and is REFUSED unless the pairing window is open.
- *   The window opens on the physical gesture (zoe_gesture.h, two double-taps) or, only while the pendant holds no bond at
- *   all, for the first minutes after boot (first setup). One bond (CONFIG_BT_MAX_PAIRED=1); a new pairing replaces it.
+ *   The window opens ONLY on the physical gesture (zoe_gesture.h, two double-taps), for first setup too. A pairing that does
+ *   not ask to bond is refused. One bond (CONFIG_BT_MAX_PAIRED=1); a new pairing replaces it.
  * - The first boot of this firmware deletes every bond made under stock firmware (a phone the Omi app paired is not
- *   trusted to read Zoe's audio).
+ *   trusted to read Zoe's audio). If that deletion fails the pendant does NOT advertise (fail closed, a 2 s buzz).
  * - A connection that has not reached encryption within CONFIG_ZOE_UNENCRYPTED_KICK_S is dropped (outside the window), so
  *   a stranger cannot sit on the pendant's single connection and lock the Pi out.
  */

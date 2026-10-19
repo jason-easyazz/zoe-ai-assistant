@@ -6,14 +6,50 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
+#include <zephyr/sys/atomic.h>
 
 LOG_MODULE_REGISTER(zoe_ring_crypt, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define ZRC_KEY_SETTING "zoe/rk"
+#define ZRC_EPOCH_SETTING "zoe/re" /* the salt reservation limit (uint32) bound to the key above */
 #define ZRC_KEY_BYTES 16U
 
 static psa_key_id_t key_id;
 static bool ready;
+static atomic_t revoked; /* set from the pairing path (BT thread): the key is unusable from that instant */
+static struct zrc_epoch epoch;
+
+struct u32_load {
+    uint32_t value;
+    bool found;
+};
+
+static int u32_cb(const char *key, size_t len, settings_read_cb read_cb, void *cb_arg, void *param)
+{
+    ARG_UNUSED(key);
+    struct u32_load *ul = param;
+    if (len == sizeof(ul->value) && read_cb(cb_arg, &ul->value, sizeof(ul->value)) == sizeof(ul->value)) {
+        ul->found = true;
+    }
+    return 0;
+}
+
+static int u8_cb(const char *key, size_t len, settings_read_cb read_cb, void *cb_arg, void *param)
+{
+    ARG_UNUSED(key);
+    ARG_UNUSED(read_cb);
+    ARG_UNUSED(cb_arg);
+    if (len > 0) {
+        ((struct u32_load *) param)->found = true;
+    }
+    return 0;
+}
+
+static int persist_epoch(uint32_t new_limit, void *ctx)
+{
+    ARG_UNUSED(ctx);
+    return settings_save_one(ZRC_EPOCH_SETTING, &new_limit, sizeof(new_limit));
+}
 
 struct key_load {
     uint8_t key[ZRC_KEY_BYTES];
@@ -42,12 +78,37 @@ int zrc_backend_init(void)
     }
 
     struct key_load kl = {0};
-    (void) settings_load_subtree_direct(ZRC_KEY_SETTING, key_cb, &kl);
-    if (!kl.found) {
+    struct u32_load el = {0};
+    struct u32_load wipe = {0};
+    (void) settings_load_subtree_direct(ZRC_WIPE_SETTING, u8_cb, &wipe);
+    (void) settings_load_subtree_direct(ZRC_EPOCH_SETTING, u32_cb, &el);
+    if (wipe.found) {
+        /* A new-bond wipe was started (possibly cut off by a power loss): the old key is never loaded again. */
+        int derr = settings_delete(ZRC_KEY_SETTING);
+        if (derr) {
+            LOG_ERR("wipe pending but the old key could not be erased (%d): ring stays blocked", derr);
+            return derr;
+        }
+    } else {
+        (void) settings_load_subtree_direct(ZRC_KEY_SETTING, key_cb, &kl);
+    }
+    if (zrc_needs_new_key(wipe.found, kl.found, el.found, el.value)) {
+        /* No key, a wipe, or a key whose salt reservation is lost: the old key (if any) is never used again. The salt
+         * reservation stays MONOTONIC across keys (it only moves up) and is written BEFORE the key, so a key never exists
+         * without one (a crash in between leaves a record and no key: the next boot makes a new key again). */
         if (psa_generate_random(kl.key, sizeof(kl.key)) != PSA_SUCCESS) {
+            memset(&kl, 0, sizeof(kl));
+            LOG_ERR("no CSPRNG output: no key, ring writes stay blocked");
             return -EIO;
         }
-        int err = settings_save_one(ZRC_KEY_SETTING, kl.key, sizeof(kl.key));
+        el.value = (el.found && el.value > 0U && el.value <= UINT32_MAX - ZRC_EPOCH_BLOCK) ? el.value + ZRC_EPOCH_BLOCK : 1U;
+        int err = persist_epoch(el.value, NULL);
+        if (err) {
+            memset(&kl, 0, sizeof(kl));
+            LOG_ERR("salt reservation not saved (%d): ring writes stay blocked", err);
+            return err;
+        }
+        err = settings_save_one(ZRC_KEY_SETTING, kl.key, sizeof(kl.key));
         if (err) {
             memset(&kl, 0, sizeof(kl));
             LOG_ERR("device key not saved (%d): ring writes stay blocked", err);
@@ -69,24 +130,48 @@ int zrc_backend_init(void)
         LOG_ERR("key import failed (%d)", (int) st);
         return -EIO;
     }
+    zrc_epoch_resume(&epoch, el.value);
     ready = true;
     return created ? 1 : 0;
 }
 
-uint32_t zrc_backend_new_salt(void)
+int zrc_backend_revoke(void)
 {
-    uint32_t salt = 0;
-    while (salt == 0U) {
-        if (psa_generate_random((uint8_t *) &salt, sizeof(salt)) != PSA_SUCCESS) {
-            salt = (uint32_t) k_cycle_get_32() | 1U; /* never reached on a working RNG; still never 0 */
-        }
+    atomic_set(&revoked, 1);
+    return settings_delete(ZRC_KEY_SETTING);
+}
+
+bool zrc_backend_rekey_pending(void)
+{
+    return atomic_get(&revoked) != 0;
+}
+
+void zrc_backend_destroy(void)
+{
+    if (ready) {
+        (void) psa_destroy_key(key_id); /* PSA zeroizes the key material it held */
     }
-    return salt;
+    ready = false;
+    key_id = 0;
+    atomic_set(&revoked, 0);
+}
+
+void zrc_backend_wipe_done(void)
+{
+    (void) settings_delete(ZRC_WIPE_SETTING);
+}
+
+int zrc_backend_new_salt(uint32_t *salt)
+{
+    if (!ready || atomic_get(&revoked)) {
+        return -EACCES; /* no key, no salt: never a weak fallback */
+    }
+    return zrc_epoch_take(&epoch, persist_epoch, NULL, salt);
 }
 
 int zrc_backend_ctr(const uint8_t iv[ZRC_IV_BYTES], const uint8_t *in, uint8_t *out, size_t len)
 {
-    if (!ready) {
+    if (!ready || atomic_get(&revoked)) {
         return -EACCES;
     }
     psa_cipher_operation_t op = PSA_CIPHER_OPERATION_INIT;

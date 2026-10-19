@@ -340,7 +340,8 @@ def test_a_confirmed_update_is_queued_with_only_the_confirmation_params(env):
     assert poll(env)[0]["params"] == {"confirm": True, "ack_no_undo": True}
 
 
-@pytest.mark.parametrize("body", [{}, {"confirm": "true"}, {"confirm": 1}, {"replace": True}])
+@pytest.mark.parametrize("body", [{}, {"confirm": "true", "ack_wipe": True}, {"confirm": 1, "ack_wipe": True}, {"replace": True},
+                                  {"confirm": True}, {"confirm": True, "ack_wipe": "yes"}])
 def test_secure_pairing_must_be_confirmed(env, body):
     online(env)
     r = env.client.post(f"/api/bluetooth/panels/{PANEL}/devices/{DEV}/omi_bond", json=body)
@@ -348,12 +349,13 @@ def test_secure_pairing_must_be_confirmed(env, body):
     assert env.broker.jobs == {} and env.audit_lines() == []
 
 
-def test_a_confirmed_pairing_is_audited_and_forwards_only_confirm_and_replace(env):
+def test_a_confirmed_pairing_is_audited_and_forwards_only_its_own_params(env):
     online(env)
     r = env.client.post(f"/api/bluetooth/panels/{PANEL}/devices/{DEV}/omi_bond",
-                        json={"confirm": True, "replace": True, "ack_no_undo": True, "evil": "x" * 500})
+                        json={"confirm": True, "ack_wipe": True, "replace": True, "force": True, "ack_no_undo": True,
+                              "evil": "x" * 500})
     assert r.status_code == 200
-    assert poll(env)[0]["params"] == {"confirm": True, "replace": True}
+    assert poll(env)[0]["params"] == {"confirm": True, "ack_wipe": True, "replace": True, "force": True}
     assert [(a["action"], a["phase"]) for a in env.audit_lines()] == [("omi_bond", "requested")]
 
 

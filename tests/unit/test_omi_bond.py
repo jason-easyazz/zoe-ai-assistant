@@ -6,7 +6,9 @@ No hardware: a fake backend/link and a scripted ``busctl`` / ``hcitool``. Source
   drop the ENCRYPT read                                          -> test_an_unencrypted_link_after_pairing_is_refused
   RemoveDevice without ``replace``                               -> test_replace_removes_only_this_pendant_and_only_when_asked
   skip making the adapter pairable, or never reset it            -> test_a_zoe_pendant_..., test_the_adapter_is_never_left_pairable
-  drop the ``bond_enabled`` / ``confirm`` checks in the op       -> test_the_op_is_flag_dark_and_needs_a_confirm
+  drop the ``bond_enabled`` / ``confirm`` / ``ack_wipe`` checks   -> test_the_op_is_flag_dark_and_needs_a_confirm
+  ignore the PairableTimeout write or its read-back              -> test_pairing_is_never_enabled_without_an_installed_timeout
+  drop the unsynced-recordings refusal                           -> test_pairing_waits_for_unsynced_recordings_unless_forced
 """
 from __future__ import annotations
 
@@ -47,20 +49,26 @@ class Client:
 class SysBus:
     """busctl + hcitool con as BlueZ / the kernel would answer them."""
 
-    def __init__(self, *, bond_holds=True, encrypt_holds=True) -> None:
+    def __init__(self, *, bond_holds=True, encrypt_holds=True, timeout_write_fails=False, timeout_ignored=False) -> None:
         self.props = {"Paired": False, "Bonded": False}
         self.bond_holds, self.encrypt_holds, self.encrypted = bond_holds, encrypt_holds, False
         self.pairable, self.pairable_timeout = False, 0
+        self.timeout_write_fails, self.timeout_ignored = timeout_write_fails, timeout_ignored
         self.calls: list[list[str]] = []
 
     async def run(self, argv, timeout):
         argv = list(argv)
         self.calls.append(argv)
         if argv[:3] == ["busctl", "--system", "get-property"]:
+            if argv[-1] == "PairableTimeout":
+                return 0, f"u {self.pairable_timeout}\n"
             return 0, f"b {'true' if self.props.get(argv[-1]) else 'false'}\n"
         if argv[:3] == ["busctl", "--system", "set-property"]:
             if argv[-3] == "PairableTimeout":
-                self.pairable_timeout = int(argv[-1])
+                if self.timeout_write_fails:
+                    return 1, "Failed to set property PairableTimeout: Access denied"
+                if not self.timeout_ignored:
+                    self.pairable_timeout = int(argv[-1])
             elif argv[-3] == "Pairable":
                 assert self.pairable_timeout > 0, "Pairable set before its timeout: a crash would leave the adapter bondable"
                 self.pairable = argv[-1] == "true"
@@ -143,6 +151,18 @@ async def test_the_adapter_is_never_left_pairable():
     assert not [c for c in sysbus.calls if "set-property" in c]          # a stock pendant never makes the adapter pairable
 
 
+@pytest.mark.parametrize("kw", [{"timeout_write_fails": True}, {"timeout_ignored": True}])
+async def test_pairing_is_never_enabled_without_an_installed_timeout(kw):
+    """Codex finding 4: a failed (or silently ignored) PairableTimeout write must stop BEFORE Pairable is ever set."""
+    sysbus = SysBus(**kw)
+    be, clients = backend_for(sysbus)
+    with pytest.raises(bond.BondRefused) as e:
+        await bond.bond_pendant(be, OMI_ADDR, "random", run=sysbus.run)
+    assert e.value.reason == "adapter" and clients[0].paired == 0
+    assert not [c for c in sysbus.calls if c[:3] == ["busctl", "--system", "set-property"] and c[-3] == "Pairable"]
+    assert sysbus.pairable is False
+
+
 async def test_a_stock_pendant_is_never_bonded():
     sysbus = SysBus()
     be, clients = backend_for(sysbus, fw="3.0.21")
@@ -188,6 +208,22 @@ async def test_replace_removes_only_this_pendant_and_only_when_asked():
 
 
 # --- the agent op -------------------------------------------------------------------------------------------------------
+GO = {"confirm": True, "ack_wipe": True}
+
+
+def _spool(tmp_path, waiting: int):
+    import sqlite3
+    d = tmp_path / "omi"
+    d.mkdir(exist_ok=True)
+    db = sqlite3.connect(d / "spool.sqlite3")
+    db.execute("CREATE TABLE IF NOT EXISTS records (id INTEGER)")
+    db.execute("CREATE TABLE IF NOT EXISTS confirmed (id INTEGER, confirmed_at REAL)")
+    db.execute("DELETE FROM records")
+    db.executemany("INSERT INTO records VALUES (?)", [(i,) for i in range(waiting)])
+    db.commit()
+    db.close()
+
+
 async def _op(agent, dev, params):
     await agent.execute({"job_id": "bondjob0001" + str(len(agent._outbox)), "op": "omi_bond", "device_id": dev, "params": params})
     return agent._outbox[-1]
@@ -199,13 +235,15 @@ async def test_the_op_is_flag_dark_and_needs_a_confirm(tmp_path, monkeypatch):
     be, clients = backend_for(sysbus)
     off = PanelBluetoothAgent(settings(tmp_path), be, DriverRegistry(), None)
     off.scan_cache[device_id(OMI_ADDR)] = advert(OMI_ADDR)
-    r = await _op(off, device_id(OMI_ADDR), {"confirm": True})
+    r = await _op(off, device_id(OMI_ADDR), GO)
     assert r["state"] == "failed" and r["error"]["code"] == "bond_disabled" and not clients
     on = PanelBluetoothAgent(settings(tmp_path, PANEL_BT_BOND_ENABLED=1), be, DriverRegistry(), None)
     on.scan_cache[device_id(OMI_ADDR)] = advert(OMI_ADDR)
-    r = await _op(on, device_id(OMI_ADDR), {})
-    assert r["state"] == "failed" and r["error"]["code"] == "bad_request" and not clients
-    r = await _op(on, device_id(OMI_ADDR), {"confirm": True})
+    for params in ({}, {"confirm": True}, {"ack_wipe": True}):            # both the confirm AND the wipe acknowledgement
+        r = await _op(on, device_id(OMI_ADDR), params)
+        assert r["state"] == "failed" and r["error"]["code"] == "bad_request" and not clients
+        assert "erases" in r["error"]["message"]
+    r = await _op(on, device_id(OMI_ADDR), GO)
     assert r["state"] == "succeeded" and r["result"]["bonded"] is True and len(clients) == 1
     assert not on.lock.held                                    # the radio goes back to omi-sync afterwards
 
@@ -216,5 +254,22 @@ async def test_only_an_omi_pendant_can_be_bonded(tmp_path, monkeypatch):
     be, clients = backend_for(sysbus)
     agent = PanelBluetoothAgent(settings(tmp_path, PANEL_BT_BOND_ENABLED=1), be, DriverRegistry(), None)
     agent.scan_cache[device_id(SENSOR_ADDR)] = advert(SENSOR_ADDR, "HR Strap", services=())
-    r = await _op(agent, device_id(SENSOR_ADDR), {"confirm": True})
+    r = await _op(agent, device_id(SENSOR_ADDR), GO)
     assert r["state"] == "failed" and r["error"]["code"] == "unsupported" and not clients
+
+
+async def test_pairing_waits_for_unsynced_recordings_unless_forced(tmp_path, monkeypatch):
+    """The pendant crypto-wipes when it pairs: refuse while omi-sync still holds unsynced records, unless forced."""
+    sysbus = SysBus()
+    monkeypatch.setattr(bond._backend, "_run", sysbus.run)
+    be, clients = backend_for(sysbus)
+    _spool(tmp_path, 3)
+    agent = PanelBluetoothAgent(settings(tmp_path, PANEL_BT_BOND_ENABLED=1), be, DriverRegistry(), None)
+    agent.scan_cache[device_id(OMI_ADDR)] = advert(OMI_ADDR)
+    r = await _op(agent, device_id(OMI_ADDR), GO)
+    assert r["state"] == "failed" and r["error"]["detail"]["reason"] == "unsynced" and not clients
+    r = await _op(agent, device_id(OMI_ADDR), {**GO, "force": True})
+    assert r["state"] == "succeeded" and len(clients) == 1
+    _spool(tmp_path, 0)
+    r = await _op(agent, device_id(OMI_ADDR), GO)                      # synced: no force needed
+    assert r["state"] == "succeeded"

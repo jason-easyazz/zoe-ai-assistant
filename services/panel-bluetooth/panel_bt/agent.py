@@ -26,6 +26,7 @@ from .drivers import DriverRegistry
 from .drivers.base import Driver, UpdateContext
 from .known import KnownStore
 from .bond import BondRefused, bond_pendant
+from .drivers.omi import read_sync_status
 from .model import (ADDR_RX, E_BAD_REQUEST, E_BOND, E_BOND_OFF, E_BUSY, E_CANCELLED, E_CONNECT, E_INTERNAL, E_NOT_CONNECTED,
                     E_NOT_FOUND, E_OTA_OFF, E_UNSUPPORTED, Advert, AgentError, Command, parse_command)
 from .radio_lock import RadioLock
@@ -317,13 +318,21 @@ class PanelBluetoothAgent:
         """Owner-run, physical: bond this Pi with a pendant on Zoe phase-2 firmware whose pairing window is open (bond.py)."""
         if not self.s.bond_enabled:
             raise AgentError(E_BOND_OFF, "Secure pairing is switched off on this panel.")
-        if cmd.params.get("confirm") is not True:
-            raise AgentError(E_BAD_REQUEST, "Secure pairing must be confirmed.")
+        if cmd.params.get("confirm") is not True or cmd.params.get("ack_wipe") is not True:
+            raise AgentError(E_BAD_REQUEST, "Secure pairing must be confirmed, including that the pendant erases its stored "
+                                            "audio when it pairs.")
         address, addr_type, _name, drv = self._resolve(cmd.device_id)  # type: ignore[arg-type]
         if not ADDR_RX.match(address):
             raise AgentError(E_BAD_REQUEST, "bad device address")
         if not drv.supports_bond:
             raise AgentError(E_UNSUPPORTED, "Only an Omi pendant can be securely paired here.")
+        held = read_sync_status(self.s.omi_sync_dir)
+        unsynced = held.get("unreadable") or held.get("waiting_to_upload", 0) > 0
+        if unsynced and cmd.params.get("force") is not True:
+            # The pendant crypto-wipes when it pairs; audio this panel still holds unconfirmed is already off the pendant,
+            # but it shows a sync is mid-flight - finish it first (the ring may hold more). Overridable, never silently.
+            raise AgentError(E_BOND, "Recordings from the pendant are still waiting to sync. Let them finish first, because "
+                                     "pairing erases what is still on the pendant.", detail={"reason": "unsynced"})
         if self.link is not None:
             await self._drop_link()                     # the pairing needs its own fresh link
         await self._need_radio()

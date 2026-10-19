@@ -3,10 +3,12 @@
  *
  * AES-128-CTR, one device key (16 random bytes generated on the pendant at first use, kept in the internal-flash settings
  * store, never sent anywhere). Each 444-byte packet is encrypted ONCE, in RAM, when it is appended to the open batch;
- * flushes rewrite the same ciphertext. IV = salt(4) || seq(8) || block(4), big-endian, where salt is a fresh random value
- * per batch (stored in the batch header's reserved0) and seq is the packet's ring sequence number. A batch re-opened after
- * a reboot is re-keyed to a new salt (decrypt, re-encrypt), so a (salt, seq) pair never covers two different plaintexts,
- * even after CLEAR, a truncated tail or a torn write.
+ * flushes rewrite the same ciphertext. IV = salt(4) || seq(8) || block(4), big-endian. The salt is NOT random: it is a
+ * per-key MONOTONIC epoch counter (one value per batch, stored in the batch header's reserved0), reserved ahead in blocks
+ * of ZRC_EPOCH_BLOCK and persisted BEFORE any value of a block is used, so after any crash or reboot the next salt is above
+ * every salt ever handed out. A batch re-opened after a reboot is re-keyed to a new salt. So, under one key, a salt is used
+ * by exactly one batch and a (salt, seq) pair covers exactly one plaintext - guaranteed, not probable - even after CLEAR, a
+ * truncated tail or a torn write. Losing the epoch record forces a NEW key (the old ring is cleared).
  *
  * Batch headers and ring metadata stay plaintext (counts and sequence numbers, no audio). The Pi receives plaintext over
  * the LE Secure Connections link: the BLE protocol is unchanged byte for byte.
@@ -16,10 +18,12 @@
 #ifndef ZOE_RING_CRYPT_H
 #define ZOE_RING_CRYPT_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #define ZRC_IV_BYTES 16U
+#define ZRC_WIPE_SETTING "zoe/wk" /* intent: the audio key must be destroyed and replaced (set before, cleared after) */
 
 /* Backend (device: PSA; host test: OpenSSL). AES-128-CTR over len bytes from the 16-byte initial counter block. */
 int zrc_backend_ctr(const uint8_t iv[ZRC_IV_BYTES], const uint8_t *in, uint8_t *out, size_t len);
@@ -28,8 +32,30 @@ int zrc_backend_ctr(const uint8_t iv[ZRC_IV_BYTES], const uint8_t *in, uint8_t *
  * key was just created, so whatever the ring holds is unreadable and the caller clears it; 0 = the existing key. */
 int zrc_backend_init(void);
 
-/* Backend: a fresh random batch salt (never 0, so an all-zero header from stock firmware is never a valid salt). */
-uint32_t zrc_backend_new_salt(void);
+/* Backend, called from the pairing path BEFORE a new bond: the key is unusable from this call on and erased from flash.
+ * The SD worker sees zrc_backend_rekey_pending() and finishes (zrc_backend_destroy, then zrc_backend_init + ring clear +
+ * zrc_backend_wipe_done). */
+int zrc_backend_revoke(void);
+bool zrc_backend_rekey_pending(void);
+void zrc_backend_destroy(void);
+void zrc_backend_wipe_done(void);
+
+/* Pure: must the boot (or a re-init) make a NEW key instead of using the stored one? */
+bool zrc_needs_new_key(bool wipe_pending, bool key_found, bool epoch_found, uint32_t epoch);
+
+/* Backend: the next batch salt (never 0). <0 = none could be reserved: the caller STOPS ring writes. */
+int zrc_backend_new_salt(uint32_t *salt);
+
+/* Pure: the monotonic salt allocator. `limit` is the persisted reservation: every salt below it may have been used. */
+#define ZRC_EPOCH_BLOCK 1024U
+struct zrc_epoch {
+    uint32_t next;
+    uint32_t limit;
+};
+typedef int (*zrc_persist_fn)(uint32_t new_limit, void *ctx);
+void zrc_epoch_resume(struct zrc_epoch *e, uint32_t persisted_limit);
+/* 0 and *salt set; or <0 (reservation not persisted, or the 32-bit space is exhausted) and *salt untouched. */
+int zrc_epoch_take(struct zrc_epoch *e, zrc_persist_fn persist, void *ctx, uint32_t *salt);
 
 /* Pure core. */
 void zrc_iv(uint8_t iv[ZRC_IV_BYTES], uint32_t salt, uint64_t seq);

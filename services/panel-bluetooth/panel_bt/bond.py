@@ -17,6 +17,10 @@ agent HERE, reviewed, never anywhere else). Refused unless the pendant reports Z
 ``3.0.21.1``): bonding a stock pendant would only take its single bond slot for nothing. Success is not "Pair returned": it
 is BlueZ reading ``Paired`` AND ``Bonded`` true and the kernel showing the link ``ENCRYPT``ed.
 
+**Pairing a pendant WIPES it.** The firmware crypto-wipes on every new or replacement bond (owner decision 2026-10-19):
+it destroys its stored-audio key, empties its ring and deletes every other bond before the pairing may complete. So audio not
+yet synced is lost; the agent refuses while omi-sync still holds unsynced records, and always needs ``ack_wipe``.
+
 ``replace`` deletes THIS pendant's old BlueZ entry first (``Adapter1.RemoveDevice`` for its path only) - for a pendant that was
 re-paired or re-flashed and holds a new key. Nothing else is ever removed. The parsers below are deliberate copies of
 ``omi_sync.link_security`` (two venvs, no import); tests/unit/test_omi_bond.py pins them equal.
@@ -73,6 +77,22 @@ def parse_link_mode(output: str, address: str) -> Optional[frozenset]:
     return None
 
 
+PAIRABLE_TIMEOUT_S = 60
+
+
+def parse_busctl_u32(output: str) -> "int | None":
+    parts = (output or "").strip().split()
+    if len(parts) == 2 and parts[0] == "u" and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
+
+async def _adapter_timeout(adapter_path: str, run: Runner) -> "int | None":
+    rc, text = await run(["busctl", "--system", "get-property", "org.bluez", adapter_path, "org.bluez.Adapter1",
+                          "PairableTimeout"], 10.0)
+    return parse_busctl_u32(text) if rc == 0 else None
+
+
 def _set_adapter(adapter_path: str, prop: str, sig: str, value: str) -> list[str]:
     return ["busctl", "--system", "set-property", "org.bluez", adapter_path, "org.bluez.Adapter1", prop, sig, value]
 
@@ -114,9 +134,12 @@ async def bond_pendant(ble: Any, address: str, addr_type: str, *, replace: bool 
         fw = (await link.read_char(DIS_FIRMWARE_UUID)).decode("ascii", "ignore").strip("\x00 ")
         if not zoe_firmware(fw):
             raise BondRefused("stock_firmware", "This pendant still runs the stock firmware. Secure pairing needs Zoe's firmware.")
-        await run(_set_adapter(adapter_path, "PairableTimeout", "u", "60"), 10.0)
+        # The timeout is what bounds a crash: it must be INSTALLED (written and read back) before Pairable is ever set.
+        rc, _out = await run(_set_adapter(adapter_path, "PairableTimeout", "u", str(PAIRABLE_TIMEOUT_S)), 10.0)
+        if rc != 0 or await _adapter_timeout(adapter_path, run) != PAIRABLE_TIMEOUT_S:
+            raise BondRefused("adapter", "The panel's Bluetooth would not accept a time-limited pairing. Nothing was changed.")
+        pairable = True                     # from here on, finally resets it even if the write below half-worked
         rc, _out = await run(_set_adapter(adapter_path, "Pairable", "b", "true"), 10.0)
-        pairable = True
         if rc != 0:
             raise BondRefused("adapter", "The panel's Bluetooth would not accept a pairing right now. Try again.")
         try:

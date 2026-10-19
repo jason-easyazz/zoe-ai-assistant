@@ -149,3 +149,146 @@ def test_pairing_window_bounds(lib):
     assert lib.host_window_open(0, 5) is False               # never opened
     assert lib.host_window_open(1_000, 999) is True
     assert lib.host_window_open(1_000, 1_000) is False       # closes exactly at the deadline
+
+
+# --- the salt allocator: monotonic, persisted ahead, never a fallback ------------------------------------------------
+def test_salts_are_strictly_increasing_and_survive_reboots_without_reuse(lib):
+    lib.host_epoch_reset(0)
+    lib.host_epoch_boot()
+    seen = []
+    s = ctypes.c_uint32()
+    for _ in range(1500):                                  # crosses a 1024 reservation boundary
+        assert lib.host_epoch_take(ctypes.byref(s)) == 0
+        seen.append(s.value)
+    assert seen == sorted(set(seen)) and 0 not in seen
+    assert lib.host_epoch_calls() == 2                     # one persist per 1024 salts, BEFORE they are used
+    lib.host_epoch_boot()                                  # power cut: resume from what was persisted
+    assert lib.host_epoch_take(ctypes.byref(s)) == 0 and s.value > max(seen)
+
+
+def test_no_salt_without_a_persisted_reservation(lib):
+    """Negative control for finding 3: a failed persist yields NO salt (the ring stops) - never a guessed one."""
+    lib.host_epoch_reset(0)
+    lib.host_epoch_boot()
+    lib.host_epoch_set_fail(1)
+    s = ctypes.c_uint32(7)
+    assert lib.host_epoch_take(ctypes.byref(s)) < 0 and s.value == 7
+    lib.host_epoch_set_fail(0)
+    assert lib.host_epoch_take(ctypes.byref(s)) == 0 and s.value == 1
+
+
+def test_the_salt_space_refuses_to_wrap(lib):
+    lib.host_epoch_reset(0)
+    lib.host_epoch_force(0xFFFFFFF0, 0xFFFFFFF0)
+    s = ctypes.c_uint32()
+    assert lib.host_epoch_take(ctypes.byref(s)) < 0
+
+
+def test_a_pending_wipe_or_a_lost_reservation_always_means_a_new_key(lib):
+    assert lib.host_needs_new_key(True, True, True, 5)          # wipe pending: the stored key is never used again
+    assert lib.host_needs_new_key(False, False, True, 5)
+    assert lib.host_needs_new_key(False, True, False, 5)
+    assert lib.host_needs_new_key(False, True, True, 0)
+    assert not lib.host_needs_new_key(False, True, True, 5)
+
+
+# --- zoe_ble_sec.c itself, against fake Zephyr: pairing gate, crypto-wipe on new bond, power loss --------------------
+STUBS = HERE / "stubs"
+
+
+@pytest.fixture(scope="module")
+def ble():
+    if shutil.which("cc") is None:
+        pytest.skip("no host C compiler")
+    tmp = tempfile.mkdtemp(prefix="zoe-fw-ble-")
+    so = os.path.join(tmp, "libzoeble.so")
+    subprocess.run(["cc", "-std=gnu11", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror", "-shared", "-fPIC",
+                    "-I", str(STUBS), "-I", str(ZOE_SRC), "-o", so, str(HERE / "ble_harness.c"),
+                    str(ZOE_SRC / "zoe_ring_crypt.c")], check=True)
+    L = ctypes.CDLL(so)
+    L.h_has.argtypes = [ctypes.c_char_p]
+    yield L
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+PI, THIEF = 1, 2
+
+
+def test_pairing_needs_the_gesture_even_with_no_bond(ble):
+    """Finding 2: no automatic first-setup window - a reset or freshly flashed pendant pairs only after the taps."""
+    ble.h_reset()
+    assert ble.h_boot() == 0
+    assert not ble.h_window_open()
+    assert ble.h_accept_now(1) != 0                        # refused: no window
+    ble.h_gesture()
+    assert ble.h_window_open()
+
+
+def test_a_failed_stock_bond_wipe_fails_closed(ble):
+    """Finding 1: if the stock-era bonds cannot be deleted, init fails (transport_start then does not advertise)."""
+    ble.h_reset()
+    ble.h_clear_marker()
+    ble.h_set_fail_unpair(1)
+    assert ble.h_init() != 0 and ble.h_haptic() == 2000
+    ble.h_set_fail_unpair(0)
+    assert ble.h_init() == 0 and ble.h_has(b"zoe/bw")
+
+
+def test_a_new_bond_crypto_wipes_the_pendant_first(ble):
+    ble.h_reset()
+    ble.h_gesture()
+    assert ble.h_pair(THIEF, -1) == 0
+    assert ble.h_bonded(THIEF) and not ble.h_bonded(PI)
+    assert ble.h_ram_key() not in (0, 1) and ble.h_flash_key() == ble.h_ram_key()
+    assert ble.h_ring_key() == 0                           # the ring is empty under the fresh key
+    assert not ble.h_has(b"zoe/wk") and not ble.h_has(b"zoe/wb")
+
+
+def test_a_reconnect_with_the_existing_bond_does_not_wipe(ble):
+    ble.h_reset()
+    assert ble.h_reconnect(PI) == 0                        # no persistent operation at all
+    assert ble.h_ram_key() == 1 and ble.h_ring_key() == 1 and ble.h_bonded(PI)
+
+
+def test_no_window_or_no_bonding_request_means_no_wipe(ble):
+    ble.h_reset()
+    assert ble.h_accept_now(1) != 0 and ble.h_ops() == 0 and ble.h_ram_key() == 1
+    ble.h_gesture()
+    assert ble.h_accept_now(0) != 0 and ble.h_ops() == 0 and ble.h_ram_key() == 1
+
+
+@pytest.mark.parametrize("nth", [1, 2])
+def test_a_wipe_that_cannot_record_its_intent_refuses_the_pairing(ble, nth):
+    ble.h_reset()
+    ble.h_gesture()
+    ble.h_set_fail_save(nth)                               # the key-wipe intent (1st) or the bond-wipe intent (2nd)
+    assert ble.h_pair(THIEF, -1) == 2 and not ble.h_bonded(THIEF)
+    ble.h_set_fail_save(0)
+
+
+def test_power_loss_at_every_step_never_leaves_the_old_key_next_to_a_new_bond(ble):
+    """Cut power before each persistent operation of pair -> bond -> re-key, boot, and check:
+    - never the old key (generation 1) usable while the new peer is bonded, and never both peers bonded;
+    - once the wipe intents are on flash, the boot ALWAYS finishes it: old key gone, ring not readable under it,
+      and the old bond gone."""
+    ble.h_reset()
+    ble.h_gesture()
+    assert ble.h_pair(THIEF, -1) == 0
+    total = ble.h_ops()
+    assert total >= 8
+    for cut in range(total + 1):
+        ble.h_reset()
+        ble.h_gesture()
+        r = ble.h_pair(THIEF, cut)
+        assert r in (0, 1), cut
+        assert ble.h_boot() == 0, cut
+        thief, pi = ble.h_bonded(THIEF), ble.h_bonded(PI)
+        assert not (thief and pi), cut
+        if thief:
+            assert ble.h_ram_key() != 1 and ble.h_flash_key() != 1 and ble.h_ring_key() != 1, cut
+        if cut >= 1:                                       # the key-wipe intent was written first
+            assert ble.h_ram_key() != 1 and ble.h_flash_key() != 1, cut
+            assert ble.h_ring_key() in (0, ble.h_ram_key()), cut
+        if cut >= 2:                                       # ... then the bond-wipe intent
+            assert not pi, cut
+        assert not ble.h_has(b"zoe/wk") and not ble.h_has(b"zoe/wb"), cut
