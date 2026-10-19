@@ -2473,10 +2473,6 @@
                     <div class="more-item-icon">⚙️</div>
                     <div class="more-item-label">Settings</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('developer/index.html')">
-                    <div class="more-item-icon">👨‍💻</div>
-                    <div class="more-item-label">Developer</div>
-                </div>
             </div>
         </div>
     </div>
@@ -2569,22 +2565,6 @@
                             <line x1="22" y1="2" x2="11" y2="13"/>
                             <polygon points="22 2 15 22 11 13 2 9 22 2"/>
                         </svg>
-                    </button>
-                </div>
-                <!-- Agent selector pills -->
-                <div class="agent-selector" id="agentSelector">
-                    <span class="agent-selector-label">via</span>
-                    <button class="agent-pill active" id="agentPillAuto"
-                            onclick="selectAgent('auto')" title="Auto — intent detection + Zoe LLM">
-                        <span class="agent-pill-dot"></span>Zoe
-                    </button>
-                    <button class="agent-pill" id="agentPillHermes"
-                            onclick="selectAgent('hermes')" title="Hermes Agent — host-native agentic reasoning">
-                        <span class="agent-pill-dot"></span>Hermes
-                    </button>
-                    <button class="agent-pill" id="agentPillOpenclaw"
-                            onclick="selectAgent('openclaw')" title="OpenClaw — full tool access &amp; builder skills">
-                        <span class="agent-pill-dot"></span>OpenClaw
                     </button>
                 </div>
             </div>
@@ -3836,6 +3816,9 @@
         }
 
         function selectAgent(agent) {
+            // Hermes and OpenClaw are retired runtimes (2026-10-18): a forced turn into
+            // either can only fail, so every agent request is Zoe's own lane.
+            agent = 'auto';
             selectedAgent = agent;
             forceOpenClawMode = (agent === 'openclaw'); // legacy compat
             // Update pill active states
