@@ -6,6 +6,7 @@ unauthenticated-admin promotion all get 403 - negative controls run the REAL gat
 overridden but the principal); the numbers are psutil's own; a service that does not answer is
 "down", a sick one "degraded", never "ok"; and one snapshot is shared across callers.
 """
+import asyncio
 import sys
 from pathlib import Path
 
@@ -147,3 +148,74 @@ async def test_snapshot_is_shared_for_the_ttl(monkeypatch):
     assert calls["n"] == 1 and first is second
     fresh = await system_stats.snapshot(use_cache=False)
     assert calls["n"] == 2 and fresh["uptime_seconds"] == 2
+
+
+class _FakeConn:
+    def __init__(self, fail=False):
+        self.fail = fail
+
+    async def fetchval(self, _sql, *_a):
+        if self.fail:
+            raise RuntimeError("relation does not exist")
+        return 1
+
+
+class _FakePool:
+    """Just enough of asyncpg.Pool: ``async with pool.acquire() as conn`` + ``await pool.acquire()``."""
+
+    def __init__(self, fail=False, hang=False):
+        self.conn = _FakeConn(fail)
+        self.hang = hang
+
+    def acquire(self):
+        pool = self
+
+        class _Acq:
+            async def _get(self):
+                if pool.hang:
+                    await asyncio.sleep(30)
+                return pool.conn
+
+            def __await__(self):
+                return self._get().__await__()
+
+            async def __aenter__(self):
+                return await self._get()
+
+            async def __aexit__(self, *_exc):
+                return False
+
+        return _Acq()
+
+    async def release(self, _conn):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_database_status_ok_only_when_select_1_answers(monkeypatch):
+    import db_pool
+
+    monkeypatch.setattr(db_pool, "_pool", _FakePool())
+    assert await system_stats._database_status() == "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pool", [None, "query-fails", "acquire-hangs"])
+async def test_database_status_fails_closed(monkeypatch, pool):
+    import db_pool
+
+    fake = {None: None, "query-fails": _FakePool(fail=True), "acquire-hangs": _FakePool(hang=True)}[pool]
+    monkeypatch.setattr(db_pool, "_pool", fake)
+    monkeypatch.setattr(system_stats, "_PROBE_TIMEOUT_S", 0.05)
+    assert await system_stats._database_status() == "down"
+
+
+@pytest.mark.asyncio
+async def test_negative_control_watchdog_probe_reads_a_failed_query_as_healthy(monkeypatch):
+    """Why the card cannot use check_pool_health: it is fail-open, so it would say "ok" here."""
+    import db_pool
+
+    monkeypatch.setattr(db_pool, "_pool", _FakePool(fail=True))
+    healthy, detail = await db_pool.check_pool_health(timeout_s=0.5)
+    assert healthy is True and "non-fatal" in detail
+    assert await system_stats._database_status() == "down"

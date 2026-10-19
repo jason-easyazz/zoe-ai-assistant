@@ -125,12 +125,23 @@ def _judge_home_assistant(resp: httpx.Response) -> str:
 
 
 async def _database_status() -> str:
-    try:
-        from db_pool import check_pool_health
+    """ok only if a pooled connection answers ``SELECT 1`` in time; anything else is "down".
 
-        healthy, _detail = await check_pool_health(timeout_s=_PROBE_TIMEOUT_S)
-        return "ok" if healthy else "down"
-    except Exception:  # noqa: BLE001
+    Deliberately NOT ``db_pool.check_pool_health``: that is a restart-watchdog probe, fail-OPEN by
+    design (a failed query or an uninitialised pool reports healthy), so the card would read "ok"
+    through a real outage. This card is fail-CLOSED.
+    """
+
+    async def _query() -> None:
+        from db_pool import get_pool
+
+        async with get_pool().acquire() as conn:
+            await conn.fetchval("SELECT 1")
+
+    try:
+        await asyncio.wait_for(_query(), timeout=_PROBE_TIMEOUT_S)
+        return "ok"
+    except Exception:  # noqa: BLE001 - uninitialised pool, exhausted pool, failed query, timeout
         return "down"
 
 

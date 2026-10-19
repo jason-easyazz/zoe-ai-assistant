@@ -442,6 +442,77 @@ check('a board emptied of cards never refreshes the template widgets', async () 
     await mustFail('falling back to templates on an empty board is caught', probe);
 });
 
+check('an emptied server layout stays empty; only a missing one falls back to this browser', async () => {
+    const stored = [{ uid: 'old1', type: 'weather', x: 0, y: 0, w: 4, h: 3 }];
+    const run = async (serverBody, patch) => {
+        const puts = [];
+        const ctx = makeContext((url, opts) => {
+            if (url === '/api/dashboard/layout/' && opts.method === 'PUT') { puts.push(JSON.parse(opts.body)); return json(200, { status: 'ok' }); }
+            if (url === '/api/dashboard/layout/') return json(200, serverBody);
+            return never();
+        });
+        const { d } = boardWith(ctx);
+        ctx._store.zoe_desktop_widgets = JSON.stringify(stored);
+        d.createDefaultLayout = () => { d.defaulted = true; };
+        if (patch) patch(d);
+        await d.loadLayout();
+        ctx._timers.splice(0).forEach(fn => fn());
+        await flush();
+        return { d, puts };
+    };
+    // the member removed every card: the board stays empty and nothing is saved back
+    const emptied = await run({ layout: [] });
+    assert.strictEqual(emptied.d.grid.engine.nodes.length, 0, 'removed cards were resurrected');
+    assert(!emptied.d.defaulted, 'the default board replaced an emptied one');
+    assert.strictEqual(emptied.puts.length, 0, 'an emptied board must not be PUT back with cards');
+    // never saved on the server (layout: null): this browser's old board is used and moved up
+    const fresh = await run({ layout: null });
+    assert.deepStrictEqual(plain(fresh.d.currentLayout().map(e => e.uid)), ['old1']);
+    assert.strictEqual(fresh.puts.length, 1, 'a browser-only board moves to the server once');
+    // negative control: the reviewed bug (an empty server layout read as "no layout") is caught
+    await mustFail('treating [] as missing is caught', async () => {
+        const bad = await run({ layout: [] }, (d) => {
+            d._fetchServerLayout = async () => {
+                const data = { layout: [] };
+                return (data && Array.isArray(data.layout) && data.layout.length) ? data.layout : null;
+            };
+        });
+        assert.strictEqual(bad.d.grid.engine.nodes.length, 0);
+    });
+});
+
+check('a singleton-dispatched type (zoe-orb) cannot be added twice; other types still can', async () => {
+    const ctx = makeContext(() => never());
+    const { d, WM } = boardWith(ctx);
+    d.serverSync = false;
+    ctx.$("WidgetManager.register(new (class extends WidgetModule { constructor() { super('zoe-orb'); } getTemplate() { return '<i></i>'; } })());");
+    assert(WM.modules['zoe-orb'], 'the orb is registered');
+    const first = d.addWidget('zoe-orb');
+    assert(first, 'the first orb mounts');
+    assert.strictEqual(d.addWidget('zoe-orb'), null, 'a second orb must be refused');
+    assert.strictEqual(d.grid.engine.nodes.length, 1);
+    assert(d.addWidget('weather') && d.addWidget('weather'), 'ordinary types may repeat');
+    // a stored layout with two orbs keeps one (and both weathers)
+    d.loadFromData([
+        { uid: 'o1', type: 'zoe-orb', x: 0, y: 0, w: 3, h: 3 }, { uid: 'o2', type: 'zoe-orb', x: 3, y: 0, w: 3, h: 3 },
+        { uid: 'w1', type: 'weather', x: 6, y: 0, w: 4, h: 3 }, { uid: 'w2', type: 'weather', x: 0, y: 3, w: 4, h: 3 }
+    ]);
+    assert.deepStrictEqual(plain(d.currentLayout().map(e => e.type)).sort(), ['weather', 'weather', 'zoe-orb']);
+    // removing the orb frees the slot
+    d.grid.removeWidget(d.grid.engine.nodes.find(n => n.el.card.getAttribute('data-widget-type') === 'zoe-orb').el);
+    assert(d.addWidget('zoe-orb'), 'a removed orb can be added again');
+    // negative control: without the guard a second orb mounts
+    const ctx2 = makeContext(() => never());
+    const b2 = boardWith(ctx2);
+    b2.d.serverSync = false;
+    ctx2.$("WidgetManager.register(new (class extends WidgetModule { constructor() { super('zoe-orb'); } getTemplate() { return '<i></i>'; } })());");
+    b2.d._hasCardOfType = () => false;
+    await mustFail('a second orb mounting is caught', async () => {
+        b2.d.addWidget('zoe-orb');
+        assert.strictEqual(b2.d.addWidget('zoe-orb'), null);
+    });
+});
+
 check('lists.html and the touch dashboard still register these widgets (registerAllWidgets)', async () => {
     // The legacy route every other consumer uses: the manifest + window[ClassName].
     const manifest = JSON.parse(read('js/widgets/widget-manifest.json'));

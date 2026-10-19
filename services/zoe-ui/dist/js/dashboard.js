@@ -33,6 +33,11 @@ const TOUCH_WIDGET_DEFAULTS = {
     'music-library': { defaultW: 8, defaultH: 5, minW: 6, minH: 4 }
 };
 
+// Widget types whose markup calls back through a per-TYPE global (zoe-orb's
+// window.zoeWidgets.get(type) in inline onclick handlers), so a board may hold
+// only one card of each. Everything else is one object per card (uid-keyed).
+const SINGLETON_WIDGET_TYPES = new Set(['zoe-orb']);
+
 /**
  * Get widget configuration from manifest
  * Falls back to defaults if manifest not loaded
@@ -309,6 +314,13 @@ class Dashboard {
             console.warn('Widget type not found:', type);
             return null;
         }
+        // A singleton-dispatched type (inline handlers resolve it by TYPE, see
+        // SINGLETON_WIDGET_TYPES) cannot have two cards: the second would take over
+        // the first card's clicks, and removing one would unregister the other.
+        if (SINGLETON_WIDGET_TYPES.has(type) && this._hasCardOfType(type)) {
+            console.warn('Only one ' + type + ' card is allowed on the board');
+            return null;
+        }
         const instance = (typeof WidgetManager.createInstance === 'function')
             ? WidgetManager.createInstance(type)
             : WidgetManager.modules[type];
@@ -356,6 +368,14 @@ class Dashboard {
             this.updateListColumns(widget);
         }
         return gridItem;
+    }
+
+    _hasCardOfType(type) {
+        if (!this.grid || !this.grid.engine) return false;
+        return this.grid.engine.nodes.some((node) => {
+            const widget = node.el && node.el.querySelector ? node.el.querySelector('.widget') : null;
+            return !!widget && widget.getAttribute('data-widget-type') === type;
+        });
     }
 
     _releaseGridItem(gridItem) {
@@ -508,7 +528,10 @@ class Dashboard {
             const r = await fetch('/api/dashboard/layout/', { credentials: 'same-origin' });
             if (!r.ok) return null;
             const data = await r.json();
-            return (data && Array.isArray(data.layout) && data.layout.length) ? data.layout : null;
+            // null = nothing saved yet (fall back to this browser / the default);
+            // [] = the member removed every card, which must stay empty - not be
+            // resurrected from localStorage or the default and saved back.
+            return (data && Array.isArray(data.layout)) ? data.layout : null;
         } catch (_) {
             return null;
         }
@@ -526,7 +549,7 @@ class Dashboard {
 
     async loadLayout() {
         const fromServer = await this._fetchServerLayout();
-        const layout = fromServer || this._readLocalLayout();
+        const layout = fromServer !== null ? fromServer : this._readLocalLayout();
         if (!layout) {
             this.createDefaultLayout();
             return;
@@ -534,7 +557,7 @@ class Dashboard {
         this.loadFromData(layout);
         // A board saved only in this browser (before Wave 4b) moves to the server
         // once, with uids minted for its cards.
-        if (!fromServer && this.serverSync) this.saveLayout();
+        if (fromServer === null && this.serverSync) this.saveLayout();
     }
 
     loadFromData(layout) {
