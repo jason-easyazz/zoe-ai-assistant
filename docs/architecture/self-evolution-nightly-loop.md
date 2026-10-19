@@ -173,3 +173,35 @@ The spine and the gate are unchanged. With 128 GB of unified memory a 27B or 70B
 - **Night budget contention.** The window is already 02:50 to 03:55 and the owner wants the 12B used; proposing is the last job in the window and yields if the window runs long. The probes have their own slot.
 - **Harness traffic.** Round 2 found the harness is 97% of the brain's load and evicts the panel's prompt cache; the loop runs only in the sleep slot, tagged, on a scratch database, and the panel's KV is re-warmed after 04:30 by the existing prewarm.
 - **Privacy.** The improver's inputs are synthetic by default; the local day replay never leaves the box; lessons carry no household words; the Tier 2 key is in the vault; the whole loop is subject to the forget cascade (candidate overlays and probe transcripts are stores and must be in the inventory).
+
+## 12. The Zoe score (owner, 2026-10-19: "a stats page where everything Zoe keeps track of gets an overall score, and Zoe is always aiming for 100%")
+
+**What it is.** One number, 0 to 100, recomputed every night from the same artefacts the loop reads, with the axes beneath it. It is the objective function of section 3: the nightly target is the lowest axis that is not in canary, and a kept change is one that moved an axis without dropping another. It is also the "Zoe's own brain to 10/10 and 100%" directive of 2026-10-09 made visible.
+
+**Axes (each 0 to 100 against a pre-registered bar, weights fixed in the design, not tuned by the loop):**
+
+| Axis | Source | Bar |
+|---|---|---|
+| Memory and companion | the bar (23 cells), the day-sim (16 asks), the person bench (12 cells) | cells passed over cells scored; SKIP counts as 0, not as missing |
+| Voice | the voice regression's per-clip correctness (once T-3 lands), STT empty-transcript rate, wakes that became turns, wake false-accept and false-reject once measured | pre-registered per signal |
+| Speed | end of speech to first sound p50 and p90 on real panel turns, brain first token p90, Telegram p50 | the latency budget in `docs/knowledge/panel-ttfa-breakdown` |
+| Identity | voice-verified share of member turns, enrolment coverage of adults, guest false-accepts in the shadow set | per the identity-presence engine's bars |
+| Availability | zoe-data starts per day, minutes offline in waking hours, Kokoro load failures, 5xx per 10k requests, panel 502s | zero in waking hours is 100 |
+| Safety floors | forget-reach inventory coverage, authority-class coverage of live memories, restraint control results, the security lane's open P0 and P1 count | a red floor caps the overall score (below) |
+| Resilience | off-box backup age and the last restore drill, encryption at rest, unit drift, release currency (days behind the signed release) | backup older than 2 days is 0 on that line |
+| Instrument health | the control arms went red in the last 7 days, held-out set intact, baselines clean and commit-bound, nightly workflow fail-closed | **unmeasured is scored 0, never 100** |
+
+**Rules that keep the number honest** (the lessons of round 2 written into the score):
+1. **Unmeasured counts as zero.** A green that ran nothing is the failure mode the nightly workflow showed for 14 nights; a skipped cell, a missing baseline or a stale artefact scores 0 on its line and shows as grey, not green.
+2. **Floors cap the total.** If any safety-floor line or instrument-health line is red, the overall score is capped at 60 whatever the other axes say, so the loop cannot climb by trading safety for charm.
+3. **Only the loop's own held-out set and control arms feed the memory and voice axes;** the targeted training cells are shown but weighted at zero, which removes the incentive to overfit the night's target.
+4. **Weights are fixed in this document** and change only by PR; the loop cannot touch them.
+5. **The score is computed by plain code** (`scripts/perf/zoe_score.py`, nightly at 05:30, from `~/.cache/zoe/*_trend.jsonl`, the voice regression artefact, `live-state.json`, the ledger and the ground-truth script), never by a model, and the computation is itself unit-tested with planted inputs that must produce the expected number.
+
+**Two faces of the same number.**
+- **Household:** one number and three plain words on the panel's settings screen and in the morning brief if asked ("Zoe is at 83. Better at calendar this week, slower in the evenings."). No axis names, no jargon, nothing spoken unprompted.
+- **Owner and maintainer:** the stats page (desktop UI, the same place the operator pack lives) with every axis, its trend, the night's attempt and whether it was kept or reverted, the canary countdowns, and the floor status. The history is the trend files plus a `zoe_score` Prometheus gauge per axis so the chart is cheap.
+
+**What exists today:** every source above except wake FA/FR, per-clip voice correctness, a backup age and the instrument-health lines; the trend files already carry commit and dirty bits; the ground-truth script already reads the live flags. The page is therefore mostly an aggregation and a layout, with the honesty rules as the hard part. **Phase 2 of section 9 builds it alongside the proposal queue, because the loop needs it to choose its target.**
+
+**One caution.** A single number invites gaming by whoever builds the axes, not only by the loop. The held-out set, the zero-for-unmeasured rule and the fixed weights are the defence; if an axis is ever found to be easy to satisfy without the property holding (the vacuous-pass class round 2 found in the contract tests), that axis is set to 0 until fixed, and the fix is a PR.
