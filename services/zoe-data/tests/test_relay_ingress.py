@@ -13,12 +13,14 @@ The nginx half (the headers are overwritten, a client without a certificate gets
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import importlib.util
 import re
 import sqlite3
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -557,6 +559,423 @@ def test_an_open_relayed_websocket_is_closed_when_its_certificate_is_revoked(reg
         with pytest.raises(WebSocketDisconnect):
             ws.receive_text()
     assert closed == [1008]
+
+
+# ── an IDLE / push-only relayed socket (N1 of the #2095 review) ───────────────────────────────────────────────────────────
+#
+# ``/ws/push`` sends and (almost) never receives, so a re-proof that only runs on an inbound frame never runs. These cells use a
+# push-only handler plus a broadcast route that behaves like ``broadcaster``: send to every open socket, drop the dead ones.
+
+SECRET = {"event": "secret"}
+IDLE_DEADLINE_S = 6.0   # the stub's own idle timeout: far past the shrunk re-proof interval, so only a missing fix reaches it
+
+
+def _push_app(reg):
+    app = make_app(reg)
+    socks: list = []
+
+    @app.websocket("/ws/idle")
+    async def idle(websocket: WebSocket):
+        await websocket.accept()
+        socks.append(websocket)
+        try:
+            while True:
+                await asyncio.wait_for(websocket.receive_text(), IDLE_DEADLINE_S)  # push-only: the client never sends a frame
+        except WebSocketDisconnect:
+            pass
+        except asyncio.TimeoutError:
+            await websocket.close(code=1000)  # a BROKEN fix ends here (1000, not 1008): the cell fails instead of hanging the suite
+        finally:
+            if websocket in socks:
+                socks.remove(websocket)
+
+    @app.post("/test/broadcast")
+    async def broadcast():
+        sent = 0
+        for sock in list(socks):
+            try:
+                await sock.send_json(SECRET)
+                sent += 1
+            except Exception:  # noqa: BLE001 - a dead socket is dropped, as the real broadcaster does
+                pass
+        return {"sent": sent}
+
+    return app
+
+
+def _revoke_cert_in_db(reg):
+    reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (FP_KITCHEN,))
+    reg.con.commit()
+
+
+def _revoke_token_in_cache():
+    panel_auth._token_cache[_hash(TOK_KITCHEN)]["revoked"] = 1
+
+
+@pytest.mark.parametrize("revoke", ["certificate", "device_token"])
+def test_an_idle_relayed_socket_is_closed_within_one_interval_of_a_revocation(reg, on, monkeypatch, revoke):
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.3)   # the 15 s production cadence, shrunk
+    monkeypatch.setattr(relay_ingress, "WS_SEND_PROOF_TTL_S", 3600.0)  # isolate the TIMER: the send-time check cannot be what closes it
+    with TestClient(_push_app(reg), client=(NGINX, 1)) as c:
+        with c.websocket_connect("/ws/idle", headers=relay_headers()) as ws:
+            assert c.post("/test/broadcast").json() == {"sent": 1}
+            assert ws.receive_json() == SECRET                  # POSITIVE: a proven socket gets the broadcast
+            # An OUT-OF-BAND revocation: no invalidate_cache() (another worker / a DB edit), so only the timer's registry read sees it.
+            _revoke_cert_in_db(reg) if revoke == "certificate" else _revoke_token_in_cache()
+            started = time.monotonic()
+            with pytest.raises(WebSocketDisconnect) as closed:
+                ws.receive_json()                               # the client sends nothing; the SERVER ends the socket
+            assert closed.value.code == 1008                   # policy violation, not a normal close
+            assert time.monotonic() - started < 0.3 + 2.0       # within one interval (plus scheduling slack)
+        assert c.post("/test/broadcast").json() == {"sent": 0}  # and it is gone from the broadcast set
+
+
+def test_a_broadcast_is_never_delivered_to_a_revoked_relayed_socket(reg, on, monkeypatch):
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 3600.0)  # isolate the SEND-time check: the timer cannot fire in this cell
+    with TestClient(_push_app(reg), client=(NGINX, 1)) as c:
+        with c.websocket_connect("/ws/idle", headers=relay_headers()) as ws:
+            assert c.post("/test/broadcast").json() == {"sent": 1}
+            assert ws.receive_json() == SECRET                  # POSITIVE
+            admin = {"X-Session-ID": SID_ADMIN}
+            assert c.delete(f"/api/panels/kitchen-panel/client-certs/{FP_KITCHEN}", headers=admin).status_code == 200
+            assert c.post("/test/broadcast").json() == {"sent": 0}       # refused before the frame left the box
+            with pytest.raises(WebSocketDisconnect) as closed:
+                ws.receive_json()                               # the very next thing the panel sees is the close, never the event
+            assert closed.value.code == 1008
+
+
+def test_a_lan_socket_is_not_guarded_or_closed(reg, on, monkeypatch):
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.2)
+    lan = {"X-Device-Token": TOK_KITCHEN}                       # through nginx's LAN block: the relay marker is always cleared there
+    with TestClient(_push_app(reg), client=(NGINX, 1)) as c:
+        with c.websocket_connect("/ws/idle", headers=lan) as lan_ws, c.websocket_connect("/ws/idle", headers=relay_headers()) as relayed_ws:
+            assert c.post("/test/broadcast").json() == {"sent": 2}
+            assert lan_ws.receive_json() == SECRET and relayed_ws.receive_json() == SECRET
+            _revoke_cert_in_db(reg)
+            relay_ingress.invalidate_cache()
+            _revoke_token_in_cache()                            # even its device token is revoked: the LAN rules never re-prove a socket
+            with pytest.raises(WebSocketDisconnect) as closed:
+                relayed_ws.receive_json()                       # CONTROL: the relayed one goes ...
+            assert closed.value.code == 1008
+            time.sleep(0.6)                                     # ... three more intervals, and the LAN one is untouched
+            assert c.post("/test/broadcast").json() == {"sent": 1}
+            assert lan_ws.receive_json() == SECRET
+
+
+async def test_a_revoked_socket_is_closed_even_while_a_send_is_stuck_behind_a_stalled_client(reg, on, monkeypatch):
+    """Codex P1 on #2115: a data frame blocked by client backpressure holds the send lock, so the 1008 close used to queue behind
+    network I/O and the 15 s bound was not kept. Driven at the ASGI level (a TestClient transport never stalls): the server's
+    ``send`` of a data frame blocks forever, the close frame passes."""
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.3)
+    monkeypatch.setattr(relay_ingress, "WS_SEND_PROOF_TTL_S", 3600.0)   # the timer, not the send-time check, is what notices
+    sent, outcome = [], []
+    in_flight, closed, stall = asyncio.Event(), asyncio.Event(), asyncio.Event()   # `stall` is never set: the client never drains
+
+    async def app(scope, receive, send):
+        await receive()                                                   # websocket.connect
+        await send({"type": "websocket.accept"})
+        try:
+            await send({"type": "websocket.send", "text": "broadcast"})
+            outcome.append("delivered")
+        except OSError:
+            outcome.append("send-abandoned")
+        await asyncio.sleep(3600)                                         # the handler would idle on; the harness cancels it
+
+    async def receive():
+        if not sent:
+            sent.append("connect")
+            return {"type": "websocket.connect"}
+        await asyncio.sleep(3600)
+
+    async def send(message):
+        sent.append(message["type"])
+        if message["type"] == "websocket.send":
+            in_flight.set()
+            await stall.wait()                                            # backpressure: the transport never drains
+        elif message["type"] == "websocket.close":
+            sent.append(("code", message["code"]))
+            closed.set()
+
+    scope = {
+        "type": "websocket", "path": "/ws/idle", "raw_path": b"/ws/idle", "query_string": b"", "scheme": "wss", "root_path": "",
+        "client": (NGINX, 1), "server": ("zoe", 8000), "subprotocols": [],
+        "headers": [(k.lower().encode(), v.encode()) for k, v in relay_headers().items()],
+    }
+    task = asyncio.ensure_future(relay_ingress.RelayIngressMiddleware(app)(scope, receive, send))
+    try:
+        await asyncio.wait_for(in_flight.wait(), 3.0)                      # POSITIVE: the frame is on the wire, the client is not draining
+        assert not closed.is_set()                                         # ... and a proven socket is NOT closed
+        reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (FP_KITCHEN,))
+        reg.con.commit()                                                   # out-of-band: only the timer's registry read sees it
+        await asyncio.wait_for(closed.wait(), 0.3 + 3.0)                   # the close was NOT held behind the stuck frame
+        assert ("code", 1008) in sent
+        for _ in range(50):
+            if outcome:
+                break
+            await asyncio.sleep(0.05)
+        assert outcome == ["send-abandoned"]                               # the stuck frame was cancelled, not delivered late
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_revoking_a_device_token_through_the_admin_api_stops_the_next_broadcast_at_once(reg, on, monkeypatch):
+    """Codex P1 on #2115: revoke_token marked the token cache but never bumped the relay epoch, so a socket proven within
+    WS_SEND_PROOF_TTL_S kept receiving broadcasts without its token being inspected. The timer is parked and the TTL is huge, so
+    only the epoch bump can force the re-proof."""
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 3600.0)
+    monkeypatch.setattr(relay_ingress, "WS_SEND_PROOF_TTL_S", 3600.0)
+    reg.con.execute("CREATE TABLE device_tokens (id TEXT, panel_id TEXT, token_hash TEXT, revoked INT DEFAULT 0, revoked_at TEXT)")
+    reg.con.execute("INSERT INTO device_tokens (id, panel_id, token_hash) VALUES ('tok-1', 'kitchen-panel', ?)", (_hash(TOK_KITCHEN),))
+    app = _push_app(reg)
+
+    @app.post("/test/revoke-token")
+    async def revoke():
+        return await panel_auth.revoke_token("kitchen-panel", "tok-1", admin={}, db=reg)
+
+    with TestClient(app, client=(NGINX, 1)) as c:
+        with c.websocket_connect("/ws/idle", headers=relay_headers()) as ws:
+            assert c.post("/test/broadcast").json() == {"sent": 1}
+            assert ws.receive_json() == SECRET                  # POSITIVE: a proven socket gets the broadcast
+            assert c.post("/test/revoke-token").json()["revoked"] is True
+            assert c.post("/test/broadcast").json() == {"sent": 0}       # the revoked token was inspected before the frame left
+            with pytest.raises(WebSocketDisconnect) as closed:
+                ws.receive_json()
+            assert closed.value.code == 1008
+
+
+async def test_a_close_queued_behind_a_stalled_frame_does_not_stop_the_revocation_timer(reg, on, monkeypatch):
+    """Codex P1 on #2115: the application idle-timeout close used to set _finished BEFORE it got the send lock, so with a broadcast
+    frame stalled on backpressure the timer exited though no close had reached the transport, and a later revocation was never
+    seen. Now _finished is set only after the close went out: the timer revokes, abandons the stuck frame and sends the 1008."""
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.3)
+    monkeypatch.setattr(relay_ingress, "WS_SEND_PROOF_TTL_S", 3600.0)
+    sent, outcome, via = [], [], {}
+    in_flight, closed, stall = asyncio.Event(), asyncio.Event(), asyncio.Event()   # stall is never set: the client never drains
+
+    async def push():
+        try:
+            await via["send"]({"type": "websocket.send", "text": "broadcast"})
+            outcome.append("delivered")
+        except OSError:
+            outcome.append("send-abandoned")
+
+    async def app(scope, receive, send):
+        await receive()                                                   # websocket.connect
+        await send({"type": "websocket.accept"})
+        via["send"] = send
+        pusher = asyncio.ensure_future(push())                           # the concurrent broadcaster
+        await asyncio.wait_for(in_flight.wait(), 3.0)                     # ... its frame is stuck on the transport
+        await send({"type": "websocket.close", "code": 1000})            # the idle timeout fires: this close queues behind it
+        await pusher
+        await asyncio.sleep(3600)
+
+    async def receive():
+        if not sent:
+            sent.append("connect")
+            return {"type": "websocket.connect"}
+        await asyncio.sleep(3600)
+
+    async def send(message):
+        sent.append(message["type"])
+        if message["type"] == "websocket.send":
+            in_flight.set()
+            await stall.wait()
+        elif message["type"] == "websocket.close":
+            sent.append(("code", message["code"]))
+            closed.set()
+
+    scope = {
+        "type": "websocket", "path": "/ws/idle", "raw_path": b"/ws/idle", "query_string": b"", "scheme": "wss", "root_path": "",
+        "client": (NGINX, 1), "server": ("zoe", 8000), "subprotocols": [],
+        "headers": [(k.lower().encode(), v.encode()) for k, v in relay_headers().items()],
+    }
+    task = asyncio.ensure_future(relay_ingress.RelayIngressMiddleware(app)(scope, receive, send))
+    try:
+        await asyncio.wait_for(in_flight.wait(), 3.0)
+        await asyncio.sleep(0.1)                                          # the application close is now queued behind the frame
+        assert not closed.is_set()                                        # POSITIVE: nothing has closed a proven socket yet
+        reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (FP_KITCHEN,))
+        reg.con.commit()                                                  # out-of-band: only the timer registry read sees it
+        await asyncio.wait_for(closed.wait(), 0.3 + 3.0)
+        assert ("code", 1008) in sent and ("code", 1000) not in sent      # the revocation close went out, not the late idle one
+        for _ in range(50):
+            if outcome:
+                break
+            await asyncio.sleep(0.05)
+        assert outcome == ["send-abandoned"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_a_registry_read_that_races_an_invalidation_never_refills_the_cache(reg, on, monkeypatch):
+    """Codex P1 on #2115: a lookup whose SELECT began before an admin revocation used to store its pre-revocation row after
+    invalidate_cache() had cleared the cache, so the next lookup reused it and the revoked certificate stayed proven for the TTL."""
+    calls = []
+
+    async def racing_fetch(fingerprint):
+        calls.append(fingerprint)
+        stale = "kitchen-panel"                       # what the SELECT saw before the revocation committed
+        relay_ingress.invalidate_cache()              # the admin revocation lands while the read is in flight
+        return stale
+
+    monkeypatch.setattr(relay_ingress, "_fetch_bound_panel", racing_fetch)
+    assert await relay_ingress.bound_panel(FP_KITCHEN, fresh=True) == "kitchen-panel"   # this caller started before the revoke
+    assert FP_KITCHEN not in relay_ingress._bound_cache                                # ... but its result was not cached
+    monkeypatch.setattr(relay_ingress, "_fetch_bound_panel", lambda fp: _revoked(calls, fp))
+    assert await relay_ingress.bound_panel(FP_KITCHEN) is None                         # the next proof reads the registry again
+    assert len(calls) == 2
+
+
+async def _revoked(calls, fp):
+    calls.append(fp)
+    return None
+
+
+async def test_a_stalled_registry_read_closes_an_idle_socket_within_the_proof_bound(reg, on, monkeypatch):
+    """Codex P1 on #2115: the timer re-proof awaited the registry with no bound of its own, so a stalled SELECT (exhausted pool,
+    slow command) let an idle revoked socket outlive the revocation interval. The proof is now bounded and a timeout fails closed."""
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.2)
+    monkeypatch.setattr(relay_ingress, "WS_PROOF_TIMEOUT_S", 0.3)
+    real, calls, sent = relay_ingress._fetch_bound_panel, [], []
+    closed = asyncio.Event()
+
+    async def stalling_fetch(fingerprint):
+        calls.append(fingerprint)
+        if len(calls) == 1:
+            return await real(fingerprint)         # the handshake proof is fine
+        await asyncio.sleep(3600)                  # every later registry read hangs
+
+    monkeypatch.setattr(relay_ingress, "_fetch_bound_panel", stalling_fetch)
+
+    async def app(scope, receive, send):
+        await receive()
+        await send({"type": "websocket.accept"})
+        await asyncio.sleep(3600)                  # push-only: idle
+
+    async def receive():
+        if not sent:
+            sent.append("connect")
+            return {"type": "websocket.connect"}
+        await asyncio.sleep(3600)
+
+    async def send(message):
+        sent.append(message["type"])
+        if message["type"] == "websocket.close":
+            sent.append(("code", message["code"]))
+            closed.set()
+
+    scope = {
+        "type": "websocket", "path": "/ws/idle", "raw_path": b"/ws/idle", "query_string": b"", "scheme": "wss", "root_path": "",
+        "client": (NGINX, 1), "server": ("zoe", 8000), "subprotocols": [],
+        "headers": [(k.lower().encode(), v.encode()) for k, v in relay_headers().items()],
+    }
+    task = asyncio.ensure_future(relay_ingress.RelayIngressMiddleware(app)(scope, receive, send))
+    try:
+        await asyncio.wait_for(closed.wait(), 0.2 + 0.3 + 2.0)       # interval + proof bound + slack, nowhere near the 3600 s stall
+        assert ("code", 1008) in sent and len(calls) >= 2
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_the_revocation_timer_keeps_its_cadence_when_a_proof_takes_time(monkeypatch):
+    """Codex P1 on #2115: the timer slept a fixed interval AFTER each proof, so a proof that took up to WS_PROOF_TIMEOUT_S stretched the
+    documented revocation bound to interval + proof. Proofs now start on an absolute schedule (fake clock, fake proof)."""
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 15.0)
+    now = [1000.0]
+    starts = []
+
+    async def fake_sleep(delay):
+        now[0] += delay
+
+    monkeypatch.setattr(relay_ingress, "_monotonic", lambda: now[0])
+    monkeypatch.setattr(relay_ingress, "_sleep", fake_sleep)
+    guard = relay_ingress._SocketGuard(None, {}, None, None, require_credential=False)
+
+    async def slow_proof(*, fresh, only_if_stale=False):
+        starts.append(now[0] - 1000.0)
+        now[0] += 5.0                                  # each proof takes the full WS_PROOF_TIMEOUT_S
+        if len(starts) == 4:
+            guard._dead.set()
+        return True
+
+    guard._prove = slow_proof
+    await guard._tick()
+    assert starts == [15.0, 30.0, 45.0, 60.0]          # a sleep-after-proof loop gives 15, 35, 55, 75
+
+    # a proof that overruns the whole slot starts the next one at once, not as a burst of missed ticks
+    now[0], starts[:] = 1000.0, []
+    guard._dead.clear()
+
+    async def overrunning_proof(*, fresh, only_if_stale=False):
+        starts.append(now[0] - 1000.0)
+        now[0] += 40.0
+        if len(starts) == 3:
+            guard._dead.set()
+        return True
+
+    guard._prove = overrunning_proof
+    await guard._tick()
+    assert starts == [15.0, 55.0, 95.0]
+
+
+async def test_a_handler_returning_after_a_revocation_does_not_cut_the_1008_close_short(reg, on, monkeypatch):
+    """Codex P2 on #2115: ``_kill`` sets ``_dead`` (which hands the handler a disconnect), the handler returns, the middleware's
+    ``stop()`` cancelled the timer task mid-``_send_close`` and the client saw an abnormal teardown instead of the 1008 policy close.
+    The close is now a shielded task that ``stop()`` waits for (bounded by WS_CLOSE_TIMEOUT_S). The transport's close is slow here."""
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.2)
+    sent, finished = [], []
+
+    async def app(scope, receive, send):
+        await receive()                                                   # websocket.connect
+        await send({"type": "websocket.accept"})
+        while (await receive())["type"] != "websocket.disconnect":        # returns the moment the guard hands it the disconnect
+            pass
+
+    async def receive():
+        if not sent:
+            sent.append("connect")
+            return {"type": "websocket.connect"}
+        await asyncio.sleep(3600)
+
+    async def send(message):
+        sent.append(message["type"])
+        if message["type"] == "websocket.close":
+            await asyncio.sleep(0.3)                                      # the close takes real time to reach the transport
+            sent.append(("code", message["code"]))
+            finished.append(True)
+
+    scope = {
+        "type": "websocket", "path": "/ws/idle", "raw_path": b"/ws/idle", "query_string": b"", "scheme": "wss", "root_path": "",
+        "client": (NGINX, 1), "server": ("zoe", 8000), "subprotocols": [],
+        "headers": [(k.lower().encode(), v.encode()) for k, v in relay_headers().items()],
+    }
+    task = asyncio.ensure_future(relay_ingress.RelayIngressMiddleware(app)(scope, receive, send))
+    try:
+        await asyncio.sleep(0.05)                                         # accepted and proven
+        reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (FP_KITCHEN,))
+        reg.con.commit()
+        await asyncio.wait_for(task, 0.2 + 0.3 + 3.0)                     # the whole ASGI call returns once the close is out
+        assert finished and ("code", 1008) in sent
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_the_proof_lives_under_a_namespaced_scope_key_not_a_bare_relay_ctx(reg, on):
+    seen = []
+    app = make_app(reg)
+
+    @app.get("/test/state")
+    async def state(request: Request):
+        seen.append(dict(request.scope.get("state", {})))
+        return {}
+
+    client_ = TestClient(app, client=(NGINX, 1))
+    assert client_.get("/test/state", headers=relay_headers()).status_code == 200
+    assert relay_ingress._CTX_KEY in seen[0] and "relay_ctx" not in seen[0]   # an app's own `state["relay_ctx"]` cannot collide
 
 
 def test_the_nginx_auth_gate_answers_only_for_a_proven_relayed_request(reg, on):
