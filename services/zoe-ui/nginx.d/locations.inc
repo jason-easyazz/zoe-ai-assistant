@@ -62,63 +62,78 @@ location ^~ /js/_archive/ { return 404; }
 # A2A agent discovery — exact match takes priority over generic /.well-known/
 location = /.well-known/agent.json {
     proxy_pass http://host.docker.internal:8000/.well-known/agent.json;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
 # OIDC provider endpoints — served by zoe-auth
 location ^~ /.well-known/ {
     proxy_pass http://zoe-auth:8002/.well-known/;
+    include /etc/nginx/zoe/auth-gate.inc;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Real-IP $zoe_real_ip;
 }
 location = /jwks.json {
     proxy_pass http://zoe-auth:8002/jwks.json;
+    include /etc/nginx/zoe/auth-gate.inc;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 location ^~ /application/o/ {
     proxy_pass http://zoe-auth:8002/application/o/;
+    include /etc/nginx/zoe/auth-gate.inc;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
 }
 
 location ^~ /api/auth/ {
     proxy_pass http://zoe-auth:8002;
+    include /etc/nginx/zoe/auth-gate.inc;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 location ^~ /api/admin/ {
     proxy_pass http://zoe-auth:8002;
+    include /etc/nginx/zoe/auth-gate.inc;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 location ^~ /api/touch-panel/ {
     proxy_pass http://zoe-auth:8002;
+    include /etc/nginx/zoe/auth-gate.inc;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 location ^~ /api/sso/ {
     proxy_pass http://zoe-auth:8002;
+    include /etc/nginx/zoe/auth-gate.inc;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
@@ -128,6 +143,7 @@ location ^~ /api/ {
     gzip off;
     client_max_body_size 25m;
     proxy_pass http://host.docker.internal:8000/api/;
+    include /etc/nginx/zoe/ingress-headers.inc;
     # Defense-in-depth: strip client-supplied internal-trust headers at the edge.
     # These must only ever come from trusted internal callers, never a browser —
     # resolve_acting_user honors X-Zoe-User-Id, so a forwarded one = impersonation.
@@ -135,8 +151,8 @@ location ^~ /api/ {
     proxy_set_header X-Zoe-User-Id "";
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
@@ -149,23 +165,25 @@ location ^~ /api/ {
 
 location = /health {
     proxy_pass http://host.docker.internal:8000/health;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
 location ^~ /ws/ {
     gzip off;
     proxy_pass http://host.docker.internal:8000/ws/;
+    include /etc/nginx/zoe/ingress-headers.inc;
     # Defense-in-depth: strip client-supplied internal-trust headers (see /api/).
     proxy_set_header X-Internal-Token "";
     proxy_set_header X-Zoe-User-Id "";
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
@@ -175,12 +193,14 @@ location ^~ /ws/ {
 
 # LiveKit WebRTC signalling proxy (port 7880)
 location ^~ /livekit/ {
+    include /etc/nginx/zoe/lan-only.inc;
     gzip off;
     proxy_pass http://host.docker.internal:7880/;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
@@ -194,12 +214,14 @@ location ^~ /livekit/ {
 #     use_x_forwarded_for: true
 #     trusted_proxies: ["172.18.0.0/16", "172.17.0.0/16"]
 location ^~ /ha/ {
+    include /etc/nginx/zoe/lan-only.inc;
     rewrite ^/ha/(.*)$ /$1 break;
     proxy_pass http://host.docker.internal:8123;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header Host localhost:8123;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
@@ -223,11 +245,12 @@ location ^~ /ha/ {
 location = /_zoe/ma-gate {
     internal;
     proxy_pass http://host.docker.internal:8000/api/music/ma-ui/gate;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Internal-Token "";
     proxy_set_header X-Zoe-User-Id "";
@@ -235,8 +258,10 @@ location = /_zoe/ma-gate {
 }
 
 location ^~ /modules/music-assistant/ {
+    include /etc/nginx/zoe/lan-only.inc;
     auth_request      /_zoe/ma-gate;
     proxy_pass        http://host.docker.internal:8095/;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header   Host $host;
     proxy_set_header   Upgrade $http_upgrade;
@@ -245,13 +270,26 @@ location ^~ /modules/music-assistant/ {
     proxy_send_timeout 3600s;
 }
 
-# Requires zoe-ui extra_hosts host.docker.internal:host-gateway (see docker-compose.yml).
+# Multica (board) -- reached over zoe-network BY CONTAINER NAME, never through the host.
+# Both containers publish on 127.0.0.1 only (docker-compose.modules.yml), which the docker0
+# gateway (host.docker.internal) cannot reach; the nginx path is the only LAN route to the
+# board. The upstreams are held in variables + Docker's embedded resolver so nginx still
+# STARTS when the opt-in Multica containers are down or being recreated (a literal
+# `proxy_pass http://zoe-multica-backend:8080` resolves at load and would refuse to boot
+# the whole UI with "host not found in upstream"). A variable proxy_pass does not strip the
+# location prefix, hence the explicit rewrite. Pinned by tests/unit/test_nginx_delivery_layer.py.
+resolver 127.0.0.11 valid=10s ipv6=off;
+
 location ^~ /multica-api/ {
+    include /etc/nginx/zoe/lan-only.inc;
     gzip off;
-    proxy_pass http://host.docker.internal:8080/;
+    set $multica_backend zoe-multica-backend:8080;
+    rewrite ^/multica-api/(.*)$ /$1 break;
+    proxy_pass http://$multica_backend;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_set_header Host $http_host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -261,18 +299,25 @@ location ^~ /multica-api/ {
 # Route /_next/ asset requests (JS/CSS chunks) to multica-web.
 # Next.js embeds root-relative /_next/ paths in its HTML when no basePath is configured.
 location ^~ /_next/ {
-    proxy_pass        http://host.docker.internal:3000/_next/;
+    include /etc/nginx/zoe/lan-only.inc;
+    set $multica_web zoe-multica-web:3000;
+    proxy_pass        http://$multica_web;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header   Host        $host;
 }
 
 location ^~ /multica/ {
-    proxy_pass        http://host.docker.internal:3000/;
+    include /etc/nginx/zoe/lan-only.inc;
+    set $multica_web zoe-multica-web:3000;
+    rewrite ^/multica/(.*)$ /$1 break;
+    proxy_pass        http://$multica_web;
+    include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
     proxy_set_header   Upgrade     $http_upgrade;
     proxy_set_header   Connection  $connection_upgrade;
     proxy_set_header   Host        $host;
-    # Rewrite server-side redirects so /login → /multica/login (not Zoe's login)
+    # Rewrite server-side redirects so /login -> /multica/login (not Zoe's login)
     proxy_redirect     /login      /multica/login;
     proxy_redirect     /register   /multica/register;
 }

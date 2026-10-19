@@ -505,7 +505,7 @@ async def set_panel_bindings(panel_id: str, payload: dict, admin: dict = Depends
     Payload:
       {
         "default_user_id": "jason" | null,
-        "allowed_user_ids": ["jason", "teneeka"],
+        "allowed_user_ids": ["jason", "morgan"],
         "allow_guest": true | false   # optional; also settable via PATCH /api/panels/{id}
       }
 

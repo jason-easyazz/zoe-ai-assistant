@@ -26,8 +26,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import contextvars
 import threading
 import time
+import traffic_class
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -192,6 +194,26 @@ def _append_shadow_line(path: str, line: str) -> None:
         _rotate_shadow_log(path)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
+
+
+SHADOW_TRAFFIC_CHOICES = ("all", "household", "harness", "probe", "ci", "untagged")
+
+
+def filter_shadow_traffic(recs: list[dict], want: str = "all") -> list[dict]:
+    """Shadow-log records of ONE traffic class (P-2, ``traffic_class.py``; the ``traffic`` field). ``untagged``
+    = records written before the field existed (2026-10-19 - then mostly the harness); ``all`` = no filter."""
+    if want == "all":
+        return list(recs)
+    return [r for r in recs if (r.get("traffic") or "untagged") == want]
+
+
+def shadow_traffic_breakdown(recs: list[dict]) -> str:
+    """``traffic: household=N harness=N ...`` for a report header."""
+    counts: dict[str, int] = {}
+    for r in recs:
+        k = r.get("traffic") or "untagged"
+        counts[k] = counts.get(k, 0) + 1
+    return "traffic: " + " ".join(f"{k}={counts[k]}" for k in sorted(counts)) if counts else "traffic: (none)"
 
 
 def shadow_log_segments(path: str | None = None) -> list[str]:
@@ -391,6 +413,7 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
             "actual_routed": routed,
             "agree": head_routed == routed,
             "head_ms": round((time.perf_counter() - t0) * 1000, 3),
+            "traffic": traffic_class.current(),
         }
         shadow_logger.info("router_head_shadow %s", json.dumps(rec, sort_keys=True))
         try:
@@ -448,6 +471,7 @@ def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
         "failed": decision is None,
         "two_stage_ms": d.get("ms"),
         "actual_routed": actual_routed,
+        "traffic": traffic_class.current(),   # P-2: reports filter on it
     }, text)
 
 
@@ -462,7 +486,9 @@ def _two_stage_shadow2(text: str, v: np.ndarray, routed: str) -> None:
             _log_two_stage(_two_stage_rec(text, decision, "shadow2", routed))
         except Exception as exc:  # shadow must never break anything
             logger.warning("two_stage shadow2 failed (non-fatal): %s", exc)
-    threading.Thread(target=_run, name="router-shadow2", daemon=True).start()
+    # copy_context: the thread must see the turn's traffic class (a bare Thread starts from an empty context)
+    threading.Thread(target=contextvars.copy_context().run, args=(_run,), name="router-shadow2",
+                     daemon=True).start()
 
 
 def _two_stage_active(text: str, v: np.ndarray) -> Optional[dict]:

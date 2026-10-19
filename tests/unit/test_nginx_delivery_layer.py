@@ -212,7 +212,7 @@ def test_successful_writes_to_a_polled_uri_stay_in_the_access_log():
 
 
 def test_both_servers_use_the_conditional_access_log():
-    assert CONF.count("access_log /var/log/nginx/access.log main if=$zoe_log_access;") == 2
+    assert CONF.count("access_log /var/log/nginx/access.log zoe_noquery if=$zoe_log_access;") == 2
     # a bare second access_log at http scope would DOUBLE-log; locations must not override it
     assert "access_log" not in LOCATIONS
 
@@ -249,3 +249,40 @@ def test_tool_snippet_in_a_nested_location_does_not_satisfy_the_server_scope():
     assert out.count("add_header Content-Security-Policy") == 1, "only the server scope gains a literal block"
     assert out.count("include /etc/nginx/zoe/security-headers.inc;") == 1, "the including location is left alone"
     assert mod.missing_headers(out) == []
+
+
+def test_the_access_log_never_writes_a_query_string():
+    """A browser WebSocket authenticates in the query (``/ws/push?...&session_id=``): the format must not log ``$request``,
+    ``$request_uri``, ``$args`` or ``$query_string`` (2026-10-19). Negative control: the stock ``main`` format logs ``$request``."""
+    m = re.search(r"log_format zoe_noquery((?:\s*'[^']*')+);", CONF)
+    assert m, "the zoe_noquery log_format is missing"
+    fmt = m.group(1)
+    assert '"$request_method $uri $server_protocol"' in fmt
+    for leaky in ("$request ", '$request"', "$request_uri", "$args", "$query_string", "$arg_"):
+        assert leaky not in fmt, leaky
+    assert " main " not in "".join(re.findall(r"access_log[^;]*;", CONF)), "an access_log still uses the stock main format"
+
+
+def test_multica_is_proxied_by_container_name_not_the_host_gateway():
+    """Multica publishes on 127.0.0.1 only, which host.docker.internal (docker0) cannot
+    reach — nginx must go to the containers by name on zoe-network, and resolve them at
+    request time so a stopped (opt-in) Multica never stops the whole UI from booting."""
+    assert not re.search(r"host\.docker\.internal:(8080|3000)\b", LOCATIONS)
+    blocks = dict(_location_blocks(LOCATIONS))
+    expect = {
+        "^~ /multica-api/": ("$multica_backend", "zoe-multica-backend:8080"),
+        "^~ /_next/": ("$multica_web", "zoe-multica-web:3000"),
+        "^~ /multica/": ("$multica_web", "zoe-multica-web:3000"),
+    }
+    for key, (var, target) in expect.items():
+        body = blocks[key]
+        assert f"set {var} {target};" in body, key
+        assert f"proxy_pass http://{var};" in " ".join(body.split()), key
+    # A variable proxy_pass does not strip the location prefix: the rewrite must.
+    assert "rewrite ^/multica-api/(.*)$ /$1 break;" in blocks["^~ /multica-api/"]
+    assert "rewrite ^/multica/(.*)$ /$1 break;" in blocks["^~ /multica/"]
+    # Variables only resolve at request time through an explicit resolver.
+    assert re.search(r"^resolver 127\.0\.0\.11\b", LOCATIONS, re.M)
+    # No literal container-name proxy_pass (would fail nginx boot when Multica is down).
+    assert not re.search(r"proxy_pass\s+http://zoe-multica", "\n".join(_active(LOCATIONS)))
+
