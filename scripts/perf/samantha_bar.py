@@ -2666,6 +2666,12 @@ def main(argv: list[str] | None = None) -> int:
     append_trend(args.trend, payload)
     record_why = bench_baseline.record_problem(revision, status=status, partial=partial,
                                                verdicts=verdict_map(results), cells=SCENARIO_IDS)
+    errored = sorted(r["id"] for r in results if r["verdict"] == "ERROR")
+    if not record_why and errored:
+        # an ERROR is the instrument failing (judge unavailable, recall packet unread), not a result: recorded as the
+        # bar it would leave that scenario with no regression protection (only a baseline PASS can regress)
+        record_why = (f"{len(errored)} scenario(s) ERRORED ({', '.join(errored)}): an errored scenario is the "
+                      "instrument, not a result")
     if args.record_baseline and not record_why:  # a partial / errored / dirty / incomplete run NEVER records
         write_json(args.baseline, make_baseline(results, revision, args.samples))
         log(f"baseline recorded: {args.baseline} (commit {(revision or {}).get('commit', '?')[:10]}, "

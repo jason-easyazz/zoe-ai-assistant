@@ -1455,6 +1455,21 @@ def test_record_baseline_is_refused_with_only_or_axis(monkeypatch, tmp_path):
     assert (tmp_path / "b.json").exists()
 
 
+def test_record_baseline_refuses_a_run_with_an_errored_scenario(monkeypatch, tmp_path):
+    """status stays ``ok`` when every id is present and teardown is proven, so an ERROR cell (judge down, recall packet
+    unread) used to be recorded as the bar and lose its regression protection. Control: an all-PASS run records."""
+    args = _gates_open(monkeypatch, tmp_path)
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+    monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [
+        {"id": s, "verdict": "ERROR" if s == "S4" else "PASS", "evidence": {}} for s in sb.SCENARIO_IDS])
+    assert sb.main(args + ["--record-baseline"]) == 0
+    assert json.loads((tmp_path / "r.json").read_text())["status"] == "ok"
+    assert not (tmp_path / "b.json").exists()
+    _all_pass(monkeypatch)
+    assert sb.main(args + ["--record-baseline"]) == 0
+    assert (tmp_path / "b.json").exists()
+
+
 def test_partial_run_never_records_even_if_the_cli_gate_were_bypassed(monkeypatch, tmp_path):
     """Defence in depth: the baseline write itself checks `partial`, not just the CLI gate."""
     args = _gates_open(monkeypatch, tmp_path)
