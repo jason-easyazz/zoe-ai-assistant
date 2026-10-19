@@ -377,9 +377,6 @@
         "in_env_example": false,
         "readers": [
           "scripts/perf/recall_evidence_probe.py",
-          "scripts/perf/samantha_bar.py",
-          "scripts/perf/samantha_day_sim.py",
-          "scripts/perf/samantha_person.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
@@ -6195,6 +6192,17 @@
           "services/zoe-data/self_model.py"
         ],
         "typed_env": true
+      },
+      "ZOE_SELF_URL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py",
+          "services/zoe-data/mcp_server.py"
+        ],
+        "typed_env": false
       },
       "ZOE_SESSION_LOCK_TIMEOUT_S": {
         "defaults": [

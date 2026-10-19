@@ -1289,6 +1289,14 @@ def _pending(live: DayLive, path: Path, log) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ctx: dict = {}
+    try:
+        return _main(argv, ctx)
+    finally:
+        sb.close_scratch(ctx)           # P-2: the run scratch stack goes, whatever happened
+
+
+def _main(argv: list[str] | None, ctx: dict) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print the plan; no network, no writes")
@@ -1337,14 +1345,14 @@ def main(argv: list[str] | None = None) -> int:
             os.nice(5 - cur)
     except OSError:
         pass
-    admin = os.environ.get("ZOE_BAR_ADMIN_SESSION", "").strip()
-    live = DayLive(sb.env_file_value(service_dir, "ZOE_INTERNAL_TOKEN"), admin,
-                   sb.env_file_value(service_dir, "POSTGRES_URL"), args.keep_replies)
-
-    if mode == "allowlisted" and not admin:
-        return _refuse(args.results, "--allowlisted needs ZOE_BAR_ADMIN_SESSION: forget-synthetic "
-                                     "refuses an allowlisted id by design, so only the admin forget "
-                                     "can prove the teardown", revision, mode)
+    admin = ""                          # P-2: a live admin session means nothing to the scratch instance
+    if mode == "allowlisted":
+        return _refuse(args.results, "--allowlisted needs an admin session to prove the teardown of an allowlisted id, "
+                                     "and the scratch instance (P-2) has none: run the default mode", revision, mode)
+    stack, refusal = sb.scratch_stack_for(service_dir, "samantha_day_sim", ctx, log)
+    if refusal:
+        return _refuse(args.results, refusal, revision, mode)
+    live = DayLive(stack.token, admin, stack.dsn, args.keep_replies)
     refusal = uma._gates(args, live, log)
     if refusal:
         return _refuse(args.results, refusal, revision, mode)
@@ -1405,7 +1413,7 @@ def main(argv: list[str] | None = None) -> int:
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
-               "revision": revision, "criteria_sha256": CRITERIA_SHA256,
+               "revision": revision, "criteria_sha256": CRITERIA_SHA256, "scratch": stack.public(),
                "plan": day_plan(mode, dt.date.today()), "overall": summary, **week, "teardown": td}
     sb.write_json(args.results, payload)
     args.trend.parent.mkdir(parents=True, exist_ok=True)

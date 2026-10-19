@@ -36,7 +36,8 @@ if __name__ == "__main__":
 _STDIO_WORKER = __name__ == "__main__"
 
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
-_BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
+# P-2: a harness instance (scripts/perf/harness_scratch.py) sets ZOE_SELF_URL so it broadcasts to ITSELF, never to the live panels
+_BROADCAST_URL = (os.environ.get("ZOE_SELF_URL") or "http://127.0.0.1:8000").rstrip("/") + "/api/internal/broadcast"
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
 _INTERNAL_TOKEN = env_str("ZOE_INTERNAL_TOKEN")
 # A tools/call that names no user is REFUSED (A3, 2026-10-19: strict is the default). The one caller that relied on the
@@ -3337,17 +3338,13 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                 user_id=proposal_user_id,
             )
             row_payload = intake.to_legacy_row()
-            await db.execute(
-                """INSERT INTO evolution_proposals
-                   (id, title, description, evidence, target_patterns, type, status, proposed_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)""",
-                row_payload["id"],
-                row_payload["title"],
-                row_payload["description"],
-                row_payload["evidence"],
-                row_payload["target_patterns"],
-                row_payload["type"],
-                _time.time(),
+            import evolution_queue  # type: ignore[import]  # the single proposal queue: its only writer
+            await evolution_queue.propose(
+                db, source="mcp:create_evolution_proposal", change_class="code",
+                component=evolution_queue.component_for_type(row_payload["type"]),
+                proposal_id=row_payload["id"], legacy_type=row_payload["type"], title=row_payload["title"],
+                description=row_payload["description"], legacy_evidence=row_payload["evidence"],
+                target_patterns=row_payload["target_patterns"], now=_time.time(),
             )
             multica_payload = dict(intake.multica_payload)
             multica_id = await sync_evolution_proposal_to_multica(**multica_payload)

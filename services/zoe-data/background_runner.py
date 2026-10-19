@@ -158,12 +158,11 @@ async def _run_task(
                         "SELECT multica_issue_id FROM evolution_proposals WHERE id=$1",
                         _proposal_id,
                     )
-                    await _db.execute(
-                        """UPDATE evolution_proposals
-                           SET status='deployed', deployed_at=$1
-                           WHERE id=$2 AND status='approved'""",
-                        time.time(), _proposal_id,
-                    )
+                    # the queue (migration 0062) move: an approved, still-open proposal becomes applied; any other state
+                    # is refused by the queue (logged below) instead of being overwritten
+                    import evolution_queue as _eq  # type: ignore[import]
+                    await _eq.transition(_db, _proposal_id, "applied", actor="background_runner",
+                                         require_decision="approved", note="task completed")
                 logger.info("background_runner: task #%d → proposal %s status=deployed", task_id, _proposal_id)
                 # Sync deployed status to Multica board
                 _multica_id = rows[0]["multica_issue_id"] if rows else None

@@ -209,7 +209,7 @@ async def test_evolution_digest_goes_to_admins_only(monkeypatch):
     class _Pg:
         async def fetch(self, sql, *args):
             if "group by status" in sql.lower():
-                return [{"status": "pending", "cnt": 2}]
+                return [{"status": "proposed", "decision": "", "cnt": 2}]       # the queue words since 0062
             return [{"id": "p1", "title": "Tune the router", "type": "code"}]
 
     @contextlib.asynccontextmanager

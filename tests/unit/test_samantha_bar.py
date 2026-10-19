@@ -736,7 +736,16 @@ def test_without_zoe_perf_it_skips(monkeypatch, tmp_path):
     assert not (tmp_path / "r.json").exists()
 
 
+class _FakeStack:
+    """P-2: the run scratch stack, faked (the real one is docker + a second zoe-data; tests/unit/test_harness_scratch.py)."""
+    token, dsn, base_url, tag = "t", "postgresql://scratch:x@127.0.0.1:1/scratch", "http://127.0.0.1:1", "fake"
+
+    def public(self):
+        return {"tag": "fake", "ram": {"total_mb": 1.0}}
+
+
 def _gates_open(monkeypatch, tmp_path, forget_ok=True):
+    monkeypatch.setattr(sb, "scratch_stack_for", lambda service_dir, name, ctx, log: (_FakeStack(), None))
     monkeypatch.setenv("ZOE_PERF", "1")
     monkeypatch.setenv("ZOE_INTERNAL_TOKEN", "t")
     monkeypatch.setenv("POSTGRES_URL", "postgresql://x")

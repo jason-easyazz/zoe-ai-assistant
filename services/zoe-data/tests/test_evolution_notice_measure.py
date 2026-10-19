@@ -6,9 +6,24 @@ import types
 import pytest
 
 import evolution_notice
+import evolution_queue
 from zoe_evolution_proposal_adapter import dump_legacy_evolution_proposal_contract, dump_mcp_evolution_proposal_contract
 
 pytestmark = pytest.mark.ci_safe
+
+
+class _Cur:
+    def __init__(self, rows=(), rowcount=None):
+        self._rows = list(rows)
+        self.rowcount = len(self._rows) if rowcount is None else rowcount
+
+    async def fetchall(self):
+        return self._rows
+
+
+def _inserts(db):
+    """The queue INSERTs (``evolution_queue.propose`` passes ONE params tuple)."""
+    return [(sql, args[0]) for sql, args in db.execute_calls if sql.startswith("INSERT INTO evolution_proposals ")]
 
 
 class _Db:
@@ -25,7 +40,7 @@ class _Db:
 
     async def fetch(self, sql, *args):
         self.fetch_calls.append((sql, args))
-        if "FROM evolution_proposals" in sql and "status='deployed'" in sql:
+        if "FROM evolution_proposals" in sql and "status='applied'" in sql:
             return self.rows
         if "SELECT multica_issue_id FROM evolution_proposals" in sql:
             return [{"multica_issue_id": None}]
@@ -35,6 +50,11 @@ class _Db:
 
     async def execute(self, sql, *args):
         self.execute_calls.append((sql, args))
+        if sql.startswith("SELECT") and "FROM evolution_proposals" in sql:      # the queue reads the row it moves
+            row = dict((c, None) for c in evolution_queue._COLS)
+            row.update(id=args[0][0], status="applied", decision="", evidence_json="{}")
+            return _Cur([row])
+        return _Cur([], rowcount=1)
 
 
 class _WriterDb:
@@ -100,10 +120,13 @@ async def test_measure_phase_treats_contract_target_patterns_as_no_patterns(monk
     result = await evolution_notice.run_measure_phase()
 
     assert result == {"evaluated": 1, "validated": 1, "failed": 0}
-    assert len(db.execute_calls) == 1
-    update_sql, update_args = db.execute_calls[0]
-    assert "validation_result" in update_sql
-    validation_result = json.loads(update_args[1])
+    updates = [(sql, args) for sql, args in db.execute_calls if "validation_result" in sql]
+    assert len(updates) == 1
+    update_sql, update_args = updates[0]
+    validation_result = json.loads(update_args[0])
+    moves = [args[0] for sql, args in db.execute_calls if sql.startswith("UPDATE evolution_proposals SET status")]
+    assert len(moves) == 1 and moves[0][0] == "kept", "applied -> kept, through the queue (never a raw status write)"
+    assert any(sql.startswith("INSERT INTO evolution_proposal_history") for sql, _a in db.execute_calls)
     assert validation_result["miss_before_48h"] == 0
     assert validation_result["miss_after_48h"] == 0
     assert validation_result["verdict"] == "validated"
@@ -211,13 +234,15 @@ async def test_record_frustration_signal_stores_runtime_intake_contract_snapshot
         repeat_count=3,
     )
 
-    assert len(db.execute_calls) == 1
+    assert len(_inserts(db)) == 1      # the writer now lands in the one queue (class code, tier 3, its source)
     assert len(sync_calls) == 1
-    insert_sql, insert_args = db.execute_calls[0]
+    insert_sql, insert_args = _inserts(db)[0]
     assert "target_patterns" in insert_sql
-    evidence = json.loads(insert_args[3])
-    contract = json.loads(insert_args[4])
-    assert insert_args[1] == "User frustration: 'why can't you remember the bins'"
+    assert insert_args[6:11] == ("proposed", insert_args[7], "code", 3, "chat") and insert_args[13] == "evolution_notice:user_frustration"
+    assert json.loads(insert_args[11]) == {"signal": {"kind": "user_frustration", "repeat_count": 3}}   # counts, never the words
+    evidence = json.loads(insert_args[4])
+    contract = json.loads(insert_args[5])
+    assert insert_args[2] == "User frustration: 'why can't you remember the bins'"
     assert evidence["source"] == "runtime_evolution_intake"
     assert evidence["signal"]["source"] == "evolution_notice:user_frustration"
     assert evidence["signal"]["scope"] == "personal"
@@ -251,7 +276,7 @@ async def test_record_frustration_signal_stores_runtime_intake_contract_snapshot
     assert proposal["approval_gate"]["allowed_to_execute"] is False
     assert sync_calls[0]["proposal_id"] == insert_args[0]
     assert sync_calls[0]["proposal_type"] == "user_frustration"
-    assert sync_calls[0]["contract_snapshot"] == insert_args[4]
+    assert sync_calls[0]["contract_snapshot"] == insert_args[5]
 
 
 @pytest.mark.asyncio
@@ -273,13 +298,14 @@ async def test_record_user_issue_stores_runtime_intake_contract_snapshot(monkeyp
 
     await evolution_notice.record_user_issue("weather failed again", "jason")
 
-    assert len(db.execute_calls) == 1
+    assert len(_inserts(db)) == 1
     assert len(sync_calls) == 1
-    insert_sql, insert_args = db.execute_calls[0]
+    insert_sql, insert_args = _inserts(db)[0]
     assert "target_patterns" in insert_sql
-    evidence = json.loads(insert_args[3])
-    contract = json.loads(insert_args[4])
-    assert insert_args[1] == "User report: 'weather failed again'"
+    assert insert_args[6] == "proposed" and insert_args[8] == "code" and insert_args[13] == "evolution_notice:user_issue_report"
+    evidence = json.loads(insert_args[4])
+    contract = json.loads(insert_args[5])
+    assert insert_args[2] == "User report: 'weather failed again'"
     assert evidence["source"] == "runtime_evolution_intake"
     assert evidence["signal"]["source"] == "evolution_notice:user_issue_report"
     assert evidence["signal"]["scope"] == "personal"
@@ -310,7 +336,7 @@ async def test_record_user_issue_stores_runtime_intake_contract_snapshot(monkeyp
     assert sync_calls[0]["proposal_id"] == insert_args[0]
     assert sync_calls[0]["proposal_type"] == "user_issue_report"
     assert sync_calls[0]["label_name"] == "user-feedback"
-    assert sync_calls[0]["contract_snapshot"] == insert_args[4]
+    assert sync_calls[0]["contract_snapshot"] == insert_args[5]
 
 
 @pytest.mark.asyncio
@@ -339,16 +365,19 @@ async def test_run_evolution_notice_stores_contract_snapshots(monkeypatch):
     result = await evolution_notice.run_evolution_notice()
 
     assert result == {"created": 2, "skipped_dedup": 0, "clusters": 1}
-    assert len(db.execute_calls) == 2
-    intent_sql, intent_args = db.execute_calls[0]
-    health_sql, health_args = db.execute_calls[1]
+    inserts = _inserts(db)
+    assert len(inserts) == 2
+    intent_sql, intent_args = inserts[0]
+    health_sql, health_args = inserts[1]
+    assert (intent_args[8], intent_args[10], intent_args[13]) == ("code", "intent_router", "evolution_notice:intent_miss_cluster")
+    assert (health_args[8], health_args[10], health_args[13]) == ("code", "brain", "evolution_notice:agent_health")
     assert "target_patterns" in intent_sql
     assert "target_patterns" in health_sql
 
     intent_evidence = json.loads(intent_args[4])
     intent_contract = json.loads(intent_args[5])
-    health_evidence = json.loads(health_args[3])
-    health_contract = json.loads(health_args[4])
+    health_evidence = json.loads(health_args[4])
+    health_contract = json.loads(health_args[5])
     assert len(sync_calls) == 2
     assert intent_evidence["source"] == "runtime_evolution_intake"
     assert intent_evidence["signal"]["source"] == "evolution_notice:intent_miss_cluster"
@@ -395,4 +424,4 @@ async def test_run_evolution_notice_stores_contract_snapshots(monkeypatch):
     assert health_proposal["approval_gate"]["allowed_to_execute"] is False
     assert sync_calls[1]["proposal_id"] == health_args[0]
     assert sync_calls[1]["proposal_type"] == "agent_health"
-    assert sync_calls[1]["contract_snapshot"] == health_args[4]
+    assert sync_calls[1]["contract_snapshot"] == health_args[5]
