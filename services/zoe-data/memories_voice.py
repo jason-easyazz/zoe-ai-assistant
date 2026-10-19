@@ -157,6 +157,12 @@ def _tokens(text: str) -> set:
     return out
 
 
+def _norm(text: str) -> str:
+    """The words of a row in order, lower-case, punctuation gone: two texts are 'the same words' only if this is equal. A token SET
+    is not enough - "I love Sam" and "Sam loves me" share one."""
+    return " ".join(re.findall(r"[a-z0-9']+", str(text or "").lower().replace("\u2019", "'")))
+
+
 def _covers(want: set, have: set) -> bool:
     return bool(want) and all(any(t == u or (min(len(t), len(u)) >= 4 and (t.startswith(u) or u.startswith(t))) for u in have)
                               for t in want)
@@ -462,10 +468,17 @@ async def forget_fact(member: str, words: str, *, svc: Any = None) -> str:
     hits = [i for i in pool if _covers(want, _tokens(i.text))]
     if not hits:
         return NOT_FOUND_REPLY
-    hits.sort(key=lambda i: (len(_tokens(i.text) - want), -(i.epoch or 0.0)))
+    said = _norm(words)
+    exact = {i.id for i in hits if _norm(i.text) == said}
+    hits.sort(key=lambda i: (i.id not in exact, len(_tokens(i.text) - want), -(i.epoch or 0.0)))
     first = hits[0]
-    if len(hits) > 1 and _tokens(first.text) - want:
-        # more than one row says it and none says EXACTLY that: the twins of one utterance are one fact, anything else is asked
+    # Forgetting is permanent, so the first-sorted row goes alone only when it is PROVEN the one: it says something beyond the
+    # words (then it is not the tie), or it is the single row whose text is exactly the member's words. Equal token sets alone
+    # prove nothing ("I love Sam" / "Sam loves me"): more than one row says it and none is proven -> the twins of one utterance
+    # are one fact, anything else is asked.
+    tied = any(not (_tokens(h.text) - want) for h in hits[1:])
+    proven = first.id in exact and len(exact) == 1
+    if len(hits) > 1 and (_tokens(first.text) - want or (tied and not proven)):
         svc = svc or pa._svc_default()
         ref = await asyncio.wait_for(svc.get(first.id), pa.READ_BUDGET_S)
         twins = {t.id for t in await pa.twins_of(member, ref, svc=svc)} if ref is not None else set()

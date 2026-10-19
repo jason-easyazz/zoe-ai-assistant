@@ -372,6 +372,23 @@ def test_forget_names_the_number_not_just_the_words(env):
     assert len([t for t in approved(env) if "Main Street" in t]) == 2
 
 
+def test_equal_token_sets_from_different_rows_ask_which(env):
+    # Codex P1 on #2144: two different rows that normalise to the same token set ({sam, love}) left the leftover-words check with
+    # nothing to compare, so the first-sorted (newest) row was forgotten for good whichever the member meant. Neither says
+    # exactly what was asked -> ask, forget nothing.
+    put(env, "Sam, I love.", when="2026-10-06T02:00:00Z")
+    put(env, "Sam loves me.", when="2026-10-06T08:00:00Z")
+    assert say("forget that I love Sam", ME) == mv.WHICH_REPLY
+    assert sorted(t for t in approved(env) if "Sam" in t) == ["Sam loves me.", "Sam, I love."], "nothing forgotten"
+
+
+def test_an_exact_text_match_still_forgets_uniquely_among_equal_token_sets(env):
+    put(env, "I love Sam.", when="2026-10-06T02:00:00Z")
+    put(env, "Sam loves me.", when="2026-10-06T08:00:00Z")      # newer, so it sorts first on token set + recency alone
+    assert say("forget that I love Sam", ME).startswith("Done")
+    assert [t for t in approved(env) if "Sam" in t] == ["Sam loves me."], "only the row that says exactly that"
+
+
 # ── the card: taps ────────────────────────────────────────────────────────────────────────────
 
 def _member_card(env):
