@@ -41,10 +41,10 @@ def test_person_create_card_without_relationship():
         {
             "id": "sug-2",
             "action_type": "person_create",
-            "pre_filled_slots": {"name": "Teneeka"},
+            "pre_filled_slots": {"name": "Morgan"},
         }
     ])
-    assert cards[0]["title"] == "Add Teneeka?"
+    assert cards[0]["title"] == "Add Morgan?"
     assert [a["action"] for a in cards[0]["actions"]] == [
         "pending_suggestion_accept",
         "pending_suggestion_dismiss",

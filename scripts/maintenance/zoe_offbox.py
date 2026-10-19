@@ -188,9 +188,28 @@ def secret_files(p: Paths) -> list[tuple[str, Path]]:
     return sorted(out.items())
 
 
+DRILL_ARTEFACT_GLOBS = ("*.gguf", "*.onnx")   # what the monthly drill restores from the artefacts tier
+PANEL_WAKE_BACKUP = ".zoe/backups/panel/hey_zoe.onnx"   # relative to home; a backup run without it is a problem
+
+
 def artefact_paths(p: Paths) -> list[Path]:
+    # ~/.zoe/backups/panel: the panel's custom wake model (hey_zoe.onnx), in no git and on no other box (models.lock).
+    # It is excluded from the household tier's ~/.zoe walk by "*backup*", so it rides here, with the other models.
     return [x for x in (p.checkout / "labs" / "functiongemma-finetune" / "runs" / "gen1" / "merged",
-                        p.home / "models" / "functiongemma-router") if x.exists()]
+                        p.home / "models" / "functiongemma-router",
+                        p.home / ".zoe" / "backups" / "panel") if x.exists()]
+
+
+def artefact_problems(p: Paths, arts: list[Path]) -> list[str]:
+    """Never a silent skip: a missing router source would let the drill compare an ever-older snapshot, and the
+    panel's wake model has no other copy off the panel."""
+    out: list[str] = []
+    if not any("functiongemma" in str(a) for a in arts):
+        out.append("artefacts: neither the router checkpoint nor the GGUF directory exists" + ("" if arts else " - no snapshot"))
+    if not (p.home / PANEL_WAKE_BACKUP).is_file():
+        out.append(f"artefacts: the panel wake-model backup ~/{PANEL_WAKE_BACKUP} is missing - "
+                   "re-copy it from the panel (models.lock has its sha256)")
+    return out
 
 
 # ── the age mirror ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -609,8 +628,7 @@ def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:
             print(f"{tier}: snapshot {sid[:8]} - {len(man)} files ({res.encrypted} re-encrypted, "
                   f"{res.kept} unchanged, {res.removed} removed)")
     arts = artefact_paths(p)
-    if not arts:      # never a silent skip: the drill would then compare an ever-older artefacts snapshot
-        problems.append("artefacts: neither the router checkpoint nor the GGUF directory exists - no snapshot")
+    problems += artefact_problems(p, arts)
     if arts:
         sid = backup_tier(cfg, "artefacts", arts)
         man = {}
@@ -682,11 +700,15 @@ def cmd_drill(p: Paths, cfg: Config, now: datetime, force: bool) -> int:
             target = scratch / tier
             args = ["restore", snap["id"], "--target", str(target)]
             if tier == "artefacts":
-                args += ["--include", "*.gguf"]     # a 1 GB checkpoint restore every month is not worth the WAN
+                # a 1 GB checkpoint restore every month is not worth the WAN; the served GGUF and the panel's
+                # wake model (its only copy off the panel) are small and are what a rebuild needs
+                for glob in DRILL_ARTEFACT_GLOBS:
+                    args += ["--include", glob]
             restic(cfg, *args)
             local = p.state_dir / "manifests" / f"{snap['id']}.json"
             if tier == "artefacts":
-                want = {k: v for k, v in json.loads(local.read_text())["files"].items() if k.endswith(".gguf")} \
+                want = {k: v for k, v in json.loads(local.read_text())["files"].items()
+                        if any(fnmatch.fnmatch(Path(k).name, g) for g in DRILL_ARTEFACT_GLOBS)} \
                     if local.exists() else {}
                 # restic restores an absolute source path P under <target>/P
                 got = {"/" + f.relative_to(target).as_posix(): sha256_file(f) for f in target.rglob("*")

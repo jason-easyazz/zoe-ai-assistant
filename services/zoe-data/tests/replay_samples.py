@@ -366,6 +366,50 @@ async def _transcribe_via_stream(wav_path: str, batch_impl) -> tuple[str, int, s
     return text, post_ms, "hit"
 
 
+def _remote_headers(token: str) -> dict:
+    """The remote-STT headers. With the service's internal token in the env (``_load_env`` reads the service
+    .env) the call also names its traffic class, ``probe`` - honoured server-side ONLY next to that token
+    (traffic_class.py); the body's ``panel_id`` is a client claim the class never reads."""
+    headers = {"Content-Type": "application/json", "X-Device-Token": token}
+    internal = (os.environ.get("ZOE_INTERNAL_TOKEN") or "").strip()
+    if internal:
+        headers["X-Internal-Token"] = internal
+        headers["X-Zoe-Traffic-Class"] = os.environ.get("ZOE_TRAFFIC_CLASS") or "probe"
+    return headers
+
+
+def _yield_to_panel() -> None:
+    """Between clips: when the probe runs under ``ZOE_HARNESS_YIELD_TO_PANEL=1`` (set by
+    voice_regression_probe.py after its quiet-hours check), wait while the household is using the panel, so a
+    gate run delays at most the clip in flight (scripts/maintenance/harness_quiet.py). Bounded by
+    ``ZOE_HARNESS_PANEL_WAIT_S`` (default 2700 s). A panel STILL in use after that ABORTS the replay (exit 5): the
+    landing probe is exempt from the hours, never from the household, and an aborted run is a non-pass, so nothing
+    lands on it. A guard that cannot run (import error) does not fail the gate."""
+    if os.environ.get("ZOE_HARNESS_YIELD_TO_PANEL") != "1":
+        return
+    quiet = True
+    try:
+        # by FILE PATH, never via sys.path: scripts/maintenance holds names that shadow service modules
+        import importlib.util
+
+        harness_quiet = sys.modules.get("harness_quiet")
+        if harness_quiet is None:
+            spec = importlib.util.spec_from_file_location("harness_quiet", os.path.join(
+                os.path.dirname(os.path.dirname(ROOT)), "scripts", "maintenance", "harness_quiet.py"))
+            harness_quiet = importlib.util.module_from_spec(spec)
+            sys.modules["harness_quiet"] = harness_quiet
+            spec.loader.exec_module(harness_quiet)
+
+        quiet = harness_quiet.wait_for_panel_quiet(float(os.environ.get("ZOE_HARNESS_PANEL_WAIT_S", "2700")),
+                                                   log=lambda m: print(m, file=sys.stderr, flush=True))
+    except Exception:  # noqa: BLE001
+        return
+    if not quiet:
+        print("replay ABORTED: the panel stayed in use past ZOE_HARNESS_PANEL_WAIT_S - yielding to the household "
+              "(a non-pass; re-run when the panel is quiet)", file=sys.stderr, flush=True)
+        raise SystemExit(5)
+
+
 def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
     """STT via the LIVE zoe-data /api/voice/transcribe (its Moonshine is already warm).
 
@@ -399,7 +443,7 @@ def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
     req = _rq.Request(
         base_url.rstrip("/") + "/api/voice/transcribe",
         data=payload,
-        headers={"Content-Type": "application/json", "X-Device-Token": token},
+        headers=_remote_headers(token),
         method="POST",
     )
     with _rq.urlopen(req, timeout=60) as resp:
@@ -412,6 +456,10 @@ def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
 async def _run(args) -> int:
     _load_env()
     os.environ.setdefault("ZOE_ROUTER_ENABLED", "1")
+    # P-2 traffic class: this process IS a probe. It replays as a real member's id in-process, so nothing in
+    # the principal says so - the process default does (traffic_class.process_default; never set in the
+    # service's own env). Every log line / record it writes, and the remote STT calls, carry "probe".
+    os.environ.setdefault("ZOE_TRAFFIC_CLASS", "probe")
     watch = _MemoryRecallWatch()
     logging.getLogger().addHandler(watch)
     preflight, recall_detail = (_memory_recall_preflight() if args.brain
@@ -475,6 +523,7 @@ async def _run(args) -> int:
     rows: list[dict] = []
     counts: dict[str, int] = {}
     for f in files:
+        _yield_to_panel()
         name = os.path.basename(f)
         rec: dict = {"file": name}
 
