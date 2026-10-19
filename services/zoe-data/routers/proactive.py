@@ -8,7 +8,7 @@ Endpoints:
   POST   /api/proactive/pending/{id}    — claim a pending notification → session
   POST   /api/proactive/trigger-morning — manually trigger morning brief (admin/self)
   POST   /api/proactive/selector/run-synthetic/{id} — Samantha-bar S5 hook (internal token)
-  GET    /api/proactive/inbox           — pull-not-push: {enabled, count, top, quiet} for the orb
+  GET    /api/proactive/inbox           — pull-not-push: {enabled, count, top, quiet[, review]} for the orb
   POST   /api/proactive/welcome         — pull-not-push: one-tap welcome / neutral / not_now
 """
 from __future__ import annotations
@@ -279,7 +279,16 @@ async def pending_inbox(user: dict = Depends(resolve_acting_user)):
     reads ``enabled: false``. Read-only: nothing is delivered or marked."""
     from proactive.pull import pending_state
 
-    return await pending_state(str(user.get("user_id") or ""))
+    uid = str(user.get("user_id") or "")
+    state = await pending_state(uid)
+    # The pendant day review is waiting (day_review_raise, ZOE_DAY_REVIEW_RAISE): a bare true/false for the orb's quiet ring,
+    # never a count or a kind. Feature off = the key is absent and the response is what it always was.
+    import day_review_raise
+
+    review = await day_review_raise.orb_review(uid)
+    if review is not None:
+        state = {**state, "review": bool(review)}
+    return state
 
 
 class WelcomeBody(BaseModel):

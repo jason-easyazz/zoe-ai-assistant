@@ -10,9 +10,10 @@ callable, ``client.start_notify(uuid, cb(sender, bytearray))``, ``client.write_g
 response=True)``, ``client.read_gatt_char(uuid)``. The official Omi SDK never observes disconnects
 (BasedHardware/omi #13290), so the disconnect callback here is ours, and a silent link times out.
 
-DO NOT ``pair`` from this module, and register no agent: the 2026-10-12 bring-up connected and read everything with no bond
-(``Paired: no``), and the pendant keeps ONE bond (``CONFIG_BT_MAX_PAIRED=1``) which the phone app would otherwise hold.
-Only ONE connection is possible at a time (``CONFIG_BT_MAX_CONN=1``): if the phone app is connected, we cannot be.
+DO NOT ``pair`` from this module, and register no agent: stock firmware connects and reads with no bond (2026-10-12
+bring-up, ``Paired: no``). Phase-2 (Zoe) firmware needs the bond the owner creates with panel-bluetooth's ``omi_bond``; for a
+pendant listed in ``OMI_SYNC_REQUIRE_BOND`` ``connect`` only CHECKS it, read-only (``link_security``), and refuses the link
+otherwise. Only ONE connection is possible at a time (``CONFIG_BT_MAX_CONN=1``): if the phone app is connected, we cannot be.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ import re
 from typing import AsyncIterator, Optional, Sequence
 
 from . import legacy_protocol as lp
+from . import link_security as sec
 from . import ring_protocol as rp
 from .engine import LinkDropped
 from .radio_lock import RadioLock
@@ -171,6 +173,14 @@ class ConnectError(Exception):
     """Every connection attempt failed (pendant out of range, or the link would not hold)."""
 
 
+class NotBonded(ConnectError):
+    """Bonded-only pendant, but BlueZ holds no bond for it: no connection is even attempted."""
+
+
+class InsecureLink(ConnectError):
+    """Bonded-only pendant, but the link did not come up encrypted with the stored key: dropped before any storage command."""
+
+
 _HANDLE_RX = re.compile(r"handle\s+(\d+)", re.I)
 
 
@@ -240,7 +250,8 @@ async def _existing_link(address: str) -> Optional[int]:
 
 @contextlib.asynccontextmanager
 async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str] = ("sudo", "-n"), addr_type: str = "random",
-                  attempts: int = 5, backoff_s: float = 4.0) -> AsyncIterator[BleLink]:
+                  attempts: int = 5, backoff_s: float = 4.0, require_bond: bool = False,
+                  adapter: str = "hci0") -> AsyncIterator[BleLink]:
     """Connect to the pendant and subscribe to its storage characteristic. NO pairing, NO agent, NO bond (the pendant's SMP
     Security Request is answered 'not supported' by BlueZ and the link carries on; its GATT table needs no encryption).
 
@@ -254,7 +265,13 @@ async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str]
     then ``ledc``) before our own ``lecc`` (2026-10-15: one ``lecc`` timed out as the owner walked away, the controller kept initiating, every
     later ``lecc`` got ``Input/output error`` for 11 h, and the stale initiation re-created an owner-less link within 110 ms of
     every ``ledc``).
+
+    ``require_bond`` (phase-2 firmware, ``OMI_SYNC_REQUIRE_BOND``): no bond in BlueZ -> ``NotBonded`` before the radio is
+    touched; a link that is not ENCRYPTED after the subscribe (or whose bond vanished meanwhile) -> ``InsecureLink``, torn down
+    before the caller sees it. Never a fallback to an open link.
     """
+    if require_bond and not sec.bonded(*await sec.bond_state(address, adapter, _run)):
+        raise NotBonded("refused: no bond with this pendant (pair it from Settings > Bluetooth first)")
     # One radio: while the Settings > Bluetooth agent holds the shared lock (a scan, an open link, a FIRMWARE UPDATE) we do not
     # connect. This is what stops a sync from taking the pendant's single connection in the gap after a firmware reset.
     radio = RadioLock()
@@ -334,6 +351,11 @@ async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str]
         radio.release()
         raise ConnectError(f"could not connect after {attempts} attempts: {type(last).__name__ if last else 'n/a'}") from last
     try:
+        if require_bond:
+            if not await sec.link_encrypted(address, _run):
+                raise InsecureLink("refused: the link to the pendant is not encrypted with the bond")
+            if not sec.bonded(*await sec.bond_state(address, adapter, _run)):
+                raise InsecureLink("refused: the bond disappeared while connecting")
         yield BleLink(client, q)
     finally:
         with contextlib.suppress(Exception):
