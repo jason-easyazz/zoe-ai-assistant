@@ -164,6 +164,34 @@ describe('init, switch, revert and the ledger', () => {
       } finally {
         bare.close();
       }
+
+      // An UNAVAILABLE or malformed /health is not the deliberate no-harness case: the brain was not
+      // signalled, so the switch is unconfirmed -> not_signalled, exit 3 (never the silent exit-0 skip).
+      const broken: Array<[string, (res: import('node:http').ServerResponse) => void]> = [
+        ['non-2xx', (res) => { res.statusCode = 503; res.end('{"ok":false}'); }],
+        ['bad JSON', (res) => { res.end('<html>not json'); }],
+        ['non-object JSON', (res) => { res.end('null'); }],
+      ];
+      for (const [label, answer] of broken) {
+        const bad = createServer((_req, res) => answer(res));
+        await new Promise<void>((r) => bad.listen(0, '127.0.0.1', r));
+        try {
+          const url = `http://127.0.0.1:${(bad.address() as AddressInfo).port}/health`;
+          const r = await ctl.switchTo(root, 'cand', 'night-loop', undefined, { reload: `pid:${process.pid}`, healthUrl: url });
+          assert.equal(r.reload.outcome, 'not_signalled', label);
+          assert.equal(ctl.switchExitCode(r), 3, label);
+        } finally {
+          bad.close();
+        }
+      }
+      // Connection refused (nothing listening) is the same.
+      const dead = createServer();
+      await new Promise<void>((r) => dead.listen(0, '127.0.0.1', r));
+      const deadUrl = `http://127.0.0.1:${(dead.address() as AddressInfo).port}/health`;
+      await new Promise<void>((r) => dead.close(() => r()));
+      const unreachable = await ctl.switchTo(root, 'cand', 'night-loop', undefined, { reload: `pid:${process.pid}`, healthUrl: deadUrl });
+      assert.equal(unreachable.reload.outcome, 'not_signalled');
+      assert.equal(ctl.switchExitCode(unreachable), 3);
     } finally {
       server.close();
     }

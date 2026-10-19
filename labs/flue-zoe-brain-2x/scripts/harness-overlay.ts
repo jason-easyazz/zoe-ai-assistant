@@ -19,8 +19,9 @@
  *   revert   --root R --who W [--reason TEXT] [--reload ...] [--health-url U]
  *
  * EXIT 0 only when the brain confirmed, or the switch is on disk only BY DESIGN (--reload none, or
- * the brain shows no harness on /health). EXIT 3 otherwise: timeout, refused, or a brain that was
- * not signalled (its overlay root is another directory, or no main pid).
+ * a successful /health that explicitly omits `harness`). EXIT 3 otherwise: timeout, refused, an
+ * unavailable/non-2xx/malformed /health, or a brain that was not signalled (its overlay root is
+ * another directory, or no main pid).
  *
  * SWITCH = validate the target (a refused overlay is never switched to), re-point `current`
  * atomically (symlink + rename), append the ledger line, then HOT-RELOAD the brain: SIGHUP to the
@@ -219,7 +220,7 @@ export interface ReloadOptions {
 
 export interface ReloadResult {
   /**
-   * `skipped` = on disk only BY DESIGN (--reload none, or no harness on the brain's /health).
+   * `skipped` = on disk only BY DESIGN (--reload none, or a successful /health that omits `harness`).
    * `not_signalled` = a brain that should have switched was NOT signalled (its /health overlay root
    * is another directory, or there is no main pid): the switch did not take effect.
    */
@@ -228,14 +229,22 @@ export interface ReloadResult {
   detail: string;
 }
 
-async function fetchHealth(url: string): Promise<Record<string, unknown> | null> {
+/** The brain's /health, or WHY there is none: an unavailable/malformed answer is not the same as "no harness". */
+async function probeHealth(url: string): Promise<{ health: Record<string, unknown> } | { error: string }> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(1500) });
-    if (!res.ok) return null;
-    return (await res.json()) as Record<string, unknown>;
-  } catch {
-    return null;
+    if (!res.ok) return { error: `HTTP ${res.status}` };
+    const body: unknown = await res.json();
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) return { error: 'malformed JSON body (not an object)' };
+    return { health: body as Record<string, unknown> };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+async function fetchHealth(url: string): Promise<Record<string, unknown> | null> {
+  const r = await probeHealth(url);
+  return 'health' in r ? r.health : null;
 }
 
 function mainPid(reload: string): number {
@@ -251,13 +260,18 @@ export async function reloadBrain(root: string, expectSha: string | null, opts: 
   const healthUrl = opts.healthUrl ?? 'http://127.0.0.1:3579/health';
   const budget = opts.budgetMs ?? RELOAD_BUDGET_MS;
   if (reload === 'none') return { outcome: 'skipped', ms: 0, detail: 'reload disabled (--reload none)' };
-  const before = await fetchHealth(healthUrl);
-  const view = before?.harness as Record<string, unknown> | undefined;
+  const probe = await probeHealth(healthUrl);
+  if ('error' in probe) {
+    // Unavailable / non-2xx / malformed is NOT the deliberate no-harness case: the brain may be running
+    // with the overlay and simply did not answer, so the switch is unconfirmed.
+    return { outcome: 'not_signalled', ms: 0, detail: `${healthUrl} gave no usable /health (${probe.error}): the brain was not signalled and the switch is unconfirmed` };
+  }
+  const view = probe.health.harness as Record<string, unknown> | undefined;
   if (!view) {
     return {
       outcome: 'skipped',
       ms: 0,
-      detail: `${healthUrl} shows no harness (brain down, or started without ZOE_BRAIN_HARNESS_DIR): switched on disk only, takes effect at the next start`,
+      detail: `${healthUrl} shows no harness (the brain started without ZOE_BRAIN_HARNESS_DIR): switched on disk only, takes effect at the next start`,
     };
   }
   if (resolve(String(view.dir ?? '')) !== resolve(join(root, CURRENT))) {
