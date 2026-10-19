@@ -151,7 +151,10 @@ No child AGENTS.md files yet.
 provably cross-vendor report (non-zero exit, empty report, no non-Anthropic
 `REVIEWER-VENDOR:` attestation, or the `CROSS-VENDOR-REVIEW-UNAVAILABLE` sentinel) it falls
 back to `codex exec` run directly in the `zoe-omnigent` container, then to ONE tool-less,
-diff-capped `pi` pass (only when codex is unavailable). There is NO Claude backend, and when
+diff-capped `pi` pass (only when codex is unavailable; model `openai/gpt-6.1-sol`, diff cap
+600 KB, per `docs/knowledge/reviewer-bakeoff-2026-10-19.md`; `CROSS_REVIEW_PI_MODEL` must be
+one concrete non-Anthropic model id — router/alias slugs are refused because the served model
+could not be attested). There is NO Claude backend, and when
 every backend fails it exits **2** `cross-review unavailable` — never a skip, never a clean
 review. Phase timeouts are clamped to what remains of the caller's 2500 s
 (`CALLER_TIMEOUT_S`, mirrored from `pipeline_cross_review.py`). Offline tests with stubbed

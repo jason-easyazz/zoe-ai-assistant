@@ -144,9 +144,10 @@ def test_codex_quota_falls_back_to_pi_with_the_cost_bound(rig):
     assert rig.calls() == ["polly", "gh", "codex", "pi"], rig.calls()
     pi_call = rig.call_lines("pi")[0]
     # The deterministic cap: a single tool-less completion, no agent loop, no session.
-    for flag in ("--no-tools", "--no-session", "--provider openrouter", "--model z-ai/glm-5.2"):
+    # The model is the 2026-10-19 bake-off winner (docs/knowledge/reviewer-bakeoff-2026-10-19.md).
+    for flag in ("--no-tools", "--no-session", "--provider openrouter", "--model openai/gpt-6.1-sol"):
         assert flag in pi_call, f"pi must run with {flag}: {pi_call}"
-    assert r.stdout.startswith("REVIEWER-VENDOR: z-ai/glm-5.2")
+    assert r.stdout.startswith("REVIEWER-VENDOR: openai/gpt-6.1-sol")
     assert "VERDICT: CLEAN (pi)" in r.stdout
     assert "codex unavailable — quota" in r.stderr
     # fetched once, reused by both direct backends
@@ -188,6 +189,34 @@ def test_there_is_no_claude_backend(rig):
     assert r.returncode == 1
     assert "no Claude backend" in r.stderr or "same-vendor" in r.stderr
     assert rig.calls() == [], "bad config must fail before any backend is touched"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openrouter/auto",
+        "openrouter/auto-beta",       # served anthropic/claude-sonnet-5.5 in the bake-off
+        "openrouter/pareto-code",     # its default tier served anthropic/claude-fable-5.1
+        "typesafe/jev-router",
+        "nvidia/switchyard",
+        "~z-ai/glm-latest",
+        "@preset/zoe-reviewer",
+        "anthropic/claude-sonnet-5.5",
+    ],
+)
+def test_pi_model_must_be_one_concrete_non_anthropic_model(rig, model):
+    # A router/alias hides the model that answered, so REVIEWER-VENDOR could not be trusted.
+    r = rig.run(CROSS_REVIEW_PI_MODEL=model, STUB_POLLY="authfail", STUB_CODEX="quota")
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+    assert "ALARM: CROSS_REVIEW_PI_MODEL" in r.stderr
+    assert rig.calls() == [], "bad config must fail before any backend is touched"
+
+
+def test_a_concrete_pi_model_override_is_accepted(rig):
+    # Negative control for the guard above: a concrete non-Anthropic id still runs.
+    r = rig.run(CROSS_REVIEW_PI_MODEL="google/gemini-4-argon", STUB_POLLY="authfail", STUB_CODEX="quota")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.startswith("REVIEWER-VENDOR: google/gemini-4-argon")
 
 
 def test_pi_never_runs_before_codex_has_been_tried(rig):

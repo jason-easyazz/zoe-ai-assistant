@@ -14,7 +14,9 @@
 #               start failure, Claude OAuth refresh contention, auth error, timeout, or
 #               a report that does not attest a non-Anthropic reviewer.
 #   3. pi     — ONE lean, tool-less, single-completion pass through OpenRouter
-#               (z-ai/glm-5.2), only when codex is unavailable (quota, auth, timeout).
+#               (openai/gpt-6.1-sol), only when codex is unavailable (quota, auth, timeout).
+#               Model chosen by the 2026-10-19 bake-off (docs/knowledge/reviewer-bakeoff-2026-10-19.md):
+#               31/40 known blocking bugs vs 9/40 for the old z-ai/glm-5.2 default.
 #
 # Routing rules this script enforces (AGENTS.md "Review pipeline", Tier 2):
 #   * prefer codex; pi is a lean last resort with a HARD cost bound (below);
@@ -26,8 +28,9 @@
 #
 # pi's cost bound is DETERMINISTIC rather than a budget it can exhaust: the pass runs
 # with --no-tools (one completion, no agent loop), the diff is capped at
-# CROSS_REVIEW_PI_DIFF_MAX_BYTES (default 200000, ~50k tokens), and the run is bounded
-# by CROSS_REVIEW_PI_TIMEOUT_S. That is cents, not the $1.50 an Omnigent-dispatched pi
+# CROSS_REVIEW_PI_DIFF_MAX_BYTES (default 600000, ~150k tokens, the same cap as codex: the
+# bake-off's three real PRs all fit, and a 200 KB cut hid every bug in #2152), and the run is
+# bounded by CROSS_REVIEW_PI_TIMEOUT_S. That is ~US$0.15-0.35, not the $1.50 an Omnigent-dispatched pi
 # worker burned before returning a verdict (week of 2026-10-12). pi has no
 # summary-on-budget-exhaustion flag; instead the prompt demands findings in priority
 # order and the script keeps whatever was streamed on timeout, labelled PARTIAL, so a
@@ -51,7 +54,7 @@ POLLY_SCRIPT="${CROSS_REVIEW_POLLY_SCRIPT:-$HERE/cross_review_polly.sh}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
 REPO_SLUG="${CROSS_REVIEW_REPO:-jason-easyazz/zoe-ai-assistant}"
 BACKENDS="${CROSS_REVIEW_BACKENDS:-polly codex pi}"
-PI_MODEL="${CROSS_REVIEW_PI_MODEL:-z-ai/glm-5.2}"
+PI_MODEL="${CROSS_REVIEW_PI_MODEL:-openai/gpt-6.1-sol}"
 
 CALLER_TIMEOUT_S=2500   # mirrors _CROSS_REVIEW_TIMEOUT_S; pinned by tests/unit/test_cross_review_fallback.py
 # Test seam only (it can lower the budget, never be relied on to raise the real caller's).
@@ -74,7 +77,7 @@ POLLY_TIMEOUT_S="${CROSS_REVIEW_POLLY_TIMEOUT_S:-1200}"
 CODEX_TIMEOUT_S="${CROSS_REVIEW_CODEX_TIMEOUT_S:-900}"
 PI_TIMEOUT_S="${CROSS_REVIEW_PI_TIMEOUT_S:-420}"
 CODEX_DIFF_MAX_BYTES="${CROSS_REVIEW_CODEX_DIFF_MAX_BYTES:-600000}"
-PI_DIFF_MAX_BYTES="${CROSS_REVIEW_PI_DIFF_MAX_BYTES:-200000}"
+PI_DIFF_MAX_BYTES="${CROSS_REVIEW_PI_DIFF_MAX_BYTES:-600000}"
 
 for v in CALLER_TIMEOUT_S POLLY_TIMEOUT_S CODEX_TIMEOUT_S PI_TIMEOUT_S CODEX_DIFF_MAX_BYTES PI_DIFF_MAX_BYTES; do
   case "${!v}" in (*[!0-9]*|''|0) echo "ALARM: $v must be a positive integer, got: ${!v}" >&2; exit 1;; esac
@@ -129,6 +132,22 @@ is_quota() { grep -q -i -E "$QUOTA_RE" "$1" 2>/dev/null; }
 last_line() { grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -n 1 | cut -c1-200; }
 
 ANTHROPIC_RE='anthropic|claude|opus|sonnet|haiku|fable'
+
+# pi must name ONE concrete, non-Anthropic model. A router or alias slug (openrouter/auto,
+# typesafe/jev-router, nvidia/switchyard, ~vendor/x-latest, ...) picks the model per request, and
+# the REVIEWER-VENDOR line would then name the router, not the model that answered: in the
+# 2026-10-19 bake-off openrouter/auto-beta served anthropic/claude-sonnet-5.5, a same-vendor
+# review this script would have presented as cross-vendor.
+case " $BACKENDS " in
+  *" pi "*)
+    if printf '%s' "$PI_MODEL" | grep -q -i -E "$ANTHROPIC_RE"; then
+      echo "ALARM: CROSS_REVIEW_PI_MODEL=$PI_MODEL is an Anthropic model — a same-vendor review is not cross-vendor" >&2; exit 1
+    fi
+    case "$PI_MODEL" in
+      openrouter/*|\~*|*/auto|*/auto-*|*router*|*switchyard*|*/fusion*|@preset/*)
+        echo "ALARM: CROSS_REVIEW_PI_MODEL=$PI_MODEL is a router/alias, not one concrete model — the served model (and its vendor) could not be attested" >&2; exit 1 ;;
+    esac ;;
+esac
 
 # ---------------------------------------------------------------- backend: polly ---
 try_polly() {
