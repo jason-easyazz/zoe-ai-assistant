@@ -78,7 +78,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-102 stores: 32 reached, 31 out of scope, 39 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+104 stores: 33 reached, 32 out of scope, 39 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -148,6 +148,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `speaker_profiles` | pg_table | biometric | out_of_scope | - | Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days). |
 | `face_profiles` | pg_table | biometric | out_of_scope | - | Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days). |
 | `enrollment_offers` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
+| `phone_devices` | pg_table | metadata | out_of_scope | - | A paired phone (phone_app.py): member id, a display name, the platform, a credential hash and public key - no household words. The member or an admin revokes it (phone_app.revoke_device), which deletes its push tokens. |
 | `user_preferences` | pg_table | config | out_of_scope | - | Preference flags; no household words. |
 | `weather_preferences` | pg_table | config | out_of_scope | - | A city and units. |
 | `dashboard_layouts` | pg_table | config | out_of_scope | - | UI layout JSON. |
@@ -174,6 +175,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `production_feedback_log` | file | words | out_of_scope | - | Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in. |
 | `voice_stt_log` | file | words | gap | - | ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, no retention, outside the cascade. Rotated by size only. |
 | `voice_sample_corpus` | corpus | biometric | gap | - | ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. |
+| `router_retrain_texts` | file | words | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | The struggle-fed router retrain run's work dir (~/.zoe/router_retrain/work/<stamp>/*.texts.jsonl) holds the failed turns' words for one run; forget tombstones the examples and deletes any leftover text files (router_retrain_ledger.forget, via struggle_proposals.forget_user / forget_events). The ledger itself holds hashes only. |
 | `omi_audio_files` | file | biometric | reached | member: `omi_recordings.forget_user` / entity: `omi_recordings.erase_entity` | Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files). |
 | `device_audit_logs` | file | metadata | out_of_scope | - | Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words. |
 | `pi_intent_evidence` | file | words | gap | - | ~/.zoe/data/pi-*.jsonl: intent-miss evidence and shadow labels (text with names/emails masked). Flag-gated (ZOE_PI_INTENT_*), outside the cascade, no retention. |

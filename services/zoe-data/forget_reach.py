@@ -146,6 +146,8 @@ TABLES: tuple[Store, ...] = (
     _t("face_profiles", BIOMETRIC, OUT_OF_SCOPE, "Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member "
        "un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days)."),
     _t("enrollment_offers", METADATA, OUT_OF_SCOPE, _NOWORDS),
+    _t("phone_devices", METADATA, OUT_OF_SCOPE, "A paired phone (phone_app.py): member id, a display name, the platform, a credential hash and "
+       "public key - no household words. The member or an admin revokes it (phone_app.revoke_device), which deletes its push tokens."),
     # --- config, ids and infrastructure ---
     _t("user_preferences", CONFIG, OUT_OF_SCOPE, "Preference flags; no household words."),
     _t("weather_preferences", CONFIG, OUT_OF_SCOPE, "A city and units."),
@@ -188,6 +190,10 @@ OTHER: tuple[Store, ...] = (
     Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
           "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member.",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),
+    Store("router_retrain_texts", "file", WORDS, REACHED, "The struggle-fed router retrain run's work dir (~/.zoe/router_retrain/work/<stamp>/*.texts.jsonl) "
+          "holds the failed turns' words for one run; forget tombstones the examples and deletes any leftover text files "
+          "(router_retrain_ledger.forget, via struggle_proposals.forget_user / forget_events). The ledger itself holds hashes only.",
+          member="struggle_detector.delete_user", entity="struggle_detector.erase_entity", markers=(".texts.jsonl",)),
     Store("omi_audio_files", "file", BIOMETRIC, REACHED, "Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files).",
           member=_OMI_M, entity="omi_recordings.erase_entity", markers=("omi-audit.jsonl",)),
     Store("device_audit_logs", "file", METADATA, OUT_OF_SCOPE, "Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words.",
