@@ -48,7 +48,7 @@ builds_on: labs/flue-zoe-brain-2x (soul.ts, agents/zoe.ts doctrines, manner.ts, 
 ```
 
 - **Signals.** The struggle detector (`struggle_events`), empty-transcript and wake-without-turn rates, repeat asks within a session, corrections, the bar, the day-sim, the person bench, the voice regression, and health. Round 2 lists the ones that are blind to the household today (speaker verdict never fires for the real panel, no intent label on misses, no tool-name logging, proactive outcomes unresolved); those are prerequisites, because the canary (section 5) reads them.
-- **One proposal queue.** `evolution_proposals` gains `class`, `risk_tier`, `component`, `evidence` (scores before and after, control-arm results, the diff), `status` (proposed, probed, applied, canary, kept, reverted, rejected) and `lesson_id`. Every other proposal writer feeds it or is removed.
+- **One proposal queue** (migration slot 0061, after the three pending migrations). `evolution_proposals` gains `class`, `risk_tier`, `component`, `evidence` (scores before and after, control-arm results, the diff), `status` (proposed, probed, applied, canary, kept, reverted, rejected) and `lesson_id`. Every other proposal writer feeds it or is removed.
 - **The improver.** Section 3.
 - **The gate.** Section 5.
 - **Apply, canary, rollback, lessons.** Section 5 and 6.
@@ -107,6 +107,8 @@ Tier 2 differs in one row: the cloud improver proposes between 00:30 and 02:30 (
 3. The two control arms stay red: a sycophancy editor (adds only agreement and warmth) must lose; a repeated-sampling arm (K extra runs of the current overlay) must not match the candidate's gain at equal cost. If sampling matches, the change is noise and is rejected.
 4. The voice regression passes after apply (04:30).
 5. Rate limit: at most one change in canary per component at a time; a component in canary is not targeted again until the canary ends.
+
+**Reuse, not reinvention:** #2128 (struggle detector phase 3, retrain-and-adopt, flag-dark) landed 2026-10-19 with the gate pattern this section needs: control arms, a held-out set, forget tombstones and a transactional swap. The overlay canary adopts that pattern rather than a second implementation.
 
 **Canary (three nights, live).** The applied overlay stays unless the live signals degrade against their trailing week: empty-transcript rate, repeat asks within a session, corrections, struggle events, first-token latency. Any degradation beyond the pre-registered band reverts the overlay automatically and records the lesson as "reverted in canary, reason". Kept changes are promoted to `kept`.
 
