@@ -517,7 +517,10 @@ async def by_voice(text: str, member_id: str, *, svc: Any = None) -> Optional[st
             return AMBIGUOUS_REPLY.format(name=name)
         try:
             pol = await policy(db, me, matches[0]["user_id"])
-            await add(db, me, pol.member.user_id, sentence, guess_category(sentence, pol), via="voice", svc=svc)
+            cat = guess_category(sentence, pol)
+            if pol.member.kind == "adult" and cat not in pol.allowed:
+                return None                              # not a category the adult opted in: their own word, untouched (D9)
+            await add(db, me, pol.member.user_id, sentence, cat, via="voice", svc=svc)
         except CurationRefused as exc:
             return exc.detail
     return SAVED_REPLY.format(name=name)

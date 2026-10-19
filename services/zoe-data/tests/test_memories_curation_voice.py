@@ -72,6 +72,10 @@ def test_an_adult_only_by_their_own_opt_in(env):
     assert say("remember that Robin\x27s bins go out on Monday night", PARENT) is None      # not curatable: the teach path runs
     as_(env, ADULT, "user").put("/api/memories/curation/me/routines", json=dict(on=True), headers=H)
     assert say("remember that Robin\x27s bins go out every Monday night", PARENT) == "Okay, I\x27ll remember that for Robin."
+    # opted in to routines only: a note of another category is not curation at all (the teach path runs, nothing spoken)
+    assert say("remember that Robin\x27s teacher is Ms Lee", PARENT) is None
+    assert say("remember that Robin is allergic to peanuts", PARENT) is None
+    assert len(rows_of(env, ADULT)) == 1
 
 
 def test_flag_off_is_inert(env, monkeypatch):
