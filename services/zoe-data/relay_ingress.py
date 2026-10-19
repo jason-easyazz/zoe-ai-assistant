@@ -89,6 +89,10 @@ WS_SEND_PROOF_TTL_S = 2.0
 #: Upper bound on writing the 1008 close of a revoked socket (a stalled client can block even that). Past it the guard gives up on the
 #: close frame; the app side still ends (the handler is handed a disconnect) and the server tears the connection down.
 WS_CLOSE_TIMEOUT_S = 2.0
+#: Upper bound on ONE re-proof of an open socket. The registry read can wait on an exhausted DB pool (10 s to acquire) and a slow
+#: command (up to 30 s) - far past ``WS_RECHECK_S`` - so without a bound an idle revoked socket could outlive the revocation promise.
+#: A proof that does not finish in time is not a proof: the socket is closed 1008 (fail closed; the panel reconnects).
+WS_PROOF_TIMEOUT_S = 5.0
 #: The panel a RELAYED request was proven to be, for code that has no ``Request`` in hand (the websocket session resolvers in main.py).
 _relay_panel: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("zoe_relay_panel", default=None)
 
@@ -520,13 +524,14 @@ class _SocketGuard:
             epoch = _epoch
             self._scope.get("state", {}).pop(_CTX_KEY, None)
             try:
-                ctx = await authenticate(self._conn, require_credential=self._require_credential, fresh=fresh)
+                ctx = await asyncio.wait_for(
+                    authenticate(self._conn, require_credential=self._require_credential, fresh=fresh), WS_PROOF_TIMEOUT_S)
             except RelayRefused as refused:
                 log_throttled(logger, logging.WARNING, f"relay-ws-revoked:{refused.code}",
                               "relay_ingress: closing open websocket %s (%s)", self._scope.get("path"), refused.code)
                 await self._kill()
                 return False
-            except Exception as exc:  # noqa: BLE001 - a proof that cannot be completed is not a proof: fail closed, and say why
+            except Exception as exc:  # noqa: BLE001 - a proof that cannot be completed (or finished in time) is not a proof: fail closed
                 logger.warning("relay_ingress: re-proof of open websocket %s failed unexpectedly (%s) - closing it",
                                self._scope.get("path"), type(exc).__name__)
                 await self._kill()

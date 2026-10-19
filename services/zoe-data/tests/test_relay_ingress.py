@@ -833,6 +833,53 @@ async def _revoked(calls, fp):
     return None
 
 
+async def test_a_stalled_registry_read_closes_an_idle_socket_within_the_proof_bound(reg, on, monkeypatch):
+    """Codex P1 on #2115: the timer re-proof awaited the registry with no bound of its own, so a stalled SELECT (exhausted pool,
+    slow command) let an idle revoked socket outlive the revocation interval. The proof is now bounded and a timeout fails closed."""
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.2)
+    monkeypatch.setattr(relay_ingress, "WS_PROOF_TIMEOUT_S", 0.3)
+    real, calls, sent = relay_ingress._fetch_bound_panel, [], []
+    closed = asyncio.Event()
+
+    async def stalling_fetch(fingerprint):
+        calls.append(fingerprint)
+        if len(calls) == 1:
+            return await real(fingerprint)         # the handshake proof is fine
+        await asyncio.sleep(3600)                  # every later registry read hangs
+
+    monkeypatch.setattr(relay_ingress, "_fetch_bound_panel", stalling_fetch)
+
+    async def app(scope, receive, send):
+        await receive()
+        await send({"type": "websocket.accept"})
+        await asyncio.sleep(3600)                  # push-only: idle
+
+    async def receive():
+        if not sent:
+            sent.append("connect")
+            return {"type": "websocket.connect"}
+        await asyncio.sleep(3600)
+
+    async def send(message):
+        sent.append(message["type"])
+        if message["type"] == "websocket.close":
+            sent.append(("code", message["code"]))
+            closed.set()
+
+    scope = {
+        "type": "websocket", "path": "/ws/idle", "raw_path": b"/ws/idle", "query_string": b"", "scheme": "wss", "root_path": "",
+        "client": (NGINX, 1), "server": ("zoe", 8000), "subprotocols": [],
+        "headers": [(k.lower().encode(), v.encode()) for k, v in relay_headers().items()],
+    }
+    task = asyncio.ensure_future(relay_ingress.RelayIngressMiddleware(app)(scope, receive, send))
+    try:
+        await asyncio.wait_for(closed.wait(), 0.2 + 0.3 + 2.0)       # interval + proof bound + slack, nowhere near the 3600 s stall
+        assert ("code", 1008) in sent and len(calls) >= 2
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 def test_the_proof_lives_under_a_namespaced_scope_key_not_a_bare_relay_ctx(reg, on):
     seen = []
     app = make_app(reg)
