@@ -27,6 +27,7 @@ looked like a regex write from a real conversation. No path checked who wrote th
 | Rank | Class | Which writers (allow-list; anything not listed is rank 0) |
 |---|---|---|
 | 6 | `operator` | `operator`, `operator-cleanup`, `identity_audit`, `admin`, `system`, `samantha_live_cleanup` |
+| 6 | `curated` | `curator` - ONLY `memory_curation` (caregiver curation, memories-space P7, [record](memory-curation.md)). Changed only by power >= 6 (a curator or an operator): never by the member's own sentence or review UI (owner D9); a contradicting remark is held as `disputed`. An adult's opt-out restamps their curated rows `user_stated` (`curated_released`) |
 | 5 | `user_confirmed` | the review UI (`review_ui`), the account acting on its own rows (`actor == user_id`: REST edits, intent handlers, MCP), the user approving a candidate |
 | 4 | `user_stated` | the person's words typed or dictated (`voice_fact`, `proposal`/`manual` - the proposals route passes `origin="proposal"` whatever label the client sent, `conversation_correction`, `chat`, `skybridge_action`, `note_*`, `journal_*`, `person_created/updated`) and deterministic extractors over the user's turn (`chat_regex`, `chat_regex_fallback`, `voice_regex`, `conversation`, `voice`) - a DIRECT statement |
 | 3 | `user_stated_derived` | a MODEL writer's fact that the user's OWN turn supports (below) - the person's words, paraphrased by a model; when a per-turn writer's turn PLAINLY entails it, basis `verbatim_user_span`, with `user_stated` power |

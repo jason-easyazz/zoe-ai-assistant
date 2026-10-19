@@ -2327,6 +2327,10 @@ _panel_cards_router.register(app)
 # Where's this from). Mounted ONLY when ZOE_MEMORIES_VOICE is on - flag off = 404. The voice side is memories_voice.tier.
 from routers import memories_card as _memories_card_router  # noqa: E402
 _memories_card_router.register(app)
+# Caregiver curation (flag-dark, memories-space P7): an adult admin adds memories for a child (and for an adult who opted a category
+# in). Always mounted; every route answers 404 while ZOE_MEMORIES_CURATORS is off (read per request).
+from routers.memories_curation import router as _memories_curation_router  # noqa: E402
+app.include_router(_memories_curation_router)
 
 # Contact cards (flag-dark): the member's own multi-value contact fields with provenance, vCard export/import and the merge-review
 # queue (migration 0053, contacts_store.py). Mounted ONLY when ZOE_CONTACTS_API is on — flag off = 404. No sync engine.

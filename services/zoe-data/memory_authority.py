@@ -97,8 +97,12 @@ USER_STATED_DERIVED = "user_stated_derived"  # a MODEL's paraphrase that the use
 USER_UNVERIFIED = "user_unverified"   # voice turn attributed only by panel binding (P1.3, follow-up)
 MODEL_FROM_TURN = "model_from_turn"
 MODEL_FROM_TRANSCRIPT = "model_from_transcript"
+#: a row a CURATOR wrote for a member (memories-space P7, ``memory_curation``; owner D9, 2026-10-19): the curated rows of a child,
+#: and those of an adult in a category that adult opted in. Only a curator or an operator changes it - not a passing statement of
+#: the member, not their review UI (``may_override``). A released row (the adult opted the category out) is restamped user_stated.
+CURATED = "curated"
 RANK = {
-    OPERATOR: 6, USER_CONFIRMED: 5, USER_STATED: 4, USER_STATED_DERIVED: 3, USER_UNVERIFIED: 2,
+    OPERATOR: 6, CURATED: 6, USER_CONFIRMED: 5, USER_STATED: 4, USER_STATED_DERIVED: 3, USER_UNVERIFIED: 2,
     MODEL_FROM_TURN: 1, MODEL_FROM_TRANSCRIPT: 0,
 }
 CLASSES = tuple(RANK)
@@ -116,7 +120,7 @@ PROTECTED = frozenset({USER_STATED, USER_CONFIRMED})
 
 
 def authority_of(cls: str) -> str:
-    if cls in (OPERATOR, USER_CONFIRMED):
+    if cls in (OPERATOR, USER_CONFIRMED, CURATED):
         return USER_CONFIRMED
     if cls in (USER_STATED, USER_STATED_DERIVED):
         return USER_STATED
@@ -208,6 +212,8 @@ OPERATOR_WRITERS = frozenset({
     "samantha_live_cleanup",
 })
 #: The review UI IS the person: approving / editing a row there is "yes, that's right".
+#: A curator writing for a member (``memory_curation`` is the ONLY caller that names it; a static test pins that).
+CURATOR_WRITERS = frozenset({"curator"})
 USER_CONFIRMED_WRITERS = frozenset({"review_ui", "user_confirmed", "omi_review"})   # omi_review: the owner approved a pendant candidate quoting their own words (omi_review_apply)
 #: The person's own words, typed or dictated, or a deterministic extractor over their turn
 #: (assistant text is never mined — tests/test_memory_extractor_purity.py).
@@ -257,6 +263,8 @@ def writer_class(writer: str, *, user_id: str = "") -> str:
     w = (writer or "").strip()
     if w in OPERATOR_WRITERS:
         return OPERATOR
+    if w in CURATOR_WRITERS:
+        return CURATED
     if w in USER_CONFIRMED_WRITERS or (user_id and w == user_id):
         return USER_CONFIRMED
     if w in USER_STATED_WRITERS or w in USER_STATED_WRITERS_EXTRA or w.startswith(USER_STATED_PREFIXES):
@@ -276,7 +284,7 @@ def is_known_writer(writer: str) -> bool:
     """On the allow-list (a lane / writer name, as opposed to an account id or a stray
     string): only these become a row's ``source``."""
     w = (writer or "").strip()
-    return (w in OPERATOR_WRITERS or w in USER_CONFIRMED_WRITERS or w in USER_STATED_WRITERS
+    return (w in OPERATOR_WRITERS or w in CURATOR_WRITERS or w in USER_CONFIRMED_WRITERS or w in USER_STATED_WRITERS
             or w in USER_STATED_WRITERS_EXTRA or w.startswith(USER_STATED_PREFIXES) or w in MODEL_FROM_TURN_WRITERS
             or w in TRANSCRIPT_WRITERS or w in LLM_WRITERS or w in _automatic_sources())
 
@@ -349,6 +357,8 @@ def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
             return Resolved(USER_UNVERIFIED, "speaker_not_verified")
         if claimed == USER_CONFIRMED and base == USER_STATED:
             return Resolved(USER_CONFIRMED, "user_confirmed")
+        if base == CURATED:
+            return Resolved(CURATED, "curator")
         return Resolved(base, "deterministic_user_turn" if w in DETERMINISTIC_USER_WRITERS
                         else "explicit_source")
     if w in MODEL_FROM_TURN_WRITERS or w in TRANSCRIPT_WRITERS:
@@ -471,6 +481,9 @@ def may_override(power: int, target_cls: str) -> bool:
         # an operator's deliberate cleanup is not undone by a spoken sentence a panel may have
         # mis-attributed (P1.3): it takes a confirming action (the review UI) or an operator
         return power >= RANK[USER_CONFIRMED]
+    if target_cls == CURATED:
+        # a curated row (owner D9): only a curator or an operator - never a sentence or the review UI of the member
+        return power >= RANK[CURATED]
     return power >= USER_RANK or power >= RANK.get(target_cls, 0)
 
 
@@ -1282,12 +1295,35 @@ def find_conflict(new_text: str, rows: list[Any], writer_power: int, *,
         if getattr(r, "id", "") == exclude_id or str(meta.get("status") or "") != "approved":
             continue
         text = getattr(r, "text", "") or ""
-        if may_override(writer_power, row_class(meta, text)):
+        target = row_class(meta, text)
+        if may_override(writer_power, target):
             continue
         kind = conflict_kind(new_text, text)
+        if not kind and target == CURATED and negation_flip(new_text, text):
+            kind = kind_of(text)   # "User is not allergic to peanuts" against a curated "User is allergic to peanuts"
         if kind:
             return r, kind
     return None
+
+
+_NEG_TOKENS = frozenset({"not", "no", "never", "longer", "anymore"})
+_AUX_TOKENS = frozenset({"is", "are", "am", "was", "were", "does", "do", "did", "has", "have", "be"})
+_NT_RE = re.compile(r"(\w+)n\u2019t\b|(\w+)n\x27t\b")
+
+
+def _neg_norm(text: str) -> tuple:
+    t = _NT_RE.sub(lambda m: (m.group(1) or m.group(2)) + " not", (text or "").lower())
+    words = re.findall(r"[a-z0-9]+", t)
+    neg = sum(1 for w in words if w in _NEG_TOKENS)
+    return frozenset(w for w in words if w not in _NEG_TOKENS and w not in _AUX_TOKENS), neg
+
+
+def negation_flip(new_text: str, old_text: str) -> bool:
+    """The same statement with a negation added or removed ("User is not allergic to peanuts" / "User is allergic to peanuts").
+    Consulted only against a CURATED row: a curated fact is not quietly contradicted by a passing denial. Pure."""
+    a, na = _neg_norm(new_text)
+    b, nb = _neg_norm(old_text)
+    return bool(a) and a == b and (na > 0) != (nb > 0)
 
 
 #: How the recall packet labels a row a voice the speaker gate did NOT confirm said (it is
