@@ -12,6 +12,7 @@ from gemma_endpoint import gemma_base
 from typed_env import env_float, env_int, env_list, env_str
 from push import broadcaster
 from auth import require_internal_token
+import relay_ingress
 from routers import (
     calendar_router,
     lists_router,
@@ -2163,7 +2164,10 @@ def _allowed_browser_origins() -> frozenset[str]:
     here cannot leave the HTTP and WebSocket policies inconsistent.
     """
     extra = env_list("ZOE_ALLOWED_WS_ORIGINS")
-    return frozenset(ALLOWED_ORIGINS) | _SELF_LAN_ORIGINS | frozenset(extra)
+    # The relay origin (https://<hid>.zoe.internal, from ZOE_RELAY_HOSTNAME) joins ONLY while ZOE_RELAY_INGRESS is on: the kiosk
+    # opened over the relay presents it, and without it the push socket refuses the kiosk (the 2026-07-03 incident class).
+    relay_origin = relay_ingress.origin()
+    return frozenset(ALLOWED_ORIGINS) | _SELF_LAN_ORIGINS | frozenset(extra) | (frozenset({relay_origin}) if relay_origin else frozenset())
 
 
 def _ws_origin_allowed(websocket: WebSocket) -> bool:
@@ -2219,6 +2223,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Relay ingress gate (flag-dark, ZOE_RELAY_INGRESS - a no-op while it is off). Added LAST so it is the OUTERMOST middleware: a
+# relayed request without a bound client certificate AND a matching device credential is refused before CORS or any route runs.
+app.add_middleware(relay_ingress.RelayIngressMiddleware)
+
 app.include_router(calendar_router)
 app.include_router(lists_router)
 app.include_router(people_router)
@@ -2256,6 +2264,10 @@ app.include_router(panel_provision_router)
 # Flag-dark (ZOE_PANEL_KIOSK_CREDENTIAL); both routes 404 while it is off.
 from routers.panel_kiosk import router as panel_kiosk_router
 app.include_router(panel_kiosk_router)
+# Relay client-certificate binding (panel-anywhere R1): /api/panels/PANEL/client-certs. 404 while ZOE_RELAY_INGRESS is off.
+from routers.panel_relay import gate_router as panel_relay_gate_router, router as panel_relay_router
+app.include_router(panel_relay_router)
+app.include_router(panel_relay_gate_router)
 # Registered AFTER panel_provision on purpose: that router's more specific
 # /api/panels/provision/{code} must win over /api/panels/{device_id}/config
 # (FastAPI matches routes in registration order).
@@ -2709,6 +2721,12 @@ async def websocket_push(
             if not subscribe_panel_id:
                 await websocket.close(1008, "Invalid device token")
                 return
+        # RELAYED socket: it may only join the channel of the panel its certificate + credential were proven to be (a stolen panel
+        # must not listen in on the household's other panels). `subscribe_panel_id` is the RESOLVED id (an alias maps to its
+        # registered panel first), so an alias of its own panel still works.
+        if not relay_ingress.panel_subscription_allowed(subscribe_panel_id):
+            await websocket.close(1008, "Panel not bound to this certificate")
+            return
         # Panel token or bound browser session verified; subscribe to panel push.
         await broadcaster.connect_panel(websocket, subscribe_panel_id)
         # Clean up under the RESOLVED id we actually subscribed to — not the
@@ -2929,9 +2947,18 @@ async def _resolve_ws_session(session_id: str | None) -> dict | None:
     from fastapi import HTTPException
 
     try:
-        return await _validate_with_auth_service(session_id)
+        user = await _validate_with_auth_service(session_id)
     except HTTPException:
         return None
+    if user is not None and relay_ingress.current_panel() is not None:
+        # RELAYED socket: a bare session id is not enough for a member (the kiosk's browser keeps one in storage). The member
+        # needs a fresh sign-in at the panel the socket was proven to be; a guest session passes unchanged (panel-guest policy),
+        # and an auth-outage principal is refused (never downgraded to a guest over the relay).
+        if user.get("auth_degraded") or user.get("__zoe_degraded__"):
+            return None
+        if _ws_role_signed_in(user) and not await relay_ingress.member_allowed_here(str(user.get("user_id") or "")):
+            return None
+    return user
 
 
 if __name__ == "__main__":
