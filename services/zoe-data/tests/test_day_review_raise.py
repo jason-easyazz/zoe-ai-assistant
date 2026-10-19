@@ -506,7 +506,32 @@ async def test_a_crowded_pull_says_nothing_private_aloud_and_sends_it_to_the_pho
         assert word not in text
     # the same ask again within ten minutes does not spam the phone
     res2 = await drr.tier("what did you find in my day?", OWNER, channel="voice", extra_ctx=vctx())
-    assert res2.reply == drr.CROWDED_NO_PHONE and len(env["sent"]) == 1
+    assert res2.reply == drr.CROWDED_RECENT and len(env["sent"]) == 1     # not "link Telegram": it was sent
+
+
+async def test_an_uncertain_send_is_never_claimed_as_sent(env, monkeypatch):
+    import telegram_notify
+
+    async def timed_out(tid, text, url=None, label=None, *, client=None):
+        return "uncertain"
+
+    seed(env)
+    monkeypatch.setattr(telegram_notify, "send", timed_out)
+    res = await drr.tier("send my day to my phone", OWNER, channel="chat")
+    assert res.reply == drr.PHONE_TRIED
+    res = await drr.tier("send my day to my phone", OWNER, channel="chat")
+    assert res.reply == drr.PHONE_RECENT
+
+
+async def test_two_overlapping_first_turns_carry_it_once(env):
+    seed(env)
+    b1 = await brief(env, sid="chat-a")
+    b2 = await brief(env, sid="chat-b")                   # the first has not settled yet
+    assert b1.day_review is not None
+    assert b2 is None or b2.day_review is None
+    await bft.settle(b1, produced=False)                  # the first turn produced nothing: the raise is free again
+    b3 = await brief(env, sid="chat-c")
+    assert b3.day_review is not None
 
 
 async def test_a_crowded_pull_with_no_linked_phone_says_ask_again_alone(env):

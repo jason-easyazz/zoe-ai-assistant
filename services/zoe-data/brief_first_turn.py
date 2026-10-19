@@ -437,6 +437,9 @@ async def _prepare(message: str, uid: str, now: datetime, sid: str = "") -> DayB
         return None
     lines = items if shape == "greeting" else critical
     if day_review is not None and not any(line.startswith(_DAY_REVIEW) for line in lines):
+        import day_review_raise
+
+        day_review_raise.release(day_review)
         day_review = None  # recorded at settle only when its line is really in this block
     from open_loop_lifecycle import lifecycle_enabled
 
@@ -508,11 +511,15 @@ async def _settle(brief: DayBrief, produced: bool) -> bool:
         await mark_brief_surfaced(brief.user_id, brief.session_id, list(brief.surfaced),
                                   **({"trigger": brief.trigger} if brief.trigger else {}))
 
-    if produced and brief.day_review is not None:
-        # today's day-review raise is used, and counts as unanswered until the member takes it up (never raises)
+    if brief.day_review is not None:
+        # today's day-review raise is used, and counts as unanswered until the member takes it up; a turn with no reply frees
+        # its reservation for a later first turn (never raises)
         import day_review_raise
 
-        await day_review_raise.settle(brief.day_review)
+        if produced:
+            await day_review_raise.settle(brief.day_review)
+        else:
+            day_review_raise.release(brief.day_review)
 
     if produced and brief.night_refs:
         # the night mind's back-off: a thread the brief voiced is not raised again tomorrow (last_raised_at / next_raise_after). Never raises.

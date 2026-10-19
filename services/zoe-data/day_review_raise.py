@@ -63,6 +63,10 @@ CROWDED_TRIED = "That's private and someone else is here. I've tried sending it 
 CROWDED_NO_PHONE = "That's private, and someone else is here. Ask me again when you're alone."
 PHONE_SENT = "I've sent it to your phone."
 PHONE_NONE = "I can't reach your phone - link Telegram in Settings first."
+PHONE_TRIED = "I've tried sending it to your phone."
+PHONE_RECENT = "I've just sent it to your phone."
+CROWDED_RECENT = "That's private and someone else is here. I sent it to your phone a moment ago."
+RESERVE_S = 300.0            # an overlapping first turn cannot carry the same raise while one is unsettled
 _TS = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -204,6 +208,7 @@ _TURNS: dict[str, _VoiceTurn] = {}
 _HEARD: dict[str, list[tuple[float, str]]] = {}    # panel -> [(monotonic, member id | "?")]
 _STARTED: list[float] = [time.monotonic()]          # when this process started: who is in the room is unknown for 10 min
 _PHONE_AT: dict[str, float] = {}
+_RESERVED: dict[str, tuple[str, float]] = {}       # member -> (household day, monotonic): a raise prepared and not yet settled
 
 
 def _clock() -> float:
@@ -373,6 +378,9 @@ async def prepare(user_id: str, session_id: str, *, now: Optional[datetime] = No
             logger.info("DAY_REVIEW_RAISE user=%s raised=0 reason=%s", uid or "-", reason)
             return None
         now = now or _now()
+        held = _RESERVED.get(uid)
+        if held and held[0] == _local_day(now) and _clock() - held[1] < RESERVE_S:
+            return None                                           # an overlapping first turn already carries it
         state, engaged_at = await _load_state(uid)
         if state.get("day") == _local_day(now):
             return None                                           # at most once a household day
@@ -388,6 +396,9 @@ async def prepare(user_id: str, session_id: str, *, now: Optional[datetime] = No
             return None
         if streak >= MAX_UNANSWERED:
             streak = 0                                            # a newer review after the snooze: a fresh start
+        if _RESERVED.get(uid, ("", 0.0))[0] == _local_day(now) and _clock() - _RESERVED[uid][1] < RESERVE_S:
+            return None                                           # reserved while this turn awaited its reads
+        _RESERVED[uid] = (_local_day(now), _clock())
         return Raise(uid, raise_line(counts), streak, now)
     except Exception as exc:  # noqa: BLE001
         logger.info("DAY_REVIEW_RAISE user=%s raised=0 reason=error:%s", uid or "-", type(exc).__name__)
@@ -405,6 +416,13 @@ async def settle(raised: Optional[Raise]) -> None:
         logger.info("DAY_REVIEW_RAISE user=%s raised=1 unanswered=%d", raised.user_id, raised.streak + 1)
     except Exception as exc:  # noqa: BLE001
         logger.warning("day_review_raise: raise not recorded for user=%s: %s", raised.user_id, type(exc).__name__)
+
+
+def release(raised: Optional[Raise]) -> None:
+    """The brief that reserved this raise did not carry it out (no reply, or the line did not make the block): free the day's
+    reservation so a later first turn may. Never raises."""
+    if raised is not None and _RESERVED.get(raised.user_id, ("",))[0] == _local_day(raised.now):
+        _RESERVED.pop(raised.user_id, None)
 
 
 async def note_engaged(member: str, *, dry: bool = False) -> None:
@@ -482,11 +500,12 @@ def _phone_url() -> Optional[str]:
 
 
 async def send_to_phone(member: str, counts: dict) -> str:
-    """``sent`` | ``uncertain`` | ``none`` (no linked phone, the bot not configured, refused, or too soon after the last).
-    The count only; the link opens the member's own Pendant page, which asks for their sign-in."""
+    """``sent`` | ``uncertain`` (may have been delivered) | ``recent`` (sent less than ``PHONE_GAP_S`` ago: not sent again) |
+    ``none`` (no linked phone, the bot not configured, refused). The count only; the link opens the member's own Pendant page,
+    which asks for their sign-in."""
     now = _clock()
     if now - _PHONE_AT.get(member, -1e9) < PHONE_GAP_S:
-        return "none"
+        return "recent"
     try:
         import telegram_notify
 
@@ -551,8 +570,8 @@ async def answer(text: str, user_id: str, *, channel: str, extra_ctx: Optional[d
         if outcome != "none":
             await note_engaged(member, dry=dry)
         if not crowded:
-            return PHONE_SENT if outcome != "none" else PHONE_NONE
-        return {"sent": CROWDED_SENT, "uncertain": CROWDED_TRIED}.get(outcome, CROWDED_NO_PHONE)
+            return {"sent": PHONE_SENT, "uncertain": PHONE_TRIED, "recent": PHONE_RECENT}.get(outcome, PHONE_NONE)
+        return {"sent": CROWDED_SENT, "uncertain": CROWDED_TRIED, "recent": CROWDED_RECENT}.get(outcome, CROWDED_NO_PHONE)
     on_screen = bool(panel_id) and not dry and await _push_card(panel_id, member)
     await note_engaged(member, dry=dry)
     where = (" They're on the screen." if on_screen else
@@ -614,4 +633,5 @@ def reset() -> None:
     _TURNS.clear()
     _HEARD.clear()
     _STARTED[:] = [_clock()]
+    _RESERVED.clear()
     _PHONE_AT.clear()
