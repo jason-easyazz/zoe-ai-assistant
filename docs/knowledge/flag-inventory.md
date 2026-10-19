@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-731 flags; 681 not documented in `.env.example`.
+739 flags; 689 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -578,7 +578,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_EVENT_TIME_PRECEDENCE` | `-` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEAD` | `'off'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEADS_BACKEND` | `'numpy'` | no | NO | `services/zoe-data/router_heads_numpy.py` |
-| `ZOE_ROUTER_HEAD_LOG` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_HEAD_LOG` | `-`, `dynamic` | no | NO | `scripts/maintenance/router_struggle_retrain.py`<br>`services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEAD_MIN_CONF` | `'0.70'` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_HEAD_MLP_PATH` | `dynamic` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_HEAD_PATH` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
@@ -587,6 +587,13 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_MODE` | `'shadow'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_MODEL` | `'BAAI/bge-small-en-v1.5'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_MODEL_DIR` | `'/home/zoe/models/functiongemma-router'` | no | NO | `scripts/maintenance/router_selftrain.py` |
+| `ZOE_ROUTER_RETRAIN_DELTA_REPEAT` | `2` | no | NO | `scripts/maintenance/router_struggle_retrain.py` |
+| `ZOE_ROUTER_RETRAIN_DIR` | `-` | no | NO | `services/zoe-data/router_retrain_ledger.py` |
+| `ZOE_ROUTER_RETRAIN_EPOCHS` | `1.0` | no | NO | `scripts/maintenance/router_struggle_retrain.py` |
+| `ZOE_ROUTER_RETRAIN_HOLDOUT_FRAC` | `0.2` | no | NO | `scripts/maintenance/router_struggle_retrain.py` |
+| `ZOE_ROUTER_RETRAIN_LR` | `0.0001` | no | NO | `scripts/maintenance/router_struggle_retrain.py` |
+| `ZOE_ROUTER_RETRAIN_REPLAY` | `300` | no | NO | `scripts/maintenance/router_struggle_retrain.py` |
+| `ZOE_ROUTER_RETRAIN_STOP_BRAIN` | `'0'` | no | NO | `scripts/maintenance/router_struggle_retrain.py` |
 | `ZOE_ROUTER_SCRATCH_PORT` | `'11437'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_SELFTRAIN` | `'off'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_ROUTER_SELFTRAIN_DOW` | `'sat'` | no | NO | `services/zoe-data/main.py` |
@@ -597,6 +604,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_SHADOW_TEXT` | `''` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SIDECAR_URL` | `-` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_THRESHOLD` | `'0.62'` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_TRAIN_PYTHON` | `'/usr/bin/python3'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_TWO_STAGE_GATE` | `'0.5'` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_TWO_STAGE_TIMEOUT_S` | `'1.5'` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_WARM_START` | `dynamic` | no | NO | `scripts/maintenance/router_selftrain.py` |
@@ -728,7 +736,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_PROFILE` | `'zoe_au_natural_v1'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_REPLAY_STT` | `'inprocess'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_RESULTS` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
-| `ZOE_VOICE_SAMPLE_DIR` | `-` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/struggle_proposals.py` |
+| `ZOE_VOICE_SAMPLE_DIR` | `-` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/router_struggle_retrain.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/struggle_proposals.py` |
 | `ZOE_VOICE_SAVE_AUDIO` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_SESSION` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
 | `ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
