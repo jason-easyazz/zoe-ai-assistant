@@ -104,12 +104,69 @@ describe('init, switch, revert and the ledger', () => {
     await assert.rejects(ctl.revert(root, 'owner', undefined, NO_RELOAD), /fix by hand/);
   });
 
-  it('exit status: 3 only when a signalled brain did not confirm', () => {
+  it('exit status: 0 only for confirmed or on-disk-by-design; every other outcome is 3', () => {
     const r = (outcome: string) => ({ from: null, to: 'v', fromSha: null, toSha: null, reload: { outcome, ms: 0, detail: '' } }) as never;
     assert.equal(ctl.switchExitCode(r('confirmed')), 0);
     assert.equal(ctl.switchExitCode(r('skipped')), 0);
     assert.equal(ctl.switchExitCode(r('timeout')), 3);
     assert.equal(ctl.switchExitCode(r('refused')), 3);
+    assert.equal(ctl.switchExitCode(r('not_signalled')), 3, 'a brain that was never signalled did not switch');
+    assert.equal(ctl.switchExitCode(r('something-new')), 3, 'an unknown outcome fails closed');
+  });
+
+  it('a /health harness on a DIFFERENT overlay root, or no main pid, is a non-switch: not_signalled, exit 3', async () => {
+    const root = freshRoot();
+    await ctl.init(root, 'owner', NO_RELOAD);
+    ctl.renderOverlay(join(root, 'cand'));
+    // A /health that claims a harness rooted somewhere else, plus a live pid that must NOT be signalled.
+    const server = createServer((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ ok: true, harness: { dir: join(scratch, 'some-other-root', 'current'), loaded_at: '2000-01-01T00:00:00Z' } }));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const healthUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/health`;
+    try {
+      const other = await ctl.switchTo(root, 'cand', 'night-loop', undefined, { reload: `pid:${process.pid}`, healthUrl });
+      assert.equal(other.reload.outcome, 'not_signalled');
+      assert.match(other.reload.detail, /not signalled/);
+      assert.equal(ctl.switchExitCode(other), 3);
+      assert.equal(ctl.currentVersion(root), 'cand', 'the switch is still on disk');
+
+      // Same root, but the pid is unusable (pid 1 / non-integer): also a non-switch.
+      const rootB = freshRoot();
+      await ctl.init(rootB, 'owner', NO_RELOAD);
+      ctl.renderOverlay(join(rootB, 'cand'));
+      const sameRoot = createServer((_req, res) => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ ok: true, harness: { dir: join(rootB, 'current'), loaded_at: '2000-01-01T00:00:00Z' } }));
+      });
+      await new Promise<void>((r) => sameRoot.listen(0, '127.0.0.1', r));
+      try {
+        const url = `http://127.0.0.1:${(sameRoot.address() as AddressInfo).port}/health`;
+        const nopid = await ctl.switchTo(rootB, 'cand', 'night-loop', undefined, { reload: 'pid:0', healthUrl: url });
+        assert.equal(nopid.reload.outcome, 'not_signalled');
+        assert.match(nopid.reload.detail, /no main pid/);
+        assert.equal(ctl.switchExitCode(nopid), 3);
+      } finally {
+        sameRoot.close();
+      }
+
+      // Negative control: the by-design disk-only cases still exit 0.
+      const none = await ctl.switchTo(root, 'cand', 'night-loop', undefined, NO_RELOAD);
+      assert.equal(ctl.switchExitCode(none), 0);
+      const bare = createServer((_req, res) => res.end(JSON.stringify({ ok: true })));
+      await new Promise<void>((r) => bare.listen(0, '127.0.0.1', r));
+      try {
+        const url = `http://127.0.0.1:${(bare.address() as AddressInfo).port}/health`;
+        const noHarness = await ctl.switchTo(root, 'cand', 'night-loop', undefined, { reload: `pid:${process.pid}`, healthUrl: url });
+        assert.equal(noHarness.reload.outcome, 'skipped');
+        assert.equal(ctl.switchExitCode(noHarness), 0);
+      } finally {
+        bare.close();
+      }
+    } finally {
+      server.close();
+    }
   });
 
   it('revert picks its target under the lock (a held lock refuses before reading the ledger)', async () => {

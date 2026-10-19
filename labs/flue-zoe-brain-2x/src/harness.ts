@@ -111,9 +111,15 @@ export const GUIDANCE_TOOLS: readonly string[] = Object.freeze(
 /** Registered tools that deliberately have NO overlay guidance section (the hard boundary). */
 export const CODE_HELD_TOOLS: readonly string[] = Object.freeze(['memory_retire', 'web_search']);
 
+/**
+ * The upper bounds MIRROR zoe-data's `GET /api/memories/for-prompt` (`routers/memories.py`:
+ * `limit` le=40, `message` max_length=_MAX_PROMPT_MESSAGE_LENGTH=1000). A value above either gets
+ * HTTP 422 and recall_memory reports memory unreachable, so an overlay may never ask for more.
+ * Pinned against the endpoint source by test/harness_overlay.test.ts.
+ */
 export const RECALL_SHAPE_BOUNDS = Object.freeze({
-  limit: Object.freeze({ min: 1, max: 48 }),
-  query_max_chars: Object.freeze({ min: 50, max: 2000 }),
+  limit: Object.freeze({ min: 1, max: 40 }),
+  query_max_chars: Object.freeze({ min: 50, max: 1000 }),
 });
 
 /**

@@ -285,6 +285,8 @@ describe('FAIL CLOSED: anything outside the schema refuses the whole overlay', (
     ['an unknown recall-shape key', () => overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":24,"query_max_chars":500},"forget":true}' }), /unknown key forget/],
     ['an unknown nested key', () => overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":24,"query_max_chars":500,"user_id":"x"}}' }), /unknown key recall_tool.user_id/],
     ['a missing recall-shape key', () => overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":24}}' }), /missing key/],
+    ['a limit just above the endpoint cap (41)', () => overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":41,"query_max_chars":500}}' }), /integer/],
+    ['a query_max_chars just above the endpoint cap (1001)', () => overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":24,"query_max_chars":1001}}' }), /integer/],
     ['an out-of-range limit', () => overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":500,"query_max_chars":500}}' }), /integer/],
     ['a fractional limit', () => overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":2.5,"query_max_chars":500}}' }), /integer/],
     ['a string limit', () => overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":"24","query_max_chars":500}}' }), /integer/],
@@ -311,6 +313,24 @@ describe('FAIL CLOSED: anything outside the schema refuses the whole overlay', (
       assert.match(h.logSuffix, /^ harness=REFUSED instructions=[0-9a-f]{16}$/);
     });
   }
+
+  it('accepts recall-shape exactly at the endpoint caps (40 facts, 1000 chars)', () => {
+    const h = fromEnv(overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":40,"query_max_chars":1000}}' }));
+    assert.equal(h.status, 'overlay', h.reason);
+    assert.deepEqual(h.recallShape, { limit: 40, queryMaxChars: 1000 });
+  });
+
+  it('recall-shape upper bounds are pinned to zoe-data GET /api/memories/for-prompt (no drift, no 422)', () => {
+    const src = readFileSync(new URL('../../../services/zoe-data/routers/memories.py', import.meta.url), 'utf8');
+    const msgMax = /^_MAX_PROMPT_MESSAGE_LENGTH\s*=\s*(\d+)/m.exec(src);
+    assert.ok(msgMax, 'memories.py no longer defines _MAX_PROMPT_MESSAGE_LENGTH: re-pin this test');
+    const handler = src.slice(src.indexOf('async def memory_for_prompt'));
+    assert.match(handler, /max_length=_MAX_PROMPT_MESSAGE_LENGTH/, 'for-prompt message cap is no longer _MAX_PROMPT_MESSAGE_LENGTH');
+    const limitMax = /limit:\s*int\s*=\s*Query\([^)]*?\ble=(\d+)/.exec(handler);
+    assert.ok(limitMax, 'for-prompt limit no longer has an le= cap: re-pin this test');
+    assert.equal(harness.RECALL_SHAPE_BOUNDS.limit.max, Number(limitMax[1]));
+    assert.equal(harness.RECALL_SHAPE_BOUNDS.query_max_chars.max, Number(msgMax[1]));
+  });
 
   it('refuses a symlink inside the overlay (even to a valid file)', () => {
     const dir = overlay();

@@ -18,7 +18,9 @@
  *   switch   --root R --to VERSION --who W [--reason TEXT] [--reload unit:NAME|pid:N|none] [--health-url U]
  *   revert   --root R --who W [--reason TEXT] [--reload ...] [--health-url U]
  *
- * EXIT 3 when a signalled brain does not confirm (timeout) or refuses; 0 otherwise.
+ * EXIT 0 only when the brain confirmed, or the switch is on disk only BY DESIGN (--reload none, or
+ * the brain shows no harness on /health). EXIT 3 otherwise: timeout, refused, or a brain that was
+ * not signalled (its overlay root is another directory, or no main pid).
  *
  * SWITCH = validate the target (a refused overlay is never switched to), re-point `current`
  * atomically (symlink + rename), append the ledger line, then HOT-RELOAD the brain: SIGHUP to the
@@ -216,7 +218,12 @@ export interface ReloadOptions {
 }
 
 export interface ReloadResult {
-  outcome: 'confirmed' | 'refused' | 'timeout' | 'skipped';
+  /**
+   * `skipped` = on disk only BY DESIGN (--reload none, or no harness on the brain's /health).
+   * `not_signalled` = a brain that should have switched was NOT signalled (its /health overlay root
+   * is another directory, or there is no main pid): the switch did not take effect.
+   */
+  outcome: 'confirmed' | 'refused' | 'timeout' | 'skipped' | 'not_signalled';
   ms: number;
   detail: string;
 }
@@ -254,10 +261,10 @@ export async function reloadBrain(root: string, expectSha: string | null, opts: 
     };
   }
   if (resolve(String(view.dir ?? '')) !== resolve(join(root, CURRENT))) {
-    return { outcome: 'skipped', ms: 0, detail: `the brain's overlay dir is ${String(view.dir)}, not ${join(root, CURRENT)}: not signalled` };
+    return { outcome: 'not_signalled', ms: 0, detail: `the brain's overlay dir is ${String(view.dir)}, not ${join(root, CURRENT)}: not signalled` };
   }
   const pid = mainPid(reload);
-  if (!Number.isInteger(pid) || pid <= 1) return { outcome: 'skipped', ms: 0, detail: `no main pid for ${reload}` };
+  if (!Number.isInteger(pid) || pid <= 1) return { outcome: 'not_signalled', ms: 0, detail: `no main pid for ${reload}` };
   const started = performance.now();
   process.kill(pid, 'SIGHUP');
   for (;;) {
@@ -345,12 +352,14 @@ export async function revert(root: string, who: string, reason?: string, opts: R
 }
 
 /**
- * CLI exit status for a switch: 0 when the brain confirmed it (or it was on disk only, by design:
- * no flag on the brain, or --reload none); 3 when a signalled brain did not confirm (timeout) or
- * refused the overlay - the caller (the nightly loop's apply step) must treat that as a failure.
+ * CLI exit status for a switch: 0 ONLY when the brain confirmed it or it was on disk only by design
+ * (`skipped`: no flag on the brain, or --reload none); 3 for everything else - a signalled brain
+ * that did not confirm (timeout), refused the overlay, or a brain that was never signalled
+ * (`not_signalled`: another overlay root, no main pid). The caller (the nightly loop's apply step)
+ * must treat nonzero as "the switch did not take effect". Allow-listed, so a new outcome fails closed.
  */
 export function switchExitCode(r: SwitchResult): number {
-  return r.reload.outcome === 'timeout' || r.reload.outcome === 'refused' ? 3 : 0;
+  return r.reload.outcome === 'confirmed' || r.reload.outcome === 'skipped' ? 0 : 3;
 }
 
 /** Render the compiled-in harness as a version and point `current` at it (a fresh root). */
@@ -434,7 +443,7 @@ export async function main(argv: string[]): Promise<number> {
             : await revert(root, who, flags.get('reason'), reloadOpts);
       print(r);
       const code = switchExitCode(r);
-      if (code) console.error(`harness-overlay: ${cmd} is on disk but the brain did NOT confirm it (${r.reload.outcome}: ${r.reload.detail})`);
+      if (code) console.error(`harness-overlay: ${cmd} is on disk but the brain did NOT switch to it (${r.reload.outcome}: ${r.reload.detail})`);
       return code;
     }
     case 'status': {

@@ -387,7 +387,7 @@ overlay; it never edits code. Loader: `src/harness.ts`. Control: `scripts/harnes
 | `doctrines/<slot>.md` | one doctrine; slots `voice-delivery`, `activator`, `in-session-context`, `recall-precedence`, `personal-recall`, `emotional-recall`, `emotional-capture` | `activator.md` must keep the code-derived group catalogue |
 | `manner.md` | zoe-data's ENGLISH manner block | applied only when zoe-data already sent that block (its flag on, an adult member) |
 | `tool-guidance.md` | tool DESCRIPTIONS, `## <tool>` sections | 21 tools; `web_search` and `memory_retire` are code-held |
-| `recall-shape.json` | `recall_memory` packet size / query cap | exactly `{"version":1,"recall_tool":{"limit":1..48,"query_max_chars":50..2000}}` |
+| `recall-shape.json` | `recall_memory` packet size / query cap | exactly `{"version":1,"recall_tool":{"limit":1..40,"query_max_chars":50..1000}}` |
 
 **Fail closed.** An unknown file, slot, key or tool section, a symlink inside the overlay, a size
 cap, invalid UTF-8, a control character, a chat-template token or an untrusted-content fence
