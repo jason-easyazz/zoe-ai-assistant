@@ -105,16 +105,17 @@ async function detectFeatureAvailability() {
     } catch (_e) {}
 
     // Probe endpoints; treat 200/401/405 as available
-    const [hasJournal, hasPrompts, hasStreak, hasJourneys] = await Promise.all([
+    const [hasJournal, hasPrompts, hasStreak] = await Promise.all([
         probe('/journal/entries?limit=1'),
         probe('/journal/prompts'),
-        probe('/journal/stats/streak'),
-        probe('/journeys')
+        probe('/journal/stats/streak')
     ]);
     capabilities.supportsJournal = !!hasJournal;
     capabilities.supportsPrompts = !!hasPrompts;
     capabilities.supportsStreak = !!hasStreak;
-    capabilities.supportsJourneys = !!hasJourneys;
+    // Journeys never had a backend (no /api/journeys route; the view was removed) - no probe,
+    // which 404'd on every journal load. The journey helpers below stay dormant behind this flag.
+    capabilities.supportsJourneys = false;
     return capabilities;
 }
 

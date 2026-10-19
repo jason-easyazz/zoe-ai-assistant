@@ -51,7 +51,9 @@ uid, so a compromised service or coding agent can neither become root nor read a
 | caller | calls | P0 route |
 |---|---|---|
 | zoe-data `ma_ondemand.py`, `routers/voice_livekit.py`; `ma_idle_reap.py` | inspect/start/stop `zoe-music-assistant`, `livekit` | proxy (allowlisted) |
-| backup, backup-verify, multica heartbeat, health check | inspect + `exec` in `zoe-database` (`pg_dump`, `psql`) | proxy (allowlisted; named volume only, see 2.6) |
+| backup, backup-verify, multica heartbeat, health check | inspect + `exec` in `zoe-database` (`pg_dump`, `pg_restore -l` / `-f -` for the dump manifest, `psql` SELECTs) | proxy (allowlisted; named volume only, see 2.6) |
+| weekly restore drill (`zoe_restore_drill.py`, deep dive 2 S0-8) | `run` / `exec` / `rm` of ONE throwaway `zoe-restore-drill` container + its `--internal` network | container create = root: root helper `zoe-restore-drill-pg` (`up`, `down`, `restore <db>`, `psql <db>`) (pinned image, no binds, capped; exact argv in `60-zoe-deroot`) |
+| host backup (`zoe_host_snapshot.py`) | Home Assistant's root-owned `.storage` / `.cloud` (NOT `docker exec homeassistant`: a zoe-writable bind) | root helper `zoe-ha-config-export storage` (O_NOFOLLOW from `/` down, regular single-link files only, capped); at P0-2 its `HA_CONFIG` line moves to `/srv/zoe/homeassistant` |
 | zoe-data `omnigent_issue_executor.py` (Multica, `ZOE_MULTICA=true`) | `exec` in `zoe-omnigent` | **not** the proxy: a root helper that pins `-u 1000:1000` (P0-2) |
 | zoe-data `main.py` + `music_discovery_batch.py` (`ZOE_MUSIC_DISCOVERY=on`) | `run` digarr (`:latest`, unpinned), `rm -f` | container create = root: moves to a zoe-tier timer + helper, or stays off (P0-2) |
 | zoe-data `system_updates.py` (admin endpoint) | inspect, `compose pull/up --build`, `exec zoe-ui nginx -s reload` | retired from zoe-data; owner path (P0-2) |
@@ -143,7 +145,8 @@ The binary is copied out of `wollomatic/socket-proxy:1.13.1@sha256:3935b709...68
 ### 4.3 sudo
 
 `/etc/sudoers.d/zoe-temp` is deleted and `zoe` leaves the `sudo` group. `60-zoe-deroot` grants `zoe` exact argv
-only: `zoe-mem-compact 0|1|3` (compact only / drop page cache / drop all + compact), `zoe-nvmap-read free|clients`, `systemctl start|stop|restart` of the three model units,
+only: `zoe-mem-compact 0|1|3` (compact only / drop page cache / drop all + compact), `zoe-nvmap-read free|clients`, the backup helpers (`zoe-ha-config-export storage`; `zoe-restore-drill-pg` with
+`up`, `down`, `restore zoe|multica`, `psql zoe|multica|drill`; docs/knowledge/offbox-backup.md section 7), `systemctl start|stop|restart` of the three model units,
 `systemctl restart` of the three service units (the last two groups match nothing until P0-4 makes them system units).
 `zoe-deploy` gets the service restarts. Helpers live root-owned in `/usr/local/libexec/zoe-priv/` and validate their
 one argument. **Owner path:** `zoe-admin` (SSH key + password sudo). **Agent path:** `zoe-ops request "<why>" -- <cmd>`

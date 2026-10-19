@@ -1,0 +1,129 @@
+#!/bin/sh
+# P0 de-root root helper (docs/architecture/p0-deroot.md; deep dive 2 S0-8, docs/knowledge/offbox-backup.md
+# section 7). NOT installed by anything: the owner installs it root:root 0755 at
+# /usr/local/libexec/zoe-priv/zoe-restore-drill-pg, and sudoers.d/60-zoe-deroot lets `zoe` run it with exact argv.
+#
+# The weekly restore drill (scripts/maintenance/zoe_restore_drill.py) restores the nightly dumps into a THROWAWAY
+# Postgres. After P0-3 `zoe` cannot create containers (the Docker proxy refuses create), so this fixed-function
+# helper owns that one container's whole life. Until the owner installs it, the drill runs the repo copy directly
+# as `zoe` (still in the docker group): the same code, so the lab proves what the owner installs.
+#
+#   up                 create the internal network + the container (pinned image, no binds, no published port,
+#                      memory/pids capped, caps dropped), RECORD their ids, and wait until it accepts TCP
+#   restore zoe|multica  createdb, then pg_restore --exit-on-error from STDIN into that database
+#   psql zoe|multica|drill  run the SQL on STDIN (psql -XAt, ON_ERROR_STOP) and print the result
+#   down               remove the recorded container (with its anonymous data volume) and network (idempotent)
+#
+# OBJECTS ARE TRUSTED BY RECORDED ID, NEVER BY NAME. `up` refuses when a container or network with its name already
+# exists and is not the one it recorded, and `restore` / `psql` / `down` act only on the recorded ids. A container
+# planted under the same name (e.g. one mounting the live database's volume) is never exec'd into or removed.
+# The state dir is root-owned 0700 under /run when installed; the unprivileged pre-P0 copy keeps it per user.
+#
+# Nothing here can reach the live database: the container is created here, on its own --internal network, with
+# only the image's own anonymous data volume (removed by `down`); it never talks to zoe-database. Arguments come
+# only from the fixed sets above; the image is pinned by digest and the env override is honoured only when NOT
+# root (the lab's wrong-pgvector control).
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+
+# Same digest as docker-compose.yml zoe-database (tests/unit/test_restore_drill.py pins them equal).
+PINNED_IMAGE="pgvector/pgvector:0.8.6-pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
+NAME=zoe-restore-drill
+NET=zoe-restore-drill-net
+MEM=512m
+
+usage() { echo "usage: zoe-restore-drill-pg up | down | restore zoe|multica | psql zoe|multica|drill" >&2; exit 2; }
+
+IMAGE="$PINNED_IMAGE"
+if [ "$(id -u)" = 0 ]; then
+  STATE=/run/zoe-restore-drill
+else
+  STATE="${XDG_RUNTIME_DIR:-/tmp}/zoe-restore-drill-$(id -u)"
+  if [ -n "${ZOE_DRILL_PG_IMAGE:-}" ]; then IMAGE="$ZOE_DRILL_PG_IMAGE"; fi
+fi
+
+[ "$#" -ge 1 ] || usage
+cmd="$1"
+case "$cmd" in
+  up|down) [ "$#" -eq 1 ] || usage ;;
+  restore) [ "$#" -eq 2 ] || usage
+           case "$2" in zoe|multica) ;; *) usage ;; esac ;;
+  psql) [ "$#" -eq 2 ] || usage
+        case "$2" in zoe|multica|drill) ;; *) usage ;; esac ;;
+  *) usage ;;
+esac
+
+mkdir -p "$STATE"
+chmod 700 "$STATE"
+[ -O "$STATE" ] && [ ! -L "$STATE" ] || { echo "zoe-restore-drill-pg: $STATE is not ours" >&2; exit 5; }
+recorded() { cat "$STATE/$1" 2>/dev/null || true; }
+cid_of() { docker container inspect -f '{{.Id}}' "$NAME" 2>/dev/null || true; }
+nid_of() { docker network inspect -f '{{.Id}}' "$NET" 2>/dev/null || true; }
+ours() {   # the live container is the one `up` created
+  c="$(recorded container)"
+  [ -n "$c" ] && [ "$(cid_of)" = "$c" ]
+}
+
+case "$cmd" in
+  up)
+    c="$(cid_of)"; n="$(nid_of)"
+    if [ -n "$c" ] && [ "$c" != "$(recorded container)" ]; then
+      echo "zoe-restore-drill-pg: a container named $NAME exists that this helper did not create; refusing" >&2; exit 4
+    fi
+    if [ -n "$c" ]; then echo "zoe-restore-drill-pg: $NAME already up; run 'down' first" >&2; exit 4; fi
+    if [ -n "$n" ] && [ "$n" != "$(recorded network)" ]; then
+      echo "zoe-restore-drill-pg: a network named $NET exists that this helper did not create; refusing" >&2; exit 4
+    fi
+    [ -n "$n" ] && docker network rm "$n" >/dev/null
+    rm -f "$STATE/container" "$STATE/network"
+    docker network create --internal --label zoe.restore-drill=1 "$NET" > "$STATE/network"
+    # trust auth is safe here: --internal network, nothing published, no bind, removed after the drill.
+    docker run -d --name "$NAME" --network "$(recorded network)" --label zoe.restore-drill=1 \
+      --memory "$MEM" --memory-swap "$MEM" --pids-limit 256 --cpus 2 \
+      --security-opt no-new-privileges --cap-drop ALL \
+      --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add SETUID --cap-add SETGID \
+      -e POSTGRES_USER=zoe -e POSTGRES_DB=drill -e POSTGRES_HOST_AUTH_METHOD=trust \
+      "$IMAGE" -c shared_buffers=64MB -c max_connections=10 -c fsync=off -c full_page_writes=off \
+      -c synchronous_commit=off -c max_parallel_workers_per_gather=0 -c maintenance_work_mem=64MB > "$STATE/container"
+    c="$(recorded container)"
+    # The image's init runs a socket-only temporary server first; TCP answers only once the real one is up.
+    i=0
+    while [ "$i" -lt 120 ]; do
+      if docker exec "$c" pg_isready -q -h 127.0.0.1 -U zoe -d drill >/dev/null 2>&1; then
+        echo "zoe-restore-drill-pg: up ($IMAGE)"
+        exit 0
+      fi
+      if [ "$(docker container inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" != true ]; then
+        echo "zoe-restore-drill-pg: container exited during start" >&2
+        exit 5
+      fi
+      i=$((i + 1))
+      sleep 1
+    done
+    echo "zoe-restore-drill-pg: not ready after 120 s" >&2
+    exit 5 ;;
+  restore)
+    ours || { echo "zoe-restore-drill-pg: not up (no container this helper created)" >&2; exit 4; }
+    c="$(recorded container)"
+    docker exec "$c" createdb -U zoe "$2"
+    exec docker exec -i "$c" pg_restore -U zoe -d "$2" --exit-on-error ;;
+  psql)
+    ours || { echo "zoe-restore-drill-pg: not up (no container this helper created)" >&2; exit 4; }
+    exec docker exec -i "$(recorded container)" psql -U zoe -d "$2" -XAt -v ON_ERROR_STOP=1 -f - ;;
+  down)
+    c="$(recorded container)"; n="$(recorded network)"
+    # -v: the image's anonymous data volume holds the restored household data; it goes with the container
+    [ -n "$c" ] && docker rm -f -v "$c" >/dev/null 2>&1 || true
+    [ -n "$n" ] && docker network rm "$n" >/dev/null 2>&1 || true
+    if [ -n "$c" ] && docker container inspect "$c" >/dev/null 2>&1; then
+      echo "zoe-restore-drill-pg: the drill container survived down" >&2; exit 5
+    fi
+    rm -f "$STATE/container" "$STATE/network"
+    if [ -n "$(cid_of)" ]; then
+      echo "zoe-restore-drill-pg: a container named $NAME remains that this helper did not create (left alone)" >&2
+      exit 5
+    fi
+    echo "zoe-restore-drill-pg: down" ;;
+esac

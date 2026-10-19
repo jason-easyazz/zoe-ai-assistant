@@ -5,15 +5,22 @@
                                                    unknown voices, ``omi_day_review.voices_to_name``; named through
                                                    ``/api/omi/voices/unknown/{id}/tag``). Facts about the caller's tagged people are
                                                    candidates like any other (``person_fact`` / ``person_relation``).
-  GET  /api/omi/day-review/candidates/{id}         one candidate (payload, quoted evidence, recording ids, provenance)
+                                                   Each candidate also carries, for the review surface (the Pendant page),
+                                                   ``editable`` (the fields an edit may change, ``omi_review_apply.EDITABLE``; [] =
+                                                   not editable), per diarised evidence entry ``offset_ms`` + ``audio_kept`` (the clip
+                                                   route would play that line now; ``omi_day_review.annotate_evidence``), and on a pending
+                                                   ``held_conflict`` a ``conflict`` = {``existing``, ``options``} read now
+                                                   (``omi_review_apply.conflict_detail``; the owner's own row only).
+  GET  /api/omi/day-review/candidates/{id}         one candidate (payload, quoted evidence, recording ids, provenance), annotated alike
   POST /api/omi/day-review/candidates/{id}/approve ``{"fields"?: {...}, "via"?: "desktop"|"phone"|"panel_touch"|"voice"}`` - writes
                                                    through the existing write path of its kind (``omi_review_apply``)
   POST /api/omi/day-review/candidates/{id}/dismiss
 
 WHO. A signed-in, non-guest HUMAN member, and only their OWN candidates (every query filters ``user_id``): a candidate exists only
 under the user its recordings belong to. A guest, an unauthenticated caller and a panel device token (even one bound to a member) are
-refused; there is NO admin override - what a member's pendant heard is theirs. No UI and no spoken offer in this phase: the Memories
-space and the first-turn mention read these routes / ``omi_day_review.pending_counts`` in the next phase.
+refused; there is NO admin override - what a member's pendant heard is theirs. The phone's UI is "Review your day" on the Pendant page
+(``zoe-ui/dist/pendant.html``), which calls exactly these routes (no phone-only endpoint). The first-turn mention reads
+``omi_day_review.pending_counts``.
 """
 from __future__ import annotations
 
@@ -43,13 +50,34 @@ async def _require_member(user: dict = Depends(require_signed_in)) -> dict:
     return user
 
 
+#: at most this many held candidates get their conflict READ per request (each is a memory read; holds are rare). Past it a held
+#: candidate is still marked held (existing unknown, no retry), so the surface never offers a plain Approve that would only 409.
+MAX_CONFLICT_READS = 10
+
+
+async def _annotate(uid: str, cands: list) -> list:
+    """The review surface's extras, all the caller's own: editable fields, where each quoted line sits and whether its audio is
+    still kept, and what a held candidate contradicts. Pointers and the member's own text only - never an audio path."""
+    await dr.annotate_evidence(uid, cands)
+    reads = 0
+    for c in cands:
+        c["editable"] = list(apply.EDITABLE.get(c.get("kind"), ()))
+        if c.get("status") == "pending" and c.get("write_error") == "held_conflict":
+            if reads < MAX_CONFLICT_READS:
+                reads += 1
+                c["conflict"] = await apply.conflict_detail(uid, c)
+            else:
+                c["conflict"] = {"existing": None, "options": [apply.KEEP_EXISTING] + ([apply.EDIT] if c["editable"] else [])}
+    return cands
+
+
 @router.get("/candidates")
 async def list_my_candidates(status: str = Query("pending", pattern="^(pending|approving|approved|dismissed|all)$"),
                              day: str = Query("", pattern=r"^(\d{4}-\d{2}-\d{2})?$"), limit: int = Query(100, ge=1, le=500),
                              user: dict = Depends(_require_member)):
     uid = user["user_id"]
-    return {"candidates": await dr.list_candidates(uid, status=status, day=day, limit=limit), "pending": await dr.pending_counts(uid),
-            "voices_to_name": await dr.voices_to_name(uid)}
+    cands = await _annotate(uid, await dr.list_candidates(uid, status=status, day=day, limit=limit))
+    return {"candidates": cands, "pending": await dr.pending_counts(uid), "voices_to_name": await dr.voices_to_name(uid)}
 
 
 @router.get("/candidates/{cid}")
@@ -57,7 +85,7 @@ async def get_my_candidate(cid: str, user: dict = Depends(_require_member)):
     c = await dr.get_candidate(user["user_id"], cid)
     if c is None:
         raise HTTPException(status_code=404, detail="no such candidate")
-    return c
+    return (await _annotate(user["user_id"], [c]))[0]
 
 
 class _Approve(BaseModel):

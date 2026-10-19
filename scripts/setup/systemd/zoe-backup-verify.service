@@ -1,15 +1,19 @@
-# Weekly on-box restore check + the MONTHLY off-box restore drill (architecture deep dive A5): restores the newest
-# snapshot of every tier from the411 to a scratch dir, compares sha256 with what was sent, reads 1/12 of the repo's
-# data, and alerts when the household tier is older than 35 days (the411's prune stopped) or backups stop landing.
+# Weekly RESTORE DRILL (deep dive 2 S0-8) + the MONTHLY off-box restore drill (architecture deep dive A5).
+# On-box: zoe_restore_drill.py restores the newest dumps into a THROWAWAY pg17 + pgvector container (never the live
+# instance), checks row counts against each dump's manifest, pgvector, Alembic and an HNSW build + query, opens the
+# palace with chromadb and runs a vector query, and checks the host archive. Off-box (monthly): restores every tier
+# from the411, compares sha256 with what was sent, reads 1/12 of the repo's data, checks the 35-day bound.
 # Tracked 2026-10-18; was ~/scripts/maintenance/zoe-backup-verify.sh.
 [Unit]
-Description=Weekly Zoe backup restore-verify (+ monthly off-box restore drill)
+Description=Weekly Zoe backup restore drill (+ monthly off-box restore drill)
 Wants=network-online.target
-After=network-online.target
+After=network-online.target zoe-backup.service zoe-offbox-backup.service
 
 [Service]
 Type=oneshot
 ExecStart=%h/assistant/scripts/maintenance/zoe-backup-verify.sh
+# A killed or timed-out run must not leave the throwaway database running (idempotent).
+ExecStopPost=-/usr/bin/python3 %h/assistant/scripts/maintenance/zoe_restore_drill.py --teardown
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
