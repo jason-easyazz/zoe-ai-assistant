@@ -278,7 +278,10 @@ baseline's `clip_profile` for every clip that was OK there. A clip with an expec
 One failing clip fails the run (`said_vs_did_regressions` gains `FUNCTION: clip <id> <kind>`, ids and the
 mismatch kind only, because `reason` reaches the public voice-gate log); a pinned set where no clip has an
 expectation judged nothing and fails. A newly `EMPTY` clip gets the same 2-of-3 retry as brain wording (one
-transient empty transcript was measured in 44 runs); a route change is deterministic and is never retried.
+transient empty transcript was measured in 44 runs), and so does a clip that comes back OK on ANOTHER route
+(one pinned clip did, in 2 isolated runs of 44: a router sidecar timeout falls back to the similarity route).
+A real route regression fails every run, so it still fails; a tolerated clip is listed in `flaky_clips` with
+its per-run outcomes and the gate message counts it. More than 3 such clips are never retried.
 **What it still cannot see:** the brain's own tool choice (sampled at temperature 0.7: a brain-lane clip is
 checked for its lane and router decision, not which tool the brain then called), wording beyond the refusal
 patterns, and everything after the brain. Artifact keys (additive): `clip_checks: true`, `clip_summary`

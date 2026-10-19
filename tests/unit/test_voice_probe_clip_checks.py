@@ -418,6 +418,15 @@ def test_self_test_refuses_the_shared_artifact_path(tmp_path, monkeypatch, world
     assert ei.value.code == 2
 
 
+def test_self_test_refuses_a_results_path_given_on_the_same_command_line(tmp_path, monkeypatch):
+    shared = tmp_path / "some-shared.json"
+    monkeypatch.setattr(sys, "argv", ["probe", "--self-test", "--results", str(shared),
+                                      "--self-test-results", str(shared)])
+    with pytest.raises(SystemExit) as ei:
+        vrp.main()
+    assert ei.value.code == 2 and not shared.exists()
+
+
 def test_a_normal_run_strips_an_inherited_fault_and_refuses_a_faulted_report(tmp_path, monkeypatch, world):
     d, names, base = world
     rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [_good(names)], env_fault="blank_stt")

@@ -37,7 +37,7 @@ def test_t3_widening_does_not_sweep_in_neighbours():
 
 
 def _clip_art(**over):
-    art = {"clip_checks": True, "clip_summary": {"checked": 3, "passed": 3, "failed": 0},
+    art = {"clip_checks": True, "clip_summary": {"checked": 3, "passed": 3, "failed": 0, "unchecked": 0},
            "clip_results": [{"clip_id": c * 12, "result": "pass"} for c in "abc"]}
     art.update(over)
     return art
@@ -48,14 +48,26 @@ def test_clip_block_passes_a_clean_block_and_ignores_a_pre_t3_artifact():
     assert vgc.clip_block_ok({"status": "pass"}) == (True, "")
 
 
+_ROWS = [{"clip_id": c * 12, "result": "pass"} for c in "abc"]
+
+
 @pytest.mark.parametrize("over,needle", [
     ({"clip_summary": None}, "well-formed"),
-    ({"clip_summary": {"checked": "3", "passed": 3, "failed": 0}}, "well-formed"),
-    ({"clip_summary": {"checked": 0, "passed": 0, "failed": 0}}, "judged 0 clips"),
-    ({"clip_summary": {"checked": 3, "passed": 2, "failed": 1}}, "1 of 3"),
+    ({"clip_summary": {"checked": "3", "passed": 3, "failed": 0, "unchecked": 0}}, "well-formed"),
+    ({"clip_summary": {"checked": 3, "passed": 3, "failed": 0}}, "well-formed"),          # no unchecked count
+    ({"clip_summary": {"checked": 0, "passed": 0, "failed": 0, "unchecked": 0}, "clip_results": []}, "judged 0 clips"),
+    ({"clip_summary": {"checked": 3, "passed": 2, "failed": 1, "unchecked": 0},
+      "clip_results": _ROWS[:2] + [{"clip_id": "c" * 12, "result": "fail"}]}, "1 of 3"),
     # a producer that miscounts: the rows say a clip failed, the summary says none did
-    ({"clip_results": [{"clip_id": "a" * 12, "result": "fail"}]}, "1 of 3"),
-    ({"clip_summary": {"checked": 3, "passed": 2, "failed": 0}}, "1 of 3"),
+    ({"clip_results": _ROWS[:2] + [{"clip_id": "c" * 12, "result": "fail"}]}, "disagrees"),
+    # truncated / padded / duplicated / unrelated evidence (Codex, review of #2154)
+    ({"clip_results": []}, "disagrees"),
+    ({"clip_results": _ROWS[:2]}, "disagrees"),
+    ({"clip_results": _ROWS + [{"clip_id": "d" * 12, "result": "pass"}]}, "disagrees"),
+    ({"clip_results": _ROWS[:2] + [dict(_ROWS[0])]}, "duplicate"),
+    ({"clip_results": _ROWS[:2] + [{"clip_id": "c" * 12, "result": "ok"}]}, "malformed"),
+    ({"clip_results": _ROWS[:2] + [{"result": "pass"}]}, "malformed"),
+    ({"clip_results": None}, "malformed"),
 ])
 def test_clip_block_refuses(over, needle):
     ok, why = vgc.clip_block_ok(_clip_art(**over))
@@ -65,9 +77,16 @@ def test_clip_block_refuses(over, needle):
 def test_evaluate_blocks_a_pass_whose_clips_failed_and_any_self_test_artifact():
     now = time.time()
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
-    art = dict(_clip_art(clip_summary={"checked": 3, "passed": 2, "failed": 1}), status="pass", timestamp=ts)
+    art = dict(_clip_art(clip_summary={"checked": 3, "passed": 2, "failed": 1, "unchecked": 0},
+                         clip_results=_ROWS[:2] + [{"clip_id": "c" * 12, "result": "fail"}]), status="pass", timestamp=ts)
     assert vgc.evaluate(art, now_epoch=now, max_age_s=DAY)[0] is False
     assert vgc.evaluate(dict(_clip_art(), status="pass", timestamp=ts), now_epoch=now, max_age_s=DAY)[0] is True
     st = dict(_clip_art(), status="pass", timestamp=ts, self_test=True)
     ok, why = vgc.evaluate(st, now_epoch=now, max_age_s=DAY)
     assert ok is False and "SELF-TEST" in why
+
+
+def test_every_pinned_clip_must_be_accounted_for():
+    ok, why = vgc.clip_block_ok(_clip_art(baseline_ref={"clip_set_size": 20}))
+    assert ok is False and "3 per-clip rows for a 20-clip pinned set" in why
+    assert vgc.clip_block_ok(_clip_art(baseline_ref={"clip_set_size": 3}))[0] is True

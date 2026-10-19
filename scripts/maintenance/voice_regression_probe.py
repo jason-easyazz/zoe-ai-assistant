@@ -1674,8 +1674,10 @@ def main(reexec: bool = False) -> int:
               file=sys.stderr)
     if args.self_test:
         shared = Path(os.environ.get("ZOE_VOICE_RESULTS", DEFAULT_RESULTS))
-        if args.self_test_results.resolve() in (shared.resolve(), DEFAULT_RESULTS.resolve()):
-            ap.error("--self-test-results must not be the shared voice-gate artifact")
+        # ...nor whatever --results names on THIS command line (a caller's shared artifact)
+        if args.self_test_results.resolve() in (shared.resolve(), DEFAULT_RESULTS.resolve(),
+                                                args.results.resolve()):
+            ap.error("--self-test-results must not be the shared voice-gate artifact (or --results)")
         # Every exit path below writes args.results: point it (and the trend) away from
         # the deploy gate's file BEFORE anything can write.
         args.results, args.trend = args.self_test_results, DEFAULT_SELFTEST_TREND

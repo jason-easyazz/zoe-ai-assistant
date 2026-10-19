@@ -770,30 +770,49 @@ def clip_block_ok(artifact: dict[str, Any]) -> tuple[bool, str]:
 
     BACKWARD COMPATIBILITY, as with the VAD stage: an artifact without
     `clip_checks: true` predates the checks and is NO OPINION. An artifact that CLAIMS
-    them must show its work, and the verdict is RE-DERIVED from the counts rather than
-    taken from the producer's status label:
-      - `clip_summary` missing / malformed          -> block (claimed, not shown)
-      - checked == 0                                -> block: nothing was judged (a
-        re-pin run, or a baseline with no per-clip profile, is not evidence)
-      - failed > 0, or a `clip_results` row whose result is "fail" -> block
+    them must show its work, and the verdict is RE-DERIVED from the per-clip rows, never
+    taken from the producer's status label or its summary counts alone:
+      - `clip_summary` missing / malformed, or `clip_results` not a list of rows with
+        a unique `clip_id` and a result in pass | fail | unchecked -> block
+      - the summary disagrees with the rows (checked / passed / failed / unchecked
+        counted from the rows) -> block: a truncated or padded block is not evidence
+      - checked == 0 -> block: nothing was judged (a re-pin / first baseline run, or
+        a baseline with no per-clip profile, is not evidence)
+      - any failed clip -> block
     """
     if artifact.get("clip_checks") is not True:
         return True, ""
     cs = artifact.get("clip_summary")
+    keys = ("checked", "passed", "failed", "unchecked")
     ints = isinstance(cs, dict) and all(isinstance(cs.get(k), int) and not isinstance(cs.get(k), bool)
-                                        and cs.get(k) >= 0 for k in ("checked", "passed", "failed"))
+                                        and cs.get(k) >= 0 for k in keys)
     if not ints:
         return False, ("artifact claims per-clip checks (clip_checks: true) but carries no well-formed "
                        "`clip_summary` - the checks' result is missing, which is NOT a pass")
-    if cs["checked"] == 0:
+    rows = artifact.get("clip_results")
+    good_rows = (isinstance(rows, list) and all(isinstance(r, dict) and isinstance(r.get("clip_id"), str)
+                                                 and r.get("result") in ("pass", "fail", "unchecked")
+                                                 for r in rows))
+    if not good_rows or len({r["clip_id"] for r in rows}) != len(rows):
+        return False, ("per-clip checks: `clip_results` is missing, malformed or has duplicate clip ids - "
+                       "the per-clip evidence is not shown, which is NOT a pass")
+    counted = {k: sum(1 for r in rows if r["result"] == v)
+               for k, v in (("passed", "pass"), ("failed", "fail"), ("unchecked", "unchecked"))}
+    counted["checked"] = counted["passed"] + counted["failed"]
+    if any(counted[k] != cs[k] for k in keys):
+        return False, (f"per-clip checks: the summary {dict((k, cs[k]) for k in keys)} disagrees with the "
+                       f"{len(rows)} per-clip rows {counted} - not evidence")
+    pinned = (artifact.get("baseline_ref") or {}).get("clip_set_size")
+    if isinstance(pinned, int) and not isinstance(pinned, bool) and len(rows) < pinned:
+        return False, (f"per-clip checks: {len(rows)} per-clip rows for a {pinned}-clip pinned set - every "
+                       "pinned clip must be accounted for")
+    if counted["checked"] == 0:
         return False, ("per-clip checks judged 0 clips (a re-pin / first baseline run, or a baseline "
                        "with no clip profile) - not evidence; run the probe against the current baseline")
-    rows = [r for r in (artifact.get("clip_results") or []) if isinstance(r, dict)]
-    failed_rows = [r for r in rows if r.get("result") == "fail"]
-    if cs["failed"] or failed_rows or cs["passed"] != cs["checked"]:
-        n = max(cs["failed"], len(failed_rows), cs["checked"] - cs["passed"])
-        return False, f"per-clip checks: {n} of {cs['checked']} pinned clip(s) did not hold their expected outcome"
-    return True, f"{cs['passed']}/{cs['checked']} clips held their expected outcome"
+    if counted["failed"]:
+        return False, (f"per-clip checks: {counted['failed']} of {counted['checked']} pinned clip(s) did not "
+                       "hold their expected outcome")
+    return True, f"{counted['passed']}/{counted['checked']} clips held their expected outcome"
 
 
 def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: float,
