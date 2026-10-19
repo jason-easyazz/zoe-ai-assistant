@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from biometric_scope import (
     authorize_profile_access,
+    require_local_panel,
     require_person_scope,
     resolve_enroll_target,
 )
@@ -79,10 +80,10 @@ async def face_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)
     if not bool(payload.get("consent")):
         raise HTTPException(status_code=400, detail="explicit consent is required to enroll a face profile")
 
-    # A session caller may only enrol ITSELF (admins excepted): accepting the
-    # payload's user_id verbatim let any household member enrol their own face
-    # under someone else's id — identity takeover, not just a bad row.
-    user_id = str(resolve_enroll_target(payload.get("user_id"), caller) or "").strip()
+    # A session caller may only enrol ITSELF (admins excepted); a device token only
+    # the member the server verified at its panel (a fresh PIN sign-in) - never the
+    # payload's user_id, which let a copied panel token enrol any face onto anyone.
+    user_id = str(await resolve_enroll_target(payload.get("user_id"), caller, kind="face") or "").strip()
     if not user_id or user_id in ("voice-daemon", "guest"):
         raise HTTPException(status_code=400, detail="a real user_id is required")
     display_name = str(payload.get("display_name") or user_id).strip() or user_id
@@ -145,6 +146,8 @@ async def face_profiles_sync(caller: dict = Depends(_require_voice_auth)):
     _require_enabled()
     if caller.get("source") != "device":
         raise HTTPException(status_code=403, detail="device token required")
+    # A copied panel token must not export every member's faceprint from the internet (2026-10-19).
+    require_local_panel(caller, "the face profile feed")
     from db_compat import get_compat_db as _get_compat_db
 
     try:

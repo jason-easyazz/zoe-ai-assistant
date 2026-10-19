@@ -9,7 +9,7 @@
 ## 🚨 INCIDENT REPORT
 
 **Date**: October 26, 2025  
-**Issue**: All user accounts lost (Jason, Andrew, Teneeka, Asya, User)  
+**Issue**: All user accounts lost (every household account)  
 **Cause**: Database location confusion and lack of safeguards  
 **Resolution**: Fresh slate with strict protection rules
 
@@ -161,14 +161,17 @@ Alerts if user count drops below 5
 
 ## ✅ REQUIRED USERS
 
+The household's real accounts are NOT listed here: this repository is public. The live
+user list is in the database (`SELECT user_id, role FROM users`); placeholders below.
+
 **Admins (2)**:
-- jason (jason@easyazz.com)
-- andrew (andrew@easyazz.com)
+- owner (owner@example.com)
+- admin-2 (admin2@example.com)
 
 **Users (3)**:
-- teneeka (teneeka@easyazz.com)
-- asya (asya@easyazz.com)
-- user (user@easyazz.com)
+- member-1 (member1@example.com)
+- member-2 (member2@example.com)
+- user (user@example.com)
 
 **System (1)**:
 - system (system@zoe.local)
@@ -210,7 +213,7 @@ ls -lt /home/zoe/assistant/data/backups/ | head -5
 **If database issues occur:**
 1. STOP all services immediately
 2. Create emergency backup
-3. Contact: jason@easyazz.com
+3. Contact: the system owner
 4. DO NOT attempt recovery without approval
 
 ---

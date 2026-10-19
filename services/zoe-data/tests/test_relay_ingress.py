@@ -761,7 +761,7 @@ def test_migration_chain_is_linear_and_rerun_safe():
         if d:
             downs.add(d.group(1))
     heads = set(revs) - downs
-    assert len(heads) == 1, f"more than one alembic head {sorted(heads)}: 0059 chains onto 0057 (#2109); expected until #2109 is on main - see the migration docstring"
+    assert len(heads) == 1, f"more than one alembic head {sorted(heads)}: 0059 chains onto 0060 (#2146); if #2141's 0058 is on main too, re-chain the later one - see the migration docstring"
     assert "0059" in revs
     con = sqlite3.connect(":memory:")
     con.execute("PRAGMA foreign_keys = ON")

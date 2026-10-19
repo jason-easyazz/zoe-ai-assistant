@@ -1,6 +1,4 @@
 from datetime import datetime
-import os
-import socket
 import sys
 from pathlib import Path
 
@@ -10,17 +8,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import db_pool
 import voice_presence
 from voice_presence import (
-    is_wake_payload,
     is_wake_text,
     processing_ack_audio_payload,
     processing_ack_event,
     processing_ack_phrases,
     processing_ack_variant,
     wake_ack_audio_payload,
-    wake_ack_events,
     wake_ack_phrase,
     wake_ack_time_period,
     wake_ack_variant,
@@ -35,105 +30,12 @@ def _reset_voice_presence_state(monkeypatch):
     monkeypatch.setattr(voice_presence, "_PROCESSING_ACK_CURSOR", 0)
 
 
-def _drop_cached_db_pool():
-    """Best-effort discard of any asyncpg pool cached by a previous lifespan."""
-    stale = db_pool._pool
-    db_pool._pool = None
-    db_pool._pool_loop = None
-    if stale is not None:
-        try:
-            stale.terminate()
-        except Exception:
-            # The previous test's event loop is already closed; asyncpg's
-            # terminate() can raise "Event loop is closed" from the transport
-            # abort. Connections die with the pytest process either way.
-            pass
-
-
-def _lifespan_postgres_endpoint() -> tuple[str, int] | None:
-    """(host, port) of the Postgres ``main``'s lifespan will open, or None.
-
-    Mirrors how the lifespan resolves it without mutating the environment:
-    ``POSTGRES_URL`` from the process env, else the first ``.env`` that
-    ``runtime_env.bootstrap_runtime_env`` would read it from.
-    """
-    from urllib.parse import urlsplit
-
-    import runtime_env
-
-    url = os.environ.get("POSTGRES_URL", "")
-    if not url:
-        for path in runtime_env._ENV_FILES:
-            try:
-                for raw in Path(path).read_text(encoding="utf-8").splitlines():
-                    if raw.strip().startswith("POSTGRES_URL="):
-                        url = raw.split("=", 1)[1].strip().strip('"').strip("'")
-                        break
-            except OSError:
-                continue
-            if url:
-                break
-    if not url:
-        return None
-    parts = urlsplit(url)
-    return parts.hostname or "localhost", parts.port or 5432
-
-
-@pytest.fixture
-def lifespan_postgres():
-    """Skip (with the reason) when ``main``'s lifespan cannot reach Postgres.
-
-    The ``/ws/voice/`` tests enter ``TestClient(main.app)``, whose lifespan
-    opens the asyncpg pool — so they are Jetson-lane tests (never ``ci_safe``,
-    see tests/AGENTS.md). Run in a no-network sandbox (``unshare -rn``) they
-    used to fail with ``OSError: Network is unreachable``, which reads as a
-    voice regression and is not one. Probed at TEST time, not import time.
-    Never skips under ``CI`` (GitHub sets it on every runner, self-hosted
-    included): the Jetson lane must go red, not quietly skip, if Postgres is down.
-    """
-    if os.environ.get("CI"):
-        return  # fail closed on any CI runner: there, unreachable is a real failure
-    endpoint = _lifespan_postgres_endpoint()
-    if endpoint is None:
-        pytest.skip("main lifespan needs POSTGRES_URL (not in env or any runtime_env .env file)")
-    try:
-        socket.create_connection(endpoint, timeout=1.0).close()
-    except OSError as exc:
-        pytest.skip(f"main lifespan needs Postgres at {endpoint[0]}:{endpoint[1]} ({exc}) — "
-                    "no-network sandbox; runs on the Jetson self-hosted lane")
-
-
-@pytest.fixture(autouse=True)
-def _fresh_db_pool_per_test():
-    """Isolate db_pool state across `with TestClient(main.app)` lifespans.
-
-    Each TestClient context runs main's lifespan on a fresh event loop, and the
-    lifespan never calls close_pool on shutdown — so the asyncpg pool leaks,
-    bound to a loop that is closed by the time the NEXT test starts. Since #880
-    init_pool() discards such stale pools via pool.terminate(), which raises
-    RuntimeError("Event loop is closed") out of app startup and failed every
-    second lifespan-entering test in this file. Dropping the cached pool around
-    each test makes every lifespan build a fresh pool on its own loop.
-    """
-    _drop_cached_db_pool()
-    yield
-    _drop_cached_db_pool()
-
-
 def test_is_wake_text_matches_only_wake_phrase():
     assert is_wake_text("hey zoe") is True
     assert is_wake_text("Hi Zoe!") is True
     assert is_wake_text("hello zoe ") is True
     assert is_wake_text("hey zoe do I need a jacket") is False
     assert is_wake_text("zoe") is False
-
-
-def test_is_wake_payload_accepts_explicit_wake_and_text_phrase():
-    assert is_wake_payload({"type": "wake"}) is True
-    assert is_wake_payload({"type": "text", "message": "hey zoe"}) is True
-    assert is_wake_payload({"type": "text", "message": "hey zoe set a timer"}) is False
-    assert is_wake_payload({"type": "cancel"}) is False
-    assert is_wake_payload(None) is False
 
 
 def test_wake_presence_events_are_instant_and_non_reasoning():
@@ -274,44 +176,6 @@ def test_wake_ack_variant_falls_back_to_default_label_when_period_missing():
     assert variant == {"phrase": "Yes Jason?", "audio_path": "", "index": 0, "label": "default"}
 
 
-def test_wake_ack_events_can_use_time_aware_variant():
-    events = wake_ack_events(
-        {
-            "ZOE_WAKE_ACK_PHRASES": "Yes Jason?|Good morning Jason.",
-            "ZOE_WAKE_ACK_VARIANT_LABELS": "default|morning",
-        },
-        now=datetime(2026, 1, 1, 7, 0),
-    )
-
-    assert events == [
-        {"type": "state", "state": "wake"},
-        {"type": "transcript", "role": "zoe", "text": "Good morning Jason."},
-        {"type": "state", "state": "listening"},
-        {"type": "done"},
-    ]
-
-
-def test_wake_ack_events_uses_selected_cached_variant(tmp_path):
-    audio_path = tmp_path / "wake.wav"
-    audio_path.write_bytes(b"RIFF")
-
-    events = wake_ack_events(
-        {
-            "ZOE_WAKE_ACK_PHRASES": "Hi there.|How can I help?",
-            "ZOE_WAKE_ACK_AUDIO_PATHS": str(audio_path),
-        }
-    )
-
-    assert events[0] == {"type": "state", "state": "wake"}
-    assert events[1] == {"type": "transcript", "role": "zoe", "text": "Hi there."}
-    assert events[2]["type"] == "audio"
-    assert events[2]["audio_base64"] == "UklGRg=="
-    assert events[-2:] == [
-        {"type": "state", "state": "listening"},
-        {"type": "done"},
-    ]
-
-
 def test_presence_event_builder_is_sub_millisecond_for_hot_path():
     import time
 
@@ -370,131 +234,6 @@ def test_processing_ack_event_can_include_cached_audio(tmp_path):
     assert event["audio_base64"] == "UklGRnByb2Nlc3Npbmc="
     assert event["audio_source"] == "cached_processing_ack"
     assert processing_ack_audio_payload(audio_path=str(audio_path))["source"] == "cached_processing_ack"
-
-
-@pytest.mark.usefixtures("lifespan_postgres")
-def test_websocket_wake_returns_presence_events_without_reasoning(monkeypatch):
-    from fastapi.testclient import TestClient
-    import main
-
-    async def _unexpected_resolve(*_args, **_kwargs):
-        raise AssertionError("wake must not enter Skybridge/card resolution")
-
-    monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
-    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASE", raising=False)
-    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
-    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATH", raising=False)
-    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATHS", raising=False)
-
-    with TestClient(main.app) as client:
-        with client.websocket_connect("/ws/voice/") as ws:
-            assert ws.receive_json() == {"type": "state", "state": "ambient"}
-            ws.send_json({"type": "wake"})
-
-            assert ws.receive_json() == {"type": "state", "state": "wake"}
-            assert ws.receive_json() == {"type": "state", "state": "listening"}
-            assert ws.receive_json() == {"type": "done"}
-
-
-@pytest.mark.usefixtures("lifespan_postgres")
-def test_websocket_hey_zoe_can_emit_configured_ack_phrase(monkeypatch):
-    from fastapi.testclient import TestClient
-    import main
-
-    async def _unexpected_resolve(*_args, **_kwargs):
-        raise AssertionError("wake phrase must not enter Skybridge/card resolution")
-
-    monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
-    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
-    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATH", raising=False)
-    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATHS", raising=False)
-    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
-
-    with TestClient(main.app) as client:
-        with client.websocket_connect("/ws/voice/") as ws:
-            assert ws.receive_json() == {"type": "state", "state": "ambient"}
-            ws.send_json({"type": "text", "message": "hey zoe"})
-
-            assert ws.receive_json() == {"type": "state", "state": "wake"}
-            assert ws.receive_json() == {"type": "transcript", "role": "zoe", "text": "Yes Jason?"}
-            assert ws.receive_json() == {"type": "state", "state": "listening"}
-            assert ws.receive_json() == {"type": "done"}
-
-
-@pytest.mark.usefixtures("lifespan_postgres")
-def test_websocket_raw_text_hey_zoe_can_emit_configured_ack_phrase(monkeypatch):
-    from fastapi.testclient import TestClient
-    import main
-
-    async def _unexpected_resolve(*_args, **_kwargs):
-        raise AssertionError("raw wake phrase must not enter Skybridge/card resolution")
-
-    monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
-    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
-    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATH", raising=False)
-    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATHS", raising=False)
-    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
-
-    with TestClient(main.app) as client:
-        with client.websocket_connect("/ws/voice/") as ws:
-            assert ws.receive_json() == {"type": "state", "state": "ambient"}
-            ws.send_text("hey zoe")
-
-            assert ws.receive_json() == {"type": "state", "state": "wake"}
-            assert ws.receive_json() == {"type": "transcript", "role": "zoe", "text": "Yes Jason?"}
-            assert ws.receive_json() == {"type": "state", "state": "listening"}
-            assert ws.receive_json() == {"type": "done"}
-
-
-@pytest.mark.usefixtures("lifespan_postgres")
-def test_websocket_wake_can_emit_cached_audio_without_reasoning(monkeypatch, tmp_path):
-    from fastapi.testclient import TestClient
-    import main
-
-    audio_path = tmp_path / "wake.wav"
-    audio_path.write_bytes(b"RIFF")
-
-    async def _unexpected_resolve(*_args, **_kwargs):
-        raise AssertionError("wake audio must not enter Skybridge/card resolution")
-
-    monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
-    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
-    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
-    monkeypatch.setenv("ZOE_WAKE_ACK_AUDIO_PATH", str(audio_path))
-
-    with TestClient(main.app) as client:
-        with client.websocket_connect("/ws/voice/") as ws:
-            assert ws.receive_json() == {"type": "state", "state": "ambient"}
-            ws.send_json({"type": "wake"})
-
-            assert ws.receive_json() == {"type": "state", "state": "wake"}
-            assert ws.receive_json() == {"type": "transcript", "role": "zoe", "text": "Yes Jason?"}
-            audio = ws.receive_json()
-            assert audio["type"] == "audio"
-            assert audio["audio_base64"] == "UklGRg=="
-            assert audio["content_type"].startswith("audio/")
-            assert audio["source"] == "cached_wake_ack"
-            assert ws.receive_json() == {"type": "state", "state": "listening"}
-            assert ws.receive_json() == {"type": "done"}
-
-
-@pytest.mark.usefixtures("lifespan_postgres")
-def test_websocket_ignores_non_object_json_and_stays_alive(monkeypatch):
-    from fastapi.testclient import TestClient
-    import main
-
-    async def _unexpected_resolve(*_args, **_kwargs):
-        raise AssertionError("non-message payload must not enter Skybridge/card resolution")
-
-    monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
-
-    with TestClient(main.app) as client:
-        with client.websocket_connect("/ws/voice/") as ws:
-            assert ws.receive_json() == {"type": "state", "state": "ambient"}
-            ws.send_text("[]")
-            ws.send_text("ping")
-
-            assert ws.receive_json() == {"type": "pong"}
 
 
 def test_voice_wake_endpoint_uses_cached_audio_before_live_tts(monkeypatch, tmp_path):

@@ -10,19 +10,15 @@ to ONE panel for good; ``revoked_at`` is the stolen-panel switch (a revoked fing
 un-revoked - a new certificate gets a new fingerprint). Rows go with their panel (``ON DELETE CASCADE``). TEXT timestamps like
 the rest of the panel tables, so the SQLite unit lane runs it. ``IF NOT EXISTS`` makes a rerun safe; the downgrade drops the table.
 
-REVISION CHAIN NOTE: ``down_revision`` is ``0057`` (#2109, struggle proposals), after ``0055`` (#2092) and ``0056`` (#2098, omi device
-health). If #2109 has not merged when this lands, the chain shows two heads and ``tests/test_relay_ingress.py::test_migration_chain``
-is red until it does; do not change ``down_revision`` to make it green.
-
-RENUMBERED 0058 -> 0059 (2026-10-19, landing train): #2141 (``0058_turn_outcomes``) and #2146 (``0058_phone_app``) also took
-0058. Revision ids are now distinct; ``down_revision`` stays on main's head (``0057``). Whichever of them lands FIRST, the next
-one re-chains its ``down_revision`` onto it (the single-head test goes red until it does).
+REVISION CHAIN NOTE: ``down_revision`` is ``0060`` (``0060_phone_app``, #2146), re-pointed 2026-10-19 after #2146 landed (it was ``0057``).
+Revision ids are distinct from #2141's ``0058_turn_outcomes``; whichever of #2141 / this lands SECOND re-chains its ``down_revision``
+onto the first's revision (the single-head test goes red until it does). Do not change ``down_revision`` to make it green.
 """
 
 from alembic import op
 
 revision = "0059"
-down_revision = "0057"
+down_revision = "0060"
 branch_labels = None
 depends_on = None
 

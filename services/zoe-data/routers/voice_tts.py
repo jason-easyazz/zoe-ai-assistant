@@ -137,6 +137,83 @@ def _spawn_bg(coro) -> None:
     _BG_TASKS.add(t)
     t.add_done_callback(_BG_TASKS.discard)
 
+def _stream_in_turn_context(agen):
+    """``agen`` (a voice turn's lazy stream body) driven in a COPY of the CURRENT context, wherever it is iterated.
+
+    ``voice_command`` binds per-turn ContextVars before its chat tier returns the lazy StreamingResponse - the speaker
+    gate's verdict (``restraint.bind_verdict``: the restraint rule, the spoken-mute refusal, the risk-cue silence), the
+    arrival row (``_USER_TURN_SAVED``), a speculative turn's gate. The brain runs INSIDE the body, and on
+    ``/voice/turn_stream`` the body is pulled by the OUTER request task (and a ``_first_task`` copy of it for the filler
+    race), not by the ``sub_task`` that ran ``voice_command`` - so none of those bindings were visible to the brain
+    (2026-10-19: every panel stream turn read ``restraint.current_verdict() is None``, an unconfirmed voice read as a typed
+    turn). Call it where the body is CREATED, inside ``voice_command``: the copy is taken there."""
+    return _drive_in_context(agen, contextvars.copy_context())
+
+
+async def _drive_in_context(agen, ctx: contextvars.Context):
+    """Yield ``agen``'s items one at a time, every step of ``agen`` running in ONE task whose context is a copy of ``ctx``
+    (Python 3.10 has no ``create_task(context=)``). Lockstep, no read-ahead: a step starts only when the consumer asks for
+    the next item, so a filler / speculation race sees the same timing as pulling ``agen`` directly. Consumer cancelled
+    mid-step -> that step is cancelled; consumer closed between steps -> ``agen.aclose()`` runs (its ``finally`` sees
+    GeneratorExit at its ``yield``, as before); an exception from ``agen`` (a CancelledError included) re-raises here."""
+    want: asyncio.Queue = asyncio.Queue()
+    got: asyncio.Queue = asyncio.Queue()
+    busy = False
+
+    async def _pump() -> None:
+        nonlocal busy
+        while True:
+            try:
+                more = await want.get()
+            except asyncio.CancelledError:
+                # cancelled between steps (a consumer cancel that raced the step's end): the body still gets its close
+                await agen.aclose()
+                raise
+            if not more:
+                await agen.aclose()
+                return
+            busy = True
+            try:
+                item = await agen.__anext__()
+            except StopAsyncIteration:
+                got.put_nowait((False, None))
+                return
+            except BaseException as exc:  # noqa: BLE001 - forwarded to the consumer, re-raised there
+                got.put_nowait((False, exc))
+                if isinstance(exc, Exception):
+                    return
+                raise
+            finally:
+                busy = False
+            got.put_nowait((True, item))
+
+    pump = ctx.run(asyncio.get_running_loop().create_task, _pump())
+    _BG_TASKS.add(pump)   # a strong reference: a cancelled consumer does not wait for the body's finally (below)
+    pump.add_done_callback(_BG_TASKS.discard)
+    try:
+        while True:
+            want.put_nowait(True)
+            ok, val = await got.get()
+            if not ok:
+                if val is not None:
+                    raise val
+                return
+            yield val
+    finally:
+        if not pump.done():
+            if busy:
+                pump.cancel()
+                want.put_nowait(False)   # a body that swallows the cancel and yields again is still closed, not left waiting
+            else:
+                want.put_nowait(False)
+                try:
+                    await pump
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - a failing finally of the body must not mask the close
+                    logger.warning("voice stream body close failed: %s", exc)
+
+
 # ── Voice session continuity ───────────────────────────────────────────────
 # Persist one session_id per panel so follow-up voice commands have context.
 # Pass 3 B3: also stores bound_user_id (resolved via daemon VID or PIN) with
@@ -837,8 +914,10 @@ async def _require_voice_auth(
 ) -> dict:
     """Allow voice endpoints if caller has a valid device token OR is authenticated."""
     if device:
-        # A provisioned device token IS the panel: a guest voice turn may use the household list (a fridge list).
-        panel_principal.mark_panel_turn()
+        # A provisioned device token IS the panel: a guest voice turn may use the household list (a fridge list). Over the
+        # Cloudflare tunnel it is NOT (owner decision 2026-10-19; escape hatch ZOE_PANEL_TOKEN_VIA_CF=panel).
+        if panel_principal.device_token_is_panel(request):
+            panel_principal.mark_panel_turn()
         # Home control (2026-10-18): judged on the validated TOKEN (the panel), so a zoe-auth outage cannot lock the lights.
         await panel_principal.record_turn_home_control(
             request, {"user_id": "guest", "role": "guest", "panel_id": device.get("panel_id")})
@@ -848,12 +927,26 @@ async def _require_voice_auth(
             "user_id": device.get("user_id", "voice-daemon"),
             "raw_token": device.get("raw_token", ""),
             "via_relay": _request_via_relay(request),
+            # Crossed the Cloudflare tunnel: the token came from the internet, not from the panel on the LAN. The biometric
+            # feeds and enrolment refuse it (biometric_scope, 2026-10-19).
+            "via_tunnel": _request_via_tunnel(request),
         }
     if user.get("role") not in (None, "guest"):
         await panel_principal.record_turn_home_control(request, user)
         return {"source": "session", "user_id": user.get("user_id"), "role": user.get("role"),
                 "via_relay": _request_via_relay(request)}
     raise HTTPException(status_code=401, detail="Voice endpoints require authentication or a device token")
+
+
+def _request_via_tunnel(request: Request) -> bool:
+    """True when the request carries a Cloudflare edge header (``panel_kiosk_credential.via_public_tunnel``). Fails closed."""
+    try:
+        import panel_kiosk_credential
+
+        return bool(panel_kiosk_credential.via_public_tunnel(request))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("voice auth: tunnel check failed (%s) - treating the request as tunnelled", type(exc).__name__)
+        return True
 
 
 def _request_via_relay(request: Request) -> bool:
@@ -1154,64 +1247,6 @@ def _voice_tool_name_from_sentinel(delta: str) -> "Optional[str]":
         return None
     name = tc.get("name")
     return str(name) if name else None
-
-
-def _voice_activity_frame(delta: str, tool_names: "Optional[dict]" = None) -> "Optional[dict]":
-    """Convert a brain ``__TOOL__:`` sentinel into a lightweight activity frame.
-
-    The touch panel's live-activity strip shows "what Zoe is DOING" during brain
-    turns from these frames: ``{"type": "activity", "phase": "start"|"result",
-    "tool": "<name>"}``. Only the tool NAME and PHASE cross the wire — args and
-    result payloads stay server-side (they can carry user data and the strip
-    doesn't need them). ``tool_names`` is an optional caller-owned id→name map
-    (one per turn) so the result phase — which often omits the name (see
-    zoe_core_client._tool_result_sentinel) — resolves to the tool that started.
-    Returns None for args phases, ``__THINKING__:`` markers, and malformed
-    sentinels: a bad frame must never break the voice turn.
-    """
-    if not delta.startswith("__TOOL__:"):
-        return None
-    try:
-        import json as _json
-        tc = _json.loads(delta[len("__TOOL__:"):])
-    except Exception:
-        return None
-    if not isinstance(tc, dict):
-        return None
-    phase = tc.get("phase")
-    if phase not in ("start", "result"):
-        return None
-    tc_id = str(tc.get("id") or "")
-    name = str(tc.get("name") or "")
-    if tool_names is not None and tc_id:
-        if phase == "start" and name:
-            tool_names[tc_id] = name
-        elif not name:
-            name = str(tool_names.get(tc_id) or "")
-    if phase == "start" and not name:
-        return None
-    return {"type": "activity", "phase": phase, "tool": name}
-
-
-async def _forward_voice_activity(delta: str, send_json, tool_names: dict) -> bool:
-    """Consume a brain sentinel delta on the ``/ws/voice/`` panel lane.
-
-    Returns True when ``delta`` is a sentinel (``__TOOL__:`` / ``__THINKING__:``)
-    — the caller must then skip it entirely (never buffer it toward TTS, where
-    Kokoro would read raw JSON aloud). Tool start/result sentinels are
-    additionally forwarded to the panel as lightweight ``activity`` frames via
-    ``send_json`` (the websocket's send_json). Forwarding is best-effort: a
-    send failure never breaks the spoken turn.
-    """
-    if not delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
-        return False
-    frame = _voice_activity_frame(delta, tool_names)
-    if frame is not None:
-        try:
-            await send_json(frame)
-        except Exception as exc:  # noqa: BLE001 - activity is cosmetic, speech is not
-            logger.debug("voice activity frame send failed (non-fatal): %s", exc)
-    return True
 
 
 def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
@@ -1606,71 +1641,6 @@ async def _broadcast_skybridge_ui(
             "voice skybridge ui_actions enqueue failed for panel=%s — skybridge card/navigate dropped (non-fatal): %s",
             panel_id, exc,
         )
-
-
-async def _broadcast_lets_talk_ui(panel_id: str, turn_key: Optional[str] = None) -> None:
-    """Navigate the touch panel browser to voice conversation mode.
-
-    Navigation target is /touch/voice.html (no ?conv=1) so the executor's
-    same-URL check always fires when already on the voice page, preventing
-    re-navigation loops when the queued action isn't acked in time.
-
-    The auto-start listening signal is sent as a separate transient push event
-    (voice:start_conversation) which the voice page handles directly — it is
-    never enqueued in the DB, so it cannot create a replay loop.
-    """
-    if _skybridge_only():
-        return
-    delivery_key = turn_key or str(time.monotonic_ns())
-    # Navigation: no ?conv=1 so the action is skipped when panel is already on voice page.
-    nav_action = {
-        "id": f"voice_letstalk_nav_{panel_id}_{delivery_key}",
-        "action_type": "panel_navigate",
-        "payload": {
-            "url": "/touch/voice.html",
-            "label": "Opening voice",
-            "panel_id": panel_id,
-        },
-    }
-    try:
-        from push import broadcaster
-        # Broadcast nav action (handled by touch-ui-executor).
-        await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": nav_action})
-        # Also broadcast a transient start-conversation signal — NOT enqueued in DB.
-        # The voice page handles this to begin auto-listening after a short delay.
-        await broadcaster.broadcast(_panel_channel(panel_id), "voice:start_conversation", {
-            "panel_id": panel_id,
-            "delay_ms": 2500,   # wait for TTS echo to settle before opening mic
-        })
-    except Exception as exc:
-        logger.debug("voice lets_talk ui broadcast failed (non-fatal): %s", exc)
-    try:
-        from database import get_db as _get_db
-        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
-        async for _db in _get_db():
-            _panel_user_id = "family-admin"
-            try:
-                _cur = await _db.execute(
-                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
-                    (panel_id,),
-                )
-                _row = await _cur.fetchone()
-                if _row and _row["user_id"]:
-                    _panel_user_id = str(_row["user_id"])
-            except Exception:
-                pass
-            await _enqueue_ui_action(
-                _db,
-                user_id=_panel_user_id,
-                panel_id=panel_id,
-                action_type="panel_navigate",
-                payload=nav_action["payload"],
-                requested_by="voice",
-                idempotency_key=f"voice_letstalk_nav_{panel_id}_{delivery_key}",
-            )
-            break
-    except Exception as exc:
-        logger.debug("voice lets_talk ui enqueue failed (non-fatal): %s", exc)
 
 
 def _parse_voice_form_field(text: str, panel_type: str) -> dict:
@@ -3707,6 +3677,13 @@ async def voice_command(
         identified_user_id, _bound_user, _panel_recent_user,
         _scope_identity_user, _has_scope_identity,
     )
+    # The day review's raise / pull (day_review_raise, ZOE_DAY_REVIEW_RAISE, default OFF = returns at once): who THIS turn
+    # identified and who else this panel heard, keyed by session for the brain lane's first-turn brief - the streaming brain
+    # runs outside this task, so a ContextVar would not reach it. In-memory only; never raises.
+    import day_review_raise as _day_review_raise
+
+    _day_review_raise.note_voice_turn(session_id, panel_id, scope_user=_scope_identity_user, verdict=_speaker_verified,
+                                      claimed=identified_user_id if _by_claim else None)
 
     if _vs_decision is not None and _vs_decision.lock:
         # "lock" / "sign me out": the session is already closed (published above); say so and stop - nothing to store.
@@ -4863,8 +4840,6 @@ async def voice_command(
                     await _broadcast_weather_ui(panel_id, _pub_reply, turn_key=_turn_key)
                 if _pub_intent.name in {"calendar_show", "daily_briefing"}:
                     await _broadcast_calendar_ui(panel_id, _pub_reply, turn_key=_turn_key)
-                if _pub_intent.name == "lets_talk":
-                    await _broadcast_lets_talk_ui(panel_id, turn_key=_turn_key)
                 try:
                     from voice_metrics import voice_stage_seconds, voice_turn_count, voice_intent_hit_count
                     voice_stage_seconds.labels(stage="llm_first_token").observe(0.0)
@@ -5391,8 +5366,9 @@ async def voice_command(
                         _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id, speaker_verified=_speaker_verified,
                                                            interrupted=not _screen_finished))
 
+            # The body runs in THIS turn's context wherever it is pulled (/turn_stream pulls it from another task).
             return StreamingResponse(
-                _generate_voice_stream(),
+                _stream_in_turn_context(_generate_voice_stream()),
                 media_type="application/x-zoe-audio-stream",
                 headers={"Cache-Control": "no-cache"},
             )
@@ -6824,10 +6800,11 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     user, raw_score = _claim_fields(payload)
     if not user:
         return None
-    if (caller or {}).get("via_relay"):
+    if (caller or {}).get("via_relay") or (caller or {}).get("via_tunnel"):
         # The score was computed on the panel, so the server's gate here trusts the device for it. On the LAN that device
-        # is the panel on the wall; over the relay it may be a stolen one anywhere (2026-10-18): no claim, a PIN instead.
-        logger.info("voice claim rejected: the request came through the relay (a member needs a fresh PIN session there)")
+        # is the panel on the wall; over the relay (2026-10-18) or the Cloudflare tunnel (2026-10-19: a copied token from
+        # the internet, which the panel never uses) it may be anywhere: no claim, a PIN instead.
+        logger.info("voice claim rejected: the request came through the relay or the tunnel (a member needs a fresh PIN session)")
         return None
     try:
         score = float(raw_score)
@@ -6927,12 +6904,10 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
         raise HTTPException(status_code=400, detail="model_id must be a non-empty string")
     if not speaker_models.is_known(model_id):
         raise HTTPException(status_code=400, detail="unknown model_id")
-    # A session caller may only enrol ITSELF (admins excepted). Taking the
-    # payload's user_id verbatim let any household member enrol their own voice
-    # under someone else's id — identity takeover, not just a bad row. A device
-    # token still enrols on behalf of the person at the panel; when it names
-    # nobody the pre-existing caller fallback stands.
-    _target = resolve_enroll_target(payload.get("user_id"), caller)
+    # A session caller may only enrol ITSELF (admins excepted). A device token only the member the SERVER verified at its
+    # panel - the enrolment grant Zoe minted when she queued the command, or a fresh PIN sign-in (2026-10-19) - never the
+    # payload's user_id: a voiceprint is a password, and a copied panel token used to enrol any voice onto any member.
+    _target = await resolve_enroll_target(payload.get("user_id"), caller, kind="voice")
     user_id = str(_target or caller.get("user_id", "unknown"))
     display_name = str(payload.get("display_name", user_id)).strip() or user_id
     panel_id = "" if not (payload.get("panel_id") or caller.get("panel_id")) else _lane_panel_id(payload, caller, "enroll")
@@ -7193,6 +7168,11 @@ async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depen
     """
     if caller.get("source") != "device":
         raise HTTPException(status_code=403, detail="device token required")
+    # A copied panel token must not export every member's voiceprint from the internet (2026-10-19). Over the relay the
+    # panel's own claims are refused anyway, so the feed would serve nothing it could use.
+    from biometric_scope import require_local_panel
+
+    require_local_panel(caller, "the voice profile feed")
     from db_compat import get_compat_db as _get_compat_db
 
     try:

@@ -53,6 +53,12 @@ Not a chatbot. A presence that grows with you.
      phone" link instead; a guest always gets the QR. (Not about the panel PIN.)
 9. **Understand before you change.** Always dive deep to fully understand before changing
    Zoe — quality, not first thought. (Owner rule, 2026-09-29.)
+10. **Zoe does not speak unprompted; a person speaking through Zoe is not Zoe speaking.** No
+    unprompted spoken brief or nudge (`ZOE_PROACTIVE_SPOKEN=0`). An intercom or PA message, or a
+    call, that a household member starts ("tell the kitchen dinner's ready") is that member
+    speaking, so it is OUTSIDE this rule. It still obeys the call rules: everyone rings first,
+    only adults drop in, guests can't call, quiet hours hold. (Owner decision, 2026-10-18;
+    `docs/knowledge/lan-intercom.md`.)
 
 ## 🗂️ Where things live (the hierarchy)
 | Layer | File | Holds |

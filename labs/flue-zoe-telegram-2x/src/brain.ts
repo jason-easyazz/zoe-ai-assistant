@@ -56,6 +56,7 @@ function internalHeaders(): Record<string, string> {
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { describeError } from './redact.ts';
 
 // Anchor the default at the PACKAGE ROOT (the parent of the built `dist/`),
 // not the process cwd. Under the systemd unit (WorkingDirectory=<package>) this
@@ -87,10 +88,10 @@ function readEpochs(): Record<string, number> {
     const missing = (err as NodeJS.ErrnoException)?.code === 'ENOENT';
     const cached = _epochCache.get(path);
     if (cached) {
-      if (!missing) console.error('readEpochs: read failed, using last-known-good:', err);
+      if (!missing) console.error(`readEpochs: read failed, using last-known-good: ${describeError(err)}`);
       return cached;
     }
-    if (!missing) console.error('readEpochs: epoch file unreadable and no cache — treating as epoch 0:', err);
+    if (!missing) console.error(`readEpochs: epoch file unreadable and no cache — treating as epoch 0: ${describeError(err)}`);
     return {}; // genuinely missing (fresh install) → epoch 0 for everyone
   }
 }
@@ -209,7 +210,7 @@ export async function registerBotUsername(username: string): Promise<void> {
     });
     if (!res.ok) console.warn(`register-bot ${res.status} ${await res.text().catch(() => '')}`);
   } catch (e) {
-    console.warn('register-bot failed (non-fatal):', e);
+    console.warn(`register-bot failed (non-fatal): ${describeError(e)}`);
   }
 }
 
