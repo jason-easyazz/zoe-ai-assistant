@@ -1648,6 +1648,25 @@ async def voices_to_name(user_id: str, limit: int = VOICES_PER_CARD) -> list[dic
              "last_heard_at": v["last_heard_at"], "sample": (v["samples"] or [{}])[0]} for v in voices[:max(0, limit)]]
 
 
+async def annotate_evidence(user_id: str, cands: list) -> list:
+    """For the owner's review surface (the Pendant page): every diarised evidence entry gets ``audio_kept`` (the clip route would
+    play that line now) and ``offset_ms`` (where it starts in its recording), from ``omi_recordings.segment_lines`` - the member's
+    OWN lines only, pointers only, never an audio path or another line's words. In place; returns ``cands``."""
+    seg_ids = [e.get("segment_id") for c in cands for e in (c.get("evidence") or []) if isinstance(e, dict) and e.get("segment_id")]
+    if not seg_ids:
+        return cands
+    import omi_recordings
+    lines = await omi_recordings.segment_lines(user_id, seg_ids)
+    for c in cands:
+        for e in c.get("evidence") or []:
+            if isinstance(e, dict) and e.get("segment_id"):
+                got = lines.get(str(e["segment_id"])) or {}
+                e["audio_kept"] = bool(got.get("audio_kept"))
+                if "offset_ms" in got:
+                    e["offset_ms"] = got["offset_ms"]
+    return cands
+
+
 async def pending_counts(user_id: str) -> dict:
     """{kind: n} of the member's pending candidates. The SEAM for the next phase (the first-turn mention / the Memories space):
     a code-composed count, never text."""
