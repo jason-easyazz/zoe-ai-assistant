@@ -8,7 +8,7 @@
     ``decided_by``, ``decision_note``, ``updated_at``;
   * ``status`` takes the queue vocabulary (proposed, probed, applied, canary, kept, reverted, rejected). Existing rows are REMAPPED,
     not dropped: pending -> proposed, approved -> proposed + decision approved, deployed -> applied, validated -> kept,
-    failed -> reverted, rejected stays; any other value becomes rejected with ``decision_note`` = ``legacy status: <value>``. Legacy
+    failed -> reverted, rejected stays; any other value (and NULL) is kept in ``decision_note`` = ``legacy status: <value>`` and the downgrade restores it. Legacy
     rows get class ``code``, risk tier 3, a component from their type and ``source`` = ``legacy``.
   * ``evolution_proposal_history`` - one row per status move or decision (the audit the score page and "what changed" read).
   * the struggle detector proposals (0057) FOLD IN: every ``struggle_proposals`` row gets its queue row under the SAME id (source
@@ -166,6 +166,7 @@ def upgrade() -> None:
     op.execute("UPDATE evolution_proposals SET decision = 'approved' WHERE status = 'approved'")
     op.execute("UPDATE evolution_proposals SET decision_note = 'legacy status: ' || status WHERE status IS NOT NULL AND status NOT IN "
                "('pending', 'approved', 'deployed', 'validated', 'failed', " + ", ".join("'" + s + "'" for s in STATUSES) + ")")
+    op.execute("UPDATE evolution_proposals SET decision_note = 'legacy status: null' WHERE status IS NULL")
     op.execute("UPDATE evolution_proposals SET status = " + LEGACY_TO_QUEUE)
     for legacy_type, component in LEGACY_COMPONENT:
         op.execute("UPDATE evolution_proposals SET component = '" + component + "' WHERE component = '' AND type = '" + legacy_type + "'")
@@ -234,6 +235,10 @@ def downgrade() -> None:
                    "WHEN status IN ('proposed', 'probed') AND decision = 'approved' THEN 'approved' "
                    "WHEN status IN ('proposed', 'probed') THEN 'pending' WHEN status IN ('applied', 'canary') THEN 'deployed' "
                    "WHEN status = 'kept' THEN 'validated' WHEN status = 'reverted' THEN 'failed' ELSE status END")
+        # the values the upgrade could not map come back exactly (it kept them in decision_note)
+        op.execute("UPDATE evolution_proposals SET status = NULL WHERE status = 'pending' AND decision_note = 'legacy status: null'")
+        op.execute("UPDATE evolution_proposals SET status = SUBSTR(decision_note, 16) "
+                   "WHERE status = 'rejected' AND decision_note LIKE 'legacy status: %' AND decision_note <> 'legacy status: null'")
     op.execute("DROP INDEX IF EXISTS idx_evolution_queue_class_status")
     op.execute("DROP INDEX IF EXISTS idx_evolution_queue_source")
     op.execute("DROP INDEX IF EXISTS idx_evolution_history_at")

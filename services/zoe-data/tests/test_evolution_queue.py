@@ -275,8 +275,14 @@ def test_delete_respects_the_source(db):
 
 
 def test_legacy_status_names_round_trip():
-    for legacy, (status, decision) in eq.LEGACY_STATUS.items():
-        assert eq.legacy_status(status, decision or "") == legacy
+    for legacy, (statuses, decision) in eq.LEGACY_STATUS.items():
+        for status in statuses:                   # the exact inverse: every status a legacy name covers renders as that name
+            assert eq.legacy_status(status, decision or "") == legacy
+    for status in eq.STATUSES:
+        for decision in eq.DECISIONS:
+            name = eq.legacy_status(status, decision)
+            statuses, want = eq.LEGACY_STATUS[name]
+            assert status in statuses and want in (None, decision), (status, decision)
     assert eq.legacy_status("canary") == "deployed" and eq.legacy_status("probed") == "pending"
 
 
@@ -381,7 +387,7 @@ def test_the_downgrade_gives_every_status_back(tmp_path):
     _run(engine, "downgrade")                                             # rerun: a no-op
     rows = dict((r["id"], r["status"]) for r in _q(engine, "SELECT id, status FROM evolution_proposals"))
     assert rows == {"L0": "pending", "L1": "approved", "L2": "deployed", "L3": "validated", "L4": "failed", "L5": "rejected",
-                    "L6": "rejected", "L7": "pending"}
+                    "L6": "weird", "L7": None}
     sp_rows = dict((r["id"], (r["status"], r["decided_by"], r["decision_note"], r["decided_at"]))
                    for r in _q(engine, "SELECT * FROM struggle_proposals"))
     assert sp_rows == {"S1": ("proposed", "", "", None), "S2": ("accepted", "admin-1", "other", NOW),
@@ -489,11 +495,14 @@ def test_the_legacy_routes_move_through_the_queue(client, db):
     listed = client.get("/api/agent/evolution/proposals?status=pending").json()
     assert sorted(p["id"] for p in listed["proposals"]) == sorted([a, b])                 # struggle rows are decided elsewhere
     assert all(p["status"] == "pending" and p["queue_status"] == "proposed" for p in listed["proposals"])
+    walk(db, b, ["probed"])                                                                 # a probed row is still "pending"
+    assert sorted(p["id"] for p in client.get("/api/agent/evolution/proposals?status=pending").json()["proposals"]) == sorted([a, b])
+    walk(db, b, ["applied"])
     act = lambda pid, action: client.post(f"/api/agent/evolution/proposals/{pid}/action", json={"action": action})
     assert act(a, "reject").status_code == 200 and status_of(db, a)["status"] == "rejected"
     assert act(a, "reject").status_code == 409                                             # rejected is not open
     assert act(a, "deploy").status_code == 409                                             # rejected -> applied is illegal
-    assert act(b, "deploy").status_code == 200 and status_of(db, b)["status"] == "applied"
+    assert act(b, "deploy").status_code == 409 and status_of(db, b)["status"] == "applied"    # already applied
     assert act(b, "defer").status_code == 409                                              # applied is not open
     assert act(s, "reject").status_code == 409 and status_of(db, s)["status"] == "proposed"
     assert client.get("/api/agent/evolution/proposals?status=deployed").json()["count"] == 1
@@ -524,3 +533,47 @@ def test_approve_is_a_decision_and_a_retry_reopens(client, db, monkeypatch):
     assert status_of(db, pid) == {"status": "proposed", "decision": "approved"}
     notes = [r["note"] for r in db.rows("SELECT note FROM evolution_proposal_history WHERE proposal_id = ? ORDER BY at, rowid", (pid,))]
     assert "reopened for retry" in notes
+
+
+def test_a_move_and_its_history_are_one_transaction():
+    """A status move, a decision or an insert and its history row commit together: on a connection with transactions the queue opens
+    one around both, so a failed history insert takes the move back with it (cross-review of #2165). Negative control: make
+    ``_atomic`` return ``contextlib.nullcontext()`` -> the move is left outside any transaction -> red."""
+    log = []
+
+    class _Tx:
+        async def __aenter__(self):
+            log.append("begin")
+
+        async def __aexit__(self, et, ev, tb):
+            log.append("rollback" if et else "commit")
+            return False
+
+    class _Cur:
+        rowcount = 1
+
+        async def fetchall(self):
+            return []
+
+    class _Db:
+        def transaction(self):
+            return _Tx()
+
+        async def execute(self, sql, params=()):
+            if sql.startswith("INSERT INTO evolution_proposal_history"):
+                log.append("history")
+                raise RuntimeError("history write failed")
+            log.append(sql.split()[0].lower())
+            return _Cur()
+
+    with pytest.raises(RuntimeError):
+        run(eq.propose(_Db(), source="t", change_class="harness", component="manner", title="x"))
+    assert log == ["begin", "insert", "history", "rollback"]
+    log.clear()
+    with pytest.raises(RuntimeError):
+        run(eq.transition(_Db(), "p1", "probed", actor="a", frm="proposed"))
+    assert log == ["begin", "update", "history", "rollback"]
+    log.clear()
+    with pytest.raises(RuntimeError):
+        run(eq.decide(_Db(), "p1", "approved", actor="a"))
+    assert log == ["begin", "update", "history", "rollback"]

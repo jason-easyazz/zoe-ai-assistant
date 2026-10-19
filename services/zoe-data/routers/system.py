@@ -2020,22 +2020,26 @@ async def get_evolution_proposals(
     import evolution_queue as _eq  # type: ignore[import]
 
     if status in _eq.LEGACY_STATUS:
-        q_status, q_decision = _eq.LEGACY_STATUS[status]
+        q_statuses, q_decision = _eq.LEGACY_STATUS[status]
     elif status in _eq.STATUSES:
-        q_status, q_decision = status, None
+        q_statuses, q_decision = (status,), None
     else:
         return {"proposals": [], "count": 0}
-    by_decision = "" if q_decision is None else " AND decision=$3"
-    args = (q_status, limit) if q_decision is None else (q_status, limit, q_decision)
+    args: list = [limit, *q_statuses]
+    marks = ", ".join(f"${i}" for i in range(2, 2 + len(q_statuses)))
+    by_decision = ""
+    if q_decision is not None:
+        args.append(q_decision)
+        by_decision = f" AND decision=${len(args)}"
     async with _get_pg_db() as db:
         rows = await db.fetch(
             """SELECT id, type, title, description, evidence, target_patterns,
                       status, decision, multica_issue_id, proposed_at, reviewed_at, deployed_at,
                       validation_result, next_review_at
                FROM evolution_proposals
-               WHERE status=$1 AND source <> 'struggle'""" + by_decision + """
+               WHERE status IN (""" + marks + """) AND source <> 'struggle'""" + by_decision + """
                ORDER BY proposed_at DESC
-               LIMIT $2""",
+               LIMIT $1""",
             *args,
         )
     return {

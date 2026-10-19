@@ -28,6 +28,7 @@ Pinned by ``tests/test_evolution_queue.py`` (transitions with negative controls,
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 import uuid
@@ -60,14 +61,15 @@ EVIDENCE_MAX = 262144
 TAG_MAX = 64
 TITLE_MAX = 300
 
-#: the pre-0062 status names, for the legacy API and its readers: legacy name -> (status, decision or None for any)
+#: the pre-0062 status names, for the legacy API and its readers: legacy name -> (the statuses it covers, decision or None for any).
+#: The exact inverse of ``legacy_status`` (a test pins it): pending / approved are every OPEN row, deployed is applied or canary.
 LEGACY_STATUS = {
-    "pending": ("proposed", ""),
-    "approved": ("proposed", "approved"),
-    "deployed": ("applied", None),
-    "validated": ("kept", None),
-    "failed": ("reverted", None),
-    "rejected": ("rejected", None),
+    "pending": (OPEN, ""),
+    "approved": (OPEN, "approved"),
+    "deployed": (("applied", "canary"), None),
+    "validated": (("kept",), None),
+    "failed": (("reverted",), None),
+    "rejected": (("rejected",), None),
 }
 
 #: a legacy proposal type -> the component it changes (migration 0062 backfills with the same map; tests/test_evolution_queue.py pins it)
@@ -197,6 +199,13 @@ async def _history(db, pid: str, frm: Optional[str], to: Optional[str], decision
         (uuid.uuid4().hex, pid, now, frm, to, decision, str(actor or "")[:80], str(note or "")[:200]))
 
 
+def _atomic(db):
+    """ONE transaction for a write and its history row (asyncpg: ``conn.transaction()``, a savepoint inside an open one), so a move
+    never lands without its history. A test double without transactions runs the statements as they come."""
+    tx = getattr(db, "transaction", None)
+    return tx() if callable(tx) else contextlib.nullcontext()
+
+
 async def _fetch(db, pid: str) -> dict:
     rows = await _rows(db, f"SELECT {', '.join(_COLS)} FROM evolution_proposals WHERE id = ?", (pid,))
     if not rows:
@@ -229,13 +238,14 @@ async def propose(db, *, source: str, change_class: str, component: str, title: 
     ev = normalize_evidence(evidence)
     pid = proposal_id or uuid.uuid4().hex
     t = time.time() if now is None else float(now)
-    await db.execute(
-        "INSERT INTO evolution_proposals (id, type, title, description, evidence, target_patterns, status, proposed_at, change_class, "
-        "risk_tier, component, evidence_json, lesson_id, source, decision, decided_by, decision_note, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (pid, legacy_type or f"{change_class}:{comp}", head, str(description or ""), legacy_evidence, target_patterns, status, t,
-         change_class, tier, comp, json.dumps(ev, sort_keys=True), None, src, "", "", "", t))
-    await _history(db, pid, None, status, "", actor or src, "proposed", t)
+    async with _atomic(db):
+        await db.execute(
+            "INSERT INTO evolution_proposals (id, type, title, description, evidence, target_patterns, status, proposed_at, change_class, "
+            "risk_tier, component, evidence_json, lesson_id, source, decision, decided_by, decision_note, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (pid, legacy_type or f"{change_class}:{comp}", head, str(description or ""), legacy_evidence, target_patterns, status, t,
+             change_class, tier, comp, json.dumps(ev, sort_keys=True), None, src, "", "", "", t))
+        await _history(db, pid, None, status, "", actor or src, "proposed", t)
     return pid
 
 
@@ -281,13 +291,14 @@ async def transition(db, pid: str, to: str, *, actor: str, frm: Optional[str] = 
     if require_decision is not None:
         where += " AND decision = ?"
         params.append(require_decision)
-    cur = await db.execute("UPDATE evolution_proposals SET " + ", ".join(sets) + " WHERE " + where, tuple(params))
-    if _rowcount(cur) <= 0:
-        if row is None:
-            await _fetch(db, pid)        # NotFound beats Conflict
-        need = (" with decision " + repr(require_decision)) if require_decision is not None else ""
-        raise Conflict("proposal " + pid + " is no longer " + str(frm) + need)
-    await _history(db, pid, frm, to, "", actor, note, t)
+    async with _atomic(db):
+        cur = await db.execute("UPDATE evolution_proposals SET " + ", ".join(sets) + " WHERE " + where, tuple(params))
+        if _rowcount(cur) <= 0:
+            if row is None:
+                await _fetch(db, pid)        # NotFound beats Conflict
+            need = (" with decision " + repr(require_decision)) if require_decision is not None else ""
+            raise Conflict("proposal " + pid + " is no longer " + str(frm) + need)
+        await _history(db, pid, frm, to, "", actor, note, t)
     return frm
 
 
@@ -308,13 +319,14 @@ async def decide(db, pid: str, decision: str, *, actor: str, note: str = "", gua
             raise ValueError("cannot guard on " + str(col))
         where += " AND (" + col + " = ? OR (" + col + " IS NULL AND CAST(? AS TEXT) IS NULL))"
         params += [val, val]
-    cur = await db.execute("UPDATE evolution_proposals SET " + sets + " WHERE " + where, tuple(params))
-    if _rowcount(cur) <= 0:
-        row = await _fetch(db, pid)
-        if row["status"] not in OPEN:
-            raise Conflict("proposal is " + str(row["status"]))
-        raise Conflict("the proposal changed under the decision")
-    await _history(db, pid, None, None, decision or "withdrawn", actor, note, t)
+    async with _atomic(db):
+        cur = await db.execute("UPDATE evolution_proposals SET " + sets + " WHERE " + where, tuple(params))
+        if _rowcount(cur) <= 0:
+            row = await _fetch(db, pid)
+            if row["status"] not in OPEN:
+                raise Conflict("proposal is " + str(row["status"]))
+            raise Conflict("the proposal changed under the decision")
+        await _history(db, pid, None, None, decision or "withdrawn", actor, note, t)
 
 
 async def attach_evidence(db, pid: str, evidence: dict, *, now: Optional[float] = None) -> dict:
@@ -351,13 +363,14 @@ async def remove(db, pids: Iterable[str], *, source: Optional[str] = None) -> No
     """Remove proposals and their history (a writer withdrawing its own row, or the forget cascade). ``source`` restricts the delete
     to that writer rows, so one writer can never remove another writer row."""
     for pid in sorted(set(str(p) for p in pids if p)):
-        if source is not None:
-            await db.execute("DELETE FROM evolution_proposal_history WHERE proposal_id IN "
-                             "(SELECT id FROM evolution_proposals WHERE id = ? AND source = ?)", (pid, source))
-            await db.execute("DELETE FROM evolution_proposals WHERE id = ? AND source = ?", (pid, source))
-        else:
-            await db.execute("DELETE FROM evolution_proposal_history WHERE proposal_id = ?", (pid,))
-            await db.execute("DELETE FROM evolution_proposals WHERE id = ?", (pid,))
+        async with _atomic(db):
+            if source is not None:
+                await db.execute("DELETE FROM evolution_proposal_history WHERE proposal_id IN "
+                                 "(SELECT id FROM evolution_proposals WHERE id = ? AND source = ?)", (pid, source))
+                await db.execute("DELETE FROM evolution_proposals WHERE id = ? AND source = ?", (pid, source))
+            else:
+                await db.execute("DELETE FROM evolution_proposal_history WHERE proposal_id = ?", (pid,))
+                await db.execute("DELETE FROM evolution_proposals WHERE id = ?", (pid,))
 
 
 # -- readers (the Zoe score page) ---------------------------------------------

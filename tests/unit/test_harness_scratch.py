@@ -108,6 +108,24 @@ def test_the_house_is_out_of_reach(tmp_path):
     assert z["MOONSHINE_VOICE_CACHE"].endswith("no-stt-models")
 
 
+def test_every_endpoint_with_a_live_default_is_overridden():
+    """The CLASS behind a found leak (``ZOE_OPENCLAW_GW``, cross-review of #2165): every env name zoe-data reads with an http(s) / ws
+    default (whose default is a real endpoint) is black-holed, pointed at the scratch instance itself, or is shared compute; and a
+    copied flag never carries a URL value. Negative control: drop ``ZOE_OPENCLAW_GW`` from ``HOUSE_URLS`` -> red."""
+    import re
+
+    pat = re.compile(r"""(?:environ\.get|getenv|env_str|env_int|env_bool)\(\s*["']([A-Z0-9_]+)["']\s*,\s*["'](?:https?|wss?)://""")
+    svc = REPO / "services" / "zoe-data"
+    names = set()
+    for path in svc.rglob("*.py"):
+        if "tests" not in path.relative_to(svc).parts:
+            names |= set(pat.findall(path.read_text(errors="replace")))
+    assert "ZOE_HA_BRIDGE_URL" in names and "MUSIC_ASSISTANT_URL" in names, "control: the scan finds the known ones"
+    handled = set(hs.HOUSE_URLS) | set(hs.SELF_URLS) | set(hs.COMPUTE_URLS)
+    assert sorted(names - handled) == []
+    assert hs.flag_env(dict(ZOE_SOMETHING_GW="http://127.0.0.1:18789", ZOE_MODE="on")) == dict(ZOE_MODE="on")
+
+
 def test_no_hardcoded_self_call_reaches_the_live_service():
     """A loopback call to :8000 is TRUSTED by the live service (``require_internal_token`` admits loopback), so a harness instance
     must never make one: every self-call reads ``ZOE_SELF_URL`` (the scratch instance sets it). Read-only GETs included.

@@ -64,7 +64,8 @@ BLACK_HOLE = "http://127.0.0.1:9"
 HOUSE_URLS = ("ZOE_HA_BRIDGE_URL", "ZOE_HA_URL", "HA_BASE_URL", "HA_URL", "HOMEASSISTANT_URL", "MUSIC_ASSISTANT_URL",
               "ZOE_YTMUSIC_POTOKEN_URL", "LIVEKIT_URL", "LIVEKIT_TURN_URL", "ZOE_AUTH_URL", "ZOE_KOKORO_SIDECAR_URL",
               "HERMES_API_URL", "OPENCLAW_GATEWAY_URL", "OPENCLAW_GATEWAY_HEALTH_URL", "ZOE_OMNIGENT_URL", "MULTICA_BASE_URL",
-              "ZOE_CHEAP_PR_AGENT_URL", "ZOE_PUBLIC_URL", "MULTICA_WEBHOOK_TARGET_URL")
+              "ZOE_CHEAP_PR_AGENT_URL", "ZOE_PUBLIC_URL", "MULTICA_WEBHOOK_TARGET_URL", "ZOE_OPENCLAW_GW",
+              "GREPTILE_MCP_URL", "OTEL_EXPORTER_OTLP_ENDPOINT", "ZOE_RIG_LOGIN_URL")
 #: names the scratch zoe-data uses to call ITSELF (their code defaults are the live :8000)
 SELF_URLS = ("ZOE_SELF_URL", "ZOE_DATA_URL", "ZOE_CHAT_URL", "ZOE_BASE_URL", "ZOE_CORE_DATA_URL", "ZOE_REPLAY_BASE_URL")
 #: shared compute the harness turn needs (kept from the live env when present)
@@ -146,7 +147,8 @@ def flag_env(live_env: dict) -> dict:
     endpoints this module sets itself."""
     skip = set(HOUSE_URLS) | set(SELF_URLS) | set(COMPUTE_URLS) | {"ZOE_INTERNAL_TOKEN", "ZOE_BRAIN_TOKEN", "ZOE_FLUE_BRAIN_URL"}
     return dict((k, v) for k, v in live_env.items()
-                if k.startswith("ZOE_") and k not in skip and not SECRET_RE.search(k) and not LOCATION_RE.search(k))
+                if k.startswith("ZOE_") and k not in skip and not SECRET_RE.search(k) and not LOCATION_RE.search(k)
+                and "://" not in v)
 
 
 def harness_env(live_env: dict, *, root: Path, dsn: str, token: str, brain_token: str, flue_url: str, self_url: str) -> dict:
@@ -183,7 +185,7 @@ def flue_env(flue_live_env: dict, *, root: Path, port: int, data_url: str, token
     env = dict(PATH=str(Path.home() / ".nvm" / "current" / "bin") + ":/usr/local/bin:/usr/bin:/bin", LANG="C.UTF-8",
                TZ=os.environ.get("TZ") or "Australia/Perth", HOME=str(root / "home"))
     env.update((k, v) for k, v in flue_live_env.items()
-               if k.startswith("ZOE_") and not SECRET_RE.search(k) and not LOCATION_RE.search(k))
+               if k.startswith("ZOE_") and not SECRET_RE.search(k) and not LOCATION_RE.search(k) and "://" not in v)
     if flue_live_env.get("ZOE_BRAIN_BASE_URL"):
         env["ZOE_BRAIN_BASE_URL"] = flue_live_env["ZOE_BRAIN_BASE_URL"]       # the llama-server: shared compute
     env.update(PORT=str(port), ZOE_DATA_URL=data_url, ZOE_INTERNAL_TOKEN=token, ZOE_BRAIN_TOKEN=brain_token,

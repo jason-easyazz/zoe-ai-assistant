@@ -39,7 +39,7 @@ applied  -> canary | kept | reverted           canary  -> kept | reverted
 kept     -> reverted  ("undo that")            reverted / rejected -> proposed  (a REOPEN: the problem recurred; the old verdict is cleared)
 ```
 
-`transition()` refuses anything else (`IllegalTransition`) and is compare-and-swap on the from-status (`Conflict` when the row moved);
+`transition()` refuses anything else (`IllegalTransition`) and is compare-and-swap on the from-status (`Conflict` when the row moved; each write and its history row are ONE transaction on asyncpg);
 `require_decision=` makes a lane that needs an approval (the board runner) refuse an undecided row. `decide()` works only on an open
 row, optionally guarded (the approve route guards on the autonomy contract its gate read). On PostgreSQL CHECK constraints back the
 value sets; `tests/test_evolution_queue.py::test_one_writer` fails the build when any other module writes a status, a decision, an
@@ -75,7 +75,7 @@ Adds the columns and `evolution_proposal_history`; REMAPS every existing row (pe
 approved, deployed -> applied, validated -> kept, failed -> reverted, rejected stays; any other value becomes rejected with the old value
 in `decision_note`), records one history row per row (`legacy status: <old>`), backfills class code / tier 3 / a component from the
 type; folds every `struggle_proposals` row in and drops its status / decision columns; on PostgreSQL adds the CHECK constraints and
-the `proposed` default. Rerun-safe; the downgrade gives every old status back. Proven on SQLite (the tests) and on a throwaway pg17
+the `proposed` default. Rerun-safe; the downgrade gives every old status back (an odd value or a NULL, noted in `decision_note`, included). Proven on SQLite (the tests) and on a throwaway pg17
 from the live image (the remap, the fold, the 0027 trigger interplay, a round trip). Chains onto `0059`; the coordinator re-points
 `down_revision` if another migration lands first (`test_one_head`).
 
