@@ -141,3 +141,11 @@ def _harness_quiet_hours_not_wall_clock(monkeypatch):
     (both checks skipped, no ssh). ``test_harness_quiet.py`` clears it in its own autouse fixture, which runs
     after this one, so the real hours and panel rules are still tested there."""
     monkeypatch.setenv("ZOE_HARNESS_FORCE", "1")
+
+
+@pytest.fixture(autouse=True)
+def _no_owner_voice_clip_expectations(monkeypatch, tmp_path):
+    """The voice probe's owner labels live OFF the repo (~/.zoe/voice-gate/clip_expectations.json, T-3) and are
+    read by default; a unit test must never pick up the household's file. Point it at an absent temp path (a test
+    that wants labels writes its own and passes ``--expectations``)."""
+    monkeypatch.setenv("ZOE_VOICE_CLIP_EXPECTATIONS", str(tmp_path / "no-owner-clip-expectations.json"))

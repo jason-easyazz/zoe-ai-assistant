@@ -345,7 +345,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   turns real family traffic into labelled training examples of the router's own
   measured mistakes. Joins the hash-keyed shadow log to raw text (forward: the
   `ZOE_ROUTER_SHADOW_TEXT=1` opt-in adds `utt_text` to the shadow-log FILE, default
-  OFF, never leaves the box; bootstrap: re-hash `chat_messages.content` with the
+  OFF, only while a round is open (`ZOE_ROUTER_SHADOW_TEXT_UNTIL`, <= 30 days), never leaves the box; bootstrap: re-hash `chat_messages.content` with the
   router's own `sha256(text)[:12]` and join), mines three reasons (disagreement /
   abstention / chat-negative), and labels each with the local Gemma brain
   (`:11434`, `json_schema`-constrained, serial + `/slots`-gated — a labeling

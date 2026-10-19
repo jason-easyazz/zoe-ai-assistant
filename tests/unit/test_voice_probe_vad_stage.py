@@ -220,7 +220,8 @@ def _drive_main(tmp_path, monkeypatch, fake, *, avail_mb=10_000, extra=()):
     corpus = _corpus(tmp_path, [LOUD] * 12)
     # The replay covers 4 corpus clips and the baseline PINS those same 4 (the
     # probe replays the baseline's set, and refuses speed against an unpinned one).
-    rows = [dict(file=p.name, stt_ms=100) for p in sorted(corpus.glob("*.wav"))[:4]]
+    rows = [dict(file=p.name, stt_ms=100, verdict="OK", route_hash="r0", heard_hash="h0", via_brain=True)
+            for p in sorted(corpus.glob("*.wav"))[:4]]
     report = {"n_samples": 4, "verdicts": {"OK": 4}, "memory_recall": "ok", "rows": rows,
               "aggregate_ms": {"stt_ms": {"median": 100}, "brain_ms": {"median": 200},
                                "e2e_ms": {"median": 300}}}
