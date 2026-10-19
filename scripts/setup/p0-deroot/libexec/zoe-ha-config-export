@@ -1,0 +1,116 @@
+#!/usr/bin/python3 -I
+"""P0 de-root root helper (docs/architecture/p0-deroot.md; deep dive 2 S0-8, docs/knowledge/offbox-backup.md
+section 7). NOT installed by anything: the owner installs it root:root 0755 at
+/usr/local/libexec/zoe-priv/zoe-ha-config-export, and sudoers.d/60-zoe-deroot lets `zoe` run it as
+``zoe-ha-config-export storage``.
+
+Home Assistant runs as root in its container and writes ``.storage/`` (integrations, auth, device and area
+registries, several files 0600 root) and ``.cloud/`` into its config dir, so ``zoe`` cannot read them and the
+nightly backup missed them. This writes ONE gzip tar of those two directories to STDOUT; the caller
+(``zoe_host_snapshot.py``, as ``zoe``) stores it 0600 under ``~/.zoe-backups/host/``.
+
+WHY NOT ``docker exec homeassistant tar``: exec into a container with a zoe-writable bind is exactly what the P0
+Docker proxy refuses (a root shell beside a zoe-writable /config), and it would run as root inside a privileged
+container.
+
+THE CONFIG DIR IS ZOE-WRITABLE until P0-2 moves it to /srv/zoe/, so a root reader must not follow anything zoe
+planted (p0-deroot.md section 2.6). Every path component is opened with O_NOFOLLOW from ``/`` down (a symlink
+anywhere, e.g. ``.storage -> /root``, is refused); only regular files with one link are read (a hard link to a
+root file is refused); FIFOs and devices are refused before a read (O_NONBLOCK + fstat); nothing below the two
+directories is descended into; file count and bytes are capped. What comes out is only what sits in real
+directories under the HA config dir, which is what HA itself wrote there.
+"""
+import io
+import os
+import stat
+import sys
+import tarfile
+
+HA_CONFIG = "/home/zoe/assistant/homeassistant"   # P0-2: the owner changes this line to /srv/zoe/homeassistant
+SUBDIRS = (".storage", ".cloud")
+MAX_FILES = 2000
+MAX_BYTES = 64 << 20
+USAGE = "usage: zoe-ha-config-export storage"
+
+
+def fail(msg, code=1):
+    print(f"zoe-ha-config-export: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def open_dir_nofollow(path):
+    if not path.startswith("/"):
+        fail(f"not absolute: {path}")
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    for comp in [c for c in path.split("/") if c]:
+        if comp in (".", ".."):
+            os.close(fd)
+            fail(f"refused path component {comp!r}")
+        try:
+            nxt = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError as exc:
+            os.close(fd)
+            raise OSError(exc.errno, f"{comp}: {exc.strerror} (a symlink is refused)") from None
+        os.close(fd)
+        fd = nxt
+    return fd
+
+
+def main(argv):
+    if argv != ["storage"]:
+        fail(USAGE, 2)
+    base = HA_CONFIG
+    if os.getuid() != 0 and os.environ.get("ZOE_HA_CONFIG_DIR"):   # lab only; sudo strips the environment
+        base = os.environ["ZOE_HA_CONFIG_DIR"]
+    try:
+        root_fd = open_dir_nofollow(base)
+    except OSError as exc:
+        fail(f"cannot open the HA config dir: {exc.strerror}")
+    nfiles = nbytes = 0
+    skipped = []
+    with tarfile.open(fileobj=sys.stdout.buffer, mode="w|gz") as tar:
+        for sub in SUBDIRS:
+            try:
+                sfd = os.open(sub, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                fail(f"{sub}: {exc.strerror} (a symlink is refused)")
+            try:
+                names = sorted(os.listdir(sfd))
+                for name in names:
+                    try:
+                        ffd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=sfd)
+                    except OSError:
+                        skipped.append(f"{sub}/{name}")      # a symlink (ELOOP), a dir, or unreadable
+                        continue
+                    try:
+                        st = os.fstat(ffd)
+                        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                            skipped.append(f"{sub}/{name}")
+                            continue
+                        nfiles += 1
+                        nbytes += st.st_size
+                        if nfiles > MAX_FILES or nbytes > MAX_BYTES:
+                            fail(f"over the cap ({MAX_FILES} files / {MAX_BYTES >> 20} MiB); refusing")
+                        with os.fdopen(os.dup(ffd), "rb") as fh:
+                            data = fh.read(MAX_BYTES + 1)
+                        if len(data) != st.st_size:
+                            skipped.append(f"{sub}/{name}")   # changed while read; the next night gets it
+                            nfiles -= 1
+                            continue
+                        ti = tarfile.TarInfo(f"{sub}/{name}")
+                        ti.size, ti.mtime, ti.mode = len(data), int(st.st_mtime), 0o600
+                        tar.addfile(ti, io.BytesIO(data))
+                    finally:
+                        os.close(ffd)
+            finally:
+                os.close(sfd)
+    os.close(root_fd)
+    print(f"zoe-ha-config-export: {nfiles} file(s), {nbytes} bytes"
+          + (f"; skipped {len(skipped)}: {', '.join(skipped[:5])}" if skipped else ""), file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
