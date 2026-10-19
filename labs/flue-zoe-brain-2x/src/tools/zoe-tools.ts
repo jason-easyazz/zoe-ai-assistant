@@ -91,7 +91,7 @@ import * as v from 'valibot';
 // .ts extension so the offline strip-types tests (node --experimental-strip-types)
 // can resolve it too; tsconfig has allowImportingTsExtensions and the flue build
 // bundles .ts specifiers fine.
-import { activeHarness } from '../harness.ts';
+import { harnessForTurn } from '../harness.ts';
 import { currentUserId } from '../request-identity.ts';
 import { describeNow } from '../local-time.ts';
 import { isReplayTurn } from '../replay-mode.ts';
@@ -353,8 +353,9 @@ const recallMemory = defineTool({
       url.searchParams.set('user_id', userId);
       const query = String(data?.query ?? '').trim();
       // The packet size and query ceiling are the harness overlay's recall shape (src/harness.ts
-      // recall-shape.json; compiled-in 24 / 500, byte-identical with ZOE_BRAIN_HARNESS_DIR unset).
-      const shape = activeHarness().recallShape;
+      // recall-shape.json; compiled-in 24 / 500, byte-identical with ZOE_BRAIN_HARNESS_DIR unset),
+      // from the harness THIS TURN runs under (bound to its signal), never one reloaded mid-turn.
+      const shape = harnessForTurn(signal).recallShape;
       if (query) url.searchParams.set('message', query.slice(0, shape.queryMaxChars));
       // Widen the packet for EXPLICIT recall. The endpoint defaults to 12 facts,
       // which the per-turn ambient injection wants small — but when the user

@@ -104,6 +104,25 @@ describe('init, switch, revert and the ledger', () => {
     await assert.rejects(ctl.revert(root, 'owner', undefined, NO_RELOAD), /fix by hand/);
   });
 
+  it('exit status: 3 only when a signalled brain did not confirm', () => {
+    const r = (outcome: string) => ({ from: null, to: 'v', fromSha: null, toSha: null, reload: { outcome, ms: 0, detail: '' } }) as never;
+    assert.equal(ctl.switchExitCode(r('confirmed')), 0);
+    assert.equal(ctl.switchExitCode(r('skipped')), 0);
+    assert.equal(ctl.switchExitCode(r('timeout')), 3);
+    assert.equal(ctl.switchExitCode(r('refused')), 3);
+  });
+
+  it('revert picks its target under the lock (a held lock refuses before reading the ledger)', async () => {
+    const root = freshRoot();
+    await ctl.init(root, 'owner', NO_RELOAD);
+    ctl.renderOverlay(join(root, 'v2'));
+    await ctl.switchTo(root, 'v2', 'x', undefined, NO_RELOAD);
+    writeFileSync(join(root, '.harness-overlay.lock'), '1');
+    await assert.rejects(ctl.revert(root, 'owner', undefined, NO_RELOAD), /holds/);
+    rmSync(join(root, '.harness-overlay.lock'));
+    assert.equal((await ctl.revert(root, 'owner', undefined, NO_RELOAD)).from, 'v2');
+  });
+
   it('the lock refuses a concurrent run and a stale lock is cleared', async () => {
     const root = freshRoot();
     await ctl.init(root, 'owner', NO_RELOAD);

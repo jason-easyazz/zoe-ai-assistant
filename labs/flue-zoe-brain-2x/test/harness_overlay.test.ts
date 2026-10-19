@@ -233,6 +233,15 @@ describe('absent files fall back one by one; the code-held doctrines always clos
       const url = new URL(seen);
       assert.equal(url.searchParams.get('limit'), '7');
       assert.equal(url.searchParams.get('message'), 'q'.repeat(60));
+      // A turn keeps its recall shape across a mid-turn reload (bound to its signal).
+      const signal = new AbortController().signal;
+      await (recall.run as (c: { data: Record<string, unknown>; signal?: AbortSignal }) => Promise<unknown>)({ data: { query: 'q' }, signal });
+      process.env.ZOE_BRAIN_HARNESS_DIR = overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":9,"query_max_chars":60}}' });
+      harness.reloadHarness(() => {}, () => {});
+      await (recall.run as (c: { data: Record<string, unknown>; signal?: AbortSignal }) => Promise<unknown>)({ data: { query: 'q' }, signal });
+      assert.equal(new URL(seen).searchParams.get('limit'), '7', 'the running turn keeps its shape');
+      await recall.run({ data: { query: 'q' } });
+      assert.equal(new URL(seen).searchParams.get('limit'), '9', 'a new turn gets the reloaded shape');
       delete process.env.ZOE_BRAIN_HARNESS_DIR;
       harness.resetHarnessForTests();
       await recall.run({ data: { query: 'q'.repeat(600) } });

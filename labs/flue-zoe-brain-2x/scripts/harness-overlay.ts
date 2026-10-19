@@ -18,6 +18,8 @@
  *   switch   --root R --to VERSION --who W [--reason TEXT] [--reload unit:NAME|pid:N|none] [--health-url U]
  *   revert   --root R --who W [--reason TEXT] [--reload ...] [--health-url U]
  *
+ * EXIT 3 when a signalled brain does not confirm (timeout) or refuses; 0 otherwise.
+ *
  * SWITCH = validate the target (a refused overlay is never switched to), re-point `current`
  * atomically (symlink + rename), append the ledger line, then HOT-RELOAD the brain: SIGHUP to the
  * unit's main pid, then poll `/health` until it reports the new overlay sha256 (10 s budget). The
@@ -284,7 +286,7 @@ export interface SwitchResult {
 
 async function doSwitch(
   root: string,
-  to: string,
+  target: string | (() => string),
   who: string,
   action: 'init' | 'switch' | 'revert',
   reason: string | undefined,
@@ -294,6 +296,8 @@ async function doSwitch(
   // The lock is held through the reload and its confirmation, so a concurrent switch can never
   // re-point `current` or signal while this one is still being confirmed.
   return withLock(root, async () => {
+    // A revert resolves its target HERE, under the lock, from the ledger as it stands now.
+    const to = typeof target === 'function' ? target() : target;
     const harness = validateVersion(root, to); // a refused overlay is never switched to
     const from = currentVersion(root);
     const fromSha = shaOrNull(root, from);
@@ -321,14 +325,32 @@ export async function switchTo(root: string, to: string, who: string, reason?: s
 
 /** Restore the overlay that was current before the latest switch. */
 export async function revert(root: string, who: string, reason?: string, opts: ReloadOptions = {}): Promise<SwitchResult> {
-  const last = readLedger(root).filter((e) => e.action !== 'reload').at(-1);
-  if (!last) throw new Error(`${join(root, LEDGER)} has no switch to revert`);
-  const current = currentVersion(root);
-  if (last.to !== current) {
-    throw new Error(`ledger says current is ${last.to} but ${join(root, CURRENT)} -> ${current}: fix by hand, then switch`);
-  }
-  if (!last.from) throw new Error(`the latest switch (${last.action} to ${last.to}) has no previous overlay to restore`);
-  return doSwitch(root, last.from, who, 'revert', reason, opts);
+  return doSwitch(
+    root,
+    () => {
+      const last = readLedger(root).filter((e) => e.action !== 'reload').at(-1);
+      if (!last) throw new Error(`${join(root, LEDGER)} has no switch to revert`);
+      const current = currentVersion(root);
+      if (last.to !== current) {
+        throw new Error(`ledger says current is ${last.to} but ${join(root, CURRENT)} -> ${current}: fix by hand, then switch`);
+      }
+      if (!last.from) throw new Error(`the latest switch (${last.action} to ${last.to}) has no previous overlay to restore`);
+      return last.from;
+    },
+    who,
+    'revert',
+    reason,
+    opts,
+  );
+}
+
+/**
+ * CLI exit status for a switch: 0 when the brain confirmed it (or it was on disk only, by design:
+ * no flag on the brain, or --reload none); 3 when a signalled brain did not confirm (timeout) or
+ * refused the overlay - the caller (the nightly loop's apply step) must treat that as a failure.
+ */
+export function switchExitCode(r: SwitchResult): number {
+  return r.reload.outcome === 'timeout' || r.reload.outcome === 'refused' ? 3 : 0;
 }
 
 /** Render the compiled-in harness as a version and point `current` at it (a fresh root). */
@@ -400,14 +422,21 @@ export async function main(argv: string[]): Promise<number> {
       }
     }
     case 'init':
-      print(await init(need(flags, 'root'), need(flags, 'who'), reloadOpts));
-      return 0;
     case 'switch':
-      print(await switchTo(need(flags, 'root'), need(flags, 'to'), need(flags, 'who'), flags.get('reason'), reloadOpts));
-      return 0;
-    case 'revert':
-      print(await revert(need(flags, 'root'), need(flags, 'who'), flags.get('reason'), reloadOpts));
-      return 0;
+    case 'revert': {
+      const root = need(flags, 'root');
+      const who = need(flags, 'who');
+      const r =
+        cmd === 'init'
+          ? await init(root, who, reloadOpts)
+          : cmd === 'switch'
+            ? await switchTo(root, need(flags, 'to'), who, flags.get('reason'), reloadOpts)
+            : await revert(root, who, flags.get('reason'), reloadOpts);
+      print(r);
+      const code = switchExitCode(r);
+      if (code) console.error(`harness-overlay: ${cmd} is on disk but the brain did NOT confirm it (${r.reload.outcome}: ${r.reload.detail})`);
+      return code;
+    }
     case 'status': {
       const root = need(flags, 'root');
       const current = currentVersion(root);
