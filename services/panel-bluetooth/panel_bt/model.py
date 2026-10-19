@@ -23,9 +23,9 @@ ID_NAMESPACE = "omi-sync:"
 JOB_ID_RX = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 
 #: every operation the agent will run. Anything else is refused before it touches the radio.
-OPS = ("scan", "connect", "disconnect", "forget", "info", "status", "update_check", "update_start", "update_cancel")
+OPS = ("scan", "connect", "disconnect", "forget", "info", "status", "update_check", "update_start", "update_cancel", "omi_bond")
 #: operations that need a target device
-DEVICE_OPS = frozenset({"connect", "disconnect", "forget", "info", "update_check", "update_start", "update_cancel"})
+DEVICE_OPS = frozenset({"connect", "disconnect", "forget", "info", "update_check", "update_start", "update_cancel", "omi_bond"})
 
 # error codes the UI maps to plain sentences (the agent also sends a human message with each)
 E_BAD_REQUEST = "bad_request"
@@ -36,6 +36,8 @@ E_CONNECT = "connect_failed"
 E_NOT_CONNECTED = "not_connected"
 E_GATE = "gate_failed"
 E_OTA_OFF = "ota_disabled"
+E_BOND_OFF = "bond_disabled"
+E_BOND = "bond_failed"
 E_UPDATE = "update_failed"
 E_CANCELLED = "cancelled"
 E_UNSUPPORTED = "unsupported"

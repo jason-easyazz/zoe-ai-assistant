@@ -47,6 +47,7 @@ from collections import OrderedDict, deque
 from typing import Any, Optional
 
 import struggle_signals as sig
+import traffic_class
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,8 @@ STORE_TIMEOUT_S = 5.0
 SYNTHETIC_PANELS = ("replay", "test", "probe", "ci-", "e2e", "bench")
 ACK_LINE = "Sorry about that. I've made a note of it."
 
-#: counters (process lifetime): observed / enqueued / dropped_off / dropped_full / skipped_synthetic / processed / events /
+#: counters (process lifetime): observed / enqueued / dropped_off / dropped_full / skipped_synthetic / skipped_traffic /
+#: processed / events /
 #: hook_errors / process_errors / store_errors / sweeps / swept
 _COUNTERS: dict[str, int] = {}
 
@@ -84,7 +86,8 @@ def stats() -> dict[str, Any]:
     q = _STATE.get("queue")
     return {"mode": mode(), "queue_depth": q.qsize() if q is not None else 0, "queue_max": queue_max(),
             **{k: _COUNTERS.get(k, 0) for k in ("observed", "enqueued", "dropped_off", "dropped_full",
-                                                 "skipped_synthetic", "processed", "events", "hook_errors",
+                                                 "skipped_synthetic", "skipped_traffic", "processed", "events",
+                                                 "hook_errors",
                                                  "process_errors", "store_errors", "sweeps", "swept")}}
 
 
@@ -255,7 +258,9 @@ def _queue() -> "asyncio.Queue":
         _STATE.update(queue=q, loop=loop, worker=None)
     w = _STATE.get("worker")
     if w is None or w.done():
-        _STATE["worker"] = loop.create_task(_worker(q), name="struggle-detector")
+        # A process-lifetime worker, born inside whichever request queued first: start it from an EMPTY context so
+        # it never inherits that request's traffic class (traffic_class.detached_task).
+        _STATE["worker"] = traffic_class.detached_task(loop, _worker(q), name="struggle-detector")
     return q
 
 
@@ -274,6 +279,11 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
         pid = panel_id or _panel_from_session(session_id)
         if pid.startswith(SYNTHETIC_PANELS) or _synthetic(user_id):
             _count("skipped_synthetic")
+            return False
+        if not traffic_class.is_household():
+            # P-2: the struggle capture is the HOUSEHOLD's failure record - a harness/probe/ci turn (server-derived
+            # traffic class, traffic_class.py) is not one, even when it replays as a real member's id.
+            _count("skipped_traffic")
             return False
         uid = "guest" if speaker_verified is False else str(user_id or "")
         item = (time.time(), str(channel or "chat"), str(user_text or "")[:TEXT_CAP], str(reply or "")[:REPLY_CAP], uid,

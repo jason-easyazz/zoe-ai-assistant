@@ -48,9 +48,17 @@ DEVICE_ID_RX = re.compile(r"^[0-9a-f]{16}$")
 PANEL_ID_RX = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 #: operations the UI may request, and whether each is audited
 USER_OPS = {"scan": False, "connect": True, "disconnect": True, "forget": True, "info": False, "status": False,
-            "update_check": False, "update_start": True, "update_cancel": True}
+            "update_check": False, "update_start": True, "update_cancel": True, "omi_bond": True}
 DEVICE_OPS = frozenset(USER_OPS) - {"scan", "status"}
 TERMINAL = ("succeeded", "failed", "cancelled")
+
+
+#: the only params each op forwards to the panel (anything else the browser sends is dropped)
+FORWARDED_PARAMS = {"update_start": ("confirm", "ack_no_undo"), "omi_bond": ("confirm", "ack_wipe", "replace", "force")}
+
+
+def _forwarded_params(op: str, params: dict) -> dict:
+    return {k: params[k] for k in FORWARDED_PARAMS.get(op, ()) if k in params}
 
 
 def enabled() -> bool:
@@ -287,13 +295,15 @@ class Broker:
         params = clean(params) if isinstance(params, dict) else {}
         if op == "update_start" and not (params.get("confirm") is True and params.get("ack_no_undo") is True):
             raise BrokerError(400, "A firmware update must be confirmed, including that it cannot be undone.")
+        if op == "omi_bond" and not (params.get("confirm") is True and params.get("ack_wipe") is True):
+            raise BrokerError(400, "Secure pairing must be confirmed, including that the pendant erases its stored audio.")
         if op not in ("status", "update_cancel"):
             busy = self.active_job(panel_id)
             if busy is not None:
                 raise BrokerError(409, "That panel is busy with another Bluetooth task.")
         job = Job(id=uuid.uuid4().hex[:20], panel_id=panel_id, op=op, device_id=device_id if op in DEVICE_OPS else None,
                   actor={"user_id": actor.get("user_id"), "role": actor.get("role")}, created=self.clock(), updated=self.clock(),
-                  params={k: params[k] for k in ("confirm", "ack_no_undo") if k in params} if op == "update_start" else {})
+                  params=_forwarded_params(op, params))
         if USER_OPS[op]:
             if not audit({"phase": "requested", "action": op, "panel_id": panel_id, "device_id": job.device_id, "job_id": job.id,
                           "actor": actor.get("user_id"), "role": actor.get("role")}):
