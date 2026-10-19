@@ -1438,6 +1438,15 @@ def stub_mute_outcomes(arm: str) -> "list[Outcome]":
     return [_o(not back, utterance=u, re_raised=back) for u in MUTE_UTTERANCES]
 
 
+# The mute probe's hand-built ``open_loops`` (the real table is created in alembic 0001, not in the migrations the
+# probe replays). Its column NAMES must stay equal to 0001's: #2129 made the selector filter on ``context`` and this
+# copy lacked it, so every probe died with "no such column: context". Pinned by
+# tests/unit/test_samantha_person_checkout.py::test_the_mute_probe_open_loops_matches_the_real_schema.
+MUTE_PROBE_OPEN_LOOPS_DDL = ("CREATE TABLE open_loops (id INTEGER PRIMARY KEY, user_id TEXT, loop_text TEXT, context TEXT, "
+                             "follow_up_hint TEXT, emotional_weight INTEGER, created_at TEXT, follow_up_after TEXT, "
+                             "resolved BOOLEAN DEFAULT FALSE, resolved_at TEXT)")
+
+
 def _mute_probe_modules():
     sys.path.insert(0, str(REPO / "services" / "zoe-data"))
     import importlib.util
@@ -1520,9 +1529,7 @@ def mute_probe(world: "World", utterance: str, arm: str = "gold") -> "Outcome":
             with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
                 mod.upgrade()
         db = _Sqlite(path)
-        for ddl in ("CREATE TABLE open_loops (id INTEGER PRIMARY KEY, user_id TEXT, loop_text TEXT, "
-                    "follow_up_hint TEXT, emotional_weight INTEGER, created_at TEXT, follow_up_after TEXT, "
-                    "resolved BOOLEAN DEFAULT FALSE, resolved_at TEXT)",
+        for ddl in (MUTE_PROBE_OPEN_LOOPS_DDL,
                     "CREATE TABLE events (id TEXT, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, "
                     "deleted INTEGER DEFAULT 0)",
                     "CREATE TABLE proactive_pending (id TEXT, trigger_type TEXT, item_id TEXT)",
