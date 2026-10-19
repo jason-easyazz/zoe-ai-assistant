@@ -25,7 +25,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from auth import get_current_user
+from panel_principal import require_member
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ def _on(body: Any) -> bool:
 
 
 @router.get("/me")
-async def my_curation(request: Request, user: dict = Depends(get_current_user)):
+async def my_curation(request: Request, user: dict = Depends(require_member)):
     import memory_curation as mc
 
     uid = await _guard(request, user)
@@ -95,7 +95,7 @@ async def my_curation(request: Request, user: dict = Depends(get_current_user)):
 
 
 @router.put("/me/{category}")
-async def set_my_curation(category: str, request: Request, body: dict, user: dict = Depends(get_current_user)):
+async def set_my_curation(category: str, request: Request, body: dict, user: dict = Depends(require_member)):
     import memory_curation as mc
 
     uid = await _guard(request, user)
@@ -104,7 +104,7 @@ async def set_my_curation(category: str, request: Request, body: dict, user: dic
 
 
 @router.get("/members")
-async def curation_members(request: Request, user: dict = Depends(get_current_user)):
+async def curation_members(request: Request, user: dict = Depends(require_member)):
     import memory_curation as mc
 
     await _guard(request, user)
@@ -113,7 +113,7 @@ async def curation_members(request: Request, user: dict = Depends(get_current_us
 
 @router.put("/members/{member_id}/sensitive/{category}")
 async def set_child_sensitive(member_id: str, category: str, request: Request, body: dict,
-                              user: dict = Depends(get_current_user)):
+                              user: dict = Depends(require_member)):
     import memory_curation as mc
 
     await _guard(request, user)
@@ -133,7 +133,7 @@ async def _rows_view(db, curator, member_id: str) -> dict:
 
 
 @router.get("/members/{member_id}/rows")
-async def curated_rows(member_id: str, request: Request, user: dict = Depends(get_current_user)):
+async def curated_rows(member_id: str, request: Request, user: dict = Depends(require_member)):
     await _guard(request, user)
     return _out(await _run(_as_curator, user, _rows_view, member_id))
 
@@ -146,7 +146,7 @@ def _text(body: Any) -> str:
 
 
 @router.post("/members/{member_id}/rows")
-async def add_curated(member_id: str, request: Request, body: dict, user: dict = Depends(get_current_user)):
+async def add_curated(member_id: str, request: Request, body: dict, user: dict = Depends(require_member)):
     import memory_curation as mc
 
     await _guard(request, user)
@@ -156,7 +156,7 @@ async def add_curated(member_id: str, request: Request, body: dict, user: dict =
 
 
 @router.post("/members/{member_id}/rows/{row_id}/edit")
-async def edit_curated(member_id: str, row_id: str, request: Request, body: dict, user: dict = Depends(get_current_user)):
+async def edit_curated(member_id: str, row_id: str, request: Request, body: dict, user: dict = Depends(require_member)):
     import memory_curation as mc
 
     await _guard(request, user)
@@ -165,7 +165,7 @@ async def edit_curated(member_id: str, row_id: str, request: Request, body: dict
 
 
 @router.post("/members/{member_id}/rows/{row_id}/forget")
-async def forget_curated(member_id: str, row_id: str, request: Request, user: dict = Depends(get_current_user)):
+async def forget_curated(member_id: str, row_id: str, request: Request, user: dict = Depends(require_member)):
     import memory_curation as mc
 
     await _guard(request, user)
@@ -174,7 +174,7 @@ async def forget_curated(member_id: str, row_id: str, request: Request, user: di
 
 
 @router.get("/members/{member_id}/held")
-async def held_notes(member_id: str, request: Request, user: dict = Depends(get_current_user)):
+async def held_notes(member_id: str, request: Request, user: dict = Depends(require_member)):
     import memory_curation as mc
 
     await _guard(request, user)
@@ -182,7 +182,7 @@ async def held_notes(member_id: str, request: Request, user: dict = Depends(get_
 
 
 @router.post("/members/{member_id}/held/{held_id}")
-async def decide_held(member_id: str, held_id: str, request: Request, body: dict, user: dict = Depends(get_current_user)):
+async def decide_held(member_id: str, held_id: str, request: Request, body: dict, user: dict = Depends(require_member)):
     import memory_curation as mc
 
     await _guard(request, user)
