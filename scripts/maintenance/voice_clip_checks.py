@@ -23,7 +23,10 @@ WHERE EXPECTATIONS COME FROM (never the repo: the corpus is household audio):
      ZOE_VOICE_CLIP_EXPECTATIONS): owner labels keyed by clip id, e.g.
      {"version": 1, "clips": {"<clip id>": {"lane": "fast", "domain": "lists",
       "intent": "add_item", "note": "..."}}}. A label OVERRIDES the baseline for
-     that clip and is checked against the actual labels field by field.
+     that clip and is checked against the actual labels field by field. A field the
+     label OMITS (``seed`` writes only lane/tier/domain/intent) is still held to the
+     baseline's recorded label for it (router_domain / router_tool / tier0), when the
+     baseline was OK and carries labels; to change one of those on purpose, name it.
   2. the baseline's per-clip profile (``summary.clip_profile``): every clip that was
      OK in the baseline is expected to stay OK on the same route.
   A clip that was not OK in the baseline and has no owner label is "unchecked".
@@ -143,6 +146,15 @@ def check_clip(cid: str, row: dict[str, Any] | None, expect_base: dict[str, Any]
             bad = [k for k in LABEL_FIELDS if k in owner and owner[k] != actual.get(k)]
             if bad:
                 problems.append(("label", "owner label mismatch on " + ", ".join(bad)))
+            # A field the owner label OMITS is not thereby unchecked: it falls back to the
+            # baseline's recorded label when the baseline was OK and carries labels (`seed`
+            # writes only lane/tier/domain/intent, and a hand-written label may name fewer).
+            b_lab = expect_base.get("labels") if base_ok and isinstance(expect_base.get("labels"), dict) else None
+            if b_lab is not None:
+                fell_back = [k for k in LABEL_FIELDS if k not in owner and k in b_lab]
+                drift = [k for k in fell_back if b_lab.get(k) != actual.get(k)]
+                if drift:
+                    problems.append(("label", "baseline mismatch (field the owner label omits) on " + ", ".join(drift)))
     elif verdict != "EMPTY":
         # Baseline-derived: the full signature when both sides carry one, else the
         # legacy route hash (tier:domain:intent, or "brain").

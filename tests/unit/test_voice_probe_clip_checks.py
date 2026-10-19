@@ -177,7 +177,7 @@ def test_a_signature_baseline_compares_the_signature_and_names_the_changed_field
 
 
 def test_owner_labels_override_the_baseline_field_by_field():
-    owner = {"lane": "fast", "domain": "lists"}
+    owner = {k: FAST[k] for k in ("lane", "tier", "domain", "intent", "router_domain", "router_tool", "tier0")}
     assert vcc.check_clip("abc", _row("x", labels=FAST), _prof(BRAIN), owner)["result"] == "pass"
     bad = vcc.check_clip("abc", _row("x", labels=BRAIN), _prof(BRAIN), owner)
     assert (bad["result"], bad["kind"], bad["expected_from"]) == ("fail", "label", "owner")
@@ -186,6 +186,37 @@ def test_owner_labels_override_the_baseline_field_by_field():
     assert vcc.check_clip("abc", _row("x", labels=BRAIN), _prof(verdict="CANT_DO"), owner)["result"] == "fail"
     # ...and it needs labels to check against (a pre-T-3 replay records none)
     assert vcc.check_clip("abc", _row("x", labels=FAST, sig=False), None, owner)["kind"] == "labels-missing"
+
+
+def test_an_owner_label_that_omits_fields_keeps_the_baseline_check_for_them():
+    """Review finding (P1): `seed` writes only lane/tier/domain/intent, and any owner label used to override the
+    baseline wholesale, so router_domain / router_tool / tier0 silently stopped being checked."""
+    owner = {"lane": "fast", "tier": "tier1", "domain": "lists", "intent": "add_item"}      # what `seed` writes
+    assert vcc.check_clip("abc", _row("x", labels=FAST), _prof(), owner)["result"] == "pass"
+    for field, value in (("router_domain", "weather"), ("router_tool", "show_list"), ("tier0", "list_add")):
+        r = vcc.check_clip("abc", _row("x", labels=dict(FAST, **{field: value})), _prof(), owner)
+        assert (r["result"], r["kind"]) == ("fail", "label"), field
+        assert field in r["why"] and "baseline" in r["why"], r
+    # a field the owner DID label stays the owner's call, even where the baseline disagrees
+    assert vcc.check_clip("abc", _row("x", labels=dict(FAST, domain="timers")), _prof(),
+                          dict(owner, domain="timers"))["result"] == "pass"
+    # no baseline labels (legacy profile / absent / not OK in the baseline): nothing to fall back to
+    changed = _row("x", labels=dict(FAST, tier0="list_add"))
+    assert vcc.check_clip("abc", changed, _prof(sig=False), owner)["result"] == "pass"
+    assert vcc.check_clip("abc", changed, None, owner)["result"] == "pass"
+    assert vcc.check_clip("abc", changed, _prof(verdict="CANT_DO"), owner)["result"] == "pass"
+
+
+def test_seeded_labels_still_catch_a_router_change_through_main(tmp_path, monkeypatch, world):
+    d, names, base = world
+    exp = tmp_path / "exp.json"
+    seeded = {k: FAST[k] for k in ("lane", "tier", "domain", "intent")}
+    exp.write_text(json.dumps({"clips": {_cid(d, names[0]): seeded}}))
+    rows = _good(names)
+    rows[0] = _row(names[0], labels=dict(FAST, router_tool="show_list"))
+    rc, art, _ = _drive(tmp_path, monkeypatch, d, base, [rows, [rows[0]]], extra=("--expectations", str(exp)))
+    assert (rc, art["status"]) == (1, "fail")
+    assert f"FUNCTION: clip {_cid(d, names[0])} label" in art["said_vs_did_regressions"]
 
 
 def test_a_pinned_clip_that_was_not_replayed_fails():
@@ -311,16 +342,40 @@ def test_owner_label_file_is_read_and_a_malformed_one_is_an_error(tmp_path, monk
 
 def test_a_rebaseline_run_is_not_evidence(tmp_path, monkeypatch, world):
     d, names, base = world
+    # Review finding (P1): a re-pin run is judged against the OLD profile but writes the NEW baseline, so its
+    # artifact (>=1 old clip checked and passing) used to clear the deploy gate without the new clips ever judged.
     rc, art, _ = _drive(tmp_path, monkeypatch, d, base, [_good(names)], extra=("--update-baseline",))
-    assert art["status"] == "pass"                                     # it wrote the new bar...
+    assert rc == 0                                                     # the re-pin itself succeeded...
+    assert art["status"] != "pass" and "re-pin" in art["reason"]       # ...but it is never evidence
+    assert json.loads((tmp_path / "baseline.json").read_text())["summary"]["clip_ids"]    # the bar WAS written
+    assert art["clip_summary"]["checked"] > 0 and art["clip_summary"]["failed"] == 0
     ok, why = vgc.evaluate(art, now_epoch=time.time(), max_age_s=3600, baseline=None)
-    assert ok, why                                                     # (same clip ids: judged against the old profile)
+    assert not ok                                                      # even with every old clip checked and passing
+    # the follow-up run against the completed new profile is the evidence
+    rc, art_b, _ = _drive(tmp_path, monkeypatch, d, json.loads((tmp_path / "baseline.json").read_text()),
+                          [_good(names)])
+    assert (rc, art_b["status"]) == (0, "pass")
+    ok, why = vgc.evaluate(art_b, now_epoch=time.time(), max_age_s=3600, baseline=None)
+    assert ok, why
     (tmp_path / "other").mkdir()
     fresh = _corpus(tmp_path / "other", 3)
     rc, art2, _ = _drive(tmp_path / "other", monkeypatch, fresh, {}, [_good(_names(fresh))])
     assert art2["status"] == "pass" and art2["clip_summary"] is None    # a first-ever run judges nothing...
     ok, why = vgc.evaluate(art2, now_epoch=time.time(), max_age_s=3600, baseline=None)
     assert not ok and "well-formed" in why                             # ...so it never clears the deploy gate
+
+
+def test_a_repin_with_a_partly_new_set_is_not_evidence_either(tmp_path, monkeypatch, world):
+    d, names, base = world
+    chosen = [_cid(d, names[i]) for i in (0, 5)]
+    pin = tmp_path / "pins.json"
+    pin.write_text(json.dumps({"clip_ids": chosen}))
+    rc, art, _ = _drive(tmp_path, monkeypatch, d, base, [[_row(names[0], labels=FAST), _row(names[5], labels=BRAIN)]],
+                        extra=("--update-baseline", "--pin-from", str(pin)))
+    assert art["clip_summary"]["checked"] > 0 and art["clip_summary"]["failed"] == 0, art["reason"]
+    assert art["status"] != "pass"
+    ok, _why = vgc.evaluate(art, now_epoch=time.time(), max_age_s=3600, baseline=None)
+    assert not ok
 
 
 def test_pin_from_repins_to_exactly_the_proposed_clips(tmp_path, monkeypatch, world):

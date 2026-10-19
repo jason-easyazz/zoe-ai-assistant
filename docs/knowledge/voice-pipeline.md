@@ -266,7 +266,8 @@ it still gets the tolerance (route change then cannot be checked); re-record it 
 only ever meant "heard something, no error, no refusal phrase", so a list add answered as small talk scored OK.
 Every pinned clip is now held to an EXPECTATION (`scripts/maintenance/voice_clip_checks.py`): an owner label
 from `~/.zoe/voice-gate/clip_expectations.json` (`--expectations`, env `ZOE_VOICE_CLIP_EXPECTATIONS`; OFF the
-repo, field-by-field: `lane`, `tier`, `domain`, `intent`, `router_domain`, `router_tool`, `tier0`), else the
+repo, field-by-field: `lane`, `tier`, `domain`, `intent`, `router_domain`, `router_tool`, `tier0`; a field the
+label omits - `seed` writes only the first four - is still held to the baseline's recorded value), else the
 baseline's `clip_profile` for every clip that was OK there. A clip with an expectation must:
 1. still be heard: a clip that was OK and is now `EMPTY` is a regression (it was heard before), no longer an
    excluded silent recording;
@@ -309,8 +310,9 @@ apply; run it with the baselines: `scripts/maintenance/record_bench_baselines.sh
 `--from-json` a replay dump), proposes ~60 clips spread across lists / timers / reminders / calendar / music /
 smart home / weather-time / notes / people-memory / chat, and writes clip ids + categories only to
 `~/.zoe/voice-gate/proposed_pins.json` (mode 600; counts printed, never audio or text). Adopt deliberately:
-`voice_regression_probe.py --update-baseline --pin-from <that file>`, then a normal run (a re-pin judges
-nothing per clip, so it is not deploy evidence). A night job: ~1 s of STT per clip over ~1,500 clips.
+`voice_regression_probe.py --update-baseline --pin-from <that file>`, then a normal run (a re-pin run is
+judged against the OLD profile and its artifact is written `status: "skip"` with a re-pin reason, so it can
+never be deploy evidence; the follow-up normal run against the completed new profile is). A night job: ~1 s of STT per clip over ~1,500 clips.
 
 **STT mode — `--stt remote` is the nightly default** (unit template sets
 `ZOE_VOICE_REPLAY_STT=remote`). In-process mode lazy-loads a SECOND Moonshine next to the live

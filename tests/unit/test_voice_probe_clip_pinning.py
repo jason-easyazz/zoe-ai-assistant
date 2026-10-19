@@ -285,7 +285,7 @@ def test_main_legacy_baseline_is_not_a_speed_pass_and_update_baseline_fixes_it(t
     # the operator step: update-baseline pins the replayed set, then runs pass
     rc2, art2, pinned, _ = _drive(tmp_path, monkeypatch, d, legacy, _rows(names),
                                   extra=("--update-baseline",))
-    assert rc2 == 0 and art2["status"] == "pass" and len(pinned["summary"]["clip_ids"]) == 4
+    assert rc2 == 0 and art2["status"] == "skip" and len(pinned["summary"]["clip_ids"]) == 4   # a re-pin is not evidence
     assert art2["speed_comparison"].startswith("skipped")
     rc3, art3, _, calls3 = _drive(tmp_path, monkeypatch, d, pinned, _rows(names))
     assert (rc3, art3["status"]) == (0, "pass") and calls3 == [names]
@@ -339,6 +339,6 @@ def test_main_repin_run_is_not_judged_against_the_old_set_speed(tmp_path, monkey
     base = _baseline_for(d, names, stt_median=100, stt_ms=100)
     rc, art, new_base, _ = _drive(tmp_path, monkeypatch, d, base, _rows(names, 1900),
                                   stt_median=1900, extra=("--update-baseline",))
-    assert rc == 0 and art["status"] == "pass"
+    assert rc == 0 and art["status"] == "skip"          # a re-pin writes the bar; it is not evidence
     assert art["speed_comparison"].startswith("skipped")
     assert new_base["summary"]["medians_ms"]["stt_ms"] == 1900

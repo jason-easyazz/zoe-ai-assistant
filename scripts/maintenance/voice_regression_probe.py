@@ -1880,6 +1880,7 @@ def main(reexec: bool = False) -> int:
               "are not comparable; re-baseline once in a quiet window (--update-baseline)")
 
     pin_error = None
+    wrote_baseline = False
     if (args.update_baseline or not args.baseline.exists()) and not summary.get("clip_ids"):
         # A baseline with no pinned set re-opens the very drift this guards.
         pin_error = "no replayed clip could be identified; refusing to write a baseline with no pinned set"
@@ -1896,6 +1897,7 @@ def main(reexec: bool = False) -> int:
             "summary": summary,
         })
         print(f"Baseline saved: {args.baseline}")
+        wrote_baseline = True
         # This run IS the new bar now — reload so baseline_ref points at it.
         try:
             baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
@@ -1912,6 +1914,16 @@ def main(reexec: bool = False) -> int:
     # calendar/lists are dirty and the systemd unit shows non-zero.
     status = fold_vad_status("pass" if (not warnings and cleanup_ok) else "fail", vad)
     reason_parts = list(warnings)
+    if wrote_baseline and status == "pass":
+        # A run that WRITES the bar is never evidence for the deploy gate. A re-pin is
+        # judged against the OLD profile (clips the new set shares are checked, new ones
+        # are "unchecked") yet its artifact points at the NEW baseline, and the gate only
+        # needs >=1 checked clip - so it could clear a set whose new clips nobody judged.
+        # The evidence is a separate run against the completed new profile.
+        status = "skip"
+        reason_parts.insert(0, "baseline re-pin run: the new baseline was written, but this run was judged "
+                               "against the previous profile, so it is not evidence - run the probe again "
+                               "(without --update-baseline) against the new baseline")
     if fault_error:
         status = "error"
         reason_parts.insert(0, fault_error)
@@ -1936,6 +1948,8 @@ def main(reexec: bool = False) -> int:
     print(f"Results: {args.results}  Trend: {args.trend}  (status={status})")
     if status == "error":
         return 2
+    if status == "skip" and wrote_baseline:
+        return 0        # the re-pin itself succeeded; only its artifact is withheld as evidence
     return 0 if status == "pass" else 1
 
 
