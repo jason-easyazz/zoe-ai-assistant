@@ -28,6 +28,7 @@ from auth import (
 )
 from database import get_db
 from guest_policy import require_feature_access
+from panel_principal import require_member
 from memory_service import (
     IndexCompactionError,
     MemoryRef,
@@ -365,7 +366,7 @@ async def correct_my_memory(
     memory_id: str,
     request: Request,
     body: dict,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member),   # a signed-in member, never a guest or the panel (#2133 ratchet)
     db=Depends(get_db),
 ):
     """Correct ONE of the signed-in member's own memories with the words they typed (the phone's "Fix this"; flag-dark

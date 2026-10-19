@@ -191,9 +191,12 @@ def main() -> int:
         chunk = mod.CHUNK_SIZE
         blocks = [audio[i:i + chunk] for i in range(0, len(audio) - chunk + 1, chunk)]
         if silero is not None:
-            if hasattr(silero, "reset_states"):
+            # One contiguous stream per clip: a fresh per-stream VAD (daemon >= 2026-10-19), or the
+            # shared model reset (older daemon sources, measured with --daemon on an old copy).
+            vad = mod._new_vad_stream() if hasattr(mod, "_new_vad_stream") else silero
+            if vad is silero and hasattr(silero, "reset_states"):
                 silero.reset_states()
-            probs = [real_prob(silero, b) for b in blocks]
+            probs = [real_prob(vad, b) for b in blocks]
         else:
             floor = args.energy_floor if args.energy_floor is not None else mod.RECORD_SILENCE_AMPLITUDE
             probs = [0.9 if float(np.abs(b.astype(np.int32)).mean()) >= floor else 0.02

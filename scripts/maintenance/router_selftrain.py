@@ -100,6 +100,11 @@ ARCHIVE_DIR = SERVED_DIR / "archive"
 PROVENANCE = SERVED_DIR / "provenance.json"
 SIDECAR_UNIT = "functiongemma-router.service"
 BRAIN_UNIT = os.environ.get("ZOE_BRAIN_UNIT", "llama-server.service")
+# The TRAINER's interpreter, not this script's. zoe-data (which schedules this
+# job) moved to the py312 venv (B0.7), and that venv has no peft / datasets:
+# train_lora.py under sys.executable would die at import. The host python3
+# carries torch + transformers + peft + datasets (measured 2026-10-19).
+TRAIN_PYTHON = os.environ.get("ZOE_ROUTER_TRAIN_PYTHON", "/usr/bin/python3")
 
 LIVE_PORT = 11436
 SCRATCH_PORT = int(os.environ.get("ZOE_ROUTER_SCRATCH_PORT", "11437"))
@@ -427,12 +432,14 @@ def latest_candidate(explicit: str | None) -> Path:
 
 
 def run_eval(gguf: Path, port: int, out: Path, launch: bool,
-             label: str) -> EvalScore:
+             label: str, corpus: Path | None = None) -> EvalScore:
     """Run the production-path eval against a sidecar serving `gguf` on `port`.
 
     The real prod router (`semantic_router.route_two_stage`) is pointed at the
     sidecar via ZOE_ROUTER_SIDECAR_URL, so this measures the model exactly as
     production would use it — while leaving the live :11436 sidecar alone.
+    `corpus` swaps the frozen 81 cases for another cases file in the same
+    shape (the struggle-fed retrain's held-out failures); default unchanged.
     """
     env = dict(os.environ)
     env["ZOE_ROUTER_SIDECAR_URL"] = f"http://127.0.0.1:{port}"
@@ -440,6 +447,8 @@ def run_eval(gguf: Path, port: int, out: Path, launch: bool,
     env["GGUF_R2"] = str(gguf)
     cmd = [sys.executable, str(CAMPAIGN / "prod_path_eval.py"),
            "--out", str(out), "--no-assert"]
+    if corpus is not None:
+        cmd += ["--corpus", str(corpus)]
     if launch:
         cmd.append("--launch-sidecar")
     log(f"EVAL[{label}]: {gguf.name} on :{port}")
@@ -569,7 +578,7 @@ def train(merged: Path, stamp: str, journal: dict) -> Path:
                 f"ABORT: MemAvailable {avail} MB < {MIN_TRAIN_MEM_MB} MB even "
                 "after freeing the brain — not starting a doomed training run")
 
-        cmd = ["nice", "-n", "10", sys.executable, str(FINETUNE / "train_lora.py"),
+        cmd = ["nice", "-n", "10", TRAIN_PYTHON, str(FINETUNE / "train_lora.py"),
                "--variant", "functok", "--cpu",
                "--model-dir", str(WARM_START),
                "--data", str(merged),
@@ -624,7 +633,8 @@ PRISTINE_TOKENIZER_FILES = (
 )
 
 
-def export_gguf(merged_ckpt: Path, stamp: str, journal: dict) -> Path:
+def export_gguf(merged_ckpt: Path, stamp: str, journal: dict,
+                out: Path | None = None) -> Path:
     log("=== 3. EXPORT ===")
     for name in PRISTINE_TOKENIZER_FILES:
         src = BASE_HF / name
@@ -632,7 +642,8 @@ def export_gguf(merged_ckpt: Path, stamp: str, journal: dict) -> Path:
             shutil.copy2(src, merged_ckpt / name)
     log(f"restored pristine tokenizer files from {BASE_HF}")
 
-    out = SELFTRAIN_DIR / "work" / f"candidate_{stamp}-Q8_0.gguf"
+    out = out or SELFTRAIN_DIR / "work" / f"candidate_{stamp}-Q8_0.gguf"
+    out.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env.setdefault("LLAMA_CPP", "/home/zoe/llama.cpp")
     proc = subprocess.run(
@@ -647,18 +658,46 @@ def export_gguf(merged_ckpt: Path, stamp: str, journal: dict) -> Path:
     return out
 
 
-def replay_gate(journal: dict) -> ReplayVerdict:
+#: the replay gate's OWN results artifact. Never the shared voice-gate slot
+#: (~/.cache/zoe/voice_regression_last.json): the deploy gate reads that one as
+#: evidence for the code being deployed, and a replay of a CANDIDATE router is
+#: evidence for nothing that is deployed (it would also bump the shared
+#: non-pass streak and its owner alert on a model that was simply rejected).
+REPLAY_RESULTS = SELFTRAIN_DIR / "replay" / "voice_regression_candidate.json"
+REPLAY_TREND = SELFTRAIN_DIR / "replay" / "voice_regression_candidate_trend.jsonl"
+
+
+def _start_scratch_sidecar(gguf: Path, port: int):
+    """Serve `gguf` on the scratch port with the eval harness's own launcher
+    (memory gate, port-free check, /props identity). Returns the Popen."""
+    sys.path.insert(0, str(LABS / "two-stage-router-eval"))
+    from run_two_stage import start_server  # noqa: E402 - lab helper, stdlib only
+    return start_server(str(gguf), port)
+
+
+def replay_gate(journal: dict, candidate_gguf: Path | None = None,
+                results: Path | None = None, trend: Path | None = None) -> ReplayVerdict:
     """The voice replay gate — mandatory for anything on the voice path.
 
     The probe writes its results JSON on a real run and exits 0 on a SKIP, so a
     zero exit code alone does not prove it ran. We require a FRESH results file
     with samples in it; anything else is 'did not run' → no promotion.
+
+    `candidate_gguf`: the replay must exercise the CANDIDATE, not the live
+    sidecar. The replay harness routes through `semantic_router`, which reads
+    `ZOE_ROUTER_SIDECAR_URL` (its `.env` loader only `setdefault`s), so the
+    candidate is served on the scratch port for the length of the probe and the
+    probe is pointed at it. Without this the gate replayed the INCUMBENT and
+    passed any candidate. Results go to this loop's own artifact
+    (REPLAY_RESULTS), never the shared voice-gate slot.
     """
     log("=== voice replay gate ===")
     if not http_ok(BRAIN_HEALTH):
         return ReplayVerdict(False, False,
                              "brain not healthy — replay cannot run")
-    results = Path.home() / ".cache" / "zoe" / "voice_regression_last.json"
+    results = results or REPLAY_RESULTS
+    trend = trend or REPLAY_TREND
+    results.parent.mkdir(parents=True, exist_ok=True)
     before = results.stat().st_mtime if results.exists() else 0.0
 
     env = dict(os.environ)
@@ -670,9 +709,23 @@ def replay_gate(journal: dict) -> ReplayVerdict:
                                                 "POSTGRES_URL") or "")
     cmd = ["flock", "/tmp/zoe-voice-harness.lock",
            sys.executable, str(REPO / "scripts" / "maintenance" / "voice_regression_probe.py"),
-           "--service-dir", str(LIVE_SERVICE_DIR)]
-    proc = subprocess.run(cmd, cwd=str(REPO), env=env, capture_output=True,
-                          text=True, timeout=3600)
+           "--service-dir", str(LIVE_SERVICE_DIR),
+           "--results", str(results), "--trend", str(trend)]
+    sidecar = None
+    if candidate_gguf is not None:
+        try:
+            sidecar = _start_scratch_sidecar(candidate_gguf, SCRATCH_PORT)
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 - a replay that could not start is "did not run", never a pass
+            return ReplayVerdict(False, False, f"candidate sidecar did not start: {exc}")
+        env["ZOE_ROUTER_SIDECAR_URL"] = f"http://127.0.0.1:{SCRATCH_PORT}"
+        log(f"replaying the CANDIDATE {candidate_gguf.name} on :{SCRATCH_PORT}")
+    try:
+        proc = subprocess.run(cmd, cwd=str(REPO), env=env, capture_output=True,
+                              text=True, timeout=3600)
+    finally:
+        if sidecar is not None:
+            sidecar.kill()
+            sidecar.wait()
     log((proc.stdout or "")[-2000:])
     if proc.returncode != 0 and proc.stderr:
         # never swallow the probe's stderr — a silent failure here reads as a
@@ -690,7 +743,9 @@ def replay_gate(journal: dict) -> ReplayVerdict:
     if not summary.get("n_samples"):
         return ReplayVerdict(False, False, "probe replayed 0 samples")
     passed = proc.returncode == 0
-    journal["replay"] = {"returncode": proc.returncode, "summary": summary}
+    journal["replay"] = {"returncode": proc.returncode, "summary": summary,
+                         "status": payload.get("status"),
+                         "candidate": str(candidate_gguf) if candidate_gguf else None}
     return ReplayVerdict(
         True, passed,
         f"n={summary.get('n_samples')} ok_rate={summary.get('ok_rate')} rc={proc.returncode}")
@@ -1042,7 +1097,7 @@ def main() -> int:
                              RUNS_DIR / f"{stamp}-candidate.json",
                              launch=True, label="candidate")
 
-        replay = replay_gate(journal)
+        replay = replay_gate(journal, candidate_gguf=candidate_gguf)
 
         log("=== 5. RATCHET (candidate vs incumbent, same rig) ===")
         decision = decide_promotion(incumbent_scratch, candidate, replay)

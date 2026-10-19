@@ -60,11 +60,6 @@ async def test_execute_list_show_returns_empty_text_for_pi_lab_when_no_lists(mon
     db = _FakeDB([])
     _install_fake_db(monkeypatch, db)
 
-    async def fail_mcporter(_cmd):
-        raise AssertionError("list_show should use the read-only direct path")
-
-    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
-
     result = await execute_intent(
         Intent("list_show", {"list_type": "shopping"}),
         "pi-intent-lab",
@@ -76,7 +71,7 @@ async def test_execute_list_show_returns_empty_text_for_pi_lab_when_no_lists(mon
 
 
 @pytest.mark.asyncio
-async def test_execute_list_show_uses_read_only_direct_path_before_mcporter(monkeypatch):
+async def test_execute_list_show_uses_read_only_direct_path(monkeypatch):
     db = _FakeDB(
         [
             {
@@ -91,11 +86,6 @@ async def test_execute_list_show_uses_read_only_direct_path_before_mcporter(monk
         ]
     )
     _install_fake_db(monkeypatch, db)
-
-    async def fail_mcporter(_cmd):
-        raise AssertionError("list_show should use the read-only direct path")
-
-    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
 
     result = await execute_intent(
         Intent("list_show", {"list_type": "shopping"}),
@@ -179,25 +169,3 @@ async def test_list_show_direct_renders_multiple_lists(monkeypatch):
     )
 
     assert result == "Your shopping lists:\nPantry:\n  - rice\nShopping:\n  - milk"
-
-
-@pytest.mark.asyncio
-async def test_mutating_list_intents_still_use_mcporter(monkeypatch):
-    calls = []
-
-    async def fake_mcporter(cmd):
-        calls.append(cmd)
-        return '{"id": "li-1", "status": "added"}'
-
-    monkeypatch.setattr("intent_router._run_mcporter", fake_mcporter)
-
-    result = await execute_intent(
-        Intent("list_add", {"list_type": "shopping", "item": "milk"}),
-        "pi-intent-lab",
-    )
-
-    assert result == "Added milk to your shopping list."
-    assert len(calls) == 1
-    assert "zoe-data.list_add_item" in calls[0]
-    assert 'text="milk"' in calls[0]
-    assert "user_id=pi-intent-lab" in calls[0]

@@ -166,6 +166,11 @@ def speech_predicate(mod: types.ModuleType, chunk: int):
         model, _ = mod._get_silero_vad()
         if model is not None:
             threshold = mod.VAD_ENDPOINT_THRESHOLD
+            if hasattr(mod, "_new_vad_stream"):
+                # Daemon >= 2026-10-19: per-stream VAD state. The trim pass gets its OWN stream
+                # (reset with every other probe state by reset_vad_state), never the endpointer's.
+                mod._probe_trim_vad = mod._new_vad_stream()
+                model = mod._probe_trim_vad
 
             def _vad_is_speech(block: np.ndarray) -> bool:
                 return mod._vad_prob(model, block) >= threshold
@@ -210,6 +215,9 @@ def reset_vad_state(mod: types.ModuleType) -> None:
         model, _ = mod._get_silero_vad()
         if model is not None and hasattr(model, "reset_states"):
             model.reset_states()
+        trim = getattr(mod, "_probe_trim_vad", None)   # daemon >= 2026-10-19: the trim pass's own stream
+        if trim is not None:
+            trim.reset()
     except Exception:
         pass
 

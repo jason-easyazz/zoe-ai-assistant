@@ -1304,6 +1304,27 @@ def in_nightly_window(now: dt.datetime, guard_min: int = NIGHTLY_GUARD_MIN) -> b
     return start <= minute < end
 
 
+def harness_quiet_refusal(name: str | None = None) -> str | None:
+    """Harness quiet hours (P-2, ``scripts/maintenance/harness_quiet.py``): the reason this harness may NOT
+    start now (waking hours, or the panel used in the last 10 min), else None. One rule for every harness
+    built on this module (the bar, day-sim, person bench, user-model A/B, recall-evidence probe)."""
+    # load by FILE PATH, never via sys.path: scripts/maintenance holds names that shadow service modules
+    # (pi_runtime_probe.py exists in both), and this runs inside processes that import service code
+    import importlib.util
+
+    harness_quiet = sys.modules.get("harness_quiet")
+    if harness_quiet is None:
+        spec = importlib.util.spec_from_file_location(
+            "harness_quiet", Path(__file__).resolve().parents[1] / "maintenance" / "harness_quiet.py")
+        harness_quiet = importlib.util.module_from_spec(spec)
+        sys.modules["harness_quiet"] = harness_quiet
+        spec.loader.exec_module(harness_quiet)
+
+    verdict = harness_quiet.check(name or Path(sys.argv[0]).stem or "harness")
+    print(verdict.reason, flush=True)
+    return None if verdict.allowed else verdict.reason
+
+
 def mem_available_mb() -> int:
     try:
         with open("/proc/meminfo") as fh:
@@ -1419,6 +1440,10 @@ class Live:
     def _req(self, method: str, url: str, headers: dict, body: dict | None = None,
              timeout: float = 60) -> tuple[int, Any]:
         data = json.dumps(body).encode() if body is not None else None
+        if "X-Internal-Token" in headers:
+            # P-2 traffic class: the server honours this only next to the internal token, and only to name a
+            # NON-household class (the demo_* id already forces "harness"; this covers token-only calls).
+            headers = {"X-Zoe-Traffic-Class": "harness", **headers}
         req = urllib.request.Request(url, data=data, method=method,
                                      headers={"Content-Type": "application/json", **headers})
         try:
@@ -2529,6 +2554,9 @@ def main(argv: list[str] | None = None) -> int:
         args.samples = 1
     if in_nightly_window(dt.datetime.now()):
         return _refuse(args, "inside (or within 30 min of) the 01:45-03:15 nightly window", revision)
+    quiet = harness_quiet_refusal("samantha_bar")
+    if quiet:
+        return _refuse(args, quiet, revision)
     busy, detail = deploy_in_progress()
     if busy is None or busy:
         return _refuse(args, f"deploy check: {detail}", revision)
