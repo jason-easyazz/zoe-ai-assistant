@@ -576,6 +576,138 @@ check('dark mode: the cards read the theme tokens, and dark-mode-shared swaps th
     }
 });
 
+check('journal (a bare `journalWidget` global) is a singleton type, and so is every widget that publishes itself on window', async () => {
+    const journal = "WidgetManager.register(new (class extends WidgetModule { constructor() { super('journal'); } getTemplate() { return '<i></i>'; } })());";
+    const run = (ctx) => {
+        const { d } = boardWith(ctx);
+        d.serverSync = false;
+        ctx.$(journal);
+        assert(d.addWidget('journal'), 'the first journal mounts');
+        assert.strictEqual(d.addWidget('journal'), null, 'a second journal would take over window.journalWidget');
+        assert.strictEqual(d.grid.engine.nodes.length, 1);
+        d.loadFromData([{ uid: 'j1', type: 'journal', x: 0, y: 0, w: 6, h: 4 }, { uid: 'j2', type: 'journal', x: 6, y: 0, w: 6, h: 4 }]);
+        assert.strictEqual(d.grid.engine.nodes.length, 1, 'a stored layout with two journals keeps one');
+    };
+    run(makeContext(() => never()));
+    // class check: any widget file that does `window.x = this` must be listed
+    const selfPublishing = widgetFiles().filter(f => f.name.startsWith('js/widgets/') && /\bwindow\.[A-Za-z_$][\w$]*\s*=\s*this\b/.test(stripComments(f.src)))
+        .map(f => path.basename(f.name, '.js'));
+    assert(selfPublishing.includes('journal'), 'the scan still finds journal.js');
+    const ctx = makeContext(() => never());
+    selfPublishing.forEach(t => assert.strictEqual(ctx.$(`SINGLETON_WIDGET_TYPES.has(${JSON.stringify(t)})`), true, t + ' publishes itself on window but is not a singleton type'));
+    // negative controls: without 'journal' in the set a second journal mounts / the scan goes red
+    await mustFail('a second journal mounting is caught', () => {
+        const c = makeContext(() => never());
+        c.$("SINGLETON_WIDGET_TYPES.delete('journal')");
+        run(c);
+    });
+    await mustFail('a self-publishing widget missing from the set is caught', () => {
+        const c = makeContext(() => never());
+        c.$("SINGLETON_WIDGET_TYPES.delete('journal')");
+        selfPublishing.forEach(t => assert.strictEqual(c.$(`SINGLETON_WIDGET_TYPES.has(${JSON.stringify(t)})`), true));
+    });
+});
+
+check('an unreadable server layout (HTTP error / network failure) is never written over; only a readable null migrates', async () => {
+    const stored = [{ uid: 'old1', type: 'weather', x: 0, y: 0, w: 4, h: 3 }];
+    const run = async (getImpl, { local = true, patch } = {}) => {
+        const puts = [];
+        const ctx = makeContext((url, opts) => {
+            if (url === '/api/dashboard/layout/' && opts.method === 'PUT') { puts.push(JSON.parse(opts.body)); return json(200, { status: 'ok' }); }
+            if (url === '/api/dashboard/layout/') return getImpl();
+            return never();
+        });
+        const { d } = boardWith(ctx);
+        if (local) ctx._store.zoe_desktop_widgets = JSON.stringify(stored);
+        if (patch) patch(d);
+        await d.loadLayout();
+        ctx._timers.splice(0).forEach(fn => fn());
+        await flush();
+        // a later edit in the same session must not reach the server either
+        d.saveLayout();
+        ctx._timers.splice(0).forEach(fn => fn());
+        await flush();
+        return { d, ctx, puts };
+    };
+    const failures = {
+        'HTTP 503': () => json(503, {}),
+        'HTTP 401': () => json(401, {}),
+        'network error': () => Promise.reject(new Error('offline'))
+    };
+    for (const [name, get] of Object.entries(failures)) {
+        const withLocal = await run(get);
+        assert.deepStrictEqual(plain(withLocal.d.currentLayout().map(e => e.uid)), ['old1'], name + ": this browser's copy is shown");
+        assert.strictEqual(withLocal.puts.length, 0, name + ': the server layout must not be overwritten');
+        const noLocal = await run(get, { local: false });
+        assert(noLocal.d.grid.engine.nodes.length > 0, name + ': the default board is shown');
+        assert.strictEqual(noLocal.puts.length, 0, name + ': the default board must not be PUT over the server layout');
+    }
+    // a successful GET that says layout: null still migrates the browser copy
+    const fresh = await run(() => json(200, { layout: null }));
+    assert(fresh.puts.length >= 1, 'a readable "nothing saved" migrates');
+    // negative control: the reviewed bug (a failed GET read as "no saved layout") is caught
+    const asMissing = (d) => {
+        const real = d._fetchServerLayout.bind(d);
+        d._fetchServerLayout = async () => {
+            const v = await real();
+            return typeof v === 'symbol' ? null : v;
+        };
+    };
+    await mustFail('a failed GET read as null is caught', async () => {
+        const bad = await run(failures['HTTP 503'], { patch: asMissing });
+        assert.strictEqual(bad.puts.length, 0);
+    });
+    await mustFail('a failed GET on the default board is caught', async () => {
+        const bad = await run(failures['network error'], { local: false, patch: asMissing });
+        assert.strictEqual(bad.puts.length, 0);
+    });
+});
+
+check('layout PUTs are serialised: one in flight, the latest layout goes next', async () => {
+    const run = async (patch) => {
+        const started = [];
+        const releases = [];
+        const ctx = makeContext((url, opts) => {
+            if (url === '/api/dashboard/layout/' && opts.method === 'PUT') {
+                started.push(JSON.parse(opts.body));
+                return new Promise((res) => releases.push(() => res({ ok: true, status: 200, json: async () => ({}) })));
+            }
+            return never();
+        });
+        const { d } = boardWith(ctx);
+        if (patch) patch(d, ctx);
+        const fire = async () => { ctx._timers.splice(0).forEach(fn => fn()); await flush(); };
+        const lay = (n) => [{ uid: 'u' + n, type: 'weather', x: 0, y: 0, w: 4, h: 3 }];
+        d._queueServerSave(lay(1)); await fire();
+        assert.strictEqual(started.length, 1, 'the first PUT starts');
+        d._queueServerSave(lay(2)); await fire();
+        d._queueServerSave(lay(3)); await fire();
+        assert.strictEqual(started.length, 1, 'no second PUT while one is in flight');
+        releases[0](); await flush();
+        assert.strictEqual(started.length, 2, 'exactly one more PUT after the first settles (2 and 3 coalesce)');
+        assert.strictEqual(started[1].layout[0].uid, 'u3', 'the latest layout is the one sent');
+        releases[1](); await flush();
+        assert.strictEqual(started.length, 2, 'nothing left to send');
+        return started;
+    };
+    await run();
+    // a failing PUT must not wedge the queue
+    const ctx = makeContext((url, opts) => (opts.method === 'PUT' ? Promise.reject(new Error('offline')) : never()));
+    const { d } = boardWith(ctx);
+    d._queueServerSave([{ uid: 'a', type: 'weather', x: 0, y: 0, w: 4, h: 3 }]);
+    ctx._timers.splice(0).forEach(fn => fn());
+    await flush();
+    assert.strictEqual(d._serverSaveInFlight, false, 'a failed PUT releases the slot');
+    // negative control: the old fire-and-forget PUT (overlapping requests) is caught
+    await mustFail('overlapping PUTs are caught', () => run((dd, cc) => {
+        dd._queueServerSave = function (layout) {
+            this._serverSaveTimer = cc.setTimeout(() => {
+                cc.fetch('/api/dashboard/layout/', { method: 'PUT', body: JSON.stringify({ layout }) });
+            }, 600);
+        };
+    }));
+});
+
 Promise.all(pending).then(() => {
     const total = pending.length;
     console.log(`\ndashboard real data: ${passed}/${total} checks passed`);

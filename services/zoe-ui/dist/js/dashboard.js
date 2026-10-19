@@ -34,9 +34,16 @@ const TOUCH_WIDGET_DEFAULTS = {
 };
 
 // Widget types whose markup calls back through a per-TYPE global (zoe-orb's
-// window.zoeWidgets.get(type) in inline onclick handlers), so a board may hold
-// only one card of each. Everything else is one object per card (uid-keyed).
-const SINGLETON_WIDGET_TYPES = new Set(['zoe-orb']);
+// window.zoeWidgets.get(type) in inline onclick handlers; journal's bare
+// `journalWidget` global, which init() points at the newest card), so a board
+// may hold only one card of each. Everything else is one object per card
+// (uid-keyed, reached via .widget.widgetInstance).
+const SINGLETON_WIDGET_TYPES = new Set(['zoe-orb', 'journal']);
+
+// _fetchServerLayout() could not read the member's saved layout (HTTP error or
+// network failure). Distinct from null ("nothing saved yet"): a failure must
+// never be treated as permission to overwrite the server copy.
+const SERVER_LAYOUT_UNREADABLE = Symbol('server-layout-unreadable');
 
 /**
  * Get widget configuration from manifest
@@ -509,31 +516,51 @@ class Dashboard {
     // board keeps its browser-local layout - a kiosk is a guest.
     _queueServerSave(layout) {
         if (!this.serverSync) return;
+        // The saved layout could not be read this session, so we do not know what
+        // is on the server: a PUT of the fallback board would overwrite it.
+        if (this._serverSaveBlocked) return;
+        this._pendingServerLayout = layout;
         clearTimeout(this._serverSaveTimer);
-        this._serverSaveTimer = setTimeout(() => {
-            fetch('/api/dashboard/layout/', {
+        this._serverSaveTimer = setTimeout(() => this._flushServerSave(), 600);
+    }
+
+    // At most one PUT in flight: an older request can otherwise land last and
+    // overwrite a newer layout. A change that arrives meanwhile waits, and only
+    // the latest layout is sent once the in-flight PUT settles.
+    async _flushServerSave() {
+        if (this._serverSaveInFlight || this._serverSaveBlocked) return;
+        const layout = this._pendingServerLayout;
+        if (!layout) return;
+        this._pendingServerLayout = null;
+        this._serverSaveInFlight = true;
+        try {
+            const r = await fetch('/api/dashboard/layout/', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
                 body: JSON.stringify({ layout })
-            }).then((r) => {
-                if (!r.ok) console.warn('Dashboard layout not saved to the server: HTTP ' + r.status);
-            }).catch((e) => console.warn('Dashboard layout not saved to the server:', e));
-        }, 600);
+            });
+            if (!r.ok) console.warn('Dashboard layout not saved to the server: HTTP ' + r.status);
+        } catch (e) {
+            console.warn('Dashboard layout not saved to the server:', e);
+        } finally {
+            this._serverSaveInFlight = false;
+            if (this._pendingServerLayout) this._flushServerSave();
+        }
     }
 
     async _fetchServerLayout() {
         if (!this.serverSync) return null;
         try {
             const r = await fetch('/api/dashboard/layout/', { credentials: 'same-origin' });
-            if (!r.ok) return null;
+            if (!r.ok) return SERVER_LAYOUT_UNREADABLE;
             const data = await r.json();
             // null = nothing saved yet (fall back to this browser / the default);
             // [] = the member removed every card, which must stay empty - not be
             // resurrected from localStorage or the default and saved back.
             return (data && Array.isArray(data.layout)) ? data.layout : null;
         } catch (_) {
-            return null;
+            return SERVER_LAYOUT_UNREADABLE;
         }
     }
 
@@ -548,8 +575,14 @@ class Dashboard {
     }
 
     async loadLayout() {
-        const fromServer = await this._fetchServerLayout();
-        const layout = fromServer !== null ? fromServer : this._readLocalLayout();
+        let fromServer = await this._fetchServerLayout();
+        if (fromServer === SERVER_LAYOUT_UNREADABLE) {
+            // Show this browser's copy (or the default) but never write it up: the
+            // member's real layout is still on the server, we just could not read it.
+            this._serverSaveBlocked = true;
+            fromServer = undefined;
+        }
+        const layout = Array.isArray(fromServer) ? fromServer : this._readLocalLayout();
         if (!layout) {
             this.createDefaultLayout();
             return;
@@ -557,7 +590,7 @@ class Dashboard {
         this.loadFromData(layout);
         // A board saved only in this browser (before Wave 4b) moves to the server
         // once, with uids minted for its cards.
-        if (fromServer === null && this.serverSync) this.saveLayout();
+        if (fromServer === null && this.serverSync && !this._serverSaveBlocked) this.saveLayout();
     }
 
     loadFromData(layout) {
