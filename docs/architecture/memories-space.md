@@ -885,8 +885,8 @@ adult admin is the implicit curator of every child); an adult is curated only in
 (`memory_curation_optins`, D9; the carer-without-consent case, D8, is not built); the curated authority is a new class `curated`
 (rank 6, changed only by a curator or an operator: the child's passing remark is held as a `disputed` note the curator keeps or
 accepts); an adult's opt-out releases their curated rows to `user_stated`. A curator sees all curated rows of the member (any
-curator's, so two parents share them), never the member's other memories. The spoken curator intent at the panel ("Zoe, remember
-that Mia's swimming is on Tuesdays") is a separate, replay-gated PR.
+curator's, so two parents share them), never the member's other memories. By voice ("Zoe, remember that Mia's swimming is on
+Tuesdays", the curator's own panel identity only) it goes through `memory_curation.by_voice` from `memories_voice.tier` (replay-gated).
 
 Each phase is one PR (or a small workstream), flag-dark, with its tests, and says what changes for the family.
 

@@ -29,6 +29,17 @@ memories"). Turning one off gives those notes back to them: their own word wins 
 The child hears the notes when they ask Zoe (they are ordinary rows of the child, found by recall), sees them on their own
 Memories list labelled "Added for you by <name>", and cannot forget or correct them.
 
+## By voice at the panel (VOICE-PATH, replay-gated)
+
+"Zoe, remember that Mia's swimming is on Tuesdays" from a curator in THEIR OWN panel identity (`extra_ctx['scope_user']`: a
+verified voice session or a fresh PIN) writes the same curated note (`curated_via="voice"`) through `memory_curation.by_voice`,
+called first in `memories_voice.tier` (inside `fast_tiers._provenance_tier`). The category is guessed from the words (health /
+medication / money by the classifiers, refused aloud unless opted in; then school, dates, routines, likes, people, other). Zoe says
+"Okay, I'll remember that for Mia." and never repeats the note. A guest, a child, a non-admin, a speaker the gate rejected
+(`speaker_verified is False`), the chat lane, a dry turn, a name that is none of the curator's people, or "remember that I ..."
+fall through untouched (the existing teach path). Two curatable people with the same first name: "Add it on your phone".
+Pinned by `tests/test_memories_curation_voice.py`.
+
 ## Walls (each pinned in `services/zoe-data/tests/test_memory_curation.py`, with a control)
 
 | Wall | Where |
@@ -61,8 +72,7 @@ Rollback: unset the flag (404 everywhere). Curated rows already written stay ord
 ## Not built / unproven
 
 - **D8** (a carer acting for an adult who cannot consent) is a legal question; nothing acts for an adult without their own opt-in.
-- The spoken curator intent at the panel ("Zoe, remember that Mia's swimming is on Tuesdays", in the curator's own verified voice
-  session) is a separate voice-path PR (replay-gated).
+- Proven only by tests and the replay gate: no live run of the spoken curator intent yet.
 - Recall phrasing: the brain sees a curated row as an ordinary fact; the "Mum added a note" lexicon line of design 2.3 is not built.
 - Contradiction detection is the shared matcher (`conflict_kind`) plus the negation flip; a paraphrased contradiction it cannot
   match is stored beside the curated row, not held.
