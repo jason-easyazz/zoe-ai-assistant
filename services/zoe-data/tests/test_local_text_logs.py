@@ -6,6 +6,7 @@ forget. These tests use throwaway logs (the conftest pins the live ones off) and
 from __future__ import annotations
 
 import json
+import re
 import stat
 
 import pytest
@@ -145,13 +146,35 @@ def test_lines_appended_during_the_rewrite_survive(shadow):
     assert [r["utt"] for r in load(shadow)] == ["a" * 12, "z" * 12]
 
 
-def test_garbage_lines_and_missing_files_are_left_alone(shadow):
+def test_malformed_rows_are_dropped_by_every_pass_and_missing_files_are_fine(shadow):
+    """Forget fails closed (codex round 3 on #2110). Break: return the line unchanged for an unparseable row again -> the word in a
+    torn / hand-edited row survives the retention sweep, an entity erasure and a member erase."""
     shadow.parent.mkdir(parents=True)
-    shadow.write_text("not json at all\n" + rec("a" * 12, "old", 99) + "\n")
-    ltl.sweep(NOW)
-    assert shadow.read_text().splitlines()[0] == "not json at all"
+    torn = '{"utt": "zzzzzzzzzzzz", "utt_text": "ring Marisol about'          # a torn append: not JSON, still holds a name
+    shadow.write_text(torn + "\nnot json at all\n" + rec("a" * 12, "old", 99) + "\n" + rec("b" * 12, "fresh", 1) + "\n")
+    assert ltl.sweep(NOW)["router_shadow"] == 3                                # 2 malformed dropped + 1 aged-out text stripped
+    assert [r["utt"] for r in load(shadow)] == ["a" * 12, "b" * 12] and "Marisol" not in shadow.read_text()
+    assert ltl.count_malformed(ltl.ROUTER_SHADOW) == 0
+
+    # entity erasure: a malformed row holding the forgotten word is gone even though no record can be matched to it
+    write(shadow, rec("a" * 12, "fine", 1), 'garbage ring Marisol {"utt"')
+    assert ltl.erase_entity(re.compile(r"\bMarisol\b")) == 1
+    assert "Marisol" not in shadow.read_text() and [r["utt"] for r in load(shadow)] == ["a" * 12]
+
+    # member erase
+    write(shadow, rec("a" * 12, "words", 1), "oops: words")
+    assert ltl.count_malformed(ltl.ROUTER_SHADOW) == 1
+    assert ltl.erase_all_text() == 2
+    assert "words" not in shadow.read_text() and [r["utt"] for r in load(shadow)] == ["a" * 12]
+
     shadow.unlink()
     assert ltl.sweep(NOW) == {"adhoc_backups": 0, "router_shadow": 0, "intent_misses": 0} and ltl.erase_all_text() == 0
+
+
+def test_a_json_row_that_is_not_an_object_is_malformed_too(shadow):
+    write(shadow, '"just a string with Marisol"', "[1, 2]", rec("a" * 12, "keep", 1))
+    assert ltl.erase_entity(re.compile(r"Marisol")) == 2
+    assert [r["utt"] for r in load(shadow)] == ["a" * 12]
 
 
 # ── the cascade step ────────────────────────────────────────────────────────────────

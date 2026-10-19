@@ -21,6 +21,8 @@ SAFETY
     BACKUP STILL HOLDS THE TEXT: check the result, then delete it (``--drop-backup`` does it for you once the check passes, or
     ``rm -r`` the printed path). A forgotten backup is the very leak this removes, so the hourly zoe-log-rotate job DELETES
     ``router-shadow-*`` backups older than 14 days (``local_text_logs.prune_adhoc_backups``) and goes red if it cannot;
+  * a row that is not a JSON object (a torn append, a hand-edit) cannot be judged and may hold words: it is DROPPED, counted in
+    "selected", and the post-check fails if any remains;
   * after the rewrite it re-reads every file and checks that the record count is unchanged and that no record selected for
     stripping still carries text; a failed check keeps the backup and exits 1;
   * file modes are kept; rewrites are atomic and re-append lines a writer added meanwhile;
@@ -65,18 +67,33 @@ def _records(seg: Path) -> list[dict]:
     return out
 
 
+def _malformed(seg: Path) -> int:
+    """Non-blank rows that are not a JSON object. The sweep and every erasure DROP them (fail closed), so they count as selected."""
+    n = 0
+    for line in seg.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            ok = isinstance(json.loads(line), dict)
+        except ValueError:
+            ok = False
+        n += 0 if ok else 1
+    return n
+
+
 def _selected(ltl, log, rec: dict, cutoff: Optional[float], everything: bool) -> bool:
     return bool(isinstance(rec.get(log.text_field), str) and rec.get(log.text_field)
                 and (everything or (cutoff is not None and ltl._ts(rec, log) < cutoff)))
 
 
 def plan(ltl, logs, cutoff: Optional[float], everything: bool) -> list[tuple]:
-    """``[(log, segment, total records, records selected)]`` - counts only."""
+    """``[(log, segment, total records, records selected)]`` - counts only. A malformed row is dropped by every pass, so it is
+    selected too."""
     rows = []
     for log in logs:
         for seg in ltl.segments(log):
             recs = _records(seg)
-            rows.append((log, seg, len(recs), sum(_selected(ltl, log, r, cutoff, everything) for r in recs)))
+            rows.append((log, seg, len(recs), sum(_selected(ltl, log, r, cutoff, everything) for r in recs) + _malformed(seg)))
     return rows
 
 
@@ -142,10 +159,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         for seg, recs in before.items():
             after = _records(seg) if seg.exists() else []
             still = sum(_selected(ltl, log, r, cutoff, ns.all) for r in after)
+            bad = _malformed(seg) if seg.exists() else 0
             kept = len(after) if log.expire == "strip" else None
-            if still or (kept is not None and kept < len(recs)):
+            if still or bad or (kept is not None and kept < len(recs)):
                 failed += 1
-                print(f"  CHECK FAILED {seg}: {still} selected records still carry text, {len(recs)} -> {len(after)} records")
+                print(f"  CHECK FAILED {seg}: {still} selected records still carry text, {bad} malformed rows remain, "
+                      f"{len(recs)} -> {len(after)} records")
             else:
                 print(f"  ok {seg}: {len(recs)} -> {len(after)} records, 0 selected remain")
     if failed:

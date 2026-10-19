@@ -248,7 +248,8 @@ def sweep_text_logs(dry_run: bool) -> int:
         if dry_run:
             for log in module.LOGS:
                 total, with_text = module.count_text(log)
-                print(f"rotate_service_logs: text log {log.name}: {with_text}/{total} records carry text (dry-run, retention "
+                print(f"rotate_service_logs: text log {log.name}: {with_text}/{total} records carry text, "
+                      f"{module.count_malformed(log)} malformed rows would be dropped (dry-run, retention "
                       f"{module.retention_days()} days)")
             return 0
         result = module.sweep()

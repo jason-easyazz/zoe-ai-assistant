@@ -166,3 +166,20 @@ def test_drop_backup_in_a_read_only_directory_fails_loudly(tool, logs, tmp_path,
 def test_drop_backup_that_works_still_exits_zero_and_says_verified_negative_control(tool, logs, tmp_path, capsys):
     assert run(tool, tmp_path, "--apply", "--all", "--drop-backup") == 0
     assert "verified gone" in capsys.readouterr().out and _backup_dirs(tmp_path) == []
+
+
+def test_malformed_rows_are_selected_dropped_and_checked(tool, logs, tmp_path, capsys, monkeypatch):
+    """Codex round 3 on #2110. Break: skip ``_malformed`` in plan/post-check -> a torn row holding words is neither counted, dropped
+    nor flagged."""
+    logs.write_text(logs.read_text() + 'torn {"utt": "eeeeeeeeeeee", "utt_text": "TORN-WORDS\n')
+    assert run(tool, tmp_path) == 0
+    assert "3 selected" in capsys.readouterr().out                      # 2 old text rows + the malformed one
+    assert run(tool, tmp_path, "--apply") == 0
+    assert "TORN-WORDS" not in logs.read_text() and len(recs(logs)) == 4
+    # the post-check flags a malformed row the rewrite failed to remove
+    logs.write_text(logs.read_text() + "again TORN-WORDS\n")
+    ltl = tool.load_ltl()
+    monkeypatch.setattr(tool, "load_ltl", lambda: ltl)
+    monkeypatch.setattr(ltl, "rewrite", lambda *a, **k: 0)
+    assert run(tool, tmp_path, "--apply") == 1
+    assert "malformed rows remain" in capsys.readouterr().out

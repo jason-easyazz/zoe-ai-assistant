@@ -111,3 +111,17 @@ def test_a_failed_daemon_reload_fails_the_run_and_says_how_to_restore(tool, unit
     assert "FAILED: systemctl --user daemon-reload returned non-zero" in out and "restore with:" in out
     assert ["daemon-reload"] in CTL and not any(c[0] == "reset-failed" for c in CTL)
     assert run(tool, units, tmp_path, "--apply", rc=0) == 0                 # nothing left to move: a clean second run
+
+
+def test_a_backslash_continuation_still_names_the_unit(tool, units, tmp_path, capsys):
+    """Codex round 3 on #2110. Break: scan physical lines again -> ``hermes-agent.service`` on the continuation line is never
+    seen and an ACTIVE unit's dependency is moved by ``--apply``."""
+    (units / "zoe-keepwarm.service").write_text(
+        "[Unit]\nDescription=x\nRequires=network.target \\\n    hermes-agent.service\n")
+    state = lambda u: ("disabled", "active") if u == "zoe-keepwarm.service" else dead(u)
+    assert run(tool, units, tmp_path, "--apply", state=state) == 1
+    assert "referenced by zoe-keepwarm.service (Requires=)" in capsys.readouterr().out
+    assert (units / "hermes-agent.service").exists()
+    # a comment inside the continuation does not end it; a line WITHOUT a trailing backslash does
+    assert tool._directive_refs("Requires=a.service \\\n# note\n  hermes-agent.service\n", {"hermes-agent.service"}) == ["Requires"]
+    assert tool._directive_refs("Requires=a.service\nhermes-agent.service\n", {"hermes-agent.service"}) == []

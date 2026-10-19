@@ -276,10 +276,12 @@ def _record(line: str) -> Optional[dict[str, Any]]:
 
 def _strip_or_drop(log: TextLog, line: str, *, older_than: Optional[float] = None, match: Any = None,
                    everything: bool = False) -> Optional[str]:
-    """One line through the log's expiry rule when the line is selected (by age, by name match, or unconditionally)."""
+    """One line through the log's expiry rule when the line is selected (by age, by name match, or unconditionally).
+    A malformed (non-JSON, or JSON that is not an object) row is always DROPPED: forget must fail closed, and such a row could be a
+    torn append or a hand-edit that still carries a word nothing here could match."""
     rec = _record(line)
     if rec is None:
-        return line                                   # a line that is not a record is not ours to touch
+        return None                                   # FAIL CLOSED: a row that cannot be parsed cannot be judged, and may hold words
     text = rec.get(log.text_field)
     if not isinstance(text, str) or not text:
         # a text-less record (router hash-only row) is not selected by name; an age/all rule may still DROP a text-less miss row
@@ -309,20 +311,30 @@ def _ts(rec: dict[str, Any], log: TextLog) -> float:
 
 
 def _apply(log: TextLog, **kw: Any) -> int:
-    """One full pass over every file of ``log`` under its write lock; a segment that was renamed under us is retried after a rescan."""
+    """One full pass over every file of ``log`` under its write lock; a segment that was renamed under us is retried after a rescan.
+    Malformed rows are dropped (see ``_strip_or_drop``) and counted in the return value; their number alone (never their content) is
+    logged."""
+    seen = [0]                                                  # malformed rows met by the CURRENT rewrite attempt
+
     def fn(line: str) -> Optional[str]:
+        if _record(line) is None:
+            seen[0] += 1
         return _strip_or_drop(log, line, **kw)
 
-    total = 0
+    total = malformed = 0
     with locked(log):
         for _attempt in range(4):
             raced = False
             for seg in segments(log):
+                seen[0] = 0
                 try:
                     total += rewrite(seg, fn, unlocked_writer=log is not ROUTER_SHADOW)
+                    malformed += seen[0]
                 except RewriteRaced:
                     raced = True
             if not raced:
+                if malformed:
+                    logger.warning("local_text_logs: %s dropped %d malformed row(s)", log.name, malformed)
                 return total
     raise RewriteRaced(f"{log.name}: still racing a rotation after 4 passes")
 
@@ -388,6 +400,16 @@ def erase_entity(rx: Any) -> int:
 def erase_all_text() -> int:
     """Member erase: the logs cannot be attributed to one member, so clear the text layer of every record. RAISES on failure."""
     return sum(_apply(log, everything=True) for log in LOGS)
+
+
+def count_malformed(log: TextLog) -> int:
+    """How many non-blank rows across the log's files are not a JSON object - counts only. Every sweep and erasure drops them."""
+    n = 0
+    for seg in segments(log):
+        for line in seg.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip() and _record(line) is None:
+                n += 1
+    return n
 
 
 def count_text(log: TextLog) -> tuple[int, int]:

@@ -74,9 +74,29 @@ def family_files(units_dir: Path, family: str) -> list[Path]:
     return found
 
 
+def _logical_lines(text: str) -> list[str]:
+    """systemd logical lines: a trailing backslash continues the directive on the next physical line
+    (``Requires=network.target \\`` + ``hermes-agent.service`` is ONE directive naming both units).
+    Comment lines inside a continuation are skipped, as systemd does."""
+    out: list[str] = []
+    cur = ""
+    for raw in text.splitlines():
+        s = raw.strip()
+        if cur and s.startswith(("#", ";")):
+            continue
+        if raw.rstrip().endswith("\\"):
+            cur += raw.rstrip()[:-1] + " "
+            continue
+        out.append(cur + raw)
+        cur = ""
+    if cur:
+        out.append(cur)
+    return out
+
+
 def _directive_refs(text: str, unit_names: set[str]) -> list[str]:
     hits = []
-    for ln in text.splitlines():
+    for ln in _logical_lines(text):
         s = ln.strip()
         if not s or s.startswith(("#", ";")) or "=" not in s:
             continue
