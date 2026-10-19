@@ -309,6 +309,50 @@ async def write_person_relation(user_id: str, c: dict, via: str) -> str:
     return ref
 
 
+#: what the owner can do with a ``held_conflict`` candidate (the review surface draws one button per option)
+KEEP_EXISTING, EDIT, RETRY = "keep_existing", "edit", "retry"
+
+
+async def conflict_detail(user_id: str, c: dict) -> Optional[dict]:
+    """What a pending ``held_conflict`` candidate disagrees with, read NOW for the owner's review surface. READ-ONLY, never raises.
+
+    ``existing`` is the owner's OWN approved row it contradicts (the memory text, or the people row's relationship), found by the
+    same test the writer ran (``facts_conflict`` / ``_protected_conflict``); None when it cannot be read or is no longer there.
+    ``options``: ``keep_existing`` (dismiss this one: approval is ADD only, nothing ever replaces the row the owner has), ``edit``
+    (the kind allows it; the edit is held to the quote again), ``retry`` (nothing disagrees any more: approving again may write)."""
+    if not isinstance(c, dict) or c.get("status") != "pending" or c.get("write_error") != "held_conflict":
+        return None
+    kind, p = c.get("kind"), c.get("payload") or {}
+    options = [KEEP_EXISTING] + ([EDIT] if EDITABLE.get(kind) else [])
+    existing: Optional[str] = None
+    try:
+        if kind == "person_fact":
+            from memory_service import get_memory_service
+            person = await _own_person(user_id, str(p.get("person_id") or ""))
+            name, fact = str(person["name"]).strip(), str(p.get("fact") or "").strip()
+            svc = get_memory_service()
+            rows = await svc._run_sync(svc._entity_rows_sync, [person["id"]], user_id)
+            existing = next((r.text for r in rows if str(r.metadata.get("status") or "approved") == "approved"
+                             and dr.facts_conflict(fact, r.text, name)), None)
+        elif kind == "person_relation":
+            person = await _own_person(user_id, str(p.get("person_id") or ""))
+            have = str(person.get("relationship") or "").strip()
+            existing = have if have and dr._norm(have) != dr._norm(dr.clean(p.get("relation") or "", 60)) else None
+        elif kind == "owner_fact":
+            import memory_authority as auth
+            from memory_service import get_memory_service
+            clash = await get_memory_service()._protected_conflict(user_id, str(p.get("fact") or ""), auth.DERIVED_RANK, strict=True)
+            existing = clash[0].text if clash is not None else None
+        else:
+            return {"existing": None, "options": options}
+    except Exception as exc:  # noqa: BLE001 - unreadable: the owner still sees the hold and can keep what they had
+        logger.debug("omi_review_apply: conflict detail unavailable (%s)", type(exc).__name__)
+        return {"existing": None, "options": options}
+    if existing is None:
+        return {"existing": None, "options": [RETRY] + options}
+    return {"existing": dr.clean(existing, 240), "options": options}
+
+
 def _written_by(row: Any, candidate_id: str) -> bool:
     """Was this memory row written by the approval of ``candidate_id``? (``ingest`` keeps an extra metadata key as ``candidate_<key>``.)"""
     md = getattr(row, "metadata", None) or {}
