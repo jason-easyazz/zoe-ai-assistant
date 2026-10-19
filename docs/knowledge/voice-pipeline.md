@@ -215,6 +215,17 @@ It mirrors `zoe_latency_probe.py`: `--update-baseline` to set the bar, baseline 
 regression. It self-guards: **SKIPs if available memory is low** (never OOMs the box) and runs the
 harness under the shared flock.
 
+**Harness quiet hours (2026-10-19, `scripts/maintenance/harness_quiet.py`).** The probe shares the brain's one
+llama slot with the household, so an ad-hoc run REFUSES 07:00-22:00 local (exit 3, before its lock and before any
+artifact write - a refusal never overwrites the shared artifact) and, outside those hours, waits (up to
+`ZOE_HARNESS_PANEL_WAIT_S`, 2700 s) while the panel was used in the last 10 min. **The landing loop's probe is
+exempt from the hours** (`land_voice_pr.sh` exports `ZOE_HARNESS_LANDING=1`) and only yields to the panel; once it
+starts, the replay also waits between clips while the panel is in use (`ZOE_HARNESS_YIELD_TO_PANEL=1`).
+`ZOE_HARNESS_FORCE=1` is the deliberate override. The replay process tags itself `probe`
+(`ZOE_TRAFFIC_CLASS`, `services/zoe-data/traffic_class.py`), so its log lines and records are not the household's.
+A household panel turn that re-prefills more than 500 prompt tokens logs `PANEL_KV_MISS` (record:
+[panel-kv-residency-2026-10-19.md](panel-kv-residency-2026-10-19.md)).
+
 **The clip set is PINNED (2026-10-13).** The probe used to replay "the newest N clips by mtime", so every
 new recording silently changed the set and the speed bar with it (STT read ~400 ms against a 921 ms
 baseline recorded on another set; a 2x STT regression would have passed). Now the baseline stores
@@ -1377,6 +1388,47 @@ reply is stored as said. The live store had 0 aborts in 4,620 submissions. With 
 - **Landing.** Use the replay gate plus an A/B: barge-in replay, and the next turn's
   `brain_ttft_ms` / `FLUE_PROMPT_CACHE` with the flag off and on. On the sidecar,
   `ZOE_FLUE_ABORT_GUARD=0` ignores the opt-in header.
+
+## Panel Silero feed — one contiguous stream per consumer (deep dive 2 V-3/V-5, 2026-10-19)
+
+**What was wrong.** The daemon's `_vad_prob` fed each 1,280-sample mic chunk to Silero as two
+512-sample windows and dropped the last 256 samples — 16 ms of every 80 ms never reached the model,
+while its 64-sample context (silero-vad 6.x JIT `forward`) jumped over the gap. One global model was
+shared by the endpointer, the barge monitor, the barge queue thread, the follow-up listener and
+ambient capture, and `reset_states()` was never called, so each recording started on whatever state
+the previous turn or the barge monitor left behind (open-problems 2026-10-05, SP gap 2).
+
+**The fix.** `_VadStream` carries the remainder into the next chunk and owns a `copy.deepcopy` of the
+model (~8 ms per copy on the Jetson). `_new_vad_stream()` hands each consumer its own, born reset;
+the reset boundaries are a new recording (after a wake), a new follow-up window (after a turn), a
+new playback (barge listeners, after a dropped backlog) and an ambient pause. A recording that
+continues audio a listener already scored takes that listener's stream (follow-up trigger, barge
+seed). Inference also runs under `torch.no_grad()` now (the old calls built autograd state).
+
+**Measured, before vs after** (`scripts/perf/measure_vad_feed.py`, 279 usable clips of the newest
+300 in `~/.zoe-voice-samples`, the main daemon `94c26ffd` = the live panel file vs this change; real
+Silero 6.2.1 JIT; `flock /tmp/zoe-voice-harness.lock`):
+
+| | old feed | new feed |
+|---|---|---|
+| matches upstream `get_speech_timestamps` windows | no | **exactly** (max abs diff 0.0) |
+| clips with speech at 0.35 | 274 | 273 |
+| onset (median) | 240 ms | 240 ms (same on 225 clips; 20 earlier, 27 later, ±80 ms mostly) |
+| endpoint close, same clip, live 640 ms tail | — | earlier on 130, later on 19, same on 130; mean −74 ms per turn, p10 −160 ms |
+| closes before the reference's last speech (cut risk) | 54 | 54 (5 swapped each way) |
+
+`measure_endpointing.py` (200 clips, live 640 ms tail, each arm trimmed by its own detector):
+tail median / p90 640 / 720 ms both; natural cuts 42 → 36; synthetic-pause false cuts 200 ms 6% → 5%,
+400 ms 12% → 14%, 600 ms 19% → 20%, 800 ms 99% → 97%. Net: the endpoint closes about one chunk
+sooner on half the turns with no measured rise in cuts. The server replay gate does not run the
+daemon, so these probes are the evidence; the ear check is part of the owner's panel deploy.
+
+**Panel config as code (same change).** `scripts/setup/zoe-voice.env.example` now lists every key
+the panel reads with the live tuned values (it held 14 of the panel's 46 keys; 36 lived only on the
+Pi); `scripts/maintenance/panel_env_drift.py` reports drift (names only, secrets masked at parse).
+`/health` reports `build` (written by `deploy-pi-voice.sh`), `code_sha256` and `wake_model_sha256`;
+`zoe_ground_truth.sh` compares the code sha with the checkout (PANEL VOICE DAEMON). The custom wake
+model is pinned in `models.lock` and backed up to `~/.zoe/backups/panel/` (off-box: artefacts tier).
 
 ## Panel per-turn dead time — adaptive endpoint tail, cooldown, cap (2026-09-28)
 

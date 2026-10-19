@@ -236,6 +236,9 @@ jobs:
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"
+          # Household-data canary key (tests/unit/test_privacy_canary.py; tools/audit/privacy_canary.py). An
+          # owner-provisioned repository secret; unset = that one scan reports a skip, the mechanism tests still run.
+          ZOE_PRIVACY_CANARY_KEY: ${{ secrets.ZOE_PRIVACY_CANARY_KEY }}
 
       - name: Lane — Home Assistant MCP bridge
         if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}

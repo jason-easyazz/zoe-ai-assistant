@@ -1345,6 +1345,38 @@ def _reexec_if_needed(python: str, source: str) -> None:
               {**os.environ, _REEXEC_ENV: python})
 
 
+def _harness_quiet_refusal(*, check=None, wait=None) -> "str | None":
+    """None when the probe may start; else why not. Hours refuse at once; a busy panel is waited out for up to
+    ``ZOE_HARNESS_PANEL_WAIT_S`` (default 2700 s) first. On a go, the replay is told to yield between clips."""
+    # load by FILE PATH, never via sys.path: scripts/maintenance holds names that shadow service modules
+    # (pi_runtime_probe.py exists in both), and this runs inside processes that import service code
+    import importlib.util
+
+    harness_quiet = sys.modules.get("harness_quiet")
+    if harness_quiet is None:
+        spec = importlib.util.spec_from_file_location("harness_quiet", Path(__file__).resolve().parent / "harness_quiet.py")
+        harness_quiet = importlib.util.module_from_spec(spec)
+        sys.modules["harness_quiet"] = harness_quiet
+        spec.loader.exec_module(harness_quiet)
+
+    check = check or harness_quiet.check
+    wait = wait or harness_quiet.wait_for_panel_quiet
+    verdict = check("voice_regression_probe")
+    if not verdict.allowed and verdict.kind == "panel":
+        try:
+            max_wait = float(os.environ.get("ZOE_HARNESS_PANEL_WAIT_S", "2700"))
+        except ValueError:
+            max_wait = 2700.0
+        if wait(max_wait):
+            verdict = check("voice_regression_probe")
+    print(verdict.reason, flush=True)
+    if not verdict.allowed:
+        return verdict.reason
+    if verdict.kind != "forced":
+        os.environ["ZOE_HARNESS_YIELD_TO_PANEL"] = "1"   # inherited by the replay subprocess
+    return None
+
+
 def main(reexec: bool = False) -> int:
     ap = argparse.ArgumentParser(description="Zoe voice regression + speed probe.")
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
@@ -1409,6 +1441,15 @@ def main(reexec: bool = False) -> int:
         _reexec_if_needed(args.python, python_source)
     print(f"probe interpreter: {sys.executable}; replay interpreter: {args.python} "
           f"({python_source})")
+
+    # Harness quiet hours (P-2, harness_quiet.py) - BEFORE the lock and before any artifact write: a refused
+    # run must not clobber the single shared voice-gate artifact with a skip. The landing loop's probe
+    # (ZOE_HARNESS_LANDING=1) is exempt from the hours and only yields to the panel; a panel-busy refusal
+    # waits (bounded) instead of failing, and the replay itself yields between clips.
+    refusal = _harness_quiet_refusal()
+    if refusal:
+        print(f"REFUSED: {refusal}", file=sys.stderr)
+        return 3
 
     _lock_fd = _acquire_harness_lock()  # noqa: F841 — held for process lifetime
 

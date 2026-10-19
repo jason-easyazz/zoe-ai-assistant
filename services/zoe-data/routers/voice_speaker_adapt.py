@@ -30,8 +30,8 @@ async def voice_adapt(payload: dict, caller: dict = Depends(_require_voice_auth)
     """Offer one high-certainty turn for guarded profile adaptation (policy is server-side)."""
     if caller.get("source") != "device":
         raise HTTPException(status_code=403, detail="device token required")
-    if caller.get("via_relay"):   # the claim + embedding are the panel's word; over the relay it may be anywhere
-        raise HTTPException(status_code=403, detail="voice adaptation is not available through the relay")
+    if caller.get("via_relay") or caller.get("via_tunnel"):   # the claim + embedding are the panel's word; off the LAN it may be anywhere
+        raise HTTPException(status_code=403, detail="voice adaptation is not available through the relay or the tunnel")
     if speaker_adaptation.adapt_mode() == "off":
         return {"ok": True, "mode": "off", "applied": False, "reason": "off"}
     from db_compat import get_compat_db as _get_compat_db

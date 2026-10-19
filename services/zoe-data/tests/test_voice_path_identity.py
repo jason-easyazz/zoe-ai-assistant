@@ -1,6 +1,6 @@
 """Voice-path identity + home control at every turn entry point (security fix 2026-10-18). Each case carries a negative control.
 
-1. Every turn entry (chat, /ws/voice/, the voice lanes, LiveKit, the brain's intent dispatch) records may_control_home; every
+1. Every turn entry (chat, the voice lanes, LiveKit, the brain's intent dispatch) records may_control_home; every
    Home Assistant executor refuses politely when it is False. 2. The relay blocker (#2095): the server decides a voice lane's
    panel and member, never the payload. (The daemon's /activate lives in tests/unit/test_voice_daemon_platform.py.)
 The identity block, _lane_panel_id, _require_voice_auth, panel_principal and the entry points are REAL; data is invented.
@@ -265,52 +265,6 @@ def test_other_chat_still_works_for_an_anonymous_caller(registry, monkeypatch):
     monkeypatch.setattr(chat_mod, "locked_chat_stream", _stream)
     r = TestClient(app, client=(PHONE_IP, 50000)).post("/api/chat/", json={"message": "what time is it"})
     assert json.loads(r.text.split("data: ", 1)[1]) == {"reply": "echo what time is it", "verdict": False}
-
-
-@pytest.fixture
-def ws_app(monkeypatch, bridge):
-    sys.modules.pop("main", None)
-    import main
-
-    async def _cards(text, user_id, context=None):
-        out = await smart_home_service.resolve_smart_home(_light_off())
-        return {**out, "handled": True, "skybridge_context": {}}
-
-    monkeypatch.setattr(main, "_resolve_voice_cards", _cards)
-    return main
-
-
-def _ws_turn(main, peer, session_id=""):
-    client = TestClient(main.app, client=(peer, 50000))
-    with client.websocket_connect(f"/ws/voice/?session_id={session_id}") as ws:
-        assert ws.receive_json() == {"type": "state", "state": "ambient"}
-        ws.send_text(json.dumps({"type": "text", "message": "turn off the kitchen light"}))
-        said = None
-        for _ in range(10):
-            msg = ws.receive_json()
-            if msg.get("type") == "transcript" and msg.get("role") == "assistant":
-                said = msg["text"]
-            if msg.get("type") == "done":
-                return said
-    raise AssertionError("no done frame")
-
-
-def test_anonymous_voice_websocket_cannot_drive_the_house(registry, ws_app, bridge):
-    assert _ws_turn(ws_app, PHONE_IP) == REFUSAL
-    assert bridge == []
-
-
-def test_the_kiosk_and_members_drive_the_house_over_the_voice_websocket(registry, ws_app, bridge, monkeypatch):
-    registry.con.execute("UPDATE panels SET ip_address = ?", (PHONE_IP,))   # this peer IS the registered panel now
-    assert _ws_turn(ws_app, PHONE_IP) != REFUSAL and bridge
-    registry.con.execute("UPDATE panels SET ip_address = '192.0.2.99'")
-    bridge.clear()
-
-    async def _member(session_id):
-        return "casey" if session_id == "sid-casey" else "voice-guest"
-
-    monkeypatch.setattr(ws_app, "_resolve_ws_user", _member)
-    assert _ws_turn(ws_app, PHONE_IP, session_id="sid-casey") != REFUSAL and bridge
 
 
 def _dispatch(monkeypatch, user_id):

@@ -241,9 +241,9 @@ class ZoeTestSuite:
         print()
     
     async def test_calendar_natural_language(self):
-        """Test natural language calendar additions (Andrew's issue)"""
+        """Test natural language calendar additions (a household member's report)"""
         print("=" * 60)
-        print("🧪 TEST 5: Calendar Natural Language (Andrew's Issue)")
+        print("🧪 TEST 5: Calendar Natural Language (member report)")
         print("=" * 60)
         
         calendar_tests = [

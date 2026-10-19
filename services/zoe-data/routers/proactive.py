@@ -8,7 +8,7 @@ Endpoints:
   POST   /api/proactive/pending/{id}    — claim a pending notification → session
   POST   /api/proactive/trigger-morning — manually trigger morning brief (admin/self)
   POST   /api/proactive/selector/run-synthetic/{id} — Samantha-bar S5 hook (internal token)
-  GET    /api/proactive/inbox           — pull-not-push: {enabled, count, top, quiet} for the orb
+  GET    /api/proactive/inbox           — pull-not-push: {enabled, count, top, quiet[, review]} for the orb
   POST   /api/proactive/welcome         — pull-not-push: one-tap welcome / neutral / not_now
 """
 from __future__ import annotations
@@ -247,11 +247,13 @@ async def run_selector_synthetic(target_user: str, request: Request, night_mind:
 async def _run_night_mind_synthetic(user_id: str) -> dict:
     """The day-sim's ``night_mind`` intent (``?night_mind=1``): the REAL night pass over this harness id's own-words turns (the digest's loader, so the same
     own-words / forgotten-turn filters), standing in for the 03:00 digest the day-sim does not run. Counts only; ``{"enabled": false}`` with ``ZOE_NIGHT_MIND`` off
-    (no work); never raises (a failure is its own status). Reached only through the guards above: a harness-minted, unregistered id."""
+    (no work); never raises (a failure is its own status). Reached only through the guards above: a harness-minted, unregistered id. Under ``serve`` (zoe-data
+    while the 12B night window is the writer) it still runs, in ``enforce``, for this harness id alone: the night window drops synthetic ids, so the two never meet."""
     try:
         import night_mind
         if night_mind.mode() == "off":
             return {"enabled": False}
+        force = "enforce" if night_mind.mode() == "serve" else None
         from memory_digest import _load_todays_messages
         from memory_service import get_memory_service
 
@@ -259,8 +261,8 @@ async def _run_night_mind_synthetic(user_id: str) -> dict:
         try:
             transcript = await _load_todays_messages(user_id)
         except TranscriptLoadError as exc:      # a failed read is its own status, never a quiet day
-            return {"enabled": True, **night_mind.load_failed(user_id, exc)}
-        res = await night_mind.run_for_user(user_id, transcript, get_memory_service())
+            return {"enabled": True, **night_mind.load_failed(user_id, exc, force_mode=force)}
+        res = await night_mind.run_for_user(user_id, transcript, get_memory_service(), force_mode=force)
         keep = ("status", "mode", "turns_in", "turns_dropped_routine", "chunks", "calls", "moments_verified", "moments_held", "observations_written",
                 "observations_pending", "threads_created", "threads_updated", "calls_invalid", "skipped_reason", "error")
         return {"enabled": True, **{k: res[k] for k in keep if k in res}}
@@ -277,7 +279,16 @@ async def pending_inbox(user: dict = Depends(resolve_acting_user)):
     reads ``enabled: false``. Read-only: nothing is delivered or marked."""
     from proactive.pull import pending_state
 
-    return await pending_state(str(user.get("user_id") or ""))
+    uid = str(user.get("user_id") or "")
+    state = await pending_state(uid)
+    # The pendant day review is waiting (day_review_raise, ZOE_DAY_REVIEW_RAISE): a bare true/false for the orb's quiet ring,
+    # never a count or a kind. Feature off = the key is absent and the response is what it always was.
+    import day_review_raise
+
+    review = await day_review_raise.orb_review(uid)
+    if review is not None:
+        state = {**state, "review": bool(review)}
+    return state
 
 
 class WelcomeBody(BaseModel):

@@ -1508,9 +1508,10 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
         # ── Night mind (ZOE_NIGHT_MIND, default OFF) ─────────────────────────
         # The chunked, cited reflection over the WHOLE day's own-words turns (the extractors above cut the transcript at 3,000 characters).
         # After the facts, so its stale-quote test sees tonight's changes. A failure is its own nested result, never the digest's ``error``.
+        # ``serve`` (zoe-data while the 12B night window is the writer) never runs it here: one writer per night.
         try:
             import night_mind
-            if night_mind.mode() != "off":
+            if night_mind.runs_pass():
                 result["night_mind"] = await night_mind.run_for_user(user_id, chat_text, svc)
         except Exception as exc:  # noqa: BLE001
             result["night_mind"] = {"status": "error", "error": type(exc).__name__}
@@ -1679,7 +1680,7 @@ def _turn_limit() -> int:
         return _CHUNKED_TURN_LIMIT
     try:
         import night_mind
-        return _CHUNKED_TURN_LIMIT if night_mind.mode() != "off" else _LEGACY_TURN_LIMIT
+        return _CHUNKED_TURN_LIMIT if night_mind.runs_pass() else _LEGACY_TURN_LIMIT
     except Exception:  # noqa: BLE001
         return _LEGACY_TURN_LIMIT
 
