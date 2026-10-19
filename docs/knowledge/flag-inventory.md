@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-746 flags; 696 not documented in `.env.example`.
+749 flags; 699 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -562,6 +562,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_RECALL_GATE` | `'shadow'` | yes | NO | `services/zoe-data/recall_gate.py` |
 | `ZOE_RECALL_PRESENT_STATE_SHAPES` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_RELATIONSHIP_GRAPH_ENABLED` | `''` | no | NO | `services/zoe-data/relationship_graph.py` |
+| `ZOE_RELAY_HOSTNAME` | `''` | no | NO | `services/zoe-data/relay_ingress.py` |
+| `ZOE_RELAY_INGRESS` | `''` | no | NO | `services/zoe-data/relay_ingress.py` |
+| `ZOE_RELAY_TRUSTED_PEER` | `''` | no | NO | `services/zoe-data/relay_ingress.py` |
 | `ZOE_REMINDER_DEFAULT_TIME` | `''` | no | NO | `services/zoe-data/proactive/triggers/reminder_scan.py` |
 | `ZOE_REMINDER_MAX_ATTEMPTS` | `'5'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_REMINDER_STUCK_CLAIM_S` | `'600'` | no | NO | `services/zoe-data/proactive/triggers/reminders.py` |

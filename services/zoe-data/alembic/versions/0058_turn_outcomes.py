@@ -25,7 +25,7 @@ The relay migration (#2095, ``0059_panel_client_certs``) is also chained onto ``
 from alembic import op
 
 revision = "0058"
-down_revision = "0060"
+down_revision = "0059"
 branch_labels = None
 depends_on = None
 
