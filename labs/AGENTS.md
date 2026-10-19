@@ -402,6 +402,23 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   lab measures) lives in `services/omi-sync/` + `zoe-data/omi_recordings.py`,
   not here; this lab stays the hand-run hardware measurement tool (live-stream
   packet loss, WER) and the source of the codec facts.
+- `omi-firmware/` — **Omi phase-2 firmware** (owner decision OD1 2026-10-19; closes gap-audit P0-1): a patch series +
+  overlay on the PINNED upstream `Omi_CV1_v3.0.21` (fetched sparse by `fetch.sh`, never vendored) that makes every Omi
+  characteristic and the SMP/OTA service require an encrypted link, refuses pairing outside a physical button window
+  (LE Secure Connections, one bond, stock-era bonds wiped; no automatic window), CRYPTO-WIPES on every new bond (key
+  destroyed, ring emptied, other bonds deleted, ordered behind persisted intents; unreadable records and a failed ring
+  clear fail closed), and encrypts the SD ring at rest
+  (AES-128-CTR, on-device key, persisted monotonic per-batch salt + re-key), and drives the status LED (dim blue
+  normal; documented states and priority). `build.sh` compiles it in the pinned Zephyr CI image (NCS v2.9.0) with a capped container
+  (refuses below 2000 MB `MemAvailable` or while `night_busy` says pause; holds the test lane); signing keys stay outside the
+  repo. Never flashes and never touches a pendant: flashing, pairing and recovery are owner steps in `RUNBOOK.md`. Pi side
+  lives in `services/omi-sync` (`OMI_SYNC_REQUIRE_BOND`) and `services/panel-bluetooth` (`omi_bond`). Regression net
+  (hand-run, never CI): `nice -n 10 python3 -m pytest labs/omi-firmware/host-test -q -p no:cacheprovider` (32 tests: the
+  ring-crypt IV layout and CTR against an independent reference, the re-key, the salt allocator, the gesture, and the REAL
+  `zoe_ble_sec.c` against stubbed Zephyr - pairing gate, wipe ordering with a power cut before each MODELLED persistent
+  step, unreadable records, a failed ring clear, reconnect-never-wipes, the LED state/priority/pattern map; it re-states `sd_card.c` / `zoe_ring_crypt_psa.c`
+  through the same pure decisions rather than running them - README section 2.1 says what it does not prove). README is
+  the record.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%
