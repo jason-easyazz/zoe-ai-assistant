@@ -230,18 +230,36 @@ location ^~ /ha/ {
     proxy_buffering off;
 }
 
-# SECURITY: proxies straight to the Music Assistant host service (its own
-# native web UI + WebSocket). A Zoe auth_request gate is NOT applied here
-# because the only legitimate browser callers are music.html's
-# `new WebSocket('/modules/music-assistant/ws')` and a `window.open(...)`
-# popup of the MA UI — and Zoe's auth is a header/localStorage bearer token
-# the browser cannot attach to either a WebSocket handshake or window.open,
-# so a gate would break live music setup/status. MA enforces its own
-# onboarding/auth; treat this route as local-trusted. Proper fix (tracked):
-# move to a cookie-issued session or relay the WS behind /api/music/. Do not
-# add unauthenticated state-changing surface beyond MA's own UI here.
+# SECURITY: Music Assistant's own web UI + WebSocket. It can add/remove providers, play
+# anywhere and change every setting, so it is gated: every request (HTTP and the WebSocket
+# handshake) runs an auth_request to zoe-data first and is proxied only on a 2xx. The gate
+# (zoe-data ma_ui_gate.py) admits a signed-in member or the panel. A browser cannot attach
+# Zoe's X-Session-ID bearer to a WebSocket handshake or a window.open navigation, so
+# music.html trades it for a signed HttpOnly SameSite=Strict cookie scoped to THIS path
+# (POST /api/music/ma-ui/session) and the gate accepts that cookie. A gate that cannot
+# answer (zoe-data down) is a 5xx: closed. Rollback without an nginx change:
+# ZOE_MA_UI_GATE=off on zoe-data.
+# The gate location is `internal` (a client asking for it directly gets 404), passes the
+# request headers (cookie, session id, device token, Cloudflare edge headers) but not the
+# body, and overwrites X-Real-IP so a caller cannot forge a panel address.
+location = /_zoe/ma-gate {
+    internal;
+    proxy_pass http://host.docker.internal:8000/api/music/ma-ui/gate;
+    include /etc/nginx/zoe/ingress-headers.inc;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Internal-Token "";
+    proxy_set_header X-Zoe-User-Id "";
+    proxy_set_header Upgrade "";
+}
+
 location ^~ /modules/music-assistant/ {
     include /etc/nginx/zoe/lan-only.inc;
+    auth_request      /_zoe/ma-gate;
     proxy_pass        http://host.docker.internal:8095/;
     include /etc/nginx/zoe/ingress-headers.inc;
     proxy_http_version 1.1;
