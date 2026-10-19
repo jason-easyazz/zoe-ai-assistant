@@ -451,6 +451,27 @@ def test_a_tap_is_only_for_the_next_turn_of_the_same_member(seeded):
     assert not any("dark roast" in t for t in approved(seeded))
 
 
+def test_a_tapped_forget_that_hits_a_store_hiccup_keeps_the_tap_armed(seeded, monkeypatch):
+    # Codex P2 on #2144: the tap was consumed before the forget ran, so after STORE_DOWN_REPLY the "forget it" the reply invites
+    # had no target. Forgetting is permanent, so the retry must finish the same row.
+    rid = row_id(seeded, "dark roast")
+    real, down = memory_space.forget_row, {"on": True}
+
+    async def flaky(*a, **kw):
+        if down["on"]:
+            raise RuntimeError("store hiccup")
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(memory_space, "forget_row", flaky)
+    mv.tap(PANEL, ME, rid, ME_LIKE)
+    assert say("forget it", ME) == pa.STORE_DOWN_REPLY
+    assert any("dark roast" in t for t in approved(seeded)), "nothing was forgotten yet"
+    down["on"] = False
+    assert say("forget it", ME).startswith("Done"), "the tap stayed armed: the repeat finishes the same row"
+    assert not any("dark roast" in t for t in approved(seeded))
+    assert say("forget it", ME) is None, "the tap is spent once the forget succeeded"
+
+
 def test_a_tap_expires(seeded):
     mv.tap(PANEL, ME, row_id(seeded, "dark roast"), ME_LIKE, now=time.monotonic() - mv.TAP_TTL_S - 1)
     assert say("forget it", ME) is None

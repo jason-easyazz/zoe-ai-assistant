@@ -417,7 +417,10 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
         if not value:
             return None
     elif st.kind == "forget_it":
-        return await _forget_one(member, tp.row_id, tp.text, svc=svc)
+        reply = await _forget_one(member, tp.row_id, tp.text, svc=svc)
+        if reply == pa.STORE_DOWN_REPLY:
+            tap(panel_id, member, tp.row_id, tp.text)  # half done: repeating "forget it" must still have its target
+        return reply
     else:
         value = st.value
     m = _ON_WHEN_RE.match(value)
