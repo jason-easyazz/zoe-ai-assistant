@@ -276,18 +276,20 @@ class LoginRun:
             pass
 
     def hops_ok(self, start: int) -> tuple[bool, str | None]:
-        """Every hop of the top document since `start` must be an origin the item allows (PSL-only for base-domain
-        rules: a hop has no browser registrable-domain to cross-check). One bad hop, even one that later bounces
-        back to the right site, refuses the whole sign-in."""
+        """Every hop of the top document since `start` must be the approved origin itself or an origin an item URI
+        names EXACTLY (a host rule). A base-domain rule is never honoured for a hop: a redirect has no committed
+        document, so Chromium never gives its registrable domain, and the broker comparing its PSL with itself is
+        no cross-check (round-3 review). One bad hop, even one that later bounces back to the right site, refuses."""
         for url in list(self.hops[start:]):
             if url == "about:blank":
                 continue
             o = originmod.origin_of_url(url)
             if o is None:
                 return False, url.split(":", 1)[0] + ":"
-            ok, _ = originmod.origin_allowed(o, self.rules, psl=self.psl,
-                                             browser_registrable=self.psl.registrable_domain(o.host),
-                                             lab_profile=self.lab_profile)
+            if originmod.origin_equal(o, self.approved_origin):
+                continue
+            ok, _ = originmod.origin_allowed(o, self.rules, psl=self.psl, browser_registrable=None,
+                                             lab_profile=self.lab_profile, host_rules_only=True)
             if not ok:
                 return False, str(o)
         return True, None

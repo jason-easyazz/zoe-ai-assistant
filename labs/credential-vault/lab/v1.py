@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, "/opt/cvlab/lab")
 from common import (CA, MEASURE, RESULTS, Bw, as_user, cell, emit_result, load_state, scan_paths,  # noqa: E402
                     spawn_as, wait_for, witness_records, witness_reset)
-from hosts import RIGHT, VAULT_URL  # noqa: E402
+from hosts import EVIL, RIGHT, VAULT_URL  # noqa: E402
 
 LAB = "/opt/cvlab/lab"
 CORE_SOCK = "/run/zoe-vault/broker.sock"
@@ -269,10 +269,10 @@ def fills(records: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-V2_ITEMS = ["lk_bounce", "lk_examp1e", "lk_homograph", "lk_suffixed", "lk_priv", "lk_priv2", "lk_http", "lk_framed", "lk_blank",
+V2_ITEMS = ["lk_basehop", "lk_bounce", "lk_examp1e", "lk_homograph", "lk_suffixed", "lk_priv", "lk_priv2", "lk_http", "lk_framed", "lk_blank",
             "lk_srcdoc", "lk_data", "lk_blob", "lk_sandbox", "lk_redirect", "fa_action", "fa_button", "fa_get"]
 V2_NC = {"substring": ["lk_suffixed"], "nopsl": ["lk_priv2"], "inherit": ["lk_blank", "lk_srcdoc"],
-         "nohops": ["lk_bounce"]}
+         "nohops": ["lk_bounce"], "psl_hops": ["lk_basehop"]}
 V13_ITEMS = ["race_nav", "race_swap", "race_oopif"]
 
 
@@ -378,6 +378,43 @@ def run(groups: str) -> None:
              nc="drop the device binding: the bare notice through the phone route "
                 + ("APPROVES and capabilities are issued (red as expected)" if nc_post == 200 and nc_caps
                    else f"was refused ({nc_post}, NOT red)"))
+
+    if "D" in groups:
+        # -- P1 capability pinned to the item policy the owner approved (round-3 finding 1) -----------------------
+        def edit_cap_d(add_evil):
+            alice.sync()
+            it = alice.get(IDS["cap_d"])
+            uris = [u for u in it["login"]["uris"] if "evil" not in (u.get("uri") or "")]
+            if add_evil:
+                uris.append({"uri": f"https://{EVIL}", "match": 1})
+            it["login"]["uris"] = uris
+            alice.run("edit", "item", IDS["cap_d"], stdin=alice.encode(it), label="edit item")
+
+        def pinned(patch):
+            if patch:
+                STACK.start_core(patch=patch)
+                wait_ready()
+            c = capability("cap_d")                    # approved while the item lists only the right site
+            edit_cap_d(True)                            # ...then the item gains evil.test, which its page bounces via
+            witness_reset()
+            r = login("cap_d", c["cap"], c["errand"])
+            recs = witness_records()
+            edit_cap_d(False)
+            if patch:
+                STACK.start_core()
+                wait_ready()
+            return r, recs
+        p1, p1_recs = pinned(None)
+        p1nc, p1nc_recs = pinned("nopolicypin")
+        p1_err, p1nc_err = p1.get("error"), p1nc.get("error")
+        MEASURE["p1"] = {"pos": p1.get("error"), "nc": p1nc.get("error") or "signed in"}
+        cell("P1 capability pinned to the approved item policy",
+             p1.get("error") == "policy_changed" and not fills(p1_recs),
+             "approved while the item listed only the right site; the member then added evil.test (which the login "
+             f"page bounces through): login -> {p1_err}, nothing sent anywhere",
+             nc="no policy pin: the capability is used under the widened rules and "
+                + ("SIGNS IN through evil.test (red as expected)" if p1nc.get("ok") or fills(p1nc_recs)
+                   else f"was refused ({p1nc_err}, NOT red)"))
 
     if "B" in groups:
         # -- V2 look-alikes, frames, form targets ------------------------------------------------------------------
@@ -641,6 +678,49 @@ def run(groups: str) -> None:
              nc="the lock as first submitted (state wiped, browser untouched): " +
                 ("the browser carried on and the site RECEIVED the password after the lock (red as expected)"
                  if l1_nc["site_got_password"] else f"nothing reached the site ({l1_nc.get('error')}, NOT red)"))
+
+    if "F" in groups:
+        # -- L2 a login queued for the browser across lock + unlock (round-3 finding 2) ----------------------------
+        gate = "/tmp/cvlab-browser-gate-open"
+
+        def unlock_once():
+            lk = next(x["path"] for x in svc({"verb": "notices"})["links"] if x["kind"] == "unlock")
+            r = phone("POST", lk, "password=" + _q(Path("/run/cvlab-secrets/zoe.pw").read_text().strip()))
+            if r["status"] != 200:
+                raise SystemExit("L2: attended unlock failed")
+            wait_ready()
+
+        def queued(patch):
+            if os.path.exists(gate):
+                os.unlink(gate)
+            STACK.start_core(patch=patch, unlock={"mode": "attended"})
+            wait_ready(locked_ok=True)
+            unlock_once()
+            c = capability("lib")
+            out = {}
+            th = threading.Thread(target=lambda: out.update(login("lib", c["cap"], c["errand"])))
+            th.start()
+            time.sleep(3)                               # spent its capability, now waiting for the browser
+            out["lock"] = svc({"verb": "lock"}).get("ok")
+            unlock_once()                               # a fresh unlock while it still waits
+            Path(gate).write_text("open")
+            th.join(timeout=120)
+            os.unlink(gate)
+            STACK.start_core()
+            wait_ready()
+            return out
+        l2 = queued("queuegate")
+        l2_nc = queued("queuegate_nostale")
+        l2_err, l2_nc_err = l2.get("error"), l2_nc.get("error")
+        MEASURE["l2"] = {"pos": {k: v for k, v in l2.items() if k != "handle"},
+                         "nc": {k: v for k, v in l2_nc.items() if k != "handle"}}
+        cell("L2 a login queued across lock and unlock cannot continue",
+             bool(l2.get("lock")) and l2.get("error") == "locked" and not l2.get("handle"),
+             "a login spent its capability, waited for the browser (held by a lab gate) while the broker was locked "
+             f"and unlocked again on the admin phone: login -> {l2_err}, no handle",
+             nc="without the lock-epoch re-checks the queued login "
+                + ("SIGNED IN after the lock (red as expected)" if l2_nc.get("ok")
+                   else f"was refused ({l2_nc_err}, NOT red)"))
 
     if "C" in groups:
         # -- V3 canary never visible (lab surfaces) ----------------------------------------------------------------

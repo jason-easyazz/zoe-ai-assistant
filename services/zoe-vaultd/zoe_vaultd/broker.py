@@ -13,6 +13,7 @@ Protocol: one JSON object per line in, one JSON object per line out.
 from __future__ import annotations
 
 import grp
+import hashlib
 import json
 import os
 import re
@@ -117,6 +118,15 @@ class _OtpWait:
     code: str | None = None
 
 
+def policy_digest(meta) -> str:
+    """SHA-256 over everything in an item that decides WHERE its password may go: every URI with its match type and
+    every zoe: field (login_url, category, selectors). A capability is bound to it (round-3 review): an item that
+    gained a URI after the owner approved is refused with policy_changed, never filled under the new rules."""
+    canon = {"uris": [[u.get("uri"), u.get("match")] for u in meta.uris],
+             "fields": sorted([k, v] for k, v in meta.fields.items())}
+    return hashlib.sha256(json.dumps(canon, sort_keys=True).encode()).hexdigest()
+
+
 def mem_available_mb() -> int:
     try:
         with open("/proc/meminfo") as fh:
@@ -192,6 +202,14 @@ class Core:
         if uid in self.cfg.admin_uids:
             return "admin"
         return None
+
+    def _stale(self, epoch: int) -> bool:
+        """True once a lock has happened since `epoch` was taken (or the broker is locked now)."""
+        return self.locked or self._epoch != epoch
+
+    @staticmethod
+    def _policy_matches(meta, cap) -> bool:
+        return bool(cap.policy) and policy_digest(meta) == cap.policy
 
     def _is_admin(self, member: str | None) -> bool:
         info = self.cfg.members.get(member) if isinstance(member, str) else None
@@ -295,7 +313,7 @@ class Core:
         approver = org.get("owner") if org.get("kind") == "member" else member
         category = meta.fields.get("zoe:category") or None
         return Step(step_id=step_id, item_id=meta.item_id, label=meta.name[:80], category=category, origin=str(o),
-                    login_url=login_url, domain=self._domain(rules)), approver
+                    login_url=login_url, domain=self._domain(rules), policy=policy_digest(meta)), approver
 
     def verb_propose(self, uid: int, req: dict) -> dict:
         self._need_unlocked()
@@ -450,6 +468,9 @@ class Core:
                              duration_ms=int((self.clock() - started) * 1000), **audit, **extra)
             return {"ok": False, "error": reason}
 
+        # The lock epoch is taken BEFORE the capability is spent and re-checked after every stage: a login that
+        # waited (for the browser, say) across a lock, even one followed by a fresh unlock, can never continue.
+        epoch = self._epoch
         if self.locked:
             return refuse("locked")
         try:
@@ -461,14 +482,17 @@ class Core:
             return refuse("ram_floor")
         if not self._browser_lock.acquire(timeout=60):
             return refuse("browser_busy")
-        epoch = self._epoch
         username = password = None
         try:
+            if self._stale(epoch):
+                return refuse("locked")
             try:
                 orgs = self.member_orgs(cap.member)
                 self.bw.sync()                      # sync before every use: a revoked share stops now (5.4)
             except (PolicyRefusal, VaultError) as e:
                 return refuse(getattr(e, "reason", "vault_unreachable"))
+            if self._stale(epoch):
+                return refuse("locked")
             raw = self.bw.get_item(cap.item_id)
             if raw is None:
                 return refuse("item_unavailable")
@@ -485,6 +509,12 @@ class Core:
             if str(originmod.origin_of_url(login_url)) != cap.origin:
                 del raw
                 return refuse("origin_changed")
+            if not self._policy_matches(meta, cap):
+                del raw
+                return refuse("policy_changed")
+            if self._stale(epoch):
+                del raw
+                return refuse("locked")
             login = raw.get("login") or {}
             username, password = login.get("username") or "", login.get("password") or ""
             del raw, login
@@ -495,7 +525,7 @@ class Core:
             except OSError:
                 return refuse("browser_unavailable")
             with self._state_lock:
-                if self.locked or self._epoch != epoch:      # locked while we synced: never open the browser
+                if self._stale(epoch):                       # locked while we synced: never open the browser
                     cdp.close()
                     return refuse("locked")
                 self._active_cdp = cdp
@@ -504,9 +534,9 @@ class Core:
                                    username=username, password=password, lab_profile=self.cfg.lab_profile,
                                    otp_wait=self._otp_wait(cap.member, cap.item_id))
             except Refusal as r:
-                return refuse("locked" if self._epoch != epoch else r.reason, frame_origin=r.frame_origin)
+                return refuse("locked" if self._stale(epoch) else r.reason, frame_origin=r.frame_origin)
             except CDPError as exc:
-                if self._epoch != epoch:
+                if self._stale(epoch):
                     return refuse("locked")
                 # the DevTools method and Chromium's short reason only (letters and spaces); never a parameter value
                 why = re.sub(r"[^A-Za-z. ]", "", str(exc))[:80]
@@ -523,7 +553,7 @@ class Core:
         finally:
             username = password = None
             self._browser_lock.release()
-        if self._epoch != epoch:
+        if self._stale(epoch):
             # locked while the browser ran: whatever the page did after its DevTools pipe was cut is not an outcome
             result.cookies.clear()
             return refuse("locked")
@@ -531,7 +561,7 @@ class Core:
             return refuse(result.outcome, frame_origin=result.frame_origin)
         handle = secrets.token_urlsafe(24)
         with self._state_lock:
-            if self.locked or self._epoch != epoch:
+            if self._stale(epoch):
                 result.cookies.clear()
                 minted = False
             else:

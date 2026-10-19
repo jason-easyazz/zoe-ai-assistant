@@ -220,10 +220,10 @@ only after P0 do sections 10.2's A3 and A6 rows hold.
 |---|---|---|---|
 | `labels` | acting member | for each usable item: an opaque item id, the display label, the category, the registrable domain | metadata only; the brain may see this list to plan ("your library card") |
 | `propose` | acting member, errand id, the errand's goal in the owner's words, and its sign-in steps as (step id, item id) | a proposal id; the broker builds the approval page itself (section 7) | nothing is usable yet |
-| `capabilities` | proposal id | once the member approved on the broker's page: one opaque capability per step, else `pending` / `denied` / `expired` | each capability is single use and bound to (member, item, errand, step, operation, expected origin, expiry, nonce), held only in the broker's memory |
+| `capabilities` | proposal id | once the member approved on the broker's page: one opaque capability per step, else `pending` / `denied` / `expired` | each capability is single use and bound to (member, item, errand, step, operation, expected origin, expiry, nonce) AND to a SHA-256 of the item security policy the owner approved (every URI with its match type and every zoe: field), so an item edited after approval is refused with `policy_changed` (cell P1); held only in the broker's memory |
 | `login` | a capability | `ok` + a sealed handle to the resulting browser storage state, or a refusal reason | section 6.1; the only verb that uses a credential |
 | `redeem` | the sealed handle from `login` | the item-domain cookies, once | V1 realises the "sealed handle" as a single-use, 5-minute, in-memory handle that only the uid that ran the `login` can redeem; nothing is written to disk, so no encryption is needed |
-| `lock` | none | `locked` | wipes keys from memory, closes the DevTools connection of a sign-in that is in the browser, and no sign-in that started before it can mint a handle; needs an unlock to resume |
+| `lock` | none | `locked` | wipes keys from memory, closes the DevTools connection of a sign-in that is in the browser, and no sign-in that started before it (even one still queued for the browser across a later unlock) can continue or mint a handle (cells L1, L2); needs an unlock to resume |
 | `status` | none | locked/unlocked, last sync, vault reachable, counters | no item data |
 | `notices` | none | the links zoe-data forwards to a phone (approve, code, U3 unlock), each `/v/n/<notice>` | a notice id is opaque and authorises nothing (below) |
 
@@ -375,7 +375,7 @@ The browser's committed origin is `scheme://host:port`. The broker compares it w
 | Regex / starts with | regex is refused; starts with is treated as exact host |
 | Frames | the field's **own frame** must match. A cross-origin iframe never gets a fill, even when the top-level page matches, unless the item lists that iframe's origin as an extra URI *and* the top-level origin also matches one of the item's URIs (a hosted sign-in widget). A same-origin iframe is treated like the top frame |
 | Opaque and special origins | refused: `about:blank` and `srcdoc` frames (even when they inherit an origin), `data:`, `blob:`, `file:`, sandboxed frames with an opaque (`null`) origin, a frame still loading (no committed document), and anything that does not parse as `https://host[:port]` |
-| Redirects | every hop counts: the broker records each document request and navigation of the top frame (CDP `Network.requestWillBeSent` incl. redirects, `Page.frameNavigated`) during the login navigation and after the submit, and refuses (`redirect_hop`) if ANY hop is an origin the item does not allow, even one that bounces back to the right site (lab review 2026-10-19, cell V2 `lk_bounce`). The fill check itself still runs on the committed origin at fill time |
+| Redirects | every hop counts: the broker records each document request and navigation of the top frame (CDP `Network.requestWillBeSent` incl. redirects, `Page.frameNavigated`) during the login navigation and after the submit, and refuses (`redirect_hop`) unless EVERY hop is the approved origin or an origin an item URI names exactly, even a hop that bounces back to the right site (lab review 2026-10-19, cell V2 `lk_bounce`). A base-domain rule is never honoured for a hop: a redirect has no committed document, so the browser cannot cross-check it (V2 `lk_basehop`). The fill check itself still runs on the committed origin at fill time |
 | Service workers | they can answer a request but cannot change a document's committed origin, so the rule is unaffected; the origin and the form action are still re-read immediately before every insert (6.2, step 5) |
 | Popups | a sign-in in a new window is a new target; the check runs on it like any other |
 
@@ -681,7 +681,7 @@ must go red.
 ### 16.1 What V0 and V1 showed (lab, 2026-10-19)
 
 The record is [`labs/credential-vault/README.md`](../../labs/credential-vault/README.md); the broker is
-`services/zoe-vaultd/` (lab-only). **31/31 cells green, every negative control red**: V1-V9, V13, V17, V18, A1 (paired-phone approvals) and L1 (lock stops an in-flight sign-in) with the
+`services/zoe-vaultd/` (lab-only). **33/33 cells green, every negative control red**: V1-V9, V13, V17, V18, A1 (paired-phone approvals), P1 (capability pinned to the approved item policy), L1 and L2 (lock stops in-flight and queued sign-ins) with the
 broker, V1c-V4c with the client alone, plus H1 (no egress), M1/M2 and the measurements. What changes the plan:
 
 - **Section 4's quick stop works:** Vaultwarden 1.37.4 hides an item left unassigned in the member's sharing

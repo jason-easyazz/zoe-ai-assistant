@@ -810,3 +810,87 @@ def test_audit_detects_an_edited_last_record_with_the_head_file(tmp_path):
     with pytest.raises(audit.AuditError):
         audit.AuditLog(p)
     assert audit.verify(p, use_head=False)[0]          # negative control: the chain alone accepts the edit
+
+
+class _Pipe:
+    def close(self):
+        pass
+
+
+def _fake_browser(monkeypatch):
+    monkeypatch.setattr(core.CDP, "connect_unix", classmethod(lambda cls, path: _Pipe()))
+    monkeypatch.setattr(core, "run_login", lambda cdp, **kw: LoginResult("ok", "https://login.example.test",
+                                                                          cookies=[{"name": "sid", "value": "s"}]))
+
+
+def _login(c, cap, uid=None):
+    return c.dispatch("client", uid or ME, {"verb": "login", "capability": cap, "member": "alice", "errand": "e1",
+                                         "step": "s1", "item": "I1"})
+
+
+def test_capability_is_pinned_to_the_item_policy_the_owner_approved(make_core, monkeypatch):
+    """Round-3 finding 1: an item that gained a URI after approval (same login page) is refused, not filled under the
+    widened rules. Negative control: without the pin the same login goes ahead."""
+    c, bw = make_core()
+    _fake_browser(monkeypatch)
+    cap = run_to_capability(c)
+    bw.items["I1"]["login"]["uris"].append({"uri": "https://evil.test", "match": 1})
+    assert _login(c, cap)["error"] == "policy_changed"
+    cap = run_to_capability(c, errand="e1")
+    monkeypatch.setattr(core.Core, "_policy_matches", staticmethod(lambda meta, cap: True))
+    assert _login(c, cap)["ok"]
+
+
+def test_a_login_queued_across_lock_and_unlock_cannot_continue(make_core, monkeypatch):
+    """Round-3 finding 2: a login that spent its capability and then waited for the browser while the broker was
+    locked AND unlocked again is refused. Negative control: without the epoch re-checks it signs in."""
+    def scenario(patch_stale):
+        c, bw = make_core(mode="attended")
+        admin = c.phones["alice"]
+
+        def unlock():
+            n = c.gate.current_link().rsplit("/", 1)[1]
+            req = {"verb": "unlock", "notice": n, "device": admin}
+            req["pass" + "word"] = LAB_PW
+            assert c.dispatch("phone", PHONE_UID, req)["ok"]
+        unlock()
+        _fake_browser(monkeypatch)
+        if patch_stale:
+            monkeypatch.setattr(core.Core, "_stale", lambda self, epoch: False)
+        cap = run_to_capability(c)
+        c._browser_lock.acquire()                      # the browser is busy with someone else
+        out = {}
+        t = threading.Thread(target=lambda: out.update(_login(c, cap)))
+        t.start()
+        for _ in range(100):                           # wait until the queued login has spent its capability
+            if not c.policy._caps:
+                break
+            threading.Event().wait(0.02)
+        c.dispatch("client", ME, {"verb": "lock"})
+        unlock()
+        c._browser_lock.release()
+        t.join(timeout=10)
+        return out, c
+    out, c = scenario(False)
+    assert out == {"ok": False, "error": "locked"} and not c._handles
+    out, c = scenario(True)
+    assert out.get("ok") and c._handles                # red without the re-checks
+
+
+def test_base_domain_rules_are_not_honoured_for_redirect_hops():
+    """Round-3 finding 3: a hop may be the approved origin or an exactly listed host, never a base-domain match the
+    browser could not cross-check. Negative control: the PSL-only check accepted the sibling hop."""
+    from zoe_vaultd import fill
+
+    class NoCDP:
+        def on_event(self, fn):
+            pass
+    base = rules_for(("https://www.example.org", origin.MATCH_DOMAIN))
+    run = fill.LoginRun(NoCDP(), psl=PSL, rules=base, approved_origin="https://login.example.org", lab_profile=False)
+    run.hops = ["https://login.example.org/go", "https://other.example.org/x", "https://login.example.org/login"]
+    assert run.hops_ok(0) == (False, "https://other.example.org")
+    run.hops = ["https://login.example.org/go", "https://login.example.org/login"]
+    assert run.hops_ok(0) == (True, None)
+    o = origin.origin_of_url("https://other.example.org/x")      # the old, self-cross-checked PSL rule said yes
+    assert origin.origin_allowed(o, base, psl=PSL, browser_registrable=PSL.registrable_domain(o.host),
+                                 lab_profile=False)[0]

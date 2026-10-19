@@ -42,6 +42,10 @@ ZOE_ITEMS = {
     "lk_sandbox": ("A", [(R, None)], f"{R}/frame-sandbox", "other", RIGHT, False),
     # a disallowed hop that bounces back: right site -> evil.test -> right site's login page (review finding 2)
     "lk_bounce": ("A", [(R, None)], go(f"https://{EVIL}/go?to={R}/login"), "other", RIGHT, False),
+    # round 3: a hop through a BASE-DOMAIN sibling (www.example.org) the browser never cross-checks
+    "lk_basehop": ("A", [(f"https://{BASE_WWW}", BASE)],
+                   f"https://{BASE_LOGIN}/go?to=https://{BASE_WWW}/go?to=https://{BASE_LOGIN}/login", "other",
+                   BASE_LOGIN, False),
     "lk_redirect": ("A", [(R, None)], go(f"https://{EVIL}/login"), "other", EVIL, False),
     # 6.4 form checks
     "fa_action": ("A", [(R, None)], f"{R}/login-formaction", "other", RIGHT, False),
@@ -59,7 +63,9 @@ ZOE_ITEMS = {
     "rev_d": ("A", [(R, None)], f"{R}/login", "other", RIGHT, False),
     "rev_e": ("A", [(R, None)], f"{R}/login", "other", RIGHT, False),
     "rev_f": ("A", [(R, None)], f"{R}/login", "other", RIGHT, False),
-    "cap_a":("A", [(R, None)], f"{R}/login", "other", RIGHT, False),
+    # round 3: approved with one URI, then the owner adds evil.test; its login page bounces through evil.test
+    "cap_d": ("A", [(R, None)], go(f"https://{EVIL}/go?to={R}/login"), "other", RIGHT, False),
+    "cap_a": ("A", [(R, None)], f"{R}/login", "other", RIGHT, False),
     "cap_b": ("A", [(R, None)], f"{R}/login", "other", RIGHT, False),
     "cap_c": ("A", [(R, None)], f"{R}/login", "other", RIGHT, False),
     "c2host": ("A", [(R, HOST)], f"{R}/login", "other", RIGHT, False),

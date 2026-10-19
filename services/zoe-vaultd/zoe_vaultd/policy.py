@@ -57,6 +57,7 @@ class Step:
     origin: str          # the expected (approved) top-level origin, computed by the broker from the vault
     login_url: str
     domain: str | None
+    policy: str = ""     # SHA-256 of the item's security policy as the owner approved it (URIs, match types, zoe: fields)
 
 
 @dataclass
@@ -86,6 +87,7 @@ class Capability:
     category: str | None
     label: str
     expires: float
+    policy: str = ""
     nonce: str = field(default_factory=lambda: secrets.token_hex(8))
     used: bool = False
 
@@ -186,7 +188,8 @@ class Policy:
                 token = secrets.token_urlsafe(32)
                 self._caps[_key(token)] = Capability(
                     member=p.member, item_id=s.item_id, errand=p.errand, step_id=s.step_id, operation="login",
-                    origin=s.origin, login_url=s.login_url, category=s.category, label=s.label, expires=expires)
+                    origin=s.origin, login_url=s.login_url, category=s.category, label=s.label, expires=expires,
+                    policy=s.policy)
                 out.append((s.step_id, token))
             return "ok", out
 

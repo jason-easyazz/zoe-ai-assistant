@@ -96,7 +96,7 @@ def trust_approval_id() -> None:
                 raise
             s = next(x for x in p.steps if x.step_id == step)
             return policy.Capability(member=member, item_id=item, errand=errand, step_id=step, operation=operation,
-                                     origin=s.origin, login_url=s.login_url, category=s.category, label=s.label,
+                                     origin=s.origin, login_url=s.login_url, category=s.category, label=s.label, policy=s.policy,
                                      expires=self._clock() + 60)
     policy.Policy.consume = consume
 
@@ -245,9 +245,67 @@ def group_widened() -> None:
     browser.Launcher.bind = bind
 
 
+def nopolicypin() -> None:
+    """P1 NC: no policy pin, so a capability is used under whatever rules the item has at login time."""
+    core.Core._policy_matches = staticmethod(lambda meta, cap: True)
+
+
+def psl_hops() -> None:
+    """V2 NC: redirect hops judged by the PSL alone (the broker cross-checking its own result), as in round 2."""
+    def hops_ok(self, start):
+        for url in list(self.hops[start:]):
+            if url == "about:blank":
+                continue
+            o = origin.origin_of_url(url)
+            if o is None:
+                return False, url
+            ok, _ = origin.origin_allowed(o, self.rules, psl=self.psl,
+                                          browser_registrable=self.psl.registrable_domain(o.host),
+                                          lab_profile=self.lab_profile)
+            if not ok:
+                return False, str(o)
+        return True, None
+    fill.LoginRun.hops_ok = hops_ok
+
+
+GATE = "/tmp/cvlab-browser-gate-open"
+
+
+def queuegate() -> None:
+    """L2 INSTRUMENT (not a break): the browser lock waits until the lab opens a gate file, so a login can be held
+    in the browser queue, deterministically, while the lab locks and unlocks the broker."""
+    import threading
+    import time as _time
+    real_init = core.Core.__init__
+
+    class GatedLock:
+        def __init__(self):
+            self._lock = threading.Lock()
+
+        def acquire(self, timeout=-1):
+            while not os.path.exists(GATE):
+                _time.sleep(0.1)
+            return self._lock.acquire(timeout=timeout)
+
+        def release(self):
+            self._lock.release()
+
+    def init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        self._browser_lock = GatedLock()
+    core.Core.__init__ = init
+
+
+def queuegate_nostale() -> None:
+    """L2 NC: the same queue, without the lock-epoch re-checks."""
+    queuegate()
+    core.Core._stale = lambda self, epoch: False
+
+
 PATCHES = {f.__name__: f for f in (substring, nopsl, inherit, logsecret, otp_via_client, nosync, timeout_allow,
                                    trust_approval_id, debug_get, nopeer, norecheck, unlock_for_client,
-                                   shared_devtools, group_widened, nodevice, nohops, oldlock)}
+                                   shared_devtools, group_widened, nodevice, nohops, oldlock, nopolicypin,
+                                   psl_hops, queuegate, queuegate_nostale)}
 
 if __name__ == "__main__":
     args = sys.argv[1:]

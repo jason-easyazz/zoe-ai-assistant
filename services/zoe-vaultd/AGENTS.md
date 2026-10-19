@@ -37,9 +37,13 @@ code / unlock pages).
 - **zoe-data never holds anything that can answer a notice.** It gets opaque `/v/n/<notice>` ids; approve, code and
   unlock need the device secret of a phone paired to the right member (`policy.DeviceRegistry`), and a pairing link
   comes only from the admin role.
-- **Every redirect hop of the top document is checked** (`fill.LoginRun.hops_ok`), not just the final page.
+- **Every redirect hop of the top document is checked** (`fill.LoginRun.hops_ok`), not just the final page; a hop
+  must be the approved origin or an exactly listed host (base-domain rules never apply to hops).
+- **A capability is pinned to the item policy the owner approved** (`broker.policy_digest`): any change to URIs,
+  match types or zoe: fields after approval is `policy_changed`.
 - **`lock` stops in-flight work:** it closes a running sign-in's DevTools connection, and a sign-in that started
-  before a lock can mint nothing (`broker.Core._epoch`).
+  before a lock can continue or mint anything, even one queued for the browser across a later unlock (the epoch is
+  taken before the capability is spent; `broker.Core._stale` is checked after every stage).
 - **Secrets never reach argv, logs or the audit log.** The `bw` session key and the U3 password go to the child
   through its environment; the audit writer accepts only allowlisted scalar fields.
 - **Standard library only** (pinned by `test_broker_is_stdlib_only`), so the whole broker stays reviewable.
