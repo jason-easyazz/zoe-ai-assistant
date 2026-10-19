@@ -62,7 +62,8 @@ def test_the_gate_location_is_internal_forwards_credentials_but_not_the_body_and
     assert "internal;" in lines                                         # a client asking for it directly gets 404
     assert "proxy_pass http://host.docker.internal:8000/api/music/ma-ui/gate;" in lines
     assert "proxy_pass_request_body off;" in lines and 'proxy_set_header Content-Length "";' in lines
-    assert "proxy_set_header X-Real-IP $remote_addr;" in lines          # a caller cannot forge a panel address
+    assert "proxy_set_header X-Real-IP $zoe_real_ip;" in lines         # a caller cannot forge a panel address (the TCP peer on the LAN)
+    assert "include /etc/nginx/zoe/ingress-headers.inc;" in lines     # and cannot claim the relay ingress
     assert 'proxy_set_header X-Internal-Token "";' in lines and 'proxy_set_header X-Zoe-User-Id "";' in lines
     assert 'proxy_set_header Upgrade "";' in lines                      # the WebSocket handshake must not reach the gate as an Upgrade
     assert not any(l.startswith(("proxy_set_header Cookie", "proxy_hide_header")) for l in lines)  # the cookie must reach the gate
