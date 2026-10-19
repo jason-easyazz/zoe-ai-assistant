@@ -48,11 +48,6 @@ location / {
     try_files $uri $uri/ =404;
 }
 
-location /developer/ {
-    alias /usr/share/nginx/html/developer/;
-    try_files $uri $uri/ /developer/index.html;
-}
-
 location ^~ /_preview/ { return 404; }
 location ^~ /js/_archive/ { return 404; }
 
