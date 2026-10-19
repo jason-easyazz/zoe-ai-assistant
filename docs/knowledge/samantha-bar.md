@@ -71,7 +71,8 @@ would be unmeasured), and `compare_baseline` itself counts a scored cell the bas
 same rule as the voice probe's `--expect-revision`) and records only a full, `ok` run with every scenario,
 writing the top-level `commit` beside `revision`. Recording therefore needs the live checkout clean
 (`git status --porcelain` empty). Run it, with the day-sim, the person bench and the voice self-test, in one
-allowed window: `bash scripts/maintenance/record_bench_baselines.sh` (22:00-01:15 or 04:45-06:45).
+allowed window: `bash scripts/maintenance/record_bench_baselines.sh` (start 22:00-01:05 or 05:00-06:45; the script itself
+refuses a start inside the 01:50-04:55 brain window or with under 45 min before 01:50, and `ZOE_HARNESS_FORCE` does not bypass that).
 
 **Day-sim baselines.** `samantha_day_sim.py --record-baseline` / `--compare-baseline` (`--baseline`, default
 one file per mode: `samantha_day_sim_baseline.json`, `…_baseline_allowlisted.json`). The baseline holds every

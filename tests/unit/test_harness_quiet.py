@@ -184,3 +184,83 @@ def test_the_shared_harness_gate_really_refuses_at_noon(monkeypatch):
     monkeypatch.setenv("ZOE_HARNESS_FORCE", "1")              # the deliberate override reaches the next gate
     with pytest.raises(pytest.fail.Exception, match="went past quiet hours"):
         uma._gates(None, None, print)
+
+
+# ---- the brain window (01:50-04:55), owned by the multi-step orchestrator record_bench_baselines.sh -------------------
+
+def _at(hh, mm=0, day=19):
+    return dt.datetime(2026, 10, day, hh, mm)
+
+
+@pytest.mark.parametrize("when,ok", [
+    (_at(22, 0), True), (_at(23, 30), True), (_at(1, 5), True),        # 01:05 + 45 min = 01:50 exactly: finishes in time
+    (_at(1, 6), False), (_at(1, 30), False),                             # cannot finish before 01:50
+    (_at(1, 50), False), (_at(2, 51), False), (_at(4, 0), False),
+    (_at(4, 45), False),                                                 # the documented-wrong start: inside the 04:10-04:52 voice gate
+    (_at(4, 54), False), (_at(4, 55), True), (_at(5, 0), True), (_at(6, 45), True),
+])
+def test_brain_window_blocks_inside_and_late_starts(when, ok):
+    v = hq.brain_window_verdict("record_bench_baselines", now=when)
+    assert v.allowed is ok, v.reason
+    assert ok or v.kind == "brain-window"
+
+
+def test_brain_window_budget_is_respected_and_force_does_not_bypass(monkeypatch):
+    assert hq.brain_window_verdict("x", budget_min=20, now=_at(1, 30)).allowed        # a 20-min step fits before 01:50
+    assert not hq.brain_window_verdict("x", budget_min=21, now=_at(1, 30)).allowed
+    monkeypatch.setenv("ZOE_HARNESS_FORCE", "1")                                       # force skips quiet hours, NOT this
+    assert not hq.brain_window_verdict("x", now=_at(4, 45)).allowed
+
+
+def test_brain_window_cli_exit_codes(capsys):
+    assert hq.main(["brain-window", "x", "--now", "2026-10-19T04:45:00"]) == hq.EXIT_REFUSED
+    assert "brain window" in capsys.readouterr().out
+    assert hq.main(["brain-window", "x", "--now", "2026-10-19T05:00:00"]) == 0
+
+
+def _stub_tree(tmp_path, refuse_after):
+    """A copy of the orchestrator over stub scripts: harness_quiet.py ``check`` allows, ``brain-window`` allows its first
+    ``refuse_after`` calls then refuses (exit 3); every harness step just drops a marker file."""
+    import shutil
+    m = tmp_path / "scripts" / "maintenance"
+    (tmp_path / "scripts" / "perf").mkdir(parents=True)
+    m.mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / "scripts" / "maintenance" / "record_bench_baselines.sh", m / "record_bench_baselines.sh")
+    (m / "harness_quiet.py").write_text(
+        "import sys, pathlib\n"
+        f"n = pathlib.Path({str(tmp_path / 'calls')!r})\n"
+        "if sys.argv[1] == 'brain-window':\n"
+        "    c = int(n.read_text()) if n.exists() else 0\n"
+        "    n.write_text(str(c + 1))\n"
+        f"    sys.exit(0 if c < {refuse_after} else 3)\n"
+        "sys.exit(0)\n")
+    for rel in ("maintenance/voice_regression_probe.py", "perf/samantha_bar.py", "perf/samantha_day_sim.py",
+                "perf/samantha_person.py"):
+        (tmp_path / "scripts" / rel).write_text(
+            "import sys, pathlib\n"
+            f"pathlib.Path({str(tmp_path)!r}, 'ran-' + pathlib.Path(sys.argv[0]).stem).write_text('x')\n")
+    return m / "record_bench_baselines.sh"
+
+
+def _run_orchestrator(tmp_path, refuse_after):
+    import subprocess
+    sh = _stub_tree(tmp_path, refuse_after)
+    env = {**os.environ, "HOME": str(tmp_path), "ZOE_HARNESS_LOCK": str(tmp_path / "lock")}
+    r = subprocess.run(["bash", str(sh)], env=env, capture_output=True, text=True, timeout=60)
+    return r, sorted(p.name for p in tmp_path.glob("ran-*"))
+
+
+def test_orchestrator_refuses_up_front_in_the_brain_window_and_runs_nothing(tmp_path):
+    r, ran = _run_orchestrator(tmp_path, refuse_after=0)
+    assert r.returncode == 3 and ran == [], (r.stdout, r.stderr)
+
+
+def test_orchestrator_rechecks_inside_the_lock_before_each_step(tmp_path):
+    # up-front check passes, the first step's in-lock check passes, the rest are refused: one step ran, three did not
+    r, ran = _run_orchestrator(tmp_path, refuse_after=2)
+    assert r.returncode == 1 and ran == ["ran-voice_regression_probe"], (ran, r.stdout)
+
+
+def test_orchestrator_positive_control_runs_every_step_when_clear(tmp_path):
+    r, ran = _run_orchestrator(tmp_path, refuse_after=99)
+    assert r.returncode == 0 and len(ran) == 4, (ran, r.stdout, r.stderr)
