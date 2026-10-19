@@ -70,14 +70,16 @@ admin API. It is not a household flow.
    `zoe-bluetooth`. On the Jetson, `ZOE_BLUETOOTH_SETTINGS=1`.
 2. Find the panel and the pendant's device id with an admin session (the `X-Session-ID` of a signed-in admin):
    `GET /api/bluetooth/panels`, then `GET /api/bluetooth/panels/<panel>`.
-3. **Tap the pendant twice, then twice again** (four quick taps). A short buzz means its pairing window is open for 60 s.
+3. **Tap the pendant twice, then twice again** (four quick taps). A short buzz and the LED cycling blue > green > purple >
+   yellow mean its pairing window is open for 60 s.
    There is no automatic window, not even for a freshly flashed pendant.
 4. Within the minute:
    `POST /api/bluetooth/panels/<panel>/devices/<id>/omi_bond` with body
    `{"confirm": true, "ack_wipe": true}`. Add `"replace": true` if this Pi paired it before, and `"force": true` only to
    pair despite unsynced recordings.
    - Poll `GET /api/bluetooth/panels/<panel>/jobs/<job>`.
-   - A long buzz from the pendant means it bonded (and wiped). The job answers `bonded: true, encrypted: true`.
+   - White flashes are the wipe. A long buzz and three green blinks from the pendant mean it bonded (and wiped). The job
+     answers `bonded: true, encrypted: true`.
    - "Did not accept pairing" means the window was shut: tap again.
    - "Waiting to sync" means let omi-sync finish.
 5. On the Pi, in `~/.zoe-omi-sync/.env.omi`, set `OMI_SYNC_REQUIRE_BOND=all`. Restart `omi-sync`.
@@ -93,6 +95,19 @@ admin API. It is not a household flow.
 - Restart `omi-sync`. The next visit must drain normally: a `sync[...] path=ring` line, no `refused:`.
 - A record of each check goes in `docs/knowledge/open-problems.md`: remove the 2026-10-17 P0-1 line and the 2026-10-13
   OTA-key line, or narrow them to the hardened bootloader.
+
+## LED meanings (what the owner sees)
+| Priority | LED | Means |
+|---|---|---|
+| 1 | off | the pendant is off (3 s hold) |
+| 2 | **red, fast blink** (+ a 2 s buzz) | fault: stock-bond wipe failed (it is not advertising), crypto/flash fail-closed (nothing is being stored), or a pairing refused while the window was open |
+| 3 | **blue > green > purple > yellow, cycling** | pairing window open (after the four taps), 60 s |
+| 4 | **white quick flashes** | crypto-wipe in progress (a new bond) |
+| 5 | **three green blinks** | just paired |
+| 6 | **green breathing** / **solid green** | charging / fully charged (>= 98 %) |
+| 7 | **red slow blink** | warning: storage >= 90 % full, battery < 15 %, or the clock is not set |
+| 8 | **blue blinking** | syncing to the panel |
+| 9 | **dim steady blue** (or white, a setting) | normal: recording / idle |
 
 ## G. Recovery
 | Symptom | Do |

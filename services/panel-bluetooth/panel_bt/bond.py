@@ -21,7 +21,8 @@ is BlueZ reading ``Paired`` AND ``Bonded`` true and the kernel showing the link 
 it destroys its stored-audio key, empties its ring and deletes every other bond before the pairing may complete. So audio not
 yet synced is lost; the agent refuses while omi-sync still holds unsynced records, and always needs ``ack_wipe``.
 
-``replace`` deletes THIS pendant's old BlueZ entry first (``Adapter1.RemoveDevice`` for its path only) - for a pendant that was
+``replace`` deletes THIS pendant's old BlueZ entry first (``Adapter1.RemoveDevice`` for its path only) and stops unless
+that is confirmed (the call succeeded or the device was unknown, and ``Paired`` no longer reads true) - for a pendant that was
 re-paired or re-flashed and holds a new key. Nothing else is ever removed. The parsers below are deliberate copies of
 ``omi_sync.link_security`` (two venvs, no import); tests/unit/test_omi_bond.py pins them equal.
 """
@@ -126,8 +127,15 @@ async def bond_pendant(ble: Any, address: str, addr_type: str, *, replace: bool 
     path = device_path(address, adapter)
     adapter_path = f"/org/bluez/{adapter}"
     if replace:
-        await run(["busctl", "--system", "call", "org.bluez", f"/org/bluez/{adapter}", "org.bluez.Adapter1", "RemoveDevice", "o",
-                   path], 15.0)
+        rc, out = await run(["busctl", "--system", "call", "org.bluez", f"/org/bluez/{adapter}", "org.bluez.Adapter1",
+                             "RemoveDevice", "o", path], 15.0)
+        gone = rc == 0 or any(e in (out or "") for e in ("DoesNotExist", "UnknownObject"))   # nothing to remove is fine
+        paired, _bonded = await _bond_state(path, run)
+        # Confirmed or nothing: the old entry must be gone (Paired reads false, or the device object is gone and the read
+        # fails) - otherwise BlueZ could encrypt with the old keys and pair() would return without a new bond.
+        if not gone or paired is True:
+            raise BondRefused("replace_failed", "The panel could not forget this pendant's old pairing, so nothing was "
+                                                "changed. Try again.")
     link = await ble.connect(address, addr_type)
     pairable = False
     try:

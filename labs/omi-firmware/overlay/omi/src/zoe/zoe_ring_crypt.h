@@ -40,8 +40,20 @@ bool zrc_backend_rekey_pending(void);
 void zrc_backend_destroy(void);
 void zrc_backend_wipe_done(void);
 
-/* Pure: must the boot (or a re-init) make a NEW key instead of using the stored one? */
-bool zrc_needs_new_key(bool wipe_pending, bool key_found, bool epoch_found, uint32_t epoch);
+/* Pure: what the boot (or a re-init) does with the stored key. Each *_err is the read's result (0 = read cleanly, found or
+ * not; <0 = the store could not be read). ZRC_KEY_USE = load the stored key; ZRC_KEY_NEW = make a new one (and empty the
+ * ring); <0 = refuse: a read failed, so nothing is guessed - no key is loaded or made, the ring stays blocked. */
+#define ZRC_KEY_USE 0
+#define ZRC_KEY_NEW 1
+int zrc_key_decision(int wipe_err, bool wipe_found, int key_err, bool key_found, int epoch_err, bool epoch_found,
+                     uint32_t epoch);
+/* Pure: the salt reservation a NEW key starts from - above the old one (monotonic across keys). <0 = exhausted: no key. */
+int zrc_new_key_epoch(bool epoch_found, uint32_t epoch, uint32_t *out);
+
+/* Empty the ring under a NEW key, then (and only then) clear the wipe intent. clear() is the ring-metadata reset. A
+ * failure leaves the intent set (the next boot repeats the wipe) and is returned: the caller must block the ring. */
+typedef int (*zrc_clear_fn)(void *ctx);
+int zrc_finish_new_key(zrc_clear_fn clear, void *ctx);
 
 /* Backend: the next batch salt (never 0). <0 = none could be reserved: the caller STOPS ring writes. */
 int zrc_backend_new_salt(uint32_t *salt);

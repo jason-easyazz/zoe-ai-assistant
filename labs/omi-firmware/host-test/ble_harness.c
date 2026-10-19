@@ -1,7 +1,10 @@
-/* Host harness: the REAL zoe_ble_sec.c (and the pure zoe_ring_crypt.c policy) against fakes of Zephyr's settings store, bond
- * table and connections, with power-loss injection: every persistent operation spends one unit of `budget`, and when the
- * budget runs out the fake "loses power" (longjmp) BEFORE applying it. The SD worker's re-key and the boot-time key policy
- * are modelled here exactly as zoe_ring_crypt_psa.c / sd_card.c order them (intent -> key -> ring -> clear intent). */
+/* Host harness: the REAL zoe_ble_sec.c (and the pure zoe_ring_crypt.c decisions) against fakes of Zephyr's settings store,
+ * bond table and connections, with power-loss injection: every MODELLED persistent operation (a settings write/delete, a
+ * bt_unpair, the ring clear, the stored bond) spends one unit of `budget`, and when the budget runs out the fake "loses
+ * power" (longjmp) BEFORE applying it. Reads can fail (fail_read) and the ring clear can fail (fail_clear).
+ * NOT modelled: a torn write inside one record, the Zephyr bond store's internal steps, SD sectors. The SD worker's re-key
+ * and the boot key policy are RE-STATED here through the same pure functions zoe_ring_crypt_psa.c / sd_card.c call
+ * (zrc_key_decision, zrc_new_key_epoch, zrc_finish_new_key); those two files are compiled, not executed, by this harness. */
 #include <setjmp.h>
 #include <string.h>
 
@@ -67,8 +70,11 @@ int settings_delete(const char *name)
     return 0;
 }
 
+static char fail_read[16]; /* a record whose read fails (a backend error, NOT "absent") */
+
 int settings_load_subtree_direct(const char *subtree, settings_load_direct_cb cb, void *param)
 {
+    if (fail_read[0] && strcmp(fail_read, subtree) == 0) return -5;
     int i = slot(subtree, 0);
     if (i >= 0) cb(NULL, 4, NULL, NULL, param);
     return 0;
@@ -143,24 +149,48 @@ int zrc_backend_revoke(void)
     return settings_delete("zoe/rk");
 }
 
-/* zrc_backend_init + the mount/re-key ring clear + zrc_backend_wipe_done */
+static int fail_clear;   /* clear_ring_internal fails (an SD error) */
+static int ring_blocked; /* sd_write_blocked / not mounted */
+
+void zrc_backend_wipe_done(void) { settings_delete("zoe/wk"); }
+
+static int fake_clear(void *ctx)  /* clear_ring_internal: the ring metadata reset */
+{
+    (void) ctx;
+    persist_op();
+    if (fail_clear) return -5;
+    ring_key = 0;
+    return 0;
+}
+
+static int rd(const char *name, int *found)   /* a read with its outcome told apart, as zoe_ring_crypt_psa.c's load_rec */
+{
+    *found = 0;
+    if (fail_read[0] && strcmp(fail_read, name) == 0) return -5;
+    *found = has(name);
+    return 0;
+}
+
+/* zrc_backend_init + the mount/re-key path, in zoe_ring_crypt_psa.c / sd_card.c order, through the SAME pure decisions
+ * (zrc_key_decision, zrc_new_key_epoch, zrc_finish_new_key) the firmware calls. */
 static void key_init_and_clear(void)
 {
-    int wipe = has("zoe/wk");
-    if (wipe) settings_delete("zoe/rk");
-    int key_found = !wipe && has("zoe/rk");
-    if (zrc_needs_new_key(wipe, key_found, has("zoe/re"), val("zoe/re"))) {
-        uint32_t ep = val("zoe/re") + 1024;
-        settings_save_one("zoe/re", &ep, 4);
-        uint32_t g = (uint32_t) ++next_gen;
-        settings_save_one("zoe/rk", &g, 4);
-        ram_key = (int) g;
-        persist_op();            /* clear_ring_internal: metadata reset */
-        ring_key = 0;
-        settings_delete("zoe/wk");
-    } else {
-        ram_key = (int) val("zoe/rk");
-    }
+    int wf, kf = 0, ef;
+    int we = rd("zoe/wk", &wf);
+    int ee = rd("zoe/re", &ef);
+    int ke = (we == 0 && !wf) ? rd("zoe/rk", &kf) : 0;
+    int d = zrc_key_decision(we, wf, ke, kf, ee, ef, ef ? val("zoe/re") : 0);
+    if (d < 0) { ram_key = 0; ring_blocked = 1; return; }
+    if (d == ZRC_KEY_USE) { ram_key = (int) val("zoe/rk"); ring_blocked = 0; return; }
+    if (wf) settings_delete("zoe/rk");
+    uint32_t ep;
+    if (zrc_new_key_epoch(ef, val("zoe/re"), &ep) != 0) { ram_key = 0; ring_blocked = 1; return; }
+    settings_save_one("zoe/re", &ep, 4);
+    uint32_t g = (uint32_t) ++next_gen;
+    settings_save_one("zoe/rk", &g, 4);
+    ram_key = (int) g;
+    if (zrc_finish_new_key(fake_clear, NULL) != 0) { ram_key = 0; ring_blocked = 1; return; }  /* destroy + block */
+    ring_blocked = 0;
 }
 
 void h_worker(void)              /* the SD worker loop's zrc_backend_rekey_pending() branch */
@@ -182,6 +212,7 @@ void h_reset(void)
     bonded[PI] = 1;
     ram_key = 1; revoked = 0; next_gen = 1; ring_key = 1; /* the ring holds the owner's audio under key 1 */
     budget = -1; ops_done = 0; fail_save = 0; fail_unpair = 0; last_haptic = 0;
+    fail_read[0] = 0; fail_clear = 0; ring_blocked = 0;
     window_until_ms = 0; gesture.armed = false; stub_uptime_ms = 100000;
 }
 
@@ -255,3 +286,7 @@ void h_set_fail_save(int f) { fail_save = f; save_calls = 0; }
 void h_clear_marker(void) { int i = slot("zoe/bw", 0); if (i >= 0) store[i].present = 0; }
 int h_init(void) { return zoe_ble_sec_init(); }
 int h_window_open(void) { return zoe_ble_sec_pairing_open(); }
+void h_set_fail_read(const char *n) { strncpy(fail_read, n ? n : "", 15); }
+void h_set_fail_clear(int f) { fail_clear = f; }
+int h_ring_blocked(void) { return ring_blocked; }
+void h_put_epoch(uint32_t v) { put("zoe/re", v); }

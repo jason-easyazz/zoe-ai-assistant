@@ -8,6 +8,7 @@ No hardware: a fake backend/link and a scripted ``busctl`` / ``hcitool``. Source
   skip making the adapter pairable, or never reset it            -> test_a_zoe_pendant_..., test_the_adapter_is_never_left_pairable
   drop the ``bond_enabled`` / ``confirm`` / ``ack_wipe`` checks   -> test_the_op_is_flag_dark_and_needs_a_confirm
   ignore the PairableTimeout write or its read-back              -> test_pairing_is_never_enabled_without_an_installed_timeout
+  ignore the RemoveDevice result or the Paired read-back         -> test_replace_stops_unless_the_old_entry_is_really_gone
   drop the unsynced-recordings refusal                           -> test_pairing_waits_for_unsynced_recordings_unless_forced
 """
 from __future__ import annotations
@@ -49,17 +50,23 @@ class Client:
 class SysBus:
     """busctl + hcitool con as BlueZ / the kernel would answer them."""
 
-    def __init__(self, *, bond_holds=True, encrypt_holds=True, timeout_write_fails=False, timeout_ignored=False) -> None:
+    def __init__(self, *, bond_holds=True, encrypt_holds=True, timeout_write_fails=False, timeout_ignored=False,
+                 old_bond=False, remove="ok") -> None:
         self.props = {"Paired": False, "Bonded": False}
         self.bond_holds, self.encrypt_holds, self.encrypted = bond_holds, encrypt_holds, False
         self.pairable, self.pairable_timeout = False, 0
         self.timeout_write_fails, self.timeout_ignored = timeout_write_fails, timeout_ignored
+        self.remove = remove                      # ok | fails | lies (rc 0, entry stays) | unknown (no such device)
+        if old_bond:
+            self.props = {"Paired": True, "Bonded": True}
         self.calls: list[list[str]] = []
 
     async def run(self, argv, timeout):
         argv = list(argv)
         self.calls.append(argv)
         if argv[:3] == ["busctl", "--system", "get-property"]:
+            if self.remove == "dbus_down" and argv[-1] in ("Paired", "Bonded"):
+                return 1, "Failed to get property: Connection timed out"
             if argv[-1] == "PairableTimeout":
                 return 0, f"u {self.pairable_timeout}\n"
             return 0, f"b {'true' if self.props.get(argv[-1]) else 'false'}\n"
@@ -74,8 +81,12 @@ class SysBus:
                 self.pairable = argv[-1] == "true"
             return 0, ""
         if argv[:3] == ["busctl", "--system", "call"]:
+            if self.remove in ("fails", "dbus_down"):
+                return 1, "Call failed: org.bluez.Error.Failed"
+            if self.remove == "lies":
+                return 0, ""
             self.props = {"Paired": False, "Bonded": False}
-            return 0, ""
+            return (1, "Call failed: org.bluez.Error.DoesNotExist") if self.remove == "unknown" else (0, "")
         if argv == ["hcitool", "con"]:
             lm = "CENTRAL AUTH ENCRYPT" if self.encrypted else "CENTRAL"
             return 0, f"Connections:\n\t< LE {OMI_ADDR} handle 64 state 1 lm {lm}\n"
@@ -161,6 +172,24 @@ async def test_pairing_is_never_enabled_without_an_installed_timeout(kw):
     assert e.value.reason == "adapter" and clients[0].paired == 0
     assert not [c for c in sysbus.calls if c[:3] == ["busctl", "--system", "set-property"] and c[-3] == "Pairable"]
     assert sysbus.pairable is False
+
+
+@pytest.mark.parametrize("remove", ["fails", "lies", "dbus_down"])
+async def test_replace_stops_unless_the_old_entry_is_really_gone(remove):
+    """Codex round 2: a failed (or silently ineffective) RemoveDevice must stop the operation before connecting/pairing."""
+    sysbus = SysBus(old_bond=True, remove=remove)
+    be, clients = backend_for(sysbus)
+    with pytest.raises(bond.BondRefused) as e:
+        await bond.bond_pendant(be, OMI_ADDR, "random", replace=True, run=sysbus.run)
+    assert e.value.reason == "replace_failed" and not clients and be.live_links() == []
+    assert not [c for c in sysbus.calls if "set-property" in c]
+
+
+async def test_replace_of_a_device_bluez_never_knew_goes_ahead():
+    sysbus = SysBus(remove="unknown")
+    be, clients = backend_for(sysbus)
+    res = await bond.bond_pendant(be, OMI_ADDR, "random", replace=True, run=sysbus.run)
+    assert res["bonded"] is True and clients[0].paired == 1
 
 
 async def test_a_stock_pendant_is_never_bonded():

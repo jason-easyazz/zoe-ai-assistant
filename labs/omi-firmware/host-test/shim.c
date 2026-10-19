@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "zoe_gesture.h"
+#include "zoe_led_logic.h"
 #include "zoe_ring_crypt.h"
 
 typedef int (*ctr_fn)(const uint8_t *iv, const uint8_t *in, uint8_t *out, size_t len);
@@ -43,4 +44,15 @@ uint32_t host_epoch_persisted(void) { return persisted; }
 int host_epoch_calls(void) { return persist_calls; }
 int host_epoch_take(uint32_t *salt) { return zrc_epoch_take(&ep, fake_persist, 0, salt); }
 void host_epoch_force(uint32_t next, uint32_t limit) { ep.next = next; ep.limit = limit; }
-bool host_needs_new_key(bool w, bool k, bool e, uint32_t v) { return zrc_needs_new_key(w, k, e, v); }
+void zrc_backend_wipe_done(void) {}
+int host_key_decision(int we, bool w, int ke, bool k, int ee, bool e, uint32_t v) { return zrc_key_decision(we, w, ke, k, ee, e, v); }
+int host_new_key_epoch(bool found, uint32_t v, uint32_t *out) { return zrc_new_key_epoch(found, v, out); }
+
+/* the LED decisions (zoe_led_logic.h) */
+int host_led_pick(const struct zoe_led_inputs *in) { return (int) zoe_led_pick(in); }
+void host_led_frame(int s, uint32_t t, bool white, uint8_t *rgb)
+{
+    struct zoe_rgb c = zoe_led_frame((enum zoe_led_state) s, t, white);
+    rgb[0] = c.r; rgb[1] = c.g; rgb[2] = c.b;
+}
+uint32_t host_led_period(int s) { return zoe_led_period_ms((enum zoe_led_state) s); }

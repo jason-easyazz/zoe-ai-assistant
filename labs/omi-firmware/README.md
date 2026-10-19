@@ -14,7 +14,7 @@ Evidence tags: **[V]** read in source or run this session, **[S]** secondary, **
 |---|---|
 | Firmware patch (`patches/zoe-phase2.patch`: Kconfig, CMake and 5 upstream sources) + new sources (`overlay/`) on upstream `Omi_CV1_v3.0.21` (`f12031d1`) | **written; applies cleanly** to a fresh fetch [V] |
 | Compile in the pinned toolchain (`build.sh`: Zephyr CI image `v0.26.13`, NCS v2.9.0, sysbuild + MCUboot, on this aarch64 box) | **compiled, all four images, no warnings in our code** (section 5) [V] |
-| Host tests (`host-test/`): the pure ring-crypt code (IV layout, CTR against an independent reference, re-key, the persisted monotonic salt allocator) and the REAL `zoe_ble_sec.c` against stubbed Zephyr (gesture-only pairing, fail-closed stock wipe, crypto-wipe on new bond with a power cut before every persistent step, reconnect never wipes) | **20/20**; 16 source mutations all red [V] |
+| Host tests (`host-test/`): the pure ring-crypt code (IV layout, CTR against an independent reference, re-key, the persisted monotonic salt allocator) and the REAL `zoe_ble_sec.c` against stubbed Zephyr (gesture-only pairing, fail-closed stock wipe, crypto-wipe on new bond with a power cut before each modelled persistent step, unreadable records, a failed ring clear, reconnect never wipes; scope in section 2.1) | **29/29** (incl. the LED state/priority/pattern tests); 28 firmware source mutations all red [V] |
 | Pi: `omi-sync` bonded-only mode (`OMI_SYNC_REQUIRE_BOND`), panel-bluetooth `omi_bond`, zoe-data broker op | built, unit-tested, flag-dark |
 | Panel UI button + spoken guidance for the pairing | **not built** (follow-up; the op and the API exist) |
 | App-only OTA "custom pin" mode in panel-bluetooth (needed for the OTA flash path) | **not built** (follow-up) |
@@ -91,8 +91,26 @@ only over SWD:
 
   The SD worker then destroys the key in PSA, generates a fresh one from the CSPRNG (no CSPRNG means nothing more is ever
   stored), empties the ring under it, and only then clears the key intent. A boot with an intent still set finishes the
-  wipe before advertising or loading the old key. So after a power cut at any step the pendant never holds the old key
-  alongside a new bond. Host-tested by cutting power before every persistent operation.
+  wipe before advertising or loading the old key. So after a power cut at any step the pendant should never hold the old
+  key alongside a new bond.
+- Every read of the flags, the key and the salt reservation tells "absent" apart from "unreadable", and an unreadable
+  record fails closed:
+  - the BLE init does not advertise;
+  - the key is neither loaded nor replaced, and the ring stays blocked.
+- If the ring cannot be emptied under a new key, the ring is not mounted, the key is dropped, and the intent stays set,
+  so the next mount repeats the whole wipe.
+- When the salt space is exhausted, no new key is made.
+- What the harness proves, and what it does not:
+  - **It covers** the real `zoe_ble_sec.c` and the shared pure decisions (`zrc_key_decision`, `zrc_new_key_epoch`,
+    `zrc_finish_new_key`, the salt allocator). It cuts power before each persistent operation, at the granularity it
+    models: each settings write or delete, each `bt_unpair`, the ring clear and the stored bond. It also covers unreadable
+    records and a failed ring clear.
+  - **It does not model:**
+    - a torn write inside one settings record;
+    - the Zephyr bond store's internal steps;
+    - SD sector behaviour;
+    - the real `sd_card.c` / `zoe_ring_crypt_psa.c`. The harness re-states their order through the same pure functions.
+      Those files are compiled (section 5) and reviewed, not executed.
   - A reconnect with the existing bond never wipes, because no pairing happens.
   - **A thief who pairs gets an empty, freshly keyed pendant.** So does the owner on every re-pair: **sync before
     re-pairing.**
@@ -103,6 +121,35 @@ only over SWD:
 - Untouched: the 3 s power-off, the single tap (reserved for press-to-record), partitions, sysbuild, MCUboot, the net core,
   and every byte of the ring protocol on the wire. DIS reports `3.0.21.1`; the 4th component is the Zoe build number.
   `omi-sync` reads the first three, so it still takes the ring path.
+
+### 2.1b The status LED (`overlay/omi/src/zoe/zoe_led*`; owner design 2026-10-19)
+`zoe_led_logic.h` is pure and host-tested. It maps inputs to a state by priority, then the state to a colour and pattern.
+`zoe_led.c` drives the three PWM channels on a work item. Steady states refresh once a second; animations refresh at
+50-100 ms. Stock's `set_led_state()` is turned off.
+
+| Priority | LED | Means |
+|---|---|---|
+| 1 | off | the pendant is off (3 s hold) |
+| 2 | **red, fast blink** (+ a 2 s buzz) | fault: stock-bond wipe failed (it is not advertising), crypto/flash fail-closed (nothing is being stored), or a pairing refused while the window was open |
+| 3 | **blue > green > purple > yellow, cycling** | pairing window open (after the four taps), 60 s |
+| 4 | **white quick flashes** | crypto-wipe in progress (a new bond) |
+| 5 | **three green blinks** | just paired |
+| 6 | **green breathing** / **solid green** | charging / fully charged (>= 98 %) |
+| 7 | **red slow blink** | warning: storage >= 90 % full, battery < 15 %, or the clock is not set |
+| 8 | **blue blinking** | syncing to the panel |
+| 9 | **dim steady blue** (or white, a setting) | normal: recording / idle |
+
+- **Normal is dim on purpose.** 15 % PWM duty draws about 15 % of the channel's full-on current, against stock's 50 %
+  default dim ratio. That is about 70 % less LED current in the state the pendant spends almost all its time in. This is
+  PWM arithmetic, not a measurement.
+- **The normal colour is a persisted setting:** `zoe/lc`, 0 = blue (default), 1 = white.
+  - The bonded Pi can read and write it over an **encrypted-only** characteristic: service
+    `3f6d1a40-8c2e-4b7a-9d15-6e2c0b8f7a10`, characteristic `...7a11`, one byte.
+  - The Pi-side control (a Settings switch) is a follow-up.
+- **Choices the owner did not specify:**
+  - "Paired" ranks below the wipe and above charging.
+  - A pairing refused because the window was shut (a stranger) does NOT light the fault. Only a refusal inside an open
+    window does, so strangers cannot make the pendant flash.
 
 ### 2.2 Audio encrypted at rest (`overlay/omi/src/zoe/zoe_ring_crypt*`; the `sd_card.c` hunks): feasible, built
 - The nRF5340 app core has Arm CryptoCell-312, which NCS exposes through PSA Crypto (`nrf_security`) [V: the Kconfig
@@ -203,26 +250,32 @@ for OTA), `merged.hex`, `merged_CPUNET.hex` (for SWD) and `app.config`. The cont
 To change the series: edit the fetched tree under `~/.cache/zoe-omi-fw/src`, regenerate the matching patch from there
 with a plain diff, and keep `overlay/` as the source of the new files.
 
-## 5. Compile result (latest: 2026-10-19 09:09, this box, aarch64, `build.sh` defaults, upstream public dev key)
+## 5. Compile result (latest: 2026-10-19 10:08, this box, aarch64, `build.sh` defaults, upstream public dev key)
 - **All four images built**: MCUboot, the app (ours), the net core `ipc_radio` and `b0n`. Our sources
   (`zoe_ble_sec.c`, `zoe_ring_crypt*.c` and the `sd_card.c` / `transport.c` hunks) compiled with **no warnings**. The
   warnings in the log are upstream's own (`battery.c`, `transport.c`, `imu.c`). No Kconfig warning touches a symbol this
   patch sets.
-- This rebuild includes the crypto-wipe on new bond, the persisted salt allocator, the gesture-only pairing and the
-  fail-closed stock wipe. A first build at 03:46 had compiled the earlier revision.
+- This rebuild includes:
+  - the crypto-wipe on new bond and the persisted salt allocator;
+  - the gesture-only pairing and the fail-closed stock wipe;
+  - fail-closed record reads and the blocked ring on a failed clear;
+  - the status LED (`zoe_led.c`).
+
+  Earlier builds (03:46, 09:09, 09:48) compiled the earlier revisions.
 - `app.config` shows every symbol as set:
-  - `CONFIG_ZOE_BLE_BONDED_ONLY=y` and `CONFIG_ZOE_RING_ENCRYPT=y` (no `ZOE_FIRST_SETUP_WINDOW_S`: that window is gone)
+  - `CONFIG_ZOE_BLE_BONDED_ONLY=y`, `CONFIG_ZOE_RING_ENCRYPT=y` and `CONFIG_ZOE_LED=y` (no `ZOE_FIRST_SETUP_WINDOW_S`:
+    that window is gone)
   - `CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW_ENCRYPT=y`
   - `CONFIG_BT_SMP_SC_PAIR_ONLY=y`, `CONFIG_BT_SMP_APP_PAIRING_ACCEPT=y` and `CONFIG_BT_SMP_ALLOW_UNAUTH_OVERWRITE=y`
   - `CONFIG_BT_SETTINGS=y`, `CONFIG_BT_KEYS_OVERWRITE_OLDEST=y` and `CONFIG_BT_MAX_PAIRED=1`
   - `CONFIG_NRF_SECURITY=y` and `CONFIG_PSA_WANT_ALG_CTR=y`
   - `CONFIG_BT_DIS_FW_REV_STR="3.0.21.1"`
-- **App image** `omi.signed.bin`: 260 600 bytes (stock 3.0.21: 248 644), with a 259 752-byte payload.
-  - App flash use is 27.4 % of the 960 KB MCUboot primary slot; app RAM is 75.3 %.
+- **App image** `omi.signed.bin`: 262 040 bytes (stock 3.0.21: 248 644), with a 261 192-byte payload.
+  - App flash use is 27.7 % of the 960 KB MCUboot primary slot.
   - TLVs (checked on the 03:46 build, same signing path): magic `0x96f3b83d`, the image hash verifies, and the key-hash
     TLV is `fc5701dc…`. That is the public dev key the stock bootloader trusts, so this is an OTA-acceptable image.
 - Output SHA-256 sums, first 8 hex digits (the full sums are in `~/.cache/zoe-omi-fw/out/SHA256SUMS`): `omi.signed.bin`
-  `fbe997b4`, `dfu_application.zip` `eee7e9dd`, `merged.hex` `89669963`, `merged_CPUNET.hex` `345faf9c`.
+  `70237a33`, `dfu_application.zip` `da4dd52e`, `merged.hex` `1819353f`, `merged_CPUNET.hex` `dd2f0b7c`.
   - Builds are not byte-reproducible: timestamps differ between runs.
   - `dfu_application.zip` also carries a net-core image from this build. **Never push that net-core image over the air**
     (README section 1).

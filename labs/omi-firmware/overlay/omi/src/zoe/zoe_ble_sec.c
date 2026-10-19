@@ -13,6 +13,9 @@
 #ifdef CONFIG_ZOE_RING_ENCRYPT
 #include "zoe_ring_crypt.h"
 #endif
+#ifdef CONFIG_ZOE_LED
+#include "zoe_led.h"
+#endif
 
 LOG_MODULE_REGISTER(zoe_ble_sec, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -142,6 +145,10 @@ static enum bt_security_err pairing_accept(struct bt_conn *conn, const struct bt
     }
     if (wipe_for_new_bond(conn) != 0) {
         LOG_ERR("pairing refused: the wipe before a new bond did not complete");
+        play_haptic_milli(2000);
+#ifdef CONFIG_ZOE_LED
+        zoe_led_raise_fault(5000); /* a refused pairing while the window was open: red fast blink */
+#endif
         return BT_SECURITY_ERR_UNSPECIFIED;
     }
     return BT_SECURITY_ERR_SUCCESS;
@@ -165,6 +172,9 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
         return;
     }
     close_window();
+#ifdef CONFIG_ZOE_LED
+    zoe_led_paired(); /* three green blinks */
+#endif
     play_haptic_milli(800);         /* a long buzz = bonded (the window opening is a short one); never sleep in a BT callback */
 }
 
@@ -281,11 +291,24 @@ static int marker_cb(const char *key, size_t len, settings_read_cb read_cb, void
 
 #define ZOE_WIPE_ATTEMPTS 3
 
+/* Read a flag record. 0 with *found set or clear; <0 = the store could not be read, which is NEVER taken as "not set"
+ * (Zephyr returns 0 without a callback for a missing record, and a negative value for a backend failure). */
+static int read_flag(const char *name, bool *found)
+{
+    *found = false;
+    int rc = settings_load_subtree_direct(name, marker_cb, found);
+    return rc < 0 ? rc : 0;
+}
+
 /* A new-bond wipe that a power cut interrupted before its bonds were deleted: delete them all now, before advertising. */
 static int finish_new_bond_wipe(void)
 {
     bool pending = false;
-    (void) settings_load_subtree_direct(ZOE_NEW_BOND_WIPE, marker_cb, &pending);
+    int rerr = read_flag(ZOE_NEW_BOND_WIPE, &pending);
+    if (rerr) {
+        LOG_ERR("new-bond wipe intent unreadable (%d): not advertising", rerr);
+        return rerr;
+    }
     if (!pending) {
         return 0;
     }
@@ -304,7 +327,11 @@ static int finish_new_bond_wipe(void)
 static int wipe_stock_bonds_once(void)
 {
     bool done = false;
-    (void) settings_load_subtree_direct(ZOE_BOND_WIPE_KEY, marker_cb, &done);
+    int rerr = read_flag(ZOE_BOND_WIPE_KEY, &done);
+    if (rerr) {
+        LOG_ERR("stock-era wipe marker unreadable (%d): not advertising", rerr);
+        return rerr;
+    }
     if (done) {
         return 0;
     }
@@ -344,6 +371,9 @@ int zoe_ble_sec_init(void)
         /* Fail closed: a stock-era phone bond could still encrypt and read. Do not advertise; a long buzz says why. */
         LOG_ERR("security init failed: NOT advertising");
         play_haptic_milli(2000);
+#ifdef CONFIG_ZOE_LED
+        zoe_led_set_fault_latched(true);
+#endif
         return err;
     }
     /* No automatic window, not even for first setup: pairing ALWAYS needs the physical gesture. */

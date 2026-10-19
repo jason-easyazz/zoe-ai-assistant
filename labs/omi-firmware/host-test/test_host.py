@@ -62,6 +62,11 @@ def lib():
     L.zrc_rekey.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_uint64, ctypes.c_uint32,
                             ctypes.c_uint32, ctypes.c_uint32]
     L.zrc_iv.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_uint64]
+    L.host_led_frame.argtypes = [ctypes.c_int, ctypes.c_uint32, ctypes.c_bool, ctypes.POINTER(ctypes.c_uint8)]
+    L.host_led_period.restype = ctypes.c_uint32
+    L.host_key_decision.argtypes = [ctypes.c_int, ctypes.c_bool, ctypes.c_int, ctypes.c_bool, ctypes.c_int, ctypes.c_bool,
+                                    ctypes.c_uint32]
+    L.host_new_key_epoch.argtypes = [ctypes.c_bool, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
     L.host_gesture_double_tap.argtypes = [ctypes.c_int64]
     L.host_gesture_double_tap.restype = ctypes.c_bool
     L.host_window_open.argtypes = [ctypes.c_int64, ctypes.c_int64]
@@ -184,12 +189,27 @@ def test_the_salt_space_refuses_to_wrap(lib):
     assert lib.host_epoch_take(ctypes.byref(s)) < 0
 
 
-def test_a_pending_wipe_or_a_lost_reservation_always_means_a_new_key(lib):
-    assert lib.host_needs_new_key(True, True, True, 5)          # wipe pending: the stored key is never used again
-    assert lib.host_needs_new_key(False, False, True, 5)
-    assert lib.host_needs_new_key(False, True, False, 5)
-    assert lib.host_needs_new_key(False, True, True, 0)
-    assert not lib.host_needs_new_key(False, True, True, 5)
+def test_the_key_decision(lib):
+    USE, NEW = 0, 1
+    d = lib.host_key_decision
+    assert d(0, True, 0, True, 0, True, 5) == NEW              # wipe pending: the stored key is never used again
+    assert d(0, False, 0, False, 0, True, 5) == NEW
+    assert d(0, False, 0, True, 0, False, 5) == NEW
+    assert d(0, False, 0, True, 0, True, 0) == NEW
+    assert d(0, False, 0, True, 0, True, 5) == USE
+    # a read ERROR is never "absent" (codex round 2, finding 1): refuse, load nothing, make nothing
+    assert d(-5, False, 0, True, 0, True, 5) < 0
+    assert d(0, False, 0, True, -5, False, 0) < 0
+    assert d(0, False, -5, False, 0, True, 5) < 0
+
+
+def test_a_new_key_never_wraps_the_salt_space(lib):
+    """Codex round 2, finding 4: at exhaustion a new key FAILS - it never restarts the reservation at 1."""
+    out = ctypes.c_uint32()
+    assert lib.host_new_key_epoch(False, 0, ctypes.byref(out)) == 0 and out.value == 1
+    assert lib.host_new_key_epoch(True, 2048, ctypes.byref(out)) == 0 and out.value == 2048 + 1024
+    out.value = 7
+    assert lib.host_new_key_epoch(True, 0xFFFFFF00, ctypes.byref(out)) < 0 and out.value == 7
 
 
 # --- zoe_ble_sec.c itself, against fake Zephyr: pairing gate, crypto-wipe on new bond, power loss --------------------
@@ -207,6 +227,7 @@ def ble():
                     str(ZOE_SRC / "zoe_ring_crypt.c")], check=True)
     L = ctypes.CDLL(so)
     L.h_has.argtypes = [ctypes.c_char_p]
+    L.h_set_fail_read.argtypes = [ctypes.c_char_p]
     yield L
     shutil.rmtree(tmp, ignore_errors=True)
 
@@ -292,3 +313,125 @@ def test_power_loss_at_every_step_never_leaves_the_old_key_next_to_a_new_bond(bl
         if cut >= 2:                                       # ... then the bond-wipe intent
             assert not pi, cut
         assert not ble.h_has(b"zoe/wk") and not ble.h_has(b"zoe/wb"), cut
+
+
+# --- codex round 2: unreadable records and a failed ring clear (fakes) ---------------------------------------------------
+def test_unreadable_flags_stop_the_boot_before_advertising(ble):
+    """Findings 1-2: an unreadable stock-wipe marker or new-bond intent is never read as "not set"."""
+    ble.h_reset()
+    ble.h_gesture()
+    assert ble.h_pair(THIEF, 2) == 1                       # power cut with both intents on flash
+    ble.h_set_fail_read(b"zoe/wb")
+    assert ble.h_boot() != 0                               # init fails: transport_start does not advertise
+    assert ble.h_bonded(PI)                                # nothing guessed, nothing half-done
+    ble.h_reset()
+    ble.h_set_fail_read(b"zoe/bw")
+    assert ble.h_boot() != 0
+
+
+def test_an_unreadable_wipe_intent_never_loads_the_old_key(ble):
+    ble.h_reset()
+    ble.h_gesture()
+    assert ble.h_pair(THIEF, 1) == 1                       # cut after the key-wipe intent, before the key is erased
+    assert ble.h_flash_key() == 1                          # the old key is still on flash ...
+    ble.h_set_fail_read(b"zoe/wk")
+    ble.h_boot()
+    assert ble.h_ram_key() == 0 and ble.h_ring_blocked()   # ... but it is never loaded: no key, ring blocked
+    ble.h_set_fail_read(b"")
+    assert ble.h_boot() == 0 and ble.h_ram_key() not in (0, 1) and not ble.h_has(b"zoe/wk")
+
+
+def test_an_unreadable_key_is_not_silently_replaced(ble):
+    ble.h_reset()
+    ble.h_set_fail_read(b"zoe/rk")
+    ble.h_boot()
+    assert ble.h_ram_key() == 0 and ble.h_ring_blocked() and ble.h_flash_key() == 1
+
+
+def test_a_failed_ring_clear_keeps_the_intent_and_blocks_the_ring(ble):
+    """Finding 3: a new key whose ring could not be emptied is not used; the intent stays, and a later boot finishes."""
+    ble.h_reset()
+    ble.h_gesture()
+    ble.h_set_fail_clear(1)
+    assert ble.h_pair(THIEF, -1) == 0
+    assert ble.h_ring_blocked() and ble.h_ram_key() == 0 and ble.h_has(b"zoe/wk") and ble.h_ring_key() == 1
+    ble.h_set_fail_clear(0)
+    assert ble.h_boot() == 0
+    assert not ble.h_ring_blocked() and ble.h_ring_key() == 0 and not ble.h_has(b"zoe/wk")
+    assert ble.h_ram_key() not in (0, 1)
+
+
+def test_salt_exhaustion_blocks_the_new_key(ble):
+    ble.h_reset()
+    ble.h_put_epoch(0xFFFFFF00)
+    ble.h_gesture()
+    assert ble.h_pair(THIEF, -1) == 0
+    assert ble.h_ram_key() == 0 and ble.h_ring_blocked() and ble.h_flash_key() == 0   # old key gone, no new one
+
+
+# --- the status LED (owner design 2026-10-19): state -> colour/pattern, and the priority order ---------------------------
+class LedIn(ctypes.Structure):
+    _fields_ = [("off", ctypes.c_bool), ("fault", ctypes.c_bool), ("pairing_window", ctypes.c_bool), ("wiping", ctypes.c_bool),
+                ("paired_celebration", ctypes.c_bool), ("charging", ctypes.c_bool), ("battery_pct", ctypes.c_uint8),
+                ("storage_pct", ctypes.c_uint8), ("clock_set", ctypes.c_bool), ("syncing", ctypes.c_bool)]
+
+
+NORMAL, SYNCING, WARNING, CHARGING, CHARGED, PAIRED, WIPE, PAIRING, FAULT, OFF = range(10)
+
+
+def pick(lib, **kw):
+    base = dict(battery_pct=80, storage_pct=10, clock_set=True)
+    base.update(kw)
+    return lib.host_led_pick(ctypes.byref(LedIn(**base)))
+
+
+def frame(lib, state, t, white=False):
+    buf = (ctypes.c_uint8 * 3)()
+    lib.host_led_frame(state, t, white, buf)
+    return tuple(buf)
+
+
+def test_led_priority_order(lib):
+    """fault > pairing window > wipe > paired > charging > warning > syncing > normal (and off above everything)."""
+    everything = dict(off=True, fault=True, pairing_window=True, wiping=True, paired_celebration=True, charging=True,
+                      battery_pct=10, storage_pct=95, clock_set=False, syncing=True)
+    order = [("off", OFF), ("fault", FAULT), ("pairing_window", PAIRING), ("wiping", WIPE), ("paired_celebration", PAIRED),
+             ("charging", CHARGING)]
+    kw = dict(everything)
+    for flag, want in order:
+        assert pick(lib, **kw) == want, flag
+        kw[flag] = False
+    assert pick(lib, **kw) == WARNING
+    kw.update(battery_pct=80, storage_pct=10, clock_set=True)
+    assert pick(lib, **kw) == SYNCING
+    kw["syncing"] = False
+    assert pick(lib, **kw) == NORMAL
+
+
+def test_led_warnings_and_charging_thresholds(lib):
+    assert pick(lib, battery_pct=14) == WARNING and pick(lib, battery_pct=15) == NORMAL
+    assert pick(lib, battery_pct=0) == NORMAL                      # 0 = not read yet, never a false warning
+    assert pick(lib, storage_pct=90) == WARNING and pick(lib, storage_pct=89) == NORMAL
+    assert pick(lib, clock_set=False) == WARNING
+    assert pick(lib, charging=True, battery_pct=97) == CHARGING and pick(lib, charging=True, battery_pct=98) == CHARGED
+    assert pick(lib, charging=True, battery_pct=5) == CHARGING    # low battery on the charger is charging, not a warning
+
+
+def test_led_patterns(lib):
+    assert frame(lib, NORMAL, 0) == (0, 0, 15) == frame(lib, NORMAL, 12345)        # dim, steady blue
+    assert frame(lib, NORMAL, 0, white=True) == (15, 15, 15)
+    assert max(frame(lib, NORMAL, 0)) <= 20                                          # the battery-saving dim duty
+    assert [frame(lib, PAIRING, t) for t in (0, 250, 500, 750, 1000)] == \
+        [(0, 0, 30), (0, 30, 0), (30, 0, 30), (30, 30, 0), (0, 0, 30)]            # blue > green > purple > yellow
+    assert frame(lib, FAULT, 50)[0] > 0 and frame(lib, FAULT, 150) == (0, 0, 0) and frame(lib, FAULT, 50)[1:] == (0, 0)
+    assert frame(lib, WARNING, 100)[0] > 0 and frame(lib, WARNING, 1000) == (0, 0, 0)
+    w_on = frame(lib, WIPE, 10)
+    assert w_on[0] == w_on[1] == w_on[2] > 0 and frame(lib, WIPE, 150) == (0, 0, 0)   # white flashes
+    assert frame(lib, SYNCING, 100) == (0, 0, 15) and frame(lib, SYNCING, 600) == (0, 0, 0)
+    assert frame(lib, CHARGED, 0) == (0, 20, 0)
+    levels = [frame(lib, CHARGING, t)[1] for t in range(0, 3000, 250)]
+    assert levels[0] == 0 and max(levels) >= 30 and levels[3] < levels[6] and levels[1] == levels[11]  # breathing
+    assert all(frame(lib, CHARGING, t)[0] == frame(lib, CHARGING, t)[2] == 0 for t in range(0, 3000, 100))
+    assert [frame(lib, PAIRED, t)[1] > 0 for t in (0, 300, 400, 700, 800)] == [True, False, True, False, True]
+    assert frame(lib, OFF, 0) == (0, 0, 0)
+    assert lib.host_led_period(NORMAL) == 1000 and lib.host_led_period(CHARGING) <= 100     # steady states barely wake

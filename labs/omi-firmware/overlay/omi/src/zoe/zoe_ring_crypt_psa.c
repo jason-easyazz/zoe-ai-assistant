@@ -19,51 +19,48 @@ static bool ready;
 static atomic_t revoked; /* set from the pairing path (BT thread): the key is unusable from that instant */
 static struct zrc_epoch epoch;
 
-struct u32_load {
-    uint32_t value;
+/* One settings record read with its outcome told apart: found or not (rc 0), or an error (<0). Zephyr's
+ * settings_load_subtree_direct returns 0 and never calls back for a missing record; a backend failure is a negative
+ * return, and a short/failed read inside the callback is caught here. An error is NEVER taken as "absent". */
+struct rec_load {
+    uint8_t buf[ZRC_KEY_BYTES];
+    size_t want; /* exact length the record must have; 0 = any (a flag) */
     bool found;
+    int err;
 };
 
-static int u32_cb(const char *key, size_t len, settings_read_cb read_cb, void *cb_arg, void *param)
+static int rec_cb(const char *key, size_t len, settings_read_cb read_cb, void *cb_arg, void *param)
 {
     ARG_UNUSED(key);
-    struct u32_load *ul = param;
-    if (len == sizeof(ul->value) && read_cb(cb_arg, &ul->value, sizeof(ul->value)) == sizeof(ul->value)) {
-        ul->found = true;
+    struct rec_load *rl = param;
+    rl->found = true;
+    if (rl->want == 0U) {
+        return 0;
+    }
+    if (len != rl->want) {
+        rl->err = -EINVAL; /* a record of the wrong size is corrupt, not absent */
+        return 0;
+    }
+    ssize_t n = read_cb(cb_arg, rl->buf, rl->want);
+    if (n != (ssize_t) rl->want) {
+        rl->err = n < 0 ? (int) n : -EIO;
     }
     return 0;
 }
 
-static int u8_cb(const char *key, size_t len, settings_read_cb read_cb, void *cb_arg, void *param)
+static int load_rec(const char *name, struct rec_load *rl)
 {
-    ARG_UNUSED(key);
-    ARG_UNUSED(read_cb);
-    ARG_UNUSED(cb_arg);
-    if (len > 0) {
-        ((struct u32_load *) param)->found = true;
+    int rc = settings_load_subtree_direct(name, rec_cb, rl);
+    if (rc < 0 && rl->err == 0) {
+        rl->err = rc;
     }
-    return 0;
+    return rl->err;
 }
 
 static int persist_epoch(uint32_t new_limit, void *ctx)
 {
     ARG_UNUSED(ctx);
     return settings_save_one(ZRC_EPOCH_SETTING, &new_limit, sizeof(new_limit));
-}
-
-struct key_load {
-    uint8_t key[ZRC_KEY_BYTES];
-    bool found;
-};
-
-static int key_cb(const char *key, size_t len, settings_read_cb read_cb, void *cb_arg, void *param)
-{
-    ARG_UNUSED(key);
-    struct key_load *kl = param;
-    if (len == ZRC_KEY_BYTES && read_cb(cb_arg, kl->key, ZRC_KEY_BYTES) == ZRC_KEY_BYTES) {
-        kl->found = true;
-    }
-    return 0;
 }
 
 int zrc_backend_init(void)
@@ -77,43 +74,57 @@ int zrc_backend_init(void)
         return -EIO;
     }
 
-    struct key_load kl = {0};
-    struct u32_load el = {0};
-    struct u32_load wipe = {0};
-    (void) settings_load_subtree_direct(ZRC_WIPE_SETTING, u8_cb, &wipe);
-    (void) settings_load_subtree_direct(ZRC_EPOCH_SETTING, u32_cb, &el);
-    if (wipe.found) {
-        /* A new-bond wipe was started (possibly cut off by a power loss): the old key is never loaded again. */
-        int derr = settings_delete(ZRC_KEY_SETTING);
-        if (derr) {
-            LOG_ERR("wipe pending but the old key could not be erased (%d): ring stays blocked", derr);
-            return derr;
-        }
-    } else {
-        (void) settings_load_subtree_direct(ZRC_KEY_SETTING, key_cb, &kl);
+    struct rec_load wipe = {.want = 0};
+    struct rec_load ep = {.want = sizeof(uint32_t)};
+    struct rec_load kl = {.want = ZRC_KEY_BYTES};
+    (void) load_rec(ZRC_WIPE_SETTING, &wipe);
+    (void) load_rec(ZRC_EPOCH_SETTING, &ep);
+    uint32_t ep_value = 0;
+    memcpy(&ep_value, ep.buf, sizeof(ep_value));
+    if (!wipe.err && !wipe.found) {
+        (void) load_rec(ZRC_KEY_SETTING, &kl); /* the old key is not even read while a wipe is pending */
     }
-    if (zrc_needs_new_key(wipe.found, kl.found, el.found, el.value)) {
-        /* No key, a wipe, or a key whose salt reservation is lost: the old key (if any) is never used again. The salt
-         * reservation stays MONOTONIC across keys (it only moves up) and is written BEFORE the key, so a key never exists
-         * without one (a crash in between leaves a record and no key: the next boot makes a new key again). */
-        if (psa_generate_random(kl.key, sizeof(kl.key)) != PSA_SUCCESS) {
+    int decision = zrc_key_decision(wipe.err, wipe.found, kl.err, kl.found, ep.err, ep.found, ep_value);
+    if (decision < 0) {
+        memset(&kl, 0, sizeof(kl));
+        LOG_ERR("key store unreadable (%d): no key loaded or made, ring stays blocked", decision);
+        return decision;
+    }
+    if (decision == ZRC_KEY_NEW) {
+        /* A wipe, no key, or a key without its salt reservation: the old key (if any) is never used again. */
+        if (wipe.found) {
+            int derr = settings_delete(ZRC_KEY_SETTING);
+            if (derr) {
+                LOG_ERR("wipe pending but the old key could not be erased (%d): ring stays blocked", derr);
+                return derr;
+            }
+        }
+        uint32_t new_limit = 0;
+        int err = zrc_new_key_epoch(ep.found, ep_value, &new_limit);
+        if (err) {
+            LOG_ERR("salt space exhausted: no new key, ring stays blocked");
+            return err;
+        }
+        if (psa_generate_random(kl.buf, ZRC_KEY_BYTES) != PSA_SUCCESS) {
             memset(&kl, 0, sizeof(kl));
             LOG_ERR("no CSPRNG output: no key, ring writes stay blocked");
             return -EIO;
         }
-        el.value = (el.found && el.value > 0U && el.value <= UINT32_MAX - ZRC_EPOCH_BLOCK) ? el.value + ZRC_EPOCH_BLOCK : 1U;
-        int err = persist_epoch(el.value, NULL);
+        /* The reservation is written BEFORE the key: a key never exists without one (a crash in between leaves a record
+         * and no key, and the next boot makes a new key again). It only moves up, across keys too. */
+        err = persist_epoch(new_limit, NULL);
         if (err) {
             memset(&kl, 0, sizeof(kl));
             LOG_ERR("salt reservation not saved (%d): ring writes stay blocked", err);
             return err;
         }
-        err = settings_save_one(ZRC_KEY_SETTING, kl.key, sizeof(kl.key));
+        err = settings_save_one(ZRC_KEY_SETTING, kl.buf, ZRC_KEY_BYTES);
         if (err) {
             memset(&kl, 0, sizeof(kl));
             LOG_ERR("device key not saved (%d): ring writes stay blocked", err);
             return err;
         }
+        ep_value = new_limit;
         LOG_INF("ring device key created");
         created = true;
     }
@@ -124,13 +135,13 @@ int zrc_backend_init(void)
     psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
     psa_set_key_algorithm(&attr, PSA_ALG_CTR);
     psa_set_key_lifetime(&attr, PSA_KEY_LIFETIME_VOLATILE);
-    psa_status_t st = psa_import_key(&attr, kl.key, sizeof(kl.key), &key_id);
+    psa_status_t st = psa_import_key(&attr, kl.buf, ZRC_KEY_BYTES, &key_id);
     memset(&kl, 0, sizeof(kl));
     if (st != PSA_SUCCESS) {
         LOG_ERR("key import failed (%d)", (int) st);
         return -EIO;
     }
-    zrc_epoch_resume(&epoch, el.value);
+    zrc_epoch_resume(&epoch, ep_value);
     ready = true;
     return created ? 1 : 0;
 }

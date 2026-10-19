@@ -54,10 +54,49 @@ int zrc_rekey(uint8_t *packets, size_t stride, size_t packet_len, uint64_t first
     return 0;
 }
 
-bool zrc_needs_new_key(bool wipe_pending, bool key_found, bool epoch_found, uint32_t epoch)
+int zrc_key_decision(int wipe_err, bool wipe_found, int key_err, bool key_found, int epoch_err, bool epoch_found,
+                     uint32_t epoch)
 {
-    /* A pending wipe ALWAYS wins: the old key is never loaded again. A key without its salt reservation is never used. */
-    return wipe_pending || !key_found || !epoch_found || epoch == 0U;
+    /* An unreadable wipe intent or reservation is never taken as "absent": refuse. */
+    if (wipe_err < 0) {
+        return wipe_err;
+    }
+    if (epoch_err < 0) {
+        return epoch_err;
+    }
+    if (wipe_found) {
+        return ZRC_KEY_NEW; /* a pending wipe ALWAYS wins: the old key is never loaded again */
+    }
+    if (key_err < 0) {
+        return key_err; /* an unreadable key is not replaced silently either */
+    }
+    if (!key_found || !epoch_found || epoch == 0U) {
+        return ZRC_KEY_NEW; /* no key, or a key without its salt reservation: never used */
+    }
+    return ZRC_KEY_USE;
+}
+
+int zrc_new_key_epoch(bool epoch_found, uint32_t epoch, uint32_t *out)
+{
+    if (!epoch_found || epoch == 0U) {
+        *out = 1U;
+        return 0;
+    }
+    if (epoch > UINT32_MAX - ZRC_EPOCH_BLOCK) {
+        return -ENOSPC; /* exhausted: fail closed, never wrap back to 1 */
+    }
+    *out = epoch + ZRC_EPOCH_BLOCK;
+    return 0;
+}
+
+int zrc_finish_new_key(zrc_clear_fn clear, void *ctx)
+{
+    int rc = clear(ctx);
+    if (rc != 0) {
+        return rc < 0 ? rc : -EIO;
+    }
+    zrc_backend_wipe_done();
+    return 0;
 }
 
 void zrc_epoch_resume(struct zrc_epoch *e, uint32_t persisted_limit)

@@ -1,13 +1,16 @@
 diff --git a/omi/firmware/omi/CMakeLists.txt b/omi/firmware/omi/CMakeLists.txt
-index 4a4de28..56dd578 100644
+index 4a4de28..40d7217 100644
 --- a/omi/firmware/omi/CMakeLists.txt
 +++ b/omi/firmware/omi/CMakeLists.txt
-@@ -35,6 +35,13 @@ if(CONFIG_OMI_ENABLE_OFFLINE_STORAGE)
+@@ -35,6 +35,16 @@ if(CONFIG_OMI_ENABLE_OFFLINE_STORAGE)
      list(APPEND core_sources src/lib/core/storage.c)
  endif()
  
 +if(CONFIG_ZOE_BLE_BONDED_ONLY)
 +    list(APPEND app_sources src/zoe/zoe_ble_sec.c)
++endif()
++if(CONFIG_ZOE_LED)
++    list(APPEND app_sources src/zoe/zoe_led.c)
 +endif()
 +if(CONFIG_ZOE_RING_ENCRYPT)
 +    list(APPEND app_sources src/zoe/zoe_ring_crypt.c src/zoe/zoe_ring_crypt_psa.c)
@@ -17,10 +20,10 @@ index 4a4de28..56dd578 100644
  target_include_directories(app PRIVATE
      ${CMAKE_CURRENT_SOURCE_DIR}/src
 diff --git a/omi/firmware/omi/Kconfig b/omi/firmware/omi/Kconfig
-index 9e48615..530a214 100644
+index 9e48615..3e56868 100644
 --- a/omi/firmware/omi/Kconfig
 +++ b/omi/firmware/omi/Kconfig
-@@ -2,6 +2,24 @@ source "Kconfig.zephyr"
+@@ -2,6 +2,29 @@ source "Kconfig.zephyr"
  
  menu "Omi Features Configuration"
  
@@ -36,6 +39,11 @@ index 9e48615..530a214 100644
 +config ZOE_UNENCRYPTED_KICK_S
 +    int "Zoe: seconds an unencrypted connection may stay outside the pairing window"
 +    default 30
++
++config ZOE_LED
++    bool "Zoe: status LED states (dim blue normal, sync/warn/fault/charging/pairing/wipe patterns) + the colour setting"
++    depends on ZOE_BLE_BONDED_ONLY && OMI_ENABLE_OFFLINE_STORAGE
++    default n
 +
 +config ZOE_RING_ENCRYPT
 +    bool "Zoe: encrypt the SD ring's audio packets at rest (AES-128-CTR, device key)"
@@ -136,18 +144,21 @@ index 2262747..d918449 100644
  
  struct bt_gatt_service storage_service = BT_GATT_SERVICE(storage_service_attr);
 diff --git a/omi/firmware/omi/src/lib/core/transport.c b/omi/firmware/omi/src/lib/core/transport.c
-index 3196ce0..0392789 100644
+index 3196ce0..8e27909 100644
 --- a/omi/firmware/omi/src/lib/core/transport.c
 +++ b/omi/firmware/omi/src/lib/core/transport.c
-@@ -24,6 +24,7 @@
+@@ -24,6 +24,10 @@
  #include "button.h"
  #include "config.h"
  #include "features.h"
 +#include "zoe/zoe_ble_sec.h"
++#ifdef CONFIG_ZOE_LED
++#include "zoe/zoe_led.h"
++#endif
  #include "haptic.h"
  #include "mic.h"
  #ifdef CONFIG_OMI_ENABLE_MONITOR
-@@ -145,25 +146,25 @@ static struct bt_gatt_attr audio_service_attr[] = {
+@@ -145,25 +149,25 @@ static struct bt_gatt_attr audio_service_attr[] = {
      BT_GATT_PRIMARY_SERVICE(&audio_service_uuid),
      BT_GATT_CHARACTERISTIC(&audio_characteristic_data_uuid.uuid,
                             BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
@@ -178,7 +189,7 @@ index 3196ce0..0392789 100644
  #endif
  
  };
-@@ -184,23 +185,23 @@ static struct bt_gatt_attr settings_service_attr[] = {
+@@ -184,23 +188,23 @@ static struct bt_gatt_attr settings_service_attr[] = {
      BT_GATT_PRIMARY_SERVICE(&settings_service_uuid),
      BT_GATT_CHARACTERISTIC(&settings_dim_ratio_characteristic_uuid.uuid,
                             BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
@@ -206,7 +217,7 @@ index 3196ce0..0392789 100644
  };
  
  static struct bt_gatt_service settings_service = BT_GATT_SERVICE(settings_service_attr);
-@@ -215,7 +216,7 @@ static struct bt_gatt_attr features_service_attr[] = {
+@@ -215,7 +219,7 @@ static struct bt_gatt_attr features_service_attr[] = {
      BT_GATT_PRIMARY_SERVICE(&features_service_uuid),
      BT_GATT_CHARACTERISTIC(&features_characteristic_uuid.uuid,
                             BT_GATT_CHRC_READ,
@@ -215,7 +226,7 @@ index 3196ce0..0392789 100644
                             features_read_handler,
                             NULL,
                             NULL),
-@@ -278,13 +279,13 @@ static struct bt_gatt_attr time_sync_service_attr[] = {
+@@ -278,13 +282,13 @@ static struct bt_gatt_attr time_sync_service_attr[] = {
      BT_GATT_PRIMARY_SERVICE(&time_sync_service_uuid),
      BT_GATT_CHARACTERISTIC(&time_sync_write_characteristic_uuid.uuid,
                             BT_GATT_CHRC_WRITE,
@@ -231,10 +242,13 @@ index 3196ce0..0392789 100644
                             time_sync_read_handler,
                             NULL,
                             NULL),
-@@ -1339,6 +1340,15 @@ int transport_start()
+@@ -1339,6 +1343,18 @@ int transport_start()
          LOG_WRN("Continuing without confirmed BLE identity (err %d)", err);
      }
  
++#ifdef CONFIG_ZOE_LED
++    (void) zoe_led_init(); /* first, so a failed security init below shows as a fault */
++#endif
 +#ifdef CONFIG_ZOE_BLE_BONDED_ONLY
 +    /* Bonds are loaded now: register the pairing gate and drop stock-era bonds BEFORE anyone can connect. */
 +    err = zoe_ble_sec_init();
@@ -247,8 +261,22 @@ index 3196ce0..0392789 100644
      // Production-line helper: emit local BLE addresses on UART for fixture parsing.
      log_local_ble_addresses();
  
+diff --git a/omi/firmware/omi/src/main.c b/omi/firmware/omi/src/main.c
+index 9972114..d615353 100644
+--- a/omi/firmware/omi/src/main.c
++++ b/omi/firmware/omi/src/main.c
+@@ -131,6 +131,9 @@ static void boot_ready_sequence(void)
+ 
+ void set_led_state()
+ {
++#ifdef CONFIG_ZOE_LED
++    return; /* src/zoe/zoe_led.c owns the LED (its own tick, states and priority: zoe_led_logic.h) */
++#endif
+     // If device is off, turn off all LEDs immediately
+     if (is_off) {
+         led_off();
 diff --git a/omi/firmware/omi/src/sd_card.c b/omi/firmware/omi/src/sd_card.c
-index 70d4370..0b4b2b9 100644
+index 70d4370..57efb0d 100644
 --- a/omi/firmware/omi/src/sd_card.c
 +++ b/omi/firmware/omi/src/sd_card.c
 @@ -14,6 +14,9 @@
@@ -329,7 +357,40 @@ index 70d4370..0b4b2b9 100644
      };
      memcpy(current_batch, &header, sizeof(header));
  
-@@ -633,6 +668,16 @@ static int read_packets_internal(uint64_t start_seq,
+@@ -547,6 +582,32 @@ static int flush_current_batch(bool sync_requested)
+     return 0;
+ }
+ 
++static int clear_ring_internal(bool sync_requested);
++
++/* Zoe LED (zoe_led.c): cheap lock-free reads; a torn read only mis-colours one LED frame. */
++uint8_t sd_ring_fill_pct(void)
++{
++    if (ring_state.capacity_packets == 0U) {
++        return 0U;
++    }
++    uint64_t used = ring_state.write_seq - ring_state.read_seq;
++    uint64_t pct = (used * 100U) / ring_state.capacity_packets;
++    return (uint8_t) MIN(pct, 100U);
++}
++
++bool sd_ring_blocked(void)
++{
++    return sd_write_blocked;
++}
++
++#ifdef CONFIG_ZOE_RING_ENCRYPT
++static int zoe_clear_ring_cb(void *ctx)
++{
++    ARG_UNUSED(ctx);
++    return clear_ring_internal(true);
++}
++#endif
++
+ static int clear_ring_internal(bool sync_requested)
+ {
+     ring_state.read_seq = 0;
+@@ -633,6 +694,16 @@ static int read_packets_internal(uint64_t start_seq,
          size_t src_offset = RAW_BATCH_HEADER_BYTES + ((size_t) packet_offset * RAW_AUDIO_PACKET_BYTES);
          size_t copy_bytes = (size_t) copy_packets * RAW_AUDIO_PACKET_BYTES;
          memcpy(out_buf + (*bytes_read), batch_read_buffer + src_offset, copy_bytes);
@@ -346,7 +407,7 @@ index 70d4370..0b4b2b9 100644
  
          *bytes_read += (uint32_t) copy_bytes;
          copied_packets += copy_packets;
-@@ -697,6 +742,15 @@ static void process_write_data_req(const sd_req_t *req)
+@@ -697,6 +768,15 @@ static void process_write_data_req(const sd_req_t *req)
      size_t dst_offset = RAW_BATCH_HEADER_BYTES + ((size_t) current_batch_packets * RAW_AUDIO_PACKET_BYTES);
      sys_put_be32(timestamp, current_batch + dst_offset);
      memcpy(current_batch + dst_offset + RAW_AUDIO_TIMESTAMP_BYTES, req->u.write.buf, MAX_WRITE_SIZE);
@@ -362,7 +423,7 @@ index 70d4370..0b4b2b9 100644
      current_batch_packets++;
      current_batch_dirty = true;
      last_batch_activity_ms = k_uptime_get();
-@@ -855,6 +909,15 @@ static int sd_mount(void)
+@@ -855,6 +935,15 @@ static int sd_mount(void)
  
      ring_state.capacity_packets = data_batch_count * RAW_PACKETS_PER_BATCH;
  
@@ -378,7 +439,7 @@ index 70d4370..0b4b2b9 100644
      ret = load_ring_metadata();
      if (ret < 0) {
          LOG_ERR("failed to load raw ring metadata: %d", ret);
-@@ -862,7 +925,19 @@ static int sd_mount(void)
+@@ -862,7 +951,26 @@ static int sd_mount(void)
          return ret;
      }
  
@@ -386,8 +447,15 @@ index 70d4370..0b4b2b9 100644
 +    if (key_state == 1) {
 +        /* A new key cannot read the old ring: start it empty rather than serve undecryptable audio. */
 +        LOG_WRN("new ring key: clearing the unreadable ring");
-+        if (clear_ring_internal(true) == 0) {
-+            zrc_backend_wipe_done(); /* only now may a pending new-bond wipe be marked finished */
++        int cret = zrc_finish_new_key(zoe_clear_ring_cb, NULL); /* clears the wipe intent only after a clean clear */
++        if (cret != 0) {
++            /* Never run on uncleared metadata under a new key: no mount, nothing stored or served this boot; the intent
++             * stays set, so the next boot repeats the wipe. */
++            LOG_ERR("ring not emptied under the new key (%d): not mounting", cret);
++            zrc_backend_destroy(); /* a later mount re-runs the whole wipe instead of reusing this key */
++            sd_write_blocked = true;
++            sd_enable_power(false);
++            return cret;
 +        }
 +    } else {
 +        (void) restore_tail_batch();
@@ -398,7 +466,7 @@ index 70d4370..0b4b2b9 100644
      is_mounted = true;
  
      LOG_INF("Raw SD ring mounted: sectors=%u, batches=%u, capacity=%u packets",
-@@ -908,6 +983,29 @@ static int get_packet_name_for_seq(uint64_t seq, char *buf, size_t buf_size)
+@@ -908,6 +1016,30 @@ static int get_packet_name_for_seq(uint64_t seq, char *buf, size_t buf_size)
      return 0;
  }
  
@@ -415,12 +483,13 @@ index 70d4370..0b4b2b9 100644
 +        return;
 +    }
 +    int key_state = zrc_backend_init();
-+    if (key_state != 1 || clear_ring_internal(true) != 0) {
-+        LOG_ERR("re-key after a new bond failed (%d): ring writes stopped", key_state);
++    if (key_state != 1 || zrc_finish_new_key(zoe_clear_ring_cb, NULL) != 0) {
++        LOG_ERR("re-key after a new bond failed (%d): ring stopped", key_state);
++        zrc_backend_destroy(); /* a later mount re-runs the whole wipe instead of reusing this key */
 +        sd_write_blocked = true;
++        is_mounted = false; /* nothing is read or written on this ring until a mount finishes the wipe */
 +        return;
 +    }
-+    zrc_backend_wipe_done();
 +    LOG_WRN("new bond: ring emptied under a fresh key");
 +}
 +#endif
@@ -428,7 +497,7 @@ index 70d4370..0b4b2b9 100644
  void sd_worker_thread(void)
  {
      sd_req_t req;
-@@ -924,6 +1022,11 @@ void sd_worker_thread(void)
+@@ -924,6 +1056,11 @@ void sd_worker_thread(void)
      sd_set_io_low_power(true);
  
      while (1) {
