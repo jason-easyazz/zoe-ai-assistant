@@ -62,6 +62,7 @@ GUEST_ADMITTING_BASELINE = {
     "routers/auth.py": {"logout"},
     "routers/chat.py": {"cancel_latest_run", "create_session", "delete_session", "resume_run", "save_message", "submit_feedback", "whatsapp_connect"},
     "routers/dashboard.py": {"add_widgets", "remove_widget", "save_layout"},
+    "routers/ha_ui.py": {"session"},  # panel_principal.member_or_panel in the body: a member or the strictly registered panel, else 403
     "routers/journal.py": {"create_entry", "delete_entry", "update_entry"},
     "routers/lists.py": {"add_item", "create_list", "delete_item", "delete_list", "update_item", "update_list"},
     "routers/memories.py": {"create_memory_proposal", "forget_my_memory", "link_preview", "review_memory", "set_memory_opt_out"},
