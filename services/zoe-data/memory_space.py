@@ -308,7 +308,7 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
         if (succ is not None and pa._owns(succ.metadata or {}, user_id)
                 and " ".join((succ.text or "").split()) == new and correction_apply.enabled()):
             twins = [tw for tw in await pa.twins_of(user_id, ref, svc=svc) if tw.id != succ_id]
-            await _retire_twins(user_id, twins, svc)
+            await retire_twins(user_id, twins, svc)
             logger.info("MEMORY_SPACE_CORRECT user=%s twins=%d (retry finished)", user_id, len(twins))
             return "corrected"
         return "gone"
@@ -325,12 +325,12 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
                                                       svc=svc)
     if res is None:
         return "refused"
-    await _retire_twins(user_id, twins, svc)
+    await retire_twins(user_id, twins, svc)
     logger.info("MEMORY_SPACE_CORRECT user=%s twins=%d", user_id, len(twins))
     return "corrected"
 
 
-async def _retire_twins(user_id: str, twins: list, svc: Any) -> None:
+async def retire_twins(user_id: str, twins: list, svc: Any) -> None:
     """Reject every twin that still holds the old value. RAISES when one could not be retired (the store refused or failed): a
     correction is not acknowledged while a sibling still recalls the old value; calling :func:`correct_row` again with the same
     words finishes the remaining twins (its superseded-retry path)."""

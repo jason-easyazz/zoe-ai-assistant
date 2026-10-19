@@ -148,7 +148,7 @@ _TOKEN_STOP = frozenset({
 
 def _tokens(text: str) -> set:
     out = set()
-    for w in re.findall(r"[a-z][a-z'’]+", str(text or "").lower()):
+    for w in re.findall(r"\d+|[a-z][a-z'’]+", str(text or "").lower()):   # numbers count: "12 Main Street" is not "14 Main Street"
         w = w.replace("’", "'")
         if w in _TOKEN_STOP:
             continue
@@ -421,8 +421,8 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
     if ref is not None and await memory_space.curated_locked(member, ref.metadata):
         return CURATED_REPLY
     exp = mp.Explained(seq=0, row_id=tp.row_id, ts=time.time(), text=tp.text)
-    reply = await pa.fix(member, session_id, text, value, exp, svc=svc)
-    if reply in (pa.ASK_FIX_REPLY, pa.FIX_NEEDS_SENTENCE):
+    reply = await pa.fix(member, session_id, text, value, exp, svc=svc, strict_twins=True)
+    if reply in (pa.ASK_FIX_REPLY, pa.FIX_NEEDS_SENTENCE, pa.STORE_DOWN_REPLY):
         tap(panel_id, member, tp.row_id, tp.text)          # the next turn is still the answer
     logger.info("MEMORIES_VOICE fix=1 user=%s", member)
     return reply

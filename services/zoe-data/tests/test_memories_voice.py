@@ -359,6 +359,19 @@ def test_two_different_rows_ask_which(env):
     assert len([t for t in approved(env) if "dark roast" in t]) == 2
 
 
+def test_forget_names_the_number_not_just_the_words(env):
+    # Codex P1 on #2144: the tokenizer dropped digits, so "12 Main Street" and "14 Main Street" were the same token set, the
+    # ambiguity check never fired and the first-sorted row was forgotten whichever the member named.
+    put(env, "My pickup is at 12 Main Street.")
+    put(env, "My pickup is at 14 Main Street.", when="2026-10-06T05:00:00Z")
+    assert say("forget that my pickup is at 12 Main Street", ME).startswith("Done")
+    left = [t for t in approved(env) if "Main Street" in t]
+    assert left == ["My pickup is at 14 Main Street."], left
+    put(env, "My pickup is at 16 Main Street.", when="2026-10-06T07:00:00Z")
+    assert say("forget that my pickup is at Main Street", ME) == mv.WHICH_REPLY     # no number named: ask, never guess
+    assert len([t for t in approved(env) if "Main Street" in t]) == 2
+
+
 # ── the card: taps ────────────────────────────────────────────────────────────────────────────
 
 def _member_card(env):
@@ -550,6 +563,37 @@ def test_a_correction_is_not_acknowledged_while_a_twin_still_holds_the_old_value
     assert any("in the garage" in t for t in approved(env))
     # a superseded row asked for DIFFERENT words is not a retry of this correction: one answer, gone
     assert run(memory_space.correct_row(ME, ra, "I keep my bike at work.")) == "gone"
+
+
+def test_a_tapped_correction_is_not_acknowledged_while_a_twin_holds_the_old_value(env, monkeypatch):
+    # Codex P1 on #2144: the tapped path used provenance_answers.fix, whose twin loop swallowed a refused retire and said "Fixed"
+    # with the tap consumed - repeating the correction could never retire the stale approved twin. Now: not acknowledged, the tap
+    # stays armed, and saying it again finishes the twin.
+    put(env, "Swimming is on Friday at 9")
+    put(env, "Swimming lessons are on Friday at 9 am")
+    ra, rb = row_id(env, "Swimming is"), row_id(env, "Swimming lessons")
+
+    async def twins(user_id, ref, *, svc=None):
+        b = await env.svc.get(rb)
+        return [b] if ref.id == ra and b is not None and (b.metadata or {}).get("status", "approved") == "approved" else []
+
+    monkeypatch.setattr(pa, "twins_of", twins)
+    real_review, refuse = env.svc.review, {"on": True}
+
+    async def review(mem_id, *a, **kw):
+        if refuse["on"] and mem_id == rb and kw.get("decision") == "reject":
+            return None                                  # the store refused the twin's retire
+        return await real_review(mem_id, *a, **kw)
+
+    monkeypatch.setattr(env.svc, "review", review)
+    mv.tap(PANEL, ME, ra, "Swimming is on Friday at 9")
+    assert say("it's on Saturday", ME) == pa.STORE_DOWN_REPLY, "a stale approved twin must not be acknowledged as fixed"
+    assert any("lessons are on Friday" in t for t in approved(env)), "the twin still recalls the old value"
+    refuse["on"] = False
+    reply = say("it's on Saturday", ME)                   # the tap stayed armed: the same words finish the job
+    assert reply.startswith("Fixed"), reply
+    assert not any("Friday" in t for t in approved(env)), approved(env)
+    assert "Swimming is on Saturday at 9" in approved(env)
 
 
 def test_a_child_whose_users_mirror_says_member_is_still_locked(env):

@@ -1236,8 +1236,12 @@ def fix_text(old: str, value: str) -> str:
 
 
 async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "mp.Explained", *, svc: Any = None,
-              speaker_verified: Optional[bool] = None, now: Optional[float] = None) -> str:
-    """"that's wrong, it's X": correct the row the previous answer named, through the correction path. NEVER raises."""
+              speaker_verified: Optional[bool] = None, now: Optional[float] = None, strict_twins: bool = False) -> str:
+    """"that's wrong, it's X": correct the row the previous answer named, through the correction path. NEVER raises.
+
+    ``strict_twins`` (the panel's tapped correction): a twin that cannot be retired is NOT acknowledged - the reply is
+    ``STORE_DOWN_REPLY`` (the caller keeps the tap armed) and the same correction said again finishes the remaining twins
+    (``memory_space.correct_row``'s superseded-retry rule), so a stale approved twin cannot silently keep the old value."""
     import correction_apply
 
     if speaker_verified is False:
@@ -1252,6 +1256,11 @@ async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "m
         return FIX_OFF_REPLY
     try:
         svc = svc or _svc_default()
+        if strict_twins:
+            done = await _finish_superseded(user_id, session_id, utterance, value, exp.row_id, svc=svc)
+            if done:
+                mp.clear_explained(user_id)
+                return done
         ev = await evidence_for_row(user_id, exp.row_id, svc=svc)
         if ev.refusal:
             return FIX_GONE_REPLY if ev.refusal == FORGOTTEN_REPLY else ev.refusal
@@ -1266,16 +1275,37 @@ async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "m
                                                           svc=svc)
         if res is None:
             return FIX_GONE_REPLY
-        for tw in twins:   # the twin rows one utterance left behind still hold the old value
-            try:
-                await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction")
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("provenance_answers: twin retire skipped (%s)", type(exc).__name__)
+        if strict_twins:
+            import memory_space
+
+            await memory_space.retire_twins(user_id, twins, svc)    # raises when one stays: caught below -> STORE_DOWN_REPLY
+        else:
+            for tw in twins:   # the twin rows one utterance left behind still hold the old value
+                try:
+                    await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction")
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("provenance_answers: twin retire skipped (%s)", type(exc).__name__)
         mp.clear_explained(user_id)
         return res.reply
     except Exception as exc:  # noqa: BLE001
         logger.warning("provenance_answers: fix failed (%s)", type(exc).__name__)
         return STORE_DOWN_REPLY
+
+
+async def _finish_superseded(user_id: str, session_id: str, utterance: str, value: str, row_id: str, *, svc: Any) -> str:
+    """The same tapped correction said AGAIN after its twin retire failed: the row is already superseded and its successor holds
+    the new words - ``memory_space.correct_row`` retires the twins that remain. "" when the row is not in that state."""
+    import memory_space
+
+    ref = await asyncio.wait_for(svc.get(row_id), READ_BUDGET_S)
+    if ref is None or str((ref.metadata or {}).get("status") or "").lower() != "superseded":
+        return ""
+    new = fix_text(ref.text or "", value)
+    if not new:
+        return ""
+    if await memory_space.correct_row(user_id, row_id, new, utterance=utterance, session_id=session_id, svc=svc) != "corrected":
+        return ""
+    return f"Fixed: {new}."
 
 
 _TWIN_WINDOW_S = 300.0
