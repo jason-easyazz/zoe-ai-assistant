@@ -54,6 +54,16 @@ POLLY_SCRIPT="${CROSS_REVIEW_POLLY_SCRIPT:-$HERE/cross_review_polly.sh}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
 REPO_SLUG="${CROSS_REVIEW_REPO:-jason-easyazz/zoe-ai-assistant}"
 BACKENDS="${CROSS_REVIEW_BACKENDS:-polly codex pi}"
+# Canonicalise to ONE-space-separated words. The validation and dispatch loops below word-split
+# (so tabs and newlines are accepted), but the `case " $BACKENDS " in *" pi "*)` guards match a
+# literal space-delimited word: with CROSS_REVIEW_BACKENDS=$'polly\ncodex\npi' they would see no
+# `pi` and skip the pi-model attestation (and the codex-before-pi ordering guard). Splitting once,
+# glob-safe, makes every consumer see the same list.
+set -f
+# shellcheck disable=SC2086  # intentional word-splitting
+BACKENDS="$(printf '%s ' $BACKENDS)"
+set +f
+BACKENDS="${BACKENDS% }"
 PI_MODEL="${CROSS_REVIEW_PI_MODEL:-openai/gpt-6.1-sol}"
 
 CALLER_TIMEOUT_S=2500   # mirrors _CROSS_REVIEW_TIMEOUT_S; pinned by tests/unit/test_cross_review_fallback.py

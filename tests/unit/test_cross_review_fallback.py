@@ -330,3 +330,36 @@ def test_scripts_are_executable_and_parse():
     for p in (_SCRIPT, _POLLY):
         assert os.access(p, os.X_OK), f"{p.name} must stay executable (callers exec it directly)"
         subprocess.run(["bash", "-n", str(p)], check=True)
+
+
+@pytest.mark.parametrize("sep", ["\n", "\t", " \n\t "], ids=["newline", "tab", "mixed"])
+def test_pi_model_guard_sees_pi_in_any_whitespace_separated_backend_list(rig, sep):
+    # Review finding: the loops word-split (tabs/newlines accepted) but the guard matched a
+    # literal space-delimited `pi`, so $'polly\ncodex\npi' skipped the Anthropic-model check.
+    r = rig.run(
+        CROSS_REVIEW_BACKENDS=sep.join(["polly", "codex", "pi"]),
+        CROSS_REVIEW_PI_MODEL="anthropic/claude-sonnet-5.5",
+        STUB_POLLY="authfail", STUB_CODEX="quota",
+    )
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+    assert "ALARM: CROSS_REVIEW_PI_MODEL" in r.stderr
+    assert rig.calls() == [], "bad config must fail before any backend is touched"
+
+
+def test_newline_separated_backends_without_pi_do_not_need_a_pi_model(rig):
+    # Negative control: the guard fires on `pi` itself, not on any multi-line list.
+    r = rig.run(
+        CROSS_REVIEW_BACKENDS="polly\ncodex",
+        CROSS_REVIEW_PI_MODEL="anthropic/claude-sonnet-5.5",
+        STUB_POLLY="authfail", STUB_CODEX="ok",
+    )
+    assert r.returncode == 0, r.stderr
+    assert [c for c in rig.calls() if c != "gh"] == ["polly", "codex"]
+
+
+def test_newline_separated_backends_keep_pi_behind_codex(rig):
+    # The codex-before-pi ordering guard shares the same space-delimited match.
+    r = rig.run(CROSS_REVIEW_BACKENDS="polly\npi\ncodex", STUB_POLLY="authfail", STUB_CODEX="ok")
+    assert r.returncode == 0, r.stderr
+    assert "pi" not in rig.calls() and "codex" in rig.calls()
+    assert "skipped: codex has not been tried yet" in r.stderr
