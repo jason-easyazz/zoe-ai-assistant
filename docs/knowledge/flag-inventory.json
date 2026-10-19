@@ -2185,6 +2185,36 @@
         ],
         "typed_env": false
       },
+      "ZOE_HA_UI_GATE": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/ha_ui.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_HA_UI_SECRET": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/ha_ui.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_HA_UI_TTL_S": {
+        "defaults": [
+          "28800"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/ha_ui.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_HA_URL": {
         "defaults": [
           "dynamic"
@@ -2442,6 +2472,7 @@
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/music_jukebox.py",
           "services/zoe-data/panel_kiosk_credential.py",
+          "services/zoe-data/routers/ha_ui.py",
           "services/zoe-data/telegram_notify.py",
           "services/zoe-data/traffic_class.py",
           "services/zoe-data/zoe_core_client.py"
@@ -4669,6 +4700,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_PUSH_PROOF": {
+        "defaults": [
+          "'enforce'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
         ],
         "typed_env": false
       },
