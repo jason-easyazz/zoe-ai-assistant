@@ -242,7 +242,16 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   (`src/speculative-turn.ts`, `test/speculative_turn.test.ts`; the prefix is
   pinned equal to `zoe_flue_client._SPECULATIVE_ENVELOPE_PREFIX` by zoe-data's
   `test_voice_speculation_write_deferral.py`).
-  Regression net (hand-run, not CI-wired): `npm test` — 30 `test/*.test.ts` files
+  **Untrusted content is fenced and taints the turn** (`src/untrusted-content.ts`): web
+  results (`web`) and, since 2026-10-19, quoted third-party text a producer fenced inside
+  the member's own message - a FORWARDED Telegram message (`telegram`), pendant transcript
+  text (`omi`). The provider (`bindIdentityForRound`) taints a turn whose NEWEST user
+  message carries a quote fence's BEGIN line, from the first round; every write and
+  `web_search` then refuses for that turn. The markers and neutraliser are mirrored in the
+  Telegram bot (`src/untrusted.ts`) and zoe-data (`untrusted_content.py`) and pinned equal
+  by `tests/unit/test_untrusted_fence_markers.py`: change all three or none
+  (`test/quoted_untrusted.test.ts`).
+  Regression net (hand-run, not CI-wired): `npm test` — 35 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a
@@ -284,7 +293,11 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `git log --all -- labs/flue-zoe-telegram` if ever needed.
   Since the cutover the AUTO-DEPLOYED pathspec is `labs/flue-zoe-telegram-2x/` —
   breaking work on the LIVE bot needs its own sibling (the same rule that
-  protected the beta). Regression net: `npm test` (70 tests, fully offline — a mock Telegram Bot
+  protected the beta). **Nothing it logs may carry the bot token** (`src/redact.ts`: every
+  error is logged through `describeError`, and `installConsoleRedaction()` at module load
+  redacts every `console.*` line); **a FORWARDED text message or voice note reaches the brain
+  fenced as untrusted data** (`src/untrusted.ts`), never as the member's own command
+  (`test/redact_and_forward.test.ts`). Regression net: `npm test` (84 tests, fully offline — a mock Telegram Bot
   API and a mock zoe-data on loopback, so no bot token, no real sends, and no
   metered model call) plus `npm run typecheck`, `npm run build`, and
   `./smoke-built.sh` (the only check that exercises the built artifact, because
@@ -349,6 +362,10 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
   never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
+  `prod_path_eval.py` (the frozen corpus through the real production router) is
+  the eval both router loops call; `--corpus` swaps in another cases file of
+  the same shape (the struggle-fed retrain scores its held-out failures with it;
+  its results then carry ids + verdicts only, the caller strips `args`).
 - `b3-1-supersession/` — B3.1 lab: **bi-temporal supersession + keep-the-richer-fact
   reconciliation**, pure Python, no model, no I/O, flag-dark
   (`ZOE_BITEMPORAL_SUPERSEDE`, default off, read by nothing in prod). Graphiti's
@@ -385,6 +402,23 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   lab measures) lives in `services/omi-sync/` + `zoe-data/omi_recordings.py`,
   not here; this lab stays the hand-run hardware measurement tool (live-stream
   packet loss, WER) and the source of the codec facts.
+- `omi-firmware/` — **Omi phase-2 firmware** (owner decision OD1 2026-10-19; closes gap-audit P0-1): a patch series +
+  overlay on the PINNED upstream `Omi_CV1_v3.0.21` (fetched sparse by `fetch.sh`, never vendored) that makes every Omi
+  characteristic and the SMP/OTA service require an encrypted link, refuses pairing outside a physical button window
+  (LE Secure Connections, one bond, stock-era bonds wiped; no automatic window), CRYPTO-WIPES on every new bond (key
+  destroyed, ring emptied, other bonds deleted, ordered behind persisted intents; unreadable records and a failed ring
+  clear fail closed), and encrypts the SD ring at rest
+  (AES-128-CTR, on-device key, persisted monotonic per-batch salt + re-key), and drives the status LED (dim blue
+  normal; documented states and priority). `build.sh` compiles it in the pinned Zephyr CI image (NCS v2.9.0) with a capped container
+  (refuses below 2000 MB `MemAvailable` or while `night_busy` says pause; holds the test lane); signing keys stay outside the
+  repo. Never flashes and never touches a pendant: flashing, pairing and recovery are owner steps in `RUNBOOK.md`. Pi side
+  lives in `services/omi-sync` (`OMI_SYNC_REQUIRE_BOND`) and `services/panel-bluetooth` (`omi_bond`). Regression net
+  (hand-run, never CI): `nice -n 10 python3 -m pytest labs/omi-firmware/host-test -q -p no:cacheprovider` (32 tests: the
+  ring-crypt IV layout and CTR against an independent reference, the re-key, the salt allocator, the gesture, and the REAL
+  `zoe_ble_sec.c` against stubbed Zephyr - pairing gate, wipe ordering with a power cut before each MODELLED persistent
+  step, unreadable records, a failed ring clear, reconnect-never-wipes, the LED state/priority/pattern map; it re-states `sd_card.c` / `zoe_ring_crypt_psa.c`
+  through the same pure decisions rather than running them - README section 2.1 says what it does not prove). README is
+  the record.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%
@@ -415,3 +449,12 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   nginx listener are the next PR (interface in its README). `RUNBOOK-R1.md` is the
   docs-only plan for the the411 relay host (nothing in it has been run there). README
   and RUNBOOK are records, not contracts. Unit net: `labs/relay/run.sh unit` (Python 3.12).
+- `p0-deroot/` — **P0 de-root lab** (`docs/architecture/p0-deroot.md` section 6): one
+  no-network container booting systemd 249 (not `--privileged`) with the deliverables
+  of `scripts/setup/p0-deroot/` installed verbatim, three stand-in services probing
+  from inside their own sandbox (S cells), the `zoe` uid after P0-3 (Z cells) and
+  negative controls with today's rights (C cells). Fake dockerd, synthetic secrets;
+  touches no host user, sudoers rule, daemon or service. Hand-run via `run.sh`
+  (01:35-04:55 refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`,
+  asserts its own teardown). Host cgroup namespace (systemd will not boot otherwise),
+  not `--privileged`. 47/47 on 2026-10-18; README is the record.

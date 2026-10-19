@@ -34,11 +34,15 @@ THE PASS (model points, code decides)
      contacts and an item already on the list are not proposed again. The recordings are marked analysed (``day_review_id``).
      One counts-only log line: ``OMI_DAY_REVIEW user= day= lane= calls= kept= dropped=``. No text is ever logged.
 
-WHICH BRAIN (``ZOE_OMI_DAY_REVIEW_LANE`` = night | day | both, default both)
-  * NIGHT (primary): the night window's job ``omi_day_review`` (``scripts/night/night_window.py``) runs
-    ``scripts/maintenance/zoe-omi-day-review.py --all-members`` on the 12B AFTER the digest, dreaming and the night mind, inside
-    the window's own time budget. No new scheduler: the window is the night's scheduler.
-  * DAY (fallback, the live 4B, only when idle): ``run_loop`` in zoe-data picks up a past day the night did not finish, after
+WHICH BRAIN (``ZOE_OMI_DAY_REVIEW_LANE`` = night | day | both, default NIGHT: owner decision 2026-10-18, the 12B overnight, not the 4B)
+  * NIGHT (the default and only lane unless the owner opts in): the night window's job ``omi_day_review``
+    (``scripts/night/night_window.py``) runs ``scripts/maintenance/zoe-omi-day-review.py --all-members --budget-s S`` on the 12B LAST,
+    after the digest, dreaming, the night mind and the struggle proposals, with whatever time the window has left. No new scheduler:
+    the window is the night's scheduler. A day whose estimated cost (``day_cost_s``: its packed prompts at the measured prefill rate
+    plus ``PLAN_OUT_FRACTION`` of the reply cap at the measured decode rate, per call) does not fit the time left is NOT started:
+    status ``no_time`` with the estimate in the count line, the claim released, the next (smaller) day still tried; tomorrow night
+    retries it, oldest first. The window's own timeout stays the hard stop.
+  * DAY (opt-in fallback, ``both`` or ``day``; the live 4B, only when idle): ``run_loop`` in zoe-data picks up a past day the night did not finish, after
     05:00 the next morning, only when no panel voice turn for ``ZOE_OMI_DAY_REVIEW_IDLE_S`` (600 s), MemAvailable at or above
     ``ZOE_OMI_DAY_REVIEW_MIN_MEM_MB`` (1000), no brain slot busy (llama-server ``/slots``), outside the night hours. Every call
     STREAMS and is cancelled the moment a voice turn starts; the day is then retried later from scratch (idempotent). It reuses
@@ -111,6 +115,9 @@ STALE_ANALYSING_S = 2 * 3600
 CROSS_DAY_DEDUP_DAYS = 7
 DAY_LANE_START_HOUR = 5          # the daytime fallback never runs between midnight and 05:00 household time (the night window owns it)
 LOOP_POLL_S = 300.0
+#: the planner's expected reply per call, as a fraction of ``ITEM_MAX_TOKENS``. Measured 2026-10-18 on the busiest real day (8 calls, 48
+#: items proposed = the 6-item cap every call): ~6 items of ~75-90 tokens is ~0.5-0.6 of the 900 cap. The window's timeout is the hard stop.
+PLAN_OUT_FRACTION = 0.6
 
 
 # --- flags -------------------------------------------------------------------------------------------------------
@@ -129,8 +136,9 @@ def enabled() -> bool:
 
 
 def lane() -> str:
-    v = (os.environ.get("ZOE_OMI_DAY_REVIEW_LANE") or "both").strip().lower()
-    return v if v in LANES else "both"
+    """night (DEFAULT: the 12B night window only) | day | both. An unrecognised value is the default: a typo never starts the 4B lane."""
+    v = (os.environ.get("ZOE_OMI_DAY_REVIEW_LANE") or "night").strip().lower()
+    return v if v in LANES else "night"
 
 
 def _env_int(name: str, default: int, lo: int, hi: int) -> int:
@@ -644,10 +652,23 @@ class Config:
     lane: str = "night"
     #: the daytime lane's cancel check: ``() -> str`` ('' = carry on, else why to stop); None = no cancel (the night window)
     cancel: Optional[Callable[[], str]] = None
+    #: the night lane's ``time.monotonic()`` deadline (the CLI's ``--budget-s``): a day that would not finish before it is not started
+    deadline: Optional[float] = None
 
     def timeout_for(self, prompt_tokens: int, max_tokens: int) -> float:
         import night_mind
         return night_mind.timeout_for(prompt_tokens, max_tokens, self.decode_tok_s, self.prefill_tok_s)
+
+
+def call_cost_s(chunk: Sequence["Line"], cfg: Config) -> float:
+    """What one call is expected to take at the server's measured rates: its packed prompt at the prefill rate plus the expected reply
+    (``PLAN_OUT_FRACTION`` of the cap) at the decode rate. An ESTIMATE for planning; the per-call HTTP timeout stays ``timeout_for``."""
+    prompt = sum(est_tokens(m["content"]) for m in messages_for(chunk))
+    return prompt / max(1.0, cfg.prefill_tok_s) + PLAN_OUT_FRACTION * ITEM_MAX_TOKENS / max(0.1, cfg.decode_tok_s)
+
+
+def day_cost_s(chunks: Sequence[Sequence["Line"]], cfg: Config) -> float:
+    return sum(call_cost_s(c, cfg) for c in chunks)
 
 
 def config_from_env(*, url: str = "", model: str = "", ctx_tokens: Optional[int] = None, decode_tok_s: Optional[float] = None,
@@ -1417,16 +1438,24 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
                 res.update(status="error", reason="segments_" + type(exc).__name__)
                 _log(res, {})
                 return res
+        lines = lines_for_day(recs, segments)
+        chunks, counts = pack(lines, cfg.chunk_tokens, cfg.max_calls, names=[p["name"] for p in people.values()])
+        if cfg.deadline is not None and not dry_run:
+            # the night lane: a day that would not finish before the window's deadline is not started (no claim, no call); tomorrow night retries it
+            need, left = day_cost_s(chunks, cfg), cfg.deadline - time.monotonic()
+            if need > left:
+                res.update(status="no_time", calls_planned=len(chunks), need_s=round(need), left_s=round(max(0.0, left)))
+                logger.info("OMI_DAY_REVIEW user=%s day=%s status=no_time calls_planned=%d need_s=%.0f left_s=%.0f (not started; the next night retries it)",
+                            user_id, day, len(chunks), need, max(0.0, left))
+                return res
         claim = None if dry_run else await _claim(db, user_id, day, cfg, now)
         if not dry_run and claim is None:
             res["status"] = "busy"
             return res
     review_id, seq = claim if claim else ("dry-run", 0)
     owner_names = await _owner_names(user_id)
-    lines = lines_for_day(recs, segments)
     by_id = {ln.id: ln for ln in lines}
     start_of = {r["id"]: _parse_utc(r["started_at"]) or now for r in recs}
-    chunks, counts = pack(lines, cfg.chunk_tokens, cfg.max_calls, names=[p["name"] for p in people.values()])
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
     cands: list[Candidate] = []
     try:

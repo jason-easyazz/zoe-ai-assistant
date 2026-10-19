@@ -70,6 +70,25 @@ _FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 _DATE_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 
+class TrafficClassFormatter(logging.Formatter):
+    """The app-log format plus `` traffic=<class>`` on every line written inside a NON-household context
+    (harness / probe / ci, ``traffic_class.py``). Household lines are byte-identical to before, so every
+    existing parser of this log is unaffected, and ``grep -v traffic=`` is the household's own log.
+    A line that already names its class (``BRAIN_LANE ... traffic=``) is not suffixed twice. Never raises."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = super().format(record)
+        try:
+            import traffic_class
+
+            suffix = traffic_class.log_suffix()
+            if suffix and " traffic=" not in text:
+                return text + suffix
+        except Exception:  # noqa: BLE001 - a log line must never fail
+            pass
+        return text
+
+
 def _int_from_env(name: str, default: int) -> int:
     """Read a positive int from the environment, falling back on any garbage."""
     raw = os.environ.get(name)
@@ -134,6 +153,17 @@ def install_quiet_poll_access_filter() -> None:
         access.addFilter(QuietPollAccessFilter())
 
 
+def install_query_secret_filter() -> None:
+    """Redact credential query values (``session_id=`` ...) in uvicorn's access + WebSocket-handshake lines (``log_redaction``).
+
+    Fails open like the poll filter: a missing module leaves logging as uvicorn configured it."""
+    try:
+        import log_redaction
+    except Exception:  # noqa: BLE001 — logging setup must never take the service down
+        return
+    log_redaction.install()
+
+
 def configure_logging(*, log_dir: str | os.PathLike[str] | None = None) -> logging.Handler | None:
     """Attach a rotating file handler to the root logger. Idempotent.
 
@@ -157,6 +187,7 @@ def configure_logging(*, log_dir: str | os.PathLike[str] | None = None) -> loggi
     # apply even when the handler already exists or cannot be opened.
     quiet_chatty_loggers()
     install_quiet_poll_access_filter()
+    install_query_secret_filter()
 
     existing = next((h for h in root.handlers if getattr(h, "name", None) == HANDLER_NAME), None)
     if existing is not None:
@@ -194,7 +225,7 @@ def configure_logging(*, log_dir: str | os.PathLike[str] | None = None) -> loggi
 
     handler.name = HANDLER_NAME
     handler.setLevel(level)
-    handler.setFormatter(logging.Formatter(_FORMAT, datefmt=_DATE_FORMAT))
+    handler.setFormatter(TrafficClassFormatter(_FORMAT, datefmt=_DATE_FORMAT))
     root.addHandler(handler)
 
     logging.getLogger(__name__).info(
