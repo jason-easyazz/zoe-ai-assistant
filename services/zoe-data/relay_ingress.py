@@ -39,6 +39,7 @@ safe). ``auth._is_internal_request`` is not involved and must never be widened f
 """
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import ipaddress
 import logging
@@ -70,9 +71,31 @@ _BOUND_SQL = (
 )
 
 _bound_cache: dict[str, tuple[Optional[str], float]] = {}
-#: How often an OPEN relayed websocket re-proves its certificate binding and device credential (revocation must not wait for a
-#: reconnect). Seconds; a module constant so a test can set it to 0.
+#: Bumped by ``invalidate_cache`` (every admin bind / revoke). An open socket whose last proof predates the current epoch re-proves
+#: on its very next outbound send, so an in-process revocation stops a broadcast at once rather than after ``WS_SEND_PROOF_TTL_S``.
+_epoch = 0
+#: Where the per-request proof lives on the ASGI scope (``scope["state"]`` is the namespace Starlette fills with lifespan state, so a
+#: bare ``relay_ctx`` could collide with an app's own key; this one is ours and namespaced).
+_CTX_KEY = "zoe.relay_ingress.ctx"
+#: How often an OPEN relayed websocket re-proves its certificate binding and device credential on a TIMER (revocation must not wait
+#: for a reconnect, nor for the client to send a frame - a push-only socket sends none). The timer proof reads the registry,
+#: not the 5 s cache, so an out-of-band DB edit (or another worker's revocation) is seen within this interval. Seconds; a module
+#: constant so a test can shrink it.
 WS_RECHECK_S = 15.0
+#: How long a proof is trusted for OUTBOUND sends: before each ``websocket.send`` the socket re-proves (cached registry read,
+#: in-memory token lookup - no DB round trip inside the cache TTL) unless it was proven this recently and no revocation happened in
+#: this process since. Short, so a broadcast to a revoked socket is stopped in seconds; cheap, so broadcasts are not slowed.
+WS_SEND_PROOF_TTL_S = 2.0
+#: Upper bound on writing the 1008 close of a revoked socket (a stalled client can block even that). Past it the guard gives up on the
+#: close frame; the app side still ends (the handler is handed a disconnect) and the server tears the connection down.
+WS_CLOSE_TIMEOUT_S = 2.0
+#: Upper bound on ONE re-proof of an open socket. The registry read can wait on an exhausted DB pool (10 s to acquire) and a slow
+#: command (up to 30 s) - far past ``WS_RECHECK_S`` - so without a bound an idle revoked socket could outlive the revocation promise.
+#: A proof that does not finish in time is not a proof: the socket is closed 1008 (fail closed; the panel reconnects).
+WS_PROOF_TIMEOUT_S = 5.0
+#: Clock and sleep of the revocation timer only (``_SocketGuard._tick``), module-level so a test can drive a fake clock.
+_monotonic = time.monotonic
+_sleep = asyncio.sleep
 #: The panel a RELAYED request was proven to be, for code that has no ``Request`` in hand (the websocket session resolvers in main.py).
 _relay_panel: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("zoe_relay_panel", default=None)
 
@@ -199,7 +222,16 @@ def client_fingerprint(conn: Any) -> Optional[str]:
 
 def invalidate_cache() -> None:
     """Forget cached fingerprint lookups (the admin endpoints call this on every bind / revoke, so revocation is immediate
-    in-process; an out-of-band DB edit takes effect within ``_BOUND_CACHE_TTL_S``)."""
+    in-process; an out-of-band DB edit takes effect within ``_BOUND_CACHE_TTL_S`` for HTTP and within ``WS_RECHECK_S`` for an open
+    socket).
+
+    MULTI-WORKER CAVEAT: this clears THIS process only. zoe-data runs as ONE uvicorn worker today. With more than one, a revocation
+    through the admin API reaches the other workers only by expiry: the certificate cache (``_BOUND_CACHE_TTL_S``, 5 s) for HTTP,
+    ``WS_RECHECK_S`` (15 s, registry read) for open sockets, and - NOT covered by any TTL - the in-memory device-token cache
+    (``routers.panel_auth._token_cache``), which another worker refreshes only on its next reload/restart. Revoke the certificate,
+    not just the token, and do not raise ``--workers`` without a shared invalidation channel."""
+    global _epoch
+    _epoch += 1
     _bound_cache.clear()
 
 
@@ -212,18 +244,21 @@ async def _fetch_bound_panel(fingerprint: str) -> Optional[str]:
     return str(row["panel_id"]) if row else None
 
 
-async def bound_panel(fingerprint: str) -> Optional[str]:
+async def bound_panel(fingerprint: str, *, fresh: bool = False) -> Optional[str]:
     """The ACTIVE panel this certificate fingerprint is bound to (not revoked), or None. A registry that cannot be read is a
-    503, never a pass."""
+    503, never a pass. ``fresh`` skips the 5 s cache (the open-socket timer proof)."""
     now = time.monotonic()
-    hit = _bound_cache.get(fingerprint)
+    hit = None if fresh else _bound_cache.get(fingerprint)
     if hit and hit[1] > now:
         return hit[0]
+    epoch = _epoch  # a revocation that lands while the SELECT is in flight must not be undone by this (older) result
     try:
         panel = await _fetch_bound_panel(fingerprint)
     except Exception as exc:  # noqa: BLE001 - fail closed, but say why
         logger.warning("relay_ingress: certificate registry lookup failed (%s) - refusing", type(exc).__name__)
         raise RelayRefused(503, "relay_registry_unavailable") from exc
+    if epoch != _epoch:
+        return panel  # invalidate_cache() ran during the fetch: answer this caller, but never cache a possibly pre-revocation row
     if len(_bound_cache) > 512:
         _bound_cache.clear()
     _bound_cache[fingerprint] = (panel, now + _BOUND_CACHE_TTL_S)
@@ -260,16 +295,17 @@ def _credential(conn: Any) -> tuple[Optional[str], Optional[str], str]:
     return None, None, role
 
 
-async def authenticate(conn: Any, *, require_credential: bool = True) -> RelayContext:
+async def authenticate(conn: Any, *, require_credential: bool = True, fresh: bool = False) -> RelayContext:
     """Prove a relayed request: certificate fingerprint -> bound active panel, and (unless ``require_credential`` is False) a
-    device token / kiosk credential for that same panel. Raises ``RelayRefused`` (401, or 503 if the registry is down)."""
+    device token / kiosk credential for that same panel. Raises ``RelayRefused`` (401, or 503 if the registry is down). ``fresh``
+    reads the registry past the cache."""
     fingerprint = client_fingerprint(conn)
     if not fingerprint:
         raise RelayRefused(401, "relay_client_certificate_required")
     panel, kind, role = _credential(conn) if require_credential else (None, None, "kiosk")
     if require_credential and not panel:
         raise RelayRefused(401, "relay_device_credential_required")
-    bound = await bound_panel(fingerprint)
+    bound = await bound_panel(fingerprint, fresh=fresh)
     if not bound:
         raise RelayRefused(401, "relay_certificate_not_bound")
     if require_credential and panel != bound:
@@ -280,11 +316,11 @@ async def authenticate(conn: Any, *, require_credential: bool = True) -> RelayCo
 async def context(conn: Any, *, require_credential: bool = True) -> RelayContext:
     """``authenticate`` once per request (cached on the ASGI scope, so the middleware's proof is reused by the dependency)."""
     state = conn.scope.setdefault("state", {})
-    cached = state.get("relay_ctx")
+    cached = state.get(_CTX_KEY)
     if isinstance(cached, RelayContext) and (cached.credential is not None or not require_credential):
         return cached
     ctx = await authenticate(conn, require_credential=require_credential)
-    state["relay_ctx"] = ctx
+    state[_CTX_KEY] = ctx
     return ctx
 
 
@@ -423,33 +459,191 @@ class RelayIngressMiddleware:
             await JSONResponse({"detail": refused.code}, status_code=refused.status)(scope, receive, send)
             return
         token = _relay_panel.set(ctx.panel_id)
+        guard: Optional[_SocketGuard] = None
         try:
             if scope["type"] == "websocket":
-                receive = _rechecking_receive(conn, scope, receive)
+                guard = _SocketGuard(conn, scope, receive, send, require_credential=scope.get("path") not in NO_CREDENTIAL_PATHS)
+                receive, send = guard.receive, guard.send
+                guard.start()
             await self.app(scope, receive, send)
         finally:
+            if guard is not None:
+                await guard.stop()
             _relay_panel.reset(token)
 
 
-def _rechecking_receive(conn: Any, scope: dict, receive: Any) -> Any:
-    """Wrap a relayed websocket's ``receive`` so revocation does not wait for a reconnect: at most every ``WS_RECHECK_S`` the
-    certificate binding and device credential are proven again, and a socket that no longer passes sees a disconnect (1008)."""
-    last = [time.monotonic()]
+class _SocketGuard:
+    """Keeps a relayed websocket honest for as long as it is open: revoking the certificate or the device token ends the socket
+    even when the client never sends a frame (``/ws/push`` is push-only) and the server only ever sends.
 
-    async def _receive() -> dict:
-        message = await receive()
-        if message.get("type") != "websocket.receive":
-            return message
-        if time.monotonic() - last[0] < WS_RECHECK_S:
-            return message
-        last[0] = time.monotonic()
-        scope.get("state", {}).pop("relay_ctx", None)
+    Three triggers, one proof (``_prove``: the certificate binding + the device credential, as at the handshake):
+      * a TIMER, every ``WS_RECHECK_S``, reading the registry past its cache - bounds the lag of any revocation, however it
+        happened, to one interval;
+      * BEFORE EACH OUTBOUND ``websocket.send``, unless the socket was proven within ``WS_SEND_PROOF_TTL_S`` and nothing was
+        invalidated in this process since (``_epoch``) - so a broadcast is not delivered to a socket that already fails;
+      * an inbound frame more than ``WS_RECHECK_S`` after the last proof (belt and braces beside the timer).
+
+    A failed proof closes the socket with 1008 (policy violation), wakes the handler blocked in ``receive`` with a disconnect, and
+    turns every later send into ``OSError`` (Starlette maps it to ``WebSocketDisconnect``, which the broadcaster already treats as a
+    dead socket). A LAN socket never gets a guard. A transient registry failure (503) also closes: fail closed, the panel reconnects.
+
+    Residual race, by construction: a send that passed its proof an instant BEFORE a concurrent revocation can still put that one
+    frame on the wire (proof and send are not atomic). Any broadcast that STARTS after the revoke returned is stopped (the epoch
+    forces a re-proof), and the timer closes the socket within one interval."""
+
+    def __init__(self, conn: Any, scope: dict, receive: Any, send: Any, *, require_credential: bool):
+        self._conn, self._scope, self._receive, self._send = conn, scope, receive, send
+        self._require_credential = require_credential
+        self._proved_at = time.monotonic()
+        self._proved_epoch = _epoch
+        self._dead = asyncio.Event()
+        self._finished = False  # the app (or the peer) already ended the socket: nothing left to close. Set only once the close REACHED
+                                # the transport - a close still queued behind a stalled frame leaves the socket open, so the timer lives on
+        self._send_lock = asyncio.Lock()
+        self._inflight: Optional[asyncio.Future] = None  # the frame currently being written, if any (cancelled on revocation)
+        self._prove_lock = asyncio.Lock()
+        self._timer: Optional[asyncio.Future] = None
+        self._closer: Optional[asyncio.Future] = None  # the 1008 close of a revoked socket, a task of its own so cancelling the caller cannot cut it
+
+    def start(self) -> None:
+        self._timer = asyncio.ensure_future(self._tick())
+
+    async def stop(self) -> None:
+        # A revocation close already in progress is allowed to finish (it is bounded by ``WS_CLOSE_TIMEOUT_S`` on its own): the
+        # handler returning after ``_kill`` set ``_dead`` must not cancel the timer mid-``_send_close``, or the client sees an
+        # abnormal teardown instead of the 1008 policy close.
+        closer = self._closer
+        if closer is not None and not closer.done():
+            await asyncio.wait({closer})
+        if self._timer is not None:
+            self._timer.cancel()
+            try:
+                await self._timer
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - the timer is ours; its end is not the request's problem
+                pass
+
+    def _stale(self) -> bool:
+        return _epoch != self._proved_epoch or time.monotonic() - self._proved_at >= WS_SEND_PROOF_TTL_S
+
+    async def _prove(self, *, fresh: bool, only_if_stale: bool = False) -> bool:
+        async with self._prove_lock:
+            if self._dead.is_set():
+                return False
+            if only_if_stale and not self._stale():
+                return True  # a concurrent send already re-proved while this one waited for the lock
+            epoch = _epoch
+            self._scope.get("state", {}).pop(_CTX_KEY, None)
+            try:
+                ctx = await asyncio.wait_for(
+                    authenticate(self._conn, require_credential=self._require_credential, fresh=fresh), WS_PROOF_TIMEOUT_S)
+            except RelayRefused as refused:
+                log_throttled(logger, logging.WARNING, f"relay-ws-revoked:{refused.code}",
+                              "relay_ingress: closing open websocket %s (%s)", self._scope.get("path"), refused.code)
+                await self._kill()
+                return False
+            except Exception as exc:  # noqa: BLE001 - a proof that cannot be completed (or finished in time) is not a proof: fail closed
+                logger.warning("relay_ingress: re-proof of open websocket %s failed unexpectedly (%s) - closing it",
+                               self._scope.get("path"), type(exc).__name__)
+                await self._kill()
+                return False
+            self._scope.setdefault("state", {})[_CTX_KEY] = ctx
+            self._proved_at, self._proved_epoch = time.monotonic(), epoch
+            return True
+
+    async def _kill(self) -> None:
+        self._dead.set()
+        if self._finished:
+            return
+        # A data frame the server is still writing to a STALLED client (backpressure) holds ``_send_lock`` until the transport drains,
+        # which may be never: abandon it, or the 1008 below queues behind network I/O and the 15 s promise is not kept. The frame is
+        # for a revoked socket that is being closed anyway; its sender gets ``OSError`` (see ``_send_frame``).
+        inflight = self._inflight
+        if inflight is not None and not inflight.done():
+            inflight.cancel()
+        if self._closer is None:
+            self._closer = asyncio.ensure_future(self._close_bounded())
+        # Shielded: the caller (the timer) may be cancelled by ``stop()`` when the handler returns; the close finishes anyway.
+        await asyncio.shield(self._closer)
+
+    async def _close_bounded(self) -> None:
         try:
-            await context(conn, require_credential=scope.get("path") not in NO_CREDENTIAL_PATHS)
-        except RelayRefused as refused:
-            log_throttled(logger, logging.WARNING, f"relay-ws-revoked:{refused.code}",
-                          "relay_ingress: closing open websocket %s (%s)", scope.get("path"), refused.code)
-            return {"type": "websocket.disconnect", "code": 1008}
-        return message
+            await asyncio.wait_for(self._send_close(), WS_CLOSE_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - already closing/closed by the app or the peer, or the close itself stalled (the timeout);
+            pass           # either way the disconnect handed to the handler still ends the app side
 
-    return _receive
+    async def _send_close(self) -> None:
+        async with self._send_lock:
+            if self._finished:  # the application close got through first
+                return
+            await self._send({"type": "websocket.close", "code": 1008})
+
+    async def _send_frame(self, message: dict) -> None:
+        """The underlying send as a task of its own, so a revocation can cancel it while it is blocked on a stalled client."""
+        inflight = asyncio.ensure_future(self._send(message))
+        self._inflight = inflight
+        try:
+            await asyncio.wait({inflight})  # wait() does not raise the task's own cancellation; the caller's cancellation it does
+        except asyncio.CancelledError:
+            inflight.cancel()
+            raise
+        finally:
+            if self._inflight is inflight:
+                self._inflight = None
+        if inflight.cancelled():
+            raise OSError("relayed websocket revoked")
+        inflight.result()
+
+    async def _tick(self) -> None:
+        # Proofs are scheduled against an ABSOLUTE deadline, not "sleep after each proof": a proof can take up to
+        # ``WS_PROOF_TIMEOUT_S``, and sleeping the full interval after it would stretch the documented revocation bound to
+        # interval + proof time. A proof that overruns its slot starts the next one at once (never a burst of catch-ups).
+        interval = max(WS_RECHECK_S, 0.05)
+        deadline = _monotonic() + interval
+        while not self._dead.is_set() and not self._finished:
+            await _sleep(max(deadline - _monotonic(), 0.0))
+            if self._finished or not await self._prove(fresh=True):
+                return
+            deadline = max(deadline + interval, _monotonic())
+
+    async def send(self, message: dict) -> None:
+        kind = message.get("type")
+        if self._dead.is_set():
+            # Already closed by the guard (1008): a data frame is refused (OSError -> WebSocketDisconnect in Starlette, which the
+            # broadcaster treats as a dead socket); the app's own accept/close that races the revocation is swallowed, since the
+            # server would raise on a second close.
+            if kind == "websocket.send":
+                raise OSError("relayed websocket revoked")
+            return
+        if kind == "websocket.send" and self._stale():
+            if not await self._prove(fresh=False, only_if_stale=True):
+                raise OSError("relayed websocket revoked")
+        async with self._send_lock:
+            if self._dead.is_set():  # revoked while waiting for the lock
+                if kind == "websocket.send":
+                    raise OSError("relayed websocket revoked")
+                return
+            await self._send_frame(message)
+            if kind == "websocket.close":
+                self._finished = True  # only now: the close has left, so nothing is left for the timer to revoke
+
+    async def receive(self) -> dict:
+        if self._dead.is_set():
+            return {"type": "websocket.disconnect", "code": 1008}
+        pending = asyncio.ensure_future(self._receive())
+        gone = asyncio.ensure_future(self._dead.wait())
+        try:
+            await asyncio.wait({pending, gone}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            gone.cancel()
+        if not pending.done():
+            pending.cancel()  # revoked while idle: hand the handler a disconnect instead of leaving it parked
+            pending.add_done_callback(lambda t: t.cancelled() or t.exception())  # retrieve any late error: no "never retrieved" noise
+            return {"type": "websocket.disconnect", "code": 1008}
+        message = pending.result()
+        kind = message.get("type")
+        if kind == "websocket.disconnect":
+            self._finished = True
+        elif kind == "websocket.receive" and time.monotonic() - self._proved_at >= WS_RECHECK_S:
+            if not await self._prove(fresh=True):
+                return {"type": "websocket.disconnect", "code": 1008}
+        return message
