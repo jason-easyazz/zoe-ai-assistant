@@ -218,6 +218,7 @@
             sensitiveSwitches(m, list);
             addForm(m, data.categories || [], list);
             if (!(data.rows || []).length) list.appendChild(el('p', 'am-note', 'No notes yet.'));
+            if (data.hidden > 0) list.appendChild(el('p', 'am-note', data.hidden + ' more in a category that is switched off. Turn it on to see or remove them.'));
             (data.rows || []).forEach((r) => list.appendChild(noteRow(m, r)));
             if (data.held > 0) await heldNotes(m, list);
         } catch (err) {

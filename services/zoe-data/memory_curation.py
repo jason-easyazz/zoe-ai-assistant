@@ -255,8 +255,10 @@ def _view(ref: Any, member: Account) -> dict:
                 added_at=str(md.get("curated_at") or ""))
 
 
-async def curated_rows(pol: Policy, *, svc: Any = None) -> list:
-    """The curated rows of the member the curator may see: a child all, an adult only the protected ones in opted-in categories."""
+async def curated_rows(pol: Policy, *, svc: Any = None, hidden: bool = False) -> list:
+    """The curated rows of the member the curator may see and change: only in a category that is allowed NOW (a child sensitive
+    category switched off again hides its notes until it is switched back on), and for an adult only the protected ones.
+    ``hidden=True`` returns the others instead (counted on the page, never shown)."""
     import memory_authority as auth
 
     out = []
@@ -264,10 +266,10 @@ async def curated_rows(pol: Policy, *, svc: Any = None) -> list:
         md = ref.metadata or dict()
         if not _is_curated(md, pol.member.user_id):
             continue
-        if pol.member.kind == "adult" and (md.get("authority_class") != auth.CURATED
-                                           or str(md.get("curated_category") or "") not in pol.allowed):
-            continue
-        out.append(ref)
+        if pol.member.kind == "adult" and md.get("authority_class") != auth.CURATED:
+            continue                                     # released to the adult (opted out): theirs, not the curator
+        if (str(md.get("curated_category") or "other") in pol.allowed) != hidden:
+            out.append(ref)
     return out
 
 
@@ -352,14 +354,16 @@ async def decide_held(db, curator: Account, member_id: str, held_id: str, action
     note = notes.get(str(held_id or ""))
     if note is None:
         raise CurationRefused(404, "That note is not there any more.")
+    cat = note["against"]["category"]
+    await _audited(db, curator.user_id, member_id, "held_" + action, cat, held_id)      # before anything changes
     out = dict(kept=True)
     if action == "accept":
         out = await edit(db, curator, member_id, note["against"]["id"], note["text"], svc=svc)
-    cat = note["against"]["category"]
-    await _audited(db, curator.user_id, member_id, "held_" + action, cat, held_id)
     ok = await svc.review(held_id, decision="reject", actor=curator.user_id, origin=WRITER,
                           note="held note: the curator chose " + action) is not None
     await _finished(db, curator.user_id, member_id, "held_" + action, ok, cat, held_id)
+    if not ok:
+        raise CurationRefused(409, "I could not close that note. Try again.")
     return out
 
 

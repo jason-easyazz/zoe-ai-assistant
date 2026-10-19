@@ -284,6 +284,22 @@ def test_sensitive_curation_is_refused_without_an_opt_in(env):
     assert [a[2] for a in curation_audit(env) if a[5] == "requested"] == ["sensitive_on", "add"]
 
 
+def test_a_sensitive_category_switched_off_again_hides_its_notes(env):
+    c = as_(env, PARENT, "admin")
+    c.put(f"/api/memories/curation/members/{KID}/sensitive/health", json=dict(on=True), headers=H)
+    assert curate(env, "Mia is allergic to peanuts", "health").status_code == 200
+    rid = rows_of(env, KID)[0].id
+    c = as_(env, PARENT, "admin")
+    c.put(f"/api/memories/curation/members/{KID}/sensitive/health", json=dict(on=False), headers=H)
+    got = c.get(f"/api/memories/curation/members/{KID}/rows", headers=H).json()
+    assert got["rows"] == [] and got["hidden"] == 1 and "peanut" not in str(got)
+    assert c.post(f"/api/memories/curation/members/{KID}/rows/{rid}/edit", json=dict(text="Mia is allergic to cats"),
+                  headers=H).status_code == 404
+    assert env.col.rows[rid][1]["status"] == "approved"                  # still the child note, still protected
+    c.put(f"/api/memories/curation/members/{KID}/sensitive/health", json=dict(on=True), headers=H)
+    assert len(c.get(f"/api/memories/curation/members/{KID}/rows", headers=H).json()["rows"]) == 1   # control: back on
+
+
 def test_feelings_and_family_conflict_are_never_curated(env):
     r = curate(env, "Mia had a huge fight with her brother and they are not speaking", "people")
     assert r.status_code == 422
@@ -379,6 +395,24 @@ def test_no_audit_no_change(env):
     assert env.col.rows[rid][1]["status"] == "approved" and not env.erased
 
 
+def test_a_held_decision_is_audited_before_anything_changes(env, monkeypatch):
+    rid = _curated_teacher(env)
+    run(env.svc.ingest("User's teacher is Mr Brown.", user_id=KID, source="chat_regex", status="approved"))
+    c = as_(env, PARENT, "admin")
+    (note,) = c.get(f"/api/memories/curation/members/{KID}/held", headers=H).json()["held"]
+    real = mc.audit
+
+    async def refuse_held(db, **kw):                # the audit is down for the held decision only (the edit audit works)
+        if kw.get("action", "").startswith("held"):
+            raise RuntimeError("audit down")
+        return await real(db, **kw)
+
+    monkeypatch.setattr(mc, "audit", refuse_held)
+    r = c.post(f"/api/memories/curation/members/{KID}/held/{note['id']}", json=dict(action="accept"), headers=H)
+    assert r.status_code == 503
+    assert env.col.rows[rid][1]["status"] == "approved" and env.col.rows[note["id"]][1]["status"] == "disputed"
+
+
 def test_a_curator_cannot_forget_the_child_other_memories(env):
     own = run(env.svc.ingest("User likes dinosaurs and drawing.", user_id=KID, source="chat_regex", status="approved"))
     r = as_(env, PARENT, "admin").post(f"/api/memories/curation/members/{KID}/rows/{own.id}/forget", headers=H)
@@ -417,6 +451,8 @@ def test_control_without_the_category_stamp_the_row_would_show(env):
 def _writes_as_curator(src: str) -> bool:
     """Passes the curator writer as a source / origin: the literal, a local constant holding it, or memory_space.CURATED_ORIGIN."""
     names = ["\x22curator\x22", "CURATED_ORIGIN"] + re.findall(r"^(\w+)\s*=\s*\x22curator\x22\s*$", src, re.M)
+    if "memory_curation" in src:
+        names.append("WRITER")                    # memory_curation.WRITER / mc.WRITER through an import
     return any(re.search(r"(?<![\w\x60])(?:source|origin)\s*=\s*(?:\w+\.)?" + re.escape(n) + r"(?!\w)", src) for n in names)
 
 
@@ -425,6 +461,7 @@ def test_only_memory_curation_writes_as_the_curator():
     assert hits == ["memory_curation.py"], hits
     assert _writes_as_curator("ref = svc.ingest(t, origin=\x22curator\x22)")          # control: the literal is caught
     assert not _writes_as_curator("WRITER = \x22ask\x22\nsvc.ingest(t, source=WRITER)")
+    assert _writes_as_curator("import memory_curation as mc\nsvc.ingest(t, origin=mc.WRITER)")   # control: an alias is caught
 
 
 def test_migration_runs_twice_on_sqlite_and_chains_onto_one_head():

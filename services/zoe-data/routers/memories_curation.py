@@ -127,8 +127,9 @@ async def _rows_view(db, curator, member_id: str) -> dict:
     pol = await mc.policy(db, curator, member_id)
     rows = [mc._view(r, pol.member) for r in await mc.curated_rows(pol)]
     held = await mc.held(db, curator, member_id)
+    hidden = len(await mc.curated_rows(pol, hidden=True))     # a sensitive category switched off: counted, never shown
     return dict(member=dict(user_id=pol.member.user_id, name=pol.member.name, kind=pol.member.kind),
-                categories=mc._category_list(pol.allowed), rows=rows, held=len(held))
+                categories=mc._category_list(pol.allowed), rows=rows, held=len(held), hidden=hidden)
 
 
 @router.get("/members/{member_id}/rows")

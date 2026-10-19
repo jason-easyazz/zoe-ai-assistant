@@ -39,6 +39,7 @@ Memories list labelled "Added for you by <name>", and cannot forget or correct t
 | an adult only in a category they opted in THEMSELF; an admin cannot opt an adult in | `memory_curation.policy`, `set_child_sensitive` |
 | health / medication / money refused until opted in; health or money words filed elsewhere refused (422) | `memory_curation.check_text` |
 | feelings, family conflict, grief never curated | `check_text` (`NEVER`) |
+| a child sensitive category switched off again hides its notes from the curator (counted, not shown, not editable) until it is back on | `memory_curation.curated_rows` |
 | class `curated` (rank 6): only a curator or an operator changes it - the child's passing remark becomes a `disputed` note, the review UI and the Memories screen refuse, a held note cannot be approved by the child | `memory_authority.may_override`, `MemoryService._authority_refuses`, `_operator_rows_sync`, `memory_space.curated_locked` |
 | a passing DENIAL ("I'm not allergic to peanuts") is held too | `memory_authority.negation_flip` (curated targets only) |
 | provenance on every row: `curated_by`, `curated_by_name`, `curated_at`, `curated_via`, `curated_category`, `curated_sensitive` | `memory_service.CURATED_KEYS` (first-class only for the `curator` writer) |
