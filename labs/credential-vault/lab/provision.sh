@@ -8,6 +8,7 @@
 #   lab-intruder       in no group at all (tests the file mode)
 #   lab-nginx          stands in for nginx in front of the phone socket
 #   lab-member         runs the members' own bw clients (alice, bob, ...), each with a private data dir
+#   lab-admin          stands in for the owner's admin login (the only role that may mint a phone-pairing link)
 #   lab-sites          runs the test sites
 set -eu
 groupadd -g 2101 zoe-vault-clients
@@ -21,6 +22,7 @@ useradd -r -u 2005 -U -M -d /nonexistent -s /usr/sbin/nologin -G zoe-vault-clien
 useradd -r -u 2006 -U -M -d /nonexistent -s /usr/sbin/nologin lab-intruder
 useradd -r -u 2007 -U -M -d /nonexistent -s /usr/sbin/nologin -G zoe-vault-web lab-nginx
 useradd -r -u 2008 -U -m -d /home/lab-member -s /usr/sbin/nologin lab-member
+useradd -r -u 2009 -U -M -d /nonexistent -s /usr/sbin/nologin -G zoe-vault-clients lab-admin
 useradd -r -u 2100 -U -M -d /nonexistent -s /usr/sbin/nologin lab-sites
 install -d -o zoe-vault -g zoe-vault -m 0700 /var/lib/zoe-vault
 install -d -o zoe-vault -g zoe-vault -m 0700 /var/lib/zoe-vault/bw

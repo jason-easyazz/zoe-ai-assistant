@@ -62,7 +62,7 @@ class Step:
 @dataclass
 class Proposal:
     proposal_id: str
-    token: str
+    notice: str          # an opaque id zoe-data forwards; NOT an authorisation (approval needs a paired phone)
     member: str
     errand: str
     goal: str
@@ -100,7 +100,7 @@ class Policy:
         self.limit_item, self.limit_member, self.limit_household = limits
         self._lock = threading.Lock()
         self._proposals: dict[str, Proposal] = {}       # by proposal id
-        self._by_token: dict[str, str] = {}             # sha256(approval token) -> proposal id
+        self._by_notice: dict[str, str] = {}            # sha256(notice id) -> proposal id
         self._caps: dict[str, Capability] = {}          # sha256(capability) -> capability
         self._prompts: deque[tuple[float, str, str]] = deque()   # (t, member, item)
         self._errand_failures: dict[str, int] = {}
@@ -131,35 +131,39 @@ class Policy:
                 raise PolicyRefusal("errand_paused")
             self._check_limits(member, [s.item_id for s in steps])
             now = self._clock()
-            p = Proposal(proposal_id="p-" + secrets.token_hex(8), token=secrets.token_urlsafe(32), member=member,
+            p = Proposal(proposal_id="p-" + secrets.token_hex(8), notice=secrets.token_urlsafe(24), member=member,
                          errand=errand, goal=goal, steps=steps, approver=approver, created=now,
                          expires=now + self.approval_timeout_s)
             self._proposals[p.proposal_id] = p
-            self._by_token[_key(p.token)] = p.proposal_id
+            self._by_notice[_key(p.notice)] = p.proposal_id
             for s in steps:
                 self._prompts.append((now, member, s.item_id))
             return p
 
-    def by_token(self, token: str) -> Proposal | None:
+    def by_notice(self, notice: str) -> Proposal | None:
         with self._lock:
-            pid = self._by_token.get(_key(token or ""))
+            pid = self._by_notice.get(_key(notice or ""))
             p = self._proposals.get(pid) if pid else None
             if p is not None:
                 self._expire(p)
             return p
 
-    def decide(self, token: str, approve: bool) -> Proposal:
+    def decide(self, notice: str, approve: bool, *, device_member: str | None) -> Proposal:
+        """Approve or deny. Only the credential owner's PAIRED PHONE decides: the caller passes the member its
+        device secret resolved to (or None), and anything but the proposal's approver is refused."""
         with self._lock:
-            pid = self._by_token.get(_key(token or ""))
+            pid = self._by_notice.get(_key(notice or ""))
             p = self._proposals.get(pid) if pid else None
             if p is None:
-                raise PolicyRefusal("unknown_token")
+                raise PolicyRefusal("unknown_notice")
+            if device_member is None or device_member != p.approver:
+                raise PolicyRefusal("not_your_phone")
             self._expire(p)
             if p.state != "pending":
                 raise PolicyRefusal("proposal_" + p.state)
             p.state = "approved" if approve else "denied"
-            # the approval token is single use either way
-            self._by_token.pop(_key(token), None)
+            # a decision is final either way
+            self._by_notice.pop(_key(notice), None)
             if not approve:
                 self._errand_failures[p.errand] = self._errand_failures.get(p.errand, 0) + 1
             return p
@@ -209,15 +213,15 @@ class Policy:
             out = []
             for p in self._proposals.values():
                 self._expire(p)
-                if p.state == "pending" and _key(p.token) in self._by_token:
+                if p.state == "pending" and _key(p.notice) in self._by_notice:
                     out.append({"kind": "approve", "member": p.approver, "proposal": p.proposal_id,
-                                "path": "/v/approve/" + p.token})
+                                "path": "/v/n/" + p.notice})
             return out
 
     def wipe(self) -> None:
         with self._lock:
             self._proposals.clear()
-            self._by_token.clear()
+            self._by_notice.clear()
             self._caps.clear()
 
 
@@ -256,7 +260,12 @@ class UnlockGate:
         with self._lock:
             if self._token is None or self._clock() >= self._expires or self._clock() < self._locked_until:
                 return None
-            return "/v/unlock/" + self._token
+            return "/v/n/" + self._token
+
+    def is_current(self, notice: str) -> bool:
+        with self._lock:
+            return bool(notice) and self._token_key is not None and _key(notice) == self._token_key \
+                and self._clock() < self._expires and self._clock() >= self._locked_until
 
     def take(self, token: str) -> None:
         """Spend the token (single use). Raises PolicyRefusal when it is wrong, expired or the verb is locked."""
@@ -290,3 +299,57 @@ class UnlockGate:
         with self._lock:
             self._token_key = None
             self._token = None
+
+
+class DeviceRegistry:
+    """Phones paired with the broker (credential-vault.md 5.2, 7). A pairing link is minted ONLY through the admin
+    role (never zoe-data's uid), is single use and expires; completing it on the phone sets a device secret as an
+    HttpOnly cookie on the broker's own pages. Approvals, codes and the U3 unlock are honoured only from a paired
+    phone of the right member, so a notice id that zoe-data forwards is not enough to act on it. Only the SHA-256 of
+    each device secret is kept (in a 0600 file of the broker's uid, so pairings survive a restart)."""
+
+    PAIR_TTL_S = 600
+
+    def __init__(self, path: str | None, *, clock=time.monotonic) -> None:
+        import json
+        import os
+        self._json, self._os = json, os
+        self.path = path
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._pending: dict[str, tuple[str, float]] = {}
+        self._devices: dict[str, str] = {}
+        if path and os.path.exists(path):
+            with open(path) as fh:
+                self._devices = {k: v for k, v in json.load(fh).items() if isinstance(v, str)}
+
+    def begin(self, member: str) -> str:
+        token = secrets.token_urlsafe(32)
+        with self._lock:
+            self._pending[_key(token)] = (member, self._clock() + self.PAIR_TTL_S)
+        return token
+
+    def complete(self, token: str) -> tuple[str, str]:
+        with self._lock:
+            entry = self._pending.pop(_key(token or ""), None)
+            if entry is None or self._clock() >= entry[1]:
+                raise PolicyRefusal("unknown_pairing")
+            secret = secrets.token_urlsafe(32)
+            self._devices[_key(secret)] = entry[0]
+            self._save()
+            return entry[0], secret
+
+    def member_of(self, secret: str | None) -> str | None:
+        if not isinstance(secret, str) or not secret:
+            return None
+        with self._lock:
+            return self._devices.get(_key(secret))
+
+    def _save(self) -> None:
+        if not self.path:
+            return
+        tmp = self.path + ".tmp"
+        fd = self._os.open(tmp, self._os.O_WRONLY | self._os.O_CREAT | self._os.O_TRUNC, 0o600)
+        with self._os.fdopen(fd, "w") as fh:
+            self._json.dump(self._devices, fh)
+        self._os.replace(tmp, self.path)

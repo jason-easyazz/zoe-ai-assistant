@@ -223,13 +223,23 @@ only after P0 do sections 10.2's A3 and A6 rows hold.
 | `capabilities` | proposal id | once the member approved on the broker's page: one opaque capability per step, else `pending` / `denied` / `expired` | each capability is single use and bound to (member, item, errand, step, operation, expected origin, expiry, nonce), held only in the broker's memory |
 | `login` | a capability | `ok` + a sealed handle to the resulting browser storage state, or a refusal reason | section 6.1; the only verb that uses a credential |
 | `redeem` | the sealed handle from `login` | the item-domain cookies, once | V1 realises the "sealed handle" as a single-use, 5-minute, in-memory handle that only the uid that ran the `login` can redeem; nothing is written to disk, so no encryption is needed |
-| `lock` | none | `locked` | wipes keys from memory; needs an unlock to resume |
+| `lock` | none | `locked` | wipes keys from memory, closes the DevTools connection of a sign-in that is in the browser, and no sign-in that started before it can mint a handle; needs an unlock to resume |
 | `status` | none | locked/unlocked, last sync, vault reachable, counters | no item data |
-| `notices` | none | the links zoe-data forwards to a phone (approve, code, U3 unlock) | each link carries a single-use token; residual until V5 below |
+| `notices` | none | the links zoe-data forwards to a phone (approve, code, U3 unlock), each `/v/n/<notice>` | a notice id is opaque and authorises nothing (below) |
 
-The phone unit's uid may use only `card` (the approval card the broker builds), `approve` (approve / deny /
-deny-and-lock), `otp`, `unlock` and `lock`. Roles come from SO_PEERCRED; the two uid lists are disjoint and never
-root. Implemented in `services/zoe-vaultd/zoe_vaultd/broker.py`.
+The phone unit's uid may use only `card` (what a notice is, for the right phone), `approve` (approve / deny /
+deny-and-lock), `otp`, `unlock`, `lock` and `pair_complete`. A third role, **admin** (the owner's privileged login,
+never zoe-data's uid), may use only `pair`, `status` and `lock`. Roles come from SO_PEERCRED; the uid lists are
+disjoint and never root. Implemented in `services/zoe-vaultd/zoe_vaultd/broker.py`.
+
+**Approvals are bound to the owner's paired phone (lab review, 2026-10-19).** zoe-data forwards notices but never
+receives anything that can answer one. Every answer (approve, code, U3 unlock) must come with the device secret of a
+phone paired to the right member (the approver; the member whose code is asked; an admin for unlock). A phone is
+paired once: the admin role mints a single-use, 10-minute `/v/pair/<token>` link, the member opens it on their
+phone, and the broker's own page sets the device secret as an `HttpOnly; Secure; SameSite=Strict` cookie scoped to
+`/v/`. The broker keeps only its SHA-256. A compromised zoe-data replaying a notice through the nginx-facing route
+therefore gets "not your phone" (lab cell A1, with a red negative control). V5's passkey signature remains the
+stronger binding (a stolen phone cookie is the residual until then).
 
 There is **no verb that returns a username, password, note, TOTP seed or custom field value.** A test enumerates the
 socket's verbs and fails if one is added that returns item content (cell V7). A bare item id, errand id or "approved"
@@ -243,17 +253,17 @@ with a peer uid that is allowed only the `approve`, `otp` and `unlock` verbs.
 
 **`unlock` (U3 only) is deliberately narrow:**
 - the core accepts it only while it is locked, and only when U3 is the configured unlock option;
-- each attempt needs a single-use token that the core minted when it started locked, expiring after 10 minutes; the
-  link goes only to admins;
+- each attempt needs the current single-use unlock notice that the core minted when it started locked (expiring after
+  10 minutes) AND an admin's paired phone;
 - the page takes Zoe's vault password (the owner's Bitwarden app can autofill it from the owner's own vault);
 - three failed attempts lock the verb for 15 minutes and notify the owner;
 - every attempt is audited without the value;
 - zoe-data's uid can never call it (cell V18);
-- after V5 the page also needs the admin's passkey. Every link carries a single-use, short-lived token that the core minted. zoe-data only
-forwards the link to the member's phone over Telegram or web push, and it never sees what the member types.
-**Residual until V5:** zoe-data sees the link, so a compromised zoe-data (after P0) could open an approval link
-itself. V5 closes that: the page must sign the challenge with the member's passkey, and the core verifies the
-signature.
+- after V5 the page also needs the admin's passkey.
+
+zoe-data only forwards notice links to the member's phone over Telegram or web push, and it never sees what the
+member types or the phone's device secret. **Residual until V5:** whoever holds a member's phone (or its cookie) holds
+that member's approvals; V5 makes the phone sign each challenge with the member's passkey.
 
 ### 5.3 Unlocking: where the key lives
 
@@ -365,7 +375,7 @@ The browser's committed origin is `scheme://host:port`. The broker compares it w
 | Regex / starts with | regex is refused; starts with is treated as exact host |
 | Frames | the field's **own frame** must match. A cross-origin iframe never gets a fill, even when the top-level page matches, unless the item lists that iframe's origin as an extra URI *and* the top-level origin also matches one of the item's URIs (a hosted sign-in widget). A same-origin iframe is treated like the top frame |
 | Opaque and special origins | refused: `about:blank` and `srcdoc` frames (even when they inherit an origin), `data:`, `blob:`, `file:`, sandboxed frames with an opaque (`null`) origin, a frame still loading (no committed document), and anything that does not parse as `https://host[:port]` |
-| Redirects | irrelevant by construction: the check runs on the committed origin of the frame at fill time, after any redirect, including the final hop of an open redirect on a trusted site |
+| Redirects | every hop counts: the broker records each document request and navigation of the top frame (CDP `Network.requestWillBeSent` incl. redirects, `Page.frameNavigated`) during the login navigation and after the submit, and refuses (`redirect_hop`) if ANY hop is an origin the item does not allow, even one that bounces back to the right site (lab review 2026-10-19, cell V2 `lk_bounce`). The fill check itself still runs on the committed origin at fill time |
 | Service workers | they can answer a request but cannot change a document's committed origin, so the rule is unaffected; the origin and the form action are still re-read immediately before every insert (6.2, step 5) |
 | Popups | a sign-in in a new window is a new target; the check runs on it like any other |
 
@@ -517,7 +527,9 @@ collection before P0** (gate G-P0, owner decision O1).
 
 **Audit.** The broker writes one JSON line per event to `/var/lib/zoe-vault/audit.jsonl`. It is owned by `zoe-vault`,
 append-only (`chattr +a` where the filesystem allows it), and each line carries the SHA-256 of the previous line, so
-deleting or editing a line breaks the chain (cell V9). Each line records the time, the event (`labels`, `login`,
+deleting or editing a line breaks the chain (cell V9). The chain cannot see its own tail being cut, nor the LAST line being edited (no successor carries its hash), so the broker also
+keeps the chain head (line count + last hash) in `audit.jsonl.head` and refuses a log shorter than it; both belong to
+the broker's uid, so a root-owned or off-box copy of the head (V2) is what covers a compromised broker. Each line records the time, the event (`labels`, `login`,
 `propose`, `approve`, `otp`, `refuse`, `lock`, `unlock`, `sync`), the item id and label, the registrable domain and exact
 origin, the errand and step, the acting member as zoe-data asserted it, the proposal and approver, the decision
 and reason, and the duration. **It never records a secret, a code, a cookie value or a page body.**
@@ -669,7 +681,7 @@ must go red.
 ### 16.1 What V0 and V1 showed (lab, 2026-10-19)
 
 The record is [`labs/credential-vault/README.md`](../../labs/credential-vault/README.md); the broker is
-`services/zoe-vaultd/` (lab-only). **29/29 cells green, every negative control red**: V1-V9, V13, V17, V18 with the
+`services/zoe-vaultd/` (lab-only). **31/31 cells green, every negative control red**: V1-V9, V13, V17, V18, A1 (paired-phone approvals) and L1 (lock stops an in-flight sign-in) with the
 broker, V1c-V4c with the client alone, plus H1 (no egress), M1/M2 and the measurements. What changes the plan:
 
 - **Section 4's quick stop works:** Vaultwarden 1.37.4 hides an item left unassigned in the member's sharing

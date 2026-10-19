@@ -2,9 +2,11 @@
 
 nginx routes one path prefix (`/v/`) straight to this unit's Unix socket, bypassing zoe-data, so what a member taps
 or types (an approval, a one-time code, Zoe's vault password for U3) never passes through the process that talks to
-the model. This unit holds no secret and no state: it renders the card the core built and forwards the member's answer
-to the core over the core's socket, where its uid may use only `card`, `approve`, `otp`, `unlock` and `lock`.
-Requests are never logged with their bodies or tokens.
+the model. zoe-data only ever forwards `/v/n/<notice>` links, and a notice id authorises nothing: every answer must come
+from a phone PAIRED to the right member, proven by the device cookie this unit set on its own pairing page
+(`/v/pair/<token>`, a link only the broker's admin role can mint). This unit keeps no state: it forwards the cookie and
+the member's answer to the core, where its uid may use only `card`, `approve`, `otp`, `unlock`, `lock` and
+`pair_complete`. Requests are never logged with their bodies, ids or cookies.
 """
 
 from __future__ import annotations
@@ -18,7 +20,8 @@ from urllib.parse import parse_qs
 
 from .broker import request
 
-ROUTE = re.compile(r"^/v/(approve|code|unlock)/([A-Za-z0-9_-]{20,80})$")
+ROUTE = re.compile(r"^/v/(n|pair)/([A-Za-z0-9_-]{20,80})$")
+DEVICE_COOKIE = "zv_device"
 MAX_BODY = 4096
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
@@ -44,10 +47,10 @@ class PhoneHandler(BaseHTTPRequestHandler):
     server_version = "zoe-vault-phone"
     sys_version = ""
 
-    def log_message(self, fmt, *args) -> None:  # never log paths (tokens) or bodies
+    def log_message(self, fmt, *args) -> None:  # never log paths (ids) or bodies
         return
 
-    def _reply(self, status: int, body: str) -> None:
+    def _reply(self, status: int, body: str, cookie: str | None = None) -> None:
         data = PAGE.format(body=body).encode()
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -55,6 +58,8 @@ class PhoneHandler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'")
         self.send_header("X-Frame-Options", "DENY")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -66,37 +71,59 @@ class PhoneHandler(BaseHTTPRequestHandler):
         m = ROUTE.match(self.path.split("?", 1)[0])
         return (m.group(1), m.group(2)) if m else (None, None)
 
+    def _device(self) -> str | None:
+        """The paired-phone secret, from this unit's own HttpOnly cookie (zoe-data never sees it)."""
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == DEVICE_COOKIE and value:
+                return value
+        return None
+
     def do_GET(self) -> None:
-        kind, token = self._route()
-        if kind == "approve":
-            card = self._core({"verb": "card", "token": token})
-            if not card.get("ok"):
-                return self._reply(410, "<p>This request is no longer open.</p>")
+        kind, ident = self._route()
+        if kind == "pair":
+            res = self._core({"verb": "pair_complete", "token": ident})
+            if not res.get("ok"):
+                return self._reply(410, "<p>This pairing link is no longer valid.</p>")
+            cookie = (f"{DEVICE_COOKIE}={res['device']}; Path=/v/; Max-Age=31536000; Secure; HttpOnly; "
+                      "SameSite=Strict")
+            return self._reply(200, f"<p>This phone is now paired for {html.escape(res['member'])}.</p>", cookie)
+        if kind != "n":
+            return self._reply(404, "<p>Not found.</p>")
+        card = self._core({"verb": "card", "notice": ident, "device": self._device()})
+        if not card.get("ok"):
+            return self._reply(403, "<p>This request is not for this phone, or is no longer open.</p>")
+        if card["kind"] == "approve":
             return self._reply(200, _card_html(card))
-        if kind == "code":
+        if card["kind"] == "otp":
             return self._reply(200, "<h1>Sign-in code</h1><form method=post><input name=code inputmode=numeric "
                                     "autocomplete=one-time-code><button>Send</button></form>")
-        if kind == "unlock":
-            return self._reply(200, "<h1>Unlock Zoe's vault</h1><form method=post><input type=password "
-                                    "name=password autocomplete=current-password><button>Unlock</button></form>")
-        return self._reply(404, "<p>Not found.</p>")
+        return self._reply(200, "<h1>Unlock Zoe's vault</h1><form method=post><input type=password "
+                                "name=password autocomplete=current-password><button>Unlock</button></form>")
 
     def do_POST(self) -> None:
-        kind, token = self._route()
+        kind, ident = self._route()
         try:
             n = int(self.headers.get("Content-Length") or "0")
         except ValueError:
             n = -1
-        if kind is None or n < 0 or n > MAX_BODY:
+        if kind != "n" or n < 0 or n > MAX_BODY:
             return self._reply(400, "<p>Bad request.</p>")
         form = parse_qs(self.rfile.read(n).decode("utf-8", "replace"), max_num_fields=4)
         val = {k: v[0] for k, v in form.items() if v}
-        if kind == "approve":
-            res = self._core({"verb": "approve", "token": token, "decision": val.get("decision", "")})
-        elif kind == "code":
-            res = self._core({"verb": "otp", "token": token, "code": val.get("code", "")})
+        device = self._device()
+        card = self._core({"verb": "card", "notice": ident, "device": device})
+        if not card.get("ok"):
+            val.clear()
+            return self._reply(403, f"<p>Refused: {html.escape(str(card.get('error', 'error')))}</p>")
+        if card["kind"] == "approve":
+            res = self._core({"verb": "approve", "notice": ident, "device": device,
+                              "decision": val.get("decision", "")})
+        elif card["kind"] == "otp":
+            res = self._core({"verb": "otp", "notice": ident, "device": device, "code": val.get("code", "")})
         else:
-            res = self._core({"verb": "unlock", "token": token, "password": val.get("password", "")})
+            res = self._core({"verb": "unlock", "notice": ident, "device": device,
+                              "password": val.get("password", "")})
         val.clear()
         if res.get("ok"):
             return self._reply(200, "<p>Done.</p>")

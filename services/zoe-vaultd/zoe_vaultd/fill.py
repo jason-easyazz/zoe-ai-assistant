@@ -215,6 +215,9 @@ class LoginRun:
         self.context_id: str | None = None
         self.sessions: dict[str, dict] = {}     # sessionId -> {target_id, type, parent_frame_id, url}
         self._new_sessions: list[str] = []
+        # every URL the TOP frame's document went through (each redirect hop and each committed navigation)
+        self.hops: list[str] = []
+        self._submit_hop_index = 0
         cdp.on_event(self._on_event)
 
     # -- event plumbing ------------------------------------------------------------------------------------------
@@ -229,6 +232,12 @@ class LoginRun:
                 self._new_sessions.append(child)
         elif method == "Target.detachedFromTarget":
             self.sessions.pop(params.get("sessionId"), None)
+        elif sid is not None and sid == self.top_session:
+            if method == "Network.requestWillBeSent" and params.get("type") == "Document" \
+                    and params.get("frameId") == self.top_target:
+                self.hops.append((params.get("request") or {}).get("url") or "")
+            elif method == "Page.frameNavigated" and not (params.get("frame") or {}).get("parentId"):
+                self.hops.append((params.get("frame") or {}).get("url") or "")
 
     def _service_sessions(self) -> None:
         while self._new_sessions:
@@ -256,6 +265,7 @@ class LoginRun:
         self.sessions[sid] = {"target_id": self.top_target, "type": "page", "parent_frame_id": None,
                               "url": "about:blank", "parent_session": None}
         self._enable(sid)
+        self.cdp.send("Network.enable", session=sid)     # to see every redirect hop of the top document
         self.cdp.send("Emulation.setFocusEmulationEnabled", {"enabled": True}, session=sid)
 
     def close(self) -> None:
@@ -265,12 +275,33 @@ class LoginRun:
         except CDPError:
             pass
 
+    def hops_ok(self, start: int) -> tuple[bool, str | None]:
+        """Every hop of the top document since `start` must be an origin the item allows (PSL-only for base-domain
+        rules: a hop has no browser registrable-domain to cross-check). One bad hop, even one that later bounces
+        back to the right site, refuses the whole sign-in."""
+        for url in list(self.hops[start:]):
+            if url == "about:blank":
+                continue
+            o = originmod.origin_of_url(url)
+            if o is None:
+                return False, url.split(":", 1)[0] + ":"
+            ok, _ = originmod.origin_allowed(o, self.rules, psl=self.psl,
+                                             browser_registrable=self.psl.registrable_domain(o.host),
+                                             lab_profile=self.lab_profile)
+            if not ok:
+                return False, str(o)
+        return True, None
+
     def navigate(self, url: str) -> None:
         start = self.cdp.event_count()
+        hop_start = len(self.hops)
         res = self.cdp.send("Page.navigate", {"url": url}, session=self.top_session)
         if res.get("errorText"):
             raise Refusal("navigation_failed")
         self._wait_settled(start)
+        ok, bad = self.hops_ok(hop_start)
+        if not ok:
+            raise Refusal("redirect_hop", bad)
 
     def _wait_settled(self, start: int) -> None:
         deadline = time.monotonic() + self.nav_timeout_s
@@ -518,6 +549,7 @@ class LoginRun:
                 raise Refusal("navigated", str(frame_origin)) from None
             raise
         start = self.cdp.event_count()
+        self._submit_hop_index = len(self.hops)
         how = self.cdp.send("Runtime.evaluate", {"expression": f"({SUBMIT_JS})({json.dumps(checked)})",
                                                  "contextId": ctx, "returnByValue": True}, session=f.session)
         verdict = (how.get("result") or {}).get("value")
@@ -534,7 +566,11 @@ class LoginRun:
         return str(frame_origin)
 
     def outcome(self) -> str:
-        """ok | needs_otp | login_failed | needs_owner (an unknown page: never guessed, never solved)."""
+        """ok | needs_otp | login_failed | needs_owner (an unknown page: never guessed, never solved) |
+        redirect_hop (after the submit the top document passed through an origin the item does not allow)."""
+        ok, _ = self.hops_ok(self._submit_hop_index)
+        if not ok:
+            return "redirect_hop"
         for mode, result in (("password", "login_failed"), ("otp", "needs_otp")):
             try:
                 self._scan(mode)

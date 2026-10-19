@@ -35,11 +35,12 @@ exactly one protection off (`substring`, `nopsl`, `inherit`, `logsecret`, `otp_v
 
 ## Result
 
-### 29/29 cells pass, every negative control red (2026-10-19, one lane-lock hold per piece)
+### 31/31 cells pass, every negative control red (2026-10-19, one lane-lock hold per piece)
 
-Run as seven pieces (v0, A-F), each 2.5-6 minutes inside one hold of the test-lane lock, `MemAvailable` 2002-3303 MB
-at the start of each. v0 ran at 05:02 (it does not load the broker); A-F were re-run 06:21-07:22 on the broker as
-submitted, after the first review round (renamed module, atomic submit-target check, audit reason-code charset). Every piece also re-proved H1. A cell whose negative control does not go red is reported as a
+Run as seven pieces (v0, A-F), each 2.5-7 minutes inside one hold of the test-lane lock, `MemAvailable` 2009-3186 MB
+at the start of each, after the second review round (paired-phone approvals, redirect hops, lock, audit head): v0-D
+07:56-10:14, E and F 10:28-10:36 on the final broker (the last change only touched what a login returns after a lock).
+Every piece also re-proved H1. A cell whose negative control does not go red is reported as a
 FAIL by `lab/common.py`, whatever its positive half says.
 
 | cell | piece | proves (green) | negative control (red) |
@@ -56,16 +57,18 @@ FAIL by `lab/common.py`, whatever its positive half says.
 | M3 bw RAM/time | v0 | measured (below) | - |
 | M7 trash retention | v0 | measured (below) | - |
 | **V1** right origin | A | the broker signs in at `login.example.test` in its own browser; the site accepts exactly that item; the redeemed handle holds cookies for `login.example.test` only; also a base-domain item (`www.example.org` -> `login.example.org`), a listed hosted widget (out-of-process `widget.test` inside `shop.example.test`) and a Household item | item bound to another host: refused (`login_url_not_in_item`), no fill |
-| **V5** approval timeout | A | a money item, card opened on the phone, no answer: after 121+ s `capabilities` = `expired`, the card is HTTP 410, no browser ever starts | unanswered defaults to allow (3 s deadline for the control): the fill happens |
-| **V2** look-alike refused | B | no fill and no canary anywhere for: `examp1e`, homograph, `.evil.test` suffix, private-PSL sibling (`mallory.github.io` vs `alice.github.io`), `http://`, cross-origin iframe, `about:blank`, `srcdoc`, `data:`, `blob:`, sandboxed frame, open-redirect final hop, plus form action / button `formaction` / `method=get` | substring host match fills `.evil.test`; no-PSL base domain fills the github.io sibling; inheriting the parent's origin fills `about:blank` and `srcdoc` |
-| **V3** canary never visible | C | across the piece's sign-ins, incl. a phone-typed one-time code and an injected "repeat the password" page: the password / username / notes / field marker and the code are in none of zoe-data's requests or replies, the phone pages, the audit log, the three units' logs or the browser profile dir | log the value at debug: found in the log; route the code page through zoe-data: the code is in zoe-data's messages |
+| **V5** approval timeout | A | a money item, card opened on the owner's paired phone, no answer: after 121+ s `capabilities` = `expired`, the card is closed (403), no browser ever starts | unanswered defaults to allow (3 s deadline for the control): the fill happens |
+| **V2** look-alike refused | B | no fill and no canary anywhere for: a disallowed hop that BOUNCES BACK (right site -> `evil.test` -> right site's login: `redirect_hop`), `examp1e`, homograph, `.evil.test` suffix, private-PSL sibling (`mallory.github.io` vs `alice.github.io`), `http://`, cross-origin iframe, `about:blank`, `srcdoc`, `data:`, `blob:`, sandboxed frame, open-redirect final hop, plus form action / button `formaction` / `method=get` | substring host match fills `.evil.test`; no-PSL base domain fills the github.io sibling; inheriting the parent's origin fills `about:blank` and `srcdoc`; checking only the final page fills the bounce |
+| **V3** canary never visible | C | across the piece's sign-ins, incl. a one-time code typed on the member's paired phone and an injected "repeat the password" page: the password / username / notes / field marker and the code are in none of zoe-data's requests or replies, the phone pages, the audit log, the three units' logs or the browser profile dir, and the witness saw the canary ONLY on the accepted sign-ins of those V3 runs (no leak) | log the value at debug: found in the log; route the code page through zoe-data: the code is in zoe-data's messages |
 | **V4** revoked share | C | a capability minted BEFORE alice unassigned the item is refused at use (`item_unavailable`, the broker syncs first); the full unshare refuses the next login and the original restores | cache without sync: the unassigned item signs in; clone skipped: nothing deleted |
+| **A1** approval needs the owner's paired phone | D | zoe-data is told only opaque `/v/n/<notice>` ids; with everything it was told it calls `approve` (verb not allowed), replays the notice through the nginx-facing phone route with no phone and with another member's phone, and opens the card: all refused, the proposal stays pending; the owner's paired phone then approves | drop the device binding: the bare notice approves and capabilities are issued |
 | **V6** capability bound | D | the right tuple signs in once; other item / errand / member / step, as an OTP token, as a redeem handle, second use, item moved after approval (`origin_changed`), bare item id, proposal id, an "approved" flag, after expiry (3 s TTL for the check): all refused | accept a caller-asserted proposal id: the forged tuple signs in |
 | **V7** no reveal verb | E | verbs are exactly the documented sets; 17 reveal-style verbs -> `unknown_verb`; phone verbs from zoe-data's uid -> `verb_not_allowed`; no item content in any reply | a debug `get` verb: item content returned |
 | **V8** peer check | E | zoe-data's uid gets labels; a uid IN the socket's group but not on the allow-list -> `peer_refused`; a uid outside the group -> `EACCES` | no SO_PEERCRED check: the grouped uid gets labels |
-| **V18** unlock narrow (U3) | E | from zoe-data's uid -> `verb_not_allowed`; first unlock via the phone page works; while unlocked, a reused token, three bad attempts then the right password, an expired token (2 s TTL for the check): refused; no link offered while locked out | allow `unlock` for zoe-data's uid: it unlocks |
-| **V9** audit chain | E | the chain verifies; one line per login call; deleting or editing a line breaks it | the same lines without the chain: an edit goes unnoticed |
+| **V18** unlock narrow (U3) | E | from zoe-data's uid -> `verb_not_allowed`; the unlock notice with no paired phone, or a non-admin's phone -> refused; first unlock via an admin's paired phone works; while unlocked, a reused token, three bad attempts then the right password, an expired token (2 s TTL for the check): refused; no link offered while locked out | allow `unlock` for zoe-data's uid: it unlocks |
+| **V9** audit chain | E | the chain verifies; one line per login call; deleting or editing a line breaks it; cutting the last lines, or editing the LAST line (which no successor authenticates), is caught against the chain-head file | the same lines without the chain: an edit goes unnoticed; the chain without its head file: a cut tail and an edited last line go unnoticed |
 | **V13** navigation race | F | a focus handler that navigates the frame, `document.open()`s a new document with a text box that beacons to `evil.test`, or navigates an out-of-process widget cross-site: all refused `navigated`, nothing at `evil.test` | no binding / re-check before insert: the swapped document's text box receives the password and beacons it to `evil.test` |
+| **L1** lock stops an in-flight sign-in | F | `lock` while a sign-in's filled form is still on the page (submit held 8 s): the browser is closed, the login returns `locked` with no handle, and the site never receives the password | the lock as first submitted (state wiped, browser untouched): the browser carries on and the site receives the password after the lock |
 | **V17** no DevTools for zoe-data | F | during a sign-in, from zoe-data's uid: the DevTools socket -> `EACCES`, no TCP DevTools port; the redeemed cookies carry no canary; with the socket mode widened to everyone the launcher's own peer check still refuses | the browser's DevTools connection shared with a second endpoint any uid can open: zoe-data's uid reads the filled password from the input |
 
 ### V0 measurements
@@ -112,7 +115,14 @@ FAIL by `lab/common.py`, whatever its positive half says.
   method for any other browser error (never a parameter value).
 - **DOM clobbering:** the fill reads form and document properties through the isolated world's pristine prototype
   getters, so `<input name=action>` cannot fake a form's submit target.
-- **From review:** the broker module was first named `core.py`, which the root `.gitignore` drops as a core dump
+- **From the second review (Codex):** (1) approvals were answerable by whoever held the notice link, which zoe-data
+  forwards: answers now need a phone PAIRED to the right member (cell A1); (2) only the final page was checked, so a
+  redirect through `evil.test` that bounced back reached the fill: every top-frame hop is now checked (V2 `lk_bounce`);
+  (3) `lock` did not stop a sign-in already in the browser: it now closes that browser and nothing started before it can
+  mint a handle (L1); also the chain-head file for a cut tail (V9), the V3 witness check across all its sign-ins, and
+  `redeem` checks the uid before consuming. Because the hop check runs first, most look-alikes in V2 are now refused
+  as `redirect_hop`; the frame-level rule for them is pinned by the unit tests.
+- **From the first review:** the broker module was first named `core.py`, which the root `.gitignore` drops as a core dump
   (`**/core.*`), so it never reached git; it is `broker.py` now (the unit is still called `core`). The form-target
   check is now repeated inside the same script that submits, so a page timer cannot change the target in between.
 - **Vaultwarden needs `encryptedFor`** on every cipher write since web-v2025.6.0 (lab seeding), and a Docker volume

@@ -1,8 +1,12 @@
 """Append-only, hash-chained audit log (credential-vault.md section 12, cell V9).
 
 One JSON object per line. Each line carries `prev`, the SHA-256 of the previous line's bytes (the first line carries
-64 zeros), so deleting, reordering or editing any line breaks `verify()`. The writer accepts only an allowlisted set of
-metadata fields with short scalar values: there is no field a secret, a code, a cookie or a page body could go into.
+64 zeros), so deleting, reordering or editing any line breaks `verify()`. The chain alone cannot see the LAST lines
+being cut off, nor the LAST line being edited (no successor carries its hash), so the writer also keeps the chain head (line count and last hash) in `<log>.head`, and `verify()`
+refuses a log shorter than its head. Both files belong to the broker's uid, so this catches truncation by anyone but
+that uid; a root-owned or off-box checkpoint of the head (phase V2) is what covers the broker itself.
+The writer accepts only an allowlisted set of metadata fields with short scalar values: there is no field a secret, a
+code, a cookie or a page body could go into.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ GENESIS = "0" * 64
 
 EVENTS = frozenset({
     "start", "labels", "propose", "approve", "deny", "capabilities", "login", "otp", "refuse", "lock", "unlock",
-    "sync", "redeem", "peer_refused",
+    "sync", "redeem", "peer_refused", "pair",
 })
 
 FIELDS = frozenset({
@@ -41,10 +45,26 @@ def _line_hash(line: bytes) -> str:
     return hashlib.sha256(line).hexdigest()
 
 
-def verify(path: str | Path) -> tuple[bool, int, str]:
-    """(ok, lines checked, problem). An absent or empty log verifies as ok with 0 lines."""
-    ok, n, problem, _ = _walk(path)
-    return ok, n, problem
+def head_path(path: str | Path) -> Path:
+    return Path(str(path) + ".head")
+
+
+def verify(path: str | Path, *, use_head: bool = True) -> tuple[bool, int, str]:
+    """(ok, lines checked, problem). An absent or empty log verifies as ok with 0 lines. With `use_head` (the
+    default) the log must also reach the recorded chain head: a cut-off tail is reported as truncated."""
+    ok, n, problem, last = _walk(path)
+    if not ok or not use_head:
+        return ok, n, problem
+    hp = head_path(path)
+    if hp.exists():
+        try:
+            want_n, want_hash = hp.read_text().split()
+            want_n = int(want_n)
+        except ValueError:
+            return False, n, "head unreadable"
+        if n < want_n or (n == want_n and last != want_hash):
+            return False, n, f"truncated: head says {want_n} lines"
+    return True, n, ""
 
 
 def _walk(path: str | Path) -> tuple[bool, int, str, str]:
@@ -78,11 +98,14 @@ class AuditLog:
         # Open first, then read the chain head once: the broker is the only writer of this file.
         self._fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         ok, n, problem, head = _walk(self.path)
+        if ok:
+            ok, n, problem = verify(self.path)
         if not ok:
             os.close(self._fd)
             # Fail closed: a broker whose audit trail was tampered with does not start.
             raise AuditError(f"audit chain broken at line {n}: {problem}")
         self._prev = head
+        self._n = n
 
     def write(self, event: str, **fields) -> None:
         if event not in EVENTS:
@@ -111,6 +134,18 @@ class AuditLog:
             os.write(self._fd, body + b"\n")
             os.fsync(self._fd)
             self._prev = _line_hash(body)
+            self._n += 1
+            self._write_head()
+
+    def _write_head(self) -> None:
+        hp = head_path(self.path)
+        tmp = str(hp) + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(f"{self._n} {self._prev}\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, hp)
 
     def close(self) -> None:
         try:

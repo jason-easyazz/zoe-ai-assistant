@@ -29,14 +29,15 @@ from .audit import AuditLog
 from .cdp import CDP, CDPError
 from .fill import Refusal, run_login
 from .peer import peer_uid
-from .policy import (OTP_TIMEOUT_S, Policy, PolicyRefusal, Step, UnlockGate, _key, is_sensitive)
+from .policy import (OTP_TIMEOUT_S, DeviceRegistry, Policy, PolicyRefusal, Step, UnlockGate, _key, is_sensitive)
 from .psl import PublicSuffixList
 from .vault import BwClient, VaultError, item_meta
 
 CLIENT_VERBS = frozenset({"labels", "propose", "capabilities", "login", "redeem", "lock", "status", "notices"})
-PHONE_VERBS = frozenset({"card", "approve", "otp", "unlock", "lock"})
-VERBS = CLIENT_VERBS | PHONE_VERBS
-ROLE_VERBS = {"client": CLIENT_VERBS, "phone": PHONE_VERBS}
+PHONE_VERBS = frozenset({"card", "approve", "otp", "unlock", "lock", "pair_complete"})
+ADMIN_VERBS = frozenset({"pair", "status", "lock"})
+VERBS = CLIENT_VERBS | PHONE_VERBS | ADMIN_VERBS
+ROLE_VERBS = {"client": CLIENT_VERBS, "phone": PHONE_VERBS, "admin": ADMIN_VERBS}
 
 MAX_REQUEST = 64 * 1024
 HANDLE_TTL_S = 300
@@ -76,6 +77,7 @@ class Config:
     capability_ttl_s: float = 600.0
     unlock_token_ttl_s: float = 600.0
     rate_limits: tuple[int, int, int] = (3, 6, 12)
+    admin_uids: set[int] = field(default_factory=set)
 
     @classmethod
     def load(cls, path: str) -> "Config":
@@ -86,13 +88,15 @@ class Config:
             raise ValueError("unlock.mode must be key_file or attended")
         client_uids = {int(u) for u in raw["client_uids"]}
         phone_uids = {int(u) for u in raw["phone_uids"]}
-        if client_uids & phone_uids or 0 in client_uids | phone_uids:
-            raise ValueError("client_uids and phone_uids must be disjoint and must not include root")
+        admin_uids = {int(u) for u in raw.get("admin_uids") or []}
+        if (client_uids & phone_uids or client_uids & admin_uids or phone_uids & admin_uids
+                or 0 in client_uids | phone_uids | admin_uids):
+            raise ValueError("client, phone and admin uids must be disjoint and must not include root")
         return cls(
             server=raw["server"], email=raw["email"], bw_path=raw["bw_path"], appdata_dir=raw["appdata_dir"],
             socket_path=raw["socket"]["path"], socket_group=raw["socket"]["group"], cdp_socket=raw["cdp_socket"],
             audit_path=raw["audit_path"], psl_path=raw["psl_path"],
-            client_uids=client_uids, phone_uids=phone_uids,
+            client_uids=client_uids, phone_uids=phone_uids, admin_uids=admin_uids,
             members=raw["members"], orgs=raw["orgs"], unlock_mode=mode, password_file=unlock.get("password_file"),
             extra_ca=raw.get("extra_ca"), lab_profile=bool(raw.get("lab_profile", False)),
             mem_floor_mb=int(raw.get("mem_floor_mb", 1500)),
@@ -135,7 +139,11 @@ class Core:
         self.policy = Policy(clock=clock, approval_timeout_s=cfg.approval_timeout_s,
                              capability_ttl_s=cfg.capability_ttl_s, limits=cfg.rate_limits)
         self.gate = UnlockGate(clock=clock, ttl_s=cfg.unlock_token_ttl_s)
+        self.devices = DeviceRegistry(os.path.join(os.path.dirname(cfg.audit_path) or ".", "devices.json"),
+                                      clock=clock)
         self.locked = True
+        self._epoch = 0                    # bumped by every lock; a login that started earlier can mint nothing
+        self._active_cdp: CDP | None = None
         self._browser_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._otp: dict[str, _OtpWait] = {}
@@ -154,6 +162,14 @@ class Core:
             self.gate.mint()
 
     def _lock(self, why: str, peer: int) -> None:
+        # First stop anything in flight: no new handle can be minted past this point, and a sign-in that is inside
+        # the browser right now loses its DevTools connection (the launcher then kills that browser).
+        with self._state_lock:
+            self.locked = True
+            self._epoch += 1
+            cdp, self._active_cdp = self._active_cdp, None
+        if cdp is not None:
+            cdp.close()
         self.bw.lock()
         self.policy.wipe()
         with self._state_lock:
@@ -173,7 +189,13 @@ class Core:
             return "client"
         if uid in self.cfg.phone_uids:
             return "phone"
+        if uid in self.cfg.admin_uids:
+            return "admin"
         return None
+
+    def _is_admin(self, member: str | None) -> bool:
+        info = self.cfg.members.get(member) if isinstance(member, str) else None
+        return isinstance(info, dict) and bool(info.get("admin")) and bool(info.get("adult"))
 
     def member_orgs(self, member: str) -> list[dict]:
         info = self.cfg.members.get(member) if isinstance(member, str) else None
@@ -232,7 +254,7 @@ class Core:
         with self._state_lock:
             for w in self._otp.values():
                 if now < w.expires and w.code is None:
-                    links.append({"kind": "otp", "member": w.member, "path": "/v/code/" + w.token})
+                    links.append({"kind": "otp", "member": w.member, "path": "/v/n/" + w.token})
         if self.locked and self.cfg.unlock_mode == "attended":
             link = self.gate.current_link()
             if link:
@@ -305,14 +327,51 @@ class Core:
             self.audit.write("propose", member=member, errand=errand, step=st.step_id, item=st.item_id,
                              label=st.label, domain=st.domain, origin=st.origin, proposal=p.proposal_id,
                              approver=p.approver, category=st.category or "none", peer_uid=uid)
-        return {"ok": True, "proposal": p.proposal_id, "approver": p.approver, "path": "/v/approve/" + p.token,
+        return {"ok": True, "proposal": p.proposal_id, "approver": p.approver, "path": "/v/n/" + p.notice,
                 "expires_in": int(self.cfg.approval_timeout_s)}
 
+    # -- the phone side: every answer needs a PAIRED phone of the right member ------------------------------------
+    def verb_pair(self, uid: int, req: dict) -> dict:
+        """Admin role only (never zoe-data's uid): a single-use, 10-minute link that pairs ONE phone to a member."""
+        member = req.get("member")
+        info = self.cfg.members.get(member) if isinstance(member, str) else None
+        if not isinstance(info, dict) or not info.get("adult"):
+            raise PolicyRefusal("not_allowed")
+        token = self.devices.begin(member)
+        self.audit.write("pair", member=member, decision="link", peer_uid=uid)
+        return {"ok": True, "path": "/v/pair/" + token}
+
+    def verb_pair_complete(self, uid: int, req: dict) -> dict:
+        member, secret = self.devices.complete(req.get("token") or "")
+        self.audit.write("pair", member=member, decision="paired", peer_uid=uid)
+        return {"ok": True, "member": member, "device": secret}
+
+    def _device(self, req: dict) -> str | None:
+        return self.devices.member_of(req.get("device"))
+
+    def _otp_by_notice(self, notice: str) -> "_OtpWait | None":
+        with self._state_lock:
+            return self._otp.get(_key(notice or ""))
+
     def verb_card(self, uid: int, req: dict) -> dict:
-        """The approval card, built here from vault data and the owner's goal; never from model text."""
-        p = self.policy.by_token(req.get("token") or "")
+        """What a notice is, shown only to the phone it is for. An approval card is built here from vault data and
+        the owner's goal, never from model text."""
+        notice = req.get("notice") or ""
+        device_member = self._device(req)
+        w = self._otp_by_notice(notice)
+        if w is not None:
+            if device_member != w.member:
+                raise PolicyRefusal("not_your_phone")
+            return {"ok": True, "kind": "otp"}
+        if self.gate.is_current(notice):
+            if not self._is_admin(device_member):
+                raise PolicyRefusal("not_your_phone")
+            return {"ok": True, "kind": "unlock"}
+        p = self.policy.by_notice(notice)
         if p is None:
-            raise PolicyRefusal("unknown_token")
+            raise PolicyRefusal("unknown_notice")
+        if device_member is None or device_member != p.approver:
+            raise PolicyRefusal("not_your_phone")
         if p.state != "pending":
             raise PolicyRefusal("proposal_" + p.state)
         steps = []
@@ -325,14 +384,15 @@ class Core:
             steps.append({"label": s.label, "origin": s.origin,
                           "looks_like": unicode_host if o and unicode_host != o.host else None,
                           "category": s.category or "none", "sensitive": is_sensitive(s.category)})
-        return {"ok": True, "member": p.member, "approver": p.approver, "goal": p.goal, "errand": p.errand,
+        return {"ok": True, "kind": "approve", "member": p.member, "approver": p.approver, "goal": p.goal,
+                "errand": p.errand,
                 "steps": steps, "expires_in": max(0, int(p.expires - self.clock()))}
 
     def verb_approve(self, uid: int, req: dict) -> dict:
         decision = req.get("decision")
         if decision not in ("approve", "deny", "deny_lock"):
             raise PolicyRefusal("bad_request")
-        p = self.policy.decide(req.get("token") or "", decision == "approve")
+        p = self.policy.decide(req.get("notice") or "", decision == "approve", device_member=self._device(req))
         self.audit.write("approve" if decision == "approve" else "deny", member=p.member, errand=p.errand,
                          proposal=p.proposal_id, approver=p.approver, decision=decision, peer_uid=uid)
         if decision == "deny_lock":
@@ -364,10 +424,13 @@ class Core:
         code = req.get("code")
         if not isinstance(code, str) or not CODE_RE.match(code):
             raise PolicyRefusal("bad_code")
+        device_member = self._device(req)
         with self._state_lock:
-            w = self._otp.get(_key(req.get("token") or ""))
+            w = self._otp.get(_key(req.get("notice") or ""))
             if w is None or self.clock() >= w.expires or w.code is not None:
-                raise PolicyRefusal("unknown_token")
+                raise PolicyRefusal("unknown_notice")
+            if device_member != w.member:
+                raise PolicyRefusal("not_your_phone")
             w.code = code
             w.event.set()
         self.audit.write("otp", member=w.member, item=w.item, decision="received", peer_uid=uid)
@@ -398,6 +461,7 @@ class Core:
             return refuse("ram_floor")
         if not self._browser_lock.acquire(timeout=60):
             return refuse("browser_busy")
+        epoch = self._epoch
         username = password = None
         try:
             try:
@@ -430,17 +494,27 @@ class Core:
                 cdp = CDP.connect_unix(self.cfg.cdp_socket)
             except OSError:
                 return refuse("browser_unavailable")
+            with self._state_lock:
+                if self.locked or self._epoch != epoch:      # locked while we synced: never open the browser
+                    cdp.close()
+                    return refuse("locked")
+                self._active_cdp = cdp
             try:
                 result = run_login(cdp, psl=self.psl, rules=rules, approved_origin=cap.origin, login_url=login_url,
                                    username=username, password=password, lab_profile=self.cfg.lab_profile,
                                    otp_wait=self._otp_wait(cap.member, cap.item_id))
             except Refusal as r:
-                return refuse(r.reason, frame_origin=r.frame_origin)
+                return refuse("locked" if self._epoch != epoch else r.reason, frame_origin=r.frame_origin)
             except CDPError as exc:
+                if self._epoch != epoch:
+                    return refuse("locked")
                 # the DevTools method and Chromium's short reason only (letters and spaces); never a parameter value
                 why = re.sub(r"[^A-Za-z. ]", "", str(exc))[:80]
                 return refuse("browser_error", detail=why)
             finally:
+                with self._state_lock:
+                    if self._active_cdp is cdp:
+                        self._active_cdp = None
                 cdp.close()
         except VaultError as e:
             return refuse(e.reason)
@@ -449,12 +523,23 @@ class Core:
         finally:
             username = password = None
             self._browser_lock.release()
+        if self._epoch != epoch:
+            # locked while the browser ran: whatever the page did after its DevTools pipe was cut is not an outcome
+            result.cookies.clear()
+            return refuse("locked")
         if result.outcome != "ok":
             return refuse(result.outcome, frame_origin=result.frame_origin)
         handle = secrets.token_urlsafe(24)
         with self._state_lock:
-            self._handles[_key(handle)] = {"uid": uid, "expires": self.clock() + HANDLE_TTL_S,
-                                           "cookies": result.cookies}
+            if self.locked or self._epoch != epoch:
+                result.cookies.clear()
+                minted = False
+            else:
+                self._handles[_key(handle)] = {"uid": uid, "expires": self.clock() + HANDLE_TTL_S,
+                                               "cookies": result.cookies}
+                minted = True
+        if not minted:
+            return refuse("locked")
         self.counters["logins_ok"] += 1
         self.audit.write("login", decision="ok", frame_origin=result.frame_origin, count=len(result.cookies),
                          duration_ms=int((self.clock() - started) * 1000), **audit)
@@ -462,9 +547,13 @@ class Core:
 
     def verb_redeem(self, uid: int, req: dict) -> dict:
         """The sealed handle from `login`: the item-domain cookies, once, only to the uid that ran the login."""
+        key = _key(req.get("handle") or "")
         with self._state_lock:
-            h = self._handles.pop(_key(req.get("handle") or ""), None)
-        if h is None or h["uid"] != uid or self.clock() >= h["expires"]:
+            h = self._handles.get(key)
+            if h is None or h["uid"] != uid:
+                raise PolicyRefusal("unknown_handle")        # another uid can neither read nor burn it
+            del self._handles[key]
+        if self.clock() >= h["expires"]:
             raise PolicyRefusal("unknown_handle")
         self.audit.write("redeem", count=len(h["cookies"]), peer_uid=uid)
         return {"ok": True, "cookies": h["cookies"]}
@@ -474,14 +563,18 @@ class Core:
         return {"ok": True, "state": "locked"}
 
     def verb_unlock(self, uid: int, req: dict) -> dict:
-        """U3 only: the phone page hands over Zoe's vault password with a single-use token (5.2, cell V18)."""
+        """U3 only: an ADMIN's paired phone hands over Zoe's vault password against the current single-use unlock
+        notice (5.2, cell V18)."""
         if self.cfg.unlock_mode != "attended":
             raise PolicyRefusal("unlock_not_attended")
+        if not self._is_admin(self._device(req)):
+            self.audit.write("unlock", decision="refused", reason="not_your_phone", peer_uid=uid)
+            raise PolicyRefusal("not_your_phone")
         if not self.locked:
             self.audit.write("unlock", decision="refused", reason="not_locked", peer_uid=uid)
             raise PolicyRefusal("not_locked")
         try:
-            self.gate.take(req.get("token") or "")
+            self.gate.take(req.get("notice") or "")
         except PolicyRefusal as r:
             self.audit.write("unlock", decision="refused", reason=r.reason, peer_uid=uid)
             raise

@@ -30,10 +30,16 @@ code / unlock pages).
   verb that returns a username, password, note, TOTP or custom-field value is a design change, not a code change.
 - **Every input to an origin decision comes from the vault or from the browser** — never from a caller. Every exact
   origin comparison goes through `origin.origin_equal`; frames are judged by `origin.check_frame`.
-- **Roles come from SO_PEERCRED only.** `client_uids` and `phone_uids` are disjoint and never root (config refuses).
+- **Roles come from SO_PEERCRED only.** `client_uids`, `phone_uids` and `admin_uids` are disjoint and never root (config refuses).
   `unlock` is phone-only and U3-only.
 - **A capability is minted only by `policy.Policy.issue` after a phone approval.** Every bound field must match;
   any use burns it.
+- **zoe-data never holds anything that can answer a notice.** It gets opaque `/v/n/<notice>` ids; approve, code and
+  unlock need the device secret of a phone paired to the right member (`policy.DeviceRegistry`), and a pairing link
+  comes only from the admin role.
+- **Every redirect hop of the top document is checked** (`fill.LoginRun.hops_ok`), not just the final page.
+- **`lock` stops in-flight work:** it closes a running sign-in's DevTools connection, and a sign-in that started
+  before a lock can mint nothing (`broker.Core._epoch`).
 - **Secrets never reach argv, logs or the audit log.** The `bw` session key and the U3 password go to the child
   through its environment; the audit writer accepts only allowlisted scalar fields.
 - **Standard library only** (pinned by `test_broker_is_stdlib_only`), so the whole broker stays reviewable.

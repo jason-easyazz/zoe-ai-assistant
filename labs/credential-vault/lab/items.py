@@ -19,6 +19,7 @@ ZOE_ITEMS = {
     "otp": ("A", [(R, None)], f"{R}/login-otp", "other", RIGHT, True),
     "inject": ("A", [(R, None)], f"{R}/login-inject", "other", RIGHT, False),
     "hold": ("A", [(R, None)], f"{R}/login-hold", "other", RIGHT, False),
+    "hold_long": ("A", [(R, None)], f"{R}/login-hold-long", "other", RIGHT, False),
     "bank": ("A", [(f"https://{BANK}", HOST)], f"https://{BANK}/login", "money", BANK, False),
     "widget": ("A", [(f"https://{SHOP}", HOST), (f"https://{WIDGET}", HOST)], f"https://{SHOP}/checkout-login",
                "shopping", WIDGET, False),
@@ -39,6 +40,8 @@ ZOE_ITEMS = {
     "lk_data": ("A", [(R, None)], f"{R}/frame-data", "other", RIGHT, False),
     "lk_blob": ("A", [(R, None)], f"{R}/frame-blob", "other", RIGHT, False),
     "lk_sandbox": ("A", [(R, None)], f"{R}/frame-sandbox", "other", RIGHT, False),
+    # a disallowed hop that bounces back: right site -> evil.test -> right site's login page (review finding 2)
+    "lk_bounce": ("A", [(R, None)], go(f"https://{EVIL}/go?to={R}/login"), "other", RIGHT, False),
     "lk_redirect": ("A", [(R, None)], go(f"https://{EVIL}/login"), "other", EVIL, False),
     # 6.4 form checks
     "fa_action": ("A", [(R, None)], f"{R}/login-formaction", "other", RIGHT, False),

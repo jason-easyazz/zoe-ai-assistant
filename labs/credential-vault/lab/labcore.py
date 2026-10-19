@@ -65,8 +65,9 @@ def logsecret() -> None:
 
 
 def otp_via_client() -> None:
-    """V3 NC: the one-time code goes through zoe-data's uid instead of the phone unit."""
+    """V3 NC: the one-time code goes through zoe-data's uid instead of the member's paired phone."""
     core.ROLE_VERBS = {**core.ROLE_VERBS, "client": core.CLIENT_VERBS | {"otp"}}
+    core.Core._device = lambda self, req: "alice"
 
 
 def nosync() -> None:
@@ -131,8 +132,34 @@ def norecheck() -> None:
 
 
 def unlock_for_client() -> None:
-    """V18 NC: allow `unlock` for zoe-data's peer uid."""
+    """V18 NC: allow `unlock` for zoe-data's peer uid (which has no paired admin phone)."""
     core.ROLE_VERBS = {**core.ROLE_VERBS, "client": core.CLIENT_VERBS | {"unlock"}}
+    core.Core._is_admin = lambda self, member: True
+
+
+def nodevice() -> None:
+    """A1 NC: drop the paired-phone binding, so a notice id alone answers for its approver."""
+    def _device(self, req):
+        p = self.policy.by_notice(req.get("notice") or "")
+        return p.approver if p else None
+    core.Core._device = _device
+
+
+def nohops() -> None:
+    """V2 NC: check only the final document, not every redirect hop."""
+    fill.LoginRun.hops_ok = lambda self, start: (True, None)
+
+
+def oldlock() -> None:
+    """L1 NC: the lock as first submitted: wipes keys and state, never touches a sign-in already in the browser."""
+    def _lock(self, why, peer):
+        self.bw.lock()
+        self.policy.wipe()
+        with self._state_lock:
+            self._handles.clear()
+        self.locked = True
+        self.audit.write("lock", reason=why, peer_uid=peer)
+    core.Core._lock = _lock
 
 
 SHARED_DEVTOOLS = "/run/zoe-vault-browser/shared.sock"
@@ -220,7 +247,7 @@ def group_widened() -> None:
 
 PATCHES = {f.__name__: f for f in (substring, nopsl, inherit, logsecret, otp_via_client, nosync, timeout_allow,
                                    trust_approval_id, debug_get, nopeer, norecheck, unlock_for_client,
-                                   shared_devtools, group_widened)}
+                                   shared_devtools, group_widened, nodevice, nohops, oldlock)}
 
 if __name__ == "__main__":
     args = sys.argv[1:]

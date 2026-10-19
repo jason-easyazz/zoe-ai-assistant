@@ -38,7 +38,8 @@ CONFIG = "/etc/zoe-vaultd/config.json"
 AUDIT = "/var/lib/zoe-vault/audit.jsonl"
 LOGS = Path("/run/cvlab-logs")
 DOCUMENTED_CLIENT = {"labels", "propose", "capabilities", "login", "redeem", "lock", "status", "notices"}
-DOCUMENTED_PHONE = {"card", "approve", "otp", "unlock", "lock"}
+DOCUMENTED_PHONE = {"card", "approve", "otp", "unlock", "lock", "pair_complete"}
+DOCUMENTED_ADMIN = {"pair", "status", "lock"}
 UNLOCK_FIELD = "password"   # the unlock verb's field; every value put in it here is synthetic or random
 PROBE_VERBS = ["get", "reveal", "item", "password", "export", "dump", "debug", "secret", "show", "fill", "totp",
                "notes", "fields", "username", "cookies", "help", "verbs"]
@@ -89,8 +90,8 @@ def write_config(**over) -> None:
         "appdata_dir": "/var/lib/zoe-vault/bw", "extra_ca": CA,
         "socket": {"path": CORE_SOCK, "group": "zoe-vault-clients"}, "cdp_socket": CDP_SOCK,
         "audit_path": AUDIT, "psl_path": "/usr/share/publicsuffix/public_suffix_list.dat",
-        "client_uids": [uid("zoe-svc")], "phone_uids": [uid("zoe-vault-phone")],
-        "members": {"alice": {"adult": True}, "bob": {"adult": True}, "carol": {"adult": True},
+        "client_uids": [uid("zoe-svc")], "phone_uids": [uid("zoe-vault-phone")], "admin_uids": [uid("lab-admin")],
+        "members": {"alice": {"adult": True, "admin": True}, "bob": {"adult": True}, "carol": {"adult": True},
                     "kid": {"adult": False}},
         "orgs": [{"id": ST["orgs"]["A"]["id"], "kind": "member", "owner": "alice", "collection": ST["orgs"]["A"]["zoe"]},
                  {"id": ST["orgs"]["B"]["id"], "kind": "member", "owner": "bob", "collection": ST["orgs"]["B"]["zoe"]},
@@ -174,9 +175,15 @@ def svc(req: dict, user: str = "zoe-svc") -> dict:
         return {"ok": False, "error": "client_crash", "detail": r.stderr[-300:]}
 
 
-def phone(method: str, path: str, body: str | None = None) -> dict:
-    args = ["python3", f"{LAB}/phonecli.py", PHONE_SOCK, method, path] + (["-"] if body is not None else [])
-    r = as_user("lab-nginx", args, input=body, timeout=900)
+PHONES: dict = {}       # member -> the zv_device cookie their paired phone holds (lab memory only, never printed)
+
+
+def phone(method: str, path: str, body: str | None = None, *, as_: str | None = "alice") -> dict:
+    """A request from `as_`'s paired phone (as_=None: no device cookie, e.g. zoe-data replaying a notice through
+    the nginx-facing route). lab-nginx stands in for nginx, which forwards whatever the network sends."""
+    args = ["python3", f"{LAB}/phonecli.py", PHONE_SOCK, method, path]
+    opts = {"body": body, "cookie": PHONES.get(as_) if as_ else None}
+    r = as_user("lab-nginx", args, input=json.dumps(opts), timeout=900)
     PHONE_PAGES.append(r.stdout)
     try:
         return json.loads(r.stdout)
@@ -199,9 +206,18 @@ def propose(key: str, *, member: str = "alice", errand: str | None = None, step:
     return p, errand
 
 
+def pair(member: str) -> None:
+    """The owner's admin login mints a pairing link (zoe-data's uid cannot); the member's phone opens it."""
+    link = svc({"verb": "pair", "member": member}, user="lab-admin")
+    res = phone("GET", link["path"], as_=None)
+    if not res.get("device"):
+        raise SystemExit(f"pairing {member}'s phone failed: {res.get('status')}")
+    PHONES[member] = res["device"]
+
+
 def approve(p: dict, decision: str = "approve") -> dict:
-    page = phone("GET", p["path"])
-    res = phone("POST", p["path"], f"decision={decision}")
+    page = phone("GET", p["path"], as_=p.get("approver"))
+    res = phone("POST", p["path"], f"decision={decision}", as_=p.get("approver"))
     return {"card": page, "post": res}
 
 
@@ -253,9 +269,10 @@ def fills(records: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-V2_ITEMS = ["lk_examp1e", "lk_homograph", "lk_suffixed", "lk_priv", "lk_priv2", "lk_http", "lk_framed", "lk_blank",
+V2_ITEMS = ["lk_bounce", "lk_examp1e", "lk_homograph", "lk_suffixed", "lk_priv", "lk_priv2", "lk_http", "lk_framed", "lk_blank",
             "lk_srcdoc", "lk_data", "lk_blob", "lk_sandbox", "lk_redirect", "fa_action", "fa_button", "fa_get"]
-V2_NC = {"substring": ["lk_suffixed"], "nopsl": ["lk_priv2"], "inherit": ["lk_blank", "lk_srcdoc"]}
+V2_NC = {"substring": ["lk_suffixed"], "nopsl": ["lk_priv2"], "inherit": ["lk_blank", "lk_srcdoc"],
+         "nohops": ["lk_bounce"]}
 V13_ITEMS = ["race_nav", "race_swap", "race_oopif"]
 
 
@@ -282,13 +299,16 @@ def run(groups: str) -> None:
     marker = ST["marker"]
     otp_codes = [v["otp"] for v in ST["items"].values() if v.get("otp")]
     setup()
-    if os.path.exists(AUDIT):
-        os.unlink(AUDIT)
+    for f in (AUDIT, AUDIT + ".head"):
+        if os.path.exists(f):
+            os.unlink(f)
     STACK.start_browser()
     STACK.start_core()
     STACK.start_phone()
     status = wait_ready()
     MEASURE["core_unlock_mode"] = status.get("unlock_mode")
+    for m in ("alice", "bob"):
+        pair(m)
     from v0 import member_bw
     member_bw("alice", ST)                 # makes alice's private bw data dir when V0 did not run in this piece
     alice = Bw("alice", "lab-member", "/home/lab-member/bw/alice", ST["emails"]["alice"],
@@ -323,6 +343,42 @@ def run(groups: str) -> None:
              nc=f"item bound to another host: {r_neg.get('stage')}={r_neg.get('error')}, no fill"
                 + (" (red as expected)" if not r_neg.get("ok") else " (NOT red)"))
 
+    if "D" in groups:
+        # -- A1 approval needs the owner's paired phone (review finding 1) ----------------------------------------
+        p, errand = propose("lib")
+        notes = svc({"verb": "notices"}).get("links") or []
+        told = json.dumps([p, notes])
+        att_paths = sorted({x["path"] for x in notes if x.get("proposal") == p.get("proposal")} | {p.get("path")})
+        tries = {
+            "zoe-data's uid calls approve": svc({"verb": "approve", "notice": p["path"].rsplit("/", 1)[1],
+                                                 "decision": "approve"}).get("error"),
+            "the notice through the phone route, no phone": phone("POST", p["path"], "decision=approve",
+                                                                  as_=None)["status"],
+            "the notice through the phone route, bob's phone": phone("POST", p["path"], "decision=approve",
+                                                                     as_="bob")["status"],
+            "the card, no phone": phone("GET", p["path"], as_=None)["status"],
+        }
+        caps_after = svc({"verb": "capabilities", "proposal": p["proposal"]}).get("error")
+        approve(p)                                      # the real owner's phone still works
+        caps_owner = svc({"verb": "capabilities", "proposal": p["proposal"]}).get("ok")
+        STACK.start_core(patch="nodevice")
+        wait_ready()
+        p2, _ = propose("lib")
+        nc_post = phone("POST", p2["path"], "decision=approve", as_=None)["status"]
+        nc_caps = svc({"verb": "capabilities", "proposal": p2["proposal"]}).get("ok")
+        STACK.start_core()
+        wait_ready()
+        MEASURE["a1"] = {"tries": tries, "paths": att_paths}
+        cell("A1 approval needs the owner's paired phone",
+             all(v in ("verb_not_allowed", 403) for v in tries.values()) and caps_after == "pending" and caps_owner
+             and all(x.startswith("/v/n/") for x in att_paths) and "/v/approve/" not in told,
+             "zoe-data gets only opaque /v/n/<notice> ids (propose's reply and `notices`); using everything it was "
+             "told: " + "; ".join(f"{k} -> {v}" for k, v in tries.items()) + f"; the proposal stays {caps_after}; "
+             f"alice's paired phone then approves it ({caps_owner})",
+             nc="drop the device binding: the bare notice through the phone route "
+                + ("APPROVES and capabilities are issued (red as expected)" if nc_post == 200 and nc_caps
+                   else f"was refused ({nc_post}, NOT red)"))
+
     if "B" in groups:
         # -- V2 look-alikes, frames, form targets ------------------------------------------------------------------
         v2 = battery(V2_ITEMS)
@@ -335,7 +391,7 @@ def run(groups: str) -> None:
         if wait_s > 0:
             time.sleep(wait_s)
         caps5 = svc({"verb": "capabilities", "proposal": v5_prop.get("proposal", "")})
-        card5 = phone("GET", v5_prop.get("path", "/v/approve/" + "x" * 30))
+        card5 = phone("GET", v5_prop.get("path", "/v/n/" + "x" * 30))
         v5_elapsed = int(time.monotonic() - v5_started)
 
     if "B" in groups:
@@ -356,8 +412,10 @@ def run(groups: str) -> None:
 
     if "C" in groups:
         # -- V3 data: an OTP sign-in through the phone code page, and the injected 'repeat the password' page -------
+        witness_reset()
         r_otp = sign_in("otp", otp_code=ST["items"]["otp"]["otp"])
         r_inject = sign_in("inject")
+        v3_recs = witness_records()          # every request the sites saw during the V3 sign-ins
 
     if "C" in groups:
         # -- V4 revoked share (broker) -------------------------------------------------------------------------------
@@ -406,7 +464,7 @@ def run(groups: str) -> None:
         c = capability("cap_a")
         checks["other step"] = login("cap_a", c["cap"], c["errand"], step="s9").get("error")
         c = capability("cap_a")
-        checks["other operation (as an OTP token)"] = phone("POST", "/v/code/" + c["cap"], "code=123456")["status"]
+        checks["other operation (as an OTP token)"] = phone("POST", "/v/n/" + c["cap"], "code=123456")["status"]
         checks["other operation (as a redeem handle)"] = svc({"verb": "redeem", "handle": c["cap"]}).get("error")
         c = capability("cap_a")
         first = login("cap_a", c["cap"], c["errand"])
@@ -451,8 +509,8 @@ def run(groups: str) -> None:
         sys.path.insert(0, "/opt/zoe-vaultd")
         from zoe_vaultd import broker as corem
         probe = {v: svc({"verb": v, "item": IDS["lib"]}).get("error") for v in PROBE_VERBS}
-        phone_from_client = {v: svc({"verb": v}).get("error") for v in sorted(DOCUMENTED_PHONE - DOCUMENTED_CLIENT)}
-        verbs_ok = set(corem.CLIENT_VERBS) == DOCUMENTED_CLIENT and set(corem.PHONE_VERBS) == DOCUMENTED_PHONE
+        phone_from_client = {v: svc({"verb": v}).get("error") for v in sorted((DOCUMENTED_PHONE | DOCUMENTED_ADMIN) - DOCUMENTED_CLIENT)}
+        verbs_ok = (set(corem.CLIENT_VERBS) == DOCUMENTED_CLIENT and set(corem.PHONE_VERBS) == DOCUMENTED_PHONE and set(corem.ADMIN_VERBS) == DOCUMENTED_ADMIN)
         probes_ok = all(e == "unknown_verb" for e in probe.values()) and all(
             e == "verb_not_allowed" for e in phone_from_client.values())
         content_hits = [x for x in ZOE_SVC if marker in x]
@@ -465,7 +523,7 @@ def run(groups: str) -> None:
         STACK.start_core()
         wait_ready()
         cell("V7 no reveal verb", verbs_ok and probes_ok and not content_hits,
-             f"client verbs = {sorted(DOCUMENTED_CLIENT)}, phone verbs = {sorted(DOCUMENTED_PHONE)}; {len(PROBE_VERBS)} "
+             f"client verbs = {sorted(DOCUMENTED_CLIENT)}, phone verbs = {sorted(DOCUMENTED_PHONE)}, admin verbs = {sorted(DOCUMENTED_ADMIN)}; {len(PROBE_VERBS)} "
              f"reveal-style verbs -> unknown_verb; phone verbs from zoe-data's uid -> verb_not_allowed; no item content in "
              f"any of {len(ZOE_SVC) // 2} replies to zoe-data",
              nc="a debug `get` verb added: " + ("item content returned (red as expected)" if nc_hit else "NOT red"))
@@ -550,6 +608,40 @@ def run(groups: str) -> None:
                 + ("attached and READ the filled canary via %s (red as expected)" % (att.get("nc") or {}).get("how")
                    if (att.get("nc") or {}).get("found_canary") else f"did not read it ({att.get('nc')}) (NOT red)"))
 
+    if "F" in groups:
+        # -- L1 lock stops a sign-in that is inside the browser (review finding 3) ---------------------------------
+        def lock_during(patch: str | None) -> dict:
+            if patch:
+                STACK.start_core(patch=patch)
+                wait_ready()
+            witness_reset()
+            out: dict = {}
+            th = threading.Thread(target=lambda: out.update(sign_in("hold_long")))
+            th.start()
+            # the browser is up once the browser uid runs a Chromium; the page holds the filled form for 8 s
+            wait_for(lambda: any(_owner(d) == uid("zoe-vault-browser") and "chromium" in _cmd(d)
+                                 for d in Path("/proc").iterdir() if d.name.isdigit()), 90, 0.2)
+            time.sleep(4)
+            out["lock"] = svc({"verb": "lock"}).get("ok")
+            th.join(timeout=60)
+            time.sleep(6)                    # past the page's 8 s hold: a surviving browser would have posted by now
+            out["site_got_password"] = any(r.get("login_ok") for r in witness_records())
+            STACK.start_core()
+            wait_ready()
+            return out
+        l1 = lock_during(None)
+        l1_nc = lock_during("oldlock")
+        MEASURE["l1"] = {"pos": {k: v for k, v in l1.items() if k != "handle"},
+                         "nc": {k: v for k, v in l1_nc.items() if k != "handle"}}
+        cell("L1 lock stops an in-flight sign-in",
+             bool(l1.get("lock")) and l1.get("error") == "locked" and not l1.get("handle")
+             and not l1["site_got_password"],
+             f"lock during a sign-in whose filled form is still on the page: login -> {l1.get('error')}, no handle, "
+             f"the site never received the password (the browser was closed)",
+             nc="the lock as first submitted (state wiped, browser untouched): " +
+                ("the browser carried on and the site RECEIVED the password after the lock (red as expected)"
+                 if l1_nc["site_got_password"] else f"nothing reached the site ({l1_nc.get('error')}, NOT red)"))
+
     if "C" in groups:
         # -- V3 canary never visible (lab surfaces) ----------------------------------------------------------------
         needles = [marker, *otp_codes]
@@ -557,8 +649,8 @@ def run(groups: str) -> None:
         page_hits = [x for x in PHONE_PAGES if marker in x]
         file_hits = scan_paths([AUDIT, str(LOGS), "/run/zoe-vault-browser/profiles"], needles)
         file_hits = [h for h in file_hits if "-logsecret" not in h]
-        all_recs = witness_records()
-        v3_ok = bool(r_otp.get("ok")) and bool(r_inject.get("ok")) and not svc_hits and not page_hits and not file_hits
+        v3_ok = (bool(r_otp.get("ok")) and bool(r_inject.get("ok")) and not svc_hits and not page_hits
+                 and not file_hits and not leaks(v3_recs) and len(fills(v3_recs)) >= 2)
         STACK.start_core(patch="logsecret")
         wait_ready()
         sign_in("lib")
@@ -573,7 +665,8 @@ def run(groups: str) -> None:
                 links = svc({"verb": "notices"}).get("links") or []
                 for link in links:
                     if link["kind"] == "otp":
-                        svc({"verb": "otp", "token": link["path"].rsplit("/", 1)[1], "code": ST["items"]["otp"]["otp"]})
+                        svc({"verb": "otp", "notice": link["path"].rsplit("/", 1)[1],
+                             "code": ST["items"]["otp"]["otp"]})
                         return
                 time.sleep(0.5)
         th = threading.Thread(target=feed_from_client, daemon=True)
@@ -588,8 +681,8 @@ def run(groups: str) -> None:
              f"across {LOGIN_CALLS[0]} login calls incl. a phone-typed one-time code ({r_otp.get('ok')}) and an injected "
              f"'repeat the password' page ({r_inject.get('ok')}): the canary password/username/notes/field marker and the "
              f"code appear in none of zoe-data's {len(ZOE_SVC) // 2} requests+replies, the {len(PHONE_PAGES)} phone pages, "
-             f"the audit log, the three units' logs or the browser profile dir; sites saw it only on accepted sign-ins "
-             f"({len(leaks(all_recs))} leaks in the last battery). NOT in the lab (no zoe-data, brain, nginx, journal, "
+             f"the audit log, the three units' logs or the browser profile dir; the sites saw the canary only on the "
+             f"accepted sign-ins ({len(fills(v3_recs))} requests, {len(leaks(v3_recs))} leaks). NOT in the lab (no zoe-data, brain, nginx, journal, "
              f"screenshots): those V3 surfaces are phase V3",
              nc=f"log the value at debug: found in {len(nc_log_hits)} log file(s); route the code page through zoe-data: "
                 f"the code is in {len(nc_otp_hits)} zoe-data message(s)"
@@ -605,7 +698,8 @@ def run(groups: str) -> None:
         nc_login = login("bank", nc_caps["capabilities"][0]["capability"], errand) if nc_caps.get("ok") else {}
         STACK.start_core()
         wait_ready()
-        cell("V5 approval timeout refuses", v5_card_open and caps5.get("error") == "expired" and card5["status"] == 410,
+        cell("V5 approval timeout refuses", v5_card_open and caps5.get("error") == "expired" and card5["status"] == 403
+             and "no longer open" in card5.get("body", ""),
              f"a money item, card opened on the phone, no answer for {v5_elapsed} s: "
              f"capabilities -> {caps5.get('error')}, the card is gone (HTTP {card5['status']}); no capability means "
              f"login is unreachable, so no browser was ever started. (errand -> needs_owner is zoe-data's side: phase V3)",
@@ -621,9 +715,11 @@ def run(groups: str) -> None:
         wait_ready(locked_ok=True)
         link = next(x["path"] for x in svc({"verb": "notices"})["links"] if x["kind"] == "unlock")
         tok = link.rsplit("/", 1)[1]
-        junk = {"verb": "unlock", "token": tok}
+        junk = {"verb": "unlock", "notice": tok}
         junk[UNLOCK_FIELD] = secrets.token_hex(4)
         u["from zoe-data's uid"] = svc(junk).get("error")
+        u["the notice, no paired phone"] = phone("POST", link, "password=" + _q(unlock_value), as_=None)["status"]
+        u["the notice, a non-admin's phone"] = phone("POST", link, "password=" + _q(unlock_value), as_="bob")["status"]
         first = phone("POST", link, "password=" + _q(unlock_value))
         u["first unlock via phone"] = first["status"]
         u["while already unlocked"] = phone("POST", link, "password=" + _q(unlock_value))["status"]
@@ -646,7 +742,7 @@ def run(groups: str) -> None:
         STACK.start_core(patch="unlock_for_client", unlock={"mode": "attended"})
         wait_ready(locked_ok=True)
         lk = next(x["path"] for x in svc({"verb": "notices"})["links"] if x["kind"] == "unlock")
-        req = {"verb": "unlock", "token": lk.rsplit("/", 1)[1]}
+        req = {"verb": "unlock", "notice": lk.rsplit("/", 1)[1]}
         req[UNLOCK_FIELD] = unlock_value
         raw = json.dumps(req)
         r = as_user("zoe-svc", ["python3", f"{LAB}/client.py", CORE_SOCK, "-"], input=raw)  # not kept: has the password
@@ -656,6 +752,7 @@ def run(groups: str) -> None:
         wait_ready()
         MEASURE["v18"] = u
         v18_ok = (u["from zoe-data's uid"] == "verb_not_allowed" and first["status"] == 200
+                  and u["the notice, no paired phone"] == 403 and u["the notice, a non-admin's phone"] == 403
                   and u["while already unlocked"] == 403 and u["reused token after lock"] == 403
                   and fails == [403, 403, 403] and u["4th attempt, right password, last token"] == 403
                   and not links_after and still_locked and u["expired token (ttl 2 s for this check)"] == 403)
@@ -684,18 +781,29 @@ def run(groups: str) -> None:
         ed[7] = ed[7].replace('"peer_uid":', '"peer_uid":1', 1) if '"peer_uid":' in ed[7] else ed[7].replace('"ts":', '"ts":1', 1)
         edited.write_text("\n".join(ed) + "\n")
         cut_ok, edit_ok = verify(cut)[0], verify(edited)[0]
+        tail = Path(tmp, "tail.jsonl")
+        tail.write_text("\n".join(lines[:-2]) + "\n")
+        shutil.copy(AUDIT + ".head", str(tail) + ".head")
+        tail_ok, tail_nc = verify(tail)[0], verify(tail, use_head=False)[0]
+        last = Path(tmp, 'last.jsonl')              # the LAST record edited: only the head can authenticate it
+        last.write_text(chr(10).join(lines[:-1] + [lines[-1].replace('"ts":', '"ts":1', 1)]) + chr(10))
+        shutil.copy(AUDIT + '.head', str(last) + '.head')
+        last_ok, last_nc = verify(last)[0], verify(last, use_head=False)[0]
         # negative control: the same events written WITHOUT the chain; the only check left is "is each line JSON?"
         plain = [json.dumps({k: v for k, v in json.loads(ln).items() if k != "prev"}) for ln in lines]
         plain[7] = plain[7].replace('"event": "', '"event": "x', 1)
         nc_unnoticed = all(isinstance(json.loads(x), dict) for x in plain)
         shutil.rmtree(tmp)
-        cell("V9 audit chain", ok and login_lines == LOGIN_CALLS[0] and not cut_ok and not edit_ok
+        cell("V9 audit chain", ok and login_lines == LOGIN_CALLS[0] and not cut_ok and not edit_ok and not tail_ok and not last_ok
              and not [ln for ln in lines if marker in ln],
              f"{n} lines verify; one login/refuse line per login call ({login_lines} = {LOGIN_CALLS[0]}); deleting a "
-             f"line breaks it ({'yes' if not cut_ok else 'NO'}), editing one breaks it ({'yes' if not edit_ok else 'NO'}); "
+             f"line breaks it ({'yes' if not cut_ok else 'NO'}), editing one breaks it ({'yes' if not edit_ok else 'NO'}), "
+             f"cutting the last two lines or editing the LAST line is caught against the head file ({'yes' if not tail_ok and not last_ok else 'NO'}); "
              f"events: {events}",
-             nc="lines without the chain: an edited line " + ("goes unnoticed (red as expected)" if nc_unnoticed
-                                                              else "was caught (NOT red)"))
+             nc="lines without the chain: an edited line " + ("goes unnoticed" if nc_unnoticed else "was caught")
+                + "; the chain without its head file: a cut tail " + ("goes unnoticed" if tail_nc else "was caught")
+                + " and an edited last line " + ("goes unnoticed" if last_nc else "was caught")
+                + (" (red as expected)" if nc_unnoticed and tail_nc and last_nc else " (NOT red)"))
 
     MEASURE["login_refusal_details"] = [
         {k: e.get(k) for k in ("reason", "detail", "item", "frame_origin")}
@@ -709,6 +817,13 @@ def run(groups: str) -> None:
     MEASURE["core_rss_kb"] = _rss_of("zoe-vault")
     STACK.stop()
     emit_result("v1" + groups)
+
+
+def _cmd(d: Path) -> str:
+    try:
+        return (d / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+    except OSError:
+        return ""
 
 
 def _owner(d: Path) -> int:
