@@ -137,6 +137,83 @@ def _spawn_bg(coro) -> None:
     _BG_TASKS.add(t)
     t.add_done_callback(_BG_TASKS.discard)
 
+def _stream_in_turn_context(agen):
+    """``agen`` (a voice turn's lazy stream body) driven in a COPY of the CURRENT context, wherever it is iterated.
+
+    ``voice_command`` binds per-turn ContextVars before its chat tier returns the lazy StreamingResponse - the speaker
+    gate's verdict (``restraint.bind_verdict``: the restraint rule, the spoken-mute refusal, the risk-cue silence), the
+    arrival row (``_USER_TURN_SAVED``), a speculative turn's gate. The brain runs INSIDE the body, and on
+    ``/voice/turn_stream`` the body is pulled by the OUTER request task (and a ``_first_task`` copy of it for the filler
+    race), not by the ``sub_task`` that ran ``voice_command`` - so none of those bindings were visible to the brain
+    (2026-10-19: every panel stream turn read ``restraint.current_verdict() is None``, an unconfirmed voice read as a typed
+    turn). Call it where the body is CREATED, inside ``voice_command``: the copy is taken there."""
+    return _drive_in_context(agen, contextvars.copy_context())
+
+
+async def _drive_in_context(agen, ctx: contextvars.Context):
+    """Yield ``agen``'s items one at a time, every step of ``agen`` running in ONE task whose context is a copy of ``ctx``
+    (Python 3.10 has no ``create_task(context=)``). Lockstep, no read-ahead: a step starts only when the consumer asks for
+    the next item, so a filler / speculation race sees the same timing as pulling ``agen`` directly. Consumer cancelled
+    mid-step -> that step is cancelled; consumer closed between steps -> ``agen.aclose()`` runs (its ``finally`` sees
+    GeneratorExit at its ``yield``, as before); an exception from ``agen`` (a CancelledError included) re-raises here."""
+    want: asyncio.Queue = asyncio.Queue()
+    got: asyncio.Queue = asyncio.Queue()
+    busy = False
+
+    async def _pump() -> None:
+        nonlocal busy
+        while True:
+            try:
+                more = await want.get()
+            except asyncio.CancelledError:
+                # cancelled between steps (a consumer cancel that raced the step's end): the body still gets its close
+                await agen.aclose()
+                raise
+            if not more:
+                await agen.aclose()
+                return
+            busy = True
+            try:
+                item = await agen.__anext__()
+            except StopAsyncIteration:
+                got.put_nowait((False, None))
+                return
+            except BaseException as exc:  # noqa: BLE001 - forwarded to the consumer, re-raised there
+                got.put_nowait((False, exc))
+                if isinstance(exc, Exception):
+                    return
+                raise
+            finally:
+                busy = False
+            got.put_nowait((True, item))
+
+    pump = ctx.run(asyncio.get_running_loop().create_task, _pump())
+    _BG_TASKS.add(pump)   # a strong reference: a cancelled consumer does not wait for the body's finally (below)
+    pump.add_done_callback(_BG_TASKS.discard)
+    try:
+        while True:
+            want.put_nowait(True)
+            ok, val = await got.get()
+            if not ok:
+                if val is not None:
+                    raise val
+                return
+            yield val
+    finally:
+        if not pump.done():
+            if busy:
+                pump.cancel()
+                want.put_nowait(False)   # a body that swallows the cancel and yields again is still closed, not left waiting
+            else:
+                want.put_nowait(False)
+                try:
+                    await pump
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - a failing finally of the body must not mask the close
+                    logger.warning("voice stream body close failed: %s", exc)
+
+
 # ── Voice session continuity ───────────────────────────────────────────────
 # Persist one session_id per panel so follow-up voice commands have context.
 # Pass 3 B3: also stores bound_user_id (resolved via daemon VID or PIN) with
@@ -5289,8 +5366,9 @@ async def voice_command(
                         _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id, speaker_verified=_speaker_verified,
                                                            interrupted=not _screen_finished))
 
+            # The body runs in THIS turn's context wherever it is pulled (/turn_stream pulls it from another task).
             return StreamingResponse(
-                _generate_voice_stream(),
+                _stream_in_turn_context(_generate_voice_stream()),
                 media_type="application/x-zoe-audio-stream",
                 headers={"Cache-Control": "no-cache"},
             )
