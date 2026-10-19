@@ -6,7 +6,7 @@ migrations (0050, 0057, 0058).
 
 Negative controls (the three the owner asked for, each a test below that went RED with its wall removed - run by hand 2026-10-19):
   * harness traffic never becomes a training example - ``test_control_harness_turn_never_trains``: make
-    ``struggle_detector._traffic`` return household and the replay-session row is failed and labelled (red);
+    ``struggle_detector._traffic`` return household and the harness-bound row is failed and labelled (red);
   * a forgotten turn never becomes one - ``test_control_forgotten_turn_never_trains``: drop ``_erase_outcomes`` from ``erase_entity``
     and the confirmed example survives the forget (red); the seam's own forget re-check is pinned separately;
   * a correction without owner confirmation never trains - ``test_control_unconfirmed_never_trains``: let ``confirmed`` accept a
@@ -64,7 +64,17 @@ def fresh(monkeypatch, tmp_path):
 def item(text, reply="Done.", *, user=A, session="chat-s1", channel="chat", ts=None, panel=""):
     sid = session
     return (time.time() if ts is None else ts, channel, text, reply, user, sid, panel, False,
-            sd._traffic(user, sid, panel or sd._panel_from_session(sid)))
+            sd._traffic(user, panel or sd._panel_from_session(sid)))
+
+
+@contextlib.contextmanager
+def as_traffic(cls="harness"):
+    """Bind the turn's SERVER-derived traffic class (P-2: the request middleware does this in production)."""
+    tok = traffic_class.bind(cls)
+    try:
+        yield
+    finally:
+        traffic_class.reset(tok)
 
 
 async def feed(*turns):
@@ -94,23 +104,22 @@ async def failed_then_fixed(session=VOICE, user=A):
 
 # ── the traffic class ────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("user,session,panel,want", [
-    (A, VOICE, "hall", "household"),
-    ("guest", "voice-panel-zoe-touch-pi-0000aaaa", "zoe-touch-pi", "household"),   # an unidentified voice at the real panel
-    (A, "replay-0123456789ab", "", "harness"),                                        # tests/replay_samples.py's run session
-    (A, "s1", "replay-harness", "harness"),
-    ("demo_bar_ab12", "s1", "", "harness"),
-    ("test-sec-b-1", "s1", "", "harness"),
-    (A, "probe-1", "", "harness"),
+@pytest.mark.parametrize("user,panel,want", [
+    (A, "hall", "household"),
+    ("guest", "zoe-touch-pi", "household"),   # an unidentified voice at the real panel
+    (A, "replay-harness", "probe"),
+    ("demo_bar_ab12", "", "harness"),
+    ("test-sec-b-1", "", "ci"),
+    ("probe_x1", "", "probe"),
 ])
-def test_traffic_class(user, session, panel, want):
-    assert traffic_class.classify(user, session, panel) == want
+def test_traffic_class(user, panel, want):
+    assert sd._traffic(user, panel) == want
 
 
-def test_a_declared_harness_process_is_harness(monkeypatch):
-    monkeypatch.setenv("ZOE_HARNESS", "1")
-    assert traffic_class.classify(A, VOICE, "hall") == "harness"
-    assert traffic_class.classify(A, VOICE, "hall", hint=None) == "harness"
+def test_the_bound_server_class_applies():
+    with as_traffic("probe"):
+        assert sd._traffic(A, "hall") == "probe"
+    assert sd._traffic(A, "hall") == "household", "a reset context is household again"
 
 
 # ── the flag ─────────────────────────────────────────────────────────────────
@@ -126,14 +135,14 @@ async def test_off_writes_no_rows_and_keeps_no_notes(monkeypatch, fresh):
     assert sd._STATE.get("queue") is None, "off: a harness turn starts no worker"
 
 
-def test_off_keeps_the_detectors_old_skip_set(monkeypatch):
-    """Flag-dark: with the capture off the detector skips exactly what it always did (a harness panel, a synthetic user); the wider
-    traffic class (a harness SESSION, a declared harness process) applies only when the capture is on."""
-    monkeypatch.setenv(to.ENV, "off")
-    assert sd._traffic(A, "replay-0123456789ab", "") == "household"
-    assert sd._traffic(A, "s1", "replay-harness") == "harness"
-    monkeypatch.setenv(to.ENV, "on")
-    assert sd._traffic(A, "replay-0123456789ab", "") == "harness"
+def test_the_traffic_class_is_the_same_flag_on_or_off(monkeypatch):
+    """P-2: the detector skips (or tags text-free) every non-household turn whatever ``ZOE_STRUGGLE_OUTCOMES`` says."""
+    for mode in ("off", "on"):
+        monkeypatch.setenv(to.ENV, mode)
+        assert sd._traffic(A, "") == "household"
+        assert sd._traffic(A, "replay-harness") == "probe"
+        with as_traffic("harness"):
+            assert sd._traffic(A, "") == "harness"
 
 
 async def test_detect_off_beats_outcomes_on(monkeypatch, fresh):
@@ -244,7 +253,8 @@ async def test_brief_line_counts_pending_only_when_on(monkeypatch, fresh):
 # ── the negative controls ────────────────────────────────────────────────────
 
 async def test_control_harness_turn_never_trains(fresh):
-    await failed_then_fixed(session="replay-0123456789ab")
+    with as_traffic("harness"):
+        await failed_then_fixed(session="replay-0123456789ab")
     assert fresh.data and all(r["traffic"] == "harness" for r in fresh.data)
     assert all(r["failed"] == 0 and r["summary"] == "" and r["label_status"] == "" for r in fresh.data)
     for r in fresh.data:
@@ -374,7 +384,8 @@ def sql(monkeypatch, tmp_path):
 
 async def test_seam_hands_out_only_confirmed_household_pairs(sql):
     await failed_then_fixed()
-    await failed_then_fixed(session="replay-0123456789ab")
+    with as_traffic("harness"):
+        await failed_then_fixed(session="replay-0123456789ab")
     assert await sp.queued_router_examples(sources=(sp.SOURCE_FOLLOWUP, sp.SOURCE_ROUTER)) == []
     rid = (await to.review(A))["items"][0]["id"]
     await to.decide(rid, A, "confirm")

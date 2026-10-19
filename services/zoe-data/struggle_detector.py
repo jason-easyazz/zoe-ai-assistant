@@ -47,6 +47,7 @@ from collections import OrderedDict, deque
 from typing import Any, Optional
 
 import struggle_signals as sig
+import traffic_class
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,8 @@ STORE_TIMEOUT_S = 5.0
 SYNTHETIC_PANELS = ("replay", "test", "probe", "ci-", "e2e", "bench")
 ACK_LINE = "Sorry about that. I've made a note of it."
 
-#: counters (process lifetime): observed / enqueued / dropped_off / dropped_full / skipped_synthetic / processed / events /
+#: counters (process lifetime): observed / enqueued / dropped_off / dropped_full / skipped_synthetic / skipped_traffic /
+#: processed / events /
 #: hook_errors / process_errors / store_errors / sweeps / swept
 _COUNTERS: dict[str, int] = {}
 
@@ -84,7 +86,8 @@ def stats() -> dict[str, Any]:
     q = _STATE.get("queue")
     return {"mode": mode(), "queue_depth": q.qsize() if q is not None else 0, "queue_max": queue_max(),
             **{k: _COUNTERS.get(k, 0) for k in ("observed", "enqueued", "dropped_off", "dropped_full",
-                                                 "skipped_synthetic", "processed", "events", "hook_errors",
+                                                 "skipped_synthetic", "skipped_traffic", "processed", "events",
+                                                 "hook_errors",
                                                  "process_errors", "store_errors", "sweeps", "swept")}}
 
 
@@ -304,7 +307,9 @@ def _queue() -> "asyncio.Queue":
         _STATE.update(queue=q, loop=loop, worker=None)
     w = _STATE.get("worker")
     if w is None or w.done():
-        _STATE["worker"] = loop.create_task(_worker(q), name="struggle-detector")
+        # A process-lifetime worker, born inside whichever request queued first: start it from an EMPTY context so
+        # it never inherits that request's traffic class (traffic_class.detached_task).
+        _STATE["worker"] = traffic_class.detached_task(loop, _worker(q), name="struggle-detector")
     return q
 
 
@@ -321,10 +326,10 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
             _count("dropped_off")
             return False
         pid = panel_id or _panel_from_session(session_id)
-        traffic = _traffic(user_id, session_id, pid)
+        traffic = _traffic(user_id, pid)
         uid = "guest" if speaker_verified is False else str(user_id or "")
         if traffic != "household":
-            _count("skipped_synthetic")
+            _count("skipped_synthetic" if (pid.startswith(SYNTHETIC_PANELS) or _synthetic(user_id)) else "skipped_traffic")
             if outcomes_on():   # a text-free outcome row (the traffic tag is the point): never detected, never in a pair, no words
                 try:
                     _queue().put_nowait((time.time(), str(channel or "chat"), "", "", uid, str(session_id or ""), pid,
@@ -373,19 +378,17 @@ def _panel_from_session(session_id: str) -> str:
     return ""
 
 
-def _traffic(user_id: str, session_id: str, panel_id: str) -> str:
-    """``household`` | ``harness`` (``traffic_class``): the detector's old rule (a harness panel or a synthetic user) plus a harness
-    session id and a declared harness process. Any doubt is ``harness`` (it never trains)."""
-    if panel_id.startswith(SYNTHETIC_PANELS) or _synthetic(user_id):
-        return "harness"
-    if not outcomes_on():
-        return "household"      # flag-dark: with the capture off the detector skips exactly what it always skipped
+def _traffic(user_id: str, panel_id: str) -> str:
+    """``household`` | ``harness`` | ``probe`` | ``ci`` (``traffic_class``, P-2): a synthetic user or harness panel forces its class (the
+    detector's old rule), else the SERVER-derived class of the turn being handled (bound by the request middleware). Never a client claim."""
+    uid = str(user_id or "")
+    if panel_id.startswith(SYNTHETIC_PANELS) or _synthetic(uid):
+        return (traffic_class.class_for_user(uid) or traffic_class.class_for_panel(panel_id)
+                or traffic_class.HARNESS)
     try:
-        import traffic_class
-
-        return traffic_class.classify(user_id, session_id, panel_id)
-    except Exception:  # noqa: BLE001
-        return "harness"
+        return traffic_class.current()
+    except Exception:  # noqa: BLE001 - when in doubt it is NOT household: harness rows never train
+        return traffic_class.HARNESS
 
 
 def _synthetic(user_id: str) -> bool:

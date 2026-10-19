@@ -750,8 +750,12 @@ async def mark_applied(pid: str, ref: str = "") -> dict:
 #: never moves between train and holdout from one night to the next and duplicate phrasings never straddle the two (a model that trained on a
 #: wording cannot be scored on the same wording)
 HOLDOUT_MOD = 5
-#: the saved utterance of a voice turn is looked for this long before the turn finished (STT, then the brain's time to answer)
+#: the saved utterance of a voice turn is looked for this long before the turn finished (STT, then the brain's time to answer) when the
+#: turn's own latency is unknown
 AUDIO_LOOKBACK_S = 90.0
+#: the clip is copied right after STT, a moment before the route note that starts the turn's latency clock: how far before that start a
+#: clip may sit and still be this turn's
+AUDIO_CAPTURE_LEAD_S = 15.0
 AUDIO_AMBIGUOUS_S = 5.0
 
 
@@ -762,72 +766,102 @@ def split_of(text: str) -> str:
     return "holdout" if int(hashlib.sha1(f"router-holdout|{key}".encode("utf-8")).hexdigest()[:8], 16) % HOLDOUT_MOD == 0 else "train"
 
 
-def audio_ref(about_ts: Any, *, sample_dir: Optional[str] = None) -> Optional[dict]:
+def audio_ref(about_ts: Any, *, latency_ms: Any = None, sample_dir: Optional[str] = None) -> Optional[dict]:
     """The saved audio of the FAILED turn, as a bare file name in the operator's voice-sample corpus (``ZOE_VOICE_SAVE_AUDIO``), or None.
 
-    The corpus keeps real utterances as ``HHMMSS_mmm.wav`` with no turn id, so the file is found by TIME: the latest sample written in
-    the ``AUDIO_LOOKBACK_S`` before the failed turn finished. Two samples within ``AUDIO_AMBIGUOUS_S`` of each other make it ambiguous and
-    no reference is given (a wrong recording is worse than none). Nothing is read, copied or moved; the corpus is never pruned."""
+    The corpus keeps real utterances as ``HHMMSS_mmm.wav`` with no turn id and no panel id (the capture sits in a replay-gated voice file),
+    so the clip is found by TIME and handed out only when that is UNAMBIGUOUS: exactly ONE clip in the turn's guard window. With the turn's
+    latency known the window is tight - from ``AUDIO_CAPTURE_LEAD_S`` + ``AUDIO_AMBIGUOUS_S`` before the turn's route started to 3 s after
+    it finished, and the clip itself must predate the route start - and without it, the ``AUDIO_LOOKBACK_S`` before it finished. Any second
+    clip in the window (another panel capturing while this turn was answered, the previous turn's clip) WITHHOLDS the reference: a wrong
+    recording attached to a training or replay example is worse than none. ``mtime`` / ``size`` let a consumer prove the file is still that
+    clip (the names repeat every day). Nothing is read, copied or moved; the corpus is never pruned."""
     import os
 
     try:
         ts = float(about_ts)
     except (TypeError, ValueError):
         return None
+    try:
+        lat = float(latency_ms) / 1000.0 if latency_ms is not None else None
+    except (TypeError, ValueError):
+        lat = None
+    if lat is not None and not 0.0 <= lat <= 600.0:
+        lat = None
+    lo = ts - lat - AUDIO_CAPTURE_LEAD_S - AUDIO_AMBIGUOUS_S if lat is not None else ts - AUDIO_LOOKBACK_S
+    hi = ts + 3.0
     d = sample_dir or os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
     try:
-        found = sorted((os.stat(os.path.join(d, n)).st_mtime, n) for n in os.listdir(d) if n.endswith(".wav"))
-    except OSError:
+        stats = [(os.stat(os.path.join(d, n)), n) for n in os.listdir(d) if n.endswith(".wav")]
+    except (OSError, TypeError):
         return None
-    near = [(m, n) for m, n in found if ts - AUDIO_LOOKBACK_S <= m <= ts + 3.0]
-    if not near:
+    near = [(st, n) for st, n in stats if lo <= st.st_mtime <= hi]
+    if len(near) != 1:
         return None
-    if len(near) > 1 and near[-1][0] - near[-2][0] < AUDIO_AMBIGUOUS_S:
-        return None
-    return {"file": near[-1][1], "age_s": round(ts - near[-1][0], 1)}
+    st, name = near[0]
+    if lat is not None and st.st_mtime > ts - lat + 1.0:
+        return None                     # written after this turn had started routing: another utterance, not the failed one
+    return {"file": name, "age_s": round(ts - st.st_mtime, 1), "mtime": round(st.st_mtime, 3), "size": int(st.st_size)}
 
 
-async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLLOWUP,)) -> list[dict]:
-    """THE PHASE 3 SEAM. Candidate router training pairs from ACCEPTED ``router_example`` proposals, newest decision first:
-    ``[{proposal_id, event_id, user_id, label, label_source, split, text, audio_ref}]``.
+#: the statuses whose examples the seam may hand out. A REJECTED proposal never: the admin said no.
+SEAM_STATUSES = (PROPOSED, ACCEPTED, APPLIED)
+
+
+async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLLOWUP,), statuses: tuple = (ACCEPTED,)) -> list[dict]:
+    """THE PHASE 3 SEAM. Candidate router training pairs from ``router_example`` proposals (ACCEPTED ones unless the caller asks for more of
+    ``SEAM_STATUSES``), newest decision first:
+    ``[{proposal_id, status, decided_by, event_id, user_id, label, label_source, split, ts, text, audio_ref}]``.
 
     * ``label`` is the fast domain that answered the follow-up that worked (``label_source`` = ``followup``); only those are handed out
       unless the caller asks for ``SOURCE_ROUTER`` too (the router's own belief, no proof).
     * ``text`` is resolved NOW from the member's own ``struggle_events.summary`` (the FAILED turn's words only; member rows only; never a
       guest's; not a word that names a thing the member has forgotten), so a forget that erased the row has already removed the example and
       nothing outside ``struggle_events`` holds the words. Any doubt drops the example (a forget-ledger lookup that fails drops it).
-    * ``split`` is the stable train / holdout assignment (by normalised text); ``audio_ref`` the saved recording's file name when one can be found unambiguously.
+    * ``ts`` is when the FAILED turn finished (the event's ``about_ts``; the event's own time when that is missing) - the Phase 3 loop splits
+      by it. ``split`` is the stable hash split (by normalised text); ``audio_ref`` the saved recording when it is unambiguous (``audio_ref``).
+    * ``status`` / ``decided_by`` say how the proposal stands, so a caller can tell a person's accept from the loop's own policy.
     * Plus the failed turns the owner CONFIRMED in review (``turn_outcomes.confirmed_examples``: ``proposal_id`` / ``event_id`` =
       ``turn:<row id>``, ``decided_by`` = ``owner:<id>``, ``label_origin``); their words come from the member's own failed-turn row under
       the same rules, and pass the same forget check below.
     Consumers re-label with their own independent oracle before training."""
-    if not sources:
+    statuses = tuple(s for s in statuses if s in SEAM_STATUSES)
+    if not sources or not statuses:
         return []
     out: list[dict] = []
     async with _ctx() as db:
         # Only proposals that can yield an example are candidates, decided BEFORE the LIMIT: a recent accepted proposal whose evidence is
         # gone (forgotten / retired), or whose label_source the caller does not want, must not use up the page.
         cur = await db.execute(
-            "SELECT id, label, label_source, followup FROM struggle_proposals WHERE kind = ? AND status = ? "
+            "SELECT id, label, label_source, followup, status, decided_by FROM struggle_proposals WHERE kind = ? "
+            f"AND status IN ({_marks(len(statuses))}) "
             f"AND label_source IN ({_marks(len(sources))}) AND EXISTS (SELECT 1 FROM struggle_proposal_events pe JOIN struggle_events se "
             "ON se.id = pe.event_id WHERE pe.proposal_id = struggle_proposals.id AND se.is_guest = 0 AND se.summary <> '') "
-            "ORDER BY decided_at DESC LIMIT ?",
-            (KIND_ROUTER_EXAMPLE, ACCEPTED, *sources, int(max(1, min(200, limit)))))
-        props = [(str(r[0]), str(r[1]), str(r[2]), _json(r[3])) for r in await cur.fetchall()]
-        for pid, label, source, fu in props:
-            if fu.get("type") != FOLLOWUP_ROUTER_QUEUE or label not in sig.FAST_DOMAINS or source not in sources:
+            "ORDER BY COALESCE(decided_at, updated_at) DESC LIMIT ?",
+            (KIND_ROUTER_EXAMPLE, *statuses, *sources, int(max(1, min(200, limit)))))
+        props = [(str(r[0]), str(r[1]), str(r[2]), _json(r[3]), str(r[4]), str(r[5] or "")) for r in await cur.fetchall()]
+        for pid, label, source, fu, status, decided_by in props:
+            if label not in sig.FAST_DOMAINS or source not in sources or status not in statuses:
                 continue
+            if status != PROPOSED and fu.get("type") != FOLLOWUP_ROUTER_QUEUE:
+                continue                    # a decided proposal must carry the router-queue follow-up its accept recorded
             cur = await db.execute(
-                "SELECT se.id, se.user_id, se.summary, se.prev_turn_id, se.channel, se.detail FROM struggle_proposal_events pe "
+                "SELECT se.id, se.user_id, se.summary, se.prev_turn_id, se.channel, se.detail, se.ts, se.latency_ms FROM struggle_proposal_events pe "
                 "JOIN struggle_events se ON se.id = pe.event_id WHERE pe.proposal_id = ? AND se.is_guest = 0 AND se.summary <> '' "
                 "ORDER BY se.ts DESC", (pid,))
-            for eid, uid, summary, prev, channel, detail in await cur.fetchall():
+            for eid, uid, summary, prev, channel, detail, ets, latency in await cur.fetchall():
                 text = str(summary).split(" -> ")[0].strip() if prev else str(summary).strip()
                 if not text or is_guest(str(uid)):
                     continue
-                out.append({"proposal_id": pid, "event_id": str(eid), "user_id": str(uid), "label": label, "label_source": source,
-                            "split": split_of(text), "text": text,
-                            "audio_ref": audio_ref(parse_detail(detail).get("about_ts")) if str(channel) == "voice" else None})
+                det = parse_detail(detail)
+                about = det.get("about_ts")
+                try:
+                    when = float(about) if about is not None else float(ets)
+                except (TypeError, ValueError):
+                    when = float(ets or 0.0)
+                out.append({"proposal_id": pid, "status": status, "decided_by": decided_by, "event_id": str(eid), "user_id": str(uid),
+                            "label": label, "label_source": source, "split": split_of(text), "ts": round(when, 3), "text": text,
+                            "audio_ref": audio_ref(about, latency_ms=latency) if str(channel) == "voice" else None})
     # failure capture: failed turns the OWNER confirmed (``turn_outcomes``; a proposed / rejected / harness / guest row never comes back)
     import turn_outcomes
 
@@ -894,11 +928,57 @@ def _sql_events() -> bool:
     return isinstance(sd.get_backend(), sd.SqlBackend)
 
 
+def _failed_words(summary: Any, prev: Any) -> str:
+    """The FAILED turn's words of a struggle row - exactly what ``queued_router_examples`` hands out as ``text``."""
+    return str(summary or "").split(" -> ")[0].strip() if prev else str(summary or "").strip()
+
+
+async def _wording_keys(ids: Optional[list[str]] = None, *, user_id: Optional[str] = None) -> set[str]:
+    """The retrain ledger's wording keys of these struggle rows (by event id, or every row of ``user_id``), read WHILE THEY STILL EXIST
+    (the forget path calls this before the rows go). RAISES on a store failure: a forget that cannot tombstone the wording must not be
+    confirmed."""
+    import router_retrain_ledger
+    import struggle_detector as sd
+
+    texts: list[str] = []
+    if _sql_events():
+        try:
+            async with _ctx() as db:
+                if user_id is not None:
+                    cur = await db.execute("SELECT summary, prev_turn_id FROM struggle_events WHERE user_id = ?", (user_id,))
+                    texts += [_failed_words(r[0], r[1]) for r in await cur.fetchall()]
+                for part in _chunks(list(ids or [])):
+                    cur = await db.execute(f"SELECT summary, prev_turn_id FROM struggle_events WHERE id IN ({_marks(len(part))})", tuple(part))
+                    texts += [_failed_words(r[0], r[1]) for r in await cur.fetchall()]
+        except Exception as exc:
+            if _missing_table(exc):
+                return set()
+            raise
+    else:
+        want = set(ids or [])
+        texts = [_failed_words(r.get("summary"), r.get("prev_turn_id"))
+                 for r in await sd.get_backend().rows(0.0, None, limit=ROW_LIMIT)
+                 if str(r.get("id")) in want or (user_id is not None and r.get("user_id") == user_id)]
+    return {router_retrain_ledger.text_key(t) for t in texts if t}
+
+
+def _forget_in_retrain(*, event_ids: Iterable[str] = (), user_id: Optional[str] = None, text_keys: Iterable[str] = ()) -> None:
+    """Phase 3: the router retrain ledger loses these examples (tombstoned by event id AND wording, so they never re-enter even before any
+    run recorded them; a served generation that learned one - directly or through its lineage - is flagged for retrain; leftover run
+    texts deleted). RAISES on a failure, like the rest of the forget path (``router_retrain_ledger.forget``)."""
+    import router_retrain_ledger
+
+    router_retrain_ledger.forget(event_ids=event_ids, user_id=user_id, text_keys=text_keys)
+
+
 async def forget_events(event_ids: list[str]) -> int:
     """Take these events out of every proposal (the forget path). RAISES on a store failure so the forget is not confirmed; only a missing
     table is "nothing stored". Returns proposals deleted."""
     ids = [str(i) for i in event_ids if i]
-    if not ids or not _sql_events():
+    if not ids:
+        return 0
+    _forget_in_retrain(event_ids=ids, text_keys=await _wording_keys(ids))
+    if not _sql_events():
         return 0
     try:
         async with _ctx() as db:
@@ -917,7 +997,10 @@ async def forget_events(event_ids: list[str]) -> int:
 
 async def forget_user(user_id: str) -> int:
     """Take every event of ``user_id`` out of every proposal (the audited user delete). RAISES on a store failure."""
-    if not (user_id or "").strip() or not _sql_events():
+    if not (user_id or "").strip():
+        return 0
+    _forget_in_retrain(user_id=user_id, text_keys=await _wording_keys(user_id=user_id))
+    if not _sql_events():
         return 0
     try:
         async with _ctx() as db:

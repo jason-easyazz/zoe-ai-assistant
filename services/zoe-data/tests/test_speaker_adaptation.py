@@ -576,7 +576,7 @@ async def test_forget_my_voice_removes_anchor_and_adapted_profile(world, monkeyp
 async def _sync(world, monkeypatch):
     from routers import voice_tts
     with _compat_db(monkeypatch, world.db):
-        return await voice_tts.voice_profiles_sync(caller={"source": "device", "panel_id": "panel1"})
+        return await voice_tts.voice_profiles_sync(caller={"source": "device", "panel_id": "panel1", "via_relay": False, "via_tunnel": False})
 
 
 @pytest.mark.asyncio

@@ -96,8 +96,10 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, AsyncIterator, Optional
 from urllib.parse import quote
+import traffic_class
 
 logger = logging.getLogger(__name__)
 
@@ -1623,14 +1625,88 @@ def _log_prompt_cache(session_id: str, terminal: dict) -> None:
         if not pairs:
             return
         first_prompt, first_cache = pairs[0]
+        traffic = traffic_class.current()   # a non-household line gets the formatter's ` traffic=` suffix
         logger.info(
             "FLUE_PROMPT_CACHE session=%s rounds=%d first_prompt_n=%d first_cache_n=%d "
             "total_prompt_n=%d per_round=%s",
             session_id, len(pairs), first_prompt, first_cache,
             sum(p for p, _ in pairs), ",".join(f"{p}/{c}" for p, c in pairs),
         )
+        _panel_kv_alarm(session_id, first_prompt, first_cache, traffic)
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn
         pass
+
+
+# ── P-3: the panel-only first_prompt_n alarm (deep dive 2, 2026-10-19) ─────────────────────────────────
+# 29 of 100 household panel brain turns re-prefilled more than 500 tokens (18 of them warm, back-to-back);
+# that is the household's brain-TTFT p90 (5.9 s). The slot trace (llama-server journal joined to these rows,
+# docs/knowledge/panel-kv-residency-2026-10-19.md) put another CONVERSATION between two warm panel turns in
+# only 2 of the 18 (both partial); 9 followed post-turn helper calls and 7 had nothing between (deep prompt
+# divergence). This line makes every miss visible as it happens, labelled warm/first, with what used the
+# single slot since the session's previous panel turn as far as zoe-data can see: its NON-household brain
+# turns and its brain_slot_guard background calls (in-process replay probes talk to the sidecar directly and
+# are NOT counted). Household + ``voice-panel-`` sessions only; ``ZOE_PANEL_KV_MISS_TOKENS`` (default 500;
+# 0 = off) is the threshold. Never raises.
+_PANEL_KV_WARM_S = 300.0
+_PANEL_KV_MAX_SESSIONS = 256
+_panel_kv_prev: "dict[str, tuple[float, int, int]]" = {}
+
+
+def _panel_kv_threshold() -> int:
+    try:
+        return max(0, int(os.environ.get("ZOE_PANEL_KV_MISS_TOKENS", "500")))
+    except (TypeError, ValueError):
+        return 500
+
+
+def _non_household_turns() -> int:
+    return sum(n for c, n in traffic_class.brain_turn_counts().items() if c != traffic_class.HOUSEHOLD)
+
+
+def _background_calls() -> int:
+    try:
+        st = brain_slot_guard.STATS
+        return int(st.get("immediate", 0)) + int(st.get("released_quiet", 0)) + int(st.get("released_max", 0))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _panel_kv_alarm(session_id: str, first_prompt: int, first_cache: int, traffic: str,
+                    *, now: "float | None" = None) -> "str | None":
+    """Log ``PANEL_KV_MISS`` for a household panel turn that re-prefilled > the threshold. Returns the kind
+    logged (``warm`` / ``first``) or None. Bookkeeping (the session's previous turn) runs for every
+    household panel turn, miss or not."""
+    try:
+        sid = str(session_id or "")
+        if traffic != "household" or not sid.startswith("voice-panel-"):
+            return None
+        t = time.monotonic() if now is None else float(now)
+        others, background = _non_household_turns(), _background_calls()
+        prev = _panel_kv_prev.pop(sid, None)
+        _panel_kv_prev[sid] = (t, others, background)
+        while len(_panel_kv_prev) > _PANEL_KV_MAX_SESSIONS:
+            _panel_kv_prev.pop(next(iter(_panel_kv_prev)))
+        threshold = _panel_kv_threshold()
+        if threshold <= 0 or int(first_prompt) <= threshold:
+            return None
+        since = (t - prev[0]) if prev else None
+        kind = "warm" if since is not None and since < _PANEL_KV_WARM_S else "first"
+        logger.warning(
+            "PANEL_KV_MISS session=%s kind=%s first_prompt_n=%d first_cache_n=%d since_prev_s=%s "
+            "non_household_turns_between=%s background_calls_between=%s threshold=%d",
+            sid, kind, int(first_prompt), int(first_cache),
+            f"{since:.0f}" if since is not None else "-",
+            (others - prev[1]) if prev else "-", (background - prev[2]) if prev else "-", threshold,
+        )
+        try:
+            from voice_metrics import panel_kv_miss_count
+
+            panel_kv_miss_count.labels(kind=kind).inc()
+        except Exception:  # noqa: BLE001
+            pass
+        return kind
+    except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+        return None
 
 
 def _log_context_budget(session_id: str, terminal: dict) -> None:

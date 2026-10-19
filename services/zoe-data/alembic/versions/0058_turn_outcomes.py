@@ -6,7 +6,7 @@ One row per finished voice / chat / Telegram turn the detector observed:
     head; ``head_top`` = the head's own top pick even when it gated to chat) and what EXECUTED it (``handler`` = ``tier:<name>`` /
     ``intent:<name>`` / ``skybridge:<domain>.<action>``, ``tools`` = the brain's tool NAMES);
   * the ``outcome`` class (did | cant_do | fell_through | brain | error | interrupted), ``path_served`` and ``latency_ms``;
-  * ``traffic`` = household | harness (``traffic_class``): a harness row is text-free and can never become a label or an example;
+  * ``traffic`` = household | harness | probe | ci (``traffic_class``): a harness row is text-free and can never become a label or an example;
   * when the turn FAILED (``failed`` = 1, ``signals``): the failed turn's words (``summary``, member + household rows only, the
     struggle detector's keep-words rules: PII-scrubbed display form, <= 160 chars, never a guest's / off-the-record / a forgotten
     entity's), a proposed correct route (``proposed_label`` + ``label_source`` followup | router) and the OWNER's decision
@@ -16,12 +16,16 @@ One row per finished voice / chat / Telegram turn the detector observed:
 Words live only on failed rows. Retention, forget and user delete reach the table through ``struggle_detector`` (the same sweep,
 ``erase_entity`` and ``delete_user`` that reach ``struggle_events``). ``IF NOT EXISTS`` makes a rerun safe and the statements run
 unchanged on PostgreSQL and SQLite.
+
+REVISION CHAIN NOTE: ``down_revision`` is ``0060`` (``0060_phone_app``, #2146), re-pointed 2026-10-19 after #2146 landed (it was ``0057``).
+The relay migration (#2095, ``0059_panel_client_certs``) is also chained onto ``0060``; whichever of the two lands SECOND re-chains its
+``down_revision`` onto the first's revision (the single-head tests go red until it does).
 """
 
 from alembic import op
 
 revision = "0058"
-down_revision = "0057"
+down_revision = "0060"
 branch_labels = None
 depends_on = None
 

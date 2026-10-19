@@ -1805,14 +1805,10 @@ def classify_skybridge_intent(
 #   UNGATED          (default) the caller has no router turn — a touch tap, a card
 #                    button re-issuing a command, the brain-tool card builder. No
 #                    gate, no log. Behaviour unchanged.
-#   ROUTE_ON_DEMAND  the caller is a conversational turn that has not run the
-#                    router; it is run HERE, and only once Skybridge has claimed
-#                    something (the voice WebSocket lane).
 #   None             a conversational turn whose router was off/failed — allow,
 #                    logged as router_unavailable (today's behaviour).
 #   dict             ``semantic_router.route()`` output for this turn.
 UNGATED = object()
-ROUTE_ON_DEMAND = object()
 
 # Skybridge domain → the two-stage router domains that agree with it
 # (router_two_stage.DOMAIN_TOOLS vocabulary). A Skybridge domain the router has
@@ -2039,20 +2035,6 @@ def _log_router_gate(intent: SkybridgeIntent, decision: str, reason: str, router
     )
 
 
-async def _route_on_demand(message: str) -> dict[str, Any] | None:
-    """Run the semantic router for a turn whose caller did not (voice WS lane).
-    Returns None when the router is off or fails — never raises."""
-    try:
-        import semantic_router as _sr
-
-        if not _sr.is_enabled():
-            return None
-        return await asyncio.to_thread(_sr.route, message)
-    except Exception as exc:  # noqa: BLE001 — a router failure must not break the turn
-        logger.warning("skybridge router gate: on-demand route failed (no veto): %s", exc)
-        return None
-
-
 async def _room_eids_for_context(
     context: dict[str, Any] | None, db: Any | None
 ) -> set[str]:
@@ -2090,7 +2072,7 @@ async def resolve_skybridge_request(
     """Resolve a typed or spoken Skybridge request into real card contracts.
 
     ``router_decision`` is the turn's router verdict for the router veto (see
-    ``UNGATED`` / ``ROUTE_ON_DEMAND`` above). A vetoed turn returns
+    ``UNGATED`` above). A vetoed turn returns
     ``handled: False`` + ``vetoed: True`` BEFORE any auth challenge or side
     effect, so the caller falls through to its brain lane exactly as for an
     unclassified utterance.
@@ -2106,8 +2088,6 @@ async def resolve_skybridge_request(
         }
 
     if router_decision is not UNGATED:
-        if router_decision is ROUTE_ON_DEMAND:
-            router_decision = await _route_on_demand(message) if router_veto_enabled() else None
         decision, reason, router_domain, conf = skybridge_router_gate(
             message, intent, router_decision, context=context
         )

@@ -456,7 +456,9 @@ See P1-1. In short:
 
 1. **OD1 Wear posture while P0-1 stands.** The pendant is readable without pairing whenever the Pi is not connected:
    keep wearing it as now, power it off in public places, or prioritise the phase-2 firmware (encrypted storage plus a
-   bond with the Pi)?
+   bond with the Pi)? **Decided 2026-10-19: prioritise the phase-2 firmware** ("make the encrypted firmware the top
+   priority"). Built as [`labs/omi-firmware/`](../../labs/omi-firmware/README.md); P0-1 stays open until it is flashed,
+   bonded and proved (its `RUNBOOK.md` sections D-F).
 2. **OD2 Sync while away** (P1-7): Web Bluetooth page on an Android phone, a travel dock, or accept the ring and the
    warning?
 3. **OD3 Backups of pendant text** (P1-4): exclude it from the nightly dump (recommended; no 35-day tail), or keep it

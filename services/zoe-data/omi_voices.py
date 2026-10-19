@@ -13,7 +13,8 @@ THE GUARDRAILS (each pinned by ``tests/test_omi_voices.py``):
   2. Suggestions / attribution in that member's own recordings ONLY. Nothing here is read by auth, sign-in, the voice session,
      presence, ``/api/voice/identify`` or the profile sync - a static allow-list test pins which modules may name the tables.
   3. A suggestion is never a tag until the member says yes; the day review reads only confirmed tags (``review_segments``).
-  4. Unconfirmed voiceprints expire (``sweep``), bystander embeddings and unknown-voice clusters expire after 14 days; "forget
+  4. Learned voiceprints are kept until forgotten (owner D15; an expiry only if explicitly configured), bystander embeddings and
+     unknown-voice clusters expire after 14 days (``sweep``); "forget
      <name>" (``purge_people`` via ``contacts_store.forget_voiceprints``), "forget this voice", "stop learning", deleting a
      recording (``drop_recording``: contributions removed and the mean REBUILT) and erasing the member (``forget_user``) erase.
   5. Children: a member who is not positively an adult (``manner_block.eligible``) never has a bystander voice stored, and a
@@ -36,8 +37,13 @@ from typed_env import env_bool, env_float, env_int
 logger = logging.getLogger(__name__)
 
 EMBED_TTL_DAYS = 14
-PROVISIONAL_DAYS = 30
-IDLE_DAYS = 365
+#: owner decision D15 (2026-10-19): a learned voice is KEPT UNTIL FORGOTTEN. 0 = no expiry (the default); a positive
+#: ``ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS`` / ``_IDLE_DAYS`` is an explicit, bounded loosening that brings the old 30 / 365-day sweep back.
+#: Forgetting still erases (``purge_people``, ``forget_voice``, ``drop_recording``, ``forget_user``). ``expires_at`` is NOT NULL
+#: (migration 0053), so a kept print carries ``KEEP_UNTIL_FORGOTTEN``, a date the sweep never reaches.
+PROVISIONAL_DAYS = 0
+IDLE_DAYS = 0
+KEEP_UNTIL_FORGOTTEN = "9999-12-31T23:59:59Z"
 CLUSTER_MIN = 0.45            # an unknown voice joins a cluster at this cosine to its centroid (calibrated, knowledge doc)
 SUGGEST_MIN = 0.45            # a learned voice is suggested at this cosine ...
 SUGGEST_MARGIN = 0.10         # ... and this far above the runner-up (Omi's own margin rule)
@@ -66,6 +72,24 @@ def _iso(dt: datetime) -> str:
 
 def _days(value: int) -> int:
     return max(1, value)
+
+
+def _print_days(kind: str) -> int:
+    """Days a learned voice lives after ``kind`` (provisional | idle); 0 = kept until forgotten (D15, the default)."""
+    if kind == "provisional":
+        return max(0, env_int("ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS", PROVISIONAL_DAYS))
+    return max(0, env_int("ZOE_OMI_VOICEPRINT_IDLE_DAYS", IDLE_DAYS))
+
+
+def voiceprints_expire() -> bool:
+    """Is a learned-voice expiry configured at all? Off (D15) = the sweep never deletes a learned voice, whatever date it carries
+    (prints learned before D15 still hold a 30 / 365-day ``expires_at``)."""
+    return _print_days("provisional") > 0 or _print_days("idle") > 0
+
+
+def _print_expiry(kind: str, now: datetime) -> str:
+    days = _print_days(kind)
+    return _iso(now + timedelta(days=days)) if days > 0 else KEEP_UNTIL_FORGOTTEN
 
 
 def _blob(v: Any) -> bytes:
@@ -308,6 +332,46 @@ async def review_segments(db, user_id: str, recording_ids: list[str]) -> list[di
     return out
 
 
+SEARCH_MAX = 50
+
+
+def _like(word: str) -> str:
+    return "%" + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+async def search_said(db, user_id: str, q: str = "", *, person_id: Optional[str] = None, limit: int = SEARCH_MAX) -> list[dict]:
+    """"What did Sam say about the trip?" (owner decision OD5, 2026-10-19: searching what other people said is allowed - WORDS ONLY,
+    shown privately to the wearer). The member's OWN lines of their own ``done`` recordings, newest first: every word of ``q`` must be
+    in the line (case-folded, wildcards escaped), optionally only lines the member TAGGED as ``person_id`` (one of their own people;
+    anyone else's id is a 404). Lines marked not-a-person (Zoe, TV ...) are left out; suggestions are never an attribution here
+    either. No audio, no embedding: text, time, label and the confirmed person only. Nothing is written."""
+    words = re.findall(r"[^\W_]{2,}", str(q or "").lower())[:6]
+    if not words and not person_id:
+        raise VoiceError("give some words to look for, or a person")
+    names = {p["id"]: p["name"] for p in await own_people(db, user_id)}
+    if person_id and person_id not in names:
+        raise VoiceError("person not found", 404)
+    sql = ("SELECT s.id, s.recording_id, s.start_ms, s.end_ms, s.text, s.speaker, s.owner_label, s.tagged_person_id, s.tag_source, "
+           "r.started_at FROM omi_segments s JOIN omi_recordings r ON r.id = s.recording_id WHERE s.user_id = ? AND r.user_id = ? "
+           "AND r.status = 'done' AND s.not_person IS NULL")
+    params: list = [user_id, user_id]
+    for w in words:
+        sql += " AND lower(s.text) LIKE ? ESCAPE '\\'"
+        params.append(_like(w))
+    if person_id:
+        sql += " AND s.tagged_person_id = ?"
+        params.append(person_id)
+    sql += " ORDER BY r.started_at DESC, s.seq LIMIT ?"
+    params.append(max(1, min(SEARCH_MAX, int(limit))))
+    out = []
+    for sid, rid, a, b, text, spk, owner_label, tagged, tag_source, started in await _all(db, sql, tuple(params)):
+        pid = tagged if tagged in names else None          # a tag to a row that is not (or no longer) the member's own: nobody
+        out.append({"segment_id": sid, "recording_id": rid, "started_at": started, "start_ms": a, "end_ms": b, "text": text or "",
+                    "label": _label({"not_person": None, "tagged_person_id": pid, "owner_label": owner_label, "speaker": spk}),
+                    "person_id": pid, "person_name": names.get(pid) if pid else None})
+    return out
+
+
 async def recordings_with_segments(db, user_id: str, recording_ids: list[str]) -> set[str]:
     """Which of these recordings have ANY segment row - including lines the member marked not-a-person, which ``review_segments``
     leaves out. The day review needs the difference: a recording with segments is read turn by turn (and may be empty), one with
@@ -509,7 +573,7 @@ async def answer_suggestion(db, user_id: str, segment_id: str, answer: str) -> d
             ok = int(n_seg) >= 3 and int(n_rec) >= 2
             await _run(db, "UPDATE learned_voiceprints SET last_confirmed_at = ?, status = ?, expires_at = ? WHERE id = ?",
                        (_iso(now), "confirmed" if ok else "provisional",
-                        _iso(now + timedelta(days=_days(env_int("ZOE_OMI_VOICEPRINT_IDLE_DAYS", IDLE_DAYS)))) if ok else expires, vp))
+                        _print_expiry("idle", now) if ok else expires, vp))
         await db.commit()
         return out
     await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE id = ? AND user_id = ?",
@@ -567,7 +631,7 @@ async def _voiceprint(db, user_id: str, person_id: str, model_id: str, *, create
                        "n_recordings, status, learning_enabled, created_at, updated_at, expires_at) "
                        "VALUES (?, ?, ?, ?, 'pendant', ?, 0, 0, 'provisional', 1, ?, ?, ?)",
                    (str(uuid.uuid4()), user_id, person_id, model_id, _blob(np.zeros(256)), _iso(now), _iso(now),
-                    _iso(now + timedelta(days=_days(env_int("ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS", PROVISIONAL_DAYS))))))
+                    _print_expiry("provisional", now)))
         rows = await _all(db, q, (user_id, person_id, model_id))
     return {"id": rows[0][0], "learning_enabled": bool(rows[0][1])} if rows else None
 
@@ -606,7 +670,9 @@ async def list_learned(db, user_id: str) -> list[dict]:
                       (user_id, user_id))
     keys = ("id", "person_id", "name", "status", "segments", "recordings", "learning_enabled", "last_confirmed_at", "expires_at",
             "created_at")
-    return [{**dict(zip(keys, r)), "learning_enabled": bool(r[6])} for r in rows]
+    keep = not voiceprints_expire()
+    return [{**dict(zip(keys, r)), "learning_enabled": bool(r[6]),
+             "expires_at": None if keep or r[8] == KEEP_UNTIL_FORGOTTEN else r[8]} for r in rows]     # None = kept until forgotten (D15)
 
 
 async def set_voice_learning(db, user_id: str, vp_id: str, enabled: bool) -> bool:
@@ -742,9 +808,9 @@ async def forget_user(db, user_id: str) -> int:
 
 
 async def sweep(db, *, now: Optional[datetime] = None) -> dict:
-    """Runs on every transcription-loop pass WHETHER OR NOT learning is on: expired bystander embeddings and unknown voices go,
-    unconfirmed (provisional) voiceprints past 30 days and confirmed ones idle past 365 go, and so does everything learned about a
-    soft-deleted person (the backstop for the People panel's delete)."""
+    """Runs on every transcription-loop pass WHETHER OR NOT learning is on: expired bystander embeddings and unknown voices go, and
+    so does everything learned about a soft-deleted person (the backstop for the People panel's delete). Learned voices are KEPT
+    UNTIL FORGOTTEN (D15); only with an expiry explicitly configured (``voiceprints_expire``) do prints past their ``expires_at`` go."""
     stamp = _iso(now or _now())
     out = {"embeddings": 0, "clusters": 0, "voiceprints": 0, "people": 0}
     touched = [r[0] for r in await _all(db, "SELECT DISTINCT s.voice_cluster_id FROM omi_segment_embeddings e JOIN omi_segments s "
@@ -757,7 +823,9 @@ async def sweep(db, *, now: Optional[datetime] = None) -> dict:
     for cid in gone:
         await _run(db, "UPDATE omi_segments SET voice_cluster_id = NULL WHERE voice_cluster_id = ?", (cid,))
         out["clusters"] += await _run(db, "DELETE FROM omi_voice_clusters WHERE id = ?", (cid,))
-    for vp, owner, pid in await _all(db, "SELECT id, owner_user_id, people_id FROM learned_voiceprints WHERE expires_at < ?", (stamp,)):
+    expiring = await _all(db, "SELECT id, owner_user_id, people_id FROM learned_voiceprints WHERE expires_at < ?", (stamp,)) \
+        if voiceprints_expire() else []           # D15: kept until forgotten unless an expiry is explicitly configured
+    for vp, owner, pid in expiring:
         await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp,))
         out["voiceprints"] += await _run(db, "DELETE FROM learned_voiceprints WHERE id = ?", (vp,))
         await _withdraw_orphaned_suggestions(db, owner, pid)          # what an expired voice suggested goes with it
