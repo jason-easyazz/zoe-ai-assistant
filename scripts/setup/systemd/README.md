@@ -25,6 +25,7 @@ Secrets are never inlined — they are read from `.env` files.
 | `zoe-backup.{service,timer}` | — | Nightly ON-BOX backup (Postgres dumps + manifests, MemPalace tarball, host archive, 02:30); tracked 2026-10-18 from the live unit |
 | `zoe-backup-verify.{service,timer}` | — | Weekly RESTORE DRILL into a throwaway pg17 + pgvector container + the MONTHLY off-box restore drill (Sunday 05:30); `docs/knowledge/offbox-backup.md` section 7 |
 | `zoe-offbox-backup.{service,timer}` | — | Nightly OFF-BOX encrypted backup to the411 (restic append-only + age, 05:10) — **install only after `~/.config/zoe-backup/offbox.env` exists**; runbook `docs/knowledge/offbox-backup.md` |
+| `zoe-router-retrain.{service,timer}` | — | Weekly struggle-fed router retrain (Saturday 00:30; `scripts/maintenance/router_struggle_retrain.py`, contract `docs/architecture/struggle-detector.md` → *Phase 3*) — **template only, owner opt-in; a no-op until `ZOE_ROUTER_STRUGGLE_FEED` is `shadow`/`on`**, and it never adopts outside `on` |
 | `zoe-health.{service,timer}` | — | The ONE spine health check (every 5 min, Telegram on transitions); replaces the untracked unit of the same name AND the `zoe-watchdog.sh` crontab line |
 | `zoe-merge-queue.{service,timer}`, `zoe-opensrc-refresh.{service,timer}`, `github-runner.service` | — | Tracked 2026-10-18 from the live units (B9); `python3 scripts/maintenance/unit_inventory.py` lists any installed unit still without a template |
 

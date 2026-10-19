@@ -1,10 +1,8 @@
-"""Direct-execution tests for the write intents that route through mcporter.
+"""Direct-execution tests for the calendar / note / journal / people write intents.
 
 Mirrors test_list_direct_execution.py (#993) and test_reminder_direct_execution.py
-(#960). calendar_create / note_create / journal_create / people_create used to
-fall through to the mcporter subprocess path in intent_router, which spawns a
-second mcp_server that dies on DB-pool init and returns None → ok:false, so the
-write silently failed on the Flue sidecar. The direct executors write straight
+(#960). These intents used to fall through to an mcporter subprocess (retired, A3
+2026-10-19: it wrote as family-admin). The direct executors write straight
 through get_db_ctx, mirroring mcp_server's corresponding tool storage semantics
 (table names, columns, category/visibility defaults, comma-split journal tags).
 """
@@ -60,13 +58,6 @@ def _fake_db_ctx(db):
     return ctx
 
 
-def _fail_mcporter(monkeypatch, msg="direct path should avoid mcporter"):
-    async def fail(_cmd):
-        raise AssertionError(msg)
-
-    monkeypatch.setattr("intent_router._run_mcporter", fail)
-
-
 def _silence_ui(monkeypatch):
     async def noop(_channel, _event, _data):
         return None
@@ -82,7 +73,6 @@ async def test_calendar_create_writes_event_and_confirms(monkeypatch):
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
-    _fail_mcporter(monkeypatch)
 
     result = await execute_intent(
         Intent("calendar_create",
@@ -107,7 +97,6 @@ async def test_calendar_create_all_day_when_no_time(monkeypatch):
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
-    _fail_mcporter(monkeypatch)
 
     result = await _execute_calendar_create_direct(
         Intent("calendar_create", {"title": "Birthday", "date": "2026-07-11"}),
@@ -124,17 +113,12 @@ async def test_calendar_create_all_day_when_no_time(monkeypatch):
 @pytest.mark.asyncio
 async def test_calendar_create_no_date_defaults_to_today(monkeypatch):
     """#1038: a dateless quick-add ("add lunch with Jess") means TODAY — the
-    direct executor fills today_for_zoe_tz() and succeeds; no mcporter fallback."""
+    direct executor fills today_for_zoe_tz() and succeeds."""
     from time_utils import today_for_zoe_tz
 
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
-
-    async def dead_mcporter(_cmd):
-        return None
-
-    monkeypatch.setattr("intent_router._run_mcporter", dead_mcporter)
 
     result = await execute_intent(
         Intent("calendar_create", {"title": "Someday"}), "family-admin"
@@ -151,21 +135,23 @@ async def test_calendar_create_unparseable_date_returns_none(monkeypatch):
     (None → ok:false), not silently land the event on today — the wrong day with
     no signal. Distinct from the absent-date case above.
 
-    The direct executor *declines* this case (returns None) and execute_intent
-    falls through to mcporter by design — so a spy (not _fail_mcporter) proves
-    the decline actually happened rather than the direct path being skipped,
-    while a dead return still exercises the ok:false end state."""
+    The direct executor *declines* this case (returns None), and there is no
+    fallback writer behind it: a spy on the executor proves the decline actually
+    happened rather than the direct path being skipped."""
+    import intent_router
+
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
 
-    mcporter_calls = []
+    real_direct = intent_router._execute_calendar_create_direct
+    direct_calls = []
 
-    async def spy_dead_mcporter(cmd):
-        mcporter_calls.append(cmd)
-        return None
+    async def spy_direct(intent, user_id):
+        direct_calls.append(intent.name)
+        return await real_direct(intent, user_id)
 
-    monkeypatch.setattr("intent_router._run_mcporter", spy_dead_mcporter)
+    monkeypatch.setattr(intent_router, "_execute_calendar_create_direct", spy_direct)
 
     result = await execute_intent(
         Intent("calendar_create", {"title": "Dentist", "date": "the twelfth of never"}),
@@ -174,9 +160,9 @@ async def test_calendar_create_unparseable_date_returns_none(monkeypatch):
 
     assert result is None
     assert db.sql_matching("INSERT INTO events") == []
-    # The fall-through fired → the direct executor really declined (no vacuous
-    # pass where the direct path was never reached at all).
-    assert mcporter_calls, "expected fall-through to mcporter after the direct decline"
+    # The direct executor really ran and declined (no vacuous pass where the
+    # direct path was never reached at all).
+    assert direct_calls == ["calendar_create"]
 
 
 @pytest.mark.asyncio
@@ -186,11 +172,7 @@ async def test_calendar_create_genuine_failure_returns_none(monkeypatch):
         raise RuntimeError("db unavailable")
         yield  # pragma: no cover
 
-    async def dead_mcporter(_cmd):
-        return None
-
     monkeypatch.setattr("database.get_db_ctx", broken_ctx)
-    monkeypatch.setattr("intent_router._run_mcporter", dead_mcporter)
 
     result = await execute_intent(
         Intent("calendar_create", {"title": "X", "date": "2026-07-10"}), "family-admin"
@@ -207,7 +189,6 @@ async def test_note_create_writes_note_and_confirms(monkeypatch):
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
-    _fail_mcporter(monkeypatch)
 
     result = await execute_intent(
         Intent("note_create", {"title": "Shopping", "content": "milk and eggs"}),
@@ -230,11 +211,6 @@ async def test_note_create_empty_content_returns_none(monkeypatch):
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
 
-    async def dead_mcporter(_cmd):
-        return None
-
-    monkeypatch.setattr("intent_router._run_mcporter", dead_mcporter)
-
     result = await execute_intent(
         Intent("note_create", {"title": "Empty"}), "family-admin"
     )
@@ -250,11 +226,7 @@ async def test_note_create_genuine_failure_returns_none(monkeypatch):
         raise RuntimeError("db unavailable")
         yield  # pragma: no cover
 
-    async def dead_mcporter(_cmd):
-        return None
-
     monkeypatch.setattr("database.get_db_ctx", broken_ctx)
-    monkeypatch.setattr("intent_router._run_mcporter", dead_mcporter)
 
     result = await execute_intent(
         Intent("note_create", {"content": "x"}), "family-admin"
@@ -271,7 +243,6 @@ async def test_note_create_survives_memory_mirror_runtime_error(monkeypatch):
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
-    _fail_mcporter(monkeypatch)
 
     async def boom(*_args, **_kwargs):
         raise RuntimeError("mempalace down")
@@ -294,7 +265,6 @@ async def test_journal_create_writes_entry_with_tags(monkeypatch):
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
-    _fail_mcporter(monkeypatch)
 
     result = await _execute_journal_create_direct(
         Intent("journal_create",
@@ -333,7 +303,6 @@ async def test_people_create_writes_person_and_confirms(monkeypatch):
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
-    _fail_mcporter(monkeypatch)
 
     result = await execute_intent(
         Intent("people_create", {"name": "Alice", "relationship": "sister"}),
@@ -365,7 +334,7 @@ async def test_people_create_empty_name_returns_none(monkeypatch):
     assert db.sql_matching("INSERT INTO people") == []
 
 
-# --- wiring: direct path runs ahead of mcporter -----------------------------
+# --- wiring: the direct path is the only path -------------------------------
 
 
 @pytest.mark.asyncio
@@ -382,7 +351,7 @@ async def test_people_create_empty_name_returns_none(monkeypatch):
          {"name": "Bob"}, "Added Bob to your contacts."),
     ],
 )
-async def test_direct_path_used_before_mcporter(
+async def test_direct_path_is_used(
     monkeypatch, intent_name, target, slots, reply
 ):
     calls = []
@@ -391,11 +360,7 @@ async def test_direct_path_used_before_mcporter(
         calls.append((intent.name, dict(intent.slots), user_id))
         return reply
 
-    async def fail_mcporter(_cmd):
-        raise AssertionError(f"{intent_name} direct path should avoid mcporter")
-
     monkeypatch.setattr(f"intent_router.{target}", fake_direct)
-    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
 
     result = await execute_intent(Intent(intent_name, slots), "family-admin")
 

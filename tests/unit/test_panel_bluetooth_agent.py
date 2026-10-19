@@ -6,7 +6,7 @@ No hardware, no BLE, no network. Source mutations worth re-running by Edit (each
   skip ``self.lock.release()`` in ``execute``'s finally          -> test_a_failed_connect_releases_the_radio
   let ``_touch`` ignore ``max_hold_s``                           -> test_a_lease_cannot_be_extended_past_the_hard_cap
   drop the ``busy_job`` check in ``execute``                     -> test_a_second_command_while_busy_is_refused
-  add a ``pair(`` call anywhere in panel_bt                      -> test_the_agent_never_pairs_and_never_listens
+  add a ``pair(`` call anywhere in panel_bt but bond.py          -> test_the_agent_never_pairs_and_never_listens
 """
 from __future__ import annotations
 
@@ -388,11 +388,13 @@ def _sources():
 
 
 def test_the_agent_never_pairs_and_never_listens():
-    forbidden = [r"\.pair\(", r"\.unpair\(", r"bluetoothctl", r"\btrust\b.*device", r"register_agent", r"RegisterAgent",
+    """No bond anywhere but bond.py (the owner-run ``omi_bond``), and nowhere an agent, an unpair or a listening socket."""
+    forbidden = [r"\.unpair\(", r"bluetoothctl", r"\btrust\b.*device", r"register_agent", r"RegisterAgent",
                  r"TCPSite", r"web\.Application", r"start_server", r"http\.server", r"\.listen\(", r"\.bind\(", r"create_server"]
+    bond_only = [r"\.pair\(", r"RemoveDevice", r"Pairable"]
     for name, text in _sources().items():
         code = "\n".join(line for line in text.splitlines() if not line.strip().startswith(("#", '"""')))
-        for pat in forbidden:
+        for pat in forbidden + ([] if name == "bond.py" else bond_only):
             assert not re.search(pat, code), f"{name} matches forbidden /{pat}/"
 
 

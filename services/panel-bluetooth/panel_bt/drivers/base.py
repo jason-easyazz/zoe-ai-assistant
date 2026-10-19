@@ -67,6 +67,7 @@ class Driver:
     label = "Device"
     known = True                       # False only for the generic fallback ("no specific driver")
     supports_update = False
+    supports_bond = False           # only a driver whose device runs bonded-only firmware (the Omi pendant) may be bonded
 
     def match(self, advert: Advert) -> int:
         """0 = not mine; higher beats lower. The generic driver returns 1 for everything."""

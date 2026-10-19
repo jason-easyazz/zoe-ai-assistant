@@ -267,8 +267,8 @@ async def test_shared_memory_owned_by_other_user_is_excluded(monkeypatch):
     try:
         mems = [
             # Owned by another user, shared into this user's context → excluded.
-            _Ref("Bob is Andrew's colleague.", memory_type="relationship",
-                 entity_type="", tags="", owner="andrew"),
+            _Ref("Bob is Alex's colleague.", memory_type="relationship",
+                 entity_type="", tags="", owner="alex"),
             # This user's own fact → still proposed.
             _Ref("Karen loves tea.", memory_type="fact",
                  entity_type="", tags="", owner=USER),
@@ -281,7 +281,7 @@ async def test_shared_memory_owned_by_other_user_is_excluded(monkeypatch):
         await cb.backfill_contacts(USER)
 
         names = {s["pre_filled_slots"]["name"] for s in stored}
-        assert names == {"Karen"}   # Bob (Andrew's) never proposed under this user
+        assert names == {"Karen"}   # Bob (Alex's) never proposed under this user
     finally:
         await db.close()
 
@@ -295,7 +295,7 @@ async def test_ownerless_shared_row_is_excluded(monkeypatch):
     db = await _open()
     try:
         mems = [
-            _Ref("Bob is Andrew's colleague.", memory_type="relationship",
+            _Ref("Bob is Alex's colleague.", memory_type="relationship",
                  entity_type="", tags="", visibility="family"),   # ownerless + shared
             _Ref("Karen loves tea.", memory_type="fact",
                  entity_type="", tags=""),                        # ownerless + private

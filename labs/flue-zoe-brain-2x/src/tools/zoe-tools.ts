@@ -100,6 +100,7 @@ import {
   isTurnUntrusted,
   markTurnUntrusted,
   neutraliseUntrustedText,
+  turnUntrustedSource,
   untrustedSearchRefusal,
   untrustedWriteRefusal,
 } from '../untrusted-content.ts';
@@ -269,7 +270,7 @@ async function runWrite(
   // W15 PER-SOURCE TOOL TIER — untrusted web content was returned into this turn,
   // so nothing may change state until the turn ends (src/untrusted-content.ts).
   // Ahead of replay isolation: a tainted turn must refuse, not fake a success.
-  if (!isRead && isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem);
+  if (!isRead && isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem, turnUntrustedSource(signal));
   // REPLAY ISOLATION — this turn came from the replay gate, so report the write as
   // done and commit nothing. Checked AFTER the ALLOW_WRITES gate on purpose: a lab
   // build with writes off keeps its loud "WRITE DISABLED" honesty, and this branch
@@ -543,7 +544,7 @@ const setTimer = defineTool({
     }
     // W15 tier: set_timer does not route through runWrite, so it carries the
     // untrusted-content gate inline too (see runWrite).
-    if (isTurnUntrusted(signal)) return untrustedWriteRefusal(`a ${minutes} minute timer${named}`);
+    if (isTurnUntrusted(signal)) return untrustedWriteRefusal(`a ${minutes} minute timer${named}`, turnUntrustedSource(signal));
     // REPLAY ISOLATION — set_timer is the ONE write that does not route through
     // runWrite (it has its own inline gate above), so it needs the check here too;
     // without it, timer_create would still dispatch on every replay turn.
@@ -1212,7 +1213,7 @@ const webSearch = defineTool({
     if (!query) return 'I need something to search for.';
     // W15 tier (Codex #1702): a search sends text OFF the box, so a turn that
     // already holds untrusted web content may not search again — no HTTP call.
-    if (isTurnUntrusted(signal)) return untrustedSearchRefusal();
+    if (isTurnUntrusted(signal)) return untrustedSearchRefusal(turnUntrustedSource(signal));
     try {
       const res = await fetch(new URL('/api/system/web-search', zoeDataUrl()), {
         method: 'POST',

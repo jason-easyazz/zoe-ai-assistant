@@ -27,6 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
 import panel_principal
+import untrusted_content
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
 from browser_broker import create_default_browser_broker
 from conversation_context import ConversationContext as _CC
@@ -68,7 +69,6 @@ _INTENT_PANEL_NAV = {
     "timer_create":      ("/touch/home.html?domain=timers",   "new_timer"),
     "recipe_search":     (None,                   None),
     "reminder_create":   (None,                   None),  # handled as toast
-    "lets_talk":         ("/touch/voice.html?conv=1", None),  # phone-call voice mode (still its own surface)
     # "Set up music" → the panel's Browse → Sources card (Connect = phone QR).
     "music_setup":       ("/touch/home.html?domain=music_sources", None),
 }
@@ -1758,7 +1758,8 @@ async def chat_stream_generator(
             await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id)
             return
 
-        if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
+        if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing) \
+                and not untrusted_content.untrusted_source_in(message_for_processing):
             yield emit(
                 CustomEvent(
                     name="zoe.run_log",
@@ -1790,6 +1791,10 @@ async def chat_stream_generator(
         if message_for_processing.startswith("/openclaw "):
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
             force_openclaw = True
+            use_intent_fast_path = False
+        if untrusted_content.untrusted_source_in(message_for_processing):
+            # Someone else's words, fenced by the producer (a forwarded Telegram message): never run a command written
+            # inside the quote here - only the brain answers it, and it refuses writes for this turn (untrusted_content.py).
             use_intent_fast_path = False
 
         _chat_ctx = _CHAT_CONTEXTS.get(session_id) or _CC()
@@ -2919,6 +2924,8 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                 message_for_processing = message_for_processing[len("/openclaw ") :].strip()
                 force_openclaw = True
                 use_intent_fast_path = False
+            if untrusted_content.untrusted_source_in(message_for_processing):
+                use_intent_fast_path = False  # fenced third-party text: the brain only (see the stream path)
 
             if use_intent_fast_path:
                 # Tier-1.5 channel-agnostic fast path (the SAME core voice uses): answer
@@ -3017,7 +3024,8 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                     asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
                     await _save_chat_message(session_id, "assistant", result, user_id=user_id)
                     return {"response": result, "session_id": session_id}
-            if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
+            if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing) \
+                and not untrusted_content.untrusted_source_in(message_for_processing):
                 message_for_processing = (
                     "Connect WhatsApp integration for user with full guided flow: preflight checks, "
                     "credential/session validation, qr/session setup, webhook test, remediation."

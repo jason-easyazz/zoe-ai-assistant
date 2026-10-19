@@ -47,6 +47,7 @@ class OmiDriver(Driver):
     name = "omi"
     label = "Omi pendant"
     supports_update = True
+    supports_bond = True            # phase-2 (Zoe) firmware only - bond.bond_pendant checks the DIS version itself
 
     def __init__(self, deps_factory: Optional[Any] = None) -> None:
         self._deps_factory = deps_factory      # tests inject a fake SMP session here; production builds the real one lazily

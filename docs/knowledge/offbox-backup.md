@@ -57,7 +57,7 @@ including words that were since forgotten.
 |---|---|---|---|
 | `household` | newest on-box Postgres dumps (`zoe`, `multica`; biometric table data already excluded by `postgres-nightly-backup.sh`) and their manifests, `pg_dumpall --globals-only`, newest MemPalace tarball, `~/.zoe` filtered, `~/.zoe-voice-samples`; **host sources (section 7)**: HA config (minus `.storage`, logs, recorder, tts, deps) + the newest `.storage`/`.cloud` helper export, `services/zoe-data/data/` (minus the router shadow log, the VAPID key and the dead `zoe.db`), the models lock | age + restic | one per day for 7 days, one per week for 34 days; **never older than 35 days**, no monthly |
 | `secrets` | the live checkout's `.env`, `.env.*`, `services|labs|modules/*/.env*` (never `*.example`, `*.bak*`), `ssl/`, `config/`, `~/.zoe/env`, `~/.zoe/secrets`; **host config (section 7)**: HA `secrets.yaml`, `~/.config/systemd/user` (units + drop-ins), `/etc/systemd/system/*.d`, `~/bin`, the crontab | age + restic | 7 daily, 4 weekly, 6 monthly |
-| `artefacts` | `labs/functiongemma-finetune/runs/gen1/merged` (the router lineage checkpoint: NEVER delete) and `~/models/functiongemma-router` | restic | 7 daily, 4 weekly, 6 monthly |
+| `artefacts` | `labs/functiongemma-finetune/runs/gen1/merged` (the router lineage checkpoint: NEVER delete), `~/models/functiongemma-router`, and `~/.zoe/backups/panel` (the panel's custom wake model `hey_zoe.onnx`, in no git; sha256 in `models.lock`) | restic | 7 daily, 4 weekly, 6 monthly |
 
 Never shipped from `~/.zoe` (each is an fnmatch on any path component, `ZOE_TREE_EXCLUDES`): anything `*backup*` (backups of
 backups, the ad-hoc owner-script backups that hold raw text or secrets), caches and venvs, `bakeoff-*` and the chroma migration
@@ -97,7 +97,7 @@ tier time-bounded at 35 days on the411; restore => re-issue the forget") so the 
   from the411 into a scratch dir (`~/.cache/zoe-offbox/drill-*`, removed after), compare every file's sha256 with the manifest the
   box recorded when it SENT that snapshot, read one twelfth of the repo's data (`restic check --read-data-subset=<month>/12`, the
   whole repo once a year), and check retention: a household snapshot more than 35 days older than the newest (no slack) means the411's prune
-  stopped; a newest snapshot older than 50 h means backups stopped landing. The artefacts tier restores only the GGUF (not the 1 GB
+  stopped; a newest snapshot older than 50 h means backups stopped landing. The artefacts tier restores only the GGUF and the panel wake model (`DRILL_ARTEFACT_GLOBS`; not the 1 GB
   checkpoint) monthly.
 - **Alerts** go over Telegram through the crash-loop watcher's sender (a process separate from zoe-data): a backup run with problems
   (a stale on-box dump, a missing source, unreadable files), any failure, a low-memory refusal, a failed drill, and on-box verify

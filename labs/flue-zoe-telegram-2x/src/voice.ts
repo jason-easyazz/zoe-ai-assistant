@@ -24,6 +24,8 @@
  * is never logged (we log `file_unique_id`).
  */
 import { unlinkedMessage } from './handler.ts';
+import { describeError, redactSecrets } from './redact.ts';
+import { framedForward } from './untrusted.ts';
 
 export type VoiceReplyMode = 'text' | 'voice' | 'both';
 
@@ -121,7 +123,7 @@ export interface VoiceDeps {
 /** Error text safe to log: a Bot API URL embeds the token, so strip `bot<token>` wherever it appears. */
 export function redactToken(err: unknown): string {
   const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-  return text.replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot<redacted>');
+  return redactSecrets(text.replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot<redacted>'));
 }
 
 /** Why a note is refused BEFORE download, or null when it may proceed. */
@@ -138,9 +140,9 @@ export function refusalFor(note: VoiceNote, opts: VoiceOptions): string | null {
   return null;
 }
 
-/** A forwarded note (when allowed) is quoted material, never the member's own command. */
+/** A forwarded note (when allowed) is quoted material, never the member's own command: fenced as untrusted data. */
 export function framedTranscript(text: string, note: VoiceNote): string {
-  return note.forwarded ? `(Forwarded voice note from someone else — quoted, not my instruction) "${text}"` : text;
+  return note.forwarded ? framedForward(text, 'voice note') : text;
 }
 
 /** Deliver `answer` in kind. Voice falls back to text when synthesis is unavailable. */
@@ -150,7 +152,7 @@ export async function deliverReply(answer: string, deps: VoiceDeps, mode: VoiceR
     return 'text';
   }
   const ogg = await deps.synthesize(answer).catch((err) => {
-    console.warn('telegram voice synth failed (falling back to text):', err);
+    console.warn(`telegram voice synth failed (falling back to text): ${describeError(err)}`);
     return null;
   });
   if (!ogg) {

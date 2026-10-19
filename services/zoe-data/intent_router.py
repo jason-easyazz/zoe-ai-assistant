@@ -1,6 +1,6 @@
 """
-Intent-first router: pattern-matches common family data requests and calls
-mcporter-safe directly, bypassing the LLM for <1 second responses.
+Intent-first router: pattern-matches common family data requests and runs each
+through an in-process direct executor, bypassing the LLM for <1 second responses.
 Falls through to the agent path (Hermes by default; OpenClaw only when explicitly enabled).
 
 Inspired by the original Zoe HassIL intent system (Tier 0/1 classification).
@@ -15,10 +15,7 @@ import logging
 import math
 import os
 import re
-import shlex
-import subprocess
 import time
-import shutil
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
@@ -155,11 +152,6 @@ _EXTEND_CAPABILITY_OPENCLAW_MSG = (
     "• NEVER include code fences (```) or skill source in the chat reply."
 )
 
-MCPORTER = shutil.which("mcporter-safe") or os.path.expanduser("~/bin/mcporter-safe")
-# Resolve the Node bin dir dynamically — prefer the directory containing the located binary,
-# fall back to the nvm path so existing installs don't break.
-_node_which = shutil.which("node")
-NODE_BIN = os.path.dirname(_node_which) if _node_which else os.path.expanduser("~/.nvm/versions/node/v22.22.0/bin")
 
 SHOPPING_KEYWORDS = {
     "milk", "eggs", "bread", "butter", "cheese", "chicken", "beef", "pork",
@@ -860,7 +852,7 @@ def detect_intent(
     if _SELF_IMPROVE_RE.search(t):
         return Intent("self_improve", {})
 
-    # "Let's talk" → navigate the browser panel to voice.html?conv=1 (conversation mode).
+    # "Let's talk" → a short spoken yes (the panel's live conversation mode is the Ask card's).
     # Placed before greetings so "let's chat" doesn't become a greeting.
     if _LETS_TALK_RE.search(t):
         return Intent("lets_talk", {})
@@ -2194,7 +2186,7 @@ async def detect_and_extract_intent(
     For create intents that the simplified keyword classifier tagged with
     {"raw": text}, the LLM extracts proper slots (title, date, time, …) and
     the returned Intent carries those structured values — all downstream
-    consumers (_build_command, form builders, intent_card_data, broadcast
+    consumers (the direct executors, form builders, intent_card_data, broadcast
     functions) receive the same slot shape as before.
 
     Returns None when no intent matched OR when LLM extraction failed (caller
@@ -2539,41 +2531,6 @@ def _list_item_ok(item: str) -> bool:
     return is_plausible_item(item)
 
 
-async def _run_mcporter(cmd: str) -> Optional[str]:
-    """Run a single mcporter-safe command, return raw stdout or None on failure.
-
-    Spawns via async_subprocess.run_to_completion so the fork happens OFF the
-    event-loop thread — asyncio.create_subprocess_exec forks on the loop and
-    can wedge the whole API (the 2026-06-29 outage class, #947).
-    """
-    env = os.environ.copy()
-    env["PATH"] = f"{NODE_BIN}:{env.get('PATH', '')}"
-    try:
-        from async_subprocess import QueueTimeout, run_to_completion
-
-        proc = await run_to_completion(shlex.split(cmd), env=env, timeout=10, queue_timeout=10)
-        if proc.returncode != 0:
-            logger.warning(f"mcporter-safe failed: {proc.stderr.decode()}")
-            return None
-        return proc.stdout.decode().strip()
-    except QueueTimeout as exc:
-        # Distinct from a slow mcporter: nothing ran. Logging this as "timed out"
-        # points debugging at mcporter when the real problem is a saturated
-        # subprocess pool. This is a live intent path, so it keeps the short
-        # interactive queue budget rather than waiting minutes for a worker.
-        logger.warning(
-            "mcporter-safe never started: no free subprocess worker after %ss "
-            "(pool saturated)", exc.timeout,
-        )
-        return None
-    except subprocess.TimeoutExpired:
-        logger.warning("mcporter-safe timed out")
-        return None
-    except (OSError, UnicodeError, ValueError) as e:
-        logger.error(f"mcporter error: {e}")
-        return None
-
-
 async def _load_direct_execution_user(db, user_id: str) -> Optional[dict]:
     cursor = await db.execute("SELECT id, role, name FROM users WHERE id = ?", (user_id,))
     row = await cursor.fetchone()
@@ -2618,14 +2575,13 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
     except HTTPException:
         raise
     except Exception as exc:
-        logger.warning("reminder_create direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("reminder_create direct execution unavailable: %s", exc)
         return None
 
 
 async def _execute_reminder_list_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Read reminders straight from the reminders table (mirrors mcp_server's
-    reminder_list query) so 'what are my reminders' works even when the mcporter
-    MCP subprocess is down, and an empty list formats as 'No reminders set.'
+    reminder_list query, scoped to the acting user), and an empty list formats as 'No reminders set.'
     instead of surfacing as a failure (ok:false) to brain/tool consumers."""
     try:
         from database import get_db_ctx
@@ -2640,7 +2596,7 @@ async def _execute_reminder_list_direct(intent: Intent, user_id: str) -> Optiona
             rows = [dict(r) for r in await cursor.fetchall()]
         return _format_response(intent, json.dumps({"reminders": rows}, default=str))
     except Exception as exc:
-        logger.warning("reminder_list direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("reminder_list direct execution unavailable: %s", exc)
         return None
 
 
@@ -2698,7 +2654,7 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
 
         return _format_response(intent, json.dumps({"lists": list(lists_map.values())}))
     except Exception as exc:
-        logger.warning("list_show direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("list_show direct execution unavailable: %s", exc)
         return None
 
 
@@ -2717,8 +2673,7 @@ async def _notify_lists_ui(event_type: str, data: dict) -> None:
 async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Add an item to the user's list straight through the DB, mirroring
     mcp_server's list_add_item tool (same list resolution, family/personal
-    visibility default, and list creation) so 'add milk to my shopping list'
-    works when the mcporter subprocess is down. Returns a confirming string on
+    visibility default, and list creation) for the acting user. Returns a confirming string on
     success; None only on genuine failure (so ok:false still means real failure)."""
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
@@ -2762,7 +2717,7 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     except HouseholdListUnavailable:
         return f"There isn't a household {lt.replace('_', ' ')} list yet, and I can only start a shopping list from here."
     except Exception as exc:
-        logger.warning("list_add direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("list_add direct execution unavailable: %s", exc)
         return None
 
 
@@ -2817,7 +2772,7 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
             intent, json.dumps({"item_id": item_id, "text": item, "status": "completed"})
         )
     except Exception as exc:
-        logger.warning("list_remove direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("list_remove direct execution unavailable: %s", exc)
         return None
 
 
@@ -2834,10 +2789,8 @@ def _say_clock(hhmm: str) -> str:
 
 
 async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optional[str]:
-    """Read the calendar straight from the events table so 'what's on my calendar'
-    works even when the mcporter MCP subprocess is down (the source of the
-    calendar 'hit and miss'). Mirrors the qualifier→date-range logic in
-    _build_command's calendar_show branch."""
+    """Read the calendar straight from the events table for the acting user
+    (qualifier → date range: today (no qualifier) / tomorrow / this week / this month / otherwise the next 7 days)."""
     from datetime import timedelta
     slots = intent.slots or {}
     qualifier = str(slots.get("qualifier", "")).strip().lower()
@@ -2872,7 +2825,7 @@ async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optiona
             )
             rows = [dict(r) for r in await cursor.fetchall()]
     except Exception as exc:
-        logger.warning("calendar_show direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("calendar_show direct execution unavailable: %s", exc)
         return None
 
     if not rows:
@@ -2939,9 +2892,7 @@ def _past_event_note(start_date: str, start_time: Optional[str], now) -> str:
 async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Create a calendar event straight through the DB, mirroring mcp_server's
     calendar_create_event tool (same events columns, category default 'general',
-    visibility 'family' except a health event, which is 'personal' - calendar_service) so 'add X to my calendar' works when the mcporter
-    subprocess is down. Slots are normalised with the same _parse_date/_parse_time
-    that _build_command's calendar_create branch used. Unlike the note/journal/
+    visibility 'family' except a health event, which is 'personal' - calendar_service), for the acting user. Slots are normalised with _parse_date/_parse_time. Unlike the note/journal/
     people executors there is deliberately NO MemPalace mirror here — mcp_server's
     calendar_create_event tool doesn't write one either, so matching it means
     omitting it. Returns a confirming string on success; None only on genuine
@@ -2997,15 +2948,15 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
         when_phrase = f"{when} at {clock}" if clock else when
         return f"Added {title} to your calendar {when_phrase}.{_past_event_note(start_date, start_time, now)}"
     except Exception as exc:
-        logger.warning("calendar_create direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("calendar_create direct execution unavailable: %s", exc)
         return None
 
 
 async def _execute_note_create_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Save a note straight through the DB, mirroring mcp_server's note_create
     tool (same notes columns, category default 'general', visibility 'personal',
-    and best-effort MemPalace mirror via routers.notes._store_note_memory) so
-    'make a note' works when the mcporter subprocess is down. Returns a confirming
+    and best-effort MemPalace mirror via routers.notes._store_note_memory) for
+    the acting user. Returns a confirming
     string on success; None only on genuine failure."""
     slots = intent.slots or {}
     content = str(slots.get("content") or "").strip()
@@ -3044,15 +2995,15 @@ async def _execute_note_create_direct(intent: Intent, user_id: str) -> Optional[
         )
         return "Saved your note."
     except Exception as exc:
-        logger.warning("note_create direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("note_create direct execution unavailable: %s", exc)
         return None
 
 
 async def _execute_journal_create_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Write a journal entry straight through the DB, mirroring mcp_server's
     journal_create_entry tool (same journal_entries columns, comma-split tags
-    JSON, visibility 'personal', deleted 0, best-effort MemPalace mirror) so
-    journalling works when the mcporter subprocess is down. Returns a confirming
+    JSON, visibility 'personal', deleted 0, best-effort MemPalace mirror) for
+    the acting user. Returns a confirming
     string on success; None only on genuine failure."""
     slots = intent.slots or {}
     content = str(slots.get("content") or "").strip()
@@ -3092,15 +3043,15 @@ async def _execute_journal_create_direct(intent: Intent, user_id: str) -> Option
         )
         return "Saved your journal entry."
     except Exception as exc:
-        logger.warning("journal_create direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("journal_create direct execution unavailable: %s", exc)
         return None
 
 
 async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Create a person straight through the DB, mirroring mcp_server's
     people_create tool (same people columns, circle default 'circle', context
-    default 'personal', visibility 'family', best-effort MemPalace mirror) so
-    'add X to my contacts' works when the mcporter subprocess is down. Returns a
+    default 'personal', visibility 'family', best-effort MemPalace mirror) for
+    the acting user. Returns a
     confirming string on success; None only on genuine failure."""
     slots = intent.slots or {}
     name = str(slots.get("name") or "").strip()
@@ -3120,8 +3071,7 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
         relationship = _cc.merge_relationship(relationship, _phrase_rel)
     conversational = _cc.conversational_enabled()
     # 'circle' = valid middle tier (inner|circle|public); people.circle is NOT
-    # NULL so it needs a value (a NULL default made this direct INSERT fail →
-    # silent mcporter fallback that persists nothing).
+    # NULL so it needs a value (a NULL default made this direct INSERT fail).
     circle = str(slots.get("circle") or "").strip() or "circle"
     context = str(slots.get("context") or "personal").strip() or "personal"
     # Private by default — a contact created by voice/chat should not be shared
@@ -3137,8 +3087,7 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
             # flue brain's tools use does NOT run _ensure_user_and_chat_session
             # (the chat path's guard), so an authed identity that only has
             # MemPalace memories but no `users` row would violate
-            # people_user_id_fkey and silently fall back to the mcporter path
-            # (which persists nothing). Mirror the chat path's upsert so contact
+            # people_user_id_fkey and persist nothing. Mirror the chat path's upsert so contact
             # creation works for any acting identity.
             await db.execute(
                 "INSERT INTO users (id, name, role) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
@@ -3147,7 +3096,7 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
             # Dedupe by name (case-insensitive) — a double-tap Add / retry (or a
             # re-issued voice command) must not create a second row. Mirrors the
             # pending-suggestion accept flow's dedup. Idempotent: returns a truthy
-            # confirmation so the caller treats it as success (no mcporter fallback).
+            # confirmation so the caller treats it as success.
             dup_cursor = await db.execute(
                 "SELECT id FROM people WHERE user_id = ? AND lower(name) = lower(?)"
                 " AND (deleted = 0 OR deleted IS NULL) LIMIT 1",
@@ -3190,7 +3139,7 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
         rel_phrase = f" as your {relationship}" if relationship else ""
         return f"Added {name}{rel_phrase} to your contacts."
     except Exception as exc:
-        logger.warning("people_create direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("people_create direct execution unavailable: %s", exc)
         return None
 
 
@@ -3377,11 +3326,9 @@ async def _execute_note_search_direct(intent: Intent, user_id: str) -> Optional[
     """Search the user's notes straight from the DB (mirrors mcp_server's
     note_search query) so 'search my notes for X' surfaces the user's OWN notes.
 
-    The mcporter path built the command WITHOUT user_id, so the MCP tool fell back
-    to the family-admin identity and searched the wrong user's rows — an authed
-    user's notes never surfaced. This direct executor binds the acting user_id in
+    It binds the acting user_id in
     trusted code, exactly like the note_create direct executor. Returns the
-    formatted response, or None to fall back to mcporter on genuine failure."""
+    formatted response, or None on genuine failure."""
     slots = intent.slots or {}
     query = str(slots.get("query") or "").strip()
     if not query:
@@ -3400,7 +3347,7 @@ async def _execute_note_search_direct(intent: Intent, user_id: str) -> Optional[
             rows = [dict(r) for r in await cursor.fetchall()]
         return _format_response(intent, json.dumps({"notes": rows}, default=str))
     except Exception as exc:
-        logger.warning("note_search direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("note_search direct execution unavailable: %s", exc)
         return None
 
 
@@ -3408,10 +3355,8 @@ async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optiona
     """Look up the user's contacts straight from the DB (mirrors mcp_server's
     people_search query) so 'who is X' surfaces the user's OWN contacts.
 
-    Same root cause as note_search: the mcporter command omitted user_id, so the
-    lookup ran as family-admin and never found an authed user's contacts. Binds
-    the acting user_id in trusted code, mirroring the people_create direct
-    executor. Returns the formatted response, or None to fall back to mcporter.
+    Binds the acting user_id in trusted code, mirroring the people_create direct
+    executor. Returns the formatted response, or None on genuine failure.
 
     The query is classified before it is searched (contacts_conversation):
     "in my contacts" / "on my contacts" is a LIST-ALL request and a clause
@@ -3451,9 +3396,7 @@ async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optiona
             else:
                 # Empty query = "show my contacts" / "open contacts page"
                 # navigation. List the acting user's OWN contacts directly —
-                # never return None here, or the intent falls through to the
-                # mcporter command (which omits user_id and would surface
-                # family-admin's contacts to any authed user).
+                # never return None here (None reads as a failure).
                 cursor = await db.execute(
                     f"SELECT {cols} FROM people"
                     " WHERE user_id = ? AND deleted = 0 ORDER BY name LIMIT "
@@ -3478,7 +3421,7 @@ async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optiona
         return _format_response(
             Intent("people_search", {"query": word or query}), json.dumps({"people": rows}, default=str))
     except Exception as exc:
-        logger.warning("people_search direct execution unavailable; falling back to mcporter: %s", exc)
+        logger.warning("people_search direct execution unavailable: %s", exc)
         return None
 
 
@@ -3616,7 +3559,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if (_is_guest_identity(user_id) and intent.name in _GUEST_HOUSEHOLD_INTENTS
             and panel_principal.in_panel_turn()):
         # Anyone AT THE PANEL may add, tick off and read the HOUSEHOLD list (a fridge list). The executors resolve a
-        # guest to family-visible lists only and never fall back to the mcporter writer, which would own a new list.
+        # guest to family-visible lists only and never create a list a guest would own.
         direct = {
             "list_add": _execute_list_add_direct,
             "list_remove": _execute_list_remove_direct,
@@ -3631,8 +3574,6 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 "calendars, lists or reminders — tap your name on the touch panel "
                 "or sign in to the app, then ask me again.")
     if intent.name == "lets_talk":
-        # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
-        # Return a short TTS reply confirming we're opening voice mode.
         return "Sure, let's talk."
 
     if intent.name == "music_setup":
@@ -4674,7 +4615,6 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         # Panel nav to cooking page handled by _broadcast_intent_nav in chat.py.
         return f"Looking up a recipe for {query}."
 
-    # Weather should not depend on mcporter command availability.
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
         return await _execute_weather_direct(
@@ -4711,8 +4651,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if direct_result:
             return direct_result
         if (intent.slots or {}).get("recurrence"):
-            # The MCP writer below has no recurrence argument: falling through
-            # would store a ONE-OFF for "every weekday". Fail honestly instead.
+            # A repeating reminder has no other writer: say so rather than let
+            # the caller fall through to something that might store a one-off.
             return ("I couldn't set that repeating reminder just now, so I haven't saved anything. "
                     "Please try again in a moment.")
 
@@ -4742,8 +4682,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             return direct_result
 
     # Read/search intents: "no matches" is a VALID answer, so return it even when
-    # empty (a truthiness gate would wrongly fall through to the mcporter path,
-    # which resolves to family-admin and misses the acting user's rows entirely).
+    # empty (a truthiness gate would wrongly treat it as a failure).
     if intent.name == "note_search":
         direct_result = await _execute_note_search_direct(intent, user_id)
         if direct_result is not None:
@@ -4754,72 +4693,65 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if direct_result is not None:
             return direct_result
 
-    try:
-        cmd = _build_command(intent, user_id)
-        if not cmd:
-            return None
-
-        logger.info(f"Intent {intent.name}: {cmd}")
-        raw = await _run_mcporter(cmd)
-        if raw is None:
-            return None
-
-        # The mcporter subprocess writes in ITS process, where write_receipts cannot see it: receipt the write here so a
-        # reply that says it happened is not blocked by the write-claim guard. Exit 0 is NOT proof: mcp_server.handle_tool
-        # catches a DB / validation error and returns {"error": ...} with isError false, so the subprocess exits 0 having
-        # written nothing. Only a result that explicitly says the row was added / created is a receipt.
-        _mcp_kind = _MCPORTER_WRITE_KINDS.get(intent.name)
-        if _mcp_kind:
-            if _mcporter_write_landed(raw):
-                import write_receipts
-
-                write_receipts.record(user_id, _mcp_kind, "", f"mcporter:{intent.name}")
-            elif not _mcporter_result_is_error(raw):
-                # Empty / unparseable / status-less: no receipt, and no templated "Added ..." line either - that line is
-                # itself a claim, and nothing backs it. (An explicit error result is worded honestly by _format_response.)
-                logger.warning("mcporter %s exited 0 without a success status; not claiming the write", intent.name)
-                return "I couldn't confirm that was saved, so please check it or try again."
-        return _format_response(intent, raw)
-
-    except Exception as e:
-        logger.error(f"Intent execution error: {e}")
+    # The intents whose ONLY implementation is an mcp_server tool run it IN PROCESS, as the acting user (A3, 2026-10-19).
+    # There is no subprocess fallback any more: the mcporter path wrote as family-admin (its tools/call carried no user)
+    # and spliced user text into a shell command. A direct executor that declines (None) is a genuine failure - the
+    # caller falls through (chat / voice to the brain, intent-dispatch answers ok:false), it is never retried elsewhere.
+    tool_call = _in_process_tool_call(intent)
+    if tool_call is None:
         return None
+    return await _execute_tool_in_process(intent, user_id, *tool_call)
 
 
-# Write intents whose mcporter fallback (the direct executor returned None) still lands a row, and the receipt kind each earns.
-_MCPORTER_WRITE_KINDS = {
-    "list_add": "list",
-    "calendar_create": "calendar",
-    "reminder_create": "reminder",
-    "note_create": "note",
-}
+# Intent -> (mcp_server tool, its arguments) for the intents that have no hand-written executor. Arguments are a dict
+# handed to the tool in process, never a command line. A write lists its receipt kind in _IN_PROCESS_WRITES.
+def _in_process_tool_call(intent: Intent) -> Optional[tuple[str, dict]]:
+    s = intent.slots or {}
+    if intent.name == "journal_prompt" or (intent.name == "journal_create" and not str(s.get("content") or "").strip()):
+        # A content-less journal_create ("start a journal entry") offers prompts, as it always did. One WITH content whose
+        # direct write failed is a failure - never answered with prompts worded as "Journal entry created".
+        return "journal_get_prompts", {}
+    if intent.name == "journal_streak":
+        return "journal_get_streak", {}
+    if intent.name == "transaction_create":
+        return "transaction_create", {
+            "description": str(s.get("description") or "purchase"),
+            "amount": s.get("amount", 0),
+            "type": "expense",
+        }
+    if intent.name == "transaction_summary":
+        return "transaction_summary", {"period": str(s.get("period") or "week")}
+    return None
 
 
-# mcp_server's create tools (list_add_item, calendar_create_event, reminder_create, note_create) return one of these on success.
-_MCPORTER_SUCCESS_STATUSES = frozenset({"added", "created"})
+# A write here records NO write_receipt (nor did the mcporter path it replaced): a brain recap that claims one is still
+# blocked by the write-claim guard. Add a receipt kind before routing a write the brain may describe through here.
+_IN_PROCESS_WRITES = frozenset({"transaction_create"})
 
 
-def _mcporter_parse(raw: object) -> Optional[dict]:
+async def _execute_tool_in_process(intent: Intent, user_id: str, tool: str, args: dict) -> Optional[str]:
+    """Run one mcp_server tool in this process for ``user_id`` (passed explicitly, so the tool never falls back to another
+    account) and word its result. A read that fails returns None (the caller falls through); a write that fails says so
+    honestly instead of claiming it happened."""
     try:
-        data = json.loads(raw) if isinstance(raw, (str, bytes)) else None
-    except (ValueError, TypeError):
+        from mcp_server import handle_tool
+
+        raw = await handle_tool(tool, {**args, "_user_id": user_id})
+    except Exception as exc:  # noqa: BLE001 - handle_tool already maps tool errors; this is the pool / import failing
+        logger.warning("%s in-process execution unavailable: %s", intent.name, exc)
+        raw = None
+    data = None
+    try:
+        data = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        data = None
+    if not isinstance(data, dict) or data.get("error"):
+        if raw:
+            logger.warning("%s in-process tool %s failed: %s", intent.name, tool, str((data or {}).get("error") or raw)[:200])
+        if intent.name in _IN_PROCESS_WRITES:
+            return "I couldn't save that just now, so nothing has been recorded. Please try again in a moment."
         return None
-    return data if isinstance(data, dict) else None
-
-
-def _mcporter_write_landed(raw: object) -> bool:
-    """True only when an mcporter create result explicitly reports the row written: a JSON object with no error and a
-    success status. Empty, non-JSON, ``{}``, ``{"error": ...}`` and any other status are all NOT a write."""
-    data = _mcporter_parse(raw)
-    if not data or data.get("error"):
-        return False
-    return str(data.get("status") or "").strip().lower() in _MCPORTER_SUCCESS_STATUSES
-
-
-def _mcporter_result_is_error(raw: object) -> bool:
-    """An explicit {"error": ...} result: ``_format_response`` already words that honestly ("Sorry, that didn't work")."""
-    data = _mcporter_parse(raw)
-    return bool(data and data.get("error"))
+    return _format_response(intent, raw)
 
 
 async def _execute_daily_briefing(user_id: str) -> Optional[str]:
@@ -4957,8 +4889,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                                   focus: str = "", day: str = "") -> Optional[str]:
     """Direct weather path used by voice fast-intent execution.
 
-    This bypasses mcporter so household voice weather works even if external
-    command tooling is unavailable.
+    Household voice weather straight from the weather backend helpers.
 
     `advice` ("rain"|"warmth") returns a DIRECT yes/no answer to questions like
     "do I need an umbrella" / "should I take a jacket" instead of a forecast dump.
@@ -5604,135 +5535,6 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
 
     except Exception as exc:
         logger.warning("music intent failed: %s", exc)
-    return None
-
-
-def _build_command(intent: Intent, user_id: str) -> Optional[str]:
-    s = intent.slots
-    base = f"{MCPORTER} call"
-
-    if intent.name == "list_add":
-        item = s.get("item", "")
-        lt = s.get("list_type", "shopping")
-        return f'{base} zoe-data.list_add_item list_type={lt} text="{item}" user_id={user_id}'
-
-    if intent.name == "list_show":
-        lt = s.get("list_type", "shopping")
-        return f"{base} zoe-data.list_get_items list_type={lt}"
-
-    if intent.name == "list_remove":
-        item = s.get("item", "")
-        lt = s.get("list_type", "shopping")
-        return f'{base} zoe-data.list_remove_item list_type={lt} item_text="{item}"'
-
-    if intent.name == "calendar_create":
-        title = s.get("title", "Event")
-        date = s.get("date", "")
-        time_ = s.get("time", "")
-        cmd = f'{base} zoe-data.calendar_create_event title="{title}"'
-        if date:
-            parsed = _parse_date(date)
-            if parsed:
-                cmd += f" start_date={parsed}"
-        if time_:
-            parsed = _parse_time(time_)
-            if parsed:
-                cmd += f" start_time={parsed}"
-        category = s.get("category", "general")
-        if category:
-            cmd += f" category={category}"
-        return cmd
-
-    if intent.name == "calendar_show":
-        from datetime import timedelta
-        qualifier = s.get("qualifier", "").strip().lower()
-        today_d = today_for_zoe_tz()
-
-        if qualifier in ("today", "today's"):
-            return f"{base} zoe-data.calendar_today"
-        elif qualifier == "tomorrow":
-            tmrw = (today_d + timedelta(days=1)).isoformat()
-            return f"{base} zoe-data.calendar_list_events start_date={tmrw} end_date={tmrw}"
-        elif qualifier in ("this week", "this week's"):
-            start = (today_d - timedelta(days=today_d.weekday())).isoformat()
-            end = (today_d + timedelta(days=6 - today_d.weekday())).isoformat()
-            return f"{base} zoe-data.calendar_list_events start_date={start} end_date={end}"
-        elif qualifier in ("this month", "this month's"):
-            import calendar as cal_mod
-            _, last = cal_mod.monthrange(today_d.year, today_d.month)
-            start = today_d.replace(day=1).isoformat()
-            end = today_d.replace(day=last).isoformat()
-            return f"{base} zoe-data.calendar_list_events start_date={start} end_date={end}"
-        else:
-            start = today_d.isoformat()
-            end = (today_d + timedelta(days=7)).isoformat()
-            return f"{base} zoe-data.calendar_list_events start_date={start} end_date={end}"
-
-    if intent.name == "reminder_create":
-        title = s.get("title", "")
-        date_str = s.get("date", "")
-        time_str = s.get("time", "")
-        cmd = f'{base} zoe-data.reminder_create title="{title}"'
-        if date_str:
-            parsed = _parse_date(date_str)
-            if parsed:
-                cmd += f" due_date={parsed}"
-        if time_str:
-            cmd += f" due_time={time_str}"
-        return cmd
-
-    if intent.name == "reminder_list":
-        return f"{base} zoe-data.reminder_list"
-
-    if intent.name == "people_create":
-        name = s.get("name", "")
-        rel = s.get("relationship", "friend")
-        context = s.get("context", "personal")
-        circle = s.get("circle", "circle")
-        return (
-            f'{base} zoe-data.people_create name="{name}" relationship={rel} '
-            f'context={context} circle={circle} user_id={user_id}'
-        )
-
-    if intent.name == "people_search":
-        query = s.get("query", "")
-        return f'{base} zoe-data.people_search query="{query}"'
-
-    if intent.name == "note_create":
-        title = s.get("title", "Note")
-        content = s.get("content", "")
-        return f'{base} zoe-data.note_create title="{title}" content="{content}" user_id={user_id}'
-
-    if intent.name == "note_search":
-        query = s.get("query", "")
-        return f'{base} zoe-data.note_search query="{query}"'
-
-    if intent.name == "weather":
-        if s.get("forecast"):
-            return f"{base} zoe-data.weather_forecast"
-        return f"{base} zoe-data.weather_current"
-
-    if intent.name == "journal_create":
-        content = s.get("content", "")
-        if content:
-            return f'{base} zoe-data.journal_create_entry content="{content}"'
-        return f"{base} zoe-data.journal_get_prompts"
-
-    if intent.name == "journal_streak":
-        return f"{base} zoe-data.journal_get_streak"
-
-    if intent.name == "journal_prompt":
-        return f"{base} zoe-data.journal_get_prompts"
-
-    if intent.name == "transaction_create":
-        desc = s.get("description", "purchase")
-        amount = s.get("amount", 0)
-        return f'{base} zoe-data.transaction_create description="{desc}" amount={amount} type=expense'
-
-    if intent.name == "transaction_summary":
-        period = s.get("period", "week")
-        return f"{base} zoe-data.transaction_summary period={period}"
-
     return None
 
 
