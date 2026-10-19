@@ -60,7 +60,7 @@ GUEST_ADMITTING = frozenset({"get_current_user"})
 # body: the role matrix, an owner check, the fridge rule, or "guests may do this"). Shrink it; never grow it without review.
 GUEST_ADMITTING_BASELINE = {
     "routers/auth.py": {"logout"},
-    "routers/chat.py": {"cancel_latest_run", "create_background_task", "create_session", "delete_session", "resume_run", "save_message", "submit_feedback", "whatsapp_connect"},
+    "routers/chat.py": {"cancel_latest_run", "create_session", "delete_session", "resume_run", "save_message", "submit_feedback", "whatsapp_connect"},
     "routers/dashboard.py": {"add_widgets", "remove_widget", "save_layout"},
     "routers/journal.py": {"create_entry", "delete_entry", "update_entry"},
     "routers/lists.py": {"add_item", "create_list", "delete_item", "delete_list", "update_item", "update_list"},
