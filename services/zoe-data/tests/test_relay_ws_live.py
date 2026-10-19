@@ -55,13 +55,19 @@ def _refused(client, url, headers):
     return e.value.code
 
 
-def test_a_relayed_panel_cannot_subscribe_to_another_panels_channel(app_client):
+def test_a_relayed_panel_cannot_subscribe_to_another_panels_channel(app_client, monkeypatch):
     own = relay_headers()  # certificate + device token of the KITCHEN panel
     assert _connect_ok(app_client, "/ws/push?panel_id=kitchen-panel", own)                    # POSITIVE: its own channel
-    assert _refused(app_client, "/ws/push?panel_id=hall-panel", own) == 1008                 # another panel's channel
-    # CONTROL: the same device token and query on the LAN (no relay marker) still subscribes - so the refusal is the relay rule,
+    assert _refused(app_client, "/ws/push?panel_id=hall-panel", own) == 1008                 # another panel"s channel
+    # The LAN refuses another panel"s channel too since the panel push proof (ZOE_PANEL_PUSH_PROOF, default enforce) ...
+    lan = {"X-Device-Token": TOK_KITCHEN}
+    assert _refused(app_client, "/ws/push?panel_id=hall-panel", lan) == 1008
+    # ... so the CONTROL turns that rule off: with the LAN proof off, the same device token and query on the LAN (no relay
+    # marker) still subscribes while the relayed one is still refused - the relay refusal is the relay rule, not the LAN rule and
     # not something the handler always did.
-    assert _connect_ok(app_client, "/ws/push?panel_id=hall-panel", {"X-Device-Token": TOK_KITCHEN})
+    monkeypatch.setenv("ZOE_PANEL_PUSH_PROOF", "off")
+    assert _connect_ok(app_client, "/ws/push?panel_id=hall-panel", lan)
+    assert _refused(app_client, "/ws/push?panel_id=hall-panel", own) == 1008
 
 
 def test_a_stale_member_session_does_not_open_a_member_socket_over_the_relay(app_client):
