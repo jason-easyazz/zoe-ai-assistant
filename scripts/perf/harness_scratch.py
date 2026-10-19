@@ -195,8 +195,9 @@ def flue_env(flue_live_env: dict, *, root: Path, port: int, data_url: str, token
 
 # -- side effects -----------------------------------------------------------------
 
-def _run(cmd: list, *, timeout: float = 120.0, env: Optional[dict] = None, cwd: Optional[Path] = None, check: bool = True):
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd)
+def _run(cmd: list, *, timeout: float = 120.0, env: Optional[dict] = None, cwd: Optional[Path] = None, check: bool = True,
+         stdin: Optional[str] = None):
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd, input=stdin)
     if check and res.returncode != 0:
         raise Refused(f"{cmd[0]} {cmd[1] if len(cmd) > 1 else ''} failed (rc {res.returncode}): {_redact(res.stderr)[-400:]}")
     return res
@@ -346,6 +347,22 @@ def sweep_stale(log=print) -> list:
     return gone
 
 
+AUTH_DDL = REPO / "scripts" / "setup" / "migrate_auth_to_postgres.sql"
+
+
+def apply_auth_ddl(container: str) -> None:
+    """Create zoe-auth's tables (``auth_users`` ...) in the scratch DB from the REAL DDL file.
+
+    The zoe-data Alembic chain never creates them (zoe-auth owns them), but
+    ``/api/memories/forget-synthetic`` - the mandatory ``Live.forget_ok()`` preflight of
+    every Samantha harness - reads ``auth_users``; without the table it returns 409 and the
+    harness refuses. Applying the shipped file (not a hand-copied table) cannot drift.
+    The file is idempotent and seeds no rows, so the table is empty: no id is "registered".
+    """
+    _run(["docker", "exec", "-i", container, "psql", "-U", PG_USER, "-d", PG_DB, "-h", "127.0.0.1",
+          "-v", "ON_ERROR_STOP=1", "-q", "-f", "-"], timeout=120, stdin=AUTH_DDL.read_text())
+
+
 def up(tag: str, *, service_dir: Path, serve: bool = False, python: Optional[str] = None, min_mem_mb: Optional[int] = None,
        log=print) -> dict:
     """Start the scratch stack and write its state. Anything half-built is torn down on failure."""
@@ -393,8 +410,9 @@ def up(tag: str, *, service_dir: Path, serve: bool = False, python: Optional[str
         t0 = time.monotonic()
         _run([py, "-m", "alembic", "upgrade", "head"], timeout=900, cwd=service_dir,
              env=dict(PATH="/usr/local/bin:/usr/bin:/bin", HOME=str(Path.home()), LANG="C.UTF-8", POSTGRES_URL=dsn))
+        apply_auth_ddl(name)
         state["migrate_s"] = round(time.monotonic() - t0, 1)
-        log(f"scratch postgres {name} on 127.0.0.1:{port} migrated to head in {state['migrate_s']} s")
+        log(f"scratch postgres {name} on 127.0.0.1:{port} migrated to head (+ auth DDL) in {state['migrate_s']} s")
         if serve:
             _serve(state, service_dir=service_dir, live_env=live_env, python=py, log=log)
         state["ram"] = measure(state)

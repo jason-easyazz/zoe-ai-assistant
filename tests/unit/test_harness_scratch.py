@@ -293,6 +293,38 @@ def test_a_stack_on_the_live_server_is_refused(bar, monkeypatch):
     sb.close_scratch(ctx)
 
 
+def test_the_scratch_db_gets_the_auth_tables_from_the_real_ddl(monkeypatch):
+    """forget-synthetic reads auth_users, which the zoe-data Alembic chain never creates."""
+    ddl = hs.AUTH_DDL.read_text()
+    assert hs.AUTH_DDL == REPO / "scripts" / "setup" / "migrate_auth_to_postgres.sql"
+    assert "CREATE TABLE IF NOT EXISTS auth_users" in ddl
+    assert "insert into" not in ddl.lower(), "the DDL must seed no row: an empty table means no id is registered"
+    calls = []
+    monkeypatch.setattr(hs, "_run", lambda cmd, **kw: calls.append((cmd, kw)))
+    hs.apply_auth_ddl("zoe-harness-x")
+    (cmd, kw), = calls
+    assert cmd[:4] == ["docker", "exec", "-i", "zoe-harness-x"] and "psql" in cmd
+    assert "ON_ERROR_STOP=1" in cmd and hs.PG_DB in cmd and hs.PG_USER in cmd
+    assert kw["stdin"] == ddl                          # the shipped file itself, not a hand-copied table
+
+
+def test_up_applies_the_auth_ddl_after_alembic_and_before_serving():
+    """Negative control: delete the apply_auth_ddl(...) call from up() and this goes red."""
+    up = next(n for n in ast.parse(Path(hs.__file__).read_text()).body
+              if isinstance(n, ast.FunctionDef) and n.name == "up")
+    order = []
+    for n in ast.walk(up):
+        if isinstance(n, ast.Call):
+            f = n.func
+            name = f.id if isinstance(f, ast.Name) else None
+            if name in ("apply_auth_ddl", "_serve"):
+                order.append((n.lineno, name))
+            elif name == "_run" and any(isinstance(a, ast.Constant) and a.value == "alembic"
+                                        for arg in n.args if isinstance(arg, ast.List) for a in arg.elts):
+                order.append((n.lineno, "alembic"))
+    assert [name for _, name in sorted(order)] == ["alembic", "apply_auth_ddl", "_serve"]
+
+
 # -- the real stack (opt-in: docker, ~40 MB, ~20 s) ------------------------------------
 
 @pytest.mark.skipif(os.environ.get("ZOE_SCRATCH_PG_TEST") != "1", reason="opt-in: ZOE_SCRATCH_PG_TEST=1 (docker, a throwaway pg17)")
@@ -318,6 +350,7 @@ def test_a_real_scratch_postgres_migrates_runs_the_queue_and_goes():
                 await eq.transition(db, pid, "probed", actor="a")
             with pytest.raises(Exception):                                     # the CHECK constraint backs the code
                 await db.execute("UPDATE evolution_proposals SET status = $1 WHERE id = $2", "pending", pid)
+            assert await conn.fetchval("SELECT 1 FROM auth_users WHERE user_id = $1 LIMIT 1", "nobody") is None
             status = await conn.fetchval("SELECT status FROM evolution_proposals WHERE id = $1", pid)
             await conn.close()
             return status
