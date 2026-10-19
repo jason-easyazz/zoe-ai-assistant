@@ -630,6 +630,70 @@ def test_searching_what_people_said_is_words_only_and_private(env):
     assert client.get("/api/omi/segments/search", params={"person_id": pid}).status_code == 404     # and A's person is not B's
 
 
+def test_the_review_surface_shows_what_a_held_fact_contradicts_and_the_owners_options(env, monkeypatch):
+    """The Pendant page's "Review your day" (owner 2026-10-19): a held candidate says WHAT it contradicts, read now from the owner's
+    OWN approved rows, plus the options the server allows. Negative controls: make ``conflict_detail`` return ``existing=None``
+    always -> red; read the rows of ``member-b`` instead of the caller in ``conflict_detail`` -> red (B's row is not A's)."""
+    sids, pid = sam_day(env)
+    run(env.svc.ingest(f"{SAM} works at the bakery on High Street", user_id=A, source="voice_fact", confidence=0.9,
+                       entity_type="person", entity_id=pid))
+    review(env, [LIBRARY_RULE])
+    (c,) = cands(env, "person_fact")
+    assert env.client.post(f"/api/omi/day-review/candidates/{c['id']}/approve").json()["detail"] == "held_conflict"
+    (got,) = [x for x in env.client.get("/api/omi/day-review/candidates").json()["candidates"] if x["id"] == c["id"]]
+    assert got["editable"] == ["fact"]
+    assert got["conflict"] == {"existing": f"{SAM} works at the bakery on High Street", "options": ["keep_existing", "edit"]}
+    assert env.client.get(f"/api/omi/day-review/candidates/{c['id']}").json()["conflict"] == got["conflict"]
+    # the clashing row is gone (the owner changed it elsewhere): nothing disagrees now, so trying again is offered
+    env.col.rows.clear()
+    (got,) = env.client.get("/api/omi/day-review/candidates").json()["candidates"]
+    assert got["conflict"] == {"existing": None, "options": ["retry", "keep_existing", "edit"]}
+    # past the per-request read budget a held candidate is STILL marked held (no read, no retry): never a plain Approve that 409s
+    monkeypatch.setattr(dr_router, "MAX_CONFLICT_READS", 0)
+    (got,) = env.client.get("/api/omi/day-review/candidates").json()["candidates"]
+    assert got["conflict"] == {"existing": None, "options": ["keep_existing", "edit"]}
+    # another member never sees it, conflict or not
+    env.who["user"] = {"user_id": B, "role": "admin"}
+    assert env.client.get("/api/omi/day-review/candidates").json()["candidates"] == []
+    assert env.client.get(f"/api/omi/day-review/candidates/{c['id']}").status_code == 404
+
+
+def test_the_review_surface_shows_a_held_relationship_without_an_edit_option(env):
+    sids, pid = sam_day(env, ("I'm your cousin, remember the wedding?", "other"))
+    tag(env, sids[2], SAM)
+    review(env, [("I'm your cousin", {"kind": "person_fact", "fields": {"name": "Sam", "fact": "is your cousin"}})])
+    (c,) = cands(env, "person_relation")
+    env.db.conn.execute("UPDATE people SET relationship = 'my friend' WHERE id = ?", (pid,))
+    env.db.conn.commit()
+    assert env.client.post(f"/api/omi/day-review/candidates/{c['id']}/approve").json()["detail"] == "held_conflict"
+    got = env.client.get(f"/api/omi/day-review/candidates/{c['id']}").json()
+    assert got["editable"] == [] and got["conflict"] == {"existing": "my friend", "options": ["keep_existing"]}
+    pending = [x for x in env.client.get("/api/omi/day-review/candidates").json()["candidates"] if x["write_error"] != "held_conflict"]
+    assert all("conflict" not in x for x in pending)                     # only a HELD candidate is read for a conflict
+
+
+def test_the_review_surface_says_where_a_quote_is_and_whether_its_audio_is_kept(env):
+    """``audio_kept`` uses the clip route's own predicate (``omi_recordings._CLIP_HELD``): no held WAV, or past retention, = False.
+    Negative control: drop ``AND {_CLIP_HELD}`` from ``segment_lines``' second query -> red."""
+    import omi_recordings
+    sids, pid = sam_day(env)
+    review(env, [LIBRARY_RULE])
+    (c,) = env.client.get("/api/omi/day-review/candidates").json()["candidates"]
+    (ev,) = c["evidence"]
+    assert ev["segment_id"] == sids[1] and ev["offset_ms"] == 3000 and ev["audio_kept"] is False          # no WAV held
+    assert "audio_path" not in json.dumps(c)
+    env.db.conn.execute("UPDATE omi_recordings SET audio_path = 'held.wav', audio_expires_at = '2999-01-01T00:00:00Z' WHERE id = 'rec1'")
+    env.db.conn.commit()
+    assert env.client.get("/api/omi/day-review/candidates").json()["candidates"][0]["evidence"][0]["audio_kept"] is True
+    env.db.conn.execute("UPDATE omi_recordings SET audio_expires_at = '2000-01-01T00:00:00Z' WHERE id = 'rec1'")
+    env.db.conn.commit()
+    assert env.client.get("/api/omi/day-review/candidates").json()["candidates"][0]["evidence"][0]["audio_kept"] is False
+    # only the caller's own lines: another member's segment id is simply absent
+    sb = add_day(env, "rec-b", [("Synthetic words from member b.", "you")], user=B)
+    assert run(omi_recordings.segment_lines(A, [sb[0], sids[1]])).keys() == {sids[1]}
+    assert run(omi_recordings.segment_lines(A, [])) == {}
+
+
 def test_a_relationship_cannot_be_edited_away_from_its_quote(env):
     """Cross-review round 2 (pi): an edited relationship would carry provenance its quote does not support. Negative control: make
     ``person_relation`` editable again in ``EDITABLE``."""
