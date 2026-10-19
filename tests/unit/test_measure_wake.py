@@ -169,6 +169,33 @@ def test_nearmiss_summary_counts_band_outcomes_night_and_retry():
     assert "0.44" in mw.render_nearmiss(s)
 
 
+def _nm(ts: str, score: float, need: float) -> str:
+    return line(ts, f"wakeword near-miss: max_score={score:.4f} (need {need:.4f}) - lower WAKEWORD_THRESHOLD")
+
+
+def test_nearmiss_window_ends_at_collection_time_not_last_event():
+    evs = pvl.events([_nm("2026-10-16 09:00:00", 0.30, 0.45), _nm("2026-10-16 12:00:00", 0.31, 0.45)])
+    since = dt.datetime(2026, 10, 16)
+    quiet = mw.nearmiss_summary(evs, since=since, now=dt.datetime(2026, 10, 18))
+    assert quiet["days"] == 2.0 and quiet["per_day"] == 1.0          # two quiet days count; not 2 / 0.5
+    assert mw.nearmiss_summary(evs, since=since, now=dt.datetime(2026, 10, 20))["per_day"] == 0.5
+    pinned = mw.nearmiss_summary(evs, since=since, until=dt.datetime(2026, 10, 17), now=dt.datetime(2026, 10, 30))
+    assert pinned["days"] == 1.0 and pinned["until"].startswith("2026-10-17")   # an explicit until wins
+    assert mw.nearmiss_summary(evs, since=since)["until"] > "2026-10-16 12:00"  # default is the wall clock
+
+
+def test_nearmiss_histogram_always_sums_to_the_total_after_a_raised_threshold():
+    scores = [0.10, 0.18, 0.30, 0.45, 0.46, 0.52, 0.549]
+    evs = pvl.events([_nm(f"2026-10-16 09:00:{i:02d}", sc, 0.55) for i, sc in enumerate(scores)])
+    s = mw.nearmiss_summary(evs, since=dt.datetime(2026, 10, 16), now=dt.datetime(2026, 10, 17))
+    assert s["near_misses"] == len(scores)
+    assert sum(b["n"] for b in s["histogram"]) == s["near_misses"]
+    top = s["histogram"][-1]
+    assert top["hi"] is None and top["n"] == 3                        # 0.46, 0.52, 0.549 survive in the overflow band
+    assert s["histogram"][0]["lo"] is None and s["histogram"][0]["n"] == 1
+    assert "and above" in mw.render_nearmiss(s)
+
+
 def _tone_wav(path: Path, seconds: float, ts: dt.datetime) -> None:
     n = int(16000 * seconds)
     with wave.open(str(path), "wb") as w:

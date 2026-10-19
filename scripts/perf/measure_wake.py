@@ -221,10 +221,16 @@ def recommend(rows: Sequence[dict], *, live_threshold: float = LIVE["threshold"]
 NEAR_EDGES = tuple(round(0.18 + 0.02 * i, 2) for i in range(15))       # 0.18 .. 0.46
 
 
-def nearmiss_summary(evs: Sequence, *, since: dt.datetime, until: Optional[dt.datetime] = None) -> dict:
+def nearmiss_summary(evs: Sequence, *, since: dt.datetime, until: Optional[dt.datetime] = None,
+                     now: Optional[dt.datetime] = None) -> dict:
     """What the live log says about the band under the threshold. CAVEAT the daemon's own logging: a near-miss line is
     the FIRST frame >= 0.18 after a 12 s cooldown, not the episode's peak, and a frame that crosses the threshold but
-    fails the 3-hit confirmation is logged nowhere - so ``max`` is a lower bound on how close background gets."""
+    fails the 3-hit confirmation is logged nowhere - so ``max`` is a lower bound on how close background gets.
+
+    The observation window ends at ``until`` when given, else at ``now`` (default: the collection time) - NOT at the last
+    parsed event, so a quiet stretch lowers ``per_day`` instead of freezing it. The histogram always sums to
+    ``near_misses``: the edged bands are closed by an underflow band (``lo`` None) and an overflow band (``hi`` None), so
+    a raised threshold (``need`` above 0.46) cannot push a near-miss out of the bands while it still counts in the total."""
     ev = [e for e in evs if e.ts >= since and (until is None or e.ts < until)]
     nm = [e for e in ev if e.kind == "near_miss"]
     scores = [e.data["score"] for e in nm]
@@ -235,8 +241,10 @@ def nearmiss_summary(evs: Sequence, *, since: dt.datetime, until: Optional[dt.da
     for t in wake_turns:
         outcomes[t.outcome] = outcomes.get(t.outcome, 0) + 1
     hist = []
+    hist.append(dict(lo=None, hi=NEAR_EDGES[0], n=sum(1 for s in scores if s < NEAR_EDGES[0])))
     for lo, hi in zip(NEAR_EDGES[:-1], NEAR_EDGES[1:]):
         hist.append(dict(lo=lo, hi=hi, n=sum(1 for s in scores if lo <= s < hi)))
+    hist.append(dict(lo=NEAR_EDGES[-1], hi=None, n=sum(1 for s in scores if s >= NEAR_EDGES[-1])))
     by_hour: dict = {}
     for e in nm:
         by_hour[e.ts.hour] = by_hour.get(e.ts.hour, 0) + 1
@@ -249,7 +257,7 @@ def nearmiss_summary(evs: Sequence, *, since: dt.datetime, until: Optional[dt.da
                 ramp += 1
             else:
                 retry += 1
-    end = until or (ev[-1].ts if ev else since)
+    end = until or now or dt.datetime.now()
     days = max((end - since).total_seconds() / 86400.0, 1e-9)
     return dict(since=since.isoformat(sep=" "), until=end.isoformat(sep=" "), days=round(days, 2),
                 near_misses=len(scores), per_day=round(len(scores) / days, 2),
@@ -444,6 +452,14 @@ def render_peaks(clips: Sequence[dict]) -> str:
     return "\n".join(out)
 
 
+def _band(b: dict) -> str:
+    if b["lo"] is None:
+        return f"below {b['hi']:.2f}"
+    if b["hi"] is None:
+        return f"{b['lo']:.2f} and above"
+    return f"{b['lo']:.2f}-{b['hi']:.2f}"
+
+
 def render_nearmiss(s: dict) -> str:
     lines = [f"Live near-misses {s['since']} .. {s['until']} ({s['days']} days): **{s['near_misses']}** "
              f"({s['per_day']}/day), threshold(s) {s['need']}, max **{_num(s['max'], 4)}**; "
@@ -452,7 +468,7 @@ def render_nearmiss(s: dict) -> str:
              f"near-miss then a wake 1.5-10 s later (retry proxy): {s['retry_after_near_miss']}; within 1.5 s (ramp): "
              f"{s['ramp_into_wake']}.",
              "", "| score band | near-misses |", "|---|---|"]
-    lines += [f"| {b['lo']:.2f}-{b['hi']:.2f} | {b['n']} |" for b in s["histogram"] if b["n"]]
+    lines += [f"| {_band(b)} | {b['n']} |" for b in s["histogram"] if b["n"]]
     lines += ["", "By hour: " + ", ".join(f"{h:02d}h {n}" for h, n in s["by_hour"].items())]
     return "\n".join(lines)
 
