@@ -627,7 +627,7 @@ def test_password_setup_hard_blocked_after_token_flood(sqlite_auth_db):
 def test_bootstrap_token_is_one_time(sqlite_auth_db):
     """The bootstrap token claims at most ONE account, then is burned/rotated."""
     _seed_pending(sqlite_auth_db, username="zoe")
-    _seed_pending(sqlite_auth_db, username="andrew")
+    _seed_pending(sqlite_auth_db, username="alex")
     client = TestClient(app)
 
     first = client.post(
@@ -645,14 +645,14 @@ def test_bootstrap_token_is_one_time(sqlite_auth_db):
     second = client.post(
         "/api/auth/password/setup",
         json={
-            "username": "andrew",
+            "username": "alex",
             "new_password": _pw("andrewfirst"),
             "confirm_password": _pw("andrewfirst"),
             "setup_token": BOOTSTRAP,
         },
     )
     assert second.status_code == 403
-    assert _password_hash_of(sqlite_auth_db, user_id="andrew") == "SETUP_REQUIRED"
+    assert _password_hash_of(sqlite_auth_db, user_id="alex") == "SETUP_REQUIRED"
     # A fresh bootstrap token was rotated in and differs from the burned one.
     assert setup_token_manager.bootstrap_token != BOOTSTRAP
 
@@ -779,8 +779,8 @@ def test_setup_token_claim_is_single_use(sqlite_auth_db):
     assert mgr.claim("zoe", token) is None  # already consumed
 
     # Bootstrap token is likewise single-use within the process.
-    assert mgr.claim("andrew", BOOTSTRAP) == "bootstrap"
-    assert mgr.claim("teneeka", BOOTSTRAP) is None
+    assert mgr.claim("alex", BOOTSTRAP) == "bootstrap"
+    assert mgr.claim("morgan", BOOTSTRAP) is None
 
 
 def test_setup_bootstrap_rejected_when_durably_consumed(sqlite_auth_db, monkeypatch):
@@ -816,7 +816,7 @@ def test_generated_bootstrap_still_one_time_without_durable_store():
     mgr = SetupTokenManager(bootstrap_token=BOOTSTRAP)  # treated as generated
     assert mgr._bootstrap_from_env is False
     assert mgr.claim("zoe", BOOTSTRAP) == "bootstrap"
-    assert mgr.claim("andrew", BOOTSTRAP) is None  # burned in-memory
+    assert mgr.claim("alex", BOOTSTRAP) is None  # burned in-memory
 
 
 def test_admin_rate_limit_reset_endpoint(sqlite_auth_db, monkeypatch):

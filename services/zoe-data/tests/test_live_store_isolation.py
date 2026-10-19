@@ -83,3 +83,12 @@ def test_local_text_logs_are_pinned_off_the_live_logs():
     assert ltl.log_path(ltl.ROUTER_SHADOW) == _pinned("ZOE_ROUTER_HEAD_LOG")
     assert ltl.log_path(ltl.INTENT_MISSES) == _pinned("ZOE_INTENT_MISS_LOG")
     assert ltl.log_path(ltl.INTENT_MISSES) != (_HOME / "training" / "data" / "intent-misses.jsonl").resolve()
+
+
+def test_router_retrain_ledger_is_pinned_off_home():
+    """Every forget / user delete reaches the Phase 3 retrain ledger; a test's forget must never edit the live one."""
+    path = _pinned("ZOE_ROUTER_RETRAIN_DIR")
+    import router_retrain_ledger
+
+    assert router_retrain_ledger.root().resolve() == path
+    assert path != (_HOME / ".zoe" / "router_retrain").resolve()
