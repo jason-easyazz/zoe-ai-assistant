@@ -3600,6 +3600,13 @@ async def voice_command(
         identified_user_id, _bound_user, _panel_recent_user,
         _scope_identity_user, _has_scope_identity,
     )
+    # The day review's raise / pull (day_review_raise, ZOE_DAY_REVIEW_RAISE, default OFF = returns at once): who THIS turn
+    # identified and who else this panel heard, keyed by session for the brain lane's first-turn brief - the streaming brain
+    # runs outside this task, so a ContextVar would not reach it. In-memory only; never raises.
+    import day_review_raise as _day_review_raise
+
+    _day_review_raise.note_voice_turn(session_id, panel_id, scope_user=_scope_identity_user, verdict=_speaker_verified,
+                                      claimed=identified_user_id if _by_claim else None)
 
     if _vs_decision is not None and _vs_decision.lock:
         # "lock" / "sign me out": the session is already closed (published above); say so and stop - nothing to store.

@@ -55,6 +55,8 @@ _FOLLOW, _OVERDUE = "To follow up: ", "Overdue: "
 _MOMENT = "Recently on their mind (at most a gentle check-in): "
 _PENDANT = "About their pendant (mention it once, plainly, only if it fits): "
 _NIGHT = "From the last few days (mention it only if it fits; one gentle line): "
+# The pendant day review's one line (day_review_raise, ZOE_DAY_REVIEW_RAISE): composed in code from counts, never a name or a quote.
+_DAY_REVIEW = "Their pendant day review (one short line, these counts only, no question, no names; they can look whenever they like): "
 
 # In-process throttles only; once-per-day correctness rests on the claim row.
 _settled: dict[str, str] = {}  # user -> local date whose claim is known taken
@@ -237,6 +239,10 @@ def day_items(ctx: dict, local_now: datetime) -> tuple[list[str], list[str]]:
     for note in ((ctx or {}).get("pendant_items") or [])[:1]:      # the pendant's one health line (omi_health.morning_items); never time-critical
         if _clean(note.get("text")):
             items.append(_PENDANT + _clean(note.get("text")))
+    for note in ((ctx or {}).get("day_review_items") or [])[:1]:   # the day review's one code-composed line (day_review_raise); never time-critical
+        text = re.sub(r"[\[\]]", "", str(note.get("text") or "")).strip()   # not _clean: its 140-char cap would cut the counts
+        if text:
+            items.append(_DAY_REVIEW + text)
     critical = [soonest[1]] if soonest else ([overdue] if overdue else [])
     return items, critical
 
@@ -308,6 +314,7 @@ class DayBrief:
     surfaced: tuple = ()  # ``mentioned`` items, marked at settle (ZOE_LOOP_LIFECYCLE)
     night_refs: tuple = ()  # ``night_threads:<id>`` the brief voiced (the night mind's back-off; marked at settle whatever ZOE_LOOP_LIFECYCLE says)
     trigger: str = ""  # ``trigger_key`` of the utterance this brief rode in on
+    day_review: object = None  # the ``day_review_raise.Raise`` this brief carries (recorded at settle), else None
 
     @property
     def block(self) -> str:
@@ -411,14 +418,26 @@ async def _prepare(message: str, uid: str, now: datetime, sid: str = "") -> DayB
     # (a copy; the cached one is untouched), so a bare "good morning" brief carries the day and not
     # the member's health, money or grief. "What's up?" gets everything.
     ctx = await restraint.filter_brief_ctx(ctx, uid, message)
+    shape = turn_shape(message)
+    # The pendant day review (day_review_raise, ZOE_DAY_REVIEW_RAISE, default OFF = None with no I/O): one counts-only line, on a
+    # GREETING turn of an identified member only (a command turn never carries it), at most once a day, snoozed when ignored.
+    day_review = None
+    if shape == "greeting":
+        import day_review_raise
+
+        day_review = await day_review_raise.prepare(uid, sid, now=now)
+        if day_review is not None:
+            ctx = dict(ctx)
+            ctx["day_review_items"] = [{"text": day_review.line}]
     items, critical = day_items(ctx, local_now)
     if not items:
         return None  # nothing on: no filler, no claim — a later turn may have something
-    shape = turn_shape(message)
     if shape == "command" and not critical:
         _log(uid, len(items), shape, injected=False, claimed=False, night=len(ctx.get("night_items") or []))
         return None
     lines = items if shape == "greeting" else critical
+    if day_review is not None and not any(line.startswith(_DAY_REVIEW) for line in lines):
+        day_review = None  # recorded at settle only when its line is really in this block
     from open_loop_lifecycle import lifecycle_enabled
 
     surfaced = tuple(mentioned(ctx, lines)) if sid and lifecycle_enabled() else ()
@@ -426,7 +445,7 @@ async def _prepare(message: str, uid: str, now: datetime, sid: str = "") -> DayB
     token = uuid.uuid4().hex
     _briefing.setdefault(uid, {})[token] = time.monotonic()
     return DayBrief(uid, shape, len(items), render_body(shape, lines, local_date), now,
-                    local_date, token, sid, surfaced, night_refs, trigger_key(message))
+                    local_date, token, sid, surfaced, night_refs, trigger_key(message), day_review)
 
 
 async def prepare(message: str, user_id: str, session_id: str = "") -> DayBrief | None:
@@ -488,6 +507,12 @@ async def _settle(brief: DayBrief, produced: bool) -> bool:
 
         await mark_brief_surfaced(brief.user_id, brief.session_id, list(brief.surfaced),
                                   **({"trigger": brief.trigger} if brief.trigger else {}))
+
+    if produced and brief.day_review is not None:
+        # today's day-review raise is used, and counts as unanswered until the member takes it up (never raises)
+        import day_review_raise
+
+        await day_review_raise.settle(brief.day_review)
 
     if produced and brief.night_refs:
         # the night mind's back-off: a thread the brief voiced is not raised again tomorrow (last_raised_at / next_raise_after). Never raises.

@@ -1228,6 +1228,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_DAY_REVIEW_RAISE": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/day_review_raise.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_DAY_REVIEW_RAISE_SNOOZE_DAYS": {
+        "defaults": [
+          "3"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/day_review_raise.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_DB_ACQUIRE_TIMEOUT_S": {
         "defaults": [
           "''"
@@ -5379,13 +5399,15 @@
       },
       "ZOE_PUBLIC_URL": {
         "defaults": [
-          "''"
+          "''",
+          "-"
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/auth_handoff.py"
+          "services/zoe-data/auth_handoff.py",
+          "services/zoe-data/day_review_raise.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_PULL_NOT_PUSH": {
         "defaults": [
