@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-741 flags; 691 not documented in `.env.example`.
+745 flags; 695 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -488,6 +488,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PERSON_MERGE_ENABLED` | `''` | no | NO | `services/zoe-data/person_merge.py` |
 | `ZOE_PERSON_RECALL_FLOOR` | `-` | no | NO | `services/zoe-data/memory_gate.py` |
 | `ZOE_PERSON_SUGGEST_ENABLED` | `''` | no | NO | `services/zoe-data/pending_suggestions.py` |
+| `ZOE_PHONE_APP` | `'off'` | yes | NO | `services/zoe-data/phone_app.py` |
+| `ZOE_PHONE_APP_BASE_URL` | `''` | yes | NO | `services/zoe-data/phone_app.py` |
+| `ZOE_PHONE_APP_BUNDLE_ID` | `''` | yes | NO | `services/zoe-data/phone_app.py` |
+| `ZOE_PHONE_APP_CA_SHA256` | `''` | yes | NO | `services/zoe-data/phone_app.py` |
 | `ZOE_PIN_CHALLENGE_TTL_S` | `'120'` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_PIN_LOCKOUT_S` | `'300'` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_PIN_MAX_ATTEMPTS` | `'5'` | no | NO | `services/zoe-data/routers/panel_auth.py` |

@@ -2295,6 +2295,10 @@ app.include_router(struggles_router)
 from routers.change_notices import router as change_notices_router  # noqa: E402
 app.include_router(change_notices_router)
 
+# Zoe's own iPhone app, M0 (phone_app, ZOE_PHONE_APP, default off = every route 404s): pairing by panel QR + push-token registry.
+from routers.phone_app import router as phone_app_router  # noqa: E402
+app.include_router(phone_app_router)
+
 try:
     from routers.voice_livekit import router as voice_livekit_router
     app.include_router(voice_livekit_router)
