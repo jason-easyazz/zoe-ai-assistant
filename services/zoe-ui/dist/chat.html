@@ -6970,8 +6970,8 @@
                 const d = await r.json();
                 const banner = document.getElementById('zoe-degraded-banner');
                 if (!banner) return;
-                const gw = d.openclaw_gateway || '';
-                banner.style.display = (gw === 'offline' || gw.startsWith('error')) ? 'block' : 'none';
+                const llm = d.llama_server || '';
+                banner.style.display = (llm === 'offline' || llm.startsWith('error')) ? 'block' : 'none';
             } catch (_) {}
         }
         checkDegraded();
