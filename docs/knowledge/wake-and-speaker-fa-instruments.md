@@ -37,7 +37,7 @@ changes a threshold. Moving one is an owner voice-path step, replay-gated like a
 - `followup`: the panel follow-up turns. This is household speech at the panel mic with no wake phrase needed. It is
   reported, but it is not part of the FA objective (a mid-sentence "Zoe" is legitimate there).
 - `tv`: `quarantine-tv-falsewakes-20260719`. These 5 clips did false-wake live, and a recommended threshold must wake on 0 of them.
-- `libri`: LibriSpeech dev-clean and test-clean, whole utterances, about 10.8 h of public read speech (`~/.cache/zoe-speaker-bakeoff/src/LibriSpeech`, fetched by the speaker bake-off). `kokoro`: the bake-off Kokoro TTS voice crops (`~/.cache/zoe-speaker-bakeoff/impostors/kokoro`).
+- `libri`, `kokoro`: the speaker bake-off public impostor crops (`~/.cache/zoe-speaker-bakeoff/impostors`): 1,112 LibriSpeech test-clean crops (1.26 h) and 560 Kokoro TTS voice crops (0.42 h), clean and synthetic far-field. The replay runs at about 3x real time on the Jetson under `nice`, so the full LibriSpeech dev + test set (10.8 h, `--negatives libri=~/.cache/zoe-speaker-bakeoff/src/LibriSpeech`) is a 4-hour run that would reach the 02:00 night window; the default keeps a run near one hour.
 - `omi`: the Omi pendant recordings (`~/.zoe/omi-recordings`), which are household conversation on another mic.
   `libri` + `kokoro` + `omi` are pooled into the FA-per-hour objective.
 
@@ -97,4 +97,57 @@ Measured 2026-10-19 (read-only).
 The panel has had **no wake since 2026-10-16 07:20**. So no turn has run since the ResNet34 flip, and the speaker sheet
 holds only the 8 dual-week rows (7 accepted at the live thresholds, all claimed as the one enrolled member and still unlabelled, and 1 with no ResNet34 profile yet).
 
-**Wake replay and offline speaker FA:** pending the first run after 22:00 (quiet hours), filled in below.
+**Wake replay** (`run`, 2026-10-19 22:15-22:50, the pinned model + panel feature files, onnxruntime 1.23.2 on the
+Jetson vs 1.24.4 on the Pi). Sets: 267 wake turns (07-16 .. 10-16), 858 follow-ups, 1,112 LibriSpeech crops (1.26 h),
+560 Kokoro crops (0.42 h), 31 Omi recordings (0.65 h), 5 TV false wakes.
+
+| threshold | positive FRR (k/267) | TV woke | LibriSpeech FA/h | Kokoro FA/h | Omi FA/h | follow-ups woke | pooled FA/h |
+|---|---|---|---|---|---|---|---|
+| 0.30 | 9.7 % (26) | 3/5 | 2.39 | 0 | 1.54 | 25/858 | 1.72 |
+| 0.40 | 12.7 % (34) | 2/5 | 2.39 | 0 | 0 | 23/858 | 1.29 |
+| **0.45 (live)** | **13.1 % (35)** | **2/5** | **1.59** | 0 | 0 | 23/858 | **0.86** |
+| 0.55 | 13.9 % (37) | 2/5 | 0.80 | 0 | 0 | 23/858 | 0.43 |
+| 0.65 | 15.0 % (40) | 2/5 | 0 | 0 | 0 | 21/858 | 0 |
+| 0.70 | 17.6 % (47) | 2/5 | 0 | 0 | 0 | 21/858 | 0 |
+
+Clip peak scores: positives p10 0.757 / p50 0.993; TV clips 0.998, 0.964, 0.853, 0.001, 0.001; LibriSpeech p99 0.047,
+max 0.959 (4 crops above 0.6); Kokoro max 0.038; Omi max 0.446; follow-ups p99 0.992 (17 of the 23 that wake say "Zoe").
+
+What it says:
+
+- **The replay itself loses 13.1 % of real wakes at the live threshold** (35 of 267). This is the instrument floor:
+  the first frame at or above 0.45 lands 1.28-1.36 s into the 1.6 s pre-roll, so the feature window is cut short on some
+  clips. 14 of the 35 are empty-chime wakes, which are likely false wakes whose trigger fell before the pre-roll. The
+  recommendation rule compares against this floor, not against zero.
+- **No threshold fixes the TV.** Two of the five quarantined TV clips confirm at every threshold up to 0.80, and three
+  peak at 0.85-0.998: to this model they ARE "Hey Zoe". So the 0/5 gate is out of reach for a threshold. The fix is at
+  model level: openWakeWord `custom_verifier_models`, a speaker-verified wake (ResNet34 is already resident on the Pi),
+  or a retrained model with TV negatives. The tool therefore makes no recommendation under its full rule.
+- **Threshold-only, public and household speech:** 0.55 costs +0.8 pp of replayed wakes and halves pooled FA
+  (0.86 -> 0.43/h). 0.65-0.67 costs +1.9 pp and clears all of LibriSpeech, Kokoro and Omi (0 wakes in 2.33 h).
+- **The live band:** 130 near-misses at or above 0.40 since 07-15, and none above 0.3754 since 10-16. Raising the
+  threshold moves it further from that band. Only about 2 % of real wakes peak between 0.45 and 0.67, so the cost
+  of going as far as 0.65 is small.
+
+**Recommendation (owner step, not applied):** raise `WAKEWORD_THRESHOLD` from 0.45 to **0.55** now. It is the +1 pp
+option: about 1 real wake in 130 lost, and half the public-speech false wakes. Run `nearmiss` for a week (empty-chime
+share, retry proxy). If the retry proxy does not rise, take the +2 pp step to 0.65. Treat the TV false wakes as a
+separate model-level item; a threshold cannot reach them. The change is a voice-path edit to the Pi `.env.voice` and
+a `zoe-voice` restart, which belong to the owner.
+
+**Offline speaker FA** (`offline-fa`, 2026-10-19 22:52): 1,672 public clips against the live enrolled ResNet34 profile
+(1 profile) at the live thresholds 0.233 / 0.265:
+
+| slice | clips | accepted | rate [95 % CI] | max score | accepted at the FAR 0.1 % tier |
+|---|---|---|---|---|---|
+| all | 1,672 | 18 | 1.1 % [0.7 - 1.7] | 0.337 | 1 |
+| LibriSpeech | 1,112 | 10 | 0.9 % [0.5 - 1.6] | 0.312 | 1 |
+| Kokoro (synthetic) | 560 | 8 | 1.4 % [0.7 - 2.8] | 0.337 | 0 |
+| Kokoro clean | 280 | 8 | 2.9 % [1.5 - 5.5] | 0.337 | 0 |
+| Kokoro far-field | 280 | 0 | 0.0 % [0.0 - 1.4] | 0.263 | 0 |
+| clips of 2 s or less | 586 | 5 | 0.9 % [0.4 - 2.0] | 0.312 | 1 |
+
+This reproduces the 0.9-1.4 % of the threshold derivation against the real enrolled profile: about 1 stranger turn in
+90 opens the voice session. The weak slice is clean synthetic speech (2.9 %). The FAR 0.1 % tier (0.309 / 0.351) would
+have let 1 of the 1,672 through. Re-derive the threshold from the labelled household sheet (30 or more rows) before
+moving it. The sheet is empty of post-flip turns today because the panel has not woken since the flip.

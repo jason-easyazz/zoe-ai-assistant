@@ -527,7 +527,10 @@ def cmd_offline_fa(args) -> int:
     if not profiles:
         print("speaker_fa_review: no ResNet34 profile enrolled - nothing to attack", file=sys.stderr)
         return 2
-    emb = rn34.Resnet34Embedder.load(str(Path(args.model_dir).expanduser()))
+    # the panel's centring artifacts are the repo copy (byte-identical to the Pi's); a stale copy beside a local model
+    # file would be refused by the pin anyway, so name the repo one explicitly
+    emb = rn34.Resnet34Embedder.load(str(Path(args.model_dir).expanduser()),
+                                     artifacts_path=str(REPO / "scripts" / "setup" / rn34.ARTIFACTS_FILENAME))
     base = Path(args.impostors).expanduser()
     items = json.loads((base / "manifest.json").read_text())
     if args.limit:

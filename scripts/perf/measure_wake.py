@@ -83,7 +83,7 @@ CORPUS = Path(pvl.CORPUS_DIR)
 BAKEOFF = HOME / ".cache" / "zoe-speaker-bakeoff"
 DEFAULT_NEGATIVES = (
     ("tv", CORPUS / "quarantine-tv-falsewakes-20260719"),
-    ("libri", BAKEOFF / "src" / "LibriSpeech"),           # dev-clean + test-clean, whole utterances (about 10.8 h)
+    ("libri", BAKEOFF / "impostors" / "libri"),           # 1112 test-clean crops, clean + far-field (1.26 h)
     ("kokoro", BAKEOFF / "impostors" / "kokoro"),
     ("omi", HOME / ".zoe" / "omi-recordings"),
 )
@@ -169,10 +169,11 @@ def _tv(row: dict) -> str:
 MIN_POSITIVES = 30
 
 
-def highest_within(rows: Sequence[dict], base: dict, budget: float) -> Optional[dict]:
-    """The highest-threshold row whose FRR exceeds ``base``'s by at most ``budget`` and that wakes on no ``tv`` clip."""
+def highest_within(rows: Sequence[dict], base: dict, budget: float, *, require_tv: bool = True) -> Optional[dict]:
+    """The highest-threshold row whose FRR exceeds ``base``'s by at most ``budget`` and (``require_tv``) that wakes on
+    no ``tv`` clip, with the TV set actually measured."""
     ok = [r for r in rows
-          if (r["sets"].get("tv") or {}).get("n") and not r["sets"]["tv"]["clips_woke"]
+          if (not require_tv or ((r["sets"].get("tv") or {}).get("n") and not r["sets"]["tv"]["clips_woke"]))
           and r["frr"] - base["frr"] <= budget + 1e-12]
     return max(ok, key=lambda r: r["threshold"]) if ok else None
 
@@ -198,8 +199,13 @@ def recommend(rows: Sequence[dict], *, live_threshold: float = LIVE["threshold"]
         options[str(b)] = None if r is None else r["threshold"]
     best = highest_within(rows, base, frr_budget)
     if best is None:
+        loose = {}
+        for b in (0.01, 0.02, 0.05):
+            r = highest_within(rows, base, b, require_tv=False)
+            loose[str(b)] = None if r is None else dict(threshold=r["threshold"], frr=r["frr"], tv=_tv(r),
+                                                         pooled_fa_per_hour=r["pooled_fa_per_hour"])
         return dict(threshold=None, live_threshold=live_threshold, live_frr=base["frr"], live_tv=_tv(base),
-                    options=options,
+                    live_pooled_fa_per_hour=base["pooled_fa_per_hour"], options=options, threshold_only=loose,
                     reason="no threshold meets both the FRR budget and TV 0/N - the model, not the threshold, is the fix")
     same = abs(best["threshold"] - live_threshold) < 1e-9
     return dict(threshold=best["threshold"], live_threshold=live_threshold, live_frr=base["frr"], frr=best["frr"],
@@ -453,7 +459,15 @@ def render_nearmiss(s: dict) -> str:
 
 def render_recommendation(rec: dict) -> str:
     if rec.get("threshold") is None:
-        return f"**No recommendation:** {rec.get('reason')}"
+        out = f"**No recommendation:** {rec.get('reason')}"
+        if rec.get("threshold_only"):
+            out += (f". Threshold-only options (TV still {rec['live_tv']} at live, live replayed FRR "
+                    f"{_pct(rec['live_frr'])}, pooled FA {_num(rec.get('live_pooled_fa_per_hour'))}/h): " + "; ".join(
+                        "+%.0f pp -> %s (FRR %s, TV %s, pooled FA %s/h)" % (float(b) * 100, _num(o["threshold"]),
+                                                                             _pct(o["frr"]), o["tv"],
+                                                                             _num(o["pooled_fa_per_hour"]))
+                        for b, o in rec["threshold_only"].items() if o))
+        return out
     return (f"**Recommended WAKEWORD_THRESHOLD = {rec['threshold']:.2f}** (live {rec['live_threshold']:.2f}): "
             f"replayed FRR {_pct(rec['frr'])} vs {_pct(rec['live_frr'])} at live (budget +{_pct(rec['frr_budget'], 0)}), "
             f"TV {rec['tv']} (live {rec['live_tv']}), pooled public/household FA "

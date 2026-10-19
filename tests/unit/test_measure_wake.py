@@ -100,6 +100,10 @@ def test_recommend_is_the_highest_threshold_within_budget_with_tv_clean():
     rec10 = mw.recommend(rows, live_threshold=0.45, frr_budget=0.10)
     assert rec10["threshold"] == pytest.approx(0.54)            # 0.54 loses 4/40 = 10 %; 0.55 loses 12.5 %
     assert rec10["options"]["0.05"] is None
+    # TV-clean is out of reach at 5 pp, so the threshold-only answer is reported beside the refusal
+    assert rec["threshold_only"]["0.05"]["threshold"] == pytest.approx(0.52)
+    assert rec["threshold_only"]["0.05"]["tv"] == "1/2"
+    assert "Threshold-only options" in mw.render_recommendation(rec)
 
 
 def test_recommend_cancels_the_replays_own_losses_and_refuses_tiny_sets():
