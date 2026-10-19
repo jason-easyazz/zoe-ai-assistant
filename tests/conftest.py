@@ -46,6 +46,9 @@ if "memory_service" not in sys.modules:
     # ... and the app log: a test that enters the zoe-data lifespan attaches a handler writing to $ZOE_LOG_DIR (the live
     # server's ~/.zoe-logs/zoe-data.app.log by default). See services/zoe-data/tests/conftest.py.
     os.environ["ZOE_LOG_DIR"] = os.path.join(_stores, "logs")
+    # ... and the router retrain ledger: every forget / user delete reaches it (struggle_proposals.forget_events / forget_user).
+    # Unpinned, a tests/unit delete_user test tombstoned a synthetic user in the live ~/.zoe/router_retrain (2026-10-19).
+    os.environ["ZOE_ROUTER_RETRAIN_DIR"] = os.path.join(_stores, "router_retrain")
 
 
 @pytest.fixture(scope="session")

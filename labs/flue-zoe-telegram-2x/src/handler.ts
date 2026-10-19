@@ -18,6 +18,8 @@
  *
  * PRODUCTION since the 2026-08-09 cutover (auto-deployed).
  */
+import { describeError } from './redact.ts';
+import { framedForward } from './untrusted.ts';
 
 export interface IncomingDeps {
   /** Resolve a verified telegram id → Zoe user_id, or null if not linked. */
@@ -53,13 +55,16 @@ export async function handleIncoming(
   chatId: number,
   text: string,
   deps: IncomingDeps,
+  opts: { forwarded?: boolean } = {},
 ): Promise<void> {
   const userId = await deps.resolve(telegramId);
   if (!userId) {
     await deps.reply(unlinkedMessage(telegramId));
     return;
   }
-  const answer = await deps.ask(text, deps.session(chatId), userId);
+  // A FORWARDED message is someone else's words: fenced as untrusted data, never the member's command (src/untrusted.ts).
+  const asked = opts.forwarded ? framedForward(text) : text;
+  const answer = await deps.ask(asked, deps.session(chatId), userId);
   await deps.reply(answer);
 }
 
@@ -109,7 +114,7 @@ export async function handleStart(
     const linkedUser = trimmed ? await deps.consume(trimmed, telegramId, username) : null;
     await deps.reply(startReply(linkedUser, Boolean(trimmed)));
   } catch (err) {
-    console.error('Telegram link error:', err);
+    console.error(`Telegram link error: ${describeError(err)}`);
     await deps.reply('Something went wrong linking your account. Please try again in a moment.');
   }
 }
@@ -144,7 +149,7 @@ export async function handleNew(
     deps.bump(chatId);
     await deps.reply('Okay — fresh conversation. Your memories are untouched; ask me anything.');
   } catch (err) {
-    console.error('Telegram /new error:', err);
+    console.error(`Telegram /new error: ${describeError(err)}`);
     await deps.reply('Something went wrong starting a fresh conversation. Please try again.');
   }
 }
