@@ -316,12 +316,22 @@ def test_a_forget_that_lands_mid_run_blocks_adoption():
     assert mid["examples"] == [rows[0]] and mid["forgotten"] == 1         # the record never names the forgotten turn
 
 
-def test_no_ledger_dir_is_nothing_stored_and_a_corrupt_ledger_fails_closed():
-    assert ledger.forget(event_ids=["e1"]) == {"examples": 0, "flagged": 0, "texts_deleted": 0}
-    ledger.root().mkdir(parents=True)
+def test_a_forget_before_any_run_still_tombstones_and_a_corrupt_ledger_fails_closed():
+    assert not ledger.root().exists()
+    assert ledger.forget(event_ids=["e1"], text_keys=["k1"]) == {"examples": 0, "flagged": 0, "texts_deleted": 0}
+    assert {"e1"} <= set(ledger.load()["tombstones"]["event_ids"]) and "k1" in ledger.load()["tombstones"]["text_keys"]
     (ledger.root() / ledger.LEDGER).write_text("{not json")
     with pytest.raises(ValueError):
         ledger.forget(event_ids=["e1"])
+
+
+def test_a_turn_forgotten_before_its_first_run_never_reenters_by_wording():
+    """Codex #4: the forget path hands the wording key over while the struggle row still exists, so a pre-record forget tombstones the
+    WORDING, not only the event id - the same words under a new event id stay out."""
+    ex = _examples(1)[0]
+    ledger.forget(event_ids=[ex.event_id], text_keys=[ex.text_key])            # no run has recorded it yet
+    kept, dropped = rr.select_examples([row(500, ex.text)], tombstones=ledger.load()["tombstones"], frozen=set(), normalize=NORM)
+    assert kept == [] and dropped["forgotten"] == 1
 
 
 def test_the_ledger_never_holds_words():
@@ -521,3 +531,185 @@ def test_held_out_eval_results_keep_ids_and_verdicts_only(tmp_path, monkeypatch)
     _, payload = rr._eval(tmp_path / "g.gguf", 1, out, True, "x", corpus=tmp_path / "c.jsonl")
     raw = out.read_text()
     assert "invented" not in raw and payload["cases"][0]["ok"] is True and payload["cases"][0]["id"] == "h-abc"
+
+
+# ── Codex round (2026-10-19): lineage, replay leakage, the swap race, transactional publication, a real shuffled-label control ──
+def _gen(gen, parent, keys, status="adopted"):
+    def _add(d):
+        d["runs"].append({"gen": gen, "parent": parent, "status": status,
+                          "examples": [{"e": f"e-{k}", "u": "u", "k": k, "s": "train"} for k in keys]})
+    ledger.update(_add)
+
+
+def test_the_whole_warm_start_lineage_counts_as_learned():
+    """Codex #1: gC was warm-started from gB, which was warm-started from gA. Whatever gA learned, gC holds - so gA's wordings can
+    never be held out as "unseen", even though gA is neither served nor previous."""
+    ex = _examples(50)
+    oldest_learned = max(ex, key=lambda e: e.ts)                              # the newest wording, which a fresh split would hold out
+    _gen("gA", None, [oldest_learned.text_key])
+    _gen("gB", "gA", ["kB"])
+    _gen("gC", "gB", ["kC"])
+    ledger.update(lambda d: d.update(served="gC", previous="gB"))
+    keys = rr.lineage_trained_keys(ledger.load())
+    assert {oldest_learned.text_key, "kB", "kC"} <= keys
+    _, hold, _ = rr.group_and_split(ex, trained_keys=keys)
+    assert oldest_learned.text_key not in {e.text_key for e in hold}
+
+
+def test_forgetting_an_ancestors_example_flags_the_served_descendant():
+    _gen("gA", None, ["kA"])
+    _gen("gB", "gA", ["kB"])
+    ledger.update(lambda d: d.update(served="gB", previous="gA"))
+    ledger.forget(event_ids=["e-kA"])
+    runs = {r["gen"]: r for r in ledger.load()["runs"]}
+    assert runs["gA"]["needs_retrain"] and runs["gB"]["needs_retrain"]          # gB inherited what gA learned
+    assert ledger.status()["served_needs_retrain"] is True
+
+
+def test_a_held_out_wording_in_the_committed_corpus_is_never_trained_or_held_out():
+    """Codex #2: the replay sample came from committed files nobody checked against the holdout."""
+    ex = _examples(50)
+    train, hold, _ = rr.group_and_split(ex, trained_keys=set())
+    for e in train + hold:
+        e.tool = "get_weather"
+    committed = [{"text": hold[0].text, "tool": "get_weather", "args": {}}] + [{"text": f"committed row {i}", "tool": None, "args": {}}
+                                                                               for i in range(40)]
+    rows, dropped = rr.prepare_training(train, hold, committed, "s", n_replay=1000)
+    assert dropped == 1 and rr.leaked(rows, hold) == []
+    assert hold[0].text_key in rr.lineage_trained_keys({"runs": [], "tombstones": {}}, committed)   # and the split would not hold it out
+
+
+def test_a_forget_during_the_swap_rolls_the_candidate_back(sandbox, monkeypatch):
+    """Codex #3: the forget lands AFTER the reservation, while the model is being swapped in. The reservation is a ledger record the
+    forget flags; the commit sees the flag and the previous model goes back."""
+    _fake_gguf(rs.SERVED_GGUF, b"INCUMBENT")
+    run_dir = sandbox / "run"
+    (run_dir / "merged").mkdir(parents=True)
+    ex = _examples(1)[0]
+    real_deploy = rs.deploy
+
+    def deploy_while_forgetting(*a, **k):
+        rc = real_deploy(*a, **k)
+        ledger.forget(event_ids=[ex.event_id])
+        return rc
+    monkeypatch.setattr(rs, "deploy", deploy_while_forgetting)
+    monkeypatch.setattr(rr, "_apply_proposals", lambda gen, train: pytest.fail("a rolled-back candidate applies nothing"))
+    rec = {"stamp": "s1", "examples": [ex.ledger_row("train")]}
+    status = rr.act("on", decide(), rec, stamp="s1", cand_gguf=_fake_gguf(sandbox / "cand.gguf", b"CANDIDATE"), run_dir=run_dir,
+                    inc_live=INC, train=[], journal={})
+    data = ledger.load()
+    assert status == "rolled_back_at_publish" and rs.SERVED_GGUF.read_bytes()[:13] == b"GGUFINCUMBENT"
+    assert data["served"] is None and not rr.adopt_marker().exists()
+    assert not (ledger.root() / "generations" / "gs1").exists()                # never a generation: it learned a forgotten turn
+
+
+def test_a_publication_failure_after_the_swap_rolls_back(sandbox, monkeypatch):
+    """Codex #5: the checkpoint move fails after deploy() swapped the model - the candidate must not stay served unrecorded."""
+    _fake_gguf(rs.SERVED_GGUF, b"INCUMBENT")
+    run_dir = sandbox / "run"
+    (run_dir / "merged").mkdir(parents=True)
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(rr.shutil, "move", boom)
+    with pytest.raises(OSError):
+        rr.act("on", decide(), {"stamp": "s1"}, stamp="s1", cand_gguf=_fake_gguf(sandbox / "cand.gguf", b"CANDIDATE"), run_dir=run_dir,
+               inc_live=INC, train=[], journal={})
+    data = ledger.load()
+    assert rs.SERVED_GGUF.read_bytes()[:13] == b"GGUFINCUMBENT" and data["served"] is None
+    assert next(r for r in data["runs"] if r.get("gen") == "gs1")["status"] == "rolled_back_at_publish"
+    assert not rr.adopt_marker().exists()
+
+
+def test_recover_rolls_back_a_publication_killed_before_its_commit(sandbox, monkeypatch):
+    """The process dies after the swap and before the ledger commit (no except clause runs on SIGKILL): the durable marker is all
+    that is left, and --recover puts the previous model back."""
+    _fake_gguf(rs.SERVED_GGUF, b"INCUMBENT")
+    run_dir = sandbox / "run"
+    (run_dir / "merged").mkdir(parents=True)
+    real_unpublish, real_update = rr._unpublish, rr.ledger.update
+    monkeypatch.setattr(rr, "_unpublish", lambda *a, **k: False)            # "killed" before it could undo anything
+    monkeypatch.setattr(rr.ledger, "update", _fail_on_commit(real_update))
+    with pytest.raises(KeyboardInterrupt):
+        rr.act("on", decide(), {"stamp": "s1"}, stamp="s1", cand_gguf=_fake_gguf(sandbox / "cand.gguf", b"CANDIDATE"), run_dir=run_dir,
+               inc_live=INC, train=[], journal={})
+    assert rs.SERVED_GGUF.read_bytes()[:13] == b"GGUFCANDIDATE" and rr.adopt_marker().exists()
+    monkeypatch.setattr(rr, "_unpublish", real_unpublish)                     # a fresh process: --recover
+    monkeypatch.setattr(rr.ledger, "update", real_update)
+    assert rr.recover() == 0
+    assert rs.SERVED_GGUF.read_bytes()[:13] == b"GGUFINCUMBENT" and not rr.adopt_marker().exists()
+    assert ledger.load()["served"] is None
+
+
+def _fail_on_commit(real):
+    def update(fn):
+        if fn.__name__ == "_commit":
+            raise KeyboardInterrupt("killed mid-publication")
+        return real(fn)
+    return update
+
+
+# A REAL shuffled-label control through the data path: the seam rows -> select -> time split -> training rows -> a tiny bag-of-words
+# "trainer" that learns ONLY from the rows prepare_training wrote -> the held-out failures scored by domain -> the gate.
+_VOCAB = {
+    "weather": ["umbrella", "forecast", "drizzle", "sunny"], "timers": ["countdown", "egg", "kettle", "stopwatch"],
+    "lists": ["groceries", "basket", "shopping", "pantry"], "music": ["playlist", "song", "jazz", "tune"],
+    "calendar": ["appointment", "meeting", "diary", "dentist"], "smart_home": ["lamp", "heater", "porch", "fan"],
+    "reminders": ["remind", "nudge", "prompt", "memo"], "time": ["clock", "oclock", "hour", "midnight"],
+}
+
+
+def _seam_rows(n=200):
+    labels = sorted(_VOCAB)
+    out = []
+    for i in range(n):
+        lab = labels[i % len(labels)]
+        w = _VOCAB[lab]
+        out.append(row(i, f"{w[i % 4]} {w[(i // 8) % 4]} request {i}", label=lab))
+    return out
+
+
+def _stub_train(rows):
+    from collections import Counter, defaultdict
+    model = defaultdict(Counter)
+    for r in rows:
+        for w in r["text"].split():
+            model[w][r["tool"]] += 1
+    return model
+
+
+def _stub_predict(model, text):
+    from collections import Counter
+    votes = Counter()
+    for w in text.split():
+        votes.update(model.get(w, {}))
+    return votes.most_common(1)[0][0] if votes else None
+
+
+def _pipeline(shuffle: bool):
+    ex, _ = rr.select_examples(_seam_rows(), tombstones={}, frozen=set(), normalize=NORM)
+    train, hold, _ = rr.group_and_split(ex, trained_keys=set())
+    for e in train + hold:
+        e.tool = rr.DOMAIN_TOOLS[e.label][0]                                    # the oracle agreed with the label it was given
+    if shuffle:                                                               # the CONTROL: the training labels, and only those, shuffled
+        import random
+        tools = [e.tool for e in train]
+        random.Random(7).shuffle(tools)
+        for e, t in zip(train, tools):
+            e.tool = t
+    rows, _ = rr.prepare_training(train, hold, [], "s", n_replay=0)
+    model = _stub_train(rows)
+    cases = rr.holdout_cases(hold)
+    cand = {c["id"]: _stub_predict(model, c["text"]) in c["expected"] for c in cases}
+    inc = {c["id"]: False for c in cases}                                      # these are failures: the incumbent got every one wrong
+    return decide(holdout_incumbent=inc, holdout_candidate=cand)
+
+
+def test_a_real_shuffled_label_control_fails_gate_a_through_the_pipeline():
+    """Codex non-blocking #1. With the true labels the stub trained on the pipeline's own rows fixes the held-out failures and passes;
+    trained on SHUFFLED labels it cannot - so a pipeline that leaked the held-out labels, or a gate that ignored them, would show."""
+    real = _pipeline(shuffle=False)
+    control = _pipeline(shuffle=True)
+    assert real.adopt and real.numbers["fixed"] >= 30
+    assert not control.adopt and control.checks["fixes_known_failures"] is False
+    assert control.numbers["fixed"] < control.numbers["needed"]

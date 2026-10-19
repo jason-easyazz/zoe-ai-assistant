@@ -953,13 +953,42 @@ def _sql_events() -> bool:
     return isinstance(sd.get_backend(), sd.SqlBackend)
 
 
-def _forget_in_retrain(*, event_ids: Iterable[str] = (), user_id: Optional[str] = None) -> None:
-    """Phase 3: the router retrain ledger loses these examples (tombstoned so they never re-enter; a served generation that learned one
-    is flagged for retrain; leftover run texts deleted). RAISES on a failure, like the rest of the forget path; a ledger dir that does not
-    exist is "nothing stored" (``router_retrain_ledger.forget``)."""
+def _failed_words(summary: Any, prev: Any) -> str:
+    """The FAILED turn's words of a struggle row - exactly what ``queued_router_examples`` hands out as ``text``."""
+    return str(summary or "").split(" -> ")[0].strip() if prev else str(summary or "").strip()
+
+
+async def _wording_keys(ids: list[str]) -> set[str]:
+    """The retrain ledger's wording keys of these struggle rows, read WHILE THEY STILL EXIST (the forget path calls this before the rows
+    go). RAISES on a store failure: a forget that cannot tombstone the wording must not be confirmed."""
+    import router_retrain_ledger
+    import struggle_detector as sd
+
+    texts: list[str] = []
+    if _sql_events():
+        try:
+            async with _ctx() as db:
+                for part in _chunks(ids):
+                    cur = await db.execute(f"SELECT summary, prev_turn_id FROM struggle_events WHERE id IN ({_marks(len(part))})", tuple(part))
+                    texts += [_failed_words(r[0], r[1]) for r in await cur.fetchall()]
+        except Exception as exc:
+            if _missing_table(exc):
+                return set()
+            raise
+    else:
+        want = set(ids)
+        texts = [_failed_words(r.get("summary"), r.get("prev_turn_id"))
+                 for r in await sd.get_backend().rows(0.0, None, limit=ROW_LIMIT) if str(r.get("id")) in want]
+    return {router_retrain_ledger.text_key(t) for t in texts if t}
+
+
+def _forget_in_retrain(*, event_ids: Iterable[str] = (), user_id: Optional[str] = None, text_keys: Iterable[str] = ()) -> None:
+    """Phase 3: the router retrain ledger loses these examples (tombstoned by event id AND wording, so they never re-enter even before any
+    run recorded them; a served generation that learned one - directly or through its lineage - is flagged for retrain; leftover run
+    texts deleted). RAISES on a failure, like the rest of the forget path (``router_retrain_ledger.forget``)."""
     import router_retrain_ledger
 
-    router_retrain_ledger.forget(event_ids=event_ids, user_id=user_id)
+    router_retrain_ledger.forget(event_ids=event_ids, user_id=user_id, text_keys=text_keys)
 
 
 async def forget_events(event_ids: list[str]) -> int:
@@ -968,7 +997,7 @@ async def forget_events(event_ids: list[str]) -> int:
     ids = [str(i) for i in event_ids if i]
     if not ids:
         return 0
-    _forget_in_retrain(event_ids=ids)
+    _forget_in_retrain(event_ids=ids, text_keys=await _wording_keys(ids))
     if not _sql_events():
         return 0
     try:

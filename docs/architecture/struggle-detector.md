@@ -236,9 +236,12 @@ member's own `struggle_events.summary` (forget-gated, member-only, the failed tu
 `label_source = followup` examples of `proposed` / `accepted` / `applied` proposals (a `rejected` one never), and a `label_source = router`
 example only when a PERSON accepted it (an owner correction; the loop's own policy accept never upgrades a weak label). Dropped and
 counted: forget tombstones, frozen-corpus texts, bad labels. One row per normalised wording (a wording with two labels is dropped). **Time
-split, no leakage:** the newest 20% of wordings no served generation has trained on are the held-out "known failures"; every older wording
-(and any wording a served generation already learned) is train, so every held-out failure happened after every new trained one and never
-shares a wording with it. Fewer than 10 held-out (about 50 labelled wordings) or 10 train = "not enough evidence": nothing is trained.
+split, no leakage:** the newest 20% of wordings the incumbent cannot have learned are the held-out "known failures"; every older wording -
+and any wording the incumbent MAY have learned: the served and previous generations' WHOLE warm-start lineage (`parent` links; a generation
+holds what every ancestor learned) and the committed corpus every generation descends from - is train, so every held-out failure happened
+after every new trained one and never shares a wording with it. The training rows are rebuilt with every held-out wording removed from
+EVERY source (the train split and the committed-corpus replay sample), and the run aborts if one is still there (`prepare_training`,
+`leaked`). Fewer than 10 held-out (about 50 labelled wordings) or 10 train = "not enough evidence": nothing is trained.
 
 **Train.** The brain re-labels every example blind (the miner's grammar-constrained oracle, full tool menu, no hint) and only agreement
 survives; the train split (x2) plus a 300-row replay sample of the committed corpus (against forgetting) is a warm-start continuation of
@@ -259,17 +262,23 @@ back to back, after the incumbent's live-vs-scratch validity check (> 10 points 
   it must RUN and pass; a skip is not a pass.
 * **(d) forget-clean:** no example the run used was tombstoned while it ran.
 
-Any miss leaves the incumbent serving and records the reasons. **Adopt** (`on` + every check): `router_selftrain.deploy` (LKG archived
-first, atomic swap, restart, `/props` identity, post-deploy LIVE eval, auto-rollback), then the checkpoint moves to
-`generations/<gen>/merged` (**never deleted** - the lineage rule) and becomes the next warm start, the ledger names it `served` and the old
-one `previous`, and the proposals it learned from move to `applied` (a still-proposed one is accepted by `policy:struggle-feed` first, so the
+Any miss leaves the incumbent serving and records the reasons. **Adopt** (`on` + every check) is one transaction: (1) RESERVE - under
+the ledger lock, re-check the tombstones and insert the run as `adopting` (a forget from then on flags it); (2) a durable
+`adopt_in_progress.json` marker; (3) `router_selftrain.deploy` (LKG archived first, atomic swap, restart, `/props` identity, post-deploy LIVE
+eval, auto-rollback); (4) PUBLISH - the checkpoint moves to `generations/<gen>/merged` (**never deleted** - the lineage rule; it becomes the
+next warm start) and, under the lock, the record commits as `adopted` with `served` / `previous` updated - unless a forget flagged it during
+the swap. Any failure or flag after the swap restores the outgoing model (`restore_lkg`), removes the half-made generation and records
+`rolled_back_at_publish`; a process killed mid-publication leaves the marker, and `--recover` (the unit's `ExecStopPost`) finishes the
+rollback unless the commit had landed. Then the proposals it learned from move to `applied` (a still-proposed one is accepted by `policy:struggle-feed` first, so the
 record says who decided). `--rollback` puts the previous model back instantly (`restore_lkg`, validated, archive-only). A candidate that
 did not become a generation is scratch: its checkpoint is deleted at the end of the run; the newest shadow candidate GGUF is kept.
 
 **Forget.** `struggle_proposals.forget_events` / `forget_user` (the forget / delete cascade, fail closed) call
-`router_retrain_ledger.forget` first: the example leaves every run record, its text key, event id (and, for a deleted user, the user
-key) become tombstones so it never re-enters even if the same words are said again, any leftover run text is deleted, and a served
-generation that LEARNED it (train split) is flagged `needs_retrain` (`--status` shows it). Weights cannot unlearn: the next adopted
+`router_retrain_ledger.forget` first, with the failed turns' WORDING keys read from the struggle rows while they still exist: the example
+leaves every run record, its wording key, event id (and, for a deleted user, the user key) become tombstones - also when no run has
+recorded it yet - so it never re-enters even if the same words are said again, any leftover run text is deleted, and a served (or
+being-swapped-in) generation that LEARNED it - itself or through any ancestor - is flagged `needs_retrain` (`--status` shows it). A pytest
+session can never reach the live ledger (`root()` refuses it; both conftests pin `ZOE_ROUTER_RETRAIN_DIR`). Weights cannot unlearn: the next adopted
 generation, trained without it, is the remedy. The ledger holds no words (event ids and truncated hashes); the words exist only for one
 run in `work/<stamp>/*.texts.jsonl` (0600) and are deleted when it ends.
 

@@ -8,15 +8,17 @@ truncated hashes. The words exist only for the length of one run, in that run's 
 an ``ids.json`` naming the event ids / user keys in it), and the run deletes them when it ends.
 
 FORGET (called by ``struggle_proposals.forget_events`` / ``forget_user`` - i.e. from ``struggle_detector.erase_entity`` /
-``delete_user`` - BEFORE the struggle rows go; it RAISES on a failure so the forget is not confirmed):
+``delete_user`` - BEFORE the struggle rows go, with the rows' wording keys derived while they still exist; it RAISES on a failure so
+the forget is not confirmed):
   * every run record that used one of the forgotten examples loses that example's entry and counts it in ``forgotten``; a record
-    whose model is (or was) SERVED is flagged ``needs_retrain`` - weights cannot unlearn, so the next adopted generation, trained
-    without it, is the remedy, and ``status()`` says so;
-  * the example's text key, event id (and, for a deleted user, the user key) become TOMBSTONES: the collector drops a tombstoned
-    example, so a forgotten turn never re-enters a training set, even if the same words are said again;
+    whose model is (or was, or is being swapped in as) SERVED - itself or through any generation it was warm-started from - is
+    flagged ``needs_retrain``: weights cannot unlearn, so the next adopted generation, trained without it, is the remedy, an
+    in-flight swap rolls back, and ``status()`` says so;
+  * the example's text key, event id (and, for a deleted user, the user key) become TOMBSTONES - also when no run has recorded it
+    yet: the collector drops a tombstoned example, so a forgotten turn never re-enters a training set, even if the same words are
+    said again;
   * any work dir still holding one of those examples' words (a run in flight, or one that crashed before its cleanup) has its text
     files deleted. A run in flight re-checks the tombstones before it records or adopts (``tombstoned``) and refuses to adopt then.
-Only a missing ledger dir is "nothing stored".
 """
 from __future__ import annotations
 
@@ -39,7 +41,11 @@ IDS_FILE = "ids.json"
 
 
 def root() -> Path:
-    return Path(os.environ.get("ZOE_ROUTER_RETRAIN_DIR") or (Path.home() / ".zoe" / "router_retrain")).expanduser()
+    d = Path(os.environ.get("ZOE_ROUTER_RETRAIN_DIR") or (Path.home() / ".zoe" / "router_retrain")).expanduser()
+    if os.environ.get("PYTEST_CURRENT_TEST") and d.resolve() == (Path.home() / ".zoe" / "router_retrain").resolve():
+        # a test must never touch the live ledger (a tests/unit delete_user once tombstoned a synthetic user in it): fail loudly
+        raise RuntimeError("router_retrain_ledger: refusing the LIVE ledger from a pytest session - pin ZOE_ROUTER_RETRAIN_DIR")
+    return d
 
 
 def text_key(text: str) -> str:
@@ -141,7 +147,7 @@ def tombstoned(examples: Iterable[dict], ledger: Optional[dict] = None) -> list[
     return out
 
 
-def _purge_work(d: Path, event_ids: set[str], ukey: Optional[str]) -> int:
+def _purge_work(d: Path, event_ids: set[str], ukey: Optional[str], text_keys: frozenset = frozenset()) -> int:
     """Delete the text files of every work dir that holds one of these examples. Returns files deleted."""
     gone = 0
     work = d / WORK
@@ -154,7 +160,8 @@ def _purge_work(d: Path, event_ids: set[str], ukey: Optional[str]) -> int:
             continue
         try:
             ids = json.loads(ids_path.read_text())
-            hit = bool(set(ids.get("event_ids") or []) & event_ids) or (ukey is not None and ukey in set(ids.get("user_keys") or []))
+            hit = (bool(set(ids.get("event_ids") or []) & event_ids) or bool(set(ids.get("text_keys") or []) & text_keys)
+                   or (ukey is not None and ukey in set(ids.get("user_keys") or [])))
         except (OSError, ValueError):
             hit = True                         # cannot tell what it holds: it holds nothing after a forget
         if hit:
@@ -164,48 +171,89 @@ def _purge_work(d: Path, event_ids: set[str], ukey: Optional[str]) -> int:
     return gone
 
 
-def forget(event_ids: Iterable[str] = (), user_id: Optional[str] = None) -> dict[str, int]:
-    """The forget path (see the module doc). RAISES on a failure; only a missing ledger dir is "nothing stored". Counts only."""
+#: run statuses whose model was (or is about to be) served: a forgotten TRAIN example in one of them, or in any of its ancestors,
+#: flags it for retrain. "adopting" is a candidate reserved for the swap (``router_struggle_retrain.adopt_generation``): a forget that
+#: lands during the swap flags it, and the adoption rolls back when it sees the flag.
+SERVED_STATUSES = ("adopting", "adopted", "rolled_back")
+
+
+def lineage(data: dict, gen: Optional[str]) -> list[dict]:
+    """The run records of ``gen`` and every generation it was warm-started from (``parent`` links), newest first. A generation holds
+    what all its ancestors learned, so isolation and forget must look at the whole chain, not only the last record."""
+    by_gen = {r.get("gen"): r for r in data.get("runs") or [] if r.get("gen")}
+    out: list[dict] = []
+    seen: set = set()
+    while gen and gen in by_gen and gen not in seen:
+        seen.add(gen)
+        out.append(by_gen[gen])
+        gen = by_gen[gen].get("parent")
+    return out
+
+
+def trained_keys(data: dict) -> set:
+    """Every wording the served and the previous generation learned, through their WHOLE warm-start lineage."""
+    keys: set = set()
+    for head in (data.get("served"), data.get("previous")):
+        for r in lineage(data, head):
+            keys.update(x.get("k") for x in r.get("examples") or [] if x.get("s") == "train" and x.get("k"))
+    return keys
+
+
+def forget(event_ids: Iterable[str] = (), user_id: Optional[str] = None, text_keys: Iterable[str] = ()) -> dict[str, int]:
+    """The forget path (see the module doc). RAISES on a failure. Counts only.
+
+    ``text_keys`` are the forgotten turns' wording keys, derived by the caller WHILE the struggle rows still exist, so a turn forgotten
+    before any run recorded it is still tombstoned by wording (the same words under a new event id never re-enter). Tombstones are
+    hashes only, so a forget creates the ledger dir when there is something to tombstone."""
     ids = {str(i) for i in event_ids if i}
+    tks = {str(k) for k in text_keys if k}
     ukey = user_key(user_id) if (user_id or "").strip() else None
-    if not ids and ukey is None:
-        return {"examples": 0, "flagged": 0, "texts_deleted": 0}
-    d = root()
-    if not d.exists():
-        return {"examples": 0, "flagged": 0, "texts_deleted": 0}
     res = {"examples": 0, "flagged": 0, "texts_deleted": 0}
+    if not ids and not tks and ukey is None:
+        return res
+
+    def _flag(r: dict) -> None:
+        if not r.get("needs_retrain"):
+            res["flagged"] += 1
+        r["needs_retrain"] = True
+        r["needs_retrain_since"] = round(time.time(), 3)
 
     def _apply(data: dict) -> None:
         t = data["tombstones"]
-        served = {data.get("served"), data.get("previous")} - {None}
-        keys: set[str] = set()
-        for r in data.get("runs") or []:
+        runs = data.get("runs") or []
+        keys: set[str] = set(tks)
+        learned_in: set = set()                     # gens (or reserved stamps) whose model learned a forgotten example
+        for r in runs:
             exs = r.get("examples") or []
-            hit = [x for x in exs if x.get("e") in ids or (ukey is not None and x.get("u") == ukey)]
+            hit = [x for x in exs if x.get("e") in ids or x.get("k") in tks or (ukey is not None and x.get("u") == ukey)]
             if not hit:
                 continue
             keys.update(x.get("k") for x in hit if x.get("k"))
             r["examples"] = [x for x in exs if x not in hit]
             r["forgotten"] = int(r.get("forgotten") or 0) + len(hit)
             res["examples"] += len(hit)
-            trained = any(x.get("s") == "train" for x in hit)          # a held-out example was scored, never learned
-            if trained and (r.get("gen") in served or r.get("status") in ("adopted", "rolled_back")):
-                if not r.get("needs_retrain"):
-                    res["flagged"] += 1
-                r["needs_retrain"] = True
-                r["needs_retrain_since"] = round(time.time(), 3)
+            if any(x.get("s") == "train" for x in hit):          # a held-out example was scored, never learned
+                if r.get("gen"):
+                    learned_in.add(r["gen"])
+                if r.get("status") in SERVED_STATUSES or r.get("gen") in (data.get("served"), data.get("previous")):
+                    _flag(r)
+        if learned_in:
+            # a descendant (served, previous, or a candidate being swapped in) inherited what its ancestor learned
+            for r in runs:
+                if r.get("status") in SERVED_STATUSES or r.get("gen") in (data.get("served"), data.get("previous")):
+                    chain = {x.get("gen") for x in lineage(data, r.get("gen"))} | {r.get("parent")}
+                    if chain & learned_in:
+                        _flag(r)
         t["event_ids"] = sorted(set(t["event_ids"]) | ids)
         t["text_keys"] = sorted(set(t["text_keys"]) | keys)
         if ukey is not None:
             t["user_keys"] = sorted(set(t["user_keys"]) | {ukey})
 
-    with _locked(create=False) as dd:
-        if dd is None:
-            return res
+    with _locked(create=True) as dd:
         data = _read(dd)
         _apply(data)
         _write(dd, data)
-        res["texts_deleted"] = _purge_work(dd, ids, ukey)
+        res["texts_deleted"] = _purge_work(dd, ids, ukey, frozenset(tks))
     return res
 
 

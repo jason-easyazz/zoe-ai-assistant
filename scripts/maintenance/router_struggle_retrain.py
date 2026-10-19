@@ -340,6 +340,34 @@ def train_rows(delta: list[Example], replay: list[dict], repeat: int = DELTA_REP
     return rows + replay
 
 
+def lineage_trained_keys(data: dict, committed: Iterable[dict] = ()) -> set:
+    """Every wording the incumbent may have LEARNED: the served and previous generations' whole warm-start lineage
+    (``router_retrain_ledger.trained_keys``) plus the committed corpus every generation descends from. None of these can be held out
+    as an unseen failure."""
+    keys = set(ledger.trained_keys(data))
+    keys.update(ledger.text_key(str(r.get("text") or "")) for r in committed if r.get("text"))
+    return keys
+
+
+def prepare_training(train: list[Example], holdout: list[Example], committed: list[dict], seed: str,
+                     *, n_replay: int = REPLAY_SAMPLE, repeat: int = DELTA_REPEAT) -> tuple[list[dict], int]:
+    """The candidate's training rows: the train split (x ``repeat``) + a replay sample of the committed corpus, with EVERY held-out
+    wording removed from EVERY source first (a held-out failure that also sits in a committed file must not be trained and then
+    "proved"). Returns (rows, replay rows dropped as held-out)."""
+    hold = {e.text_key for e in holdout}
+    hold_norm = {rs._normalize(e.text) for e in holdout}
+    clean = [r for r in committed
+             if ledger.text_key(str(r.get("text") or "")) not in hold and rs._normalize(str(r.get("text") or "")) not in hold_norm]
+    delta = [e for e in train if e.text_key not in hold]
+    return train_rows(delta, replay_sample(clean, n_replay, seed), repeat), len(committed) - len(clean)
+
+
+def leaked(rows: list[dict], holdout: list[Example]) -> list[str]:
+    """Held-out wording keys present in the training rows (must be empty)."""
+    hold = {e.text_key for e in holdout}
+    return sorted({ledger.text_key(str(r.get("text") or "")) for r in rows} & hold)
+
+
 # ===========================================================================
 # I/O
 # ===========================================================================
@@ -377,18 +405,12 @@ async def _collect_rows() -> list[dict]:
         await close_pool()
 
 
-def trained_keys(data: dict) -> set:
-    """Wordings a served (or previous) generation was trained on."""
-    keep = {data.get("served"), data.get("previous")} - {None}
-    return {x.get("k") for r in data.get("runs") or [] if r.get("gen") in keep for x in r.get("examples") or [] if x.get("s") == "train"}
-
-
 def collect(data: dict) -> tuple[list[Example], list[Example], dict]:
     _load_service_env()
     rows = asyncio.run(_collect_rows())
     frozen = rs.frozen_corpus_texts(rs.FROZEN_CORPUS)
     examples, dropped = select_examples(rows, tombstones=data["tombstones"], frozen=frozen, normalize=rs._normalize)
-    train, holdout, info = group_and_split(examples, trained_keys=trained_keys(data))
+    train, holdout, info = group_and_split(examples, trained_keys=lineage_trained_keys(data, committed_rows()))
     by_source = Counter(r.get("label_source") for r in rows)
     by_status = Counter(r.get("status") for r in rows)
     report = {"seam_rows": len(rows), "by_label_source": dict(by_source), "by_status": dict(by_status),
@@ -709,8 +731,10 @@ def run(mode: str, *, collect_only: bool = False) -> int:
         rec["examples"] = [e.ledger_row("train") for e in train] + [e.ledger_row("holdout") for e in holdout]
 
         # ---- 3. TRAIN -----------------------------------------------------------
-        replay_rows = replay_sample(committed_rows(), REPLAY_SAMPLE, stamp)
-        rows = train_rows(train, replay_rows)
+        rows, n_dropped = prepare_training(train, holdout, committed_rows(), stamp)
+        journal["replay_rows_dropped_as_holdout"] = n_dropped
+        if leaked(rows, holdout):
+            raise SystemExit("ABORT: a held-out wording reached the training rows - refusing to train and then 'prove' it")
         ok, reasons = rs.check_heldout_guard({"held_out_guard": {"result": "pass", "collisions": 0}},
                                              [r["text"] for r in rows], rs.frozen_corpus_texts(rs.FROZEN_CORPUS))
         if not ok:
@@ -809,28 +833,60 @@ def adopt_generation(rec: dict, *, stamp: str, cand_gguf: Path, run_dir: Path, i
     work dir (never deleted - the lineage rule), the ledger names it served and the old one previous (instant rollback), and the
     proposals it learned from move to applied."""
     gen = f"g{stamp}"
-    if ledger.tombstoned(rec.get("examples") or []):
-        # the gate's forget check is a snapshot; a forget that landed since must still stop the swap
+    lkg = rs.ARCHIVE_DIR / f"lkg_{stamp}_{rs.SERVED_GGUF.name}"          # the name router_selftrain.deploy archives the outgoing model as
+    gdir = ledger.root() / "generations" / gen
+
+    # 1. RESERVE, atomically with the forget check: the record goes in as "adopting" UNDER the ledger lock, so a forget that lands at
+    #    any point after this flags it (router_retrain_ledger.forget treats "adopting" as served) instead of missing it.
+    reserved = {"ok": False}
+
+    def _reserve(d: dict) -> None:
+        if ledger.tombstoned(rec.get("examples") or [], d):
+            return
+        rec.update(status="adopting", gen=gen, lkg=str(lkg))
+        d["runs"].append(dict(rec))
+        reserved["ok"] = True
+    ledger.update(_reserve)
+    if not reserved["ok"]:
         rec.update(status="rejected", outcome="not adopted: an example this run used was forgotten just before the swap")
         _record(rec)
         return
-    rc = rs.deploy(cand_gguf, stamp, inc_live, journal)
-    if rc != 0:
-        rec.update(status="rolled_back_at_deploy", outcome="post-deploy check failed: auto-rolled back to the last-known-good")
-        _record(rec)
-        return
-    gdir = ledger.root() / "generations" / gen
-    gdir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(run_dir), str(gdir))
-    shutil.copy2(cand_gguf, gdir / cand_gguf.name)
-    rec.update(status="adopted", gen=gen, merged=str(gdir / "merged"), gguf=str(gdir / cand_gguf.name),
-               lkg=(journal.get("deploy") or {}).get("last_known_good"), outcome="adopted")
 
-    def _serve(d: dict) -> None:
-        _strike_forgotten(d, rec)
-        d["runs"].append(rec)
-        d["previous"], d["served"] = d.get("served"), gen
-    ledger.update(_serve)
+    # 2. a DURABLE marker before the swap: --recover (and the unit's ExecStopPost) rolls back a publication that never committed
+    _write_private(adopt_marker(), json.dumps({"gen": gen, "stamp": stamp, "lkg": str(lkg), "gdir": str(gdir)}))
+    try:
+        rc = rs.deploy(cand_gguf, stamp, inc_live, journal)
+        if rc != 0:                                               # deploy already rolled back and verified (or says it could not)
+            _settle(gen, "rolled_back_at_deploy", "post-deploy check failed: auto-rolled back to the last-known-good")
+            rec.update(status="rolled_back_at_deploy")
+            adopt_marker().unlink(missing_ok=True)
+            return
+        # 3. PUBLISH: everything below commits together or the swap is undone
+        gdir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(run_dir), str(gdir))
+        shutil.copy2(cand_gguf, gdir / cand_gguf.name)
+        committed = {"ok": False}
+
+        def _commit(d: dict) -> None:
+            r = next((x for x in d["runs"] if x.get("gen") == gen and x.get("status") == "adopting"), None)
+            if r is None or r.get("needs_retrain"):
+                return                                           # a forget landed during the swap: it must not stay served
+            r.update(status="adopted", merged=str(gdir / "merged"), gguf=str(gdir / cand_gguf.name), outcome="adopted")
+            d["previous"], d["served"] = d.get("served"), gen
+            committed["ok"] = True
+        ledger.update(_commit)
+        if not committed["ok"]:
+            raise _Unpublish("a forget landed during the swap")
+    except BaseException as exc:
+        restored = _unpublish(gen, lkg, gdir, why=f"publication failed: {exc!r}"[:200])
+        rec.update(status="rolled_back_at_publish")
+        if restored:
+            adopt_marker().unlink(missing_ok=True)
+        if isinstance(exc, _Unpublish):
+            return
+        raise
+    adopt_marker().unlink(missing_ok=True)
+    rec.update(status="adopted", merged=str(gdir / "merged"), gguf=str(gdir / cand_gguf.name), outcome="adopted")
     try:
         applied = _apply_proposals(gen, train)
     except Exception as exc:  # noqa: BLE001 - the model is live and recorded; a proposal bookkeeping failure is reported, not fatal
@@ -842,6 +898,33 @@ def adopt_generation(rec: dict, *, stamp: str, cand_gguf: Path, run_dir: Path, i
                 r["applied"] = applied
     ledger.update(_note)
     rec["applied"] = applied
+
+
+class _Unpublish(Exception):
+    """The swap happened but must not stand (a forget landed during it)."""
+
+
+def adopt_marker() -> Path:
+    return ledger.root() / "adopt_in_progress.json"
+
+
+def _settle(gen: str, status: str, outcome: str) -> None:
+    def _f(d: dict) -> None:
+        for r in d["runs"]:
+            if r.get("gen") == gen and r.get("status") == "adopting":
+                r.update(status=status, outcome=outcome)
+    ledger.update(_f)
+
+
+def _unpublish(gen: str, lkg: Path, gdir: Path, *, why: str) -> bool:
+    """Undo a swap that did not commit: the outgoing model (its LKG archive) goes back - only if the swap got that far - the half-made
+    generation dir goes (it never became a generation; it may hold a forgotten turn), and the record says so. True when the sidecar
+    is provably back on the previous model (or was never swapped)."""
+    ok = rs.restore_lkg(lkg) if lkg.exists() else True
+    shutil.rmtree(gdir, ignore_errors=True)
+    _settle(gen, "rolled_back_at_publish", why + ("" if ok else " - RESTORE DID NOT VERIFY, --recover retries"))
+    log(f"UNPUBLISHED {gen}: {why}; previous model {'restored' if ok else 'NOT restored'}")
+    return ok
 
 
 def _prune_work(keep: int = 1) -> None:
@@ -892,7 +975,30 @@ def recover() -> int:
             rc = 1
     if rs.DEPLOY_MARKER.exists():
         rc = max(rc, rs.recover())
+    if adopt_marker().exists():
+        rc = max(rc, _recover_adoption())
     return rc
+
+
+def _recover_adoption() -> int:
+    """A publication was interrupted (killed after the swap, before the ledger commit): a COMMITTED one just loses its marker; anything
+    else is rolled back to the previous model."""
+    try:
+        m = json.loads(adopt_marker().read_text())
+        gen, lkg, gdir = str(m["gen"]), Path(m["lkg"]), Path(m["gdir"])
+    except (OSError, ValueError, KeyError) as exc:
+        log(f"OPERATOR ACTION REQUIRED: unreadable adoption marker ({type(exc).__name__}); the sidecar was NOT modified")
+        return 1
+    data = ledger.load()
+    r = next((x for x in data.get("runs") or [] if x.get("gen") == gen), None)
+    if data.get("served") == gen and r is not None and r.get("status") == "adopted":
+        adopt_marker().unlink(missing_ok=True)
+        log(f"adoption of {gen} had committed - nothing to undo")
+        return 0
+    if not _unpublish(gen, lkg, gdir, why="interrupted before the ledger commit"):
+        return 1
+    adopt_marker().unlink(missing_ok=True)
+    return 0
 
 
 def _install_signal_handlers() -> None:
@@ -937,7 +1043,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         except OSError:
             print("ROUTER_RETRAIN another run holds the lock")
             return 0
-        if brain_marker().exists() or rs.DEPLOY_MARKER.exists():
+        if brain_marker().exists() or rs.DEPLOY_MARKER.exists() or adopt_marker().exists():
             log("a previous run was interrupted - recovering first")
             if recover() != 0:
                 raise SystemExit("ABORT: could not recover from an interrupted run")

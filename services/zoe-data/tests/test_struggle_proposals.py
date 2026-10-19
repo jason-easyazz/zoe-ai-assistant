@@ -1060,3 +1060,18 @@ def test_a_retrain_ledger_that_cannot_be_updated_fails_the_forget_closed(env, mo
     with pytest.raises(ValueError):
         run(sd.erase_entity(A, "Quentin"))
     assert len(env.db.rows("SELECT * FROM struggle_events")) == 3                     # not confirmed, nothing half-done: a retry finds them
+
+
+def test_a_turn_forgotten_before_any_retrain_run_is_tombstoned_by_its_wording(env, monkeypatch, tmp_path):
+    """Codex #4 on #2128: no retrain run has recorded these turns yet (no ledger at all). The forget must still tombstone the failed
+    turn's WORDING - read from the struggle row while it still exists - so the same words under a new event id never re-enter."""
+    import router_retrain_ledger as rl
+
+    monkeypatch.setenv("ZOE_ROUTER_RETRAIN_DIR", str(tmp_path / "rr"))
+    assert not rl.root().exists()
+    store(*[event(i, user=A, ts=NOW - i * DAY, summary=f"call quentin about {MARK} -> no I said quentin", prev=f"bad-{i}",
+                  fix=sig.FIX_ROUTER_TRAINING) for i in range(2)])
+    assert run(sd.erase_entity(A, "Quentin")) == 2
+    t = rl.load()["tombstones"]
+    assert rl.text_key(f"call quentin about {MARK}") in t["text_keys"]               # the FAILED turn's words, as the seam hands them out
+    assert {"e0", "e1"} <= set(t["event_ids"]) and MARK not in json.dumps(rl.load())
