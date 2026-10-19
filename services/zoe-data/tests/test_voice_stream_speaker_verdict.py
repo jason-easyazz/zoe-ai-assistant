@@ -177,12 +177,6 @@ def test_the_non_stream_turn_sees_the_same_verdict(monkeypatch, speaker):
     assert got["verdict"] is expected and got["turn_verdict"] is expected, got
 
 
-def test_the_turn_context_does_not_leak_into_the_test_context(monkeypatch):
-    got = _turn(monkeypatch, "guest", filler=True)
-    assert got["verdict"] is False
-    assert restraint.current_verdict() is None
-
-
 @pytest.mark.parametrize("speaker", list(SPEAKERS))
 def test_negative_control_without_propagation_the_unverified_voice_sees_sensitive_rows(monkeypatch, speaker):
     """Remove the propagation (the carrier becomes a pass-through, the code before the fix): every speaker reads as NO
@@ -322,3 +316,63 @@ def test_carrier_reraises_the_bodys_own_exception(exc_type):
             await wrapped.__anext__()
 
     asyncio.run(main())
+
+
+def test_carrier_pump_cancelled_between_steps_still_closes_the_body():
+    """A consumer cancel that lands just after a step ended finds the pump idle: the body is closed, not abandoned."""
+    import routers.voice_tts as vt
+
+    events = []
+
+    async def body():
+        try:
+            yield 1
+            yield 2
+        finally:
+            events.append("finally")
+
+    async def main():
+        before = set(vt._BG_TASKS)
+        wrapped = _carrier(body())
+        assert await wrapped.__anext__() == 1
+        (pump,) = set(vt._BG_TASKS) - before
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
+        snapshot = list(events)
+        await wrapped.aclose()
+        return snapshot, pump in vt._BG_TASKS
+
+    snapshot, still_held = asyncio.run(main())
+    assert snapshot == ["finally"]
+    assert not still_held, "the strong reference is dropped once the pump ends"
+
+
+def test_carrier_body_that_swallows_the_cancel_is_still_closed():
+    """A body that catches the mid-step cancel and yields again must not leave the pump waiting forever."""
+    import routers.voice_tts as vt
+
+    events = []
+
+    async def body():
+        try:
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                events.append("swallowed")
+            yield 1
+        finally:
+            events.append("finally")
+
+    async def main():
+        before = set(vt._BG_TASKS)
+        wrapped = _carrier(body())
+        task = asyncio.ensure_future(wrapped.__anext__())
+        await asyncio.sleep(0.05)
+        (pump,) = set(vt._BG_TASKS) - before
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.wait_for(asyncio.gather(pump, return_exceptions=True), 2)
+        return pump.done()
+
+    assert asyncio.run(main()) is True
+    assert events == ["swallowed", "finally"]

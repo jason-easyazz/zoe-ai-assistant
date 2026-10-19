@@ -163,7 +163,13 @@ async def _drive_in_context(agen, ctx: contextvars.Context):
     async def _pump() -> None:
         nonlocal busy
         while True:
-            if not await want.get():
+            try:
+                more = await want.get()
+            except asyncio.CancelledError:
+                # cancelled between steps (a consumer cancel that raced the step's end): the body still gets its close
+                await agen.aclose()
+                raise
+            if not more:
                 await agen.aclose()
                 return
             busy = True
@@ -182,6 +188,8 @@ async def _drive_in_context(agen, ctx: contextvars.Context):
             got.put_nowait((True, item))
 
     pump = ctx.run(asyncio.get_running_loop().create_task, _pump())
+    _BG_TASKS.add(pump)   # a strong reference: a cancelled consumer does not wait for the body's finally (below)
+    pump.add_done_callback(_BG_TASKS.discard)
     try:
         while True:
             want.put_nowait(True)
@@ -195,6 +203,7 @@ async def _drive_in_context(agen, ctx: contextvars.Context):
         if not pump.done():
             if busy:
                 pump.cancel()
+                want.put_nowait(False)   # a body that swallows the cancel and yields again is still closed, not left waiting
             else:
                 want.put_nowait(False)
                 try:
@@ -202,7 +211,7 @@ async def _drive_in_context(agen, ctx: contextvars.Context):
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 - a failing finally of the body must not mask the close
-                    logger.debug("voice stream body close failed: %s", exc)
+                    logger.warning("voice stream body close failed: %s", exc)
 
 
 # ── Voice session continuity ───────────────────────────────────────────────
