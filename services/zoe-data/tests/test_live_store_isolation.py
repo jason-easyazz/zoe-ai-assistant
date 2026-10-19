@@ -73,3 +73,12 @@ def test_configure_logging_with_no_arguments_lands_in_the_pin():
                 h.close()
         root.handlers[:] = saved
         root.setLevel(level)
+
+
+def test_router_retrain_ledger_is_pinned_off_home():
+    """Every forget / user delete reaches the Phase 3 retrain ledger; a test's forget must never edit the live one."""
+    path = _pinned("ZOE_ROUTER_RETRAIN_DIR")
+    import router_retrain_ledger
+
+    assert router_retrain_ledger.root().resolve() == path
+    assert path != (_HOME / ".zoe" / "router_retrain").resolve()

@@ -1,12 +1,9 @@
-"""CI wrapper: run the LiveKit voice-page session node harness (the REAL helper
-block extracted from dist/voice.html and dist/touch/voice.html against stub
-localStorage/fetch).
+"""CI wrapper: run the dist/voice.html node harness (the REAL page code against stub localStorage/fetch/audio).
 
-The server-side gate is deterministic and tested in
-`test_livekit_media_authz.py`; this is the OTHER half of the acceptance
-constraint — the panel and the desktop page must still get a working voice turn
-once the endpoints stop answering anonymous callers. It pins the guest mint, the
-single bounded retry, and the no-silent-downgrade rule.
+The server-side gate is deterministic and tested in `test_livekit_media_authz.py`; this is the OTHER half: the page still
+gets a working voice turn. It pins the LiveKit mode's guest mint, single bounded retry and no-silent-downgrade rule, and the
+local push-to-talk lane (A4, 2026-10-19): one 16 kHz mono PCM WAV per turn to POST /api/voice/turn, members only, and the
+retired /ws/voice/ socket never opened.
 """
 import os
 import shutil

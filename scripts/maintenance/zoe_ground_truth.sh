@@ -160,6 +160,33 @@ elif [ "$_gt_subs" = "0" ]; then
   esac
 else ok "${_gt_panel}: ${_gt_subs} push subscriber(s) connected"; fi
 
+# ── Panel voice daemon: WHICH build runs on the panel (deep dive 2 V-3) ──────
+# /health carries the build deploy-pi-voice.sh shipped (BUILD.json), the sha256 of
+# the daemon file it loaded, and the wake model's sha256 (models.lock pins it).
+# Compared with this checkout's daemon file: "differs" means the panel runs other
+# code than main - an unshipped merge, or a hand edit on the Pi. Bounded (-m 2),
+# read-only; the Pi binds :7777 for exactly this read. ZOE_GT_PANEL_HOST overrides the ssh alias.
+hdr "PANEL VOICE DAEMON"
+# The host comes from the operator's ssh alias (ssh -G resolves it locally, no connection), not a committed address.
+_gt_ph="${ZOE_GT_PANEL_HOST:-$(timeout 2 ssh -G zoe-pi 2>/dev/null | awk '/^hostname /{print $2; exit}')}"
+_gt_ph="${_gt_ph:-zoe-pi}"
+_gt_vh=$(curl -s -m 2 "http://${_gt_ph}:7777/health" 2>/dev/null)
+_gt_vline=$(printf '%s' "$_gt_vh" | python3 -c '
+import hashlib, json, os, sys
+d = json.load(sys.stdin)
+p = os.path.expanduser("~/assistant/scripts/setup/zoe_voice_daemon.py")
+mine = hashlib.sha256(open(p, "rb").read()).hexdigest() if os.path.exists(p) else ""
+code = d.get("code_sha256", "")
+same = "(older daemon: no code sha in /health)" if not code else ("== checkout" if code == mine else "DIFFERS from checkout")
+print("%s|build %s, code %s %s, wake model %s" % ("ok" if code and code == mine else "bad", d.get("build", "?"),
+      code[:12] or "?", same, (d.get("wake_model_sha256") or "?")[:12]))
+' 2>/dev/null)
+case "$_gt_vline" in
+  ok\|*) ok "${_gt_ph}: ${_gt_vline#ok|}" ;;
+  bad\|*) bad "${_gt_ph}: ${_gt_vline#bad|}" ;;
+  *) dim "panel /health unreadable at ${_gt_ph}:7777 (panel off, or the daemon down)" ;;
+esac
+
 # ── Load-bearing tables: row count + freshness (empty+documented-live=suspect)
 # Rendered from the parallel prefetch above. Count and freshness are separate
 # reads on purpose: the row count is the load-bearing signal (empty +
