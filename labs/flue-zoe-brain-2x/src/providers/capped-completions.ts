@@ -379,7 +379,7 @@ function cappedStream(
   bindIdentityForRound(context, options?.signal);
   return streamOpenAICompletions(
     model as Model<'openai-completions'>,
-    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal)),
+    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt)),
     withBrainTemperature(options),
   );
 }
@@ -392,7 +392,7 @@ function cappedStreamSimple(
   bindIdentityForRound(context, options?.signal);
   return streamSimpleOpenAICompletions(
     model as Model<'openai-completions'>,
-    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal)),
+    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt)),
     withBrainTemperature(options),
   );
 }

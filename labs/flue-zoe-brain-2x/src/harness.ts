@@ -544,18 +544,59 @@ export function initHarness(): Harness {
 const turnHarness = new WeakMap<AbortSignal, Harness>();
 
 /**
+ * The harnesses `Zoe()` rendered recently (newest last). `Zoe()` has no handle on the turn's
+ * AbortSignal, so the render cannot bind the harness itself; it leaves the object here and the
+ * turn's first model round claims it by matching the instructions in the system prompt it was
+ * handed. A handful is plenty: only a reload landing between a render and its first round makes the
+ * render and the active harness differ. Flag unset: nothing is ever stored.
+ */
+const RENDER_MEMORY = 4;
+const rendered: Harness[] = [];
+
+/**
+ * The harness `Zoe()` renders the turn's system prompt from: the active one, remembered so the
+ * turn's first round binds THIS object even when a SIGHUP lands between the render and that round
+ * (otherwise the new overlay's manner, tool guidance and recall shape ride under the old render).
+ */
+export function harnessForRender(): Harness {
+  const h = activeHarness();
+  if (!h.enabled) return h;
+  const at = rendered.indexOf(h);
+  if (at !== -1) rendered.splice(at, 1);
+  rendered.push(h);
+  if (rendered.length > RENDER_MEMORY) rendered.shift();
+  return h;
+}
+
+/**
+ * The newest remembered render whose instructions sit in `systemPrompt`, else null. (Two harnesses
+ * with byte-identical instructions are indistinguishable here; the newest wins, and the prompt is
+ * the same either way.)
+ */
+function renderedInto(systemPrompt: string | undefined): Harness | null {
+  if (!systemPrompt) return null;
+  for (let i = rendered.length - 1; i >= 0; i--) {
+    if (systemPrompt.includes(rendered[i].instructions)) return rendered[i];
+  }
+  return null;
+}
+
+/**
  * The harness a TURN runs under, bound to the turn's AbortSignal on its first model round (the same
- * keying as the acting identity, request-identity.ts). A SIGHUP that lands mid-turn therefore never
- * changes a turn's later tool rounds: the reload takes effect from the next turn. Flag unset (or no
+ * keying as the acting identity, request-identity.ts). It is the harness the turn's system prompt
+ * was RENDERED from when `systemPrompt` identifies it (see `harnessForRender`), else the active
+ * one. A SIGHUP that lands mid-turn therefore never changes a turn's later tool rounds, nor mixes
+ * two versions into the first: the reload takes effect from the next turn. Flag unset (or no
  * signal): the active harness, nothing stored.
  */
-export function harnessForTurn(signal?: AbortSignal): Harness {
+export function harnessForTurn(signal?: AbortSignal, systemPrompt?: string): Harness {
   const now = activeHarness();
   if (!now.enabled || !signal) return now;
   const bound = turnHarness.get(signal);
   if (bound) return bound;
-  turnHarness.set(signal, now);
-  return now;
+  const turn = renderedInto(systemPrompt) ?? now;
+  turnHarness.set(signal, turn);
+  return turn;
 }
 
 /**
@@ -574,6 +615,7 @@ export function withTurnInstructions<C extends { systemPrompt?: string }>(contex
 /** Test seam: forget the active harness so the next read reloads from the environment. */
 export function resetHarnessForTests(): void {
   active = null;
+  rendered.length = 0;
 }
 
 /** The `/health` body field; only called when the flag is set. */

@@ -372,6 +372,42 @@ describe('one harness per turn: a mid-turn reload never moves a later round', ()
     }
   });
 
+  it('a reload between the render and the first round binds the RENDERED harness (no mixed turn)', () => {
+    const v1 = rendered();
+    const v2Manner = 'Be brief and kind.\n';
+    const v2 = overlay({ 'doctrines/voice-delivery.md': 'Two short sentences at most.', 'manner.md': v2Manner });
+    process.env.ZOE_BRAIN_HARNESS_DIR = v1;
+    harness.resetHarnessForTests();
+    try {
+      // Zoe() renders the turn's instructions from v1 ...
+      const renderedFrom = harness.harnessForRender();
+      const systemPrompt = renderedFrom.instructions;
+      // ... a SIGHUP lands before the first provider round ...
+      process.env.ZOE_BRAIN_HARNESS_DIR = v2;
+      harness.reloadHarness(() => {}, () => {});
+      const now = harness.activeHarness();
+      assert.notEqual(now, renderedFrom);
+      assert.notEqual(now.instructions, renderedFrom.instructions);
+      // ... so the turn binds v1 (not the newly active v2), and the whole turn is v1.
+      const signal = new AbortController().signal;
+      const turn = harness.harnessForTurn(signal, systemPrompt);
+      assert.equal(turn, renderedFrom, 'bound the harness the prompt was rendered from');
+      assert.equal(harness.harnessForTurn(signal), turn, 'later rounds keep it');
+      const sent = applyPolicies({ systemPrompt, messages: [user('hi')], tools: [] } as never, '', turn) as { systemPrompt: string };
+      assert.equal(sent.systemPrompt, systemPrompt, 'instructions stay v1');
+      assert.equal(harness.harnessManner(harness.COMPILED_MANNER_EN, turn), harness.COMPILED_MANNER_EN, 'manner is v1 too');
+      assert.equal(harness.harnessManner(harness.COMPILED_MANNER_EN, now), 'Be brief and kind.', 'control: v2 differs');
+      // The next turn renders after the reload and binds v2.
+      const next = harness.harnessForRender();
+      assert.equal(harness.harnessForTurn(new AbortController().signal, next.instructions), now);
+      // v1's first round arriving AFTER another turn rendered v2 still gets v1.
+      assert.equal(harness.harnessForTurn(new AbortController().signal, systemPrompt), renderedFrom);
+    } finally {
+      delete process.env.ZOE_BRAIN_HARNESS_DIR;
+      harness.resetHarnessForTests();
+    }
+  });
+
   it('flag unset: nothing is bound and nothing is swapped', () => {
     const signal = new AbortController().signal;
     assert.equal(harness.harnessForTurn(signal), harness.COMPILED_HARNESS);
