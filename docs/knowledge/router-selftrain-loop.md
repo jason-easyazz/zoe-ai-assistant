@@ -19,10 +19,10 @@ worse model is a loop that will eventually do so.
   rocks — are never touched.
 - **NOT the subject — stage 1.** The loop never reads, retrains, or promotes the SetFit
   head `services/zoe-data/models/router_head_mlp.joblib`. The driver has **no reference
-  to a router/SetFit head, an MLP, or a `.joblib`** in its 1099 lines (a case-insensitive
-  `head` grep matches exactly one incidental word — "heading" at `:133` — and nothing
+  to a router/SetFit head, an MLP, or a `.joblib`** in its 1154 lines (a case-insensitive
+  `head` grep matches exactly one incidental word — "heading" at `:138` — and nothing
   else); the only model **artifact** it promotes in production is the stage-2
-  `SERVED_GGUF` (`router_selftrain.py:98`, written at `:884-886`) under
+  `SERVED_GGUF` (`router_selftrain.py:98`, written at `:939-941`) under
   `~/models/functiongemma-router/`. Its other production writes — rollback restores,
   deployment markers, provenance, last-known-good archives — land in that same
   directory, **outside the repo** — so no ratchet verdict ever reaches git. Stage-1 heads are **hand-committed** (`git log -- services/zoe-data/
@@ -31,7 +31,9 @@ worse model is a loop that will eventually do so.
   glob in `VOICE_PATH_PATTERNS`. Assuming the ratchet covered stage 1 left that
   checkpoint ungated for two releases.
 - **Related:** [Two-stage router rollout](two-stage-router-rollout.md) ·
-  [Voice pipeline](voice-pipeline.md) · [Merge & deploy discipline](merge-and-deploy.md)
+  [Voice pipeline](voice-pipeline.md) · [Merge & deploy discipline](merge-and-deploy.md) ·
+  the struggle-fed retrain that reuses this ratchet / deploy / rollback with a stricter
+  per-case gate on REAL failed turns: [struggle detector → Phase 3](../architecture/struggle-detector.md)
 
 ## The ratchet (the whole point)
 
@@ -85,6 +87,27 @@ Two consequences, both baked into the loop:
 
 This is why the job is scheduled for a quiet window (default Sat 01:00), and why
 pre-flight refuses to start below ~1.6 GB MemAvailable.
+
+### The replay gate replays the CANDIDATE, into its own artifact
+
+Until 2026-10-19 the gate ran the probe against the live service with nothing
+pointing it at the candidate, so the replay exercised the **incumbent** sidecar
+and passed any candidate. `replay_gate(journal, candidate_gguf=...)` now serves
+the candidate on the scratch port for the length of the probe and sets
+`ZOE_ROUTER_SIDECAR_URL` for it (the replay's `.env` loader only `setdefault`s,
+and `router_two_stage` reads the URL per call). Results go to
+`data/router_selftrain/replay/voice_regression_candidate.json` (or the caller's
+path), never the shared voice-gate slot `~/.cache/zoe/voice_regression_last.json`:
+that artifact is the deploy gate's evidence for the code being deployed, and its
+non-pass streak drives an owner alert - a rejected candidate must touch neither.
+A candidate sidecar that cannot start is "did not run".
+
+### The trainer runs on its own interpreter
+
+zoe-data (which schedules this job) moved to the py312 venv, which has no
+`peft` / `datasets`; `train_lora.py` under `sys.executable` would die at import.
+The trainer now runs on `ZOE_ROUTER_TRAIN_PYTHON` (default `/usr/bin/python3`,
+which carries torch + transformers + peft + datasets, measured 2026-10-19).
 
 ### A skipped replay gate is NOT a pass
 
@@ -210,6 +233,7 @@ systemctl --user restart zoe-data.service
 | `ZOE_ROUTER_WARM_START` | `labs/functiongemma-finetune/runs/functok-r2/merged` | production lineage checkpoint |
 | `ZOE_ROUTER_SCRATCH_PORT` | `11437` | candidate-eval sidecar (never :11436) |
 | `ZOE_ROUTER_ARCHIVE_KEEP` | `3` | last-known-good GGUFs retained (never 0) |
+| `ZOE_ROUTER_TRAIN_PYTHON` | `/usr/bin/python3` | the trainer's interpreter (needs torch + transformers + peft + datasets) |
 
 ## Crash recovery (`--recover`)
 

@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 import panel_kiosk_credential as kiosk
+import relay_ingress
 from database import get_db
 from routers.panel_auth import _hash_token, lookup_device_token
 
@@ -85,6 +86,11 @@ async def kiosk_enter(request: Request, db=Depends(get_db)):
         return response
     if not await _panel_is_active(db, panel_id):
         logger.warning("panel_kiosk: kiosk-enter refused - panel %s is not active", panel_id)
+        return response
+    if not await relay_ingress.cert_matches_panel(request, panel_id):
+        # Over the relay the ticket is spent by the browser holding THIS panel's client certificate: another panel's certificate
+        # (or an unbound one) must not turn a ticket into a credential.
+        logger.warning("panel_kiosk: kiosk-enter refused - the relay client certificate is not bound to panel %s", panel_id)
         return response
     response.set_cookie(
         kiosk.COOKIE_NAME,
