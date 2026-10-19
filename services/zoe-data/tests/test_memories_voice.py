@@ -541,7 +541,7 @@ def test_a_correction_is_not_acknowledged_while_a_twin_still_holds_the_old_value
     put(env, "My bike lives in the shed behind the garage.")
     ra, rb = row_id(env, "keep my bike"), row_id(env, "bike lives")
 
-    async def twins(user_id, ref, *, svc=None):
+    async def twins(user_id, ref, *, svc=None, **_kw):
         b = await env.svc.get(rb)
         return [b] if ref.id == ra and b is not None and (b.metadata or {}).get("status", "approved") == "approved" else []
 
@@ -573,7 +573,7 @@ def test_a_tapped_correction_is_not_acknowledged_while_a_twin_holds_the_old_valu
     put(env, "Swimming lessons are on Friday at 9 am")
     ra, rb = row_id(env, "Swimming is"), row_id(env, "Swimming lessons")
 
-    async def twins(user_id, ref, *, svc=None):
+    async def twins(user_id, ref, *, svc=None, **_kw):
         b = await env.svc.get(rb)
         return [b] if ref.id == ra and b is not None and (b.metadata or {}).get("status", "approved") == "approved" else []
 
@@ -594,6 +594,33 @@ def test_a_tapped_correction_is_not_acknowledged_while_a_twin_holds_the_old_valu
     assert reply.startswith("Fixed"), reply
     assert not any("Friday" in t for t in approved(env)), approved(env)
     assert "Swimming is on Saturday at 9" in approved(env)
+
+
+def test_a_failed_twin_lookup_stops_the_write_before_it_happens(env, monkeypatch):
+    # Codex P1 on #2144: twins_of swallowed a transient list_by_status failure and returned [], so a correction (or forget) went
+    # ahead, retired nothing and reported success while an approved twin still recalled the old value. Now the write is not made.
+    put(env, "Swimming is on Friday at 9")
+    put(env, "Swimming lessons are on Friday at 9 am")
+    ra = row_id(env, "Swimming is")
+    real_list, down = env.svc.list_by_status, {"on": True}
+
+    async def list_by_status(*a, **kw):
+        if down["on"]:
+            raise RuntimeError("store hiccup")
+        return await real_list(*a, **kw)
+
+    monkeypatch.setattr(env.svc, "list_by_status", list_by_status)
+    with pytest.raises(RuntimeError):
+        run(memory_space.correct_row(ME, ra, "Swimming is on Saturday at 9"))
+    with pytest.raises(RuntimeError):
+        run(memory_space.forget_row(ME, ra))
+    assert env.col.rows[ra][1]["status"] == "approved", "nothing was written while the twins could not be looked up"
+    mv.tap(PANEL, ME, ra, "Swimming is on Friday at 9")
+    assert say("it's on Saturday", ME) == pa.STORE_DOWN_REPLY          # the tapped path is strict too, and stays armed
+    assert env.col.rows[ra][1]["status"] == "approved"
+    down["on"] = False
+    assert say("it's on Saturday", ME).startswith("Fixed")             # the same words, store back: the whole job
+    assert not any("Friday" in t for t in approved(env)), approved(env)
 
 
 def test_a_child_whose_users_mirror_says_member_is_still_locked(env):

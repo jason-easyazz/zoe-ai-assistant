@@ -1269,7 +1269,7 @@ async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "m
             mp.mark_explained(user_id, exp.row_id, text=exp.text, quote=exp.quote, awaiting_fix=True, now=now)
             return FIX_NEEDS_SENTENCE
         old_ref = await asyncio.wait_for(svc.get(exp.row_id), READ_BUDGET_S)
-        twins = await twins_of(user_id, old_ref, svc=svc) if old_ref is not None else []
+        twins = await twins_of(user_id, old_ref, svc=svc, strict=strict_twins) if old_ref is not None else []
         await _speculation_barrier()
         res = await correction_apply.apply_row_correction(user_id, exp.row_id, new, utterance=utterance, session_id=session_id,
                                                           svc=svc)
@@ -1312,10 +1312,11 @@ _TWIN_WINDOW_S = 300.0
 _TWIN_OVERLAP = 0.5
 
 
-async def twins_of(user_id: str, ref: Any, *, svc: Any = None) -> list:
+async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = False) -> list:
     """The other approved rows ONE utterance left behind (the extractor's twin and the digest's): same owner, same evidence
     excerpt or turn id, or captured within five minutes of it with most of the same content words - so "forget it" does not leave
-    the fact standing in a sibling. Never raises."""
+    the fact standing in a sibling. Never raises - unless ``strict`` (a write that must not go ahead blind: forget / correct), which
+    lets a failed lookup propagate so the caller can stop BEFORE the write instead of leaving a twin behind an empty list."""
     try:
         svc = svc or _svc_default()
         meta = ref.metadata or {}
@@ -1348,6 +1349,8 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None) -> list:
                 out.append(r)
         return out
     except Exception as exc:  # noqa: BLE001
+        if strict:
+            raise
         logger.debug("provenance_answers: twin lookup skipped (%s)", type(exc).__name__)
         return []
 
