@@ -113,7 +113,7 @@ import {
 import { elideStaleBlocks, elideStaleBlocksEnabled } from '../context-blocks.ts';
 import { cachedUserModelSuffix, turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
 import { markTurnUntrusted, untrustedSourceInMessages } from '../untrusted-content.ts';
-import { activeHarness, harnessManner, withToolGuidance } from '../harness.ts';
+import { activeHarness, harnessForTurn, harnessManner, withToolGuidance, withTurnInstructions, type Harness } from '../harness.ts';
 
 /** Provider id the sidecar registers; the agent binds to `zoe/local`. */
 export const ZOE_PROVIDER_ID = 'zoe';
@@ -220,7 +220,12 @@ export function applyCap(context: Context): Context {
  * windowing had quietly broken that. Passing the full basis restores it AND
  * makes the tool block a stable prompt prefix.
  */
-export function applyPolicies(context: Context, userModelSuffix = ''): Context {
+export function applyPolicies(context: Context, userModelSuffix = '', turnHarness?: Harness): Context {
+  // The harness overlay (src/harness.ts, flag-dark ZOE_BRAIN_HARNESS_DIR): the TURN's harness (bound
+  // on its first round, so a mid-turn reload never moves a later round), or the active one. With the
+  // flag unset it is the compiled-in harness and every application below is identity.
+  const harness = turnHarness ?? activeHarness();
+  context = withTurnInstructions(context, harness);
   // Strip the control envelopes BEFORE any other policy so the model — and every
   // downstream transform — only ever sees the human-authored message text. The
   // replay marker rides AHEAD of the identity line on the wire (both parsers are
@@ -234,9 +239,6 @@ export function applyPolicies(context: Context, userModelSuffix = ''): Context {
   const persona = forwardedPersonaFromMessages(unwrapped);
   // The manner block (src/manner.ts) rides between the persona and identity lines; same read-then-strip.
   const afterPersona = stripPersonaEnvelope(unwrapped);
-  // The harness overlay (src/harness.ts, flag-dark ZOE_BRAIN_HARNESS_DIR) is read ONCE per round:
-  // with the flag unset it is the compiled-in harness and both applications below are identity.
-  const harness = activeHarness();
   // An overlay manner.md replaces only the English block zoe-data already chose to send.
   const manner = harnessManner(forwardedMannerFromMessages(afterPersona), harness);
   const clean = { ...context, messages: stripIdentityEnvelope(stripMannerEnvelope(afterPersona)) };
@@ -377,7 +379,7 @@ function cappedStream(
   bindIdentityForRound(context, options?.signal);
   return streamOpenAICompletions(
     model as Model<'openai-completions'>,
-    applyPolicies(context, turnUserModelSuffix(options?.signal)),
+    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal)),
     withBrainTemperature(options),
   );
 }
@@ -390,7 +392,7 @@ function cappedStreamSimple(
   bindIdentityForRound(context, options?.signal);
   return streamSimpleOpenAICompletions(
     model as Model<'openai-completions'>,
-    applyPolicies(context, turnUserModelSuffix(options?.signal)),
+    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal)),
     withBrainTemperature(options),
   );
 }

@@ -66,5 +66,12 @@ export const ZOE_PERSONA_KEEP = [KNOWS_YOU, '', HELP_IS].join('\n');
  */
 export const FLUE_ONLY_SOUL_PARAGRAPHS: readonly string[] = [RECALL];
 
+/**
+ * The soul's recall floor ("you do NOT know anything about the person from your own head ... call
+ * recall_memory FIRST"): the anti-fabrication anchor for personal facts. A harness overlay's soul.md
+ * must keep it verbatim as a whole paragraph (src/harness.ts), like the persona/identity opening.
+ */
+export const SOUL_RECALL_FLOOR = RECALL;
+
 /** The full soul: the persona paragraphs, then the capability paragraphs. */
 export const ZOE_SOUL = [ZOE_PERSONA_FIXED, '', EVERYDAY, '', RECALL].join('\n');

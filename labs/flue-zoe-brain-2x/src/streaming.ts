@@ -545,6 +545,8 @@ function openTurnStream(
   opts: TurnStreamOptions,
 ): TurnStream {
   const encoder = new TextEncoder();
+  // The harness in force when the turn opened: what its per-turn log line reports.
+  const openHarness = activeHarness();
   const state = newSeamAState();
   const pending: string[] = [];
   let wake: (() => void) | null = null;
@@ -607,9 +609,11 @@ function openTurnStream(
         + ` deltas=${textFrames} deduped=${earlyText?.deduped ?? 0}`
         + ` enabled=${earlyText ? 1 : 0}`
         + (earlyText?.diverged ? ` diverged=${earlyText.diverged}` : '')
-        // The harness overlay in force (src/harness.ts): label@overlay sha and each loaded file's
-        // sha256 prefix. '' with ZOE_BRAIN_HARNESS_DIR unset, so the line is byte-identical to today.
-        + activeHarness().logSuffix,
+        // The harness overlay this turn started under (src/harness.ts): label@overlay sha and each
+        // loaded file's sha256 prefix, plus a marker if a reload landed while it ran. '' with
+        // ZOE_BRAIN_HARNESS_DIR unset, so the line is byte-identical to today.
+        + openHarness.logSuffix
+        + (activeHarness() !== openHarness ? ' harness_reloaded_mid_turn=1' : ''),
       );
     } catch {
       /* logging must never break the stream */

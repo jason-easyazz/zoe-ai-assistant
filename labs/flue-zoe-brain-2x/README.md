@@ -383,7 +383,7 @@ overlay; it never edits code. Loader: `src/harness.ts`. Control: `scripts/harnes
 
 | Overlay file | Replaces | Rules |
 | --- | --- | --- |
-| `soul.md` | `ZOE_SOUL` | must OPEN with the code-held persona + identity paragraphs byte for byte |
+| `soul.md` | `ZOE_SOUL` | must OPEN with the code-held persona + identity paragraphs byte for byte and keep the recall floor paragraph (`SOUL_RECALL_FLOOR`) verbatim |
 | `doctrines/<slot>.md` | one doctrine; slots `voice-delivery`, `activator`, `in-session-context`, `recall-precedence`, `personal-recall`, `emotional-recall`, `emotional-capture` | `activator.md` must keep the code-derived group catalogue |
 | `manner.md` | zoe-data's ENGLISH manner block | applied only when zoe-data already sent that block (its flag on, an adult member) |
 | `tool-guidance.md` | tool DESCRIPTIONS, `## <tool>` sections | 21 tools; `web_search` and `memory_retire` are code-held |
@@ -399,6 +399,15 @@ untrusted-content fence and tool permissions stay in code: identity and prompt c
 are appended from code, last; schemas, groups, permissions and write gates are untouched; the
 policies that decide WHO gets a manner block, a persona or a write live in zoe-data.
 `test/harness_boundary.test.ts` fails if `OVERLAY_SCHEMA` ever gains a key touching them.
+The boundary is STRUCTURAL (no key reaches enforcing code; code-held text cannot be removed or
+moved), not a semantic filter on the words inside an allowed doctrine: prompt text steers, it never
+enforces, and judging what an edit says is the nightly loop's gate (held-out cells, control arms,
+the voice replay).
+
+**One harness per turn.** The provider binds the harness to the turn's AbortSignal on its first
+round, so a reload that lands mid-turn never changes that turn's later tool rounds; the turn's
+`FLUE_EARLY_TEXT` line reports the harness it opened under, plus ` harness_reloaded_mid_turn=1`
+if a reload landed while it ran.
 
 **Observability.** Each loaded file's sha256 is on `/health` (`harness.components`, plus
 `overlay_sha256` and `instructions_sha256`), and the per-turn `FLUE_EARLY_TEXT` line gains
@@ -408,9 +417,9 @@ policies that decide WHO gets a manner block, a persona or a write live in zoe-d
 `ZOE_BRAIN_HARNESS_DIR` points at `<root>/current`. `switch` validates the target (a refused
 overlay is never switched to), re-points the link atomically, appends `<root>/ledger.jsonl`
 (`ts`, `who`, `from`/`to`, both overlay sha256s, `reason`), then hot-reloads: SIGHUP to the unit's
-main pid and a `/health` poll until the new sha is reported. `revert` switches back to the latest
+main pid and a `/health` poll until the new sha is reported (the root's lock is held until then). `revert` switches back to the latest
 ledger line's `from` (refusing if the ledger and the link disagree). Measured on the built sidecar
-(scratch port, 2026-10-19): **signal → confirmed in 6–7 ms**; the whole `revert` command, node
+(scratch port, 2026-10-19): **signal → confirmed in 6–7.5 ms**; the whole `revert` command, node
 start included, **~0.95 s**; no restart, no dropped turn. The full-restart alternative is ~1.0 s
 to `/health` plus every in-flight turn. The signal is sent only when `/health` shows the brain
 was started WITH the flag (Node's default SIGHUP action is to exit).

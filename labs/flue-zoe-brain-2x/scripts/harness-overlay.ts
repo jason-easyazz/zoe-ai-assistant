@@ -136,7 +136,7 @@ export function readLedger(root: string): LedgerEntry[] {
     .map((l) => JSON.parse(l) as LedgerEntry);
 }
 
-function withLock<T>(root: string, fn: () => T): T {
+async function withLock<T>(root: string, fn: () => T | Promise<T>): Promise<T> {
   const path = join(root, LOCK);
   try {
     const st = statSync(path);
@@ -152,7 +152,7 @@ function withLock<T>(root: string, fn: () => T): T {
   }
   try {
     writeSync(fd, String(process.pid));
-    return fn();
+    return await fn();
   } finally {
     closeSync(fd);
     rmSync(path, { force: true });
@@ -291,7 +291,9 @@ async function doSwitch(
   opts: ReloadOptions,
 ): Promise<SwitchResult> {
   if (!who.trim()) throw new Error('--who is required');
-  const { from, fromSha, toSha } = withLock(root, () => {
+  // The lock is held through the reload and its confirmation, so a concurrent switch can never
+  // re-point `current` or signal while this one is still being confirmed.
+  return withLock(root, async () => {
     const harness = validateVersion(root, to); // a refused overlay is never switched to
     const from = currentVersion(root);
     const fromSha = shaOrNull(root, from);
@@ -306,11 +308,11 @@ async function doSwitch(
       to_sha256: harness.overlaySha256,
       ...(reason ? { reason } : {}),
     });
-    return { from, fromSha, toSha: harness.overlaySha256 };
+    const toSha = harness.overlaySha256;
+    const reload = await reloadBrain(root, toSha, opts);
+    appendLedger(root, { ts: new Date().toISOString(), action: 'reload', who, to, outcome: reload.outcome, ms: reload.ms });
+    return { from, to, fromSha, toSha, reload };
   });
-  const reload = await reloadBrain(root, toSha, opts);
-  appendLedger(root, { ts: new Date().toISOString(), action: 'reload', who, to, outcome: reload.outcome, ms: reload.ms });
-  return { from, to, fromSha, toSha, reload };
 }
 
 export async function switchTo(root: string, to: string, who: string, reason?: string, opts: ReloadOptions = {}): Promise<SwitchResult> {

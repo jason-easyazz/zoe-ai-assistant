@@ -260,7 +260,9 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   via `scripts/harness-overlay.ts`. **Contract:** the self-evolution loop edits only overlay
   versions and switches them only through that script; restraint, authority, forget, guest
   policy, identity, the untrusted-content fence and tool permissions stay in code —
-  `OVERLAY_SCHEMA` changes only by PR, with `test/harness_boundary.test.ts` edited beside it.
+  `OVERLAY_SCHEMA` changes only by PR, with `test/harness_boundary.test.ts` edited beside it;
+  an overlay soul must keep the persona opening and the recall floor verbatim; a turn keeps
+  the harness it started under (bound to its AbortSignal).
   `src/soul.ts` is the soul's source of truth: `services/zoe-core/SOUL.md` plus the declared
   flue-only paragraphs, pinned by `test/soul_source.test.ts`.
   Regression net (hand-run, not CI-wired): `npm test` — 39 `test/*.test.ts` files

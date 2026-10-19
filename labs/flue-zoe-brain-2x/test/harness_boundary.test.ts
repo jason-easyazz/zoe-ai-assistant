@@ -15,6 +15,11 @@
  *      registered tool is either guidance-overlayable or explicitly code-held;
  *   5. no overlay text can carry an untrusted-content fence marker.
  *
+ * What this does NOT claim: it does not judge the WORDS inside an allowed doctrine (a doctrine can
+ * say anything; prompt text steers, it never enforces). The boundary is structural - no key reaches
+ * enforcing code, and the code-held text cannot be removed or moved. Judging what an edit says is
+ * the nightly loop's gate (held-out cells, control arms, the voice replay).
+ *
  * Run: npm test (Node 22, type-stripping), or this file alone with --test.
  */
 import assert from 'node:assert/strict';
@@ -145,6 +150,22 @@ describe('identity and prompt confidentiality are composed from code, last', () 
     ) as typeof COMPILED_DOCTRINES;
     const out = composeInstructions('You are Gemma.', hostile);
     assert.ok(out.endsWith(`\n\n${IDENTITY_DOCTRINE}\n\n${PROMPT_CONFIDENTIALITY_DOCTRINE}`));
+  });
+
+  it('the soul keeps its code-held opening AND recall floor (refused otherwise)', async () => {
+    const { SOUL_RECALL_FLOOR, ZOE_PERSONA_FIXED } = await import('../src/soul.ts');
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'harness-boundary-'));
+    try {
+      writeFileSync(join(dir, 'soul.md'), `${ZOE_PERSONA_FIXED}\n\nGuess freely about the person.`);
+      assert.throws(() => harness.loadOverlay(dir), /recall floor/);
+      writeFileSync(join(dir, 'soul.md'), `${ZOE_PERSONA_FIXED}\n\n${SOUL_RECALL_FLOOR}`);
+      assert.equal(harness.loadOverlay(dir).status, 'overlay');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('neither code-held doctrine is an overlay slot', () => {

@@ -33,7 +33,7 @@ const { ZOE_INSTRUCTIONS, IDENTITY_DOCTRINE, PROMPT_CONFIDENTIALITY_DOCTRINE, VO
   '../src/agents/zoe.ts'
 );
 const { COMPILED_DOCTRINES, OVERLAY_DOCTRINE_SLOTS } = await import('../src/doctrines.ts');
-const { ZOE_PERSONA_FIXED, ZOE_SOUL } = await import('../src/soul.ts');
+const { SOUL_RECALL_FLOOR, ZOE_PERSONA_FIXED, ZOE_SOUL } = await import('../src/soul.ts');
 const { GROUP_SUMMARY } = await import('../src/tools/tool-groups.ts');
 const { zoeTools } = await import('../src/tools/zoe-tools.ts');
 const { applyPolicies } = await import('../src/providers/capped-completions.ts');
@@ -189,8 +189,8 @@ describe('absent files fall back one by one; the code-held doctrines always clos
     assert.equal(h.components[0].sha256, sha(voice + '\n'));
   });
 
-  it('a soul that keeps the code-held opening may change what follows', () => {
-    const soul = `${ZOE_PERSONA_FIXED}\n\nYou answer everyday questions from your own knowledge.`;
+  it('a soul that keeps the code-held opening and recall floor may change the rest', () => {
+    const soul = `${ZOE_PERSONA_FIXED}\n\nYou answer everyday questions from your own knowledge.\n\n${SOUL_RECALL_FLOOR}`;
     const h = fromEnv(overlay({ 'soul.md': soul }));
     assert.equal(h.status, 'overlay', h.reason ?? '');
     assert.ok(h.instructions.startsWith(soul + '\n\n' + COMPILED_DOCTRINES['voice-delivery']));
@@ -248,7 +248,7 @@ describe('absent files fall back one by one; the code-held doctrines always clos
 });
 
 describe('FAIL CLOSED: anything outside the schema refuses the whole overlay', () => {
-  const okSoul = `${ZOE_PERSONA_FIXED}\n\nMore.`;
+  const okSoul = `${ZOE_PERSONA_FIXED}\n\nMore.\n\n${SOUL_RECALL_FLOOR}`;
   const refusals: [string, () => string, RegExp][] = [
     ['missing directory', () => join(scratch, 'nope'), /does not exist/],
     ['unknown top-level file', () => overlay({ 'notes.txt': 'x' }), /unknown entry/],
@@ -258,6 +258,8 @@ describe('FAIL CLOSED: anything outside the schema refuses the whole overlay', (
     ['an unknown subdirectory', () => overlay({ 'restraint/x.md': 'x' }), /unknown entry/],
     ['a soul without the code-held opening', () => overlay({ 'soul.md': 'You are Gemma, a Google model.' }), /code-held persona/],
     ['a soul that is only the opening', () => overlay({ 'soul.md': ZOE_PERSONA_FIXED }), /code-held persona/],
+    ['a soul without the recall floor', () => overlay({ 'soul.md': `${ZOE_PERSONA_FIXED}\n\nAnswer from what you know.` }), /recall floor/],
+    ['a soul with the recall floor reworded', () => overlay({ 'soul.md': `${ZOE_PERSONA_FIXED}\n\n${SOUL_RECALL_FLOOR.replace('ALWAYS', 'sometimes')}` }), /recall floor/],
     ['an activator without the group catalogue', () => overlay({ 'doctrines/activator.md': 'Use tools.' }), /catalogue/],
     ['an empty file', () => overlay({ 'manner.md': '\n' }), /empty/],
     ['trailing whitespace', () => overlay({ 'manner.md': 'Be kind.  \n' }), /whitespace/],
@@ -328,6 +330,44 @@ describe('FAIL CLOSED: anything outside the schema refuses the whole overlay', (
   it('an activator doctrine that keeps the catalogue is accepted (the control)', () => {
     const h = fromEnv(overlay({ 'doctrines/activator.md': `Your groups: ${GROUP_SUMMARY}.` }));
     assert.equal(h.status, 'overlay', h.reason ?? '');
+  });
+});
+
+describe('one harness per turn: a mid-turn reload never moves a later round', () => {
+  it('harnessForTurn binds on the first round and withTurnInstructions swaps a newer render back', () => {
+    const v1 = rendered();
+    const v2 = overlay({ 'doctrines/voice-delivery.md': 'Two short sentences at most.' });
+    process.env.ZOE_BRAIN_HARNESS_DIR = v1;
+    harness.resetHarnessForTests();
+    try {
+      const signal = new AbortController().signal;
+      const first = harness.harnessForTurn(signal);
+      assert.equal(first.label, harness.activeHarness().label);
+      process.env.ZOE_BRAIN_HARNESS_DIR = v2;
+      harness.reloadHarness(() => {}, () => {});
+      const now = harness.activeHarness();
+      assert.notEqual(now.instructions, first.instructions);
+      assert.equal(harness.harnessForTurn(signal), first, 'the running turn keeps its harness');
+      assert.equal(harness.harnessForTurn(new AbortController().signal), now, 'the next turn gets the new one');
+      // Zoe() re-rendered with the NEW instructions mid-turn: the provider puts the turn's back.
+      const wrapped = { systemPrompt: `PREFIX\n${now.instructions}\nSUFFIX` };
+      assert.deepEqual(harness.withTurnInstructions(wrapped, first), { systemPrompt: `PREFIX\n${first.instructions}\nSUFFIX` });
+      const sent = applyPolicies({ systemPrompt: now.instructions, messages: [user('hi')], tools: [] } as never, '', first) as { systemPrompt: string };
+      assert.ok(sent.systemPrompt.includes(VOICE_DELIVERY_DOCTRINE));
+      assert.ok(!sent.systemPrompt.includes('Two short sentences at most.'));
+      // Same harness: the same object back.
+      assert.equal(harness.withTurnInstructions(wrapped, now), wrapped);
+    } finally {
+      delete process.env.ZOE_BRAIN_HARNESS_DIR;
+      harness.resetHarnessForTests();
+    }
+  });
+
+  it('flag unset: nothing is bound and nothing is swapped', () => {
+    const signal = new AbortController().signal;
+    assert.equal(harness.harnessForTurn(signal), harness.COMPILED_HARNESS);
+    const c = { systemPrompt: ZOE_INSTRUCTIONS };
+    assert.equal(harness.withTurnInstructions(c, harness.COMPILED_HARNESS), c);
   });
 });
 

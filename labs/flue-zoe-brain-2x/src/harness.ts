@@ -15,7 +15,8 @@
  * scripts/harness-overlay.ts for switch / revert / the ledger) holding only these entries:
  *
  *   soul.md                 the soul. MUST open with the code-held persona + identity paragraphs
- *                           (`ZOE_PERSONA_FIXED`) byte for byte; the overlay may change what follows.
+ *                           (`ZOE_PERSONA_FIXED`) byte for byte and keep the recall floor paragraph
+ *                           (`SOUL_RECALL_FLOOR`) verbatim; the overlay may change the rest.
  *   doctrines/<slot>.md     one per `OVERLAY_DOCTRINE_SLOTS` entry (voice-delivery, activator, ...).
  *                           `activator.md` must still carry the code-derived group catalogue.
  *   manner.md               replaces zoe-data's ENGLISH manner block, and only when zoe-data already
@@ -40,6 +41,14 @@
  * schema is the single `OVERLAY_SCHEMA` object, and test/harness_boundary.test.ts fails if it ever
  * gains a key touching any of those.
  *
+ * WHAT THE BOUNDARY IS, AND IS NOT. It is STRUCTURAL: no overlay key reaches the code that ENFORCES
+ * those floors (write gates, the fence's tool taint, identity binding, zoe-data's restraint /
+ * authority / forget / guest code), and the code-held prompt text (identity, confidentiality, the
+ * soul's persona opening and recall floor) cannot be removed or moved. It is NOT a semantic filter
+ * on the words inside an allowed doctrine: a doctrine can still SAY anything, and prompt text is
+ * steering, never enforcement. Judging what an edit says is the nightly loop's gate (held-out cells,
+ * control arms, the voice replay), not this loader.
+ *
  * PER TURN. `activeHarness()` is a module variable read: the composed instructions, the tool
  * guidance map and the per-turn log suffix are all computed once, at load. Each loaded file's
  * sha256 is on `/health` (`harness`) and its first 16 hex chars on the per-turn FLUE_EARLY_TEXT line.
@@ -63,7 +72,7 @@ import {
   composeInstructions,
   type OverlayDoctrineSlot,
 } from './doctrines.ts';
-import { ZOE_PERSONA_FIXED, ZOE_SOUL } from './soul.ts';
+import { SOUL_RECALL_FLOOR, ZOE_PERSONA_FIXED, ZOE_SOUL } from './soul.ts';
 import { ACTIVATOR_TOOL_NAME, CORE_TOOL_NAMES, GROUP_SUMMARY, TOOL_GROUPS } from './tools/tool-groups.ts';
 
 export const HARNESS_DIR_ENV = 'ZOE_BRAIN_HARNESS_DIR';
@@ -254,6 +263,9 @@ function checkSoul(text: string): string {
   const opening = ZOE_PERSONA_FIXED + '\n\n';
   if (!text.startsWith(opening) || !text.slice(opening.length).trim()) {
     refuse('soul.md: must open with the code-held persona and identity paragraphs, byte for byte, then add to them');
+  }
+  if (!text.split('\n\n').includes(SOUL_RECALL_FLOOR)) {
+    refuse('soul.md: must keep the code-held recall floor paragraph verbatim (never answer about the person from your own head)');
   }
   return text;
 }
@@ -525,6 +537,38 @@ export function initHarness(): Harness {
     });
   }
   return h;
+}
+
+// ─── one harness per turn ─────────────────────────────────────────────────────
+
+const turnHarness = new WeakMap<AbortSignal, Harness>();
+
+/**
+ * The harness a TURN runs under, bound to the turn's AbortSignal on its first model round (the same
+ * keying as the acting identity, request-identity.ts). A SIGHUP that lands mid-turn therefore never
+ * changes a turn's later tool rounds: the reload takes effect from the next turn. Flag unset (or no
+ * signal): the active harness, nothing stored.
+ */
+export function harnessForTurn(signal?: AbortSignal): Harness {
+  const now = activeHarness();
+  if (!now.enabled || !signal) return now;
+  const bound = turnHarness.get(signal);
+  if (bound) return bound;
+  turnHarness.set(signal, now);
+  return now;
+}
+
+/**
+ * Keep a turn's system prompt on the turn's harness: when `Zoe()` rendered a newer harness's
+ * instructions (a reload landed after the turn began), swap them back for the turn's own. The SAME
+ * context when nothing differs (always, with the flag unset).
+ */
+export function withTurnInstructions<C extends { systemPrompt?: string }>(context: C, turn: Harness): C {
+  const now = activeHarness();
+  if (turn === now || turn.instructions === now.instructions) return context;
+  const system = context.systemPrompt ?? '';
+  if (!system.includes(now.instructions)) return context;
+  return { ...context, systemPrompt: system.replace(now.instructions, () => turn.instructions) };
 }
 
 /** Test seam: forget the active harness so the next read reloads from the environment. */
