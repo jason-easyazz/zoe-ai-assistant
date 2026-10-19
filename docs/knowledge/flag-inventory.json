@@ -2328,16 +2328,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_HERMES_AUTO_ESCALATE": {
-        "defaults": [
-          "'true'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/zoe_agent.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_HOLD_THE_FACT": {
         "defaults": [
           "-"
@@ -4660,18 +4650,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_OPENCLAW_GW": {
-        "defaults": [
-          "'http://127.0.0.1:18789'",
-          "dynamic"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/mcp_server.py",
-          "services/zoe-data/routers/chat.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_OTEL_ENABLED": {
         "defaults": [
           "''"
@@ -6923,8 +6901,7 @@
       },
       "ZOE_TASK_TIMEOUT_S": {
         "defaults": [
-          "-",
-          "dynamic"
+          "3600.0"
         ],
         "in_env_example": false,
         "readers": [
