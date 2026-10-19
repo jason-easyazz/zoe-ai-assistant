@@ -39,8 +39,7 @@ def _quiet_common_gates(monkeypatch):
     # Route straight to the no-match branch: no guarded-auto gate, tools disabled
     # (so the fast path / pi-hybrid / intent detection are all skipped), plain chat
     # (not research), no WhatsApp flow.
-    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
-    monkeypatch.setattr(chat_router, "_ALL_TOOLS_ENABLED", False)
+    monkeypatch.setattr(chat_router, "_INTENT_FAST_PATH_ENABLED", False)
     monkeypatch.setattr(chat_router, "_WHATSAPP_FLOW_ENABLED", False)
     monkeypatch.setattr(chat_router, "classify_query", lambda *a, **k: "chat")
 
