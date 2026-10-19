@@ -145,6 +145,8 @@ async def test_create_evolution_proposal_stores_runtime_intake_contract_snapshot
 
 @pytest.mark.asyncio
 async def test_create_evolution_proposal_attributes_legacy_fallback_to_family_admin(monkeypatch):
+    # The family-admin fallback exists only when ZOE_MCP_STRICT_USER_ID=false loosens the strict default (A3, 2026-10-19).
+    monkeypatch.setattr(mcp_server, "_MCP_STRICT_USER_ID", False)
     async def fake_sync_evolution_proposal_to_multica(**_kwargs):
         return None
 
@@ -370,6 +372,7 @@ def test_greptile_trigger_review_schema_exposes_force_flag():
 
 @pytest.mark.asyncio
 async def test_greptile_trigger_review_uses_guard_dedupe(monkeypatch):
+    monkeypatch.setattr(mcp_server, "_MCP_STRICT_USER_ID", False)   # a user-less legacy call (strict refuses it by default)
     calls = []
 
     async def fake_trigger_review_with_guard_lock(**kwargs):

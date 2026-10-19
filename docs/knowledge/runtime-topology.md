@@ -51,11 +51,17 @@ for them in `docker ps`.
 clients use `localhost`/`127.0.0.1`, containers use the `zoe-network` service name
 (`zoe-database:5432`, `homeassistant-mcp-bridge:8007`). A container must **not** reach a
 loopback-bound port through `host.docker.internal` (that is the docker0 gateway, not loopback).
-The deliberate LAN-facing ports (UI 80/443, HA 8123, LiveKit, zoe-auth 8002, Multica 3000/8080, …)
+The deliberate LAN-facing ports (UI 80/443, HA 8123, LiveKit, zoe-auth 8002, …)
 are listed with their reason in `tests/unit/test_compose_loopback_binds.py` (`LAN_LEDGER`); adding one
 is a reviewed edit there. Postgres image/port changes are an **operator** step (pg_dumpall first,
 then recreate `zoe-database`, then `multica-backend`): CD's zoe-auth reconcile is `--no-deps` so a
 deploy never recreates the database as a side effect.
+
+Multica (`zoe-multica-backend` 8080, `zoe-multica-web` 3000) publishes on `127.0.0.1` only with
+`ALLOW_SIGNUP=false` (2026-10-19). Host processes (zoe-data `MULTICA_BASE_URL`, the executor, Cursor MCP)
+use `127.0.0.1:8080`; the LAN reaches the board only through nginx (`/multica/`, `/multica-api/`,
+`/_next/`), which proxies to the containers BY NAME on zoe-network. Owner steps for a Multica recreate
+and the `MULTICA_DEV_CODE` requirement: `docs/knowledge/multica-loopback.md`.
 
 ## The touch panel
 

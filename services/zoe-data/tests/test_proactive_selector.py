@@ -79,7 +79,7 @@ def env(monkeypatch, tmp_path):
     _migrate(engine, "upgrade")
     db = _Sqlite(path)
     for ddl in (
-        "CREATE TABLE open_loops (id INTEGER PRIMARY KEY, user_id TEXT, loop_text TEXT, "
+        "CREATE TABLE open_loops (id INTEGER PRIMARY KEY, user_id TEXT, loop_text TEXT, context TEXT, "
         "follow_up_hint TEXT, emotional_weight INTEGER, created_at TEXT, follow_up_after TEXT, "
         "resolved BOOLEAN DEFAULT FALSE, resolved_at TEXT)",
         "CREATE TABLE events (id TEXT, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, "
@@ -171,6 +171,16 @@ async def test_select_persists_logs_and_is_off_without_the_flag(env, monkeypatch
     assert f"PROACTIVE_SELECT user={MEMBER} candidates=1 kept=1" in caplog.text
     monkeypatch.setenv("ZOE_PROACTIVE_SELECTOR", "0")
     assert await _select(env) is None
+
+
+async def test_a_pendant_follow_up_loop_is_never_raised(env):
+    """Owner decision D5: a pendant follow-up is an open loop with no alarm and nothing proactive (``context='pendant:<id>'``).
+    Negative control: drop the ``context`` clause from ``_gather`` and this goes red (kept == 2)."""
+    _loop(env["db"], "A relative is in hospital; user is travelling to visit", weight=5)
+    _loop(env["db"], "User will call the plumber about the leaking tap", weight=5)
+    env["db"].conn.execute("UPDATE open_loops SET context = 'pendant:cand-1' WHERE loop_text LIKE '%plumber%'")
+    assert (await _select(env))["kept"] == 1
+    assert [r[0] for r in env["db"].rows("SELECT source_ref FROM proactive_candidates")] == ["open_loops:1"]
 
 
 async def test_recompute_keeps_the_cooldown_and_expires_dropped_rows(env):

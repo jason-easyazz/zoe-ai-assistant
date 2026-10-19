@@ -244,6 +244,13 @@ async def start_enrollment(user_id: str, panel_id: str, lang: str) -> bool:
             await voice_announce.enqueue_command(
                 db, user_id=user_id, panel_id=panel_id or None, trigger_type="voice_enroll", command=command,
             )
+        # The server-side half of the command: ONLY this member may be enrolled at THIS panel for the command's life (queue
+        # TTL + the run + slack). ``/api/voice/enroll`` checks it instead of trusting the daemon's payload (2026-10-19).
+        import biometric_scope
+
+        biometric_scope.grant_enrolment(
+            panel_id, user_id, kind="voice",
+            ttl_s=voice_announce.COMMAND_TTL_S + float(command.get("max_total_s") or ENROLL_MAX_S) + 60.0)
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("voice_enrollment: could not queue the enrol command: %s", type(exc).__name__)
