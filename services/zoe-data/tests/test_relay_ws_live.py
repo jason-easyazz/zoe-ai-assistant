@@ -22,7 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_relay_ingress import FRESH, NGINX, SID_CASEY, TOK_KITCHEN, _env, on, relay_headers, reg  # noqa: E402,F401
+import relay_ingress  # noqa: E402
+from test_relay_ingress import FP_KITCHEN, FRESH, NGINX, SID_CASEY, TOK_KITCHEN, _env, on, relay_headers, reg  # noqa: E402,F401
 
 
 @pytest.fixture(scope="module")
@@ -80,3 +81,26 @@ def test_a_stale_member_session_does_not_open_a_member_socket_over_the_relay(app
     assert _connect_ok(app_client, url, member)                                               # POSITIVE: a fresh sign-in at THIS panel
     FRESH.clear()
     assert _connect_ok(app_client, url, {"X-Session-ID": SID_CASEY})                         # CONTROL: the LAN needs no freshness
+
+
+def test_an_idle_push_socket_of_a_revoked_certificate_is_closed_by_the_real_handler(zoe_main, reg, on, monkeypatch):
+    """N1 of the #2095 review on the REAL ``/ws/push`` handler and its REAL receive loop (not the stub): the panel is subscribed and
+    sends nothing, its certificate is revoked out of band, and the server ends the socket with 1008 within one interval."""
+    import time
+
+    from push import broadcaster
+
+    monkeypatch.setattr(relay_ingress, "WS_RECHECK_S", 0.3)
+    monkeypatch.setattr(zoe_main, "WS_IDLE_TIMEOUT_SECONDS", 6.0)               # so a broken fix fails the cell instead of hanging it
+    before = broadcaster.panel_subscriber_count("kitchen-panel")                 # earlier cells (loop stubbed out) leave sockets behind
+    client = TestClient(zoe_main.app, client=(NGINX, 50000))
+    with client.websocket_connect("/ws/push?panel_id=kitchen-panel", headers=relay_headers()) as ws:
+        assert ws.receive_json()["type"] == "connected"                         # POSITIVE: subscribed, then idle
+        assert broadcaster.panel_subscriber_count("kitchen-panel") == before + 1
+        reg.con.execute("UPDATE panel_client_certs SET revoked_at = 'now' WHERE fingerprint = ?", (FP_KITCHEN,))
+        reg.con.commit()
+        started = time.monotonic()
+        with pytest.raises(WebSocketDisconnect) as closed:
+            ws.receive_json()                                                   # a missing fix ends at the 6 s idle deadline (1001)
+        assert closed.value.code == 1008 and time.monotonic() - started < 0.3 + 2.0
+    assert broadcaster.panel_subscriber_count("kitchen-panel") == before         # the handler's cleanup ran
