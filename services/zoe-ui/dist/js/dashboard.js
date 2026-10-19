@@ -117,6 +117,9 @@ class Dashboard {
         this.isEditMode = false;
         this.storageKey = 'zoe_desktop_widgets';
         this.cardOptions = new Map();   // uid -> options a card was created with
+        if (typeof WidgetManager !== 'undefined' && typeof WidgetManager.useInstances === 'function') {
+            WidgetManager.useInstances();
+        }
         this.serverSync = !(document.body && document.body.classList.contains('touch-dashboard'));
         this._serverSaveTimer = null;
     }
@@ -300,7 +303,9 @@ class Dashboard {
             console.error('❌ Grid not initialized');
             return null;
         }
-        if (typeof WidgetManager === 'undefined' || !WidgetManager.modules[type]) {
+        // own property only: a stored type such as 'constructor' must not resolve to Object's
+        if (typeof WidgetManager === 'undefined' || typeof type !== 'string'
+            || !Object.prototype.hasOwnProperty.call(WidgetManager.modules, type)) {
             console.warn('Widget type not found:', type);
             return null;
         }

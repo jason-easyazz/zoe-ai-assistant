@@ -387,7 +387,9 @@ check('removing a card stops only that card; a legacy layout gets distinct uids'
         { type: 'weather', uid: 'dup', x: 4, y: 0, w: 4, h: 3 },
         { type: 'weather', uid: 'dup', x: 8, y: 0, w: 4, h: 3 },
         { type: 'system', uid: '"><img src=x onerror=alert(1)>', x: 0, y: 3, w: 4, h: 3 },
-        { type: 'not-a-widget', x: 0, y: 6, w: 4, h: 3 }
+        { type: 'not-a-widget', x: 0, y: 6, w: 4, h: 3 },
+        { type: 'constructor', x: 4, y: 6, w: 4, h: 3 },   // an inherited property is not a widget
+        { type: '__proto__', x: 8, y: 6, w: 4, h: 3 }
     ]);
     const uids = plain(d.currentLayout().map(e => e.uid));
     assert.strictEqual(uids.length, 4, 'unknown types are skipped, the rest kept');
@@ -417,6 +419,47 @@ check('the desktop board saves to and restores from /api/dashboard/layout/', asy
     ctx2.document.body.classList.add('touch-dashboard');
     const b2 = boardWith(ctx2);
     assert.strictEqual(b2.d.serverSync, false);
+});
+
+check('a board emptied of cards never refreshes the template widgets', async () => {
+    const ctx = makeContext(() => never());
+    const { d, WM } = boardWith(ctx);
+    d.serverSync = false;
+    const card = d.addWidget('weather');
+    d.grid.removeWidget(card);
+    assert.strictEqual(WM.instances.size, 0);
+    let templateUpdates = 0;
+    Object.values(WM.modules).forEach(m => { m.update = () => { templateUpdates++; }; });
+    const probe = () => {
+        templateUpdates = 0;
+        WM.updateAll();
+        assert.strictEqual(WM.updateType('weather'), true, 'handled: the board has no weather card to refresh');
+        assert.strictEqual(templateUpdates, 0, 'a never-mounted template was refreshed');
+    };
+    probe();
+    // negative control: inferring the mode from instances.size (the reviewed bug) is caught
+    WM.instanceMode = false;
+    await mustFail('falling back to templates on an empty board is caught', probe);
+});
+
+check('lists.html and the touch dashboard still register these widgets (registerAllWidgets)', async () => {
+    // The legacy route every other consumer uses: the manifest + window[ClassName].
+    const manifest = JSON.parse(read('js/widgets/widget-manifest.json'));
+    manifest.widgets = manifest.widgets.filter(w => ['system', 'home', 'weather'].includes(w.id));
+    assert.strictEqual(manifest.widgets.length, 3, 'manifest still lists system, home and weather');
+    const run = async (mutate) => {
+        const ctx = makeContext((url) => (url === '/js/widgets/widget-manifest.json' ? json(200, manifest) : never()));
+        ctx.setTimeout = (fn, ms) => setTimeout(fn, Math.min(ms || 0, 5));
+        if (mutate) mutate(ctx);
+        const count = await ctx.$('registerAllWidgets()');
+        const WM = ctx.$('WidgetManager');
+        assert.strictEqual(count, 3, 'registered ' + count + ' of 3');
+        assert(WM.modules.system instanceof ctx.SystemWidget && WM.modules.home instanceof ctx.HomeWidget
+            && WM.modules.weather instanceof ctx.WeatherWidget);
+        assert.strictEqual(WM.instanceMode, false, 'a page without the dashboard stays on the module path');
+    };
+    await run(null);
+    await mustFail('a widget that stops exposing its class is caught', () => run((ctx) => { delete ctx.HomeWidget; }));
 });
 
 // ── 6. Dark mode: cards follow the theme tokens ─────────────────────────────

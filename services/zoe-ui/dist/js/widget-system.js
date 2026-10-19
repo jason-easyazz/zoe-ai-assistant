@@ -13,6 +13,10 @@ const WidgetManager = {
     // createInstance() for a fresh object per card and tracks it here by its uid.
     // Pages that still use `modules` directly (lists) are unchanged.
     instances: new Map(),
+    // Sticky once a page mounts cards as instances (the dashboard). It must not be
+    // inferred from instances.size: after the last card is removed the map is
+    // empty, and a refresh would then fall back to the never-init()ed templates.
+    instanceMode: false,
     manifest: null,
     manifestLoaded: false,
     
@@ -50,6 +54,7 @@ const WidgetManager = {
      * instance (a plain object cannot be constructed again).
      */
     createInstance(type) {
+        if (!Object.prototype.hasOwnProperty.call(this.modules, type)) return null;
         const proto = this.modules[type];
         if (!proto) return null;
         const Ctor = proto.constructor;
@@ -62,7 +67,13 @@ const WidgetManager = {
         return proto;
     },
 
+    /** Called by a page that mounts one instance per card (js/dashboard.js). */
+    useInstances() {
+        this.instanceMode = true;
+    },
+
     trackInstance(uid, instance) {
+        this.instanceMode = true;
         if (uid && instance) this.instances.set(uid, instance);
     },
 
@@ -86,7 +97,7 @@ const WidgetManager = {
      * module there is a never-init()ed template. Elsewhere it is the module.
      */
     liveOfType(type) {
-        if (this.instances.size) {
+        if (this.instanceMode) {
             const out = [];
             this.instances.forEach(inst => { if (inst && inst.type === type) out.push(inst); });
             return out;
@@ -100,7 +111,7 @@ const WidgetManager = {
      * to refresh), so a caller never falls back to the template module.
      */
     updateType(type) {
-        let handled = this.instances.size > 0;
+        let handled = this.instanceMode;
         this.liveOfType(type).forEach(inst => {
             if (inst && typeof inst.update === 'function') {
                 handled = true;
@@ -187,7 +198,7 @@ const WidgetManager = {
         // them would fetch into a null element. Pages without instances keep the
         // old behaviour.
         console.log('🔄 Updating all widgets...');
-        const live = this.instances.size ? Array.from(this.instances.values()) : Object.values(this.modules);
+        const live = this.instanceMode ? Array.from(this.instances.values()) : Object.values(this.modules);
         live.forEach(module => {
             if (module && typeof module.update === 'function') {
                 try {
