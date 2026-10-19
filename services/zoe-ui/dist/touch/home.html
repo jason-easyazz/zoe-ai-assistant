@@ -2965,7 +2965,7 @@
     // The flow is rebuilt with the card, so its state can't survive a show().
     cfApplyScale();cfClear();wireCF();wireSeek();wireVol();wireVolPop();wireKeep();
     _toolsClear();var _mf0=document.querySelector('.mfull');if(_mf0)_mf0.classList.remove('tools');
-    loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
+    loadMusic();_wxTick=setInterval(function(){if(_cur==='music'){loadMusic();jukeboxQR();}},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');if(!a)return;
       musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
@@ -3003,14 +3003,23 @@
       }).catch(function(){mi.favorite=wasOn;cfPaintFav();toast('Couldn’t favourite');});};
     // Jukebox QR: phones scan it to search + queue music (jukebox.html). It carries a
     // short-lived play/queue-only token bound to this panel, so it is a server SVG by
-    // single-use handle (POST /api/music/jukebox/start), re-minted once it expires.
-    var qr=document.getElementById('mQRCode');
-    if(qr&&!(+qr.dataset.exp>Date.now())){qr.dataset.exp=String(Date.now()+60000);
+    // single-use handle (POST /api/music/jukebox/start). jukeboxQR() re-mints it before the
+    // token expires; wireMusic() calls it once and the 5 s music poll keeps calling it, so a
+    // music screen that stays up for hours never shows an expired code.
+    function jukeboxQR(){
+      var qr=document.getElementById('mQRCode');
+      if(!qr)return;
+      if(+qr.dataset.tok<Date.now())qr.innerHTML='';                    // never leave an expired code on screen, even mid-retry
+      if(+qr.dataset.exp>Date.now())return;
+      qr.dataset.exp=String(Date.now()+60000);                          // retry a failed mint after a minute
       apiJson('POST','/api/music/jukebox/start',{panel_id:_panelDevId()}).then(function(r){
         if(!r||!r.qr_path)return;
-        qr.dataset.exp=String(Date.now()+Math.max(60,(r.expires_in||0)-300)*1000);
+        var ttl=r.expires_in||0;
+        qr.dataset.exp=String(Date.now()+Math.max(60,ttl-300)*1000);   // re-mint 5 min before it expires
+        qr.dataset.tok=String(Date.now()+ttl*1000);
         var im=document.createElement('img');im.alt='Jukebox code';im.width=74;im.height=74;im.src=r.qr_path;
         qr.innerHTML='';qr.appendChild(im);}).catch(function(){});}
+    jukeboxQR();
     // Speaker picker: list Music Assistant players, tap to move playback there.
     var spk=document.getElementById('mSpk');
     if(spk)spk.onclick=function(){
