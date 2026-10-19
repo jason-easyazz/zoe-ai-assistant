@@ -918,7 +918,7 @@ async def _drop(db, pid: str) -> None:
     """A proposal leaves BOTH tables (withdrawn, or its evidence was forgotten)."""
     await db.execute("DELETE FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
     await db.execute("DELETE FROM struggle_proposals WHERE id = ?", (pid,))
-    await eq.delete(db, [pid], source=QUEUE_SOURCE)
+    await eq.remove(db, [pid], source=QUEUE_SOURCE)
 
 
 async def _prune_queue(db) -> int:
@@ -926,7 +926,7 @@ async def _prune_queue(db) -> int:
     cur = await db.execute("SELECT id FROM evolution_proposals WHERE source = ? AND id NOT IN (SELECT id FROM struggle_proposals)",
                            (QUEUE_SOURCE,))
     ids = [str(r[0]) for r in await cur.fetchall()]
-    await eq.delete(db, ids, source=QUEUE_SOURCE)
+    await eq.remove(db, ids, source=QUEUE_SOURCE)
     return len(ids)
 
 

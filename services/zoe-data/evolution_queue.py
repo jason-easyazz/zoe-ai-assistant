@@ -19,7 +19,7 @@ change to Zoe, whoever proposed it:
   * ``source`` - which writer: ``struggle`` (``struggle_proposals.py``; its domain detail stays in ``struggle_proposals``, keyed by the
     SAME id), ``evolution_notice:<kind>``, ``mcp:create_evolution_proposal``, ``legacy`` (rows from before 0062).
 
-Writers: ``propose``, ``transition``, ``decide``, ``attach_evidence``, ``update_text``, ``delete``. Every one takes the caller's ``db``
+Writers: ``propose``, ``transition``, ``decide``, ``attach_evidence``, ``update_text``, ``remove``. Every one takes the caller's ``db``
 (``db_pool.get_db_ctx()`` or a test double) and uses ``?`` placeholders with ONE params tuple, which both the asyncpg compat layer and
 SQLite accept. Readers: ``list_queue``, ``get``, ``history``, ``summary`` - the one read API the Zoe score page will use
 (``GET /api/system/evolution/queue`` in ``routers/system.py``).
@@ -347,7 +347,7 @@ async def update_text(db, pid: str, *, title: Optional[str] = None, description:
     await db.execute("UPDATE evolution_proposals SET " + ", ".join(sets) + " WHERE id = ?", tuple(params))
 
 
-async def delete(db, pids: Iterable[str], *, source: Optional[str] = None) -> None:
+async def remove(db, pids: Iterable[str], *, source: Optional[str] = None) -> None:
     """Remove proposals and their history (a writer withdrawing its own row, or the forget cascade). ``source`` restricts the delete
     to that writer rows, so one writer can never remove another writer row."""
     for pid in sorted(set(str(p) for p in pids if p)):

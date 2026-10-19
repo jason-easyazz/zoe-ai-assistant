@@ -269,7 +269,7 @@ def test_the_read_api(db):
 def test_delete_respects_the_source(db):
     mine = new(db, source="struggle")
     theirs = new(db, source="evolution_notice:user_issue_report", change_class="code", component="chat")
-    run(eq.delete(db, [mine, theirs], source="struggle"))
+    run(eq.remove(db, [mine, theirs], source="struggle"))
     assert [r["id"] for r in db.rows("SELECT id FROM evolution_proposals")] == [theirs]
     assert not db.rows("SELECT 1 FROM evolution_proposal_history WHERE proposal_id = ?", (mine,))
 

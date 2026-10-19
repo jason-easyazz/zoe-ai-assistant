@@ -75,7 +75,7 @@ def _offline() -> bool:
     """``alembic upgrade --sql``. Outside an alembic environment (the tests drive ``upgrade()`` through ``Operations``) it is online."""
     try:
         return bool(context.is_offline_mode())
-    except NameError:
+    except (NameError, AttributeError):     # no proxy yet, or a torn-down one from an earlier alembic run
         return False
 
 
