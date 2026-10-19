@@ -267,7 +267,7 @@ it still gets the tolerance (route change then cannot be checked); re-record it 
 service's warm one, which is why the gate demanded 1500MB and skipped for days on a box whose
 steady state leaves ~350–1200MB. Remote mode POSTs each WAV to the live `/api/voice/transcribe`
 (auth: `ZOE_DEVICE_TOKEN` — `DEVICE_TOKEN` also honoured as the fallback name, matching
-`zoe_latency_probe` — in the environment, provisioned in `~/.hermes/.env`): measured
+`zoe_latency_probe` — in the environment, provisioned in `services/zoe-data/.env`, which the voice-regression unit loads): measured
 2026-07-27, a full run peaks at **445MB** and the per-mode memory floor is 700MB vs 1500MB.
 Transcripts are engine-identical across modes (same Moonshine, same box), so baselines carry
 over; the replay JSON records `stt_mode`. **Remote STT targets the LOCAL service by number:**

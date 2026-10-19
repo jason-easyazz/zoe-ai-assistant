@@ -23,6 +23,8 @@ scripts/maintenance/router_shadow_report.py.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -187,13 +189,60 @@ def _rotate_shadow_log(path: str) -> None:
     os.replace(path, f"{path}.1")
 
 
-def _append_shadow_line(path: str, line: str) -> None:
-    """Rotate-if-needed then append one JSON line, under the shadow write lock."""
-    with _shadow_write_lock:
+#: Longest a live turn waits for the in-process append lock (a sibling shadow2 append is microseconds; retention holds it for the whole pass).
+_SHADOW_APPEND_WAIT_S = 0.02
+#: Observations skipped because retention (or a sibling append) owned the file. A skipped shadow line costs nothing; a stalled voice turn does.
+shadow_append_skipped = 0
+
+
+@contextlib.contextmanager
+def _shadow_file_lock(path: str):
+    """Cross-process exclusive lock (``<log>.lock``) around rotate + append, so the out-of-process retention rewrite
+    (`local_text_logs`, the hourly job, the owner script) can hold the whole multi-segment pass without a rotation or an append
+    interleaving. Taken AFTER `_shadow_write_lock` here and in `local_text_logs.locked` (same order, no deadlock). NEVER WAITS: the
+    append runs inside `route()` on a live voice turn, and retention holds this lock across its entire rewrite, so it takes
+    ``LOCK_NB`` and yields ``False`` when retention owns the file (the caller skips the observation). A lock file that cannot be
+    opened never breaks a turn: the append goes ahead unlocked (yields ``True``)."""
+    try:
+        fh = open(f"{path}.lock", "a")
+    except OSError:
+        yield True
+        return
+    try:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
+def _append_shadow_line(path: str, line: str) -> bool:
+    """Rotate-if-needed then append one JSON line, under the shadow write lock (in-process) and the file lock (cross-process).
+    Never waits on retention: returns ``False`` (and counts the skip) when either lock is held, ``True`` once the line is written."""
+    global shadow_append_skipped
+    if not _shadow_write_lock.acquire(timeout=_SHADOW_APPEND_WAIT_S):
+        shadow_append_skipped += 1
+        shadow_logger.debug("shadow append skipped: write lock busy (retention pass)")
+        return False
+    try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        _rotate_shadow_log(path)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
+        with _shadow_file_lock(path) as got:
+            if not got:
+                shadow_append_skipped += 1
+                shadow_logger.debug("shadow append skipped: retention owns %s", path)
+                return False
+            _rotate_shadow_log(path)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+            return True
+    finally:
+        _shadow_write_lock.release()
 
 
 SHADOW_TRAFFIC_CHOICES = ("all", "household", "harness", "probe", "ci", "untagged")

@@ -39,6 +39,20 @@ SAFETY
     * rotated segments are written 0640 (the logs hold household conversation);
     * ``--dry-run`` reports what it would do and changes nothing.
 
+TEXT-LOG RETENTION (deep dive A6)
+    The same hourly pass also applies the retention window to the local logs that keep utterance TEXT (the router shadow log
+    and the intent-miss log): text older than ``ZOE_TEXT_LOG_RETENTION_DAYS`` (default 30) is stripped or dropped. The logic lives
+    in ``services/zoe-data/local_text_logs.py`` (stdlib only); this job only schedules it. It also deletes the owner scripts'
+    one-off backups past 14 days (``prune_adhoc_backups``). It FAILS CLOSED: if the pass raises or any part reports failure the job
+    exits 1 (after the rotation ran), so a retention pass that stopped working shows red.
+    ``--no-text-sweep`` skips it.
+    The retention knobs (``ZOE_TEXT_LOG_RETENTION_DAYS``, ``ZOE_ROUTER_HEAD_LOG``, ``ZOE_INTENT_MISS_LOG``, ``ZOE_ADHOC_BACKUP_DIR``)
+    live in the zoe-data env files, not in this job's environment, so the sweep reads them from ``<repo>/.env`` then
+    ``<repo>/services/zoe-data/.env`` (PARSED, never sourced; a variable already in the process environment wins). Without that an
+    owner's ``ZOE_TEXT_LOG_RETENTION_DAYS=keep`` would be ignored and text they chose to keep deleted. ``zoe-log-rotate.service``
+    also loads the same files via ``EnvironmentFile=-`` (re-installing the unit is an owner step; this reader makes the fix hold
+    before that).
+
 Exit status 0 on success (including "nothing to do"), 1 if any file failed.
 """
 from __future__ import annotations
@@ -64,6 +78,11 @@ DEFAULT_FILES = (
     "voice-regression.log",
 )
 _CHUNK = 1024 * 1024
+_REPO = Path(__file__).resolve().parents[2]
+#: env files that configure zoe-data, in the order its unit loads them (later wins)
+ENV_FILES = (_REPO / ".env", _REPO / "services" / "zoe-data" / ".env")
+#: the only names the sweep takes from them - nothing else in those files (they hold secrets) is read into this process
+SWEEP_ENV_KEYS = ("ZOE_TEXT_LOG_RETENTION_DAYS", "ZOE_ROUTER_HEAD_LOG", "ZOE_INTENT_MISS_LOG", "ZOE_ADHOC_BACKUP_DIR")
 _NEVER = {"zoe-data.app.log"}
 
 
@@ -181,6 +200,72 @@ def run(directory: Path, files: tuple[str, ...], *, max_bytes: int, keep: int, d
             lock.close()
 
 
+def read_env_settings(files: tuple[Path, ...], keys: tuple[str, ...]) -> dict[str, str]:
+    """``{key: value}`` for the wanted ``keys`` found in the env ``files`` (later file wins). Parses ``NAME=value`` / ``export NAME=value``
+    lines, strips one pair of matching quotes, ignores comments and everything else; unreadable files are skipped. Never executes
+    or expands anything."""
+    found: dict[str, str] = {}
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export") and line[6:7].isspace():
+                line = line[6:].lstrip()
+            name, sep, value = line.partition("=")
+            name = name.strip()
+            if not sep or name not in keys:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            found[name] = value
+    return found
+
+
+def apply_env_files() -> None:
+    """Fill the retention settings from the zoe-data env files for any name the process environment does not already set."""
+    for key, value in read_env_settings(ENV_FILES, SWEEP_ENV_KEYS).items():
+        os.environ.setdefault(key, value)
+
+
+def sweep_text_logs(dry_run: bool) -> int:
+    """Apply ``local_text_logs`` retention and expire the owner scripts' one-off backups. Returns 0, or 1 when any part FAILED
+    (fail closed: a retention pass that did not run leaves words on disk, so the job must go red, not stay quietly green)."""
+    try:
+        import importlib.util
+
+        apply_env_files()
+        mod_path = Path(__file__).resolve().parents[2] / "services" / "zoe-data" / "local_text_logs.py"
+        spec = importlib.util.spec_from_file_location("local_text_logs", mod_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        if dry_run:
+            for log in module.LOGS:
+                total, with_text = module.count_text(log)
+                print(f"rotate_service_logs: text log {log.name}: {with_text}/{total} records carry text, "
+                      f"{module.count_malformed(log)} malformed rows would be dropped (dry-run, retention "
+                      f"{module.retention_days()} days)")
+            return 0
+        result = module.sweep()
+        swept = {k: v for k, v in result.items() if v}
+        if swept:
+            print("rotate_service_logs: text-log retention: " + " ".join(f"{k}={v}" for k, v in swept.items()))
+        failed = sorted(k for k, v in result.items() if v < 0)
+        if failed:
+            print(f"rotate_service_logs: text-log retention FAILED for {', '.join(failed)}", file=sys.stderr)
+            return 1
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"rotate_service_logs: text-log retention FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dir", default=DEFAULT_DIR, help=f"log directory (default {DEFAULT_DIR})")
@@ -188,17 +273,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--keep", type=int, default=DEFAULT_KEEP, help="compressed segments to retain")
     ap.add_argument("--file", action="append", dest="files", help="file name inside --dir (repeatable)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-text-sweep", action="store_true", help="skip the utterance-text log retention pass")
     args = ap.parse_args(argv)
     if args.keep < 1 or args.max_mb <= 0:
         ap.error("--keep must be >= 1 and --max-mb > 0")
     files = tuple(args.files) if args.files else DEFAULT_FILES
-    return run(
+    status = run(
         Path(args.dir),
         files,
         max_bytes=int(args.max_mb * 1024 * 1024),
         keep=args.keep,
         dry_run=args.dry_run,
     )
+    if not args.no_text_sweep and sweep_text_logs(args.dry_run):
+        status = 1                      # fail closed, AFTER the rotation above ran
+    return status
 
 
 if __name__ == "__main__":

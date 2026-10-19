@@ -2025,6 +2025,13 @@ class MemoryService:
                 await struggle_detector.delete_user(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: struggle-row erasure failed ({type(exc).__name__})") from exc
+            # ... and the local utterance-text logs (router shadow log, intent misses). They carry no user id, so the TEXT layer of
+            # every record goes household-wide; hash-only rows hold no words and stay. Same rule: fail closed.
+            try:
+                import local_text_logs
+                await asyncio.to_thread(local_text_logs.erase_all_text)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: local text-log erasure failed ({type(exc).__name__})") from exc
             # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
             # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
             try:

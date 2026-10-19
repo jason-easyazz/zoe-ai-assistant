@@ -16,7 +16,6 @@ KillMode=process
 Environment=HOME=%h
 Environment=HERMES_HOME=%h/.hermes
 EnvironmentFile=-%h/assistant/.env
-EnvironmentFile=-%h/.hermes/.env
 
 [Install]
 WantedBy=default.target
