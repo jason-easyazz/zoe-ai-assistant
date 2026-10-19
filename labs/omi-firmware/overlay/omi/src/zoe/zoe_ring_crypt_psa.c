@@ -17,6 +17,7 @@ LOG_MODULE_REGISTER(zoe_ring_crypt, CONFIG_LOG_DEFAULT_LEVEL);
 static psa_key_id_t key_id;
 static bool ready;
 static atomic_t revoked; /* set from the pairing path (BT thread): the key is unusable from that instant */
+static atomic_t wipe_active; /* mirrors the persisted wipe intent (zoe/wk) */
 static struct zrc_epoch epoch;
 
 /* One settings record read with its outcome told apart: found or not (rc 0), or an error (<0). Zephyr's
@@ -24,7 +25,7 @@ static struct zrc_epoch epoch;
  * return, and a short/failed read inside the callback is caught here. An error is NEVER taken as "absent". */
 struct rec_load {
     uint8_t buf[ZRC_KEY_BYTES];
-    size_t want; /* exact length the record must have; 0 = any (a flag) */
+    size_t want; /* exact length the record must have (a flag is 1 byte); its contents are always read back */
     bool found;
     int err;
 };
@@ -34,9 +35,6 @@ static int rec_cb(const char *key, size_t len, settings_read_cb read_cb, void *c
     ARG_UNUSED(key);
     struct rec_load *rl = param;
     rl->found = true;
-    if (rl->want == 0U) {
-        return 0;
-    }
     if (len != rl->want) {
         rl->err = -EINVAL; /* a record of the wrong size is corrupt, not absent */
         return 0;
@@ -74,7 +72,7 @@ int zrc_backend_init(void)
         return -EIO;
     }
 
-    struct rec_load wipe = {.want = 0};
+    struct rec_load wipe = {.want = 1};
     struct rec_load ep = {.want = sizeof(uint32_t)};
     struct rec_load kl = {.want = ZRC_KEY_BYTES};
     (void) load_rec(ZRC_WIPE_SETTING, &wipe);
@@ -93,6 +91,7 @@ int zrc_backend_init(void)
     if (decision == ZRC_KEY_NEW) {
         /* A wipe, no key, or a key without its salt reservation: the old key (if any) is never used again. */
         if (wipe.found) {
+            atomic_set(&wipe_active, 1);
             int derr = settings_delete(ZRC_KEY_SETTING);
             if (derr) {
                 LOG_ERR("wipe pending but the old key could not be erased (%d): ring stays blocked", derr);
@@ -169,7 +168,19 @@ void zrc_backend_destroy(void)
 
 void zrc_backend_wipe_done(void)
 {
-    (void) settings_delete(ZRC_WIPE_SETTING);
+    if (settings_delete(ZRC_WIPE_SETTING) == 0) {
+        atomic_set(&wipe_active, 0); /* only once the intent is really gone from flash */
+    }
+}
+
+void zrc_backend_wipe_started(void)
+{
+    atomic_set(&wipe_active, 1);
+}
+
+bool zrc_backend_wipe_in_progress(void)
+{
+    return atomic_get(&wipe_active) != 0;
 }
 
 int zrc_backend_new_salt(uint32_t *salt)

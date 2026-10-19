@@ -102,7 +102,7 @@ admin API. It is not a household flow.
 | 1 | off | the pendant is off (3 s hold) |
 | 2 | **red, fast blink** (+ a 2 s buzz) | fault: stock-bond wipe failed (it is not advertising), crypto/flash fail-closed (nothing is being stored), or a pairing refused while the window was open |
 | 3 | **blue > green > purple > yellow, cycling** | pairing window open (after the four taps), 60 s |
-| 4 | **white quick flashes** | crypto-wipe in progress (a new bond) |
+| 4 | **white quick flashes** | crypto-wipe in progress (a new bond), until the ring is cleared under the new key |
 | 5 | **three green blinks** | just paired |
 | 6 | **green breathing** / **solid green** | charging / fully charged (>= 98 %) |
 | 7 | **red slow blink** | warning: storage >= 90 % full, battery < 15 %, or the clock is not set |

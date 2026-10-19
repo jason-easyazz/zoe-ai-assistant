@@ -39,6 +39,10 @@ int zrc_backend_revoke(void);
 bool zrc_backend_rekey_pending(void);
 void zrc_backend_destroy(void);
 void zrc_backend_wipe_done(void);
+/* The RAM mirror of the persisted wipe intent ("zoe/wk"): set when the intent is written (or found at boot), cleared only
+ * when zrc_backend_wipe_done() has erased it - i.e. after the ring was cleared under the new key. Drives the white LED. */
+void zrc_backend_wipe_started(void);
+bool zrc_backend_wipe_in_progress(void);
 
 /* Pure: what the boot (or a re-init) does with the stored key. Each *_err is the read's result (0 = read cleanly, found or
  * not; <0 = the store could not be read). ZRC_KEY_USE = load the stored key; ZRC_KEY_NEW = make a new one (and empty the

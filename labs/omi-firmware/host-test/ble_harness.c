@@ -34,7 +34,7 @@ static void persist_op(void)
 
 /* ---- fake settings store (persistent) ----------------------------------------------------------------------------- */
 #define NKEYS 8
-static struct { char name[16]; int present; uint32_t value; } store[NKEYS];
+static struct { char name[16]; int present; uint32_t value; size_t len; } store[NKEYS];
 
 static int slot(const char *name, int create)
 {
@@ -58,6 +58,7 @@ int settings_save_one(const char *name, const void *value, size_t len)
     int i = slot(name, 1);
     store[i].present = 1;
     store[i].value = 0;
+    store[i].len = len;
     memcpy(&store[i].value, value, len < 4 ? len : 4);
     return 0;
 }
@@ -70,13 +71,23 @@ int settings_delete(const char *name)
     return 0;
 }
 
-static char fail_read[16]; /* a record whose read fails (a backend error, NOT "absent") */
+static char fail_read[16];    /* a record whose lookup fails (a backend error, NOT "absent") */
+static char fail_content[16]; /* a record that is found but whose CONTENTS cannot be read back (a corrupt record) */
+
+static ssize_t fake_read_cb(void *cb_arg, void *data, size_t len)
+{
+    int i = *(int *) cb_arg;
+    if (fail_content[0] && strcmp(fail_content, store[i].name) == 0) return -5;
+    size_t n = len < store[i].len ? len : store[i].len;
+    memcpy(data, &store[i].value, n < 4 ? n : 4);
+    return (ssize_t) n;
+}
 
 int settings_load_subtree_direct(const char *subtree, settings_load_direct_cb cb, void *param)
 {
     if (fail_read[0] && strcmp(fail_read, subtree) == 0) return -5;
     int i = slot(subtree, 0);
-    if (i >= 0) cb(NULL, 4, NULL, NULL, param);
+    if (i >= 0) cb(NULL, store[i].len, fake_read_cb, &i, param);
     return 0;
 }
 
@@ -88,6 +99,7 @@ static void put(const char *name, uint32_t v)
     int i = slot(name, 1);
     store[i].present = 1;
     store[i].value = v;
+    store[i].len = strncmp(name, "zoe/b", 5) == 0 || strcmp(name, "zoe/wk") == 0 ? 1 : 4;   /* flags are one byte */
 }
 
 /* ---- fake bond table (persistent) --------------------------------------------------------------------------------- */
@@ -152,7 +164,9 @@ int zrc_backend_revoke(void)
 static int fail_clear;   /* clear_ring_internal fails (an SD error) */
 static int ring_blocked; /* sd_write_blocked / not mounted */
 
-void zrc_backend_wipe_done(void) { settings_delete("zoe/wk"); }
+static int wipe_active;  /* zrc_backend_wipe_in_progress(): the RAM mirror of the persisted intent */
+void zrc_backend_wipe_done(void) { settings_delete("zoe/wk"); wipe_active = 0; }
+void zrc_backend_wipe_started(void) { wipe_active = 1; }
 
 static int fake_clear(void *ctx)  /* clear_ring_internal: the ring metadata reset */
 {
@@ -168,6 +182,7 @@ static int rd(const char *name, int *found)   /* a read with its outcome told ap
     *found = 0;
     if (fail_read[0] && strcmp(fail_read, name) == 0) return -5;
     *found = has(name);
+    if (*found && fail_content[0] && strcmp(fail_content, name) == 0) return -5;   /* load_rec reads every record back */
     return 0;
 }
 
@@ -182,7 +197,7 @@ static void key_init_and_clear(void)
     int d = zrc_key_decision(we, wf, ke, kf, ee, ef, ef ? val("zoe/re") : 0);
     if (d < 0) { ram_key = 0; ring_blocked = 1; return; }
     if (d == ZRC_KEY_USE) { ram_key = (int) val("zoe/rk"); ring_blocked = 0; return; }
-    if (wf) settings_delete("zoe/rk");
+    if (wf) { wipe_active = 1; settings_delete("zoe/rk"); }
     uint32_t ep;
     if (zrc_new_key_epoch(ef, val("zoe/re"), &ep) != 0) { ram_key = 0; ring_blocked = 1; return; }
     settings_save_one("zoe/re", &ep, 4);
@@ -212,7 +227,7 @@ void h_reset(void)
     bonded[PI] = 1;
     ram_key = 1; revoked = 0; next_gen = 1; ring_key = 1; /* the ring holds the owner's audio under key 1 */
     budget = -1; ops_done = 0; fail_save = 0; fail_unpair = 0; last_haptic = 0;
-    fail_read[0] = 0; fail_clear = 0; ring_blocked = 0;
+    fail_read[0] = 0; fail_content[0] = 0; fail_clear = 0; ring_blocked = 0; wipe_active = 0;
     window_until_ms = 0; gesture.armed = false; stub_uptime_ms = 100000;
 }
 
@@ -290,3 +305,5 @@ void h_set_fail_read(const char *n) { strncpy(fail_read, n ? n : "", 15); }
 void h_set_fail_clear(int f) { fail_clear = f; }
 int h_ring_blocked(void) { return ring_blocked; }
 void h_put_epoch(uint32_t v) { put("zoe/re", v); }
+void h_set_fail_content(const char *n) { strncpy(fail_content, n ? n : "", 15); }
+int h_wipe_active(void) { return wipe_active; }

@@ -396,7 +396,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   (refuses below 2000 MB `MemAvailable` or while `night_busy` says pause; holds the test lane); signing keys stay outside the
   repo. Never flashes and never touches a pendant: flashing, pairing and recovery are owner steps in `RUNBOOK.md`. Pi side
   lives in `services/omi-sync` (`OMI_SYNC_REQUIRE_BOND`) and `services/panel-bluetooth` (`omi_bond`). Regression net
-  (hand-run, never CI): `nice -n 10 python3 -m pytest labs/omi-firmware/host-test -q -p no:cacheprovider` (29 tests: the
+  (hand-run, never CI): `nice -n 10 python3 -m pytest labs/omi-firmware/host-test -q -p no:cacheprovider` (32 tests: the
   ring-crypt IV layout and CTR against an independent reference, the re-key, the salt allocator, the gesture, and the REAL
   `zoe_ble_sec.c` against stubbed Zephyr - pairing gate, wipe ordering with a power cut before each MODELLED persistent
   step, unreadable records, a failed ring clear, reconnect-never-wipes, the LED state/priority/pattern map; it re-states `sd_card.c` / `zoe_ring_crypt_psa.c`

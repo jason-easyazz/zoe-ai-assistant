@@ -115,6 +115,7 @@ static int wipe_for_new_bond(struct bt_conn *conn)
     if (settings_save_one(ZRC_WIPE_SETTING, &one, sizeof(one))) {
         return -EIO;
     }
+    zrc_backend_wipe_started(); /* the white LED follows the persisted intent until the ring is cleared */
 #endif
     if (settings_save_one(ZOE_NEW_BOND_WIPE, &one, sizeof(one))) {
         return -EIO;
@@ -278,13 +279,26 @@ BT_CONN_CB_DEFINE(zoe_conn_cb) = {
 
 /* ---- first boot of this firmware: forget every stock-era bond ------------------------------------------------- */
 
+struct flag_load {
+    bool found;
+    int err;
+};
+
+/* A flag is one byte. Its contents are READ: a record of the wrong size, or one that cannot be read back, is corrupt -
+ * an error (fail closed), never "set" and never "absent". */
 static int marker_cb(const char *key, size_t len, settings_read_cb read_cb, void *cb_arg, void *param)
 {
     ARG_UNUSED(key);
-    ARG_UNUSED(read_cb);
-    ARG_UNUSED(cb_arg);
-    if (len > 0) {
-        *(bool *) param = true;
+    struct flag_load *fl = param;
+    uint8_t v = 0;
+    fl->found = true;
+    if (len != 1U) {
+        fl->err = -EINVAL;
+        return 0;
+    }
+    ssize_t n = read_cb(cb_arg, &v, 1);
+    if (n != 1) {
+        fl->err = n < 0 ? (int) n : -EIO;
     }
     return 0;
 }
@@ -295,9 +309,13 @@ static int marker_cb(const char *key, size_t len, settings_read_cb read_cb, void
  * (Zephyr returns 0 without a callback for a missing record, and a negative value for a backend failure). */
 static int read_flag(const char *name, bool *found)
 {
-    *found = false;
-    int rc = settings_load_subtree_direct(name, marker_cb, found);
-    return rc < 0 ? rc : 0;
+    struct flag_load fl = {false, 0};
+    int rc = settings_load_subtree_direct(name, marker_cb, &fl);
+    *found = fl.found;
+    if (rc < 0) {
+        return rc;
+    }
+    return fl.err;
 }
 
 /* A new-bond wipe that a power cut interrupted before its bonds were deleted: delete them all now, before advertising. */

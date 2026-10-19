@@ -70,7 +70,7 @@ static void led_tick(struct k_work *work)
         .fault = atomic_get(&fault_latched) != 0 || before(&fault_until_ms, now) || sd_ring_blocked(),
         .pairing_window = zoe_ble_sec_pairing_open(),
 #ifdef CONFIG_ZOE_RING_ENCRYPT
-        .wiping = zrc_backend_rekey_pending(),
+        .wiping = zrc_backend_wipe_in_progress(), /* the persisted intent, held until the ring is cleared */
 #endif
         .paired_celebration = before(&paired_until_ms, now),
         .charging = is_charging,

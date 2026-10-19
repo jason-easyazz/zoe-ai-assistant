@@ -228,6 +228,7 @@ def ble():
     L = ctypes.CDLL(so)
     L.h_has.argtypes = [ctypes.c_char_p]
     L.h_set_fail_read.argtypes = [ctypes.c_char_p]
+    L.h_set_fail_content.argtypes = [ctypes.c_char_p]
     yield L
     shutil.rmtree(tmp, ignore_errors=True)
 
@@ -435,3 +436,42 @@ def test_led_patterns(lib):
     assert [frame(lib, PAIRED, t)[1] > 0 for t in (0, 300, 400, 700, 800)] == [True, False, True, False, True]
     assert frame(lib, OFF, 0) == (0, 0, 0)
     assert lib.host_led_period(NORMAL) == 1000 and lib.host_led_period(CHARGING) <= 100     # steady states barely wake
+
+
+# --- round 3 (post-cap, coordinator triage): flag CONTENTS are read; the wipe LED follows the persisted intent ---------
+def test_a_corrupt_stock_wipe_marker_never_skips_the_stock_bond_wipe(ble):
+    """The marker is found but its contents cannot be read back: that is an error, not "already wiped"."""
+    ble.h_reset()
+    ble.h_set_fail_content(b"zoe/bw")
+    assert ble.h_boot() != 0 and ble.h_haptic() == 2000      # no advertising with possibly-trusted stock bonds
+    ble.h_reset()
+    ble.h_gesture()
+    assert ble.h_pair(THIEF, 2) == 1                        # both intents on flash
+    ble.h_set_fail_content(b"zoe/wb")
+    assert ble.h_boot() != 0
+
+
+def test_a_corrupt_wipe_intent_never_loads_the_old_key(ble):
+    ble.h_reset()
+    ble.h_gesture()
+    assert ble.h_pair(THIEF, 1) == 1                        # key-wipe intent written, old key still on flash
+    ble.h_set_fail_content(b"zoe/wk")
+    ble.h_boot()
+    assert ble.h_ram_key() == 0 and ble.h_ring_blocked()
+
+
+def test_the_wipe_indication_lasts_until_the_ring_is_cleared(ble):
+    """The white LED is driven by the persisted intent's mirror: on from the moment the intent is written, off only once
+    the ring was emptied under the new key - and still on through a failed clear (until a boot finishes it)."""
+    ble.h_reset()
+    ble.h_gesture()
+    assert ble.h_accept_now(1) == 0 and ble.h_wipe_active()    # pairing accepted: wipe under way, worker not run yet
+    ble.h_reset()
+    ble.h_gesture()
+    assert ble.h_pair(THIEF, -1) == 0 and not ble.h_wipe_active()
+    ble.h_reset()
+    ble.h_gesture()
+    ble.h_set_fail_clear(1)
+    assert ble.h_pair(THIEF, -1) == 0 and ble.h_wipe_active()  # failed clear: the intent (and the LED) stay
+    ble.h_set_fail_clear(0)
+    assert ble.h_boot() == 0 and not ble.h_wipe_active() and ble.h_ring_key() == 0
