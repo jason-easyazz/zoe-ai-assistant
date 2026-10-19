@@ -2438,6 +2438,7 @@
           "scripts/maintenance/zoe-nightly-dreaming.py",
           "services/zoe-data/auth.py",
           "services/zoe-data/auth_handoff.py",
+          "services/zoe-data/ma_ui_gate.py",
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/music_jukebox.py",
           "services/zoe-data/panel_kiosk_credential.py",
@@ -2818,6 +2819,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/voice_settings.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LAN_HOSTS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth_handoff.py"
         ],
         "typed_env": false
       },
@@ -3325,6 +3336,36 @@
           "services/zoe-data/ma_ondemand.py"
         ],
         "typed_env": false
+      },
+      "ZOE_MA_UI_GATE": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ma_ui_gate.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MA_UI_SECRET": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ma_ui_gate.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MA_UI_TTL_S": {
+        "defaults": [
+          "43200"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ma_ui_gate.py"
+        ],
+        "typed_env": true
       },
       "ZOE_MCP_ACTOR_ROLE": {
         "defaults": [
