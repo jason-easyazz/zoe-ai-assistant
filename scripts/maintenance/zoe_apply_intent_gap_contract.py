@@ -148,9 +148,6 @@ def _run_checked(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[st
 def run_focused_checks(
     root: Path,
     result: dict[str, object],
-    *,
-    kanban_task: str | None = None,
-    hermes_bin: str | None = None,
 ) -> dict[str, object]:
     checks = [
         ["python3", "-m", "py_compile", "services/zoe-data/intent_router.py"],
@@ -171,16 +168,6 @@ def run_focused_checks(
         "git_diff_clean": clean,
         "terminal_action": None,
     }
-    if result.get("idempotent") is True and clean and kanban_task:
-        reason = (
-            "BLOCKER=ALREADY_COVERED: intent gap helper was idempotent and "
-            "focused tests passed; no PR required"
-        )
-        _run_checked(
-            [hermes_bin or "/home/zoe/.local/bin/hermes", "kanban", "block", kanban_task, reason],
-            cwd=root,
-        )
-        focused["terminal_action"] = "kanban_block:ALREADY_COVERED"
     return focused
 
 
@@ -193,8 +180,12 @@ def main() -> int:
         action="store_true",
         help="Run the focused compile/test checks after applying the contract",
     )
-    parser.add_argument("--kanban-task", default=None, help="Kanban task id for ALREADY_COVERED terminal block")
-    parser.add_argument("--hermes-bin", default=None, help="Hermes executable; defaults to /home/zoe/.local/bin/hermes")
+    parser.add_argument(
+        "--kanban-task",
+        default=None,
+        help="Accepted for compatibility with existing worker instructions and IGNORED: the ALREADY_COVERED "
+        "block used to exec the hermes CLI, which is retired (nothing in this repo may exec hermes)",
+    )
     parser.add_argument(
         "--allow-live-root",
         action="store_true",
@@ -213,8 +204,6 @@ def main() -> int:
         result["focused_checks"] = run_focused_checks(
             root,
             result,
-            kanban_task=args.kanban_task,
-            hermes_bin=args.hermes_bin,
         )
     print(json.dumps(result, sort_keys=True))
     return 0

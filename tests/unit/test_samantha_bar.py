@@ -380,6 +380,11 @@ def _base(**scen):
     return {"scenarios": scen, "judge_prompt_sha256": sb.JUDGE_PROMPT_SHA256}
 
 
+def _full_base(**over):
+    """A baseline holding EVERY scenario (T-4: a compare refuses a baseline that lacks a cell it scores)."""
+    return _base(**{**{s: "PASS" for s in sb.SCENARIO_IDS}, **over})
+
+
 def test_only_a_previous_pass_can_regress():
     cmp = sb.compare_baseline({"S1": "FAIL", "S2": "FAIL", "S3": "PASS"},
                               _base(S1="PASS", S2="FAIL", S3="FAIL"))
@@ -745,7 +750,8 @@ def _gates_open(monkeypatch, tmp_path, forget_ok=True):
     monkeypatch.setattr(sb, "deploy_in_progress", lambda: (False, "0"))
     monkeypatch.setattr(sb, "_readyz", lambda: (True, "ok"))
     monkeypatch.setattr(sb, "mem_available_mb", lambda: 4096)
-    monkeypatch.setattr(sb, "service_revision", lambda d: {"commit": "c0ffee", "dirty": False})
+    monkeypatch.setattr(sb, "service_revision", lambda d: {"commit": "c0ffee", "tree": "7ree", "dirty": False,
+                                                           "clean_verified": True})
     monkeypatch.setattr(sb.Live, "forget_ok", lambda self: forget_ok)
     monkeypatch.setattr(sb.os, "nice", lambda n: 5)
     return ["--results", str(tmp_path / "r.json"), "--trend", str(tmp_path / "t.jsonl"),
@@ -799,7 +805,7 @@ def test_teardown_runs_even_when_the_run_crashes(monkeypatch, tmp_path):
 
 def test_regression_exit_and_baseline_record(monkeypatch, tmp_path):
     args = _gates_open(monkeypatch, tmp_path)
-    (tmp_path / "b.json").write_text(json.dumps(_base(S1="PASS")))
+    (tmp_path / "b.json").write_text(json.dumps(_full_base()))
     verdicts = {sid: "PASS" for sid in sb.SCENARIO_IDS}
     verdicts["S1"] = "FAIL"
     monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [
@@ -876,7 +882,7 @@ def test_record_baseline_overwrites_a_malformed_one(monkeypatch, tmp_path):
 
 def test_compare_with_a_valid_baseline_and_no_regression_is_ok(monkeypatch, tmp_path):
     args = _gates_open(monkeypatch, tmp_path)
-    (tmp_path / "b.json").write_text(json.dumps(_base(S1="PASS")))
+    (tmp_path / "b.json").write_text(json.dumps(_full_base()))
     _all_pass(monkeypatch)
     assert sb.main(args + ["--compare-baseline"]) == 0
     res = json.loads((tmp_path / "r.json").read_text())
@@ -1185,7 +1191,7 @@ def _capture_samples(monkeypatch):
 
 def test_compare_inherits_the_baseline_sample_count(monkeypatch, tmp_path):
     args = _gates_open(monkeypatch, tmp_path)
-    (tmp_path / "b.json").write_text(json.dumps({**_base(S1="PASS"), "samples": 3}))
+    (tmp_path / "b.json").write_text(json.dumps({**_full_base(), "samples": 3}))
     seen = _capture_samples(monkeypatch)
     assert sb.main(args + ["--compare-baseline"]) == 0
     assert seen["samples"] == 3 and seen["backdate"] is True
@@ -1195,7 +1201,7 @@ def test_compare_inherits_the_baseline_sample_count(monkeypatch, tmp_path):
 
 def test_compare_with_an_explicit_mismatched_sample_count_is_refused(monkeypatch, tmp_path):
     args = _gates_open(monkeypatch, tmp_path)
-    (tmp_path / "b.json").write_text(json.dumps({**_base(S1="PASS"), "samples": 3}))
+    (tmp_path / "b.json").write_text(json.dumps({**_full_base(), "samples": 3}))
     calls = _must_not_run(monkeypatch)
     assert sb.main(args + ["--compare-baseline", "--samples", "1"]) == 2 and calls == []
     res = json.loads((tmp_path / "r.json").read_text())
@@ -1446,6 +1452,21 @@ def test_record_baseline_is_refused_with_only_or_axis(monkeypatch, tmp_path):
     # selecting EVERY scenario is the full run: recording stays legal
     _all_pass(monkeypatch)
     assert sb.main(args + ["--record-baseline", "--only", ",".join(sb.SCENARIO_IDS)]) == 0
+    assert (tmp_path / "b.json").exists()
+
+
+def test_record_baseline_refuses_a_run_with_an_errored_scenario(monkeypatch, tmp_path):
+    """status stays ``ok`` when every id is present and teardown is proven, so an ERROR cell (judge down, recall packet
+    unread) used to be recorded as the bar and lose its regression protection. Control: an all-PASS run records."""
+    args = _gates_open(monkeypatch, tmp_path)
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+    monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [
+        {"id": s, "verdict": "ERROR" if s == "S4" else "PASS", "evidence": {}} for s in sb.SCENARIO_IDS])
+    assert sb.main(args + ["--record-baseline"]) == 0
+    assert json.loads((tmp_path / "r.json").read_text())["status"] == "ok"
+    assert not (tmp_path / "b.json").exists()
+    _all_pass(monkeypatch)
+    assert sb.main(args + ["--record-baseline"]) == 0
     assert (tmp_path / "b.json").exists()
 
 

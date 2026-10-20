@@ -177,8 +177,7 @@ async def test_chat_turns_through_the_real_generator_land_and_the_report_cluster
     for name in ("_ensure_user_and_chat_session", "_record_run_state", "_persist_ag_ui_run"):
         monkeypatch.setattr(chat_router, name, anoop)
     monkeypatch.setattr(chat_router, "_check_frustration", lambda *a, **k: None)
-    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
-    monkeypatch.setattr(chat_router, "_ALL_TOOLS_ENABLED", False)
+    monkeypatch.setattr(chat_router, "_INTENT_FAST_PATH_ENABLED", False)
     monkeypatch.setattr(chat_router, "_WHATSAPP_FLOW_ENABLED", False)
     monkeypatch.setattr(chat_router, "classify_query", lambda *a, **k: "chat")
     monkeypatch.setattr(chat_router, "_USE_LOCAL_BRAIN", True)

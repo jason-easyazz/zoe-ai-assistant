@@ -2328,16 +2328,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_HERMES_AUTO_ESCALATE": {
-        "defaults": [
-          "'true'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/zoe_agent.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_HOLD_THE_FACT": {
         "defaults": [
           "-"
@@ -4670,18 +4660,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_OPENCLAW_GW": {
-        "defaults": [
-          "'http://127.0.0.1:18789'",
-          "dynamic"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/mcp_server.py",
-          "services/zoe-data/routers/chat.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_OTEL_ENABLED": {
         "defaults": [
           "''"
@@ -6231,6 +6209,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_ROUTER_SHADOW_TEXT_UNTIL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_ROUTER_SIDECAR_URL": {
         "defaults": [
           "-"
@@ -6933,8 +6921,7 @@
       },
       "ZOE_TASK_TIMEOUT_S": {
         "defaults": [
-          "-",
-          "dynamic"
+          "3600.0"
         ],
         "in_env_example": false,
         "readers": [
@@ -7389,6 +7376,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_VOICE_CLIP_EXPECTATIONS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_clip_checks.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_VOICE_CONTINUATION_HOLD": {
         "defaults": [
           "'on'"
@@ -7555,6 +7552,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/maintenance/voice_corpus_strata.py",
           "scripts/maintenance/voice_regression_probe.py"
         ],
         "typed_env": false
@@ -7619,6 +7617,7 @@
           "scripts/maintenance/curate_voice_corpus.py",
           "scripts/maintenance/router_struggle_retrain.py",
           "scripts/maintenance/stt_accuracy_report.py",
+          "scripts/maintenance/voice_corpus_strata.py",
           "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-data/routers/voice_tts.py",
           "services/zoe-data/struggle_proposals.py"

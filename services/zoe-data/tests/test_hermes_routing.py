@@ -166,7 +166,6 @@ async def test_force_hermes_uses_single_chat_run_and_persists_once(monkeypatch):
     monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", fake_empty)
     monkeypatch.setattr(chat_router, "_save_chat_message", fake_save)
     monkeypatch.setattr(chat_router, "_check_frustration", lambda *_, **__: None)
-    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
     monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
     monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
     monkeypatch.setattr(chat_router, "_build_memory_context", fake_empty)
@@ -228,7 +227,6 @@ async def test_force_hermes_surfaces_progress_events(monkeypatch):
     monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", fake_empty)
     monkeypatch.setattr(chat_router, "_save_chat_message", fake_empty)
     monkeypatch.setattr(chat_router, "_check_frustration", lambda *_, **__: None)
-    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
     monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
     monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
     monkeypatch.setattr(chat_router, "_build_memory_context", fake_empty)
@@ -283,7 +281,6 @@ async def test_force_hermes_error_records_hermes_mode(monkeypatch):
     monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", fake_empty)
     monkeypatch.setattr(chat_router, "_save_chat_message", fake_empty)
     monkeypatch.setattr(chat_router, "_check_frustration", lambda *_, **__: None)
-    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
     monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
     monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
     monkeypatch.setattr(chat_router, "_build_memory_context", fake_empty)
@@ -377,8 +374,7 @@ async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch)
     monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", fake_empty)
     monkeypatch.setattr(chat_router, "_save_chat_message", fake_save)
     monkeypatch.setattr(chat_router, "_check_frustration", lambda *_, **__: None)
-    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
-    monkeypatch.setattr(chat_router, "_ALL_TOOLS_ENABLED", False)
+    monkeypatch.setattr(chat_router, "_INTENT_FAST_PATH_ENABLED", False)
     monkeypatch.setattr(chat_router, "_USE_ZOE_AGENT", True)
     # This test validates the legacy zoe_agent Hermes-escalation contract, so pin
     # the brain to zoe_agent: the cutover routes to zoe-core by default, which has
@@ -444,64 +440,21 @@ async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_mcp_a2a_delegate_hermes_queues_background_task(monkeypatch):
-    calls = []
-
-    async def fake_enqueue(task, user_id, session_id=None, panel_id=None, request_depth=0, multica_issue_id=None):
-        calls.append(
-            {
-                "task": task,
-                "user_id": user_id,
-                "session_id": session_id,
-                "request_depth": request_depth,
-            }
-        )
-        return 123
-
-    monkeypatch.setitem(
-        sys.modules,
-        "background_runner",
-        types.SimpleNamespace(enqueue_background_task=fake_enqueue),
-    )
+async def test_mcp_a2a_delegate_hermes_is_refused_and_nothing_is_queued(monkeypatch):
+    """Hermes is retired: delegating to it must not queue anything (the old path ran an
+    auto-approve agent as the zoe user - deep dive S0-7)."""
     monkeypatch.setitem(
         sys.modules,
         "a2a_client",
         types.SimpleNamespace(get_a2a_client=lambda: (_ for _ in ()).throw(AssertionError("A2A should not be used for Hermes"))),
     )
-    monkeypatch.setattr(
-        mcp_server,
-        "_load_agents_registry",
-        lambda: (_ for _ in ()).throw(AssertionError("Hermes should not require agents_registry.yml")),
-    )
-
     result = await mcp_server._execute_tool(
         db=None,
         name="a2a_delegate",
-        args={
-            "_user_id": "test-user",
-            "agent_name": "hermes",
-            "task": "Investigate routing",
-            "session_id": "session-1",
-            "request_depth": 2,
-        },
+        args={"_user_id": "test-user", "agent_name": "hermes", "task": "Investigate routing", "session_id": "session-1"},
     )
-
-    assert result == {
-        "agent": "hermes",
-        "result": {
-            "status": "queued",
-            "task_id": 123,
-            "result_endpoint": "/api/agent/tasks/123",
-        },
-    }
-    assert calls == [
-        {
-            "task": "Investigate routing",
-            "user_id": "test-user",
-            "session_id": "session-1",
-            "request_depth": 2,
-        }
-    ]
+    assert "retired" in result["error"]
+    assert "task_id" not in str(result) and "queued" not in str(result)
 
 
 def test_mcp_agents_registry_missing_file_fails_softly(monkeypatch):
@@ -514,59 +467,17 @@ def test_mcp_agents_registry_missing_file_fails_softly(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_system_delegate_to_hermes_queues_background_task(monkeypatch):
-    calls = []
-
-    async def fake_enqueue(task, user_id, session_id=None, panel_id=None, request_depth=0, multica_issue_id=None):
-        calls.append(
-            {
-                "task": task,
-                "user_id": user_id,
-                "session_id": session_id,
-                "request_depth": request_depth,
-            }
-        )
-        return 456
+async def test_system_delegate_to_hermes_is_gone(monkeypatch):
+    from fastapi import HTTPException
 
     monkeypatch.setattr(
         system,
         "_load_registry",
-        lambda: (_ for _ in ()).throw(AssertionError("Hermes should not require agents_registry.yml")),
+        lambda: (_ for _ in ()).throw(AssertionError("Hermes must be refused before any registry lookup")),
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "background_runner",
-        types.SimpleNamespace(enqueue_background_task=fake_enqueue),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "a2a_client",
-        types.SimpleNamespace(get_a2a_client=lambda: (_ for _ in ()).throw(AssertionError("A2A should not be used for Hermes"))),
-    )
-
-    result = await system.delegate_to_agent(
-        {
-            "agent_name": "hermes",
-            "task": "Investigate routing",
-            "session_id": "session-2",
-            "request_depth": 1,
-        },
-        user={"user_id": "test-user"},
-    )
-
-    assert result == {
-        "agent": "hermes",
-        "result": {
-            "status": "queued",
-            "task_id": 456,
-            "result_endpoint": "/api/agent/tasks/456",
-        },
-    }
-    assert calls == [
-        {
-            "task": "Investigate routing",
-            "user_id": "test-user",
-            "session_id": "session-2",
-            "request_depth": 1,
-        }
-    ]
+    with pytest.raises(HTTPException) as ei:
+        await system.delegate_to_agent(
+            {"agent_name": "hermes", "task": "Investigate routing", "session_id": "session-2"},
+            user={"user_id": "test-user"},
+        )
+    assert ei.value.status_code == 410
