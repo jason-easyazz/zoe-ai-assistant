@@ -3,9 +3,16 @@
 ## Purpose
 
 Throwaway-grade experiments and de-risking spikes that must run **isolated from
-the Zoe runtime**. Nothing here is imported, built, or executed by any production
-service, Docker image, or CI job. Lab work proves (or kills) an idea before any
-prod migration — per the Samantha guardrail: **lab-prove before prod**.
+the Zoe runtime**. Most of `labs/` is never imported, built, or executed by any
+production service, Docker image, or CI job — lab work proves (or kills) an idea
+before any prod migration, per the Samantha guardrail: **lab-prove before prod**.
+
+**Two lab directories are NOT lab-only: they are live production services.**
+`flue-zoe-brain-2x/` is the voice brain sidecar (:3579, `flue-zoe-brain-2x.service`,
+Pi on the Gemma 4 E4B+MTP rock) and `flue-zoe-telegram-2x/` is the Telegram bot
+(:3582, `flue-zoe-telegram.service`). Both are auto-deployed on any diff (see
+Forbidden). Treat edits there as production edits; they are lab-hosted until the
+architecture deep-dive task B1 promotes them to `services/`.
 
 ## Ownership
 
@@ -338,7 +345,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   turns real family traffic into labelled training examples of the router's own
   measured mistakes. Joins the hash-keyed shadow log to raw text (forward: the
   `ZOE_ROUTER_SHADOW_TEXT=1` opt-in adds `utt_text` to the shadow-log FILE, default
-  OFF, never leaves the box; bootstrap: re-hash `chat_messages.content` with the
+  OFF, only while a round is open (`ZOE_ROUTER_SHADOW_TEXT_UNTIL`, <= 30 days), never leaves the box; bootstrap: re-hash `chat_messages.content` with the
   router's own `sha256(text)[:12]` and join), mines three reasons (disagreement /
   abstention / chat-negative), and labels each with the local Gemma brain
   (`:11434`, `json_schema`-constrained, serial + `/slots`-gated — a labeling
@@ -435,7 +442,18 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   negative controls: wrong password, append-only delete, cross-household, identity on the
   box, wrong identity, the 35-day retention bound). Hand-run via `run.sh` (01:35-04:55
   refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`, asserts its own
-  teardown). 19/19 on 2026-10-18.
+  teardown). 19/19 on 2026-10-18. Its tier-policy cell (B2) also covers the deep dive 2
+  S0-8 host sources.
+- `restore-drill/` — **S0-8 weekly restore drill + host sources** (`docs/knowledge/offbox-backup.md`
+  section 7): a synthetic source database in its own capped `--network none` container
+  (the pinned live image), a synthetic chromadb 1.5.9 palace, a synthetic box, and the
+  REAL nightly scripts, `zoe_host_snapshot.py`, `zoe_restore_drill.py` and the two backup
+  root helpers (repo copies, run unprivileged). Cells S1-S5, D1, negative controls N1-N10
+  (corrupted dump, missing table, wrong pgvector, palace without HNSW, tampered host file,
+  a planted same-name container, a truncated encrypted archive,
+  planted symlinks, memory floor, helper argv), T1 teardown + the live database's database
+  list unchanged. Hand-run via `run.sh` (`night_busy.sh test`, 01:35-04:55 refused,
+  `MemAvailable` >= 2000 MB, the test-lane lock). 18/18 on 2026-10-19.
 - `comms-matrix/` — **household comms gates 1 and 2** (deep dive 2026-10-18 section 8): a hermetic
   Docker lab (internal network, nothing published, every container memory-capped, homeservers
   on 2 CPUs) running Tuwunel 1.9.4 or Synapse 1.163.0 + Postgres one at a time, an nginx TLS

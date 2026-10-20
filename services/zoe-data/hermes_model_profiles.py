@@ -407,23 +407,12 @@ def apply_profiles(
 
     restart_result = None
     if restart:
-        try:
-            restarted = subprocess.run(
-                ["systemctl", "--user", "restart", "hermes-agent.service"],
-                check=False,
-                text=True,
-                capture_output=True,
-                timeout=30,
-            )
-            restart_result = {
-                "returncode": restarted.returncode,
-                "stderr": restarted.stderr[-4000:],
-            }
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            restart_result = {
-                "returncode": -1,
-                "stderr": f"hermes-agent.service restart failed after profiles applied: {exc}",
-            }
+        # hermes-agent.service is retired (its unit execs `hermes gateway run`); nothing in this
+        # repo may start or restart it. The profiles are written, the restart is reported as skipped.
+        restart_result = {
+            "returncode": -1,
+            "stderr": "hermes-agent.service is retired: profiles were applied, no restart was attempted",
+        }
 
     audit = {
         "timestamp": ts,

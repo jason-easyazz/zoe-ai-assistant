@@ -20,7 +20,7 @@ class ProactiveTrigger(ABC):
     """
     Abstract trigger.  Two tiers derive from this:
       - Tier 1: APScheduler-backed (reminders) — uses register_job / cancel_job.
-      - Tier 2: Slow-loop (OpenClaw checks) — implements should_fire / compose.
+      - Tier 2: Slow-loop checks — implements should_fire / compose.
     """
 
     trigger_type: str = "base"

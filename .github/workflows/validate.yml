@@ -61,6 +61,7 @@ jobs:
       # request path imports it yet; it joins requirements.txt with the calendar connectors work (a manifest edit
       # is voice-gated, see voice_gate_check.VOICE_PATH_PATTERNS) - docs/architecture/calendar-data-model.md s7.
       - name: Install slim CI deps
+        id: slim_deps
         run: |
           pip install --quiet \
             aiosqlite asyncpg psycopg2-binary alembic \
@@ -103,6 +104,7 @@ jobs:
         run: python3 tools/audit/validate_offline_memory.py
 
       - name: Run Alembic migrations on CI PostgreSQL
+        id: alembic
         run: |
           cd services/zoe-data
           POSTGRES_URL=postgresql://zoe:${CI_DB_PASSWORD}@localhost:5432/zoe \
@@ -174,7 +176,21 @@ jobs:
       # Run pure unit tests plus zoe-auth contract tests that use lightweight DB fakes.
       # Heavy tests requiring Jetson-specific packages (whisper, torch, MemPalace)
       # still run on the Jetson or during focused local validation.
-      - name: Unit tests (pure logic and auth contracts)
+      #
+      # EVERY LANE BELOW RUNS EVEN IF AN EARLIER ONE FAILED (2026-10-19, deep dive 2
+      # lane K / T-2). These used to be ONE bash block of four `pytest -x` calls, and
+      # GitHub's `bash -e` stops a block at the first failing line: a single failing
+      # source-text test stopped the zoe-data lane at "1 failed, 211 passed" of ~18,500
+      # and the tests/unit + zoe-auth invocations behind it never ran at all, so one red
+      # test hid thousands of unknowns. Now: separate steps, each gated on
+      # `!cancelled()` + the dependency install (not on its sibling lanes), and
+      # `--maxfail=200` instead of `-x` — a systemic break still stops early enough to
+      # keep the run short, but 200 failures are enough to show its shape. The job (the
+      # REQUIRED `validate` context) is red if ANY lane is red.
+      # tests/unit/test_validate_workflow_lanes.py pins all of this.
+      - name: Install lane deps (zoe-auth, numpy, LiveKit wheels)
+        id: lane_deps
+        if: ${{ !cancelled() && steps.slim_deps.outcome == 'success' }}
         run: |
           pip install --quiet -r services/zoe-auth/requirements.txt
           # numpy: lets the ci_safe semantic_router/router-head tests actually run
@@ -195,45 +211,26 @@ jobs:
           # test_livekit_ci_dep_guard.py FAILS this lane if they ever go missing,
           # so deleting this line cannot silently re-open the hole.
           pip install --quiet "av==17.1.0" "aiortc==1.15.0" "livekit-protocol==1.1.27"
-          # zoe-data slim-dep-green tests are selected by the `ci_safe` marker
-          # (registered in pytest.ini), not a hand-enumerated file list — so a new
-          # slim-safe test runs here just by adding a co-located
-          # `pytestmark = pytest.mark.ci_safe` line, no YAML edit. The full dir runs
-          # on the Jetson (self-hosted-tests.yml) as the catch-all safety net, so an
-          # UNMARKED new test still runs somewhere. See tests/AGENTS.md.
-          # The cross-test isolation leak that used to force --deselect exclusions
-          # here is FIXED: test_auth_unauthenticated (bisected as the necessary
-          # poison) swapped in a new `auth` module object without restoring the
-          # original, so later dependency_overrides keyed by the new object never
-          # matched → guest verdicts → 403s. Its fixture now restores the saved
-          # module IDENTITY (test_metrics_auth_regression got the same fix).
+
+      # zoe-data slim-dep-green tests are selected by the `ci_safe` marker
+      # (registered in pytest.ini), not a hand-enumerated file list — so a new
+      # slim-safe test runs here just by adding a co-located
+      # `pytestmark = pytest.mark.ci_safe` line, no YAML edit. The full dir runs
+      # on the Jetson (self-hosted-tests.yml) as the catch-all safety net, so an
+      # UNMARKED new test still runs somewhere. See tests/AGENTS.md.
+      # The cross-test isolation leak that used to force --deselect exclusions
+      # here is FIXED: test_auth_unauthenticated (bisected as the necessary
+      # poison) swapped in a new `auth` module object without restoring the
+      # original, so later dependency_overrides keyed by the new object never
+      # matched → guest verdicts → 403s. Its fixture now restores the saved
+      # module IDENTITY (test_metrics_auth_regression got the same fix).
+      - name: Lane — zoe-data (ci_safe)
+        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        run: |
           pytest services/zoe-data/tests -m ci_safe \
             --ignore=services/zoe-data/tests/samantha_live \
-            -x -q \
+            --maxfail=200 -q \
             --override-ini="asyncio_mode=auto"
-          pytest \
-            services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
-            services/homeassistant-mcp-bridge/tests/test_ha_tool_names.py \
-            -x -q \
-            --override-ini="asyncio_mode=auto"
-          # Repo-root tests/unit uses the SAME marker lane as zoe-data (no
-          # hand-enumerated file list — that list silently dropped every other
-          # tests/unit file out of CI). Slim-dep-green files opt in with a
-          # co-located `pytestmark = pytest.mark.ci_safe`; unmarked files
-          # (live-service smokes, PyJWT/yaml-dependent) run in the full-dir
-          # tests/unit catch-all on the Jetson (self-hosted-tests.yml).
-          # test_remediate_ownerless_memories.py + test_memory_service_fixes.py
-          # (the two formerly enumerated here) are ci_safe-marked, so they
-          # still run in this lane. See tests/AGENTS.md.
-          PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
-            tests/unit -m ci_safe \
-            -x -q \
-            --override-ini="asyncio_mode=auto"
-          # Full zoe-auth suite — no hand enumeration (the old 4-file list
-          # silently dropped test_oidc_login / test_rbac / test_security).
-          PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \
-            services/zoe-auth/tests \
-            -x -q
         env:
           PYTHONPATH: ${{ github.workspace }}/services/zoe-data
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
@@ -243,11 +240,60 @@ jobs:
           # owner-provisioned repository secret; unset = that one scan reports a skip, the mechanism tests still run.
           ZOE_PRIVACY_CANARY_KEY: ${{ secrets.ZOE_PRIVACY_CANARY_KEY }}
 
+      - name: Lane — Home Assistant MCP bridge
+        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        run: |
+          pytest \
+            services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
+            services/homeassistant-mcp-bridge/tests/test_ha_tool_names.py \
+            --maxfail=200 -q \
+            --override-ini="asyncio_mode=auto"
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/zoe-data
+          POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
+          ZOE_DATA_DB: ":memory:"
+          ZOE_MEMORY_STARTUP_STRICT: "false"
+
+      # Repo-root tests/unit uses the SAME marker lane as zoe-data (no
+      # hand-enumerated file list — that list silently dropped every other
+      # tests/unit file out of CI). Slim-dep-green files opt in with a
+      # co-located `pytestmark = pytest.mark.ci_safe`; unmarked files
+      # (live-service smokes, PyJWT/yaml-dependent) run in the full-dir
+      # tests/unit catch-all on the Jetson (self-hosted-tests.yml).
+      # test_remediate_ownerless_memories.py + test_memory_service_fixes.py
+      # (the two formerly enumerated here) are ci_safe-marked, so they
+      # still run in this lane. See tests/AGENTS.md.
+      - name: Lane — tests/unit (ci_safe)
+        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        run: |
+          PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
+            tests/unit -m ci_safe \
+            --maxfail=200 -q \
+            --override-ini="asyncio_mode=auto"
+        env:
+          POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
+          ZOE_DATA_DB: ":memory:"
+          ZOE_MEMORY_STARTUP_STRICT: "false"
+
+      # Full zoe-auth suite — no hand enumeration (the old 4-file list
+      # silently dropped test_oidc_login / test_rbac / test_security).
+      - name: Lane — zoe-auth (full)
+        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        run: |
+          PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \
+            services/zoe-auth/tests \
+            --maxfail=200 -q
+        env:
+          POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
+          ZOE_DATA_DB: ":memory:"
+          ZOE_MEMORY_STARTUP_STRICT: "false"
+
       - name: People MemPalace integration cleanup
+        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
         run: |
           PYTHONPATH="${{ github.workspace }}/services/zoe-data" pytest \
             tests/integration/test_people_mempalace_sync.py \
-            -x -q \
+            -q \
             --override-ini="asyncio_mode=auto"
         env:
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
@@ -258,15 +304,85 @@ jobs:
       # the Alembic step just migrated to head. ZOE_REQUIRE_PG_TESTS turns a missing database / driver into a FAILURE
       # here instead of a silent skip. It still skips cleanly everywhere else (no URL -> skipped).
       - name: People graph invariants on CI PostgreSQL
+        if: ${{ !cancelled() && steps.alembic.outcome == 'success' && steps.lane_deps.outcome == 'success' }}
         run: |
           pip install --quiet asyncpg
           PYTHONPATH="${{ github.workspace }}/services/zoe-data" pytest \
             services/zoe-data/tests/test_people_graph_postgres.py \
-            -x -q -rs \
+            -q -rs \
             --override-ini="asyncio_mode=auto"
         env:
           ZOE_TEST_PG_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
           ZOE_REQUIRE_PG_TESTS: "1"
+
+  # The zoe-data ci_safe lane on PYTHON 3.12 — the interpreter the LIVE service runs.
+  #
+  # The required `validate` job above runs 3.10 (the rollback-only interpreter the
+  # Jetson's system python still is). Production zoe-data has run the B0.7 3.12 venv
+  # since the cutover, so a 3.12-only break (a removed stdlib module, a changed
+  # asyncio default, a typing change) would have been green in the required gate and
+  # red on the box. 2026-10-19 deep dive 2 lane K / T-2.
+  #
+  # A SEPARATE JOB, deliberately not a matrix on `validate`: required contexts are
+  # authenticated by NAME, and a matrix renames the check (`validate (3.10)`), which
+  # would leave the required `validate` context permanently unreported — GitHub
+  # waits for it forever and `main` freezes (tests/unit/test_required_gate_workflows.py
+  # is the guard on that failure). So `validate` keeps its exact name and shape, and
+  # this job is NOT branch-protected: it reports a visible check on every PR, heeded
+  # when red, promoted to required only after it has shown itself stable (the same
+  # path `deps-resolvable` is on). Adding a required context is a branch-protection
+  # change, which is the owner's, not this PR's.
+  #
+  # Same slim install and lane command as `validate` (tests/unit/test_ci_instrument_honesty.py
+  # asserts the install blocks are identical so the two cannot drift apart silently). NO
+  # Postgres service and no migrations: the ci_safe zoe-data lane is database-free by
+  # contract (tests/AGENTS.md - a test that needs postgres is left unmarked), and measured
+  # on CPython 3.12.13 with POSTGRES_URL unset it is 18,702 passed. The service is also the
+  # only place `validate` carries its CI password fallback; not copying it keeps one
+  # occurrence of that literal in the repo instead of two.
+  zoe-data-py312:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install slim CI deps
+        id: slim_deps
+        run: |
+          pip install --quiet \
+            aiosqlite asyncpg psycopg2-binary alembic \
+            fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
+            pydantic pywebpush py-vapid cryptography \
+            "ag-ui-protocol==1.0.0" "websockets==16.1.1" "pyjwt==2.15.0" passlib \
+            python-multipart "uvicorn[standard]==0.53.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
+            pyyaml "icalendar==7.3.0"
+
+      - name: Install lane deps (zoe-auth, numpy, LiveKit wheels)
+        id: lane_deps
+        if: ${{ !cancelled() && steps.slim_deps.outcome == 'success' }}
+        run: |
+          pip install --quiet -r services/zoe-auth/requirements.txt
+          pip install --quiet "numpy<2"
+          pip install --quiet "av==17.1.0" "aiortc==1.15.0" "livekit-protocol==1.1.27"
+
+      - name: Lane — zoe-data (ci_safe) on Python 3.12
+        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        run: |
+          python3 --version
+          pytest services/zoe-data/tests -m ci_safe \
+            --ignore=services/zoe-data/tests/samantha_live \
+            --maxfail=200 -q \
+            --override-ini="asyncio_mode=auto"
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/zoe-data
+          ZOE_DATA_DB: ":memory:"
+          ZOE_MEMORY_STARTUP_STRICT: "false"
+          # Same env as the required lane minus the database (tests/unit/test_ci_instrument_honesty.py pins it).
+          ZOE_PRIVACY_CANARY_KEY: ${{ secrets.ZOE_PRIVACY_CANARY_KEY }}
 
   # Are the dependency manifests still SATISFIABLE, and do their load-bearing
   # ceilings still hold?

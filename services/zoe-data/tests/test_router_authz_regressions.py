@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from models import ListItemCreate, ListItemUpdate
-from routers import lists, notifications, openclaw, stubs
+from routers import lists, notifications, stubs
 
 pytestmark = pytest.mark.ci_safe
 
@@ -301,18 +301,19 @@ def test_track_interaction_accepts_json_body_action(monkeypatch):
     assert update_calls[0][1][0] == "snooze"
 
 
-def test_openclaw_telegram_token_routes_are_retired():
-    """The OpenClaw bot-token setup/status routes were deleted (auth audit
-    2026-09-27): an admin-typed token written into ~/.openclaw that nothing
-    consumed. Asking for them must 404 for everyone, admin included."""
-    paths = {getattr(r, "path", "") for r in openclaw.router.routes}
-    assert not any(p.startswith("/api/openclaw/telegram") for p in paths)
-    app = FastAPI()
-    app.include_router(openclaw.router)
-    app.dependency_overrides[openclaw.get_current_user] = lambda: {"user_id": "a", "role": "admin"}
-    client = TestClient(app)
-    assert client.post("/api/openclaw/telegram/setup", json={"bot_token": "1:x"}).status_code == 404
-    assert client.get("/api/openclaw/telegram/status").status_code == 404
+def test_openclaw_router_is_removed():
+    """The OpenClaw REST router (plugin/skill management + the old bot-token
+    setup/status routes, deleted in the 2026-09-27 auth audit) is GONE with the
+    gateway it fronted (B3, 2026-10-18). Nothing may import or mount it again:
+    its token routes wrote an admin-typed secret into ~/.openclaw that nothing
+    consumed."""
+    import importlib.util
+
+    assert importlib.util.find_spec("routers.openclaw") is None
+    assert importlib.util.find_spec("openclaw_manager") is None
+    main_src = (ROOT / "main.py").read_text()
+    assert "routers.openclaw" not in main_src
+    assert "openclaw_router" not in main_src
 
 
 @pytest.mark.asyncio

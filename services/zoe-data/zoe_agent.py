@@ -89,33 +89,15 @@ _MAX_TOOL_ITERS   = env_int("ZOE_AGENT_MAX_TOOL_ITERS", 5)
 _LLM_TIMEOUT      = float(os.environ.get("ZOE_AGENT_LLM_TIMEOUT", "120.0"))
 _TOOL_TIMEOUT     = float(os.environ.get("ZOE_AGENT_TOOL_TIMEOUT", "10.0"))
 _DDG_SEARCH_HTML_MAX_BYTES = 5 * 1024 * 1024
-# Hermes opt-out — set ZOE_HERMES_AUTO_ESCALATE=false to disable even when healthy.
-_HERMES_AUTO_ESCALATE = os.environ.get("ZOE_HERMES_AUTO_ESCALATE", "true").lower() != "false"
-
-
 def _hermes_available() -> bool:
-    """Return True if Hermes should be offered as an escalation target.
+    """Hermes is retired (no gateway on :8642), so it is never an escalation target.
 
-    Checks runtime health lazily (populated by main.py _probe_runtimes at startup)
-    and the opt-out env var. Falls back to False if health dict not yet populated.
+    This used to probe :8642 (and read main._RUNTIME_HEALTH["hermes"]); both probes
+    went with the Hermes removal (B3, 2026-10-18). The function stays only so the
+    tool-list builders keep one place that says "no Hermes tool" until the
+    escalate_to_hermes tool itself is deleted.
     """
-    if not _HERMES_AUTO_ESCALATE:
-        return False
-    try:
-        from main import _RUNTIME_HEALTH  # lazy import — main is fully loaded by call time
-        if bool(_RUNTIME_HEALTH.get("hermes", False)):
-            return True
-        from main import _RUNTIME_LAST_PROBED  # type: ignore[import]
-        if _RUNTIME_LAST_PROBED:
-            return False
-    except Exception:
-        pass
-    try:
-        import socket
-        with socket.create_connection(("127.0.0.1", 8642), timeout=0.1):
-            return True
-    except Exception:
-        return False
+    return False
 
 
 def _openclaw_execution_enabled() -> bool:

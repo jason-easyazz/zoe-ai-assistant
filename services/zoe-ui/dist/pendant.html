@@ -70,6 +70,29 @@
         .toast.show { opacity: 1; }
         .toast.bad { background: var(--p-bad); }
         audio.clip { display: block; width: 100%; margin-top: 8px; }
+        /* Review your day: phone-first, every target at least 48 px */
+        .rv .pb { min-height: 48px; min-width: 48px; padding: 10px 16px; font-size: 16px; }
+        .rv .pb.small { min-height: 48px; font-size: 15px; }
+        .rv h3 { margin: 18px 0 4px; font-size: 15px; color: var(--p-muted); text-transform: uppercase; letter-spacing: .03em; }
+        .rv-item h4 { margin: 8px 0 4px; font-size: 17px; line-height: 1.35; }
+        .rv-quote { margin: 8px 0 0; }
+        .rv-quote .sample { margin: 0; font-style: italic; }
+        .rv-quote figcaption { margin-top: 4px; }
+        .rv-who { color: var(--p-text); }
+        .rv-quote .play { margin-top: 6px; }
+        .rv-warn { margin-top: 10px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--p-warn);
+                   background: rgba(180,83,9,0.08); color: var(--p-text); }
+        .rv-conflict { border-color: var(--p-warn); }
+        .rv-acts .pb { flex: 1 1 auto; }
+        .rv-edit { margin-top: 10px; }
+        .rv-field { margin: 8px 0; }
+        .rv-field label { display: block; font-size: 14px; color: var(--p-muted); margin-bottom: 4px; }
+        .rv-field .who-in { min-height: 48px; }
+        .rv-voice { padding: 8px 0; border-top: 1px solid var(--p-line); }
+        .rv-voice:first-of-type { border-top: 0; }
+        .rv-flash { outline: 3px solid var(--p-accent); outline-offset: 2px; }
+        .rv-summary:focus, .rv-item h4:focus, .voice h3:focus { outline: 2px solid var(--p-accent); outline-offset: 2px; }
+        .card.voice, #pendantUnknownHead { scroll-margin-top: 72px; }   /* a jump from the review lands below the sticky bar */
         [hidden] { display: none !important; }
     </style>
 </head>
@@ -82,7 +105,13 @@
     <main>
         <section class="card" id="pendantStatus" aria-live="polite"><p class="empty">Loading…</p></section>
 
-        <h2>Voices to name</h2>
+        <section class="rv" aria-labelledby="pendantReviewHead">
+            <h2 id="pendantReviewHead">Review your day</h2>
+            <p class="hint">What Zoe picked up from your pendant, with the exact words and who said them.</p>
+            <div id="pendantReview"></div>
+        </section>
+
+        <h2 id="pendantUnknownHead" tabindex="-1">Voices to name</h2>
         <p class="hint">Voices Zoe heard on your pendant that she does not know yet. Tell her who each one is.</p>
         <div id="pendantUnknown"></div>
 
@@ -95,7 +124,7 @@
         <div id="pendantKnown"></div>
     </main>
     <div class="toast" id="pendantToast" role="status"></div>
-    <script src="/js/pendant-page.js?v=5"></script>
+    <script src="/js/pendant-page.js?v=6"></script>
     <script>
         // auth.js's synchronous desktop gate may already be redirecting to sign-in: send nothing from this page meanwhile
         if (window.ZoePendant && !window.__zoeAuthRedirecting) window.ZoePendant.init(document);

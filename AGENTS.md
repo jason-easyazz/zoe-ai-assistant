@@ -1,4 +1,4 @@
-# Command Center — READ THESE FIRST (every agent: Claude Code, Codex, Omnigent, Hermes)
+# Command Center — READ THESE FIRST (every agent: Claude Code, Codex, Omnigent)
 
 - **[docs/VISION.md](docs/VISION.md)** — Zoe's north star, direction & core principles (the *why*). Read this first; every decision aligns to it (the rocks; local/private/fast; lab-prove-before-prod; build-to-stick; capture-don't-lose).
 - **[docs/CANONICAL.md](docs/CANONICAL.md)** — the **locked-in truth**: what's actually live, and what's settled (the rocks: Gemma 4 E4B-QAT+MTP brain, Moonshine STT, Kokoro TTS). If a system isn't listed canonical there, it's **not load-bearing** — don't extend or resurrect it. Swapping a rock fails CI (`test_canonical_invariants.py`) by design.
@@ -417,7 +417,6 @@ For reviewable development work:
 - For Zoe engineering tasks, prefer `scripts/maintenance/greploop_guard.py --packet-only` or `--once` before broad expensive-agent repair.
 - Cheap models must receive one generated fix packet for one finding or CI failure; never hand them the whole PR.
 - Use Cursor's Greptile MCP to fetch review status/comments.
-- Use the `github-greptile-loop` Hermes skill to delegate heavier fix/re-review loops.
 - Do not treat any AI reviewer as a replacement for local Zoe verification; run focused tests and live health checks before marking work merge-ready.
 
 Merge mechanics & gotchas — canonical record: **[docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md)** (read it before driving any PR to merge). The load-bearing rules:
@@ -437,15 +436,19 @@ The `zoe-flag-inventory-fresh` hook **auto-fixes** the `ZOE_*` flag-inventory pa
 
 The tracked Cursor MCP config intentionally includes only non-secret local servers. `zoe-tools` launches the operator-local helper at `/home/zoe/bin/zoe-tools-mcp.py` through `uv run --with fastmcp --with httpx`; provision that helper on Zoe hosts before relying on the repo-local MCP entry. Keep token-backed servers such as Greptile in user-global Cursor config or environment-backed local config, never in tracked repo files.
 
-## Hermes-First Delegation
+## Engineering agents — who does what
 
-Hermes is Zoe's default engineering and browser agent. Use it for planning, code review, implementation repair, architecture analysis, Greptile loops, codebase-memory/Serena-guided codebase work, Multica board repair, generated knowledge refresh, and browser work through Zoe's CloakBrowser tools.
+Hermes and OpenClaw are **retired** (operator decisions 2026-07-22, `docs/architecture/multica-executor-migration.md` §5; `~/.hermes` and `~/.openclaw` were deleted live 2026-10-18, bar the `~/.hermes/.env` file that is being migrated out). Route no work to either, extend neither, and treat any doc, skill or code path that still names them as a deletion target (git keeps history). Their skills never executed once — verified; backups live in `docs/knowledge/operator-skills/`. A capability is rebuilt on Pi/Flue only when it is actually needed.
 
-Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zoe-engineering`, `agentic-engineering-workflow`, `source-code-context`, `code-structure-cleanup`, `github-greptile-loop`, `grep-loop-review-workflow`, and `zoe-status-refresh`. They are operator-level Hermes skills, not user-facing Zoe runtime skills under `skills/`.
+Engineering work runs on:
 
-The `agentic-engineering-workflow` and `grep-loop-review-workflow` names are kept as compatibility entrypoints for the Micky-style workflow pack, but they map onto Zoe's Hermes-first codebase-memory/opensrc/Greptile process rather than introducing a second parallel system.
+- **Claude Code** (Claude Max, flat-rate) — the primary implementer; Sonnet-tier for routine work, Opus-tier for hard or multi-file work. Reads this file via `CLAUDE.md`.
+- **Codex** (ChatGPT subscription, flat-rate) — second implementer for narrow changes and the primary independent reviewer of Claude-implemented work.
+- **Omnigent** (the `zoe-omnigent` container) — hosts the polly orchestrator and the codex / pi workers behind cross-vendor review and the heavy lane of the Flue executor.
+- **`scripts/maintenance/cross_review.sh <PR#> "<contract>"`** — the cross-vendor review dispatcher (polly → direct codex → one lean pi pass, automatic fallback; exit 2 means "unavailable", never a clean review). Routing and costs: *Review pipeline*, Tier 2, and [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
+- **Multica** (currently paused) is the engineering-board workflow-state driver and the **Flue executor** (`labs/flue-executor/`) its execution seam, per the migration plan; moving the household autopilots off Multica is architecture-deep-dive task B2.
 
-OpenClaw is **being fully retired** (operator decision 2026-07-22, recorded in `docs/architecture/multica-executor-migration.md` §5): do not route ANY work to it, do not extend it, and its runtime + builder intents are to be deleted via gated PRs (its 31 workspace skills never executed once — verified; backups live in `docs/knowledge/operator-skills/`). Capabilities are rebuilt on Pi/Flue when actually needed, referencing the public Agent-Skills ecosystem. Zoe's Multica-first engineering driver owns workflow state and phase advancement; execution moves to the Flue executor + Omnigent per the migration plan.
+Browser work goes through Zoe's CloakBrowser tools (the Zoe MCP browser broker). Operator-level agent skills live outside the repo and are not user-facing Zoe runtime skills under `skills/`.
 
 ## Branching policy
 
@@ -465,7 +468,7 @@ Trunk-based development off protected `main`. No permanent `develop` or `staging
 
 Third-party skills and extensions run with the agent's privileges. Treat them as untrusted code.
 
-- Before installing any third-party skill, Pi/OpenClaw extension, or code-bearing MCP server into a Zoe agent runtime — and before promoting a self-authored skill from the lab to a live agent — scan it: `skillspector scan <dir|file|git-url>` (installed at `~/.local/bin/skillspector`).
+- Before installing any third-party skill, Pi extension, or code-bearing MCP server into a Zoe agent runtime — and before promoting a self-authored skill from the lab to a live agent — scan it: `skillspector scan <dir|file|git-url>` (installed at `~/.local/bin/skillspector`).
 - The static stage needs no credentials but is deliberately conservative: it flags legitimately powerful, process-spawning extensions as HIGH/CRITICAL. Do not treat the raw static score as a verdict — use the optional LLM stage (`SKILLSPECTOR_PROVIDER=...`) plus human judgement for promotion decisions.
 - Do not egress internal Zoe skill content to an external LLM provider for scanning without operator consent; prefer static scans, or a local/NV provider, for internal skills.
 - Record the scan outcome (or a deliberate waiver) when adopting a new skill or extension.
@@ -564,7 +567,7 @@ When the user requests a durable behavior change, record it here or in the relev
 ## Child DOX Index
 
 - [services/AGENTS.md](services/AGENTS.md) — runtime services: zoe-data production web/chat API, zoe-ui static UI + nginx, zoe-auth, MCP bridges, LiveKit
-- [skills/AGENTS.md](skills/AGENTS.md) — Zoe skill definitions (SKILL.md dirs); documentation only — NOT wired to runtime discovery, which reads `~/.openclaw/workspace/skills` + `~/.hermes/skills`
+- [skills/AGENTS.md](skills/AGENTS.md) — Zoe skill definitions (SKILL.md dirs); documentation only — NOT wired to any runtime discovery (the `~/.openclaw` / `~/.hermes` skill directories were retired and deleted 2026-10-18)
 - [tools/AGENTS.md](tools/AGENTS.md) — audit, cleanup, validation, and generator utilities (structure/critical-file validators live here)
 - [scripts/AGENTS.md](scripts/AGENTS.md) — setup, maintenance, deployment, and utility scripts, including systemd unit templates
 - [tests/AGENTS.md](tests/AGENTS.md) — unit, integration, performance, e2e, and voice test suites

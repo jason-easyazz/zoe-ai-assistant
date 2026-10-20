@@ -212,3 +212,22 @@ docstring).
 Name them / TV-radio-Zoe-media, Play), recordings opening to their lines (Me / Not me / Who? / TV, suggestion Yes / No) and
 the learned voices (Forget). Recordings transcribed before `ZOE_OMI_SPEAKER_TAG` was on have no turns and no audio: they show
 their joined transcript and cannot be tagged. Play needs `ZOE_OMI_KEEP_AUDIO_FOR_TAGGING=1` (or `keep_audio`).
+
+### Review your day (on the phone, 2026-10-19)
+
+The Pendant page's first section is the phone's way to approve what the day review proposed. It needs
+`ZOE_OMI_DAY_REVIEW` (`shadow` or `on`); off, it says "switched off" and shows nothing to act on.
+
+- **What the owner sees.** Pending items grouped: about your people, relationships, follow-ups and open loops, other. Each one
+  has the proposed item ("Sam Okoro: works at the library"), who said the line (Me, the person the owner tagged, or Someone),
+  the exact quote, the day, the recording's start time and how far in, and "▶ Play the line" while that recording's audio is
+  still held (at most 8 s, the owner-only clip route).
+- **What the owner taps.** Approve, Skip, and Edit where the server allows it (`editable`; a relationship has none). An edit
+  sends only the changed fields. The server re-checks it against the quote, and a refusal keeps what was typed and says why.
+- **A held conflict** shows what it contradicts ("This contradicts what you approved before: ..."; for a relationship, "You
+  already have Sam as 'friend'"). The buttons are the server's options: Keep what I had (skip this one), Change this one, and
+  Try again when the clashing row is no longer there. Approval never replaces what the owner already has.
+- **New voices to name** (up to 3) sit under the items. "Name this voice" moves focus to that voice's card in "Voices to name"
+  on the same page.
+- **Same routes everywhere.** The page calls only `GET /api/omi/day-review/candidates` and `POST .../{id}/approve|dismiss`;
+  the extras it needs (`editable`, `audio_kept`, `offset_ms`, `conflict`) are read-only annotations on that GET.

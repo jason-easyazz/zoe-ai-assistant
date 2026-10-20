@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-19T00:00:00Z
+timestamp: 2026-10-20T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-19T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-19. The table body is deterministic (sorted, no
+Last generated: 2026-10-20. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-756 flags; 706 not documented in `.env.example`.
+764 flags; 714 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -51,7 +51,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_AUTOPILOT_QUEUE_WAIT_S` | `1200.0` | yes | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_AUTORESEARCH_RUN_ROOT` | `'data/autoresearch'` | no | NO | `services/zoe-data/routers/autoresearch.py` |
 | `ZOE_AUTO_APPROVE_THRESHOLD` | `'0'` | no | NO | `services/zoe-data/evolution_notice.py` |
-| `ZOE_BACKUP_DIR` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
+| `ZOE_BACKUP_DIR` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py`<br>`scripts/maintenance/zoe_restore_drill.py` |
 | `ZOE_BARGE_MIN_MS` | `'192'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_BARGE_SPEECH_THRESHOLD` | `'0.30'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_BAR_ADMIN_SESSION` | `''` | no | NO | `scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/user_model_ab.py` |
@@ -173,6 +173,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DISTRESS_HANDOFF` | `'enforce'` | yes | NO | `services/zoe-data/distress_handoff.py` |
 | `ZOE_DISTRESS_LINES_FILE` | `''` | yes | NO | `services/zoe-data/distress_handoff.py` |
 | `ZOE_DISTRESS_NOTIFY` | `'all'` | yes | NO | `services/zoe-data/distress_handoff.py` |
+| `ZOE_DRILL_HELPER` | `(required)`, `-` | no | NO | `scripts/maintenance/zoe_restore_drill.py` |
+| `ZOE_DRILL_MEM_FLOOR_MB` | `dynamic` | no | NO | `scripts/maintenance/zoe_restore_drill.py` |
+| `ZOE_DRILL_PYTHON` | `dynamic` | no | NO | `scripts/maintenance/zoe_restore_drill.py` |
 | `ZOE_EDGE_TTS_TIMEOUT_S` | `'5'` | no | yes | `services/zoe-data/tts_waterfall.py` |
 | `ZOE_EDGE_TTS_VOICE` | `dynamic` | no | yes | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_EMBEDDING_MODEL_VERSION` | `'minilm-v1'` | no | NO | `services/zoe-data/memory_service.py` |
@@ -231,6 +234,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_HARNESS_QUIET_START` | `dynamic` | no | NO | `scripts/maintenance/harness_quiet.py` |
 | `ZOE_HA_BRIDGE_URL` | `''`, `'http://127.0.0.1:8007'` | no | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_HA_CONTROL_SCOPE` | `'panel'` | no | NO | `services/zoe-data/panel_principal.py` |
+| `ZOE_HA_EXPORT_CMD` | `(required)`, `-` | no | NO | `scripts/maintenance/zoe_host_snapshot.py` |
 | `ZOE_HA_UI_GATE` | `True` | yes | NO | `services/zoe-data/routers/ha_ui.py` |
 | `ZOE_HA_UI_SECRET` | `-` | yes | NO | `services/zoe-data/routers/ha_ui.py` |
 | `ZOE_HA_UI_TTL_S` | `28800` | yes | NO | `services/zoe-data/routers/ha_ui.py` |
@@ -241,7 +245,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_HEALTH_CHECK_TIMEOUT_S` | `'120'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_HEALTH_NO_ALERT` | `-` | no | NO | `scripts/maintenance/zoe_health.py` |
 | `ZOE_HEALTH_STATE` | `dynamic` | no | NO | `scripts/maintenance/zoe_health.py` |
-| `ZOE_HERMES_AUTO_ESCALATE` | `'true'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_HOLD_THE_FACT` | `-` | yes | NO | `services/zoe-data/hold_the_fact.py` |
 | `ZOE_HOME_SETUP_SECRET` | `-` | no | NO | `services/zoe-data/smart_home_setup.py` |
 | `ZOE_HOME_SETUP_TTL_S` | `'900'` | no | NO | `services/zoe-data/smart_home_setup.py` |
@@ -321,6 +324,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LK_USE_AIORTC` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_LLAMA_URL` | `'http://127.0.0.1:11434'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_LLM_MODEL` | `'gemma'` | no | NO | `services/zoe-data/memory_digest.py` |
+| `ZOE_LOCAL_BACKUP_ENCRYPT` | `''` | no | NO | `scripts/maintenance/zoe_host_snapshot.py` |
 | `ZOE_LOCAL_MODEL` | `'Gemma 4 E4B-QAT'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_LOCAL_TTS_URL` | `''` | no | yes | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_LOCATION_CITY` | `''`, `'Geraldton'`, `dynamic` | no | NO | `services/zoe-data/identity_facts.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py`<br>`services/zoe-data/voice_stitch.py` |
@@ -378,6 +382,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MIRROR_GUARD` | `-` | yes | NO | `services/zoe-data/mirror_guard.py` |
 | `ZOE_MIRROR_INTENTS_TO_OPENCLAW` | `'false'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_MISHEAR_CLARIFY` | `'off'` | yes | NO | `services/zoe-data/mishear_clarify.py` |
+| `ZOE_MODELS_LOCK` | `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_MOONSHINE_ARCH` | `'MEDIUM_STREAMING'`, `'v2'` | yes | yes | `scripts/perf/measure_moonshine_vad_threshold.py`<br>`scripts/perf/measure_stt_under_speech.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MOONSHINE_KEYTERMS` | `-` | yes | yes | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MULTICA` | `'false'` | no | NO | `services/zoe-data/main.py` |
@@ -424,6 +429,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_NVM_NODE_BIN` | `-` | no | NO | `services/zoe-data/pi_intent_classifier.py` |
 | `ZOE_OFFBOX_CHECKOUT` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_CONFIG_DIR` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_CRONTAB_FILE` | `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFBOX_ETC_SYSTEMD` | `'/etc/systemd/system'` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_HOME` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_MEM_FLOOR_MB` | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_NO_ALERT` | `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |
@@ -466,7 +473,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_OMNIGENT_CONTAINER` | `'zoe-omnigent'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_IMPLEMENT_TIMEOUT_S` | `'1800'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_URL` | `'http://127.0.0.1:6767'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
-| `ZOE_OPENCLAW_GW` | `'http://127.0.0.1:18789'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/chat.py` |
 | `ZOE_OTEL_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_OWN_FACT_PRECEDENCE` | `-` | no | NO | `services/zoe-data/semantic_router.py`<br>`services/zoe-data/zoe_flue_client.py` |
 | `ZOE_PANEL_AGENT_PORT` | `'8765'` | no | NO | `services/zoe-data/auth_handoff.py`<br>`services/zoe-data/routers/system.py` |
@@ -619,6 +625,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_SHADOW_KEEP` | `4` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SHADOW_MAX_BYTES` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SHADOW_TEXT` | `''` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_SHADOW_TEXT_UNTIL` | `''` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_SIDECAR_URL` | `-` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_THRESHOLD` | `'0.62'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_TRAIN_PYTHON` | `'/usr/bin/python3'` | no | NO | `scripts/maintenance/router_selftrain.py` |
@@ -688,7 +695,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STT_STREAM_UPLOAD` | `'false'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_SUBPROCESS_QUEUE_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/async_subprocess.py` |
 | `ZOE_SYNTHETIC_USER_ALLOWLIST` | `''` | no | NO | `services/zoe-data/user_filters.py` |
-| `ZOE_TASK_TIMEOUT_S` | `-`, `dynamic` | yes | NO | `services/zoe-data/background_runner.py` |
+| `ZOE_TASK_TIMEOUT_S` | `3600.0` | yes | NO | `services/zoe-data/background_runner.py` |
 | `ZOE_TAVILY_DEPTH` | `'basic'` | yes | NO | `services/zoe-data/web_search_provider.py` |
 | `ZOE_TELEGRAM_BOT_TOKEN` | `-` | yes | NO | `services/zoe-data/auth_handoff.py` |
 | `ZOE_TELEGRAM_BOT_USERNAME` | `''` | no | NO | `services/zoe-data/telegram_link.py` |
@@ -731,6 +738,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_BARGE_IN` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_VOICE_BASELINE` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_CHAT_TIMEOUT_S` | `'20'` | no | NO | `services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_VOICE_CLIP_EXPECTATIONS` | `-` | no | NO | `scripts/maintenance/voice_clip_checks.py` |
 | `ZOE_VOICE_CONTINUATION_HOLD` | `'on'` | no | NO | `services/zoe-data/voice_utterance_shape.py` |
 | `ZOE_VOICE_FAST_FIRST_AUDIO` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_FILLER_AFTER_S` | `'1.6'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
@@ -747,13 +755,13 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_PROBE_MIN_MEM_MB` | `-` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_SAMPLES` | `'20'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_TIMEOUT_S` | `'900'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
-| `ZOE_VOICE_PROBE_USER` | `'jason'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
+| `ZOE_VOICE_PROBE_USER` | `'jason'` | no | NO | `scripts/maintenance/voice_corpus_strata.py`<br>`scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_VAD_CHECK` | `'1'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_VAD_CLIPS` | `dynamic` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROFILE` | `'zoe_au_natural_v1'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_REPLAY_STT` | `'inprocess'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_RESULTS` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
-| `ZOE_VOICE_SAMPLE_DIR` | `-` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/router_struggle_retrain.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/struggle_proposals.py` |
+| `ZOE_VOICE_SAMPLE_DIR` | `-` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/router_struggle_retrain.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_corpus_strata.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/struggle_proposals.py` |
 | `ZOE_VOICE_SAVE_AUDIO` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_SESSION` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
 | `ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER` | `False` | yes | NO | `services/zoe-data/voice_session.py` |

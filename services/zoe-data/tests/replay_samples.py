@@ -29,6 +29,11 @@ mechanisms, and for years it only had one:
     brain used to write for real. Now gated by the `replay_isolation` marker at
     the brain call below.
 --execute fulfils writes on both halves.
+
+Every row also carries ``route``: content-free code labels of what the turn DID (lane, fast-path
+tier/domain/intent, router domain + tool, Tier-0 intent), which the voice probe holds each pinned
+clip to. ``ZOE_REPLAY_FAULT=blank_stt|misroute`` injects a known fault for the probe's
+``--self-test`` (recorded as ``fault`` in the JSON; never set on a gate run).
 --brain actually runs the Gemma brain on fall-through (slower; needed to test
 recall end-to-end). Default user is 'jason' so memory recall has facts.
 
@@ -288,6 +293,82 @@ def _classify(transcript: str, reply: str, outcome: str) -> str:
     return "OK"
 
 
+# ── Per-clip route labels (T-3, 2026-10-19) ─────────────────────────────────
+# "OK" above only means "did not refuse". The probe asserts WHAT each pinned clip
+# did by comparing these labels with the clip's expectation (the baseline's
+# per-clip profile, or an owner-labelled expectations file kept OFF the repo).
+# They are CODE identifiers (tier / domain / intent / tool names), never the
+# transcript or the reply; anything that is not a plain identifier is hashed.
+_LABEL_RE = re.compile(r"^[A-Za-z0-9_.:\-]{1,64}$")
+
+
+def _label(value) -> str | None:
+    if value is None or value == "":
+        return None
+    s = str(value)
+    if _LABEL_RE.match(s):
+        return s
+    import hashlib
+    return "h:" + hashlib.sha1(s.encode("utf-8")).hexdigest()[:8]
+
+
+def _route_labels(rr: dict | None, tier0, outcome: str) -> dict:
+    """What the turn DID, as content-free labels: the lane (fast | brain | deferred |
+    error), the fast tier's tier/domain/intent, the router's domain + chosen tool, and
+    the Tier-0 keyword intent. Deterministic for a fixed transcript: the router head is
+    numpy, the FunctionGemma sidecar decodes at temperature 0, fast_tiers is code.
+    The BRAIN's own tool choice is sampled (temp 0.7) and deliberately not here."""
+    rr = rr or {}
+    tier = domain = intent = None
+    if outcome == "brain":
+        lane = "brain"
+    elif outcome == "→ brain":
+        lane = "deferred"
+    elif outcome.startswith("<"):
+        lane = "error"
+    else:
+        lane = "fast"
+        tier, _, rest = outcome.partition(":")
+        domain, _, intent = rest.partition(":")
+    two = rr.get("two_stage") if isinstance(rr.get("two_stage"), dict) else {}
+    return {"lane": lane, "tier": _label(tier), "domain": _label(domain), "intent": _label(intent),
+            "router_domain": _label(rr.get("domain")), "router_tool": _label(two.get("tool")),
+            "tier0": _label(tier0)}
+
+
+# ── Fault injection: the probe's negative control (T-3) ──────────────────────
+# ``voice_regression_probe.py --self-test`` replays the pinned clips through a
+# KNOWN-BROKEN pipeline and requires the per-clip checks to go red. The fault is
+# chosen by ZOE_REPLAY_FAULT and recorded in the JSON (``fault``), so a faulted run
+# can never pass as evidence: the probe strips the variable from a normal run and
+# refuses a report that carries a fault, and voice_gate_check refuses a self-test
+# artifact. An unknown value is refused (exit 2), never silently ignored.
+REPLAY_FAULTS = ("blank_stt", "misroute")
+# misroute moves every clip to a DIFFERENT router domain, deterministically: chat is
+# pushed onto a tool domain and every tool domain onto the next one (or chat).
+_MISROUTE_RING = ("chat", "lists", "timers", "reminders", "calendar", "music", "smart_home",
+                  "weather", "time", "notes", "journal", "people", "memory")
+
+
+def _replay_fault() -> str | None:
+    raw = (os.environ.get("ZOE_REPLAY_FAULT") or "").strip()
+    if not raw:
+        return None
+    if raw not in REPLAY_FAULTS:
+        raise ValueError(f"ZOE_REPLAY_FAULT={raw!r}: expected one of {', '.join(REPLAY_FAULTS)}")
+    return raw
+
+
+def _misroute(rr: dict) -> dict:
+    """The router decision with its domain rotated and its two-stage tool dropped."""
+    dom = rr.get("domain") or "chat"
+    ring = _MISROUTE_RING
+    wrong = ring[(ring.index(dom) + 1) % len(ring)] if dom in ring else "chat"
+    out = {k: v for k, v in rr.items() if k != "two_stage"}
+    out.update(domain=wrong, routed=wrong, score=0.99)
+    return out
+
+
 def _replay_base_url(cli_base: str | None) -> str:
     """--base-url, else ZOE_REPLAY_BASE_URL, else numeric loopback. NEVER ZOE_BASE_URL:
     that is the PUBLIC URL (http://zoe.local live, an mDNS name another device owns);
@@ -460,6 +541,14 @@ async def _run(args) -> int:
     # the principal says so - the process default does (traffic_class.process_default; never set in the
     # service's own env). Every log line / record it writes, and the remote STT calls, carry "probe".
     os.environ.setdefault("ZOE_TRAFFIC_CLASS", "probe")
+    try:
+        fault = _replay_fault()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if fault:
+        print(f"!! FAULT INJECTION ACTIVE: {fault} (the probe's self-test; this run is NOT evidence)",
+              file=sys.stderr)
     watch = _MemoryRecallWatch()
     logging.getLogger().addHandler(watch)
     preflight, recall_detail = (_memory_recall_preflight() if args.brain
@@ -529,7 +618,9 @@ async def _run(args) -> int:
 
         t = time.monotonic()
         try:
-            if args.stt == "remote":
+            if fault == "blank_stt":
+                transcript = ""   # the negative control: STT heard nothing on every clip
+            elif args.stt == "remote":
                 transcript = (await asyncio.to_thread(
                     _transcribe_remote, f, args.base_url, _remote_token) or "").strip()
             elif os.environ.get("ZOE_REPLAY_STT_UNDER_SPEECH") == "1":
@@ -546,6 +637,8 @@ async def _run(args) -> int:
         rec["transcript"] = transcript
 
         rr = sr.route(transcript) if transcript else {"domain": "chat", "score": 0.0, "scores": {}}
+        if fault == "misroute" and transcript:
+            rr = _misroute(rr)
         rec["router"] = {"domain": rr.get("domain"), "score": rr.get("score")}
         try:
             det = ir.detect_intent(transcript, log_miss=False)
@@ -601,6 +694,7 @@ async def _run(args) -> int:
                 rec["brain_ms"] = int((time.monotonic() - t) * 1000)
 
         rec["outcome"] = outcome
+        rec["route"] = _route_labels(rr, rec.get("tier0"), outcome)
         if reply:
             rec["reply"] = reply
             rec["spoken"] = _clean_for_speech(reply)
@@ -645,7 +739,7 @@ async def _run(args) -> int:
           f"load failures={watch.load_failures})")
     if args.json:
         with open(args.json, "w") as fh:
-            json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt,
+            json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt, "fault": fault,
                        "interpreter": interp, "memory_recall": recall,
                        "memory_recall_detail": recall_detail,
                        "memory_load_failures": watch.load_failures}, fh, indent=2)
