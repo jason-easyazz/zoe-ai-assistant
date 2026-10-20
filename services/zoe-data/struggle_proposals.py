@@ -821,6 +821,9 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
     * ``ts`` is when the FAILED turn finished (the event's ``about_ts``; the event's own time when that is missing) - the Phase 3 loop splits
       by it. ``split`` is the stable hash split (by normalised text); ``audio_ref`` the saved recording when it is unambiguous (``audio_ref``).
     * ``status`` / ``decided_by`` say how the proposal stands, so a caller can tell a person's accept from the loop's own policy.
+    * Plus the failed turns the owner CONFIRMED in review (``turn_outcomes.confirmed_examples``: ``proposal_id`` / ``event_id`` =
+      ``turn:<row id>``, ``decided_by`` = ``owner:<id>``, ``label_origin``); their words come from the member's own failed-turn row under
+      the same rules, and pass the same forget check below.
     Consumers re-label with their own independent oracle before training."""
     statuses = tuple(s for s in statuses if s in SEAM_STATUSES)
     if not sources or not statuses:
@@ -859,6 +862,10 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
                 out.append({"proposal_id": pid, "status": status, "decided_by": decided_by, "event_id": str(eid), "user_id": str(uid),
                             "label": label, "label_source": source, "split": split_of(text), "ts": round(when, 3), "text": text,
                             "audio_ref": audio_ref(about, latency_ms=latency) if str(channel) == "voice" else None})
+    # failure capture: failed turns the OWNER confirmed (``turn_outcomes``; a proposed / rejected / harness / guest row never comes back)
+    import turn_outcomes
+
+    out.extend(ex for ex in await turn_outcomes.confirmed_examples(limit) if ex["label_source"] in sources)
     kept: list[dict] = []
     try:
         import memory_forgotten

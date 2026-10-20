@@ -194,6 +194,55 @@ def note_snap(text: str, info: dict) -> None:
         _count("hook_errors")
 
 
+#: (ts, session_id, user_id, kind, name): what EXECUTED a turn (``ZOE_STRUGGLE_OUTCOMES`` only) - a fast tier (``fast_tiers.resolve``),
+#: an intent executor (``intent_router.execute_intent``, which knows the user but not the session) or a brain tool call (``zoe_flue_client``)
+_HANDLERS: "deque[tuple[float, str, str, str, str]]" = deque(maxlen=128)
+
+
+def outcomes_on() -> bool:
+    try:
+        import turn_outcomes
+
+        return turn_outcomes.enabled()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def note_handler(session_id: str, user_id: str, kind: str, name: str) -> None:
+    """``kind`` (tier / intent / skybridge / tool) ``name`` ran for this session (or, with no session, this user). O(1), never raises;
+    nothing at all unless ``ZOE_STRUGGLE_OUTCOMES`` is on."""
+    try:
+        if not name or mode() == "off" or not outcomes_on():
+            return
+        _HANDLERS.append((time.time(), str(session_id or ""), str(user_id or ""), str(kind or "")[:12], str(name)[:60]))
+    except Exception:  # noqa: BLE001
+        _count("hook_errors")
+
+
+def note_tool(session_id: str, name: str) -> None:
+    """The brain called the tool ``name`` in this session (a ``__TOOL__`` phase=start sentinel). O(1), never raises."""
+    note_handler(session_id, "", "tool", name)
+
+
+def _handlers_for(session_id: str, user_id: str, since: float, now: float) -> tuple[str, list[str]]:
+    """(the last non-tool handler as ``kind:name``, the brain's tool names in call order) of the turn that ran from ``since`` to ``now``
+    in ``session_id`` (or, for a session-less note, by ``user_id``). The notes are consumed: one note belongs to one turn; stale ones go."""
+    handler, tools, keep = "", [], []
+    for item in list(_HANDLERS):
+        ts, sid, uid, kind, name = item
+        mine = (sid and sid == session_id) or (not sid and uid and uid == user_id)
+        if mine and since - 0.5 <= ts <= now + 0.5:
+            if kind == "tool":
+                tools.append(name)
+            else:
+                handler = f"{kind}:{name}"
+        elif now - ts <= NOTE_TTL_S:
+            keep.append(item)
+    _HANDLERS.clear()
+    _HANDLERS.extend(keep)
+    return handler, tools
+
+
 def _snap_for(text: str, now: float) -> dict:
     raw = (text or "").strip()
     for i in range(len(_SNAPS) - 1, -1, -1):
@@ -277,17 +326,19 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
             _count("dropped_off")
             return False
         pid = panel_id or _panel_from_session(session_id)
-        if pid.startswith(SYNTHETIC_PANELS) or _synthetic(user_id):
-            _count("skipped_synthetic")
-            return False
-        if not traffic_class.is_household():
-            # P-2: the struggle capture is the HOUSEHOLD's failure record - a harness/probe/ci turn (server-derived
-            # traffic class, traffic_class.py) is not one, even when it replays as a real member's id.
-            _count("skipped_traffic")
-            return False
+        traffic = _traffic(user_id, pid)
         uid = "guest" if speaker_verified is False else str(user_id or "")
+        if traffic != "household":
+            _count("skipped_synthetic" if (pid.startswith(SYNTHETIC_PANELS) or _synthetic(user_id)) else "skipped_traffic")
+            if outcomes_on():   # a text-free outcome row (the traffic tag is the point): never detected, never in a pair, no words
+                try:
+                    _queue().put_nowait((time.time(), str(channel or "chat"), "", "", uid, str(session_id or ""), pid,
+                                         bool(interrupted), traffic))
+                except asyncio.QueueFull:
+                    _count("dropped_full")
+            return False
         item = (time.time(), str(channel or "chat"), str(user_text or "")[:TEXT_CAP], str(reply or "")[:REPLY_CAP], uid,
-                str(session_id or ""), pid, bool(interrupted))
+                str(session_id or ""), pid, bool(interrupted), traffic)
         q = _queue()
         try:
             q.put_nowait(item)
@@ -301,6 +352,23 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
         return False
 
 
+FEEDBACK_ITEM = "__feedback__"
+
+
+def observe_feedback(user_id: str, interaction_id: str, kind: str) -> bool:
+    """The thumbs-down / correction BUTTON (``routers/chat.submit_feedback``): queue it for the worker, which marks the rated turn's outcome
+    row (``turn_outcomes.note_feedback``) - the worker stays the one writer of those rows. ``ZOE_STRUGGLE_OUTCOMES`` on only. O(1), never
+    raises."""
+    try:
+        if mode() == "off" or not outcomes_on() or kind not in ("thumbs_down", "correction"):
+            return False
+        _queue().put_nowait((FEEDBACK_ITEM, str(user_id or ""), str(interaction_id or ""), str(kind)))
+        return True
+    except Exception:  # noqa: BLE001 - QueueFull included
+        _count("hook_errors")
+        return False
+
+
 def _panel_from_session(session_id: str) -> str:
     """``voice-panel-<panel>-<hex8>`` -> ``<panel>``."""
     sid = session_id or ""
@@ -308,6 +376,19 @@ def _panel_from_session(session_id: str) -> str:
         rest = sid[len("voice-panel-"):]
         return rest.rsplit("-", 1)[0] if "-" in rest else rest
     return ""
+
+
+def _traffic(user_id: str, panel_id: str) -> str:
+    """``household`` | ``harness`` | ``probe`` | ``ci`` (``traffic_class``, P-2): a synthetic user or harness panel forces its class (the
+    detector's old rule), else the SERVER-derived class of the turn being handled (bound by the request middleware). Never a client claim."""
+    uid = str(user_id or "")
+    if panel_id.startswith(SYNTHETIC_PANELS) or _synthetic(uid):
+        return (traffic_class.class_for_user(uid) or traffic_class.class_for_panel(panel_id)
+                or traffic_class.HARNESS)
+    try:
+        return traffic_class.current()
+    except Exception:  # noqa: BLE001 - when in doubt it is NOT household: harness rows never train
+        return traffic_class.HARNESS
 
 
 def _synthetic(user_id: str) -> bool:
@@ -341,6 +422,7 @@ def reset() -> None:
     _BRAINS.clear()
     _SKY.clear()
     _SNAPS.clear()
+    _HANDLERS.clear()
     _HISTORY.clear()
     _COUNTERS.clear()
     _ERASED_AT.clear()
@@ -371,7 +453,7 @@ async def _worker(q: "asyncio.Queue") -> None:
 
 
 def build_turn(item: tuple) -> sig.Turn:
-    ts, channel, text, reply, user_id, session_id, panel_id, interrupted = item
+    ts, channel, text, reply, user_id, session_id, panel_id, interrupted = item[:8]
     panel_id = panel_id or _panel_from_session(session_id)
     route_ts, route = _route_for(text, ts)
     brain = _brain_for(session_id, route_ts if route_ts is not None else ts - 120.0, ts)
@@ -397,9 +479,19 @@ def build_turn(item: tuple) -> sig.Turn:
 
 async def process(item: tuple) -> list[sig.Event]:
     """Detect and store the struggles of one queued turn. Returns the events (tests)."""
+    if item and item[0] == FEEDBACK_ITEM:
+        import turn_outcomes
+
+        await turn_outcomes.note_feedback(item[1], item[2], item[3])
+        return []
     cur = build_turn(item)
     if _erased_since(cur.user_id, cur.ts, _DELETED_AT):
         return []          # the user was deleted after this turn was queued: it is not recorded at all
+    traffic = item[8] if len(item) > 8 else "household"
+    if traffic != "household":
+        if outcomes_on():
+            await _record_outcome(cur, [], str(item[4] or ""), traffic)
+        return []
     for k in [k for k, h in _HISTORY.items() if not h or cur.ts - h[-1].ts > HISTORY_TTL_S]:
         _HISTORY.pop(k, None)
     history = list(_HISTORY.get(cur.conv_key) or [])
@@ -420,8 +512,57 @@ async def process(item: tuple) -> list[sig.Event]:
             logger.info("STRUGGLE signal=%s conf=%.2f fix=%s domain=%s path=%s channel=%s user=%s mode=%s",
                         e.signal, e.confidence, e.fix_type, e.about.domain() or "-", e.about.path, cur.channel,
                         "guest" if cur.is_guest else cur.user_id, mode())
+    if outcomes_on():
+        await _record_outcome(cur, events, str(item[4] or ""), traffic)
     await _maybe_sweep(cur.ts)
     return events
+
+
+async def _words_of(turn: sig.Turn, at: float) -> str:
+    """The failed turn's OWN words for its outcome row - the rules of an event's ``summary`` (a member, words that may be kept, scrubbed
+    RAW, display form) - or ''."""
+    if turn.is_guest or _erased_since(turn.user_id, at, _ERASED_AT) or not await _keep_words_bounded(turn, turn.text):
+        return ""
+    scrubbed = _scrub(turn.text)
+    return sig.display(scrubbed)[:SUMMARY_MAX] if scrubbed is not None else ""
+
+
+async def words_for_turn(user_id: str, turn_id: str) -> str:
+    """A recent turn's own words for its outcome row, when a rating arrives AFTER the turn was recorded (the thumbs-down button): only
+    while the turn is still in the in-process history (``HISTORY_TTL_S``), under the same keep-words rules. '' otherwise."""
+    for turns in list(_HISTORY.values()):
+        for t in turns:
+            if t.turn_id == turn_id and t.user_id == user_id:
+                return await _words_of(t, time.time())
+    return ""
+
+
+async def _record_outcome(cur: sig.Turn, events: list, raw_user: str, traffic: str) -> None:
+    """``ZOE_STRUGGLE_OUTCOMES`` on: write ``cur``'s outcome row, and mark the earlier turn a pair event is ABOUT as failed (with its own
+    words and the route the follow-up proved). Every failure is counted; nothing raises."""
+    try:
+        import turn_outcomes as to
+
+        handler, tools = _handlers_for(cur.session_id, raw_user, cur.started if cur.started is not None else cur.ts - 120.0, cur.ts)
+        own = [e for e in events if e.about is cur]
+        outcome = to.outcome_of(cur, own)
+        signals = [e.signal for e in own]
+        label = next((lab for lab in (to.proposed_label(e, {}) for e in own) if lab[0]), ("", ""))
+        household = traffic == "household"
+        words = await _words_of(cur, cur.ts) if household and to.failing(signals, outcome) else ""
+        await to.record(to.new_row(cur, traffic=traffic, outcome=outcome, handler=handler, tools=tools, signals=signals, label=label,
+                                   summary=words, mode=mode()))
+        if not household:
+            return
+        for e in events:
+            about = e.about
+            if about is cur:
+                continue
+            words = await _words_of(about, cur.ts) if about.user_id == cur.user_id and not about.is_guest else ""
+            await to.mark_failed(about.user_id, about.turn_id, [e.signal], to.proposed_label(e, _follow_up(e)), words)
+    except Exception as exc:  # noqa: BLE001
+        _count("process_errors")
+        logger.debug("struggle_detector: outcome record failed (%s)", type(exc).__name__)
 
 
 async def _may_keep_words(turn: sig.Turn, *texts: str) -> bool:
@@ -535,6 +676,13 @@ async def _maybe_sweep(now: float) -> None:
     except Exception as exc:  # noqa: BLE001
         _count("store_errors")
         logger.debug("struggle_detector: retention sweep failed (%s)", type(exc).__name__)
+    try:   # the outcome rows age out the same way, whatever the flag says now (rows written while it was on still go)
+        import turn_outcomes
+
+        n = await asyncio.wait_for(turn_outcomes.get_backend().purge_before(now - retention_days() * 86400.0), STORE_TIMEOUT_S)
+        _count("swept", int(n or 0))
+    except Exception as exc:  # noqa: BLE001 - a missing table (0058 not run) included
+        logger.debug("struggle_detector: outcome retention sweep failed (%s)", type(exc).__name__)
 
 
 # ── the store ────────────────────────────────────────────────────────────────
@@ -674,16 +822,46 @@ async def erase_entity(user_id: str, name: str) -> int:
     try:
         hits = await backend.matching(user_id, needle)
     except Exception as exc:
-        if _nothing_stored(exc):
-            return 0
-        raise
+        if not _nothing_stored(exc):
+            raise
+        hits = []
     ids = [rid for rid, summary in hits if pat.search(summary or "")]
     if ids:
         # the proposals built on these rows go FIRST (Phase 2): a failure raises with the rows still there, so a retry finds them again
         import struggle_proposals
 
         await struggle_proposals.forget_events(ids)
-    return int(await backend.delete_ids(user_id, ids) or 0) if ids else 0
+    n = int(await backend.delete_ids(user_id, ids) or 0) if ids else 0
+    return n + await _erase_outcomes(user_id, pat, needle)
+
+
+def _outcomes_store_live() -> bool:
+    """The outcome rows live where the events live: SQL beside a SQL event store, or an explicitly swapped-in store (tests). An in-memory
+    event store (tests, the offline replay) beside the default SQL outcome store has no SQL rows to reach - the same rule as
+    ``struggle_proposals._sql_events``."""
+    import turn_outcomes
+
+    return type(turn_outcomes.get_backend()) is not turn_outcomes.SqlBackend or isinstance(get_backend(), SqlBackend)
+
+
+async def _erase_outcomes(user_id: str, pat, needle: str) -> int:
+    """The failure-capture rows (``turn_outcomes``) naming the entity go too, whatever the flag says now; their seam ids leave the
+    proposals / the retrain ledger first. RAISES on a failure; a missing table is "nothing stored"."""
+    import struggle_proposals
+    import turn_outcomes
+
+    if not _outcomes_store_live():
+        return 0
+    try:
+        ids = await turn_outcomes.matching_ids(user_id, pat, needle)
+    except Exception as exc:
+        if _nothing_stored(exc):
+            return 0
+        raise
+    if not ids:
+        return 0
+    await struggle_proposals.forget_events([f"turn:{i}" for i in ids])
+    return int(await turn_outcomes.get_backend().delete_ids(user_id, ids) or 0)
 
 
 async def delete_user(user_id: str) -> int:
@@ -696,10 +874,20 @@ async def delete_user(user_id: str) -> int:
         import struggle_proposals
 
         await struggle_proposals.forget_user(user_id)          # Phase 2 evidence first; the rows below are still there for a retry
-        return int(await get_backend().delete_user(user_id) or 0)
+        n = int(await get_backend().delete_user(user_id) or 0)
+    except Exception as exc:
+        if not _nothing_stored(exc):
+            raise
+        n = 0
+    try:   # the failure-capture rows (turn_outcomes), whatever the flag says now
+        import turn_outcomes
+
+        if not _outcomes_store_live():
+            return n
+        return n + int(await turn_outcomes.get_backend().delete_user(user_id) or 0)
     except Exception as exc:
         if _nothing_stored(exc):
-            return 0
+            return n
         raise
 
 
@@ -727,7 +915,8 @@ def _nothing_stored(exc: BaseException) -> bool:
     """A table that does not exist yet (migration 0050 not run) holds no rows. Anything else - a lost pool, a pool never
     built in this process (a script would then wrongly report rows gone that live in Postgres) - is a FAILURE."""
     msg = f"{type(exc).__name__} {exc}".lower()
-    return "undefinedtable" in msg or "no such table" in msg or ("struggle_events" in msg and "does not exist" in msg)
+    return ("undefinedtable" in msg or "no such table" in msg
+            or (("struggle_events" in msg or "turn_outcomes" in msg) and "does not exist" in msg))
 
 
 # ── the one user-facing reply (mode ``on``) ──────────────────────────────────

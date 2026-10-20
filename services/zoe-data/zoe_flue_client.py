@@ -254,6 +254,25 @@ _WIRE_2 = 2
 _NDJSON_CONTENT_TYPE = "application/x-ndjson"
 _TOOL_SENTINEL_PREFIX = "__TOOL__:"
 _THINKING_SENTINEL_PREFIX = "__THINKING__:"
+_TOOL_START_MARK = '"phase": "start"'
+
+
+def _note_tool_sentinel(session_id: str, chunk: str) -> None:
+    """Failure capture (``ZOE_STRUGGLE_OUTCOMES``, default off): the tool NAME of a ``__TOOL__`` phase=start sentinel goes to the struggle
+    detector's per-turn record. Only a start sentinel is parsed (a substring test first, so an args / result / thinking chunk costs one
+    ``in``); never raises, never changes what is yielded."""
+    try:
+        if not chunk.startswith(_TOOL_SENTINEL_PREFIX) or _TOOL_START_MARK not in chunk[:200]:
+            return
+        import struggle_detector
+
+        if not struggle_detector.outcomes_on():
+            return
+        name = json.loads(chunk[len(_TOOL_SENTINEL_PREFIX):]).get("name")
+        if isinstance(name, str) and name:
+            struggle_detector.note_tool(session_id, name)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _wire_version() -> int:
@@ -1855,6 +1874,7 @@ async def _run_turn_aggregated_wire2(
                         # Activity sentinels are not reply text — dropped here
                         # exactly as the wire-1 whole-result path never sees them.
                         if chunk.startswith((_TOOL_SENTINEL_PREFIX, _THINKING_SENTINEL_PREFIX)):
+                            _note_tool_sentinel(session_id, chunk)
                             continue
                         parts.append(chunk)
                         continue
@@ -2528,6 +2548,8 @@ async def _run_flue_brain_streaming_turn(
                                     if not chunk.startswith((_TOOL_SENTINEL_PREFIX, _THINKING_SENTINEL_PREFIX)):
                                         emitted_chars += len(chunk)
                                         emitted_deltas += 1
+                                    else:
+                                        _note_tool_sentinel(session_id, chunk)
                                     yield chunk
                                 continue
                             if isinstance(chunk, dict):
