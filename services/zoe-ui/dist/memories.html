@@ -952,6 +952,7 @@
             color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
             border-radius: 12px; transition: all 0.3s ease;
         }
+        .mobile-nav-item[hidden] { display: none; }   /* the About-me link stays hidden until the server offers it */
         .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
         .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
         .mobile-nav-item.logout { color: #ff4444; }
@@ -1215,6 +1216,25 @@
   }
 }
 </style>
+<style>
+/* "What Zoe knows about you" (js/memories-about-me.js) - phone first */
+.about-me-open{margin-top:10px;font:inherit;font-size:14px;padding:8px 12px;border-radius:10px;border:1px solid rgba(123,150,255,.45);background:rgba(123,150,255,.12);color:inherit;cursor:pointer}
+.about-me{position:fixed;inset:0;z-index:300;overflow:auto;padding:20px 16px 40px;background:var(--bg,#0e101a);color:var(--ink,#F4F6FA)}
+.about-me .am-head{display:flex;justify-content:space-between;align-items:center;gap:12px;max-width:720px;margin:0 auto}
+.about-me .am-title{font-size:22px;margin:0}
+.about-me .am-sub,.about-me .am-list{max-width:720px;margin:8px auto}
+.about-me .am-sub,.about-me .am-note,.about-me .am-meta{color:rgba(244,246,250,.7);font-size:14px}
+.about-me .am-h{margin:18px 0 6px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:rgba(244,246,250,.55)}
+.about-me .am-item{padding:10px 0;border-top:1px solid rgba(255,255,255,.08)}
+.about-me .am-item.am-soft .am-text{font-style:italic;opacity:.8}
+.about-me .am-text{margin:0 0 2px;font-size:16px}
+.about-me .am-acts,.about-me .am-pane{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.about-me .am-b{font:inherit;font-size:15px;min-height:40px;padding:0 14px;border-radius:10px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:inherit;cursor:pointer}
+.about-me .am-primary{background:#7b96ff;border-color:transparent;color:#fff}
+.about-me .am-danger{border-color:rgba(255,120,120,.5)}
+.about-me .am-input{flex:1 1 100%;font:inherit;font-size:16px;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.04);color:inherit}
+.about-me .am-label{flex:1 1 100%;font-size:14px}
+</style>
 </head>
 <body>
     <div class="nav-bar">
@@ -1244,6 +1264,7 @@
         <div class="insights-sidebar">
             <div class="insights-header">
                 <h2 class="insights-title">Memory Collections</h2>
+                <button type="button" id="aboutMeOpen" class="about-me-open" hidden>What Zoe knows about me</button>
             </div>
             
             <div class="search-box">
@@ -1270,6 +1291,9 @@
     </div>
     
     <div id="tilesContainer"></div>
+
+    <!-- "What Zoe knows about you" (js/memories-about-me.js, flag-dark ZOE_MEMORIES_VOICE): hidden until the server offers it -->
+    <section id="aboutMe" class="about-me" hidden aria-label="What Zoe knows about you"></section>
     
     <div class="modal-overlay" id="newCollectionModal">
         <div class="modal">
@@ -1327,6 +1351,7 @@
             <a href="people.html" class="mobile-nav-item">👥 People</a>
             <a href="memories.html" class="mobile-nav-item active">🧠 Memories</a>
             <a href="pendant.html" class="mobile-nav-item">🎙️ Pendant</a>
+            <a href="memories.html#about-me" id="aboutMeNav" class="mobile-nav-item" hidden>🙋 What Zoe knows about me</a>
             <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
 
 
@@ -1396,6 +1421,13 @@
     <script src="js/common.js"></script>
     <script src="/js/notifications-panel.js"></script>
     <script src="js/ai-processor.js"></script>
+    <script src="/js/memories-about-me.js?v=am-2"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () { if (window.ZoeAboutMe) window.ZoeAboutMe.init(document); });
+        window.addEventListener('hashchange', function () {
+            if (window.ZoeAboutMe && location.hash === '#about-me') window.ZoeAboutMe.open();
+        });
+    </script>
     <script>
         /* ── Render-safety helpers ──
            Memory content, collection names and canvas tiles originate from

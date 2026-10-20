@@ -332,7 +332,7 @@ def test_a_retry_after_a_failed_twin_finishes_the_whole_job(seeded, monkeypatch)
     twin = row_id(seeded, ME, "bike")                     # stands in for a twin row of the same utterance
     ref_twin = run(seeded.get(twin))
 
-    async def twins(_uid, _ref, svc=None):
+    async def twins(_uid, _ref, svc=None, **_kw):
         return [ref_twin] if _ref.id == rid else []
 
     monkeypatch.setattr(pa, "twins_of", twins)
