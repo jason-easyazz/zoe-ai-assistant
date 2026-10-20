@@ -1547,13 +1547,6 @@
    "kind": "unknown",
    "readers": 1
   },
-  "ZOE_HERMES_AUTO_ESCALATE": {
-   "defaults": [
-    "on"
-   ],
-   "kind": "bool",
-   "readers": 1
-  },
   "ZOE_HOLD_THE_FACT": {
    "defaults": [
     "unset"
@@ -3159,14 +3152,6 @@
    "kind": "unknown",
    "readers": 1
   },
-  "ZOE_OPENCLAW_GW": {
-   "defaults": [
-    "dynamic",
-    "http://127.0.0.1:18789"
-   ],
-   "kind": "unknown",
-   "readers": 2
-  },
   "ZOE_OTEL_ENABLED": {
    "defaults": [
     "unset"
@@ -4233,6 +4218,13 @@
    "kind": "bool",
    "readers": 1
   },
+  "ZOE_ROUTER_SHADOW_TEXT_UNTIL": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
   "ZOE_ROUTER_SIDECAR_URL": {
    "defaults": [
     "unset"
@@ -4720,8 +4712,7 @@
   },
   "ZOE_TASK_TIMEOUT_S": {
    "defaults": [
-    "dynamic",
-    "unset"
+    "3600.0"
    ],
    "kind": "number",
    "readers": 1
@@ -5023,6 +5014,13 @@
    "kind": "number",
    "readers": 2
   },
+  "ZOE_VOICE_CLIP_EXPECTATIONS": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
   "ZOE_VOICE_CONTINUATION_HOLD": {
    "defaults": [
     "on"
@@ -5140,7 +5138,7 @@
     "jason"
    ],
    "kind": "unknown",
-   "readers": 1
+   "readers": 2
   },
   "ZOE_VOICE_PROBE_VAD_CHECK": {
    "defaults": [
@@ -5182,7 +5180,7 @@
     "unset"
    ],
    "kind": "unknown",
-   "readers": 6
+   "readers": 7
   },
   "ZOE_VOICE_SAVE_AUDIO": {
    "defaults": [
