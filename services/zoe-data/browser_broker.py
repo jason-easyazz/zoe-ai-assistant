@@ -1063,13 +1063,8 @@ async def search_web(
             "elapsed_s": round(time.monotonic() - started, 3)}
 
 
-def create_default_browser_broker(openclaw_gateway_url: str | None = None) -> BrowserBroker:
-    """Zoe's browser broker: a single Zoe-native CloakBrowser surface.
-
-    ``openclaw_gateway_url`` is accepted but IGNORED — kept so existing callers
-    keep working while the OpenClaw retirement lands. The OpenClaw fallback
-    surface (already operator-flag-dark) and its gateway executor are removed.
-    """
+def create_default_browser_broker() -> BrowserBroker:
+    """Zoe's browser broker: a single Zoe-native CloakBrowser surface."""
     broker = BrowserBroker(default_surface="zoeCloak")
     cloak_exec = build_cloak_executor()
     if cloak_exec is not None:

@@ -62,6 +62,25 @@ omit `--samples` to inherit it; an explicit different count is refused. `--no-ba
 refused in both baseline modes — S2/S4/S7 are multi-day scenarios, and a same-day run can
 neither set nor clear the bar; the results file records `backdate`.
 
+**Complete, clean, commit-bound baselines (T-4, deep dive 2, 2026-10-19; `scripts/perf/bench_baseline.py`,
+shared with the day-sim and the person bench).** The 2026-09-30 baseline held S1-S8 only, and a scenario
+missing from the baseline was vacuously "not regressed", so 21 of the 29 scored cells could never go red.
+Now: `--compare-baseline` REFUSES before the run when the baseline lacks any scenario the run scores (each
+would be unmeasured), and `compare_baseline` itself counts a scored cell the baseline lacks as red;
+`--record-baseline` refuses before the run on a DIRTY or unverifiable service tree (untracked files count,
+same rule as the voice probe's `--expect-revision`) and records only a full, `ok` run with every scenario,
+writing the top-level `commit` beside `revision`. Recording therefore needs the live checkout clean
+(`git status --porcelain` empty). Run it, with the day-sim, the person bench and the voice self-test, in one
+allowed window: `bash scripts/maintenance/record_bench_baselines.sh` (start 22:00-01:05 or 05:00-06:45; the script itself
+refuses a start inside the 01:50-04:55 brain window or with under 45 min before 01:50, and `ZOE_HARNESS_FORCE` does not bypass that).
+
+**Day-sim baselines.** `samantha_day_sim.py --record-baseline` / `--compare-baseline` (`--baseline`, default
+one file per mode: `samantha_day_sim_baseline.json`, `…_baseline_allowlisted.json`). The baseline holds every
+ask's verdict (`cells`), the mode, `samples`, `criteria_sha256` and the commit; a record needs a full, `ok`,
+clean run with no `ERROR` ask. Compare refuses another mode, another sample count, changed criteria or a
+missing ask; then only an ask that PASSED in the baseline can regress (exit 1, `status: regression`), and the
+asks that were not PASS (the default mode's brief + card SKIPs) are listed as `uncovered`.
+
 Exit codes: 0 = ran with no regression; 1 = regression; 2 = refused, error, or teardown not
 proven; 3 = harness lock held. Without `ZOE_PERF=1` it prints a skip notice, exits 0 and
 writes nothing. This follows the `scripts/perf/` convention.
