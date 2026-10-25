@@ -124,6 +124,7 @@ def build_manifest(toc_lines: Iterable[str], copy_stream: IO[str], live_tables: 
         if extra:
             problems.append(f"{len(extra)} dumped table(s) not in the live catalog: {extra[:5]}")
     return {"tables": rows, "data_excluded": excluded,
+            "excluded_fks": [],           # filled by _manifest: FKs a restore must null (pg_restore_plan.py)
             "live_tables": sorted(live_tables) if live_tables is not None else None,
             "extensions": extensions, "alembic_version": alembic, "problems": problems}
 
@@ -208,7 +209,19 @@ def _manifest(ns, plain: Path) -> dict:
             live = set(_psql(ns.container, ns.db, CATALOG_TABLES_SQL))
             exts = dict(x.split("=", 1) for x in _psql(ns.container, ns.db, EXTENSIONS_SQL))
             alembic = "".join(_psql(ns.container, ns.db, ALEMBIC_SQL))
-        return build_manifest(toc.stdout.decode(errors="replace").splitlines(), sql, live, exts or {}, alembic)
+        man = build_manifest(toc.stdout.decode(errors="replace").splitlines(), sql, live, exts or {}, alembic)
+        # FKs from a backed-up table into a data-excluded one, read from the dump's own schema (pg_restore -s -f -:
+        # SQL to stdout, no connection). Lazy import: pg_restore_plan imports this module.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import pg_restore_plan as plan  # noqa: PLC0415
+        with open(plain, "rb") as fh:
+            sch = subprocess.run(["docker", "exec", "-i", ns.container, "pg_restore", "-s", "-f", "-"], stdin=fh,
+                                 capture_output=True, timeout=600)
+        if sch.returncode != 0:
+            raise RuntimeError(f"pg_restore -s failed: {sch.stderr.decode(errors='replace').strip()[-200:]}")
+        man["excluded_fks"] = plan.excluded_fks(plan.parse_fks(sch.stdout.decode(errors="replace")),
+                                                man["data_excluded"])
+        return man
 
 
 if __name__ == "__main__":
