@@ -717,7 +717,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_TRUSTED_PROXY_NETS` | `dynamic` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_TTS_KEEP_TAIL_MS` | `130` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_TTS_LEAD_GUARD_MS` | `20` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
-| `ZOE_TTS_MODE` | `'hybrid'` | yes | yes | `services/zoe-data/main.py`<br>`services/zoe-data/routers/voice_tts.py` |
+| `ZOE_TTS_MODE` | `'kokoro'` | yes | yes | `services/zoe-data/tts_waterfall.py` |
 | `ZOE_TTS_TRIM_SILENCE` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_UNAUTHENTICATED_ROLE` | `'guest'` | no | yes | `services/zoe-data/auth.py` |
 | `ZOE_UPDATE_CHECK_ENABLED` | `'true'` | no | NO | `services/zoe-data/system_updates.py` |
