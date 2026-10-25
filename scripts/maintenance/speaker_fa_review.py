@@ -98,7 +98,7 @@ def live_threshold(group: str, thresholds: dict = LIVE_THRESHOLDS) -> float:
 _APP_TS = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})([+-]\d{4})? ")
 _CMD = re.compile(r"voice/command panel=(\S+) session=\S+ user=(\S+) len=\d+ \[identity: identified=(\S+)")
 _VERDICT = re.compile(r"voice speaker verdict panel=(\S+) verified=(True|False)")
-_REJECT = re.compile(r"voice claim rejected: user=(\S+) score=([0-9.]+) < threshold=([0-9.]+)")
+_REJECT = re.compile(r"voice claim rejected: user=(\S+) score=(-?[0-9.]+) < threshold=([0-9.]+)")
 
 
 def server_events(lines: Iterable[str], panel: str = PANEL_ID) -> list:
@@ -235,6 +235,12 @@ def merge(old: Sequence[dict], new: Sequence[dict]) -> list:
         prev = keep.pop(r["turn_id"], None)
         if prev:
             r = dict(r, label=prev.get("label", ""), notes=prev.get("notes") or r.get("notes", ""))
+            # evidence a later collection cannot find again (an app log since compressed) is kept, never blanked
+            if r.get("server_identified") in (None, "", "none") and prev.get("server_identified") not in (None, "", "none"):
+                r["server_identified"] = prev["server_identified"]
+            for k in ("server_verified", "clip"):
+                if not r.get(k) and prev.get(k):
+                    r[k] = prev[k]
         out.append(r)
     out.extend(keep.values())
     out.sort(key=lambda r: r["turn_id"])
@@ -358,11 +364,18 @@ def disagreements(rows: Sequence[dict]) -> list:
 # --------------------------------------------------------------------------------------------- offline FA (public)
 
 def score_impostors(items: Sequence[dict], profiles: Sequence[dict], *, base: Path, embed_wav: Callable,
-                    match: Callable, thresholds: dict = LIVE_THRESHOLDS, strict: Optional[dict] = None) -> tuple:
-    """Each public clip against the enrolled profile(s): (results, skipped). ``embed_wav(bytes) -> (vec, seconds)`` and
-    ``match(vec, profiles) -> (user, score, n)`` are the panel module functions in production."""
-    results, skipped = [], 0
-    for it in items:
+                    match: Callable, thresholds: dict = LIVE_THRESHOLDS, strict: Optional[dict] = None,
+                    window: Optional[Callable[[int], Optional[str]]] = None, check_every: int = 25) -> tuple:
+    """Each public clip against the enrolled profile(s): (results, skipped, stopped). ``embed_wav(bytes) -> (vec,
+    seconds)`` and ``match(vec, profiles) -> (user, score, n)`` are the panel module functions in production.
+    ``window(1)`` (the shared night-pause rule) is consulted every ``check_every`` clips; when it refuses, scoring stops
+    and ``stopped`` is the reason (None for a complete run) - a run that outlives its estimate must not keep embedding."""
+    results, skipped, stopped = [], 0, None
+    for i, it in enumerate(items):
+        if window is not None and i % check_every == 0:
+            stopped = window(1)
+            if stopped:
+                break
         try:
             vec, seconds = embed_wav((Path(base) / it["path"]).read_bytes())
         except (OSError, ValueError):
@@ -378,7 +391,7 @@ def score_impostors(items: Sequence[dict], profiles: Sequence[dict], *, base: Pa
         if strict:
             row["accept_strict"] = score is not None and score >= live_threshold(group, strict)
         results.append(row)
-    return results, skipped
+    return results, skipped, stopped
 
 
 def summarise_impostors(results: Sequence[dict]) -> dict:
@@ -593,9 +606,13 @@ def cmd_offline_fa(args) -> int:
     emb = rn34.Resnet34Embedder.load(str(Path(args.model_dir).expanduser()),
                                      artifacts_path=str(REPO / "scripts" / "setup" / rn34.ARTIFACTS_FILENAME))
     t0 = time.time()
-    results, skipped = score_impostors(items, profiles, base=base, embed_wav=emb.embed_wav,
-                                       match=lambda v, ps: rn34.match_profiles(v, ps, rn34.MODEL_ID),
-                                       strict=dict(rn34.THRESHOLDS["far01"]))
+    results, skipped, stopped = score_impostors(items, profiles, base=base, embed_wav=emb.embed_wav,
+                                                match=lambda v, ps: rn34.match_profiles(v, ps, rn34.MODEL_ID),
+                                                strict=dict(rn34.THRESHOLDS["far01"]), window=window_refusal)
+    if stopped:     # a prefix of the impostor set is not a FAR: say so, write nothing that reads as a result
+        print(f"speaker_fa_review offline-fa: INCOMPLETE - {stopped} (scored {len(results)} of {len(items)}); no result written",
+              file=sys.stderr)
+        return 4
     summ = summarise_impostors(results)
     print(f"Public impostors vs the {len(profiles)} enrolled ResNet34 profile(s), live thresholds "
           f"{LIVE_THRESHOLDS['short']} / {LIVE_THRESHOLDS['long']} ({len(results)} clips, {skipped} skipped, "

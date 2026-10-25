@@ -111,6 +111,36 @@ def test_merge_never_loses_a_label():
     assert out[0]["score"] == "0.3" and out[0]["notes"] == "kitchen"
 
 
+def test_merge_keeps_server_evidence_a_later_collection_cannot_find():
+    old = [dict(turn_id="a", label="me", notes="", server_identified="alex", server_verified="yes", clip="/c/a.wav")]
+    new = [dict(turn_id="a", label="", notes="", server_identified="none", server_verified="", clip="")]   # app log compressed
+    out = sfa.merge(old, new)[0]
+    assert (out["label"], out["server_identified"], out["server_verified"], out["clip"]) == ("me", "alex", "yes", "/c/a.wav")
+    fresh = sfa.merge(old, [dict(turn_id="a", label="", notes="", server_identified="bob", server_verified="no", clip="")])[0]
+    assert (fresh["server_identified"], fresh["server_verified"]) == ("bob", "no")      # new evidence still wins
+
+
+def test_negative_cosine_scores_are_parsed():
+    lines = [pi("2026-10-20 20:00:00", "Wake word detected! Notifying Jetson and waking screen..."),
+             pi("2026-10-20 20:00:02", "Recorded command: duration=1.20s chunks=15 stop=silence"),
+             pi("2026-10-20 20:00:02", "Speaker claim: alex (-0.050)"),
+             pi("2026-10-20 20:00:03", "Speaker ID (dual, ResNet34): alex score=-0.1200 accept=False source=local 90ms"),
+             pi("2026-10-20 20:00:04", "Speaker ID (shadow): alex (-0.0300)")]
+    t = pvl.turns(pvl.events(lines))[0]
+    assert (t.claim_score, t.dual_score) == (-0.05, -0.12)
+
+
+def test_scoring_stops_when_the_night_pause_closes_mid_run():
+    seen = []
+    items = [dict(source="libri", variant="clean", path=f"c{i}.wav") for i in range(60)]
+    def window(b):
+        seen.append(b)
+        return "brain window" if len(seen) > 1 else None
+    res, skipped, stopped = sfa.score_impostors(items, ["P"], base=Path("/nonexistent"), window=window,
+                                                embed_wav=lambda raw: (None, 0.0), match=lambda v, p: ("x", 0.0, 1))
+    assert stopped == "brain window" and len(seen) == 2 and skipped == 25   # 25 attempted, then stopped at clip 25
+
+
 def test_labels_normalise():
     assert [sfa.norm_label(x) for x in ("Me", " m ", "y", "NOT ME", "n", "no", "skip", "", "maybe")] == \
         ["me", "me", "me", "not me", "not me", "not me", "skip", "", ""]
@@ -195,8 +225,9 @@ def test_offline_fa_scores_each_public_clip_against_the_profile(tmp_path):
         assert profiles == ["P"]
         return ("alex", vec, 1)
 
-    res, skipped = sfa.score_impostors(items, ["P"], base=tmp_path, embed_wav=embed_wav, match=match,
+    res, skipped, stopped = sfa.score_impostors(items, ["P"], base=tmp_path, embed_wav=embed_wav, match=match,
                                        strict=dict(short=0.309, long=0.351))
+    assert stopped is None
     assert skipped == 2                                   # an unembeddable clip and an unreadable one
     assert [(r["group"], r["accept"], r["accept_strict"]) for r in res] == \
         [("short", True, False), ("long", False, False), ("long", True, True)]

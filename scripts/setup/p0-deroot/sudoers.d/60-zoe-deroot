@@ -38,8 +38,14 @@ Cmnd_Alias ZOE_SVC_UNITS = /usr/bin/systemctl restart zoe-data.service, \
 Cmnd_Alias ZOE_BACKUP = /usr/local/libexec/zoe-priv/zoe-ha-config-export storage, \
                         /usr/local/libexec/zoe-priv/zoe-restore-drill-pg up, \
                         /usr/local/libexec/zoe-priv/zoe-restore-drill-pg down, \
-                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg restore zoe, \
-                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg restore multica, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg restore zoe pre-data, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg restore zoe data, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg restore zoe post-data, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg restore multica pre-data, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg restore multica data, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg restore multica post-data, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg inspect list, \
+                        /usr/local/libexec/zoe-priv/zoe-restore-drill-pg inspect schema, \
                         /usr/local/libexec/zoe-priv/zoe-restore-drill-pg psql zoe, \
                         /usr/local/libexec/zoe-priv/zoe-restore-drill-pg psql multica, \
                         /usr/local/libexec/zoe-priv/zoe-restore-drill-pg psql drill

@@ -10,7 +10,12 @@
 #
 #   up                 create the internal network + the container (pinned image, no binds, no published port,
 #                      memory/pids capped, caps dropped), RECORD their ids, and wait until it accepts TCP
-#   restore zoe|multica  createdb, then pg_restore --exit-on-error from STDIN into that database
+#   restore zoe|multica pre-data|data|post-data
+#                      pg_restore --exit-on-error of ONE section of the dump on STDIN into that database
+#                      (pre-data also createdb's it). Sections, not one pass, so the drill can null links into
+#                      data-excluded biometric tables between data and post-data (pg_restore_plan.py)
+#   inspect list|schema  read-only look at the dump on STDIN, NO database connection: its TOC (pg_restore -l) or its
+#                      schema SQL (pg_restore -s -f -); the drill derives the restore plan from these
 #   psql zoe|multica|drill  run the SQL on STDIN (psql -XAt, ON_ERROR_STOP) and print the result
 #   down               remove the recorded container (with its anonymous data volume) and network (idempotent)
 #
@@ -34,7 +39,7 @@ NAME=zoe-restore-drill
 NET=zoe-restore-drill-net
 MEM=512m
 
-usage() { echo "usage: zoe-restore-drill-pg up | down | restore zoe|multica | psql zoe|multica|drill" >&2; exit 2; }
+usage() { echo "usage: zoe-restore-drill-pg up | down | restore zoe|multica pre-data|data|post-data | inspect list|schema | psql zoe|multica|drill" >&2; exit 2; }
 
 IMAGE="$PINNED_IMAGE"
 if [ "$(id -u)" = 0 ]; then
@@ -48,8 +53,11 @@ fi
 cmd="$1"
 case "$cmd" in
   up|down) [ "$#" -eq 1 ] || usage ;;
-  restore) [ "$#" -eq 2 ] || usage
-           case "$2" in zoe|multica) ;; *) usage ;; esac ;;
+  restore) [ "$#" -eq 3 ] || usage
+           case "$2" in zoe|multica) ;; *) usage ;; esac
+           case "$3" in pre-data|data|post-data) ;; *) usage ;; esac ;;
+  inspect) [ "$#" -eq 2 ] || usage
+           case "$2" in list|schema) ;; *) usage ;; esac ;;
   psql) [ "$#" -eq 2 ] || usage
         case "$2" in zoe|multica|drill) ;; *) usage ;; esac ;;
   *) usage ;;
@@ -107,8 +115,12 @@ case "$cmd" in
   restore)
     ours || { echo "zoe-restore-drill-pg: not up (no container this helper created)" >&2; exit 4; }
     c="$(recorded container)"
-    docker exec "$c" createdb -U zoe "$2"
-    exec docker exec -i "$c" pg_restore -U zoe -d "$2" --exit-on-error ;;
+    [ "$3" != pre-data ] || docker exec "$c" createdb -U zoe "$2" || exit 1
+    exec docker exec -i "$c" pg_restore -U zoe -d "$2" --section="$3" --exit-on-error ;;
+  inspect)
+    ours || { echo "zoe-restore-drill-pg: not up (no container this helper created)" >&2; exit 4; }
+    if [ "$2" = list ]; then exec docker exec -i "$(recorded container)" pg_restore -l; fi
+    exec docker exec -i "$(recorded container)" pg_restore -s -f - ;;
   psql)
     ours || { echo "zoe-restore-drill-pg: not up (no container this helper created)" >&2; exit 4; }
     exec docker exec -i "$(recorded container)" psql -U zoe -d "$2" -XAt -v ON_ERROR_STOP=1 -f - ;;

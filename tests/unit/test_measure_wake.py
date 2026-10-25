@@ -69,7 +69,30 @@ def test_min_interval_suppresses_back_to_back_wakes():
     assert len(mw.confirmed_wakes(frames, 0.45, min_interval_s=0.0)) == 10
 
 
+@pytest.fixture(autouse=True)
+def _cuda_env_restored():
+    """cmd_run writes os.environ["CUDA_VISIBLE_DEVICES"] directly (monkeypatch cannot see it): put it back whatever happens."""
+    before = os.environ.get("CUDA_VISIBLE_DEVICES")
+    try:
+        yield
+    finally:
+        if before is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = before
+
+
 # ------------------------------------------------------------------ curve and recommendation
+
+def test_a_later_hey_zoe_inside_the_command_does_not_rescue_a_missed_wake_phrase():
+    # the opening phrase scores 0.5 (trigger at ~3.6 s -> frame 45); the command says "hey zoe" again at ~10 s scoring 0.9
+    frames = [0.0] * 40 + [0.5] * 4 + [0.0] * 80 + [0.9] * 4 + [0.0] * 10
+    pos = dict(set="positive", seconds=14.0, frames=frames, trigger_s=3.6)
+    low, high = mw.curve([pos], (0.45, 0.60))
+    assert low["frr"] == 0.0                       # the phrase itself wakes at 0.45
+    assert high["frr"] == 1.0                      # 0.60 misses the phrase; the later 0.9 must not count
+
+
 
 def _clip(name, peak, n_hits=4, seconds=3.0):
     return dict(set=name, seconds=seconds, frames=[0.0] * 10 + [peak] * n_hits + [0.0] * 10)
@@ -439,6 +462,17 @@ def test_score_clips_stops_when_the_window_is_about_to_open():
     assert len(clips) == 50 and aborted["reason"] == "brain-window"
 
 
+def test_the_memory_wait_rechecks_the_night_pause_before_resuming():
+    calls = []
+    def window(b):
+        calls.append(b)
+        return "brain window" if len(calls) > 1 else None   # clear at the start, closed after the first wait
+    clips, aborted = mw.score_clips([("libri", f"c{i}") for i in range(5)], _FakeScorer(), {}, lead_s=2.0, tail_s=1.0,
+                                    min_avail_mb=1500, mem=lambda: 100.0, sleep=lambda s: None, window=window,
+                                    load=lambda p: [0.0] * mw.SR, log=lambda m: None)
+    assert aborted["reason"] == "brain-window" and clips == []
+
+
 def test_a_complete_score_has_no_abort():
     sc = _FakeScorer()
     clips, aborted = mw.score_clips([("libri", "a"), ("libri", "b")], sc, {}, lead_s=2.0, tail_s=1.0, min_avail_mb=0,
@@ -472,6 +506,22 @@ def test_a_memory_aborted_run_is_marked_incomplete_withholds_the_recommendation_
     rargs = SimpleNamespace(scores=str(out / "scores.json"), no_nearmiss=True, voice_log=None, since=args.since,
                             threshold=0.45, confirm_count=3, confirm_window=1.0, min_interval=5.0, frr_budget=0.05)
     assert mw.cmd_report(rargs) == mw.EXIT_INCOMPLETE
+
+
+def test_an_unreadable_tv_clip_makes_the_run_incomplete_and_withholds_the_threshold():
+    def load(p):
+        if p == "bad":
+            raise OSError("corrupt")
+        return [0.0] * mw.SR
+    notes: dict = {}
+    clips, aborted = mw.score_clips([("positive", "a"), ("tv", "bad"), ("tv", "ok")], _FakeScorer(), notes, lead_s=2.0,
+                                    tail_s=1.0, min_avail_mb=0, mem=lambda: 9999.0, window=CLEAR, load=load,
+                                    log=lambda m: None)
+    assert len(clips) == 2 and aborted["reason"] == "unscored-tv" and notes["unreadable_tv"] == 1
+    # an unreadable non-TV clip alone stays a complete run
+    _c, ab = mw.score_clips([("libri", "bad")], _FakeScorer(), {}, lead_s=2.0, tail_s=1.0, min_avail_mb=0,
+                            mem=lambda: 9999.0, window=CLEAR, load=load, log=lambda m: None)
+    assert ab is None
 
 
 def test_build_report_marks_a_partial_run_and_gives_no_threshold():

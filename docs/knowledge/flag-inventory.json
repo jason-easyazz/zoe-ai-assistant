@@ -4084,6 +4084,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_NIGHT_BUSY": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/harness_quiet.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_NIGHT_MIND": {
         "defaults": [
           "''",
@@ -7139,12 +7149,11 @@
       },
       "ZOE_TTS_MODE": {
         "defaults": [
-          "'hybrid'"
+          "'kokoro'"
         ],
         "in_env_example": true,
         "readers": [
-          "services/zoe-data/main.py",
-          "services/zoe-data/routers/voice_tts.py"
+          "services/zoe-data/tts_waterfall.py"
         ],
         "typed_env": true
       },

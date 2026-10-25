@@ -218,7 +218,7 @@ def test_brain_window_cli_exit_codes(capsys):
     assert hq.main(["brain-window", "x", "--now", "2026-10-19T05:00:00"]) == 0
 
 
-def _stub_tree(tmp_path, refuse_after):
+def _stub_tree(tmp_path, refuse_after, deadline=600, body=None):
     """A copy of the orchestrator over stub scripts: harness_quiet.py ``check`` allows, ``brain-window`` allows its first
     ``refuse_after`` calls then refuses (exit 3); every harness step just drops a marker file."""
     import shutil
@@ -232,6 +232,9 @@ def _stub_tree(tmp_path, refuse_after):
         "if sys.argv[1] == 'brain-window-wait':\n"
         "    print(7)\n"
         "    sys.exit(0)\n"
+        "if sys.argv[1] == 'brain-window-deadline':\n"
+        f"    print({deadline})\n"
+        "    sys.exit(0)\n"
         "if sys.argv[1] == 'brain-window':\n"
         "    c = int(n.read_text()) if n.exists() else 0\n"
         "    n.write_text(str(c + 1))\n"
@@ -241,13 +244,14 @@ def _stub_tree(tmp_path, refuse_after):
                 "perf/samantha_person.py"):
         (tmp_path / "scripts" / rel).write_text(
             "import sys, pathlib\n"
-            f"pathlib.Path({str(tmp_path)!r}, 'ran-' + pathlib.Path(sys.argv[0]).stem).write_text('x')\n")
+            f"pathlib.Path({str(tmp_path)!r}, 'ran-' + pathlib.Path(sys.argv[0]).stem).write_text('x')\n"
+            + (body or ""))
     return m / "record_bench_baselines.sh"
 
 
-def _run_orchestrator(tmp_path, refuse_after):
+def _run_orchestrator(tmp_path, refuse_after, **kw):
     import subprocess
-    sh = _stub_tree(tmp_path, refuse_after)
+    sh = _stub_tree(tmp_path, refuse_after, **kw)
     env = {**os.environ, "HOME": str(tmp_path), "ZOE_HARNESS_LOCK": str(tmp_path / "lock")}
     r = subprocess.run(["bash", str(sh)], env=env, capture_output=True, text=True, timeout=60)
     return r, sorted(p.name for p in tmp_path.glob("ran-*"))
@@ -311,3 +315,40 @@ def test_night_pause_verdict_asks_the_gate_and_fails_back_to_the_fixed_window(mo
     assert hq.night_pause_verdict("x", now=_at(12, 0)).allowed
     monkeypatch.setenv("ZOE_NIGHT_BUSY", str(tmp_path / "missing.sh"))             # no gate installed -> the fixed rule
     assert not hq.night_pause_verdict("x", now=_at(3, 40)).allowed
+
+
+@pytest.mark.parametrize("when,secs", [
+    (_at(1, 20), 30 * 60 - 120),    # 30 min to the window minus the 2-min teardown margin
+    (_at(1, 49), 0),                # inside the margin: no room, refuse
+    (_at(2, 51), 0),                # inside the window
+    (_at(23, 0), 2 * 3600 + 50 * 60 - 120),
+])
+def test_step_deadline_is_the_window_minus_margin(when, secs):
+    assert hq.deadline_s(now=when) == secs
+
+
+def test_orchestrator_kills_a_step_that_outlives_its_deadline(tmp_path):
+    """Codex P1: the start check trusts an estimate; a step that overruns (waits, hang) must be KILLED at the deadline and the
+    run must not report success. Without the timeout wrapper the 30 s sleep runs to completion and rc stays 0."""
+    import time
+    t0 = time.monotonic()
+    r, _ = _run_orchestrator(tmp_path, refuse_after=99, deadline=1, body="import time; time.sleep(30)\n")
+    assert time.monotonic() - t0 < 25, "a step outlived its deadline"
+    assert r.returncode == 1, (r.stdout, r.stderr)
+
+
+def test_orchestrator_refuses_a_step_with_no_deadline_room(tmp_path):
+    r, ran = _run_orchestrator(tmp_path, refuse_after=99, deadline=0)
+    assert r.returncode == 1 and ran == [], (ran, r.stdout)
+
+
+def test_kill_grace_covers_bar_teardown_but_lands_before_the_window():
+    """Greptile P1: `timeout -k 20` SIGKILLed samantha_bar.py mid-teardown (needs >= 30 s). The grace must be >= 30 s yet
+    (TERM at deadline = window - margin) the final KILL must still land before the quiet window, i.e. grace < margin."""
+    import inspect
+    import re
+    text = (ROOT / "scripts/maintenance/record_bench_baselines.sh").read_text()
+    m = re.search(r'timeout -k (\d+) "\$d"', text)
+    assert m, "record_bench_baselines.sh lost its hard deadline wrapper"
+    margin = inspect.signature(hq.deadline_s).parameters["margin_s"].default
+    assert 30 <= int(m.group(1)) < margin

@@ -119,11 +119,12 @@ numpy<2
 # 1.23.2 is the LAST onnxruntime release with a cp310 wheel (1.24+ requires
 # Python >=3.11), so this pin cannot move until the zoe-data 3.12 venv (B0.7).
 onnxruntime==1.23.2
-# Cloud TTS fallback (fast, AU Neural voice)
+# Cloud TTS — legacy explicit ZOE_TTS_MODE=hybrid/cloud/edge only; NOT used by
+# default (Kokoro-only, owner decision 2026-10-21: Edge sends reply text off-box).
 edge-tts>=6.1.12
-# Primary offline TTS is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py,
-# port 10201) — NOT an in-process dep here. zoe-data reaches it over HTTP and falls
-# back to edge/espeak if it is down (see ZOE_TTS_MODE in .env.example).
+# Zoe's only voice is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py,
+# port 10201) — NOT an in-process dep here. zoe-data reaches it over HTTP; by
+# default there is no fallback if it is down (see ZOE_TTS_MODE in .env.example).
 # STT primary: Moonshine v2 (MEDIUM_STREAMING) — accurate on real room audio, CPU/ONNX.
 # Pinned to what the live Orin actually runs (box first, file second): 0.1.3 was
 # installed on the box 2026-09-27 (B1.10) and replay-gated there — said-vs-did

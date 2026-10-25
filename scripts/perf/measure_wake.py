@@ -77,6 +77,8 @@ LIVE = dict(threshold=0.45, confirm_count=3, confirm_window_s=1.0, min_interval_
 GRID = tuple(round(0.20 + 0.01 * i, 2) for i in range(61))                             # 0.20 .. 0.80
 EXIT_INCOMPLETE = 4                  # the run stopped early (memory floor / brain window): artifacts say so, no recommendation
 SHOW = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70)
+PREROLL_S = 1.6                 # the panel's pre-roll: the live trigger sits this far into a positive clip
+TRIGGER_SLACK_S = 1.5           # a wake this much later than the original trigger is the COMMAND, not the wake phrase
 PREROLL_20_SINCE = dt.datetime(2026, 7, 16)   # #1326 (07-15): 1.6 s pre-roll; before it 0.96 s began inside the phrase
 NEARMISS_SINCE = dt.datetime(2026, 10, 16)
 
@@ -133,6 +135,20 @@ def peak(frames: Sequence[float]) -> float:
     return max(frames) if frames else 0.0
 
 
+def _counted_wakes(c: dict, set_name: str, t: float, live: dict) -> list:
+    """Confirmed wakes that count for this clip. A ``positive`` only counts a wake near the ORIGINAL trigger (the
+    live daemon stops predicting while it records the command, so a later "Hey Zoe" inside the command could never
+    have fired): at or before ``trigger_s`` + slack, where ``trigger_s`` = lead + pre-roll, stored at score time."""
+    ws = confirmed_wakes(c["frames"], t, confirm_count=live["confirm_count"], window_s=live["confirm_window_s"],
+                         min_interval_s=live["min_interval_s"])
+    if set_name != "positive":
+        return ws
+    trigger = c.get("trigger_s")
+    if trigger is None:
+        trigger = 2.0 + PREROLL_S        # a saved run from before the field: the default lead
+    return [w for w in ws if w <= float(trigger) + TRIGGER_SLACK_S]
+
+
 def curve(clips: Sequence[dict], grid: Iterable[float] = GRID, *, live: dict = LIVE) -> list:
     """One row per threshold. ``clips`` = [{set, seconds, frames}]. For the ``positive`` set: FRR = share of clips with
     no confirmed wake. For every other set: wakes, hours, wakes per hour and the share of clips that woke."""
@@ -142,9 +158,7 @@ def curve(clips: Sequence[dict], grid: Iterable[float] = GRID, *, live: dict = L
         row: dict = dict(threshold=round(float(t), 2), sets={})
         for name in sets:
             mine = [c for c in clips if c["set"] == name]
-            woke = [len(confirmed_wakes(c["frames"], t, confirm_count=live["confirm_count"],
-                                        window_s=live["confirm_window_s"],
-                                        min_interval_s=live["min_interval_s"])) for c in mine]
+            woke = [len(_counted_wakes(c, name, t, live)) for c in mine]
             n = len(mine)
             hours = sum(float(c["seconds"]) for c in mine) / 3600.0
             n_woke = sum(1 for w in woke if w > 0)
@@ -460,6 +474,11 @@ def score_clips(todo: Sequence, scorer, notes: dict, *, lead_s: float, tail_s: f
                     break
                 sleep(30)
                 waited += 30
+                why = window(1)                  # a wait of up to 10 min must not resume into the brain window
+                if why:
+                    aborted = dict(reason="brain-window", detail=why, clips_scored=i, clips_planned=len(todo))
+                    log(f"measure_wake: {why} - stopping")
+                    break
             if aborted:
                 break
             log(f"  {i}/{len(todo)} clips, {time.time() - t0:.0f}s")
@@ -468,10 +487,17 @@ def score_clips(todo: Sequence, scorer, notes: dict, *, lead_s: float, tail_s: f
         except Exception as exc:  # noqa: BLE001 - one unreadable file must not cost the run
             notes.setdefault("unreadable", 0)
             notes["unreadable"] += 1
+            if name == "tv":
+                notes["unreadable_tv"] = notes.get("unreadable_tv", 0) + 1
             log(f"  skip unreadable {Path(path).name}: {type(exc).__name__}")
             continue
-        clips.append(dict(set=name, path=path, seconds=round(len(x) / SR, 3),
+        clips.append(dict(set=name, path=path, seconds=round(len(x) / SR, 3), trigger_s=lead_s + PREROLL_S,
                           frames=scorer.frames(x, lead_s=lead_s, tail_s=tail_s)))
+    if aborted is None and notes.get("unreadable_tv"):
+        # a TV clip nobody scored is a false-wake example never checked: the run cannot approve a threshold
+        aborted = dict(reason="unscored-tv", detail=f"{notes['unreadable_tv']} TV clip(s) could not be read",
+                       clips_scored=len(clips), clips_planned=len(todo))
+        log("measure_wake: a TV clip was unreadable - INCOMPLETE run")
     return clips, aborted
 
 
