@@ -118,3 +118,104 @@ def test_religion_trait_is_marked_unless_confirmed():
 
 def test_legacy_row_without_stamped_provenance_is_unchanged():
     assert "unconfirmed" not in render([ref("1", "User plays the cello in an orchestra.", "habit")])
+
+
+# ---- review-round hardening ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("turn", [
+    "What if I'm not a morning person?",
+    "I used to say I'm not a morning person, but I am now.",
+    "Suppose I'm not a mountain person, what then?",
+])
+def test_hypothetical_or_reversed_denials_are_ignored(turn):
+    assert tc.challenged_trait(turn) is None
+
+
+def test_relatives_facts_are_never_matched():
+    rows = [row("a", "User's sister is a doctor."), row("b", "User is a doctor."),
+            row("c", "User's sister is a morning person.")]
+    assert [r.id for r in tc.matching_rows("doctor", rows)] == ["b"]
+    assert tc.matching_rows("morning person", rows) == []
+
+
+def _bare_service(rows, order):
+    import memory_service as ms
+
+    svc = object.__new__(ms.MemoryService)
+    svc._user_locks = {}
+    writes = []
+
+    async def get(mem_id):
+        order.append("get")
+        return rows.get(mem_id)
+
+    async def run_sync(fn, *a):
+        return fn(*a)
+
+    svc.get = get
+    svc._run_sync = run_sync
+    svc._write_row = lambda mem_id, text, md: writes.append((mem_id, md))
+
+    async def audit(**kw):
+        pass
+
+    svc._append_audit = audit
+    return svc, writes
+
+
+def test_flag_challenged_rereads_inside_the_lock_so_an_erase_is_not_undone(monkeypatch):
+    import memory_service as ms
+
+    monkeypatch.setattr(ms, "_invalidate_agent_user_facts_cache", lambda uid: None)
+    rows = {"a": MemoryRef(id="a", text="User is a mountain person.",
+                           metadata={"status": "approved", "user_id": "ottilie"})}
+    order = []
+    svc, writes = _bare_service(rows, order)
+
+    async def scenario():
+        lock = svc._user_locks.setdefault("ottilie", asyncio.Lock())
+        async with lock:                                   # an erase holds the lock ...
+            task = asyncio.ensure_future(svc.flag_challenged("a", user_id="ottilie", utterance="x"))
+            await asyncio.sleep(0.05)
+            assert order == []                             # ... and flag has not read a stale copy yet
+            rows.pop("a")                                  # the erase lands
+        return await task
+
+    assert run(scenario()) is False and writes == []
+
+
+def test_flag_challenged_parks_only_the_owners_row(monkeypatch):
+    import memory_service as ms
+
+    monkeypatch.setattr(ms, "_invalidate_agent_user_facts_cache", lambda uid: None)
+    rows = {"a": MemoryRef(id="a", text="User is a mountain person.",
+                           metadata={"status": "approved", "user_id": "ottilie"})}
+    svc, writes = _bare_service(rows, [])
+    assert run(svc.flag_challenged("a", user_id="someone-else", utterance="x")) is False
+    assert run(svc.flag_challenged("a", user_id="ottilie", utterance="I'm not sure I'm a mountain person"))
+    assert writes[0][1]["status"] == "pending" and writes[0][1]["challenged_by_turn"]
+
+
+def test_deep_sleep_never_promotes_or_archives_a_challenged_row(monkeypatch):
+    import memory_digest as md
+    import memory_service as ms
+
+    hot = {"user_id": "ottilie", "status": "pending", "confidence": 0.9, "access_count": 50,
+           "unique_query_count": 10, "added_at": "2020-01-01T00:00:00Z"}
+
+    class Col:
+        upserts = []
+
+        def get(self, **kw):
+            return {"ids": ["c", "p"], "documents": ["User is a mountain person.", "User likes tea."],
+                    "metadatas": [{**hot, "challenged_by_turn": "I'm not sure"}, dict(hot)]}
+
+        def upsert(self, ids, documents, metadatas):
+            self.upserts.append(ids[0])
+
+    col = Col()
+    monkeypatch.setattr(ms, "get_memory_service", lambda: object())
+    monkeypatch.setattr(ms, "leased_drawers", lambda svc: col)
+    monkeypatch.setattr(md, "_promotion_score", lambda meta: 0.95)
+    run(md._deep_sleep_pass("ottilie"))
+    assert col.upserts == ["p"]

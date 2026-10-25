@@ -46,6 +46,17 @@ _CUES = tuple(re.compile(p, re.I) for p in (
 ))
 
 
+# a denial that is not a present assertion by the owner: hypothetical, quoted, reported, or historical
+_NOT_ASSERTED_BEFORE = re.compile(
+    r"\b(?:what\s+if|if|suppose|supposing|imagine|pretend|hypothetically|say|says|said|used\s+to|once|when|whether|wonder|"
+    r"would|could|might|maybe|perhaps|ask|asked|asking|question|she|he|they|we|you)\b", re.I)
+# ... or one the same sentence immediately takes back ("I used to say I'm not X, but I am now")
+_REVERSED_AFTER = re.compile(r"\b(?:but\s+)?(?:i\s*(?:'m|am)\s+(?:now|one\s+now)|now\s+i\s*(?:'m|am)|that\s+changed)\b", re.I)
+# a row that says something about the owner: "User is a X." / "User's job/role: X" - never "User's sister is a X"
+_ABOUT_OWNER = re.compile(
+    r"^\s*user\s+is\b|^\s*user's\s+(?:job/role|job|role|occupation|profession|trade|identity|faith|religion|nature)\b", re.I)
+
+
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").replace("’", "'").replace("‘", "'")).strip()
 
@@ -62,6 +73,12 @@ def challenged_trait(turn: str) -> Optional[str]:
     for rx in _CUES:
         m = rx.search(t)
         if m:
+            start = max((x.end() for x in re.finditer(r"[.!?;\n]\s*", t[: m.start()])), default=0)
+            if _NOT_ASSERTED_BEFORE.search(t[start:m.start()]):
+                return None
+            tail = re.split(r"[.!?\n]", t[m.end():], maxsplit=1)[0]
+            if _REVERSED_AFTER.search(tail):
+                return None
             trait = m.group("t").strip().lower()
             return trait if _content(trait) else None
     return None
@@ -78,6 +95,8 @@ def matching_rows(trait: str, rows: Iterable[Any]) -> list[Any]:
         text = getattr(r, "text", "") or ""
         if str(meta.get("status") or "approved") != "approved" or _NEG_IN_ROW.search(text):
             continue
+        if not _ABOUT_OWNER.search(text) or re.search(r"'s\b", _ABOUT_OWNER.sub("", text, count=1)):
+            continue          # a relative's fact ("User's sister is a doctor") is not the owner's trait
         if want <= _content(text):
             out.append(r)
     return out[:MAX_ROWS]
