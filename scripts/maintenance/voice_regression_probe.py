@@ -1222,6 +1222,18 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
         "self_test": bool(getattr(args, "self_test", False)),
     }
     write_json(args.results, payload)
+    if is_main_lane_run(payload):
+        main_path = main_lane_path(args.results)
+        main_payload = dict(payload, lane="main")
+        # The main lane keeps its OWN streak: a PR probe in between must not
+        # reset or extend the count of consecutive nightly failures.
+        m_streak = 0 if status == "pass" else _previous_non_pass_streak(main_path) + 1
+        main_payload.update(non_pass_streak=m_streak, non_pass_alert=m_streak >= alert_after)
+        try:
+            write_json(main_path, main_payload)
+        except OSError as exc:
+            # not silent: an unwritable main record leaves `report` showing the OLD nightly verdict
+            print(f"voice-gate: could not write the main-lane record {main_path}: {exc}", file=sys.stderr)
     try:
         args.trend.parent.mkdir(parents=True, exist_ok=True)
         with open(args.trend, "a") as fh:
@@ -1229,6 +1241,49 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
     except OSError:
         pass
     return payload
+
+
+def main_lane_path(results: Path) -> Path:
+    """The per-lane 'last main run' record, a sibling of the shared results file.
+
+    The shared file (`voice_regression_last.json`) is overwritten by EVERY run:
+    the 04:30 nightly on main and each PR-landing probe. A PR run therefore hid a
+    failed nightly (10-21: ground truth said "pass" while main's nightly failed).
+    The deploy gate and replay-evidence keep reading the shared file unchanged;
+    this sibling holds only main's runs, so the nightly verdict is never masked."""
+    results = Path(results)
+    return results.with_name(results.stem + "_main" + results.suffix)
+
+
+def is_main_lane_run(payload: dict[str, Any]) -> bool:
+    """True when the run exercised the LIVE checkout (not a PR/agent worktree).
+
+    Discriminator: recorded `revision.service_dir` resolves to the live checkout
+    (ZOE_VOICE_MAIN_CHECKOUT, default ~/assistant) - the nightly unit runs there,
+    PR landings run under ~/.worktrees/voice-probe-<pr>. Self-tests and runs with
+    no recorded revision are never main. Dirtiness is not required: the live
+    checkout routinely carries untracked cruft and is still main."""
+    if payload.get("self_test"):
+        return False
+    rev = payload.get("revision")
+    sd = rev.get("service_dir") if isinstance(rev, dict) else None
+    if not sd:
+        return False
+    live = os.environ.get("ZOE_VOICE_MAIN_CHECKOUT") or str(Path.home() / "assistant")
+    return service_dir_is_live(sd, live)
+
+
+def service_dir_is_live(sd: str, live: str) -> bool:
+    """service_dir is the live checkout or inside it (the probe records the
+    zoe-data dir, e.g. ~/assistant/services/zoe-data) - but NOT an agent worktree
+    under <live>/.claude/worktrees/**. Mirrored in voice_gate_report.py."""
+    try:
+        p, root = Path(sd).resolve(), Path(live).resolve()
+        if p != root and root not in p.parents:
+            return False
+        return (root / ".claude" / "worktrees") not in (p, *p.parents)
+    except OSError:
+        return False
 
 
 def _previous_non_pass_streak(results_path: Path) -> int:

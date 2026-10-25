@@ -236,8 +236,13 @@ if [ -d "$HOME/assistant/.git" ]; then
   [ "${behind:-0}" = "0" ] && ok "live checkout: $br, 0 behind origin/main" \
                            || bad "live checkout: $br, $behind behind origin/main — merged fixes NOT yet deployed"
 fi
-gate="$HOME/.cache/zoe/voice_regression_last.json"
-[ -f "$gate" ] && dim "voice gate last: $(python3 -c "import json;d=json.load(open('$gate'));print(d.get('status'),'-',d.get('reason'))" 2>/dev/null || echo unreadable)"
+# Lane-aware: the shared last-result file is overwritten by PR probes, so the nightly-main
+# verdict lives in its own record (voice_gate_report.py reads both, falls back to the trend file).
+_vgr="$(dirname "$0")/voice_gate_report.py"
+[ -f "$_vgr" ] || _vgr="$HOME/assistant/scripts/maintenance/voice_gate_report.py"
+if [ -d "$HOME/.cache/zoe" ] && [ -f "$_vgr" ]; then
+  python3 "$_vgr" "$HOME/.cache/zoe" 2>/dev/null | while IFS= read -r _l; do dim "$_l"; done
+fi
 
 # ── Units: is every installed unit tracked, and did templates reach the box? ─
 # File parsing only (no systemctl), bounded. UNTRACKED > 0 = a live unit with no template and no
