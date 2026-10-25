@@ -155,3 +155,25 @@ def test_ground_truth_calls_helper_not_shared_file():
     sh = (REPO / "scripts/maintenance/zoe_ground_truth.sh").read_text()
     assert "voice_gate_report.py" in sh
     assert "voice gate last:" not in sh
+
+
+def test_real_shape_service_dirs(tmp_path, live):
+    """The probe records <checkout>/services/zoe-data, not the checkout root."""
+    zd = live / "services" / "zoe-data"
+    zd.mkdir(parents=True)
+    pr = tmp_path / "wt" / "voice-probe-2176" / "services" / "zoe-data"
+    pr.mkdir(parents=True)
+    agent = live / ".claude" / "worktrees" / "night-100" / "services" / "zoe-data"
+    agent.mkdir(parents=True)
+    for mod in (lambda d: vrp.is_main_lane_run({"revision": {"service_dir": str(d)}}),
+                lambda d: vgr._is_main({"revision": {"service_dir": str(d)}}, str(live))):
+        assert mod(zd) is True
+        assert mod(live) is True
+        assert mod(pr) is False
+        assert mod(agent) is False
+    (tmp_path / "voice_regression_trend.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in [
+            _rec(zd, "fail", "2026-10-25T20:30:00Z", "speed"),
+            _rec(pr, "pass", "2026-10-25T22:00:00Z")]) + "\n")
+    out = vgr.report(tmp_path, str(live))
+    assert out[0] == "voice gate (nightly main, 2026-10-25T20:30:00Z, from trend): fail - speed"

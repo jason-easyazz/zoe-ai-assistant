@@ -25,7 +25,10 @@ def _is_main(rec: dict[str, Any], live: str) -> bool:
     if not sd:
         return False
     try:
-        return Path(sd).resolve() == Path(live).resolve()
+        p, root = Path(sd).resolve(), Path(live).resolve()
+        if p != root and root not in p.parents:
+            return False
+        return (root / ".claude" / "worktrees") not in (p, *p.parents)
     except OSError:
         return False
 

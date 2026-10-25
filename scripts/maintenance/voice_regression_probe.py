@@ -1229,7 +1229,7 @@ def main_lane_path(results: Path) -> Path:
 
 
 def is_main_lane_run(payload: dict[str, Any]) -> bool:
-    """True when the run exercised the LIVE checkout (not a PR worktree).
+    """True when the run exercised the LIVE checkout (not a PR/agent worktree).
 
     Discriminator: recorded `revision.service_dir` resolves to the live checkout
     (ZOE_VOICE_MAIN_CHECKOUT, default ~/assistant) - the nightly unit runs there,
@@ -1262,7 +1262,7 @@ def main_lane_path(results: Path) -> Path:
 
 
 def is_main_lane_run(payload: dict[str, Any]) -> bool:
-    """True when the run exercised the LIVE checkout (not a PR worktree).
+    """True when the run exercised the LIVE checkout (not a PR/agent worktree).
 
     Discriminator: recorded `revision.service_dir` resolves to the live checkout
     (ZOE_VOICE_MAIN_CHECKOUT, default ~/assistant) - the nightly unit runs there,
@@ -1276,8 +1276,18 @@ def is_main_lane_run(payload: dict[str, Any]) -> bool:
     if not sd:
         return False
     live = os.environ.get("ZOE_VOICE_MAIN_CHECKOUT") or str(Path.home() / "assistant")
+    return service_dir_is_live(sd, live)
+
+
+def service_dir_is_live(sd: str, live: str) -> bool:
+    """service_dir is the live checkout or inside it (the probe records the
+    zoe-data dir, e.g. ~/assistant/services/zoe-data) - but NOT an agent worktree
+    under <live>/.claude/worktrees/**. Mirrored in voice_gate_report.py."""
     try:
-        return Path(sd).resolve() == Path(live).resolve()
+        p, root = Path(sd).resolve(), Path(live).resolve()
+        if p != root and root not in p.parents:
+            return False
+        return (root / ".claude" / "worktrees") not in (p, *p.parents)
     except OSError:
         return False
 
