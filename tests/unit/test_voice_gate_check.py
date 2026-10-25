@@ -227,6 +227,13 @@ def test_parse_iso_z_roundtrips_utc():
 
 
 # --- the producer side: skip/error leave a non-pass artifact, never absent --
+# What a probe pass carries since T-3: per-clip checks that judged clips and saw none fail
+# (clip_block_ok refuses a claimed-but-empty or a failing block).
+CLIPS_OK = {"summary": {"checked": 2, "passed": 2, "failed": 0, "unchecked": 0, "owner_labelled": 0,
+                        "compared": ["route_hash"]},
+            "results": [{"clip_id": "a" * 12, "result": "pass"}, {"clip_id": "b" * 12, "result": "pass"}]}
+
+
 class _Args:
     """Minimal stand-in for the probe's argparse namespace."""
     def __init__(self, tmp_path):
@@ -259,7 +266,7 @@ def test_probe_pass_artifact_clears_the_checker(tmp_path):
     args = _Args(tmp_path)
     summary = {"n_samples": 20, "ok_rate": 0.95, "medians_ms": {"stt_ms": 100}}
     vrp.emit_result(args, status="pass", summary=summary, said_vs_did=[],
-                    speed_deltas={}, baseline={"created_at": "2026-07-14T00:00:00Z"})
+                    speed_deltas={}, baseline={"created_at": "2026-07-14T00:00:00Z"}, clip_eval=CLIPS_OK)
     payload = _json.loads(args.results.read_text())
     assert payload["status"] == "pass"
     ok, _ = vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,
@@ -376,7 +383,7 @@ def test_probe_records_the_service_revision(tmp_path):
     args = _Args(tmp_path)
     args.service_dir = str(repo / "services" / "zoe-data")
     vrp.emit_result(args, status="pass", summary={"n_samples": 20},
-                    said_vs_did=[], speed_deltas={}, baseline={})
+                    said_vs_did=[], speed_deltas={}, baseline={}, clip_eval=CLIPS_OK)
     payload = _json.loads(args.results.read_text())
     assert payload["revision"]["commit"] == head
     assert payload["revision"]["dirty"] is False
@@ -394,7 +401,7 @@ def test_probe_reports_a_dirty_tree_honestly(tmp_path):
     args = _Args(tmp_path)
     args.service_dir = str(repo / "services" / "zoe-data")
     vrp.emit_result(args, status="pass", summary={"n_samples": 20},
-                    said_vs_did=[], speed_deltas={}, baseline={})
+                    said_vs_did=[], speed_deltas={}, baseline={}, clip_eval=CLIPS_OK)
     payload = _json.loads(args.results.read_text())
     assert payload["revision"]["dirty"] is True
     assert vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,
@@ -450,7 +457,7 @@ def test_unreadable_git_status_is_recorded_as_dirty(tmp_path, monkeypatch):
     args = _Args(tmp_path)
     args.service_dir = str(repo / "services" / "zoe-data")
     vrp.emit_result(args, status="pass", summary={"n_samples": 20},
-                    said_vs_did=[], speed_deltas={}, baseline={})
+                    said_vs_did=[], speed_deltas={}, baseline={}, clip_eval=CLIPS_OK)
     import json as _json
     payload = _json.loads(args.results.read_text())
     ok, why = vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,
@@ -465,7 +472,7 @@ def test_probe_without_a_service_dir_records_no_revision(tmp_path):
     import json as _json
     args = _Args(tmp_path)
     vrp.emit_result(args, status="pass", summary={"n_samples": 20},
-                    said_vs_did=[], speed_deltas={}, baseline={})
+                    said_vs_did=[], speed_deltas={}, baseline={}, clip_eval=CLIPS_OK)
     assert _json.loads(args.results.read_text())["revision"] is None
 
 
@@ -695,7 +702,7 @@ def test_probe_artifact_satisfies_the_tree_binding_after_a_squash(tmp_path):
     args = _Args(tmp_path)
     args.service_dir = str(repo / "services" / "zoe-data")
     vrp.emit_result(args, status="pass", summary={"n_samples": 20},
-                    said_vs_did=[], speed_deltas={}, baseline={})
+                    said_vs_did=[], speed_deltas={}, baseline={}, clip_eval=CLIPS_OK)
     payload = _json.loads(args.results.read_text())
     assert payload["revision"]["tree"] == vgc.resolve_tree(repo, s["merge"])
     assert vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,

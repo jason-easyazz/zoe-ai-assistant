@@ -79,6 +79,7 @@ def _load(name: str):
 
 
 ob = _load("zoe_offbox")
+restore_plan = _load("pg_restore_plan")
 
 # ── SQL run in the SANDBOX only ──────────────────────────────────────────────────────────────────────────────────
 COUNTS_SQL = r"""
@@ -163,17 +164,39 @@ class Sandbox:
     def down(self) -> bool:
         return self.call("down", timeout=120).returncode == 0
 
-    def restore(self, db: str, dump_gz: Path) -> tuple[bool, str]:
+    def restore(self, db: str, dump_gz: Path, manifest: Optional[dict] = None) -> tuple[bool, str]:
+        """pre-data -> data -> NULL the links into data-excluded (biometric) tables -> post-data. One pass would end
+        with a failed FK on every dump whose parent rows were deliberately left out (pg_restore_plan.py); sectioned,
+        any OTHER pg_restore error still fails the restore (the helper runs ``--exit-on-error``)."""
         # decompressed to a private temp file first: a GzipFile passed as stdin= would hand the child the
         # COMPRESSED descriptor (the lab caught exactly that)
+        def err(r) -> str:
+            return r.stderr.decode(errors="replace").strip()[-400:]
+
         with tempfile.TemporaryDirectory(prefix="drill-dump-") as td:
             os.chmod(td, 0o700)
             plain = Path(td) / "dump"
             with gzip.open(dump_gz, "rb") as src, open(plain, "wb") as dst:
                 shutil.copyfileobj(src, dst, 1 << 20)
             with open(plain, "rb") as fh:
-                r = self.call("restore", db, stdin=fh)
-        return r.returncode == 0, r.stderr.decode(errors="replace").strip()[-400:]
+                toc = self.call("inspect", "list", stdin=fh)
+            with open(plain, "rb") as fh:
+                schema = self.call("inspect", "schema", stdin=fh)
+            for r in (toc, schema):
+                if r.returncode != 0:
+                    return False, "could not read the dump's structure: " + err(r)
+            nulling = restore_plan.nulling_sql(restore_plan.plan_for(toc.stdout.decode(errors="replace").splitlines(),
+                                                     schema.stdout.decode(errors="replace"), manifest))
+            for section in ("pre-data", "data", "post-data"):
+                if section == "post-data" and nulling:
+                    r = self.call("psql", db, text_input=nulling, timeout=600)
+                    if r.returncode != 0:
+                        return False, "nulling links into data-excluded tables failed: " + err(r)
+                with open(plain, "rb") as fh:
+                    r = self.call("restore", db, section, stdin=fh)
+                if r.returncode != 0:
+                    return False, f"{section}: " + err(r)
+        return True, ""
 
     def sql(self, db: str, sql: str) -> list[str]:
         r = self.call("psql", db, text_input=sql, timeout=600)
@@ -480,7 +503,7 @@ def drill_postgres(sb: Sandbox, backup_root: Path, now: datetime, res: Result) -
     try:
         sb.up()
         for db, dump, manifest in plan:
-            ok, err = sb.restore(db, dump)
+            ok, err = sb.restore(db, dump, manifest)
             if not ok:
                 res.findings.append(f"{db}: pg_restore of {dump.name} into the sandbox FAILED: {err}")
                 continue

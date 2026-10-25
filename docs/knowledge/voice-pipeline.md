@@ -35,8 +35,12 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    the user (~14.8% of turns fall through to the brain; router decision p50 ~393 ms). This front is
    the biggest single contributor to the post-2026-07-02 median drop (see *Latency wins* below).
 3. **TTS — Kokoro on CUDA** (PyTorch, RTF ~0.08, live-verified `device":"cuda"` on
-   `:10201/health`), out-of-process sidecar on `127.0.0.1:10201`, via a waterfall in
-   `routers/voice_tts.py`: **Kokoro → Edge TTS → espeak-ng** (each falls back to the next).
+   `:10201/health`), out-of-process sidecar on `127.0.0.1:10201`. **Kokoro is the ONLY voice**
+   (owner decision 2026-10-21; `ZOE_TTS_MODE` default `kokoro`): no fallback voice and **no
+   off-box TTS** — Edge TTS would send reply text to Microsoft. If Kokoro fails, `/synthesize`
+   returns 503 and `/stream` an error line per chunk (the turn is silent, never a different
+   voice). The legacy waterfall (Kokoro → local sidecar → Edge TTS → espeak-ng) still exists
+   only for an explicitly set non-default mode (`hybrid`/`local`/`cloud`/`edge`/`offline`).
    PyTorch/CUDA is the sidecar's sole backend; it falls back to CPU on its own only if CUDA
    cannot load, reporting `degraded=true` on `/health`. zoe-data holds no in-process TTS model.
    An ONNX Runtime CUDA backend was built and measured NOT a win (2026-09-27; code kept on
@@ -262,6 +266,70 @@ it still gets the tolerance (route change then cannot be checked); re-record it 
 `--update-baseline` in a quiet window to get the strict route check. Pinned by
 `tests/unit/test_voice_probe_flaky_retry.py`.
 
+**A blank retry is inconclusive (owner decision 2026-10-20).** One pinned clip (id `d15a8f1d4fc3`) has an
+unstable STT: in 6 of 65 runs since 10-15 (on unrelated PRs; main's nightly always scored it OK) the first run
+was `CANT_DO` or `EMPTY` and the flaky retry then heard nothing (`EMPTY`), which counted as a second failure
+and blocked the PR. Now a retry that comes back `EMPTY` is NOT a failure: it is re-run ONCE more
+(`FLAKY_EMPTY_RERUNS = 1`, so a clip gets at most 3 retries instead of 2, a count and never a loop). Only
+that extra retry's non-blank result counts: `OK` on the reference route passes the clip (listed in
+`flaky_clips`, `regressed: false`); `CANT_DO` / `ERROR` / a wrong route fails it as before; a second `EMPTY`
+fails it as before. The inconclusive retry stays in `runs` but is left out of `failures` / `of`, and the
+entry carries `retry_empty_rerun: true` (always present, `false` when no blank was re-run) so the extra
+retry is auditable. A retry that is not blank is untouched: a real regression (retry `CANT_DO`, wrong route,
+first-run route/transcript change) fails exactly as above.
+
+**What "OK" means per clip — the per-clip outcome checks (T-3, deep dive 2, 2026-10-19).** `_classify`'s OK
+only ever meant "heard something, no error, no refusal phrase", so a list add answered as small talk scored OK.
+Every pinned clip is now held to an EXPECTATION (`scripts/maintenance/voice_clip_checks.py`): an owner label
+from `~/.zoe/voice-gate/clip_expectations.json` (`--expectations`, env `ZOE_VOICE_CLIP_EXPECTATIONS`; OFF the
+repo, field-by-field: `lane`, `tier`, `domain`, `intent`, `router_domain`, `router_tool`, `tier0`; a field the
+label omits - `seed` writes only the first four - is still held to the baseline's recorded value), else the
+baseline's `clip_profile` for every clip that was OK there. A clip with an expectation must:
+1. still be heard: a clip that was OK and is now `EMPTY` is a regression (it was heard before), no longer an
+   excluded silent recording;
+2. still be `OK` (no `CANT_DO` / `ERROR` / `DEFERRED`);
+3. take the same route: the lane and the fast path's `tier:domain:intent` (the legacy `route_hash`), and,
+   once the baseline is recorded by a T-3 replay, the full `route_sig` (adds the router's domain + chosen
+   tool and the Tier-0 intent). `replay_samples._route_labels` writes the labels; anything that is not a
+   plain identifier is hashed, so no transcript can leak in.
+One failing clip fails the run (`said_vs_did_regressions` gains `FUNCTION: clip <id> <kind>`, ids and the
+mismatch kind only, because `reason` reaches the public voice-gate log); a pinned set where no clip has an
+expectation judged nothing and fails. A newly `EMPTY` clip gets the same 2-of-3 retry as brain wording (one
+transient empty transcript was measured in 44 runs), and so does a clip that comes back OK on ANOTHER route
+(one pinned clip did, in 2 isolated runs of 44: a router sidecar timeout falls back to the similarity route).
+A real route regression fails every run, so it still fails; a tolerated clip is listed in `flaky_clips` with
+its per-run outcomes and the gate message counts it. More than 3 such clips are never retried.
+**What it still cannot see:** the brain's own tool choice (sampled at temperature 0.7: a brain-lane clip is
+checked for its lane and router decision, not which tool the brain then called), wording beyond the refusal
+patterns, and everything after the brain. Artifact keys (additive): `clip_checks: true`, `clip_summary`
+(`checked`, `passed`, `failed`, `unchecked`, `owner_labelled`, `compared`), `clip_results` (per clip: id,
+result, verdict, route hashes, labels, `heard_changed`), `self_test: false`. `voice_gate_check.py` re-derives
+the verdict from them (`clip_block_ok`): a claimed block that is missing, judged 0 clips (a first or re-pin
+run), or has any failed clip blocks; an artifact without the claim predates T-3 and is no opinion. Inspect
+locally with `voice_clip_checks.py show`; seed owner labels from the last PASS with `voice_clip_checks.py seed`
+(then correct them: a wrong label is a wrong bar). Pinned by `tests/unit/test_voice_probe_clip_checks.py`,
+`tests/unit/test_voice_gate_clip_block.py`, `services/zoe-data/tests/test_replay_route_labels.py`.
+
+**The negative control — `--self-test`.** The probe replays the pinned clips once per injected fault
+(`ZOE_REPLAY_FAULT`, read by `replay_samples.py`: `blank_stt` = STT hears nothing on every clip; `misroute` =
+every clip's router domain moved to another one and its two-stage tool dropped) and judges each run with the
+SAME per-clip checks. Exit 0 only when every fault went red (blank: EVERY expected clip fails as stt-empty;
+misroute: at least one fails on its route); 1 when a fault stayed green (the instrument is broken; do not
+trust a pass); 2 when it could not run (a replay that predates fault injection reports no fault, which is
+never a pass). It writes `~/.cache/zoe/voice_probe_selftest.json` (+ its own trend) and NEVER the shared
+artifact, trend or baseline; a normal run strips an inherited `ZOE_REPLAY_FAULT`, refuses a report that
+carries one (`status: error`), and `voice_gate_check.py` refuses any `self_test: true` artifact. Quiet hours
+apply; run it with the baselines: `scripts/maintenance/record_bench_baselines.sh`.
+
+**A balanced pinned set (V-8).** The 20 pinned clips are 14 brain-lane and no list, music or reminder clip.
+`scripts/maintenance/voice_corpus_strata.py` labels the corpus by route (a dry, no-brain replay, or
+`--from-json` a replay dump), proposes ~60 clips spread across lists / timers / reminders / calendar / music /
+smart home / weather-time / notes / people-memory / chat, and writes clip ids + categories only to
+`~/.zoe/voice-gate/proposed_pins.json` (mode 600; counts printed, never audio or text). Adopt deliberately:
+`voice_regression_probe.py --update-baseline --pin-from <that file>`, then a normal run (a re-pin run is
+judged against the OLD profile and its artifact is written `status: "skip"` with a re-pin reason, so it can
+never be deploy evidence; the follow-up normal run against the completed new profile is). ~1.5 s per clip over ~1,500 clips (~40 min), so run it in the evening, NOT overnight: the dry replay takes the harness lock and refuses a start inside the 01:50-04:55 brain window, or one whose clip-count budget (`--budget-min` to override) would still be alive at 01:50, before the lock is taken (`--force` does not skip it; `--from-json` is never gated).
+
 **STT mode — `--stt remote` is the nightly default** (unit template sets
 `ZOE_VOICE_REPLAY_STT=remote`). In-process mode lazy-loads a SECOND Moonshine next to the live
 service's warm one, which is why the gate demanded 1500MB and skipped for days on a box whose
@@ -374,11 +442,17 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
            "pass_frac": 0.958, "min_pass_frac": 0.6, "threshold": 0.5,
            "min_max_prob": [0.36, 0.96], "median_max_prob": 0.81,
            "model": {"path": "/home/zoe/models/silero_vad.onnx", "md5": "00bdd414…"},
-           "reason": ""}}
+           "reason": ""},
+   "clip_checks": true, "self_test": false,
+   "clip_summary": {"checked": 19, "passed": 19, "failed": 0, "unchecked": 1, "owner_labelled": 0,
+                    "compared": ["route_hash"]},
+   "clip_results": [{"clip_id": "…12 hex…", "result": "pass|fail|unchecked", "verdict": "OK", "…": "…"}]}
   ```
 
   `vad_stage` / `vad` are the VAD stage (see *The VAD stage* below). An artifact without `vad_stage` predates
-  the stage and is **no opinion** on VAD — older artifacts keep clearing the checker.
+  the stage and is **no opinion** on VAD — older artifacts keep clearing the checker. `clip_checks` /
+  `clip_summary` / `clip_results` are the per-clip outcome checks (above): the same no-opinion rule for an
+  artifact without the claim, and a `self_test: true` artifact is always refused.
 
   A **skip** (box too tight), **timeout**, or **error** (harness couldn't run) MUST still write an
   artifact with `status != "pass"` — an *absent* file is never "nothing wrong". `summary` +

@@ -47,7 +47,9 @@ from tts_waterfall import (
     _synthesize_espeak,
     _synthesize_kokoro_sidecar,
     _synthesize_local_service,
+    TTS_MODE_KOKORO,
     edge_tts_available,
+    tts_mode,
 )
 
 logger = logging.getLogger(__name__)
@@ -2406,7 +2408,7 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
 
     # Pre-process: strip markdown and normalise units so TTS sounds natural.
     text = _clean_for_speech(_voice_preprocess(str(text).strip()))[:1200]
-    mode = os.getenv("ZOE_TTS_MODE", "hybrid").lower()
+    mode = tts_mode()
     profile = str((payload or {}).get("profile") or os.getenv("ZOE_VOICE_PROFILE", "zoe_au_natural_v1"))
     prof = VOICE_PROFILES.get(profile, VOICE_PROFILES["zoe_au_natural_v1"])
     edge_voice = str((payload or {}).get("edge_voice") or os.getenv("ZOE_EDGE_TTS_VOICE", prof["edge_voice"]))
@@ -2419,7 +2421,12 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
     content_type = "audio/wav"
     provider = "none"
 
-    # ── TTS waterfall: Kokoro sidecar → local sidecar → Edge TTS → espeak-ng ──
+    # ── TTS: Kokoro sidecar ONLY by default (ZOE_TTS_MODE=kokoro) ──
+    # Owner decision 2026-10-21: Kokoro is Zoe's only voice. No fallback voice,
+    # and reply text never leaves the box (Edge TTS sends it to Microsoft). If
+    # Kokoro fails, the request 503s below. The legacy waterfall (Kokoro → local
+    # sidecar → Edge TTS → espeak-ng) runs only when another mode is set
+    # explicitly (hybrid/local/cloud/edge/offline).
     # Kokoro sidecar — GPU-accelerated natural af_sky voice (~150ms warm on Jetson).
     if mode != "cloud":
         audio_bytes = await _synthesize_kokoro_sidecar(text)
@@ -2444,7 +2451,7 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
         except Exception:
             audio_bytes = None
 
-    if audio_bytes is None and mode != "cloud":
+    if audio_bytes is None and mode not in {"cloud", TTS_MODE_KOKORO}:
         try:
             audio_bytes = await _synthesize_espeak(text, speed=speed, pitch=pitch, volume=volume)
             provider = "espeak-ng"
@@ -2542,7 +2549,7 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
 
     text = _voice_preprocess(raw_text)[:_STREAM_TEXT_MAX]
 
-    mode = os.getenv("ZOE_TTS_MODE", "hybrid").lower()
+    mode = tts_mode()
     profile = str((payload or {}).get("profile") or os.getenv("ZOE_VOICE_PROFILE", "zoe_au_natural_v1"))
     prof = VOICE_PROFILES.get(profile, VOICE_PROFILES["zoe_au_natural_v1"])
     edge_voice = str((payload or {}).get("edge_voice") or os.getenv("ZOE_EDGE_TTS_VOICE", prof["edge_voice"]))
@@ -2559,7 +2566,8 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
             provider = "none"
             error_msg: Optional[str] = None
 
-            # Waterfall: Kokoro sidecar → local sidecar → Edge TTS → espeak
+            # Kokoro ONLY by default (see /synthesize). The waterfall
+            # (Kokoro → local sidecar → Edge TTS → espeak) needs an explicit mode.
             if mode != "cloud":
                 audio_bytes = await _synthesize_kokoro_sidecar(sentence)
                 if audio_bytes:
@@ -2579,7 +2587,7 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
                     error_msg = str(exc)
                     audio_bytes = None
 
-            if audio_bytes is None and mode != "cloud":
+            if audio_bytes is None and mode not in {"cloud", TTS_MODE_KOKORO}:
                 try:
                     audio_bytes = await _synthesize_espeak(sentence, prof["espeak_speed"], prof["espeak_pitch"], prof["espeak_volume"])
                     if audio_bytes:
@@ -5273,12 +5281,11 @@ async def voice_command(
                         if delta.startswith(_VOICE_ESCALATION_MARKERS):
                             try:
                                 is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
-                                # See the non-stream path: Hermes is retired, so
-                                # every escalation goes to the background runner.
-                                logger.info("voice/command stream escalation -> background (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
-                                from background_runner import enqueue_background_task
-                                _spawn_bg(enqueue_background_task(esc_prompt, effective_user, session_id))
-                                delta = "I'll work on that in the background and let you know when it's done."
+                                # Hermes is retired and the background executor is gone (it launched an
+                                # agent with auto-approve as the zoe user - deep dive S0-7): an escalation
+                                # is refused out loud, never queued.
+                                logger.info("voice/command stream escalation refused - no executor (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
+                                delta = "I can't run that kind of task any more, so I haven't started it."
                             except Exception as esc_exc:
                                 logger.warning("voice/command stream escalation failed: %s", esc_exc)
                                 delta = "I couldn't complete that advanced request right now. Please try again."
@@ -5403,15 +5410,11 @@ async def voice_command(
                 if delta.startswith(_VOICE_ESCALATION_MARKERS):
                     try:
                         is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
-                        # Hermes is retired, so there is no foreground escalation
-                        # engine — every escalation now goes to the background
-                        # runner, which is the path that still has one. Verified
-                        # never-fired before removal (operator-confirmed; zero
-                        # 'escalation ->' hits in the logs).
-                        logger.info("voice/command escalation -> background (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
-                        from background_runner import enqueue_background_task
-                        _spawn_bg(enqueue_background_task(esc_prompt, effective_user, session_id))
-                        delta = "I'll work on that in the background and let you know when it's done."
+                        # Hermes is retired and the background executor is gone (it launched an agent
+                        # with auto-approve as the zoe user - deep dive S0-7): an escalation is refused
+                        # out loud, never queued.
+                        logger.info("voice/command escalation refused - no executor (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
+                        delta = "I can't run that kind of task any more, so I haven't started it."
                     except Exception as esc_exc:
                         logger.warning("voice/command escalation failed: %s", esc_exc)
                         delta = "I couldn't complete that advanced request right now. Please try again."
@@ -6300,8 +6303,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
                 except Exception:
                     _wav = None
                 if not _wav:
-                    # Sidecar down — use the full synth fallback chain (local
-                    # -> edge-tts -> espeak) so the panel is never left silent.
+                    # Sidecar down — retry via synthesize(), which honours
+                    # ZOE_TTS_MODE: Kokoro-only by default (503 -> chunk skipped);
+                    # the legacy fallback chain runs only when explicitly set.
                     try:
                         _resp = await synthesize({"text": _sentence}, caller=caller)
                         _wav = _resp.body
