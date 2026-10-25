@@ -348,6 +348,7 @@ function boundedInt(file: string, key: string, v: unknown, bounds: { min: number
 /** Parse recall-shape.json: exact keys, integers in range, nothing else. */
 export function parseRecallShape(text: string): RecallShape {
   const file = 'recall-shape.json';
+  if (CONTROL_RE.test(text)) refuse(`${file}: control character`);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);

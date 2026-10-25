@@ -282,6 +282,8 @@ describe('FAIL CLOSED: anything outside the schema refuses the whole overlay', (
     ['a file over the byte cap', () => overlay({ 'manner.md': 'a'.repeat(harness.MAX_FILE_BYTES + 1) }), /cap/],
     ['a manner block over its cap', () => overlay({ 'manner.md': 'a'.repeat(harness.MAX_MANNER_CHARS + 1) }), /cap/],
     ['instructions over the total cap', () => overlay({ 'doctrines/emotional-recall.md': 'a'.repeat(5000), 'doctrines/personal-recall.md': 'b'.repeat(5000) }), /instructions/],
+    ['a tab in recall-shape.json', () => overlay({ 'recall-shape.json': '{\t"version":1,"recall_tool":{"limit":7,"query_max_chars":60}}' }), /control character/],
+    ['CRLF in recall-shape.json', () => overlay({ 'recall-shape.json': '{"version":1,\r\n"recall_tool":{"limit":7,"query_max_chars":60}}' }), /control character/],
     ['malformed recall-shape.json', () => overlay({ 'recall-shape.json': '{"version":1,' }), /malformed JSON/],
     ['an unknown recall-shape key', () => overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":24,"query_max_chars":500},"forget":true}' }), /unknown key forget/],
     ['an unknown nested key', () => overlay({ 'recall-shape.json': '{"version":1,"recall_tool":{"limit":24,"query_max_chars":500,"user_id":"x"}}' }), /unknown key recall_tool.user_id/],

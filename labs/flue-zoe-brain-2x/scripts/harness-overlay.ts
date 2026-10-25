@@ -277,10 +277,19 @@ export async function reloadBrain(root: string, expectSha: string | null, opts: 
   if (resolve(String(view.dir ?? '')) !== resolve(join(root, CURRENT))) {
     return { outcome: 'not_signalled', ms: 0, detail: `the brain's overlay dir is ${String(view.dir)}, not ${join(root, CURRENT)}: not signalled` };
   }
-  const pid = mainPid(reload);
+  let pid: number;
+  try {
+    pid = mainPid(reload);
+  } catch (e) {
+    return { outcome: 'not_signalled', ms: 0, detail: `could not resolve the main pid for ${reload}: ${e instanceof Error ? e.message : String(e)}` };
+  }
   if (!Number.isInteger(pid) || pid <= 1) return { outcome: 'not_signalled', ms: 0, detail: `no main pid for ${reload}` };
   const started = performance.now();
-  process.kill(pid, 'SIGHUP');
+  try {
+    process.kill(pid, 'SIGHUP');
+  } catch (e) {
+    return { outcome: 'not_signalled', ms: 0, detail: `could not signal pid ${pid}: ${e instanceof Error ? e.message : String(e)}` };
+  }
   for (;;) {
     const h = (await fetchHealth(healthUrl))?.harness as Record<string, unknown> | undefined;
     // Signal -> the brain's /health reporting the new overlay: the measured reload latency.
@@ -323,16 +332,27 @@ async function doSwitch(
     const from = currentVersion(root);
     const fromSha = shaOrNull(root, from);
     pointCurrent(root, to);
-    appendLedger(root, {
-      ts: new Date().toISOString(),
-      action,
-      who,
-      from,
-      to,
-      from_sha256: fromSha,
-      to_sha256: harness.overlaySha256,
-      ...(reason ? { reason } : {}),
-    });
+    try {
+      appendLedger(root, {
+        ts: new Date().toISOString(),
+        action,
+        who,
+        from,
+        to,
+        from_sha256: fromSha,
+        to_sha256: harness.overlaySha256,
+        ...(reason ? { reason } : {}),
+      });
+    } catch (e) {
+      // No ledger entry means no switch: put the old link back so ledger and `current` still agree.
+      try {
+        if (from) pointCurrent(root, from);
+        else rmSync(join(root, CURRENT), { force: true });
+      } catch {
+        // best effort; the original failure is the one to report
+      }
+      throw e;
+    }
     const toSha = harness.overlaySha256;
     const reload = await reloadBrain(root, toSha, opts);
     appendLedger(root, { ts: new Date().toISOString(), action: 'reload', who, to, outcome: reload.outcome, ms: reload.ms });
@@ -356,6 +376,10 @@ export async function revert(root: string, who: string, reason?: string, opts: R
         throw new Error(`ledger says current is ${last.to} but ${join(root, CURRENT)} -> ${current}: fix by hand, then switch`);
       }
       if (!last.from) throw new Error(`the latest switch (${last.action} to ${last.to}) has no previous overlay to restore`);
+      // Restore the bytes that were active, not merely a directory of the same name.
+      if (last.from_sha256 && shaOrNull(root, last.from) !== last.from_sha256) {
+        throw new Error(`${last.from} no longer matches the overlay that was active (sha256 ${last.from_sha256}): refusing to revert to changed files`);
+      }
       return last.from;
     },
     who,

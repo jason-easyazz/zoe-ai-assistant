@@ -7,7 +7,7 @@
  * Run: npm test (Node 22, type-stripping), or this file alone with --test.
  */
 import assert from 'node:assert/strict';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -102,6 +102,54 @@ describe('init, switch, revert and the ledger', () => {
     rmSync(join(root, 'current'));
     symlinkSync('hand', join(root, 'current')); // a hand edit the ledger never saw
     await assert.rejects(ctl.revert(root, 'owner', undefined, NO_RELOAD), /fix by hand/);
+  });
+
+  it('a failed ledger write rolls the switch back, so revert still works afterwards', async () => {
+    const root = freshRoot();
+    const first = await ctl.init(root, 'owner', NO_RELOAD);
+    ctl.renderOverlay(join(root, 'cand'));
+    const ledgerPath = join(root, 'ledger.jsonl');
+    const saved = readFileSync(ledgerPath);
+    rmSync(ledgerPath);
+    mkdirSync(ledgerPath); // appending to a directory fails
+    await assert.rejects(ctl.switchTo(root, 'cand', 'night-loop', undefined, NO_RELOAD));
+    assert.equal(ctl.currentVersion(root), first.to, 'current is back where the ledger says it is');
+    rmSync(ledgerPath, { recursive: true });
+    writeFileSync(ledgerPath, saved);
+    await ctl.switchTo(root, 'cand', 'night-loop', undefined, NO_RELOAD);
+    const rv = await ctl.revert(root, 'owner', undefined, NO_RELOAD);
+    assert.equal(rv.to, first.to);
+  });
+
+  it('revert refuses when the version it would restore was edited after being switched away from', async () => {
+    const root = freshRoot();
+    const first = await ctl.init(root, 'owner', NO_RELOAD);
+    ctl.renderOverlay(join(root, 'cand'));
+    await ctl.switchTo(root, 'cand', 'night-loop', undefined, NO_RELOAD);
+    writeFileSync(join(root, first.to, 'manner.md'), 'Edited after the fact.\n');
+    await assert.rejects(ctl.revert(root, 'owner', undefined, NO_RELOAD), /no longer matches/);
+    assert.equal(ctl.currentVersion(root), 'cand');
+  });
+
+  it('a pid that cannot be signalled is recorded as not_signalled, not thrown', async () => {
+    const root = freshRoot();
+    await ctl.init(root, 'owner', NO_RELOAD);
+    ctl.renderOverlay(join(root, 'cand'));
+    const server = createServer((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ ok: true, harness: { dir: join(root, 'current'), loaded_at: '2000-01-01T00:00:00Z' } }));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const healthUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/health`;
+    try {
+      const sw = await ctl.switchTo(root, 'cand', 'night-loop', undefined, { reload: 'pid:2147483646', healthUrl });
+      assert.equal(sw.reload.outcome, 'not_signalled');
+      assert.match(sw.reload.detail, /could not signal/);
+      assert.equal(ctl.readLedger(root).at(-1)?.outcome, 'not_signalled');
+      assert.equal(ctl.switchExitCode(sw), 3);
+    } finally {
+      server.close();
+    }
   });
 
   it('exit status: 0 only for confirmed or on-disk-by-design; every other outcome is 3', () => {
