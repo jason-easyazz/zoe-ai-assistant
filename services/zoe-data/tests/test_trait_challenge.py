@@ -118,3 +118,168 @@ def test_religion_trait_is_marked_unless_confirmed():
 
 def test_legacy_row_without_stamped_provenance_is_unchanged():
     assert "unconfirmed" not in render([ref("1", "User plays the cello in an orchestra.", "habit")])
+
+
+# ---- review-round hardening ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("turn", [
+    "What if I'm not a morning person?",
+    "I used to say I'm not a morning person, but I am now.",
+    "Suppose I'm not a mountain person, what then?",
+])
+def test_hypothetical_or_reversed_denials_are_ignored(turn):
+    assert tc.challenged_trait(turn) is None
+
+
+def test_relatives_facts_are_never_matched():
+    rows = [row("a", "User's sister is a doctor."), row("b", "User is a doctor."),
+            row("c", "User's sister is a morning person.")]
+    assert [r.id for r in tc.matching_rows("doctor", rows)] == ["b"]
+    assert tc.matching_rows("morning person", rows) == []
+
+
+def _bare_service(rows, order):
+    import memory_service as ms
+
+    svc = object.__new__(ms.MemoryService)
+    svc._user_locks = {}
+    writes = []
+
+    async def get(mem_id):
+        order.append("get")
+        return rows.get(mem_id)
+
+    async def run_sync(fn, *a):
+        return fn(*a)
+
+    svc.get = get
+    svc._run_sync = run_sync
+    svc._write_row = lambda mem_id, text, md: writes.append((mem_id, md))
+
+    async def audit(**kw):
+        pass
+
+    svc._append_audit = audit
+    return svc, writes
+
+
+def test_flag_challenged_rereads_inside_the_lock_so_an_erase_is_not_undone(monkeypatch):
+    import memory_service as ms
+
+    monkeypatch.setattr(ms, "_invalidate_agent_user_facts_cache", lambda uid: None)
+    rows = {"a": MemoryRef(id="a", text="User is a mountain person.",
+                           metadata={"status": "approved", "user_id": "ottilie"})}
+    order = []
+    svc, writes = _bare_service(rows, order)
+
+    async def scenario():
+        lock = svc._user_locks.setdefault("ottilie", asyncio.Lock())
+        async with lock:                                   # an erase holds the lock ...
+            task = asyncio.ensure_future(svc.flag_challenged("a", user_id="ottilie", utterance="x"))
+            await asyncio.sleep(0.05)
+            assert order == []                             # ... and flag has not read a stale copy yet
+            rows.pop("a")                                  # the erase lands
+        return await task
+
+    assert run(scenario()) is False and writes == []
+
+
+def test_flag_challenged_parks_only_the_owners_row(monkeypatch):
+    import memory_service as ms
+
+    monkeypatch.setattr(ms, "_invalidate_agent_user_facts_cache", lambda uid: None)
+    rows = {"a": MemoryRef(id="a", text="User is a mountain person.",
+                           metadata={"status": "approved", "user_id": "ottilie"})}
+    svc, writes = _bare_service(rows, [])
+    assert run(svc.flag_challenged("a", user_id="someone-else", utterance="x")) is False
+    assert run(svc.flag_challenged("a", user_id="ottilie", utterance="I'm not sure I'm a mountain person"))
+    assert writes[0][1]["status"] == "pending" and writes[0][1]["challenged_by_turn"]
+
+
+def test_deep_sleep_never_promotes_or_archives_a_challenged_row(monkeypatch):
+    import memory_digest as md
+    import memory_service as ms
+
+    hot = {"user_id": "ottilie", "status": "pending", "confidence": 0.9, "access_count": 50,
+           "unique_query_count": 10, "added_at": "2020-01-01T00:00:00Z"}
+
+    class Col:
+        upserts = []
+
+        def get(self, **kw):
+            return {"ids": ["c", "p"], "documents": ["User is a mountain person.", "User likes tea."],
+                    "metadatas": [{**hot, "challenged_by_turn": "I'm not sure"}, dict(hot)]}
+
+        def upsert(self, ids, documents, metadatas):
+            self.upserts.append(ids[0])
+
+    col = Col()
+    monkeypatch.setattr(ms, "get_memory_service", lambda: object())
+    monkeypatch.setattr(ms, "leased_drawers", lambda svc: col)
+    monkeypatch.setattr(md, "_promotion_score", lambda meta: 0.95)
+    run(md._deep_sleep_pass("ottilie"))
+    assert col.upserts == ["p"]
+
+
+# ---- final review round: scope the vetoes, tie a reversal to the same trait -----------------------
+
+@pytest.mark.parametrize("turn,trait", [
+    ("You know, I'm not a morning person.", "morning person"),
+    ("You keep saying I'm a morning person, but I'm not a morning person.", "morning person"),
+    ("If I'm tired, I'm not a morning person.", "morning person"),
+    ("I'm not a doctor, but now I'm a teacher.", "doctor"),
+    ("I'm not a morning person, but I'm now working early shifts.", "morning person"),
+])
+def test_real_denials_survive_prefix_and_unrelated_now(turn, trait):
+    assert tc.challenged_trait(turn) == trait
+
+
+@pytest.mark.parametrize("turn", [
+    "I'm not a morning person, but actually I am.",
+    "I'm not a doctor, but now I'm a doctor.",
+    "She says I'm not a morning person.",
+])
+def test_taken_back_or_reported_denials_are_ignored(turn):
+    assert tc.challenged_trait(turn) is None
+
+
+def test_possessive_in_an_owner_facts_details_still_matches():
+    rows = [row("a", "User is a doctor at St Mary's Hospital."), row("b", "User's sister is a doctor."),
+            row("c", "User is a nurse and User's sister is a doctor.")]
+    assert [r.id for r in tc.matching_rows("doctor", rows)] == ["a"]
+
+
+# ---- last review round -----------------------------------------------------------------------------
+
+def test_owner_rows_with_other_verb_forms_match_but_relatives_do_not():
+    rows = [row("a", "User works as a paramedic."), row("b", "The user is a paramedic."),
+            row("c", "User's sister is a paramedic."), row("d", "User's sister works as a paramedic."),
+            row("e", "User's job/role: paramedic")]
+    assert [r.id for r in tc.matching_rows("paramedic", rows)] == ["a", "b", "e"]
+
+
+@pytest.mark.parametrize("turn", [
+    "I'm not a morning person, but I'm so tired.",
+    "I'm not a morning person, but my husband says I'm a morning person.",
+])
+def test_unrelated_or_reported_but_clauses_do_not_take_the_denial_back(turn):
+    assert tc.challenged_trait(turn) == "morning person"
+
+
+def test_first_person_same_trait_affirmation_still_takes_it_back():
+    assert tc.challenged_trait("I'm not a morning person, but I'm a morning person now.") is None
+
+
+@pytest.mark.parametrize("turn", [
+    "Suppose, for a moment, I'm not a morning person.",
+    "Imagine, just for fun, I'm not a morning person.",
+])
+def test_parenthetical_commas_keep_the_hypothetical_scope(turn):
+    assert tc.challenged_trait(turn) is None
+
+
+def test_a_relatives_trait_inside_an_owner_sentence_is_never_parked():
+    rows = [row("a", "User has a sister who is a doctor."), row("b", "User is a doctor."),
+            row("c", "User's mother, whose job is doctor, lives nearby."), row("d", "User has a brother who works as a doctor."),
+            row("e", "User works as a doctor.")]
+    assert [r.id for r in tc.matching_rows("doctor", rows)] == ["b", "e"]
