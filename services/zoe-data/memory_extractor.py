@@ -735,8 +735,13 @@ def _asked_not_said(text: str, m: "re.Match[str]", template: str) -> bool:
     The explicit teach templates have their own guard (``_remember_is_a_question``)."""
     if template.startswith(("User asked me to remember", "Important note")):
         return False
-    if re.match(r"my\s+(?:job|occupation|profession|trade)\b", m.group(0), re.IGNORECASE):
-        return _possessive_job_asked(text, m)
+    if template == "User's job/role: {0}":
+        # every occupation frame ("my job is ...", "I work as ...", "I'm a nurse ...") gets the full question test: a
+        # wh-word / guess / know / tell / ask before it, or a sentence that ends in "?" ("Do you think I work as a nurse?")
+        if _possessive_job_asked(text, m):
+            return True
+        if re.match(r"my\s+(?:job|occupation|profession|trade)\b", m.group(0), re.IGNORECASE):
+            return False
     if not re.match(r"i(?:\s|'m\b)", m.group(0), re.IGNORECASE):
         return False          # "you can call me Mika": the auxiliary belongs to a different subject than the template's
     start = 0

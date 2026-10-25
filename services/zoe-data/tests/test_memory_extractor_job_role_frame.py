@@ -105,3 +105,27 @@ def test_my_job_is_evaluation_is_not_a_job(sentence):
 def test_occupation_with_context_suffix_captures_only_occupation(sentence, needle):
     facts = _job_facts(sentence)
     assert facts and facts[0].lower() == f"user's job/role: {needle}"
+
+
+QUESTION_SHAPED_FRAMES = [
+    "Do you think I work as a nurse?",
+    "Would you guess I'm a carpenter by trade?",
+    "Do you know if I'm employed as a bookkeeper?",
+    "Do you reckon I am a plumber?",
+]
+
+
+@pytest.mark.parametrize("sentence", QUESTION_SHAPED_FRAMES)
+def test_a_question_in_any_occupation_frame_is_not_a_job(sentence):
+    # every job frame, not only "my job is ...", gets the question test (sentence ends in "?" / asking word first)
+    assert _job_facts(sentence) == []
+
+
+@pytest.mark.parametrize("sentence,needle", [
+    ("I work as a nurse.", "nurse"),
+    ("I work as a nurse. Do you remember that?", "nurse"),
+    ("I am a plumber", "plumber"),
+])
+def test_statements_in_occupation_frames_still_file_a_job(sentence, needle):
+    facts = _job_facts(sentence)
+    assert facts and facts[0].lower() == f"user's job/role: {needle}"
