@@ -354,3 +354,13 @@ def test_disabled_stt_is_exempt_from_readiness(monkeypatch):
     monkeypatch.setenv("ZOE_STT_DISABLED", "1")
     report = asyncio.run(main._check_stt_ready())
     assert report["ok"] is True and report["disabled"] is True
+
+
+@pytest.mark.parametrize("raw,expected", [("1", True), ("true", True), (" On ", True), ("0", False), ("", False), ("no", False)])
+def test_stt_disabled_uses_typed_env_per_call(monkeypatch, raw, expected):
+    import main
+
+    monkeypatch.setenv("ZOE_STT_DISABLED", raw)
+    assert main._stt_disabled() is expected
+    monkeypatch.delenv("ZOE_STT_DISABLED")
+    assert main._stt_disabled() is False

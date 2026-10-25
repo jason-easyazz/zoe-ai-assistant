@@ -507,3 +507,10 @@ def test_revision_and_cleanliness_come_from_the_checkout_actually_served(fname, 
     src = _main_source(fname)
     assert "service_revision(service_dir)" not in src and "load_source_fallback_markers(service_dir)" not in src
     assert "service_revision(" in src and "code_checkout_dir()" in src
+
+
+def test_up_marks_the_scratch_palace_so_the_live_store_guard_treats_it_as_throwaway():
+    """Negative control: drop the sentinel write in up() -> red (the guard would classify the palace live)."""
+    guard = (Path(__file__).resolve().parents[2] / "services" / "zoe-data" / "live_store_guard.py").read_text()
+    assert 'SCRATCH_SENTINEL = ".zoe-harness-scratch"' in guard
+    assert '(root / "palace" / ".zoe-harness-scratch").write_text' in Path(hs.__file__).read_text()

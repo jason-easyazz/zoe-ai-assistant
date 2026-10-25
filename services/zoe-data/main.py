@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import httpx
 from database import init_db
 from gemma_endpoint import gemma_base
-from typed_env import env_float, env_int, env_list, env_str
+from typed_env import env_bool, env_float, env_int, env_list, env_str
 from push import broadcaster
 from auth import require_internal_token
 import relay_ingress
@@ -146,7 +146,7 @@ async def _check_brain_ready(timeout_s: float = 2.0) -> dict:
 def _stt_disabled() -> bool:
     """``ZOE_STT_DISABLED=1``: the isolated text-harness instance never transcribes (no model, no download), so it neither warms
     Moonshine nor waits on it for readiness. Never set on the live service."""
-    return os.environ.get("ZOE_STT_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    return env_bool("ZOE_STT_DISABLED", default=False)
 
 
 async def _check_stt_ready() -> dict:

@@ -393,6 +393,8 @@ def up(tag: str, *, service_dir: Path, serve: bool = False, python: Optional[str
     for sub in ("home/.cache", "palace", "logs", "flue", "router_retrain", "voice-samples", "no-stt-models"):
         (root / sub).mkdir(parents=True, exist_ok=True)
     os.chmod(root, 0o700)
+    # live_store_guard honours this marker (only under STATE_DIR) so the scratch palace is not classed as the household's
+    (root / "palace" / ".zoe-harness-scratch").write_text("scratch palace: throwaway\n")
     for cache in SHARED_MODEL_CACHES:          # the memory embedder loads from the real model cache (read), never downloads
         real, link = Path.home() / ".cache" / cache, root / "home" / ".cache" / cache
         if real.is_dir() and not link.exists():
