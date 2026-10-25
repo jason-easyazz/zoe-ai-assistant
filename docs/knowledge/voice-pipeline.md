@@ -35,8 +35,12 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    the user (~14.8% of turns fall through to the brain; router decision p50 ~393 ms). This front is
    the biggest single contributor to the post-2026-07-02 median drop (see *Latency wins* below).
 3. **TTS — Kokoro on CUDA** (PyTorch, RTF ~0.08, live-verified `device":"cuda"` on
-   `:10201/health`), out-of-process sidecar on `127.0.0.1:10201`, via a waterfall in
-   `routers/voice_tts.py`: **Kokoro → Edge TTS → espeak-ng** (each falls back to the next).
+   `:10201/health`), out-of-process sidecar on `127.0.0.1:10201`. **Kokoro is the ONLY voice**
+   (owner decision 2026-10-21; `ZOE_TTS_MODE` default `kokoro`): no fallback voice and **no
+   off-box TTS** — Edge TTS would send reply text to Microsoft. If Kokoro fails, `/synthesize`
+   returns 503 and `/stream` an error line per chunk (the turn is silent, never a different
+   voice). The legacy waterfall (Kokoro → local sidecar → Edge TTS → espeak-ng) still exists
+   only for an explicitly set non-default mode (`hybrid`/`local`/`cloud`/`edge`/`offline`).
    PyTorch/CUDA is the sidecar's sole backend; it falls back to CPU on its own only if CUDA
    cannot load, reporting `degraded=true` on `/health`. zoe-data holds no in-process TTS model.
    An ONNX Runtime CUDA backend was built and measured NOT a win (2026-09-27; code kept on
