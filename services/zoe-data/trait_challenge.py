@@ -46,15 +46,31 @@ _CUES = tuple(re.compile(p, re.I) for p in (
 ))
 
 
-# a denial that is not a present assertion by the owner: hypothetical, quoted, reported, or historical
+# words that make a denial hypothetical, quoted, reported or historical - checked only in the denial's OWN clause
 _NOT_ASSERTED_BEFORE = re.compile(
-    r"\b(?:what\s+if|if|suppose|supposing|imagine|pretend|hypothetically|say|says|said|used\s+to|once|when|whether|wonder|"
-    r"would|could|might|maybe|perhaps|ask|asked|asking|question|she|he|they|we|you)\b", re.I)
-# ... or one the same sentence immediately takes back ("I used to say I'm not X, but I am now")
-_REVERSED_AFTER = re.compile(r"\b(?:but\s+)?(?:i\s*(?:'m|am)\s+(?:now|one\s+now)|now\s+i\s*(?:'m|am)|that\s+changed)\b", re.I)
+    r"\b(?:what\s+if|if|suppose|supposing|imagine|pretend|hypothetically|used\s+to|once|when|whether|wonder|wondering|"
+    r"(?:he|she|they|people|everyone|you)\s+(?:says?|said|thinks?|thought|reckons?|claims?|believes?|asked?|told\s+me)|"
+    r"(?:ask|asked|asking|question|questions)\s+(?:me\s+)?(?:if|whether|that)?)\b", re.I)
+# ... or one the same sentence takes back: "I used to say I'm not X, but I am now" / "..., but actually I am"
+_REVERSED_BARE = re.compile(r"\b(?:but\s+)?(?:actually\s+|in\s+fact\s+|really\s+|now\s+)?i\s+am\s*(?:[,;]|$)|\bthat\s+changed\b", re.I)
+_REAFFIRM = re.compile(r"\bi\s*(?:'m|am)\s+(?!not\b)(?:now\s+|actually\s+|really\s+|in\s+fact\s+)?(?P<r>.*)|\bnow\s+i\s*(?:'m|am)\s+(?!not\b)(?P<r2>.*)", re.I)
 # a row that says something about the owner: "User is a X." / "User's job/role: X" - never "User's sister is a X"
 _ABOUT_OWNER = re.compile(
     r"^\s*user\s+is\b|^\s*user's\s+(?:job/role|job|role|occupation|profession|trade|identity|faith|religion|nature)\b", re.I)
+# where the owner's own statement ends and a second subject begins
+_OTHER_SUBJECT = re.compile(r"[.!?;]\s|,?\s+and\s+(?:user's|his|her|their)\b|,\s*(?:user's|his|her|their)\b", re.I)
+
+
+def _reversed(tail: str, trait: str) -> bool:
+    """True when the rest of the sentence re-affirms THIS trait (not just any 'I'm now ...')."""
+    if _REVERSED_BARE.search(tail):
+        return True
+    want = _content(trait)
+    for m in _REAFFIRM.finditer(tail):
+        rest = (m.group("r") or m.group("r2") or "").strip().lower()
+        if rest.startswith(("one", "so ")) or (want and want <= _content(rest)):
+            return True
+    return False
 
 
 def _norm(text: str) -> str:
@@ -73,13 +89,13 @@ def challenged_trait(turn: str) -> Optional[str]:
     for rx in _CUES:
         m = rx.search(t)
         if m:
-            start = max((x.end() for x in re.finditer(r"[.!?;\n]\s*", t[: m.start()])), default=0)
+            start = max((x.end() for x in re.finditer(r"[.!?;,\n]\s*", t[: m.start()])), default=0)
             if _NOT_ASSERTED_BEFORE.search(t[start:m.start()]):
                 return None
             tail = re.split(r"[.!?\n]", t[m.end():], maxsplit=1)[0]
-            if _REVERSED_AFTER.search(tail):
-                return None
             trait = m.group("t").strip().lower()
+            if _reversed(tail, trait):
+                return None
             return trait if _content(trait) else None
     return None
 
@@ -95,9 +111,10 @@ def matching_rows(trait: str, rows: Iterable[Any]) -> list[Any]:
         text = getattr(r, "text", "") or ""
         if str(meta.get("status") or "approved") != "approved" or _NEG_IN_ROW.search(text):
             continue
-        if not _ABOUT_OWNER.search(text) or re.search(r"'s\b", _ABOUT_OWNER.sub("", text, count=1)):
+        if not _ABOUT_OWNER.search(text):
             continue          # a relative's fact ("User's sister is a doctor") is not the owner's trait
-        if want <= _content(text):
+        own = _OTHER_SUBJECT.split(text.strip(), maxsplit=1)[0]   # drop a second subject ("... and User's sister ...")
+        if want <= _content(own):
             out.append(r)
     return out[:MAX_ROWS]
 

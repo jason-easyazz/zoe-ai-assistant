@@ -219,3 +219,31 @@ def test_deep_sleep_never_promotes_or_archives_a_challenged_row(monkeypatch):
     monkeypatch.setattr(md, "_promotion_score", lambda meta: 0.95)
     run(md._deep_sleep_pass("ottilie"))
     assert col.upserts == ["p"]
+
+
+# ---- final review round: scope the vetoes, tie a reversal to the same trait -----------------------
+
+@pytest.mark.parametrize("turn,trait", [
+    ("You know, I'm not a morning person.", "morning person"),
+    ("You keep saying I'm a morning person, but I'm not a morning person.", "morning person"),
+    ("If I'm tired, I'm not a morning person.", "morning person"),
+    ("I'm not a doctor, but now I'm a teacher.", "doctor"),
+    ("I'm not a morning person, but I'm now working early shifts.", "morning person"),
+])
+def test_real_denials_survive_prefix_and_unrelated_now(turn, trait):
+    assert tc.challenged_trait(turn) == trait
+
+
+@pytest.mark.parametrize("turn", [
+    "I'm not a morning person, but actually I am.",
+    "I'm not a doctor, but now I'm a doctor.",
+    "She says I'm not a morning person.",
+])
+def test_taken_back_or_reported_denials_are_ignored(turn):
+    assert tc.challenged_trait(turn) is None
+
+
+def test_possessive_in_an_owner_facts_details_still_matches():
+    rows = [row("a", "User is a doctor at St Mary's Hospital."), row("b", "User's sister is a doctor."),
+            row("c", "User is a nurse and User's sister is a doctor.")]
+    assert [r.id for r in tc.matching_rows("doctor", rows)] == ["a"]
