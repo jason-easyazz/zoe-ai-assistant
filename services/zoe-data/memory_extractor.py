@@ -63,6 +63,19 @@ _SKIP_PREFIXES = (
 )
 
 
+# Head nouns that are unambiguously an occupation. Deliberately NOT generic nouns
+# (man, woman, person, fan, owl, believer, ...): "I am a man of faith" is not a job.
+_OCCUPATIONS = (
+    r"nurse|doctor|physician|surgeon|dentist|teacher|lecturer|professor|tutor|carpenter|plumber|electrician|"
+    r"builder|mechanic|welder|painter|plasterer|bricklayer|engineer|developer|programmer|designer|architect|"
+    r"accountant|bookkeeper|lawyer|solicitor|barrister|paralegal|chef|cook|baker|barista|bartender|waiter|waitress|"
+    r"farmer|gardener|fisherman|driver|pilot|paramedic|firefighter|police\s+officer|soldier|pharmacist|"
+    r"physiotherapist|psychologist|therapist|vet|veterinarian|scientist|researcher|journalist|writer|photographer|"
+    r"musician|electrician|cleaner|cashier|receptionist|secretary|manager|consultant|analyst|sales\s*(?:man|woman|person)|"
+    r"retail\s+worker|student|labourer|laborer|florist|hairdresser|barber|tailor|butcher|pastor|priest|minister"
+)
+
+
 _TEMPLATE_PATTERNS: list[tuple[str, str, float]] = [
     # Explicit memory commands
     (r"(?:please\s+)?remember\s+(?:that\s+|this\s+)?(.{5,280})", "User asked me to remember: {0}", 0.95),
@@ -85,8 +98,13 @@ _TEMPLATE_PATTERNS: list[tuple[str, str, float]] = [
     (r"(?:people\s+)?call\s+me\s+([A-Za-z][A-Za-z' -]{1,40})", "User goes by {0}", 0.88),
     (r"i(?:'m|\s+am)\s+(\d{1,3})\s+years?\s+old", "User is {0} years old", 0.88),
 
-    # Profession / identity
-    (r"i(?:'m|\s+am)\s+a(?:n)?\s+([\w][\w\s]{3,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.75),
+    # Profession: an OCCUPATIONAL FRAME or a known occupation. A bare "I am a <noun phrase>"
+    # is identity/belief/self-description ("a man of faith", "a night owl"), never a job.
+    (r"i\s+work\s+as\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.8),
+    (r"i(?:'m|\s+am)\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)\s+by\s+(?:trade|profession|occupation)\b", "User's job/role: {0}", 0.8),
+    (r"i(?:'m|\s+am)\s+employed\s+as\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.8),
+    (r"my\s+(?:job|occupation|profession|trade)\s+is\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.8),
+    (r"i(?:'m|\s+am)\s+a(?:n)?\s+((?:[a-z]+\s+){0,2}(?:" + _OCCUPATIONS + r"))(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.75),
 
     # Pets — "my dog's name is X" / "my dog is named X" / "my dog is called X"
     (
