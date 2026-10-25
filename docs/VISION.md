@@ -16,8 +16,10 @@ things up unprompted, and — over time — **learns and improves herself**.
 Not a chatbot. A presence that grows with you.
 
 ## 🧭 Direction — the architecture we're driving toward
-- **Pi (`zoe-core`) is the brain.** Everything routes through the Pi agent; the older
-  multi-tool scaffolding gets hidden behind it.
+- **The brain is the Flue 2.x sidecar on :3579** (`labs/flue-zoe-brain-2x/`) — the Pi
+  agent hosted by Flue, running the Gemma 4 E4B+MTP rock. Everything routes through it;
+  the older multi-tool scaffolding gets hidden behind it. `services/zoe-core` is the
+  legacy lane (kept as the in-code default until the brain-lane cleanup, B1, lands).
 - **Local-first & private.** Gemma brain + Moonshine STT + Kokoro voice + MemPalace
   memory — all on-device. Nothing leaves the box unless Jason opts in.
 - **Samantha-grade memory** — local, fast, no-nightly, reflective (the "live → idle →
