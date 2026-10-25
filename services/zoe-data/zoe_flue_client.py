@@ -2377,6 +2377,12 @@ async def _run_flue_brain_streaming_turn(
     if not (recall_block or verify_block or continuity_block or continuity_turn or hop_block or offer_block
             or kwargs.get("raise_block") or kwargs.get("day_brief_block")):
         risk_block = await _risk_cue_block(message, uid, session_id)
+    # Fast-path exchanges (reminder, "what do you know about me", ...) the brain never saw (flue_fastpath_context.py): without them a
+    # follow-up like "thank you" / "no" reached the brain with nothing to follow. Context beside the other blocks, same session + member only.
+    import flue_fastpath_context
+
+    fastpath_block = await flue_fastpath_context.block_for(uid, session_id, message)
+    flue_fastpath_context.note_brain_turn(session_id, message)
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
     # order is fixed: identity → recall → offer → the user's words. "" when the flag is
@@ -2393,7 +2399,7 @@ async def _run_flue_brain_streaming_turn(
     except Exception:  # noqa: BLE001
         pass
     # ZOE_PERSONALISATION_HOP_PLACEMENT=preamble: the hop block rides BEFORE the user's words, behind the other blocks
-    _blocks = "\n".join(b for b in (identity_block, recall_block, offer_block,
+    _blocks = "\n".join(b for b in (identity_block, fastpath_block, recall_block, offer_block,
                                     hop_block if hop_placement == "preamble" else "") if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
     # the start of the outbound message and forge the trusted marker. Only reachable

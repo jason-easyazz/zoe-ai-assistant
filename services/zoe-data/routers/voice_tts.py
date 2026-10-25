@@ -4802,13 +4802,30 @@ async def voice_command(
     try:
         from intent_router import detect_intent as _detect_pub, execute_intent as _exec_pub
         _pub_intent = _detect_pub(text, log_miss=False)
-        if _pub_intent and _pub_intent.name in _PUBLIC_VOICE_INTENTS:
+        # A bare "thank you" / "cheers" / "ok" is a social micro-reply: no data, no policy question, no brain round-trip (live
+        # 2026-10-23: "Thank you" was classified `acknowledgement` here and still went to the brain, which answered "I'm Zoe.").
+        # It is not in the capability matrix, so it skips the matrix lookup. An "ok" that ACCEPTS Zoe's last offer is not a bare
+        # acknowledgement: it falls through to the brain, which has the conversation (the same rule the chat lane applies).
+        _pub_social_ack = bool(_pub_intent and _pub_intent.name == "acknowledgement")
+        if _pub_social_ack:
+            try:
+                from intent_router import ack_answers_offer as _ack_answers_offer
+                if await _ack_answers_offer(_pub_intent, effective_user):
+                    _pub_social_ack = False
+                    _pub_intent = None
+            except Exception:
+                _pub_social_ack = False
+                _pub_intent = None
+        if _pub_intent and (_pub_social_ack or _pub_intent.name in _PUBLIC_VOICE_INTENTS):
             # Detached-task safety (see identity block above): run the auth check on a
             # dedicated connection, never the released request `db`. Fail closed.
             try:
-                from db_pool import get_db_ctx as _get_db_ctx
-                async with _get_db_ctx() as _authconn:
-                    _pub_allowed = await _can_use_voice_intent(_authconn, _voice_policy_user, _pub_intent.name)
+                if _pub_social_ack:
+                    _pub_allowed = True
+                else:
+                    from db_pool import get_db_ctx as _get_db_ctx
+                    async with _get_db_ctx() as _authconn:
+                        _pub_allowed = await _can_use_voice_intent(_authconn, _voice_policy_user, _pub_intent.name)
             except Exception:
                 # Dedicated conn unavailable: on the awaited path the request db is valid;
                 # on the detached path it fails → fail closed (deny).
