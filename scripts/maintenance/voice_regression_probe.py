@@ -325,6 +325,12 @@ def clip_profile(rows: list[dict[str, Any]], sample_dir: str) -> dict[str, dict[
 FLAKY_MAX_CLIPS = 3       # more candidates than this is a regression, not noise
 FLAKY_EXTRA_RUNS = 2      # runs 2 and 3
 FLAKY_FAIL_MIN = 2        # failures (of 3 runs) that make a clip regressed
+# A retry that comes back EMPTY (STT heard nothing) is INCONCLUSIVE, not a failure
+# (owner decision 2026-10-20): the clip's first such retry is re-run ONCE more and does
+# not count. The second EMPTY retry of the same clip counts as the failure it always was,
+# so each clip gets at most FLAKY_EXTRA_RUNS + 1 retries (a count, never a loop). The
+# extra retry is decisive: OK passes the clip (listed flaky), CANT_DO/ERROR/EMPTY fail it.
+FLAKY_EMPTY_RERUNS = 1
 
 
 def _profile_of(baseline: dict[str, Any] | None) -> dict[str, dict[str, Any]] | None:
@@ -433,7 +439,9 @@ def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | Non
     retried; a clip that fails in >= FLAKY_FAIL_MIN of its runs keeps CANT_DO,
     otherwise its row is set to OK with `flaky: true` (first-run numbers kept).
     A retry that cannot run, has no recall evidence, or returns a different route
-    counts as a failure: tolerance is only ever granted on positive evidence."""
+    counts as a failure: tolerance is only ever granted on positive evidence.
+    A retry that comes back EMPTY is inconclusive (not counted) and its clip gets ONE
+    extra retry (FLAKY_EMPTY_RERUNS); a second EMPTY retry counts as a failure."""
     out: dict[str, Any] = dict(retried=False, report=report, clips=[], note="")
     cand = flaky_candidates(report, baseline, sample_dir)
     if not cand["eligible"]:
@@ -472,8 +480,22 @@ def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | Non
            for cid in names}
     passing: dict[str, dict[str, Any]] = {}
     problems: list[str] = []
-    for _ in range(extra_runs):
-        pending = [cid for cid, v in runs.items() if sum(x != "OK" for x in v) < FLAKY_FAIL_MIN]
+    # clip -> index in runs[clip] of its one inconclusive (EMPTY) retry; never counted.
+    inconclusive: dict[str, int] = {}
+
+    def _fails(cid: str) -> int:
+        return sum(x != "OK" for i, x in enumerate(runs[cid]) if i != inconclusive.get(cid))
+
+    def _may_retry(cid: str) -> bool:
+        used = len(runs[cid]) - 1
+        k = inconclusive.get(cid)
+        if k is not None and k + 1 < len(runs[cid]) and runs[cid][k + 1] == "OK":
+            return False       # the one extra retry of a blank came back OK: decided, pass
+        return _fails(cid) < FLAKY_FAIL_MIN and used < extra_runs + (
+            FLAKY_EMPTY_RERUNS if k is not None else 0)
+
+    for _ in range(extra_runs + FLAKY_EMPTY_RERUNS):
+        pending = [cid for cid in runs if _may_retry(cid)]
         if not pending:
             break
         try:
@@ -489,6 +511,8 @@ def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | Non
         got = {c: r for r in rep.get("rows") or [] if (c := _row_clip_id(r, sample_dir))}
         for cid in pending:
             v = _retry_verdict(ref[cid], got.get(cid))
+            if v == "EMPTY" and cid not in inconclusive:
+                inconclusive[cid] = len(runs[cid])      # blank retry: re-run once, not a failure
             runs[cid].append(v)
             if v == "OK":
                 passing.setdefault(cid, got[cid])
@@ -499,8 +523,8 @@ def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | Non
         cid = _row_clip_id(r, sample_dir)
         if cid not in runs:
             continue
-        fails = sum(v != "OK" for v in runs[cid])
-        total = len(runs[cid])
+        fails = _fails(cid)
+        total = len(runs[cid]) - (1 if cid in inconclusive else 0)
         regressed = fails >= FLAKY_FAIL_MIN
         kind = {"EMPTY": "EMPTY (transient STT)",
                 "ROUTE-CHANGED": "route flip (transient router)"}.get(runs[cid][0], "CANT_DO (brain wording)")
@@ -515,7 +539,9 @@ def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | Non
             clip_id=cid, runs=runs[cid], failures=fails, of=total, regressed=regressed,
             note=(f"clip {cid} regressed: {fails}/{total} runs failed {runs[cid]}: counted"
                   if regressed else
-                  f"clip {cid} flaky: {fails}/{total} {kind}: not counted")))
+                  f"clip {cid} flaky: {fails}/{total} {kind}: not counted")
+            + ("; a blank retry was re-run once (inconclusive)" if cid in inconclusive else ""),
+            retry_empty_rerun=cid in inconclusive))
     new_report = dict(report, rows=adjusted, verdicts=_recount(adjusted),
                       first_run_verdicts=report.get("verdicts"))
     return dict(retried=True, report=new_report, clips=clips, note="; ".join(problems),
