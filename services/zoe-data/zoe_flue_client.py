@@ -2175,9 +2175,12 @@ async def run_flue_brain_streaming(
     # sink when the named-person floor fired for a person no row relates to the user; every
     # other turn passes through untouched.
     role_guard: dict[str, Any] = {}
+    # Set by the inner turn when it answered in code without ever reaching the sidecar (verify-on-challenge): that exchange is NOT in the
+    # sidecar's history, so it must not be marked brain-owned (flue_fastpath_context).
+    code_reply: dict[str, bool] = {}
     turn = _run_flue_brain_streaming_turn(
         message, session_id, user_id, day_brief_block=brief.block if brief else "",
-        raise_block=raised.block if raised else "", _role_guard=role_guard, **kwargs,
+        raise_block=raised.block if raised else "", _role_guard=role_guard, _code_reply=code_reply, **kwargs,
     )
     import role_guess_guard
 
@@ -2227,7 +2230,7 @@ async def run_flue_brain_streaming(
         # Settled HERE, not after the loop: a consumer that disconnects or barges
         # in after the first text exits through this finally (GeneratorExit or a
         # CancelledError), and the brief it heard must still take the claim.
-        if emitted:   # the sidecar has this turn in its history; a failed / refused one stays a fast-path row to resend
+        if emitted and not code_reply:   # the sidecar has this turn in its history; a failed / refused one stays a fast-path row to resend
             try:
                 import flue_fastpath_context
 
@@ -2326,6 +2329,8 @@ async def _run_flue_brain_streaming_turn(
     verify_plan = await _verify_plan(message, uid, session_id, bool(kwargs.get("voice_mode")))
     if verify_plan is not None and verify_plan.reply:
         _record_outcome(outcome_sink, FLUE_OUTCOME_SEAM_REPLY, f"verify_on_challenge:{verify_plan.status}")
+        if isinstance(kwargs.get("_code_reply"), dict):
+            kwargs["_code_reply"]["code"] = True    # answered here, the sidecar never saw this turn
         yield verify_plan.reply
         return
     verify_block = verify_plan.block if verify_plan is not None else ""

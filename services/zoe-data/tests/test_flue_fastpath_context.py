@@ -22,8 +22,16 @@ BOB = "bob-test"
 SID = "voice-session-1"
 
 
+_ids = iter(range(1, 10**6))
+
+
 def _row(role, text, uid=ALICE, **extra):
-    return (role, text, json.dumps({"user_id": uid, **extra}))
+    return (role, text, json.dumps({"user_id": uid, **extra}), f"row-{next(_ids)}")
+
+
+def _id_of(rows, text):
+    """Id of the first user row with this text (the brain-answered turn a test marks seen)."""
+    return next(r[3] for r in rows if r[0] == "user" and r[1] == text)
 
 
 def _newest_first(*chron):
@@ -33,6 +41,7 @@ def _newest_first(*chron):
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     monkeypatch.setattr(ffc, "_BRAIN_SEEN", OrderedDict())
+    monkeypatch.setattr(ffc, "_PENDING", OrderedDict())
     monkeypatch.delenv(ffc._ENV, raising=False)
 
 
@@ -79,16 +88,16 @@ def test_brain_turns_are_never_repeated(monkeypatch):
     rows = [_row("user", "tell me a joke"), _row("assistant", "Why did the ferns cross the road?"),
             _row("user", "what time is it"), _row("assistant", "It's 3pm."), _row("user", "and the date")]
     _rig(monkeypatch, rows)
-    ffc.note_brain_turn(SID, "tell me a joke")           # the brain has the joke exchange
+    ffc.note_brain_turn(SID, "tell me a joke", _id_of(rows, "tell me a joke"))   # the brain has the joke exchange
     block = _block("and the date")
     assert "what time is it" in block and "It's 3pm." in block
     assert "joke" not in block and "ferns cross" not in block
 
 
 def test_nothing_new_when_the_brain_has_everything(monkeypatch):
-    _rig(monkeypatch, [_row("user", "tell me a joke"), _row("assistant", "Why did the ferns cross the road?"),
-                       _row("user", "another")])
-    ffc.note_brain_turn(SID, "tell me a joke")
+    rows = [_row("user", "tell me a joke"), _row("assistant", "Why did the ferns cross the road?"), _row("user", "another")]
+    _rig(monkeypatch, rows)
+    ffc.note_brain_turn(SID, "tell me a joke", _id_of(rows, "tell me a joke"))
     assert _block("another") == ""
 
 
@@ -97,7 +106,7 @@ def test_fast_exchange_is_resent_on_later_brain_turns_within_the_window(monkeypa
     rows = [_row("user", "remind me to stretch"), _row("assistant", "Reminder set: stretch."), _row("user", "which plants")]
     _rig(monkeypatch, rows)
     assert "stretch" in _block("which plants")
-    ffc.note_brain_turn(SID, "which plants")              # the brain answered it
+    ffc.note_brain_turn(SID, "which plants", _id_of(rows, "which plants"))   # the brain answered it
     rows += [_row("assistant", "The ferns."), _row("user", "what did I want to do with them")]
     _rig(monkeypatch, rows)
     block = _block("what did I want to do with them")
@@ -145,10 +154,61 @@ def test_run_flue_brain_streaming_marks_seen_only_when_reply_text_came_back(monk
         monkeypatch.setattr(zfc, "_run_flue_brain_streaming_turn", turn)
         return [d async for d in zfc.run_flue_brain_streaming("hello there", SID, ALICE, replay_isolation=True)]
 
+    _rig(monkeypatch, [_row("user", "hello there")])
+    _block("hello there")                                 # the real turn matches its saved row before the request
     asyncio.run(drive(failed_turn))
     assert SID not in ffc._BRAIN_SEEN
+    _block("hello there")
     asyncio.run(drive(ok_turn))
-    assert ffc._BRAIN_SEEN[SID] == ["hello there"]
+    assert len(ffc._BRAIN_SEEN[SID]) == 1       # by the saved row's id, not its text
+
+
+def test_repeated_request_answered_by_the_fast_path_still_carries_context(monkeypatch):
+    """Greptile P1: the SAME words once answered by the brain, later answered by a fast path, must not be hidden by a text match."""
+    rows = [_row("user", "remind me to stretch"), _row("assistant", "Brain: sure, noted."),
+            _row("user", "what time is it"), _row("assistant", "It's 3pm."),
+            _row("user", "remind me to stretch"), _row("assistant", "Reminder set: stretch."), _row("user", "thanks")]
+    _rig(monkeypatch, rows)
+    ffc.note_brain_turn(SID, "remind me to stretch", rows[0][3])      # only the FIRST one was the brain's
+    block = _block("thanks")
+    assert "Reminder set: stretch." in block and "It's 3pm." in block
+    assert "Brain: sure" not in block                                   # the brain's own row is still not repeated
+
+
+def test_note_claims_the_row_block_for_matched_and_a_mismatch_notes_nothing(monkeypatch):
+    rows = [_row("user", "hello there")]
+    _rig(monkeypatch, rows)
+    _block("hello there")
+    ffc.note_brain_turn(SID, "hello there")
+    assert ffc._BRAIN_SEEN[SID] == [rows[0][3]]
+    _block("hello there")
+    ffc.note_brain_turn(SID, "something else entirely")
+    assert ffc._BRAIN_SEEN[SID] == [rows[0][3]]          # no matching pending row: nothing new marked
+
+
+def test_early_verify_reply_never_marks_the_exchange_brain_owned(monkeypatch):
+    """Codex: ZOE_VERIFY_ON_CHALLENGE answers in code; the sidecar never saw that turn, so it stays a fast-path row."""
+    rows = [_row("user", "is the sky green")]
+    _rig(monkeypatch, rows)
+    _block("is the sky green")                            # what the real turn does before the brain request
+
+    async def verify_turn(message, session_id, user_id="", **k):
+        k["_code_reply"]["code"] = True                  # exactly what the inner turn does on verify_plan.reply
+        yield "I checked and no, it is not."
+
+    async def drive(turn):
+        monkeypatch.setattr(zfc, "_run_flue_brain_streaming_turn", turn)
+        return [d async for d in zfc.run_flue_brain_streaming("is the sky green", SID, ALICE, replay_isolation=True)]
+
+    asyncio.run(drive(verify_turn))
+    assert SID not in ffc._BRAIN_SEEN
+
+    async def ok_turn(message, session_id, user_id="", **_k):   # negative control: a sidecar-answered turn IS marked
+        yield "Sure thing."
+
+    _block("is the sky green")
+    asyncio.run(drive(ok_turn))
+    assert ffc._BRAIN_SEEN[SID] == [rows[0][3]]
 
 
 # ── privacy ──────────────────────────────────────────────────────────────────
