@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
 from typing import Optional
 
@@ -61,6 +62,14 @@ def harness_lock_held(path: Optional[str] = None) -> bool:
     return False
 
 
+def _finished(sess: object) -> bool:
+    done = getattr(sess, "_done", None)
+    try:
+        return bool(done is not None and done.is_set())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def live_stt_in_flight() -> bool:
     """The panel's Moonshine inference lock is held, or an under-speech STT stream is open. Reads module state only, and only if the
     voice router is already loaded (``sys.modules``) - this never imports it."""
@@ -73,27 +82,48 @@ def live_stt_in_flight() -> bool:
         pass
     ss = sys.modules.get("voice_stt_stream")
     try:
-        return bool(ss and (getattr(ss, "_sessions", None) or getattr(ss, "_pending", None)))
+        if not ss:
+            return False
+        if getattr(ss, "_pending", None):
+            return True
+        # A session whose worker has finished (error / rejected chunk) can sit in the registry until the next reap: not inference in flight.
+        return any(not _finished(s) for s in list((getattr(ss, "_sessions", None) or {}).values()))
     except Exception:  # noqa: BLE001
         return False
 
 
-def night_unit_active(now_mono: Optional[float] = None) -> bool:
-    """``zoe-night-window.service`` is active (cached ``UNIT_TTL_S``; any systemctl trouble reads as not-active)."""
-    t = time.monotonic() if now_mono is None else now_mono
-    if t - _unit_cache["at"] < UNIT_TTL_S:
-        return bool(_unit_cache["active"])
-    active = False
+def _probe_unit() -> bool:
     try:
         env = dict(os.environ)
         env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
         r = subprocess.run(["systemctl", "--user", "is-active", "--quiet", NIGHT_UNIT], env=env, timeout=1.5,
                            capture_output=True, check=False)
-        active = r.returncode == 0
+        return r.returncode == 0
     except (OSError, subprocess.SubprocessError):
-        active = False
+        return False
+
+
+_refresh_lock = threading.Lock()
+_refresh_thread: Optional[threading.Thread] = None
+
+
+def _refresh_unit(t: float) -> None:
+    active = _probe_unit()
     _unit_cache["at"], _unit_cache["active"] = t, active
-    return active
+
+
+def night_unit_active(now_mono: Optional[float] = None) -> bool:
+    """``zoe-night-window.service`` is active. NEVER blocks the caller (this runs on the API event loop): the answer is cached for
+    ``UNIT_TTL_S`` and a stale cache is refreshed by one worker thread while the last known value is returned. Before the first probe
+    completes it reads as not-active (the harness flock, live STT and cool-off signals still apply); systemctl trouble reads as inactive."""
+    global _refresh_thread
+    t = time.monotonic() if now_mono is None else now_mono
+    if t - _unit_cache["at"] >= UNIT_TTL_S:
+        with _refresh_lock:
+            if _refresh_thread is None or not _refresh_thread.is_alive():
+                _refresh_thread = threading.Thread(target=_refresh_unit, args=(t,), name="live-voice-gate-unit", daemon=True)
+                _refresh_thread.start()
+    return bool(_unit_cache["active"])
 
 
 def busy_reason(now_mono: Optional[float] = None) -> Optional[str]:
@@ -116,4 +146,7 @@ def reset() -> None:
     """Test seam: forget the cool-off and the cached unit state."""
     global _last_busy_at
     _last_busy_at = None
+    th = _refresh_thread
+    if th is not None:
+        th.join(5)
     _unit_cache["at"], _unit_cache["active"] = -1e9, False

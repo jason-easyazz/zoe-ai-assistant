@@ -56,8 +56,15 @@ def test_a_held_moonshine_infer_lock_is_live_stt():
 def test_an_open_stt_stream_is_live_stt():
     sys.modules["voice_stt_stream"] = types.SimpleNamespace(_sessions={}, _pending={})
     assert g.busy_reason(1.0) is None
-    sys.modules["voice_stt_stream"]._sessions["abc"] = object()
+    sys.modules["voice_stt_stream"]._sessions["abc"] = types.SimpleNamespace(_done=threading.Event())
     assert g.busy_reason(2.0) == "live_stt"
+
+
+def test_a_finished_stt_session_left_in_the_registry_is_not_live_stt():
+    done = threading.Event()
+    done.set()
+    sys.modules["voice_stt_stream"] = types.SimpleNamespace(_sessions={"dead": types.SimpleNamespace(_done=done)}, _pending={})
+    assert g.live_stt_in_flight() is False and g.busy_reason(1.0) is None
 
 
 def test_cooloff_holds_for_n_seconds_after_the_last_busy_signal(monkeypatch):
@@ -80,11 +87,24 @@ def test_night_unit_is_cached_and_systemctl_trouble_reads_as_inactive(monkeypatc
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    assert g.night_unit_active(1000.0) is True and g.night_unit_active(1001.0) is True and len(calls) == 1   # cached
+    release = threading.Event()
+
+    def slow_run(cmd, **kw):
+        release.wait(5)
+        return fake_run(cmd, **kw)
+
+    monkeypatch.setattr(subprocess, "run", slow_run)
+    assert g.night_unit_active(1000.0) is False                            # the caller never waits for systemctl (event-loop safe)
+    release.set()
+    g._refresh_thread.join(5)
+    assert g.night_unit_active(1001.0) is True and len(calls) == 1         # refreshed in the worker, then cached
+    assert g.night_unit_active(1002.0) is True and len(calls) == 1
     g.reset()
 
     def boom(cmd, **kw):
         raise FileNotFoundError("systemctl")
 
     monkeypatch.setattr(subprocess, "run", boom)
-    assert g.night_unit_active(2000.0) is False
+    g.night_unit_active(2000.0)
+    g._refresh_thread.join(5)
+    assert g.night_unit_active(2001.0) is False
