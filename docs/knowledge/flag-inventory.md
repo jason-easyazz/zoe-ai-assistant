@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-25T00:00:00Z
+timestamp: 2026-10-26T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-25T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-25. The table body is deterministic (sorted, no
+Last generated: 2026-10-26. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-764 flags; 714 not documented in `.env.example`.
+766 flags; 716 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -456,6 +456,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_OMI_LEARN_VOICES` | `False` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_MIN_MEM_MB` | `dynamic` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_OWNER_USER_ID` | `''` | yes | NO | `services/zoe-data/omi_devices.py`<br>`services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_REVIEW_TELEGRAM` | `-` | yes | NO | `services/zoe-data/omi_review_digest.py` |
+| `ZOE_OMI_REVIEW_TELEGRAM_HOUR` | `8` | yes | NO | `services/zoe-data/omi_review_digest.py` |
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_SPEAKER_TAG` | `'off'` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_SUGGEST_MARGIN` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
