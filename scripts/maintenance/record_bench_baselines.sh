@@ -65,7 +65,13 @@ step() {
   local wait_s
   wait_s="$(python3 "$REPO/scripts/maintenance/harness_quiet.py" brain-window-wait --budget-min "$STEP_MIN" --cap-s 1800)" || wait_s=0
   flock -w "${wait_s:-0}" "$LOCK" bash -c 'python3 "$1" brain-window record_bench_baselines --budget-min "$2" || exit 3
-shift 2; exec nice -n 5 "$@"' _ "$REPO/scripts/maintenance/harness_quiet.py" "$STEP_MIN" "$@" 2>&1 | tee -a "$LOG" || rc=1
+hq="$1"; shift 2
+# HARD deadline: the start check above only trusts an estimate, and a step has its own waits (the bar alone allows
+# 1200 s readiness + 900 s memory). Kill it (TERM, then KILL) before 01:50 so neither it nor the lock outlives the cutoff.
+# TERM at the deadline (window - 120 s margin), KILL 60 s later (still 60 s clear of the window): samantha_bar.py needs >=30 s to tear down.
+d="$(python3 "$hq" brain-window-deadline)" || exit 3
+case "$d" in (""|*[!0-9]*|0) exit 3 ;; esac
+exec timeout -k 60 "$d" nice -n 5 "$@"' _ "$REPO/scripts/maintenance/harness_quiet.py" "$STEP_MIN" "$@" 2>&1 | tee -a "$LOG" || rc=1
 }
 
 [ "$selftest" = 1 ] && step python3 "$REPO/scripts/maintenance/voice_regression_probe.py" --self-test

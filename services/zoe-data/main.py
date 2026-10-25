@@ -167,11 +167,13 @@ async def _check_stt_ready() -> dict:
 async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
     from routers import voice_tts
 
-    mode = env_str("ZOE_TTS_MODE", "hybrid").lower()
+    mode = voice_tts.tts_mode()
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     detail: dict = {
         "ok": False,
-        "engine": "kokoro-waterfall",
+        # Default mode is Kokoro-only (owner decision 2026-10-21): no fallback
+        # voice, so readiness is exactly "is the Kokoro sidecar up".
+        "engine": "kokoro" if mode == voice_tts.TTS_MODE_KOKORO else "kokoro-waterfall",
         "mode": mode,
         "sidecar_url": sidecar_url,
     }
@@ -205,6 +207,9 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
         detail["error"] = f"http_{response.status_code}"
     except Exception as exc:
         detail["error"] = exc.__class__.__name__
+    if mode == voice_tts.TTS_MODE_KOKORO:
+        # No fallback voice in kokoro-only mode: Kokoro down = TTS not ready.
+        return detail
     detail["espeak_available"] = bool(voice_tts._has_espeak_ng())
     if mode in {"hybrid", "local", "offline"} and detail["espeak_available"]:
         detail["ok"] = True

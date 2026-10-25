@@ -4867,10 +4867,10 @@
   },
   "ZOE_TTS_MODE": {
    "defaults": [
-    "hybrid"
+    "kokoro"
    ],
    "kind": "str",
-   "readers": 2
+   "readers": 1
   },
   "ZOE_TTS_TRIM_SILENCE": {
    "defaults": [

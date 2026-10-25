@@ -35,8 +35,12 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    the user (~14.8% of turns fall through to the brain; router decision p50 ~393 ms). This front is
    the biggest single contributor to the post-2026-07-02 median drop (see *Latency wins* below).
 3. **TTS — Kokoro on CUDA** (PyTorch, RTF ~0.08, live-verified `device":"cuda"` on
-   `:10201/health`), out-of-process sidecar on `127.0.0.1:10201`, via a waterfall in
-   `routers/voice_tts.py`: **Kokoro → Edge TTS → espeak-ng** (each falls back to the next).
+   `:10201/health`), out-of-process sidecar on `127.0.0.1:10201`. **Kokoro is the ONLY voice**
+   (owner decision 2026-10-21; `ZOE_TTS_MODE` default `kokoro`): no fallback voice and **no
+   off-box TTS** — Edge TTS would send reply text to Microsoft. If Kokoro fails, `/synthesize`
+   returns 503 and `/stream` an error line per chunk (the turn is silent, never a different
+   voice). The legacy waterfall (Kokoro → local sidecar → Edge TTS → espeak-ng) still exists
+   only for an explicitly set non-default mode (`hybrid`/`local`/`cloud`/`edge`/`offline`).
    PyTorch/CUDA is the sidecar's sole backend; it falls back to CPU on its own only if CUDA
    cannot load, reporting `degraded=true` on `/health`. zoe-data holds no in-process TTS model.
    An ONNX Runtime CUDA backend was built and measured NOT a win (2026-09-27; code kept on
@@ -261,6 +265,18 @@ this probe stores `summary.clip_profile` (per clip id: verdict, route, heard has
 it still gets the tolerance (route change then cannot be checked); re-record it once with
 `--update-baseline` in a quiet window to get the strict route check. Pinned by
 `tests/unit/test_voice_probe_flaky_retry.py`.
+
+**A blank retry is inconclusive (owner decision 2026-10-20).** One pinned clip (id `d15a8f1d4fc3`) has an
+unstable STT: in 6 of 65 runs since 10-15 (on unrelated PRs; main's nightly always scored it OK) the first run
+was `CANT_DO` or `EMPTY` and the flaky retry then heard nothing (`EMPTY`), which counted as a second failure
+and blocked the PR. Now a retry that comes back `EMPTY` is NOT a failure: it is re-run ONCE more
+(`FLAKY_EMPTY_RERUNS = 1`, so a clip gets at most 3 retries instead of 2, a count and never a loop). Only
+that extra retry's non-blank result counts: `OK` on the reference route passes the clip (listed in
+`flaky_clips`, `regressed: false`); `CANT_DO` / `ERROR` / a wrong route fails it as before; a second `EMPTY`
+fails it as before. The inconclusive retry stays in `runs` but is left out of `failures` / `of`, and the
+entry carries `retry_empty_rerun: true` (always present, `false` when no blank was re-run) so the extra
+retry is auditable. A retry that is not blank is untouched: a real regression (retry `CANT_DO`, wrong route,
+first-run route/transcript change) fails exactly as above.
 
 **What "OK" means per clip — the per-clip outcome checks (T-3, deep dive 2, 2026-10-19).** `_classify`'s OK
 only ever meant "heard something, no error, no refusal phrase", so a list add answered as small talk scored OK.
