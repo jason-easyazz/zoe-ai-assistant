@@ -69,6 +69,7 @@ sys.path.insert(0, str(HERE.parents[1] / "lib"))
 sys.path.insert(0, str(HERE.parents[1] / "maintenance"))
 
 import panel_voice_log as pvl  # noqa: E402
+import speaker_fa_review as _spk  # noqa: E402
 
 SR = 16000
 CHUNK = 1280                      # the daemon's CHUNK_SIZE: one openWakeWord frame = 80 ms
@@ -614,10 +615,8 @@ def _private_dir(d: Path, root: Path = VOICE_GATE_ROOT) -> Path:
 
 
 def _write_private(path: Path, text: str) -> None:
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)   # never through a symlink
-    with os.fdopen(fd, "w") as fh:
-        fh.write(text)
-    os.chmod(path, 0o600)
+    """Atomic 0600 write (temp + fsync + os.replace), shared with the speaker tool."""
+    _spk.write_private(path, text)
 
 
 def _live_from(args) -> dict:

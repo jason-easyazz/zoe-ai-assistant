@@ -243,6 +243,42 @@ def test_corpus_join_matches_by_time_and_exact_duration(tmp_path):
     assert old["excluded_old"] == 1 and len(old["positive"]) == 1
 
 
+ORB_LOG = [
+    line("2026-10-16 22:00:00", "Orb-tap activation received"),
+    line("2026-10-16 22:00:00", "Wake word detected! Notifying Jetson and waking screen..."),   # on_wake() from the tap
+    line("2026-10-16 22:00:03", "Recorded command: duration=2.00s chunks=20 stop=silence"),
+    line("2026-10-16 22:00:04", "turn_stream TTFA=0.50s transcript='lights on'"),
+    line("2026-10-16 22:10:00", "Wake word detected! Notifying Jetson and waking screen..."),   # a genuine wake
+    line("2026-10-16 22:10:03", "Recorded command: duration=1.50s chunks=20 stop=silence"),
+    line("2026-10-16 22:10:04", "turn_stream TTFA=0.50s transcript='hello'"),
+]
+
+
+def test_orb_tap_and_its_synthetic_wake_are_one_orb_turn():
+    tns = pvl.turns(pvl.events(ORB_LOG))
+    assert [t.trigger for t in tns] == ["orb", "wake"]
+    assert tns[0].transcript == "lights on"
+
+
+def test_orb_turn_is_never_a_wake_positive(tmp_path):
+    _tone_wav(tmp_path / "220003_000.wav", 2.00, dt.datetime(2026, 10, 16, 22, 0, 3))
+    _tone_wav(tmp_path / "221003_000.wav", 1.50, dt.datetime(2026, 10, 16, 22, 10, 3))
+    sets = mw.panel_clips(ORB_LOG, str(tmp_path), positives_since=dt.datetime(2026, 7, 16))
+    assert [Path(x).name for x in sets["positive"]] == ["221003_000.wav"]
+
+
+def test_write_private_is_atomic(tmp_path, monkeypatch):
+    p = tmp_path / "scores.json"
+    mw._write_private(p, "old")
+    assert oct(p.stat().st_mode & 0o777) == "0o600"
+    import os as _os
+    monkeypatch.setattr(_os, "fsync", lambda fd: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError):
+        mw._write_private(p, "new")
+    assert p.read_text() == "old"
+    assert [x.name for x in tmp_path.iterdir()] == ["scores.json"]
+
+
 def test_clip_time_rejects_a_name_far_from_its_mtime():
     ts = dt.datetime(2026, 10, 16, 23, 59, 59)
     assert pvl.clip_time("235959_100.wav", ts.timestamp()) is not None
@@ -352,8 +388,8 @@ def test_private_outputs_land_only_under_the_voice_gate_root(tmp_path):
     d = mw._private_dir(tmp_path / "wake", root=tmp_path)
     (tmp_path / "victim").write_text("keep")
     os.symlink(tmp_path / "victim", d / "link.json")
-    with pytest.raises(OSError):
-        mw._write_private(d / "link.json", "{}")             # never written through a symlink
+    mw._write_private(d / "link.json", "{}")                 # replaces the symlink itself, never writes through it
+    assert not (d / "link.json").is_symlink()
     assert (tmp_path / "victim").read_text() == "keep"
     mw._write_private(d / "x.json", "{}")
     assert (os.stat(d).st_mode & 0o777) == 0o700

@@ -123,6 +123,7 @@ def events(lines: Iterable[str]) -> list:
     return out
 
 
+ORB_WAKE_COALESCE_S = 1.0
 _OUTCOMES = ("turn", "empty", "too_short", "junk", "not_addressed", "held")
 
 
@@ -133,6 +134,11 @@ def turns(evs: Iterable[Event]) -> list:
     cur: Optional[Turn] = None
     for e in evs:
         if e.kind in ("wake", "orb", "followup"):
+            # An orb tap makes the daemon call on_wake(), which logs "Wake word detected!" ~instantly: that line belongs
+            # to the orb turn, it is not an acoustic wake-phrase positive.
+            if (e.kind == "wake" and cur is not None and cur.trigger == "orb"
+                    and 0 <= (e.ts - cur.trigger_ts).total_seconds() <= ORB_WAKE_COALESCE_S):
+                continue
             cur = Turn(trigger=e.kind, trigger_ts=e.ts)
             out.append(cur)
             continue
