@@ -4489,6 +4489,26 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_REVIEW_TELEGRAM": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_review_digest.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_REVIEW_TELEGRAM_HOUR": {
+        "defaults": [
+          "8"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_review_digest.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMI_SEGMENT_EMBED_TTL_DAYS": {
         "defaults": [
           "dynamic"
@@ -7502,6 +7522,17 @@
         "in_env_example": false,
         "readers": [
           "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_MAIN_CHECKOUT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_gate_report.py",
+          "scripts/maintenance/voice_regression_probe.py"
         ],
         "typed_env": false
       },

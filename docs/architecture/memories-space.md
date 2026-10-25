@@ -538,7 +538,7 @@ act until T8 has measured the RSS delta and the voice replay has passed with a t
      below), and never as anything else.
    - Drop routine stretches with a cheap cue filter (no date, time, list word, "remind", "need", "buy", "meeting",
      "call", or name), like the night mind's `is_routine`.
-   - Cut into chunks of about 2,400 tokens, at most `ZOE_OMI_DAY_REVIEW_MAX_CALLS` (default 8). A full day keeps its
+   - Cut into chunks of about 2,400 tokens, at most `ZOE_OMI_DAY_REVIEW_MAX_CALLS` (default 16). A full day keeps its
      highest-scoring chunks and reports what it skipped.
 2. **Prompt.**
    - Each line is rendered `[s<id> YOU 09:14] text` or `[s<id> OTHER 09:15] text`. Text is passed through the
@@ -824,7 +824,7 @@ omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_con
 | `ZOE_OMI_TAG_WINDOW_S` / `_HOP_S` | 2.0 / 1.0 | windowing |
 | `ZOE_OMI_DAY_REVIEW` | off | `shadow`: analyse and store candidates, shown on the desktop Pendant tab only, with no mention, no raise and no voice. `on`: the raise, the pull, the dialogue and the cards. |
 | `ZOE_OMI_DAY_REVIEW_LANE` | `night` | `night` (the 12B night window, last; owner decision 2026-10-18) / `day` (the idle 4B, opt-in) / `both` |
-| `ZOE_OMI_DAY_REVIEW_IDLE_S` / `_MAX_CALLS` | 600 / 8 | lane E gate and budget |
+| `ZOE_OMI_DAY_REVIEW_IDLE_S` / `_MAX_CALLS` | 600 / 16 | lane E gate and budget |
 | `ZOE_OMI_REVIEW_UNTAGGED` | on (in shadow) | analyse untagged days in the reduced form of §5.2 (D4) |
 | `ZOE_OMI_CANDIDATE_RETENTION_DAYS` | 14 | candidate text retention after close |
 | `ZOE_OMI_LEARN_VOICES` | off | learned voiceprints from member tags + suggestions (§2.6) |
