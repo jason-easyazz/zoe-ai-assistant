@@ -20,6 +20,19 @@ pytestmark = pytest.mark.ci_safe
 REPO = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _cuda_env_restored():
+    """cmd_offline_fa writes os.environ["CUDA_VISIBLE_DEVICES"] directly (monkeypatch cannot see it): put it back whatever happens."""
+    before = os.environ.get("CUDA_VISIBLE_DEVICES")
+    try:
+        yield
+    finally:
+        if before is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = before
+
+
 def _load(name: str, rel: str):
     spec = importlib.util.spec_from_file_location(name, REPO / rel)
     mod = importlib.util.module_from_spec(spec)
@@ -113,11 +126,18 @@ def test_merge_never_loses_a_label():
 
 def test_merge_keeps_server_evidence_a_later_collection_cannot_find():
     old = [dict(turn_id="a", label="me", notes="", server_identified="alex", server_verified="yes", clip="/c/a.wav")]
-    new = [dict(turn_id="a", label="", notes="", server_identified="none", server_verified="", clip="")]   # app log compressed
+    new = [dict(turn_id="a", label="", notes="", server_identified="", server_verified="", clip="")]   # app log compressed: no join
     out = sfa.merge(old, new)[0]
     assert (out["label"], out["server_identified"], out["server_verified"], out["clip"]) == ("me", "alex", "yes", "/c/a.wav")
     fresh = sfa.merge(old, [dict(turn_id="a", label="", notes="", server_identified="bob", server_verified="no", clip="")])[0]
     assert (fresh["server_identified"], fresh["server_verified"]) == ("bob", "no")      # new evidence still wins
+
+
+def test_merge_keeps_a_corrected_none_from_a_later_collection():
+    # "none" = a joined command whose server identified NOBODY: a positive finding that must replace an earlier member join
+    old = [dict(turn_id="a", label="", notes="", server_identified="alex", server_verified="yes", clip="")]
+    new = [dict(turn_id="a", label="", notes="", server_identified="none", server_verified="no", clip="")]
+    assert sfa.merge(old, new)[0]["server_identified"] == "none"
 
 
 def test_negative_cosine_scores_are_parsed():

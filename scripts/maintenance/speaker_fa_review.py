@@ -236,7 +236,9 @@ def merge(old: Sequence[dict], new: Sequence[dict]) -> list:
         if prev:
             r = dict(r, label=prev.get("label", ""), notes=prev.get("notes") or r.get("notes", ""))
             # evidence a later collection cannot find again (an app log since compressed) is kept, never blanked
-            if r.get("server_identified") in (None, "", "none") and prev.get("server_identified") not in (None, "", "none"):
+            # "none" is a positive finding (a joined command whose server identified nobody), not missing evidence:
+            # only an unjoined row ("" / None) inherits the earlier identity
+            if r.get("server_identified") in (None, "") and prev.get("server_identified") not in (None, "", "none"):
                 r["server_identified"] = prev["server_identified"]
             for k in ("server_verified", "clip"):
                 if not r.get(k) and prev.get(k):
