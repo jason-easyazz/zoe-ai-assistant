@@ -662,3 +662,44 @@ async def test_confirmed_voice_example_audio_uses_the_turns_latency(fresh, monke
     monkeypatch.setattr(sp, "audio_ref", lambda ts, **kw: seen.append(kw) or None)
     assert len(await to.confirmed_examples()) == 1
     assert seen == [{"latency_ms": 1234}], "without it the 90 s fallback can attach an earlier turn's clip"
+
+
+# ── review round 4 (PR #2141): a late rating never copies an off-the-record turn's words ────────────
+
+def _turn_id(user=A):
+    return next(t.turn_id for h in sd._HISTORY.values() for t in h if t.user_id == user)
+
+
+async def test_an_off_record_turn_rated_after_the_mark_expired_stores_no_words(monkeypatch):
+    import memory_provenance as mp
+
+    mark = {"live": True}
+    monkeypatch.setattr(mp, "is_off_record", lambda user, text, **kw: mark["live"])
+    await feed(item("this one is off the record please", ts=time.time()))
+    mark["live"] = False                                   # the 900 s mark has expired by the time the rating lands
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + 16 * 60)
+    assert await sd.words_for_turn(A, _turn_id()) == ""
+
+
+async def test_an_off_record_turn_rated_within_the_ttl_still_stores_no_words(monkeypatch):
+    import memory_provenance as mp
+
+    mark = {"live": True}
+    monkeypatch.setattr(mp, "is_off_record", lambda user, text, **kw: mark["live"])
+    await feed(item("secret thing, off the record", ts=time.time()))
+    mark["live"] = False                                   # status was captured at turn time, not re-derived
+    assert await sd.words_for_turn(A, _turn_id()) == ""
+
+
+async def test_a_normal_turn_rated_within_the_ttl_keeps_its_words():
+    q = "what's the capital of chad"
+    await feed(item(q, "Lyon."))
+    assert await sd.words_for_turn(A, _turn_id()) == q
+
+
+async def test_a_normal_turn_rated_after_the_ttl_stores_no_words(monkeypatch):
+    await feed(item("what's the capital of chad", "Lyon."))
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + sd.WORDS_TTL_S + 60)
+    assert await sd.words_for_turn(A, _turn_id()) == ""

@@ -427,6 +427,7 @@ def reset() -> None:
     _SNAPS.clear()
     _HANDLERS.clear()
     _HISTORY.clear()
+    _OFF_RECORD_AT_TURN.clear()
     _COUNTERS.clear()
     _ERASED_AT.clear()
     _DELETED_AT.clear()
@@ -439,6 +440,21 @@ def reset() -> None:
 _HISTORY: "OrderedDict[str, list[sig.Turn]]" = OrderedDict()
 #: turns kept per conversation: the previous one (pair rules) + the look-back (``struggle_signals.LOOKBACK_TURNS``)
 HISTORY_TURNS = sig.LOOKBACK_TURNS + 1
+#: turn_id -> True for a turn that was off the record (or undecidable) AT TURN TIME. memory_provenance's mark expires (~900 s), so a
+#: LATE rating must never re-derive this from the expiring mark: the status is captured once, here, and carried with the history.
+_OFF_RECORD_AT_TURN: "dict[str, bool]" = {}
+#: a rating arriving later than this after the turn gets no words (matches memory_provenance's off-the-record mark lifetime)
+WORDS_TTL_S = 900.0
+
+
+def _off_record_now(turn: sig.Turn) -> bool:
+    """Is this turn off the record / distress right now? Any doubt (import or lookup failing) = True (fail closed)."""
+    try:
+        import memory_provenance
+
+        return bool(memory_provenance.is_off_record(turn.user_id, turn.text))
+    except Exception:  # noqa: BLE001
+        return True
 
 
 async def _worker(q: "asyncio.Queue") -> None:
@@ -505,6 +521,12 @@ async def process(item: tuple) -> list[sig.Event]:
     _HISTORY.move_to_end(cur.conv_key)
     while len(_HISTORY) > HISTORY_MAX:
         _HISTORY.popitem(last=False)
+    if _off_record_now(cur):
+        _OFF_RECORD_AT_TURN[cur.turn_id] = True
+    if _OFF_RECORD_AT_TURN:
+        live = {t.turn_id for h in _HISTORY.values() for t in h}
+        for tid in [k for k in _OFF_RECORD_AT_TURN if k not in live]:
+            _OFF_RECORD_AT_TURN.pop(tid, None)
     events = sig.detect_window(history, cur, window_s=window_s())
     if events:
         _count("events", len(events))
@@ -543,7 +565,10 @@ async def words_for_turn(user_id: str, turn_id: str) -> str:
     for turns in list(_HISTORY.values()):
         for t in turns:
             if t.turn_id == turn_id and t.user_id == user_id:
-                return await _words_of(t, time.time())
+                now = time.time()
+                if _OFF_RECORD_AT_TURN.get(t.turn_id) or now - t.ts > WORDS_TTL_S:
+                    return ""      # off the record AT TURN TIME (never re-derived from the expiring mark), or too old
+                return await _words_of(t, now)
     return ""
 
 
