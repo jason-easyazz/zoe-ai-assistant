@@ -2372,6 +2372,7 @@ class MemoryService:
                 new_meta["status"] = new_status
                 new_meta["reviewed_by"] = actor
                 new_meta["reviewed_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+                new_meta.pop("challenged_by_turn", None)   # a person decided: the hold is over
                 if decision == "archive":
                     # invalidate, never delete: the row is kept, with the instant it stopped being believed
                     new_meta.update(_temporal.archive_fields(
@@ -3013,14 +3014,18 @@ class MemoryService:
         an approve restores it. Only the row's own user may do this; any other row is refused.
         Never raises; returns whether it flagged."""
         try:
-            cur = await self.get(mem_id)
-            if cur is None:
+            if not user_id:
                 return False
-            uid = cur.metadata.get("user_id") or cur.metadata.get("wing")
-            if not uid or uid != user_id or str(cur.metadata.get("status")) != "approved":
-                return False
+            uid = user_id
             lock = self._user_locks.setdefault(uid, asyncio.Lock())
             async with lock:
+                # re-read INSIDE the lock: an edit or erase that held it must not be undone by a stale copy
+                cur = await self.get(mem_id)
+                if cur is None:
+                    return False
+                if (cur.metadata.get("user_id") or cur.metadata.get("wing")) != uid \
+                        or str(cur.metadata.get("status")) != "approved":
+                    return False
                 md = dict(cur.metadata)
                 md.update(status="pending", reviewed_by=actor,
                           reviewed_at=datetime.datetime.utcnow().isoformat() + "Z",
