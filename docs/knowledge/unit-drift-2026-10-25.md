@@ -71,5 +71,5 @@ for s in flue-zoe-brain-2x flue-zoe-telegram; do
 systemctl --user daemon-reload     # then restart one at a time and poll :3579 / the Telegram watchdog
 # zoe-data stale bits (next deploy restart): rm $U/zoe-data.service.d/10-sync-zoe-self.conf, drop the three
 # retired Environment= lines from the main unit, daemon-reload, restart, poll /readyz
-python3 scripts/maintenance/unit_drift_check.py    # expect no MISSING/DIFFERS
+python3 scripts/maintenance/unit_drift_check.py    # expect ONLY the two deferred items: zoe-data EnvironmentFile (owner decision) and kokoro-tts After=llama-server.service (take the template copy of the unit)
 ```
