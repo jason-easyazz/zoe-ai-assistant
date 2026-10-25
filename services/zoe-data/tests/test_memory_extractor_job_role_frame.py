@@ -129,3 +129,13 @@ def test_a_question_in_any_occupation_frame_is_not_a_job(sentence):
 def test_statements_in_occupation_frames_still_file_a_job(sentence, needle):
     facts = _job_facts(sentence)
     assert facts and facts[0].lower() == f"user's job/role: {needle}"
+
+
+@pytest.mark.parametrize("sentence,needle", [
+    ("As you know, I am a nurse.", "nurse"),
+    ("I wanted to tell you I'm a carpenter.", "carpenter"),
+    ("Guess what, I work as a nurse.", "nurse"),
+])
+def test_a_reporting_lead_in_does_not_turn_an_assertion_into_a_question(sentence, needle):
+    facts = _job_facts(sentence)
+    assert facts and facts[0].lower() == f"user's job/role: {needle}"

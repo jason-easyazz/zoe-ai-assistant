@@ -719,6 +719,11 @@ def _possessive_job_asked(text: str, m: "re.Match[str]") -> bool:
         start = sm.end()
     if _QUESTION_WORD_BEFORE_RE.search(text[start:m.start()]):
         return True
+    return _sentence_ends_in_question(text, m)
+
+
+def _sentence_ends_in_question(text: str, m: "re.Match[str]") -> bool:
+    """True when the sentence holding the match ends in "?" (the match's own consumed terminator, or the sentence's real one)."""
     last = m.group(0)[-1:]
     if last in ".!?":
         # the match already consumed its own sentence terminator: that, not the NEXT sentence's, says statement vs question
@@ -736,12 +741,13 @@ def _asked_not_said(text: str, m: "re.Match[str]", template: str) -> bool:
     if template.startswith(("User asked me to remember", "Important note")):
         return False
     if template == "User's job/role: {0}":
-        # every occupation frame ("my job is ...", "I work as ...", "I'm a nurse ...") gets the full question test: a
-        # wh-word / guess / know / tell / ask before it, or a sentence that ends in "?" ("Do you think I work as a nurse?")
-        if _possessive_job_asked(text, m):
-            return True
         if re.match(r"my\s+(?:job|occupation|profession|trade)\b", m.group(0), re.IGNORECASE):
-            return False
+            # "my job is ..." also asks when an embedding word comes first ("Can you guess what my job is?")
+            return _possessive_job_asked(text, m)
+        # "I work as / I'm a <occupation> ...": only a sentence that ENDS in "?" asks ("Do you think I work as a nurse?");
+        # a reporting lead-in ("As you know, I am a nurse.", "I wanted to tell you I'm a carpenter.") still states it
+        if _sentence_ends_in_question(text, m):
+            return True
     if not re.match(r"i(?:\s|'m\b)", m.group(0), re.IGNORECASE):
         return False          # "you can call me Mika": the auxiliary belongs to a different subject than the template's
     start = 0
