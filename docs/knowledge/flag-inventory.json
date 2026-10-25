@@ -7139,12 +7139,11 @@
       },
       "ZOE_TTS_MODE": {
         "defaults": [
-          "'hybrid'"
+          "'kokoro'"
         ],
         "in_env_example": true,
         "readers": [
-          "services/zoe-data/main.py",
-          "services/zoe-data/routers/voice_tts.py"
+          "services/zoe-data/tts_waterfall.py"
         ],
         "typed_env": true
       },
