@@ -76,3 +76,32 @@ def test_statement_then_question_still_files_the_job():
 
 def test_statement_then_question_with_exclaim_files_the_job():
     assert any("teaching" in f for f in _job_facts("My job is teaching! Can you guess why?"))
+
+
+# Review round: "my job is <predicate>" needs an occupational complement; occupation + context suffix.
+NOT_JOBS_PREDICATE = [
+    "My job is boring",
+    "My job is making me miserable",
+    "my job is exhausting.",
+    "My job is killing me",
+]
+SUFFIX_JOBS = [
+    ("I am a nurse at the hospital", "nurse"),
+    ("I am a software engineer working remotely", "software engineer"),
+    ("I'm a teacher in a small town.", "teacher"),
+    ("my job is a nurse at the clinic", "nurse"),
+    ("my job is driving trucks", "driving trucks"),
+    ("My job is nursing", "nursing"),
+    ("my job is teaching.", "teaching"),
+]
+
+
+@pytest.mark.parametrize("sentence", NOT_JOBS_PREDICATE)
+def test_my_job_is_evaluation_is_not_a_job(sentence):
+    assert _job_facts(sentence) == []
+
+
+@pytest.mark.parametrize("sentence,needle", SUFFIX_JOBS)
+def test_occupation_with_context_suffix_captures_only_occupation(sentence, needle):
+    facts = _job_facts(sentence)
+    assert facts and facts[0].lower() == f"user's job/role: {needle}"

@@ -75,6 +75,17 @@ _OCCUPATIONS = (
     r"retail\s+worker|student|labourer|laborer|florist|hairdresser|barber|tailor|butcher|pastor|priest|minister"
 )
 
+# Gerunds that ARE an occupation activity ("my job is teaching"). Emotion / evaluation gerunds
+# ("making me miserable", "killing me") are deliberately absent.
+_WORK_GERUNDS = (
+    r"teaching|nursing|driving|plumbing|carpentry|building|cooking|baking|farming|gardening|painting|welding|"
+    r"cleaning|accounting|bookkeeping|programming|coding|designing|engineering|writing|photography|"
+    r"selling|serving|tutoring|lecturing|banking|fishing|mechanics|electrical\s+work|"
+    r"(?:software\s+)?development|looking\s+after\s+\w+|caring\s+for\s+\w+"
+)
+# Bounded contextual tail after a recognised occupation ("a nurse at the hospital"); never captured.
+_JOB_SUFFIX = r"(?:\s+(?:at|in|for|with|working|based)\b(?:\s+[\w'-]+){0,6})?"
+_JOB_END = r"(?:\s*[.,;!?]|$)"
 
 _TEMPLATE_PATTERNS: list[tuple[str, str, float]] = [
     # Explicit memory commands
@@ -103,8 +114,10 @@ _TEMPLATE_PATTERNS: list[tuple[str, str, float]] = [
     (r"i\s+work\s+as\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.8),
     (r"i(?:'m|\s+am)\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)\s+by\s+(?:trade|profession|occupation)\b", "User's job/role: {0}", 0.8),
     (r"i(?:'m|\s+am)\s+employed\s+as\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.8),
-    (r"my\s+(?:job|occupation|profession|trade)\s+is\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.8),
-    (r"i(?:'m|\s+am)\s+a(?:n)?\s+((?:[a-z]+\s+){0,2}(?:" + _OCCUPATIONS + r"))(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.75),
+    (r"my\s+(?:job|occupation|profession|trade)\s+is\s+(?:a(?:n)?\s+)?((?:[a-z]+\s+){0,2}(?:" + _OCCUPATIONS + r")\b"
+     r"|(?:" + _WORK_GERUNDS + r")\b(?!\s+(?:me|us|him|her|them)\b)(?:\s+(?!(?:at|in|for|with|working|based)\b)[\w'-]+){0,3})"
+     + _JOB_SUFFIX + _JOB_END, "User's job/role: {0}", 0.8),
+    (r"i(?:'m|\s+am)\s+a(?:n)?\s+((?:[a-z]+\s+){0,2}(?:" + _OCCUPATIONS + r")\b)" + _JOB_SUFFIX + _JOB_END, "User's job/role: {0}", 0.75),
 
     # Pets — "my dog's name is X" / "my dog is named X" / "my dog is called X"
     (
