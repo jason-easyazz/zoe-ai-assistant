@@ -452,10 +452,10 @@ def _pruned_root(home: Path) -> Path:
 
 def _warn_if_unpruned(backup_root: Path, home: Path) -> None:
     pruned = _pruned_root(home)
-    try:
-        backup_root.resolve().relative_to(pruned.resolve())
-    except ValueError:
-        print(f"WARNING: --backup-root {backup_root} is outside {pruned}, which the hourly job prunes: the backup there will NOT "
+    # the hourly prune scans only the DIRECT children of its root and the backup is written as a direct child of backup_root:
+    # anything but backup_root == pruned (incl. a nested sub-directory) never expires
+    if backup_root.resolve() != pruned.resolve():
+        print(f"WARNING: --backup-root {backup_root} is not {pruned}, the directory the hourly job prunes: the backup there will NOT "
               f"expire automatically - delete it by hand.", file=sys.stderr)
 
 

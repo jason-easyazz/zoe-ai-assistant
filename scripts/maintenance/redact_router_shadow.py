@@ -110,14 +110,6 @@ def plan(ltl, logs, cutoff: Optional[float], everything: bool) -> list[tuple]:
     return rows
 
 
-def _inside(path: Path, root: Path) -> bool:
-    try:
-        Path(os.path.abspath(path)).relative_to(os.path.abspath(root))
-        return True
-    except ValueError:
-        return False
-
-
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     mode = ap.add_mutually_exclusive_group()
@@ -135,8 +127,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ltl = load_ltl()
     pruned = ltl.adhoc_backup_root()                   # AFTER the saved settings: the dir the hourly job really prunes
     backup_root = ns.backup_root if ns.backup_root is not None else pruned
-    if ns.apply and not _inside(backup_root, pruned):
-        print(f"WARNING: --backup-root {backup_root} is outside {pruned}, which the hourly job prunes: the raw-text backup there "
+    # the hourly prune scans only the DIRECT children of its root, and this tool writes its backup as a direct child of
+    # backup_root - so only backup_root == pruned expires (a nested ".../manual" would not)
+    if ns.apply and os.path.abspath(backup_root) != os.path.abspath(pruned):
+        print(f"WARNING: --backup-root {backup_root} is not {pruned}, the directory the hourly job prunes: the raw-text backup there "
               f"will NOT be deleted automatically - delete it by hand.", file=sys.stderr)
     logs = [l for l in ltl.LOGS if not ns.log or l.name in ns.log]
     days = ns.days if ns.days is not None else ltl.retention_days()

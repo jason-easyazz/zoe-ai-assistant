@@ -185,6 +185,13 @@ def test_explicit_backup_root_outside_the_pruned_dir_warns(tool, units, tmp_path
     assert "will NOT expire" in capsys.readouterr().err
 
 
+def test_a_backup_root_nested_under_the_pruned_dir_still_warns(tool, units, tmp_path, monkeypatch, capsys):
+    """PR #2110 review: only direct children of the pruned dir expire; a nested root must warn."""
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(tmp_path / "bk" / ".."))   # resolves to tmp_path: bk is NESTED under it
+    assert run(tool, units, tmp_path, "--apply") == 0
+    assert "will NOT expire" in capsys.readouterr().err
+
+
 def test_a_masked_unit_is_moved_without_chmod_following_its_dev_null_link(tool, units, tmp_path, monkeypatch):
     """PR #2110 review. Break: _restrict() chmods a moved symlink -> it follows a masked unit's /dev/null link and the owner gets
     PermissionError mid-cleanup (before daemon-reload). The fixture links to a temp file so a regression is caught without root."""

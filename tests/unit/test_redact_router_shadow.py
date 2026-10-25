@@ -242,7 +242,15 @@ def test_default_backup_root_is_resolved_after_saved_settings(tool, logs, tmp_pa
 def test_explicit_backup_root_outside_the_pruned_dir_warns(tool, logs, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(tmp_path / "pruned"))
     assert tool.main(["--backup-root", str(tmp_path / "elsewhere"), "--apply"]) == 0
-    assert "outside" in capsys.readouterr().err
+    assert "will NOT be deleted" in capsys.readouterr().err
+
+
+def test_a_backup_root_nested_under_the_pruned_dir_still_warns(tool, logs, tmp_path, monkeypatch, capsys):
+    """PR #2110 review: the hourly prune scans only direct children, so <pruned>/manual/<backup> never expires. Break: accept
+    any directory beneath the pruned root -> no warning."""
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(tmp_path / "pruned"))
+    assert tool.main(["--backup-root", str(tmp_path / "pruned" / "manual"), "--apply"]) == 0
+    assert "will NOT be deleted" in capsys.readouterr().err
 
 
 def test_a_rotation_between_backup_copies_cannot_happen(tool, logs, tmp_path, monkeypatch):

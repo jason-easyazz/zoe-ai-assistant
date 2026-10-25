@@ -299,3 +299,10 @@ def test_explicit_backup_root_outside_the_pruned_dir_warns(mig, box, monkeypatch
     monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(box["home"] / "pruned"))
     assert _apply(mig, box) == 0
     assert "will NOT expire" in capsys.readouterr().err
+
+
+def test_a_backup_root_nested_under_the_pruned_dir_still_warns(mig, box, monkeypatch, capsys):
+    """PR #2110 review: <pruned>/bk is nested, so its backup is not a direct child of the pruned dir and never expires."""
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(box["home"]))
+    assert _apply(mig, box) == 0
+    assert "will NOT expire" in capsys.readouterr().err
