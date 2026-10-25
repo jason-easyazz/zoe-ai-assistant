@@ -276,3 +276,10 @@ def test_first_person_same_trait_affirmation_still_takes_it_back():
 ])
 def test_parenthetical_commas_keep_the_hypothetical_scope(turn):
     assert tc.challenged_trait(turn) is None
+
+
+def test_a_relatives_trait_inside_an_owner_sentence_is_never_parked():
+    rows = [row("a", "User has a sister who is a doctor."), row("b", "User is a doctor."),
+            row("c", "User's mother, whose job is doctor, lives nearby."), row("d", "User has a brother who works as a doctor."),
+            row("e", "User works as a doctor.")]
+    assert [r.id for r in tc.matching_rows("doctor", rows)] == ["b", "e"]

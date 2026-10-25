@@ -67,6 +67,15 @@ _REAFFIRM = re.compile(r"\bi\s*(?:'m|am)\s+(?!not\b)(?:now\s+|actually\s+|really
 _ABOUT_OWNER = re.compile(
     r"^\s*(?:the\s+)?user(?:\s+(?!'s\b)[a-z]|'s\s+(?:job/role|job|role|occupation|profession|trade|identity|faith|religion|nature)\b)",
     re.I)
+# ... and one that ASSIGNS the trait to the owner: "User is/are/was/'s/works as <trait>" or "User's job/role/identity: <trait>"
+_ASSIGNS = re.compile(
+    r"^\s*(?:the\s+)?user\s*(?:is|are|was|'s|works?\s+as|worked\s+as)\b"
+    r"|^\s*(?:the\s+)?user's\s+(?:job/role|job|role|occupation|profession|trade|identity|faith|religion|nature)\b", re.I)
+# a second person brought into the owner's clause ("has a sister who is ...", "whose ...", "User is a doctor like his brother")
+_OTHER_PERSON = re.compile(
+    r"\bwhose\b|\b(?:sister|brother|mother|mom|mum|father|dad|wife|husband|partner|spouse|son|daughter|child|children|kid|kids|"
+    r"parent|parents|grand\w+|cousin|aunt|uncle|niece|nephew|friend|friends|colleague|boss|neighbou?r|mate|girlfriend|boyfriend|"
+    r"fianc\w+|in-law)\b|\b(?:who|whom)\b", re.I)
 # where the owner's own statement ends and a second subject begins
 _OTHER_SUBJECT = re.compile(r"[.!?;]\s|,?\s+and\s+(?:user's|his|her|their)\b|,\s*(?:user's|his|her|their)\b", re.I)
 
@@ -130,6 +139,8 @@ def matching_rows(trait: str, rows: Iterable[Any]) -> list[Any]:
         if not _ABOUT_OWNER.search(text):
             continue          # a relative's fact ("User's sister is a doctor") is not the owner's trait
         own = _OTHER_SUBJECT.split(text.strip(), maxsplit=1)[0]   # drop a second subject ("... and User's sister ...")
+        if not _ASSIGNS.search(own) or _OTHER_PERSON.search(own):
+            continue          # "User has a sister who is a doctor": the trait belongs to someone else
         if want <= _content(own):
             out.append(r)
     return out[:MAX_ROWS]
