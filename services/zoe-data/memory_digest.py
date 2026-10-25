@@ -2720,6 +2720,9 @@ async def _deep_sleep_pass(user_id: str) -> dict:
             uqc = int(meta.get("unique_query_count", 0) or 0)
             added_at = meta.get("added_at") or ""
 
+            if meta.get("challenged_by_turn"):
+                continue    # the owner doubted this: held for a person to decide, never auto-approved or auto-archived
+
             if score >= 0.8 and uqc >= 3:
                 meta["status"] = "approved"
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
