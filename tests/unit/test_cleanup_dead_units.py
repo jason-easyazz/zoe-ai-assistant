@@ -183,3 +183,21 @@ def test_explicit_backup_root_outside_the_pruned_dir_warns(tool, units, tmp_path
     monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(tmp_path / "pruned"))
     assert run(tool, units, tmp_path, "--apply") == 0
     assert "will NOT expire" in capsys.readouterr().err
+
+
+def test_a_masked_unit_is_moved_without_chmod_following_its_dev_null_link(tool, units, tmp_path, monkeypatch):
+    """PR #2110 review. Break: _restrict() chmods a moved symlink -> it follows a masked unit's /dev/null link and the owner gets
+    PermissionError mid-cleanup (before daemon-reload). The fixture links to a temp file so a regression is caught without root."""
+    import os
+    target = tmp_path / "devnull-stand-in"
+    target.write_text("")
+    os.chmod(target, 0o644)
+    (units / "bonsai-server.service").unlink()
+    (units / "bonsai-server.service").symlink_to(target)          # masked: a link, not a unit file
+    pruned = tmp_path / "pruned"
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(pruned))
+    assert tool.main(["--units-dir", str(units), "--repo-root", str(tmp_path / "norepo"), "--apply"],
+                     state=dead, ctl=lambda argv: 0) == 0
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644                # the link's target was never chmodded
+    (bdir,) = list(pruned.glob("dead-units-*"))
+    assert (bdir / "bonsai-server.service").is_symlink()

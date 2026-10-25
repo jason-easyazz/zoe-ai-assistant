@@ -206,8 +206,11 @@ def assess_all(units_dir: Path, families: list[str], state: StateFn, repo_root: 
 
 def _restrict(path: Path) -> None:
     """Owner-only, but still usable: regular files 0600, directories 0700 (a drop-in ``.d`` dir needs its execute bit, or the
-    hourly ``prune_adhoc_backups`` rmtree cannot traverse it and a secret-bearing backup never expires)."""
-    if path.is_dir() and not path.is_symlink():
+    hourly ``prune_adhoc_backups`` rmtree cannot traverse it and a secret-bearing backup never expires). A symlink - e.g. a MASKED
+    unit, which is a link to /dev/null - is left alone: chmod would follow it to its target."""
+    if path.is_symlink():
+        return
+    if path.is_dir():
         os.chmod(path, 0o700)
         for sub in path.rglob("*"):
             if sub.is_symlink():
