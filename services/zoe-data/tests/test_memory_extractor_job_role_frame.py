@@ -57,3 +57,13 @@ def test_occupational_frames_file_a_job(sentence, needle):
 
 def test_belief_inside_long_utterance_not_a_job():
     assert _job_facts("honestly, I am a man of faith, and I like quiet evenings") == []
+
+
+@pytest.mark.parametrize("sentence", [
+    "Can you guess what my job is based on my hobbies?",
+    "Do you know what my occupation is these days?",
+    "Guess what my job is based on my hobbies.",
+    "Is my job a good fit for night shifts?",
+])
+def test_possessive_job_questions_file_nothing(sentence):
+    assert _job_facts(sentence) == []

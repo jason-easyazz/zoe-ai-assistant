@@ -694,12 +694,31 @@ _AUX_BEFORE_SUBJECT_RE = re.compile(
     r"\b(?:do|does|did|can|could|would|will|should|am|are|is|where|what|which|who|how)\s*$", re.IGNORECASE)
 
 
+_QUESTION_WORD_BEFORE_RE = re.compile(
+    r"\b(?:what|which|who|how|guess|know|tell|wonder|wondering|ask|asked|whether|if)\b", re.IGNORECASE)
+
+
+def _possessive_job_asked(text: str, m: "re.Match[str]") -> bool:
+    """True when "my job is ..." sits inside a QUESTION or an embedded one ("Can you guess what my job is based on my hobbies?",
+    "Do you know what my occupation is these days?"): the sentence ends in "?", or a wh-word / guess / know / tell comes first."""
+    start = 0
+    for sm in re.finditer(r"[.!?\n]\s*", text[: m.start()]):
+        start = sm.end()
+    if _QUESTION_WORD_BEFORE_RE.search(text[start:m.start()]):
+        return True
+    end = re.search(r"[.!?\n]", text[m.end():])
+    sentence_end = m.end() + end.start() if end else len(text)
+    return text[sentence_end:sentence_end + 1] == "?"
+
+
 def _asked_not_said(text: str, m: "re.Match[str]", template: str) -> bool:
     """True when the "I <verb> ..." a template matched sits inside a QUESTION ("Which city do I live in these days?", "Do I like
     pizza?"): the auxiliary / wh-word comes straight before the "I", so the sentence asks and states nothing about the speaker.
     The explicit teach templates have their own guard (``_remember_is_a_question``)."""
     if template.startswith(("User asked me to remember", "Important note")):
         return False
+    if re.match(r"my\s+(?:job|occupation|profession|trade)\b", m.group(0), re.IGNORECASE):
+        return _possessive_job_asked(text, m)
     if not re.match(r"i(?:\s|'m\b)", m.group(0), re.IGNORECASE):
         return False          # "you can call me Mika": the auxiliary belongs to a different subject than the template's
     start = 0
