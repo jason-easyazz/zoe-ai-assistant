@@ -163,6 +163,22 @@ def test_default_backup_root_is_the_dir_the_hourly_job_prunes(tool, units, tmp_p
     assert all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in bdir.iterdir() if f.is_file())
 
 
+def test_a_moved_dropin_dir_stays_traversable_so_its_backup_can_expire(tool, units, tmp_path, monkeypatch):
+    """PR #2110 review. Break: chmod 0600 on the moved hermes-agent.service.d -> the hourly rmtree cannot enter it and the
+    secret-bearing backup never expires."""
+    import shutil
+    pruned = tmp_path / "pruned"
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(pruned))
+    assert tool.main(["--units-dir", str(units), "--repo-root", str(tmp_path / "norepo"), "--apply"],
+                     state=dead, ctl=lambda argv: 0) == 0
+    (bdir,) = list(pruned.glob("dead-units-*"))
+    dropin = bdir / "hermes-agent.service.d"
+    assert dropin.is_dir() and stat.S_IMODE(dropin.stat().st_mode) == 0o700
+    assert stat.S_IMODE((dropin / "kanban-worker-lean.conf").stat().st_mode) == 0o600
+    shutil.rmtree(bdir)                                             # what the hourly expiry does: must not raise
+    assert not bdir.exists()
+
+
 def test_explicit_backup_root_outside_the_pruned_dir_warns(tool, units, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(tmp_path / "pruned"))
     assert run(tool, units, tmp_path, "--apply") == 0

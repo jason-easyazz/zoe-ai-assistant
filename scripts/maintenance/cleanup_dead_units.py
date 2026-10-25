@@ -204,6 +204,19 @@ def assess_all(units_dir: Path, families: list[str], state: StateFn, repo_root: 
             return results
 
 
+def _restrict(path: Path) -> None:
+    """Owner-only, but still usable: regular files 0600, directories 0700 (a drop-in ``.d`` dir needs its execute bit, or the
+    hourly ``prune_adhoc_backups`` rmtree cannot traverse it and a secret-bearing backup never expires)."""
+    if path.is_dir() and not path.is_symlink():
+        os.chmod(path, 0o700)
+        for sub in path.rglob("*"):
+            if sub.is_symlink():
+                continue
+            os.chmod(sub, 0o700 if sub.is_dir() else 0o600)
+    else:
+        os.chmod(path, 0o600)
+
+
 def apply_removal(units_dir: Path, results: list[dict], backup_root: Path, now: Optional[float] = None,
                   ctl: Optional[Callable[[list[str]], int]] = None) -> tuple[list[str], bool]:
     """Move the removable families' files away, then reload systemd. Returns ``(report lines, ok)``; ``ok`` is False when
@@ -222,7 +235,7 @@ def apply_removal(units_dir: Path, results: list[dict], backup_root: Path, now: 
         for f in r["files"]:
             dest = bdir / f.name
             shutil.move(str(f), str(dest))
-            os.chmod(dest, 0o600)                       # a unit file can carry Environment= secrets: never wider than 0600
+            _restrict(dest)                             # a unit file can carry Environment= secrets: files 0600, dirs 0700
             out.append(f"  moved {f.name} -> {dest}")
             if f.name.endswith((".service", ".timer")):
                 moved_units.append(f.name)
