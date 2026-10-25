@@ -467,7 +467,7 @@ measured on their kept WAVs (32 held by then; read-only, under the voice-harness
 
 What changed: `measure_wav` adds `clipped`, `rms_median` and `active_s`; the WARNING's reason gains `transient_only` (sound
 reached Moonshine only because of a click) beside `voiced_but_no_text` (sustained sound, still no words — the one worth a look).
-It is a label, never a gate: a click recording is still transcribed (Moonshine's own VAD decides). The wake click itself is a
+The label itself is not a gate. Since 2026-10-25 a separate per-chunk pre-STT skip (`ZOE_OMI_QUIET_SKIP`, default on: fewer than 3 100 ms windows at RMS >= 200) keeps a lone click from costing a Moonshine call; a word after a click is 3+ windows and still goes through, and an all-empty recording keeps its WAV. The wake click itself is a
 firmware matter (upstream; this repo never writes the pendant).
 
 ### 4.4 Retention, review, forgetting
