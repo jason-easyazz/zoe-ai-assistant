@@ -681,7 +681,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STRUCTURAL_READER` | `'shadow'` | yes | NO | `services/zoe-data/structural_reader.py` |
 | `ZOE_STRUCTURAL_VERIFIER` | `-` | no | NO | `services/zoe-data/structural_verifier.py` |
 | `ZOE_STRUGGLE_DETECT` | `-` | no | NO | `services/zoe-data/struggle_detector.py` |
-| `ZOE_STRUGGLE_OUTCOMES` | `-` | no | NO | `services/zoe-data/turn_outcomes.py` |
+| `ZOE_STRUGGLE_OUTCOMES` | `-`, `False` | yes | NO | `services/zoe-data/turn_outcomes.py` |
 | `ZOE_STRUGGLE_PROPOSALS` | `-` | no | NO | `services/zoe-data/struggle_proposals.py` |
 | `ZOE_STRUGGLE_PROPOSAL_DAYS` | `7.0` | yes | NO | `services/zoe-data/struggle_proposals.py` |
 | `ZOE_STRUGGLE_PROPOSAL_MIN_EPISODES` | `3` | yes | NO | `services/zoe-data/struggle_proposals.py` |

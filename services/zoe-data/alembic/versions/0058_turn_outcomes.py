@@ -41,6 +41,7 @@ def upgrade() -> None:
                panel_id TEXT NOT NULL DEFAULT '',
                session_id TEXT NOT NULL DEFAULT '',
                turn_id TEXT NOT NULL DEFAULT '',
+               message_id TEXT NOT NULL DEFAULT '',
                route_domain TEXT NOT NULL DEFAULT '',
                route_conf DOUBLE PRECISION,
                route_source TEXT NOT NULL DEFAULT '',

@@ -427,15 +427,143 @@ async def test_seam_survives_a_missing_table(monkeypatch, tmp_path):
 
 async def test_the_thumbs_down_button_marks_the_rated_turn(sql):
     q = "what's the capital of chad"
-    await feed(item(q, "Lyon.", session="web_1"))
     sql.conn.execute("INSERT INTO chat_messages VALUES ('m1', 'web_1', 'assistant', 'Lyon.', '2026-10-19 10:00:00')")
+    await feed(item(q, "Lyon.", session="web_1"))
     assert sd.observe_feedback(A, "m1", "thumbs_up") is False, "only a wrong verdict marks a turn"
     assert sd.observe_feedback(A, "m1", "thumbs_down") is True      # the button path: queued for the ONE worker that writes rows
     await sd.drain(timeout=10)
     row = (await to.review(A))["items"][0]
     assert "NEGATIVE_FEEDBACK" in row["signals"] and row["words"] == q
-    sql.conn.execute("INSERT INTO chat_messages VALUES ('m2', 'web_1', 'assistant', 'Paris.', '2026-10-19 10:05:00')")
-    assert await to.note_feedback(A, "m1", "thumbs_down") is False, "a rating of an OLDER reply is not guessed at"
+    assert await to.note_feedback(A, "m2", "thumbs_down") is False, "a reply with no row of its own is not guessed at"
+
+
+async def test_a_rating_never_lands_on_a_neighbouring_turn(sql, monkeypatch):
+    """The newest turn's outcome insert failed: its thumbs-down must not fall back to the PREVIOUS turn's row (the old latest-in-session
+    lookup did, and the newest-assistant-message check could not tell)."""
+    first, second = "what's the capital of chad", "what's the capital of mali"
+    sql.conn.execute("INSERT INTO chat_messages VALUES ('m1', 'web_1', 'assistant', 'N Djamena.', '2026-10-19 10:00:00')")
+    await feed(item(first, "N Djamena.", session="web_1"))
+    sql.conn.execute("INSERT INTO chat_messages VALUES ('m2', 'web_1', 'assistant', 'Lagos.', '2026-10-19 10:05:00')")
+    real_add = to.SqlBackend.add
+
+    async def flaky(self, row):
+        raise RuntimeError("db blip")
+
+    monkeypatch.setattr(to.SqlBackend, "add", flaky)
+    await feed(item(second, "Lagos.", session="web_1"))
+    monkeypatch.setattr(to.SqlBackend, "add", real_add)
+    assert await to.note_feedback(A, "m2", "thumbs_down") is False
+    assert (await to.review(A))["items"] == [], "the earlier turn was not marked failed"
+    assert (await to.get_backend().by_message(A, "m1"))[0]["failed"] == 0
+
+
+# ── review round 2 (PR #2141): flag read path, forget race, harness facts, logging, typed env ──────
+
+async def test_capture_off_stops_confirmed_examples_reaching_training(sql, monkeypatch):
+    await failed_then_fixed()
+    rid = (await to.review(A))["items"][0]["id"]
+    await to.decide(rid, A, "confirm")
+    assert len(await to.confirmed_examples()) == 1
+    assert len(await sp.queued_router_examples(sources=(sp.SOURCE_FOLLOWUP, sp.SOURCE_ROUTER))) == 1
+    monkeypatch.setenv(to.ENV, "off")           # on, then off
+    assert await to.confirmed_examples() == []
+    assert await sp.queued_router_examples(sources=(sp.SOURCE_FOLLOWUP, sp.SOURCE_ROUTER)) == []
+    monkeypatch.setenv(to.ENV, "on")
+    assert len(await to.confirmed_examples()) == 1, "the rows were kept; only the read path is gated"
+
+
+async def test_an_insert_paused_across_a_forget_cannot_resurrect_the_words(fresh, monkeypatch):
+    """A background outcome write is past its keep-words check when a forget runs. Without the per-user lock the forget finds nothing,
+    finishes, and the paused insert then stores the forgotten name."""
+    import memory_forgotten
+
+    gate, entered = asyncio.Event(), asyncio.Event()
+    real = memory_forgotten.matches
+
+    async def slow_matches(uid, text):
+        entered.set()
+        await gate.wait()                 # the write is parked between its words check and its insert
+        return await real(uid, text)
+
+    monkeypatch.setattr(memory_forgotten, "matches", slow_matches)
+    q = "will marlowe need an umbrella this afternoon"
+    weather_note(q)
+    sd.note_brain(VOICE, "flue", "ok")
+    writer = asyncio.create_task(sd.process(item(q, "Maybe.", channel="voice", session=VOICE)))
+    await asyncio.wait_for(entered.wait(), 5)
+    eraser = asyncio.create_task(sd.erase_entity(A, "Marlowe"))
+    await asyncio.sleep(0.05)
+    gate.set()
+    await asyncio.wait_for(asyncio.gather(writer, eraser), 10)
+    assert not [r for r in fresh.data if "marlowe" in (r["summary"] or "").lower()]
+    assert not [r for r in sd.get_backend().data if "marlowe" in (r["summary"] or "").lower()]
+
+
+async def test_an_insert_paused_across_a_user_delete_leaves_nothing(fresh, monkeypatch):
+    import memory_forgotten
+
+    gate, entered = asyncio.Event(), asyncio.Event()
+
+    async def slow_matches(uid, text):
+        entered.set()
+        await gate.wait()
+        return False
+
+    monkeypatch.setattr(memory_forgotten, "matches", slow_matches)
+    q = "will it be windy this afternoon"
+    weather_note(q)
+    sd.note_brain(VOICE, "flue", "ok")
+    writer = asyncio.create_task(sd.process(item(q, "Probably a little.", channel="voice", session=VOICE)))
+    await asyncio.wait_for(entered.wait(), 5)
+    deleter = asyncio.create_task(sd.delete_user(A))
+    await asyncio.sleep(0.05)
+    gate.set()
+    await asyncio.wait_for(asyncio.gather(writer, deleter), 10)
+    assert fresh.data == [] and sd.get_backend().data == []
+
+
+async def test_a_harness_turn_keeps_its_route_latency_and_cant_do_but_no_words(fresh):
+    text, reply = "dim the porch lights to ten percent", "Sorry, I can't control that device."
+    sd.note_route(text, {"domain": "lights", "score": 0.8, "scores": {"lights": 0.8}})
+    await asyncio.sleep(0.02)
+    assert sd.observe("voice", text, reply, A, "replay-0123456789ab", panel_id="replay-harness") is False
+    await sd.drain(timeout=10)
+    row = fresh.data[0]
+    assert row["traffic"] == "probe" and row["outcome"] == "cant_do", "the reply decides the outcome class"
+    assert row["route_domain"] == "lights" and row["route_source"] == "similarity" and row["latency_ms"] is not None
+    assert row["failed"] == 0 and row["summary"] == "" and row["label_status"] == ""
+    assert not any(isinstance(v, str) and (text in v or "porch" in v or "control that" in v) for v in row.values()), "text-free"
+
+
+async def test_failed_writes_warn_without_household_words(fresh, caplog):
+    secret = "marlowe's surprise party"
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("db down " + secret)
+
+    fresh.add, fresh.update, fresh.by_turn = boom, boom, boom
+    caplog.set_level("WARNING")
+    row = to.new_row(sig.Turn(ts=time.time(), channel="chat", user_id=A, is_guest=False, conv_key="c", turn_id="t-1"),
+                     traffic="household", outcome="did")
+    assert await to.record(row) is False
+    assert await to.mark_failed(A, "t-1", ["X"]) is False
+    sd.set_backend(None)
+    msgs = [r for r in caplog.records if r.levelname == "WARNING" and "turn_outcomes" in r.getMessage()]
+    assert len(msgs) == 2 and all("RuntimeError" in m.getMessage() for m in msgs)
+    assert all(secret not in m.getMessage() and "marlowe" not in m.getMessage() for m in msgs)
+
+
+def test_the_flag_goes_through_typed_env(monkeypatch, caplog):
+    import typed_env
+
+    typed_env._warned.clear()
+    for v, want in (("on", True), ("1", True), ("enforce", True), ("off", False), ("", False)):
+        monkeypatch.setenv(to.ENV, v)
+        assert to.enabled() is want, v
+    caplog.set_level("WARNING")
+    monkeypatch.setenv(to.ENV, "maybe-later")
+    assert to.enabled() is False
+    assert any(to.ENV in r.getMessage() for r in caplog.records), "an unparseable value earns the shared warning"
 
 
 # ── migration 0058 ───────────────────────────────────────────────────────────

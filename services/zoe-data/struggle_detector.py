@@ -331,9 +331,12 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
         if traffic != "household":
             _count("skipped_synthetic" if (pid.startswith(SYNTHETIC_PANELS) or _synthetic(user_id)) else "skipped_traffic")
             if outcomes_on():   # a text-free outcome row (the traffic tag is the point): never detected, never in a pair, no words
+                # The words ride the in-memory queue item ONLY so the route / latency / can't-do facts can be derived from them (the
+                # route note is found by its text; the outcome class reads the reply). They are never stored: ``turn_outcomes.new_row``
+                # keeps a non-household row text-free whatever it is given, and a non-household item never reaches history or events.
                 try:
-                    _queue().put_nowait((time.time(), str(channel or "chat"), "", "", uid, str(session_id or ""), pid,
-                                         bool(interrupted), traffic))
+                    _queue().put_nowait((time.time(), str(channel or "chat"), str(user_text or "")[:TEXT_CAP],
+                                         str(reply or "")[:REPLY_CAP], uid, str(session_id or ""), pid, bool(interrupted), traffic))
                 except asyncio.QueueFull:
                     _count("dropped_full")
             return False
@@ -427,6 +430,7 @@ def reset() -> None:
     _COUNTERS.clear()
     _ERASED_AT.clear()
     _DELETED_AT.clear()
+    _USER_LOCKS.clear()
 
 
 # ── the worker ───────────────────────────────────────────────────────────────
@@ -482,7 +486,9 @@ async def process(item: tuple) -> list[sig.Event]:
     if item and item[0] == FEEDBACK_ITEM:
         import turn_outcomes
 
-        await turn_outcomes.note_feedback(item[1], item[2], item[3])
+        async with _user_lock(item[1]):
+            if not _erased_since(item[1], time.time(), _DELETED_AT):
+                await turn_outcomes.note_feedback(item[1], item[2], item[3])
         return []
     cur = build_turn(item)
     if _erased_since(cur.user_id, cur.ts, _DELETED_AT):
@@ -502,12 +508,15 @@ async def process(item: tuple) -> list[sig.Event]:
     events = sig.detect_window(history, cur, window_s=window_s())
     if events:
         _count("events", len(events))
-        rows = [await _row(e) for e in events]
-        try:
-            await asyncio.wait_for(get_backend().add(rows), STORE_TIMEOUT_S)
-        except Exception as exc:  # noqa: BLE001 - DB down / slow: counted, the turn already happened
-            _count("store_errors")
-            logger.debug("struggle_detector: store failed (%s)", type(exc).__name__)
+        async with _user_lock(cur.user_id):
+            if not _erased_since(cur.user_id, cur.ts, _DELETED_AT):
+                try:
+                    rows = [await _row(e) for e in events]
+                    await asyncio.wait_for(get_backend().add(rows), STORE_TIMEOUT_S)
+                except Exception as exc:  # noqa: BLE001 - DB down / slow: counted, the turn already happened
+                    _count("store_errors")
+                    logger.warning("struggle_detector: event store failed (%s) events=%d channel=%s", type(exc).__name__,
+                                   len(events), cur.channel)
         for e in events:
             logger.info("STRUGGLE signal=%s conf=%.2f fix=%s domain=%s path=%s channel=%s user=%s mode=%s",
                         e.signal, e.confidence, e.fix_type, e.about.domain() or "-", e.about.path, cur.channel,
@@ -529,7 +538,8 @@ async def _words_of(turn: sig.Turn, at: float) -> str:
 
 async def words_for_turn(user_id: str, turn_id: str) -> str:
     """A recent turn's own words for its outcome row, when a rating arrives AFTER the turn was recorded (the thumbs-down button): only
-    while the turn is still in the in-process history (``HISTORY_TTL_S``), under the same keep-words rules. '' otherwise."""
+    while the turn is still in the in-process history (``HISTORY_TTL_S``), under the same keep-words rules. '' otherwise. The CALLER holds
+    the user's lock across this read and the write of the words (``process``'s feedback branch)."""
     for turns in list(_HISTORY.values()):
         for t in turns:
             if t.turn_id == turn_id and t.user_id == user_id:
@@ -537,9 +547,35 @@ async def words_for_turn(user_id: str, turn_id: str) -> str:
     return ""
 
 
+async def _message_id_for(cur: sig.Turn) -> str:
+    """The id of the assistant message this turn's reply was saved as (``chat_messages``), '' when it is not found (not saved yet, a
+    guest, a failed save). Matched on the reply's own text among the session's newest assistant rows; the rating button later finds the
+    outcome row by this id alone."""
+    reply = (cur.reply or "").strip()
+    if not reply or cur.is_guest or not cur.session_id:
+        return ""
+
+    async def _look() -> str:
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as db:
+            c = await db.execute("SELECT id, content FROM chat_messages WHERE session_id = ? AND role = 'assistant' "
+                                 "ORDER BY created_at DESC LIMIT 5", (cur.session_id,))
+            for mid, content in await c.fetchall():
+                if (content or "").strip().startswith(reply):
+                    return str(mid)
+        return ""
+
+    try:
+        return await asyncio.wait_for(_look(), STORE_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 - no id = a later rating of this reply is simply not attached (never a neighbouring turn)
+        return ""
+
+
 async def _record_outcome(cur: sig.Turn, events: list, raw_user: str, traffic: str) -> None:
     """``ZOE_STRUGGLE_OUTCOMES`` on: write ``cur``'s outcome row, and mark the earlier turn a pair event is ABOUT as failed (with its own
-    words and the route the follow-up proved). Every failure is counted; nothing raises."""
+    words and the route the follow-up proved). Every failure is counted; nothing raises. The words check through the writes run under the
+    user's lock, so a forget / user delete cannot slip between them."""
     try:
         import turn_outcomes as to
 
@@ -549,20 +585,24 @@ async def _record_outcome(cur: sig.Turn, events: list, raw_user: str, traffic: s
         signals = [e.signal for e in own]
         label = next((lab for lab in (to.proposed_label(e, {}) for e in own) if lab[0]), ("", ""))
         household = traffic == "household"
-        words = await _words_of(cur, cur.ts) if household and to.failing(signals, outcome) else ""
-        await to.record(to.new_row(cur, traffic=traffic, outcome=outcome, handler=handler, tools=tools, signals=signals, label=label,
-                                   summary=words, mode=mode()))
-        if not household:
-            return
-        for e in events:
-            about = e.about
-            if about is cur:
-                continue
-            words = await _words_of(about, cur.ts) if about.user_id == cur.user_id and not about.is_guest else ""
-            await to.mark_failed(about.user_id, about.turn_id, [e.signal], to.proposed_label(e, _follow_up(e)), words)
+        message_id = await _message_id_for(cur) if household else ""
+        async with _user_lock(cur.user_id):
+            if _erased_since(cur.user_id, cur.ts, _DELETED_AT):
+                return
+            words = await _words_of(cur, cur.ts) if household and to.failing(signals, outcome) else ""
+            await to.record(to.new_row(cur, traffic=traffic, outcome=outcome, handler=handler, tools=tools, signals=signals,
+                                       label=label, summary=words, mode=mode(), message_id=message_id))
+            if not household:
+                return
+            for e in events:
+                about = e.about
+                if about is cur:
+                    continue
+                words = await _words_of(about, cur.ts) if about.user_id == cur.user_id and not about.is_guest else ""
+                await to.mark_failed(about.user_id, about.turn_id, [e.signal], to.proposed_label(e, _follow_up(e)), words)
     except Exception as exc:  # noqa: BLE001
         _count("process_errors")
-        logger.debug("struggle_detector: outcome record failed (%s)", type(exc).__name__)
+        logger.warning("struggle_detector: outcome record failed (%s) channel=%s traffic=%s", type(exc).__name__, cur.channel, traffic)
 
 
 async def _may_keep_words(turn: sig.Turn, *texts: str) -> bool:
@@ -675,14 +715,14 @@ async def _maybe_sweep(now: float) -> None:
         _count("swept", int(n or 0))
     except Exception as exc:  # noqa: BLE001
         _count("store_errors")
-        logger.debug("struggle_detector: retention sweep failed (%s)", type(exc).__name__)
+        logger.warning("struggle_detector: retention sweep failed (%s)", type(exc).__name__)
     try:   # the outcome rows age out the same way, whatever the flag says now (rows written while it was on still go)
         import turn_outcomes
 
         n = await asyncio.wait_for(turn_outcomes.get_backend().purge_before(now - retention_days() * 86400.0), STORE_TIMEOUT_S)
         _count("swept", int(n or 0))
     except Exception as exc:  # noqa: BLE001 - a missing table (0058 not run) included
-        logger.debug("struggle_detector: outcome retention sweep failed (%s)", type(exc).__name__)
+        logger.warning("struggle_detector: outcome retention sweep failed (%s)", type(exc).__name__)
 
 
 # ── the store ────────────────────────────────────────────────────────────────
@@ -811,6 +851,11 @@ async def erase_entity(user_id: str, name: str) -> int:
     A store failure is RAISED: a forget that could not erase must not be confirmed. Only a missing table is "nothing stored"."""
     if not (user_id or "").strip() or not (name or "").strip():
         return 0
+    async with _user_lock(user_id):   # no outcome / event write of this user is mid-flight while the erase runs (see ``_USER_LOCKS``)
+        return await _erase_entity_locked(user_id, name)
+
+
+async def _erase_entity_locked(user_id: str, name: str) -> int:
     _ERASED_AT[user_id] = time.time()     # turns still queued for this user keep no words
     _forget_history(user_id)
     from memory_forgotten import name_pattern, normalise_key
@@ -868,6 +913,11 @@ async def delete_user(user_id: str) -> int:
     """Remove every row of a user (``MemoryService.delete_user``). RAISES on a store failure (fail closed)."""
     if not (user_id or "").strip():
         return 0
+    async with _user_lock(user_id):
+        return await _delete_user_locked(user_id)
+
+
+async def _delete_user_locked(user_id: str) -> int:
     _DELETED_AT[user_id] = time.time()    # turns still queued for this user are not recorded
     _forget_history(user_id)
     try:
@@ -889,6 +939,20 @@ async def delete_user(user_id: str) -> int:
         if _nothing_stored(exc):
             return n
         raise
+
+
+#: one lock per user: an outcome / event WRITE (its keep-words check through its insert) and a forget / user delete of that user never
+#: interleave, so a write that was already past its check when the erase ran cannot land after the erase finished and find nothing to
+#: delete ("forgotten means forever"). Writers re-check the erase marks INSIDE the lock; the erase sets its mark inside it too.
+_USER_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
+
+
+def _user_lock(user_id: str) -> asyncio.Lock:
+    key = (id(asyncio.get_running_loop()), user_id)
+    lock = _USER_LOCKS.get(key)
+    if lock is None:
+        lock = _USER_LOCKS[key] = asyncio.Lock()
+    return lock
 
 
 #: user -> when a forget / a delete ran: a turn queued BEFORE it must not write the words (forget) or anything (delete) after it

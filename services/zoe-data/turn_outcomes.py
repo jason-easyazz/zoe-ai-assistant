@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 import uuid
 from typing import Any, Iterable, Optional
@@ -39,7 +38,6 @@ import struggle_signals as sig
 logger = logging.getLogger(__name__)
 
 ENV = "ZOE_STRUGGLE_OUTCOMES"
-_ON = frozenset({"on", "1", "true", "yes", "enforce"})
 
 DID, CANT_DO, FELL_THROUGH, BRAIN, ERROR, INTERRUPTED = "did", "cant_do", "fell_through", "brain", "error", "interrupted"
 OUTCOMES = (DID, CANT_DO, FELL_THROUGH, BRAIN, ERROR, INTERRUPTED)
@@ -67,7 +65,13 @@ def stats() -> dict[str, int]:
 
 
 def enabled() -> bool:
-    return (os.environ.get("ZOE_STRUGGLE_OUTCOMES") or "").strip().lower() in _ON
+    """The flag, read per call through ``typed_env`` (an unparseable value warns once and stays off). ``on`` / ``enforce`` are the
+    flag's own spellings; ``enforce`` is the ladder word the detector's mode flag uses, so it is accepted here too."""
+    from typed_env import env_bool, env_str
+
+    if env_str(ENV).strip().lower() == "enforce":
+        return True
+    return env_bool(ENV, False)
 
 
 # ── pure classification ──────────────────────────────────────────────────────
@@ -124,7 +128,7 @@ def failing(signals: Iterable[str], outcome: str) -> bool:
 
 
 def new_row(turn: sig.Turn, *, traffic: str, outcome: str, handler: str = "", tools: Iterable[str] = (), signals: Iterable[str] = (),
-            label: tuple[str, str] = ("", ""), summary: str = "", mode: str = "") -> dict[str, Any]:
+            label: tuple[str, str] = ("", ""), summary: str = "", mode: str = "", message_id: str = "") -> dict[str, Any]:
     """The row for one turn. A harness row is text-free and never failed / labelled, whatever it is given."""
     dom, conf, src = route_of(turn)
     household = traffic == "household"
@@ -135,6 +139,7 @@ def new_row(turn: sig.Turn, *, traffic: str, outcome: str, handler: str = "", to
         "id": uuid.uuid4().hex, "ts": float(turn.ts), "user_id": "guest" if turn.is_guest else turn.user_id,
         "is_guest": 1 if turn.is_guest else 0, "traffic": traffic, "channel": channel_of(turn), "panel_id": (turn.panel_id or "")[:80],
         "session_id": "" if turn.is_guest else (turn.session_id or "")[:120], "turn_id": turn.turn_id,
+        "message_id": "" if (turn.is_guest or not household) else (message_id or "")[:80],
         "route_domain": dom[:40], "route_conf": float(conf) if isinstance(conf, (int, float)) else None, "route_source": src,
         "head_top": (turn.head_top or "")[:40], "handler": (handler or "")[:80], "tools": ",".join(list(tools)[:12])[:200],
         "outcome": outcome, "path_served": turn.path + (f":{turn.lane}" if turn.lane else ""), "latency_ms": turn.latency_ms,
@@ -146,7 +151,7 @@ def new_row(turn: sig.Turn, *, traffic: str, outcome: str, handler: str = "", to
 
 # ── the store ────────────────────────────────────────────────────────────────
 
-COLUMNS = ("id", "ts", "user_id", "is_guest", "traffic", "channel", "panel_id", "session_id", "turn_id", "route_domain", "route_conf",
+COLUMNS = ("id", "ts", "user_id", "is_guest", "traffic", "channel", "panel_id", "session_id", "turn_id", "message_id", "route_domain", "route_conf",
            "route_source", "head_top", "handler", "tools", "outcome", "path_served", "latency_ms", "failed", "signals", "proposed_label",
            "label_source", "label_status", "label", "decided_by", "decided_at", "summary", "mode")
 
@@ -204,8 +209,9 @@ class SqlBackend:
     async def by_id(self, row_id: str) -> list[dict]:
         return await self._select("id = ?", (row_id,), 1)
 
-    async def latest_in_session(self, user_id: str, session_id: str) -> list[dict]:
-        return await self._select("user_id = ? AND session_id = ? AND traffic = 'household'", (user_id, session_id), 1)
+    async def by_message(self, user_id: str, message_id: str) -> list[dict]:
+        return await self._select("user_id = ? AND message_id = ? AND traffic = 'household'", (user_id, message_id), 1)
+
 
     async def rows(self, since: float, user_id: Optional[str] = None, failed_only: bool = False, limit: int = 500) -> list[dict]:
         where, params = "ts >= ?", [float(since)]
@@ -271,8 +277,9 @@ class MemoryBackend:
     async def by_id(self, row_id: str) -> list[dict]:
         return self._pick(lambda r: r["id"] == row_id, 1)
 
-    async def latest_in_session(self, user_id: str, session_id: str) -> list[dict]:
-        return self._pick(lambda r: r["user_id"] == user_id and r["session_id"] == session_id and r["traffic"] == "household", 1)
+    async def by_message(self, user_id: str, message_id: str) -> list[dict]:
+        return self._pick(lambda r: r["user_id"] == user_id and r["message_id"] == message_id and r["traffic"] == "household", 1)
+
 
     async def rows(self, since: float, user_id: Optional[str] = None, failed_only: bool = False, limit: int = 500) -> list[dict]:
         return self._pick(lambda r: r["ts"] >= since and (user_id is None or r["user_id"] == user_id)
@@ -328,7 +335,8 @@ async def record(row: dict) -> bool:
         return True
     except Exception as exc:  # noqa: BLE001 - the turn already happened
         _count("store_errors")
-        logger.debug("turn_outcomes: store failed (%s)", type(exc).__name__)
+        logger.warning("turn_outcomes: store failed (%s) traffic=%s channel=%s outcome=%s", type(exc).__name__, row.get("traffic"),
+                       row.get("channel"), row.get("outcome"))
         return False
 
 
@@ -352,31 +360,20 @@ async def mark_failed(user_id: str, turn_id: str, signals: Iterable[str], label:
         return done
     except Exception as exc:  # noqa: BLE001
         _count("store_errors")
-        logger.debug("turn_outcomes: mark failed (%s)", type(exc).__name__)
+        logger.warning("turn_outcomes: mark failed write failed (%s) turn=%s", type(exc).__name__, turn_id)
         return False
 
 
 async def note_feedback(user_id: str, interaction_id: str, kind: str) -> bool:
-    """The thumbs-down / correction BUTTON (``routers/chat.submit_feedback``): when the rated reply is the session's newest answer, that
-    turn's row is marked failed (NEGATIVE_FEEDBACK). A rating of an older reply is not guessed at. Never raises."""
+    """The thumbs-down / correction BUTTON (``routers/chat.submit_feedback``): the rated reply's OWN outcome row (matched exactly on the
+    assistant message id stored with it) is marked failed (NEGATIVE_FEEDBACK). A reply with no row of its own - an older one, or one whose
+    row was dropped - is never guessed at by falling back to a neighbouring turn. Never raises."""
     try:
-        if not enabled() or kind not in ("thumbs_down", "correction"):
+        if not enabled() or kind not in ("thumbs_down", "correction") or not str(interaction_id or "").strip():
             return False
-        from db_pool import get_db_ctx
-
-        async with get_db_ctx() as db:
-            cur = await db.execute("SELECT session_id FROM chat_messages WHERE id = ? AND role = 'assistant'", (str(interaction_id),))
-            got = await cur.fetchone()
-        if not got:
-            return False
-        import conversation_feedback as cf
-
-        session_id = str(got[0])
-        if await cf.last_assistant_message_id(session_id) != str(interaction_id):
-            _count("feedback_not_latest")
-            return False
-        rows = await get_backend().latest_in_session(user_id, session_id)
+        rows = await get_backend().by_message(user_id, str(interaction_id))
         if not rows:
+            _count("feedback_no_row")
             return False
         import struggle_detector
 
@@ -384,7 +381,7 @@ async def note_feedback(user_id: str, interaction_id: str, kind: str) -> bool:
         return await mark_failed(user_id, rows[0]["turn_id"], [sig.NEGATIVE_FEEDBACK], summary=words)
     except Exception as exc:  # noqa: BLE001
         _count("store_errors")
-        logger.debug("turn_outcomes: feedback mark failed (%s)", type(exc).__name__)
+        logger.warning("turn_outcomes: feedback mark failed (%s) message=%s", type(exc).__name__, interaction_id)
         return False
 
 
@@ -461,6 +458,8 @@ async def confirmed_examples(limit: int = 500) -> list[dict]:
     the brain was right: nothing to train the router towards). ``label_source`` keeps the seam's two-valued vocabulary: ``followup`` when
     the owner confirmed a follow-up-proven label, else ``router`` with a PERSON as ``decided_by`` (the retrain driver treats a
     person-accepted label as strong); ``label_origin`` says where the label came from. The caller re-checks the forget ledger."""
+    if not enabled():       # capture off = nothing from here reaches training, whatever was confirmed while it was on
+        return []
     try:
         rows = await asyncio.wait_for(get_backend().confirmed(max(1, min(2000, int(limit)))), STORE_TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001 - a missing table / DB blip: no examples from here

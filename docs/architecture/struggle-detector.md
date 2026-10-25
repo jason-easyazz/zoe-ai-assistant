@@ -329,10 +329,12 @@ cost: the hooks are deque appends behind two env reads (`test_note_overhead_is_t
 handler + one tool note per turn); the row write is one INSERT (plus one UPDATE when a later turn reveals a failure) in the existing
 background worker, whose CPU per turn grows ~0.15 ms (p50 1.73 -> 1.88 ms with in-process stores; the DB round trip is async).
 
+**Concurrency and flag.** Outcome / event writes and `erase_entity` / `delete_user` take the same per-user lock (the writer re-checks the erase marks inside it), so a write parked between its keep-words check and its insert cannot land after a forget finished. `ZOE_STRUGGLE_OUTCOMES` gates the read path too: off, `confirmed_examples` returns nothing (rows already kept stay for the retention sweep and forget). DB write failures log at WARNING with names and counts only, never words.
+
 **Failed turns and their labels.** A row is FAILED when its outcome is cant_do / fell_through / error or a struggle signal fires about it
 (an over-long answer alone does not count) - at once for a single-turn signal, or when a later turn reveals it: a re-ask, rephrase,
 correction, "that was wrong", or the chat **thumbs-down / correction button** (queued to the same worker, which marks the rated turn
-when that is the session's newest answer - an older one is not guessed at - and keeps its words only while the turn is still in the
+by the assistant message id stored with the outcome row (an exact match; a reply with no row of its own is skipped, never attached to a neighbouring turn) - and keeps its words only while the turn is still in the
 detector's 10-minute in-process history). A failed household member row keeps the member's own words under exactly the event `summary`
 rules (PII-scrubbed raw, display form, <= 160 chars; never a guest's, off-the-record, distress or forgotten-entity turn; never across two
 identities) and a PROPOSED route: the fast domain that answered the follow-up that worked (`followup`), else the router's own belief

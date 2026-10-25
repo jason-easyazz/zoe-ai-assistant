@@ -4614,9 +4614,10 @@
   },
   "ZOE_STRUGGLE_OUTCOMES": {
    "defaults": [
+    "off",
     "unset"
    ],
-   "kind": "str",
+   "kind": "bool",
    "readers": 1
   },
   "ZOE_STRUGGLE_PROPOSALS": {
