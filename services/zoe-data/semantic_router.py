@@ -202,11 +202,12 @@ def _shadow_file_lock(path: str):
     interleaving. Taken AFTER `_shadow_write_lock` here and in `local_text_logs.locked` (same order, no deadlock). NEVER WAITS: the
     append runs inside `route()` on a live voice turn, and retention holds this lock across its entire rewrite, so it takes
     ``LOCK_NB`` and yields ``False`` when retention owns the file (the caller skips the observation). A lock file that cannot be
-    opened never breaks a turn: the append goes ahead unlocked (yields ``True``)."""
+    opened never breaks a turn, but the append is SKIPPED (yields ``False``): writing unlocked could land beside an erase and
+    restore forgotten words."""
     try:
         fh = open(f"{path}.lock", "a")
     except OSError:
-        yield True
+        yield False
         return
     try:
         try:

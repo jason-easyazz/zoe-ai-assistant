@@ -65,3 +65,19 @@ def test_a_write_racing_an_erase_never_survives_it(miss):
         t.join()
     ltl.erase_entity(re.compile("forgotten-name"))
     assert "forgotten-name" not in (miss.read_text() if miss.exists() else "")
+
+
+def test_an_unopenable_lock_file_fails_closed(miss):
+    """PR #2110 review: a lock file that cannot be opened must NOT let a pass run unlocked (it could race an append and restore
+    forgotten words), and must make the writer skip. Break: restore ``yield`` / ``return`` on OSError in locked()/append_line()."""
+    miss.write_text(json.dumps({"text": "forgotten-person", "ts": 1.0}) + "\n")
+    ltl.lock_path(ltl.INTENT_MISSES).mkdir()                 # a directory where the lock FILE should be: open(..., "a") -> IsADirectoryError
+    try:
+        with pytest.raises(OSError):
+            ltl.erase_all_text()
+        assert ltl.sweep().get("intent_misses") == -1          # the sweep reports the failed log rather than raising
+        before = miss.read_text()
+        assert ltl.append_line(ltl.INTENT_MISSES, json.dumps({"text": "late", "ts": 2.0})) is False
+        assert miss.read_text() == before
+    finally:
+        ltl.lock_path(ltl.INTENT_MISSES).rmdir()

@@ -110,6 +110,14 @@ def plan(ltl, logs, cutoff: Optional[float], everything: bool) -> list[tuple]:
     return rows
 
 
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        Path(os.path.abspath(path)).relative_to(os.path.abspath(root))
+        return True
+    except ValueError:
+        return False
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     mode = ap.add_mutually_exclusive_group()
@@ -118,12 +126,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--days", type=float, default=None, help="strip text older than this many days (default: the retention window)")
     ap.add_argument("--all", action="store_true", help="strip the text from every record, whatever its age")
     ap.add_argument("--log", action="append", choices=["router_shadow", "intent_misses"], help="restrict to a log (repeatable)")
-    ap.add_argument("--backup-root", type=Path, default=Path(os.environ.get("HOME", str(Path.home()))) / ".zoe" / "backups")
+    ap.add_argument("--backup-root", type=Path, default=None,
+                    help="where the raw-text backup goes (default: the directory the hourly job prunes, ZOE_ADHOC_BACKUP_DIR)")
     ap.add_argument("--drop-backup", action="store_true", help="delete the backup once the post-check passes")
     ns = ap.parse_args(argv)
 
     load_saved_settings()
     ltl = load_ltl()
+    pruned = ltl.adhoc_backup_root()                   # AFTER the saved settings: the dir the hourly job really prunes
+    backup_root = ns.backup_root if ns.backup_root is not None else pruned
+    if ns.apply and not _inside(backup_root, pruned):
+        print(f"WARNING: --backup-root {backup_root} is outside {pruned}, which the hourly job prunes: the raw-text backup there "
+              f"will NOT be deleted automatically - delete it by hand.", file=sys.stderr)
     logs = [l for l in ltl.LOGS if not ns.log or l.name in ns.log]
     days = ns.days if ns.days is not None else ltl.retention_days()
     if days is None and not ns.all:
@@ -150,30 +164,38 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("nothing to strip.")
         return 0
 
-    bdir = ns.backup_root / f"router-shadow-{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}"
+    bdir = backup_root / f"router-shadow-{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}"
     bdir.mkdir(parents=True, exist_ok=True)
     os.chmod(bdir, 0o700)
-    for i, (_log, seg, _t, sel) in enumerate(rows):
-        if sel:
-            dest = bdir / f"{i:02d}-{seg.name}"
-            shutil.copy2(seg, dest)
-            os.chmod(dest, 0o600)
     print(f"backup (STILL HOLDS THE TEXT): {bdir}")
 
     failed = 0
+    n_copied = 0
     for log in logs:
-        before = {seg: _records(seg) for seg in ltl.segments(log)}
-        kw = {"everything": True} if ns.all else {"older_than": cutoff}
         try:
-            ltl._apply(log, **kw)                      # one pass over EVERY segment under the log's write lock (the router's own flock)
+            # ONE lock across enumeration, backup, rewrite and verification: a rotation (or append) cannot slip a segment past the
+            # backup, because none can happen until the pass is finished.
+            with ltl.locked(log):
+                cur = plan(ltl, [log], cutoff, ns.all)
+                before = {seg: _records(seg) for _l, seg, _t, _s in cur}
+                for _l, seg, _t, sel in cur:
+                    if sel:
+                        dest = bdir / f"{n_copied:02d}-{seg.name}"
+                        n_copied += 1
+                        shutil.copy2(seg, dest)
+                        os.chmod(dest, 0o600)
+                kw = {"everything": True} if ns.all else {"older_than": cutoff}
+                ltl._apply(log, _held=True, **kw)
+                checks = []
+                for seg, recs in before.items():
+                    after = _records(seg) if seg.exists() else []
+                    checks.append((seg, recs, after, _malformed(seg) if seg.exists() else 0))
         except Exception as exc:  # noqa: BLE001
             failed += 1
             print(f"  FAILED {log.name}: {type(exc).__name__}: {exc}")
             continue
-        for seg, recs in before.items():
-            after = _records(seg) if seg.exists() else []
+        for seg, recs, after, bad in checks:
             still = sum(_selected(ltl, log, r, cutoff, ns.all) for r in after)
-            bad = _malformed(seg) if seg.exists() else 0
             kept = len(after) if log.expire == "strip" else None
             if still or bad or (kept is not None and kept < len(recs)):
                 failed += 1

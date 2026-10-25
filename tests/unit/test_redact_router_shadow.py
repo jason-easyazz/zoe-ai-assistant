@@ -211,3 +211,48 @@ def test_saved_retention_and_log_path_are_honoured(tool, logs, tmp_path, monkeyp
     monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(logs))            # restore the fixture pin on teardown (script set it)
     assert "SECRET-OLD-ONE" not in custom.read_text() and "recent-words" in custom.read_text()
     assert "SECRET-OLD-ONE" in logs.read_text()                 # the default-path log was not the one acted on
+
+
+def test_default_backup_root_is_resolved_after_saved_settings(tool, logs, tmp_path, monkeypatch, capsys):
+    """PR #2110 review: the default backup dir must be the one the hourly job PRUNES (ZOE_ADHOC_BACKUP_DIR, which may come from the
+    saved env files). Break: resolve the default before load_saved_settings() -> the backup lands in ~/.zoe/backups."""
+    pruned = tmp_path / "pruned"
+    monkeypatch.setattr(tool, "load_saved_settings", lambda: monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(pruned)))
+    assert tool.main(["--apply"]) == 0
+    assert len(list(pruned.glob("router-shadow-*"))) == 1
+    assert "WARNING" not in capsys.readouterr().err
+
+
+def test_explicit_backup_root_outside_the_pruned_dir_warns(tool, logs, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(tmp_path / "pruned"))
+    assert tool.main(["--backup-root", str(tmp_path / "elsewhere"), "--apply"]) == 0
+    assert "outside" in capsys.readouterr().err
+
+
+def test_a_rotation_between_backup_copies_cannot_happen(tool, logs, tmp_path, monkeypatch):
+    """PR #2110 review: the lock is held across enumerate + backup + rewrite, so a rotation attempted between two copies is refused
+    (TimeoutError) and every segment that gets stripped was backed up first. Break: take the lock only inside _apply -> the
+    attempted rotation succeeds."""
+    ltl = tool.load_ltl()
+    monkeypatch.setattr(tool, "load_ltl", lambda: ltl)
+    monkeypatch.setattr(ltl, "LOCK_WAIT_S", 0.2)
+    now = time.time()
+    for n in (1, 2):
+        seg = logs.with_name(f"{logs.name}.{n}")
+        seg.write_text(json.dumps({"ts": now - 90 * DAY, "utt": f"{n}" * 12, "utt_text": f"SEG-{n}-SECRET"}) + "\n")
+    outcomes = []
+    real = tool.shutil.copy2
+
+    def copy_then_try_rotation(src, dst, *a, **k):
+        real(src, dst, *a, **k)
+        try:
+            with ltl.locked(ltl.ROUTER_SHADOW):
+                outcomes.append("rotated")
+        except TimeoutError:
+            outcomes.append("refused")
+
+    monkeypatch.setattr(tool.shutil, "copy2", copy_then_try_rotation)
+    assert run(tool, tmp_path, "--apply") == 0
+    assert outcomes and set(outcomes) == {"refused"}
+    backed = "".join(p.read_text() for p in (tmp_path / "bk").glob("router-shadow-*/*"))
+    assert "SEG-1-SECRET" in backed and "SEG-2-SECRET" in backed and "SECRET-OLD-ONE" in backed

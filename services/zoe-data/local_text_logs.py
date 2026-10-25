@@ -144,7 +144,7 @@ def lock_path(log: TextLog) -> Path:
 def locked(log: TextLog):
     """Hold the log's write lock for a whole multi-segment pass: the in-process append lock, then (router log only) an exclusive
     ``flock`` on ``<log>.lock`` - the SAME lock ``semantic_router._append_shadow_line`` takes around rotate + append, in the same order.
-    So no append and no rotation can interleave with the rewrite, in this process or another. Fails closed: if the flock cannot be
+    So no append and no rotation can interleave with the rewrite, in this process or another. Fails closed: if the lock file cannot be opened it raises ``OSError``; if the flock cannot be
     had within ``LOCK_WAIT_S`` it raises ``TimeoutError`` (the sweep reports -1, the cascade step fails and is retried). BOTH logs take
     it: the intent-miss writer appends through ``append_line`` (same lock). The old-inode catch-up in ``rewrite`` stays as defence
     against a writer process still running the old, lock-less code."""
@@ -153,9 +153,9 @@ def locked(log: TextLog):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             fh = open(path, "a")
-        except OSError:
-            yield                                           # no lock file possible (read-only dir): nothing is being written there either
-            return
+        except OSError as exc:
+            # FAIL CLOSED: a pass that cannot take the lock would race an append/rotation and could restore forgotten words
+            raise OSError(f"shadow-log write lock file {path} cannot be opened ({type(exc).__name__}): not rewriting unlocked") from exc
         try:
             deadline = time.monotonic() + LOCK_WAIT_S
             while True:
@@ -184,7 +184,11 @@ def append_line(log: TextLog, line: str) -> bool:
     try:
         path = log_path(log)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(lock_path(log), "a") as fh:
+        try:
+            fh = open(lock_path(log), "a")
+        except OSError:
+            return False                                    # no lock, no append: never write unlocked beside a pass that may be erasing
+        with fh:
             try:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
@@ -340,10 +344,11 @@ def _ts(rec: dict[str, Any], log: TextLog) -> float:
         return 0.0                                    # no timestamp = oldest: it ages out rather than living forever
 
 
-def _apply(log: TextLog, **kw: Any) -> int:
+def _apply(log: TextLog, *, _held: bool = False, **kw: Any) -> int:
     """One full pass over every file of ``log`` under its write lock; a segment that was renamed under us is retried after a rescan.
     Malformed rows are dropped (see ``_strip_or_drop``) and counted in the return value; their number alone (never their content) is
-    logged."""
+    logged. ``_held``: the caller already holds ``locked(log)`` (the owner script keeps it across backup + rewrite + verify; the
+    flock is not re-entrant)."""
     seen = [0]                                                  # malformed rows met by the CURRENT rewrite attempt
 
     def fn(line: str) -> Optional[str]:
@@ -352,7 +357,7 @@ def _apply(log: TextLog, **kw: Any) -> int:
         return _strip_or_drop(log, line, **kw)
 
     total = malformed = 0
-    with locked(log):
+    with (contextlib.nullcontext() if _held else locked(log)):
         for _attempt in range(4):
             raced = False
             for seg in segments(log):
