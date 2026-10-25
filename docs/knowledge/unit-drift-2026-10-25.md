@@ -54,9 +54,14 @@ re-enables `zoe-dreaming.timer` as the night window's rollback. Remove them toge
 
 Dates are file mtimes. `functiongemma-router.service.bak-20260925` (2026-09-25), `zoe-backup.service.bak-20260926`
 (2026-09-26), `.zoe-voice-regression.service.bak-20260727` (2026-07-27), `llama-server.service.bak-*` x10
-(2026-04-04 to 2026-07-08), `llama-server-{12b,e2b,e4b}.service.bak` and `llama-server-12b-deepbrain.service.disabled`
+(2026-04-04 to 2026-07-08), `llama-server-{12b,e2b,e4b}.service.bak`
 (2026-06-20), `hermes-agent.service.bak-routing-cleanup-20260526_140650` (2026-05-26),
 `openclaw-gateway.service.bak-*` x2 (2026-05-17, 2026-05-26).
+
+`llama-server-12b-deepbrain.service.disabled` is NOT archived: the night window reads it by path
+(`scripts/perf/zmb/bakeoff.py` `BAKEOFF_DEEP_UNIT`). It was moved once by mistake and has been restored on the host;
+`unit_drift_cleanup.sh` now protects it, and any cruft file whose `systemd/user/<name>` path appears in repo code.
+A service+timer pair is removed only when both are eligible, and the reference scan covers every installed unit type.
 
 ## Owner steps (not done by this PR; each restarts or edits a live unit)
 

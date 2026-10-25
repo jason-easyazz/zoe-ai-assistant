@@ -13,6 +13,8 @@
 # scripts/night/install_night_window.sh --uninstall re-enables zoe-dreaming.timer as its rollback target;
 # remove them only together with that script's rollback path.
 #
+# Cruft that repo code references by path is PROTECTED and never moved (see PROTECTED below).
+#
 # Class-b units (stale installs to refresh from the templates) are NOT touched here: refreshing restarts
 # a live service, which is an owner / next-deploy step. See docs/knowledge/unit-drift-2026-10-25.md.
 set -u
@@ -21,6 +23,10 @@ EXECUTE=0
 UNITDIR="${ZOE_UNIT_DIR:-$HOME/.config/systemd/user}"
 BACKUP="${ZOE_UNIT_BACKUP_DIR:-$HOME/.zoe/unit-backups/$(date +%F)}"
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
+REPO="${ZOE_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# Cruft files other code READS by path (the night window reads the .disabled deepbrain unit). Never moved.
+# Extra names come from repo code: any `systemd/user/<name>` path under scripts/ or services/ (this script excluded).
+PROTECTED="llama-server-12b-deepbrain.service.disabled"
 RETIRED="bonsai-server.service flue-zoe-brain.service llama-server-e2b-fallback.service zoe-12b-postboot.service
 zoe-brain-boot-check.service zoe-keepwarm.service zoe-keepwarm.timer zoe-purge-presence.service zoe-purge-presence.timer"
 
@@ -31,37 +37,70 @@ say "unit dir: $UNITDIR"
 say "backup:   $BACKUP   ($([ "$EXECUTE" = 1 ] && echo EXECUTE || echo dry-run))"
 if [ "$EXECUTE" = 1 ] && ! mkdir -p "$BACKUP"; then say "ABORT: cannot create backup dir $BACKUP"; exit 1; fi
 
+protected_names() {
+  printf '%s\n' $PROTECTED
+  grep -rhoE 'systemd/user/[A-Za-z0-9_.@-]+' "$REPO/scripts" "$REPO/services" \
+    --exclude=unit_drift_cleanup.sh --exclude-dir=node_modules --exclude-dir=.git 2>/dev/null \
+    | sed 's|^systemd/user/||'
+}
+PROT_LIST="$(protected_names | sort -u)"
+
 say "== 1. .bak / .disabled files -> backup (moved, never deleted)"
 while IFS= read -r f; do
   [ -n "$f" ] || continue
+  if printf '%s\n' "$PROT_LIST" | grep -qxF "$(basename "$f")"; then
+    say "  PROTECTED (referenced by repo code, left in place)  $(basename "$f")"; continue
+  fi
   say "  $(stat -c '%y' "$f" | cut -d' ' -f1)  $(basename "$f")"
   run mv -n "$f" "$BACKUP/"
 done < <(find "$UNITDIR" -maxdepth 1 -type f \( -name '*.bak*' -o -name '*.disabled' \) | sort)
 
+# Prints the reason unit $1 may not be removed (empty = eligible). Pair siblings are handled by the caller.
+blocked_reason() {
+  local u="$1" stem state f r
+  stem="${u%.*}"
+  state="$("$SYSTEMCTL" --user is-active "$u" 2>&1)"
+  # Only an explicit stopped state allows removal; a bus error / unknown state is NOT evidence of inactivity.
+  case "$state" in
+    inactive|failed) ;;
+    *) echo "SKIP (state unknown or not stopped: $state)"; return;;
+  esac
+  if find "$UNITDIR" -name "$u" \( -path '*.wants/*' -o -path '*.requires/*' \) 2>/dev/null | grep -q .; then
+    echo "SKIP (linked from a .wants/.requires dir)"; return
+  fi
+  # Every installed unit file of ANY type, plus drop-ins and real files inside .wants/.requires dirs.
+  r="$(find "$UNITDIR" -type f \( -name '*.service' -o -name '*.timer' -o -name '*.target' -o -name '*.path' \
+        -o -name '*.socket' -o -name '*.mount' -o -name '*.automount' -o -name '*.swap' -o -name '*.slice' \
+        -o -name '*.scope' -o -path '*.d/*.conf' -o -path '*.wants/*' -o -path '*.requires/*' \) | sort | while IFS= read -r f; do
+            case "$(basename "$f")" in "$u") continue;; esac
+            # Same-stem RETIRED siblings (foo.timer for foo.service) are judged as a pair by the caller.
+            case "$(basename "$f")" in "$stem".*) case " $RETIRED_ALL " in *" $(basename "$f") "*) continue;; esac;; esac
+            case "$(basename "$(dirname "$f")")" in "$u".d) continue;; esac
+            sed -e ':a' -e '/\\$/N; s/\\\n/ /; ta' "$f" \
+              | grep -E "^[[:space:]]*(Requires|Wants|After|Before|BindsTo|PartOf|Requisite|Upholds|Conflicts|OnFailure|Unit)[[:space:]]*=([^#]*[[:space:]])?${u//./\\.}([[:space:]]|\$)" \
+              | sed "s|^|$f: |"
+          done)"
+  [ -z "$r" ] || echo "SKIP (referenced): $r"
+}
+
 say "== 2. retired units -> back up, disable, remove"
+RETIRED_ALL="$(echo $RETIRED)"
 removed=0
 failed=0
 for u in $RETIRED; do
   stem="${u%.*}"
   [ -e "$UNITDIR/$u" ] || { say "  $u: not installed"; continue; }
-  state="$("$SYSTEMCTL" --user is-active "$u" 2>&1)"
-  # Only an explicit stopped state allows removal; a bus error / unknown state is NOT evidence of inactivity.
-  case "$state" in
-    inactive|failed) ;;
-    *) say "  $u: SKIP (state unknown or not stopped: $state)"; continue;;
-  esac
-  if find "$UNITDIR" -name "$u" \( -path '*.wants/*' -o -path '*.requires/*' \) 2>/dev/null | grep -q .; then
-    say "  $u: SKIP (linked from a .wants/.requires dir)"; continue
+  why="$(blocked_reason "$u")"
+  # A service+timer pair is ONE decision: if any installed same-stem retired sibling is blocked, keep both.
+  if [ -z "$why" ]; then
+    for sib in $RETIRED; do
+      [ "$sib" != "$u" ] && [ "${sib%.*}" = "$stem" ] && [ -e "$UNITDIR/$sib" ] || continue
+      sw="$(blocked_reason "$sib")"
+      if [ -n "$sw" ]; then why="SKIP (paired unit $sib is not eligible: $sw)"; break; fi
+    done
   fi
-  refs="$(for f in "$UNITDIR"/*.service "$UNITDIR"/*.timer "$UNITDIR"/*.d/*.conf; do
-            [ -f "$f" ] || continue
-            case "$(basename "$f")" in "$u"|"$stem".*) continue;; esac
-            case "$(basename "$(dirname "$f")")" in "$u".d) continue;; esac
-            sed -e ':a' -e '/\\$/N; s/\\\n/ /; ta' "$f" \
-              | grep -E "^[[:space:]]*(Requires|Wants|After|Before|BindsTo|PartOf|Requisite|Upholds|Conflicts|OnFailure|Unit)=([^#]*[[:space:]])?${u//./\\.}([[:space:]]|\$)" \
-              | sed "s|^|$f: |"
-          done)"
-  if [ -n "$refs" ]; then say "  $u: SKIP (referenced): $refs"; continue; fi
+  if [ -n "$why" ]; then say "  $u: $why"; continue; fi
+  state="$("$SYSTEMCTL" --user is-active "$u" 2>&1)"
   say "  $u: state=$state enabled=$("$SYSTEMCTL" --user is-enabled "$u" 2>&1) -> backup + remove"
   # Backups must succeed BEFORE anything is disabled or removed; a failed copy skips this unit.
   if [ "$EXECUTE" = 1 ]; then
