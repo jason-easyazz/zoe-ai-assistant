@@ -194,8 +194,9 @@ def test_root_helpers_honour_overrides_only_when_not_root():
     assert 'if os.getuid() != 0 and os.environ.get("ZOE_HA_CONFIG_DIR")' in (LIBEXEC / "zoe-ha-config-export").read_text()
 
 
-@pytest.mark.parametrize("argv", [[], ["up", "x"], ["down", "x"], ["restore"], ["restore", "postgres"],
-                                  ["restore", "zoe", "x"], ["psql", "template1"], ["exec", "zoe"], ["sql", "zoe"]])
+@pytest.mark.parametrize("argv", [[], ["up", "x"], ["down", "x"], ["restore"], ["restore", "postgres", "data"],
+                                  ["restore", "zoe"], ["restore", "zoe", "x"], ["restore", "zoe", "data", "x"],
+                                  ["inspect"], ["inspect", "x"], ["psql", "template1"], ["exec", "zoe"], ["sql", "zoe"]])
 def test_drill_helper_refuses_arguments_outside_its_set(argv):
     r = subprocess.run(["sh", str(LIBEXEC / "zoe-restore-drill-pg"), *argv], capture_output=True, text=True)
     assert r.returncode == 2 and "usage" in r.stderr
@@ -252,7 +253,9 @@ def test_ha_helper_never_follows_a_planted_symlink(tmp_path):
 def test_sudoers_grants_the_backup_helpers_exact_argv_only():
     text = (REPO / "scripts/setup/p0-deroot/sudoers.d/60-zoe-deroot").read_text()
     for line in ("zoe-ha-config-export storage", "zoe-restore-drill-pg up", "zoe-restore-drill-pg down",
-                 "zoe-restore-drill-pg restore zoe", "zoe-restore-drill-pg restore multica",
+                 *(f"zoe-restore-drill-pg restore {d} {sec}" for d in ("zoe", "multica")
+                   for sec in ("pre-data", "data", "post-data")),
+                 "zoe-restore-drill-pg inspect list", "zoe-restore-drill-pg inspect schema",
                  "zoe-restore-drill-pg psql drill"):
         assert f"/usr/local/libexec/zoe-priv/{line}" in text, line
     grant = next(ln for ln in text.splitlines() if ln.startswith("zoe ALL=(root)"))
