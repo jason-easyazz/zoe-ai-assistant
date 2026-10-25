@@ -501,7 +501,13 @@ async def confirmed_examples(limit: int = 500) -> list[dict]:
 
 # ── forgetting (called by struggle_detector; RAISES on a store failure) ──────
 
-async def matching_ids(user_id: str, pattern, needle: str) -> list[str]:
-    """``user_id``'s rows whose words match ``pattern`` (the forget's whole-word name pattern). RAISES on a failure."""
+async def matching_rows(user_id: str, pattern, needle: str) -> list[tuple[str, str]]:
+    """``user_id``'s ``(id, words)`` rows whose words match ``pattern`` (the forget's whole-word name pattern). RAISES on a failure.
+    The words are read here so the forget can tombstone their wording BEFORE the rows go."""
     hits = await get_backend().matching(user_id, needle)
-    return [rid for rid, words in hits if pattern.search(words or "")]
+    return [(rid, words) for rid, words in hits if pattern.search(words or "")]
+
+
+async def matching_ids(user_id: str, pattern, needle: str) -> list[str]:
+    """``user_id``'s row ids whose words match ``pattern``. RAISES on a failure."""
+    return [rid for rid, _ in await matching_rows(user_id, pattern, needle)]

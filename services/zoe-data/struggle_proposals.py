@@ -971,13 +971,17 @@ def _forget_in_retrain(*, event_ids: Iterable[str] = (), user_id: Optional[str] 
     router_retrain_ledger.forget(event_ids=event_ids, user_id=user_id, text_keys=text_keys)
 
 
-async def forget_events(event_ids: list[str]) -> int:
+async def forget_events(event_ids: list[str], *, extra_texts: Iterable[str] = ()) -> int:
     """Take these events out of every proposal (the forget path). RAISES on a store failure so the forget is not confirmed; only a missing
-    table is "nothing stored". Returns proposals deleted."""
+    table is "nothing stored". Returns proposals deleted. ``extra_texts`` are failed wordings that live outside ``struggle_events`` (a
+    ``turn_outcomes`` row's words, read before it is deleted): their keys are tombstoned too, so the words stay out of training under ANY id."""
     ids = [str(i) for i in event_ids if i]
     if not ids:
         return 0
-    _forget_in_retrain(event_ids=ids, text_keys=await _wording_keys(ids))
+    import router_retrain_ledger
+
+    keys = await _wording_keys(ids) | {router_retrain_ledger.text_key(t) for t in extra_texts if t}
+    _forget_in_retrain(event_ids=ids, text_keys=keys)
     if not _sql_events():
         return 0
     try:

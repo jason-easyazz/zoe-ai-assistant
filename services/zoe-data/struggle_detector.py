@@ -923,14 +923,16 @@ async def _erase_outcomes(user_id: str, pat, needle: str) -> int:
     if not _outcomes_store_live():
         return 0
     try:
-        ids = await turn_outcomes.matching_ids(user_id, pat, needle)
+        rows = await turn_outcomes.matching_rows(user_id, pat, needle)
     except Exception as exc:
         if _nothing_stored(exc):
             return 0
         raise
-    if not ids:
+    if not rows:
         return 0
-    await struggle_proposals.forget_events([f"turn:{i}" for i in ids])
+    ids = [rid for rid, _ in rows]
+    # the words go to the ledger too (an outcome has no struggle_events row to read them from): the same words under a NEW turn id stay out
+    await struggle_proposals.forget_events([f"turn:{i}" for i in ids], extra_texts=[w for _, w in rows])
     return int(await turn_outcomes.get_backend().delete_ids(user_id, ids) or 0)
 
 

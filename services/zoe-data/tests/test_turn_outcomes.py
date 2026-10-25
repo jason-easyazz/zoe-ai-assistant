@@ -275,6 +275,35 @@ async def test_control_forgotten_turn_never_trains(fresh):
     assert await to.confirmed_examples() == []
 
 
+async def test_control_forgotten_outcome_wording_is_struck_under_any_id(fresh, tmp_path, monkeypatch):
+    """An outcome-only turn (no struggle_events row) that is forgotten still tombstones its WORDING in the retrain ledger: the same words
+    under a NEW turn id (the entity shield released by a re-teach) are struck too. Control: drop ``extra_texts`` from ``_erase_outcomes``
+    and the new turn's key is not tombstoned (red)."""
+    import router_retrain_ledger as rrl
+
+    monkeypatch.setenv("ZOE_ROUTER_RETRAIN_DIR", str(tmp_path / "rr"))
+    q = "will marlowe need an umbrella this afternoon"
+    weather_note(q)
+    sd.note_brain(VOICE, "flue", "ok")
+    await feed(item(q, "Maybe.", channel="voice", session=VOICE))
+    old = fresh.data[0]["id"]
+    await to.decide(old, A, "confirm", "weather")
+    sd.get_backend().data.clear()        # outcome-ONLY: no struggle_events row to read the wording from
+    assert await sd.erase_entity(A, "Marlowe") >= 1
+    assert fresh.data == []
+    sd.reset()
+    weather_note(q)
+    sd.note_brain(VOICE, "flue", "ok")
+    await feed(item(q, "Maybe.", channel="voice", session=VOICE))
+    new = fresh.data[0]["id"]
+    assert new != old
+    await to.decide(new, A, "confirm", "weather")
+    got = await to.confirmed_examples()
+    assert [e["text"] for e in got] == [q]
+    rows = [{**e, "text_key": rrl.text_key(e["text"])} for e in got]
+    assert rrl.tombstoned(rows) == rows, "the same words under a new turn id must stay out of training"
+
+
 async def test_control_unconfirmed_never_trains(fresh):
     await failed_then_fixed()
     assert await to.confirmed_examples() == [], "a follow-up-proven label is still only a PROPOSAL"
