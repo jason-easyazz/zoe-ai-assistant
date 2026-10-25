@@ -19,6 +19,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 
+from typed_env import env_str
+
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL_S = 5.0
@@ -146,9 +148,9 @@ async def _database_status() -> str:
 
 
 def _service_probes() -> list[tuple[str, str, Callable[[], Awaitable[str]]]]:
-    llama = os.environ.get("ZOE_LLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
-    kokoro = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
-    bridge = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007").rstrip("/")
+    llama = env_str("ZOE_LLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+    kokoro = env_str("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
+    bridge = env_str("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007").rstrip("/")
     return [
         ("database", "Database", _database_status),
         ("brain", "Brain", lambda: _http_status(f"{llama}/health", _ok_if_200)),

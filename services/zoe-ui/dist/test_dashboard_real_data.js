@@ -708,6 +708,123 @@ check('layout PUTs are serialised: one in flight, the latest layout goes next', 
     }));
 });
 
+// ── Review round (PR #2164): unsynced layout, stale-board saves, Home badge, Notes hook ─
+check('a layout PUT that fails is kept and recovered after a reload, not replaced by the older server copy', async () => {
+    const stale = [{ uid: 'w1', type: 'weather', x: 0, y: 0, w: 4, h: 3 }];
+    const run = async (patch) => {
+        const ctx = makeContext((url, opts) => {
+            if (opts.method === 'PUT') return json(503, {});
+            if (url === '/api/dashboard/layout/') return json(200, { layout: stale, version: 'v1' });
+            return never();
+        });
+        const { d } = boardWith(ctx);
+        if (patch) patch(d);
+        await d.loadLayout();
+        d.grid.removeWidget(d.grid.engine.nodes[0].el);   // the member removes the last card
+        d.saveLayout();
+        ctx._timers.splice(0).forEach(fn => fn());
+        await flush();
+        // reload: a new page over the same browser storage; the server still holds the old board
+        const puts = [];
+        const ctx2 = makeContext((url, opts) => {
+            if (opts.method === 'PUT') { puts.push(JSON.parse(opts.body)); return json(200, { status: 'ok', version: 'v2' }); }
+            if (url === '/api/dashboard/layout/') return json(200, { layout: stale, version: 'v1' });
+            return never();
+        });
+        Object.assign(ctx2._store, ctx._store);
+        const b2 = boardWith(ctx2);
+        await b2.d.loadLayout();
+        ctx2._timers.splice(0).forEach(fn => fn());
+        await flush();
+        return { d2: b2.d, puts, ctx2 };
+    };
+    const { d2, puts, ctx2 } = await run();
+    assert.deepStrictEqual(plain(d2.currentLayout()), [], 'the removal survives the reload');
+    assert.strictEqual(puts.length, 1, 'and is saved again');
+    assert.deepStrictEqual(puts[0].layout, []);
+    assert.strictEqual(puts[0].base_version, 'v1', 'against the version read');
+    assert(!('zoe_desktop_widgets_unsynced' in ctx2._store), 'acknowledged: the marker is cleared');
+    // negative control: never marking the layout unsynced (the reviewed bug) is caught
+    await mustFail('an unmarked failed save is caught', async () => {
+        const r = await run((d) => { d._setUnsynced = () => {}; });
+        assert.deepStrictEqual(plain(r.d2.currentLayout()), []);
+    });
+});
+
+check('a board saving over a layout chat changed merges the new cards instead of erasing them', async () => {
+    const run = async (patch) => {
+        const puts = [];
+        const chatCard = { uid: 'c1', type: 'system', x: 0, y: 3, w: 4, h: 3 };
+        const ctx = makeContext((url, opts) => {
+            if (opts.method === 'PUT') {
+                const body = JSON.parse(opts.body);
+                puts.push(body);
+                if (body.base_version === 'v1') {
+                    return json(409, { detail: { error: 'layout_changed', layout: [{ uid: 'w1', type: 'weather', x: 0, y: 0, w: 4, h: 3 }, chatCard], version: 'v2' } });
+                }
+                return json(200, { status: 'ok', version: 'v3' });
+            }
+            if (url === '/api/dashboard/layout/') return json(200, { layout: [{ uid: 'w1', type: 'weather', x: 0, y: 0, w: 4, h: 3 }], version: 'v1' });
+            return never();
+        });
+        const { d } = boardWith(ctx);
+        if (patch) patch(d);
+        await d.loadLayout();
+        d.saveLayout();
+        ctx._timers.splice(0).forEach(fn => fn());
+        await flush();
+        return { d, puts };
+    };
+    const { d, puts } = await run();
+    assert.strictEqual(puts.length, 2, 'the conflict is retried once');
+    assert.deepStrictEqual(puts[1].layout.map(e => e.uid).sort(), ['c1', 'w1'], "chat's card is kept in the save");
+    assert.strictEqual(puts[1].base_version, 'v2');
+    assert.deepStrictEqual(plain(d.currentLayout().map(e => e.uid)).sort(), ['c1', 'w1'], 'and shown on the board');
+    // negative control: dropping the merge (the reviewed bug) is caught
+    await mustFail('a save that ignores the conflict is caught', async () => {
+        const r = await run((dd) => { dd._adoptServerCards = () => {}; });
+        assert.deepStrictEqual(r.puts[1].layout.map(e => e.uid).sort(), ['c1', 'w1']);
+    });
+});
+
+check('Home badge counts every switchable device and says Unknown when the device read failed', async () => {
+    const ctx = makeContext(() => never());
+    const H = ctx.HomeWidget;
+    const ents = [];
+    for (let i = 0; i < 10; i++) {
+        const n = String.fromCharCode(97 + i);
+        ents.push({ entity_id: 'light.l' + n, state: i === 9 ? 'on' : 'off', attributes: { friendly_name: 'Lamp ' + n } });
+    }
+    const rooms = { data: { rooms: [{ id: 1, name: 'R', devices: [] }], ha_available: true } };
+    const st = H.stateFrom(rooms, { data: { entities: ents } });
+    assert.strictEqual(st.devices.length, 8, 'still shows eight');
+    assert.strictEqual(H.badge(st), '1 on', 'a device beyond the eight shown is counted');
+    assert.strictEqual(H.badge(H.stateFrom(rooms, { failed: true })), 'Unknown', 'rooms loaded, devices unreadable: not "All off"');
+    assert.strictEqual(H.badge(H.stateFrom(rooms, { data: { entities: ents.slice(0, 2) } })), 'All off');
+});
+
+check('a removed Notes card stops fetching; live cards still refresh', async () => {
+    const fetched = [];
+    const ctx = makeContext((url) => { fetched.push(url); return json(200, { notes: [] }); });
+    vm.runInContext(read('js/widgets/core/notes.js'), ctx, { filename: 'notes.js' });
+    const { d, WM } = boardWith(ctx);
+    WM.register(new (ctx.$('NotesWidget'))());
+    d.serverSync = false;
+    const a = d.addWidget('notes');
+    const b = d.addWidget('notes');
+    assert(a && b, 'two notes cards mounted');
+    await flush();
+    fetched.length = 0;
+    ctx.window.loadNotes();
+    await flush();
+    assert.strictEqual(fetched.length, 2, 'both live cards refresh');
+    d.grid.removeWidget(a);
+    fetched.length = 0;
+    ctx.window.loadNotes();
+    await flush();
+    assert.strictEqual(fetched.length, 1, 'the removed card no longer fetches');
+});
+
 Promise.all(pending).then(() => {
     const total = pending.length;
     console.log(`\ndashboard real data: ${passed}/${total} checks passed`);

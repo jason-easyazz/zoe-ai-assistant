@@ -89,14 +89,17 @@ class HomeWidget extends WidgetModule {
         }
         if (roomList === null && entList === null) return { kind: 'unavailable' };
         const devices = HomeWidget.switchable(entList || []);
+        // The badge counts EVERY switchable device, not just the eight shown; null = the
+        // device read failed, so "how many are on" is unknown (never a definite "All off").
+        const onCount = entList === null ? null : HomeWidget.switchable(entList, Infinity).filter(d => d.on).length;
         const haDown = entList === null || !!(rooms.data && rooms.data.ha_available === false);
         if (!(roomList || []).length && !devices.length) {
             return haDown ? { kind: 'unavailable' } : { kind: 'empty' };
         }
-        return { kind: 'data', rooms: roomList || [], devices, haDown };
+        return { kind: 'data', rooms: roomList || [], devices, onCount, haDown };
     }
 
-    static switchable(entities) {
+    static switchable(entities, limit = 8) {
         const DOMAINS = ['light', 'switch', 'input_boolean', 'fan'];
         return entities
             .filter(e => e && typeof e.entity_id === 'string' && DOMAINS.includes(e.entity_id.split('.')[0]))
@@ -107,7 +110,7 @@ class HomeWidget extends WidgetModule {
                 on: String(e.state).toLowerCase() === 'on'
             }))
             .sort((a, b) => a.name.localeCompare(b.name))
-            .slice(0, 8);
+            .slice(0, limit);
     }
 
     show(state) {
@@ -125,7 +128,8 @@ class HomeWidget extends WidgetModule {
     static badge(state) {
         if (state.kind === 'loading') return '…';
         if (state.kind === 'data') {
-            const on = state.devices.filter(d => d.on).length;
+            if (state.onCount === null) return 'Unknown';
+            const on = Number.isInteger(state.onCount) ? state.onCount : state.devices.filter(d => d.on).length;
             return on ? on + ' on' : 'All off';
         }
         if (state.kind === 'empty') return '—';

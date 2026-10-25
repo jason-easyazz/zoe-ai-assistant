@@ -207,7 +207,7 @@ async def test_put_layout_keeps_two_cards_of_the_same_type(monkeypatch):
         {"uid": "w2", "type": "weather", "x": 4, "y": 0, "w": 4, "h": 3, "options": {"city": "Perth"}},
     ]
 
-    assert await dashboard.save_layout(_Request({"layout": two_weather}), {"user_id": "u1"}) == {"status": "ok"}
+    assert (await dashboard.save_layout(_Request({"layout": two_weather}), {"user_id": "u1"}))["status"] == "ok"
 
     assert db.layout == two_weather
     assert [w["uid"] for w in db.layout] == ["w1", "w2"]
@@ -294,3 +294,51 @@ async def test_delete_by_uid_removes_one_card_by_type_removes_all(monkeypatch):
 
     await dashboard.remove_widget("notes", {"user_id": "u1"})
     assert [w["uid"] for w in db.layout] == ["w1"]
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_a_legacy_card_by_the_key_get_returned(monkeypatch):
+    """GET and DELETE each normalize the stored row; a legacy card's uid must agree between them."""
+    from contextlib import asynccontextmanager
+
+    legacy = [
+        {"id": "weather", "x": 0, "y": 0, "w": 2, "h": 2},
+        {"id": "weather", "x": 2, "y": 0, "w": 2, "h": 2},
+    ]
+
+    @asynccontextmanager
+    async def fake_ctx():
+        yield _GetDb(legacy)
+
+    monkeypatch.setattr(dashboard, "get_db_ctx", fake_ctx)
+    keys = [w["uid"] for w in (await dashboard.get_layout({"user_id": "u1"}))["layout"]]
+
+    db = _FakeDashboardDb(layout=legacy)
+    _patch_db(monkeypatch, db)
+    await dashboard.remove_widget(keys[1], {"user_id": "u1"})
+
+    assert len(db.layout) == 1, "only the card whose key was deleted goes"
+    assert db.layout[0]["x"] == 0
+
+
+@pytest.mark.asyncio
+async def test_put_layout_with_a_stale_base_version_conflicts_and_returns_the_current_layout(monkeypatch):
+    chat_added = [
+        {"uid": "w1", "type": "weather", "x": 0, "y": 0, "w": 4, "h": 3},
+        {"uid": "c1", "type": "notes", "x": 0, "y": 3, "w": 4, "h": 3},
+    ]
+    db = _FakeDashboardDb(layout=chat_added)
+    _patch_db(monkeypatch, db)
+    version = dashboard._layout_version(chat_added)
+    board = [{"uid": "w1", "type": "weather", "x": 4, "y": 0, "w": 4, "h": 3}]
+
+    with pytest.raises(HTTPException) as exc:
+        await dashboard.save_layout(_Request({"layout": board, "base_version": "stale"}), {"user_id": "u1"})
+    assert exc.value.status_code == 409
+    assert exc.value.detail["version"] == version
+    assert [w["uid"] for w in exc.value.detail["layout"]] == ["w1", "c1"]
+    assert db.layout == chat_added, "a conflicting save writes nothing"
+
+    result = await dashboard.save_layout(_Request({"layout": board, "base_version": version}), {"user_id": "u1"})
+    assert result["version"] == dashboard._layout_version(board)
+    assert db.layout == board

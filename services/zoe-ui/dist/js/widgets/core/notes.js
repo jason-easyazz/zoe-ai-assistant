@@ -77,15 +77,25 @@ class NotesWidget extends WidgetModule {
         });
 
         // Real-time updates: websocket-sync.js opens /api/notes/ws on the page and calls a
-        // global loadNotes() on note_created/updated/deleted. Chain on top of any existing
-        // handler so we don't clobber callers registered before us.
-        const prev = window.loadNotes;
-        window.loadNotes = () => {
-            try { if (typeof prev === 'function' && prev !== window.loadNotes) prev(); } catch (_) {}
-            this.loadNotes();
-        };
+        // global loadNotes() on note_created/updated/deleted. ONE hook is installed per page
+        // (chained on top of any existing handler) and it refreshes the LIVE cards through
+        // WidgetManager, so a removed card is no longer reachable from it and stops fetching.
+        NotesWidget.installGlobalHook();
 
         this.loadNotes();
+    }
+
+    static installGlobalHook() {
+        if (typeof window === 'undefined' || window.__zoeNotesHook) return;
+        const prev = window.loadNotes;
+        const hook = () => {
+            try { if (typeof prev === 'function' && prev !== hook) prev(); } catch (_) {}
+            const live = (typeof WidgetManager !== 'undefined' && typeof WidgetManager.liveOfType === 'function')
+                ? WidgetManager.liveOfType('notes') : [];
+            live.forEach(inst => { if (inst && inst.element && typeof inst.loadNotes === 'function') inst.loadNotes(); });
+        };
+        window.loadNotes = hook;
+        window.__zoeNotesHook = hook;
     }
 
     async loadNotes() {

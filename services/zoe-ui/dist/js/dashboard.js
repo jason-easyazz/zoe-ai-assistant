@@ -44,6 +44,7 @@ const SINGLETON_WIDGET_TYPES = new Set(['zoe-orb', 'journal']);
 // network failure). Distinct from null ("nothing saved yet"): a failure must
 // never be treated as permission to overwrite the server copy.
 const SERVER_LAYOUT_UNREADABLE = Symbol('server-layout-unreadable');
+const SERVER_SAVE_RETRY_MS = 5000;   // a failed layout PUT is retried until the server acknowledges it
 
 /**
  * Get widget configuration from manifest
@@ -508,6 +509,10 @@ class Dashboard {
             localStorage.setItem(this.storageKey, JSON.stringify(layout));
         } catch (_) { /* private mode / quota: the server copy still saves */ }
         console.log('💾 Layout saved:', layout.length, 'widgets');
+        // Not on the server until a PUT is acknowledged: remember that across reloads, so a
+        // failed save or a page left inside the debounce is recovered, not overwritten by the
+        // older server copy.
+        if (this.serverSync && !this._serverSaveBlocked) this._setUnsynced(true);
         this._queueServerSave(layout);
     }
 
@@ -533,20 +538,73 @@ class Dashboard {
         if (!layout) return;
         this._pendingServerLayout = null;
         this._serverSaveInFlight = true;
+        let retryLater = false;
         try {
             const r = await fetch('/api/dashboard/layout/', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
-                body: JSON.stringify({ layout })
+                body: JSON.stringify({ layout, base_version: this._serverVersion || 'none' })
             });
-            if (!r.ok) console.warn('Dashboard layout not saved to the server: HTTP ' + r.status);
+            if (r.ok) {
+                let body = null;
+                try { body = await r.json(); } catch (_) { /* the save still landed */ }
+                this._serverVersion = (body && body.version) || null;
+                this._syncedUids = new Set(layout.map(c => c.uid));
+                if (!this._pendingServerLayout) this._setUnsynced(false);
+            } else if (r.status === 409) {
+                // Chat changed the saved layout since this board read it. Keep this board's
+                // edits and bring in the cards it has not seen, then save again.
+                let conflict = null;
+                try { conflict = (await r.json()).detail; } catch (_) { /* fall through to retry */ }
+                if (conflict && Array.isArray(conflict.layout)) {
+                    this._adoptServerCards(conflict.layout);
+                    this._serverVersion = conflict.version || null;
+                    this._pendingServerLayout = this.currentLayout();
+                } else {
+                    retryLater = true;
+                    if (!this._pendingServerLayout) this._pendingServerLayout = layout;
+                }
+            } else {
+                console.warn('Dashboard layout not saved to the server: HTTP ' + r.status);
+                retryLater = true;
+                if (!this._pendingServerLayout) this._pendingServerLayout = layout;
+            }
         } catch (e) {
             console.warn('Dashboard layout not saved to the server:', e);
+            retryLater = true;
+            if (!this._pendingServerLayout) this._pendingServerLayout = layout;
         } finally {
             this._serverSaveInFlight = false;
-            if (this._pendingServerLayout) this._flushServerSave();
+            if (retryLater) {
+                clearTimeout(this._serverSaveTimer);
+                this._serverSaveTimer = setTimeout(() => this._flushServerSave(), SERVER_SAVE_RETRY_MS);
+            } else if (this._pendingServerLayout) {
+                this._flushServerSave();
+            }
         }
+    }
+
+    // Cards on the server that this board never saw (added by chat) join the board.
+    _adoptServerCards(serverLayout) {
+        const known = this._syncedUids || new Set();
+        serverLayout.forEach(card => {
+            if (!card || known.has(card.uid)) return;
+            const w = this._mountCard(card.type, card, card.options || null, card.uid);
+            if (w) known.add(card.uid);
+        });
+        this._syncedUids = known;
+    }
+
+    _setUnsynced(flag) {
+        try {
+            if (flag) localStorage.setItem(this.storageKey + '_unsynced', '1');
+            else localStorage.removeItem(this.storageKey + '_unsynced');
+        } catch (_) { /* no storage: nothing to remember */ }
+    }
+
+    _isUnsynced() {
+        try { return localStorage.getItem(this.storageKey + '_unsynced') === '1'; } catch (_) { return false; }
     }
 
     async _fetchServerLayout() {
@@ -558,16 +616,17 @@ class Dashboard {
             // null = nothing saved yet (fall back to this browser / the default);
             // [] = the member removed every card, which must stay empty - not be
             // resurrected from localStorage or the default and saved back.
+            this._serverVersion = (data && data.version) || null;
             return (data && Array.isArray(data.layout)) ? data.layout : null;
         } catch (_) {
             return SERVER_LAYOUT_UNREADABLE;
         }
     }
 
-    _readLocalLayout() {
+    _readLocalLayout(allowEmpty = false) {
         try {
             const layout = JSON.parse(localStorage.getItem(this.storageKey) || 'null');
-            return (Array.isArray(layout) && layout.length) ? layout : null;
+            return (Array.isArray(layout) && (layout.length || allowEmpty)) ? layout : null;
         } catch (e) {
             console.error('Failed to read the saved layout:', e);
             return null;
@@ -582,12 +641,19 @@ class Dashboard {
             this._serverSaveBlocked = true;
             fromServer = undefined;
         }
-        const layout = Array.isArray(fromServer) ? fromServer : this._readLocalLayout();
+        // This browser holds edits the server never acknowledged (a failed PUT, or the page
+        // was left inside the debounce): they are newer than the server copy, so recover and
+        // re-save them (the version check still merges anything chat added meanwhile).
+        const unsynced = (this.serverSync && !this._serverSaveBlocked && this._isUnsynced())
+            ? this._readLocalLayout(true) : null;
+        const layout = unsynced || (Array.isArray(fromServer) ? fromServer : this._readLocalLayout());
         if (!layout) {
             this.createDefaultLayout();
             return;
         }
         this.loadFromData(layout);
+        this._syncedUids = new Set(Array.isArray(fromServer) ? fromServer.map(c => c.uid) : []);
+        if (unsynced) { this.saveLayout(); return; }
         // A board saved only in this browser (before Wave 4b) moves to the server
         // once, with uids minted for its cards.
         if (fromServer === null && this.serverSync && !this._serverSaveBlocked) this.saveLayout();

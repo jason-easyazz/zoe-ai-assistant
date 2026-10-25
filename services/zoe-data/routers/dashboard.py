@@ -10,6 +10,7 @@ duplicates. ``POST /widgets/`` (chat's "add weather to my dashboard") stays an E
 command: it adds a type the board does not have yet and never stacks a second copy.
 ``DELETE /widgets/{key}`` removes the card whose uid is ``key``, else every card of type ``key``.
 """
+import hashlib
 import json
 import logging
 import re
@@ -89,11 +90,27 @@ def _entry_type(entry) -> str | None:
     return t if isinstance(t, str) else None
 
 
+def _derived_uid(index: int, wtype: str, taken: set) -> str:
+    """A uid for a stored entry that has none, derived from its position + type so GET and
+    DELETE (which each normalize the same stored row) agree on it. A random one would differ per call."""
+    salt = 0
+    while True:
+        uid = hashlib.sha1(f"{index}:{wtype}:{salt}".encode()).hexdigest()[:16]
+        if uid not in taken:
+            return uid
+        salt += 1
+
+
+def _layout_version(entries: list[dict]) -> str:
+    """Content version of a normalized layout, for the PUT's optimistic-concurrency check."""
+    return hashlib.sha1(json.dumps(entries, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def _normalize_entries(entries) -> list[dict]:
     """Stored entries as instances: every one carries ``uid`` + ``type`` (legacy ``{id}`` too)."""
     out = []
     seen = set()
-    for entry in entries or []:
+    for index, entry in enumerate(entries or []):
         wtype = _entry_type(entry)
         if not wtype:
             continue
@@ -102,7 +119,7 @@ def _normalize_entries(entries) -> list[dict]:
         item.pop("id", None)
         uid = item.get("uid")
         if not isinstance(uid, str) or not _UID_RE.match(uid) or uid in seen:
-            uid = _new_uid()
+            uid = _derived_uid(index, wtype, seen)
         item["uid"] = uid
         seen.add(uid)
         out.append(item)
@@ -173,8 +190,9 @@ async def get_layout(user: dict = Depends(get_current_user)):
     async with get_db_ctx() as db:
         row = await _fetchone_layout_row(db, user_id)
         if row:
-            return {"layout": _normalize_entries(_decode_layout(row["layout"])), "updated_at": row["updated_at"]}
-        return {"layout": None, "updated_at": None}
+            entries = _normalize_entries(_decode_layout(row["layout"]))
+            return {"layout": entries, "updated_at": row["updated_at"], "version": _layout_version(entries)}
+        return {"layout": None, "updated_at": None, "version": None}
 
 
 @router.put("/layout/")
@@ -183,11 +201,25 @@ async def save_layout(request: Request, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
-    layout = json.dumps(_validated_layout(body))
+    clean = _validated_layout(body)
+    layout = json.dumps(clean)
+    base_version = body.get("base_version")
+    if base_version is not None and not isinstance(base_version, str):
+        raise HTTPException(status_code=400, detail="base_version must be a string")
     async for db in get_db():
         async with db.transaction():
             await _ensure_layout_row(db, user_id)
-            await _fetchone_layout_for_update(db, user_id)
+            row = await _fetchone_layout_for_update(db, user_id)
+            # The board only reads the layout when it loads, but chat can change it through
+            # POST/DELETE /widgets/. A save made on a stale copy would erase those edits, so a
+            # client that sends the version it read gets a 409 + the current layout to reconcile.
+            if base_version is not None and row is not None:
+                current = _normalize_entries(_decode_layout(row["layout"]))
+                if current and _layout_version(current) != base_version:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"error": "layout_changed", "layout": current, "version": _layout_version(current)},
+                    )
             await db.execute(
                 "UPDATE dashboard_layouts "
                 "SET layout = $1::jsonb, updated_at = CURRENT_TIMESTAMP "
@@ -195,7 +227,7 @@ async def save_layout(request: Request, user: dict = Depends(get_current_user)):
                 layout,
                 user_id,
             )
-    return {"status": "ok"}
+    return {"status": "ok", "version": _layout_version(clean)}
 
 
 @router.post("/widgets/")
