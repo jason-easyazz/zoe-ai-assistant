@@ -1351,9 +1351,14 @@ def scratch_stack_for(service_dir: Path, name: str, ctx: dict, log) -> tuple[Any
     head) and a harness zoe-data + Flue pair on it (``harness_scratch.py``) - never to the live database. The quiet-hours guard is
     asked FIRST, so nothing starts in waking hours. On success ``DATA_BASE`` points at the scratch zoe-data and the stack is in
     ``ctx`` for ``close_scratch``. Returns (stack, None) or (None, the refusal)."""
+    if in_nightly_window(dt.datetime.now()):                  # every refusal BEFORE anything starts (Postgres, zoe-data, a brain warm-up)
+        return None, "inside (or within 30 min of) the 01:45-03:15 nightly window"
     quiet = harness_quiet_refusal(name)
     if quiet:
         return None, quiet
+    busy, detail = deploy_in_progress()
+    if busy is None or busy:
+        return None, f"deploy check: {detail}"
     hs = _harness_scratch()
     tag = re.sub(r"[^a-z0-9-]", "-", f"{name[:18]}-{os.getpid()}".lower())
     stack = hs.ScratchStack(service_dir, serve=True, tag=tag, log=log)

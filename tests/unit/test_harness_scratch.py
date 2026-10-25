@@ -270,6 +270,8 @@ def bar(monkeypatch, tmp_path):
 
     (tmp_path / ".env").write_text("POSTGRES_URL=" + LIVE + "\n")
     monkeypatch.setattr(sb, "DATA_BASE", "http://127.0.0.1:8000")
+    monkeypatch.setattr(sb, "in_nightly_window", lambda now: False)          # scratch_stack_for gates on these before it starts anything
+    monkeypatch.setattr(sb, "deploy_in_progress", lambda: (False, "0"))
     return sb, tmp_path
 
 
@@ -423,3 +425,66 @@ def test_a_real_scratch_postgres_migrates_runs_the_queue_and_goes():
     finally:
         assert hs.down(tag)
     assert hs.load_state(tag) is None
+
+
+def test_the_scratch_instance_does_not_wait_for_the_black_holed_voice_services():
+    """/readyz fails in kokoro mode when the (black-holed) Kokoro sidecar is unreachable, so all three text harnesses would time out.
+    Negative control: drop ZOE_TTS_MODE from harness_env -> red."""
+    env = hs.harness_env({**LIVE_ENV, "ZOE_TTS_MODE": "kokoro"}, root=Path("/tmp/x"), dsn="postgresql://s", token="t", brain_token="b",
+                         flue_url="http://127.0.0.1:1", self_url="http://127.0.0.1:2")
+    assert env["ZOE_TTS_MODE"] == "offline"
+
+
+def test_the_scratch_brain_listens_on_loopback_and_is_never_open():
+    """A copied ZOE_BRAIN_OPEN=1 drops the bearer gate and Flue binds every interface by default.
+    Negative control: drop the two settings from flue_env -> red."""
+    f = hs.flue_env({"ZOE_BRAIN_OPEN": "1", "ZOE_LISTEN_HOST": "0.0.0.0"}, root=Path("/tmp/x"), port=1, data_url="http://127.0.0.1:2",
+                    token="t", brain_token="b")
+    assert f["ZOE_BRAIN_OPEN"] == "0" and f["ZOE_LISTEN_HOST"] == "127.0.0.1"
+    assert f["NODE_OPTIONS"] == "--import=" + str(REPO / "scripts" / "lib" / "node_listen_host.mjs")
+
+
+def test_the_scratch_stack_runs_this_checkouts_code_not_the_settings_dirs(tmp_path, monkeypatch):
+    """The settings dir may be the MAIN checkout (a worktree has no .env); the migrations, zoe-data and Flue it runs are the candidate's.
+    Negative control: spawn with cwd=service_dir again -> red."""
+    settings = tmp_path / "main" / "services" / "zoe-data"
+    settings.mkdir(parents=True)
+    code = tmp_path / "wt" / "services" / "zoe-data"
+    (tmp_path / "wt" / "labs" / "flue-zoe-brain-2x" / "dist").mkdir(parents=True)
+    (tmp_path / "wt" / "labs" / "flue-zoe-brain-2x" / "dist" / "server.mjs").write_text("")
+    code.mkdir(parents=True)
+    spawned = []
+    monkeypatch.setattr(hs.shutil, "which", lambda *a, **k: "/usr/bin/node")
+    monkeypatch.setattr(hs, "parse_env_file", lambda p: {})
+    monkeypatch.setattr(hs, "flue_env", lambda *a, **k: {})
+    monkeypatch.setattr(hs, "harness_env", lambda *a, **k: {"POSTGRES_URL": "postgresql://scratch"})
+    monkeypatch.setattr(hs, "assert_not_live", lambda *a, **k: None)
+    monkeypatch.setattr(hs, "_write_state", lambda st: None)
+    monkeypatch.setattr(hs, "_wait", lambda *a, **k: None)
+    monkeypatch.setattr(hs, "free_port", iter(range(5001, 5010)).__next__)
+    monkeypatch.setattr(hs, "_spawn", lambda cmd, **kw: spawned.append((cmd, kw["cwd"])) or {"pid": 1, "start": 1, "cmd": []})
+    root = tmp_path / "root"
+    root.mkdir()
+    hs._serve({"tag": "t", "root": str(root), "dsn": "postgresql://scratch", "procs": {}}, service_dir=settings, live_env={},
+              python="python3", log=lambda *_: None, code_dir=code)
+    assert [cwd for _c, cwd in spawned] == [code.parent.parent / "labs" / "flue-zoe-brain-2x", code]
+    assert 'code_dir = REPO / "services" / "zoe-data"' in Path(hs.__file__).read_text()
+
+
+def test_a_refused_run_starts_nothing_in_the_nightly_window_or_during_a_deploy(bar, monkeypatch):
+    """Every gate runs BEFORE Postgres/zoe-data/the brain warm-up start. Negative control: drop either check from scratch_stack_for -> red."""
+    sb, svc = bar
+    fake = _FakeHS()
+    monkeypatch.setattr(sb, "_harness_scratch", lambda: fake)
+    monkeypatch.setattr(sb, "harness_quiet_refusal", lambda name=None: None)
+    monkeypatch.setattr(sb, "in_nightly_window", lambda now: True)
+    monkeypatch.setattr(sb, "deploy_in_progress", lambda: (False, "0"))
+    stack, refusal = sb.scratch_stack_for(svc, "samantha_day_sim", {}, print)
+    assert stack is None and "nightly window" in refusal and fake.started == []
+    monkeypatch.setattr(sb, "in_nightly_window", lambda now: False)
+    monkeypatch.setattr(sb, "deploy_in_progress", lambda: (True, "1 run"))
+    stack, refusal = sb.scratch_stack_for(svc, "samantha_person", {}, print)
+    assert stack is None and "deploy check" in refusal and fake.started == []
+    monkeypatch.setattr(sb, "deploy_in_progress", lambda: (None, "gh unavailable"))
+    stack, refusal = sb.scratch_stack_for(svc, "samantha_person", {}, print)
+    assert stack is None and "deploy check" in refusal and fake.started == []

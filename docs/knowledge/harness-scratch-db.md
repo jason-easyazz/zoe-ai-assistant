@@ -57,7 +57,7 @@ cells need a zoe-data on the scratch database anyway.
 ## The order inside a harness
 
 The quiet-hours guard (#2145) runs FIRST (`scratch_stack_for` asks it before anything starts: nothing comes up in waking hours or
-with the panel in use), then the stack, then the harness own gates (readyz on the scratch instance, the forget path, memory headroom),
+with the panel in use; the nightly-window and deploy checks sit beside it, so a refused run starts nothing), then the stack, then the harness own gates (readyz on the scratch instance, the forget path, memory headroom),
 then the run. `DATA_BASE` is the scratch zoe-data for the whole run; the live client is built from `stack.token` / `stack.dsn`; the
 live `POSTGRES_URL` is read in one place only, to refuse a stack that reaches the live server (`assert_not_live`: the live host and
 port - any database on it - or 5432 on this box). Results carry `scratch` (tag, ports, RAM; never the DSN or a token).
@@ -83,3 +83,7 @@ port - any database on it - or 5432 on this box). Results carry `scratch` (tag, 
    (the household is asleep in the quiet hours; the stack itself is capped).
 3. The 50 harness users the live database still holds from before (P-2 purge, `purge_harness_users.sql`, dry run first) are
    unchanged by this.
+
+The scratch instance runs THIS checkout's code (migrations, zoe-data, the Flue build) - the settings dir (possibly the main checkout) is only
+read for flags. It sets `ZOE_TTS_MODE=offline` so `/readyz` does not wait on the black-holed Kokoro sidecar, and its Flue is loopback-only
+with `ZOE_BRAIN_OPEN=0`.

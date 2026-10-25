@@ -645,6 +645,7 @@ async def run_measure_phase() -> dict:
             """SELECT id, type, title, target_patterns, deployed_at
                FROM evolution_proposals
                WHERE status='applied'
+                 AND COALESCE(source, '') <> 'struggle'   -- struggle proposals carry no target_patterns: not this evaluator's
                  AND validation_result IS NULL
                  AND deployed_at IS NOT NULL
                  AND deployed_at < $1""",

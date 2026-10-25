@@ -267,7 +267,7 @@ async def transition(db, pid: str, to: str, *, actor: str, frm: Optional[str] = 
     sets = ["status = ?", "updated_at = ?"]
     params: list = [to, t]
     if to == "applied":
-        sets.append("deployed_at = ?")
+        sets += ["deployed_at = ?", "validation_result = NULL"]     # every deploy is measured afresh (a retry keeps no old verdict)
         params.append(t)
     if to == "rejected":
         sets += ["reviewed_at = ?", "decided_by = ?"]

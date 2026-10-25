@@ -577,3 +577,38 @@ def test_a_move_and_its_history_are_one_transaction():
     with pytest.raises(RuntimeError):
         run(eq.decide(_Db(), "p1", "approved", actor="a"))
     assert log == ["begin", "update", "history", "rollback"]
+
+
+def test_a_retry_that_is_deployed_again_is_measured_again(db):
+    """A measured failure leaves a validation_result; the retry's next deploy must clear it, else run_measure_phase (which selects
+    ``validation_result IS NULL``) never measures the second attempt. Negative control: drop the reset in transition() -> red."""
+    pid = new(db)
+    run(eq.decide(db, pid, "approved", actor="admin-1"))
+    walk(db, pid, ["applied"])
+    db.conn.execute("UPDATE evolution_proposals SET validation_result = ? WHERE id = ?", ('{"verdict": "failed"}', pid))
+    db.conn.commit()
+    walk(db, pid, ["reverted", "proposed"])
+    run(eq.decide(db, pid, "approved", actor="admin-1"))
+    walk(db, pid, ["applied"])
+    row = db.rows("SELECT status, validation_result FROM evolution_proposals WHERE id = ?", (pid,))[0]
+    assert row == {"status": "applied", "validation_result": None}
+
+
+def test_the_legacy_miss_rate_evaluator_leaves_struggle_proposals_alone(db, monkeypatch):
+    """A struggle proposal has no target_patterns; the no-pattern branch would auto-'keep' it with zero misses, reporting an
+    unmeasured change as validated. Negative control: drop the source filter in run_measure_phase -> red."""
+    import evolution_notice
+    monkeypatch.setitem(sys.modules, "multica_client", types.SimpleNamespace(
+        update_multica_issue_on_proposal_status_change=lambda *a, **k: None))
+    ids = {}
+    for src in ("struggle", "evolution_notice:intent_miss_cluster"):
+        pid = new(db, source=src)
+        run(eq.decide(db, pid, "approved", actor="admin-1"))
+        walk(db, pid, ["applied"])
+        ids[src] = pid
+    db.conn.execute("UPDATE evolution_proposals SET deployed_at = 1000.0")
+    db.conn.commit()
+    got = run(evolution_notice.run_measure_phase())
+    assert got["evaluated"] == 1
+    assert status_of(db, ids["struggle"])["status"] == "applied"
+    assert status_of(db, ids["evolution_notice:intent_miss_cluster"])["status"] == "kept"

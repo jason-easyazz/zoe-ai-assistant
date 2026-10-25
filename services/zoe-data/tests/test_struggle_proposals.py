@@ -1120,3 +1120,58 @@ def test_a_queue_row_left_without_its_detail_is_pruned(env):
     assert [r["id"] for r in queue_of(env)] == [pid]
     run(sp.run_pass(now=NOW))
     assert pid not in [r["id"] for r in queue_of(env)] and len(rows_of(env)) == 1      # the orphan is gone, the pattern re-proposed
+
+
+def test_accepting_writes_the_verdict_and_its_follow_up_in_one_transaction(env, monkeypatch):
+    """If the follow-up write fails the approval must roll back with it, else the proposal is accepted with an empty follow-up and
+    every retry is refused as already decided. Negative control: move the follow-up UPDATE out of the eq._atomic block -> red."""
+    pid = seed_router_proposal(env)
+    inner = env.db.conn
+    state = {"depth": 0}
+
+    class _Conn:
+        def __getattr__(self, name):
+            return getattr(inner, name)
+
+        def execute(self, sql, params=()):
+            if sql.startswith("UPDATE struggle_proposals SET followup"):
+                raise RuntimeError("the follow-up write failed")
+            return inner.execute(sql, params)
+
+        def commit(self):
+            if state["depth"] == 0:
+                inner.commit()
+
+    @contextlib.asynccontextmanager
+    async def _tx():
+        state["depth"] += 1
+        try:
+            yield
+        except BaseException:
+            inner.rollback()
+            state["depth"] -= 1
+            raise
+        state["depth"] -= 1
+        if state["depth"] == 0:
+            inner.commit()
+
+    class _Tx:
+        def transaction(self):
+            return _tx()
+
+        def __getattr__(self, name):
+            return getattr(env.db, name)
+
+    env.db.conn = _Conn()
+    wrapped = _Tx()
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield wrapped
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    with pytest.raises(RuntimeError):
+        run(sp.decide(pid, "accept", "admin-1"))
+    env.db.conn = inner
+    row = env.db.rows("SELECT decision FROM evolution_proposals WHERE id = ?", (pid,))[0]
+    assert row["decision"] == "", "the approval rolled back with the failed follow-up"

@@ -737,14 +737,15 @@ async def decide(pid: str, action: str, by: str, reason: str = "") -> dict:
         pub = public(row, live[pid])
         followup = build_followup(pub, now) if action == "accept" else {}
         try:
-            if action == "accept":       # a person verdict on an OPEN queue row: the status stays open, accepting applies nothing
-                await eq.decide(db, pid, "approved", actor=str(by or "")[:80], note=reason or "", guard={"decision": ""}, now=now)
-            else:
-                await eq.transition(db, pid, "rejected", actor=str(by or "")[:80], note=reason or "", require_decision="", now=now)
+            async with eq._atomic(db):   # ONE transaction: the verdict and its follow-up land together or not at all
+                if action == "accept":   # a person verdict on an OPEN queue row: the status stays open, accepting applies nothing
+                    await eq.decide(db, pid, "approved", actor=str(by or "")[:80], note=reason or "", guard={"decision": ""}, now=now)
+                else:
+                    await eq.transition(db, pid, "rejected", actor=str(by or "")[:80], note=reason or "", require_decision="", now=now)
+                await db.execute("UPDATE struggle_proposals SET followup = ?, updated_at = ? WHERE id = ?",
+                                 (json.dumps(followup, sort_keys=True), now, pid))
         except (eq.Conflict, eq.IllegalTransition) as exc:
             raise Conflict("already decided") from exc
-        await db.execute("UPDATE struggle_proposals SET followup = ?, updated_at = ? WHERE id = ?",
-                         (json.dumps(followup, sort_keys=True), now, pid))
         await db.commit()
     return await get_proposal(pid)
 

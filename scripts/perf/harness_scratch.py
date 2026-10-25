@@ -165,6 +165,9 @@ def harness_env(live_env: dict, *, root: Path, dsn: str, token: str, brain_token
         ZOE_ROUTER_RETRAIN_DIR=str(root / "router_retrain"), ZOE_VOICE_SAMPLE_DIR=str(root / "voice-samples"),
         ZOE_VOICE_SAVE_AUDIO="0", ZOE_MULTICA="false", ZOE_HARNESS="1", ZOE_HARNESS_INSTANCE="1", ZOE_PI_HOST="invalid.",
         JETSON_AGENT_MODE="true", MALLOC_ARENA_MAX="2",
+        # the text harnesses never speak, and the live Kokoro sidecar is a house endpoint (black-holed): "offline" makes /readyz's
+        # TTS check pass without contacting anything, so readiness reflects what the harness uses (the brain, the DB, the memory store)
+        ZOE_TTS_MODE="offline",
         # no egress: every outbound HTTP(S) client that honours the proxy variables is sent to the black hole; loopback stays
         # direct (the brain, the router, the scratch Flue and Postgres). A model the instance would DOWNLOAD (the STT model, for
         # one: MOONSHINE_VOICE_CACHE is empty, so STT stays cold and costs no RAM) fails instead.
@@ -189,7 +192,11 @@ def flue_env(flue_live_env: dict, *, root: Path, port: int, data_url: str, token
     if flue_live_env.get("ZOE_BRAIN_BASE_URL"):
         env["ZOE_BRAIN_BASE_URL"] = flue_live_env["ZOE_BRAIN_BASE_URL"]       # the llama-server: shared compute
     env.update(PORT=str(port), ZOE_DATA_URL=data_url, ZOE_INTERNAL_TOKEN=token, ZOE_BRAIN_TOKEN=brain_token,
-               ZOE_BRAIN_DB=str(root / "flue" / "zoe-brain.db"))
+               ZOE_BRAIN_DB=str(root / "flue" / "zoe-brain.db"),
+               # loopback only (Flue's generated entry binds every interface) and NEVER open: a copied ZOE_BRAIN_OPEN=1 would
+               # drop the bearer gate, so a LAN caller could drive the scratch brain
+               ZOE_LISTEN_HOST="127.0.0.1", ZOE_BRAIN_OPEN="0",
+               NODE_OPTIONS="--import=" + str(REPO / "scripts" / "lib" / "node_listen_host.mjs"))
     return env
 
 
@@ -376,7 +383,8 @@ def up(tag: str, *, service_dir: Path, serve: bool = False, python: Optional[str
     if load_state(tag):
         raise Refused(f"scratch stack {tag} is already up (run down first)")
     service_dir = Path(service_dir).resolve()
-    live_env = service_env(service_dir)
+    live_env = service_env(service_dir)                      # LIVE settings come from service_dir (may be the main checkout)
+    code_dir = REPO / "services" / "zoe-data"                # the CODE under test is always THIS checkout, never the settings dir
     image = live_image()
     name = f"{PREFIX}-{tag}"
     root = STATE_DIR / tag
@@ -408,13 +416,13 @@ def up(tag: str, *, service_dir: Path, serve: bool = False, python: Optional[str
                            timeout=10, check=False).returncode == 0, 90, "scratch postgres")
         py = _service_python(python)
         t0 = time.monotonic()
-        _run([py, "-m", "alembic", "upgrade", "head"], timeout=900, cwd=service_dir,
+        _run([py, "-m", "alembic", "upgrade", "head"], timeout=900, cwd=code_dir,
              env=dict(PATH="/usr/local/bin:/usr/bin:/bin", HOME=str(Path.home()), LANG="C.UTF-8", POSTGRES_URL=dsn))
         apply_auth_ddl(name)
         state["migrate_s"] = round(time.monotonic() - t0, 1)
         log(f"scratch postgres {name} on 127.0.0.1:{port} migrated to head (+ auth DDL) in {state['migrate_s']} s")
         if serve:
-            _serve(state, service_dir=service_dir, live_env=live_env, python=py, log=log)
+            _serve(state, service_dir=service_dir, live_env=live_env, python=py, log=log, code_dir=code_dir)
         state["ram"] = measure(state)
         _write_state(state)
         return state
@@ -423,23 +431,27 @@ def up(tag: str, *, service_dir: Path, serve: bool = False, python: Optional[str
         raise
 
 
-def _serve(state: dict, *, service_dir: Path, live_env: dict, python: str, log=print) -> None:
+def _serve(state: dict, *, service_dir: Path, live_env: dict, python: str, log=print, code_dir: Optional[Path] = None) -> None:
+    """``service_dir`` is where the LIVE settings are read; ``code_dir`` (default: the same) is the checkout whose code runs."""
+    code_dir = Path(code_dir if code_dir is not None else service_dir)
     root = Path(state["root"])
     token, brain_token = secrets.token_hex(24), secrets.token_hex(24)
     zport, fport = free_port(), free_port()
     self_url, flue_url = f"http://127.0.0.1:{zport}", f"http://127.0.0.1:{fport}"
-    flue_dir = Path(service_dir).resolve().parents[1] / "labs" / "flue-zoe-brain-2x"
+    flue_dir = code_dir.resolve().parents[1] / "labs" / "flue-zoe-brain-2x"
+    flue_settings_dir = Path(service_dir).resolve().parents[1] / "labs" / "flue-zoe-brain-2x"
     node = shutil.which("node", path=str(Path.home() / ".nvm" / "current" / "bin")) or shutil.which("node")
     if not node or not (flue_dir / "dist" / "server.mjs").is_file():
-        raise Refused("the Flue sidecar build (labs/flue-zoe-brain-2x/dist) or node is missing")
-    fenv = flue_env(parse_env_file(flue_dir / ".env"), root=root, port=fport, data_url=self_url, token=token, brain_token=brain_token)
+        raise Refused(f"the Flue sidecar build ({flue_dir}/dist) or node is missing - build it in THIS checkout "
+                      "(the scratch stack runs this checkout's code, never the main checkout's)")
+    fenv = flue_env(parse_env_file(flue_settings_dir / ".env"), root=root, port=fport, data_url=self_url, token=token, brain_token=brain_token)
     state["procs"]["flue"] = _spawn([node, "dist/server.mjs"], env=fenv, cwd=flue_dir, log=root / "logs" / "flue.log")
     _write_state(state)                        # persist per spawn: if the next spawn fails, down() must still find (and stop) this one
     zenv = harness_env(live_env, root=root, dsn=state["dsn"], token=token, brain_token=brain_token, flue_url=flue_url,
                        self_url=self_url)
     assert_not_live(zenv["POSTGRES_URL"], live_env.get("POSTGRES_URL"))
     state["procs"]["zoe_data"] = _spawn([python, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(zport)],
-                                        env=zenv, cwd=Path(service_dir), log=root / "logs" / "zoe-data.log")
+                                        env=zenv, cwd=code_dir, log=root / "logs" / "zoe-data.log")
     _write_state(state)
     state.update(base_url=self_url, flue_url=flue_url, token=token, brain_token=brain_token, zoe_data_port=zport, flue_port=fport)
     _write_state(state)
