@@ -223,15 +223,23 @@ def _shadow_file_lock(path: str):
         fh.close()
 
 
-def _append_shadow_line(path: str, line: str) -> bool:
+def _append_shadow_line(path: str, line: str, epoch: Optional[int] = None) -> bool:
     """Rotate-if-needed then append one JSON line, under the shadow write lock (in-process) and the file lock (cross-process).
-    Never waits on retention: returns ``False`` (and counts the skip) when either lock is held, ``True`` once the line is written."""
+    Never waits on retention: returns ``False`` (and counts the skip) when either lock is held, ``True`` once the line is written.
+    ``epoch``: the ``local_text_logs.erase_epoch()`` captured BEFORE the observation was computed; if an erase ran since, the line
+    may carry forgotten words and is dropped (checked inside the lock, so an erase cannot finish between check and write)."""
     global shadow_append_skipped
     if not _shadow_write_lock.acquire(timeout=_SHADOW_APPEND_WAIT_S):
         shadow_append_skipped += 1
         shadow_logger.debug("shadow append skipped: write lock busy (retention pass)")
         return False
     try:
+        if epoch is not None:
+            import local_text_logs
+
+            if local_text_logs.erase_epoch() != epoch:
+                shadow_logger.debug("shadow append dropped: an erase ran while it was computing")
+                return False
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with _shadow_file_lock(path) as got:
             if not got:
@@ -516,7 +524,7 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
         logger.warning("router head shadow failed (non-fatal): %s", exc)
 
 
-def _log_two_stage(rec: dict) -> None:
+def _log_two_stage(rec: dict, epoch: Optional[int] = None) -> None:
     """Append a structured two-stage line to the shadow log.
 
     The INFO log line is ALWAYS hash-only (privacy: journald never sees the
@@ -526,7 +534,7 @@ def _log_two_stage(rec: dict) -> None:
     try:
         line_rec = {k: v for k, v in rec.items() if k != "utt_text"}
         shadow_logger.info("router_two_stage %s", json.dumps(line_rec, sort_keys=True))
-        _append_shadow_line(_HEAD_LOG_PATH, json.dumps(rec, sort_keys=True))
+        _append_shadow_line(_HEAD_LOG_PATH, json.dumps(rec, sort_keys=True), epoch)
     except Exception as exc:
         shadow_logger.debug("two_stage log append failed: %s", exc)
 
@@ -571,12 +579,19 @@ def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
 def _two_stage_shadow2(text: str, v: np.ndarray, routed: str) -> None:
     """shadow2: compute+log the full two-stage decision OFF the turn's
     critical path (the sidecar call is ~400 ms — never block a live turn)."""
+    try:
+        import local_text_logs
+
+        epoch: Optional[int] = local_text_logs.erase_epoch()      # BEFORE compute: an erase finishing mid-compute drops the append
+    except Exception:  # noqa: BLE001
+        epoch = None
+
     def _run():
         try:
             import router_two_stage
 
             decision = router_two_stage.decide(text, v)
-            _log_two_stage(_two_stage_rec(text, decision, "shadow2", routed))
+            _log_two_stage(_two_stage_rec(text, decision, "shadow2", routed), epoch)
         except Exception as exc:  # shadow must never break anything
             logger.warning("two_stage shadow2 failed (non-fatal): %s", exc)
     # copy_context: the thread must see the turn's traffic class (a bare Thread starts from an empty context)

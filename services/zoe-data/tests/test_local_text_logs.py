@@ -237,3 +237,52 @@ async def test_delete_user_clears_the_text_layer_and_fails_closed(shadow, monkey
     monkeypatch.setattr(ltl, "erase_all_text", boom)
     with pytest.raises(MemoryServiceError, match="local text-log erasure failed"):
         await svc.delete_user("jason", actor="admin")
+
+
+# --- shadow2 worker racing an erase (the pre-forget utterance must not land after the erase) --------------------------------
+
+def _shadow2_world(shadow, monkeypatch, decide):
+    import sys
+    import types
+
+    import semantic_router as sr
+
+    monkeypatch.setattr(sr, "_HEAD_LOG_PATH", str(shadow))
+    monkeypatch.setattr(sr, "_with_text", lambda r, t: {**r, "utt_text": t})
+    monkeypatch.setitem(sys.modules, "router_two_stage", types.SimpleNamespace(decide=decide))
+    return sr
+
+
+def _run_shadow2(sr, text):
+    import threading as th
+
+    before = {t.ident for t in th.enumerate()}
+    sr._two_stage_shadow2(text, None, "chat")
+    return [t for t in th.enumerate() if t.ident not in before and t.name == "router-shadow2"]
+
+
+def test_shadow2_observation_computed_across_an_erase_is_dropped(shadow, monkeypatch):
+    import re
+    import threading as th
+
+    started, release = th.Event(), th.Event()
+
+    def decide(text, v):
+        started.set()
+        assert release.wait(10)
+        return {"domain": "chat"}
+
+    sr = _shadow2_world(shadow, monkeypatch, decide)
+    (worker,) = _run_shadow2(sr, "remind me to call Marisol tomorrow")
+    assert started.wait(10)
+    ltl.erase_entity(re.compile(r"\bMarisol\b"))              # the erase finishes while the prediction is still pending
+    release.set()
+    worker.join(10)
+    assert not shadow.exists() or "Marisol" not in shadow.read_text()
+
+
+def test_shadow2_normal_observation_still_appends(shadow, monkeypatch):
+    sr = _shadow2_world(shadow, monkeypatch, lambda t, v: {"domain": "chat"})
+    (worker,) = _run_shadow2(sr, "what time is it")
+    worker.join(10)
+    assert [r.get("utt_text") for r in load(shadow)] == ["what time is it"]

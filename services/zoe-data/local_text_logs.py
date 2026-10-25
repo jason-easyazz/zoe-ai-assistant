@@ -426,15 +426,40 @@ def sweep(now: Optional[float] = None) -> dict[str, int]:
     return out
 
 
+_ERASE_EPOCH = 0
+_EPOCH_LOCK = threading.Lock()
+
+
+def erase_epoch() -> int:
+    """Generation counter bumped at the START and END of every erase. A writer that computes an observation off the append path
+    (the shadow2 worker) captures this BEFORE computing and drops its append if it moved: the utterance may have predated a forget
+    that finished while it was computing."""
+    return _ERASE_EPOCH
+
+
+def _bump_epoch() -> None:
+    global _ERASE_EPOCH
+    with _EPOCH_LOCK:
+        _ERASE_EPOCH += 1
+
+
 def erase_entity(rx: Any) -> int:
     """Drop every record whose text matches ``rx`` (a ``re.Pattern`` or ``memory_forgotten.LedgerPattern``). RAISES on an I/O
     failure so the cascade records the step as failed (a forget that left words behind must not read as done)."""
-    return sum(_apply(log, match=rx) for log in LOGS)
+    _bump_epoch()
+    try:
+        return sum(_apply(log, match=rx) for log in LOGS)
+    finally:
+        _bump_epoch()
 
 
 def erase_all_text() -> int:
     """Member erase: the logs cannot be attributed to one member, so clear the text layer of every record. RAISES on failure."""
-    return sum(_apply(log, everything=True) for log in LOGS)
+    _bump_epoch()
+    try:
+        return sum(_apply(log, everything=True) for log in LOGS)
+    finally:
+        _bump_epoch()
 
 
 def count_malformed(log: TextLog) -> int:
