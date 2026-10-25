@@ -1205,8 +1205,9 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
         main_payload.update(non_pass_streak=m_streak, non_pass_alert=m_streak >= alert_after)
         try:
             write_json(main_path, main_payload)
-        except OSError:
-            pass
+        except OSError as exc:
+            # not silent: an unwritable main record leaves `report` showing the OLD nightly verdict
+            print(f"voice-gate: could not write the main-lane record {main_path}: {exc}", file=sys.stderr)
     try:
         args.trend.parent.mkdir(parents=True, exist_ok=True)
         with open(args.trend, "a") as fh:
@@ -1214,39 +1215,6 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
     except OSError:
         pass
     return payload
-
-
-def main_lane_path(results: Path) -> Path:
-    """The per-lane 'last main run' record, a sibling of the shared results file.
-
-    The shared file (`voice_regression_last.json`) is overwritten by EVERY run:
-    the 04:30 nightly on main and each PR-landing probe. A PR run therefore hid a
-    failed nightly (10-21: ground truth said "pass" while main's nightly failed).
-    The deploy gate and replay-evidence keep reading the shared file unchanged;
-    this sibling holds only main's runs, so the nightly verdict is never masked."""
-    results = Path(results)
-    return results.with_name(results.stem + "_main" + results.suffix)
-
-
-def is_main_lane_run(payload: dict[str, Any]) -> bool:
-    """True when the run exercised the LIVE checkout (not a PR/agent worktree).
-
-    Discriminator: recorded `revision.service_dir` resolves to the live checkout
-    (ZOE_VOICE_MAIN_CHECKOUT, default ~/assistant) - the nightly unit runs there,
-    PR landings run under ~/.worktrees/voice-probe-<pr>. Self-tests and runs with
-    no recorded revision are never main. Dirtiness is not required: the live
-    checkout routinely carries untracked cruft and is still main."""
-    if payload.get("self_test"):
-        return False
-    rev = payload.get("revision")
-    sd = rev.get("service_dir") if isinstance(rev, dict) else None
-    if not sd:
-        return False
-    live = os.environ.get("ZOE_VOICE_MAIN_CHECKOUT") or str(Path.home() / "assistant")
-    try:
-        return Path(sd).resolve() == Path(live).resolve()
-    except OSError:
-        return False
 
 
 def main_lane_path(results: Path) -> Path:

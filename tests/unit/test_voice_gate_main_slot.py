@@ -177,3 +177,48 @@ def test_real_shape_service_dirs(tmp_path, live):
             _rec(pr, "pass", "2026-10-25T22:00:00Z")]) + "\n")
     out = vgr.report(tmp_path, str(live))
     assert out[0] == "voice gate (nightly main, 2026-10-25T20:30:00Z, from trend): fail - speed"
+
+
+def test_unwritable_main_record_is_logged_not_silent(tmp_path, live, monkeypatch, capsys):
+    """Greptile: a failed main-lane write used to be swallowed, so `report` kept showing the OLD nightly verdict."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    args = _Args(cache, live)
+    main_path = vrp.main_lane_path(args.results)
+    real = vrp.write_json
+
+    def flaky(path, payload):
+        if Path(path) == main_path:
+            raise OSError("read-only")
+        return real(path, payload)
+
+    monkeypatch.setattr(vrp, "write_json", flaky)
+    _emit(args, "fail")
+    err = capsys.readouterr().err
+    assert str(main_path) in err and "read-only" in err
+    assert json.loads(args.results.read_text())["status"] == "fail"    # the shared file still lands
+
+
+def test_pr_result_survives_a_later_nightly_via_trend(tmp_path, live):
+    """Greptile: shared file holds a MAIN run, the newest PR result lives only in the trend -> still reported."""
+    (tmp_path / "voice_regression_trend.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in [
+            _rec(tmp_path / "wt", "pass", "2026-10-21T01:00:00Z"),
+            _rec(live, "fail", "2026-10-21T04:32:00Z", "speed"),
+        ]) + "\n")
+    (tmp_path / "voice_regression_last.json").write_text(json.dumps(_rec(live, "fail", "2026-10-21T04:32:00Z", "speed")))
+    out = vgr.report(tmp_path, str(live))
+    assert len(out) == 2 and "latest PR probe" in out[1] and "from trend" in out[1]
+
+
+def test_trend_read_is_bounded_but_finds_recent_records(tmp_path, live, monkeypatch):
+    monkeypatch.setattr(vgr, "_TREND_TAIL_BYTES", 2048)
+    junk = json.dumps({"status": "pass", "pad": "x" * 300, "revision": {"service_dir": str(tmp_path / "wt")}})
+    old_main = json.dumps(_rec(live, "fail", "OLD-BEYOND-TAIL"))
+    lines = [old_main] + [junk] * 40 + [json.dumps(_rec(live, "fail", "2026-10-21T04:32:00Z", "speed"))]
+    (tmp_path / "t.jsonl").write_text("\n".join(lines) + "\n")
+    rec = vgr._trend(tmp_path / "t.jsonl", str(live), True)
+    assert rec["timestamp"] == "2026-10-21T04:32:00Z"
+    # the record beyond the tail is NOT reachable: the read really is bounded
+    (tmp_path / "t2.jsonl").write_text("\n".join([old_main] + [junk] * 40) + "\n")
+    assert vgr._trend(tmp_path / "t2.jsonl", str(live), True) is None

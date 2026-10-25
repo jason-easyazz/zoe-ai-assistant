@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Any
 
 
+_TREND_TAIL_BYTES = 1 << 20   # the append-only history grows forever: read a bounded tail, never the whole file
+
+
 def _is_main(rec: dict[str, Any], live: str) -> bool:
     if rec.get("self_test"):
         return False
@@ -43,9 +46,16 @@ def _load(path: Path) -> dict[str, Any] | None:
 
 def _trend(path: Path, live: str, want_main: bool) -> dict[str, Any] | None:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - _TREND_TAIL_BYTES))
+            raw = fh.read()
     except OSError:
         return None
+    lines = raw.decode("utf-8", errors="replace").splitlines()
+    if size > _TREND_TAIL_BYTES:
+        lines = lines[1:]    # the first line of a mid-file seek is a partial record
     for line in reversed(lines[-500:]):
         try:
             rec = json.loads(line)
@@ -79,7 +89,7 @@ def report(cache_dir: Path, live: str) -> list[str]:
             out.append("voice gate (nightly main): no record")
     if shared and not _is_main(shared, live):
         out.append(_fmt("latest PR probe", shared))
-    elif not shared:
+    else:
         t = _trend(trend_path, live, False)
         if t:
             out.append(_fmt("latest PR probe", t, ", from trend"))
