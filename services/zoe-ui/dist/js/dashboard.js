@@ -505,8 +505,9 @@ class Dashboard {
     saveLayout() {
         if (!this.grid) return;
         const layout = this.currentLayout();
+        const key = this._layoutKey();
         try {
-            localStorage.setItem(this.storageKey, JSON.stringify(layout));
+            if (key) localStorage.setItem(key, JSON.stringify(layout));
         } catch (_) { /* private mode / quota: the server copy still saves */ }
         console.log('💾 Layout saved:', layout.length, 'widgets');
         // Not on the server until a PUT is acknowledged: remember that across reloads, so a
@@ -550,7 +551,7 @@ class Dashboard {
                 let body = null;
                 try { body = await r.json(); } catch (_) { /* the save still landed */ }
                 this._serverVersion = (body && body.version) || null;
-                this._syncedUids = new Set(layout.map(c => c.uid));
+                this._setSynced(layout.map(c => c.uid));
                 if (!this._pendingServerLayout) this._setUnsynced(false);
             } else if (r.status === 409) {
                 // Chat changed the saved layout since this board read it. Keep this board's
@@ -586,25 +587,80 @@ class Dashboard {
     }
 
     // Cards on the server that this board never saw (added by chat) join the board.
+    // A card already on the board is never mounted twice (a lost PUT response retried
+    // into a 409 carries the board's own new card back).
     _adoptServerCards(serverLayout) {
         const known = this._syncedUids || new Set();
+        const mounted = this._mountedUids();
         serverLayout.forEach(card => {
-            if (!card || known.has(card.uid)) return;
+            if (!card || known.has(card.uid) || mounted.has(card.uid)) return;
             const w = this._mountCard(card.type, card, card.options || null, card.uid);
             if (w) known.add(card.uid);
         });
         this._syncedUids = known;
     }
 
-    _setUnsynced(flag) {
+    _mountedUids() {
+        const out = new Set();
+        if (!this.grid) return out;
+        this.grid.engine.nodes.forEach((node) => {
+            const widget = node.el && node.el.querySelector('.widget');
+            const uid = widget && widget.getAttribute('data-widget-uid');
+            if (uid) out.add(uid);
+        });
+        return out;
+    }
+
+    // The signed-in member. A browser is shared: the unsaved copy and its marker belong to
+    // one member and are never read or sent for another.
+    _memberId() {
         try {
-            if (flag) localStorage.setItem(this.storageKey + '_unsynced', '1');
-            else localStorage.removeItem(this.storageKey + '_unsynced');
+            const session = window.zoeAuth && window.zoeAuth.getCurrentSession();
+            const id = session && ((session.user_info && session.user_info.user_id) || session.user_id);
+            return (typeof id === 'string' && id && id !== 'guest') ? id : null;
+        } catch (_) { return null; }
+    }
+
+    // Where this browser keeps the layout copy. The synced (desktop) board is keyed by
+    // member; without a known member there is no copy at all. The unkeyed key from before
+    // is never read for it. The touch board is a guest kiosk and keeps the plain key.
+    _layoutKey() {
+        if (!this.serverSync) return this.storageKey;
+        const id = this._memberId();
+        return id ? this.storageKey + ':' + id : null;
+    }
+
+    _setUnsynced(flag) {
+        const key = this._layoutKey();
+        if (!key) return;
+        try {
+            if (flag) localStorage.setItem(key + '_unsynced', '1');
+            else localStorage.removeItem(key + '_unsynced');
         } catch (_) { /* no storage: nothing to remember */ }
     }
 
     _isUnsynced() {
-        try { return localStorage.getItem(this.storageKey + '_unsynced') === '1'; } catch (_) { return false; }
+        const key = this._layoutKey();
+        if (!key) return false;
+        try { return localStorage.getItem(key + '_unsynced') === '1'; } catch (_) { return false; }
+    }
+
+    // The cards the server last acknowledged, kept beside the local copy so a recovery after a
+    // reload can tell "removed here" from "added on the server meanwhile".
+    _setSynced(uids) {
+        this._syncedUids = new Set(uids);
+        const key = this._layoutKey();
+        if (!key || !this.serverSync) return;
+        try { localStorage.setItem(key + '_base', JSON.stringify(Array.from(this._syncedUids))); } catch (_) { /* no storage */ }
+    }
+
+    _readSynced() {
+        const key = this._layoutKey();
+        if (!key) return null;
+        try {
+            const v = JSON.parse(localStorage.getItem(key + '_base') || 'null');
+            return Array.isArray(v) ? new Set(v) : null;
+        } catch (_) { return null; }
     }
 
     async _fetchServerLayout() {
@@ -624,8 +680,10 @@ class Dashboard {
     }
 
     _readLocalLayout(allowEmpty = false) {
+        const key = this._layoutKey();
+        if (!key) return null;
         try {
-            const layout = JSON.parse(localStorage.getItem(this.storageKey) || 'null');
+            const layout = JSON.parse(localStorage.getItem(key) || 'null');
             return (Array.isArray(layout) && (layout.length || allowEmpty)) ? layout : null;
         } catch (e) {
             console.error('Failed to read the saved layout:', e);
@@ -652,8 +710,17 @@ class Dashboard {
             return;
         }
         this.loadFromData(layout);
-        this._syncedUids = new Set(Array.isArray(fromServer) ? fromServer.map(c => c.uid) : []);
-        if (unsynced) { this.saveLayout(); return; }
+        if (unsynced) {
+            // The server version just read is about to be acknowledged, so cards added there
+            // since this browser last synced (chat, another browser) join the board first -
+            // otherwise the replay would delete them with no 409 to warn.
+            this._syncedUids = this._readSynced() || new Set();
+            if (Array.isArray(fromServer)) this._adoptServerCards(fromServer);
+            this.saveLayout();
+            return;
+        }
+        if (this._serverSaveBlocked) this._syncedUids = new Set();   // nothing was read: keep the stored baseline
+        else this._setSynced(Array.isArray(fromServer) ? fromServer.map(c => c.uid) : []);
         // A board saved only in this browser (before Wave 4b) moves to the server
         // once, with uids minted for its cards.
         if (fromServer === null && this.serverSync && !this._serverSaveBlocked) this.saveLayout();

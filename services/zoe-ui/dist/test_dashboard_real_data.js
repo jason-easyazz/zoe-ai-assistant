@@ -117,6 +117,7 @@ function makeContext(fetchImpl) {
         crypto: { getRandomValues: (a) => { for (let i = 0; i < a.length; i++) a[i] = (++rng * 2654435761) >>> 0; return a; } },
         fetch: (url, opts) => fetchImpl(url, opts || {}),
         confirm: () => true,
+        zoeAuth: { getCurrentSession: () => ({ user_info: { user_id: ctx.__member || 'alice' } }) },
         _store: store, _timers: timers
     };
     ctx.window = ctx;
@@ -354,7 +355,7 @@ check('two cards of one type are two independent instances', async () => {
     d.serverSync = false;
     const { ua, ub } = assertTwoIndependentCards(d, WM);
     d.saveLayout();
-    const saved = JSON.parse(ctx._store.zoe_desktop_widgets);
+    const saved = JSON.parse(ctx._store['zoe_desktop_widgets']);
     assert.deepStrictEqual(saved.map(e => e.type), ['weather', 'weather']);
     assert.deepStrictEqual(saved.map(e => e.uid), [ua, ub]);
     assert(saved.every(e => !('order' in e)), 'order is redundant with x/y');
@@ -452,7 +453,7 @@ check('an emptied server layout stays empty; only a missing one falls back to th
             return never();
         });
         const { d } = boardWith(ctx);
-        ctx._store.zoe_desktop_widgets = JSON.stringify(stored);
+        ctx._store['zoe_desktop_widgets:alice'] = JSON.stringify(stored);
         d.createDefaultLayout = () => { d.defaulted = true; };
         if (patch) patch(d);
         await d.loadLayout();
@@ -618,7 +619,7 @@ check('an unreadable server layout (HTTP error / network failure) is never writt
             return never();
         });
         const { d } = boardWith(ctx);
-        if (local) ctx._store.zoe_desktop_widgets = JSON.stringify(stored);
+        if (local) ctx._store['zoe_desktop_widgets:alice'] = JSON.stringify(stored);
         if (patch) patch(d);
         await d.loadLayout();
         ctx._timers.splice(0).forEach(fn => fn());
@@ -743,7 +744,7 @@ check('a layout PUT that fails is kept and recovered after a reload, not replace
     assert.strictEqual(puts.length, 1, 'and is saved again');
     assert.deepStrictEqual(puts[0].layout, []);
     assert.strictEqual(puts[0].base_version, 'v1', 'against the version read');
-    assert(!('zoe_desktop_widgets_unsynced' in ctx2._store), 'acknowledged: the marker is cleared');
+    assert(!('zoe_desktop_widgets:alice_unsynced' in ctx2._store), 'acknowledged: the marker is cleared');
     // negative control: never marking the layout unsynced (the reviewed bug) is caught
     await mustFail('an unmarked failed save is caught', async () => {
         const r = await run((d) => { d._setUnsynced = () => {}; });
@@ -823,6 +824,153 @@ check('a removed Notes card stops fetching; live cards still refresh', async () 
     ctx.window.loadNotes();
     await flush();
     assert.strictEqual(fetched.length, 1, 'the removed card no longer fetches');
+});
+
+// ── Review round 3 (PR #2164): member-keyed copy, recovery merge, no duplicate adopt, widget teardown ─
+const W = (uid, type = 'weather') => ({ uid, type, x: 0, y: 0, w: 4, h: 3 });
+
+check("another member signing in never loads or sends the first member's unsaved board", async () => {
+    const run = async (patch) => {
+        const puts = [];
+        const ctx = makeContext((url, opts) => {
+            if (opts.method === 'PUT') { puts.push(JSON.parse(opts.body)); return json(200, { status: 'ok', version: 'v8' }); }
+            if (url === '/api/dashboard/layout/') return json(200, { layout: [W('b1')], version: 'v7' });
+            return never();
+        });
+        // alice's failed save, plus the unkeyed copy + marker an older page left behind
+        ctx._store['zoe_desktop_widgets:alice'] = JSON.stringify([W('a1')]);
+        ctx._store['zoe_desktop_widgets:alice_unsynced'] = '1';
+        ctx._store.zoe_desktop_widgets = JSON.stringify([W('old')]);
+        ctx._store.zoe_desktop_widgets_unsynced = '1';
+        ctx.__member = 'bob';
+        const { d } = boardWith(ctx);
+        if (patch) patch(d);
+        await d.loadLayout();
+        ctx._timers.splice(0).forEach(fn => fn());
+        await flush();
+        assert.deepStrictEqual(plain(d.currentLayout().map(e => e.uid)), ['b1'], "bob sees his own board");
+        assert.strictEqual(puts.length, 0, "nothing of alice's is sent over bob's board");
+        // bob's later edit lands under bob's key, alice's copy is untouched
+        d.saveLayout();
+        assert(ctx._store['zoe_desktop_widgets:bob'], "bob's copy is keyed by bob");
+        assert.strictEqual(ctx._store['zoe_desktop_widgets:alice'], JSON.stringify([W('a1')]), "alice's copy is untouched");
+        return { puts };
+    };
+    await run();
+    await mustFail('an unkeyed local copy is caught', () => run((d) => { d._layoutKey = () => 'zoe_desktop_widgets'; }));
+    // no known member: no browser copy at all
+    const ctx = makeContext(() => never());
+    ctx.__member = '';
+    ctx.zoeAuth = { getCurrentSession: () => ({ session_id: null }) };
+    const { d } = boardWith(ctx);
+    d.saveLayout();
+    assert(!Object.keys(ctx._store).some(k => k.startsWith('zoe_desktop_widgets')), 'no member, nothing stored');
+});
+
+check('recovering an unsaved board keeps a card the server gained meanwhile; a card removed here stays removed', async () => {
+    const run = async (patch, local) => {
+        const puts = [];
+        const ctx = makeContext((url, opts) => {
+            if (opts.method === 'PUT') { puts.push(JSON.parse(opts.body)); return json(200, { status: 'ok', version: 'v3' }); }
+            if (url === '/api/dashboard/layout/') return json(200, { layout: [W('w1'), W('c1', 'system')], version: 'v2' });
+            return never();
+        });
+        ctx._store['zoe_desktop_widgets:alice'] = JSON.stringify(local);
+        ctx._store['zoe_desktop_widgets:alice_base'] = JSON.stringify(['w1']);
+        ctx._store['zoe_desktop_widgets:alice_unsynced'] = '1';
+        const { d } = boardWith(ctx);
+        if (patch) patch(d);
+        await d.loadLayout();
+        ctx._timers.splice(0).forEach(fn => fn());
+        await flush();
+        return puts;
+    };
+    const puts = await run(null, [W('w1')]);
+    assert.strictEqual(puts.length, 1);
+    assert.deepStrictEqual(puts[0].layout.map(e => e.uid).sort(), ['c1', 'w1'], "the server's new card is in the replay");
+    assert.strictEqual(puts[0].base_version, 'v2');
+    const removed = await run(null, []);
+    assert.deepStrictEqual(removed[0].layout.map(e => e.uid), ['c1'], 'w1 (removed here, known to the server) stays removed; c1 (new there) joins');
+    await mustFail('a replay that ignores the server additions is caught', async () => {
+        const bad = await run((d) => { d._adoptServerCards = () => {}; }, [W('w1')]);
+        assert.deepStrictEqual(bad[0].layout.map(e => e.uid).sort(), ['c1', 'w1']);
+    });
+});
+
+check('a lost PUT response retried into a 409 does not mount the board\'s own new card twice', async () => {
+    const run = async (patch) => {
+        const puts = [];
+        let newUid = null;
+        const ctx = makeContext((url, opts) => {
+            if (opts.method === 'PUT') {
+                const body = JSON.parse(opts.body);
+                puts.push(body);
+                if (puts.length === 1) {
+                    // the first PUT committed on the server but its response never arrived
+                    return json(409, { detail: { error: 'layout_changed', layout: [W('w1'), W(newUid)], version: 'v2' } });
+                }
+                return json(200, { status: 'ok', version: 'v3' });
+            }
+            if (url === '/api/dashboard/layout/') return json(200, { layout: [W('w1')], version: 'v1' });
+            return never();
+        });
+        const { d } = boardWith(ctx);
+        if (patch) patch(d);
+        await d.loadLayout();
+        d.addWidget('weather');
+        newUid = d.currentLayout().map(e => e.uid).find(u => u !== 'w1');
+        ctx._timers.splice(0).forEach(fn => fn());
+        await flush();
+        const uids = d.currentLayout().map(e => e.uid);
+        assert.strictEqual(new Set(uids).size, uids.length, 'no duplicate uid on the board');
+        assert.strictEqual(puts.length, 2);
+        const sent = puts[1].layout.map(e => e.uid);
+        assert.strictEqual(new Set(sent).size, sent.length, 'the retried PUT has no duplicate uid');
+    };
+    await run();
+    await mustFail('adopting an already-mounted card is caught', () => run((d) => {
+        d._adoptServerCards = function (serverLayout) {
+            const known = this._syncedUids || new Set();
+            serverLayout.forEach(card => {
+                if (!card || known.has(card.uid)) return;
+                if (this._mountCard(card.type, card, card.options || null, card.uid)) known.add(card.uid);
+            });
+            this._syncedUids = known;
+        };
+    }));
+});
+
+check('a removed Multica board / Time card drops its document and window listeners', async () => {
+    const run = async (cls, file, type, patch) => {
+        const fetched = [];
+        const ctx = makeContext((url) => { fetched.push(url); return json(200, { available: true, groups: {} }); });
+        const live = new Map();   // event -> Set of listeners
+        const reg = (t, f) => { if (!live.has(t)) live.set(t, new Set()); live.get(t).add(f); };
+        const unreg = (t, f) => { if (live.has(t)) live.get(t).delete(f); };
+        ctx.document.addEventListener = reg; ctx.document.removeEventListener = unreg;
+        ctx.addEventListener = reg; ctx.removeEventListener = unreg;
+        ctx.ResizeObserver = function () { this.observe = () => {}; this.disconnect = () => {}; };
+        vm.runInContext(read(file), ctx, { filename: file });
+        const { d, WM } = boardWith(ctx);
+        WM.register(new (ctx.$(cls))());
+        if (patch) patch(ctx.$(cls));
+        d.serverSync = false;
+        const a = d.addWidget(type);
+        d.addWidget(type);
+        await flush();
+        const count = () => Array.from(live.values()).reduce((n, set) => n + set.size, 0);
+        const before = count();
+        d.grid.removeWidget(a);
+        return { before, after: count(), ctx, live, fetched };
+    };
+    const mb = await run('MulticaBoardWidget', 'js/widgets/core/multica-board.js', 'multica-board');
+    assert(mb.before - mb.after >= 2, 'both ticket listeners of the removed card are gone');
+    const tm = await run('TimeWidget', 'js/widgets/core/time.js', 'time');
+    assert(tm.before - tm.after >= 1, 'the settings listener of the removed card is gone');
+    await mustFail('a Multica card that keeps its listeners is caught', async () => {
+        const bad = await run('MulticaBoardWidget', 'js/widgets/core/multica-board.js', 'multica-board', (C) => { C.prototype.destroy = function () { if (this.updateTimer) clearInterval(this.updateTimer); }; });
+        assert(bad.before - bad.after >= 2);
+    });
 });
 
 Promise.all(pending).then(() => {
