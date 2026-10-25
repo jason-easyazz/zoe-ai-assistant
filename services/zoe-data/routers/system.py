@@ -145,20 +145,6 @@ async def get_system_status(
     db=Depends(get_db),
 ):
     """System status for Zoe's active runtime services."""
-    gateway_status = "unknown"
-    gateway_model = None
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get("http://127.0.0.1:18789/health")
-            if r.status_code == 200:
-                gateway_status = "connected"
-                data = r.json()
-                gateway_model = data.get("model")
-            else:
-                gateway_status = "error"
-    except Exception:
-        gateway_status = "offline"
-
     db_status = "ok"
     try:
         cursor = await db.execute("SELECT 1")
@@ -218,10 +204,6 @@ async def get_system_status(
 
     return {
         "database": db_status,
-        "openclaw_gateway": gateway_status,
-        "openclaw_default_route": False,
-        "openclaw_manual_fallback": gateway_status == "connected",
-        "openclaw_model": gateway_model,
         "llama_server": llama_status,
         "llama_model": llama_model,
         "ha_bridge": ha_bridge_status,
@@ -1118,19 +1100,6 @@ def _build_agent_card() -> dict:
             "model": os.environ.get("ZOE_LOCAL_MODEL", "Gemma 4 E4B-QAT"),
             "status": "online" if _RUNTIME_HEALTH.get("local_llm") else "offline",
         },
-        {
-            "tier": 1.5,
-            "name": "hermes",
-            "model": "GPT-5.4/Codex",
-            "status": "online" if _RUNTIME_HEALTH.get("hermes") else "offline",
-        },
-        {
-            "tier": 2,
-            "name": "openclaw",
-            "model": "Gemma 4 E4B-QAT",
-            "browser": True,
-            "status": "online" if _RUNTIME_HEALTH.get("openclaw") else "offline",
-        },
     ]
 
     return {
@@ -1189,39 +1158,6 @@ class _EngineeringTaskRequest(BaseModel):
 
 class _EngineeringGuardRunRequest(BaseModel):
     packet_only: bool = False
-
-
-@_agent_card_router.post("/tasks")
-async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_a2a_caller)):
-    """
-    A2A task intake endpoint.
-
-    Accepts a natural-language task from another agent and routes it through
-    Zoe's standard pipeline (intent router -> Zoe Agent -> Hermes escalation).
-
-    Returns a task_id immediately. Results available via GET /api/agent/tasks/{task_id}.
-    For streaming, POST to /api/agent/tasks/stream instead.
-
-    Auth: ``Authorization: Bearer <ZOE_A2A_TOKEN>`` (A2A agents) or
-    ``X-Session-ID`` / ``X-Device-Token`` (UI/voice paths).
-    """
-    user_id = user.get("user_id", "a2a-agent")
-    session_id = body.session_id or f"a2a-{body.caller}-{__import__('uuid').uuid4().hex[:8]}"
-
-    logger.info(
-        "A2A task received: caller=%s user=%s task=%s",
-        body.caller, user_id, body.task[:80],
-    )
-
-    from background_runner import enqueue_background_task  # type: ignore[import]
-    task_id = await enqueue_background_task(body.task, user_id, session_id)
-    return {
-        "task_id": task_id,
-        "session_id": session_id,
-        "status": "queued",
-        "caller": body.caller,
-        "result_endpoint": f"/api/agent/tasks/{task_id}",
-    }
 
 
 @_agent_card_router.post("/tasks/stream")
@@ -1543,23 +1479,9 @@ async def delegate_to_agent(
         )
 
     if agent_name == "hermes":
-        from background_runner import enqueue_background_task  # type: ignore[import]
-        user_id = user.get("user_id", "unknown")
-        session_id = body.get("session_id") or None
-        task_id = await enqueue_background_task(
-            task,
-            user_id,
-            session_id=session_id,
-            request_depth=int(body.get("request_depth") or 0),
-        )
-        return {
-            "agent": agent_name,
-            "result": {
-                "status": "queued",
-                "task_id": task_id,
-                "result_endpoint": f"/api/agent/tasks/{task_id}",
-            },
-        }
+        # Hermes is retired and nothing may launch it (the old branch queued the task for
+        # `hermes --accept-hooks` with HERMES_YOLO_MODE as the zoe user - deep dive S0-7).
+        raise HTTPException(status_code=410, detail="Hermes is retired; no agent can be launched for this task.")
 
     registry = _load_registry()
     agent_info = registry.get("agents", {}).get(agent_name)
@@ -1612,16 +1534,6 @@ async def get_agent_runtimes():
                 "port": 11434,
                 "description": "llama-server (Gemma 4 E4B-QAT, fast-path agent)",
                 "online": _RUNTIME_HEALTH.get("local_llm", False),
-            },
-            "hermes": {
-                "port": 8642,
-                "description": "Hermes Agent (GPT-5.4/Codex)",
-                "online": _RUNTIME_HEALTH.get("hermes", False),
-            },
-            "openclaw": {
-                "port": 18789,
-                "description": "OpenClaw Gateway (Gemma 4 E4B-QAT, browser/exec)",
-                "online": _RUNTIME_HEALTH.get("openclaw", False),
             },
         },
     }

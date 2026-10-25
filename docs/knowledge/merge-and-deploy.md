@@ -217,16 +217,33 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
 
 ### Landings and the night window (rationale; the rule is binding in scripts/AGENTS.md)
 
-The rule itself lives in [scripts/AGENTS.md](../../scripts/AGENTS.md) ("Brain-window quiet hours"): between
-01:50 and 04:55 no landing or harness starts, holds `/tmp/zoe-brain-window.lock`, or stays alive as a process
-(including `land_voice_pr.sh`). This section keeps the why.
+The rule itself lives in [scripts/AGENTS.md](../../scripts/AGENTS.md) ("Brain-window quiet hours"), and is a
+**measured pause**, not a fixed blackout (owner decision 2026-10-19, replacing the 01:50-04:55 span of 2026-10-13):
 
-The 12B night window (`scripts/night/night_window.py`, timer 02:50 +0-2 min, over by 03:55; see
-[night-window.md](night-window.md)) takes the **brain** for about an hour. On 2026-10-13 a lander that was
-sleeping (waiting, but still a live `land_voice_pr.sh` process) at 02:50 made the window wait and then refuse,
-and the 12B night was lost. The span is wider than the window itself: 01:50 gives a lander time to drain before
-the earliest manual start (01:30 is allowed) and the timer; 04:55 is past the voice-gate blackout (04:10-04:52)
-the window already refuses to overlap.
+- voice landings and harnesses (including `land_voice_pr.sh`) do not START from 01:55 until tonight's window has
+  finished (fallback: paused until 03:30 if the window never ran), nor in 04:00-04:55 (the nightly 04:30 voice
+  regression owns the single voice-gate artifact slot);
+- deploys (merges that trigger `deploy.yml`) pause from 02:45 until the window has finished (same 03:30 fallback);
+- agent test runs pause while the night window or `zoe-backup.service` is active;
+- any work at all pauses while `zoe-night-window.service` is active;
+- unchanged: nothing may hold `/tmp/zoe-brain-window.lock` or be a live lander past the window's 20-min busy grace
+  (gone by 03:10).
+
+The operator-local gate that landers consult is `~/.zoe/agent-tools/night_busy.sh voice|deploy|test` (exit 0 =
+pause, 1 = may run). This section keeps the why.
+
+**The measurement.** `zoe-night-window.service` was observed 2026-10-12 to 2026-10-18: it started at 02:50 (plus up
+to 2 min timer jitter) and finished between 02:52 and 03:10 every night - roughly 15 minutes, not the "about an
+hour, over by 03:55" the 2026-10-13 span was sized for. The owner asked "doesn't the night brain only take like 15
+minutes", and the answer was yes, so the pause now tracks the window (`ExecMainExitTimestamp` after 02:45 means
+tonight's has finished) with a 03:30 fallback instead of idling the box for 3 h 5 min.
+
+The 12B night window (`scripts/night/night_window.py`, timer 02:50 +0-2 min; see [night-window.md](night-window.md))
+takes the **brain**. On 2026-10-13 a lander that was sleeping (waiting, but still a live `land_voice_pr.sh`
+process) at 02:50 made the window wait and then refuse, and the 12B night was lost. That incident is why a voice
+lander must not start from 01:55 (a lander holds the brain-window lock for up to ~45 min) and why a deploy, whose
+`zoe-data` restart collides with the window's stops, pauses from 02:45. The 04:00-04:55 voice pause is the
+nightly voice regression, not the window.
 
 What the window does about it (read-only facts, pinned by `tests/unit/test_night_window_landing_contract.py`):
 

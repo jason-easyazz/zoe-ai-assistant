@@ -29,7 +29,6 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from hermes_http import hermes_bin
 from repo_paths import zoe_repo_root
 from kanban_phase_budget import (
     dead_worker_reason,
@@ -156,13 +155,10 @@ def _board() -> str:
 
 
 def _kanban_backend() -> str:
-    """Which executor serves the kanban verbs: ``executor`` (default) or ``hermes``.
+    """Which executor serves the kanban verbs: only ``executor`` is supported.
 
-    Read per call, never cached, so the revert to the Hermes CLI is an env flip
-    (``ZOE_KANBAN_BACKEND=hermes``) + restart with no code change
-    (docs/architecture/perf-hardening-plan.md discipline). Unsetting the
-    variable keeps ``executor`` — it is the code default since the 2026-07-28
-    Phase-2 flip.
+    Read per call, never cached. The ``hermes`` CLI backend (the pre-Phase-2 revert path) was
+    removed with Hermes: any other value makes ``_run`` raise rather than shell a CLI.
     """
     return (os.environ.get("ZOE_KANBAN_BACKEND", "executor") or "executor").strip().lower()
 
@@ -182,7 +178,7 @@ def _greptile_mcp_bin() -> str:
     """Locate the operator-local greptile MCP CLI; honour GREPTILE_MCP_BIN override.
 
     This is an operator-installed binary (not in the repo), so mirror the
-    ``hermes_bin`` pattern: prefer the env override, fall back to the standard
+    CLI-path pattern: prefer the env override, fall back to the standard
     install path. Keeps the closeout worker portable across hosts/users instead
     of silently stalling the Greptile loop when the path differs.
     """
@@ -881,52 +877,25 @@ class KanbanAdapter:
     name = NAME
 
     async def _run(self, args: list[str], *, expect_json: bool = False) -> Any:
-        # PHASE-2 SEAM (docs/architecture/multica-executor-migration.md §2):
-        # the ONLY Hermes coupling in this adapter is this CLI call site. With
-        # ZOE_KANBAN_BACKEND=executor the identical verb surface is served by
-        # the Zoe-native executor against Multica's own agent_task_queue, so
-        # every phase, gate and deterministic override above stays untouched.
-        # Code default is `executor` (flipped live 2026-07-28); the revert
-        # path is one env var: ZOE_KANBAN_BACKEND=hermes + restart.
-        if _kanban_backend() == "executor":
-            from executors import executor_queue_backend
+        # PHASE-2 SEAM (docs/architecture/multica-executor-migration.md §2): the kanban verb
+        # surface is served by the Zoe-native executor against Multica's own agent_task_queue
+        # (the only backend since the Hermes CLI backend was removed with Hermes).
+        if _kanban_backend() != "executor":
+            # The Hermes CLI backend is gone (Hermes is retired; nothing may exec `hermes`).
+            raise KanbanCLIError(
+                f"ZOE_KANBAN_BACKEND={_kanban_backend()!r} is not supported: the Hermes CLI "
+                "backend was removed, only 'executor' remains"
+            )
+        from executors import executor_queue_backend
 
-            try:
-                return await executor_queue_backend.run_kanban_command(
-                    args, expect_json=expect_json
-                )
-            except executor_queue_backend.ExecutorBackendError as exc:
-                # Surface as the adapter's own error type so all existing
-                # recovery paths treat it exactly like a CLI failure.
-                raise KanbanCLIError(f"executor backend: {exc}") from exc
-        cmd = [hermes_bin(), "kanban", "--board", _board(), *args]
-        env = dict(os.environ)
-        env.setdefault("HERMES_KANBAN_BOARD", _board())
         try:
-            proc = await _spawn_cli(
-                cmd, cwd=str(zoe_repo_root()), env=env, timeout=_KANBAN_CLI_TIMEOUT_S
+            return await executor_queue_backend.run_kanban_command(
+                args, expect_json=expect_json
             )
-        except OSError as exc:
-            raise KanbanCLIError(
-                f"`hermes kanban {' '.join(args)}` could not start: {exc}"
-            ) from exc
-        except (subprocess.TimeoutExpired, asyncio.TimeoutError) as exc:
-            raise KanbanCLIError(
-                f"`hermes kanban {' '.join(args)}` timed out after "
-                f"{_KANBAN_CLI_TIMEOUT_S:.0f}s"
-            ) from exc
-        stdout = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
-        stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-        if proc.returncode != 0:
-            raise KanbanCLIError(
-                f"`hermes kanban {' '.join(args)}` exited {proc.returncode}: {stderr or stdout}"
-            )
-        if not expect_json:
-            return stdout
-        try:
-            return json.loads(stdout) if stdout else {}
-        except json.JSONDecodeError as exc:
-            raise KanbanCLIError(f"non-JSON output from kanban {args[0]}: {exc}: {stdout[:200]}")
+        except executor_queue_backend.ExecutorBackendError as exc:
+            # Surface as the adapter's own error type so all existing recovery paths
+            # treat it exactly like a CLI failure.
+            raise KanbanCLIError(f"executor backend: {exc}") from exc
 
     async def _run_worktree_command(
         self,

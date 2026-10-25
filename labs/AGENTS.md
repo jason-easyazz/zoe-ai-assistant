@@ -3,9 +3,16 @@
 ## Purpose
 
 Throwaway-grade experiments and de-risking spikes that must run **isolated from
-the Zoe runtime**. Nothing here is imported, built, or executed by any production
-service, Docker image, or CI job. Lab work proves (or kills) an idea before any
-prod migration — per the Samantha guardrail: **lab-prove before prod**.
+the Zoe runtime**. Most of `labs/` is never imported, built, or executed by any
+production service, Docker image, or CI job — lab work proves (or kills) an idea
+before any prod migration, per the Samantha guardrail: **lab-prove before prod**.
+
+**Two lab directories are NOT lab-only: they are live production services.**
+`flue-zoe-brain-2x/` is the voice brain sidecar (:3579, `flue-zoe-brain-2x.service`,
+Pi on the Gemma 4 E4B+MTP rock) and `flue-zoe-telegram-2x/` is the Telegram bot
+(:3582, `flue-zoe-telegram.service`). Both are auto-deployed on any diff (see
+Forbidden). Treat edits there as production edits; they are lab-hosted until the
+architecture deep-dive task B1 promotes them to `services/`.
 
 ## Ownership
 
@@ -251,7 +258,21 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   Telegram bot (`src/untrusted.ts`) and zoe-data (`untrusted_content.py`) and pinned equal
   by `tests/unit/test_untrusted_fence_markers.py`: change all three or none
   (`test/quoted_untrusted.test.ts`).
-  Regression net (hand-run, not CI-wired): `npm test` — 35 `test/*.test.ts` files
+  Carries the **harness overlay seam** (flag-dark `ZOE_BRAIN_HARNESS_DIR`, self-evolution
+  Phase 0 S-M, `src/harness.ts`, README "Harness overlay"): soul, the seven overlay doctrine
+  slots (`src/doctrines.ts`), the English manner block, tool DESCRIPTIONS and the recall
+  tool's shape may be loaded from an overlay directory; unset = `ZOE_INSTRUCTIONS` byte for
+  byte, absent file = compiled-in text, anything outside `OVERLAY_SCHEMA` refuses the whole
+  overlay (fail closed, loud log, `/health`). Versions + ledger + hot reload (SIGHUP, ~6 ms)
+  via `scripts/harness-overlay.ts`. **Contract:** the self-evolution loop edits only overlay
+  versions and switches them only through that script; restraint, authority, forget, guest
+  policy, identity, the untrusted-content fence and tool permissions stay in code —
+  `OVERLAY_SCHEMA` changes only by PR, with `test/harness_boundary.test.ts` edited beside it;
+  an overlay soul must keep the persona opening and the recall floor verbatim; a turn keeps
+  the harness it started under (bound to its AbortSignal).
+  `src/soul.ts` is the soul's source of truth: `services/zoe-core/SOUL.md` plus the declared
+  flue-only paragraphs, pinned by `test/soul_source.test.ts`.
+  Regression net (hand-run, not CI-wired): `npm test` — 39 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a
@@ -338,7 +359,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   turns real family traffic into labelled training examples of the router's own
   measured mistakes. Joins the hash-keyed shadow log to raw text (forward: the
   `ZOE_ROUTER_SHADOW_TEXT=1` opt-in adds `utt_text` to the shadow-log FILE, default
-  OFF, never leaves the box; bootstrap: re-hash `chat_messages.content` with the
+  OFF, only while a round is open (`ZOE_ROUTER_SHADOW_TEXT_UNTIL`, <= 30 days), never leaves the box; bootstrap: re-hash `chat_messages.content` with the
   router's own `sha256(text)[:12]` and join), mines three reasons (disagreement /
   abstention / chat-negative), and labels each with the local Gemma brain
   (`:11434`, `json_schema`-constrained, serial + `/slots`-gated — a labeling

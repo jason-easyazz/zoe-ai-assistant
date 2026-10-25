@@ -49,7 +49,6 @@ from routers.system import (
     _agent_card_router,
 )
 from system_updates import start_zoe_update_background_tasks
-from routers.openclaw import router as openclaw_router
 import logging
 from middleware.logging import setup_json_logging
 from log_throttle import log_throttled
@@ -73,8 +72,6 @@ _memory_capture_health: dict[str, str] = {"status": "unknown", "detail": "startu
 # routers.system can read it for agent card tier status.
 _RUNTIME_HEALTH: dict[str, bool] = {
     "local_llm": False,
-    "hermes": False,
-    "openclaw": False,
 }
 # Timestamp of the last probe (ISO string); exposed via GET /api/agent/runtimes
 _RUNTIME_LAST_PROBED: str = ""
@@ -170,11 +167,13 @@ async def _check_stt_ready() -> dict:
 async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
     from routers import voice_tts
 
-    mode = env_str("ZOE_TTS_MODE", "hybrid").lower()
+    mode = voice_tts.tts_mode()
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     detail: dict = {
         "ok": False,
-        "engine": "kokoro-waterfall",
+        # Default mode is Kokoro-only (owner decision 2026-10-21): no fallback
+        # voice, so readiness is exactly "is the Kokoro sidecar up".
+        "engine": "kokoro" if mode == voice_tts.TTS_MODE_KOKORO else "kokoro-waterfall",
         "mode": mode,
         "sidecar_url": sidecar_url,
     }
@@ -208,6 +207,9 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
         detail["error"] = f"http_{response.status_code}"
     except Exception as exc:
         detail["error"] = exc.__class__.__name__
+    if mode == voice_tts.TTS_MODE_KOKORO:
+        # No fallback voice in kokoro-only mode: Kokoro down = TTS not ready.
+        return detail
     detail["espeak_available"] = bool(voice_tts._has_espeak_ng())
     if mode in {"hybrid", "local", "offline"} and detail["espeak_available"]:
         detail["ok"] = True
@@ -877,17 +879,10 @@ async def _probe_runtimes() -> None:
             return False
 
     _RUNTIME_HEALTH["local_llm"] = await _check_port(11434)
-    _RUNTIME_HEALTH["hermes"] = await _check_port(8642)
-    _RUNTIME_HEALTH["openclaw"] = await _check_port(18789)
     global _RUNTIME_LAST_PROBED
     from datetime import datetime, timezone
     _RUNTIME_LAST_PROBED = datetime.now(timezone.utc).isoformat()
-    logger.info(
-        "Runtime health probe: local_llm=%s hermes=%s openclaw=%s",
-        _RUNTIME_HEALTH["local_llm"],
-        _RUNTIME_HEALTH["hermes"],
-        _RUNTIME_HEALTH["openclaw"],
-    )
+    logger.info("Runtime health probe: local_llm=%s", _RUNTIME_HEALTH["local_llm"])
 
 
 async def _runtime_health_refresh_loop() -> None:
@@ -1268,18 +1263,15 @@ async def lifespan(app: FastAPI):
         logger.info("Background task watchdog started")
     except Exception as _wd_exc:
         logger.warning("Task watchdog not started (non-fatal): %s", _wd_exc)
-    # Zoe Agent: warm Gemma's KV cache in background so first real query is fast
-    # Check env directly to avoid circular import from routers.chat
-    _pi_mode = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
-    _jetson_mode = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
-    if _pi_mode or _jetson_mode:
-        try:
-            from zoe_agent import warmup_kv_cache
-            asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
-            tier = "Jetson" if _jetson_mode else "Pi"
-            logger.info("%s Agent: Gemma KV cache warmup scheduled (fires in 8s)", tier)
-        except Exception as _wup_exc:
-            logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
+    # Zoe Agent: warm Gemma's KV cache in background so first real query is fast.
+    # Unconditional: the HERMES_FAST_PATH / JETSON_AGENT_MODE gates were pinned to
+    # the Zoe-Agent side on the only host that exists (B3, 2026-10-18).
+    try:
+        from zoe_agent import warmup_kv_cache
+        asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
+        logger.info("Jetson Agent: Gemma KV cache warmup scheduled (fires in 8s)")
+    except Exception as _wup_exc:
+        logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
 
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
@@ -1299,14 +1291,12 @@ async def lifespan(app: FastAPI):
         from proactive.triggers.reminder_scan import ReminderScanTrigger
         from proactive.triggers.morning_checkin import MorningCheckInTrigger
         from proactive.triggers.evening_windown import EveningWindDownTrigger
-        from proactive.triggers.openclaw_trigger import OpenClawTrigger
         from proactive.triggers.people_health import PeopleHealthTrigger
         from proactive.triggers.people_birthday import PeopleBirthdayTrigger
         from proactive.triggers.emotional_followup import EmotionalFollowUpTrigger
         register_trigger(ReminderScanTrigger())
         register_trigger(MorningCheckInTrigger())
         register_trigger(EveningWindDownTrigger())
-        register_trigger(OpenClawTrigger())
         register_trigger(PeopleHealthTrigger())
         register_trigger(PeopleBirthdayTrigger())
         # Samantha proactivity: gentle follow-up on captured worries. Registered
@@ -1320,7 +1310,7 @@ async def lifespan(app: FastAPI):
         except ImportError:
             logger.info(
                 "Proactive engine started (ReminderScanTrigger, MorningCheckInTrigger,"
-                " EveningWindDownTrigger, OpenClawTrigger registered)"
+                " EveningWindDownTrigger registered)"
             )
         start_proactive_engine()
         # Reconcile after the scheduler is live: re-register any unfired reminder
@@ -2241,7 +2231,6 @@ app.include_router(_agent_card_router)
 app.include_router(notifications_router)
 app.include_router(chat_router)
 app.include_router(ui_router)
-app.include_router(openclaw_router)
 app.include_router(voice_tts_router)
 from routers.voice_settings import router as voice_settings_router  # noqa: E402
 from routers.face_id import router as face_id_router  # noqa: E402

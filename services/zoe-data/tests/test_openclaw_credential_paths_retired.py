@@ -68,9 +68,9 @@ def test_chat_router_no_longer_writes_openclaw_or_hermes_credentials():
 
 
 def test_openclaw_router_no_longer_takes_a_bot_token():
-    names = _top_level_names(ZOE_DATA / "routers" / "openclaw.py")
-    for gone in ("telegram_setup", "telegram_status", "_save_telegram_token", "_validate_bot_token"):
-        assert gone not in names, gone
+    # The whole router was deleted with the gateway (B3, 2026-10-18), taking the
+    # bot-token routes with it; the file must stay gone.
+    assert not (ZOE_DATA / "routers" / "openclaw.py").exists()
 
 
 def test_brain_no_longer_offers_the_telegram_wizard_tool():

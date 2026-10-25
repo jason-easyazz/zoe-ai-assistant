@@ -70,6 +70,14 @@ self-training round.** When on:
 - the text is mined by a local script and labelled by the **local** Gemma brain.
   **It never leaves the box.**
 
+**A round, not a standing setting (2026-10-19, deep dive 2 T-4).** The flag was left on and
+10,560 shadow rows held raw household words. `ZOE_ROUTER_SHADOW_TEXT=1` now writes text only
+while a round is OPEN: `ZOE_ROUTER_SHADOW_TEXT_UNTIL=YYYY-MM-DD` (local date, inclusive, at
+most 30 days ahead). Without it, past it, malformed or too far out, no text is written and
+one warning is logged (`semantic_router.shadow_text_window`). The BOOTSTRAP path is
+unaffected. Gated rows also record the head's own `head_top` now, so the 0.70 confidence gate
+can be re-measured from the log.
+
 ## Mining reasons
 
 Only **two-stage** records (`mode` ∈ `shadow2`/`active`) can be mined — a
