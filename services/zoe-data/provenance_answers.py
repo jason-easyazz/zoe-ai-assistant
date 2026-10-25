@@ -1347,8 +1347,15 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
             # WHOLLY inside the other's - "my son Rowan is allergic to peanuts" and "my daughter Wren is allergic to peanuts" share
             # the predicate, not the fact (ask_to_remember.siblings_of's rule)
             need = _TWIN_OVERLAP if same_turn else 1.0
-            if words and rw and len(words & rw) / min(len(words), len(rw)) >= need:
-                out.append(r)
+            if not (words and rw and len(words & rw) / min(len(words), len(rw)) >= need):
+                continue
+            # a twin restates the SAME fact. Each side's words the other lacks: when both hold a word the speaker actually SAID
+            # (it is in the utterance), they name two different things from one breath ("my bike ... my tools in the shed"), not
+            # two wordings of one claim; a word only the extractor chose ("arrives" for "flying in") is wording and stays a twin
+            said = mp.content_words(excerpt) | mp.content_words(r_ex)
+            if said and (words - rw) & said and (rw - words) & said:
+                continue
+            out.append(r)
         return out
     except Exception as exc:  # noqa: BLE001
         if strict:
