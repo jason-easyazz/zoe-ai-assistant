@@ -523,7 +523,7 @@ def test_forgetting_a_person_needs_a_fresh_pin_and_uses_the_existing_intent(seed
     assert r.status_code == 200 and calls == [(ME, "Marisol")]
 
 
-def test_forget_person_is_the_memory_forget_entity_intent(monkeypatch):
+def test_forget_person_is_the_memory_forget_entity_intent(env, monkeypatch):
     import intent_router
 
     seen = []
@@ -969,7 +969,8 @@ def test_panel_card_actions_need_the_review_capability(seeded, monkeypatch):
         if denied["on"]:
             raise HTTPException(status_code=403, detail="no")
 
-    monkeypatch.setattr(memories_card, "require_feature_access", fake)
+    import guest_policy
+    monkeypatch.setattr(guest_policy, "require_feature_access", fake)
     assert tap(seeded, token, item, "forget", "yes").status_code == 403
     assert tap(seeded, token, item, "wrong", "voice").status_code == 403
     assert any("dark roast" in t for t in approved(seeded)), "nothing changed"
@@ -1059,3 +1060,50 @@ def test_a_bare_command_after_the_wrong_tap_runs_and_is_not_the_correction(env):
         mv.tap(PANEL, ME, rid, "I live in Lisbon")
         assert say(word, ME) is None, word
         assert approved(env) == ["I live in Lisbon"], word
+
+
+# ── spoken writes need memories.review too (Codex + Greptile on #2144) ────────────────────────
+def test_a_child_cannot_forget_by_voice(env):
+    put(env, "I like jazz.", user=OTHER)
+    assert say("forget that I like jazz", OTHER) == mv.GROWN_UP_REPLY
+    assert approved(env, OTHER) == ["I like jazz."]
+
+
+def test_a_member_without_review_cannot_forget_by_voice(env, monkeypatch):
+    import guest_policy
+    from fastapi import HTTPException
+
+    async def deny(*_a, **_k):
+        raise HTTPException(status_code=403, detail="no")
+
+    monkeypatch.setattr(guest_policy, "require_feature_access", deny)
+    put(env, "I like jazz.")
+    assert say("forget that I like jazz", ME) == mv.NO_REVIEW_REPLY
+    assert approved(env) == ["I like jazz."]
+    assert run(mv.forget_person(ME, "Marisol")) == mv.NO_REVIEW_REPLY
+
+
+def test_an_adult_can_still_forget_by_voice(env):
+    put(env, "I like jazz.")
+    say("forget that I like jazz", ME)
+    assert "I like jazz." not in approved(env)
+
+
+def test_a_role_lookup_error_refuses_the_spoken_forget(env, monkeypatch):
+    @contextlib.asynccontextmanager
+    async def boom():
+        raise RuntimeError("db down")
+        yield
+
+    monkeypatch.setattr(db_compat, "get_compat_db", boom)
+    put(env, "I like jazz.")
+    assert say("forget that I like jazz", ME) == mv.NO_REVIEW_REPLY
+    assert approved(env) == ["I like jazz."]
+
+
+def test_a_child_tapped_forget_is_refused(env):
+    put(env, "Swimming is on Friday", user=OTHER)
+    rid = row_id(env, "Swimming", OTHER)
+    mv.tap(PANEL, OTHER, rid, "Swimming is on Friday")
+    assert say("forget it", OTHER) == mv.GROWN_UP_REPLY
+    assert approved(env, OTHER) == ["Swimming is on Friday"]

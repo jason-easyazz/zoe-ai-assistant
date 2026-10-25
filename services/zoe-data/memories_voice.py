@@ -500,6 +500,9 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
     t = " ".join(str(text or "").split())
     if _CANCEL_RE.match(t):
         return LEAVE_IT_REPLY
+    refused = await review_refusal(member)                # forget / fix are memories.review actions
+    if refused:
+        return refused
     st = pa.parse_stateful(t)
     value = ""
     if st is None:
@@ -532,6 +535,47 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
         tap(panel_id, member, tp.row_id, tp.text)          # the next turn is still the answer
     logger.info("MEMORIES_VOICE fix=1 user=%s", member)
     return reply
+
+
+# -- who may change memories ---------------------------------------------------------------------------------------------------------
+GROWN_UP_REPLY = "That's one for a grown-up to change."
+NO_REVIEW_REPLY = "I can't change memories for this account."
+
+
+async def review_verdict(member: str) -> str:
+    """``"ok"`` | ``"child"`` | ``"denied"``: may this member change memories (the ``memories.review`` capability)? The ONE authority
+    the phone routes, the card route and every spoken write share. Reads the AUTHORITATIVE account (zoe-auth's ``auth_users``, not
+    the data-plane ``users`` mirror chat writes as 'member' for everyone) + ``require_feature_access`` + ``manner_block.is_adult``.
+    Fail-closed: any lookup error or unknown account is ``"denied"``."""
+    try:
+        from fastapi import HTTPException
+
+        from db_compat import get_compat_db
+        from guest_policy import require_feature_access
+        from manner_block import is_adult
+
+        async with get_compat_db() as db:
+            cur = await db.execute("SELECT role FROM auth_users WHERE user_id = ?", (member,))
+            row = await cur.fetchone()
+            role = (row[0] if row else None) or ""
+            if not role:
+                return "denied"
+            try:
+                await require_feature_access(db, {"user_id": member, "role": role}, feature="memories", action="review")
+            except HTTPException:
+                return "child" if role == "child" else "denied"
+            if not await is_adult(member, db=db):          # a kid member_mode locks even an adult-looking role
+                return "child"
+            return "ok"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memories_voice: role lookup failed (%s)", type(exc).__name__)
+        return "denied"
+
+
+async def review_refusal(member: str) -> Optional[str]:
+    """None when ``member`` may change memories, else the gentle spoken refusal (nothing is written)."""
+    v = await review_verdict(member)
+    return None if v == "ok" else GROWN_UP_REPLY if v == "child" else NO_REVIEW_REPLY
 
 
 # -- forgetting ----------------------------------------------------------------------------------------------------------------------
@@ -611,6 +655,9 @@ async def forget_person(member: str, name: str) -> str:
     the cascade (people row, edges, loops, the learned voice). The member's own calendar events and list items stay (owner D6)."""
     from intent_router import Intent, execute_intent
 
+    refused = await review_refusal(member)
+    if refused:
+        return refused
     return str(await execute_intent(Intent("memory_forget_entity", {"name": name}), member) or "")
 
 
@@ -647,6 +694,9 @@ async def answer(text: str, user_id: str, session_id: str = "", *, channel: str,
             return FORGET_PRIVATE_REPLY
         if not allow_writes:
             return None                                   # a dry / speculative turn never forgets
+        refused = await review_refusal(member)
+        if refused:
+            return refused
         return await forget_fact(member, ask.value, svc=svc)
     if not on_panel:
         return None                                       # chat keeps the existing answers (provenance_answers)
