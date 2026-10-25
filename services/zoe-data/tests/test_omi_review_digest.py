@@ -122,7 +122,7 @@ def status_of(env, cid):
 
 @pytest.mark.asyncio
 async def test_digest_renders_candidates_for_the_owner_only(env):
-    add(env, "c1", "reminder", {"title": "Send the invoice", "when": "Friday"})
+    add(env, "c1", "reminder", {"title": "Send the invoice", "date": "2026-10-30", "time": "09:00", "when_said": "Friday"})
     add(env, "c2", "list_item", {"item": "oat milk", "list": "shopping"})
     add(env, "x1", "reminder", {"title": "SECRET-OF-OTHER-MEMBER"}, user=OTHER)
     assert await dig.send_for(OWNER, NOW) == "sent" and len(env.sent) == 1
@@ -130,7 +130,53 @@ async def test_digest_renders_candidates_for_the_owner_only(env):
     assert tid == "111" and url == "https://zoe.example/pendant.html"
     assert "Send the invoice" in text and "oat milk" in text and "2 things" in text
     assert "SECRET-OF-OTHER-MEMBER" not in text
+    assert "(2026-10-30 09:00)" in text                                   # the stored date/time fields, not a synthetic `when`
     assert env.calls["approve"] == [] and env.calls["write"] == []        # listing never writes
+
+
+def test_reminder_without_date_falls_back_to_what_was_said():
+    assert dig.describe({"kind": "reminder", "payload": {"title": "Ring back", "date": "", "time": "", "when_said": "tomorrow"}}) == "Remind you: Ring back (tomorrow)"
+
+
+@pytest.mark.asyncio
+async def test_day_is_claimed_before_the_send_so_a_failed_state_write_cannot_repeat_it(env, monkeypatch):
+    add(env, "c1", "list_item", {"item": "oat milk"})
+    real, n = dig._save, {"n": 0}
+
+    async def flaky(uid, st):
+        n["n"] += 1
+        if n["n"] == 2:                      # the post-send write fails
+            raise RuntimeError("db down")
+        await real(uid, st)
+
+    monkeypatch.setattr(dig, "_save", flaky)
+    with pytest.raises(RuntimeError):
+        await dig.send_for(OWNER, NOW)
+    assert len(env.sent) == 1 and env.prefs[OWNER]["day"] == dig._local(NOW).date().isoformat()
+    assert await dig.send_for(OWNER, NOW) == "skipped:already_today" and len(env.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_claim_write_sends_nothing_and_a_retry_safe_failure_releases_the_day(env, monkeypatch):
+    import telegram_notify
+    add(env, "c1", "list_item", {"item": "oat milk"})
+    real = dig._save
+
+    async def down(uid, st):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(dig, "_save", down)
+    with pytest.raises(RuntimeError):
+        await dig.send_for(OWNER, NOW)
+    assert env.sent == []
+    monkeypatch.setattr(dig, "_save", real)
+
+    async def retry(*a, **k):
+        return "retry"
+
+    monkeypatch.setattr(telegram_notify, "send", retry)
+    assert await dig.send_for(OWNER, NOW) == "skipped:retry"
+    assert not env.prefs[OWNER].get("day")                                # released
 
 
 @pytest.mark.asyncio

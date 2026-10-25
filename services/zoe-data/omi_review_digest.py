@@ -65,13 +65,13 @@ def _s(v: Any, n: int = 90) -> str:
 def describe(c: dict) -> str:
     """One plain-language line for a candidate (its own payload only)."""
     p, kind = c.get("payload") or {}, c.get("kind")
-    when = " ".join(x for x in (_s(p.get("date"), 30), _s(p.get("time"), 12)) if x)
+    when = " ".join(x for x in (_s(p.get("date"), 30), _s(p.get("time"), 12)) if x) or _s(p.get("when_said"), 30)
     if kind == "calendar_event":
         return f"Calendar: {_s(p.get('title'))}" + (f" ({when})" if when else "")
     if kind == "list_item":
         return f"Add to your {_s(p.get('list'), 20) or 'shopping'} list: {_s(p.get('item'))}"
     if kind == "reminder":
-        return f"Remind you: {_s(p.get('title'))}" + (f" ({_s(p.get('when'), 30)})" if p.get("when") else "")
+        return f"Remind you: {_s(p.get('title'))}" + (f" ({when})" if when else "")
     if kind == "follow_up":
         return f"Come back to: {_s(p.get('title'))}"
     if kind == "person":
@@ -191,9 +191,17 @@ async def send_for(member: str, now: datetime) -> str:
         return "skipped:nothing_pending"
     total = sum((await dr.pending_counts(member)).values()) or len(cands)
     url = _phone_url()
+    # Claim the day BEFORE the network call (at-most-once, like change_notices._send): a failed claim write sends nothing; a crash or
+    # failed final write after the message left leaves the claim, so the next poll cannot repeat it.
+    await _save(member, {**st, "day": today, "unanswered": unanswered, "claim": "sending"})
     outcome = await telegram_notify.send(tid, compose(cands, total), url=url, label="Review your day" if url else None)
     if outcome in ("sent", "uncertain"):
         await _save(member, {"day": today, "sent_at": now.strftime(_TS), "unanswered": unanswered + 1})
+    else:  # definitely not delivered: release the claim so the next poll retries
+        try:
+            await _save(member, st)
+        except Exception as exc:  # noqa: BLE001 - the day stays claimed (safe side)
+            logger.warning("omi_review_digest: claim release failed (%s)", type(exc).__name__)
     logger.info("OMI_REVIEW_TELEGRAM user=%s outcome=%s pending=%d", member, outcome, total)
     return outcome if outcome in ("sent", "uncertain") else "skipped:" + outcome
 
