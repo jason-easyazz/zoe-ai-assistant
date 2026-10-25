@@ -706,6 +706,11 @@ def _possessive_job_asked(text: str, m: "re.Match[str]") -> bool:
         start = sm.end()
     if _QUESTION_WORD_BEFORE_RE.search(text[start:m.start()]):
         return True
+    last = m.group(0)[-1:]
+    if last in ".!?":
+        # the match already consumed its own sentence terminator: that, not the NEXT sentence's, says statement vs question
+        return last == "?"
+    # a "," / ";" (or end of text) was consumed: the sentence runs on to its real terminator
     end = re.search(r"[.!?\n]", text[m.end():])
     sentence_end = m.end() + end.start() if end else len(text)
     return text[sentence_end:sentence_end + 1] == "?"

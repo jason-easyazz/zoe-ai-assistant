@@ -67,3 +67,12 @@ def test_belief_inside_long_utterance_not_a_job():
 ])
 def test_possessive_job_questions_file_nothing(sentence):
     assert _job_facts(sentence) == []
+
+
+def test_statement_then_question_still_files_the_job():
+    facts = _job_facts("My job is teaching. Do you remember that?")
+    assert any("teaching" in f for f in facts)
+
+
+def test_statement_then_question_with_exclaim_files_the_job():
+    assert any("teaching" in f for f in _job_facts("My job is teaching! Can you guess why?"))
