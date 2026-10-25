@@ -141,3 +141,36 @@ def test_cruft_referenced_by_repo_code_is_not_moved(tmp_path):
     (d / "custom-thing.service.bak-1").write_text("x")
     r, d = _run(tmp_path, repo=repo)
     assert (d / "custom-thing.service.bak-1").exists(), r.stdout
+
+
+def test_a_second_run_never_overwrites_an_earlier_backup_copy(tmp_path):
+    """PR #2178 review. Break: cp -a over an existing backup -> the second same-day run replaces the original recovery copy."""
+    bak = tmp_path / "bak"
+    bak.mkdir()
+    (bak / U).write_text("ORIGINAL RECOVERY COPY\n")
+    r, d = _run(tmp_path, backup=bak)
+    assert r.returncode == 1, r.stdout
+    assert (bak / U).read_text() == "ORIGINAL RECOVERY COPY\n"      # untouched
+    assert (d / U).exists()                                         # and nothing was removed
+
+
+def test_a_failed_removal_is_reported_and_exits_nonzero(tmp_path):
+    """PR #2178 review. Break: count a unit as removed even when rm fails -> 'removed' and exit 0."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory write bits")
+    unitdir = tmp_path / "units"
+    unitdir.mkdir()
+    (unitdir / U).write_text("[Service]\nExecStart=/bin/true\n")
+    fake = tmp_path / "fakectl"
+    fake.write_text('#!/bin/sh\ncase "$2" in is-active) echo inactive; exit 3;; esac\nexit 0\n')
+    fake.chmod(0o755)
+    env = dict(os.environ, ZOE_UNIT_DIR=str(unitdir), SYSTEMCTL=str(fake), ZOE_UNIT_BACKUP_DIR=str(tmp_path / "bak"),
+               ZOE_REPO_ROOT=str(tmp_path / "emptyrepo"))
+    os.chmod(unitdir, 0o500)                                         # readable, not writable: backup works, rm cannot
+    try:
+        r = subprocess.run(["bash", str(SCRIPT), "--execute"], env=env, capture_output=True, text=True)
+    finally:
+        os.chmod(unitdir, 0o700)
+    assert r.returncode == 1, r.stdout
+    assert "FAILED to remove" in r.stdout and (unitdir / U).exists()
+    assert (tmp_path / "bak" / U).exists()                          # the backup was still taken
