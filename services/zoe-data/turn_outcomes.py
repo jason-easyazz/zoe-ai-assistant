@@ -194,14 +194,18 @@ class SqlBackend:
                                    (*params, int(limit)))
             return [dict(zip(COLUMNS, tuple(r))) for r in await cur.fetchall()]
 
-    async def update(self, row_id: str, fields: dict) -> None:
+    async def update(self, row_id: str, fields: dict, *, undecided_only: bool = False) -> bool:
+        """Write ``fields``; with ``undecided_only`` the SQL itself refuses a row the owner already decided (no read-modify-write window).
+        Returns whether a row was written."""
         keys = [k for k in fields if k in COLUMNS and k != "id"]
         if not keys:
-            return
+            return False
+        guard = " AND (label_status IS NULL OR label_status IN ('', 'proposed'))" if undecided_only else ""
         async with self._ctx() as db:
-            await db.execute(f"UPDATE turn_outcomes SET {', '.join(f'{k} = ?' for k in keys)} WHERE id = ?",
-                             (*[fields[k] for k in keys], row_id))
+            cur = await db.execute(f"UPDATE turn_outcomes SET {', '.join(f'{k} = ?' for k in keys)} WHERE id = ?{guard}",
+                                   (*[fields[k] for k in keys], row_id))
             await db.commit()
+            return (getattr(cur, "rowcount", 1) or 0) > 0
 
     async def by_turn(self, user_id: str, turn_id: str) -> list[dict]:
         return await self._select("user_id = ? AND turn_id = ?", (user_id, turn_id), 5)
@@ -266,10 +270,14 @@ class MemoryBackend:
     def _pick(self, pred, limit: int = 500) -> list[dict]:
         return [dict(r) for r in sorted(self.data, key=lambda r: -r["ts"]) if pred(r)][:limit]
 
-    async def update(self, row_id: str, fields: dict) -> None:
+    async def update(self, row_id: str, fields: dict, *, undecided_only: bool = False) -> bool:
         for r in self.data:
             if r["id"] == row_id:
+                if undecided_only and r.get("label_status") not in ("", None, PROPOSED):
+                    return False
                 r.update({k: v for k, v in fields.items() if k in COLUMNS and k != "id"})
+                return True
+        return False
 
     async def by_turn(self, user_id: str, turn_id: str) -> list[dict]:
         return self._pick(lambda r: r["user_id"] == user_id and r["turn_id"] == turn_id, 5)
@@ -351,7 +359,14 @@ async def mark_failed(user_id: str, turn_id: str, signals: Iterable[str], label:
             for row in await backend.by_turn(user_id, turn_id):
                 upd = _merge_failed(row, sigs, label, summary)
                 if upd:
-                    await backend.update(row["id"], upd)
+                    if "label_status" in upd:
+                        # the status change is conditional IN the write: an owner's decide() landing since the read above survives
+                        if not await backend.update(row["id"], upd, undecided_only=True):
+                            for k in ("label_status", "proposed_label", "label_source"):
+                                upd.pop(k, None)
+                            await backend.update(row["id"], upd)
+                    else:
+                        await backend.update(row["id"], upd)
                     return True
             return False
 
@@ -402,6 +417,8 @@ def public(row: dict, *, with_words: bool) -> dict:
 
 async def review(viewer_id: str, *, days: float = REVIEW_DAYS, now: Optional[float] = None, limit: int = 100) -> dict:
     """The viewer's OWN failed household turns of the last ``days`` (their own words), newest first, plus counts."""
+    if not enabled():       # capture off = the saved words are not read or shown, whatever was stored while it was on
+        return {"days": days, "enabled": False, "pending": 0, "items": []}
     t = time.time() if now is None else now
     rows = await get_backend().rows(t - days * 86400.0, user_id=viewer_id, failed_only=True, limit=limit)
     items = [public(r, with_words=True) for r in rows if not int(r.get("is_guest") or 0)]
@@ -478,7 +495,7 @@ async def confirmed_examples(limit: int = 500) -> list[dict]:
         out.append({"proposal_id": rid, "status": "accepted", "decided_by": str(r.get("decided_by") or ""), "event_id": rid,
                     "user_id": str(r["user_id"]), "label": lab, "label_source": source, "label_origin": origin or SOURCE_OWNER,
                     "split": sp.split_of(text), "ts": round(float(r["ts"]), 3), "text": text,
-                    "audio_ref": sp.audio_ref(r["ts"]) if r.get("channel") == "voice" else None})
+                    "audio_ref": sp.audio_ref(r["ts"], latency_ms=r.get("latency_ms")) if r.get("channel") == "voice" else None})
     return out
 
 

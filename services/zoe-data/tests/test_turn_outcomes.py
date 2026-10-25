@@ -595,3 +595,70 @@ def test_no_request_time_ddl():
 
 def test_rows_never_hold_the_reply():
     assert "reply" not in to.COLUMNS and json.dumps(to.COLUMNS).count("summary") == 1
+
+
+# ── review round 3 (PR #2141): decide-vs-mark race, review gated on the flag, voice audio window ──────
+
+async def _racing_decide_survives(label):
+    """``decide`` lands between ``mark_failed``'s read of the row and its write: the owner's decision must survive."""
+    q = "will marlowe need an umbrella this afternoon"
+    weather_note(q)
+    sd.note_brain(VOICE, "flue", "ok")
+    await feed(item(q, "Maybe.", channel="voice", session=VOICE))
+    store = to.get_backend()
+    row = (await store.rows(0))[0]
+    rid, turn = row["id"], row["turn_id"]
+    assert await to.mark_failed(A, turn, ["REASK"], ("weather", "router"), q) is True      # proposed, awaiting the owner
+    real = store.by_turn
+
+    async def read_then_owner_decides(user_id, turn_id):
+        rows = await real(user_id, turn_id)         # mark_failed holds this (proposed) copy ...
+        await to.decide(rid, A, "reject")           # ... and the owner decides before its write
+        return rows
+
+    store.by_turn = read_then_owner_decides
+    try:
+        await to.mark_failed(A, turn, ["CORRECTION"], ("calendar", "router"), q)
+    finally:
+        store.by_turn = real
+    after = (await store.by_id(rid))[0]
+    assert after["label_status"] == "rejected" and after["decided_by"] == f"owner:{A}", label
+    assert "CORRECTION" in after["signals"], "the new signal is still recorded"
+
+
+async def test_a_background_mark_never_overwrites_an_owner_decision(fresh):
+    await _racing_decide_survives("memory")
+
+
+async def test_a_background_mark_never_overwrites_an_owner_decision_in_sql(sql):
+    await _racing_decide_survives("sql")
+
+
+async def test_review_reads_nothing_once_capture_is_off(fresh, monkeypatch):
+    await failed_then_fixed()
+    assert (await to.review(A))["items"], "on: the saved words are shown"
+    monkeypatch.setenv(to.ENV, "off")           # on, then off
+    reads = []
+    real_rows = fresh.rows
+
+    async def spy(*a, **k):
+        reads.append(1)
+        return await real_rows(*a, **k)
+
+    fresh.rows = spy
+    rep = await to.review(A)
+    assert rep == {"days": to.REVIEW_DAYS, "enabled": False, "pending": 0, "items": []} and reads == []
+
+
+async def test_confirmed_voice_example_audio_uses_the_turns_latency(fresh, monkeypatch):
+    q = "will it be windy this afternoon"
+    weather_note(q)
+    sd.note_brain(VOICE, "flue", "ok")
+    await feed(item(q, "Probably.", channel="voice", session=VOICE))
+    row = fresh.data[0]
+    row["latency_ms"] = 1234
+    await to.decide(row["id"], A, "confirm", "weather")
+    seen = []
+    monkeypatch.setattr(sp, "audio_ref", lambda ts, **kw: seen.append(kw) or None)
+    assert len(await to.confirmed_examples()) == 1
+    assert seen == [{"latency_ms": 1234}], "without it the 90 s fallback can attach an earlier turn's clip"
