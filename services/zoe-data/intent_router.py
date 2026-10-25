@@ -30,6 +30,7 @@ import panel_principal
 import traffic_class
 from list_service import HouseholdListUnavailable
 from time_utils import today_for_zoe_tz
+from typed_env import env_str
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
 if TYPE_CHECKING:
@@ -44,7 +45,7 @@ _DAILY_BRIEFING_CACHE_MAX_USERS = max(1, int(os.environ.get("ZOE_DAILY_BRIEFING_
 
 def _self_url() -> str:
     """This zoe-data instance (P-2: a harness instance sets ZOE_SELF_URL, so its self-calls never reach the live service)."""
-    return (os.environ.get("ZOE_SELF_URL") or "http://localhost:8000").rstrip("/")
+    return env_str("ZOE_SELF_URL", "http://localhost:8000").rstrip("/")
 
 
 def _daily_briefing_cache_sweep(now: float | None = None) -> None:

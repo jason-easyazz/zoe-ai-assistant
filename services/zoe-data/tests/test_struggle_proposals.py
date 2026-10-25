@@ -55,12 +55,30 @@ class _Sqlite:
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
 
+    _depth = 0
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        """asyncpg-style transaction: statements inside commit together on a clean exit, roll back on an exception."""
+        self._depth += 1
+        try:
+            yield
+        except BaseException:
+            self._depth -= 1
+            if self._depth == 0:
+                self.conn.rollback()
+            raise
+        self._depth -= 1
+        if self._depth == 0:
+            self.conn.commit()
+
     def execute(self, sql, params=()):
         async def _run():
             await asyncio.sleep(0)
             cur = self.conn.execute(sql, tuple(params))
             rows = cur.fetchall()
-            self.conn.commit()
+            if not self._depth:
+                self.conn.commit()
             return _Cursor(rows, rowcount=cur.rowcount)
         return _ExecResult(_run())
 
@@ -641,6 +659,29 @@ def test_a_failed_proposal_erase_fails_the_forget_and_leaves_the_rows_for_a_retr
     with pytest.raises(RuntimeError):
         run(sd.erase_entity(A, "Quentin"))
     assert len(env.db.rows("SELECT * FROM struggle_events")) == 3                    # the forget is not confirmed, and nothing was half-done
+
+
+def test_a_queue_sync_failure_during_a_forget_changes_nothing_and_the_retry_succeeds(env, monkeypatch):
+    """Codex P1 on #2165: link removal, recount and queue update are ONE transaction - a failing _sync_queue must not leave reduced counts."""
+    store(*wide())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    before_links = env.db.rows("SELECT event_id FROM struggle_proposal_events ORDER BY event_id")
+    before = env.db.rows("SELECT id, event_count, episode_count, user_count, day_count FROM struggle_proposals ORDER BY id")
+    victim = [r["event_id"] for r in env.db.rows("SELECT event_id FROM struggle_proposal_events WHERE proposal_id = ? LIMIT 1", (pid,))]
+    real = sp._sync_queue
+
+    async def boom(*a, **k):
+        raise RuntimeError("queue down")
+    monkeypatch.setattr(sp, "_sync_queue", boom)
+    with pytest.raises(RuntimeError):
+        run(sp.forget_events(victim))
+    assert env.db.rows("SELECT event_id FROM struggle_proposal_events ORDER BY event_id") == before_links
+    assert env.db.rows("SELECT id, event_count, episode_count, user_count, day_count FROM struggle_proposals ORDER BY id") == before
+    monkeypatch.setattr(sp, "_sync_queue", real)
+    run(sp.forget_events(victim))                                                       # the retry now repairs everything
+    assert not env.db.rows("SELECT 1 FROM struggle_proposal_events WHERE event_id = ?", (victim[0],))
+    assert env.db.rows("SELECT event_count FROM struggle_proposals WHERE id = ?", (pid,))[0]["event_count"] == before[0]["event_count"] - 1
 
 
 def test_an_orphaned_evidence_link_never_shows_a_proposal_or_an_example_and_reconcile_clears_it(env):

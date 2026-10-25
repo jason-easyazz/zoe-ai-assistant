@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import json
 import os
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -514,3 +516,42 @@ def test_up_marks_the_scratch_palace_so_the_live_store_guard_treats_it_as_throwa
     guard = (Path(__file__).resolve().parents[2] / "services" / "zoe-data" / "live_store_guard.py").read_text()
     assert 'SCRATCH_SENTINEL = ".zoe-harness-scratch"' in guard
     assert '(root / "palace" / ".zoe-harness-scratch").write_text' in Path(hs.__file__).read_text()
+
+
+def _fake_docker(monkeypatch, *, rm_rc, ps_rc, ps_out):
+    def run(cmd, **kw):
+        if cmd[:2] == ["docker", "ps"]:
+            return types.SimpleNamespace(returncode=ps_rc, stdout=ps_out, stderr="")
+        return types.SimpleNamespace(returncode=rm_rc if cmd[:2] == ["docker", "rm"] else 0, stdout="", stderr="")
+    monkeypatch.setattr(hs, "_run", run)
+
+
+def test_down_keeps_the_state_until_removal_is_confirmed_so_the_sweep_can_retry(tmp_path, monkeypatch):
+    """Codex P2 on #2165. Negative control: unlink the state unconditionally -> red."""
+    monkeypatch.setattr(hs, "STATE_DIR", tmp_path)
+    tag = "samantha-bar-999999999"
+    (tmp_path / f"{tag}.json").write_text(json.dumps({"tag": tag, "container": "c", "network": "n", "root": str(tmp_path / tag)}))
+    _fake_docker(monkeypatch, rm_rc=1, ps_rc=0, ps_out="abc123\n")                 # docker rm failed: the container is still listed
+    assert hs.down(tag, log=lambda m: None) is False
+    assert (tmp_path / f"{tag}.json").exists()                                        # the state survives for a retry
+    assert hs.sweep_stale(lambda m: None) == []                                       # and a failed teardown is not reported as swept
+    _fake_docker(monkeypatch, rm_rc=0, ps_rc=0, ps_out="")                            # the retry succeeds
+    assert hs.sweep_stale(lambda m: None) == [tag] and not (tmp_path / f"{tag}.json").exists()
+
+
+def test_down_keeps_the_state_when_docker_cannot_answer_the_listing(tmp_path, monkeypatch):
+    monkeypatch.setattr(hs, "STATE_DIR", tmp_path)
+    (tmp_path / "t9.json").write_text(json.dumps({"tag": "t9", "container": "c", "network": "n", "root": str(tmp_path / "t9")}))
+    _fake_docker(monkeypatch, rm_rc=1, ps_rc=1, ps_out="")
+    assert hs.down("t9", log=lambda m: None) is False and (tmp_path / "t9.json").exists()
+
+
+def test_the_scratch_path_carries_the_directories_of_pi_and_node(monkeypatch):
+    """Codex P2 on #2165: a core-backed scratch instance spawns ``pi`` (an NVM node script). Negative control: the fixed PATH -> red."""
+    found = {"pi": "/home/u/.nvm/versions/node/v22/bin/pi", "node": "/home/u/.nvm/versions/node/v22/bin/node"}
+    monkeypatch.setattr(hs.shutil, "which", lambda name, *a, **k: found.get(name))
+    env = hs.harness_env(LIVE_ENV, root=Path("/tmp/x"), dsn="postgresql://s", token="t", brain_token="b",
+                         flue_url="http://127.0.0.1:1", self_url="http://127.0.0.1:2")
+    parts = env["PATH"].split(":")
+    assert parts[0] == "/home/u/.nvm/versions/node/v22/bin" and parts.count("/home/u/.nvm/versions/node/v22/bin") == 1
+    assert parts[-3:] == ["/usr/local/bin", "/usr/bin", "/bin"]

@@ -1030,11 +1030,12 @@ async def forget_events(event_ids: list[str]) -> int:
         return 0
     try:
         async with _ctx() as db:
-            pids: set[str] = set()
-            for part in _chunks(ids):
-                pids.update(await _proposals_of(db, f"event_id IN ({_marks(len(part))})", tuple(part)))
-                await db.execute(f"DELETE FROM struggle_proposal_events WHERE event_id IN ({_marks(len(part))})", tuple(part))
-            gone = await _refresh(db, pids)
+            async with _atomic(db):     # link removal + recount + queue update are ONE transaction: a failed queue sync leaves nothing changed
+                pids: set[str] = set()
+                for part in _chunks(ids):
+                    pids.update(await _proposals_of(db, f"event_id IN ({_marks(len(part))})", tuple(part)))
+                    await db.execute(f"DELETE FROM struggle_proposal_events WHERE event_id IN ({_marks(len(part))})", tuple(part))
+                gone = await _refresh(db, pids)
             await db.commit()
             return gone
     except Exception as exc:
@@ -1052,9 +1053,10 @@ async def forget_user(user_id: str) -> int:
         return 0
     try:
         async with _ctx() as db:
-            pids = set(await _proposals_of(db, "user_id = ?", (user_id,)))
-            await db.execute("DELETE FROM struggle_proposal_events WHERE user_id = ?", (user_id,))
-            gone = await _refresh(db, pids)
+            async with _atomic(db):     # one transaction, as in forget_events
+                pids = set(await _proposals_of(db, "user_id = ?", (user_id,)))
+                await db.execute("DELETE FROM struggle_proposal_events WHERE user_id = ?", (user_id,))
+                gone = await _refresh(db, pids)
             await db.commit()
             return gone
     except Exception as exc:
@@ -1067,15 +1069,8 @@ async def reconcile() -> int:
     """Drop evidence links whose event no longer exists (retention sweep, a forget that ran between a read and a write), recount, delete
     what is left empty. Returns proposals deleted."""
     async with _ctx() as db:
-        await _prune_queue(db)
-        cur = await db.execute(
-            "SELECT DISTINCT proposal_id FROM struggle_proposal_events WHERE event_id NOT IN (SELECT id FROM struggle_events)")
-        pids = [str(r[0]) for r in await cur.fetchall()]
-        if not pids:
-            await db.commit()
-            return 0
-        await db.execute("DELETE FROM struggle_proposal_events WHERE event_id NOT IN (SELECT id FROM struggle_events)")
-        gone = await _refresh(db, pids)
+        async with _atomic(db):
+            gone = await _reconcile_in(db)
         await db.commit()
         return gone
 

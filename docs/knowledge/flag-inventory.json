@@ -6398,14 +6398,15 @@
       },
       "ZOE_SELF_URL": {
         "defaults": [
-          "-"
+          "'http://127.0.0.1:8000'",
+          "'http://localhost:8000'"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/intent_router.py",
           "services/zoe-data/mcp_server.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_SESSION_LOCK_TIMEOUT_S": {
         "defaults": [

@@ -151,9 +151,22 @@ def flag_env(live_env: dict) -> dict:
                 and "://" not in v)
 
 
+def scratch_path() -> str:
+    """The scratch zoe-data PATH: the fixed system dirs plus the directories holding ``pi`` and ``node`` as THIS user resolves them
+    (``pi`` is an NVM-installed node script, so a core-backed instance cannot start it from the bare system PATH)."""
+    dirs: list = []
+    for tool in ("pi", "node"):
+        found = shutil.which(tool)
+        if found:
+            d = str(Path(found).parent)
+            if d not in dirs:
+                dirs.append(d)
+    return ":".join(dirs + ["/usr/local/bin", "/usr/bin", "/bin"])
+
+
 def harness_env(live_env: dict, *, root: Path, dsn: str, token: str, brain_token: str, flue_url: str, self_url: str) -> dict:
     """The scratch zoe-data environment: the live FLAGS, scratch everything else. Pure (tests pin it)."""
-    env = dict(PATH="/usr/local/bin:/usr/bin:/bin", LANG="C.UTF-8", LC_ALL="C.UTF-8", TZ=os.environ.get("TZ") or "Australia/Perth")
+    env = dict(PATH=scratch_path(), LANG="C.UTF-8", LC_ALL="C.UTF-8", TZ=os.environ.get("TZ") or "Australia/Perth")
     env.update(flag_env(live_env))
     for name in COMPUTE_URLS:
         if live_env.get(name):
@@ -351,8 +364,8 @@ def sweep_stale(log=print) -> list:
         m = re.search(r"-(\d+)$", path.stem)
         if not m or Path(f"/proc/{m.group(1)}").exists():
             continue
-        down(path.stem, log=log)
-        gone.append(path.stem)
+        if down(path.stem, log=log):
+            gone.append(path.stem)
     return gone
 
 
@@ -500,12 +513,19 @@ def down(tag: str, *, log=print, keep_root: bool = False) -> bool:
         _stop(p)
     _run(["docker", "rm", "-f", state["container"]], timeout=60, check=False)
     _run(["docker", "network", "rm", state["network"]], timeout=30, check=False)
-    if not keep_root:
-        root = Path(state.get("root") or "")
-        if root.is_dir() and STATE_DIR in root.parents:
-            shutil.rmtree(root, ignore_errors=True)
-    state_path(tag).unlink(missing_ok=True)
-    left = _run(["docker", "ps", "-aq", "--filter", f"label=zoe.harness.scratch={tag}"], timeout=20, check=False).stdout.strip()
+    listed = _run(["docker", "ps", "-aq", "--filter", f"label=zoe.harness.scratch={tag}"], timeout=20, check=False)
+    left = listed.stdout.strip()
+    # removal is CONFIRMED only when docker answered the listing and nothing is left; otherwise the state stays so sweep_stale can retry
+    # (a non-zero ``rm`` for a container that is already gone is fine: the listing is the authority)
+    confirmed = listed.returncode == 0 and not left
+    if not confirmed:
+        left = left or "unconfirmed"
+    if confirmed:
+        if not keep_root:
+            root = Path(state.get("root") or "")
+            if root.is_dir() and STATE_DIR in root.parents:
+                shutil.rmtree(root, ignore_errors=True)
+        state_path(tag).unlink(missing_ok=True)
     log(f"scratch stack {tag} down" + (" (a container is still listed)" if left else ""))
     return not left
 

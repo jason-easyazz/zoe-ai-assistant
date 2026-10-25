@@ -37,7 +37,11 @@ _STDIO_WORKER = __name__ == "__main__"
 
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 # P-2: a harness instance (scripts/perf/harness_scratch.py) sets ZOE_SELF_URL so it broadcasts to ITSELF, never to the live panels
-_BROADCAST_URL = (os.environ.get("ZOE_SELF_URL") or "http://127.0.0.1:8000").rstrip("/") + "/api/internal/broadcast"
+def _broadcast_url() -> str:
+    """Read per call (typed_env, stripped), so a blank ZOE_SELF_URL means the default and a late-set one is honoured."""
+    return env_str("ZOE_SELF_URL", "http://127.0.0.1:8000").rstrip("/") + "/api/internal/broadcast"
+
+
 _INTERNAL_TOKEN = env_str("ZOE_INTERNAL_TOKEN")
 # A tools/call that names no user is REFUSED (A3, 2026-10-19: strict is the default). The one caller that relied on the
 # family-admin fallback - intent_router's mcporter subprocess, which sent no user and so wrote as family-admin - is gone;
@@ -63,7 +67,7 @@ async def _notify_ui(channel: str, event_type: str, data: dict):
         if _INTERNAL_TOKEN:
             headers["X-Internal-Token"] = _INTERNAL_TOKEN
         async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(_BROADCAST_URL, json={
+            await client.post(_broadcast_url(), json={
                 "channel": channel,
                 "event_type": event_type,
                 "data": data,
