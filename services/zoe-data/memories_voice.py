@@ -500,9 +500,6 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
     t = " ".join(str(text or "").split())
     if _CANCEL_RE.match(t):
         return LEAVE_IT_REPLY
-    refused = await review_refusal(member)                # forget / fix are memories.review actions
-    if refused:
-        return refused
     st = pa.parse_stateful(t)
     value = ""
     if st is None:
@@ -510,7 +507,12 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
                 and not _NOT_AN_ANSWER_RE.match(t) and not parse(t) and not _is_command(t)):
             value = pa._clean_value(re.sub(rf"^(?:{pa._IT_IS}\s+)", "", t, flags=re.IGNORECASE))
         if not value:
-            return None
+            return None                                   # not a correction/forget: the command guard ran, no permission lookup
+    refused = await review_refusal(member)                # forget / fix are memories.review actions, asked only when requested
+    if refused:
+        return refused
+    if st is None:
+        pass
     elif st.kind == "forget_it":
         reply = await _forget_one(member, tp.row_id, tp.text, svc=svc)
         if reply == pa.STORE_DOWN_REPLY:

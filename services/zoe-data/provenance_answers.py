@@ -1258,6 +1258,7 @@ async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "m
     try:
         svc = svc or _svc_default()
         if strict_twins:
+            await _speculation_barrier()          # the retry mutates too: nothing is written before the turn commits
             done = await _finish_superseded(user_id, session_id, utterance, value, exp.row_id, svc=svc)
             if done:
                 mp.clear_explained(user_id)

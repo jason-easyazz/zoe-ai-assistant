@@ -1107,3 +1107,47 @@ def test_a_child_tapped_forget_is_refused(env):
     mv.tap(PANEL, OTHER, rid, "Swimming is on Friday")
     assert say("forget it", OTHER) == mv.GROWN_UP_REPLY
     assert approved(env, OTHER) == ["Swimming is on Friday"]
+
+
+# ── review round 2 on #2144 ───────────────────────────────────────────────────────────────────
+def test_a_command_after_the_wrong_tap_runs_even_when_the_permission_lookup_fails(env, monkeypatch):
+    # the command guard runs BEFORE the memories.review lookup: "pause" is a command, not a memory write, so a lookup failure
+    # must not answer it with a memory-permission refusal. A real correction is still refused.
+    put(env, "I live in Lisbon")
+    rid = row_id(env, "Lisbon")
+
+    @contextlib.asynccontextmanager
+    async def boom():
+        raise RuntimeError("db down")
+        yield
+
+    monkeypatch.setattr(db_compat, "get_compat_db", boom)
+    mv.tap(PANEL, ME, rid, "I live in Lisbon")
+    assert say("pause", ME) is None
+    mv.tap(PANEL, ME, rid, "I live in Lisbon")
+    assert say("forget it", ME) == mv.NO_REVIEW_REPLY
+    assert approved(env) == ["I live in Lisbon"]
+
+
+def test_the_tapped_retry_waits_for_the_speculation_barrier(env, monkeypatch):
+    import correction_apply
+
+    calls = []
+
+    async def barrier():
+        calls.append("barrier")
+        raise RuntimeError("turn not committed")
+
+    async def finish(*a, **k):
+        calls.append("write")
+        return "Fixed."
+
+    monkeypatch.setattr(pa, "_speculation_barrier", barrier)
+    monkeypatch.setattr(pa, "_finish_superseded", finish)
+    monkeypatch.setattr(correction_apply, "enabled", lambda: True)
+    put(env, "Swimming is on Friday")
+    rid = row_id(env, "Swimming")
+    exp = mv.mp.Explained(seq=0, row_id=rid, ts=time.time(), text="Swimming is on Friday")
+    reply = run(pa.fix(ME, "s1", "it's Saturday", "Saturday", exp, svc=env.svc, strict_twins=True))
+    assert calls == ["barrier"], "nothing mutates before the turn commits"
+    assert reply == pa.STORE_DOWN_REPLY
