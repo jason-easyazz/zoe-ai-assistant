@@ -426,7 +426,7 @@ Merge mechanics & gotchas — canonical record: **[docs/knowledge/merge-and-depl
 - GitGuardian scans **branch history**: a leaked/test cred in an intermediate commit fails even with a clean head tree. Scrub via a clean re-branch (squash to one commit on a new branch, replacement PR) — force-push is blocked by design.
 - Never `--admin`/`--force`; squash-only; the **human merges** (or armed auto-merge does) — agents never bypass the gate.
 
-- **Landings keep clear of the night window: 01:50 to 04:55.** No landing or harness may start, hold `/tmp/zoe-brain-window.lock`, or stay alive as a process in that span (the 12B night window refuses otherwise). Binding text: [scripts/AGENTS.md](scripts/AGENTS.md) "Brain-window quiet hours"; rationale: [docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md).
+- **Landings keep clear of the night window (measured pause, 2026-10-19).** The window runs ~02:50 to ~03:10; no voice landing/harness starts from 01:55 until it has finished (nor 04:00-04:55), no deploy from 02:45, and nothing at all while it is active - consult `night_busy.sh voice|deploy|test`. Binding text: [scripts/AGENTS.md](scripts/AGENTS.md) "Brain-window quiet hours"; rationale: [docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md).
 
 Local pre-commit — a tracked `.pre-commit-config.yaml` at repo root runs the repo's own `tools/audit/validate_structure.py` + `validate_critical_files.py` plus standard hygiene hooks. Run `pre-commit install` once per clone to arm it. `validate_structure.py` treats any root file not in `.zoe/manifest.json` `approved_root_files` as an orphan and fails — register new root files there.
 
