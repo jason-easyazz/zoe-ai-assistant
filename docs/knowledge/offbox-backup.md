@@ -296,8 +296,8 @@ HNSW index, and ran at 03:30 inside the night window. Now:
    network planted under the drill's name is refused, never exec'd into or removed (lab N9). `down` removes the recorded
    container WITH its anonymous volume (`rm -v`: the restored household data) and network; it is also the unit's
    `ExecStopPost`.
-3. **Checks** (each a finding on failure): the dump's sha256 vs its manifest and a full gunzip; `pg_restore --exit-on-error`
-   into the sandbox; **every table's `count(*) FROM ONLY`** equal to the manifest, no table missing or extra, the dump's table
+3. **Checks** (each a finding on failure): the dump's sha256 vs its manifest and a full gunzip; a sectioned
+   `pg_restore --exit-on-error` into the sandbox (see *Restoring a dump with data-excluded tables* below); **every table's `count(*) FROM ONLY`** equal to the manifest, no table missing or extra, the dump's table
    set equal to the live catalog's at backup time; the **pgvector extension version** equal to the dump's; the Alembic revision;
    every HNSW index in the restore valid and USED by a nearest-neighbour query that returns the probed row; and always an HNSW
    index **built** in the sandbox (2,000 synthetic vectors) and queried with `enable_seqscan=off` (no live table has one today,
@@ -313,6 +313,29 @@ HNSW index, and ran at 03:30 inside the night window. Now:
 
 Never touched: the live database (the drill only reads its image name), the live palace (`palace_drill_check.py` refuses
 `~/.mempalace`), the live backups (read only).
+
+#### Restoring a dump with data-excluded tables (FKs into the biometric tables)
+
+The nightly dump leaves out the DATA of `learned_voiceprints`, `learned_voiceprint_segments`, `omi_segment_embeddings` and
+`omi_voice_clusters` (owner privacy rule; manifest `data_excluded`). A table that IS backed up but has a foreign key into one of
+them (today `omi_segments.voice_cluster_id` -> `omi_voice_clusters`) restores its rows but not the parents, so a plain
+`pg_restore` ends with `violates foreign key constraint "omi_segments_voice_cluster_id_fkey"` and exit 1. That broke the weekly
+verify on 2026-10-25, and it would equally break a real disaster restore. The class is fixed, not the one FK:
+
+- **Decision: restore in sections and NULL the dangling column**, rather than dump the excluded tables' key columns. A cluster id
+  is a stable handle to a biometric row, so keeping ids would put (pseudonymous but real) biometric structure back into every
+  backup and the off-box copies; a link to a re-learnable cluster is itself re-learnable (the pipeline re-clusters the
+  segments). The row, the constraint and everything else are kept; only the link is cleared.
+- **Discovery is from the dump itself** (`pg_restore -s -f -`, no connection; `scripts/maintenance/pg_restore_plan.py`): every FK
+  whose parent is data-excluded and whose child is not. A new FK of this kind needs no code change. The backup records the same
+  list in the manifest as `excluded_fks` (audit trail); an old manifest without it, or none, falls back to the dump's TOC.
+- **Manual / disaster restore** of such a dump: `pg_restore -d <db> --section=pre-data`, then `--section=data`, then run
+  `nulling_sql(plan_for(<pg_restore -l>, <pg_restore -s -f ->))` (one `UPDATE <child> SET <col> = NULL WHERE <col> IS NOT NULL`
+  per FK) in `psql -v ON_ERROR_STOP=1`, then `--section=post-data`. The weekly drill does exactly this
+  (`Sandbox.restore`, through the root helper's `restore <db> <section>` and `inspect list|schema`).
+- **Nothing is blanket-ignored:** every section runs `--exit-on-error`, so any OTHER error still fails the drill. A NOT NULL
+  referencing column makes the UPDATE fail loudly instead of inventing a value.
+- After such a restore the biometric tables are empty and the nulled links are gone: re-enrol / let the pipeline re-learn them.
 
 ### 7.3 Encryption at rest for the local backups: recommended for the host archive only
 
@@ -340,6 +363,13 @@ Never touched: the live database (the drill only reads its image name), the live
    `sudo install -m 0755 -o root -g root scripts/setup/p0-deroot/libexec/zoe-restore-drill-pg /usr/local/libexec/zoe-priv/`.
    Once installed the drill uses it through `sudo -n`; before that it runs the repo copy as `zoe` (docker group). When the
    `zoe-database` image is bumped, bump `PINNED_IMAGE` in it too (a test fails until both match) and re-install.
+   **If the helper and `60-zoe-deroot` are already installed**, re-install both: the sectioned restore needs the new argv
+   (`restore <db> pre-data|data|post-data`, `inspect list|schema`); the old `restore <db>` is gone.
+   **The installed `~/scripts/maintenance/zoe-backup-verify.sh` is a stale May-2026 copy** that still restores into the live
+   instance with a bare `pg_restore` and discards its stderr - it is what failed on 2026-10-25. Replace it with the tracked
+   script (`install -m 0755 scripts/maintenance/zoe-backup-verify.sh ~/scripts/maintenance/`, with `zoe_restore_drill.py`,
+   `zoe_offbox.py`, `pg_dump_manifest.py` and `pg_restore_plan.py` alongside it - the script finds them next to itself), or point
+   `zoe-backup-verify.service` at the repo copy.
 3. **Units**: `cp scripts/setup/systemd/zoe-backup{,-verify}.{service,timer} ~/.config/systemd/user/ && systemctl --user
    daemon-reload` (both timers are already enabled live; the verify moves from the live 03:30 to Sunday 05:30). The first
    night writes `~/.zoe-backups/host/` and the first dump manifests; run `python3 scripts/maintenance/zoe_restore_drill.py` by
