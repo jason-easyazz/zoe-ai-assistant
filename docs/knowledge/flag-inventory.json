@@ -4489,6 +4489,36 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_QUIET_SKIP": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_REVIEW_TELEGRAM": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_review_digest.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_REVIEW_TELEGRAM_HOUR": {
+        "defaults": [
+          "8"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_review_digest.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMI_SEGMENT_EMBED_TTL_DAYS": {
         "defaults": [
           "dynamic"
@@ -4597,6 +4627,26 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/omi_voices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_YIELD_COOLOFF_S": {
+        "defaults": [
+          "15"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/live_voice_gate.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_YIELD_TO_VOICE": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/live_voice_gate.py"
         ],
         "typed_env": true
       },
@@ -7484,6 +7534,16 @@
           "services/zoe-data/voice_greeting.py"
         ],
         "typed_env": false
+      },
+      "ZOE_VOICE_HARNESS_LOCK": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/live_voice_gate.py"
+        ],
+        "typed_env": true
       },
       "ZOE_VOICE_IDENT": {
         "defaults": [
