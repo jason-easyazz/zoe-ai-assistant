@@ -323,9 +323,48 @@ def shadow_text_enabled() -> bool:
     to a file on this box, is mined by a local script, and is labelled by the
     local Gemma brain. It never leaves the box. Leave it off unless the household
     has agreed to a self-training round; the hash is kept either way.
+
+    A ROUND, NOT A STANDING SETTING (deep dive 2, T-4, 2026-10-19): the flag had
+    been left on and 10,560 shadow rows held raw household words. The opt-in now
+    needs ``ZOE_ROUTER_SHADOW_TEXT_UNTIL=YYYY-MM-DD`` (local date, inclusive, at
+    most ``SHADOW_TEXT_MAX_DAYS`` ahead): without it, past it, malformed or too far
+    out, NO text is written (a warning is logged once), so a forgotten flag lapses
+    instead of collecting forever. Rows already written are redacted by the forget
+    / retention work (#2110), not here.
     """
-    return ((os.environ.get("ZOE_ROUTER_SHADOW_TEXT", "") or "")
-            .strip().lower() in ("1", "true", "yes", "on"))
+    return shadow_text_window()[0]
+
+
+SHADOW_TEXT_MAX_DAYS = 30
+_SHADOW_TEXT_WARNED: set[str] = set()
+
+
+def shadow_text_window(today=None) -> tuple[bool, str]:
+    """(enabled, why) for raw-text capture; ``today`` (a date) is injectable for tests."""
+    import datetime as _dt
+
+    if ((os.environ.get("ZOE_ROUTER_SHADOW_TEXT", "") or "").strip().lower()
+            not in ("1", "true", "yes", "on")):
+        return False, "off"
+    raw = (os.environ.get("ZOE_ROUTER_SHADOW_TEXT_UNTIL", "") or "").strip()
+    day = today or _dt.date.today()
+    why = ""
+    try:
+        until = _dt.date.fromisoformat(raw) if raw else None
+    except ValueError:
+        until, why = None, f"ZOE_ROUTER_SHADOW_TEXT_UNTIL={raw!r} is not YYYY-MM-DD"
+    if until is None:
+        why = why or "ZOE_ROUTER_SHADOW_TEXT=1 without ZOE_ROUTER_SHADOW_TEXT_UNTIL (a round needs an end date)"
+    elif until < day:
+        why = f"the raw-text round ended {until.isoformat()}"
+    elif (until - day).days > SHADOW_TEXT_MAX_DAYS:
+        why = f"ZOE_ROUTER_SHADOW_TEXT_UNTIL is more than {SHADOW_TEXT_MAX_DAYS} days out"
+    if why:
+        if why not in _SHADOW_TEXT_WARNED:
+            _SHADOW_TEXT_WARNED.add(why)
+            logger.warning("router shadow log: raw text NOT recorded - %s", why)
+        return False, why
+    return True, f"raw-text round open until {until.isoformat()}"
 
 
 def _with_text(rec: dict, text: str) -> dict:
@@ -514,6 +553,10 @@ def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
         "two_stage_tool": d.get("tool"),
         "two_stage_domain": d.get("domain"),
         "shortlist": d.get("shortlist"),
+        # The head's OWN top-1, kept on gated rows too: there two_stage_domain is "chat"
+        # by construction, so without it the 0.70 confidence gate cannot be re-measured
+        # (deep dive 2, T-4).
+        "head_top": d.get("head_top"),
         "head_conf": d.get("head_conf"),
         "gated": d.get("gated"),
         "reason": d.get("reason"),

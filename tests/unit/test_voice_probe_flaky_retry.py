@@ -278,7 +278,10 @@ def test_legacy_baseline_without_a_clip_profile_still_gets_the_tolerance(tmp_pat
     run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
     ok = [_row(names[2])]
     rc, art, calls = _drive(tmp_path, monkeypatch, d, legacy, [run1, ok, ok])
-    assert (rc, art["status"]) == (0, "pass") and len(calls) == 3
+    assert len(calls) == 3 and art["flaky_clips"][0]["regressed"] is False   # the tolerance still applies...
+    # ...but since T-3 a baseline with no per-clip profile judges no clip, and judging nothing is never a pass
+    assert (rc, art["status"]) == (1, "fail")
+    assert any("no pinned clip has a per-clip expectation" in w for w in art["said_vs_did_regressions"])
     # ...but a deterministic non-brain failure on a legacy baseline (which had 0 fails) is hard
     rc2, art2, calls2 = _drive(tmp_path, monkeypatch, d, legacy,
                                [_with(names, **{"2": dict(verdict="CANT_DO"), "4": dict(verdict="ERROR")}), ok])
@@ -336,7 +339,8 @@ def test_a_regressed_clip_does_not_show_as_tolerated_in_the_gate_message(tmp_pat
     run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
     rc, art, _ = _drive(tmp_path, monkeypatch, d, base, [run1, [_row(names[2], "CANT_DO")]])
     assert art["status"] == "fail"
-    forced = dict(art, status="pass")
+    # forced past BOTH the status and the per-clip block (which would refuse the failed clip on its own)
+    forced = dict(art, status="pass", clip_checks=False)
     ok, why = vgc.evaluate(forced, now_epoch=time.time(), max_age_s=3600, baseline=None)
     assert ok and "tolerated" not in why                     # only non-regressed clips are reported tolerated
 
@@ -359,3 +363,99 @@ def test_measure_voice_rows_carry_content_free_route_identity(tmp_path, monkeypa
     assert got[0]["route_hash"] != got[1]["route_hash"] and len(got[0]["route_hash"]) == 8
     blob = json.dumps(got)
     assert "lamp" not in blob and "lights" not in blob       # hashes only, never the outcome label or text
+
+
+# -- a BLANK retry is inconclusive (owner decision 2026-10-20) ----------------------
+# Pattern in 6 of 65 runs: first run CANT_DO or EMPTY, the flaky retry then heard
+# nothing (EMPTY) and the clip counted as regressed on an unrelated PR. A blank retry
+# is re-run ONCE; only a non-blank result counts; a second blank fails as before.
+def _blank(names):
+    return [_row(names[2], "EMPTY", heard="")]
+
+
+@pytest.mark.parametrize("first", ["CANT_DO", "EMPTY"])
+def test_blank_retry_then_ok_passes_and_is_flagged(tmp_path, monkeypatch, world, first):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict=first)})
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, _blank(names), [_row(names[2])]])
+    assert (rc, art["status"]) == (0, "pass"), art
+    assert calls == [names, [names[2]], [names[2]]]          # the blank retry re-run exactly once
+    c = art["flaky_clips"][0]
+    assert c["runs"] == [first, "EMPTY", "OK"] and c["regressed"] is False
+    assert c["retry_empty_rerun"] is True and (c["failures"], c["of"]) == (1, 2)
+    assert "blank retry was re-run once" in c["note"]
+    assert art["said_vs_did_regressions"] == []
+
+
+def test_blank_retry_then_blank_again_fails(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [run1, _blank(names), _blank(names), [_row(names[2])]])
+    assert (rc, art["status"]) == (1, "fail")
+    assert len(calls) == 3                                   # no third retry: the OK scripted last is never reached
+    c = art["flaky_clips"][0]
+    assert c["runs"] == ["CANT_DO", "EMPTY", "EMPTY"] and c["regressed"] is True
+    assert c["retry_empty_rerun"] is True
+
+
+def test_blank_retry_then_cant_do_fails(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [run1, _blank(names), [_row(names[2], "CANT_DO")], [_row(names[2])]])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 3
+    assert art["flaky_clips"][0]["runs"] == ["CANT_DO", "EMPTY", "CANT_DO"]
+    assert art["flaky_clips"][0]["regressed"] is True and art["said_vs_did_regressions"]
+
+
+def test_negative_control_real_regressions_fail_exactly_as_before(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
+    # a retry that CANT_DOs (no blank anywhere): decided at 2 runs, no extra retry, no flag
+    bad = [_row(names[2], "CANT_DO")]
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, bad, [_row(names[2])]])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 2
+    c = art["flaky_clips"][0]
+    assert c["runs"] == ["CANT_DO", "CANT_DO"] and c["retry_empty_rerun"] is False
+    # a retry OK on the WRONG route is a failure, and does not earn the blank's extra retry
+    moved = [_row(names[2], "OK", brain=False, route="tier")]
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, moved, moved])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 2
+    assert art["flaky_clips"][0]["runs"] == ["CANT_DO", "ROUTE-CHANGED"]
+    assert art["flaky_clips"][0]["retry_empty_rerun"] is False
+    # a first-run route/tier change is still never retried at all
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [_with(names, **{"2": dict(verdict="CANT_DO", route="other-route")}), _blank(names)])
+    assert (rc, art["status"]) == (1, "fail") and calls == [names]
+
+
+def test_extra_retry_for_a_blank_happens_at_most_once_per_clip(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
+    # blank forever: the old budget of two retries, never more
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, _blank(names)])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 3
+    # the worst case is OK, blank, then blank: the hard ceiling of THREE retries per clip
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [run1, [_row(names[2])], _blank(names), _blank(names), [_row(names[2])]])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 4
+    assert art["flaky_clips"][0]["runs"] == ["CANT_DO", "OK", "EMPTY", "EMPTY"]
+    # and OK, blank, OK passes inside the same ceiling
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [run1, [_row(names[2])], _blank(names), [_row(names[2])]])
+    assert (rc, art["status"]) == (0, "pass") and len(calls) == 4
+    assert art["flaky_clips"][0]["retry_empty_rerun"] is True
+
+
+def test_blank_tolerance_unit_counts_calls_directly(world):
+    d, names, base = world
+    rep = _report(_with(names, **{"2": dict(verdict="CANT_DO")}))
+    seen: list = []
+
+    def rerun(ns):
+        seen.append(list(ns))
+        return _report([_row(n, "EMPTY", heard="") for n in ns])
+
+    out = vrp.apply_flaky_tolerance(rep, base, rerun, str(d))
+    assert len(seen) == 2 and out["clips"][0]["regressed"] is True      # the old two retries, nothing more

@@ -322,7 +322,15 @@ jobs:
                 /^services\/livekit\/config\.yaml$/,
                 /^services\/zoe-data\/voice_vad\.py$/,
                 /^services\/zoe-data\/voice_turn\.py$/,
-                /^.*silero.*$/
+                /^.*silero.*$/,
+                /^services\/zoe-data\/intent_router\.py$/,
+                /^services\/zoe-data\/stt_snap\.py$/,
+                /^services\/zoe-data\/memory_service\.py$/,
+                /^services\/zoe-data\/auth\.py$/,
+                /^services\/zoe-data\/panel_principal\.py$/,
+                /^scripts\/maintenance\/voice_regression_probe\.py$/,
+                /^scripts\/maintenance\/voice_clip_checks\.py$/,
+                /^scripts\/perf\/measure_voice\.py$/
               ];
               // Documentation is never voice scope: the `*kokoro*` / `*moonshine*` / `*silero*`
               // globs match docs/ notes by name. MIRRORED from voice_gate_check.py

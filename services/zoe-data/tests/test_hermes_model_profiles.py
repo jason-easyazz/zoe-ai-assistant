@@ -181,13 +181,17 @@ def test_restart_apply_fails_closed_when_worker_count_times_out(hermes_home, mon
     assert data["model"]["default"] == "openrouter/free"
 
 
-def test_restart_timeout_is_reported_after_successful_apply(hermes_home, monkeypatch):
+def test_restart_is_never_attempted_because_hermes_agent_is_retired(hermes_home, monkeypatch):
+    """Applying profiles with restart=True writes them and reports a skipped restart: nothing may
+    start `hermes-agent.service` (its unit execs `hermes gateway run`)."""
     monkeypatch.setattr(hmp, "count_running_workers", lambda: 0)
+    calls = []
 
-    def timeout_restart(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd="systemctl", timeout=30)
+    def recording_run(cmd, *args, **kwargs):
+        calls.append(cmd)
+        raise AssertionError(f"subprocess must not be used to restart hermes: {cmd}")
 
-    monkeypatch.setattr(hmp.subprocess, "run", timeout_restart)
+    monkeypatch.setattr(hmp.subprocess, "run", recording_run)
 
     result = hmp.apply_profiles(
         [{"name": "main", "provider": "openrouter", "model": "changed/model", "fallbacks": []}],
@@ -198,8 +202,9 @@ def test_restart_timeout_is_reported_after_successful_apply(hermes_home, monkeyp
     data = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
     audit = json.loads((hermes_home / "model-profile-audit.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert data["model"]["default"] == "changed/model"
+    assert not calls
     assert result["restart"]["returncode"] == -1
-    assert "timed out" in result["restart"]["stderr"]
+    assert "retired" in result["restart"]["stderr"]
     assert audit["restart_result"]["returncode"] == -1
 
 
