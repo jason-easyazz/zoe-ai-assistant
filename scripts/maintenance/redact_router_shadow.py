@@ -55,6 +55,19 @@ def load_ltl():
     return module
 
 
+def load_saved_settings() -> None:
+    """Fill ZOE_TEXT_LOG_RETENTION_DAYS / ZOE_ROUTER_HEAD_LOG / ZOE_INTENT_MISS_LOG from the zoe-data env files exactly as the hourly
+    ``rotate_service_logs.py`` does (the settings live there, not in an owner's shell): otherwise a bare ``--apply`` would strip text
+    the owner chose to keep, or leave a custom log untouched. A variable already in the environment wins."""
+    mod = sys.modules.get("rotate_service_logs")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("rotate_service_logs", Path(__file__).resolve().parent / "rotate_service_logs.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+    mod.apply_env_files()
+
+
 def _records(seg: Path) -> list[dict]:
     out = []
     for line in seg.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -109,6 +122,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--drop-backup", action="store_true", help="delete the backup once the post-check passes")
     ns = ap.parse_args(argv)
 
+    load_saved_settings()
     ltl = load_ltl()
     logs = [l for l in ltl.LOGS if not ns.log or l.name in ns.log]
     days = ns.days if ns.days is not None else ltl.retention_days()

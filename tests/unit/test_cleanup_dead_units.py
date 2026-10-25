@@ -135,3 +135,18 @@ def test_the_families_are_exactly_the_retired_installs():
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     assert set(mod.FAMILIES) == {"hermes-agent", "openclaw-gateway", "flue-zoe-brain", "zoe-dreaming", "zoe-keepwarm", "bonsai-server"}
+
+
+def test_a_timer_that_exists_only_elsewhere_still_blocks_its_family(tool, units, tmp_path):
+    """PR #2110: only the service is in this units dir; its timer is loaded from another user-unit directory and ACTIVE.
+    Break: skip members with no local file -> the timer is never asked about and the service is moved from under it."""
+    (units / "zoe-dreaming.timer").unlink()
+    asked = []
+
+    def state(u):
+        asked.append(u)
+        return ("enabled", "active") if u == "zoe-dreaming.timer" else dead(u)
+
+    assert run(tool, units, tmp_path, "--apply", state=state) == 1
+    assert "zoe-dreaming.timer" in asked
+    assert (units / "zoe-dreaming.service").exists()

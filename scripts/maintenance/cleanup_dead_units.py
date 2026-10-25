@@ -180,8 +180,8 @@ def assess_all(units_dir: Path, families: list[str], state: StateFn, repo_root: 
         blockers: list[str] = []
         states = {}
         for n in FAMILIES[family][0]:
-            if not (units_dir / n).exists():
-                continue
+            # ask systemd about EVERY family member, local file or not: a timer loaded/installed from another user-unit directory
+            # still fires the service we would move away
             enabled, active = state(n)
             states[n] = (enabled, active)
             if enabled not in _DEAD_STATES_ENABLED:

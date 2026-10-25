@@ -183,3 +183,31 @@ def test_malformed_rows_are_selected_dropped_and_checked(tool, logs, tmp_path, c
     monkeypatch.setattr(ltl, "rewrite", lambda *a, **k: 0)
     assert run(tool, tmp_path, "--apply") == 1
     assert "malformed rows remain" in capsys.readouterr().out
+
+
+def test_saved_retention_and_log_path_are_honoured(tool, logs, tmp_path, monkeypatch, capsys):
+    """PR #2110: a bare --apply must read the zoe-data env files like the hourly job. Break: drop load_saved_settings() ->
+    keep is ignored (30 days applied) and the custom log is never looked at."""
+    rotate = importlib.util.spec_from_file_location("rotate_service_logs", SCRIPT.parent / "rotate_service_logs.py")
+    rmod = importlib.util.module_from_spec(rotate)
+    sys.modules["rotate_service_logs"] = rmod
+    rotate.loader.exec_module(rmod)
+    custom = tmp_path / "custom.jsonl"
+    custom.write_text(logs.read_text())
+    env = tmp_path / "zoe-data.env"
+    env.write_text(f'ZOE_TEXT_LOG_RETENTION_DAYS=keep\nZOE_ROUTER_HEAD_LOG="{custom}"\n')
+    monkeypatch.setattr(rmod, "ENV_FILES", (env,))
+    monkeypatch.setenv("ZOE_TEXT_LOG_RETENTION_DAYS", "x")      # registers teardown restore (apply_env_files writes os.environ directly)
+    monkeypatch.delenv("ZOE_TEXT_LOG_RETENTION_DAYS")
+    monkeypatch.delenv("ZOE_ROUTER_HEAD_LOG")
+    before = custom.read_bytes()
+    assert run(tool, tmp_path, "--apply") == 0
+    assert "nothing selected" in capsys.readouterr().out
+    assert custom.read_bytes() == before
+    env.write_text(f'ZOE_TEXT_LOG_RETENTION_DAYS=30\nZOE_ROUTER_HEAD_LOG="{custom}"\n')
+    monkeypatch.delenv("ZOE_TEXT_LOG_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("ZOE_ROUTER_HEAD_LOG", raising=False)
+    assert run(tool, tmp_path, "--apply") == 0
+    monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(logs))            # restore the fixture pin on teardown (script set it)
+    assert "SECRET-OLD-ONE" not in custom.read_text() and "recent-words" in custom.read_text()
+    assert "SECRET-OLD-ONE" in logs.read_text()                 # the default-path log was not the one acted on

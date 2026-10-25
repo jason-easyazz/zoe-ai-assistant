@@ -46,6 +46,7 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,8 +109,14 @@ def retention_days() -> Optional[float]:
         return DEFAULT_RETENTION_DAYS
 
 
-def _append_lock():
-    """The router's own in-process append lock when this process has it loaded (zoe-data); otherwise a no-op context."""
+_MISS_THREAD_LOCK = threading.Lock()
+
+
+def _append_lock(log: Optional[TextLog] = None):
+    """The log's in-process append lock: the router's own when this process has it loaded (zoe-data), this module's for the
+    intent-miss log; otherwise a no-op context."""
+    if log is INTENT_MISSES:
+        return _MISS_THREAD_LOCK
     mod = sys.modules.get("semantic_router")
     lock = getattr(mod, "_shadow_write_lock", None)
     if lock is not None:
@@ -138,12 +145,10 @@ def locked(log: TextLog):
     """Hold the log's write lock for a whole multi-segment pass: the in-process append lock, then (router log only) an exclusive
     ``flock`` on ``<log>.lock`` - the SAME lock ``semantic_router._append_shadow_line`` takes around rotate + append, in the same order.
     So no append and no rotation can interleave with the rewrite, in this process or another. Fails closed: if the flock cannot be
-    had within ``LOCK_WAIT_S`` it raises ``TimeoutError`` (the sweep reports -1, the cascade step fails and is retried). The intent-miss
-    log has no cooperating writer lock; the old-inode catch-up in ``rewrite`` covers it."""
-    with _append_lock():
-        if log is not ROUTER_SHADOW:
-            yield
-            return
+    had within ``LOCK_WAIT_S`` it raises ``TimeoutError`` (the sweep reports -1, the cascade step fails and is retried). BOTH logs take
+    it: the intent-miss writer appends through ``append_line`` (same lock). The old-inode catch-up in ``rewrite`` stays as defence
+    against a writer process still running the old, lock-less code."""
+    with _append_lock(log):
         path = lock_path(log)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,6 +172,31 @@ def locked(log: TextLog):
                 fcntl.flock(fh, fcntl.LOCK_UN)
         finally:
             fh.close()
+
+
+def append_line(log: TextLog, line: str) -> bool:
+    """Append one JSON line to ``log`` under the SAME locks a rewrite pass holds (in-process lock + ``flock`` on ``<log>.lock``), so
+    an append can never land in an inode a sweep/erase is about to replace. Never WAITS (it runs on a live voice turn): if a pass
+    holds the lock the observation is skipped and False returned. I/O errors raise to the caller (which swallows them)."""
+    tlock = _append_lock(log)
+    if not tlock.acquire(blocking=False):
+        return False
+    try:
+        path = log_path(log)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path(log), "a") as fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            try:
+                with open(path, "a") as out:
+                    out.write(line.rstrip("\n") + "\n")
+                return True
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+    finally:
+        tlock.release()
 
 
 _SETTLE_S = 0.05
