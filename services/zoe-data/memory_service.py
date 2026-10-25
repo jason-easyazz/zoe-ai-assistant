@@ -2997,6 +2997,39 @@ class MemoryService:
             logger.warning("memory_service: archive_duplicate failed (%s)", type(exc).__name__)
             return False
 
+    async def flag_challenged(self, mem_id: str, *, user_id: str, utterance: str,
+                              actor: str = "trait_challenge") -> bool:
+        """The owner HEDGED or DENIED what this approved row says about them ("I'm not sure I'm a
+        man of faith"): park it as ``pending`` so it is no longer served as fact, and leave it in
+        the review queue. Never a deletion and never a rewrite - the person did not say the
+        opposite, only that the claim is not settled - so the row keeps its text and provenance and
+        an approve restores it. Only the row's own user may do this; any other row is refused.
+        Never raises; returns whether it flagged."""
+        try:
+            cur = await self.get(mem_id)
+            if cur is None:
+                return False
+            uid = cur.metadata.get("user_id") or cur.metadata.get("wing")
+            if not uid or uid != user_id or str(cur.metadata.get("status")) != "approved":
+                return False
+            lock = self._user_locks.setdefault(uid, asyncio.Lock())
+            async with lock:
+                md = dict(cur.metadata)
+                md.update(status="pending", reviewed_by=actor,
+                          reviewed_at=datetime.datetime.utcnow().isoformat() + "Z",
+                          review_note=("owner hedged or denied this: " + " ".join(utterance.split())[:200])[:1024],
+                          challenged_by_turn=" ".join(utterance.split())[:300])
+                await self._run_sync(self._write_row, mem_id, cur.text, md)
+                await self._append_audit(
+                    mem_id=mem_id, user_id=uid, actor=actor, action="flag_challenged",
+                    before={"status": "approved"}, after={"status": "pending"},
+                    reason="owner hedged or denied the claim")
+            _invalidate_agent_user_facts_cache(uid)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_service: flag_challenged failed (%s)", type(exc).__name__)
+            return False
+
     async def _existing_candidate(
         self, user_id: str, text: str, contradicts: str
     ) -> Optional[MemoryRef]:
