@@ -3047,6 +3047,13 @@
    "kind": "str",
    "readers": 2
   },
+  "ZOE_OMI_QUIET_SKIP": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
   "ZOE_OMI_REVIEW_TELEGRAM": {
    "defaults": [
     "unset"
@@ -3136,6 +3143,20 @@
     "dynamic"
    ],
    "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_YIELD_COOLOFF_S": {
+   "defaults": [
+    "15"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
+  "ZOE_OMI_YIELD_TO_VOICE": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
    "readers": 1
   },
   "ZOE_OMNIGENT_AGENT_ID": {
@@ -5132,6 +5153,13 @@
     "dynamic"
    ],
    "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_VOICE_HARNESS_LOCK": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "str",
    "readers": 1
   },
   "ZOE_VOICE_IDENT": {
