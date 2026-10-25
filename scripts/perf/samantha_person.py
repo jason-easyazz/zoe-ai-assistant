@@ -2656,11 +2656,11 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
 
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = sb.resolve_service_dir(args.service_dir)
-    revision = sb.service_revision(service_dir)
+    revision = sb.service_revision(sb.code_checkout_dir())  # the checkout actually served
     if not proof["ok"] or proof["pairing_problems"]:
         return _refuse(args.results, "the instrument proof failed - fix the controls first: "
                        + "; ".join((proof["problems"] + proof["pairing_problems"])[:3]), revision)
-    sb.load_source_fallback_markers(service_dir)
+    sb.load_source_fallback_markers(sb.code_checkout_dir())
     lock_fd = sb._acquire_lock()  # noqa: F841 - held for the process lifetime
     try:
         cur = os.nice(0)

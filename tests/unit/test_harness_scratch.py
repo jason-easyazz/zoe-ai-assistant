@@ -488,3 +488,22 @@ def test_a_refused_run_starts_nothing_in_the_nightly_window_or_during_a_deploy(b
     monkeypatch.setattr(sb, "deploy_in_progress", lambda: (None, "gh unavailable"))
     stack, refusal = sb.scratch_stack_for(svc, "samantha_person", {}, print)
     assert stack is None and "deploy check" in refusal and fake.started == []
+
+
+def test_the_scratch_instance_does_not_wait_for_a_stt_model_it_cannot_load():
+    """The empty scratch model cache makes Moonshine's warm-up fail and /readyz stay red, so all three text harnesses would time out.
+    Negative control: drop ZOE_STT_DISABLED from harness_env -> red."""
+    env = hs.harness_env(LIVE_ENV, root=Path("/tmp/x"), dsn="postgresql://s", token="t", brain_token="b",
+                         flue_url="http://127.0.0.1:1", self_url="http://127.0.0.1:2")
+    assert env["ZOE_STT_DISABLED"] == "1"
+
+
+@pytest.mark.parametrize("fname", sorted(HARNESSES))
+def test_revision_and_cleanliness_come_from_the_checkout_actually_served(fname, bar):
+    """The scratch stack runs THIS checkout's code; service_dir (settings) may be the main checkout in a linked worktree.
+    Negative control: service_revision(service_dir) in a harness main -> red."""
+    sb, _svc = bar
+    assert sb.code_checkout_dir() == hs.REPO / "services" / "zoe-data"
+    src = _main_source(fname)
+    assert "service_revision(service_dir)" not in src and "load_source_fallback_markers(service_dir)" not in src
+    assert "service_revision(" in src and "code_checkout_dir()" in src

@@ -1175,3 +1175,58 @@ def test_accepting_writes_the_verdict_and_its_follow_up_in_one_transaction(env, 
     env.db.conn = inner
     row = env.db.rows("SELECT decision FROM evolution_proposals WHERE id = ?", (pid,))[0]
     assert row["decision"] == "", "the approval rolled back with the failed follow-up"
+
+
+def test_a_new_proposal_is_one_transaction_a_failed_detail_write_leaves_no_queue_orphan(env, monkeypatch):
+    """The queue row, the detail row and the evidence links land together: ``AsyncpgCompat.commit()`` is a no-op, so each statement used
+    to autocommit and a second pass could prune the half-written queue row (leaving a hidden detail row whose fingerprint blocked a
+    replacement). Negative control: drop the ``_atomic`` block around ``_upsert`` in ``run_pass`` -> the queue row survives -> red."""
+    store(*genuine())
+    inner = env.db.conn
+    state = {"depth": 0}
+
+    class _Conn:
+        def __getattr__(self, name):
+            return getattr(inner, name)
+
+        def execute(self, sql, params=()):
+            if sql.startswith("INSERT INTO struggle_proposals "):
+                raise RuntimeError("the detail write failed")
+            return inner.execute(sql, params)
+
+        def commit(self):
+            if state["depth"] == 0:
+                inner.commit()
+
+    @contextlib.asynccontextmanager
+    async def _tx():
+        state["depth"] += 1
+        try:
+            yield
+        except BaseException:
+            inner.rollback()
+            state["depth"] -= 1
+            raise
+        state["depth"] -= 1
+        if state["depth"] == 0:
+            inner.commit()
+
+    class _Tx:
+        def transaction(self):
+            return _tx()
+
+        def __getattr__(self, name):
+            return getattr(env.db, name)
+
+    env.db.conn = _Conn()
+    wrapped = _Tx()
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield wrapped
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    with pytest.raises(RuntimeError):
+        run(sp.run_pass(now=NOW))
+    env.db.conn = inner
+    assert queue_of(env) == [] and rows_of(env) == [], "nothing half-written survives the failed detail insert"

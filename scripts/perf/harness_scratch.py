@@ -174,6 +174,8 @@ def harness_env(live_env: dict, *, root: Path, dsn: str, token: str, brain_token
         HTTP_PROXY=BLACK_HOLE, HTTPS_PROXY=BLACK_HOLE, http_proxy=BLACK_HOLE, https_proxy=BLACK_HOLE,
         NO_PROXY="127.0.0.1,localhost,::1", no_proxy="127.0.0.1,localhost,::1",
         MOONSHINE_VOICE_CACHE=str(root / "no-stt-models"),
+        # ... and the text harnesses never transcribe either: no Moonshine warm-up, and /readyz does not wait on it
+        ZOE_STT_DISABLED="1",
         LD_LIBRARY_PATH=os.environ.get("LD_LIBRARY_PATH") or "/usr/local/cuda-12.6/lib64:/usr/lib/aarch64-linux-gnu",
     )
     for name in HOUSE_URLS:

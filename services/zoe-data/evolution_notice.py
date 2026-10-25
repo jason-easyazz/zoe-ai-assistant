@@ -706,22 +706,29 @@ async def run_measure_phase() -> dict:
             }
 
             new_status = verdict  # the board word: 'validated' or 'failed'
-            # the status move is the queue (applied -> kept | reverted, the one legal move here), FIRST: a row the queue refuses
-            # keeps a NULL validation_result, so the next pass measures it again instead of leaving it stuck as measured-but-applied
+            # the status move is the queue (applied -> kept | reverted, the one legal move here) and the measurement are ONE transaction:
+            # a failed result write takes the move back (the row stays `applied` with a NULL result, so the next pass measures it again),
+            # and the row lock the move takes keeps a retry from reopening / redeploying between the two writes. The result write is also
+            # conditional on the deployment it measured, so an old measurement can never overwrite a newer attempt's cleared result.
             try:
-                await evolution_queue.transition(
-                    db, proposal_id, "kept" if verdict == "validated" else "reverted", actor="evolution_notice:measure",
-                    frm="applied", note="measured: " + verdict,
-                    evidence={"before": {"misses_48h": miss_before}, "after": {"misses_48h": miss_after}},
-                )
+                async with evolution_queue.atomic(db):
+                    await evolution_queue.transition(
+                        db, proposal_id, "kept" if verdict == "validated" else "reverted", actor="evolution_notice:measure",
+                        frm="applied", note="measured: " + verdict,
+                        evidence={"before": {"misses_48h": miss_before}, "after": {"misses_48h": miss_after}},
+                    )
+                    written = await db.execute(
+                        "UPDATE evolution_proposals SET validation_result=$1 "
+                        "WHERE id=$2 AND validation_result IS NULL AND deployed_at = $3",
+                        json.dumps(validation_result),
+                        proposal_id,
+                        deployed_at,
+                    )
+                    if int(getattr(written, "rowcount", 0) or 0) < 1:
+                        raise evolution_queue.QueueError("the deployment changed while it was measured")
             except evolution_queue.QueueError as exc:
                 logger.warning("evolution_measure: proposal %s not moved: %s", proposal_id, exc)
                 continue
-            await db.execute(
-                "UPDATE evolution_proposals SET validation_result=$1 WHERE id=$2",
-                json.dumps(validation_result),
-                proposal_id,
-            )
             results["evaluated"] += 1
             results[verdict] += 1
             logger.info(

@@ -6847,6 +6847,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_STT_DISABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_STT_PREWARM_ON_WAKE": {
         "defaults": [
           "True"

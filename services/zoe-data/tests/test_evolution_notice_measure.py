@@ -425,3 +425,64 @@ async def test_run_evolution_notice_stores_contract_snapshots(monkeypatch):
     assert sync_calls[1]["proposal_id"] == health_args[0]
     assert sync_calls[1]["proposal_type"] == "agent_health"
     assert sync_calls[1]["contract_snapshot"] == health_args[5]
+
+
+
+class _TxLog:
+    def __init__(self, log):
+        self.log = log
+
+    async def __aenter__(self):
+        self.log.append("begin")
+
+    async def __aexit__(self, et, ev, tb):
+        self.log.append("rollback" if et else "commit")
+        return False
+
+
+def _tx_db(rows, log, *, result_rowcount=1):
+    class _TxDb(_Db):
+        def transaction(self):
+            return _TxLog(log)
+
+        async def execute(self, sql, *args):
+            if sql.startswith("UPDATE evolution_proposals SET validation_result"):
+                self.execute_calls.append((sql, args))
+                log.append("result")
+                return _Cur([], rowcount=result_rowcount)
+            if sql.startswith("UPDATE evolution_proposals SET status") or sql.startswith("UPDATE evolution_proposals"):
+                log.append("move")
+            return await super().execute(sql, *args)
+
+    return _TxDb(rows)
+
+
+def _measure_row():
+    return {"id": "p1", "type": "t", "title": "T", "target_patterns": None, "deployed_at": 1000.0}
+
+
+@pytest.mark.asyncio
+async def test_the_measured_move_and_its_result_are_one_conditional_transaction(monkeypatch):
+    """The move to kept / reverted and the validation_result write commit together (a failed result write used to leave the row moved
+    and never re-measured) and the result write is conditional on the deployment it measured (a stale measurement can no longer
+    overwrite a newer attempt's cleared result). Negative controls: drop the ``atomic`` block -> no begin/commit around move+result, red;
+    drop ``AND validation_result IS NULL`` / the deployed_at guard -> the SQL assertion is red; ignore rowcount -> the stale case is red."""
+    monkeypatch.setattr(evolution_notice.time, "time", lambda: 1000.0 + evolution_notice._MEASURE_WINDOW_S + 1)
+    monkeypatch.setitem(sys.modules, "multica_client", types.SimpleNamespace(
+        update_multica_issue_on_proposal_status_change=lambda *a, **k: None))
+
+    log = []
+    db = _tx_db([_measure_row()], log)
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: db))
+    res = await evolution_notice.run_measure_phase()
+    assert res["evaluated"] == 1
+    assert log[0] == "begin" and log[-1] == "commit" and "result" in log and "move" in log
+    sql = [s for s, _ in db.execute_calls if s.startswith("UPDATE evolution_proposals SET validation_result")][0]
+    assert "validation_result IS NULL" in sql and "deployed_at = $3" in sql
+
+    # a stale write (the guard matched no row) takes the move back and does not count as measured
+    log2 = []
+    stale = _tx_db([_measure_row()], log2, result_rowcount=0)
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: stale))
+    res2 = await evolution_notice.run_measure_phase()
+    assert res2["evaluated"] == 0 and log2[0] == "begin" and log2[-1] == "rollback"

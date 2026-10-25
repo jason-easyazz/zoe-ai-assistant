@@ -143,7 +143,15 @@ async def _check_brain_ready(timeout_s: float = 2.0) -> dict:
         return detail
 
 
+def _stt_disabled() -> bool:
+    """``ZOE_STT_DISABLED=1``: the isolated text-harness instance never transcribes (no model, no download), so it neither warms
+    Moonshine nor waits on it for readiness. Never set on the live service."""
+    return os.environ.get("ZOE_STT_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 async def _check_stt_ready() -> dict:
+    if _stt_disabled():
+        return {"ok": True, "engine": "moonshine", "disabled": True, "loaded": False}
     try:
         from routers import voice_tts
 
@@ -1209,9 +1217,12 @@ async def lifespan(app: FastAPI):
         logger.warning("event-loop lag monitor unavailable (non-fatal): %s", _lag_exc)
 
     try:
-        from routers.voice_tts import warm_moonshine
-        asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
-        logger.info("Voice STT warmup scheduled (Moonshine — the only STT engine)")
+        if _stt_disabled():
+            logger.info("Voice STT warmup skipped (ZOE_STT_DISABLED=1: isolated text-harness instance)")
+        else:
+            from routers.voice_tts import warm_moonshine
+            asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
+            logger.info("Voice STT warmup scheduled (Moonshine — the only STT engine)")
         try:
             import semantic_router as _sr
             if _sr.is_enabled():

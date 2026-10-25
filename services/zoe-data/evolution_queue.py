@@ -206,6 +206,9 @@ def _atomic(db):
     return tx() if callable(tx) else contextlib.nullcontext()
 
 
+atomic = _atomic        # public: a caller that pairs a queue move with its OWN write wraps both in this one transaction
+
+
 async def _fetch(db, pid: str) -> dict:
     rows = await _rows(db, f"SELECT {', '.join(_COLS)} FROM evolution_proposals WHERE id = ?", (pid,))
     if not rows:

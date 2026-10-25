@@ -1412,6 +1412,13 @@ def deploy_in_progress(runner: Callable[..., Any] = subprocess.run) -> tuple[boo
     return bool(found), f"{len(found)} deploy.yml run(s) queued/in progress"
 
 
+def code_checkout_dir() -> Path:
+    """The zoe-data tree the scratch stack actually SERVES (harness_scratch runs THIS checkout's code). Revision metadata, the
+    clean-baseline gate and the fallback markers come from here; ``service_dir`` stays the source of live settings only (in a linked
+    worktree without its own .env it resolves to the main checkout, which is not what is being measured)."""
+    return Path(__file__).resolve().parents[2] / "services" / "zoe-data"
+
+
 def service_revision(service_dir: Path | None) -> dict[str, Any] | None:
     """Commit of the checkout the live service runs from — same shape and the
     same fail-closed dirty rule as voice_regression_probe.service_revision."""
@@ -2581,8 +2588,8 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
 
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = resolve_service_dir(args.service_dir)
-    revision = service_revision(service_dir)
-    load_source_fallback_markers(service_dir)  # the checkout's own "brain did not answer" texts
+    revision = service_revision(code_checkout_dir())  # the checkout actually served, not the settings dir
+    load_source_fallback_markers(code_checkout_dir())  # the checkout's own "brain did not answer" texts
     lock_fd = _acquire_lock()  # noqa: F841 — held for the process lifetime
     try:
         cur = os.nice(0)

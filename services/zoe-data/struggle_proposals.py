@@ -1120,7 +1120,8 @@ async def run_pass(*, now: Optional[float] = None, llm: Optional[LLM] = None, dr
                     res["deferred"] += 1       # RANKED, not dropped: a cluster beyond the nightly cap of NEW proposals waits for a later night
                     continue
                 fresh += 1
-            action = await _upsert(db, c, old, t, m)
+            async with _atomic(db):
+                action = await _upsert(db, c, old, t, m)
             res[action[0]] = res.get(action[0], 0) + 1
             if action[1]:
                 keep.add(action[1])
@@ -1165,6 +1166,13 @@ async def _write_links(db, pid: str, c: Cluster) -> None:
     for eid, uid, ts, s in c.links:
         await db.execute("INSERT INTO struggle_proposal_events (proposal_id, event_id, user_id, ts, signal) VALUES (?, ?, ?, ?, ?)",
                          (pid, eid, uid, ts, s))
+
+
+def _atomic(db):
+    """ONE transaction around a proposal's queue row, its detail row and its evidence links (asyncpg ``conn.transaction()``; a savepoint
+    inside an open one). ``AsyncpgCompat.commit()`` is a no-op, so without this each statement autocommits and a concurrent pass can prune
+    the half-written queue row. A test double without transactions runs the statements as they come."""
+    return eq.atomic(db)
 
 
 async def _upsert(db, c: Cluster, old: Optional[dict], now: float, m: str) -> tuple[str, Optional[str]]:

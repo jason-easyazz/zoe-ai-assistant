@@ -1355,8 +1355,8 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
 
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = sb.resolve_service_dir(args.service_dir)
-    revision = sb.service_revision(service_dir)
-    sb.load_source_fallback_markers(service_dir)
+    revision = sb.service_revision(sb.code_checkout_dir())  # the checkout actually served
+    sb.load_source_fallback_markers(sb.code_checkout_dir())
     lock_fd = sb._acquire_lock()  # noqa: F841 — held for the process lifetime
     try:
         cur = os.nice(0)
