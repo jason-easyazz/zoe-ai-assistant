@@ -74,21 +74,27 @@ async def fresh_pin(card: prc.Card, caller: Optional[dict]) -> bool:
 async def _require_review(card: prc.Card) -> None:
     """Forget / correct are ``memories.review`` actions, the same capability the phone routes check. The card token proves the
     member, not their role: look the CARD OWNER's role up and refuse (403) when it may not review. Fail-closed."""
+    denied = HTTPException(status_code=403, detail="Your role does not have access to this action.")
     try:
         from db_compat import get_compat_db
+        from manner_block import is_adult
 
         async with get_compat_db() as db:
-            cur = await db.execute("SELECT role FROM users WHERE id = ?", (card.member_id,))
+            # the AUTHORITATIVE account (zoe-auth's auth_users, what get_current_user returns on the phone routes) - NOT the
+            # data-plane ``users`` mirror, which chat writes as 'member' for every account, a child's included
+            cur = await db.execute("SELECT role FROM auth_users WHERE user_id = ?", (card.member_id,))
             row = await cur.fetchone()
             role = (row[0] if row else None) or ""
             if not role:
-                raise HTTPException(status_code=403, detail="Your role does not have access to this action.")
+                raise denied
             await require_feature_access(db, {"user_id": card.member_id, "role": role}, feature="memories", action="review")
+            if not await is_adult(card.member_id, db=db):   # a kid member_mode locks even an adult-looking role
+                raise denied
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("memories_card: role lookup failed (%s)", type(exc).__name__)
-        raise HTTPException(status_code=403, detail="Your role does not have access to this action.") from exc
+        raise denied from exc
 
 
 class _Act(BaseModel):

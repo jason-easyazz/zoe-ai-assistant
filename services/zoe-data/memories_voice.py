@@ -190,6 +190,9 @@ def _covers(want: set, have: set) -> bool:
 
 
 _NEGATION_RE = re.compile(r"\b(?:not|no|never|none|nothing|nobody|cannot|without)\b|n['’]t\b", re.I)
+#: a temporal qualifier changes WHEN a claim holds ("I used to like jazz" is not "I like jazz"); the stopwords drop most of them
+_TEMPORAL_RE = re.compile(r"\bused\s+to\b|\bno\s+longer\b|\bany\s?more\b|\bback\s+then\b|\bpreviously\b|\bformerly\b|"
+                          r"\bthese\s+days\b|\bnowadays\b|\bcurrently\b|\bat\s+the\s+moment\b|\bnow\b", re.I)
 _ME_WORDS = frozenset({"i", "i'm", "im", "i've", "i'd", "me", "my", "mine", "myself", "we", "we're", "our", "user", "user's", "users"})
 
 
@@ -205,10 +208,12 @@ def _i_lead(text: str) -> Optional[bool]:
 
 
 def _same_claim(said: str, row: str) -> bool:
-    """False when ``row`` covers the words but claims something else: it is negated and the member's words are not (or the reverse),
+    """False when ``row`` covers the words but claims something else: it is negated or time-qualified (used to, no longer, now) and the member's words are not (or the reverse),
     or the person named and "I" swap who does what. Forgetting is permanent, so a mismatch is asked about, never erased. Pure."""
     if bool(_NEGATION_RE.search(said)) != bool(_NEGATION_RE.search(row)):
         return False
+    if bool(_TEMPORAL_RE.search(said)) != bool(_TEMPORAL_RE.search(row)):
+        return False                                     # "used to like jazz" must not erase "likes jazz" (or the reverse)
     a, b = _i_lead(said), _i_lead(row)
     return a is None or b is None or a == b
 
@@ -479,6 +484,18 @@ def reset() -> None:
     _RETRY.clear()
 
 
+def _is_command(text: str) -> bool:
+    """True when the words are a command the intent router already understands ("mute", "shuffle", "volume up", "turn the lights
+    off"): the one matcher, not a hand list. A bare command is never a correction value. A matcher failure reads as a command -
+    nothing is written on a doubt."""
+    try:
+        import intent_router
+
+        return intent_router.detect_intent(text, log_miss=False) is not None
+    except Exception:  # noqa: BLE001
+        return True
+
+
 async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: str, *, svc: Any = None) -> Optional[str]:
     t = " ".join(str(text or "").split())
     if _CANCEL_RE.match(t):
@@ -487,7 +504,7 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
     value = ""
     if st is None:
         if (tp.awaiting and t and len(t.split()) <= 14 and "?" not in t and not pa._NOT_A_FIX_RE.match(t)
-                and not _NOT_AN_ANSWER_RE.match(t) and not parse(t)):
+                and not _NOT_AN_ANSWER_RE.match(t) and not parse(t) and not _is_command(t)):
             value = pa._clean_value(re.sub(rf"^(?:{pa._IT_IS}\s+)", "", t, flags=re.IGNORECASE))
         if not value:
             return None

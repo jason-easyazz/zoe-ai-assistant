@@ -1006,3 +1006,56 @@ def test_an_inferred_person_fact_is_not_said_as_told(env):
     said = mv.spoken_person(e)
     assert "Lisbon" not in said and "nurse" in said and "worked out 1 thing" in said, said
     assert "worked out 1 thing" in mv.spoken_me(wall)
+
+
+# ── three more findings on #2144 ──────────────────────────────────────────────────────────────
+def test_a_child_card_cannot_forget_or_correct_even_with_a_member_mirror_role(env):
+    # the card owner's role is read from the AUTHORITATIVE account (auth_users), not the users mirror chat writes as 'member'
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    env.db.conn.execute("UPDATE users SET role = 'member' WHERE id = ?", (OTHER,))
+    env.db.conn.commit()
+    child = SimpleNamespace(member_id=OTHER)
+    with pytest.raises(HTTPException) as exc:
+        run(memories_card._require_review(child))
+    assert exc.value.status_code == 403
+    run(memories_card._require_review(SimpleNamespace(member_id=ME)))        # an adult still passes
+    env.db.conn.execute("DELETE FROM auth_users WHERE user_id = ?", (ME,))     # no authoritative account: fail closed
+    env.db.conn.commit()
+    with pytest.raises(HTTPException):
+        run(memories_card._require_review(SimpleNamespace(member_id=ME)))
+
+
+def test_a_kid_member_mode_blocks_the_card_even_for_an_adult_role(env):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    env.db.conn.execute("INSERT INTO member_modes VALUES (?, 'kid', 1)", (ME,))
+    env.db.conn.commit()
+    with pytest.raises(HTTPException):
+        run(memories_card._require_review(SimpleNamespace(member_id=ME)))
+
+
+def test_a_used_to_forget_never_erases_the_present_tense_row_and_the_reverse(env):
+    put(env, "I like jazz.")
+    assert say("forget that I used to like jazz", ME) == mv.DIFFERENT_REPLY
+    assert say("forget that I no longer like jazz", ME) in (mv.DIFFERENT_REPLY, mv.NOT_FOUND_REPLY)
+    assert approved(env) == ["I like jazz."]
+    assert say("forget that I like jazz", ME).startswith("Done")             # the exact claim still goes
+    assert approved(env) == []
+    put(env, "I used to like jazz.")
+    assert say("forget that I like jazz", ME) == mv.DIFFERENT_REPLY
+    assert approved(env) == ["I used to like jazz."]
+    assert say("forget that I used to like jazz", ME).startswith("Done")
+
+
+def test_a_bare_command_after_the_wrong_tap_runs_and_is_not_the_correction(env):
+    put(env, "I live in Lisbon")
+    rid = row_id(env, "Lisbon")
+    for word in ("mute", "unmute", "shuffle", "pause", "next", "volume up"):
+        mv.tap(PANEL, ME, rid, "I live in Lisbon")
+        assert say(word, ME) is None, word
+        assert approved(env) == ["I live in Lisbon"], word
