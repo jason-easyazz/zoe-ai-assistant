@@ -378,7 +378,7 @@ def test_equal_token_sets_from_different_rows_ask_which(env):
     # exactly what was asked -> ask, forget nothing.
     put(env, "Sam, I love.", when="2026-10-06T02:00:00Z")
     put(env, "Sam loves me.", when="2026-10-06T08:00:00Z")
-    assert say("forget that I love Sam", ME) == mv.WHICH_REPLY
+    assert say("forget that I love Sam", ME) in (mv.WHICH_REPLY, mv.DIFFERENT_REPLY)   # either way: asked, nothing erased
     assert sorted(t for t in approved(env) if "Sam" in t) == ["Sam loves me.", "Sam, I love."], "nothing forgotten"
 
 
@@ -911,3 +911,98 @@ def test_phone_actions_follow_the_role_capabilities(seeded, monkeypatch):
     assert c.get("/api/memories/mine/actions", headers=H).json() == {"forget": False, "correct": False}
     denied.add("read")
     assert c.get("/api/memories/mine/actions", headers=H).status_code == 403
+
+
+# ── last review round on #2144 ────────────────────────────────────────────────────────────────
+def test_a_lone_opposite_polarity_row_is_never_erased(env):
+    put(env, "I don't like jazz.")
+    assert say("forget that I like jazz", ME) == mv.DIFFERENT_REPLY
+    assert approved(env) == ["I don't like jazz."]
+    put(env, "I like blues music.")
+    assert say("forget that I don't like blues music", ME) in (mv.DIFFERENT_REPLY, mv.NOT_FOUND_REPLY)
+    assert "I like blues music." in approved(env)
+
+
+def test_a_lone_row_with_who_did_what_swapped_is_never_erased(env):
+    put(env, "Sam loves me.")
+    assert say("forget that I love Sam", ME) == mv.DIFFERENT_REPLY
+    assert approved(env) == ["Sam loves me."]
+
+
+def test_the_agreeing_row_goes_when_an_opposite_one_sits_beside_it(env):
+    put(env, "I don't like jazz.", when="2026-10-06T02:00:00Z")
+    put(env, "I like jazz.", when="2026-10-06T03:00:00Z")
+    assert say("forget that I like jazz", ME).startswith("Done")
+    assert approved(env) == ["I don't like jazz."]
+
+
+def test_a_retry_after_a_half_done_untapped_forget_finishes_the_same_row(seeded, monkeypatch):
+    real, state = pa._erase_words, {"down": True, "ran": 0}
+
+    async def flaky(*a, **kw):
+        state["ran"] += 1
+        if state["down"]:
+            raise RuntimeError("cleanup failed")    # the row is already rejected when the cleanup step fails
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(pa, "_erase_words", flaky)
+    assert say("forget that I like dark roast coffee", ME) == pa.STORE_DOWN_REPLY
+    assert not any("dark roast" in t for t in approved(seeded)), "the row is already rejected: a fresh search cannot see it"
+    state["down"] = False
+    assert say("forget that I like dark roast coffee", ME) != mv.NOT_FOUND_REPLY, "the repeat finds the same row"
+    assert state["ran"] == 2, "and re-runs the cleanup step that failed"
+    assert say("forget that I like dark roast coffee", ME) == mv.NOT_FOUND_REPLY, "the retry target is spent"
+
+
+def test_panel_card_actions_need_the_review_capability(seeded, monkeypatch):
+    from fastapi import HTTPException
+
+    seeded.sessions[PANEL] = ME
+    say("what do you know about me", ME)
+    frame = last_card(seeded)
+    token = frame["card_token"]
+    item = next(it for it in frame["items"] if "dark roast" in it["text"])["id"]
+    denied = {"on": True}
+
+    async def fake(db, user, *, feature, action, surface="api"):
+        assert (feature, action) == ("memories", "review") and user["user_id"] == ME
+        if denied["on"]:
+            raise HTTPException(status_code=403, detail="no")
+
+    monkeypatch.setattr(memories_card, "require_feature_access", fake)
+    assert tap(seeded, token, item, "forget", "yes").status_code == 403
+    assert tap(seeded, token, item, "wrong", "voice").status_code == 403
+    assert any("dark roast" in t for t in approved(seeded)), "nothing changed"
+    assert say("forget it", ME) is None, "no correction was armed"
+    assert tap(seeded, token, item, "source").status_code == 200, "reading where it came from is not a review action"
+    denied["on"] = False
+    assert tap(seeded, token, item, "forget", "yes").status_code == 200
+    assert not any("dark roast" in t for t in approved(seeded))
+
+
+def test_an_inferred_person_fact_is_not_said_as_told(env):
+    put(env, "User's sister Marisol lives in Lisbon.")
+    put(env, "User's sister Marisol is a nurse.", when="2026-10-06T03:00:00Z")
+    rows = run(env.svc.list_by_status(user_id=ME, status="approved", limit=50))
+    lisbon = next(r for r in rows if "Lisbon" in r.text)
+    real = pa.gather
+
+    async def gather(member, **kw):
+        known = await real(member, **kw)
+        for it in known.items:
+            if it.id == lisbon.id:
+                it.inferred = True
+        return known
+
+    import pytest as _p
+    mp_ = _p.MonkeyPatch()
+    mp_.setattr(pa, "gather", gather)
+    try:
+        wall = run(mv.gather_wall(ME))
+    finally:
+        mp_.undo()
+    e = next(x for x in wall.people if x.name == "Marisol")
+    assert mv._inferred_count([e]) == 1
+    said = mv.spoken_person(e)
+    assert "Lisbon" not in said and "nurse" in said and "worked out 1 thing" in said, said
+    assert "worked out 1 thing" in mv.spoken_me(wall)

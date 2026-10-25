@@ -85,7 +85,7 @@
         const pane = el('div', 'am-pane');
         const note = el('p', 'am-note', '');
         if (state.actions && state.actions.correct) bar.appendChild(button('Fix this', '', () => fixPane(it, row, pane, note)));
-        bar.appendChild(button('Forget', 'am-danger', () => forgetPane(it, row, pane, note)));
+        if (state.actions && state.actions.forget) bar.appendChild(button('Forget', 'am-danger', () => forgetPane(it, row, pane, note)));
         row.appendChild(bar);
         row.appendChild(pane);
         row.appendChild(note);

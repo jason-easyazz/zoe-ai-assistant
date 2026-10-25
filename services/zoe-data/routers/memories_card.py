@@ -26,6 +26,7 @@ from pydantic import BaseModel
 import memories_voice as mv
 import panel_review_cards as prc
 from auth import get_current_user
+from guest_policy import require_feature_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix=mv.ENDPOINT, tags=["panel"])
@@ -70,6 +71,26 @@ async def fresh_pin(card: prc.Card, caller: Optional[dict]) -> bool:
         return False
 
 
+async def _require_review(card: prc.Card) -> None:
+    """Forget / correct are ``memories.review`` actions, the same capability the phone routes check. The card token proves the
+    member, not their role: look the CARD OWNER's role up and refuse (403) when it may not review. Fail-closed."""
+    try:
+        from db_compat import get_compat_db
+
+        async with get_compat_db() as db:
+            cur = await db.execute("SELECT role FROM users WHERE id = ?", (card.member_id,))
+            row = await cur.fetchone()
+            role = (row[0] if row else None) or ""
+            if not role:
+                raise HTTPException(status_code=403, detail="Your role does not have access to this action.")
+            await require_feature_access(db, {"user_id": card.member_id, "role": role}, feature="memories", action="review")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memories_card: role lookup failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=403, detail="Your role does not have access to this action.") from exc
+
+
 class _Act(BaseModel):
     item: str
     action: str
@@ -110,6 +131,8 @@ async def act(body: _Act, request: Request, card: prc.Card = Depends(_require_ca
     import memory_space
 
     it = _item(card, body.item)
+    if body.action in ("forget", "wrong", "forget_person"):
+        await _require_review(card)
     out: dict
     if it["type"] == "memory" and body.action == "forget":
         if body.choice != "yes":

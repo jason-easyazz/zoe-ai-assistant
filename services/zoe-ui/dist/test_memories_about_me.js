@@ -77,7 +77,7 @@ function makeEnv(opts = {}) {
         const method = (o.method || 'GET').toUpperCase();
         calls.push({ method, url, body: o.body === undefined ? undefined : JSON.parse(o.body) });
         const reply = (status, json) => ({ ok: status >= 200 && status < 300, status, json: async () => json });
-        if (url === '/api/memories/mine/actions') return opts.actions === 404 ? reply(404, { detail: 'Not Found' }) : reply(200, { forget: true, correct: opts.correct !== false });
+        if (url === '/api/memories/mine/actions') return opts.actions === 404 ? reply(404, { detail: 'Not Found' }) : reply(200, { forget: opts.forget !== false, correct: opts.correct !== false });
         if (url === '/api/memories/mine') return opts.mine ? reply(opts.mine, { detail: 'Sign in' }) : reply(200, view);
         if (/\/correct$/.test(url)) {
             view.groups[1].items[0].text = 'You like oat milk';
@@ -190,6 +190,13 @@ async function check(label, fn) {
         const e = makeEnv({ hash: '#about-me', correct: false });
         await e.Z.init(e.doc);
         assert.strictEqual(byText(e.ids.aboutMe, 'Fix this').length, 0);
+    });
+
+    await check('no Forget button when the role may not review', async () => {
+        const e = makeEnv({ hash: '#about-me', forget: false, correct: false });
+        await e.Z.init(e.doc);
+        assert.strictEqual(byText(e.ids.aboutMe, 'Forget').length, 0);
+        assert(e.ids.aboutMe.textContent.includes('dark roast'), 'the rows still show');
     });
 
     await check('signed out: the sign-in line and no rows', async () => {

@@ -62,6 +62,9 @@ FORGET_PRIVATE_REPLY = ("I can only forget things for someone I know is here. Sa
                         "or unlock with your PIN.")
 TOPIC_WALL_REPLY = ("That's private, so I won't say it out loud here. Ask me on your phone or in chat.")
 NOT_FOUND_REPLY = "I couldn't find that in what I know about you, so there was nothing to forget."
+DIFFERENT_REPLY = ("I have a note that says something a little different from that, so I haven't forgotten anything. "
+                   "Say it the way I have it, or tell me more.")
+RETRY_TTL_S = 300.0
 WHICH_REPLY = "I've got more than one note like that. Say a bit more about which one."
 CURATED_REPLY = "A grown-up added that one for you, so I'll leave it as it is. Ask them to change it."
 NOTHING_REPLY = pa.NOTHING_KNOWN_REPLY
@@ -186,6 +189,30 @@ def _covers(want: set, have: set) -> bool:
     return bool(want) and all(t in have or _stem(t) in stems for t in want)
 
 
+_NEGATION_RE = re.compile(r"\b(?:not|no|never|none|nothing|nobody|cannot|without)\b|n['’]t\b", re.I)
+_ME_WORDS = frozenset({"i", "i'm", "im", "i've", "i'd", "me", "my", "mine", "myself", "we", "we're", "our", "user", "user's", "users"})
+
+
+def _i_lead(text: str) -> Optional[bool]:
+    """Whether the speaker ("I", "me", "my", the store's "User") comes BEFORE the first content word: "I love Sam" True, "Sam loves
+    me" False, no first person at all None. It is who-did-what: the same words, the other way round, are a different fact."""
+    words = re.findall(r"[a-z0-9']+", str(text or "").lower().replace("\u2019", "'"))
+    me = next((n for n, w in enumerate(words) if w in _ME_WORDS), None)
+    if me is None:
+        return None
+    content = next((n for n, w in enumerate(words) if w not in _TOKEN_STOP and w not in _ME_WORDS), None)
+    return content is None or me < content
+
+
+def _same_claim(said: str, row: str) -> bool:
+    """False when ``row`` covers the words but claims something else: it is negated and the member's words are not (or the reverse),
+    or the person named and "I" swap who does what. Forgetting is permanent, so a mismatch is asked about, never erased. Pure."""
+    if bool(_NEGATION_RE.search(said)) != bool(_NEGATION_RE.search(row)):
+        return False
+    a, b = _i_lead(said), _i_lead(row)
+    return a is None or b is None or a == b
+
+
 _FIRST_PERSON = ((re.compile(r"^i['’]m\b", re.I), "you're"), (re.compile(r"^i\s+am\b", re.I), "you are"),
                  (re.compile(r"^i['’]ve\b", re.I), "you've"), (re.compile(r"^i['’]d\b", re.I), "you'd"),
                  (re.compile(r"^i\b", re.I), "you"), (re.compile(r"\bmy\b", re.I), "your"),
@@ -237,9 +264,12 @@ async def gather_wall(member: str, *, svc: Any = None) -> Wall:
         named = it.group == "people" and bool(pa._NL_PERSON_RE.match(txt) or (pa._DERIVED_RE.match(txt) and it.mtype in (
             "person", "relationship")))
         (people_items if named else w.items).append(it)
+    told = {e.key: e for e in pa.people_entries([i for i in people_items if not i.inferred], known.people)}
     for e in pa.people_entries(people_items, known.people):
         if not (e.name or e.rel):
             continue
+        t = told.get(e.key)           # a fact no row the member told or confirmed supports is one Zoe worked out
+        e.inferred = {k for _, k in e.facts if not (t and any(pa._same_fact(k, tk) for _, tk in t.facts))}
         e.facts = [(f, k) for f, k in e.facts if wall_safe(f)]
         w.people.append(e)
     return w
@@ -258,8 +288,18 @@ def _told_first(items: list) -> list:
     return sorted(items, key=lambda i: (bool(i.inferred), -(i.epoch or 0.0)))
 
 
+def _told_facts(e: Any) -> list:
+    """A person's facts, told or confirmed ones before those Zoe worked out (``e.inferred``)."""
+    inf = getattr(e, "inferred", None) or set()
+    return sorted(e.facts, key=lambda fk: fk[1] in inf)
+
+
+def _inferred_count(people: list) -> int:
+    return sum(1 for e in people for _, k in e.facts if k in (getattr(e, "inferred", None) or set()))
+
+
 def _person_line(e: Any) -> str:
-    facts = [pa.trim(f, 70) for f, _ in e.facts[:2]]
+    facts = [pa.trim(f, 70) for f, _ in _told_facts(e)[:2]]
     return "; ".join(facts)
 
 
@@ -278,7 +318,8 @@ def build_card(panel_id: str, member: str, wall: Wall, *, title: str, people: Op
         if e.name:
             reg[key] = {"type": "person", "ref": e.name}
             acts = [{"key": "forget_person", "label": "Forget", "choices": [{"key": "yes", "label": f"Yes, forget {e.name}"}]}]
-        out.append({"id": key, "group": "people", "text": e.label(), "meta": _person_line(e), "actions": acts})
+        out.append({"id": key, "group": "people", "text": e.label(), "meta": _person_line(e), "soft": bool(e.facts) and _inferred_count([e]) == len(e.facts),
+                    "actions": acts})
     by_group: dict = {g: [] for g in GROUP_ORDER}
     for it in _told_first(rows):
         by_group[card_group(it)].append(it)
@@ -333,7 +374,7 @@ def spoken_me(wall: Wall, *, on_screen: bool = True) -> str:
     ex = _examples(wall.items, SPOKEN_FACTS)
     if ex:
         s.append(f"You've told me things like {pa._join_spoken(ex)}.")
-    inferred = sum(1 for i in wall.items if i.inferred)
+    inferred = sum(1 for i in wall.items if i.inferred) + _inferred_count(wall.people)
     if inferred:
         s.append(f"I've also worked out {pa._plural(inferred, 'thing')} on my own"
                  + ("; they're marked on the screen." if on_screen else "."))
@@ -364,7 +405,7 @@ def spoken_recent(people: list, items: list, window: str, *, on_screen: bool = T
         named = next((e for e in people if e.name), None)
         if named:
             s.append(f"Like {pa._spoken_person(named)}.")
-    inferred = sum(1 for i in items if i.inferred)
+    inferred = sum(1 for i in items if i.inferred) + _inferred_count(people)
     if inferred:
         s.append(f"{pa._plural(inferred, 'of them', 'of them')} I worked out myself"
                  + ("; they're marked on the screen." if on_screen else "."))
@@ -375,13 +416,24 @@ def spoken_recent(people: list, items: list, window: str, *, on_screen: bool = T
 
 def spoken_person(e: Any, *, on_screen: bool = True) -> str:
     subject = e.name or (f"your {e.rel}" if e.rel else "")
+    inf = getattr(e, "inferred", None) or set()
     said = []
-    for f, _ in e.facts[:SPOKEN_FACTS]:
+    for f, k in e.facts:
+        if k in inf:
+            continue                                      # an inferred fact is never said as something the member told me
         clause = pa.trim(f, 80).removesuffix("...").rstrip(" .")
         said.append(f"{subject} {clause}" if clause[:1].islower() and subject else clause)
+        if len(said) >= SPOKEN_FACTS:
+            break
+    worked = _inferred_count([e])
     head = f"Here's what I know about {pa._spoken_person(e)}: "
     tail = f" {SCREEN_TAIL}" if on_screen else ""
-    return head + "; ".join(said) + "." + tail
+    mine = ""
+    if worked:
+        mine = f" I worked out {pa._plural(worked, 'thing')} on my own" + ("; marked on the screen." if on_screen else ".")
+    if not said:
+        return (f"I know {pa._spoken_person(e)}, but nothing you've told me about them yet." if worked else head + "not much yet.") + mine + tail
+    return head + "; ".join(said) + "." + mine + tail
 
 
 async def _find_person(member: str, wall: Wall, name: str) -> Optional[Any]:
@@ -424,6 +476,7 @@ def _take_tap(panel_id: str, now: Optional[float] = None) -> Optional[Tap]:
 
 def reset() -> None:
     _TAPS.clear()
+    _RETRY.clear()
 
 
 async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: str, *, svc: Any = None) -> Optional[str]:
@@ -483,22 +536,38 @@ async def _forget_one(member: str, row_id: str, text: str, *, svc: Any = None) -
     return f"Done - I've forgotten that {said}."
 
 
+_RETRY: dict = {}      # (member, the member's words) -> (row id, row text, monotonic ts): a forget that stopped half way
+
+
 async def forget_fact(member: str, words: str, *, svc: Any = None) -> str:
     """"forget that I like jazz": the ONE row of the member's that says it (with its twins) goes through the audited row forget.
-    Two different rows -> ask which; none -> say so. A private row is never read back."""
+    Two different rows -> ask which; none -> say so; a row that says the opposite or the other way round -> ask, never erase.
+    A private row is never read back."""
     want = _tokens(words)
     if not want:
         return NOT_FOUND_REPLY
+    said = _norm(words)
+    key = (str(member), said)
+    pend = _RETRY.pop(key, None)
+    if pend is not None and time.monotonic() - pend[2] <= RETRY_TTL_S:
+        # the last attempt rejected the row but the twin cleanup failed: the row is no longer "approved", so a fresh search would
+        # say NOT_FOUND and the cleanup would never finish. Repeating the same words finishes the SAME row.
+        reply = await _forget_one(member, pend[0], pend[1], svc=svc)
+        if reply == pa.STORE_DOWN_REPLY:
+            _RETRY[key] = (pend[0], pend[1], time.monotonic())
+        return reply
     try:
         known = await pa.gather(member, svc=svc)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memories_voice: gather failed (%s)", type(exc).__name__)
         return pa.STORE_DOWN_REPLY
     pool = list(known.items) + [i for lst in known.private.values() for i in lst]
-    hits = [i for i in pool if _covers(want, _tokens(i.text))]
-    if not hits:
+    covered = [i for i in pool if _covers(want, _tokens(i.text))]
+    if not covered:
         return NOT_FOUND_REPLY
-    said = _norm(words)
+    hits = [i for i in covered if _norm(i.text) == said or _same_claim(words, i.text)]
+    if not hits:
+        return DIFFERENT_REPLY
     exact = {i.id for i in hits if _norm(i.text) == said}
     hits.sort(key=lambda i: (i.id not in exact, len(_tokens(i.text) - want), -(i.epoch or 0.0)))
     first = hits[0]
@@ -514,7 +583,10 @@ async def forget_fact(member: str, words: str, *, svc: Any = None) -> str:
         twins = {t.id for t in await pa.twins_of(member, ref, svc=svc)} if ref is not None else set()
         if [h for h in hits[1:] if h.id not in twins]:
             return WHICH_REPLY
-    return await _forget_one(member, first.id, first.text, svc=svc)
+    reply = await _forget_one(member, first.id, first.text, svc=svc)
+    if reply == pa.STORE_DOWN_REPLY:
+        _RETRY[key] = (first.id, first.text, time.monotonic())
+    return reply
 
 
 async def forget_person(member: str, name: str) -> str:

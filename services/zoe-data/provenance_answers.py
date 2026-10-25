@@ -702,6 +702,7 @@ class PersonEntry:
     epoch: Optional[float] = None
     facts: list = field(default_factory=list)       # [(text, tokens)], natural-language first, newest first
     derived: list = field(default_factory=list)     # the same facts as the projection rows wrote them
+    inferred: set = field(default_factory=set)      # fact keys (the tokens in ``facts``) only an inferred row supports
 
     def label(self) -> str:
         return _person_label(self.name, self.rel) if self.name else (self.rel or "someone")
