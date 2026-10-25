@@ -325,3 +325,15 @@ def test_orchestrator_kills_a_step_that_outlives_its_deadline(tmp_path):
 def test_orchestrator_refuses_a_step_with_no_deadline_room(tmp_path):
     r, ran = _run_orchestrator(tmp_path, refuse_after=99, deadline=0)
     assert r.returncode == 1 and ran == [], (ran, r.stdout)
+
+
+def test_kill_grace_covers_bar_teardown_but_lands_before_the_window():
+    """Greptile P1: `timeout -k 20` SIGKILLed samantha_bar.py mid-teardown (needs >= 30 s). The grace must be >= 30 s yet
+    (TERM at deadline = window - margin) the final KILL must still land before the quiet window, i.e. grace < margin."""
+    import inspect
+    import re
+    text = (ROOT / "scripts/maintenance/record_bench_baselines.sh").read_text()
+    m = re.search(r'timeout -k (\d+) "\$d"', text)
+    assert m, "record_bench_baselines.sh lost its hard deadline wrapper"
+    margin = inspect.signature(hq.deadline_s).parameters["margin_s"].default
+    assert 30 <= int(m.group(1)) < margin
