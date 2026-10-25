@@ -134,6 +134,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.delenv("ZOE_OMI_KEEP_AUDIO", raising=False)
     monkeypatch.delenv("ZOE_OMI_AUDIO_RETENTION_DAYS", raising=False)
     monkeypatch.setattr(omi, "voice_busy", lambda now_mono=None: False)
+    monkeypatch.setattr(omi, "live_busy_reason", lambda: None)            # never read the real harness flock / systemd unit
     # The night-window gate reads the WALL CLOCK when called without ``now`` (``transcribe_pending`` does), and the household-local
     # 02:30-04:30 window is 18:30-20:30 UTC - so a run landing there (CI is UTC and runs at any hour) silently deferred every
     # transcription and ~11 tests failed with ``'pending' == 'done'``. Pin the default to midday household time; an explicit ``now``
@@ -529,6 +530,7 @@ def test_empty_reason_labels():
 
 def test_a_click_only_recording_is_labelled_transient_only_and_kept(env, monkeypatch, caplog):
     import logging
+    monkeypatch.setenv("ZOE_OMI_QUIET_SKIP", "0")         # the label path: with the pre-STT skip off the click still reaches Moonshine
 
     async def says_nothing(path):
         return ""
@@ -559,12 +561,39 @@ def test_sustained_sound_with_no_words_is_still_voiced_but_no_text(env, monkeypa
     assert "reason=voiced_but_no_text" in msg
 
 
-def test_the_transient_label_is_never_a_gate_a_click_recording_still_reaches_moonshine(env):
-    """Negative control for the label: Moonshine runs its own VAD, so a short word after a click must not be skipped by ours."""
+def test_the_transient_label_is_never_a_gate_a_click_recording_still_reaches_moonshine(env, monkeypatch):
+    """The LABEL is not a gate: with the pre-STT quiet skip off, a click recording still reaches Moonshine."""
+    monkeypatch.setenv("ZOE_OMI_QUIET_SKIP", "0")
     upload(env, wake_transient_wav(), duration=11.0)
     run(omi.transcribe_pending(limit=1, pause_s=0))
     (row,) = rows(env)
     assert len(env.stt) == 1 and row["status"] == "done" and row["transcript"] == "words1"
+
+
+def test_a_click_only_chunk_is_not_sent_to_moonshine_and_its_wav_is_kept(env, caplog):
+    import logging
+    upload(env, wake_transient_wav(), duration=11.0)
+    path = rows(env)[0]["audio_path"]
+    with caplog.at_level(logging.WARNING, logger="omi_recordings"):
+        assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    (row,) = rows(env)
+    assert env.stt == [] and row["status"] == "empty_transcript" and Path(path).exists()      # no STT call; audio still recoverable
+    (msg,) = [r.getMessage() for r in caplog.records if "OMI_EMPTY_TRANSCRIPT" in r.getMessage()]
+    assert "quiet_skipped=1" in msg and "voiced_chunks=0/1" in msg
+
+
+def test_quiet_skip_negative_controls_speech_and_a_short_word_after_a_click_still_reach_moonshine(env):
+    upload(env, speechlike_wav(), duration=6.0, key="r1.0-40")
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert len(env.stt) == 1
+    # a click followed by a ~0.4 s word (4 windows of speech-level sound): the skip must not eat it
+    x = [float(v) for v in omi._samples(wake_transient_wav(3.0)[44:])]
+    import math
+    for j in range(6400):
+        x[16000 + j] += math.sin(2 * math.pi * 180 * j / 16000) * 3000
+    upload(env, _pcm_to_wav(x), duration=3.0, key="r1.0-41")
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert len(env.stt) == 2
 
 
 # --- requeue: held recordings can be transcribed again inside their retention ---------------------------------------------------------
@@ -1351,3 +1380,78 @@ def test_a_flag_flip_clears_a_stale_deferred_state_and_ends_a_running_job(env, m
     monkeypatch.setattr(omi, "_transcribe_file", flip_after_first)
     assert run(asyncio.wait_for(omi.transcribe_pending(limit=1, pause_s=0), timeout=10)) == 0
     assert rows(env)[0]["status"] == "pending" and rows(env)[0]["attempts"] == 0
+
+
+# --- yield to live voice / the harness lock / the night unit (live_voice_gate) ----------------------------------------------------------
+def _set_live(monkeypatch, state: dict):
+    monkeypatch.setattr(omi, "live_busy_reason", lambda: state["why"])
+
+
+def test_omi_does_not_call_stt_while_live_voice_is_busy_and_the_backlog_survives(env, monkeypatch):
+    state = {"why": "harness"}
+    _set_live(monkeypatch, state)
+    for i in range(3):
+        upload(env, speechlike_wav(), duration=6.0, key=f"r1.0-{50 + i}")
+    assert run(omi.transcribe_pending(limit=3, pause_s=0)) == 0
+    assert env.stt == []                                                    # the model was never touched
+    assert [r["status"] for r in rows(env)] == ["pending"] * 3 and [r["attempts"] for r in rows(env)] == [0, 0, 0]
+    assert run(omi.backlog_count()) == 3 and omi.deferred_state()["reason"] == "voice_harness"
+    state["why"] = None                                                     # the harness lock was released: it resumes, nothing was lost
+    assert run(omi.transcribe_pending(limit=3, pause_s=0)) == 3
+    assert len(env.stt) == 3 and {r["status"] for r in rows(env)} == {"done"} and run(omi.backlog_count()) == 0
+
+
+def test_omi_negative_control_idle_gate_transcribes(env, monkeypatch):
+    _set_live(monkeypatch, {"why": None})
+    upload(env, speechlike_wav(), duration=6.0)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1 and len(env.stt) == 1
+
+
+@pytest.mark.parametrize("why,code", [("live_stt", "voice_active"), ("cooloff", "voice_active"), ("harness", "voice_harness")])
+def test_every_live_code_closes_the_gate_with_its_reason_and_is_waited_out(env, monkeypatch, why, code):
+    _set_live(monkeypatch, {"why": why})
+    ok, reason = omi.may_transcribe_now(continuing=True)
+    assert not ok and omi.reason_code(reason) == code and omi.is_transient(reason)
+
+
+def test_the_night_unit_ends_a_job_at_once_it_is_a_decision_not_weather(env, monkeypatch):
+    _set_live(monkeypatch, {"why": "night_unit"})
+    ok, reason = omi.may_transcribe_now(continuing=True)
+    assert not ok and omi.reason_code(reason) == "night_window" and not omi.is_transient(reason)
+
+
+def test_a_job_mid_recording_yields_when_live_voice_arrives_and_resumes_without_losing_the_recording(env, monkeypatch):
+    state = {"why": None}
+    _set_live(monkeypatch, state)
+    monkeypatch.setattr(omi, "HOLD_MAX_S", 0.05)
+    monkeypatch.setattr(omi, "HOLD_POLL_S", 0.01)
+    seen: list[str] = []
+
+    async def stt(path):
+        seen.append(path)
+        state["why"] = "live_stt"                  # a live turn starts right after the first chunk
+        return "first"
+
+    monkeypatch.setattr(omi, "_transcribe_file", stt)
+    upload(env, speechlike_wav(45.0, bursts=70), duration=45.0)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0
+    assert len(seen) == 1                                                    # the 2nd chunk never reached Moonshine
+    (row,) = rows(env)
+    assert row["status"] == "pending" and row["attempts"] == 0 and Path(row["audio_path"]).exists()
+
+    async def stt_ok(path):
+        seen.append(path)
+        return "word"
+
+    monkeypatch.setattr(omi, "_transcribe_file", stt_ok)
+    state["why"] = None
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    assert rows(env)[0]["status"] == "done"
+
+
+def test_yield_flag_off_restores_the_old_behaviour(monkeypatch):
+    import live_voice_gate as g
+    g.reset()
+    monkeypatch.setenv("ZOE_OMI_YIELD_TO_VOICE", "0")
+    monkeypatch.setattr(g, "harness_lock_held", lambda path=None: True)
+    assert g.busy_reason() is None

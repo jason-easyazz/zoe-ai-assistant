@@ -48,6 +48,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
+import live_voice_gate
 import user_erase_gate as erase_gate
 from typed_env import env_bool, env_int, env_str
 
@@ -207,9 +208,15 @@ def voice_busy(now_mono: Optional[float] = None) -> bool:
     return age is not None and age < VOICE_BUSY_S
 
 
+def live_busy_reason() -> Optional[str]:
+    """Seam over ``live_voice_gate.busy_reason``: live STT in flight, the voice-harness flock, the night-window unit, a cool-off."""
+    return live_voice_gate.busy_reason()
+
+
 # Gate reasons: the human string ``may_transcribe_now`` returns, and the stable code the log line / API use.
 WHY_VOICE = "voice turn in flight"
 WHY_NOT_IDLE = "panel not idle"
+WHY_LIVE_PREFIX = "live voice: "       # + a ``live_voice_gate`` code (live_stt / harness / cooloff); night_unit maps to "night window"
 WHY_MEM_PREFIX = "MemAvailable"
 
 
@@ -220,6 +227,8 @@ def reason_code(why: str) -> str:
         return "voice_active"
     if why == WHY_NOT_IDLE:
         return "panel_not_idle"
+    if why.startswith(WHY_LIVE_PREFIX):
+        return "voice_harness" if why.endswith("harness") else "voice_active"
     if why == "night window":
         return "night_window"
     if why == "flag off":
@@ -230,7 +239,7 @@ def reason_code(why: str) -> str:
 def is_transient(why: str) -> bool:
     """A closure a RUNNING job should wait out (a voice turn ends, RAM comes back) rather than abort on. The flag and the night
     window are decisions, not weather: they end the job at once."""
-    return reason_code(why) in ("low_memory", "voice_active", "panel_not_idle")
+    return reason_code(why) in ("low_memory", "voice_active", "voice_harness", "panel_not_idle")
 
 
 def may_transcribe_now(now: Optional[datetime] = None, *, continuing: bool = False) -> tuple[bool, str]:
@@ -243,6 +252,11 @@ def may_transcribe_now(now: Optional[datetime] = None, *, continuing: bool = Fal
         return False, "night window"
     if voice_busy():
         return False, WHY_VOICE
+    live = live_busy_reason()
+    if live == "night_unit":
+        return False, "night window"
+    if live:
+        return False, WHY_LIVE_PREFIX + live
     if not continuing:
         age = last_voice_age_s()
         if age is not None and age < idle_s():
@@ -404,6 +418,29 @@ def iter_wave_chunks(w: Any, *, target_s: float = CHUNK_S, search_s: float = SPL
 def peak(pcm: bytes) -> int:
     a = _samples(pcm)
     return max(map(abs, a)) if len(a) else 0
+
+
+QUIET_SKIP_RMS = ACTIVE_RMS // 3  # a 100 ms window at/above this RMS counts toward "something sustained happened" (pre-STT skip only)
+QUIET_MIN_WINDOWS = 3             # a click/ringing spans at most 2 windows; a word is >= 3. Fewer sustained windows = nothing to transcribe
+
+
+def quiet_skip_enabled() -> bool:
+    """``ZOE_OMI_QUIET_SKIP`` (default on) - a chunk whose only loud part is a click (fewer than ``QUIET_MIN_WINDOWS`` 100 ms windows at
+    or above ``QUIET_SKIP_RMS``) is not sent to Moonshine. The recording keeps its WAV when nothing at all came out (empty_transcript),
+    so a wrong skip is recoverable inside the retention."""
+    return env_bool("ZOE_OMI_QUIET_SKIP", True)
+
+
+def sustained_windows(pcm: bytes) -> int:
+    """Count of 100 ms windows at or above ``QUIET_SKIP_RMS``. Pure; call it off the event loop for a 20 s chunk."""
+    a = _samples(pcm)
+    win = SAMPLE_RATE // 10
+    n = 0
+    for i in range(0, len(a) - win + 1, win):
+        part = a[i:i + win]
+        if (sum(v * v for v in part) / win) ** 0.5 >= QUIET_SKIP_RMS:
+            n += 1
+    return n
 
 
 def _measure_reader(w: Any) -> dict:
@@ -866,6 +903,11 @@ async def transcribe_wave(w: Any, *, gate=None, pause_s: float = 0.4, stats: Opt
                 if spans is not None:
                     spans.append((start_ms, pos * 1000 // SAMPLE_RATE, ""))
                 continue
+            if quiet_skip_enabled() and await asyncio.to_thread(sustained_windows, piece) < QUIET_MIN_WINDOWS:
+                st["quiet_skipped"] = st.get("quiet_skipped", 0) + 1    # a lone click above the peak floor: Moonshine would say nothing
+                if spans is not None:
+                    spans.append((start_ms, pos * 1000 // SAMPLE_RATE, ""))
+                continue
             st["voiced"] += 1
             text = (await _transcribe_file(_chunk_wav(piece, tmp, i)) or "").strip()
             if text:
@@ -1087,10 +1129,10 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                                  "WHERE id = ? AND status = 'transcribing'", (_iso(_now()), rid))
                 await db.commit()
                 logger.warning("OMI_EMPTY_TRANSCRIPT id=%s seconds=%s peak=%s rms=%s clipped=%s rms_median=%s active_s=%s rate=%s "
-                               "voiced_chunks=%s/%s reason=%s - WAV kept until retention",
+                               "voiced_chunks=%s/%s quiet_skipped=%s reason=%s - WAV kept until retention",
                                rid, level.get("seconds"), level.get("peak"), level.get("rms"), level.get("clipped"),
                                level.get("rms_median"), level.get("active_s"), level.get("rate"),
-                               seen_chunks.get("voiced"), seen_chunks.get("chunks"), empty_reason(seen_chunks, level))
+                               seen_chunks.get("voiced"), seen_chunks.get("chunks"), seen_chunks.get("quiet_skipped", 0), empty_reason(seen_chunks, level))
                 return True
             seg_ids: list = []
             if segs is not None:              # segments land BEFORE the row says done, and the WAV goes only after both
