@@ -1462,9 +1462,14 @@ def test_record_baseline_refuses_a_run_with_an_errored_scenario(monkeypatch, tmp
     monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
     monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [
         {"id": s, "verdict": "ERROR" if s == "S4" else "PASS", "evidence": {}} for s in sb.SCENARIO_IDS])
-    assert sb.main(args + ["--record-baseline"]) == 0
-    assert json.loads((tmp_path / "r.json").read_text())["status"] == "ok"
+    # a REFUSED recording is a failed run (Codex P2): exit 2 + status error, or record_bench_baselines.sh reports success
+    # while the baseline is missing or stale
+    assert sb.main(args + ["--record-baseline"]) == 2
+    assert json.loads((tmp_path / "r.json").read_text())["status"] == "error"
     assert not (tmp_path / "b.json").exists()
+    # without --record-baseline an errored cell is still just a result of an otherwise clean run
+    assert sb.main(args) == 0
+    assert json.loads((tmp_path / "r.json").read_text())["status"] == "ok"
     _all_pass(monkeypatch)
     assert sb.main(args + ["--record-baseline"]) == 0
     assert (tmp_path / "b.json").exists()
