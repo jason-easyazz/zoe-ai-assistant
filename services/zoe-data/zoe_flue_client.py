@@ -2227,6 +2227,13 @@ async def run_flue_brain_streaming(
         # Settled HERE, not after the loop: a consumer that disconnects or barges
         # in after the first text exits through this finally (GeneratorExit or a
         # CancelledError), and the brief it heard must still take the claim.
+        if emitted:   # the sidecar has this turn in its history; a failed / refused one stays a fast-path row to resend
+            try:
+                import flue_fastpath_context
+
+                flue_fastpath_context.note_brain_turn(session_id, _spoken)
+            except Exception:  # noqa: BLE001
+                pass
         if brief is not None:
             await brief_first_turn.settle(brief, produced=emitted)
         if raised is not None:
@@ -2382,7 +2389,6 @@ async def _run_flue_brain_streaming_turn(
     import flue_fastpath_context
 
     fastpath_block = await flue_fastpath_context.block_for(uid, session_id, message)
-    flue_fastpath_context.note_brain_turn(session_id, message)
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
     # order is fixed: identity → recall → offer → the user's words. "" when the flag is

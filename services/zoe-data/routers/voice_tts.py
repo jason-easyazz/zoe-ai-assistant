@@ -3224,6 +3224,25 @@ _USER_TURN_SAVED: "contextvars.ContextVar[Optional[_ArrivalRow]]" = contextvars.
 _ARRIVAL_SETTLE_TIMEOUT_S = 10.0
 
 
+async def _session_last_reply(session_id: str) -> Optional[str]:
+    """Zoe's newest saved reply in THIS voice session, or None when there is none / it cannot be read (fail closed)."""
+    if not session_id:
+        return None
+    try:
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as db:
+            cur = await db.execute(
+                "SELECT content FROM chat_messages WHERE session_id = ? AND role = 'assistant' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (session_id,),
+            )
+            row = await cur.fetchone()
+        return (str(row[0]) or None) if row is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _schedule_voice_chat_save(
     session_id: str, user_text: str, reply: str, user_id: str,
     speaker_verified: Optional[bool] = None,
@@ -4810,7 +4829,13 @@ async def voice_command(
         if _pub_social_ack:
             try:
                 from intent_router import ack_answers_offer as _ack_answers_offer
-                if await _ack_answers_offer(_pub_intent, effective_user):
+                _ack_prev = None
+                if (_pub_intent.slots or {}).get("kind") == "ack":
+                    # THIS voice session's last reply (never the member's latest across sessions); unknown (a guest's turns
+                    # are not saved, or no reply yet) means the brain decides - it has the conversation.
+                    _ack_prev = await _session_last_reply(session_id)
+                if (_ack_prev is None and (_pub_intent.slots or {}).get("kind") == "ack") or await _ack_answers_offer(
+                        _pub_intent, effective_user, previous=_ack_prev):
                     _pub_social_ack = False
                     _pub_intent = None
             except Exception:

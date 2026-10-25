@@ -8,6 +8,7 @@ All text is synthetic. Every guard carries a negative control (the same rig DOES
 """
 import asyncio
 import json
+from collections import OrderedDict
 
 import pytest
 
@@ -31,10 +32,8 @@ def _newest_first(*chron):
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
-    ffc._BRAIN_SEEN.clear()
+    monkeypatch.setattr(ffc, "_BRAIN_SEEN", OrderedDict())
     monkeypatch.delenv(ffc._ENV, raising=False)
-    yield
-    ffc._BRAIN_SEEN.clear()
 
 
 def _rig(monkeypatch, rows_chron):
@@ -93,14 +92,63 @@ def test_nothing_new_when_the_brain_has_everything(monkeypatch):
     assert _block("another") == ""
 
 
-def test_second_brain_turn_after_injection_does_not_resend(monkeypatch):
-    rows = [_row("user", "remind me to stretch"), _row("assistant", "Reminder set: stretch."), _row("user", "thanks mate")]
+def test_fast_exchange_is_resent_on_later_brain_turns_within_the_window(monkeypatch):
+    """The sidecar elides the block from older messages, so a one-shot injection would vanish a turn later."""
+    rows = [_row("user", "remind me to stretch"), _row("assistant", "Reminder set: stretch."), _row("user", "which plants")]
     _rig(monkeypatch, rows)
-    assert "stretch" in _block("thanks mate")
-    ffc.note_brain_turn(SID, "thanks mate")               # what run_flue_brain does right after the block
-    rows += [_row("assistant", "No worries."), _row("user", "what is a fern")]
+    assert "stretch" in _block("which plants")
+    ffc.note_brain_turn(SID, "which plants")              # the brain answered it
+    rows += [_row("assistant", "The ferns."), _row("user", "what did I want to do with them")]
     _rig(monkeypatch, rows)
-    assert _block("what is a fern") == ""
+    block = _block("what did I want to do with them")
+    assert "Reminder set: stretch." in block
+    assert "which plants" not in block and "The ferns." not in block    # the brain's own turn is never repeated
+
+
+def test_a_fast_exchange_ages_out_of_the_bounded_window(monkeypatch):
+    rows = [_row("user", "remind me to stretch"), _row("assistant", "Reminder set: stretch.")]
+    for i in range(4):
+        rows += [_row("user", f"fast question {i}"), _row("assistant", f"fast answer {i}")]
+    rows.append(_row("user", "thanks"))
+    _rig(monkeypatch, rows)
+    assert "stretch" not in _block("thanks")
+
+
+def test_a_turn_the_brain_never_answered_is_not_marked_seen(monkeypatch):
+    """Failed / refused request: nothing noted, so the exchange is delivered on the next turn."""
+    rows = [_row("user", "remind me to stretch"), _row("assistant", "Reminder set: stretch."), _row("user", "thanks")]
+    _rig(monkeypatch, rows)
+    assert "stretch" in _block("thanks")                  # block built, but the request then failed: no note_brain_turn
+    assert "stretch" in _block("thanks")
+    assert SID not in ffc._BRAIN_SEEN
+
+
+class _FakeAsyncClientDown:
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        raise ConnectionError("sidecar down")
+
+    async def __aexit__(self, *a):
+        return False
+
+
+def test_run_flue_brain_streaming_marks_seen_only_when_reply_text_came_back(monkeypatch):
+    async def ok_turn(message, session_id, user_id="", **_k):
+        yield "Sure thing."
+
+    async def failed_turn(message, session_id, user_id="", **_k):
+        yield zfc._FALLBACK_TEXT
+
+    async def drive(turn):
+        monkeypatch.setattr(zfc, "_run_flue_brain_streaming_turn", turn)
+        return [d async for d in zfc.run_flue_brain_streaming("hello there", SID, ALICE, replay_isolation=True)]
+
+    asyncio.run(drive(failed_turn))
+    assert SID not in ffc._BRAIN_SEEN
+    asyncio.run(drive(ok_turn))
+    assert ffc._BRAIN_SEEN[SID] == ["hello there"]
 
 
 # ── privacy ──────────────────────────────────────────────────────────────────
@@ -128,6 +176,17 @@ def test_guest_rows_without_a_stored_member_are_skipped(monkeypatch):
 def test_off_record_rejected_speaker_and_truncated_rows_are_skipped(monkeypatch, extra):
     _rig(monkeypatch, [_row("user", "secret thing", **extra), _row("assistant", "kept quiet", **extra), _row("user", "ok")])
     assert _block("ok") == ""
+
+
+def test_reply_to_a_speaker_rejected_turn_is_skipped_too(monkeypatch):
+    """The assistant row carries no speaker flag of its own; it follows its user row's eligibility."""
+    rows = [_row("user", "remind me to water the ferns"), _row("assistant", "Reminder set: water the ferns."),
+            _row("user", "remind me to call SecretName", speaker_verified=False),
+            _row("assistant", "Reminder set: call SecretName."), _row("user", "thanks")]
+    _rig(monkeypatch, rows)
+    block = _block("thanks")
+    assert "ferns" in block                                # negative control: the eligible exchange still goes
+    assert "SecretName" not in block
 
 
 def test_a_different_session_is_never_read(monkeypatch):
@@ -228,10 +287,11 @@ def test_brain_request_for_another_member_has_nothing(monkeypatch):
 # ── a bare thanks is answered fast, with no brain ────────────────────────────
 import sys  # noqa: E402
 
+from routers import voice_tts  # noqa: E402
 from test_voice_identity_freshness import _PanelStore, _turn, _wire  # noqa: E402
 
 
-def _ack_rig(monkeypatch, kind, offer_pending=False):
+def _ack_rig(monkeypatch, kind, offer_pending=False, prev_reply="Reminder set."):
     seen = _wire(monkeypatch, _PanelStore(), skybridge_handles=False)
     seen["intent"].name = "acknowledgement"
     seen["intent"].slots = {"kind": kind}
@@ -244,8 +304,13 @@ def _ack_rig(monkeypatch, kind, offer_pending=False):
     async def answers_offer(_intent, _uid, previous=None):
         return offer_pending
 
-    ir.execute_intent = exec_ack
-    ir.ack_answers_offer = answers_offer
+    monkeypatch.setattr(ir, "execute_intent", exec_ack, raising=False)
+    monkeypatch.setattr(ir, "ack_answers_offer", answers_offer, raising=False)
+
+    async def last_reply(_sid):
+        return prev_reply
+
+    monkeypatch.setattr(voice_tts, "_session_last_reply", last_reply)
     return seen
 
 
@@ -258,15 +323,53 @@ async def test_bare_acknowledgement_gets_a_fast_reply_not_the_brain(monkeypatch,
     assert "I'm Zoe" not in resp["reply"]
 
 
+def _brain_rig(monkeypatch, seen):
+    """Stand in for the brain: records what reaches it (the voice lane imports ``brain_streaming`` from brain_dispatch)."""
+    import brain_dispatch
+
+    reached = []
+
+    async def fake_brain(text, session_id, **_k):
+        reached.append(text)
+        yield "Sure, I'll do that."
+
+    monkeypatch.setattr(brain_dispatch, "brain_streaming", fake_brain)
+    return reached
+
+
 @pytest.mark.asyncio
 async def test_ack_that_accepts_zoes_offer_still_goes_to_the_brain(monkeypatch):
     """Negative control: an "ok" answering Zoe's own offer is not a bare acknowledgement."""
-    seen = _ack_rig(monkeypatch, "ack", offer_pending=True)
-    try:
-        resp = await _turn(seen, text="sounds good")
-    except Exception:  # the rig has no brain: reaching it IS the point
-        return
+    seen = _ack_rig(monkeypatch, "ack", offer_pending=True, prev_reply="Want me to add it?")
+    reached = _brain_rig(monkeypatch, seen)
+    resp = await _turn(seen, text="sounds good")
+    assert reached == ["sounds good"]
     assert resp.get("intent") != "acknowledgement"
+
+
+@pytest.mark.asyncio
+async def test_ack_with_no_known_reply_in_this_session_goes_to_the_brain(monkeypatch):
+    """A guest's turns are not saved, so the session has no reply to judge: fail closed to the brain, never a canned ack."""
+    seen = _ack_rig(monkeypatch, "ack", prev_reply=None)
+    reached = _brain_rig(monkeypatch, seen)
+    resp = await _turn(seen, text="sounds good")
+    assert reached == ["sounds good"] and resp.get("intent") != "acknowledgement"
+
+
+@pytest.mark.asyncio
+async def test_ack_offer_check_reads_this_sessions_reply_not_the_members_latest_anywhere(monkeypatch):
+    seen = _ack_rig(monkeypatch, "ack", prev_reply="Want me to add it?")
+    asked = {}
+    ir = sys.modules["intent_router"]
+
+    async def spy(_intent, _uid, previous=None):
+        asked["previous"] = previous
+        return True
+
+    monkeypatch.setattr(ir, "ack_answers_offer", spy)
+    _brain_rig(monkeypatch, seen)
+    await _turn(seen, text="sounds good")
+    assert asked["previous"] == "Want me to add it?"       # the session's own reply is passed in, no cross-session lookup
 
 
 def test_reply_pools_are_short_varied_and_never_introduce_zoe():
