@@ -113,7 +113,7 @@ import {
 import { elideStaleBlocks, elideStaleBlocksEnabled } from '../context-blocks.ts';
 import { cachedUserModelSuffix, turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
 import { markTurnUntrusted, untrustedSourceInMessages } from '../untrusted-content.ts';
-import { activeHarness, harnessForTurn, harnessManner, stripRenderMark, withToolGuidance, withTurnInstructions, type Harness } from '../harness.ts';
+import { activeHarness, harnessForTurn, harnessManner, harnessRenderedInto, stripRenderMark, withToolGuidance, withTurnInstructions, type Harness } from '../harness.ts';
 
 /** Provider id the sidecar registers; the agent binds to `zoe/local`. */
 export const ZOE_PROVIDER_ID = 'zoe';
@@ -285,7 +285,9 @@ export interface PromptSections {
 export function promptSections(context: Context): PromptSections {
   const unwrapped = stripReplayEnvelope(stripSpeculativeEnvelope(context.messages));
   const uid = forwardedIdentityFromMessages(stripMannerEnvelope(stripPersonaEnvelope(unwrapped))) || (process.env.ZOE_BRAIN_USER_ID ?? '');
-  const sent = applyPolicies(context, cachedUserModelSuffix(uid.trim()));
+  // Bound to the harness the prompt was RENDERED from (the render marker), as the provider does: a SIGHUP between render and
+  // turn_request must not mix the newly active manner / tool guidance into this turn's accounting.
+  const sent = applyPolicies(context, cachedUserModelSuffix(uid.trim()), harnessRenderedInto(context.systemPrompt) ?? undefined);
   const tokens = (ms: Message[]) => ms.reduce((n, m) => n + estimateMessageTokens(m), 0);
   let last = sent.messages.length;
   while (last > 0 && sent.messages[last - 1].role !== 'user') last -= 1;

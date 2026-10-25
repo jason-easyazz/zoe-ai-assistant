@@ -36,7 +36,7 @@ const { COMPILED_DOCTRINES, OVERLAY_DOCTRINE_SLOTS } = await import('../src/doct
 const { SOUL_RECALL_FLOOR, ZOE_PERSONA_FIXED, ZOE_SOUL } = await import('../src/soul.ts');
 const { GROUP_SUMMARY } = await import('../src/tools/tool-groups.ts');
 const { zoeTools } = await import('../src/tools/zoe-tools.ts');
-const { applyPolicies } = await import('../src/providers/capped-completions.ts');
+const { applyPolicies, promptSections } = await import('../src/providers/capped-completions.ts');
 const { wrapMessageWithManner } = await import('../src/manner.ts');
 const { renderCompiledFiles, renderOverlay } = await import('../scripts/harness-overlay.ts');
 
@@ -423,6 +423,24 @@ describe('one harness per turn: a mid-turn reload never moves a later round', ()
       assert.equal(harness.harnessForTurn(new AbortController().signal, nextPrompt), now);
       // v1's first round arriving AFTER another turn rendered v2 still gets v1.
       assert.equal(harness.harnessForTurn(new AbortController().signal, systemPrompt), renderedFrom);
+    } finally {
+      delete process.env.ZOE_BRAIN_HARNESS_DIR;
+      harness.resetHarnessForTests();
+    }
+  });
+
+  it('promptSections accounts the RENDERED harness, not the one a later reload made active', () => {
+    const v1 = rendered();
+    const v2 = overlay({ 'doctrines/voice-delivery.md': 'Two short sentences at most.', 'manner.md': 'Be brief and kind.' });
+    process.env.ZOE_BRAIN_HARNESS_DIR = v1;
+    harness.resetHarnessForTests();
+    try {
+      const systemPrompt = harness.renderHarnessPrompt();
+      const request = { systemPrompt, messages: [user(wrapMessageWithManner('hi there', harness.COMPILED_MANNER_EN))], tools: allTools() } as never;
+      const before = promptSections(request);
+      process.env.ZOE_BRAIN_HARNESS_DIR = v2;
+      harness.reloadHarness(() => {}, () => {});
+      assert.deepEqual(promptSections(request), before, 'a reload after the render must not change that turn\'s accounting');
     } finally {
       delete process.env.ZOE_BRAIN_HARNESS_DIR;
       harness.resetHarnessForTests();
