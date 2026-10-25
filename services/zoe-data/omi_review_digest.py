@@ -197,7 +197,11 @@ async def send_for(member: str, now: datetime) -> str:
     outcome = await telegram_notify.send(tid, compose(cands, total), url=url, label="Review your day" if url else None)
     if outcome in ("sent", "uncertain"):
         await _save(member, {"day": today, "sent_at": now.strftime(_TS), "unanswered": unanswered + 1})
-    else:  # definitely not delivered: release the claim so the next poll retries
+    elif str(outcome).startswith("refused"):
+        # a PERMANENT rejection (e.g. HTTP 400 for a bad link): keep today's claim so the 10-minute poll does not repeat it all day;
+        # sent_at / unanswered are untouched, so tomorrow's digest still goes out once the cause is fixed
+        await _save(member, {**st, "day": today, "unanswered": unanswered, "refused": str(outcome)})
+    else:  # a retry-safe failure: definitely not delivered, release the claim so the next poll retries
         try:
             await _save(member, st)
         except Exception as exc:  # noqa: BLE001 - the day stays claimed (safe side)

@@ -180,6 +180,23 @@ async def test_failed_claim_write_sends_nothing_and_a_retry_safe_failure_release
 
 
 @pytest.mark.asyncio
+async def test_a_permanent_refusal_keeps_the_day_so_polls_do_not_repeat_it(env, monkeypatch):
+    import telegram_notify
+    add(env, "c1", "list_item", {"item": "oat milk"})
+    calls = []
+
+    async def refused(*a, **k):
+        calls.append(1)
+        return "refused:bad_request"
+
+    monkeypatch.setattr(telegram_notify, "send", refused)
+    assert await dig.send_for(OWNER, NOW) == "skipped:refused:bad_request"
+    assert env.prefs[OWNER]["day"] == dig._local(NOW).date().isoformat()  # claimed: the next poll does not re-send
+    assert await dig.send_for(OWNER, NOW) == "skipped:already_today" and len(calls) == 1
+    assert not env.prefs[OWNER].get("sent_at")                            # nothing was delivered
+
+
+@pytest.mark.asyncio
 async def test_run_once_each_member_gets_only_their_own_and_only_once_a_day(env):
     add(env, "c1", "reminder", {"title": "Owner thing"})
     add(env, "x1", "reminder", {"title": "Other thing"}, user=OTHER)
