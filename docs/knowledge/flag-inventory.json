@@ -7495,6 +7495,17 @@
         ],
         "typed_env": false
       },
+      "ZOE_VOICE_MAIN_CHECKOUT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_gate_report.py",
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_VOICE_MEMORY_PACKET_LAZY": {
         "defaults": [
           "'true'"
