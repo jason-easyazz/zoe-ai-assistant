@@ -1425,7 +1425,11 @@
     <script>
         document.addEventListener('DOMContentLoaded', function () { if (window.ZoeAboutMe) window.ZoeAboutMe.init(document); });
         window.addEventListener('hashchange', function () {
-            if (window.ZoeAboutMe && location.hash === '#about-me') window.ZoeAboutMe.open();
+            if (!window.ZoeAboutMe || location.hash !== '#about-me') return;
+            // the open menu (z-index 2000 / backdrop 1999) would sit over the view (z-index 300): close it first
+            var menu = document.getElementById('mobileNavMenu');
+            if (menu && menu.classList.contains('open') && typeof toggleMobileMenu === 'function') toggleMobileMenu();
+            window.ZoeAboutMe.open();
         });
     </script>
     <script>

@@ -252,6 +252,21 @@ class Wall:
     people: list = field(default_factory=list)     # PersonEntry with a name or a relation, newest first
     private: int = 0                                # rows held back (private classes, restraint classes, feelings)
     unsure: int = 0                                 # inferred rows nothing the member said supports: never listed
+    people_rows: list = field(default_factory=list)  # the source Items behind ``people`` (so a time window filters rows, not entries)
+    known_people: Any = None
+
+
+def _build_people(people_items: list, known_people: Any) -> list:
+    out = []
+    told = {e.key: e for e in pa.people_entries([i for i in people_items if not i.inferred], known_people)}
+    for e in pa.people_entries(people_items, known_people):
+        if not (e.name or e.rel):
+            continue
+        t = told.get(e.key)           # a fact no row the member told or confirmed supports is one Zoe worked out
+        e.inferred = {k for _, k in e.facts if not (t and any(pa._same_fact(k, tk) for _, tk in t.facts))}
+        e.facts = [(f, k) for f, k in e.facts if wall_safe(f)]
+        out.append(e)
+    return out
 
 
 async def gather_wall(member: str, *, svc: Any = None) -> Wall:
@@ -269,14 +284,8 @@ async def gather_wall(member: str, *, svc: Any = None) -> Wall:
         named = it.group == "people" and bool(pa._NL_PERSON_RE.match(txt) or (pa._DERIVED_RE.match(txt) and it.mtype in (
             "person", "relationship")))
         (people_items if named else w.items).append(it)
-    told = {e.key: e for e in pa.people_entries([i for i in people_items if not i.inferred], known.people)}
-    for e in pa.people_entries(people_items, known.people):
-        if not (e.name or e.rel):
-            continue
-        t = told.get(e.key)           # a fact no row the member told or confirmed supports is one Zoe worked out
-        e.inferred = {k for _, k in e.facts if not (t and any(pa._same_fact(k, tk) for _, tk in t.facts))}
-        e.facts = [(f, k) for f, k in e.facts if wall_safe(f)]
-        w.people.append(e)
+    w.people_rows, w.known_people = people_items, known.people
+    w.people = _build_people(people_items, known.people)
     return w
 
 
@@ -390,10 +399,27 @@ def spoken_me(wall: Wall, *, on_screen: bool = True) -> str:
     return " ".join(s)
 
 
+def _recent_cutoff(window: str, now: float) -> float:
+    """Epoch a window opens at. ``today`` is local midnight in the household zone, not now minus 24 h."""
+    if window == "today":
+        import calendar_ical
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        try:
+            tz = ZoneInfo(calendar_ical.household_tz())
+            return datetime.fromtimestamp(now, tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        except Exception:
+            pass
+    return now - RECENT_WINDOWS.get(window, 7 * 86400)
+
+
 def recent_rows(wall: Wall, window: str, now: Optional[float] = None) -> tuple:
-    cutoff = (time.time() if now is None else now) - RECENT_WINDOWS.get(window, 7 * 86400)
+    cutoff = _recent_cutoff(window, time.time() if now is None else now)
     items = [i for i in wall.items if i.epoch and i.epoch >= cutoff]
-    people = [e for e in wall.people if e.epoch and e.epoch >= cutoff]
+    # filter the SOURCE rows before they merge into people entries, so a new fact does not drag an old one in with it
+    rows = [i for i in wall.people_rows if i.epoch and i.epoch >= cutoff]
+    people = _build_people(rows, wall.known_people) if rows else []
     return people, items
 
 

@@ -14,6 +14,8 @@ break-the-fix control in this file (the ``test_control_*`` tests patch the wall 
 """
 from __future__ import annotations
 
+import types
+
 import asyncio
 import contextlib
 import sqlite3
@@ -1151,3 +1153,27 @@ def test_the_tapped_retry_waits_for_the_speculation_barrier(env, monkeypatch):
     reply = run(pa.fix(ME, "s1", "it's Saturday", "Saturday", exp, svc=env.svc, strict_twins=True))
     assert calls == ["barrier"], "nothing mutates before the turn commits"
     assert reply == pa.STORE_DOWN_REPLY
+
+
+def test_today_anchors_to_household_midnight(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")
+    tz = ZoneInfo("Australia/Perth")
+    now = datetime(2026, 10, 20, 8, 0, tzinfo=tz).timestamp()
+    yesterday = datetime(2026, 10, 19, 16, 0, tzinfo=tz).timestamp()
+    this_morning = datetime(2026, 10, 20, 6, 0, tzinfo=tz).timestamp()
+    w = mv.Wall(items=[types.SimpleNamespace(epoch=yesterday), types.SimpleNamespace(epoch=this_morning)])
+    _, items = mv.recent_rows(w, "today", now=now)
+    assert [i.epoch for i in items] == [this_morning]
+
+
+def test_recent_people_filter_rows_before_merging(env):
+    now = time.time()
+    iso = lambda d: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - d * 86400))
+    put(env, "User's sister Marisol works as a nurse at the clinic", when=iso(60))
+    put(env, "User's sister Marisol is flying in from Lisbon on Thursday", when=iso(1))
+    wall = run(mv.gather_wall(ME, svc=env.svc))
+    people, _ = mv.recent_rows(wall, "this week")
+    text = " ".join(f for e in people for f, _ in e.facts).lower()
+    assert "lisbon" in text and "nurse" not in text
