@@ -479,7 +479,7 @@ def warm() -> bool:
         return False
 
 
-def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
+def _head_shadow(text: str, v: np.ndarray, routed: str, epoch: Optional[int] = None) -> None:
     """SHADOW-ONLY head comparison. Never influences routing, never raises.
 
     Logs a structured line keyed by an utterance HASH (no raw text at INFO —
@@ -517,6 +517,7 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
             _append_shadow_line(
                 _HEAD_LOG_PATH,
                 json.dumps(_with_text(rec, text), sort_keys=True),
+                epoch,
             )
         except OSError as exc:
             shadow_logger.debug("shadow log append failed: %s", exc)
@@ -576,15 +577,22 @@ def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
     }, text)
 
 
-def _two_stage_shadow2(text: str, v: np.ndarray, routed: str) -> None:
-    """shadow2: compute+log the full two-stage decision OFF the turn's
-    critical path (the sidecar call is ~400 ms — never block a live turn)."""
+def _erase_epoch_now() -> Optional[int]:
+    """``local_text_logs.erase_epoch()`` or None when it cannot be read (then the append is not epoch-guarded - the erase's own
+    file pass under the append lock is still the primary guarantee)."""
     try:
         import local_text_logs
 
-        epoch: Optional[int] = local_text_logs.erase_epoch()      # BEFORE compute: an erase finishing mid-compute drops the append
+        return local_text_logs.erase_epoch()
     except Exception:  # noqa: BLE001
-        epoch = None
+        return None
+
+
+def _two_stage_shadow2(text: str, v: np.ndarray, routed: str, epoch: Optional[int] = None) -> None:
+    """shadow2: compute+log the full two-stage decision OFF the turn's
+    critical path (the sidecar call is ~400 ms — never block a live turn)."""
+    if epoch is None:
+        epoch = _erase_epoch_now()      # BEFORE compute: an erase finishing mid-compute drops the append
 
     def _run():
         try:
@@ -834,6 +842,7 @@ def route(text: str) -> dict:
     'chat' (Tier-2). 'chat' domain itself always routes to chat.
     """
     _ensure_loaded()
+    epoch = _erase_epoch_now()      # BEFORE any compute: an erase finishing mid-turn drops this turn's text-bearing appends
     t0 = time.perf_counter()
     v = embed(text)
     sims = _MATRIX @ v
@@ -842,7 +851,7 @@ def route(text: str) -> dict:
     score = scores[domain]
     thr = threshold()
     routed = domain if (score >= thr and domain != "chat") else "chat"
-    _head_shadow(text, v, routed)
+    _head_shadow(text, v, routed, epoch)
     out = {
         "domain": domain,
         "score": round(score, 3),
@@ -852,7 +861,7 @@ def route(text: str) -> dict:
     }
     hm = head_mode()
     if hm == "shadow2":
-        _two_stage_shadow2(text, v, routed)
+        _two_stage_shadow2(text, v, routed, epoch)
     elif hm == "active":
         decision = _two_stage_active(text, v)
         if decision is not None:
@@ -874,7 +883,7 @@ def route(text: str) -> dict:
             # log it as the independent baseline (out["routed"] is now the
             # two-stage's own output, so it cannot serve as ground truth).
             _log_two_stage(_two_stage_rec(text, decision, "active",
-                                          out["routed"], similarity_routed=routed))
+                                          out["routed"], similarity_routed=routed), epoch)
         # decision None → similarity behavior unchanged (brain-safe)
     if "two_stage" not in out:
         _apply_question_precedence(text, out, scores)

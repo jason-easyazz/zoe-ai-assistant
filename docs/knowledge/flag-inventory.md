@@ -29,7 +29,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_A2A_CLIENT_TIMEOUT_S` | `'30'` | no | NO | `services/zoe-data/a2a_client.py` |
 | `ZOE_A2A_TOKEN` | `''` | no | NO | `services/zoe-data/auth.py` |
 | `ZOE_ACP_DELIVERY_MODE` | `'live'` | no | NO | `services/zoe-data/zoe_acp_client.py` |
-| `ZOE_ADHOC_BACKUP_DIR` | `-` | no | NO | `services/zoe-data/local_text_logs.py` |
+| `ZOE_ADHOC_BACKUP_DIR` | `-` | no | NO | `scripts/maintenance/rotate_service_logs.py`<br>`services/zoe-data/local_text_logs.py` |
 | `ZOE_AFFECT_CONSENT_GATE` | `-` | no | NO | `services/zoe-data/memory_authority.py` |
 | `ZOE_AGENT_LLM_TIMEOUT` | `'120.0'`, `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_AGENT_MAX_TOOL_ITERS` | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |

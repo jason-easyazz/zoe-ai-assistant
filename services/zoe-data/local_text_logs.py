@@ -71,12 +71,19 @@ INTENT_MISSES = TextLog("intent_misses", "text", "drop")
 LOGS = (ROUTER_SHADOW, INTENT_MISSES)
 
 
+def _anchored(raw: str) -> Path:
+    """A relative setting is relative to the SERVICE directory (zoe-data runs with ``WorkingDirectory=services/zoe-data``); the
+    hourly sweep runs from elsewhere, so resolving against its cwd would miss the live log and report success."""
+    p = Path(raw).expanduser()
+    return p if p.is_absolute() else _HERE / p
+
+
 def log_path(log: TextLog) -> Path:
     if log is ROUTER_SHADOW:
-        return Path(os.environ.get("ZOE_ROUTER_HEAD_LOG") or (_HERE / "data" / "router_head_shadow.jsonl"))
+        return _anchored(os.environ.get("ZOE_ROUTER_HEAD_LOG") or str(_HERE / "data" / "router_head_shadow.jsonl"))
     if log is INTENT_MISSES:
         # the writer (intent_router.detect_intent) is fixed at ~/training/data; the env var exists so a TEST can pin this module off it
-        return Path(os.environ.get("ZOE_INTENT_MISS_LOG") or (Path.home() / "training" / "data" / "intent-misses.jsonl"))
+        return _anchored(os.environ.get("ZOE_INTENT_MISS_LOG") or str(Path.home() / "training" / "data" / "intent-misses.jsonl"))
     raise KeyError(log.name)
 
 

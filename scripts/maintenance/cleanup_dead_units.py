@@ -222,6 +222,7 @@ def apply_removal(units_dir: Path, results: list[dict], backup_root: Path, now: 
         for f in r["files"]:
             dest = bdir / f.name
             shutil.move(str(f), str(dest))
+            os.chmod(dest, 0o600)                       # a unit file can carry Environment= secrets: never wider than 0600
             out.append(f"  moved {f.name} -> {dest}")
             if f.name.endswith((".service", ".timer")):
                 moved_units.append(f.name)
@@ -237,6 +238,28 @@ def apply_removal(units_dir: Path, results: list[dict], backup_root: Path, now: 
     return out, ok
 
 
+def _pruned_root(home: Path) -> Path:
+    """The dir the hourly job prunes (ZOE_ADHOC_BACKUP_DIR from env / saved settings, else <home>/.zoe/backups)."""
+    import importlib.util
+
+    mod = sys.modules.get("rotate_service_logs")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("rotate_service_logs", Path(__file__).resolve().parent / "rotate_service_logs.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+    return mod.pruned_backup_root(home)
+
+
+def _warn_if_unpruned(backup_root: Path, home: Path) -> None:
+    pruned = _pruned_root(home)
+    try:
+        backup_root.resolve().relative_to(pruned.resolve())
+    except ValueError:
+        print(f"WARNING: --backup-root {backup_root} is outside {pruned}, which the hourly job prunes: the backup there will NOT "
+              f"expire automatically - delete it by hand.", file=sys.stderr)
+
+
 def main(argv: Optional[list[str]] = None, *, state: StateFn = systemctl_state,
          ctl: Optional[Callable[[list[str]], int]] = None) -> int:
     home = Path(os.environ.get("HOME", str(Path.home())))
@@ -246,9 +269,14 @@ def main(argv: Optional[list[str]] = None, *, state: StateFn = systemctl_state,
     mode.add_argument("--apply", action="store_true", help="move the unit files to a backup dir and reload systemd")
     ap.add_argument("--units-dir", type=Path, default=home / ".config" / "systemd" / "user")
     ap.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
-    ap.add_argument("--backup-root", type=Path, default=home / ".zoe" / "backups")
+    ap.add_argument("--backup-root", type=Path, default=None,
+                    help="default: the directory the hourly job prunes (ZOE_ADHOC_BACKUP_DIR, else ~/.zoe/backups)")
     ap.add_argument("--only", action="append", choices=sorted(FAMILIES), help="restrict to a family (repeatable)")
     ns = ap.parse_args(argv)
+    explicit_backup = ns.backup_root is not None
+    ns.backup_root = ns.backup_root if explicit_backup else _pruned_root(home)
+    if ns.apply and explicit_backup:
+        _warn_if_unpruned(ns.backup_root, home)
     if not ns.units_dir.is_dir():
         print(f"no such units dir: {ns.units_dir}", file=sys.stderr)
         return 1

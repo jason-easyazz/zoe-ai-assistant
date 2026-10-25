@@ -150,3 +150,20 @@ def test_a_timer_that_exists_only_elsewhere_still_blocks_its_family(tool, units,
     assert run(tool, units, tmp_path, "--apply", state=state) == 1
     assert "zoe-dreaming.timer" in asked
     assert (units / "zoe-dreaming.service").exists()
+
+
+def test_default_backup_root_is_the_dir_the_hourly_job_prunes(tool, units, tmp_path, monkeypatch):
+    """PR #2110 review. Break: default to ~/.zoe/backups -> moved unit files (which can carry Environment= secrets) never expire."""
+    pruned = tmp_path / "pruned"
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(pruned))
+    assert tool.main(["--units-dir", str(units), "--repo-root", str(tmp_path / "norepo"), "--apply"],
+                     state=dead, ctl=lambda argv: 0) == 0
+    (bdir,) = list(pruned.glob("dead-units-*"))
+    assert stat.S_IMODE(bdir.stat().st_mode) == 0o700
+    assert all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in bdir.iterdir() if f.is_file())
+
+
+def test_explicit_backup_root_outside_the_pruned_dir_warns(tool, units, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(tmp_path / "pruned"))
+    assert run(tool, units, tmp_path, "--apply") == 0
+    assert "will NOT expire" in capsys.readouterr().err

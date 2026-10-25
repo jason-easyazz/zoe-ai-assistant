@@ -121,7 +121,7 @@ def test_the_observation_resumes_once_retention_lets_go(box):
 
 def test_negative_control_the_old_blocking_acquisition_stalls(box, monkeypatch):
     """Proves the harness can see a stall: re-install the OLD blocking append and route() does not return while retention holds the file."""
-    def old_append(path, line):
+    def old_append(path, line, epoch=None):
         with sr._shadow_write_lock:
             with open(f"{path}.lock", "a") as fh:
                 fcntl.flock(fh, fcntl.LOCK_EX)

@@ -34,6 +34,22 @@ MB = 1024 * 1024
 
 
 @pytest.fixture(autouse=True)
+def _restore_settings_env():
+    """The code under test writes ``os.environ`` DIRECTLY (``apply_env_files`` -> ``setdefault``), which ``monkeypatch`` cannot undo
+    for a key it never set. Snapshot every key the sweep may set and restore it in a ``finally`` whatever the test did."""
+    keys = ("ZOE_TEXT_LOG_RETENTION_DAYS", "ZOE_ROUTER_HEAD_LOG", "ZOE_INTENT_MISS_LOG", "ZOE_ADHOC_BACKUP_DIR")
+    saved = {k: os.environ.get(k) for k in keys}
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+@pytest.fixture(autouse=True)
 def _text_logs_off_the_live_files(tmp_path, monkeypatch):
     """``main`` also runs the utterance-text retention pass (local_text_logs). Pin its two logs off the checkout's real ones."""
     monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(tmp_path / "pinned-shadow.jsonl"))

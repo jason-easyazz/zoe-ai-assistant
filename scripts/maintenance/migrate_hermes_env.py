@@ -18,7 +18,9 @@ CONTRACT.
     live file, which is the sprawl the deep dive flagged) and keeps the target's file mode.
     The BACKUP is always mode 600 inside a 0700 dir, deliberately never looser than the source (a
     secret copy must not be wider than its original). A target created here is mode 600. The
-    hourly zoe-log-rotate job deletes these backups after 14 days (local_text_logs).
+    hourly zoe-log-rotate job deletes these backups after 14 days (local_text_logs) - the default root
+    is the directory that job prunes (ZOE_ADHOC_BACKUP_DIR, incl. the saved zoe-data env files); an explicit
+    ``--backup-root`` outside it warns that the copy will not expire.
   * "Only from hermes" is computed per unit against everything else the unit gets: its other
     ``EnvironmentFile=`` lines, inline ``Environment=`` lines (unit + ``.d/*.conf`` drop-ins) and
     names already planned for the same target earlier in the run.
@@ -435,6 +437,28 @@ def render_report(plans: list[UnitPlan], applied: bool) -> str:
     return "\n".join(lines)
 
 
+def _pruned_root(home: Path) -> Path:
+    """The dir the hourly job prunes (ZOE_ADHOC_BACKUP_DIR from env / saved settings, else <home>/.zoe/backups)."""
+    import importlib.util
+
+    mod = sys.modules.get("rotate_service_logs")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("rotate_service_logs", Path(__file__).resolve().parent / "rotate_service_logs.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+    return mod.pruned_backup_root(home)
+
+
+def _warn_if_unpruned(backup_root: Path, home: Path) -> None:
+    pruned = _pruned_root(home)
+    try:
+        backup_root.resolve().relative_to(pruned.resolve())
+    except ValueError:
+        print(f"WARNING: --backup-root {backup_root} is outside {pruned}, which the hourly job prunes: the backup there will NOT "
+              f"expire automatically - delete it by hand.", file=sys.stderr)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--home", type=Path, default=Path(os.environ.get("HOME", str(Path.home()))),
@@ -455,7 +479,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ns.units_dir = ns.units_dir or home / ".config/systemd/user"
     ns.hermes_env = ns.hermes_env or home / ".hermes/.env"
     ns.repo_root = ns.repo_root or Path(os.environ.get("ZOE_REPO_ROOT", home / "assistant"))
-    ns.backup_root = ns.backup_root or home / ".zoe/backups"
+    explicit_backup = ns.backup_root is not None
+    ns.backup_root = ns.backup_root if explicit_backup else _pruned_root(home)      # the dir the hourly job prunes
+    if ns.apply and explicit_backup:
+        _warn_if_unpruned(ns.backup_root, home)
     if not ns.hermes_env.is_file():
         print(f"{ns.hermes_env} does not exist: nothing to migrate (already retired?).")
         return 0

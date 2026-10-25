@@ -269,3 +269,33 @@ def test_every_cleanup_family_unit_is_retired_here(mig):
     spec.loader.exec_module(cleanup)
     services = {n for names, _globs in cleanup.FAMILIES.values() for n in names if n.endswith(".service")}
     assert services and services <= mig.RETIRED_UNITS, sorted(services - mig.RETIRED_UNITS)
+
+
+def test_default_backup_root_is_the_dir_the_hourly_job_prunes(mig, box, monkeypatch):
+    """PR #2110 review: with no --backup-root the copy of a secret env file must land where ``prune_adhoc_backups`` looks
+    (ZOE_ADHOC_BACKUP_DIR). Break: default to <home>/.zoe/backups -> it never expires."""
+    pruned = box["home"] / "pruned"
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(pruned))
+    assert mig.main(["--apply", "--home", str(box["home"]), "--units-dir", str(box["units"]), "--hermes-env", str(box["hermes"]),
+                     "--repo-root", str(box["repo"])]) == 0
+    (backup,) = list(pruned.glob("migrate-hermes-env-*/.env"))
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600 and stat.S_IMODE(backup.parent.stat().st_mode) == 0o700
+    assert not (box["home"] / ".zoe" / "backups").exists()
+
+
+def test_default_backup_root_follows_the_saved_zoe_data_env(mig, box, monkeypatch):
+    import rotate_service_logs as rsl      # loaded by the script itself
+
+    env = box["home"] / "saved.env"
+    env.write_text(f'ZOE_ADHOC_BACKUP_DIR="{box["home"] / "saved-pruned"}"\n')
+    monkeypatch.delenv("ZOE_ADHOC_BACKUP_DIR", raising=False)
+    mig._pruned_root(box["home"])           # make sure the module is loaded
+    monkeypatch.setattr(sys.modules["rotate_service_logs"], "ENV_FILES", (env,))
+    assert mig._pruned_root(box["home"]) == box["home"] / "saved-pruned"
+    assert "ZOE_ADHOC_BACKUP_DIR" not in __import__("os").environ      # resolving never writes the process environment
+
+
+def test_explicit_backup_root_outside_the_pruned_dir_warns(mig, box, monkeypatch, capsys):
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(box["home"] / "pruned"))
+    assert _apply(mig, box) == 0
+    assert "will NOT expire" in capsys.readouterr().err

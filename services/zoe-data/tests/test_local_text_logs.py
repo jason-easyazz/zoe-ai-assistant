@@ -253,12 +253,26 @@ def _shadow2_world(shadow, monkeypatch, decide):
     return sr
 
 
-def _run_shadow2(sr, text):
+def _run_shadow2(sr, text, monkeypatch):
+    """Start the shadow2 worker and return the Thread object ``_two_stage_shadow2`` created. The handle is captured AT creation
+    (a ``threading`` shim recording every Thread), never found afterwards by scanning ``threading.enumerate()`` - a fast worker
+    would already be gone by then."""
     import threading as th
+    import types
 
-    before = {t.ident for t in th.enumerate()}
+    made: list = []
+
+    class _Rec(th.Thread):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            made.append(self)
+
+    shim = types.SimpleNamespace(**{k: v for k, v in vars(th).items() if k != "Thread"})
+    shim.Thread = _Rec
+    monkeypatch.setattr(sr, "threading", shim)
     sr._two_stage_shadow2(text, None, "chat")
-    return [t for t in th.enumerate() if t.ident not in before and t.name == "router-shadow2"]
+    (worker,) = [t for t in made if t.name == "router-shadow2"]
+    return worker
 
 
 def test_shadow2_observation_computed_across_an_erase_is_dropped(shadow, monkeypatch):
@@ -273,7 +287,7 @@ def test_shadow2_observation_computed_across_an_erase_is_dropped(shadow, monkeyp
         return {"domain": "chat"}
 
     sr = _shadow2_world(shadow, monkeypatch, decide)
-    (worker,) = _run_shadow2(sr, "remind me to call Marisol tomorrow")
+    worker = _run_shadow2(sr, "remind me to call Marisol tomorrow", monkeypatch)
     assert started.wait(10)
     ltl.erase_entity(re.compile(r"\bMarisol\b"))              # the erase finishes while the prediction is still pending
     release.set()
@@ -283,6 +297,69 @@ def test_shadow2_observation_computed_across_an_erase_is_dropped(shadow, monkeyp
 
 def test_shadow2_normal_observation_still_appends(shadow, monkeypatch):
     sr = _shadow2_world(shadow, monkeypatch, lambda t, v: {"domain": "chat"})
-    (worker,) = _run_shadow2(sr, "what time is it")
+    worker = _run_shadow2(sr, "what time is it", monkeypatch)
     worker.join(10)
     assert [r.get("utt_text") for r in load(shadow)] == ["what time is it"]
+
+
+def test_active_mode_observation_computed_across_an_erase_is_dropped(shadow, monkeypatch):
+    """PR #2110 review: ``route()`` in ZOE_ROUTER_HEAD=active logged with no erase epoch. The prediction is held (events, no
+    sleeps) while the erase completes. Break: drop the ``epoch`` argument from the active ``_log_two_stage`` call -> Marisol returns."""
+    import re
+    import threading as th
+
+    import numpy as np
+
+    started, release = th.Event(), th.Event()
+
+    def decide(text, v):
+        started.set()
+        assert release.wait(10)
+        return {"domain": "chat"}
+
+    sr = _shadow2_world(shadow, monkeypatch, decide)
+
+    class _M:
+        def __matmul__(self, v):
+            return np.zeros(64)
+
+    monkeypatch.setattr(sr, "_ensure_loaded", lambda: None)
+    monkeypatch.setattr(sr, "embed", lambda t: np.zeros(4))
+    monkeypatch.setattr(sr, "head_mode", lambda: "active")
+    monkeypatch.setattr(sr, "_head_shadow", lambda *a, **k: None)
+    monkeypatch.setattr(sr, "_apply_question_precedence", lambda *a, **k: None)
+    monkeypatch.setattr(sr, "threshold", lambda: 0.5)
+    monkeypatch.setattr(sr, "_MATRIX", _M())
+    monkeypatch.setattr(sr, "_DOM_IDX", {d: 0 for d in sr.ROUTES})
+    out: dict = {}
+    t = th.Thread(target=lambda: out.update(sr.route("remind me to call Marisol tomorrow")))
+    t.start()
+    assert started.wait(10)
+    ltl.erase_entity(re.compile(r"\bMarisol\b"))
+    release.set()
+    t.join(10)
+    assert out.get("two_stage") is not None                    # the turn itself still routed
+    assert not shadow.exists() or "Marisol" not in shadow.read_text()
+
+
+def test_head_shadow_observation_across_an_erase_is_dropped(shadow, monkeypatch):
+    """The sync head-shadow append carries the same epoch. Break: drop ``epoch`` from its ``_append_shadow_line`` call."""
+    import re
+
+    sr = _shadow2_world(shadow, monkeypatch, lambda t, v: None)
+    epoch = sr._erase_epoch_now()
+    ltl.erase_entity(re.compile(r"\bMarisol\b"))
+    assert sr._append_shadow_line(str(shadow), json.dumps({"utt": "x", "utt_text": "call Marisol"}), epoch) is False
+    assert not shadow.exists() or "Marisol" not in shadow.read_text()
+
+
+def test_relative_log_settings_resolve_against_the_service_dir_not_the_cwd(tmp_path, monkeypatch):
+    """PR #2110 review: the hourly sweep runs from another cwd; a relative ZOE_ROUTER_HEAD_LOG / ZOE_INTENT_MISS_LOG must name the
+    file zoe-data (cwd = services/zoe-data) writes. Break: return the raw relative Path -> it follows the process cwd."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", "data/custom.jsonl")
+    monkeypatch.setenv("ZOE_INTENT_MISS_LOG", "data/miss.jsonl")
+    assert ltl.log_path(ltl.ROUTER_SHADOW) == ltl._HERE / "data" / "custom.jsonl"
+    assert ltl.log_path(ltl.INTENT_MISSES) == ltl._HERE / "data" / "miss.jsonl"
+    monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(tmp_path / "abs.jsonl"))
+    assert ltl.log_path(ltl.ROUTER_SHADOW) == tmp_path / "abs.jsonl"

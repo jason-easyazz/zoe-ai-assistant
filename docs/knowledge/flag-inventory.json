@@ -119,6 +119,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/maintenance/rotate_service_logs.py",
           "services/zoe-data/local_text_logs.py"
         ],
         "typed_env": false

@@ -64,6 +64,7 @@ import os
 import stat
 import sys
 from pathlib import Path
+from typing import Optional
 
 DEFAULT_DIR = "~/.zoe-logs"
 DEFAULT_MAX_MB = 50
@@ -231,6 +232,14 @@ def apply_env_files() -> None:
     """Fill the retention settings from the zoe-data env files for any name the process environment does not already set."""
     for key, value in read_env_settings(ENV_FILES, SWEEP_ENV_KEYS).items():
         os.environ.setdefault(key, value)
+
+
+def pruned_backup_root(home: Optional[Path] = None) -> Path:
+    """The directory the hourly job prunes one-off backups from: ``ZOE_ADHOC_BACKUP_DIR`` (process env, else the zoe-data env
+    files - the same precedence ``apply_env_files`` gives the job), else ``<home>/.zoe/backups``. Pure: it does NOT touch
+    ``os.environ``. Owner scripts that write backups default to this so their copies expire with the rest."""
+    raw = os.environ.get("ZOE_ADHOC_BACKUP_DIR") or read_env_settings(ENV_FILES, ("ZOE_ADHOC_BACKUP_DIR",)).get("ZOE_ADHOC_BACKUP_DIR")
+    return Path(raw) if raw else (home or Path.home()) / ".zoe" / "backups"
 
 
 def sweep_text_logs(dry_run: bool) -> int:
