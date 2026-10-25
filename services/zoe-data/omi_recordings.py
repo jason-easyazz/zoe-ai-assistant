@@ -66,7 +66,7 @@ TRANSIENT_ONLY_S = 0.5            # under this much sustained sound, a "voiced" 
 MAX_ATTEMPTS = 3
 #: Bump whenever transcription or its empty-transcript diagnostics change. The first loop pass after a deploy that changes it requeues
 #: every held empty/failed recording ONCE (``requeue_after_pipeline_change``), so the change reaches audio still inside its retention.
-TRANSCRIBE_PIPELINE = "2026-10-16.transient-robust-levels"
+TRANSCRIBE_PIPELINE = "2026-10-25.click-skip-keep-wav"
 STALE_CLAIM_S = 30 * 60
 POLL_S = 60.0
 VOICE_BUSY_S = 45.0              # a voice turn this recent = "in flight": it aborts/holds a running job
