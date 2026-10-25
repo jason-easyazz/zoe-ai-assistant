@@ -219,8 +219,8 @@ def _manifest(ns, plain: Path) -> dict:
                                  capture_output=True, timeout=600)
         if sch.returncode != 0:
             raise RuntimeError(f"pg_restore -s failed: {sch.stderr.decode(errors='replace').strip()[-200:]}")
-        man["excluded_fks"] = plan.excluded_fks(plan.parse_fks(sch.stdout.decode(errors="replace")),
-                                                man["data_excluded"])
+        schema_sql = sch.stdout.decode(errors="replace")
+        man["excluded_fks"] = plan.excluded_fks(plan.parse_fks(schema_sql), man["data_excluded"], schema_sql)
         return man
 
 

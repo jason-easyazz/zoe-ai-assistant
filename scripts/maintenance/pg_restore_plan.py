@@ -45,9 +45,33 @@ def parse_fks(schema_sql: str) -> list[dict]:
     return out
 
 
-def excluded_fks(fks: Iterable[dict], excluded: Iterable[str]) -> list[dict]:
-    """FKs whose parent has no data in the dump while the referencing table does."""
-    ex = set(excluded)
+_ATTACH = re.compile(
+    rf"ALTER TABLE (?:ONLY )?(?P<parent>{_ID}(?:\.{_ID})?)\s+ATTACH PARTITION (?P<child>{_ID}(?:\.{_ID})?)", re.S)
+
+
+def partition_children(schema_sql: str) -> dict[str, list[str]]:
+    """``{partitioned parent: [direct partitions]}`` from the ``ATTACH PARTITION`` statements of a ``pg_restore -s`` script."""
+    out: dict[str, list[str]] = {}
+    for m in _ATTACH.finditer(schema_sql):
+        out.setdefault(_man.split_qualified(m["parent"]), []).append(_man.split_qualified(m["child"]))
+    return out
+
+
+def _has_data(table: str, ex: set[str], kids: dict[str, list[str]], seen: frozenset = frozenset()) -> bool:
+    """A partitioned parent has no ``TABLE DATA`` entry of its own - its rows are dumped under its partitions - so it
+    holds data when any partition (recursively) does. An ordinary table holds data unless it is in ``ex``."""
+    if table in seen:
+        return False
+    if table not in kids:
+        return table not in ex
+    return any(_has_data(k, ex, kids, seen | {table}) for k in kids[table])
+
+
+def excluded_fks(fks: Iterable[dict], excluded: Iterable[str], schema_sql: str = "") -> list[dict]:
+    """FKs whose parent has no data in the dump while the referencing table does. ``schema_sql`` lets a partitioned
+    parent (no ``TABLE DATA`` of its own, rows under its partitions) count as restored when a partition has data."""
+    kids = partition_children(schema_sql) if schema_sql else {}
+    ex = {t for t in set(excluded) if t not in kids or not _has_data(t, set(excluded), kids)}
     return [f for f in fks if f["parent"] in ex and f["child"] not in ex]
 
 
@@ -81,4 +105,4 @@ def excluded_tables(manifest: Optional[dict], toc_lines: list[str]) -> list[str]
 
 
 def plan_for(toc_lines: list[str], schema_sql: str, manifest: Optional[dict] = None) -> list[dict]:
-    return excluded_fks(parse_fks(schema_sql), excluded_tables(manifest, toc_lines))
+    return excluded_fks(parse_fks(schema_sql), excluded_tables(manifest, toc_lines), schema_sql)
