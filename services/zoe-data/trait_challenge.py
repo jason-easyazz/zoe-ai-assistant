@@ -51,12 +51,22 @@ _NOT_ASSERTED_BEFORE = re.compile(
     r"\b(?:what\s+if|if|suppose|supposing|imagine|pretend|hypothetically|used\s+to|once|when|whether|wonder|wondering|"
     r"(?:he|she|they|people|everyone|you)\s+(?:says?|said|thinks?|thought|reckons?|claims?|believes?|asked?|told\s+me)|"
     r"(?:ask|asked|asking|question|questions)\s+(?:me\s+)?(?:if|whether|that)?)\b", re.I)
+# hypothetical framing that scopes over the WHOLE sentence, parenthetical commas included ("Suppose, for a moment, I'm not X");
+# bare "you" is not a marker, and a contrastive "but" starts a fresh claim. "if" stays clause-scoped above ("If I'm tired, I'm not X").
+_HYPOTHETICAL_SENTENCE = re.compile(
+    r"\b(?:what\s+if|suppose|supposing|imagine|imagining|pretend|pretending|hypothetically|let's\s+say|say\s+that|"
+    r"(?:ask|asked|asking)\s+(?:me\s+)?(?:if|whether)|wonder(?:ing)?\s+(?:if|whether)|whether)\b", re.I)
+# a third party reporting the affirmation: not the speaker taking their denial back
+_REPORTED = re.compile(
+    r"(?<!\bi\s)\b(?:says?|said|saying|thinks?|thought|reckons?|claims?|believes?|insists?|tells?\s+me|told\s+me|"
+    r"according\s+to|apparently)\b", re.I)
 # ... or one the same sentence takes back: "I used to say I'm not X, but I am now" / "..., but actually I am"
 _REVERSED_BARE = re.compile(r"\b(?:but\s+)?(?:actually\s+|in\s+fact\s+|really\s+|now\s+)?i\s+am\s*(?:[,;]|$)|\bthat\s+changed\b", re.I)
 _REAFFIRM = re.compile(r"\bi\s*(?:'m|am)\s+(?!not\b)(?:now\s+|actually\s+|really\s+|in\s+fact\s+)?(?P<r>.*)|\bnow\s+i\s*(?:'m|am)\s+(?!not\b)(?P<r2>.*)", re.I)
 # a row that says something about the owner: "User is a X." / "User's job/role: X" - never "User's sister is a X"
 _ABOUT_OWNER = re.compile(
-    r"^\s*user\s+is\b|^\s*user's\s+(?:job/role|job|role|occupation|profession|trade|identity|faith|religion|nature)\b", re.I)
+    r"^\s*(?:the\s+)?user(?:\s+(?!'s\b)[a-z]|'s\s+(?:job/role|job|role|occupation|profession|trade|identity|faith|religion|nature)\b)",
+    re.I)
 # where the owner's own statement ends and a second subject begins
 _OTHER_SUBJECT = re.compile(r"[.!?;]\s|,?\s+and\s+(?:user's|his|her|their)\b|,\s*(?:user's|his|her|their)\b", re.I)
 
@@ -68,7 +78,9 @@ def _reversed(tail: str, trait: str) -> bool:
     want = _content(trait)
     for m in _REAFFIRM.finditer(tail):
         rest = (m.group("r") or m.group("r2") or "").strip().lower()
-        if rest.startswith(("one", "so ")) or (want and want <= _content(rest)):
+        if _REPORTED.search(tail[: m.start()]):
+            continue          # "but my husband says I'm a morning person": reported speech never reverses
+        if want and want <= _content(rest):
             return True
     return False
 
@@ -91,6 +103,10 @@ def challenged_trait(turn: str) -> Optional[str]:
         if m:
             start = max((x.end() for x in re.finditer(r"[.!?;,\n]\s*", t[: m.start()])), default=0)
             if _NOT_ASSERTED_BEFORE.search(t[start:m.start()]):
+                return None
+            sent = max((x.end() for x in re.finditer(r"[.!?;\n]\s*", t[: m.start()])), default=0)
+            scope = re.split(r"\bbut\b", t[sent:m.start()], flags=re.I)[-1]
+            if _HYPOTHETICAL_SENTENCE.search(scope):
                 return None
             tail = re.split(r"[.!?\n]", t[m.end():], maxsplit=1)[0]
             trait = m.group("t").strip().lower()

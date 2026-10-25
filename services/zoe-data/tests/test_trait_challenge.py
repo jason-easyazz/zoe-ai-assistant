@@ -247,3 +247,32 @@ def test_possessive_in_an_owner_facts_details_still_matches():
     rows = [row("a", "User is a doctor at St Mary's Hospital."), row("b", "User's sister is a doctor."),
             row("c", "User is a nurse and User's sister is a doctor.")]
     assert [r.id for r in tc.matching_rows("doctor", rows)] == ["a"]
+
+
+# ---- last review round -----------------------------------------------------------------------------
+
+def test_owner_rows_with_other_verb_forms_match_but_relatives_do_not():
+    rows = [row("a", "User works as a paramedic."), row("b", "The user is a paramedic."),
+            row("c", "User's sister is a paramedic."), row("d", "User's sister works as a paramedic."),
+            row("e", "User's job/role: paramedic")]
+    assert [r.id for r in tc.matching_rows("paramedic", rows)] == ["a", "b", "e"]
+
+
+@pytest.mark.parametrize("turn", [
+    "I'm not a morning person, but I'm so tired.",
+    "I'm not a morning person, but my husband says I'm a morning person.",
+])
+def test_unrelated_or_reported_but_clauses_do_not_take_the_denial_back(turn):
+    assert tc.challenged_trait(turn) == "morning person"
+
+
+def test_first_person_same_trait_affirmation_still_takes_it_back():
+    assert tc.challenged_trait("I'm not a morning person, but I'm a morning person now.") is None
+
+
+@pytest.mark.parametrize("turn", [
+    "Suppose, for a moment, I'm not a morning person.",
+    "Imagine, just for fun, I'm not a morning person.",
+])
+def test_parenthetical_commas_keep_the_hypothetical_scope(turn):
+    assert tc.challenged_trait(turn) is None
