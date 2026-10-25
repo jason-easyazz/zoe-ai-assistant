@@ -199,6 +199,21 @@ def wait_for_panel_quiet(max_wait_s: float, *, poll_s: float = 60.0, log: Callab
     return True
 
 
+def deadline_s(*, margin_s: int = 120, now: Optional[dt.datetime] = None) -> int:
+    """Hard wall-clock budget, in seconds, for a step that is running NOW: the time until the brain window opens minus a
+    teardown margin. 0 when inside the window or with no room left (the caller must refuse, never run unbounded).
+    ``brain_window_verdict`` only checks a start against an ESTIMATE; this is the bound the step is actually killed at."""
+    t0 = now or dt.datetime.now()
+    day = t0.replace(hour=0, minute=0, second=0, microsecond=0)
+    w_start = day + dt.timedelta(hours=BRAIN_WINDOW_START.hour, minutes=BRAIN_WINDOW_START.minute)
+    w_end = day + dt.timedelta(hours=BRAIN_WINDOW_END.hour, minutes=BRAIN_WINDOW_END.minute)
+    if w_start <= t0 < w_end:
+        return 0
+    if t0 >= w_end:
+        w_start += dt.timedelta(days=1)
+    return int(max(0, (w_start - t0).total_seconds() - max(0, int(margin_s))))
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -214,6 +229,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     w.add_argument("--budget-min", type=int, default=20)
     w.add_argument("--cap-s", type=int, default=1800)
     w.add_argument("--now", help="ISO local time (tests)")
+    d = sub.add_parser("brain-window-deadline", help="print the seconds a RUNNING step may live (0 = refuse)")
+    d.add_argument("--margin-s", type=int, default=120)
+    d.add_argument("--now", help="ISO local time (tests)")
     sub.add_parser("panel-quiet", help="exit 0 when the panel has been quiet 10 min, 1 when in use")
     args = ap.parse_args(argv)
     if args.cmd == "panel-quiet":
@@ -221,6 +239,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.cmd == "brain-window-wait":
         print(lock_wait_s(args.budget_min, cap_s=args.cap_s,
                           now=dt.datetime.fromisoformat(args.now) if args.now else None))
+        return 0
+    if args.cmd == "brain-window-deadline":
+        print(deadline_s(margin_s=args.margin_s, now=dt.datetime.fromisoformat(args.now) if args.now else None))
         return 0
     if args.cmd == "brain-window":
         v = brain_window_verdict(args.name, budget_min=args.budget_min,
