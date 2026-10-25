@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-766 flags; 716 not documented in `.env.example`.
+767 flags; 717 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -753,6 +753,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_GREETING_STATE_PATH` | `dynamic` | no | NO | `services/zoe-data/voice_greeting.py` |
 | `ZOE_VOICE_IDENT` | `''` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_LOG` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_VOICE_MAIN_CHECKOUT` | `-` | no | NO | `scripts/maintenance/voice_gate_report.py`<br>`scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_MEMORY_PACKET_LAZY` | `'true'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_PROBE_MIN_MEM_MB` | `-` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_SAMPLES` | `'20'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
