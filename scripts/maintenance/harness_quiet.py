@@ -166,6 +166,32 @@ def brain_window_verdict(name: str, *, budget_min: int = 45, now: Optional[dt.da
                          f"for a {budget_min}-min run")
 
 
+NIGHT_BUSY_ENV = "ZOE_NIGHT_BUSY"
+NIGHT_BUSY_DEFAULT = "~/.zoe/agent-tools/night_busy.sh"
+
+
+def night_pause_verdict(name: str, *, budget_min: int = 45, kind: str = "voice", now: Optional[dt.datetime] = None,
+                        runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> Verdict:
+    """The measured night pause (scripts/AGENTS.md "Brain-window quiet hours", 2026-10-19): ask the operator-local
+    ``night_busy.sh <kind>`` (exit 0 = pause, 1 = may run), which follows tonight's real 12B window instead of a fixed span.
+
+    The script lives outside the repo, so when it is missing, not executable, errors, times out or answers anything but 0/1 this
+    falls back to the conservative fixed ``brain_window_verdict`` - an unreadable gate never reads as "clear". Like the fixed rule,
+    ``ZOE_HARNESS_FORCE`` does not reach it."""
+    path = os.path.expanduser(os.environ.get(NIGHT_BUSY_ENV) or NIGHT_BUSY_DEFAULT)
+    if os.path.isfile(path) and os.access(path, os.X_OK):
+        try:
+            rc = runner([path, kind], capture_output=True, timeout=10, check=False).returncode
+        except (OSError, subprocess.SubprocessError):
+            rc = None
+        if rc == 0:
+            return Verdict(False, f"{name}: night_busy.sh {kind} says pause (the 12B night window, the nightly voice regression, "
+                                  "or the household's waking hours own the box) - start it when the gate opens", "brain-window")
+        if rc == 1:
+            return Verdict(True, f"{name}: night_busy.sh {kind} says the box is free")
+    return brain_window_verdict(name, budget_min=budget_min, now=now)
+
+
 def lock_wait_s(budget_min: int = 20, *, cap_s: int = 1800, now: Optional[dt.datetime] = None) -> int:
     """How long may a step wait for the shared harness lock and still start in time to finish before 01:50?
 

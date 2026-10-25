@@ -401,10 +401,10 @@ def estimate_budget_min(n_clips: int) -> int:
 def window_refusal(budget_min: int, *, verdict: Optional[Callable] = None) -> Optional[str]:
     """None when a run of ``budget_min`` minutes starting now stays clear of the 01:50-04:55 brain window
     (scripts/AGENTS.md "Brain-window quiet hours"), else the refusal. The shared rule is
-    ``harness_quiet.brain_window_verdict``; ``--force`` / ``ZOE_HARNESS_FORCE`` do NOT reach it."""
+    ``harness_quiet.night_pause_verdict`` (the measured ``night_busy.sh voice`` gate, the fixed window as its fallback); ``--force`` / ``ZOE_HARNESS_FORCE`` do NOT reach it."""
     if verdict is None:
         import harness_quiet
-        verdict = harness_quiet.brain_window_verdict
+        verdict = harness_quiet.night_pause_verdict
     v = verdict("measure_wake", budget_min=budget_min)
     return None if v.allowed else v.reason
 

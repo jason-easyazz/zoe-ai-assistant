@@ -256,9 +256,24 @@ def private_dir(d: Path, root: Path = VOICE_GATE_ROOT) -> Path:
 
 
 def write_private(path: Path, text: str) -> None:
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)   # never through a symlink
-    with os.fdopen(fd, "w", newline="") as fh:
-        fh.write(text)
+    """Atomic: a private (0600) temp file in the same directory, flushed + fsynced, then ``os.replace``d over ``path`` - a kill or a
+    failed write mid-way leaves the previous file (the operator's labels) intact. Never writes through a symlink (the temp is
+    ``O_EXCL|O_NOFOLLOW``; ``replace`` swaps a symlink at ``path`` itself rather than following it)."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", newline="") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     os.chmod(path, 0o600)
 
 
@@ -424,10 +439,10 @@ def estimate_budget_min(n_clips: int) -> int:
 def window_refusal(budget_min: int, *, verdict: Optional[Callable] = None) -> Optional[str]:
     """None when a run of ``budget_min`` minutes starting now stays clear of the 01:50-04:55 brain window
     (scripts/AGENTS.md "Brain-window quiet hours"), else the refusal. The shared rule is
-    ``harness_quiet.brain_window_verdict``; ``--force`` / ``ZOE_HARNESS_FORCE`` do NOT reach it."""
+    ``harness_quiet.night_pause_verdict`` (the measured ``night_busy.sh voice`` gate, the fixed window as its fallback); ``--force`` / ``ZOE_HARNESS_FORCE`` do NOT reach it."""
     if verdict is None:
         import harness_quiet
-        verdict = harness_quiet.brain_window_verdict
+        verdict = harness_quiet.night_pause_verdict
     v = verdict("speaker_fa_review", budget_min=budget_min)
     return None if v.allowed else v.reason
 

@@ -241,6 +241,7 @@ _REAL_BWV = _hq.brain_window_verdict   # captured once: _clock re-patches the mo
 def _clock(monkeypatch, when: dt.datetime):
     """Pin harness_quiet's brain-window verdict to ``when`` (the real one reads the wall clock)."""
     import harness_quiet
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", "/nonexistent/night_busy.sh")   # no operator gate: fall back to the fixed window
     monkeypatch.setattr(harness_quiet, "brain_window_verdict",
                         lambda name, budget_min=45, now=None: _REAL_BWV(name, budget_min=budget_min, now=when))
     monkeypatch.setattr(harness_quiet, "check", lambda *a, **k: SimpleNamespace(allowed=True, reason="ok"))
@@ -332,3 +333,34 @@ def test_join_server_honours_an_upper_bound():
     sev = [(dt.datetime(2026, 10, 20, 20, 0, 19), "command", dict(user="alex", identified="alex"))]
     assert sfa.join_server(t0, sev, set()) == dict(identified="alex")                       # unbounded: the old behaviour
     assert sfa.join_server(t0, sev, set(), until=dt.datetime(2026, 10, 20, 20, 0, 15)) == {}
+
+
+def _gate(tmp_path, monkeypatch, rc: int):
+    g = tmp_path / "night_busy.sh"
+    g.write_text(f"#!/bin/sh\n[ \"$1\" = voice ] || exit 9\nexit {rc}\n")
+    g.chmod(0o755)
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(g))
+
+
+def test_window_refusal_follows_the_measured_night_gate_not_the_fixed_span(monkeypatch, tmp_path):
+    _clock(monkeypatch, dt.datetime(2026, 10, 20, 3, 40))        # inside the OLD fixed 01:50-04:55 span
+    _gate(tmp_path, monkeypatch, 1)                              # the window finished: may run
+    assert sfa.window_refusal(10) is None
+    _clock(monkeypatch, dt.datetime(2026, 10, 20, 5, 30))        # past the old span, but the gate says the box is busy
+    _gate(tmp_path, monkeypatch, 0)
+    assert sfa.window_refusal(10)
+
+
+def test_write_private_is_atomic_a_failed_write_keeps_the_previous_sheet(tmp_path, monkeypatch):
+    f = tmp_path / "sheet.csv"
+    sfa.write_private(f, "labels-v1\n")
+    assert f.read_text() == "labels-v1\n" and (f.stat().st_mode & 0o777) == 0o600
+
+    def boom(fd):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sfa.os, "fsync", boom)
+    with pytest.raises(OSError):
+        sfa.write_private(f, "labels-v2-partial\n")
+    assert f.read_text() == "labels-v1\n"                                  # nothing destroyed
+    assert [p.name for p in tmp_path.iterdir()] == ["sheet.csv"]            # and no temp left behind

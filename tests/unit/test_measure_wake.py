@@ -351,6 +351,7 @@ def _at(h: int, m: int = 0) -> dt.datetime:
 def _clock(monkeypatch, when: dt.datetime):
     """Pin harness_quiet's brain-window verdict to ``when`` (the real one reads the wall clock)."""
     import harness_quiet
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", "/nonexistent/night_busy.sh")   # no operator gate: fall back to the fixed window
     monkeypatch.setattr(harness_quiet, "brain_window_verdict",
                         lambda name, budget_min=45, now=None: _REAL_BWV(name, budget_min=budget_min, now=when))
     return harness_quiet
@@ -481,3 +482,19 @@ def test_build_report_marks_a_partial_run_and_gives_no_threshold():
     _rows, rec2, md2 = mw.build_report(clips, live=mw.LIVE, frr_budget=0.05,
                                        aborted=dict(reason="memory", detail="x", clips_scored=301, clips_planned=900))
     assert complete_has_threshold and rec2["threshold"] is None and "INCOMPLETE RUN" in md2 and "INCOMPLETE" not in md
+
+
+def _gate(tmp_path, monkeypatch, rc: int):
+    g = tmp_path / "night_busy.sh"
+    g.write_text(f"#!/bin/sh\n[ \"$1\" = voice ] || exit 9\nexit {rc}\n")
+    g.chmod(0o755)
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(g))
+
+
+def test_window_refusal_follows_the_measured_night_gate_not_the_fixed_span(monkeypatch, tmp_path):
+    _clock(monkeypatch, dt.datetime(2026, 10, 20, 3, 40))        # inside the OLD fixed 01:50-04:55 span
+    _gate(tmp_path, monkeypatch, 1)                              # the window finished: may run
+    assert mw.window_refusal(10) is None
+    _clock(monkeypatch, dt.datetime(2026, 10, 20, 5, 30))        # past the old span, but the gate says the box is busy
+    _gate(tmp_path, monkeypatch, 0)
+    assert mw.window_refusal(10)
