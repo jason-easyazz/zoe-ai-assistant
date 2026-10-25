@@ -2206,7 +2206,7 @@
           "services/zoe-data/system_stats.py",
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_HA_CONTROL_SCOPE": {
         "defaults": [
@@ -2864,7 +2864,7 @@
           "services/zoe-data/system_stats.py",
           "services/zoe-data/tts_waterfall.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_KOKORO_VOICE": {
         "defaults": [
@@ -3127,7 +3127,7 @@
           "services/zoe-data/routers/system.py",
           "services/zoe-data/system_stats.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_LLM_MODEL": {
         "defaults": [

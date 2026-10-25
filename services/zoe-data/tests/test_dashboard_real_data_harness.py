@@ -36,4 +36,4 @@ def test_dashboard_real_data_harness():
     assert HARNESS.is_file(), f"harness missing: {HARNESS}"
     proc = subprocess.run([_node(), str(HARNESS)], capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, f"dashboard real-data harness failed:\n{proc.stdout}\n{proc.stderr}"
-    assert "dashboard real data: 19/19 checks passed" in proc.stdout
+    assert "dashboard real data: 23/23 checks passed" in proc.stdout

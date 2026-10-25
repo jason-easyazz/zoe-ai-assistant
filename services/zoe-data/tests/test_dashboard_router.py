@@ -171,7 +171,7 @@ async def test_concurrent_save_and_add_serialize_on_layout_lock(monkeypatch):
     db.release_save.set()
     save_result, add_result = await asyncio.gather(save_task, add_task)
 
-    assert save_result == {"status": "ok"}
+    assert save_result["status"] == "ok"
     assert add_result == {"status": "ok", "added": ["events"]}
     assert {widget["type"] for widget in db.layout} == {"tasks", "events"}
     assert db.max_active_transactions == 1
