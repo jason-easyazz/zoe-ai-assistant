@@ -596,6 +596,46 @@ def test_quiet_skip_negative_controls_speech_and_a_short_word_after_a_click_stil
     assert len(env.stt) == 2
 
 
+def _short_word_wav(ms: int = 180) -> bytes:
+    """Room noise + one ~180 ms voiced word (140 Hz harmonics, sine envelope) - shorter than 3 loud windows."""
+    import math
+    x = _room(3.0, seed=13)
+    n = 16 * ms
+    for j in range(n):
+        t = (16000 + j) / 16000
+        x[16000 + j] += math.sin(math.pi * j / n) * 5000 * sum(math.sin(2 * math.pi * 140 * h * t) / h for h in (1, 2, 3, 4))
+    return _pcm_to_wav(x)
+
+
+def test_a_short_voiced_word_reaches_moonshine_and_a_lone_click_does_not():
+    word = _short_word_wav()[44:]
+    assert omi.sustained_windows(word) < omi.QUIET_MIN_WINDOWS            # under the old window-count rule ...
+    assert omi.is_click_only(word) is False                               # ... but its envelope is not a transient
+    assert omi.is_click_only(wake_transient_wav()[44:]) is True
+
+
+def test_a_short_word_recording_is_transcribed(env):
+    upload(env, _short_word_wav(), duration=3.0, key="r1.0-50")
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert len(env.stt) == 1 and rows(env)[0]["status"] == "done"
+
+
+def test_a_recording_with_a_skipped_chunk_keeps_its_wav_even_when_other_chunks_had_text(env, monkeypatch):
+    orig = omi.transcribe_audio_file
+
+    async def with_skip(path, **kw):
+        text = await orig(path, **kw)
+        kw["stats"]["quiet_skipped"] = 1
+        return text
+
+    monkeypatch.setattr(omi, "transcribe_audio_file", with_skip)
+    upload(env, speechlike_wav(), duration=6.0)
+    path = rows(env)[0]["audio_path"]
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    (row,) = rows(env)
+    assert row["status"] == "done" and row["transcript"] and Path(path).exists() and row["keep_audio"]
+
+
 # --- requeue: held recordings can be transcribed again inside their retention ---------------------------------------------------------
 def _held(env, monkeypatch, n=2):
     async def says_nothing(path):

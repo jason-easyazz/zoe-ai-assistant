@@ -443,6 +443,30 @@ def sustained_windows(pcm: bytes) -> int:
     return n
 
 
+CLICK_PEAK_SHARE = 0.5            # a click puts >= this share of the chunk's loud-window energy into ONE 10 ms slice; a voiced word spreads it
+
+
+def is_click_only(pcm: bytes) -> bool:
+    """True only for a lone sharp transient: fewer than ``QUIET_MIN_WINDOWS`` loud windows AND (when there is any loud window) the
+    energy is peak-dominated - one 10 ms slice holds >= ``CLICK_PEAK_SHARE`` of it. A short voiced word ("no", ~200 ms) has a
+    normal envelope, so it fails the second test and still reaches Moonshine. Pure; call it off the event loop."""
+    a = _samples(pcm)
+    win = SAMPLE_RATE // 10
+    sl = SAMPLE_RATE // 100
+    loud = 0
+    total = 0.0
+    top = 0.0
+    for i in range(0, len(a) - win + 1, win):
+        part = a[i:i + win]
+        if (sum(v * v for v in part) / win) ** 0.5 >= QUIET_SKIP_RMS:
+            loud += 1
+            total += sum(v * v for v in part)
+            top = max(top, max(sum(v * v for v in part[j:j + sl]) for j in range(0, win, sl)))
+    if loud >= QUIET_MIN_WINDOWS:
+        return False
+    return loud == 0 or total <= 0 or top / total >= CLICK_PEAK_SHARE
+
+
 def _measure_reader(w: Any) -> dict:
     rate, ch, width, n = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()
     pk, sumsq, count, clipped = 0, 0, 0, 0
@@ -903,7 +927,7 @@ async def transcribe_wave(w: Any, *, gate=None, pause_s: float = 0.4, stats: Opt
                 if spans is not None:
                     spans.append((start_ms, pos * 1000 // SAMPLE_RATE, ""))
                 continue
-            if quiet_skip_enabled() and await asyncio.to_thread(sustained_windows, piece) < QUIET_MIN_WINDOWS:
+            if quiet_skip_enabled() and await asyncio.to_thread(is_click_only, piece):
                 st["quiet_skipped"] = st.get("quiet_skipped", 0) + 1    # a lone click above the peak floor: Moonshine would say nothing
                 if spans is not None:
                     spans.append((start_ms, pos * 1000 // SAMPLE_RATE, ""))
@@ -1122,6 +1146,11 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
             if not cur or cur[0]["status"] != "transcribing":      # deleted while we worked: write nothing
                 return False
             keep = bool(cur[0]["keep_audio"])
+            if seen_chunks.get("quiet_skipped"):
+                # a chunk was skipped before STT: other chunks' text must not make the recording look complete and delete the only
+                # copy of audio nobody transcribed. Held until its retention expiry (audio_expires_at), like any kept recording.
+                keep = True
+                await db.execute("UPDATE omi_recordings SET keep_audio = 1 WHERE id = ?", (rid,))
             if not text.strip():
                 # An EMPTY transcript is not a successful transcription: nothing was understood, so the audio is the only copy of
                 # whatever the pendant heard. Keep the WAV (its retention expiry still bounds it) and say so loudly.

@@ -4600,6 +4600,26 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_YIELD_COOLOFF_S": {
+        "defaults": [
+          "15"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/live_voice_gate.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_YIELD_TO_VOICE": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/live_voice_gate.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMNIGENT_AGENT_ID": {
         "defaults": [
           "'057995d1517418e6839f51d340785dd6'"
@@ -7484,6 +7504,16 @@
           "services/zoe-data/voice_greeting.py"
         ],
         "typed_env": false
+      },
+      "ZOE_VOICE_HARNESS_LOCK": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/live_voice_gate.py"
+        ],
+        "typed_env": true
       },
       "ZOE_VOICE_IDENT": {
         "defaults": [
