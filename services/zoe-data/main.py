@@ -1256,6 +1256,12 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_change_notices.run_loop(), name="change_notices")
     except Exception as _cn_exc:
         logger.warning("change notices loop not started (non-fatal): %s", _cn_exc)
+    try:  # the owner's once-a-day Telegram digest of pending day-review candidates (flag-dark ZOE_OMI_REVIEW_TELEGRAM)
+        import omi_review_digest as _omi_rd
+        if _omi_rd.enabled():
+            asyncio.create_task(_omi_rd.run_loop(), name="omi_review_digest")
+    except Exception as _omi_rd_exc:
+        logger.warning("omi review digest loop not started (non-fatal): %s", _omi_rd_exc)
     try:  # the pendant day review's DAYTIME fallback lane (flag-dark ZOE_OMI_DAY_REVIEW; the night window is the primary lane)
         import omi_day_review as _omi_dr
         if _omi_dr.enabled() and _omi_dr.lane() != "night":

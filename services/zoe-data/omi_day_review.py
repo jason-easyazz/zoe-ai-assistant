@@ -19,7 +19,8 @@ THE PASS (model points, code decides)
   2. PACK (code). Broadcast stretches (TV, radio, a video: broadcast cue words, or a long run with almost no first person) are
      dropped; lines with no cue (a date, a time, a list word, a commitment, the first person, a name) and no cued neighbour are
      dropped as routine. What is left is chunked to the slot (``night_mind``'s budget: 2,400 tokens at 8k) and at most
-     ``ZOE_OMI_DAY_REVIEW_MAX_CALLS`` (8) chunks are sent, the best-scoring ones; the rest are counted as skipped.
+     ``ZOE_OMI_DAY_REVIEW_MAX_CALLS`` (default ceiling 16: a full day fits whole) chunks are sent, the best-scoring ones; any beyond
+     that are counted as skipped (``chunks_skipped``) AND logged at WARNING - never dropped silently.
   3. ASK (model, one call per chunk). The lines are fenced as DATA. The model returns ``{"items": [...]}``: kind, cited line ids,
      an exact quote, ``heard_from`` (conversation | media | unsure), ``about`` (me | other | both) and the kind's fields.
   4. VERIFY (code, never repaired, every drop counted by reason): cited ids must be in the chunk and the quote an exact span of a
@@ -106,7 +107,10 @@ STATUSES = ("pending", "approving", "approved", "dismissed")
 PROVENANCE = "pendant"
 WRITER = "omi_review"
 
-DEFAULT_MAX_CALLS = 8
+#: the ceiling on chunks sent per member-day when ``ZOE_OMI_DAY_REVIEW_MAX_CALLS`` is unset. It used to be 8, which silently dropped
+#: the rest of a 12-hour day (11-13 chunks measured 2026-10-25); a normal full day now fits whole, and a day that does not FIT THE
+#: NIGHT's time is not trimmed - it is not started (``no_time``) and the next night retries it, so nothing is dropped for time.
+DEFAULT_MAX_CALLS = 16
 MAX_ITEMS_PER_CHUNK = 6
 ITEM_MAX_TOKENS = 900
 LINE_CHARS = 400
@@ -1570,6 +1574,9 @@ async def _store(user_id: str, day: str, cfg: Config, recs: list, merged: list, 
 def _log(res: dict, counts: dict) -> None:
     res["counts"] = {k: v for k, v in counts.items() if isinstance(v, int)}        # counts only, never text
     dropped = ",".join(f"{k[5:]}:{v}" for k, v in sorted(counts.items()) if k.startswith("drop_") and v)
+    if counts.get("chunks_skipped", 0):
+        logger.warning("OMI_DAY_REVIEW user=%s day=%s chunks_skipped=%s of %s (over the %s-call ceiling; ZOE_OMI_DAY_REVIEW_MAX_CALLS raises it)",
+                       res.get("user_id"), res.get("day"), counts.get("chunks_skipped", 0), counts.get("chunks_total", 0), max_calls())
     logger.info("OMI_DAY_REVIEW user=%s day=%s status=%s calls=%s invalid=%s proposed=%s kept=%s stored=%s media_lines=%s routine_lines=%s "
                 "chunks=%s skipped=%s dropped=%s", res.get("user_id"), res.get("day"), res.get("status"), res.get("calls"),
                 res.get("calls_invalid"), res.get("proposed"), res.get("kept"), res.get("stored"), counts.get("lines_media", 0),
