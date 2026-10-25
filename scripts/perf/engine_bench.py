@@ -38,7 +38,7 @@ BENCH_PORT = 11435
 MODEL = HOME / "models/gemma4-e4b-qat/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
 MTP = HOME / "models/gemma4-e4b-qat/mtp-gemma-4-E4B-it.gguf"
 GPU_FREQ = Path("/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu/cur_freq")
-INSTR_TS = "labs/flue-zoe-brain-2x/src/agents/zoe.ts"
+INSTR_TS = "labs/flue-zoe-brain-2x/src/doctrines.ts"  # doctrines + composeInstructions (moved out of agents/zoe.ts by the harness overlay seam)
 SOUL_TS = "labs/flue-zoe-brain-2x/src/soul.ts"
 GROUPS_TS = "labs/flue-zoe-brain-2x/src/tools/tool-groups.ts"
 

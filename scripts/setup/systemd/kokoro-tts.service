@@ -1,5 +1,5 @@
-# Kokoro neural TTS sidecar, port 10201. Optional -- zoe-data falls back to
-# edge/espeak TTS if this is not running (see ZOE_TTS_MODE in .env.example).
+# Kokoro neural TTS sidecar, port 10201 -- Zoe's ONLY voice. By default
+# (ZOE_TTS_MODE=kokoro) zoe-data has no fallback: if this is down, Zoe is silent.
 [Unit]
 Description=Kokoro TTS sidecar (local neural voice for Zoe, port 10201)
 Documentation=https://github.com/hexgrad/kokoro

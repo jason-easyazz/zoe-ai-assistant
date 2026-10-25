@@ -2651,6 +2651,18 @@ def main(argv: list[str] | None = None) -> int:
                          or {r["id"] for r in results} != set(expected_ids)) \
         else ("regression" if (args.compare_baseline and cmp["red"])
               else ("partial" if partial else "ok"))
+    record_why = bench_baseline.record_problem(revision, status=status, partial=partial,
+                                               verdicts=verdict_map(results), cells=SCENARIO_IDS)
+    errored = sorted(r["id"] for r in results if r["verdict"] == "ERROR")
+    if not record_why and errored:
+        # an ERROR is the instrument failing (judge unavailable, recall packet unread), not a result: recorded as the
+        # bar it would leave that scenario with no regression protection (only a baseline PASS can regress)
+        record_why = (f"{len(errored)} scenario(s) ERRORED ({', '.join(errored)}): an errored scenario is the "
+                      "instrument, not a result")
+    if args.record_baseline and record_why and status != "error":
+        # asked to record a bar and REFUSED: that is a failed run (exit 2, status error), never a quiet success that leaves the
+        # baseline missing or stale for record_bench_baselines.sh to report as done
+        status = "error"
     payload = {"harness_version": HARNESS_VERSION, "status": status, "run_error": run_error,
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -2664,20 +2676,12 @@ def main(argv: list[str] | None = None) -> int:
                                 "commit": ((baseline or {}).get("revision") or {}).get("commit")}}
     write_json(args.results, payload)
     append_trend(args.trend, payload)
-    record_why = bench_baseline.record_problem(revision, status=status, partial=partial,
-                                               verdicts=verdict_map(results), cells=SCENARIO_IDS)
-    errored = sorted(r["id"] for r in results if r["verdict"] == "ERROR")
-    if not record_why and errored:
-        # an ERROR is the instrument failing (judge unavailable, recall packet unread), not a result: recorded as the
-        # bar it would leave that scenario with no regression protection (only a baseline PASS can regress)
-        record_why = (f"{len(errored)} scenario(s) ERRORED ({', '.join(errored)}): an errored scenario is the "
-                      "instrument, not a result")
     if args.record_baseline and not record_why:  # a partial / errored / dirty / incomplete run NEVER records
         write_json(args.baseline, make_baseline(results, revision, args.samples))
         log(f"baseline recorded: {args.baseline} (commit {(revision or {}).get('commit', '?')[:10]}, "
             f"{len(results)} scenarios)")
     elif args.record_baseline:
-        log(f"baseline NOT recorded: {record_why}")
+        log(f"baseline NOT recorded: {record_why}")  # status is already "error" -> exit 2
 
     for r in results:
         exp = f"  (expected {r['expected']}: a target)" if r.get("expected") else ""
