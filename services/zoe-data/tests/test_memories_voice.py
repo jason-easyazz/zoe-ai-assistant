@@ -871,3 +871,43 @@ def test_the_reply_only_says_it_is_on_the_screen_if_a_card_was_delivered(seeded,
     reply = say(question, ME)
     assert sent and reply, "a card was attempted"
     assert "screen" not in reply.lower() and "tap one" not in reply.lower(), reply
+
+
+# -- Codex round 5 on #2144 -----------------------------------------------------------------------------------------------------
+
+def test_single_letter_terms_distinguish_facts(env):
+    assert mv._tokens("I take vitamin C") != mv._tokens("I take vitamin D")
+    put(env, "I take vitamin D daily")
+    assert say("forget that I take vitamin C", ME) == mv.NOT_FOUND_REPLY, "forgetting is permanent: C is not D"
+    assert any("vitamin D" in t for t in approved(env))
+
+
+def test_find_person_requires_the_full_name_when_a_surname_is_spoken():
+    import asyncio
+    from types import SimpleNamespace as NS
+    wall = NS(people=[NS(name="Sam Patel")])
+
+    def find(n):
+        return asyncio.run(mv._find_person(ME, wall, n))
+
+    assert find("Sam Wilson") is None
+    assert find("Sam Patel") is wall.people[0]
+    assert find("Sam") is wall.people[0], "a bare first name keeps the unique-first-name fallback"
+
+
+def test_phone_actions_follow_the_role_capabilities(seeded, monkeypatch):
+    import routers.memories as rm
+    from fastapi import HTTPException
+
+    denied = set()
+
+    async def fake(db, user, *, feature, action, surface="api"):
+        if action in denied:
+            raise HTTPException(status_code=403, detail="no")
+
+    monkeypatch.setattr(rm, "require_feature_access", fake)
+    c = _phone({"user_id": ME, "role": "user"})
+    denied.add("review")
+    assert c.get("/api/memories/mine/actions", headers=H).json() == {"forget": False, "correct": False}
+    denied.add("read")
+    assert c.get("/api/memories/mine/actions", headers=H).status_code == 403

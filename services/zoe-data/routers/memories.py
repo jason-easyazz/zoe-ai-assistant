@@ -350,14 +350,20 @@ def _memories_voice_on() -> None:
 
 
 @router.get("/mine/actions")
-async def my_memory_actions(request: Request, user: dict = Depends(get_current_user)):
+async def my_memory_actions(request: Request, user: dict = Depends(get_current_user), db=Depends(get_db)):
     """What the phone / desktop "What Zoe knows about you" section may offer (flag-dark ``ZOE_MEMORIES_VOICE``: off = 404, so the
     section stays hidden). Same identity wall as ``GET /mine``."""
     _memories_voice_on()
     _member_or_refuse(request, user)
+    await require_feature_access(db, user, feature="memories", action="read")   # same capability as GET /mine: no read = no section
+    try:
+        await require_feature_access(db, user, feature="memories", action="review")
+        can_review = True
+    except HTTPException:
+        can_review = False   # forget + correct are review actions; never advertise what the write routes would 403
     import correction_apply
 
-    return JSONResponse(content={"forget": True, "correct": bool(correction_apply.enabled())},
+    return JSONResponse(content={"forget": can_review, "correct": can_review and bool(correction_apply.enabled())},
                         headers={"Cache-Control": "no-store"})
 
 

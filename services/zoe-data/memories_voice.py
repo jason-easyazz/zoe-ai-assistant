@@ -148,7 +148,7 @@ _TOKEN_STOP = frozenset({
 
 def _tokens(text: str) -> set:
     out = set()
-    for w in re.findall(r"\d+|[a-z][a-z'’]+", str(text or "").lower()):   # numbers count: "12 Main Street" is not "14 Main Street"
+    for w in re.findall(r"\d+|[a-z][a-z'’]*", str(text or "").lower()):   # numbers count: "12 Main Street" is not "14 Main Street"
         w = w.replace("’", "'")
         if w in _TOKEN_STOP:
             continue
@@ -385,8 +385,12 @@ def spoken_person(e: Any, *, on_screen: bool = True) -> str:
 
 
 async def _find_person(member: str, wall: Wall, name: str) -> Optional[Any]:
-    first = name.split()[0].lower()
-    hits = [e for e in wall.people if e.name and (e.name.lower() == name.lower() or e.name.split()[0].lower() == first)]
+    parts = name.split()
+    first = parts[0].lower()
+    exact = [e for e in wall.people if e.name and e.name.lower() == name.lower()]
+    if exact or len(parts) > 1:   # a spoken surname must match in full: "Sam Wilson" is not "Sam Patel"
+        return exact[0] if len(exact) == 1 else None
+    hits = [e for e in wall.people if e.name and e.name.split()[0].lower() == first]
     return hits[0] if len(hits) == 1 else None
 
 
