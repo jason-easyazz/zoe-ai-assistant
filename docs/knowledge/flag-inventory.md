@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-25T00:00:00Z
+timestamp: 2026-10-26T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-25T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-25. The table body is deterministic (sorted, no
+Last generated: 2026-10-26. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-764 flags; 714 not documented in `.env.example`.
+771 flags; 721 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -456,6 +456,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_OMI_LEARN_VOICES` | `False` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_MIN_MEM_MB` | `dynamic` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_OWNER_USER_ID` | `''` | yes | NO | `services/zoe-data/omi_devices.py`<br>`services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_QUIET_SKIP` | `True` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_REVIEW_TELEGRAM` | `-` | yes | NO | `services/zoe-data/omi_review_digest.py` |
+| `ZOE_OMI_REVIEW_TELEGRAM_HOUR` | `8` | yes | NO | `services/zoe-data/omi_review_digest.py` |
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_SPEAKER_TAG` | `'off'` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_SUGGEST_MARGIN` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
@@ -467,6 +470,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_OMI_VOICEPRINT_IDLE_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_VOICE_CLUSTER_MIN` | `dynamic` | yes | NO | `services/zoe-data/omi_voices.py` |
+| `ZOE_OMI_YIELD_COOLOFF_S` | `15` | yes | NO | `services/zoe-data/live_voice_gate.py` |
+| `ZOE_OMI_YIELD_TO_VOICE` | `True` | yes | NO | `services/zoe-data/live_voice_gate.py` |
 | `ZOE_OMNIGENT_AGENT_ID` | `'057995d1517418e6839f51d340785dd6'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_CLOSE_POLL_S` | `'60'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_CLOSE_TIMEOUT_S` | `'2400'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
@@ -749,8 +754,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_GATE_PATHS` | `''` | no | NO | `scripts/maintenance/voice_gate_check.py` |
 | `ZOE_VOICE_GREETING_ENABLED` | `'0'` | no | NO | `services/zoe-data/voice_greeting.py` |
 | `ZOE_VOICE_GREETING_STATE_PATH` | `dynamic` | no | NO | `services/zoe-data/voice_greeting.py` |
+| `ZOE_VOICE_HARNESS_LOCK` | `dynamic` | yes | NO | `services/zoe-data/live_voice_gate.py` |
 | `ZOE_VOICE_IDENT` | `''` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_LOG` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_VOICE_MAIN_CHECKOUT` | `-` | no | NO | `scripts/maintenance/voice_gate_report.py`<br>`scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_MEMORY_PACKET_LAZY` | `'true'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_PROBE_MIN_MEM_MB` | `-` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_SAMPLES` | `'20'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
