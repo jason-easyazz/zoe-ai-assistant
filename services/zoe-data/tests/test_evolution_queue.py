@@ -707,3 +707,85 @@ def test_the_legacy_miss_rate_evaluator_leaves_struggle_proposals_alone(db, monk
     assert got["evaluated"] == 1
     assert status_of(db, ids["struggle"])["status"] == "applied"
     assert status_of(db, ids["evolution_notice:intent_miss_cluster"])["status"] == "kept"
+
+
+def _tx_client(tmp_path, monkeypatch):
+    system = pytest.importorskip("routers.system")
+    import auth
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    path = str(tmp_path / "zoe.db")
+    _run(sa.create_engine(f"sqlite:///{path}"), "upgrade")
+    store = _TxSqlite(path)
+
+    @contextlib.asynccontextmanager
+    async def fake_ctx():
+        yield store
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", fake_ctx)
+    app = FastAPI()
+    app.include_router(system.router)
+    app.include_router(system._agent_card_router)
+    admin = {"user_id": "admin-1", "username": "admin", "role": "admin"}
+    app.dependency_overrides[auth.require_admin] = lambda: admin
+    app.dependency_overrides[auth.get_current_user] = lambda: admin
+    return system, store, TestClient(app, raise_server_exceptions=False)
+
+
+def test_approve_and_its_board_link_are_one_transaction(tmp_path, monkeypatch):
+    """Approving a review-only proposal records the decision AND the board link in one transaction (cross-review of #2165): a failed
+    link write leaves no approval, a failed decision write leaves no link. Negative control: take the ``_eq.atomic`` block off
+    that branch (decide, then the link UPDATE, outside it) -> the approval survives the failed link -> red."""
+    system, store, client = _tx_client(tmp_path, monkeypatch)
+
+    async def _sync(**kw):
+        return "issue-1"                       # the board issue the approval would link
+
+    async def _noop(*a, **kw):
+        return None
+
+    monkeypatch.setitem(sys.modules, "multica_client", types.SimpleNamespace(
+        sync_evolution_proposal_to_multica=_sync, update_multica_issue_on_proposal_status_change=_noop))
+
+    pid = new(store, change_class="code", component="chat", source="evolution_notice:user_issue_report")
+
+    def state():
+        return store.rows("SELECT decision, multica_issue_id FROM evolution_proposals WHERE id = ?", (pid,))[0]
+
+    def approve():
+        return client.post(f"/api/agent/evolution/proposals/{pid}/action", json={"action": "approve"})
+
+    store.fail_on = "SET multica_issue_id"
+    assert approve().status_code == 500
+    store.fail_on = None
+    assert state()["decision"] != "approved"
+
+    store.fail_on = "INSERT INTO evolution_proposal_history"
+    assert approve().status_code == 500
+    store.fail_on = None
+    assert state()["multica_issue_id"] is None and state()["decision"] != "approved"
+
+
+def test_board_done_is_one_transaction(tmp_path, monkeypatch):
+    """A board ``done`` event moves applied -> kept together: if the second move fails the first is taken back (cross-review of
+    #2165). Negative control: remove the ``eq.atomic`` block in ``_board_status_to_queue`` -> the proposal is left ``applied`` -> red."""
+    system, store, _client = _tx_client(tmp_path, monkeypatch)
+    pid = new(store, change_class="code", component="chat", source="evolution_notice:user_issue_report")
+    store.conn.execute("UPDATE evolution_proposals SET multica_issue_id = 'iss-9' WHERE id = ?", (pid,))
+
+    live_eq = sys.modules["evolution_queue"]     # the module the router imports (another test may have swapped it)
+    orig = live_eq.transition
+    calls = []
+
+    async def flaky(db, p, to, **kw):
+        calls.append(to)
+        if to == "kept":
+            raise RuntimeError("second move failed")
+        return await orig(db, p, to, **kw)
+
+    monkeypatch.setattr(live_eq, "transition", flaky)
+    with pytest.raises(RuntimeError):
+        run(system._board_status_to_queue(store, "iss-9", "done"))
+    assert calls == ["applied", "kept"]
+    assert status_of(store, pid)["status"] == "proposed"

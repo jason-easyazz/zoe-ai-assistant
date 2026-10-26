@@ -1836,12 +1836,14 @@ async def _board_status_to_queue(db, multica_issue_id: str, board_status: str) -
                     await eq.decide(db, pid, "approved", actor="multica:board")
                     moved += 1
             elif board_status == "done":
-                if st in eq.OPEN:
-                    await eq.transition(db, pid, "applied", actor="multica:board", frm=st, note="board: done")
-                    st = "applied"
-                if st in ("applied", "canary"):
-                    await eq.transition(db, pid, "kept", actor="multica:board", frm=st, note="board: done")
-                    moved += 1
+                # ONE transaction: applied -> kept lands together or not at all (a refused second move takes the first back)
+                async with eq.atomic(db):
+                    if st in eq.OPEN:
+                        await eq.transition(db, pid, "applied", actor="multica:board", frm=st, note="board: done")
+                        st = "applied"
+                    if st in ("applied", "canary"):
+                        await eq.transition(db, pid, "kept", actor="multica:board", frm=st, note="board: done")
+                        moved += 1
             elif board_status == "cancelled":
                 to = "rejected" if st in eq.OPEN else ("reverted" if st in eq.LANDED else None)
                 if to:
@@ -2161,14 +2163,17 @@ async def evolution_proposal_action(
                         detail="Proposal's autonomy contract changed during approval — re-read and retry",
                     )
             else:
+                # ONE transaction: the approval and its board link land together or not at all. The detail column goes first,
+                # then the queue write (decide), the lock order the rest of the queue takes; a Conflict rolls the link back.
                 try:
-                    await _eq.decide(db, proposal_id, "approved", actor=_actor)
+                    async with _eq.atomic(db):
+                        await db.execute(
+                            "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                            multica_issue_id, proposal_id,
+                        )
+                        await _eq.decide(db, proposal_id, "approved", actor=_actor)
                 except _eq.Conflict as exc:
                     raise HTTPException(status_code=409, detail=str(exc)) from exc
-                await db.execute(
-                    "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                    multica_issue_id, proposal_id,
-                )
             # Hermes PROPOSAL pre-review gate — REVIEW-ONLY proposals only.
             # An auto-executing proposal is skipped here: it is already authorized
             # (admin + execution gate) and the CODE it produces is reviewed

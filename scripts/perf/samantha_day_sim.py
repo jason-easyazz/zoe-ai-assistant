@@ -1270,6 +1270,13 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
 # main
 # ─────────────────────────────────────────────────────────────────────────────
 
+def point_log_at_scratch(stack) -> Path:
+    """Read raise / seam-hop evidence from the scratch instance's app log (``harness_env`` sets ``ZOE_LOG_DIR`` to
+    ``<stack root>/logs``). ``uma.APP_LOG`` defaults to the live service's log, which the scratch turns never touch."""
+    uma.APP_LOG = Path(stack.state["root"]) / "logs" / "zoe-data.app.log"
+    return uma.APP_LOG
+
+
 def _refuse(path: Path, reason: str, revision: dict | None, mode: str) -> int:
     print(f"REFUSED: {reason}", file=sys.stderr)
     sb.write_json(path, {"status": "refused", "reason": reason, "mode": mode, "revision": revision,
@@ -1371,6 +1378,7 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
     stack, refusal = sb.scratch_stack_for(service_dir, "samantha_day_sim", ctx, log)
     if refusal:
         return _refuse(args.results, refusal, revision, mode)
+    point_log_at_scratch(stack)         # the turns go to the scratch zoe-data, so the evidence is ITS app log, not the household's
     live = DayLive(stack.token, admin, stack.dsn, args.keep_replies)
     baseline = None
     if args.compare_baseline:
