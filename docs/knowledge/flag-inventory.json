@@ -378,9 +378,6 @@
         "in_env_example": false,
         "readers": [
           "scripts/perf/recall_evidence_probe.py",
-          "scripts/perf/samantha_bar.py",
-          "scripts/perf/samantha_day_sim.py",
-          "scripts/perf/samantha_person.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
@@ -6432,6 +6429,18 @@
         ],
         "typed_env": true
       },
+      "ZOE_SELF_URL": {
+        "defaults": [
+          "'http://127.0.0.1:8000'",
+          "'http://localhost:8000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py",
+          "services/zoe-data/mcp_server.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_SESSION_LOCK_TIMEOUT_S": {
         "defaults": [
           "'5'"
@@ -6919,6 +6928,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_STT_DISABLED": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
         ],
         "typed_env": true
       },

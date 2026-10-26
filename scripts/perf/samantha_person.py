@@ -2550,6 +2550,14 @@ def run_checkout(seeds: tuple[str, ...], cap: "int | None", out_path: Path) -> i
 
 
 def main(argv: list[str] | None = None) -> int:
+    ctx: dict = {}
+    try:
+        return _main(argv, ctx)
+    finally:
+        sb.close_scratch(ctx)           # P-2: the run scratch stack goes, whatever happened
+
+
+def _main(argv: list[str] | None, ctx: dict) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print the plan and the bars; no network")
@@ -2648,11 +2656,11 @@ def main(argv: list[str] | None = None) -> int:
 
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = sb.resolve_service_dir(args.service_dir)
-    revision = sb.service_revision(service_dir)
+    revision = sb.service_revision(sb.code_checkout_dir())  # the checkout actually served
     if not proof["ok"] or proof["pairing_problems"]:
         return _refuse(args.results, "the instrument proof failed - fix the controls first: "
                        + "; ".join((proof["problems"] + proof["pairing_problems"])[:3]), revision)
-    sb.load_source_fallback_markers(service_dir)
+    sb.load_source_fallback_markers(sb.code_checkout_dir())
     lock_fd = sb._acquire_lock()  # noqa: F841 - held for the process lifetime
     try:
         cur = os.nice(0)
@@ -2660,9 +2668,11 @@ def main(argv: list[str] | None = None) -> int:
             os.nice(5 - cur)
     except OSError:
         pass
-    live = PersonLive(sb.env_file_value(service_dir, "ZOE_INTERNAL_TOKEN"), "",
-                      sb.env_file_value(service_dir, "POSTGRES_URL"), args.keep_replies)
-    live.admin = os.environ.get("ZOE_BAR_ADMIN_SESSION", "").strip()
+    stack, refusal = sb.scratch_stack_for(service_dir, "samantha_person", ctx, log)     # P-2: never the live database
+    if refusal:
+        return _refuse(args.results, refusal, revision)
+    live = PersonLive(stack.token, "", stack.dsn, args.keep_replies)
+    live.admin = ""                     # a live admin session means nothing to the scratch instance
     baseline = None
     if args.compare_baseline:
         baseline, problem = bench_baseline.load(args.baseline, CELL_VERDICTS)
@@ -2736,7 +2746,7 @@ def main(argv: list[str] | None = None) -> int:
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "n_cap": args.n_cap, "judge_samples": args.samples,
-               "revision": revision, "flags": flags, "prereg_sha256": PREREG_SHA256,
+               "revision": revision, "flags": flags, "prereg_sha256": PREREG_SHA256, "scratch": stack.public(),
                "judge_prompt_sha256": JUDGE_PROMPT_SHA256, "bank_sha256": bank.BANK_SHA256,
                "p12_sessions": args.p12_sessions,
                "instrument_proof": {"ok": proof["ok"], "arms": {a: d.get("still_green") for a, d in proof["arms"].items()}},

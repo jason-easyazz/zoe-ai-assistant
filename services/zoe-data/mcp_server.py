@@ -36,7 +36,12 @@ if __name__ == "__main__":
 _STDIO_WORKER = __name__ == "__main__"
 
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
-_BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
+# P-2: a harness instance (scripts/perf/harness_scratch.py) sets ZOE_SELF_URL so it broadcasts to ITSELF, never to the live panels
+def _broadcast_url() -> str:
+    """Read per call (typed_env, stripped), so a blank ZOE_SELF_URL means the default and a late-set one is honoured."""
+    return env_str("ZOE_SELF_URL", "http://127.0.0.1:8000").rstrip("/") + "/api/internal/broadcast"
+
+
 _INTERNAL_TOKEN = env_str("ZOE_INTERNAL_TOKEN")
 # A tools/call that names no user is REFUSED (A3, 2026-10-19: strict is the default). The one caller that relied on the
 # family-admin fallback - intent_router's mcporter subprocess, which sent no user and so wrote as family-admin - is gone;
@@ -62,7 +67,7 @@ async def _notify_ui(channel: str, event_type: str, data: dict):
         if _INTERNAL_TOKEN:
             headers["X-Internal-Token"] = _INTERNAL_TOKEN
         async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(_BROADCAST_URL, json={
+            await client.post(_broadcast_url(), json={
                 "channel": channel,
                 "event_type": event_type,
                 "data": data,
@@ -3310,17 +3315,13 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                 user_id=proposal_user_id,
             )
             row_payload = intake.to_legacy_row()
-            await db.execute(
-                """INSERT INTO evolution_proposals
-                   (id, title, description, evidence, target_patterns, type, status, proposed_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)""",
-                row_payload["id"],
-                row_payload["title"],
-                row_payload["description"],
-                row_payload["evidence"],
-                row_payload["target_patterns"],
-                row_payload["type"],
-                _time.time(),
+            import evolution_queue  # type: ignore[import]  # the single proposal queue: its only writer
+            await evolution_queue.propose(
+                db, source="mcp:create_evolution_proposal", change_class="code",
+                component=evolution_queue.component_for_type(row_payload["type"]),
+                proposal_id=row_payload["id"], legacy_type=row_payload["type"], title=row_payload["title"],
+                description=row_payload["description"], legacy_evidence=row_payload["evidence"],
+                target_patterns=row_payload["target_patterns"], now=_time.time(),
             )
             multica_payload = dict(intake.multica_payload)
             multica_id = await sync_evolution_proposal_to_multica(**multica_payload)

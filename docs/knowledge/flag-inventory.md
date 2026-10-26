@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-774 flags; 724 not documented in `.env.example`.
+776 flags; 726 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -54,7 +54,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BACKUP_DIR` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py`<br>`scripts/maintenance/zoe_restore_drill.py` |
 | `ZOE_BARGE_MIN_MS` | `'192'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_BARGE_SPEECH_THRESHOLD` | `'0.30'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
-| `ZOE_BAR_ADMIN_SESSION` | `''` | no | NO | `scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/user_model_ab.py` |
+| `ZOE_BAR_ADMIN_SESSION` | `''` | no | NO | `scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_BAR_BRAIN_URL` | `'http://127.0.0.1:11434'` | no | NO | `scripts/perf/samantha_bar.py` |
 | `ZOE_BASE_URL` | `'http://localhost:8000'`, `'http://zoe.local'`, `'https://192.168.1.218'` | no | NO | `services/zoe-auth/oidc/startup.py`<br>`services/zoe-data/routers/panel_provision.py`<br>`services/zoe-data/routers/system.py` |
 | `ZOE_BENCHMARK_OUTPUT` | `dynamic` | no | NO | `scripts/utilities/gemma4_trial_benchmark.py` |
@@ -648,6 +648,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SEARCH_HOTNESS_WEIGHT` | `'0.05'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_SEARCH_PROVIDER` | `'auto'` | yes | yes | `services/zoe-data/web_search_provider.py` |
 | `ZOE_SELF_MODEL` | `'shadow'` | yes | NO | `services/zoe-data/self_model.py` |
+| `ZOE_SELF_URL` | `'http://127.0.0.1:8000'`, `'http://localhost:8000'` | yes | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py` |
 | `ZOE_SESSION_LOCK_TIMEOUT_S` | `'5'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_SETUP_QR_HANDLE_TTL_S` | `'120'` | no | NO | `services/zoe-data/setup_qr.py` |
 | `ZOE_SILERO_VAD_MODEL` | `''` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/voice_vad.py` |
@@ -696,6 +697,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STRUGGLE_RETENTION_DAYS` | `90` | yes | NO | `services/zoe-data/struggle_detector.py` |
 | `ZOE_STRUGGLE_WINDOW_S` | `dynamic` | yes | NO | `services/zoe-data/struggle_detector.py` |
 | `ZOE_STT_BACKEND` | `'moonshine'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_STT_DISABLED` | `False` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_STT_PREWARM_ON_WAKE` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_SNAP` | `'shadow'` | no | NO | `services/zoe-data/stt_snap.py` |
 | `ZOE_STT_STREAM_FINISH_TIMEOUT_MS` | `2500` | yes | NO | `services/zoe-data/voice_stt_stream.py` |
