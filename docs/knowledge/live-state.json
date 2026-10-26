@@ -1321,6 +1321,13 @@
    "kind": "unknown",
    "readers": 1
   },
+  "ZOE_FLUE_FASTPATH_CONTEXT": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
   "ZOE_FLUE_STREAM_ENABLED": {
    "defaults": [
     "unset"

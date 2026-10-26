@@ -496,6 +496,10 @@ _ACK_RE = re.compile(
     r"|^(?:no\s+(?:problem|worries)|all\s+good)\s*[!.,]*$",
     re.IGNORECASE,
 )
+# Spoken replies to a bare thanks / acknowledgement: short, casual, varied, never a self-introduction.
+THANKS_REPLIES = ("You're welcome!", "Anytime.", "Happy to help.", "No worries.", "No dramas.", "Not a problem.", "Any time!",
+                  "You got it.", "Pleasure.")
+ACK_REPLIES = ("Got it.", "Sure thing.", "Okay.", "No problem.", "No worries.", "Righto.", "All good.")
 _STATUS_CHECK_RE = re.compile(
     r"^(?:are\s+you\s+|you\s+)?(?:there|listening|awake|around|still\s+(?:there|listening|awake|with\s+me))\s*\??$"
     r"|^(?:can\s+you\s+)?hear\s+me(?:\s+(?:ok|okay|now))?\s*\??$"
@@ -3633,8 +3637,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "acknowledgement":
         import random
         if intent.slots.get("kind") == "thanks":
-            return random.choice(["You're welcome!", "Anytime.", "Happy to help.", "No worries."])
-        return random.choice(["Got it.", "Sure thing.", "Okay.", "No problem."])
+            return random.choice(THANKS_REPLIES)
+        return random.choice(ACK_REPLIES)
 
     if intent.name == "status_check":
         import random
