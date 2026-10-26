@@ -4924,7 +4924,7 @@
   },
   "ZOE_TRAINING_FEEDBACK_LOG": {
    "defaults": [
-    "unset"
+    "off"
    ],
    "kind": "bool",
    "readers": 1

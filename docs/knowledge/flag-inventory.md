@@ -725,7 +725,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_TOUCH_PROBE_DEVICE_TOKEN` | `''` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |
 | `ZOE_TOUCH_PROBE_PANEL_ID` | `'zoe-touch-pi'` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |
 | `ZOE_TRAFFIC_CLASS` | `-` | no | NO | `services/zoe-data/traffic_class.py` |
-| `ZOE_TRAINING_FEEDBACK_LOG` | `-` | no | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_TRAINING_FEEDBACK_LOG` | `False` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_TRIVIA_HEDGE` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_TRUSTED_PROXY_NETS` | `dynamic` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_TTS_KEEP_TAIL_MS` | `130` | no | NO | `scripts/setup/zoe_voice_daemon.py` |

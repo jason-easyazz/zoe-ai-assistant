@@ -42,7 +42,7 @@ import httpx
 
 from agent_safety import CommandRejected, check_bash_command, guard_browser_page, is_public_url
 import persona_layer
-from typed_env import env_int, env_str
+from typed_env import env_bool, env_int, env_str
 
 logger = logging.getLogger(__name__)
 
@@ -3423,7 +3423,7 @@ async def _log_feedback_triple(
     OFF by default (``ZOE_TRAINING_FEEDBACK_LOG=1`` opts in). The file holds the member's message AND Zoe's reply verbatim, outside
     the forget cascade and with no retention; the LoRA training it fed is retired, so nothing reads it any more (deep dive A6).
     """
-    if (os.environ.get("ZOE_TRAINING_FEEDBACK_LOG") or "").strip().lower() not in ("1", "true", "yes", "on"):
+    if not env_bool("ZOE_TRAINING_FEEDBACK_LOG", default=False):
         return
     try:
         import datetime as _dt
