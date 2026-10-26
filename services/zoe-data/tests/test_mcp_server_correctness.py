@@ -720,9 +720,22 @@ async def test_dashboard_save_layout_serializes_with_add_widget_on_layout_lock()
 
     assert save_result == {"status": "ok"}
     assert add_result == {"status": "ok", "added": ["events"]}
-    assert {widget["id"] for widget in db.layout} == {"tasks", "events"}
+    assert {(widget.get("type") or widget.get("id")) for widget in db.layout} == {"tasks", "events"}
     assert db.max_active_transactions == 1
     assert sum("FOR UPDATE" in sql for sql, _params in db.calls) >= 2
+
+
+@pytest.mark.asyncio
+async def test_dashboard_add_widget_does_not_duplicate_a_card_saved_as_an_instance():
+    db = _DashboardLayoutDb(layout=[{"uid": "w1", "type": "weather", "x": 0, "y": 0, "w": 4, "h": 3}])
+
+    result = await mcp_server._execute_tool(
+        db=db, name="dashboard_add_widget", args={"_user_id": "u1", "widgets": ["weather", "events"]}
+    )
+
+    assert result == {"status": "ok", "added": ["events"]}
+    assert [w["type"] for w in db.layout] == ["weather", "events"]
+    assert db.layout[1]["uid"] and "id" not in db.layout[1], "new cards are instances"
 
 
 @pytest.mark.asyncio

@@ -79,7 +79,7 @@ class _SlowSaveDb(_FakeDashboardDb):
         if (
             sql.startswith("UPDATE dashboard_layouts")
             and not self._held_save_once
-            and params[0] == json.dumps([{"id": "tasks", "x": 0, "y": 0, "w": 2, "h": 3}])
+            and params[0] == json.dumps([{"uid": "t1", "type": "tasks", "x": 0, "y": 0, "w": 2, "h": 3}])
         ):
             self._held_save_once = True
             self.save_lock_acquired.set()
@@ -124,7 +124,7 @@ async def test_add_and_remove_widgets_use_locked_transaction(monkeypatch):
 
     assert add_result == {"status": "ok", "added": ["events"]}
     assert remove_result == {"status": "ok", "removed": "weather"}
-    assert [widget["id"] for widget in db.layout] == ["events"]
+    assert [widget["type"] for widget in db.layout] == ["events"]
     assert any("FOR UPDATE" in sql for sql in db.sql)
 
 
@@ -145,8 +145,8 @@ async def test_concurrent_add_and_remove_do_not_lose_updates(monkeypatch):
 
     assert add_result == {"status": "ok", "added": ["events"]}
     assert remove_result == {"status": "ok", "removed": "weather"}
-    assert {widget["id"] for widget in db.layout} == {"tasks", "events"}
-    assert "weather" not in {widget["id"] for widget in db.layout}
+    assert {widget["type"] for widget in db.layout} == {"tasks", "events"}
+    assert "weather" not in {widget["type"] for widget in db.layout}
 
 
 @pytest.mark.asyncio
@@ -156,7 +156,7 @@ async def test_concurrent_save_and_add_serialize_on_layout_lock(monkeypatch):
 
     save_task = asyncio.create_task(
         dashboard.save_layout(
-            _Request({"layout": [{"id": "tasks", "x": 0, "y": 0, "w": 2, "h": 3}]}),
+            _Request({"layout": [{"uid": "t1", "type": "tasks", "x": 0, "y": 0, "w": 2, "h": 3}]}),
             {"user_id": "u1"},
         )
     )
@@ -171,8 +171,174 @@ async def test_concurrent_save_and_add_serialize_on_layout_lock(monkeypatch):
     db.release_save.set()
     save_result, add_result = await asyncio.gather(save_task, add_task)
 
-    assert save_result == {"status": "ok"}
+    assert save_result["status"] == "ok"
     assert add_result == {"status": "ok", "added": ["events"]}
-    assert {widget["id"] for widget in db.layout} == {"tasks", "events"}
+    assert {widget["type"] for widget in db.layout} == {"tasks", "events"}
     assert db.max_active_transactions == 1
     assert sum("FOR UPDATE" in sql for sql in db.sql) >= 2
+
+
+# ── Wave 4b (2026-10-19): layout entries are widget INSTANCES ─────────────────
+# The duplicate-widget flaw had three layers; these pin the two server ones: the
+# layout schema carries an instance key (uid) apart from the type, and nothing
+# collapses two same-type cards.
+
+
+class _GetDb:
+    def __init__(self, layout):
+        self.layout = layout
+
+    async def execute(self, sql, params):
+        layout = self.layout
+
+        class _Cur:
+            async def fetchone(self_inner):
+                return {"layout": json.dumps(layout), "updated_at": None}
+
+        return _Cur()
+
+
+@pytest.mark.asyncio
+async def test_put_layout_keeps_two_cards_of_the_same_type(monkeypatch):
+    db = _FakeDashboardDb(layout=[])
+    _patch_db(monkeypatch, db)
+    two_weather = [
+        {"uid": "w1", "type": "weather", "x": 0, "y": 0, "w": 4, "h": 3},
+        {"uid": "w2", "type": "weather", "x": 4, "y": 0, "w": 4, "h": 3, "options": {"city": "Perth"}},
+    ]
+
+    assert (await dashboard.save_layout(_Request({"layout": two_weather}), {"user_id": "u1"}))["status"] == "ok"
+
+    assert db.layout == two_weather
+    assert [w["uid"] for w in db.layout] == ["w1", "w2"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"layout": "weather"},
+        {"layout": [{"type": "weather", "x": 0, "y": 0, "w": 4, "h": 3}]},  # no uid: the old shape
+        {"layout": [{"uid": "a", "type": "weather", "x": 0, "y": 0, "w": 4, "h": 3},
+                    {"uid": "a", "type": "weather", "x": 4, "y": 0, "w": 4, "h": 3}]},  # repeated uid
+        {"layout": [{"uid": "a", "type": "<script>", "x": 0, "y": 0, "w": 4, "h": 3}]},
+        {"layout": [{"uid": "a", "type": "weather", "x": "0", "y": 0, "w": 4, "h": 3}]},
+        {"layout": [{"uid": "a", "type": "weather", "x": 0, "y": 0, "w": 4, "h": 3, "options": "x" * 10}]},
+        {"layout": [{"uid": f"u{i}", "type": "time", "x": 0, "y": 0, "w": 1, "h": 1}
+                    for i in range(dashboard.MAX_LAYOUT_ENTRIES + 1)]},
+    ],
+)
+@pytest.mark.asyncio
+async def test_put_layout_refuses_a_malformed_layout_instead_of_dropping_cards(monkeypatch, bad):
+    db = _FakeDashboardDb(layout=[{"uid": "keep", "type": "time", "x": 0, "y": 0, "w": 4, "h": 3}])
+    _patch_db(monkeypatch, db)
+
+    with pytest.raises(HTTPException) as exc:
+        await dashboard.save_layout(_Request(bad), {"user_id": "u1"})
+
+    assert exc.value.status_code == 400
+    assert db.layout == [{"uid": "keep", "type": "time", "x": 0, "y": 0, "w": 4, "h": 3}]
+
+
+@pytest.mark.asyncio
+async def test_get_layout_reads_legacy_entries_as_instances(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    legacy = [
+        {"id": "weather", "x": 0, "y": 0, "w": 2, "h": 2},
+        {"id": "weather", "x": 2, "y": 0, "w": 2, "h": 2},
+        {"uid": "n1", "type": "notes", "x": 0, "y": 2, "w": 4, "h": 4},
+    ]
+
+    @asynccontextmanager
+    async def fake_ctx():
+        yield _GetDb(legacy)
+
+    monkeypatch.setattr(dashboard, "get_db_ctx", fake_ctx)
+    result = await dashboard.get_layout({"user_id": "u1"})
+
+    layout = result["layout"]
+    assert [w["type"] for w in layout] == ["weather", "weather", "notes"]
+    assert all("id" not in w for w in layout)
+    uids = [w["uid"] for w in layout]
+    assert len(set(uids)) == 3, "two legacy same-type cards must come back as two instances"
+    assert uids[2] == "n1"
+
+
+@pytest.mark.asyncio
+async def test_post_widgets_is_ensure_present_and_writes_instances(monkeypatch):
+    db = _FakeDashboardDb(layout=[
+        {"uid": "w1", "type": "weather", "x": 0, "y": 0, "w": 4, "h": 3},
+        {"uid": "w2", "type": "weather", "x": 4, "y": 0, "w": 4, "h": 3},
+    ])
+    _patch_db(monkeypatch, db)
+
+    result = await dashboard.add_widgets(_Request({"widgets": ["weather", "notes"]}), {"user_id": "u1"})
+
+    assert result == {"status": "ok", "added": ["notes"]}
+    assert [w["type"] for w in db.layout] == ["weather", "weather", "notes"]
+    assert [w["uid"] for w in db.layout][:2] == ["w1", "w2"], "existing instances keep their uid"
+    assert db.layout[2]["uid"] and "id" not in db.layout[2]
+
+
+@pytest.mark.asyncio
+async def test_delete_by_uid_removes_one_card_by_type_removes_all(monkeypatch):
+    db = _FakeDashboardDb(layout=[
+        {"uid": "w1", "type": "weather", "x": 0, "y": 0, "w": 4, "h": 3},
+        {"uid": "w2", "type": "weather", "x": 4, "y": 0, "w": 4, "h": 3},
+        {"uid": "n1", "type": "notes", "x": 0, "y": 3, "w": 4, "h": 4},
+    ])
+    _patch_db(monkeypatch, db)
+
+    await dashboard.remove_widget("w2", {"user_id": "u1"})
+    assert [w["uid"] for w in db.layout] == ["w1", "n1"]
+
+    await dashboard.remove_widget("notes", {"user_id": "u1"})
+    assert [w["uid"] for w in db.layout] == ["w1"]
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_a_legacy_card_by_the_key_get_returned(monkeypatch):
+    """GET and DELETE each normalize the stored row; a legacy card's uid must agree between them."""
+    from contextlib import asynccontextmanager
+
+    legacy = [
+        {"id": "weather", "x": 0, "y": 0, "w": 2, "h": 2},
+        {"id": "weather", "x": 2, "y": 0, "w": 2, "h": 2},
+    ]
+
+    @asynccontextmanager
+    async def fake_ctx():
+        yield _GetDb(legacy)
+
+    monkeypatch.setattr(dashboard, "get_db_ctx", fake_ctx)
+    keys = [w["uid"] for w in (await dashboard.get_layout({"user_id": "u1"}))["layout"]]
+
+    db = _FakeDashboardDb(layout=legacy)
+    _patch_db(monkeypatch, db)
+    await dashboard.remove_widget(keys[1], {"user_id": "u1"})
+
+    assert len(db.layout) == 1, "only the card whose key was deleted goes"
+    assert db.layout[0]["x"] == 0
+
+
+@pytest.mark.asyncio
+async def test_put_layout_with_a_stale_base_version_conflicts_and_returns_the_current_layout(monkeypatch):
+    chat_added = [
+        {"uid": "w1", "type": "weather", "x": 0, "y": 0, "w": 4, "h": 3},
+        {"uid": "c1", "type": "notes", "x": 0, "y": 3, "w": 4, "h": 3},
+    ]
+    db = _FakeDashboardDb(layout=chat_added)
+    _patch_db(monkeypatch, db)
+    version = dashboard._layout_version(chat_added)
+    board = [{"uid": "w1", "type": "weather", "x": 4, "y": 0, "w": 4, "h": 3}]
+
+    with pytest.raises(HTTPException) as exc:
+        await dashboard.save_layout(_Request({"layout": board, "base_version": "stale"}), {"user_id": "u1"})
+    assert exc.value.status_code == 409
+    assert exc.value.detail["version"] == version
+    assert [w["uid"] for w in exc.value.detail["layout"]] == ["w1", "c1"]
+    assert db.layout == chat_added, "a conflicting save writes nothing"
+
+    result = await dashboard.save_layout(_Request({"layout": board, "base_version": version}), {"user_id": "u1"})
+    assert result["version"] == dashboard._layout_version(board)
+    assert db.layout == board
