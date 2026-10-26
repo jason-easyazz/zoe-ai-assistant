@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-773 flags; 723 not documented in `.env.example`.
+774 flags; 724 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -419,6 +419,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MUSIC_OBSERVE_DEDUP_H` | `'12'` | no | NO | `services/zoe-data/music_history.py` |
 | `ZOE_MUSIC_SETUP_SECRET` | `-` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_MUSIC_SETUP_TTL_S` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
+| `ZOE_NIGHT_BUSY` | `-` | no | NO | `scripts/maintenance/harness_quiet.py` |
 | `ZOE_NIGHT_MIND` | `''`, `-` | no | NO | `scripts/maintenance/zoe-night-mind.py`<br>`scripts/perf/zmb/arms/z0.py`<br>`services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_CHUNK_TOKENS` | `0` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_CTX_TOKENS` | `0` | no | NO | `services/zoe-data/night_mind.py` |
