@@ -161,6 +161,12 @@ Read-only: `scripts/night/night_window.py`, the unit and timer, `docs/knowledge/
 Builds on the sister record (prosody plus text cues fused; speech-emotion recognition is poor on natural speech; audio LLMs mostly
 follow the words; phase 0 is a gated, explainable detector).
 
+> **Governance boundary (binding, unchanged by this record).** `docs/governance/emotional-safety-note.md` §6 limits prosody
+> scoring to turns addressed to Zoe (wake-word turns) and forbids ambient scoring until counsel answers the surveillance-devices
+> question. Every pendant (ambient) prosody item below, including the baseline and the outcome association, is therefore
+> **BLOCKED on that counsel decision**. Until then the only permitted experiment is on wake-word turns; the pendant items are a
+> design for after the decision, not a plan to run now.
+
 - **What the pendant adds**: a long, natural, always-the-same-person record (62 h in 10 days) from which a **per-speaker, per-channel
   baseline** of level, rate and pause behaviour can be computed; the sister record called such a baseline the missing ingredient
   [V]. It is a different microphone and distance from the panel, so baselines must be **per channel**; do not mix.
@@ -328,9 +334,9 @@ effort and risk, my judgement.
 | 3 | **Reminders and commitments said aloud** (already a kind) | H | S | L | Finish delivery and timing; it is the most tangible win |
 | 4 | **Pendant-channel owner enrolment** (fixes `you`) | H | M | M | Do third. Unblocks 4a, 4b, 4e; owner consent; pendant profile only |
 | 5 | **Summaries and routines** from approved items | M | M | M | After 1 and 4; repetition rule; inferred, expiring |
-| 6 | **Tone: sister-record phase 0 plus pendant baseline** | M | M | H | Measure first; use pendant only for baseline and aggregate association |
+| 6 | **Tone: sister-record phase 0 on wake-word turns** | M | M | H | Measure first on turns addressed to Zoe; the pendant baseline is BLOCKED on the counsel decision (emotional-safety note §6) |
 | 7 | **Wake-word hard-negative scoring** (derived scores, no audio kept) | M | S | L | Cheap measurement; informs a verifier later |
-| 8 | **12B audio tone test** (150 labelled clips, four arms) | M | M | M | One manual window; drop if it fails the gate |
+| 8 | **12B audio tone test** (150 labelled wake-word clips, four arms) | M | M | M | Bounded manual windows; wake-word turns only until counsel answers; drop if it fails the gate |
 | 9 | **Router hard negatives / natural-phrasing eval set** | L-M | S | L | Small; keep inside the existing ratchet |
 | 10 | **Moonshine fine-tune on own voice** | M | L | M | Defer until golden set and measured vocabulary gain |
 | 11 | **Adaptive update of the panel speaker profile from pendant audio** | L-M | M | H | No. Pendant profile only |
@@ -359,9 +365,9 @@ rules applied in the same change.
 
 ### Phase 2 - measured experiments (after Phase 0 labels exist; manual windows)
 1. The golden set: about 150 owner-labelled clips plus the owner's corrections, split by time and by speaker; frozen.
-2. The 12B audio tone test (section 4b) in one manual window with the projector re-added; record MemAvailable low, time per clip,
+2. The 12B audio tone test (section 4b) on wake-word turns only (never ambient pendant audio until counsel answers), in manual windows with the projector re-added; record MemAvailable low, time per clip,
    and the four-arm result.
-3. Tone phase 0 of the sister record using the pendant baseline per channel.
+3. Tone phase 0 of the sister record on wake-word turns. The per-channel pendant baseline waits for the counsel decision (emotional-safety note §6).
 4. **Gates:** audio-plus-text beats text-only by at least +0.10 macro-F1 and the shuffled-audio arm does not beat text-only by a meaningful margin and the audio-only arm is above chance (two-part gate, section 4b); tone flag precision
    at least 0.8 with apology-trigger rate at most 1 per 100 turns plus owner review of a sample of triggered replies (sister record); projector fits with MemAvailable never below the floor.
 
