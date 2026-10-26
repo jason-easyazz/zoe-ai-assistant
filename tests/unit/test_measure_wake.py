@@ -584,3 +584,67 @@ def test_window_refusal_follows_the_measured_night_gate_not_the_fixed_span(monke
     _clock(monkeypatch, dt.datetime(2026, 10, 20, 5, 30))        # past the old span, but the gate says the box is busy
     _gate(tmp_path, monkeypatch, 0)
     assert mw.window_refusal(10)
+
+
+# ------------------------------------------------------------------ PR #2162 review: duration budget, timed re-check, orb wakes
+
+def _wav(path, seconds: float) -> str:
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)                      # tiny header-only-ish files: 8 kHz keeps the synthetic WAVs small
+        w.writeframes(b"\x00\x00" * int(8000 * seconds))
+    return str(path)
+
+
+def test_budget_follows_total_audio_duration_not_file_count(tmp_path):
+    long_files = [mw.audio_seconds(_wav(tmp_path / f"o{i}.wav", 600)) for i in range(3)]
+    assert long_files == [600.0] * 3
+    # 3 files used to budget 1 s each (OVERHEAD only); 1800 s of audio at ~3x real time is ~10 min + margin
+    assert mw.estimate_budget_min(3, long_files) >= 15 + mw.OVERHEAD_MIN
+    assert mw.estimate_budget_min(3, long_files) > mw.estimate_budget_min(3)
+    short = [2.0] * 3
+    assert mw.estimate_budget_min(3, short) <= mw.estimate_budget_min(3) + 1       # short clips stay cheap
+    assert mw.audio_seconds(tmp_path / "missing.wav") is None
+    assert mw.estimate_budget_min(1, [None]) > mw.OVERHEAD_MIN                      # unreadable header: assumed, not free
+
+
+def test_the_night_pause_is_rechecked_by_elapsed_time_and_before_a_long_file():
+    t = [0.0]
+    sc = _FakeScorer()
+    seen = []
+
+    def window(b):
+        seen.append(b)
+        return "brain window" if t[0] >= 130 else None
+
+    def load(p):
+        t[0] += 40.0                                     # each clip takes 40 s of wall time
+        return [0.0] * mw.SR
+
+    todo = [("libri", f"c{i}") for i in range(10)]       # far fewer than 25: only the timed re-check can fire
+    clips, aborted = mw.score_clips(todo, sc, {}, lead_s=2.0, tail_s=1.0, min_avail_mb=0, mem=lambda: 9999.0,
+                                    window=window, load=load, log=lambda m: None, clock=lambda: t[0],
+                                    duration_of=lambda p: 5.0)
+    assert aborted and aborted["reason"] == "brain-window" and 3 <= len(clips) < 10
+    # a 600 s file is checked BEFORE it starts, sized to finish: its own check, not just "1 minute"
+    seen.clear()
+    mw.score_clips([("libri", "a"), ("libri", "b")], _FakeScorer(), {}, lead_s=2.0, tail_s=1.0, min_avail_mb=0,
+                   mem=lambda: 9999.0, window=lambda b: seen.append(b), load=lambda p: [0.0] * mw.SR,
+                   log=lambda m: None, clock=lambda: 0.0, duration_of=lambda p: 600.0 if p == "b" else 5.0)
+    assert len(seen) == 2 and seen[1] >= 6
+
+
+def test_nearmiss_does_not_count_the_synthetic_wake_after_an_orb_tap():
+    lines = [
+        line("2026-10-17 02:10:00", "Orb-tap activation received"),
+        line("2026-10-17 02:10:00", "Wake word detected! Notifying Jetson and waking screen..."),   # synthetic
+        line("2026-10-17 02:10:03", "Recorded command: duration=1.60s chunks=20 stop=silence"),
+        line("2026-10-17 03:00:00", "Wake word detected! Notifying Jetson and waking screen..."),   # acoustic
+        line("2026-10-17 03:00:03", "Recorded command: duration=1.60s chunks=20 stop=silence"),
+    ]
+    s = mw.nearmiss_summary(pvl.events(lines), since=dt.datetime(2026, 10, 17), now=dt.datetime(2026, 10, 18))
+    assert s["wakes"] == 1 and s["night_wakes_01_05"] == 1
+    nm = [_nm("2026-10-17 02:09:59", 0.40, 0.45)] + lines
+    s2 = mw.nearmiss_summary(pvl.events(nm), since=dt.datetime(2026, 10, 17), now=dt.datetime(2026, 10, 18))
+    assert s2["retry_after_near_miss"] == 0 and s2["ramp_into_wake"] == 0       # the orb's wake is not a retry

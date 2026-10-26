@@ -256,7 +256,6 @@ def nearmiss_summary(evs: Sequence, *, since: dt.datetime, until: Optional[dt.da
     ev = [e for e in evs if e.ts >= since and (until is None or e.ts < until)]
     nm = [e for e in ev if e.kind == "near_miss"]
     scores = [e.data["score"] for e in nm]
-    wakes = [e for e in ev if e.kind == "wake"]
     wake_turns = [t for t in pvl.turns(evs) if t.trigger == "wake" and t.trigger_ts >= since
                   and (until is None or t.trigger_ts < until)]
     outcomes: dict = {}
@@ -270,7 +269,8 @@ def nearmiss_summary(evs: Sequence, *, since: dt.datetime, until: Optional[dt.da
     by_hour: dict = {}
     for e in nm:
         by_hour[e.ts.hour] = by_hour.get(e.ts.hour, 0) + 1
-    wake_ts = sorted(e.ts for e in wakes)
+    # ACOUSTIC wakes only: pvl.turns() folds the synthetic "Wake word detected!" an orb tap logs into the orb turn
+    wake_ts = sorted(t.trigger_ts for t in wake_turns)
     retry = ramp = 0
     for e in nm:
         gaps = [(w - e.ts).total_seconds() for w in wake_ts if 0 <= (w - e.ts).total_seconds() <= 10.0]
@@ -287,8 +287,8 @@ def nearmiss_summary(evs: Sequence, *, since: dt.datetime, until: Optional[dt.da
                 max=max(scores) if scores else None,
                 at_or_above={str(t): sum(1 for s in scores if s >= t) for t in (0.30, 0.35, 0.40, 0.42, 0.44)},
                 top=sorted(scores, reverse=True)[:10], histogram=hist,
-                by_hour=dict(sorted(by_hour.items())), wakes=len(wakes), wake_outcomes=outcomes,
-                night_wakes_01_05=sum(1 for e in wakes if 1 <= e.ts.hour < 5),
+                by_hour=dict(sorted(by_hour.items())), wakes=len(wake_turns), wake_outcomes=outcomes,
+                night_wakes_01_05=sum(1 for w in wake_ts if 1 <= w.hour < 5),
                 retry_after_near_miss=retry, ramp_into_wake=ramp)
 
 
@@ -408,9 +408,37 @@ SEC_PER_CLIP = 1.0     # measured 0.73 s/clip (2026-10-19: ~2,870 clips in 35 mi
 OVERHEAD_MIN = 5       # model + feature load, the ssh log read, the report
 
 
-def estimate_budget_min(n_clips: int) -> int:
-    """Minutes a replay of ``n_clips`` clips is expected to take, for the brain-window start guard."""
-    return int(math.ceil(max(0, n_clips) * SEC_PER_CLIP / 60.0)) + OVERHEAD_MIN
+RT_FACTOR = 3.0        # audio seconds scored per wall second (long Omi negatives run ~3x real time on the Jetson, niced)
+BUDGET_MARGIN = 1.5    # safety multiplier on the duration-based estimate
+RECHECK_S = 60.0       # re-check the night pause at least this often while scoring
+LONG_FILE_S = 60.0     # a file at least this long gets its own night-pause check, sized to that file
+UNKNOWN_CLIP_S = 10.0  # assumed length of a file whose header cannot be read
+
+
+def audio_seconds(path) -> Optional[float]:
+    """Duration from the WAV header (no decode), or None when it cannot be read."""
+    import wave
+    try:
+        with wave.open(str(path), "rb") as w:
+            return w.getnframes() / float(w.getframerate() or SR)
+    except Exception:  # noqa: BLE001 - not a WAV / unreadable: the caller assumes a length
+        return None
+
+
+def clip_cost_s(duration_s: Optional[float]) -> float:
+    """Expected wall seconds to score one file of ``duration_s`` audio seconds (unknown -> UNKNOWN_CLIP_S)."""
+    d = UNKNOWN_CLIP_S if duration_s is None else max(0.0, duration_s)
+    return max(SEC_PER_CLIP, d / RT_FACTOR)
+
+
+def estimate_budget_min(n_clips: int, durations: Optional[Sequence[Optional[float]]] = None) -> int:
+    """Minutes a replay is expected to take, for the brain-window start guard. With ``durations`` (audio seconds per
+    file, None = unreadable header) the estimate follows total audio time - one 600 s Omi recording costs minutes, not
+    one second - with a safety margin; without, ``n_clips`` x ``SEC_PER_CLIP``."""
+    if durations is None:
+        return int(math.ceil(max(0, n_clips) * SEC_PER_CLIP / 60.0)) + OVERHEAD_MIN
+    total = sum(clip_cost_s(d) for d in durations) * BUDGET_MARGIN
+    return int(math.ceil(total / 60.0)) + OVERHEAD_MIN
 
 
 def window_refusal(budget_min: int, *, verdict: Optional[Callable] = None) -> Optional[str]:
@@ -448,7 +476,8 @@ def guard(*, force: bool, min_avail_mb: float, check: Optional[Callable] = None,
 def score_clips(todo: Sequence, scorer, notes: dict, *, lead_s: float, tail_s: float, min_avail_mb: float,
                 mem: Optional[Callable[[], Optional[float]]] = None, sleep: Optional[Callable[[float], None]] = None,
                 window: Optional[Callable[[int], Optional[str]]] = None, load: Optional[Callable] = None,
-                log: Callable[[str], None] = lambda m: print(m, file=sys.stderr)) -> tuple:
+                log: Callable[[str], None] = lambda m: print(m, file=sys.stderr),
+                clock: Optional[Callable[[], float]] = None, duration_of: Optional[Callable] = None) -> tuple:
     """Score ``todo`` clip by clip; returns (clips, aborted). ``aborted`` is None for a complete run, else a dict naming
     why it stopped early (memory below the floor for 10 min, or the brain window about to open) and how far it got:
     a partial run is NOT a result, so the caller records it and withholds the threshold recommendation."""
@@ -456,12 +485,19 @@ def score_clips(todo: Sequence, scorer, notes: dict, *, lead_s: float, tail_s: f
     sleep = sleep or time.sleep
     window = window or window_refusal
     load = load or load_audio
+    clock = clock or time.time
+    duration_of = duration_of or audio_seconds
     clips: list = []
     aborted: Optional[dict] = None
-    t0 = time.time()
+    t0 = last_check = clock()
     for i, (name, path) in enumerate(todo):
-        if i % 25 == 0:
-            why = window(1)                      # one minute of margin before 01:50
+        dur = duration_of(path)
+        long_file = dur is not None and dur >= LONG_FILE_S
+        if i % 25 == 0 or long_file or clock() - last_check >= RECHECK_S:
+            last_check = clock()
+            # one minute of margin before 01:50; a long file must also FINISH before the window, so size it
+            need_min = 1 if not long_file else int(math.ceil(clip_cost_s(dur) * BUDGET_MARGIN / 60.0)) + 1
+            why = window(need_min)
             if why:
                 aborted = dict(reason="brain-window", detail=why, clips_scored=i, clips_planned=len(todo))
                 log(f"measure_wake: {why} - stopping")
@@ -482,7 +518,7 @@ def score_clips(todo: Sequence, scorer, notes: dict, *, lead_s: float, tail_s: f
                     break
             if aborted:
                 break
-            log(f"  {i}/{len(todo)} clips, {time.time() - t0:.0f}s")
+            log(f"  {i}/{len(todo)} clips, {clock() - t0:.0f}s")
         try:
             x = load(path)
         except Exception as exc:  # noqa: BLE001 - one unreadable file must not cost the run
@@ -716,7 +752,7 @@ def cmd_run(args) -> int:
     out = _private_dir(Path(args.out))
     lines = pvl.fetch_lines(args.voice_log)
     todo, notes = _sets(args, lines)
-    budget = args.budget_min or estimate_budget_min(len(todo))
+    budget = args.budget_min or estimate_budget_min(len(todo), [audio_seconds(p) for _n, p in todo])
     why = window_refusal(budget)       # the clip count is known now: refuse a start that would run into 01:50
     if why:
         print(f"measure_wake: refused - {why}", file=sys.stderr)
