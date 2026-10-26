@@ -135,6 +135,12 @@ class Dashboard {
         }
         this.serverSync = !(document.body && document.body.classList.contains('touch-dashboard'));
         this._serverSaveTimer = null;
+        // The desktop board is not editable until the first server read has settled (a read
+        // that failed counts: it blocks saving separately). An edit made while the GET is
+        // pending would be saved as the whole board and then PUT over the member's real cards.
+        this._layoutReady = !this.serverSync;
+        // uid -> signature of the cards the server last acknowledged (in memory only).
+        this._baseCards = new Map();
     }
     
     init() {
@@ -253,11 +259,15 @@ class Dashboard {
         // Load saved layout
         this.loadLayout().catch((e) => {
             console.error('Dashboard layout failed to load:', e);
+            // Nothing was read reliably: show the default but never write it up.
+            this._serverSaveBlocked = true;
+            this._layoutReady = true;
             this.createDefaultLayout();
         });
     }
     
     toggleEditMode() {
+        if (!this._layoutReady && !this.isEditMode) return;   // still loading the saved board
         this.isEditMode = !this.isEditMode;
         document.body.classList.toggle('edit-mode', this.isEditMode);
         window.dispatchEvent(new CustomEvent('dashboard-edit-mode-changed', {
@@ -397,6 +407,7 @@ class Dashboard {
     }
 
     addWidget(type, options = {}) {
+        if (!this._layoutReady) return null;   // the saved board is still loading
         const gridItem = this._mountCard(type, {}, options);
         if (gridItem) {
             console.log(`✅ Added ${type}`);
@@ -416,6 +427,7 @@ class Dashboard {
         removeBtn.setAttribute('aria-label', 'Remove widget');
         removeBtn.onclick = (e) => {
             e.stopPropagation();
+            if (!this._layoutReady) return;
             if (confirm('Remove this widget?')) {
                 this._releaseGridItem(gridItem);
                 this.grid.removeWidget(gridItem);
@@ -448,6 +460,7 @@ class Dashboard {
     }
     
     removeWidget(widget) {
+        if (!this._layoutReady) return;
         const gridItem = widget.closest('.grid-stack-item');
         if (gridItem && this.grid) {
             this._releaseGridItem(gridItem);
@@ -504,6 +517,8 @@ class Dashboard {
 
     saveLayout() {
         if (!this.grid) return;
+        // Before the first server read settles the grid is not the member's board.
+        if (!this._layoutReady) return;
         const layout = this.currentLayout();
         const key = this._layoutKey();
         try {
@@ -551,7 +566,7 @@ class Dashboard {
                 let body = null;
                 try { body = await r.json(); } catch (_) { /* the save still landed */ }
                 this._serverVersion = (body && body.version) || null;
-                this._setSynced(layout.map(c => c.uid));
+                this._setSynced(layout.map(c => c.uid), layout);
                 if (!this._pendingServerLayout) this._setUnsynced(false);
             } else if (r.status === 409) {
                 // Chat changed the saved layout since this board read it. Keep this board's
@@ -559,7 +574,7 @@ class Dashboard {
                 let conflict = null;
                 try { conflict = (await r.json()).detail; } catch (_) { /* fall through to retry */ }
                 if (conflict && Array.isArray(conflict.layout)) {
-                    this._adoptServerCards(conflict.layout);
+                    this._mergeServerLayout(conflict.layout);
                     this._serverVersion = conflict.version || null;
                     this._pendingServerLayout = this.currentLayout();
                 } else {
@@ -598,6 +613,41 @@ class Dashboard {
             if (w) known.add(card.uid);
         });
         this._syncedUids = known;
+    }
+
+    // Three-way merge of a 409: base (last acknowledged) vs this board vs the server.
+    // A card the server dropped since base was deleted elsewhere: it leaves this board
+    // too unless it was edited here. Cards added on either side are kept; cards removed
+    // here stay removed (they are simply not on the board).
+    _mergeServerLayout(serverLayout) {
+        const onServer = new Set(serverLayout.filter(c => c && c.uid).map(c => c.uid));
+        const local = new Map(this.currentLayout().map(c => [c.uid, c]));
+        this._baseCards.forEach((sig, uid) => {
+            if (onServer.has(uid)) return;
+            const mine = local.get(uid);
+            if (!mine || this._cardSig(mine) !== sig) return;   // gone here / edited here
+            this._removeCardByUid(uid);
+            if (this._syncedUids) this._syncedUids.delete(uid);
+        });
+        this._adoptServerCards(serverLayout);
+        this._baseCards = new Map(serverLayout.filter(c => c && c.uid).map(c => [c.uid, this._cardSig(c)]));
+    }
+
+    _cardSig(card) {
+        return JSON.stringify([card.type, card.x, card.y, card.w, card.h, card.options || null]);
+    }
+
+    _removeCardByUid(uid) {
+        if (!this.grid) return;
+        const nodes = Array.from(this.grid.engine.nodes);
+        for (const node of nodes) {
+            const widget = node.el && node.el.querySelector('.widget');
+            if (widget && widget.getAttribute('data-widget-uid') === uid) {
+                this._releaseGridItem(node.el);
+                this.grid.removeWidget(node.el);
+                return;
+            }
+        }
     }
 
     _mountedUids() {
@@ -647,8 +697,9 @@ class Dashboard {
 
     // The cards the server last acknowledged, kept beside the local copy so a recovery after a
     // reload can tell "removed here" from "added on the server meanwhile".
-    _setSynced(uids) {
+    _setSynced(uids, cards) {
         this._syncedUids = new Set(uids);
+        this._baseCards = new Map((cards || []).filter(c => c && c.uid).map(c => [c.uid, this._cardSig(c)]));
         const key = this._layoutKey();
         if (!key || !this.serverSync) return;
         try { localStorage.setItem(key + '_base', JSON.stringify(Array.from(this._syncedUids))); } catch (_) { /* no storage */ }
@@ -693,6 +744,7 @@ class Dashboard {
 
     async loadLayout() {
         let fromServer = await this._fetchServerLayout();
+        this._layoutReady = true;   // the first read has settled (answer or definite failure)
         if (fromServer === SERVER_LAYOUT_UNREADABLE) {
             // Show this browser's copy (or the default) but never write it up: the
             // member's real layout is still on the server, we just could not read it.
@@ -720,7 +772,7 @@ class Dashboard {
             return;
         }
         if (this._serverSaveBlocked) this._syncedUids = new Set();   // nothing was read: keep the stored baseline
-        else this._setSynced(Array.isArray(fromServer) ? fromServer.map(c => c.uid) : []);
+        else this._setSynced(Array.isArray(fromServer) ? fromServer.map(c => c.uid) : [], Array.isArray(fromServer) ? fromServer : []);
         // A board saved only in this browser (before Wave 4b) moves to the server
         // once, with uids minted for its cards.
         if (fromServer === null && this.serverSync && !this._serverSaveBlocked) this.saveLayout();

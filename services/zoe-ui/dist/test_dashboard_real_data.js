@@ -328,12 +328,13 @@ check('Weather card loads with no placeholder temperatures, then real data or "u
 });
 
 // ── 5. Duplicate widgets: one instance per card, kept apart in the layout ───
-function boardWith(ctx) {
+function boardWith(ctx, loaded = true) {
     const WM = ctx.$('WidgetManager');
     ['SystemWidget', 'HomeWidget', 'WeatherWidget'].forEach(c => WM.register(new ctx[c]()));
     const Dashboard = ctx.$('Dashboard');
     const d = new Dashboard();
     d.grid = fakeGrid();
+    if (loaded) d._layoutReady = true;   // tests that never call loadLayout stand for an already-loaded board
     d.grid.on('removed', (e, items) => (items || []).forEach(n => n && n.el && d._releaseGridItem(n.el)));
     return { d, WM };
 }
@@ -970,6 +971,76 @@ check('a removed Multica board / Time card drops its document and window listene
     await mustFail('a Multica card that keeps its listeners is caught', async () => {
         const bad = await run('MulticaBoardWidget', 'js/widgets/core/multica-board.js', 'multica-board', (C) => { C.prototype.destroy = function () { if (this.updateTimer) clearInterval(this.updateTimer); }; });
         assert(bad.before - bad.after >= 2);
+    });
+});
+
+check('a 409 is a three-way merge: a card another tab deleted stays deleted unless edited here; local adds/removes are kept', async () => {
+    const run = async (patch, edit) => {
+        const puts = [];
+        const ctx = makeContext((url, opts) => {
+            if (opts.method === 'PUT') {
+                const body = JSON.parse(opts.body);
+                puts.push(body);
+                if (body.base_version === 'v1') return json(409, { detail: { error: 'layout_changed', layout: [W('b')], version: 'v2' } });
+                return json(200, { status: 'ok', version: 'v3' });
+            }
+            if (url === '/api/dashboard/layout/') return json(200, { layout: [W('a'), W('b')], version: 'v1' });
+            return never();
+        });
+        const { d } = boardWith(ctx);
+        if (patch) patch(d);
+        await d.loadLayout();
+        if (edit) d.grid.engine.nodes.find(n => n.el.querySelector('.widget').getAttribute('data-widget-uid') === 'a').x = 6;
+        d.addWidget('system');
+        ctx._timers.splice(0).forEach(fn => fn());
+        await flush();
+        return { d, puts };
+    };
+    const { d, puts } = await run();
+    assert.strictEqual(puts.length, 2, 'the conflict is retried once');
+    const sent = puts[1].layout.map(e => e.type + ':' + e.uid.slice(0, 1)).sort();
+    assert(!puts[1].layout.some(e => e.uid === 'a'), 'a (deleted in another tab) is not re-sent');
+    assert(puts[1].layout.some(e => e.uid === 'b') && puts[1].layout.some(e => e.type === 'system'), 'b and the local System card are kept: ' + sent);
+    assert(!d.currentLayout().some(e => e.uid === 'a'), 'and a leaves this board');
+    const edited = await run(null, true);
+    assert(edited.puts[1].layout.some(e => e.uid === 'a'), 'a card edited here survives the remote delete');
+    await mustFail('a retry that resurrects the remotely deleted card is caught', async () => {
+        const bad = await run((dd) => { dd._mergeServerLayout = function (l) { this._adoptServerCards(l); }; });
+        assert(!bad.puts[1].layout.some(e => e.uid === 'a'));
+    });
+});
+
+check('an edit made while the first layout GET is pending is refused, so the member\'s cards are never overwritten', async () => {
+    const run = async (patch) => {
+        const puts = [];
+        let release;
+        const gate = new Promise(r => { release = r; });
+        const ctx = makeContext((url, opts) => {
+            if (opts.method === 'PUT') { puts.push(JSON.parse(opts.body)); return json(200, { status: 'ok', version: 'v3' }); }
+            if (url === '/api/dashboard/layout/') return gate.then(() => ({ ok: true, status: 200, json: async () => ({ layout: [W('a'), W('b')], version: 'v1' }) }));
+            return never();
+        });
+        ctx._store['zoe_desktop_widgets:alice'] = JSON.stringify([W('w1')]);
+        const { d } = boardWith(ctx, false);
+        if (patch) patch(d);
+        const loading = d.loadLayout();
+        d.addWidget('system');
+        d.saveLayout();
+        ctx._timers.splice(0).forEach(fn => fn());
+        release();
+        await loading;
+        ctx._timers.splice(0).forEach(fn => fn());
+        await flush();
+        return { d, puts, ctx };
+    };
+    const { d, puts, ctx } = await run();
+    assert.deepStrictEqual(plain(d.currentLayout().map(e => e.uid)).sort(), ['a', 'b'], 'the server board is what loads');
+    assert.strictEqual(puts.length, 0, 'nothing is PUT');
+    assert(!('zoe_desktop_widgets:alice_unsynced' in ctx._store), 'and nothing is marked unsynced');
+    await mustFail('an edit allowed during the pending GET is caught', async () => {
+        const bad = await run((dd) => { dd._layoutReady = true; });
+        assert.strictEqual(bad.puts.length, 0);
+        assert.deepStrictEqual(plain(bad.d.currentLayout().map(e => e.uid)).sort(), ['a', 'b']);
     });
 });
 
