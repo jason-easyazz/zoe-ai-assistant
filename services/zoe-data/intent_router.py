@@ -779,6 +779,11 @@ def detect_intent(
     user_id: str = "unknown",
     _filler_retry: bool = True,
 ) -> Optional[Intent]:
+    try:
+        import local_text_logs as _ltl_epoch
+        _miss_epoch: Optional[int] = _ltl_epoch.erase_epoch()   # BEFORE detection: an erase finishing mid-detect drops the miss append
+    except Exception:  # noqa: BLE001 - unreadable guard: append stays in-progress-guarded only
+        _miss_epoch = None
     t = _normalize_chat_intent_text(text)
 
     # Bare name-as-question ("zoe?") — normalization strips the wake word to '', so
@@ -1716,7 +1721,8 @@ def detect_intent(
             _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
             # traffic_class (P-2): the weekly review drops the harness's misses
             _ltl.append_line(_ltl.INTENT_MISSES, _json.dumps({"text": _clean, "ts": __import__("time").time(),
-                                                              "traffic_class": traffic_class.current()}))
+                                                              "traffic_class": traffic_class.current()}),
+                            epoch=_miss_epoch)
         except Exception:
             pass  # Never let logging break intent routing
         try:

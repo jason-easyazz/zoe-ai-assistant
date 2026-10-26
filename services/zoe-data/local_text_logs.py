@@ -181,14 +181,18 @@ def locked(log: TextLog):
             fh.close()
 
 
-def append_line(log: TextLog, line: str) -> bool:
+def append_line(log: TextLog, line: str, epoch: Optional[int] = None) -> bool:
     """Append one JSON line to ``log`` under the SAME locks a rewrite pass holds (in-process lock + ``flock`` on ``<log>.lock``), so
     an append can never land in an inode a sweep/erase is about to replace. Never WAITS (it runs on a live voice turn): if a pass
-    holds the lock the observation is skipped and False returned. I/O errors raise to the caller (which swallows them)."""
+    holds the lock the observation is skipped and False returned. I/O errors raise to the caller (which swallows them).
+    ``epoch``: the ``erase_epoch()`` captured BEFORE the observation was computed; inside the lock the line is refused if an erase is
+    in progress or the epoch moved (same rule as ``semantic_router._append_shadow_line``): it may carry words an erase just removed."""
     tlock = _append_lock(log)
     if not tlock.acquire(blocking=False):
         return False
     try:
+        if erase_in_progress() or (epoch is not None and erase_epoch() != epoch):
+            return False
         path = log_path(log)
         path.parent.mkdir(parents=True, exist_ok=True)
         try:

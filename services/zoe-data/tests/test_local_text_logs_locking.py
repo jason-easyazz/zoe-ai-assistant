@@ -81,3 +81,39 @@ def test_an_unopenable_lock_file_fails_closed(miss):
         assert miss.read_text() == before
     finally:
         ltl.lock_path(ltl.INTENT_MISSES).rmdir()
+
+
+def _miss_rows(p):
+    return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+
+
+def test_a_miss_prepared_before_an_erase_is_not_appended_after_it(miss, monkeypatch):
+    """detect_intent captures the erase epoch BEFORE detection; an erase completing mid-detect drops the miss.
+    Break: drop ``epoch=_miss_epoch`` in intent_router or the epoch check in append_line -> the stale miss lands."""
+    import intent_router
+
+    real = intent_router._normalize_chat_intent_text
+
+    def paused(text):
+        ltl.erase_entity(re.compile("zzz-never-matches"))      # a whole erase completes while detection is paused
+        return real(text)
+
+    monkeypatch.setattr(intent_router, "_normalize_chat_intent_text", paused)
+    assert intent_router.detect_intent("qqq wibble frobnicate plonk", user_id="u") is None
+    assert _miss_rows(miss) == []
+
+
+def test_a_normal_miss_still_appends(miss):
+    import intent_router
+
+    assert intent_router.detect_intent("qqq wibble frobnicate plonk", user_id="u") is None
+    assert [r["text"] for r in _miss_rows(miss)] == ["qqq wibble frobnicate plonk"]
+
+
+def test_append_line_refuses_while_an_erase_is_in_progress(miss):
+    ltl._bump_epoch(+1)
+    try:
+        assert ltl.append_line(ltl.INTENT_MISSES, json.dumps({"text": "x", "ts": 1.0})) is False
+    finally:
+        ltl._bump_epoch(-1)
+    assert _miss_rows(miss) == []
