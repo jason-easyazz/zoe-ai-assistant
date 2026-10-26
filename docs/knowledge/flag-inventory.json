@@ -3504,6 +3504,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MEMORIES_VOICE": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memories_voice.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MEMORY_AUDIT_COLLECTION": {
         "defaults": [
           "'mempalace_audit'"

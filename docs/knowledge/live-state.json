@@ -2352,6 +2352,13 @@
    "kind": "unknown",
    "readers": 1
   },
+  "ZOE_MEMORIES_VOICE": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
   "ZOE_MEMORY_AUDIT_COLLECTION": {
    "defaults": [
     "mempalace_audit"

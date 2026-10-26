@@ -872,6 +872,13 @@ there. A fact about a tagged person is a `person_memory` candidate citing segmen
 "Forget <name>" clears `tagged_person_id`, so the review must re-read segments rather than cache names.
 
 
+**Build status (2026-10-19): P3 is built, flag-dark** (`ZOE_MEMORIES_VOICE`; `memories_voice.py`, `routers/memories_card.py`,
+`js/memories-about-me.js`; record [memories-voice.md](../knowledge/memories-voice.md)). Differences from 2.2, each deliberate: the
+voice-session view is the panel review cards' private card (a card token, card-local ids), not a tile; "Fix on my phone" opens
+`memories.html#about-me` (typed fixes through `correction_apply`); a person is forgotten from the card only behind a fresh PIN; the
+exact words behind a row ("Where's this from?") need a fresh PIN too (D13); a fact forget is the existing row forget, not a ledger
+entry (the ledger holds names).
+
 Each phase is one PR (or a small workstream), flag-dark, with its tests, and says what changes for the family.
 
 | Phase | What | Needs | Changes for the family |
