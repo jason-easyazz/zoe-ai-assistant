@@ -34,6 +34,8 @@ This index gives every record one status.
 | [agent-sessions-off-box-2026-10-04.md](agent-sessions-off-box-2026-10-04.md) | 2026-10-04 | absorbed 2026-10-18 | engineering-off-box.md in knowledge; retire by 2026-11-17 |
 | [architecture-deep-dive-2026-10-18.md](architecture-deep-dive-2026-10-18.md) | 2026-10-18 | open | task list A-D still being worked; ROADMAP derives from it |
 | [arousal-detection-licence-scope-2026-10-04.md](arousal-detection-licence-scope-2026-10-04.md) | 2026-10-04 | open | licence decision before any build |
+| [tone-of-voice-deep-dive-2026-10-26.md](tone-of-voice-deep-dive-2026-10-26.md) | 2026-10-26 | open | tone-of-voice options and phased plan; owner decisions pending |
+| [omi-data-to-teach-zoe-2026-10-26.md](omi-data-to-teach-zoe-2026-10-26.md) | 2026-10-26 | open | pendant data as a teacher: ranked use cases, night-window budget, AU recording law (WA worked example), phased plan; sister of the tone record; owner decisions pending |
 | [bakeoff-ram-latency-optimisation-2026-10-06.md](bakeoff-ram-latency-optimisation-2026-10-06.md) | 2026-10-07 | absorbed 2026-10-18 | bake-off closed; retire by 2026-11-17 |
 | [bakeoff-run-20261006-0935.md](bakeoff-run-20261006-0935.md) | 2026-10-06 | absorbed 2026-10-18 | run record; verdict in 10-08 decision; retire by 2026-11-17 |
 | [bakeoff-run-20261008-1805.md](bakeoff-run-20261008-1805.md) | 2026-10-08 | absorbed 2026-10-18 | run record; verdict in 10-08 decision; retire by 2026-11-17 |
@@ -45,7 +47,7 @@ This index gives every record one status.
 | [communication-preferences-2026-10.md](communication-preferences-2026-10.md) | 2026-10-16 | open | design only |
 | [companion-field-vs-samantha-2026-10-03.md](companion-field-vs-samantha-2026-10-03.md) | 2026-10-03 | absorbed 2026-10-18 | folded into beat-the-bar and ROADMAP; retire by 2026-11-17 |
 | [credential-vault-2026-10.md](credential-vault-2026-10.md) | 2026-10-18 | open | design only; owner decisions pending |
-| [failure-fed-proposals-2026-10-04.md](failure-fed-proposals-2026-10-04.md) | 2026-10-04 | open | struggle detector phase 3 only designed |
+| [failure-fed-proposals-2026-10-04.md](failure-fed-proposals-2026-10-04.md) | 2026-10-04 | absorbed 2026-10-26 | runtime half + router retrain built as the struggle detector phases 1-3 (docs/architecture/struggle-detector.md); the unbuilt ledger, digest, tickets and the four owner decisions carried to knowledge/open-problems.md (2026-10-27); retire by 2026-11-25 |
 | [flue-and-agent-runtimes-2026-10-03.md](flue-and-agent-runtimes-2026-10-03.md) | 2026-10-04 | absorbed 2026-10-18 | Flue 2.x cutover done; retire by 2026-11-17 |
 | [identity-presence-scorecard-2026-10.md](identity-presence-scorecard-2026-10.md) | 2026-10-13 | open | score-card engine not built |
 | [incomplete-turn-marker-2026-10-04.md](incomplete-turn-marker-2026-10-04.md) | 2026-10-04 | absorbed 2026-10-18 | built (incomplete-turn marker); retire by 2026-11-17 |
