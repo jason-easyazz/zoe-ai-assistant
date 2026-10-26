@@ -729,6 +729,16 @@ async def _provenance_tier(text: str, user_id: str, session_id: str, kwargs: dic
             return None
         _mp.note_user_turn(uid, text, session_id)
         _mp.claim_turn(uid, text)
+        # memories by voice (ZOE_MEMORIES_VOICE, default OFF = returns before any work): on a panel, "what do you know about me?"
+        # answers for the TURN's member (voice session / fresh PIN) with a private card; "forget that I ..." and the tapped-row
+        # correction go through the existing audited forget / correction paths. Inside this tier so the turn is numbered first.
+        import memories_voice as _mv
+
+        answered = await _mv.tier(text, uid, session_id, channel=kwargs.get("channel"), extra_ctx=kwargs.get("extra_ctx"),
+                                  allow_writes=kwargs.get("allow_writes") is not False)
+        if answered is not None:
+            _mp.note_direct_reply(uid, "memories", session_id, domain="memory")
+            return answered
         import provenance_answers as _pa
 
         reply = await _pa.handle(
