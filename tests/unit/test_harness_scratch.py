@@ -125,7 +125,7 @@ def test_every_endpoint_with_a_live_default_is_overridden():
     assert "ZOE_HA_BRIDGE_URL" in names and "MUSIC_ASSISTANT_URL" in names, "control: the scan finds the known ones"
     handled = set(hs.HOUSE_URLS) | set(hs.SELF_URLS) | set(hs.COMPUTE_URLS)
     assert sorted(names - handled) == []
-    assert hs.flag_env(dict(ZOE_SOMETHING_GW="http://127.0.0.1:18789", ZOE_MODE="on")) == dict(ZOE_MODE="on")
+    assert hs.flag_env(dict(ZOE_SOMETHING_GW="http://127.0.0.1:45678", ZOE_MODE="on")) == dict(ZOE_MODE="on")
 
 
 def test_no_hardcoded_self_call_reaches_the_live_service():

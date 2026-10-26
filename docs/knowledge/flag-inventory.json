@@ -4104,6 +4104,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_NIGHT_BUSY": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/harness_quiet.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_NIGHT_MIND": {
         "defaults": [
           "''",
