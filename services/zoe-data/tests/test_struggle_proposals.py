@@ -1271,3 +1271,56 @@ def test_a_new_proposal_is_one_transaction_a_failed_detail_write_leaves_no_queue
         run(sp.run_pass(now=NOW))
     env.db.conn = inner
     assert queue_of(env) == [] and rows_of(env) == [], "nothing half-written survives the failed detail insert"
+
+
+def test_a_failed_queue_removal_deletes_nothing_and_the_retry_succeeds(env, monkeypatch):
+    """Review P1 on #2165: ``_drop`` deleted the links + detail before ``eq.remove`` opened its own transaction, so a failed removal left a
+    queued proposal with no detail. Negative control: drop the ``_atomic`` block in ``_drop`` -> detail + links are gone, queue row stays -> red."""
+    store(*wide())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    links = env.db.rows("SELECT event_id FROM struggle_proposal_events WHERE proposal_id = ? ORDER BY event_id", (pid,))
+    assert links and queue_of(env)
+    real = sp.eq.remove
+
+    async def boom(*a, **k):
+        raise RuntimeError("queue down")
+
+    async def drop():
+        async with sp._ctx() as db:
+            await sp._drop(db, pid)
+
+    monkeypatch.setattr(sp.eq, "remove", boom)
+    with pytest.raises(RuntimeError):
+        run(drop())
+    assert env.db.rows("SELECT id FROM struggle_proposals WHERE id = ?", (pid,))
+    assert env.db.rows("SELECT event_id FROM struggle_proposal_events WHERE proposal_id = ? ORDER BY event_id", (pid,)) == links
+    assert queue_of(env)
+    monkeypatch.setattr(sp.eq, "remove", real)
+    run(drop())
+    assert not env.db.rows("SELECT id FROM struggle_proposals WHERE id = ?", (pid,))
+    assert not env.db.rows("SELECT 1 FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
+    assert not queue_of(env)
+
+
+def test_a_failed_queue_sentence_write_leaves_the_template_summary_and_the_retry_succeeds(env, monkeypatch):
+    """``_write_summaries``: the detail sentence and the queue sentence change together. Negative control: drop its ``_atomic`` -> red."""
+    store(*wide())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    before = env.db.rows("SELECT summary, summary_source FROM struggle_proposals WHERE id = ?", (pid,))[0]
+
+    async def fake_summarise(items, llm, budget_s=0):
+        return {pid: "A model sentence."}
+    monkeypatch.setattr(sp, "summarise", fake_summarise)
+    real = sp.eq.update_text
+
+    async def boom(*a, **k):
+        raise RuntimeError("queue down")
+    monkeypatch.setattr(sp.eq, "update_text", boom)
+    with pytest.raises(RuntimeError):
+        run(sp._write_summaries({}, object(), 1.0))
+    assert env.db.rows("SELECT summary, summary_source FROM struggle_proposals WHERE id = ?", (pid,))[0] == before
+    monkeypatch.setattr(sp.eq, "update_text", real)
+    run(sp._write_summaries({}, object(), 1.0))
+    assert env.db.rows("SELECT summary, summary_source FROM struggle_proposals WHERE id = ?", (pid,))[0]["summary_source"] == "model"

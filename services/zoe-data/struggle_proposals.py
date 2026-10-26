@@ -762,12 +762,13 @@ async def mark_applied(pid: str, ref: str = "") -> dict:
             raise NotFound(pid)
         note = (((row["decision_note"] + " ") if row["decision_note"] else "") + f"applied: {ref}")[:120]
         try:
-            if row["status"] != ACCEPTED:
-                raise eq.Conflict(row["status"])
-            await eq.transition(db, pid, "applied", actor="struggle_proposals:mark_applied", note=note, require_decision="approved", now=now)
+            async with _atomic(db):     # the queue move and the detail touch land together
+                if row["status"] != ACCEPTED:
+                    raise eq.Conflict(row["status"])
+                await eq.transition(db, pid, "applied", actor="struggle_proposals:mark_applied", note=note, require_decision="approved", now=now)
+                await db.execute("UPDATE struggle_proposals SET updated_at = ? WHERE id = ?", (now, pid))
         except (eq.Conflict, eq.IllegalTransition) as exc:
             raise Conflict(f"only an accepted proposal can be applied (this one is {row['status']})") from exc
-        await db.execute("UPDATE struggle_proposals SET updated_at = ? WHERE id = ?", (now, pid))
         await db.commit()
     return await get_proposal(pid, with_evidence=False)
 
@@ -917,9 +918,10 @@ async def _sync_queue(db, pid: str, kind: str, st: dict, confidence: float, sent
 
 async def _drop(db, pid: str) -> None:
     """A proposal leaves BOTH tables (withdrawn, or its evidence was forgotten)."""
-    await db.execute("DELETE FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
-    await db.execute("DELETE FROM struggle_proposals WHERE id = ?", (pid,))
-    await eq.remove(db, [pid], source=QUEUE_SOURCE)
+    async with _atomic(db):     # ONE transaction (a savepoint inside an open one): a failed queue removal leaves the detail in place
+        await db.execute("DELETE FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
+        await db.execute("DELETE FROM struggle_proposals WHERE id = ?", (pid,))
+        await eq.remove(db, [pid], source=QUEUE_SOURCE)
 
 
 async def _prune_queue(db) -> int:
@@ -1229,12 +1231,13 @@ async def _write_summaries(res: dict, llm: Optional[LLM], budget_s: float) -> No
         return
     async with _ctx() as db:
         for pid, text in got.items():
-            cur = await db.execute(
-                "UPDATE struggle_proposals SET summary = ?, summary_source = 'model', updated_at = ? WHERE id = ? AND id IN "
-                "(SELECT id FROM evolution_proposals WHERE id = ? AND status IN ('proposed', 'probed') AND decision = '')",
-                (text, time.time(), pid, pid))
-            if int(getattr(cur, "rowcount", 0) or 0) > 0:
-                await eq.update_text(db, pid, title=text, description=text)
+            async with _atomic(db):     # the detail sentence and the queue sentence change together or not at all
+                cur = await db.execute(
+                    "UPDATE struggle_proposals SET summary = ?, summary_source = 'model', updated_at = ? WHERE id = ? AND id IN "
+                    "(SELECT id FROM evolution_proposals WHERE id = ? AND status IN ('proposed', 'probed') AND decision = '')",
+                    (text, time.time(), pid, pid))
+                if int(getattr(cur, "rowcount", 0) or 0) > 0:
+                    await eq.update_text(db, pid, title=text, description=text)
         await db.commit()
     res["summaries_model"] = len(got)
     res["summaries_template"] -= len(got)
