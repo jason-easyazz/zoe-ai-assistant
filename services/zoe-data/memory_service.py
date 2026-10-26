@@ -2288,7 +2288,7 @@ class MemoryService:
             try:
                 import memory_provenance as _mp
 
-                if _mp.enabled() and _mp.parse_off_record(edits) is not None:
+                if _mp.enabled() and (_mp.parse_off_record(edits) is not None or _mp.is_off_record(user_id, edits)):
                     self._bump("off_record", actor)
                     logger.info("OFF_RECORD user=%s blocked=edit source=%s", user_id, actor)
                     return None

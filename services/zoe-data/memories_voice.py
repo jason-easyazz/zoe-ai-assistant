@@ -538,6 +538,13 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
         if cue is not None:
             mp.claim_turn(member, t)
             return pa.OFF_RECORD_ACKS.get(cue.cue, pa.OFF_RECORD_ACKS["off_the_record"])
+        # An earlier BARE cue marks this whole turn off the record (claim_turn ran first) though these words carry no cue.
+        try:
+            marked = mp.is_off_record(member, t)
+        except Exception:  # noqa: BLE001
+            marked = False
+        if marked:
+            return pa.OFF_RECORD_ACKS["off_the_record"]
     value = ""
     if st is None:
         if (tp.awaiting and t and len(t.split()) <= 14 and "?" not in t and not pa._NOT_A_FIX_RE.match(t)

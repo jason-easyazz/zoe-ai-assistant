@@ -1205,6 +1205,33 @@ def test_an_off_the_record_correction_after_a_tap_writes_nothing(env):
     assert not mv._TAPS, "nothing re-armed"
 
 
+def test_a_correction_after_an_earlier_bare_cue_and_a_tap_writes_nothing(env):
+    import memory_provenance as mpv
+
+    put(env, ME_BIRTHDAY)
+    old = row_id(env, "birthday")
+    before = dict(env.col.rows[old][1])
+    assert mpv.claim_turn(ME, "off the record") is False          # a bare cue arms the next turn
+    mv.tap(PANEL, ME, old, ME_BIRTHDAY)
+    fix = "actually my birthday is on 5 March"                    # no cue in these words
+    assert mpv.claim_turn(ME, fix) is True                        # the pipeline claims the turn before the tap sees it
+    reply = say(fix, ME)
+    assert reply == pa.OFF_RECORD_ACKS["off_the_record"], reply
+    assert approved(env) == [ME_BIRTHDAY] and len(env.col.rows) == 1
+    assert env.col.rows[old][1] == before
+
+
+def test_review_edit_refuses_a_turn_already_marked_off_the_record(env):
+    import memory_provenance as mpv
+
+    put(env, ME_BIRTHDAY)
+    old = row_id(env, "birthday")
+    mpv.claim_turn(ME, "off the record")
+    assert mpv.claim_turn(ME, "My birthday is on 5 March") is True
+    assert run(env.svc.review(old, decision="edit", edits="My birthday is on 5 March", actor=ME)) is None
+    assert approved(env) == [ME_BIRTHDAY] and len(env.col.rows) == 1
+
+
 def test_a_normal_correction_after_a_tap_still_works(env):
     put(env, ME_BIRTHDAY)
     old = row_id(env, "birthday")
