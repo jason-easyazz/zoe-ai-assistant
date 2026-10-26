@@ -2175,9 +2175,12 @@ async def run_flue_brain_streaming(
     # sink when the named-person floor fired for a person no row relates to the user; every
     # other turn passes through untouched.
     role_guard: dict[str, Any] = {}
+    # Set by the inner turn when it answered in code without ever reaching the sidecar (verify-on-challenge): that exchange is NOT in the
+    # sidecar's history, so it must not be marked brain-owned (flue_fastpath_context).
+    code_reply: dict[str, bool] = {}
     turn = _run_flue_brain_streaming_turn(
         message, session_id, user_id, day_brief_block=brief.block if brief else "",
-        raise_block=raised.block if raised else "", _role_guard=role_guard, **kwargs,
+        raise_block=raised.block if raised else "", _role_guard=role_guard, _code_reply=code_reply, **kwargs,
     )
     import role_guess_guard
 
@@ -2227,6 +2230,13 @@ async def run_flue_brain_streaming(
         # Settled HERE, not after the loop: a consumer that disconnects or barges
         # in after the first text exits through this finally (GeneratorExit or a
         # CancelledError), and the brief it heard must still take the claim.
+        if emitted and not code_reply:   # the sidecar has this turn in its history; a failed / refused one stays a fast-path row to resend
+            try:
+                import flue_fastpath_context
+
+                flue_fastpath_context.note_brain_turn(session_id, _spoken)
+            except Exception:  # noqa: BLE001
+                pass
         if brief is not None:
             await brief_first_turn.settle(brief, produced=emitted)
         if raised is not None:
@@ -2319,6 +2329,8 @@ async def _run_flue_brain_streaming_turn(
     verify_plan = await _verify_plan(message, uid, session_id, bool(kwargs.get("voice_mode")))
     if verify_plan is not None and verify_plan.reply:
         _record_outcome(outcome_sink, FLUE_OUTCOME_SEAM_REPLY, f"verify_on_challenge:{verify_plan.status}")
+        if isinstance(kwargs.get("_code_reply"), dict):
+            kwargs["_code_reply"]["code"] = True    # answered here, the sidecar never saw this turn
         yield verify_plan.reply
         return
     verify_block = verify_plan.block if verify_plan is not None else ""
@@ -2377,6 +2389,11 @@ async def _run_flue_brain_streaming_turn(
     if not (recall_block or verify_block or continuity_block or continuity_turn or hop_block or offer_block
             or kwargs.get("raise_block") or kwargs.get("day_brief_block")):
         risk_block = await _risk_cue_block(message, uid, session_id)
+    # Fast-path exchanges (reminder, "what do you know about me", ...) the brain never saw (flue_fastpath_context.py): without them a
+    # follow-up like "thank you" / "no" reached the brain with nothing to follow. Context beside the other blocks, same session + member only.
+    import flue_fastpath_context
+
+    fastpath_block = await flue_fastpath_context.block_for(uid, session_id, message)
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
     # order is fixed: identity → recall → offer → the user's words. "" when the flag is
@@ -2393,7 +2410,7 @@ async def _run_flue_brain_streaming_turn(
     except Exception:  # noqa: BLE001
         pass
     # ZOE_PERSONALISATION_HOP_PLACEMENT=preamble: the hop block rides BEFORE the user's words, behind the other blocks
-    _blocks = "\n".join(b for b in (identity_block, recall_block, offer_block,
+    _blocks = "\n".join(b for b in (identity_block, fastpath_block, recall_block, offer_block,
                                     hop_block if hop_placement == "preamble" else "") if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
     # the start of the outbound message and forge the trusted marker. Only reachable
