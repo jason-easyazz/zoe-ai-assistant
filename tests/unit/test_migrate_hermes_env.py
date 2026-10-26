@@ -326,3 +326,20 @@ def test_dropin_empty_environment_and_exec_reset(mig, box):
     info = mig.read_unit(unit, box["home"])
     assert info.inline_names == set()
     assert info.exec_paths == [Path("/opt/new.sh")]
+
+
+def test_rerun_after_apply_keeps_the_envfile_reminder_until_the_unit_loads_the_target(mig, box):
+    """PR #2110 review: after --apply the values sit in the target, so plan.copy is empty - the reminder must NOT vanish while the
+    unit still loads only the Hermes file. Break the fix (gate on plan.copy alone) -> needs_envfile_line is None here."""
+    _apply(mig, box)
+    p = by_unit(run_plan(mig, box))["zoe-health.service"]
+    assert p.copy == []
+    assert p.needs_envfile_line == "EnvironmentFile=-%h/.zoe/env/zoe-health.env"
+
+
+def test_rerun_reminder_clears_once_the_unit_loads_the_target(mig, box):
+    _apply(mig, box)
+    unit = box["units"] / "zoe-health.service"
+    unit.write_text(unit.read_text() + "EnvironmentFile=-%h/.zoe/env/zoe-health.env\n")
+    p = by_unit(run_plan(mig, box))["zoe-health.service"]
+    assert p.needs_envfile_line is None

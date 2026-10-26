@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-26T00:00:00Z
+timestamp: 2026-10-27T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-26T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-26. The table body is deterministic (sorted, no
+Last generated: 2026-10-27. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-778 flags; 728 not documented in `.env.example`.
+780 flags; 730 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -55,7 +55,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BACKUP_DIR` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py`<br>`scripts/maintenance/zoe_restore_drill.py` |
 | `ZOE_BARGE_MIN_MS` | `'192'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_BARGE_SPEECH_THRESHOLD` | `'0.30'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
-| `ZOE_BAR_ADMIN_SESSION` | `''` | no | NO | `scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/user_model_ab.py` |
+| `ZOE_BAR_ADMIN_SESSION` | `''` | no | NO | `scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_BAR_BRAIN_URL` | `'http://127.0.0.1:11434'` | no | NO | `scripts/perf/samantha_bar.py` |
 | `ZOE_BASE_URL` | `'http://localhost:8000'`, `'http://zoe.local'`, `'https://192.168.1.218'` | no | NO | `services/zoe-auth/oidc/startup.py`<br>`services/zoe-data/routers/panel_provision.py`<br>`services/zoe-data/routers/system.py` |
 | `ZOE_BENCHMARK_OUTPUT` | `dynamic` | no | NO | `scripts/utilities/gemma4_trial_benchmark.py` |
@@ -611,7 +611,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_EVENT_TIME_PRECEDENCE` | `-` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEAD` | `'off'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEADS_BACKEND` | `'numpy'` | no | NO | `services/zoe-data/router_heads_numpy.py` |
-| `ZOE_ROUTER_HEAD_LOG` | `-`, `dynamic` | no | NO | `scripts/maintenance/router_struggle_retrain.py`<br>`services/zoe-data/local_text_logs.py`<br>`services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_HEAD_LOG` | `-` | no | NO | `scripts/maintenance/router_struggle_retrain.py`<br>`services/zoe-data/local_text_logs.py` |
 | `ZOE_ROUTER_HEAD_MIN_CONF` | `'0.70'` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_HEAD_MLP_PATH` | `dynamic` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_HEAD_PATH` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
@@ -650,6 +650,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SEARCH_HOTNESS_WEIGHT` | `'0.05'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_SEARCH_PROVIDER` | `'auto'` | yes | yes | `services/zoe-data/web_search_provider.py` |
 | `ZOE_SELF_MODEL` | `'shadow'` | yes | NO | `services/zoe-data/self_model.py` |
+| `ZOE_SELF_URL` | `'http://127.0.0.1:8000'`, `'http://localhost:8000'` | yes | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py` |
 | `ZOE_SESSION_LOCK_TIMEOUT_S` | `'5'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_SETUP_QR_HANDLE_TTL_S` | `'120'` | no | NO | `services/zoe-data/setup_qr.py` |
 | `ZOE_SILERO_VAD_MODEL` | `''` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/voice_vad.py` |
@@ -698,6 +699,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STRUGGLE_RETENTION_DAYS` | `90` | yes | NO | `services/zoe-data/struggle_detector.py` |
 | `ZOE_STRUGGLE_WINDOW_S` | `dynamic` | yes | NO | `services/zoe-data/struggle_detector.py` |
 | `ZOE_STT_BACKEND` | `'moonshine'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_STT_DISABLED` | `False` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_STT_PREWARM_ON_WAKE` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_SNAP` | `'shadow'` | no | NO | `services/zoe-data/stt_snap.py` |
 | `ZOE_STT_STREAM_FINISH_TIMEOUT_MS` | `2500` | yes | NO | `services/zoe-data/voice_stt_stream.py` |
@@ -807,7 +809,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Lab flags (`labs/` — not prod)
 
-8 flags; 8 not documented in `.env.example`.
+7 flags; 7 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -817,5 +819,4 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_KOKORO_VOICES` | `'/home/zoe/models/voices-v1.0.bin'` | no | NO | `labs/kokoro-voice-blend/blend_zoe_voices.py` |
 | `ZOE_LIVE_ROOT` | `-` | no | NO | `labs/flue-zoe-brain-2x/parity/gatelib.py` |
 | `ZOE_PGU_SID` | `-` | no | NO | `labs/flue-zoe-brain-2x/parity/tool_breadth_gate.py` |
-| `ZOE_ROUTER_HEAD_LOG` | `dynamic` | no | NO | `labs/router-selftrain/mine_candidates.py` |
 | `ZOE_ROUTER_SIDECAR_PORT` | `'11436'` | no | NO | `labs/router-90-campaign/prod_path_eval.py` |

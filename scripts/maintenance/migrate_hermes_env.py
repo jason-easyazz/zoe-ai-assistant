@@ -321,11 +321,15 @@ def plan_migration(units_dir: Path, hermes_env: Path, repo_root: Path, home: Pat
             if not _is_hermes_env(p, hermes_env):
                 other_vals.update(parse_env(p).values)
         already = set(other_vals) | info.inline_names | set(target_env.values) | planned_by_target.get(plan.target, set())
+        in_target: list[str] = []
         roots = code_roots(info, repo_root)
         python_code = any(r.is_dir() or r.suffix == ".py" for r in roots)
         for name in sorted(hermes.values):
             hv = hermes.values[name]
             if name in already:
+                if name not in other_vals and name not in info.inline_names and (
+                        name in target_env.values or name in planned_by_target.get(plan.target, set())):
+                    in_target.append(name)              # this unit gets the name ONLY through the target file
                 have = other_vals.get(name, target_env.values.get(name))
                 if have is not None:
                     (plan.shadowed_same if _digest(have) == _digest(hv) else plan.shadowed_differs).append(name)
@@ -348,8 +352,9 @@ def plan_migration(units_dir: Path, hermes_env: Path, repo_root: Path, home: Pat
                 if hint:
                     plan.hints[name] = hint
         planned_by_target.setdefault(plan.target, set()).update(plan.copy)
-        if not plan.copy:
-            plan.needs_envfile_line = None              # nothing lands in the target, so the unit needs no new line
+        # the line is needed whenever the unit's values live in the target (copied now OR on an earlier --apply) and it does not load it
+        if not plan.copy and not in_target:
+            plan.needs_envfile_line = None              # nothing is (or will be) in the target for this unit
         elif plan.needs_envfile_line and plan.target in info.env_files:
             plan.needs_envfile_line = None              # the unit already loads it
         plans.append(plan)

@@ -219,9 +219,19 @@ def webhook(monkeypatch):
 
     writes = []
 
+    class _Cur:
+        rowcount = 1
+
+        async def fetchall(self):
+            return []
+
     class _Db:
+        async def fetch(self, sql, *args):        # the proposal linked to the board issue (since 0062: moved through the queue)
+            return [{"id": "p1", "status": "proposed", "decision": ""}] if "multica_issue_id" in sql else []
+
         async def execute(self, sql, *args):
-            writes.append(args)
+            writes.append((sql, args))
+            return _Cur()
 
     @asynccontextmanager
     async def ctx():
@@ -251,7 +261,8 @@ def test_the_webhook_writes_nothing_without_the_secret(webhook, monkeypatch, sec
 def test_the_webhook_syncs_the_proposal_with_the_secret(webhook, monkeypatch, headers):
     monkeypatch.setenv("MULTICA_WEBHOOK_SECRET", "s3cret")
     assert webhook.post("/api/agent/board/webhook", json=EVENT, headers=headers).json() == {"ok": True}
-    assert webhook.writes == [("validated", "iss-1")]
+    moves = [args[0][0] for sql, args in webhook.writes if sql.startswith("UPDATE evolution_proposals SET status")]
+    assert moves == ["applied", "kept"]          # board done: the maintainer PR landed (the queue legal moves, never a raw write)
 
 
 # ── fake success is gone ─────────────────────────────────────────────────────────────────────────────────────────────────────

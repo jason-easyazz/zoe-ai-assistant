@@ -388,3 +388,34 @@ def test_append_between_erase_passes_is_refused(shadow, monkeypatch):
     assert results == [False]
     assert not ltl.erase_in_progress()
     assert not shadow.exists() or "Marisol" not in shadow.read_text()
+
+
+# --- one path resolver for writer and erasers (PR #2110 review: a ``~`` log setting) -------------------------------------------
+
+def test_tilde_log_setting_is_written_and_erased_at_the_same_file(tmp_path, monkeypatch):
+    """ZOE_ROUTER_HEAD_LOG=~/x: the router writer and forget/retention must name ONE file (HOME-expanded), not the writer opening a
+    literal ``~`` dir under the service. Break the fix (writer reads the raw env) -> the line lands in ./~/ and the erase misses it."""
+    import semantic_router as sr
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", "~/tilde-router.jsonl")
+    monkeypatch.setenv("ZOE_INTENT_MISS_LOG", str(tmp_path / "misses.jsonl"))
+    monkeypatch.chdir(tmp_path)
+    resolved = sr._resolve_head_log_path()
+    assert resolved == str(tmp_path / "tilde-router.jsonl") == str(ltl.log_path(ltl.ROUTER_SHADOW))
+    monkeypatch.setattr(sr, "_HEAD_LOG_PATH", resolved)
+    assert sr._append_shadow_line(sr._HEAD_LOG_PATH, rec("aaa", "tell Zed the secret", 0)) is True
+    assert (tmp_path / "tilde-router.jsonl").exists() and not (tmp_path / "~").exists()
+    assert ltl.erase_entity(re.compile("Zed")) == 1
+    assert "Zed" not in (tmp_path / "tilde-router.jsonl").read_text()
+
+
+def test_writer_and_reader_modules_resolve_through_local_text_logs():
+    """No module may open the raw ZOE_ROUTER_HEAD_LOG value: the writer, the miner and the retrain gate all use the shared resolver."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    for rel in ("services/zoe-data/semantic_router.py", "labs/router-selftrain/mine_candidates.py",
+                "scripts/maintenance/router_struggle_retrain.py"):
+        src = (root / rel).read_text()
+        assert "local_text_logs" in src, rel

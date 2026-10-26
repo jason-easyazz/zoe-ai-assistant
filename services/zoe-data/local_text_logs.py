@@ -72,10 +72,16 @@ LOGS = (ROUTER_SHADOW, INTENT_MISSES)
 
 
 def _anchored(raw: str) -> Path:
-    """A relative setting is relative to the SERVICE directory (zoe-data runs with ``WorkingDirectory=services/zoe-data``); the
+    """THE one resolver for a log path setting: every writer (``semantic_router``), reader (the self-train miner / retrain gate) and
+    eraser (this module) resolves ``ZOE_ROUTER_HEAD_LOG`` / ``ZOE_INTENT_MISS_LOG`` through it, so a ``~`` or relative value names
+    the same file for all of them (a writer that opened the raw value would put text where forget and retention never look).
+    A relative setting is relative to the SERVICE directory (zoe-data runs with ``WorkingDirectory=services/zoe-data``); the
     hourly sweep runs from elsewhere, so resolving against its cwd would miss the live log and report success."""
     p = Path(raw).expanduser()
     return p if p.is_absolute() else _HERE / p
+
+
+anchor_path = _anchored          # public name for the writers/readers outside this module
 
 
 def log_path(log: TextLog) -> Path:

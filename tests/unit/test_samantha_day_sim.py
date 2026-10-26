@@ -603,3 +603,36 @@ def test_a_hop_fail_with_the_fact_in_the_packet_but_no_brain_turn_is_attributed_
     monkeypatch.setattr(ds.uma, "read_app_log", lambda off: packet_read_only * 2)
     v, ev = ds.run_hop_ask(live, user, "S9b", 1, [], *SEEDED, "default")
     assert v == "FAIL" and ev["seam_hops"] == 1 and "why" not in ev
+
+
+def test_the_log_reader_follows_the_scratch_instance(monkeypatch, tmp_path):
+    """The turns go to the scratch zoe-data, so raise / seam-hop evidence must come from ITS app log, not the household's (cross-review
+    of #2165). Negative control: delete the ``point_log_at_scratch(stack)`` call in ``main`` -> ``uma.APP_LOG`` is still the live log -> red."""
+    class _Stack:
+        state = {"root": str(tmp_path / "stack")}
+        token, dsn, base_url, tag = "t", "d", "http://127.0.0.1:1", "x"
+
+        def public(self):
+            return {}
+
+    class _Stop(Exception):
+        pass
+
+    def _boom(*a, **k):
+        raise _Stop()
+
+    live_log = ds.uma.APP_LOG
+    monkeypatch.setattr(ds.uma, "APP_LOG", live_log)
+    monkeypatch.setenv("ZOE_PERF", "1")
+    monkeypatch.setattr(ds.sb, "resolve_service_dir", lambda d: tmp_path)
+    monkeypatch.setattr(ds.sb, "service_revision", lambda d: {})
+    monkeypatch.setattr(ds.sb, "code_checkout_dir", lambda: tmp_path)
+    monkeypatch.setattr(ds.sb, "load_source_fallback_markers", lambda d: None)
+    monkeypatch.setattr(ds.sb, "_acquire_lock", lambda: 0)
+    monkeypatch.setattr(ds.sb, "scratch_stack_for", lambda *a, **k: (_Stack(), None))
+    monkeypatch.setattr(ds.sb, "close_scratch", lambda ctx: None)
+    monkeypatch.setattr(ds, "DayLive", _boom)
+    with pytest.raises(_Stop):
+        ds.main([])
+    assert ds.uma.APP_LOG == tmp_path / "stack" / "logs" / "zoe-data.app.log"
+    assert ds.uma.APP_LOG != live_log

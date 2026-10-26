@@ -1270,6 +1270,13 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
 # main
 # ─────────────────────────────────────────────────────────────────────────────
 
+def point_log_at_scratch(stack) -> Path:
+    """Read raise / seam-hop evidence from the scratch instance's app log (``harness_env`` sets ``ZOE_LOG_DIR`` to
+    ``<stack root>/logs``). ``uma.APP_LOG`` defaults to the live service's log, which the scratch turns never touch."""
+    uma.APP_LOG = Path(stack.state["root"]) / "logs" / "zoe-data.app.log"
+    return uma.APP_LOG
+
+
 def _refuse(path: Path, reason: str, revision: dict | None, mode: str) -> int:
     print(f"REFUSED: {reason}", file=sys.stderr)
     sb.write_json(path, {"status": "refused", "reason": reason, "mode": mode, "revision": revision,
@@ -1295,6 +1302,14 @@ def _pending(live: DayLive, path: Path, log) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ctx: dict = {}
+    try:
+        return _main(argv, ctx)
+    finally:
+        sb.close_scratch(ctx)           # P-2: the run scratch stack goes, whatever happened
+
+
+def _main(argv: list[str] | None, ctx: dict) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print the plan; no network, no writes")
@@ -1347,8 +1362,8 @@ def main(argv: list[str] | None = None) -> int:
 
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = sb.resolve_service_dir(args.service_dir)
-    revision = sb.service_revision(service_dir)
-    sb.load_source_fallback_markers(service_dir)
+    revision = sb.service_revision(sb.code_checkout_dir())  # the checkout actually served
+    sb.load_source_fallback_markers(sb.code_checkout_dir())
     lock_fd = sb._acquire_lock()  # noqa: F841 — held for the process lifetime
     try:
         cur = os.nice(0)
@@ -1356,14 +1371,15 @@ def main(argv: list[str] | None = None) -> int:
             os.nice(5 - cur)
     except OSError:
         pass
-    admin = os.environ.get("ZOE_BAR_ADMIN_SESSION", "").strip()
-    live = DayLive(sb.env_file_value(service_dir, "ZOE_INTERNAL_TOKEN"), admin,
-                   sb.env_file_value(service_dir, "POSTGRES_URL"), args.keep_replies)
-
-    if mode == "allowlisted" and not admin:
-        return _refuse(args.results, "--allowlisted needs ZOE_BAR_ADMIN_SESSION: forget-synthetic "
-                                     "refuses an allowlisted id by design, so only the admin forget "
-                                     "can prove the teardown", revision, mode)
+    admin = ""                          # P-2: a live admin session means nothing to the scratch instance
+    if mode == "allowlisted":
+        return _refuse(args.results, "--allowlisted needs an admin session to prove the teardown of an allowlisted id, "
+                                     "and the scratch instance (P-2) has none: run the default mode", revision, mode)
+    stack, refusal = sb.scratch_stack_for(service_dir, "samantha_day_sim", ctx, log)
+    if refusal:
+        return _refuse(args.results, refusal, revision, mode)
+    point_log_at_scratch(stack)         # the turns go to the scratch zoe-data, so the evidence is ITS app log, not the household's
+    live = DayLive(stack.token, admin, stack.dsn, args.keep_replies)
     baseline = None
     if args.compare_baseline:
         baseline, problem = bench_baseline.load(args.baseline, ASK_VERDICTS)
@@ -1442,7 +1458,7 @@ def main(argv: list[str] | None = None) -> int:
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
-               "revision": revision, "criteria_sha256": CRITERIA_SHA256,
+               "revision": revision, "criteria_sha256": CRITERIA_SHA256, "scratch": stack.public(),
                "plan": day_plan(mode, dt.date.today()), "overall": summary, "compare": cmp,
                "baseline_ref": {"path": str(args.baseline), "commit": (cmp or {}).get("baseline_commit")},
                **week, "teardown": td}

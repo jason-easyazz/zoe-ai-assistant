@@ -134,11 +134,14 @@ _HEAD_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
                  "models", "router_head_logreg.joblib"),
 )
-_HEAD_LOG_PATH = os.environ.get(
-    "ZOE_ROUTER_HEAD_LOG",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                 "data", "router_head_shadow.jsonl"),
-)
+def _resolve_head_log_path() -> str:
+    """The shadow-log path, resolved by `local_text_logs` - the SAME resolver the retention sweep and the forget erasers use, so a
+    `~`-based or relative ZOE_ROUTER_HEAD_LOG is written exactly where they look (architecture deep dive A6)."""
+    import local_text_logs
+    return str(local_text_logs.log_path(local_text_logs.ROUTER_SHADOW))
+
+
+_HEAD_LOG_PATH = _resolve_head_log_path()
 
 # ── Shadow-log rotation ─────────────────────────────────────────────────────
 # The shadow log is append-only on EVERY routed turn, so left alone it grows
