@@ -193,7 +193,11 @@ def night_pause_verdict(name: str, *, budget_min: int = 45, kind: str = "voice",
             # holds the harness lock into the night window. A start already inside the span is the gate's call.
             t0 = now or dt.datetime.now()
             end = t0 + dt.timedelta(minutes=max(0, int(budget_min)))
+            # The NEXT upcoming window opening: today's 01:50 while it is still ahead, otherwise tomorrow's - a 23:00
+            # start must not slip past tomorrow's pause, while a start after tonight's window checks the next night's.
             w_start = t0.replace(hour=BRAIN_WINDOW_START.hour, minute=BRAIN_WINDOW_START.minute, second=0, microsecond=0)
+            if t0 >= w_start:
+                w_start += dt.timedelta(days=1)
             if t0 < w_start < end:
                 return Verdict(False, f"{name}: night_busy.sh {kind} says free, but a {budget_min}-min run would still be alive "
                                       f"at {BRAIN_WINDOW_START:%H:%M} - start it after the window or early enough to finish first",
