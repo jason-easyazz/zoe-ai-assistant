@@ -2349,14 +2349,18 @@ async def evolution_proposal_action(
 
         elif action == "defer":
             next_review = _time.time() + 7 * 86400
+            # ONE transaction: the delay and the withdrawn decision land together or not at all. The detail column goes first,
+            # then the queue write (decide), the order the rest of the queue takes the row lock in; a Conflict from decide
+            # (not open any more) rolls the delay back with it.
             try:
-                await _eq.decide(db, proposal_id, "", actor=_actor, note="deferred 7 days")
+                async with _eq.atomic(db):
+                    await db.execute(
+                        "UPDATE evolution_proposals SET next_review_at=$1 WHERE id=$2",
+                        next_review, proposal_id,
+                    )
+                    await _eq.decide(db, proposal_id, "", actor=_actor, note="deferred 7 days")
             except _eq.Conflict as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
-            await db.execute(
-                "UPDATE evolution_proposals SET next_review_at=$1 WHERE id=$2",
-                next_review, proposal_id,
-            )
             return {"ok": True, "action": "deferred", "next_review_in_days": 7}
 
 

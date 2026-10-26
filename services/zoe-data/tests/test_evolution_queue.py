@@ -535,6 +535,101 @@ def test_approve_is_a_decision_and_a_retry_reopens(client, db, monkeypatch):
     assert "reopened for retry" in notes
 
 
+class _TxSqlite(_Sqlite):
+    """The same store with real transactions: statements inside ``transaction()`` commit together or roll back together, and a
+    statement containing ``fail_on`` raises (a write that fails mid-way)."""
+
+    fail_on = None
+
+    def __init__(self, path):
+        super().__init__(path)
+        self.conn.isolation_level = None            # we issue BEGIN / COMMIT / ROLLBACK ourselves
+        self.depth = 0
+
+    def execute(self, sql, *params):
+        if self.fail_on and self.fail_on in sql:
+            async def _boom():
+                raise RuntimeError("write failed")
+            return _ExecResult(_boom())
+        if len(params) == 1 and isinstance(params[0], (list, tuple)):
+            params = params[0]
+        sql = re.sub(r"\$(\d+)", r"?\1", sql)
+
+        async def _run():
+            await asyncio.sleep(0)
+            cur = self.conn.execute(sql, tuple(params))      # autocommit outside a transaction, held inside one
+            return _Cursor(cur.fetchall(), rowcount=cur.rowcount)
+        return _ExecResult(_run())
+
+    def transaction(self):
+        store = self
+
+        class _Tx:
+            async def __aenter__(self):
+                store.depth += 1
+                if store.depth == 1:
+                    store.conn.execute("BEGIN")
+
+            async def __aexit__(self, et, ev, tb):
+                store.depth -= 1
+                if store.depth == 0:
+                    store.conn.execute("ROLLBACK" if et else "COMMIT")
+                return False
+        return _Tx()
+
+
+def test_defer_is_one_transaction(tmp_path, monkeypatch):
+    """Deferring withdraws the decision AND sets the seven-day delay in one transaction: if either write fails the other is taken
+    back (cross-review of #2165). Negative control: put ``_eq.decide`` back OUTSIDE the ``_eq.atomic`` block, before the
+    ``next_review_at`` UPDATE -> the withdrawn decision survives the failed delay -> red."""
+    system = pytest.importorskip("routers.system")
+    import auth
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    path = str(tmp_path / "zoe.db")
+    _run(sa.create_engine(f"sqlite:///{path}"), "upgrade")
+    store = _TxSqlite(path)
+
+    @contextlib.asynccontextmanager
+    async def fake_ctx():
+        yield store
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", fake_ctx)
+    app = FastAPI()
+    app.include_router(system.router)
+    app.include_router(system._agent_card_router)
+    admin = {"user_id": "admin-1", "username": "admin", "role": "admin"}
+    app.dependency_overrides[auth.require_admin] = lambda: admin
+    app.dependency_overrides[auth.get_current_user] = lambda: admin
+    client = TestClient(app, raise_server_exceptions=False)
+
+    def state(pid):
+        return store.rows("SELECT decision, next_review_at FROM evolution_proposals WHERE id = ?", (pid,))[0]
+
+    def defer(pid):
+        return client.post(f"/api/agent/evolution/proposals/{pid}/action", json={"action": "defer"})
+
+    # the delay write fails: the withdrawn decision must not survive it
+    a = new(store, change_class="code", component="chat", source="evolution_notice:user_issue_report")
+    run(eq.decide(store, a, "approved", actor="admin-1"))
+    store.fail_on = "SET next_review_at"
+    assert defer(a).status_code == 500
+    store.fail_on = None
+    assert state(a) == {"decision": "approved", "next_review_at": None}
+
+    # the decision's history write fails: the delay must not survive it
+    store.fail_on = "INSERT INTO evolution_proposal_history"
+    assert defer(a).status_code == 500
+    store.fail_on = None
+    assert state(a) == {"decision": "approved", "next_review_at": None}
+
+    # both succeed: both land
+    assert defer(a).status_code == 200
+    got = state(a)
+    assert got["decision"] == "" and got["next_review_at"] is not None
+
+
 def test_a_move_and_its_history_are_one_transaction():
     """A status move, a decision or an insert and its history row commit together: on a connection with transactions the queue opens
     one around both, so a failed history insert takes the move back with it (cross-review of #2165). Negative control: make
