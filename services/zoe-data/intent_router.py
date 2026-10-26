@@ -30,6 +30,7 @@ import panel_principal
 import traffic_class
 from list_service import HouseholdListUnavailable
 from time_utils import today_for_zoe_tz
+from typed_env import env_str
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
 if TYPE_CHECKING:
@@ -40,6 +41,11 @@ logger = logging.getLogger(__name__)
 _DAILY_BRIEFING_RESPONSE_CACHE: dict[str, tuple[float, str]] = {}
 _DAILY_BRIEFING_CACHE_TTL_SECONDS = float(os.environ.get("ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS", "120"))
 _DAILY_BRIEFING_CACHE_MAX_USERS = max(1, int(os.environ.get("ZOE_DAILY_BRIEFING_CACHE_MAX_USERS", "64")))
+
+
+def _self_url() -> str:
+    """This zoe-data instance (P-2: a harness instance sets ZOE_SELF_URL, so its self-calls never reach the live service)."""
+    return env_str("ZOE_SELF_URL", "http://localhost:8000").rstrip("/")
 
 
 def _daily_briefing_cache_sweep(now: float | None = None) -> None:
@@ -4128,9 +4134,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             import httpx as _httpx
             async with _httpx.AsyncClient(timeout=5) as _cli:
                 reg_resp, squad_resp, runtime_resp = await asyncio.gather(
-                    _cli.get("http://localhost:8000/api/agent/registry"),
-                    _cli.get("http://localhost:8000/api/agent/squad"),
-                    _cli.get("http://localhost:8000/api/agent/runtimes"),
+                    _cli.get(_self_url() + "/api/agent/registry"),
+                    _cli.get(_self_url() + "/api/agent/squad"),
+                    _cli.get(_self_url() + "/api/agent/runtimes"),
                     return_exceptions=True,
                 )
             reg = reg_resp.json() if not isinstance(reg_resp, Exception) else {}
@@ -4206,7 +4212,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         try:
             import httpx as _httpx
             async with _httpx.AsyncClient(timeout=5) as _cli:
-                resp = await _cli.get("http://localhost:8000/api/agent/board")
+                resp = await _cli.get(_self_url() + "/api/agent/board")
                 board = resp.json()
 
             available = board.get("available", False)
@@ -4419,7 +4425,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             import httpx as _httpx
             async with _httpx.AsyncClient(timeout=5) as _cli:
                 resp = await _cli.get(
-                    "http://localhost:8000/api/agent/evolution/proposals",
+                    _self_url() + "/api/agent/evolution/proposals",
                     params={"status": "pending", "limit": "5"},
                 )
                 data = resp.json()

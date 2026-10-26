@@ -17,14 +17,14 @@ Words live only on failed rows. Retention, forget and user delete reach the tabl
 ``erase_entity`` and ``delete_user`` that reach ``struggle_events``). ``IF NOT EXISTS`` makes a rerun safe and the statements run
 unchanged on PostgreSQL and SQLite.
 
-REVISION CHAIN NOTE: ``down_revision`` is ``0059`` (``0059_panel_client_certs``, #2095), the head on main when #2141 landed after #2146 (``0060``) and #2095.
+REVISION CHAIN NOTE: ``down_revision`` is ``0062`` (``0062_evolution_proposal_queue``, #2165), the head on main when #2141 landed (after #2146 ``0060``, #2095 ``0059`` and #2165 ``0062``).
 Whichever migration lands next re-chains its ``down_revision`` onto this one (the single-head tests go red until it does).
 """
 
 from alembic import op
 
 revision = "0058"
-down_revision = "0059"
+down_revision = "0062"
 branch_labels = None
 depends_on = None
 

@@ -25,6 +25,14 @@ import samantha_bar as sb  # noqa: E402
 import samantha_day_sim as ds  # noqa: E402
 import samantha_person as sp  # noqa: E402
 
+class _FakeStack:
+    """P-2: the run scratch stack, faked (the real one is docker + a second zoe-data; tests/unit/test_harness_scratch.py)."""
+    token, dsn, base_url, tag = "t", "postgresql://scratch:x@127.0.0.1:1/scratch", "http://127.0.0.1:1", "fake"
+
+    def public(self):
+        return {"tag": "fake", "ram": {"total_mb": 1.0}}
+
+
 CLEAN = {"commit": "c0ffee" * 6 + "abcd", "tree": "7ree", "dirty": False, "clean_verified": True}
 
 
@@ -71,6 +79,7 @@ def test_load_names_each_problem(tmp_path):
 
 # ── the bar: a partial baseline can no longer judge a full run ───────────────
 def _bar_gates(monkeypatch, tmp_path, rev=CLEAN):
+    monkeypatch.setattr(sb, "scratch_stack_for", lambda service_dir, name, ctx, log: (_FakeStack(), None))
     monkeypatch.setenv("ZOE_PERF", "1")
     for name, fn in (("_acquire_lock", lambda: None), ("in_nightly_window", lambda now: False),
                      ("deploy_in_progress", lambda: (False, "0")), ("_readyz", lambda: (True, "ok")),
@@ -121,6 +130,10 @@ def test_bar_records_every_scenario_with_its_commit(monkeypatch, tmp_path):
 
 # ── the day-sim ──────────────────────────────────────────────────────────────
 def _day_gates(monkeypatch, tmp_path, verdicts, rev=CLEAN):
+    stack = _FakeStack()
+    stack.state = {"root": str(tmp_path / "scratch")}       # point_log_at_scratch reads the scratch root
+    monkeypatch.setattr(ds.uma, "APP_LOG", ds.uma.APP_LOG)  # restored after the test: main() repoints it
+    monkeypatch.setattr(sb, "scratch_stack_for", lambda service_dir, name, ctx, log: (stack, None))
     monkeypatch.setenv("ZOE_PERF", "1")
     monkeypatch.setattr(sb, "service_revision", lambda d: rev)
     monkeypatch.setattr(sb, "_acquire_lock", lambda: None)
@@ -206,6 +219,7 @@ def _arm(verdicts: dict[str, str]) -> dict:
 
 
 def _person_gates(monkeypatch, tmp_path, verdicts, rev=CLEAN):
+    monkeypatch.setattr(sb, "scratch_stack_for", lambda service_dir, name, ctx, log: (_FakeStack(), None))
     monkeypatch.setenv("ZOE_PERF", "1")
     monkeypatch.setattr(sb, "service_revision", lambda d: rev)
     monkeypatch.setattr(sb, "_acquire_lock", lambda: None)

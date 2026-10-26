@@ -1333,6 +1333,54 @@ def harness_quiet_refusal(name: str | None = None) -> str | None:
     return None if verdict.allowed else verdict.reason
 
 
+def _harness_scratch():
+    """``scripts/perf/harness_scratch.py`` (P-2: the throwaway Zoe), loaded once by file path like ``harness_quiet``."""
+    import importlib.util
+
+    mod = sys.modules.get("harness_scratch")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("harness_scratch", Path(__file__).resolve().parent / "harness_scratch.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["harness_scratch"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def scratch_stack_for(service_dir: Path, name: str, ctx: dict, log) -> tuple[Any, str | None]:
+    """P-2: a live run writes ONLY to its own throwaway Zoe - a scratch Postgres (the live image, its own network, migrated to
+    head) and a harness zoe-data + Flue pair on it (``harness_scratch.py``) - never to the live database. The quiet-hours guard is
+    asked FIRST, so nothing starts in waking hours. On success ``DATA_BASE`` points at the scratch zoe-data and the stack is in
+    ``ctx`` for ``close_scratch``. Returns (stack, None) or (None, the refusal)."""
+    if in_nightly_window(dt.datetime.now()):                  # every refusal BEFORE anything starts (Postgres, zoe-data, a brain warm-up)
+        return None, "inside (or within 30 min of) the 01:45-03:15 nightly window"
+    quiet = harness_quiet_refusal(name)
+    if quiet:
+        return None, quiet
+    busy, detail = deploy_in_progress()
+    if busy is None or busy:
+        return None, f"deploy check: {detail}"
+    hs = _harness_scratch()
+    tag = re.sub(r"[^a-z0-9-]", "-", f"{name[:18]}-{os.getpid()}".lower())
+    stack = hs.ScratchStack(service_dir, serve=True, tag=tag, log=log)
+    ctx["stack"] = stack
+    try:
+        stack.__enter__()
+        hs.assert_not_live(stack.dsn, env_file_value(service_dir, "POSTGRES_URL"))
+    except hs.Refused as exc:
+        return None, f"scratch stack: {exc}"
+    global DATA_BASE
+    DATA_BASE = stack.base_url
+    log(f"scratch stack up ({stack.tag}): {json.dumps(stack.public().get('ram'))}")
+    return stack, None
+
+
+def close_scratch(ctx: dict) -> None:
+    """Tear the run's scratch stack down (every exit path: the harness main wrappers call this in ``finally``)."""
+    stack = ctx.pop("stack", None)
+    if stack is not None:
+        stack.__exit__(None, None, None)
+
+
 def mem_available_mb() -> int:
     try:
         with open("/proc/meminfo") as fh:
@@ -1362,6 +1410,13 @@ def deploy_in_progress(runner: Callable[..., Any] = subprocess.run) -> tuple[boo
         except json.JSONDecodeError:
             return None, "gh returned non-JSON"
     return bool(found), f"{len(found)} deploy.yml run(s) queued/in progress"
+
+
+def code_checkout_dir() -> Path:
+    """The zoe-data tree the scratch stack actually SERVES (harness_scratch runs THIS checkout's code). Revision metadata, the
+    clean-baseline gate and the fallback markers come from here; ``service_dir`` stays the source of live settings only (in a linked
+    worktree without its own .env it resolves to the main checkout, which is not what is being measured)."""
+    return Path(__file__).resolve().parents[2] / "services" / "zoe-data"
 
 
 def service_revision(service_dir: Path | None) -> dict[str, Any] | None:
@@ -2464,6 +2519,14 @@ def _pending_teardown(live: Live, path: Path, log) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ctx: dict = {}
+    try:
+        return _main(argv, ctx)
+    finally:
+        close_scratch(ctx)
+
+
+def _main(argv: list[str] | None, ctx: dict) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print the plan; no network, no writes")
@@ -2525,8 +2588,8 @@ def main(argv: list[str] | None = None) -> int:
 
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = resolve_service_dir(args.service_dir)
-    revision = service_revision(service_dir)
-    load_source_fallback_markers(service_dir)  # the checkout's own "brain did not answer" texts
+    revision = service_revision(code_checkout_dir())  # the checkout actually served, not the settings dir
+    load_source_fallback_markers(code_checkout_dir())  # the checkout's own "brain did not answer" texts
     lock_fd = _acquire_lock()  # noqa: F841 — held for the process lifetime
     try:
         cur = os.nice(0)
@@ -2535,10 +2598,9 @@ def main(argv: list[str] | None = None) -> int:
     except OSError:
         pass
 
-    token = env_file_value(service_dir, "ZOE_INTERNAL_TOKEN")
-    dsn = env_file_value(service_dir, "POSTGRES_URL")
-    admin = os.environ.get("ZOE_BAR_ADMIN_SESSION", "").strip()
-    live = Live(token, admin, dsn, args.keep_replies)
+    # P-2: the live token and DSN are never read here - the run gets a scratch stack below, after the gates
+    token = dsn = ""
+    live = None
 
     # Gates -----------------------------------------------------------------
     baseline, baseline_problem = load_baseline(args.baseline)
@@ -2584,6 +2646,11 @@ def main(argv: list[str] | None = None) -> int:
     busy, detail = deploy_in_progress()
     if busy is None or busy:
         return _refuse(args, f"deploy check: {detail}", revision)
+    stack, refusal = scratch_stack_for(service_dir, "samantha_bar", ctx, log)
+    if refusal:
+        return _refuse(args, refusal, revision)
+    token, dsn = stack.token, stack.dsn          # the live admin session means nothing to the scratch instance: token teardown
+    live = Live(stack.token, "", stack.dsn, args.keep_replies)
     if not token or not dsn:
         return _refuse(args, "ZOE_INTERNAL_TOKEN / POSTGRES_URL not resolvable from the service .env",
                        revision)
@@ -2669,7 +2736,7 @@ def main(argv: list[str] | None = None) -> int:
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
                "backdate": not args.no_backdate, "partial": partial,
                "selected": sorted(expected_ids) if partial else None,
-               "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
+               "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256, "scratch": stack.public(),
                "scenarios": results, "compare": cmp, "teardown": td,
                "baseline_ref": {"path": str(args.baseline),
                                 "created_at": (baseline or {}).get("created_at"),

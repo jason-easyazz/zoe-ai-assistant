@@ -55,12 +55,30 @@ class _Sqlite:
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
 
+    _depth = 0
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        """asyncpg-style transaction: statements inside commit together on a clean exit, roll back on an exception."""
+        self._depth += 1
+        try:
+            yield
+        except BaseException:
+            self._depth -= 1
+            if self._depth == 0:
+                self.conn.rollback()
+            raise
+        self._depth -= 1
+        if self._depth == 0:
+            self.conn.commit()
+
     def execute(self, sql, params=()):
         async def _run():
             await asyncio.sleep(0)
             cur = self.conn.execute(sql, tuple(params))
             rows = cur.fetchall()
-            self.conn.commit()
+            if not self._depth:
+                self.conn.commit()
             return _Cursor(rows, rowcount=cur.rowcount)
         return _ExecResult(_run())
 
@@ -87,6 +105,7 @@ def env(monkeypatch, tmp_path):
     engine = sa.create_engine(f"sqlite:///{path}")
     _migrate(engine, "0050_struggle_events.py")
     _migrate(engine, "0057_struggle_proposals.py")
+    _migrate(engine, "0062_evolution_proposal_queue.py")       # the single queue: status / decision live there since 0062
     db = _Sqlite(path)
 
     @contextlib.asynccontextmanager
@@ -379,7 +398,13 @@ def test_each_count_is_bound_to_its_own_field_not_just_to_a_number_the_facts_hap
 # ── the pass: store, idempotence, no auto-apply ──────────────────────────────
 
 def rows_of(env, table="struggle_proposals"):
+    if table == "struggle_proposals":     # since 0062 the status / decision live in the queue: read the module view (detail JOIN queue)
+        return [dict(zip(sp._PCOLS, tuple(r.values()))) for r in env.db.rows(f"SELECT {sp._SEL} FROM {sp._FROM}")]
     return env.db.rows(f"SELECT * FROM {table}")
+
+
+def queue_of(env, source="struggle"):
+    return env.db.rows("SELECT * FROM evolution_proposals WHERE source = ?", (source,))
 
 
 def test_a_pass_stores_a_proposal_with_evidence_and_a_rerun_updates_it_in_place(env):
@@ -551,8 +576,9 @@ def test_the_router_example_page_is_not_used_up_by_a_proposal_whose_evidence_is_
     pids = _proposal_ids(env)
     for pid in pids.values():
         run(sp.decide(pid, "accept", "admin-1"))
-    env.db.conn.execute("UPDATE struggle_proposals SET decided_at = ? WHERE pattern = ?", (NOW + 100.0, "unrouted|what:now:none"))          # the newest decision
-    env.db.conn.execute("UPDATE struggle_proposals SET decided_at = ? WHERE pattern = ?", (NOW, "unrouted|what:future:today"))
+    decided = "UPDATE evolution_proposals SET reviewed_at = ? WHERE id IN (SELECT id FROM struggle_proposals WHERE pattern = ?)"
+    env.db.conn.execute(decided, (NOW + 100.0, "unrouted|what:now:none"))          # the newest decision
+    env.db.conn.execute(decided, (NOW, "unrouted|what:future:today"))
     env.db.conn.commit()
     assert {e["proposal_id"] for e in run(_with_ledger_clear(sp.queued_router_examples(limit=1)))} == {pids["unrouted|what:now:none"]}, "control arm: newest first"
     _kill_events_of(env, pids["unrouted|what:now:none"])
@@ -633,6 +659,29 @@ def test_a_failed_proposal_erase_fails_the_forget_and_leaves_the_rows_for_a_retr
     with pytest.raises(RuntimeError):
         run(sd.erase_entity(A, "Quentin"))
     assert len(env.db.rows("SELECT * FROM struggle_events")) == 3                    # the forget is not confirmed, and nothing was half-done
+
+
+def test_a_queue_sync_failure_during_a_forget_changes_nothing_and_the_retry_succeeds(env, monkeypatch):
+    """Codex P1 on #2165: link removal, recount and queue update are ONE transaction - a failing _sync_queue must not leave reduced counts."""
+    store(*wide())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    before_links = env.db.rows("SELECT event_id FROM struggle_proposal_events ORDER BY event_id")
+    before = env.db.rows("SELECT id, event_count, episode_count, user_count, day_count FROM struggle_proposals ORDER BY id")
+    victim = [r["event_id"] for r in env.db.rows("SELECT event_id FROM struggle_proposal_events WHERE proposal_id = ? LIMIT 1", (pid,))]
+    real = sp._sync_queue
+
+    async def boom(*a, **k):
+        raise RuntimeError("queue down")
+    monkeypatch.setattr(sp, "_sync_queue", boom)
+    with pytest.raises(RuntimeError):
+        run(sp.forget_events(victim))
+    assert env.db.rows("SELECT event_id FROM struggle_proposal_events ORDER BY event_id") == before_links
+    assert env.db.rows("SELECT id, event_count, episode_count, user_count, day_count FROM struggle_proposals ORDER BY id") == before
+    monkeypatch.setattr(sp, "_sync_queue", real)
+    run(sp.forget_events(victim))                                                       # the retry now repairs everything
+    assert not env.db.rows("SELECT 1 FROM struggle_proposal_events WHERE event_id = ?", (victim[0],))
+    assert env.db.rows("SELECT event_count FROM struggle_proposals WHERE id = ?", (pid,))[0]["event_count"] == before[0]["event_count"] - 1
 
 
 def test_an_orphaned_evidence_link_never_shows_a_proposal_or_an_example_and_reconcile_clears_it(env):
@@ -1062,3 +1111,271 @@ def test_a_user_delete_before_any_retrain_run_tombstones_their_wordings(env, mon
     run(sd.delete_user(B))
     t = rl.load()["tombstones"]
     assert rl.text_key(f"what is the {MARK} forecast") in t["text_keys"] and rl.user_key(B) in t["user_keys"]
+
+
+# ── the one queue (migration 0062): every proposal is a row of evolution_proposals ──
+
+def test_a_struggle_proposal_is_a_queue_row_its_decisions_are_queue_moves_and_a_delete_takes_it_out(env):
+    """The struggle writer lands in the single evolution queue (same id, source struggle): class / component / tier by kind, COUNTS-only
+    evidence, the decisions as the queue's legal moves with history, and a member delete removes the queue row too.
+    Negative controls: make ``_drop`` skip ``eq.delete`` -> the deleted member's proposal stays queued (red); add ``row["summary"]`` of
+    an event to ``_signal`` -> the marker word reaches the queue (red)."""
+    store(*genuine(), *followed(start=50, summary=f"what will the {MARK} be"))
+    run(sp.run_pass(now=NOW))
+    props = dict((p["id"], p) for p in rows_of(env))
+    queued = dict((r["id"], r) for r in queue_of(env))
+    assert set(queued) == set(props) and len(props) == 2
+    for pid, p in props.items():
+        row = queued[pid]
+        cls, comp, tier = sp.QUEUE_CLASS[p["kind"]]
+        assert (row["status"], row["decision"], row["change_class"], row["component"], row["risk_tier"]) == ("proposed", "", cls, comp, tier)
+        signal = json.loads(row["evidence_json"])["signal"]
+        assert (signal["kind"], signal["episodes"], signal["events"], signal["user_days"]) == (p["kind"], p["episode_count"], p["event_count"], p["day_count"])
+        assert row["title"] == p["summary"]
+    assert MARK not in json.dumps(queue_of(env)) and MARK not in json.dumps(env.db.rows("SELECT * FROM evolution_proposal_history"))
+    router = [pid for pid, p in props.items() if p["kind"] == sp.KIND_ROUTER_EXAMPLE][0]
+    gap = [pid for pid, p in props.items() if p["kind"] == sp.KIND_INTENT_GAP][0]
+    run(sp.decide(router, "accept", "admin-1"))
+    run(sp.decide(gap, "reject", "admin-1", "not_now"))
+    queued = dict((r["id"], r) for r in queue_of(env))
+    assert (queued[router]["status"], queued[router]["decision"], queued[router]["decided_by"]) == ("proposed", "approved", "admin-1")
+    assert (queued[gap]["status"], queued[gap]["decision_note"]) == ("rejected", "not_now")
+    run(sp.mark_applied(router, "gen-7"))
+    assert queue_of(env) and dict((r["id"], r["status"]) for r in queue_of(env))[router] == "applied"
+    moves = [(h["from_status"], h["to_status"], h["decision"]) for h in
+             env.db.rows("SELECT * FROM evolution_proposal_history WHERE proposal_id = ? ORDER BY at, rowid", (router,))]
+    assert moves == [(None, "proposed", ""), (None, None, "approved"), ("proposed", "applied", "")]
+    run(sd.delete_user(A))
+    run(sd.delete_user(B))
+    assert rows_of(env) == [] and queue_of(env) == []
+    assert not env.db.rows("SELECT 1 FROM evolution_proposal_history WHERE proposal_id IN (?, ?)", (router, gap))
+
+
+def test_a_queue_row_left_without_its_detail_is_pruned(env):
+    """A crash between the two inserts leaves a queue row with no struggle detail; the next pass removes it."""
+    store(*genuine())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    env.db.conn.execute("DELETE FROM struggle_proposals WHERE id = ?", (pid,))
+    env.db.conn.commit()
+    assert [r["id"] for r in queue_of(env)] == [pid]
+    run(sp.run_pass(now=NOW))
+    assert pid not in [r["id"] for r in queue_of(env)] and len(rows_of(env)) == 1      # the orphan is gone, the pattern re-proposed
+
+
+def test_accepting_writes_the_verdict_and_its_follow_up_in_one_transaction(env, monkeypatch):
+    """If the follow-up write fails the approval must roll back with it, else the proposal is accepted with an empty follow-up and
+    every retry is refused as already decided. Negative control: move the follow-up UPDATE out of the eq._atomic block -> red."""
+    pid = seed_router_proposal(env)
+    inner = env.db.conn
+    state = {"depth": 0}
+
+    class _Conn:
+        def __getattr__(self, name):
+            return getattr(inner, name)
+
+        def execute(self, sql, params=()):
+            if sql.startswith("UPDATE struggle_proposals SET followup"):
+                raise RuntimeError("the follow-up write failed")
+            return inner.execute(sql, params)
+
+        def commit(self):
+            if state["depth"] == 0:
+                inner.commit()
+
+    @contextlib.asynccontextmanager
+    async def _tx():
+        state["depth"] += 1
+        try:
+            yield
+        except BaseException:
+            inner.rollback()
+            state["depth"] -= 1
+            raise
+        state["depth"] -= 1
+        if state["depth"] == 0:
+            inner.commit()
+
+    class _Tx:
+        def transaction(self):
+            return _tx()
+
+        def __getattr__(self, name):
+            return getattr(env.db, name)
+
+    env.db.conn = _Conn()
+    wrapped = _Tx()
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield wrapped
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    with pytest.raises(RuntimeError):
+        run(sp.decide(pid, "accept", "admin-1"))
+    env.db.conn = inner
+    row = env.db.rows("SELECT decision FROM evolution_proposals WHERE id = ?", (pid,))[0]
+    assert row["decision"] == "", "the approval rolled back with the failed follow-up"
+
+
+def test_a_new_proposal_is_one_transaction_a_failed_detail_write_leaves_no_queue_orphan(env, monkeypatch):
+    """The queue row, the detail row and the evidence links land together: ``AsyncpgCompat.commit()`` is a no-op, so each statement used
+    to autocommit and a second pass could prune the half-written queue row (leaving a hidden detail row whose fingerprint blocked a
+    replacement). Negative control: drop the ``_atomic`` block around ``_upsert`` in ``run_pass`` -> the queue row survives -> red."""
+    store(*genuine())
+    inner = env.db.conn
+    state = {"depth": 0}
+
+    class _Conn:
+        def __getattr__(self, name):
+            return getattr(inner, name)
+
+        def execute(self, sql, params=()):
+            if sql.startswith("INSERT INTO struggle_proposals "):
+                raise RuntimeError("the detail write failed")
+            return inner.execute(sql, params)
+
+        def commit(self):
+            if state["depth"] == 0:
+                inner.commit()
+
+    @contextlib.asynccontextmanager
+    async def _tx():
+        state["depth"] += 1
+        try:
+            yield
+        except BaseException:
+            inner.rollback()
+            state["depth"] -= 1
+            raise
+        state["depth"] -= 1
+        if state["depth"] == 0:
+            inner.commit()
+
+    class _Tx:
+        def transaction(self):
+            return _tx()
+
+        def __getattr__(self, name):
+            return getattr(env.db, name)
+
+    env.db.conn = _Conn()
+    wrapped = _Tx()
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield wrapped
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    with pytest.raises(RuntimeError):
+        run(sp.run_pass(now=NOW))
+    env.db.conn = inner
+    assert queue_of(env) == [] and rows_of(env) == [], "nothing half-written survives the failed detail insert"
+
+
+def test_a_failed_queue_removal_deletes_nothing_and_the_retry_succeeds(env, monkeypatch):
+    """Review P1 on #2165: ``_drop`` deleted the links + detail before ``eq.remove`` opened its own transaction, so a failed removal left a
+    queued proposal with no detail. Negative control: drop the ``_atomic`` block in ``_drop`` -> detail + links are gone, queue row stays -> red."""
+    store(*wide())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    links = env.db.rows("SELECT event_id FROM struggle_proposal_events WHERE proposal_id = ? ORDER BY event_id", (pid,))
+    assert links and queue_of(env)
+    real = sp.eq.remove
+
+    async def boom(*a, **k):
+        raise RuntimeError("queue down")
+
+    async def drop():
+        async with sp._ctx() as db:
+            await sp._drop(db, pid)
+
+    monkeypatch.setattr(sp.eq, "remove", boom)
+    with pytest.raises(RuntimeError):
+        run(drop())
+    assert env.db.rows("SELECT id FROM struggle_proposals WHERE id = ?", (pid,))
+    assert env.db.rows("SELECT event_id FROM struggle_proposal_events WHERE proposal_id = ? ORDER BY event_id", (pid,)) == links
+    assert queue_of(env)
+    monkeypatch.setattr(sp.eq, "remove", real)
+    run(drop())
+    assert not env.db.rows("SELECT id FROM struggle_proposals WHERE id = ?", (pid,))
+    assert not env.db.rows("SELECT 1 FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
+    assert not queue_of(env)
+
+
+def test_a_failed_queue_sentence_write_leaves_the_template_summary_and_the_retry_succeeds(env, monkeypatch):
+    """``_write_summaries``: the detail sentence and the queue sentence change together. Negative control: drop its ``_atomic`` -> red."""
+    store(*wide())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    before = env.db.rows("SELECT summary, summary_source FROM struggle_proposals WHERE id = ?", (pid,))[0]
+
+    async def fake_summarise(items, llm, budget_s=0):
+        return {pid: "A model sentence."}
+    monkeypatch.setattr(sp, "summarise", fake_summarise)
+    real = sp.eq.update_text
+
+    async def boom(*a, **k):
+        raise RuntimeError("queue down")
+    monkeypatch.setattr(sp.eq, "update_text", boom)
+    with pytest.raises(RuntimeError):
+        run(sp._write_summaries({}, object(), 1.0))
+    assert env.db.rows("SELECT summary, summary_source FROM struggle_proposals WHERE id = ?", (pid,))[0] == before
+    monkeypatch.setattr(sp.eq, "update_text", real)
+    run(sp._write_summaries({}, object(), 1.0))
+    assert env.db.rows("SELECT summary, summary_source FROM struggle_proposals WHERE id = ?", (pid,))[0]["summary_source"] == "model"
+
+
+def _lock_order_log(env, monkeypatch):
+    """Record which of the two tables each WRITE touches, in order (statement order == row-lock order on Postgres)."""
+    seen: list[str] = []
+    real = env.db.execute
+
+    def spy(sql, params=()):
+        m = re.match(r"\s*(?:UPDATE|DELETE FROM|INSERT INTO)\s+(struggle_proposals|evolution_proposals)\b", sql)
+        if m:
+            seen.append("detail" if m.group(1) == "struggle_proposals" else "queue")
+        return real(sql, params)
+    monkeypatch.setattr(env.db, "execute", spy)
+    return seen
+
+
+def _detail_before_queue(seen):
+    return "queue" in seen and seen[0] == "detail" and seen.index("detail") < seen.index("queue")
+
+
+def test_accept_reject_and_apply_lock_the_detail_row_before_the_queue_row(env, monkeypatch):
+    """Review P1 on #2165: decide / mark_applied wrote the queue row first while _refresh / _upsert / _drop write the detail row first, so a
+    concurrent accept and forget could deadlock on Postgres. Every path now takes DETAIL then QUEUE. The unit DB is single-connection SQLite,
+    so this asserts the statement order. Negative control: swap the two writes in decide() -> the first write is 'queue' -> red."""
+    store(*genuine(fix=sig.FIX_ROUTER_TRAINING, summary="what is the high today"))
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    seen = _lock_order_log(env, monkeypatch)
+    run(sp.decide(pid, "accept", "admin-1"))
+    assert _detail_before_queue(seen), seen
+    seen.clear()
+    run(sp.mark_applied(pid, "gen-9"))
+    assert _detail_before_queue(seen), seen
+
+
+def test_reject_locks_the_detail_row_before_the_queue_row(env, monkeypatch):
+    store(*genuine())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    seen = _lock_order_log(env, monkeypatch)
+    run(sp.decide(pid, "reject", "admin-1", "not_now"))
+    assert _detail_before_queue(seen), seen
+
+
+def test_a_reopen_locks_the_detail_row_before_the_queue_row(env, monkeypatch):
+    store(*genuine())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    run(sp.decide(pid, "reject", "admin-1", "not_now"))
+    later = NOW + 40 * DAY
+    store(*[event(300 + i, user=A if i % 2 else B, ts=NOW + 31 * DAY + i * 3 * 3600.0 + (i % 2) * DAY) for i in range(4)])
+    seen = _lock_order_log(env, monkeypatch)
+    res = run(sp.run_pass(now=later, days=60))
+    assert res["reopened"] == 1
+    assert _detail_before_queue(seen), seen

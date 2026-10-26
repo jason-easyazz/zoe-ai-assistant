@@ -395,7 +395,7 @@ def _migration(fname):
 def sql(monkeypatch, tmp_path):
     path = str(tmp_path / "zoe.db")
     engine = sa.create_engine(f"sqlite:///{path}")
-    for f in ("0050_struggle_events.py", "0057_struggle_proposals.py", "0058_turn_outcomes.py"):
+    for f in ("0050_struggle_events.py", "0057_struggle_proposals.py", "0062_evolution_proposal_queue.py", "0058_turn_outcomes.py"):
         with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
             _migration(f).upgrade()
     db = _Sqlite(path)
@@ -440,7 +440,7 @@ async def test_seam_rechecks_the_forget_ledger(sql, monkeypatch):
 async def test_seam_survives_a_missing_table(monkeypatch, tmp_path):
     path = str(tmp_path / "old.db")
     engine = sa.create_engine(f"sqlite:///{path}")
-    for f in ("0050_struggle_events.py", "0057_struggle_proposals.py"):
+    for f in ("0050_struggle_events.py", "0057_struggle_proposals.py", "0062_evolution_proposal_queue.py"):
         with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
             _migration(f).upgrade()
     db = _Sqlite(path)

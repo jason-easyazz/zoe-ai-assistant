@@ -339,3 +339,28 @@ def test_gemma_base_url_uses_shared_gemma_resolver(monkeypatch):
 
     assert main._gemma_base_url() == gemma_endpoint.gemma_base()
     assert main._gemma_base_url() == "http://127.0.0.1:11434"
+
+
+def test_disabled_stt_is_exempt_from_readiness(monkeypatch):
+    """ZOE_STT_DISABLED=1 (isolated text harness): a Moonshine that cannot load must not hold /readyz red.
+    Negative control: drop the _stt_disabled() early return -> red."""
+    import main
+    from routers import voice_tts
+
+    monkeypatch.setattr(voice_tts, "moonshine_ready", lambda: False)
+    monkeypatch.setattr(voice_tts, "moonshine_error", lambda: "model missing")
+    monkeypatch.delenv("ZOE_STT_DISABLED", raising=False)
+    assert asyncio.run(main._check_stt_ready())["ok"] is False
+    monkeypatch.setenv("ZOE_STT_DISABLED", "1")
+    report = asyncio.run(main._check_stt_ready())
+    assert report["ok"] is True and report["disabled"] is True
+
+
+@pytest.mark.parametrize("raw,expected", [("1", True), ("true", True), (" On ", True), ("0", False), ("", False), ("no", False)])
+def test_stt_disabled_uses_typed_env_per_call(monkeypatch, raw, expected):
+    import main
+
+    monkeypatch.setenv("ZOE_STT_DISABLED", raw)
+    assert main._stt_disabled() is expected
+    monkeypatch.delenv("ZOE_STT_DISABLED")
+    assert main._stt_disabled() is False
