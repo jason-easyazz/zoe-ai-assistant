@@ -11,6 +11,11 @@
  * The card token goes in the X-Panel-Card HEADER (never a URL); the server honours it only while the member's voice session is
  * open or the request carries their own session. Every server string is set with textContent; a clip and the QR are fetched
  * with the headers and shown from blob URLs. Nothing is stored in the browser (the session id is only read).
+ *
+ * The memories card ("what do you know about me?", ZOE_MEMORIES_VOICE) is drawn by the same renderer: its frame names its own
+ * routes (`endpoint`, e.g. /api/panel/memories), a reply with `keep` leaves the row on screen (That's wrong -> "say it", Where's
+ * this from -> the answer under the row), `phone_hint` words the phone QR, `soft` rows (what Zoe worked out herself) are dimmed,
+ * and `more_label` says what only the phone shows. A person is forgotten only behind a fresh PIN (`pin_needed`).
  */
 (function () {
     'use strict';
@@ -18,6 +23,9 @@
 
     var AGAIN = 'Say it again so I know it’s you.';
     var FAILED = 'That didn’t work. Try again.';
+    var PIN_FIRST = 'Unlock with your PIN first, then tap it again.';
+    var CURATED = 'A grown-up added that one, so only they can change it.';
+    var PHONE_DEFAULT = 'Scan with your phone to name them on the Pendant page.';
 
     function el(tag, cls, text) {
         var n = document.createElement(tag);
@@ -57,6 +65,8 @@
             '#zvs-card .zrc-b[data-act=done],#zvs-card .zrc-b[data-act=keep],#zvs-card .zrc-b[data-act=me]{' +
             'background:var(--accent,#7b96ff);border-color:transparent;color:#fff}' +
             '#zvs-card .zrc-r[data-busy] .zrc-b{opacity:.5;pointer-events:none}' +
+            '#zvs-card .zrc-r.zrc-soft .zvs-rt{opacity:.72;font-style:italic}' +
+            '#zvs-card .zrc-d{display:block;font-size:16px;color:var(--ink,#F4F6FA);margin-top:4px}' +
             '#zvs-card .zrc-qr{width:176px;height:176px;border-radius:12px;background:#fff;padding:6px}' +
             '#zvs-card .zrc-note{min-height:22px;margin-top:10px;font-size:16px;color:var(--ink-soft,rgba(244,246,250,.74))}';
         (document.head || document.documentElement).appendChild(s);
@@ -66,6 +76,7 @@
         ensureStyle();
         var items = Array.isArray(d.items) ? d.items : [];
         var groups = d.groups || {};
+        var base = (typeof d.endpoint === 'string' && /^\/api\/panel\/[a-z]+$/.test(d.endpoint)) ? d.endpoint : '/api/panel/cards';
         var note = el('div', 'zrc-note', '');
         note.setAttribute('role', 'status');
         var rows = [];
@@ -77,7 +88,7 @@
                 lastGroup = it.group;
                 if (groups[it.group]) card.appendChild(el('div', 'zrc-g', groups[it.group]));
             }
-            var row = el('div', 'zvs-r zrc-r', null);
+            var row = el('div', 'zvs-r zrc-r' + (it.soft ? ' zrc-soft' : ''), null);
             row.setAttribute('data-item', String(it.id));
             var main = el('div', '', null);
             main.appendChild(el('span', 'zvs-rt', it.text || ''));
@@ -97,6 +108,7 @@
             card.appendChild(row);
             rows.push(row);
         });
+        if (d.more > 0 && d.more_label) card.appendChild(el('div', 'zvs-s', d.more_label));
         card.appendChild(note);
 
         function gone(row) {
@@ -106,15 +118,29 @@
         }
         function say(text) { note.textContent = text || ''; }
 
-        function send(it, action, choice, row) {
+        function refused(r) {
+            return r.json().then(function (j) { return (j && j.detail) || ''; }, function () { return ''; }).then(function (detail) {
+                if (r.status === 403 && detail === 'pin_needed') say(PIN_FIRST);
+                else if (r.status === 409 && detail === 'curated') say(CURATED);
+                else say(r.status === 403 || r.status === 404 ? AGAIN : FAILED);
+            });
+        }
+        function send(it, action, choice, row, sub) {
             var body = { item: String(it.id), action: action };
             if (choice) body.choice = choice;
             row.setAttribute('data-busy', '1');
-            return fetch('/api/panel/cards/act', { method: 'POST', headers: headers(d.card_token, true), body: JSON.stringify(body) })
+            return fetch(base + '/act', { method: 'POST', headers: headers(d.card_token, true), body: JSON.stringify(body) })
                 .then(function (r) {
                     row.removeAttribute('data-busy');
-                    if (!r.ok) { say(r.status === 403 || r.status === 404 ? AGAIN : FAILED); return; }
-                    return r.json().then(function (j) { gone(row); if (j && j.note) say(j.note); });
+                    if (!r.ok) return refused(r);
+                    return r.json().then(function (j) {
+                        if (j && j.keep) {
+                            if (sub) { clear(sub); if (j.detail) sub.appendChild(el('span', 'zrc-d', j.detail)); }
+                        } else {
+                            gone(row);
+                        }
+                        if (j && j.note) say(j.note);
+                    });
                 })
                 .catch(function () { row.removeAttribute('data-busy'); say(FAILED); });
         }
@@ -127,7 +153,7 @@
         function act(it, a, row, sub) {
             if (a.local && a.key === 'later') { gone(row); return; }
             if (a.key === 'play') {
-                blob('/api/panel/cards/clip/' + encodeURIComponent(String(it.id))).then(function (b) {
+                blob(base + '/clip/' + encodeURIComponent(String(it.id))).then(function (b) {
                     if (!b) return;
                     var u = URL.createObjectURL(b);
                     var au = new Audio(u);
@@ -143,16 +169,16 @@
                     b.setAttribute('data-choice', String(c.key));
                     b.addEventListener('click', function () {
                         if (c.phone) { phone(sub); return; }
-                        send(it, a.key, String(c.key), row);
+                        send(it, a.key, String(c.key), row, sub);
                     });
                     sub.appendChild(b);
                 });
                 return;
             }
-            send(it, a.key, null, row);
+            send(it, a.key, null, row, sub);
         }
         function phone(sub) {
-            blob('/api/panel/cards/phone-qr').then(function (b) {
+            blob(base + '/phone-qr').then(function (b) {
                 if (!b) return;
                 clear(sub);
                 var img = document.createElement('img');
@@ -161,7 +187,7 @@
                 img.onload = function () { try { img.scrollIntoView({ block: 'nearest' }); } catch (_) { /* old engine */ } };
                 img.src = URL.createObjectURL(b);
                 sub.appendChild(img);
-                sub.appendChild(el('span', 'zrc-m', 'Scan with your phone to name them on the Pendant page.'));
+                sub.appendChild(el('span', 'zrc-m', d.phone_hint || PHONE_DEFAULT));
             });
         }
     }
