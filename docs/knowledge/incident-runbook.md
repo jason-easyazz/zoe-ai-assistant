@@ -839,8 +839,8 @@ python3 scripts/maintenance/unit_drift_check.py --strict   # also fail on untrac
 
 `MISSING`/`DIFFERS` = merged template not applied (act). `LIVE_ONLY` = an untracked host edit
 (track it as a drop-in or leave it). Run it after every merge touching `scripts/setup/systemd/`.
-Known harmless residue: kokoro `PYTHONPATH`/`ZOE_KOKORO_BACKEND`, serena `MemorySwapMax=0`
-(stricter than the template); **to confirm**: live zoe-data omits the repo-root `.env` its
+Known harmless residue: kokoro `PYTHONPATH`/`ZOE_KOKORO_BACKEND` (serena's `MemorySwapMax=0` is now the tracked
+`no-swap.conf`; full 2026-10-25 classification: [unit-drift-2026-10-25.md](unit-drift-2026-10-25.md)); **to confirm**: live zoe-data omits the repo-root `.env` its
 template lists first.
 
 ### Operator steps (applying is NOT done by the PR)
