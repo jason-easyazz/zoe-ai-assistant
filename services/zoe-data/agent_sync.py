@@ -214,7 +214,7 @@ def _build_zoe_self_md(
         "## Self-Evolution Loop (NOTICE→PROPOSE→EXECUTE→MEASURE)",
         "- NOTICE: nightly run_evolution_notice() — clusters intent misses (llm_call_log),",
         "  detects LLM error spikes, records user frustration signals",
-        "- PROPOSE: writes to evolution_proposals (status=pending)",
+        "- PROPOSE: writes to the evolution queue (evolution_proposals, status=proposed)",
         "- EXECUTE: user approves in chat or settings; implementation runs on the Multica board lane",
         "- MEASURE: run_measure_phase() after 48h — sets status=validated or failed",
         "- Weekly digest: EvolutionWeeklyDigestTrigger fires Friday 6pm",

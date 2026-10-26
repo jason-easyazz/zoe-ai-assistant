@@ -273,6 +273,27 @@ def test_orchestrator_positive_control_runs_every_step_when_clear(tmp_path):
     assert r.returncode == 0 and len(ran) == 4, (ran, r.stdout, r.stderr)
 
 
+def test_night_pause_verdict_gate_go_still_enforces_the_run_budget(monkeypatch, tmp_path):
+    g = tmp_path / "night_busy.sh"
+    g.write_text("#!/bin/sh\nexit 1\n")
+    g.chmod(0o755)
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(g))
+    assert not hq.night_pause_verdict("x", budget_min=45, now=_at(1, 30)).allowed   # would still run at 01:50
+    assert hq.night_pause_verdict("x", budget_min=10, now=_at(1, 30)).allowed       # finishes first
+    assert hq.night_pause_verdict("x", budget_min=45, now=_at(3, 40)).allowed       # inside the span: the gate decides
+
+
+def test_night_pause_verdict_gate_go_checks_the_next_nights_window_too(monkeypatch, tmp_path):
+    g = tmp_path / "night_busy.sh"
+    g.write_text("#!/bin/sh\nexit 1\n")
+    g.chmod(0o755)
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(g))
+    assert not hq.night_pause_verdict("x", budget_min=240, now=_at(23, 0)).allowed   # crosses tomorrow's 01:50
+    assert hq.night_pause_verdict("x", budget_min=30, now=_at(23, 0)).allowed        # finishes by 23:30
+    assert hq.night_pause_verdict("x", budget_min=45, now=_at(3, 40)).allowed        # after tonight's window
+    assert not hq.night_pause_verdict("x", budget_min=24 * 60, now=_at(3, 40)).allowed  # but not past the next 01:50
+
+
 @pytest.mark.parametrize("when,secs", [
     (_at(1, 20), 600),        # 30 min to the window - the 20-min step budget = 10 min, not the 30-min cap
     (_at(1, 30), 0),          # the step cannot finish in time: never queue
@@ -300,6 +321,21 @@ def test_orchestrator_bounds_each_lock_wait_by_the_brain_window(tmp_path):
     r = subprocess.run(["bash", str(sh)], env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert (tmp_path / "flock-waits").read_text().split() == ["7"] * 4
+
+
+def test_night_pause_verdict_asks_the_gate_and_fails_back_to_the_fixed_window(monkeypatch, tmp_path):
+    g = tmp_path / "night_busy.sh"
+    g.write_text("#!/bin/sh\nexit 1\n")
+    g.chmod(0o755)
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(g))
+    assert hq.night_pause_verdict("x", now=_at(3, 40)).allowed                    # gate: free, though inside the old span
+    g.write_text("#!/bin/sh\nexit 0\n")
+    assert not hq.night_pause_verdict("x", now=_at(12, 0)).allowed                # gate: pause
+    g.write_text("#!/bin/sh\nexit 7\n")                                          # unreadable answer -> the fixed rule
+    assert not hq.night_pause_verdict("x", now=_at(3, 40)).allowed
+    assert hq.night_pause_verdict("x", now=_at(12, 0)).allowed
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(tmp_path / "missing.sh"))             # no gate installed -> the fixed rule
+    assert not hq.night_pause_verdict("x", now=_at(3, 40)).allowed
 
 
 @pytest.mark.parametrize("when,secs", [
