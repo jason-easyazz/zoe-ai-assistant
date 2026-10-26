@@ -48,11 +48,11 @@ Nothing leaves the box; api.omi.me is never used.
 6. **Do not fine-tune the brain.** On personal data, retrieval beats fine-tuning for small models (+14.9% vs +1.1% in the
    best benchmark I found [S]); LoRA on a QAT 4-bit base with MTP is unproven on this stack [U]; and weights change the rock.
    Spend effort on retrieval, vocabulary, router examples and verified labels instead.
-7. **Law and ethics set the shape.** In Western Australia the Surveillance Devices Act 1998 s 5(1) makes it an offence to
+7. **Law and ethics set the shape.** Taking Western Australia as the worked example (state laws differ; the household's own state applies), the Surveillance Devices Act 1998 s 5(1) makes it an offence to
    record a private conversation *whether or not you are a party*, unless an exception applies; participant recording is
    lawful where each principal party consents (s 5(3)) [V, statute]. A household privacy exemption in the Privacy Act does not
    touch that. This is not legal advice, but it means: consent norms in the home, nothing learned from non-members' speech,
-   short retention of their words, and a WA lawyer's view before widening anything (section 6).
+   short retention of their words, and a local lawyer's view before widening anything (section 6).
 
 ## 1. What is in the data, and where it lives (verified, aggregates only)
 
@@ -271,7 +271,7 @@ figure is written to the repo.
 
 ## 6. Privacy, law and ethics
 
-**Western Australia (high level, not legal advice).** [V = read in the statute via a fetcher, s 5 and s 9 of the
+**Worked example: Western Australia (high level, not legal advice; other states differ).** [V = read in the statute via a fetcher, s 5 and s 9 of the
 [Surveillance Devices Act 1998 (WA)](https://www.legislation.wa.gov.au/legislation/prod/filestore.nsf/FileURL/mrdoc_45890.htm/$FILE/Surveillance%20Devices%20Act%201998%20-%20%5B02-g0-00%5D.html)]
 - s 5(1): a person must not use a listening device to record or listen to a private conversation to which they are **not** a party,
   or to record one to which they **are** a party. Penalty for an individual: $5,000 or 12 months, or both [V].
@@ -375,7 +375,7 @@ deadline are the stop.
 4. Raw audio policy: keep only transcripts and derived numbers (recommended), or also keep a small consented slice (about 150 clips,
    hard expiry) for the golden set and the tone test?
 5. Transcript retention: an age bound (for example 90 days) or until you delete?
-6. Bystanders: adopt a household notice, a mute habit and "nothing learned from non-members' speech"? Do you want a WA lawyer's view
+6. Bystanders: adopt a household notice, a mute habit and "nothing learned from non-members' speech"? Do you want a local lawyer's view
    before the pendant is used with visitors?
 7. Willing to label about 150 of your own clips in one time-boxed session (kept local)?
 8. Confirm the "no" on a brain LoRA and on adapting the panel voiceprint from pendant audio.
