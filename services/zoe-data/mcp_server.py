@@ -1765,13 +1765,14 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             await _ensure_dashboard_layout_row(db, uid)
             row = await _fetch_dashboard_layout_for_update(db, uid)
             current = _decode_dashboard_layout(row["layout"]) if row else []
-            existing = {w.get("id") for w in current if isinstance(w, dict)}
+            # stored cards are instances {uid, type}; legacy ones are {id}
+            existing = {(w.get("type") or w.get("id")) for w in current if isinstance(w, dict)}
             max_y = max((w.get("y", 0) + w.get("h", 2) for w in current), default=0)
             added = []
             for wid in to_add:
                 if wid in existing:
                     continue
-                current.append({"id": wid, "x": 0, "y": max_y, "w": 2, "h": 2})
+                current.append({"uid": uuid.uuid4().hex[:16], "type": wid, "x": 0, "y": max_y, "w": 2, "h": 2})
                 max_y += 2
                 added.append(wid)
             await db.execute(

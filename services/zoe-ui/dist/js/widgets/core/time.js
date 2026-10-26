@@ -39,6 +39,7 @@ class TimeWidget extends WidgetModule {
             this.updateWidgetSize(element);
         });
         resizeObserver.observe(element);
+        this._resizeObserver = resizeObserver;
 
         this._onSettingsUpdate = (e) => {
             if (!e.detail || e.detail.type !== 'time') return;
@@ -47,6 +48,14 @@ class TimeWidget extends WidgetModule {
             this.updateTime();
         };
         window.addEventListener('widget-settings:update', this._onSettingsUpdate);
+    }
+
+    destroy() {
+        super.destroy();
+        if (this._resizeObserver) this._resizeObserver.disconnect();
+        this._resizeObserver = null;
+        if (this._onSettingsUpdate) window.removeEventListener('widget-settings:update', this._onSettingsUpdate);
+        this._onSettingsUpdate = null;
     }
 
     getPrefs() {
