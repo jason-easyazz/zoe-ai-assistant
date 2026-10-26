@@ -174,13 +174,16 @@ def _fmt(v) -> str:
     return str(v)
 
 
-ROUND_TOL = 0.0005     # the daemon logs scores as %.3f, so a logged score is only known to within half a last digit
+ROUND_TOL = 0.0005     # the acting ``Speaker claim`` line logs scores as %.3f: known to within half a last digit
+ROW_TOL = 0.00005      # every other score is logged at full precision and only rounded to 4 dp in the review rows (_fmt)
 
 
-def near_threshold(score: Optional[float], thr: float) -> bool:
+def near_threshold(score: Optional[float], thr: float, model: Optional[str] = "resnet34") -> bool:
     """True when a score read from a ROUNDED log line is within rounding distance of ``thr``: its real value may sit on
-    either side, so the accept/reject verdict cannot be reconstructed from it."""
-    return score is not None and abs(score - thr) <= ROUND_TOL + 1e-9
+    either side, so the accept/reject verdict cannot be reconstructed from it. The tolerance follows the model's log
+    precision: only the acting ``resnet34`` claim is %.3f; the ``resnet34-dual`` line carries the raw score."""
+    tol = ROUND_TOL if model == "resnet34" else ROW_TOL
+    return score is not None and abs(score - thr) <= tol + 1e-9
 
 
 def turn_score(t, acting_since: dt.datetime) -> Optional[tuple]:
@@ -217,8 +220,8 @@ def build_rows(tns: Sequence, sev: Sequence, clips: dict, *, since: dt.datetime,
             turn_id=t.trigger_ts.isoformat(timespec="milliseconds"), time=t.trigger_ts.strftime("%Y-%m-%d %H:%M:%S"),
             kind=t.trigger, seconds="" if t.duration_s is None else f"{t.duration_s:.2f}", group=group, threshold=f"{thr:.3f}", model=model,
             claimed_user="" if user in (None, "None") else user, score=_fmt(score),
-            panel_accept="" if near_threshold(score, thr) else _fmt(score is not None and score >= thr),
-            notes=("score within rounding of the threshold - verdict uncertain" if near_threshold(score, thr)
+            panel_accept="" if near_threshold(score, thr, model) else _fmt(score is not None and score >= thr),
+            notes=("score within rounding of the threshold - verdict uncertain" if near_threshold(score, thr, model)
                    else "" if t.dual_accept is None or t.dual_accept == (score is not None and score >= thr)
                    else f"panel logged accept={t.dual_accept} (threshold then differed)"),
             server_identified=srv.get("identified") or ("" if not srv else "none"),
@@ -346,7 +349,7 @@ def rates(rows: Sequence[dict], *, owner: str, thresholds: Optional[dict] = None
     for r in lab:
         score = _float(r.get("score"))
         t = global_threshold if global_threshold is not None else live_threshold(r.get("group") or "long", thr)
-        if near_threshold(score, t):      # rounded-log score on the boundary: neither accepted nor rejected, reported apart
+        if near_threshold(score, t, r.get("model") or "resnet34"):      # rounded-log score on the boundary: neither accepted nor rejected, reported apart
             uncertain += 1
             continue
         accepted = score is not None and score >= t

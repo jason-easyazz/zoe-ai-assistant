@@ -192,6 +192,15 @@ def test_rates_at_the_live_thresholds_and_a_global_what_if():
     assert loose["false_accepts"] == 1 and loose["false_rejects"] == 1
 
 
+def test_dual_scores_are_full_precision_so_only_a_true_tie_is_uncertain():
+    # the dual line logs the raw score: 0.2654 is clearly above a 0.265 bar, so a "not me" row is a real false accept
+    rows = [dict(turn_id="a", model="resnet34-dual", label="not me", claimed_user="alex", group="long", score="0.2654"),
+            dict(turn_id="b", model="resnet34-dual", label="me", claimed_user="alex", group="long", score="0.2650")]
+    r = sfa.rates(rows, owner="alex")
+    assert r["uncertain"] == 1 and r["false_accepts"] == 1 and r["n_not_me"] == 1
+    assert not sfa.near_threshold(0.2654, 0.265, "resnet34-dual") and sfa.near_threshold(0.2654, 0.265, "resnet34")
+
+
 def test_boundary_rounded_scores_are_uncertain_not_exact():
     # a 3-decimal log line cannot say which side of the 0.265 bar a logged 0.265 / 0.2654 fell on
     rows = [dict(turn_id="a", label="not me", claimed_user="alex", group="long", score="0.265"),
