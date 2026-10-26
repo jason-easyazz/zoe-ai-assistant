@@ -130,7 +130,10 @@ def test_bar_records_every_scenario_with_its_commit(monkeypatch, tmp_path):
 
 # ── the day-sim ──────────────────────────────────────────────────────────────
 def _day_gates(monkeypatch, tmp_path, verdicts, rev=CLEAN):
-    monkeypatch.setattr(sb, "scratch_stack_for", lambda service_dir, name, ctx, log: (_FakeStack(), None))
+    stack = _FakeStack()
+    stack.state = {"root": str(tmp_path / "scratch")}       # point_log_at_scratch reads the scratch root
+    monkeypatch.setattr(ds.uma, "APP_LOG", ds.uma.APP_LOG)  # restored after the test: main() repoints it
+    monkeypatch.setattr(sb, "scratch_stack_for", lambda service_dir, name, ctx, log: (stack, None))
     monkeypatch.setenv("ZOE_PERF", "1")
     monkeypatch.setattr(sb, "service_revision", lambda d: rev)
     monkeypatch.setattr(sb, "_acquire_lock", lambda: None)
