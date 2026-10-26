@@ -249,7 +249,7 @@ models on the live path, any Omni-class 7B+ model resident, any sarcasm label, a
 - Exclude quarantine folders. No transcripts, no audio and no per-clip rows leave the box or enter a repo doc.
 - **Label a small set on the box:** the owner labels roughly 150 clips (frustrated / neutral / urgent / tired / unsure)
   in a time-boxed, owner-claimed session; labels stay local. Report only counts and rates. Add about 30 negative
-  controls (calm clips with a loud TV, whispered clips) and a shuffle control (permuted baselines must give chance).
+  controls (calm clips with a loud TV, whispered clips) and two shuffle controls: shuffled LABELS must give chance (sanity check), and permuted speaker baselines must remove the gain the baseline features add over text-only (correction cues in the text may stay predictive, so not chance).
 - **Weak-label shortcut for scale:** use existing struggle events as a proxy label and report only aggregate AUC and
   flag rate per 100 turns.
 - **Report:** per-feature distributions; precision/recall of the gated flag; agreement (kappa) between detectors;
