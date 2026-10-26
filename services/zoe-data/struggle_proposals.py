@@ -738,12 +738,13 @@ async def decide(pid: str, action: str, by: str, reason: str = "") -> dict:
         followup = build_followup(pub, now) if action == "accept" else {}
         try:
             async with eq._atomic(db):   # ONE transaction: the verdict and its follow-up land together or not at all
+                # LOCK ORDER (every path): the struggle DETAIL row first, the QUEUE row second - so a concurrent forget / pass cannot deadlock it
+                await db.execute("UPDATE struggle_proposals SET followup = ?, updated_at = ? WHERE id = ?",
+                                 (json.dumps(followup, sort_keys=True), now, pid))
                 if action == "accept":   # a person verdict on an OPEN queue row: the status stays open, accepting applies nothing
                     await eq.decide(db, pid, "approved", actor=str(by or "")[:80], note=reason or "", guard={"decision": ""}, now=now)
                 else:
                     await eq.transition(db, pid, "rejected", actor=str(by or "")[:80], note=reason or "", require_decision="", now=now)
-                await db.execute("UPDATE struggle_proposals SET followup = ?, updated_at = ? WHERE id = ?",
-                                 (json.dumps(followup, sort_keys=True), now, pid))
         except (eq.Conflict, eq.IllegalTransition) as exc:
             raise Conflict("already decided") from exc
         await db.commit()
@@ -762,11 +763,11 @@ async def mark_applied(pid: str, ref: str = "") -> dict:
             raise NotFound(pid)
         note = (((row["decision_note"] + " ") if row["decision_note"] else "") + f"applied: {ref}")[:120]
         try:
-            async with _atomic(db):     # the queue move and the detail touch land together
+            async with _atomic(db):     # the detail touch and the queue move land together; DETAIL row first (the one lock order)
+                await db.execute("UPDATE struggle_proposals SET updated_at = ? WHERE id = ?", (now, pid))
                 if row["status"] != ACCEPTED:
                     raise eq.Conflict(row["status"])
                 await eq.transition(db, pid, "applied", actor="struggle_proposals:mark_applied", note=note, require_decision="approved", now=now)
-                await db.execute("UPDATE struggle_proposals SET updated_at = ? WHERE id = ?", (now, pid))
         except (eq.Conflict, eq.IllegalTransition) as exc:
             raise Conflict(f"only an accepted proposal can be applied (this one is {row['status']})") from exc
         await db.commit()
@@ -1196,8 +1197,8 @@ async def _upsert(db, c: Cluster, old: Optional[dict], now: float, m: str) -> tu
         since = [(u, ts) for _, u, ts, _ in c.links if ts > decided]
         if now - decided < REJECT_SUPPRESS_DAYS * DAY_S or episodes_of(since) < min_episodes():
             return "suppressed", None
+        await db.execute("UPDATE struggle_proposals SET followup = '{}' WHERE id = ?", (old["id"],))    # DETAIL row first (the one lock order)
         await eq.transition(db, old["id"], "proposed", actor="struggle_proposals", note="", now=now)    # a reopen clears the verdict
-        await db.execute("UPDATE struggle_proposals SET followup = '{}' WHERE id = ?", (old["id"],))
         counter = "reopened"
     else:
         counter = "updated"

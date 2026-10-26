@@ -1324,3 +1324,58 @@ def test_a_failed_queue_sentence_write_leaves_the_template_summary_and_the_retry
     monkeypatch.setattr(sp.eq, "update_text", real)
     run(sp._write_summaries({}, object(), 1.0))
     assert env.db.rows("SELECT summary, summary_source FROM struggle_proposals WHERE id = ?", (pid,))[0]["summary_source"] == "model"
+
+
+def _lock_order_log(env, monkeypatch):
+    """Record which of the two tables each WRITE touches, in order (statement order == row-lock order on Postgres)."""
+    seen: list[str] = []
+    real = env.db.execute
+
+    def spy(sql, params=()):
+        m = re.match(r"\s*(?:UPDATE|DELETE FROM|INSERT INTO)\s+(struggle_proposals|evolution_proposals)\b", sql)
+        if m:
+            seen.append("detail" if m.group(1) == "struggle_proposals" else "queue")
+        return real(sql, params)
+    monkeypatch.setattr(env.db, "execute", spy)
+    return seen
+
+
+def _detail_before_queue(seen):
+    return "queue" in seen and seen[0] == "detail" and seen.index("detail") < seen.index("queue")
+
+
+def test_accept_reject_and_apply_lock_the_detail_row_before_the_queue_row(env, monkeypatch):
+    """Review P1 on #2165: decide / mark_applied wrote the queue row first while _refresh / _upsert / _drop write the detail row first, so a
+    concurrent accept and forget could deadlock on Postgres. Every path now takes DETAIL then QUEUE. The unit DB is single-connection SQLite,
+    so this asserts the statement order. Negative control: swap the two writes in decide() -> the first write is 'queue' -> red."""
+    store(*genuine(fix=sig.FIX_ROUTER_TRAINING, summary="what is the high today"))
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    seen = _lock_order_log(env, monkeypatch)
+    run(sp.decide(pid, "accept", "admin-1"))
+    assert _detail_before_queue(seen), seen
+    seen.clear()
+    run(sp.mark_applied(pid, "gen-9"))
+    assert _detail_before_queue(seen), seen
+
+
+def test_reject_locks_the_detail_row_before_the_queue_row(env, monkeypatch):
+    store(*genuine())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    seen = _lock_order_log(env, monkeypatch)
+    run(sp.decide(pid, "reject", "admin-1", "not_now"))
+    assert _detail_before_queue(seen), seen
+
+
+def test_a_reopen_locks_the_detail_row_before_the_queue_row(env, monkeypatch):
+    store(*genuine())
+    run(sp.run_pass(now=NOW))
+    pid = rows_of(env)[0]["id"]
+    run(sp.decide(pid, "reject", "admin-1", "not_now"))
+    later = NOW + 40 * DAY
+    store(*[event(300 + i, user=A if i % 2 else B, ts=NOW + 31 * DAY + i * 3 * 3600.0 + (i % 2) * DAY) for i in range(4)])
+    seen = _lock_order_log(env, monkeypatch)
+    res = run(sp.run_pass(now=later, days=60))
+    assert res["reopened"] == 1
+    assert _detail_before_queue(seen), seen
