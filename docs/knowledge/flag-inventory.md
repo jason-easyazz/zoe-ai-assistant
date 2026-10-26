@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-772 flags; 722 not documented in `.env.example`.
+773 flags; 723 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|

@@ -527,6 +527,17 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
     if _CANCEL_RE.match(t):
         return LEAVE_IT_REPLY
     st = pa.parse_stateful(t)
+    if st is None or st.kind != "forget_it":
+        # Off the record beats a correction: pa.handle applies this precedence on a normal turn, but a tapped turn is taken here
+        # first, and review(edit) would otherwise store the words permanently. Nothing is written, the row is untouched, the tap
+        # stays spent, and the turn is claimed so no extractor keeps it either.
+        try:
+            cue = mp.parse_off_record(t) if mp.enabled() else None
+        except Exception:  # noqa: BLE001
+            cue = None
+        if cue is not None:
+            mp.claim_turn(member, t)
+            return pa.OFF_RECORD_ACKS.get(cue.cue, pa.OFF_RECORD_ACKS["off_the_record"])
     value = ""
     if st is None:
         if (tp.awaiting and t and len(t.split()) <= 14 and "?" not in t and not pa._NOT_A_FIX_RE.match(t)

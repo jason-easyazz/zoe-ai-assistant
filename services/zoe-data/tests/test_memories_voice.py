@@ -1177,3 +1177,48 @@ def test_recent_people_filter_rows_before_merging(env):
     people, _ = mv.recent_rows(wall, "this week")
     text = " ".join(f for e in people for f, _ in e.facts).lower()
     assert "lisbon" in text and "nurse" not in text
+
+
+# -- off the record beats a tapped correction ----------------------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _fresh_provenance():
+    import memory_provenance
+
+    memory_provenance.reset()
+    yield
+    memory_provenance.reset()
+
+
+OTR_FIX = "actually my birthday is on 5 March, off the record"
+
+
+def test_an_off_the_record_correction_after_a_tap_writes_nothing(env):
+    put(env, ME_BIRTHDAY)
+    old = row_id(env, "birthday")
+    before = dict(env.col.rows[old][1])
+    mv.tap(PANEL, ME, old, ME_BIRTHDAY)
+    reply = say(OTR_FIX, ME)
+    assert reply == pa.OFF_RECORD_ACKS["off_the_record"], reply
+    assert approved(env) == [ME_BIRTHDAY], "nothing new stored"
+    assert env.col.rows[old][1] == before, "the original row is unchanged"
+    assert len(env.col.rows) == 1
+    assert not mv._TAPS, "nothing re-armed"
+
+
+def test_a_normal_correction_after_a_tap_still_works(env):
+    put(env, ME_BIRTHDAY)
+    old = row_id(env, "birthday")
+    mv.tap(PANEL, ME, old, ME_BIRTHDAY)
+    reply = say("actually my birthday is on 5 March", ME)
+    assert reply.startswith("Fixed"), reply
+    assert any("5 March" in t for t in approved(env))
+
+
+def test_review_edit_refuses_text_with_an_off_the_record_cue(env):
+    put(env, ME_BIRTHDAY)
+    old = row_id(env, "birthday")
+    out = run(env.svc.review(old, decision="edit", edits="My birthday is on 5 March, off the record", actor=ME))
+    assert out is None
+    assert approved(env) == [ME_BIRTHDAY] and len(env.col.rows) == 1
+    ok = run(env.svc.review(old, decision="edit", edits="My birthday is on 5 March", actor=ME))
+    assert ok is not None
