@@ -79,13 +79,25 @@ except the chat compose-card assets (a dependency, item 5 below); `jukebox`, `se
 
 ### The prioritised remaining list (later waves)
 
-1. **Wave 4b — the dashboard, the landing page (owner decision).** Live today: the default board is
-   clock / weather / home / events / tasks / notes on gridstack. Fake or broken: `widgets/core/system.js`
-   shows **`Math.random()` CPU / memory / disk / uptime** (5 sites); `home.js` renders four hard-coded
-   rooms (Living Room / Kitchen / Bedroom / Office) whatever the house has; weather paints a
-   "25 / 22 degrees" skeleton until data lands; cards stay light in dark mode; the duplicate-widget
-   flaw at three layers (Wave 4b below). Rebuild per Wave 4b, salvaging the 8 live fetch paths;
-   delete `system.js` or wire it to `/api/system/status`.
+1. **Wave 4b — the dashboard, the landing page (owner decision). REAL DATA DONE (2026-10-19,
+   branch `fix/desktop-dashboard-real-data`, on top of phase 1).** Fixed: `system.js` (was
+   `Math.random()` CPU / memory / disk / uptime) reads the new member-only `GET /api/system/stats`
+   (psutil + database / brain / voice / Home Assistant health; `/api/system/status` had no resource
+   numbers and a 5 s probe of the retired OpenClaw gateway); `home.js` (was four hard-coded rooms)
+   shows this house's rooms + switchable devices from `/api/rooms` + `/api/ha/entities`; weather
+   shows a loading state instead of placeholder temperatures (and no longer sends `user_id`, prompts
+   for a location the server ignores, or refetches the forecast on every resize); cards follow the
+   `--clr-*` tokens in dark mode; tasks / events titles are escaped. **The duplicate-widget flaw is
+   fixed at all three layers:** one widget object per card (`WidgetManager.createInstance`, tracked
+   by uid); the server keeps two same-type cards (`PUT /layout/` stores `{uid, type, x, y, w, h,
+   options?}`, `POST /widgets/` stays chat's ensure-present-by-type); and the desktop board now
+   persists to `/api/dashboard/layout/` (its first caller). Pinned by
+   `dist/test_dashboard_real_data.js`, `test_system_stats.py`, `test_dashboard_router.py`.
+   **Still open from Wave 4b below:** the lists.html dead-code strip, `LayoutProtection` on the
+   dashboard, static registration, migrating lists onto the stack and deleting the superseded
+   lineage (≥3 PRs); and two pre-existing layout flaws seen in the browser: the weather forecast
+   chips overlap the condition text at the default 4x3 size, and the per-card gear button shows
+   outside edit mode.
 2. **The Zoe page (new; replaces the desktop `updates.html`).** Design: `docs/architecture/self-evolution-nightly-loop.md`
    sections 12-13 (branch `claude/zoe-deep-dive-2-2026-10-19`, not yet on main). Backend that exists:
    `GET /api/system/updates`, `/updates/history`, `POST /updates/install/{component}`, the change
