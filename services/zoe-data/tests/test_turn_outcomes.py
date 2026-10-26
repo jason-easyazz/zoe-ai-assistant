@@ -585,7 +585,7 @@ async def test_failed_writes_warn_without_household_words(fresh, caplog):
 def test_the_flag_goes_through_typed_env(monkeypatch, caplog):
     import typed_env
 
-    typed_env._warned.clear()
+    monkeypatch.setattr(typed_env, "_warned", set())   # restored after the test: later warning tests see the real history
     for v, want in (("on", True), ("1", True), ("enforce", True), ("off", False), ("", False)):
         monkeypatch.setenv(to.ENV, v)
         assert to.enabled() is want, v
