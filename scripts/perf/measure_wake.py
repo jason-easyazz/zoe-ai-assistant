@@ -348,12 +348,16 @@ class OwwScorer:
     with ``np.random`` noise, so the RNG is seeded first (a replay is deterministic); ``lead_s`` of digital silence then
     flushes that noise out of the 1.28 s feature window and ``tail_s`` lets the score ramp finish."""
 
-    def __init__(self, model_path: Path, features_dir: Path, *, model_factory: Optional[Callable] = None):
+    def __init__(self, model_path: Path, features_dir: Path, *, model_factory: Optional[Callable] = None,
+                 speex_ns: bool = False):
         if model_factory is None:
             from openwakeword.model import Model as model_factory  # noqa: N813
-        self.model = model_factory(wakeword_models=[str(model_path)], inference_framework="onnx",
-                                   melspec_model_path=str(Path(features_dir) / "melspectrogram.onnx"),
-                                   embedding_model_path=str(Path(features_dir) / "embedding_model.onnx"))
+        kw = dict(wakeword_models=[str(model_path)], inference_framework="onnx",
+                  melspec_model_path=str(Path(features_dir) / "melspectrogram.onnx"),
+                  embedding_model_path=str(Path(features_dir) / "embedding_model.onnx"))
+        if speex_ns:      # the daemon's kwarg, passed only when on (it is absent, not False, when speexdsp_ns is missing)
+            kw["enable_speex_noise_suppression"] = True
+        self.model = model_factory(**kw)
 
     def frames(self, x, *, lead_s: float = 2.0, tail_s: float = 1.0, seed: int = 0) -> list:
         import numpy as np
@@ -417,13 +421,48 @@ UNKNOWN_CLIP_S = 10.0  # assumed length of a file whose header cannot be read
 
 
 def audio_seconds(path) -> Optional[float]:
-    """Duration from the WAV header (no decode), or None when it cannot be read."""
+    """Duration from the file header (no decode) for every format ``load_audio`` accepts (WAV, FLAC, ... via
+    soundfile), or None when it cannot be established - ``score_clips`` then refuses the file instead of guessing."""
+    try:
+        import soundfile as sf
+        info = sf.info(str(path))
+        if info.samplerate and info.frames >= 0:
+            return info.frames / float(info.samplerate)
+    except Exception:  # noqa: BLE001 - fall through to the stdlib WAV reader
+        pass
     import wave
     try:
         with wave.open(str(path), "rb") as w:
             return w.getnframes() / float(w.getframerate() or SR)
-    except Exception:  # noqa: BLE001 - not a WAV / unreadable: the caller assumes a length
+    except Exception:  # noqa: BLE001 - not a readable audio file
         return None
+
+
+def speex_available() -> bool:
+    """Whether ``speexdsp_ns`` imports here - the daemon's own test for enabling Speex noise suppression."""
+    try:
+        import speexdsp_ns  # type: ignore  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def resolve_speex(mode: Optional[str], available: Optional[bool] = None) -> tuple:
+    """(enabled, warning). ``auto`` (default) = the panel's behaviour: on when speexdsp_ns is importable. ``on`` / ``off``
+    override; ``on`` without the package raises SystemExit (the model would not honour it). A replay on a box without
+    the package runs WITHOUT noise suppression, so it can differ from a panel that has it: that is warned loudly."""
+    mode = mode or "auto"
+    have = speex_available() if available is None else available
+    if mode == "off":
+        return False, None
+    if mode == "on" and not have:
+        raise SystemExit("measure_wake: --speex-ns on, but speexdsp_ns is not installed here")
+    if have:
+        return True, None
+    return False, ("WARNING: speexdsp_ns is not installed on this box, so this replay runs WITHOUT Speex noise "
+                   "suppression. The panel daemon enables it whenever the package is installed there, so these "
+                   "FA/FR rates may not describe the live detector. Install speexdsp_ns here (or pass --speex-ns off "
+                   "if the panel truly lacks it) and re-run.")
 
 
 def clip_cost_s(duration_s: Optional[float]) -> float:
@@ -493,7 +532,15 @@ def score_clips(todo: Sequence, scorer, notes: dict, *, lead_s: float, tail_s: f
     t0 = last_check = clock()
     for i, (name, path) in enumerate(todo):
         dur = duration_of(path)
-        long_file = dur is not None and dur >= LONG_FILE_S
+        if dur is None:       # length unknown: the long-file night-pause guard cannot size it, so refuse rather than guess
+            notes.setdefault("unreadable", 0)
+            notes["unreadable"] += 1
+            notes["unknown_duration"] = notes.get("unknown_duration", 0) + 1
+            if name == "tv":
+                notes["unreadable_tv"] = notes.get("unreadable_tv", 0) + 1
+            log(f"  refuse {Path(path).name}: duration cannot be established")
+            continue
+        long_file = dur >= LONG_FILE_S
         if i % 25 == 0 or long_file or clock() - last_check >= RECHECK_S:
             last_check = clock()
             # one minute of margin before 01:50; a long file must also FINISH before the window, so size it
@@ -684,7 +731,7 @@ def incomplete_banner(aborted: dict) -> str:
 
 
 def build_report(clips: Sequence[dict], *, live: dict, frr_budget: float, near: Optional[dict] = None,
-                 aborted: Optional[dict] = None) -> tuple:
+                 aborted: Optional[dict] = None, speex_ns: Optional[bool] = None) -> tuple:
     rows = curve(clips, GRID, live=live)
     if aborted:    # a partial replay never yields a threshold: say why instead
         rec = dict(threshold=None, reason="the run was incomplete (" + str(aborted.get("reason")) + ") - no recommendation "
@@ -695,7 +742,9 @@ def build_report(clips: Sequence[dict], *, live: dict, frr_budget: float, near: 
     if aborted:
         md += [incomplete_banner(aborted), ""]
     md += [f"Confirmation as live: {live['confirm_count']} hits within {live['confirm_window_s']} s, "
-           f"{live['min_interval_s']} s between wakes.", "", render_curve(rows), "", "### Clip peak scores", "",
+           f"{live['min_interval_s']} s between wakes."
+           + ("" if speex_ns is None else f" Speex noise suppression: {'on' if speex_ns else 'OFF'}."),
+           "", render_curve(rows), "", "### Clip peak scores", "",
            render_peaks(clips), "", "### Recommendation", "", render_recommendation(rec)]
     if near:
         md += ["", "### Live near-misses (panel voice.log)", "", render_nearmiss(near)]
@@ -721,8 +770,10 @@ def cmd_report(args) -> int:
         except (RuntimeError, OSError) as exc:
             print(f"(near-miss section skipped: {exc})", file=sys.stderr)
     aborted = ((data.get("meta") or {}).get("notes") or {}).get("aborted")    # a saved partial run stays partial
-    live, frr_budget = _settings_from(args, (data.get("meta") or {}).get("settings"))
-    _rows, rec, md = build_report(data["clips"], live=live, frr_budget=frr_budget, near=near, aborted=aborted)
+    saved = (data.get("meta") or {}).get("settings")
+    live, frr_budget = _settings_from(args, saved)
+    _rows, rec, md = build_report(data["clips"], live=live, frr_budget=frr_budget, near=near, aborted=aborted,
+                                  speex_ns=(saved or {}).get("speex_ns"))
     print(md)
     return EXIT_INCOMPLETE if aborted else 0
 
@@ -775,7 +826,10 @@ def cmd_run(args) -> int:
         print(f"measure_wake: refused - {why}", file=sys.stderr)
         return 3
     live, frr_budget = _settings_from(args)
-    scorer = OwwScorer(model, feats)
+    speex_ns, speex_warn = resolve_speex(getattr(args, "speex_ns", None))
+    if speex_warn:
+        print(f"measure_wake: {speex_warn}", file=sys.stderr)
+    scorer = OwwScorer(model, feats, speex_ns=speex_ns)
     t0 = time.time()
     clips, aborted = score_clips(todo, scorer, notes, lead_s=args.lead_s, tail_s=args.tail_s,
                                  min_avail_mb=args.min_avail_mb)
@@ -786,10 +840,13 @@ def cmd_run(args) -> int:
                 embedding_sha256=sha256(feats / "embedding_model.onnx"), onnxruntime=onnxruntime.__version__,
                 lead_s=args.lead_s, tail_s=args.tail_s, seconds=round(time.time() - t0, 1),
                 finished=dt.datetime.now().isoformat(timespec="seconds"), notes=notes,
-                settings=dict(live=live, frr_budget=frr_budget))
+                settings=dict(live=live, frr_budget=frr_budget, speex_ns=speex_ns))
     _write_private(out / "scores.json", json.dumps(dict(meta=meta, clips=clips)))
     near = nearmiss_summary(pvl.events(lines), since=args.since)
-    rows, rec, md = build_report(clips, live=live, frr_budget=frr_budget, near=near, aborted=aborted)
+    rows, rec, md = build_report(clips, live=live, frr_budget=frr_budget, near=near, aborted=aborted,
+                                 speex_ns=speex_ns)
+    if speex_warn:
+        md = f"**{speex_warn}**\n\n" + md
     md += "\n\nRun: " + json.dumps(meta, default=str)
     _write_private(out / "report.md", md + "\n")
     _write_private(out / "report.json", json.dumps(dict(meta=meta, recommendation=rec, nearmiss=near,
@@ -835,6 +892,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     r.add_argument("--negatives", action="append", default=[], metavar="NAME=DIR",
                    help="a negative set (repeatable; replaces the defaults). Names libri/kokoro/omi are pooled; "
                         "tv is the 0/N constraint")
+    r.add_argument("--speex-ns", choices=("auto", "on", "off"), default="auto",
+                   help="Speex noise suppression like the panel daemon (auto = on when speexdsp_ns is importable)")
     r.add_argument("--no-followups", action="store_true", help="skip the panel's follow-up turns")
     r.add_argument("--positives-since", type=_date, default=PREROLL_20_SINCE)
     r.add_argument("--limit", type=int, default=0, help="at most N clips per set (a smoke run)")

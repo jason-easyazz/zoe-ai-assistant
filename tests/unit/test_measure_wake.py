@@ -443,7 +443,7 @@ def _run_args(tmp_path, **kw):
     base = dict(force=True, min_avail_mb=0.0, model=str(tmp_path / "m.onnx"), features_dir=str(tmp_path),
                 oww_path=str(tmp_path), out=str(tmp_path / "out"), voice_log=None, lead_s=2.0, tail_s=1.0,
                 since=dt.datetime(2026, 10, 16), threshold=0.45, confirm_count=3, confirm_window=1.0, min_interval=5.0,
-                frr_budget=0.05, budget_min=0)
+                frr_budget=0.05, budget_min=0, speex_ns="off")
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -484,7 +484,7 @@ def test_score_clips_aborts_when_memory_stays_low_and_says_so():
     todo = [("libri", f"c{i}") for i in range(60)]
     clips, aborted = mw.score_clips(todo, sc, {}, lead_s=2.0, tail_s=1.0, min_avail_mb=1500,
                                     mem=lambda: 100.0 if sc.n >= 25 else 9999.0, sleep=lambda s: None,
-                                    window=CLEAR, load=lambda p: [0.0] * mw.SR, log=lambda m: None)
+                                    window=CLEAR, load=lambda p: [0.0] * mw.SR, log=lambda m: None, duration_of=lambda p: 5.0)
     assert len(clips) == 25 and aborted["reason"] == "memory"
     assert (aborted["clips_scored"], aborted["clips_planned"]) == (25, 60)
 
@@ -494,7 +494,7 @@ def test_score_clips_stops_when_the_window_is_about_to_open():
     todo = [("libri", f"c{i}") for i in range(60)]
     clips, aborted = mw.score_clips(todo, sc, {}, lead_s=2.0, tail_s=1.0, min_avail_mb=0, mem=lambda: 9999.0,
                                     window=lambda b: "too close to the brain window" if sc.n >= 50 else None,
-                                    load=lambda p: [0.0] * mw.SR, log=lambda m: None)
+                                    load=lambda p: [0.0] * mw.SR, log=lambda m: None, duration_of=lambda p: 5.0)
     assert len(clips) == 50 and aborted["reason"] == "brain-window"
 
 
@@ -505,14 +505,14 @@ def test_the_memory_wait_rechecks_the_night_pause_before_resuming():
         return "brain window" if len(calls) > 1 else None   # clear at the start, closed after the first wait
     clips, aborted = mw.score_clips([("libri", f"c{i}") for i in range(5)], _FakeScorer(), {}, lead_s=2.0, tail_s=1.0,
                                     min_avail_mb=1500, mem=lambda: 100.0, sleep=lambda s: None, window=window,
-                                    load=lambda p: [0.0] * mw.SR, log=lambda m: None)
+                                    load=lambda p: [0.0] * mw.SR, log=lambda m: None, duration_of=lambda p: 5.0)
     assert aborted["reason"] == "brain-window" and clips == []
 
 
 def test_a_complete_score_has_no_abort():
     sc = _FakeScorer()
     clips, aborted = mw.score_clips([("libri", "a"), ("libri", "b")], sc, {}, lead_s=2.0, tail_s=1.0, min_avail_mb=0,
-                                    mem=lambda: 9999.0, window=CLEAR, load=lambda p: [0.0] * mw.SR, log=lambda m: None)
+                                    mem=lambda: 9999.0, window=CLEAR, load=lambda p: [0.0] * mw.SR, log=lambda m: None, duration_of=lambda p: 5.0)
     assert len(clips) == 2 and aborted is None
 
 
@@ -527,6 +527,7 @@ def test_a_memory_aborted_run_is_marked_incomplete_withholds_the_recommendation_
     monkeypatch.setattr(mw, "_sets", lambda args, lines: ([("positive", f"p{i}") for i in range(60)], {}))
     monkeypatch.setattr(mw, "OwwScorer", lambda *a, **k: sc)
     monkeypatch.setattr(mw, "load_audio", lambda p: [0.0] * mw.SR)
+    monkeypatch.setattr(mw, "audio_seconds", lambda p: 5.0)
     monkeypatch.setattr(mw, "mem_available_mb", lambda: 100.0 if sc.n >= 25 else 9999.0)
     monkeypatch.setattr(mw.time, "sleep", lambda s: None)
     monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(__version__="0.0-test"))
@@ -552,11 +553,11 @@ def test_an_unreadable_tv_clip_makes_the_run_incomplete_and_withholds_the_thresh
     notes: dict = {}
     clips, aborted = mw.score_clips([("positive", "a"), ("tv", "bad"), ("tv", "ok")], _FakeScorer(), notes, lead_s=2.0,
                                     tail_s=1.0, min_avail_mb=0, mem=lambda: 9999.0, window=CLEAR, load=load,
-                                    log=lambda m: None)
+                                    log=lambda m: None, duration_of=lambda p: 5.0)
     assert len(clips) == 2 and aborted["reason"] == "unscored-tv" and notes["unreadable_tv"] == 1
     # an unreadable non-TV clip alone stays a complete run
     _c, ab = mw.score_clips([("libri", "bad")], _FakeScorer(), {}, lead_s=2.0, tail_s=1.0, min_avail_mb=0,
-                            mem=lambda: 9999.0, window=CLEAR, load=load, log=lambda m: None)
+                            mem=lambda: 9999.0, window=CLEAR, load=load, log=lambda m: None, duration_of=lambda p: 5.0)
     assert ab is None
 
 
@@ -660,9 +661,76 @@ def test_report_restores_the_settings_the_run_used_and_cli_flags_still_override(
     live, budget = mw._settings_from(SimpleNamespace(**unset), None)                           # old scores.json
     assert live == mw.LIVE and budget == 0.05
     seen = {}
-    monkeypatch.setattr(mw, "build_report", lambda clips, *, live, frr_budget, near=None, aborted=None:
+    monkeypatch.setattr(mw, "build_report", lambda clips, *, live, frr_budget, near=None, aborted=None, speex_ns=None:
                         (seen.update(live=live, budget=frr_budget), ([], {}, "md"))[1])
     p = tmp_path / "scores.json"
     p.write_text(json.dumps(dict(meta=dict(settings=saved), clips=[])))
     assert mw.cmd_report(SimpleNamespace(scores=str(p), no_nearmiss=True, voice_log=None, since=None, **unset)) == 0
     assert seen == dict(live=saved["live"], budget=0.1)
+
+
+def test_audio_seconds_reads_flac_durations_and_a_long_flac_hits_the_long_file_guard(tmp_path):
+    sf = pytest.importorskip("soundfile")
+    np = pytest.importorskip("numpy")
+    f = tmp_path / "long.flac"
+    sf.write(str(f), np.zeros(8000 * 90, dtype="int16"), 8000, format="FLAC")      # 90 s: over LONG_FILE_S
+    assert mw.audio_seconds(f) == pytest.approx(90.0)
+    seen: list = []
+    mw.score_clips([("omi", str(f))], _FakeScorer(), {}, lead_s=2.0, tail_s=1.0, min_avail_mb=0, mem=lambda: 9999.0,
+                   window=lambda b: seen.append(b), load=lambda p: [0.0] * mw.SR, log=lambda m: None)
+    assert len(seen) == 1 and seen[0] > 1            # sized to the file, not the 1-minute margin of a short clip
+
+
+def test_a_file_whose_duration_cannot_be_established_is_refused_not_guessed(tmp_path):
+    bad = tmp_path / "junk.flac"
+    bad.write_bytes(b"not audio")
+    assert mw.audio_seconds(bad) is None
+    loaded: list = []
+    notes: dict = {}
+    clips, aborted = mw.score_clips([("libri", str(bad)), ("tv", str(bad))], _FakeScorer(), notes, lead_s=2.0,
+                                    tail_s=1.0, min_avail_mb=0, mem=lambda: 9999.0, window=CLEAR,
+                                    load=lambda p: loaded.append(p) or [0.0] * mw.SR, log=lambda m: None)
+    assert clips == [] and loaded == [] and notes["unknown_duration"] == 2
+    assert aborted["reason"] == "unscored-tv"        # a refused TV clip cannot approve a threshold
+
+
+def test_scorer_enables_speex_noise_suppression_like_the_daemon(tmp_path):
+    mw.OwwScorer(tmp_path / "m.onnx", tmp_path, model_factory=_FakeModel, speex_ns=True)
+    assert _FakeModel.instances[-1].kw["enable_speex_noise_suppression"] is True
+    mw.OwwScorer(tmp_path / "m.onnx", tmp_path, model_factory=_FakeModel)
+    assert "enable_speex_noise_suppression" not in _FakeModel.instances[-1].kw      # absent when off, as in the daemon
+
+
+def test_resolve_speex_follows_the_panel_default_and_warns_when_the_package_is_missing():
+    assert mw.resolve_speex("auto", available=True) == (True, None)
+    on, warn = mw.resolve_speex(None, available=False)
+    assert on is False and "WITHOUT Speex" in warn and "panel" in warn
+    assert mw.resolve_speex("off", available=True) == (False, None)
+    with pytest.raises(SystemExit):
+        mw.resolve_speex("on", available=False)
+
+
+def test_the_speex_setting_is_saved_in_scores_meta_and_shown_by_report(monkeypatch, tmp_path, capsys):
+    sc = _FakeScorer()
+    seen = {}
+    monkeypatch.setattr(mw, "guard", lambda **kw: None)
+    monkeypatch.setattr(mw, "window_refusal", lambda budget: None)
+    monkeypatch.setattr(mw, "verify_pinned", lambda f: None)
+    monkeypatch.setattr(mw, "sha256", lambda p: "0" * 64)
+    monkeypatch.setattr(mw, "_private_dir", lambda d: (Path(d).mkdir(parents=True, exist_ok=True), Path(d))[1])
+    monkeypatch.setattr(mw.pvl, "fetch_lines", lambda *_a, **_k: [])
+    monkeypatch.setattr(mw, "_sets", lambda args, lines: ([("positive", "p0")], {}))
+    monkeypatch.setattr(mw, "OwwScorer", lambda *a, **k: (seen.update(k), sc)[1])
+    monkeypatch.setattr(mw, "load_audio", lambda p: [0.0] * mw.SR)
+    monkeypatch.setattr(mw, "audio_seconds", lambda p: 5.0)
+    monkeypatch.setattr(mw, "speex_available", lambda: False)                  # this box lacks it, the panel has it
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(__version__="0.0-test"))
+    assert mw.cmd_run(_run_args(tmp_path, speex_ns="auto")) == 0
+    assert seen["speex_ns"] is False and "WITHOUT Speex" in capsys.readouterr().err
+    scores = json.loads((tmp_path / "out" / "scores.json").read_text())
+    assert scores["meta"]["settings"]["speex_ns"] is False
+    assert "Speex noise suppression: OFF" in (tmp_path / "out" / "report.md").read_text()
+    monkeypatch.setattr(mw, "speex_available", lambda: True)
+    assert mw.cmd_run(_run_args(tmp_path, speex_ns="auto")) == 0
+    assert seen["speex_ns"] is True
+    assert json.loads((tmp_path / "out" / "scores.json").read_text())["meta"]["settings"]["speex_ns"] is True
