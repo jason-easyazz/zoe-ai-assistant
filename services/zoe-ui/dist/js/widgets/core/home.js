@@ -1,70 +1,39 @@
 /**
- * Home Widget
- * Displays Home Assistant status and quick room toggles.
+ * Home Widget - this house's real rooms and switchable devices (Wave 4b, 2026-10-19).
  *
- * zoe-data exposes HA through /api/ha/* (entities, state, control) — the
- * previous /api/homeassistant/states path is a legacy/zoe-core URL that
- * never resolves, so the widget fell back to a hard-coded cosmetic state.
- * Version: 1.1.0
+ * Reads the same two routes the estate's Rooms surface reads (touch/home.html):
+ *   GET /api/rooms        Zoe's own rooms, each device resolved against live HA state
+ *   GET /api/ha/entities  the live entity list (lights / switches / input_booleans / fans)
+ * and toggles through POST /api/ha/control {entity_id, action: 'toggle'}.
+ * Both reads need a member or the panel; the desktop is members-only.
+ *
+ * It used to draw four hard-coded rooms (Living Room / Kitchen / Bedroom / Office)
+ * mapped to light.<room> ids whatever the house had. Now every state is honest:
+ * loading, the house, an empty house, or unavailable. Rendering is a pure
+ * function of the state (HomeWidget.render) so the harness can check every
+ * state without a browser.
+ * Version: 2.0.0
  */
 
 class HomeWidget extends WidgetModule {
     constructor() {
         super('home', {
-            version: '1.1.0',
+            version: '2.0.0',
             defaultSize: 'size-small',
             updateInterval: 60000
         });
-
-        // Friendly room id -> HA entity id. Users with different entity
-        // naming can override via localStorage['zoe_home_rooms'] (JSON).
-        this.rooms = {
-            living_room: 'light.living_room',
-            kitchen:     'light.kitchen',
-            bedroom:     'light.bedroom',
-            office:      'light.office',
-        };
-        try {
-            const override = JSON.parse(localStorage.getItem('zoe_home_rooms') || 'null');
-            if (override && typeof override === 'object') {
-                this.rooms = { ...this.rooms, ...override };
-            }
-        } catch (_) { /* ignore bad JSON */ }
-
-        this._entityState = {};
+        this.state = { kind: 'loading' };
+        this._onClick = null;
     }
 
     getTemplate() {
         return `
             <div class="widget-header">
                 <div class="widget-title">🏠 Home</div>
-                <div class="widget-badge" id="homeStatus">…</div>
+                <div class="widget-badge" data-role="home-badge">…</div>
             </div>
-            <div class="widget-content">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
-                    <button class="room-btn" data-room="living_room" onclick="HomeWidget.toggleRoom('living_room')" style="padding: 12px; border: none; border-radius: 8px; background: rgba(123, 97, 255, 0.1); color: #7B61FF; font-size: 12px; cursor: pointer;">
-                        💡 Living Room
-                    </button>
-                    <button class="room-btn" data-room="kitchen" onclick="HomeWidget.toggleRoom('kitchen')" style="padding: 12px; border: none; border-radius: 8px; background: rgba(123, 97, 255, 0.1); color: #7B61FF; font-size: 12px; cursor: pointer;">
-                        🔆 Kitchen
-                    </button>
-                    <button class="room-btn" data-room="bedroom" onclick="HomeWidget.toggleRoom('bedroom')" style="padding: 12px; border: none; border-radius: 8px; background: rgba(123, 97, 255, 0.1); color: #7B61FF; font-size: 12px; cursor: pointer;">
-                        🛏️ Bedroom
-                    </button>
-                    <button class="room-btn" data-room="office" onclick="HomeWidget.toggleRoom('office')" style="padding: 12px; border: none; border-radius: 8px; background: rgba(123, 97, 255, 0.1); color: #7B61FF; font-size: 12px; cursor: pointer;">
-                        💻 Office
-                    </button>
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;" id="homeStats">
-                    <div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.5); border-radius: 8px;">
-                        <div style="font-size: 16px; font-weight: 600; color: #7B61FF;" id="homeSolar">—</div>
-                        <div style="font-size: 10px; color: #666;">Solar Output</div>
-                    </div>
-                    <div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.5); border-radius: 8px;">
-                        <div style="font-size: 16px; font-weight: 600; color: #7B61FF;" id="homeBattery">—</div>
-                        <div style="font-size: 10px; color: #666;">Battery</div>
-                    </div>
-                </div>
+            <div class="widget-content zw-body" data-role="home-body" aria-live="polite" aria-busy="true">
+                ${HomeWidget.render({ kind: 'loading' })}
             </div>
         `;
     }
@@ -72,113 +41,163 @@ class HomeWidget extends WidgetModule {
     init(element) {
         super.init(element);
         this.element = element;
-        this.loadHomeStatus();
+        this._onClick = (ev) => {
+            const btn = ev.target && ev.target.closest ? ev.target.closest('button[data-entity-id]') : null;
+            if (btn && element.contains(btn)) {
+                ev.stopPropagation();
+                this.toggle(btn);
+            }
+        };
+        element.addEventListener('click', this._onClick);
+        this.show({ kind: 'loading' });
+        this.load();
     }
 
     update() {
-        this.loadHomeStatus();
+        this.load();
     }
 
-    async loadHomeStatus() {
-        const badge = this.element ? this.element.querySelector('#homeStatus') : null;
+    destroy() {
+        super.destroy();
+        if (this.element && this._onClick) this.element.removeEventListener('click', this._onClick);
+        this._onClick = null;
+    }
+
+    static async _getJson(url) {
+        const r = await fetch(url, { credentials: 'same-origin' });
+        if (r.status === 401 || r.status === 403) return { denied: true };
+        if (!r.ok) return { failed: true };
+        return { data: await r.json() };
+    }
+
+    async load() {
+        const [rooms, ents] = await Promise.all([
+            HomeWidget._getJson('/api/rooms').catch(() => ({ failed: true })),
+            HomeWidget._getJson('/api/ha/entities').catch(() => ({ failed: true }))
+        ]);
+        this.show(HomeWidget.stateFrom(rooms, ents));
+    }
+
+    /** Fold the two reads into one render state. Pure. */
+    static stateFrom(rooms, ents) {
+        if (rooms.denied && ents.denied) return { kind: 'denied' };
+        const roomList = (rooms.data && Array.isArray(rooms.data.rooms)) ? rooms.data.rooms : null;
+        let entList = null;
+        if (ents.data) {
+            if (Array.isArray(ents.data)) entList = ents.data;
+            else if (Array.isArray(ents.data.entities)) entList = ents.data.entities;
+        }
+        if (roomList === null && entList === null) return { kind: 'unavailable' };
+        const devices = HomeWidget.switchable(entList || []);
+        // The badge counts EVERY switchable device, not just the eight shown; null = the
+        // device read failed, so "how many are on" is unknown (never a definite "All off").
+        const onCount = entList === null ? null : HomeWidget.switchable(entList, Infinity).filter(d => d.on).length;
+        const haDown = entList === null || !!(rooms.data && rooms.data.ha_available === false);
+        if (!(roomList || []).length && !devices.length) {
+            return haDown ? { kind: 'unavailable' } : { kind: 'empty' };
+        }
+        return { kind: 'data', rooms: roomList || [], devices, onCount, haDown };
+    }
+
+    static switchable(entities, limit = 8) {
+        const DOMAINS = ['light', 'switch', 'input_boolean', 'fan'];
+        return entities
+            .filter(e => e && typeof e.entity_id === 'string' && DOMAINS.includes(e.entity_id.split('.')[0]))
+            .filter(e => e.state !== 'unavailable' && e.state !== 'unknown')
+            .map(e => ({
+                entity_id: e.entity_id,
+                name: String((e.attributes && e.attributes.friendly_name) || (e.entity_id.split('.')[1] || '').replace(/_/g, ' ')),
+                on: String(e.state).toLowerCase() === 'on'
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .slice(0, limit);
+    }
+
+    show(state) {
+        this.state = state;
+        if (!this.element) return;
+        const body = this.element.querySelector('[data-role="home-body"]');
+        const badge = this.element.querySelector('[data-role="home-badge"]');
+        if (body) {
+            body.innerHTML = HomeWidget.render(state);
+            body.setAttribute('aria-busy', state.kind === 'loading' ? 'true' : 'false');
+        }
+        if (badge) badge.textContent = HomeWidget.badge(state);
+    }
+
+    static badge(state) {
+        if (state.kind === 'loading') return '…';
+        if (state.kind === 'data') {
+            if (state.onCount === null) return 'Unknown';
+            const on = Number.isInteger(state.onCount) ? state.onCount : state.devices.filter(d => d.on).length;
+            return on ? on + ' on' : 'All off';
+        }
+        if (state.kind === 'empty') return '—';
+        return 'Offline';
+    }
+
+    static esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    /** HTML for a state. Every interpolated value goes through esc(). */
+    static render(state) {
+        const esc = HomeWidget.esc;
+        switch (state.kind) {
+        case 'loading':
+            return '<div class="zw-state zw-loading" role="status">Loading your home…</div>';
+        case 'denied':
+            return '<div class="zw-state" role="status">Sign in to see your home.</div>';
+        case 'unavailable':
+            return '<div class="zw-state zw-error" role="status">Home Assistant isn’t answering right now.</div>';
+        case 'empty':
+            return '<div class="zw-state zw-empty" role="status">No rooms or devices yet. Once Home Assistant has devices, they show up here.</div>';
+        default: break;
+        }
+        const parts = [];
+        if (state.haDown) {
+            parts.push('<div class="zw-note" role="status">Home Assistant isn’t answering - showing your rooms only.</div>');
+        }
+        if (state.rooms.length) {
+            parts.push('<ul class="zw-rooms" aria-label="Rooms">' + state.rooms.map(room => {
+                const devs = Array.isArray(room.devices) ? room.devices : [];
+                const on = devs.filter(d => d && String(d.state).toLowerCase() === 'on').length;
+                let summary = 'No devices';
+                if (devs.length) summary = on ? `${on} of ${devs.length} on` : `${devs.length} device${devs.length === 1 ? '' : 's'}`;
+                return `<li class="zw-room"><span class="zw-room-name">${esc(room.name)}</span><span class="zw-room-meta">${esc(summary)}</span></li>`;
+            }).join('') + '</ul>');
+        }
+        if (state.devices.length) {
+            parts.push('<div class="zw-devices" role="group" aria-label="Lights and switches">' + state.devices.map(d =>
+                `<button type="button" class="zw-device${d.on ? ' is-on' : ''}" data-entity-id="${esc(d.entity_id)}" aria-pressed="${d.on ? 'true' : 'false'}">` +
+                `<span class="zw-device-name">${esc(d.name)}</span><span class="zw-device-state">${d.on ? 'On' : 'Off'}</span></button>`
+            ).join('') + '</div>');
+        }
+        return parts.join('');
+    }
+
+    async toggle(btn) {
+        if (btn.disabled) return;
+        const entityId = btn.getAttribute('data-entity-id');
+        btn.disabled = true;
         try {
-            const response = await fetch('/api/ha/entities');
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-            const entities = Array.isArray(data) ? data : (data.entities || []);
-            this.updateHomeDisplay(entities);
-            if (badge) {
-                badge.textContent = 'Online';
-                badge.style.color = '';
-            }
-        } catch (error) {
-            console.warn('Home widget: HA bridge unreachable', error);
-            if (badge) {
-                badge.textContent = 'Offline';
-                badge.style.color = '#b91c1c';
-            }
-        }
-    }
-
-    updateHomeDisplay(entities) {
-        if (!this.element || !Array.isArray(entities)) return;
-
-        // Build a quick entity_id -> state map and cache it.
-        const byId = {};
-        entities.forEach(e => {
-            if (e && e.entity_id) byId[e.entity_id] = e;
-        });
-        this._entityState = byId;
-
-        // Reflect each room button's on/off state.
-        const onGradient = 'linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%)';
-        const offBg = 'rgba(123, 97, 255, 0.1)';
-        Object.keys(this.rooms).forEach(room => {
-            const entityId = this.rooms[room];
-            const ent = byId[entityId];
-            const isOn = ent && String(ent.state || '').toLowerCase() === 'on';
-            const btn = this.element.querySelector(`.room-btn[data-room="${room}"]`);
-            if (!btn) return;
-            btn.classList.toggle('on', !!isOn);
-            btn.style.background = isOn ? onGradient : offBg;
-            btn.style.color = isOn ? 'white' : '#7B61FF';
-        });
-
-        // Optional energy sensors — use them if the HA install exposes them.
-        const solar = byId['sensor.solar_power'] || byId['sensor.solar_output'];
-        const battery = byId['sensor.home_battery'] || byId['sensor.battery_level'];
-        const solarEl = this.element.querySelector('#homeSolar');
-        const batteryEl = this.element.querySelector('#homeBattery');
-        if (solarEl) {
-            if (solar && solar.state && solar.state !== 'unavailable') {
-                const unit = (solar.attributes && solar.attributes.unit_of_measurement) || 'kW';
-                solarEl.textContent = `⚡ ${solar.state} ${unit}`;
-            } else {
-                solarEl.textContent = '—';
-            }
-        }
-        if (batteryEl) {
-            if (battery && battery.state && battery.state !== 'unavailable') {
-                batteryEl.textContent = `🔋 ${battery.state}%`;
-            } else {
-                batteryEl.textContent = '—';
-            }
-        }
-    }
-
-    static async toggleRoom(room) {
-        const inst = window.__zoeHomeWidget || null;
-        const entityId = inst && inst.rooms ? inst.rooms[room] : null;
-        if (!entityId) {
-            console.warn('HomeWidget.toggleRoom: no entity mapped for', room);
-            return;
-        }
-        try {
-            const response = await fetch('/api/ha/control', {
+            const r = await fetch('/api/ha/control', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
                 body: JSON.stringify({ entity_id: entityId, action: 'toggle' })
             });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            if (inst) await inst.loadHomeStatus();
+            if (!r.ok) throw new Error('HTTP ' + r.status);
         } catch (error) {
-            console.error('HomeWidget.toggleRoom failed:', error);
+            console.warn('Home widget: toggle failed', error);
+        } finally {
+            btn.disabled = false;
+            this.load();
         }
     }
 }
 
 // Expose to global scope for WidgetManager
 window.HomeWidget = HomeWidget;
-
-// Keep a global toggleRoom shim so any legacy onclick="toggleRoom(...)"
-// handlers elsewhere in the UI still work.
-if (typeof window.toggleRoom !== 'function') {
-    window.toggleRoom = function(room) { return HomeWidget.toggleRoom(room); };
-}
-
-// Register widget + keep the live instance reachable for onclick handlers.
-if (typeof WidgetRegistry !== 'undefined') {
-    const homeInstance = new HomeWidget();
-    window.__zoeHomeWidget = homeInstance;
-    WidgetRegistry.register('home', homeInstance);
-}

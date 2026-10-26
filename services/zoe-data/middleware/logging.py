@@ -131,6 +131,7 @@ DEFAULT_QUIET_POLL_PATHS: tuple[str, ...] = (
     "/api/music/now-playing",
     "/api/panels/*/config",
     "/api/proactive/inbox",
+    "/api/system/stats",            # the desktop dashboard's System card, every 30 s
 )
 DEFAULT_QUIET_POLL_SLOW_MS = 1000
 
