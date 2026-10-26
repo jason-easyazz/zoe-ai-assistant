@@ -174,6 +174,15 @@ def _fmt(v) -> str:
     return str(v)
 
 
+ROUND_TOL = 0.0005     # the daemon logs scores as %.3f, so a logged score is only known to within half a last digit
+
+
+def near_threshold(score: Optional[float], thr: float) -> bool:
+    """True when a score read from a ROUNDED log line is within rounding distance of ``thr``: its real value may sit on
+    either side, so the accept/reject verdict cannot be reconstructed from it."""
+    return score is not None and abs(score - thr) <= ROUND_TOL + 1e-9
+
+
 def turn_score(t, acting_since: dt.datetime) -> Optional[tuple]:
     """(model, user, score) of the ResNet34 decision for this turn, or None when the turn has no ResNet34 meaning (the
     Resemblyzer era). In ``dual`` the ResNet34 score is the dual line (logged, not acted on); once ResNet34 acts, the
@@ -208,8 +217,9 @@ def build_rows(tns: Sequence, sev: Sequence, clips: dict, *, since: dt.datetime,
             turn_id=t.trigger_ts.isoformat(timespec="milliseconds"), time=t.trigger_ts.strftime("%Y-%m-%d %H:%M:%S"),
             kind=t.trigger, seconds="" if t.duration_s is None else f"{t.duration_s:.2f}", group=group, threshold=f"{thr:.3f}", model=model,
             claimed_user="" if user in (None, "None") else user, score=_fmt(score),
-            panel_accept=_fmt(score is not None and score >= thr),
-            notes=("" if t.dual_accept is None or t.dual_accept == (score is not None and score >= thr)
+            panel_accept="" if near_threshold(score, thr) else _fmt(score is not None and score >= thr),
+            notes=("score within rounding of the threshold - verdict uncertain" if near_threshold(score, thr)
+                   else "" if t.dual_accept is None or t.dual_accept == (score is not None and score >= thr)
                    else f"panel logged accept={t.dual_accept} (threshold then differed)"),
             server_identified=srv.get("identified") or ("" if not srv else "none"),
             server_verified=_fmt(srv.get("verified")), outcome=t.outcome,
@@ -332,10 +342,13 @@ def rates(rows: Sequence[dict], *, owner: str, thresholds: Optional[dict] = None
         raise ValueError("owner is required (the enrolled member id the me rows belong to)")
     lab = [r for r in rows if norm_label(r.get("label")) in ("me", "not me")]
     thr = thresholds or LIVE_THRESHOLDS
-    fa = fr = n_me = n_not = unscored_me = 0
+    fa = fr = n_me = n_not = unscored_me = uncertain = 0
     for r in lab:
         score = _float(r.get("score"))
         t = global_threshold if global_threshold is not None else live_threshold(r.get("group") or "long", thr)
+        if near_threshold(score, t):      # rounded-log score on the boundary: neither accepted nor rejected, reported apart
+            uncertain += 1
+            continue
         accepted = score is not None and score >= t
         if norm_label(r["label"]) == "me":
             n_me += 1
@@ -345,7 +358,7 @@ def rates(rows: Sequence[dict], *, owner: str, thresholds: Optional[dict] = None
             n_not += 1
             fa += accepted
     return dict(owner=owner, n_me=n_me, n_not_me=n_not, false_rejects=fr, false_accepts=fa,
-                unscored_me=unscored_me, frr=(fr / n_me) if n_me else float("nan"), frr_ci=wilson(fr, n_me),
+                unscored_me=unscored_me, uncertain=uncertain, frr=(fr / n_me) if n_me else float("nan"), frr_ci=wilson(fr, n_me),
                 far=(fa / n_not) if n_not else float("nan"), far_ci=wilson(fa, n_not))
 
 
@@ -355,6 +368,8 @@ def disagreements(rows: Sequence[dict]) -> list:
     out = []
     for r in rows:
         if r.get("model") != "resnet34" or not r.get("server_identified"):
+            continue
+        if r.get("panel_accept") == "":      # boundary-rounded score: no panel verdict to compare
             continue
         srv = r["server_identified"] not in ("", "none")
         if (r.get("panel_accept") == "yes") != srv:
@@ -564,6 +579,9 @@ def cmd_score(args) -> int:
           f"false accept {live['false_accepts']}/{live['n_not_me']} = {_pct(live['far'], live['far_ci'])}; "
           f"false reject {live['false_rejects']}/{live['n_me']} = {_pct(live['frr'], live['frr_ci'])} "
           f"({live['unscored_me']} of them unscored turns).")
+    if live["uncertain"]:
+        print(f"{live['uncertain']} labelled turn(s) scored within rounding (+-{ROUND_TOL}) of their threshold are excluded "
+              "from these rates - the logged 3-decimal score cannot tell accept from reject.")
     print("\n| one global threshold | false accept | false reject |\n|---|---|---|")
     sweep = []
     for i in range(0, 31):

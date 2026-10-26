@@ -273,6 +273,16 @@ def test_orchestrator_positive_control_runs_every_step_when_clear(tmp_path):
     assert r.returncode == 0 and len(ran) == 4, (ran, r.stdout, r.stderr)
 
 
+def test_night_pause_verdict_gate_go_still_enforces_the_run_budget(monkeypatch, tmp_path):
+    g = tmp_path / "night_busy.sh"
+    g.write_text("#!/bin/sh\nexit 1\n")
+    g.chmod(0o755)
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(g))
+    assert not hq.night_pause_verdict("x", budget_min=45, now=_at(1, 30)).allowed   # would still run at 01:50
+    assert hq.night_pause_verdict("x", budget_min=10, now=_at(1, 30)).allowed       # finishes first
+    assert hq.night_pause_verdict("x", budget_min=45, now=_at(3, 40)).allowed       # inside the span: the gate decides
+
+
 @pytest.mark.parametrize("when,secs", [
     (_at(1, 20), 600),        # 30 min to the window - the 20-min step budget = 10 min, not the 30-min cap
     (_at(1, 30), 0),          # the step cannot finish in time: never queue

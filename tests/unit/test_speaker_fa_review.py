@@ -192,6 +192,21 @@ def test_rates_at_the_live_thresholds_and_a_global_what_if():
     assert loose["false_accepts"] == 1 and loose["false_rejects"] == 1
 
 
+def test_boundary_rounded_scores_are_uncertain_not_exact():
+    # a 3-decimal log line cannot say which side of the 0.265 bar a logged 0.265 / 0.2654 fell on
+    rows = [dict(turn_id="a", label="not me", claimed_user="alex", group="long", score="0.265"),
+            dict(turn_id="b", label="not me", claimed_user="alex", group="long", score="0.100"),
+            dict(turn_id="c", label="me", claimed_user="alex", group="long", score="0.2654"),
+            dict(turn_id="d", label="me", claimed_user="alex", group="long", score="0.500")]
+    r = sfa.rates(rows, owner="alex")
+    assert r["uncertain"] == 2 and (r["n_me"], r["n_not_me"]) == (1, 1)
+    assert (r["false_accepts"], r["false_rejects"]) == (0, 0)
+    assert sfa.near_threshold(0.233, 0.233) and not sfa.near_threshold(0.240, 0.233)
+    rows = [dict(turn_id="u", model="resnet34", panel_accept="", server_identified="none"),
+            dict(turn_id="v", model="resnet34", panel_accept="yes", server_identified="none")]
+    assert sfa.disagreements(rows) == ["v"]
+
+
 def test_a_me_row_claimed_as_someone_else_is_a_false_reject():
     rows = [dict(turn_id="1", label="me", claimed_user="sam", group="long", score="0.9"),
             dict(turn_id="2", label="me", claimed_user="alex", group="long", score="0.9")]

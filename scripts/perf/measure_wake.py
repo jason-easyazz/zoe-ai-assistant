@@ -74,6 +74,7 @@ import speaker_fa_review as _spk  # noqa: E402
 SR = 16000
 CHUNK = 1280                      # the daemon's CHUNK_SIZE: one openWakeWord frame = 80 ms
 FRAME_S = CHUNK / SR
+DEFAULT_FRR_BUDGET = 0.05
 LIVE = dict(threshold=0.45, confirm_count=3, confirm_window_s=1.0, min_interval_s=5.0)   # Pi .env.voice, 2026-10-19
 GRID = tuple(round(0.20 + 0.01 * i, 2) for i in range(61))                             # 0.20 .. 0.80
 EXIT_INCOMPLETE = 4                  # the run stopped early (memory floor / brain window): artifacts say so, no recommendation
@@ -655,9 +656,25 @@ def _write_private(path: Path, text: str) -> None:
     _spk.write_private(path, text)
 
 
+_LIVE_ARGS = (("threshold", "threshold"), ("confirm_count", "confirm_count"), ("confirm_window_s", "confirm_window"),
+              ("min_interval_s", "min_interval"))
+
+
+def _settings_from(args, saved: Optional[dict] = None) -> tuple:
+    """(live, frr_budget) for a run or a re-render: an explicit CLI flag wins, else the value saved in scores.json by the
+    ``run`` that produced it, else today's LIVE defaults (a scores.json from before settings were saved has none)."""
+    saved = saved or {}
+    sl = saved.get("live") or {}
+    live = {}
+    for key, flag in _LIVE_ARGS:
+        v = getattr(args, flag, None)
+        live[key] = v if v is not None else sl.get(key, LIVE[key])
+    budget = getattr(args, "frr_budget", None)
+    return live, (budget if budget is not None else saved.get("frr_budget", DEFAULT_FRR_BUDGET))
+
+
 def _live_from(args) -> dict:
-    return dict(threshold=args.threshold, confirm_count=args.confirm_count, confirm_window_s=args.confirm_window,
-                min_interval_s=args.min_interval)
+    return _settings_from(args)[0]
 
 
 def incomplete_banner(aborted: dict) -> str:
@@ -704,8 +721,8 @@ def cmd_report(args) -> int:
         except (RuntimeError, OSError) as exc:
             print(f"(near-miss section skipped: {exc})", file=sys.stderr)
     aborted = ((data.get("meta") or {}).get("notes") or {}).get("aborted")    # a saved partial run stays partial
-    _rows, rec, md = build_report(data["clips"], live=_live_from(args), frr_budget=args.frr_budget, near=near,
-                                  aborted=aborted)
+    live, frr_budget = _settings_from(args, (data.get("meta") or {}).get("settings"))
+    _rows, rec, md = build_report(data["clips"], live=live, frr_budget=frr_budget, near=near, aborted=aborted)
     print(md)
     return EXIT_INCOMPLETE if aborted else 0
 
@@ -757,6 +774,7 @@ def cmd_run(args) -> int:
     if why:
         print(f"measure_wake: refused - {why}", file=sys.stderr)
         return 3
+    live, frr_budget = _settings_from(args)
     scorer = OwwScorer(model, feats)
     t0 = time.time()
     clips, aborted = score_clips(todo, scorer, notes, lead_s=args.lead_s, tail_s=args.tail_s,
@@ -767,10 +785,11 @@ def cmd_run(args) -> int:
     meta = dict(model_sha256=sha256(model), melspec_sha256=sha256(feats / "melspectrogram.onnx"),
                 embedding_sha256=sha256(feats / "embedding_model.onnx"), onnxruntime=onnxruntime.__version__,
                 lead_s=args.lead_s, tail_s=args.tail_s, seconds=round(time.time() - t0, 1),
-                finished=dt.datetime.now().isoformat(timespec="seconds"), notes=notes)
+                finished=dt.datetime.now().isoformat(timespec="seconds"), notes=notes,
+                settings=dict(live=live, frr_budget=frr_budget))
     _write_private(out / "scores.json", json.dumps(dict(meta=meta, clips=clips)))
     near = nearmiss_summary(pvl.events(lines), since=args.since)
-    rows, rec, md = build_report(clips, live=_live_from(args), frr_budget=args.frr_budget, near=near, aborted=aborted)
+    rows, rec, md = build_report(clips, live=live, frr_budget=frr_budget, near=near, aborted=aborted)
     md += "\n\nRun: " + json.dumps(meta, default=str)
     _write_private(out / "report.md", md + "\n")
     _write_private(out / "report.json", json.dumps(dict(meta=meta, recommendation=rec, nearmiss=near,
@@ -796,11 +815,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         p.add_argument("--voice-log", help="a local copy of the panel's voice.log (default: read it over ssh)")
         p.add_argument("--since", type=_date, default=NEARMISS_SINCE, help="near-miss window start (local)")
         if live:
-            p.add_argument("--threshold", type=float, default=LIVE["threshold"], help="the LIVE threshold")
-            p.add_argument("--confirm-count", type=int, default=LIVE["confirm_count"])
-            p.add_argument("--confirm-window", type=float, default=LIVE["confirm_window_s"])
-            p.add_argument("--min-interval", type=float, default=LIVE["min_interval_s"])
-            p.add_argument("--frr-budget", type=float, default=0.05,
+            p.add_argument("--threshold", type=float, default=None, help="the LIVE threshold (report: default = the value the run used)")
+            p.add_argument("--confirm-count", type=int, default=None)
+            p.add_argument("--confirm-window", type=float, default=None)
+            p.add_argument("--min-interval", type=float, default=None)
+            p.add_argument("--frr-budget", type=float, default=None,
                            help="extra real wakes a recommended threshold may lose vs the live one (0.05 = 5 pp)")
 
     n = sub.add_parser("nearmiss", help="live near-miss distribution + wake outcomes from voice.log (no model)")

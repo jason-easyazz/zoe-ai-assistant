@@ -188,6 +188,16 @@ def night_pause_verdict(name: str, *, budget_min: int = 45, kind: str = "voice",
             return Verdict(False, f"{name}: night_busy.sh {kind} says pause (the 12B night window, the nightly voice regression, "
                                   "or the household's waking hours own the box) - start it when the gate opens", "brain-window")
         if rc == 1:
+            # The measured gate says "go" for a start NOW; it cannot know the run's length. A start that would still be
+            # alive when the fixed window opens (the gate pauses from ~01:55) is refused here, so a long run never
+            # holds the harness lock into the night window. A start already inside the span is the gate's call.
+            t0 = now or dt.datetime.now()
+            end = t0 + dt.timedelta(minutes=max(0, int(budget_min)))
+            w_start = t0.replace(hour=BRAIN_WINDOW_START.hour, minute=BRAIN_WINDOW_START.minute, second=0, microsecond=0)
+            if t0 < w_start < end:
+                return Verdict(False, f"{name}: night_busy.sh {kind} says free, but a {budget_min}-min run would still be alive "
+                                      f"at {BRAIN_WINDOW_START:%H:%M} - start it after the window or early enough to finish first",
+                               "brain-window")
             return Verdict(True, f"{name}: night_busy.sh {kind} says the box is free")
     return brain_window_verdict(name, budget_min=budget_min, now=now)
 

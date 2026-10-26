@@ -648,3 +648,21 @@ def test_nearmiss_does_not_count_the_synthetic_wake_after_an_orb_tap():
     nm = [_nm("2026-10-17 02:09:59", 0.40, 0.45)] + lines
     s2 = mw.nearmiss_summary(pvl.events(nm), since=dt.datetime(2026, 10, 17), now=dt.datetime(2026, 10, 18))
     assert s2["retry_after_near_miss"] == 0 and s2["ramp_into_wake"] == 0       # the orb's wake is not a retry
+
+
+def test_report_restores_the_settings_the_run_used_and_cli_flags_still_override(monkeypatch, tmp_path):
+    unset = dict(threshold=None, confirm_count=None, confirm_window=None, min_interval=None, frr_budget=None)
+    saved = dict(live=dict(threshold=0.6, confirm_count=2, confirm_window_s=2.0, min_interval_s=7.0), frr_budget=0.1)
+    live, budget = mw._settings_from(SimpleNamespace(**unset), saved)
+    assert live == saved["live"] and budget == 0.1
+    live, budget = mw._settings_from(SimpleNamespace(**{**unset, "confirm_count": 4, "frr_budget": 0.2}), saved)
+    assert live["confirm_count"] == 4 and live["threshold"] == 0.6 and budget == 0.2          # explicit flag wins
+    live, budget = mw._settings_from(SimpleNamespace(**unset), None)                           # old scores.json
+    assert live == mw.LIVE and budget == 0.05
+    seen = {}
+    monkeypatch.setattr(mw, "build_report", lambda clips, *, live, frr_budget, near=None, aborted=None:
+                        (seen.update(live=live, budget=frr_budget), ([], {}, "md"))[1])
+    p = tmp_path / "scores.json"
+    p.write_text(json.dumps(dict(meta=dict(settings=saved), clips=[])))
+    assert mw.cmd_report(SimpleNamespace(scores=str(p), no_nearmiss=True, voice_log=None, since=None, **unset)) == 0
+    assert seen == dict(live=saved["live"], budget=0.1)
