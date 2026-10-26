@@ -34,6 +34,7 @@ This index gives every record one status.
 | [agent-sessions-off-box-2026-10-04.md](agent-sessions-off-box-2026-10-04.md) | 2026-10-04 | absorbed 2026-10-18 | engineering-off-box.md in knowledge; retire by 2026-11-17 |
 | [architecture-deep-dive-2026-10-18.md](architecture-deep-dive-2026-10-18.md) | 2026-10-18 | open | task list A-D still being worked; ROADMAP derives from it |
 | [arousal-detection-licence-scope-2026-10-04.md](arousal-detection-licence-scope-2026-10-04.md) | 2026-10-04 | open | licence decision before any build |
+| [tone-of-voice-deep-dive-2026-10-26.md](tone-of-voice-deep-dive-2026-10-26.md) | 2026-10-26 | open | tone-of-voice options and phased plan; owner decisions pending |
 | [bakeoff-ram-latency-optimisation-2026-10-06.md](bakeoff-ram-latency-optimisation-2026-10-06.md) | 2026-10-07 | absorbed 2026-10-18 | bake-off closed; retire by 2026-11-17 |
 | [bakeoff-run-20261006-0935.md](bakeoff-run-20261006-0935.md) | 2026-10-06 | absorbed 2026-10-18 | run record; verdict in 10-08 decision; retire by 2026-11-17 |
 | [bakeoff-run-20261008-1805.md](bakeoff-run-20261008-1805.md) | 2026-10-08 | absorbed 2026-10-18 | run record; verdict in 10-08 decision; retire by 2026-11-17 |
