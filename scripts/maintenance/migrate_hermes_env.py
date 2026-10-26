@@ -181,6 +181,7 @@ def read_unit(path: Path, home: Path) -> UnitInfo:
     env_files: list[Path] = []
     inline: set[str] = set()
     execs: list[Path] = []
+    exec_by_key: dict[str, list[Path]] = {}
     workdir: Optional[Path] = None
     for text in texts:
         for ln in text.splitlines():
@@ -191,16 +192,27 @@ def read_unit(path: Path, home: Path) -> UnitInfo:
                 v = s.split("=", 1)[1].strip().lstrip("-")
                 if v:
                     env_files.append(Path(_expand(v, home)))
+                else:
+                    env_files.clear()           # systemd: an empty assignment resets the list
             elif s.startswith("Environment="):
+                if not s.split("=", 1)[1].strip():
+                    inline.clear()              # same reset semantics
+                    continue
                 for m in re.finditer(r"""(?:^|\s)["']?([A-Za-z_][A-Za-z0-9_]*)=""", s.split("=", 1)[1]):
                     inline.add(m.group(1))
             elif s.startswith("WorkingDirectory="):
                 workdir = Path(_expand(s.split("=", 1)[1].strip().lstrip("-"), home))
             elif s.startswith(("ExecStart=", "ExecStartPre=")):
-                for tok in s.split("=", 1)[1].split():
+                key, val = s.split("=", 1)
+                if not val.strip():
+                    exec_by_key[key] = []       # empty ExecStart=/ExecStartPre= resets just that list
+                    continue
+                for tok in val.split():
                     tok = _expand(tok.lstrip("-@+!"), home)
                     if tok.startswith("/"):
-                        execs.append(Path(tok))
+                        exec_by_key.setdefault(key, []).append(Path(tok))
+    for lst in exec_by_key.values():
+        execs.extend(lst)
     return UnitInfo(path.name, path, env_files, inline, execs, workdir)
 
 

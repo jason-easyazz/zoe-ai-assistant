@@ -306,3 +306,23 @@ def test_a_backup_root_nested_under_the_pruned_dir_still_warns(mig, box, monkeyp
     monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", str(box["home"]))
     assert _apply(mig, box) == 0
     assert "will NOT expire" in capsys.readouterr().err
+
+
+def test_dropin_empty_environmentfile_resets_the_list(mig, box):
+    # systemd: an empty EnvironmentFile= in a drop-in clears earlier files; only later ones count.
+    unit = box["units"] / "zoe-data.service"
+    d = unit.with_name(unit.name + ".d")
+    d.mkdir()
+    (d / "10-reset.conf").write_text("[Service]\nEnvironmentFile=\nEnvironmentFile=-%h/.hermes/.env\n")
+    info = mig.read_unit(unit, box["home"])
+    assert info.env_files == [box["home"] / ".hermes" / ".env"]
+
+
+def test_dropin_empty_environment_and_exec_reset(mig, box):
+    unit = box["units"] / "zoe-health.service"
+    d = unit.with_name(unit.name + ".d")
+    d.mkdir()
+    (d / "10-reset.conf").write_text("[Service]\nEnvironment=\nExecStart=\nExecStart=/opt/new.sh\n")
+    info = mig.read_unit(unit, box["home"])
+    assert info.inline_names == set()
+    assert info.exec_paths == [Path("/opt/new.sh")]
