@@ -25,7 +25,7 @@
    "defaults": [
     "unset"
    ],
-   "kind": "unknown",
+   "kind": "bool",
    "readers": 2
   },
   "ZOE_AFFECT_CONSENT_GATE": {
