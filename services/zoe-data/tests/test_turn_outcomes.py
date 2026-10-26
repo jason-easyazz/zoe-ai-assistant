@@ -466,6 +466,26 @@ async def test_the_thumbs_down_button_marks_the_rated_turn(sql):
     assert await to.note_feedback(A, "m2", "thumbs_down") is False, "a reply with no row of its own is not guessed at"
 
 
+async def test_a_streamed_reply_is_rated_by_the_id_the_page_received(sql, monkeypatch):
+    """The chat page rates a freshly streamed reply by ``assistant_message_id`` (a 12-char run id) before history reloads. The reply is
+    saved by the REAL ``_save_chat_message`` under that same id, so the outcome row carries it and the rating lands (PR #2141 review)."""
+    from routers import chat as chat_router
+
+    page_id = "a1b2c3d4e5f6"
+    sql.conn.execute("ALTER TABLE chat_messages ADD COLUMN metadata TEXT")
+
+    async def no_touch(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(chat_router, "_touch_chat_session", no_touch)
+    q = "what's the capital of chad"
+    assert await chat_router._save_chat_message("web_1", "assistant", "Lyon.", user_id=A, message_id=page_id)
+    await feed(item(q, "Lyon.", session="web_1"))
+    assert (await to.get_backend().by_message(A, page_id))[0]["message_id"] == page_id
+    assert await to.note_feedback(A, page_id, "thumbs_down") is True
+    assert "NEGATIVE_FEEDBACK" in (await to.review(A))["items"][0]["signals"]
+
+
 async def test_a_rating_never_lands_on_a_neighbouring_turn(sql, monkeypatch):
     """The newest turn's outcome insert failed: its thumbs-down must not fall back to the PREVIOUS turn's row (the old latest-in-session
     lookup did, and the newest-assistant-message check could not tell)."""
