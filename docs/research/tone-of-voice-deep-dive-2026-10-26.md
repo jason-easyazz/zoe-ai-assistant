@@ -216,7 +216,7 @@ Licence and size detail is in the 2026-10-04 record; summary and updates:
 - **Acoustic confounds in a home.** TV in the background, far-field echo, a noisy kitchen, mic gain and a sore throat
   all move the same features as emotion. The corpus quarantine folders (TV false-wakes) are exactly this.
 - **False frustration causes false apologies.** An unnecessary "sorry you're upset" is itself irritating and presumptuous.
-  The Alexa pattern avoids it by acting only after an explicit correction. Budget: false-apology rate is a hard gate.
+  The Alexa pattern avoids it by acting only after an explicit correction. Budget: apology-trigger rate is a hard gate, with a reviewed false-apology share.
 - **Sarcasm over-calling.** Models infer sarcasm from stereotyped pitch/pauses; do not ship a sarcasm label at all.
 - **Creep factor and record-keeping.** An emotional measurement with a timestamp becomes linkable data the moment it
   is stored. Follow the existing scope call: act in the moment, record nothing per clip, aggregates only; any stored
@@ -258,8 +258,10 @@ models on the live path, any Omni-class 7B+ model resident, any sarcasm label, a
 ### Gates (proposed; fixed before any run)
 1. Voice path untouched: replay-gate said-vs-did and per-stage speed unchanged (`voice_regression_probe.py`, under
    `flock /tmp/zoe-voice-harness.lock`); the new work is off-path.
-2. Precision of the gated "frustrated" flag at least 0.8 on the labelled set; **false-apology rate no more than 1 per
-   100 turns** on the unlabelled corpus (by construction: acts only with an explicit correction cue).
+2. Precision of the gated "frustrated" flag at least 0.8 on the labelled set; **apology-trigger rate no more than 1 per
+   100 turns** on the unlabelled corpus (it counts how often the apology fires; the false-apology share cannot be measured without
+   labels). The owner reviews a sample of the triggered replies (for example 30, or all if fewer) and the share judged unwarranted must
+   be at most 10%; an explicit correction cue lowers the trigger rate but does not guarantee a correct trigger.
 3. Model options only: RAM delta at most 300 MB resident and none during a voice turn; licence clean for the live path;
    beats Phase 0 by a margin set in advance (e.g. +0.10 F1) or it is dropped (ties go to the simpler system).
 4. Governance: emotional-safety note updated in the same PR if anything reads or keeps affect; inferred-only,

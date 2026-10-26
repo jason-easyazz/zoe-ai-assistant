@@ -78,7 +78,9 @@ Storage and retention (code, `services/zoe-data/omi_recordings.py`, `omi_voices.
 - Transcripts, turn text and day-review candidates sit in Postgres. I found no age-based expiry for transcript text in
   `omi_recordings.py`; they go when the owner deletes a recording, on "forget <name>" (redacts the name) or on member erase.
   This is a gap for the policy in section 6.
-- The pass over turn embeddings keeps bystander embeddings 14 days, unknown voices 30 days, confirmed voices 365 idle days.
+- Voice retention [V, `omi_voices.py`]: unknown-voice clusters share the 14-day embedding limit (`EMBED_TTL_DAYS`). Learned voiceprints are
+  kept until forgotten by default (`PROVISIONAL_DAYS = 0`, `IDLE_DAYS = 0`). The 30-day (provisional) and 365-day (idle) sweeps are optional
+  and apply only when `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `ZOE_OMI_VOICEPRINT_IDLE_DAYS` are set above zero.
 - Nothing else may read pendant transcripts except the day review (static test `test_nothing_else_reads_pendant_transcripts`).
   Every use case below that wants the transcript therefore goes through the day review's approve-before-write gate, or needs a
   deliberate, tested widening of that allow-list.
@@ -124,8 +126,13 @@ Read-only: `scripts/night/night_window.py`, the unit and timer, `docs/knowledge/
   on the others under a minute [V]. **Any new overnight job competes with it**, so give each job an explicit budget slice, and order
   by value (vocabulary mining and label queue before any audio judging).
 - **Audio-judging cost** [E]: a 10 s clip is about 250 audio tokens, about 1.6 s of prefill, plus the projector (CPU, unmeasured) and
-  a 30-token verdict at 6.6 tok/s (about 4.5 s): roughly 8-12 s per clip. 150 owner-labelled clips is about 20-30 min, so the
-  tone test in section 4b fits **one manual trial window** rather than a nightly budget.
+  a 30-token verdict at 6.6 tok/s (about 4.5 s): roughly 8-12 s per audio judgment (a text-only judgment is about 5 s).
+  The full section 4b experiment is 150 clips x 4 arms = 600 judgments: the three audio arms are 450 x 8-12 s = 60-90 min,
+  the text-only arm about 12 min, and the 30 negative-control clips across all four arms about 15-20 min more, so roughly
+  **90-120 min in total**. That exceeds even the free tail (about 16 min worst case, 38 min median), so it is split into six
+  bounded manual trials of 30 clips x 4 arms each (about 15-20 min), each run on its own and each resumable; the negative
+  controls are the sixth. Arm order is shuffled within a trial and every trial writes its own result file, so a trial that is
+  aborted by the RAM floor loses only itself.
 - **RAM risk** [V + E]: the lowest MemAvailable seen beside the 12B was 1,251 MiB against a 1,200 MiB floor (a past trial). Adding
   a 175 MB projector and audio compute buffers could trip the floor, which kills the running job and restores. Hence "trial first".
 - **Rules that stay**: no landing or harness in the quiet hours; the transcription loop already refuses to run during the window;
@@ -165,11 +172,12 @@ follow the words; phase 0 is a gated, explainable detector).
   1. The owner labels about 150 clips of their own (frustrated / neutral / urgent / tired / unsure), local only, time-boxed.
      Use panel clips from the voice corpus first (known channel), pendant clips only if the owner keeps a consented slice.
   2. Four arms on the same clips: **text only**, **audio plus text**, **audio only**, and a **shuffled-audio control** (same transcript,
-     audio swapped from another clip). A model that really listens must drop on the shuffled arm.
+     audio swapped from another clip). The shuffled arm keeps the true transcript, so it is not expected to reach chance; it tests whether the audio gain disappears.
   3. Include about 30 negative controls (calm speech over loud TV, whispered speech) and exclude children and guests entirely.
   4. Report macro-F1, accuracy against chance with a confidence interval, and agreement (kappa) with the owner.
-  5. **Gate:** audio-plus-text beats text-only by at least +0.10 macro-F1, the shuffled-audio arm falls to within chance, and the
-     false-"frustrated" rate on calm clips is at most 5%. Otherwise the 12B audio judge is dropped (a valid, cheap result).
+  5. **Gate:** audio-plus-text beats text-only by at least +0.10 macro-F1, the shuffled-audio arm does not beat text-only by a
+     meaningful margin (the audio gain disappears when the audio is shuffled), the audio-only arm is above chance (or, if it is at chance,
+     the same is checked on clips whose words do not reveal the label), and the false-"frustrated" rate on calm clips is at most 5%. Otherwise the 12B audio judge is dropped (a valid, cheap result).
 - **Policy limits** (governance note, unchanged): act in the moment; no per-clip emotion record; records only for consenting adults;
   children and guests never; an inference never overrides what was said; never tell the person "you sound angry".
 - **Verdict:** valuable, uncertain, high creep risk. Do phase 0 of the sister record first; use the pendant only for the baseline
@@ -261,7 +269,7 @@ Technique to use and the guard that makes it safe on a one-person data set:
 | **Weak supervision with outcome labels** | Corrections, re-asks, abandoned requests, approve/reject taps as noisy labels | Labels come from events *after* the output, never from the model's own confidence; store as `inferred`; aggregate before use |
 | **Pseudo-labelling with confidence gating** | Speaker turns, lexicon candidates, hard negatives | Gate on a margin over the runner-up and a fixed floor; teach from a *different* model or the owner, not the model being trained; keep a floor of human labels in every round (confirmation bias, [arXiv 1908.02983](https://arxiv.org/abs/1908.02983)) |
 | **Active learning with a tiny budget** | Ask only through the day review's approve/reject tap | Spend labels on the lowest-confidence and highest-disagreement items first [E]; cap asks per day; never ask more than the owner answers (the digest already waits after unanswered rounds) |
-| **Held-out evaluation** | Every claimed gain | **Frozen golden set**: labelled by the owner only, split by time and by speaker, never touched by any pseudo-labeller or model under training; same set before and after every change; shuffled and permuted controls must fall to chance |
+| **Held-out evaluation** | Every claimed gain | **Frozen golden set**: labelled by the owner only, split by time and by speaker, never touched by any pseudo-labeller or model under training; same set before and after every change; permuted-baseline controls must fall to chance, and a shuffled-audio control must lose any gain over text-only |
 | **Feedback-loop control** | Anything where output feeds the next input | Without fresh real data each generation, quality degrades ([Shumailov et al., arXiv 2307.01850](https://arxiv.org/abs/2307.01850)) [V]; therefore: no training on text the model wrote, no memory write from an inference, and `user-stated > confirmed > inferred` enforced by the authority layer |
 | **Ratchets** | Router, wake word, keyterms | Promote only if no said-vs-did regression on `~/.zoe-voice-samples` and per-stage speed is not worse; every change reversible |
 
@@ -354,8 +362,8 @@ rules applied in the same change.
 2. The 12B audio tone test (section 4b) in one manual window with the projector re-added; record MemAvailable low, time per clip,
    and the four-arm result.
 3. Tone phase 0 of the sister record using the pendant baseline per channel.
-4. **Gates:** audio-plus-text beats text-only by at least +0.10 macro-F1 and the shuffled-audio arm is within chance; tone flag precision
-   at least 0.8 with false-apology rate at most 1 per 100 turns (sister record); projector fits with MemAvailable never below the floor.
+4. **Gates:** audio-plus-text beats text-only by at least +0.10 macro-F1 and the shuffled-audio arm does not beat text-only by a meaningful margin and the audio-only arm is above chance (two-part gate, section 4b); tone flag precision
+   at least 0.8 with apology-trigger rate at most 1 per 100 turns plus owner review of a sample of triggered replies (sister record); projector fits with MemAvailable never below the floor.
 
 ### Phase 3 - only if Phases 1-2 leave a gap
 Moonshine adaptation or a wake-word verifier, judged against the golden set with a held-out speaker split; router hard negatives through
