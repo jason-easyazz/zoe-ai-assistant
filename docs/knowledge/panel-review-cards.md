@@ -63,7 +63,8 @@ returns before any work with the flag off. It runs on `voice` and `chat` (chat: 
 
 1. Land through the voice landing loop (replay probe against the merged commit).
 2. Set `ZOE_PANEL_REVIEW_CARDS=1` in zoe-data's env, restart zoe-data, deploy the UI (`touch/home.html` loads
-   `touch-voice-session.js?v=vs-2` and `touch-review-cards.js?v=rc-1`; not precached, no `SW_VERSION` bump).
+   `touch-voice-session.js?v=vs-2` and `touch-review-cards.js?v=rc-2`; not precached, no `SW_VERSION` bump). The renderer is shared
+   with the memories card ([memories-voice.md](memories-voice.md)): a frame may name its own routes (`endpoint`, only `/api/panel/<word>`).
 3. The day review part also needs `ZOE_OMI_DAY_REVIEW` (items) and `ZOE_OMI_SYNC_ENABLED` (voices); each part is empty while its
    flag is off.
 4. Verify at the panel: "what's on my plate?" with a verified voice (badge "<name> · voice") shows the card; tap Done; say "lock"
