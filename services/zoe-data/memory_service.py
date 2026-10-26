@@ -2290,6 +2290,17 @@ class MemoryService:
             self._bump(GUEST_DROP, actor)
             logger.info("GUEST_MEMORY_DISCARD writer=%s op=edit", actor)
             return None
+        if decision == "edit" and edits:
+            # defence in depth: an edit WRITES a new row, and words said off the record are never stored (ingest has the same wall)
+            try:
+                import memory_provenance as _mp
+
+                if _mp.enabled() and (_mp.parse_off_record(edits) is not None or _mp.is_off_record(user_id, edits)):
+                    self._bump("off_record", actor)
+                    logger.info("OFF_RECORD user=%s blocked=edit source=%s", user_id, actor)
+                    return None
+            except Exception:  # noqa: BLE001
+                pass
         if (
             decision == "edit"
             and actor in MEMORY_OPT_OUT_SOURCES

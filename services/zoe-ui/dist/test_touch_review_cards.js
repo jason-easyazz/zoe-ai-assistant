@@ -165,6 +165,75 @@ const LOOPS = { panel_id: P, member_id: 'casey', kind: 'open_loops', private: tr
     s.fire('zoe:voice-card', { panel_id: P, member_id: 'casey', kind: 'calendar', private: true, title: 'c', items: [{ text: 'Dentist' }] });
     assert(s.card().textContent.includes('Dentist') && !s.btn('done'));
   }
+  // ── the memories card (ZOE_MEMORIES_VOICE): its own routes, rows kept on "keep", the phone hint, soft rows, PIN first ──────
+  {
+    const MEM = '/api/panel/memories';
+    const s = boot((url, opts) => {
+      if (url === MEM + '/phone-qr') return { status: 200 };
+      if (url !== MEM + '/act') return { status: 500 };
+      const b = JSON.parse(opts.body);
+      if (b.action === 'source') return { status: 200, json: { ok: true, keep: true, detail: 'You told me on Tuesday.' } };
+      if (b.action === 'wrong') return { status: 200, json: { ok: true, keep: true, note: 'Okay - tell me what is right.' } };
+      if (b.action === 'forget_person') return { status: 403, json: { detail: 'pin_needed' } };
+      return { status: 200, json: { ok: true, note: 'Forgotten.' } };
+    });
+    const rowActs = [
+      { key: 'wrong', label: "That's wrong", choices: [{ key: 'voice', label: "I'll say it" }, { key: 'phone', label: 'Fix on my phone', phone: true }] },
+      { key: 'forget', label: 'Forget', choices: [{ key: 'yes', label: 'Yes, forget it' }] },
+      { key: 'source', label: "Where's this from?" }];
+    s.fire('zoe:voice-session', { panel_id: P, state: 'open', member_id: 'casey', display_name: 'Casey' });
+    s.fire('zoe:voice-card', { panel_id: P, member_id: 'casey', kind: 'memories', private: true, title: 'What I know about you',
+      card_token: TOKEN, endpoint: MEM, phone_hint: 'Scan with your phone to fix it there.', more: 3,
+      more_label: '3 more on your phone', groups: { people: 'People', preferences: 'Preferences', about: 'About you' },
+      items: [
+        { id: 'p1', group: 'people', text: 'Robin (sister)', meta: 'lives in Eastvale',
+          actions: [{ key: 'forget_person', label: 'Forget', choices: [{ key: 'yes', label: 'Yes, forget Robin' }] }] },
+        { id: 'm1', group: 'preferences', text: 'You like dark roast <i>coffee</i>', meta: 'You told me on 3 Oct', actions: rowActs },
+        { id: 'm2', group: 'about', text: 'You enjoy long hikes', meta: 'I worked this out', soft: true, actions: rowActs },
+      ] });
+    const txt = s.card().textContent;
+    assert(txt.includes('People') && txt.includes('Preferences') && txt.includes('About you'), 'grouped');
+    assert(txt.includes('You like dark roast <i>coffee</i>') && txt.includes('You told me on 3 Oct'), 'text + provenance as text');
+    assert(txt.includes('3 more on your phone'), 'what only the phone shows is said');
+    const soft = s.find((e) => e.getAttribute && e.getAttribute('data-item') === 'm2')[0];
+    assert(soft && soft.className.includes('zrc-soft'), 'what Zoe worked out herself is marked');
+    s.btn('source', 'm1').click();
+    await flush(); await flush();
+    assert.strictEqual(s.calls[0].url, MEM + '/act', 'the card uses its own routes');
+    assert.strictEqual(s.calls[0].opts.headers['X-Panel-Card'], TOKEN);
+    assert.deepStrictEqual(JSON.parse(s.calls[0].opts.body), { item: 'm1', action: 'source' });
+    assert(s.card().textContent.includes('You told me on Tuesday.') && s.card().textContent.includes('dark roast'), 'kept + answered');
+    s.btn('wrong', 'm1').click();
+    s.choice('voice').click();
+    await flush(); await flush();
+    assert.deepStrictEqual(JSON.parse(s.calls[1].opts.body), { item: 'm1', action: 'wrong', choice: 'voice' });
+    assert(s.card().textContent.includes('dark roast') && s.card().textContent.includes('tell me what is right'));
+    s.btn('wrong', 'm1').click();
+    s.choice('phone').click();
+    await flush(); await flush();
+    assert.strictEqual(s.calls[2].url, MEM + '/phone-qr');
+    assert(s.card().textContent.includes('fix it there'), "the phone hint is the card's own");
+    s.btn('forget', 'm1').click();
+    assert.strictEqual(s.calls.length, 3, 'Forget asks first: nothing sent yet');
+    s.choice('yes').click();
+    await flush(); await flush();
+    assert.deepStrictEqual(JSON.parse(s.calls[3].opts.body), { item: 'm1', action: 'forget', choice: 'yes' });
+    assert(!s.card().textContent.includes('dark roast'), 'forgotten row goes after the yes');
+    s.btn('forget_person', 'p1').click();
+    s.choice('yes').click();
+    await flush(); await flush();
+    assert(s.card().textContent.includes('Robin') && s.card().textContent.includes('Unlock with your PIN first'), 'PIN first');
+    assert.strictEqual(s.find((e) => e.tagName === 'INPUT' || e.tagName === 'TEXTAREA').length, 0, 'no keyboard on the panel');
+  }
+  // ── a card cannot point its taps off the panel routes ────────────────────────────────────────────────────────────────────
+  {
+    const s = boot();
+    s.fire('zoe:voice-session', { panel_id: P, state: 'open', member_id: 'casey', display_name: 'Casey' });
+    s.fire('zoe:voice-card', Object.assign({}, LOOPS, { endpoint: 'https://evil.example/x' }));
+    s.btn('done', '1').click();
+    await flush(); await flush();
+    assert.strictEqual(s.calls[0].url, '/api/panel/cards/act');
+  }
   const vsAt = homeHtml.indexOf('/js/touch-voice-session.js');
   const rcAt = homeHtml.indexOf('/js/touch-review-cards.js');
   const exAt = homeHtml.indexOf('/js/touch-ui-executor.js');
