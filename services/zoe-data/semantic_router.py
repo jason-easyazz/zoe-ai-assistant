@@ -234,10 +234,15 @@ def _append_shadow_line(path: str, line: str, epoch: Optional[int] = None) -> bo
         shadow_logger.debug("shadow append skipped: write lock busy (retention pass)")
         return False
     try:
-        if epoch is not None:
+        try:
             import local_text_logs
-
-            if local_text_logs.erase_epoch() != epoch:
+        except Exception:  # noqa: BLE001 - unreadable guard: fall back to the epoch-less behaviour
+            local_text_logs = None
+        if local_text_logs is not None:
+            if local_text_logs.erase_in_progress():
+                shadow_logger.debug("shadow append dropped: an erase is in progress")
+                return False
+            if epoch is not None and local_text_logs.erase_epoch() != epoch:
                 shadow_logger.debug("shadow append dropped: an erase ran while it was computing")
                 return False
         os.makedirs(os.path.dirname(path), exist_ok=True)

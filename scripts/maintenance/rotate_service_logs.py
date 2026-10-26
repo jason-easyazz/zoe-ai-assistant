@@ -239,7 +239,12 @@ def pruned_backup_root(home: Optional[Path] = None) -> Path:
     files - the same precedence ``apply_env_files`` gives the job), else ``<home>/.zoe/backups``. Pure: it does NOT touch
     ``os.environ``. Owner scripts that write backups default to this so their copies expire with the rest."""
     raw = os.environ.get("ZOE_ADHOC_BACKUP_DIR") or read_env_settings(ENV_FILES, ("ZOE_ADHOC_BACKUP_DIR",)).get("ZOE_ADHOC_BACKUP_DIR")
-    return Path(raw) if raw else (home or Path.home()) / ".zoe" / "backups"
+    base = home or Path.home()
+    if not raw:
+        return base / ".zoe" / "backups"
+    path = Path(raw).expanduser()
+    # same anchor as local_text_logs.anchor_backup_dir: a relative value means <home>/<value>, whatever the caller's cwd
+    return path if path.is_absolute() else base / path
 
 
 def sweep_text_logs(dry_run: bool) -> int:

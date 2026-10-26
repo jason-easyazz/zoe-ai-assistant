@@ -386,8 +386,21 @@ ADHOC_BACKUP_MAX_AGE_DAYS = 14
 ADHOC_BACKUP_PREFIXES = ("router-shadow-", "migrate-hermes-env-", "dead-units-")
 
 
+def anchor_backup_dir(raw: Optional[str], home: Optional[Path] = None) -> Path:
+    """Resolve a ``ZOE_ADHOC_BACKUP_DIR`` value to ONE absolute path. A relative value is anchored to the HOME directory (what the
+    hourly user service sees as its cwd), never the caller's cwd - so the owner scripts and the sweep always agree on the place."""
+    base = home or Path.home()
+    if not raw:
+        return base / ".zoe" / "backups"
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        logger.warning("ZOE_ADHOC_BACKUP_DIR is relative (%s); anchoring it to the home directory %s", raw, base)
+        p = base / p
+    return p
+
+
 def adhoc_backup_root() -> Path:
-    return Path(os.environ.get("ZOE_ADHOC_BACKUP_DIR") or (Path.home() / ".zoe" / "backups"))
+    return anchor_backup_dir(os.environ.get("ZOE_ADHOC_BACKUP_DIR"))
 
 
 def prune_adhoc_backups(now: Optional[float] = None) -> int:
@@ -434,7 +447,14 @@ def sweep(now: Optional[float] = None) -> dict[str, int]:
 
 
 _ERASE_EPOCH = 0
+_ERASES_IN_PROGRESS = 0
 _EPOCH_LOCK = threading.Lock()
+
+
+def erase_in_progress() -> bool:
+    """True from the start to the end of any erase (all passes). Appends are refused meanwhile, so an observation that captured
+    the epoch after the initial bump cannot land between two passes."""
+    return _ERASES_IN_PROGRESS > 0
 
 
 def erase_epoch() -> int:
@@ -444,29 +464,30 @@ def erase_epoch() -> int:
     return _ERASE_EPOCH
 
 
-def _bump_epoch() -> None:
-    global _ERASE_EPOCH
+def _bump_epoch(delta: int = 0) -> None:
+    global _ERASE_EPOCH, _ERASES_IN_PROGRESS
     with _EPOCH_LOCK:
         _ERASE_EPOCH += 1
+        _ERASES_IN_PROGRESS += delta
 
 
 def erase_entity(rx: Any) -> int:
     """Drop every record whose text matches ``rx`` (a ``re.Pattern`` or ``memory_forgotten.LedgerPattern``). RAISES on an I/O
     failure so the cascade records the step as failed (a forget that left words behind must not read as done)."""
-    _bump_epoch()
+    _bump_epoch(+1)
     try:
         return sum(_apply(log, match=rx) for log in LOGS)
     finally:
-        _bump_epoch()
+        _bump_epoch(-1)
 
 
 def erase_all_text() -> int:
     """Member erase: the logs cannot be attributed to one member, so clear the text layer of every record. RAISES on failure."""
-    _bump_epoch()
+    _bump_epoch(+1)
     try:
         return sum(_apply(log, everything=True) for log in LOGS)
     finally:
-        _bump_epoch()
+        _bump_epoch(-1)
 
 
 def count_malformed(log: TextLog) -> int:

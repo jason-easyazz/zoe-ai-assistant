@@ -363,3 +363,28 @@ def test_relative_log_settings_resolve_against_the_service_dir_not_the_cwd(tmp_p
     assert ltl.log_path(ltl.INTENT_MISSES) == ltl._HERE / "data" / "miss.jsonl"
     monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(tmp_path / "abs.jsonl"))
     assert ltl.log_path(ltl.ROUTER_SHADOW) == tmp_path / "abs.jsonl"
+
+
+def test_append_between_erase_passes_is_refused(shadow, monkeypatch):
+    """PR #2110 review: an observation that captured the epoch AFTER the erase's initial bump must not land between the two log
+    passes. Break: drop the erase_in_progress() check in _append_shadow_line."""
+    import re
+
+    sr = _shadow2_world(shadow, monkeypatch, lambda t, v: None)
+    results = []
+    real_apply = ltl._apply
+    calls = {"n": 0}
+
+    def apply_then_append(log, **kw):
+        out = real_apply(log, **kw)
+        calls["n"] += 1
+        if calls["n"] == 1:      # between pass 1 and pass 2: epoch already bumped, so a fresh capture matches
+            line = json.dumps({"utt": "x", "utt_text": "call Marisol"})
+            results.append(sr._append_shadow_line(str(shadow), line, sr._erase_epoch_now()))
+        return out
+
+    monkeypatch.setattr(ltl, "_apply", apply_then_append)
+    ltl.erase_entity(re.compile(r"\bMarisol\b"))
+    assert results == [False]
+    assert not ltl.erase_in_progress()
+    assert not shadow.exists() or "Marisol" not in shadow.read_text()

@@ -351,3 +351,25 @@ def test_read_env_settings_parses_without_executing(tmp_path):
     f2.write_text("export ZOE_TEXT_LOG_RETENTION_DAYS=keep\n  # ZOE_ADHOC_BACKUP_DIR=/commented\nNOT_WANTED=1\n")
     got = mod.read_env_settings((f1, f2, tmp_path / "missing.env"), mod.SWEEP_ENV_KEYS)
     assert got == {"ZOE_TEXT_LOG_RETENTION_DAYS": "keep", "ZOE_INTENT_MISS_LOG": "/x/y.jsonl"}    # later file wins; quotes stripped
+
+
+def test_relative_backup_dir_is_anchored_to_home_and_agrees_with_zoe_data(tmp_path, monkeypatch):
+    """PR #2110 review: a relative ZOE_ADHOC_BACKUP_DIR must resolve to the SAME absolute path in the sweep and in zoe-data,
+    whatever the cwd. Break: return Path(raw) (follows the cwd)."""
+    import sys
+
+    sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
+    try:
+        import local_text_logs as ltl
+    finally:
+        sys.path.pop(0)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ZOE_ADHOC_BACKUP_DIR", "rel/backups")
+    seen = set()
+    for cwd in (tmp_path, home, ROOT):
+        monkeypatch.chdir(cwd)
+        seen.add(mod.pruned_backup_root())
+        seen.add(ltl.adhoc_backup_root())
+    assert seen == {home / "rel" / "backups"}
