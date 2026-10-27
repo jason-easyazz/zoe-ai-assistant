@@ -2443,7 +2443,12 @@ _NOT_BRIGHTNESS_RE = re.compile(r"\b(?:speed|position|volume|temperature|temp|co
 def _home_text(raw_message: str, text: str) -> str:
     """The smart-home matcher's input: ``text`` with the polite / wake / modal frame off ("can you turn the light on?" ->
     " turn the light on "). Uses the shared ``conversation_cues.strip_command_filler`` (lexicon section
-    ``command_filler``) so there is ONE stripper; falls back to ``text`` unchanged."""
+    ``command_filler``) so there is ONE stripper; falls back to ``text`` unchanged.
+
+    An explicit entity marker (``@light.zoe``, sent by a panel tap) is an exact selection, not natural language: the text goes
+    through untouched so the stripper can never eat part of the id (``.zoe`` looks like a trailing wake word)."""
+    if re.search(r"@[a-z_]+\.[a-z0-9_]+", text):
+        return text
     try:
         from conversation_cues import strip_command_filler
 

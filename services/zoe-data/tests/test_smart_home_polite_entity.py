@@ -59,6 +59,15 @@ def test_guard_a_named_device_still_resolves():
     assert got.query == "kitchen lamp"
 
 
+@pytest.mark.parametrize("text,eid,action", [
+    ("turn on Zoe Lamp @light.zoe", "light.zoe", "turn_on"),
+    ("can you turn off Hall Light @light.hall_zoe please", "light.hall_zoe", "turn_off"),
+])
+def test_explicit_entity_marker_survives_filler_stripping(text, eid, action):
+    got = sky.classify_skybridge_intent(text)
+    assert got is not None and got.entity_id == eid and got.action == action, got
+
+
 def test_guard_non_commands_are_left_alone():
     assert sky.classify_skybridge_intent("can you hear me") is None
 
