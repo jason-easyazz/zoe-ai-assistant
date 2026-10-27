@@ -144,7 +144,7 @@ async def test_force_hermes_uses_single_chat_run_and_persists_once(monkeypatch):
     agui_runs = []
     persisted_candidates = []
 
-    async def fake_save(session_id, role, content, user_id=None):
+    async def fake_save(session_id, role, content, user_id=None, **_kw):
         saved_messages.append((session_id, role, content))
 
     async def fake_record_run_state(*args, **kwargs):

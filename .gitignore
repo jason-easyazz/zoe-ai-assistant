@@ -413,6 +413,9 @@ services/zoe-data/models/*
 !services/zoe-data/models/restraint_head.npz
 !services/zoe-data/models/restraint_head.json
 services/zoe-data/data/router_head_shadow.jsonl
+services/zoe-data/data/router_head_shadow.jsonl.lock
+services/zoe-data/data/router_head_shadow.jsonl.[0-9]
+services/zoe-data/data/router_head_shadow.jsonl.[0-9][0-9]
 
 # Router self-training loop — miner (labs/router-selftrain/) + orchestrator
 # (scripts/maintenance/router_selftrain.py). Candidate datasets are mined from

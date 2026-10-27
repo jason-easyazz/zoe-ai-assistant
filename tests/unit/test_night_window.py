@@ -2169,6 +2169,8 @@ MIND_QUIET_BUT_ERROR = json.dumps({"status": "error", "members": [{"user_id": "a
 MIND_LOAD_ERROR = json.dumps({"status": "load_error", "members": [{"user_id": "a", "status": "load_error"}, {"user_id": "b", "status": "skipped", "skipped_reason": "quiet_day"}]}) + "\n"
 OMI_FLAG_OFF = 'NIGHT_JOB omi_day_review status=flag_off days=0 calls=0 stored=0 no_time=0\n'          # ZOE_OMI_DAY_REVIEW off: the default
 OMI_LANE_DAY = 'NIGHT_JOB omi_day_review status=lane_day_only days=0 calls=0 stored=0 no_time=0\n'
+OMI_NO_TIME = 'NIGHT_JOB omi_day_review status=ok days=2 calls=0 stored=0 no_time=2\n'              # every pending day exceeded the budget: planned deferral
+OMI_NO_TIME_BUT_CALLS = 'NIGHT_JOB omi_day_review status=ok days=2 calls=3 stored=1 no_time=1\n'    # real work happened: not an idle verdict
 MIND_OFF = json.dumps({"status": "ok", "members": [{"user_id": "a", "status": "off", "mode": "off"}]}) + "\n"
 OMI_NONE = 'INFO user_filters: omi_day_review: users kept=0\nNIGHT_JOB omi_day_review status=nothing_to_do days=0 calls=0 stored=0 no_time=0\n'
 DREAM_QUIET = "OPEN_LOOPS user=a extracted=0 status=no_messages\nOPEN_LOOPS user=b extracted=0 status=no_messages\nDreaming cycle complete: 2 users processed\n"
@@ -2180,7 +2182,7 @@ DREAM_FAILED_QUIETLY = "OPEN_LOOPS user=a extracted=0 status=llm_failed\nDreamin
     ("night_mind", MIND_QUIET, True), ("night_mind", MIND_LOAD_ERROR, False), ("night_mind", MIND_QUIET_BUT_ERROR, False), ("night_mind", "night_mind: users kept=2\n", False),
     ("omi_day_review", OMI_NONE, True), ("omi_day_review", "INFO nothing here\n", False),
     ("omi_day_review", OMI_FLAG_OFF, True), ("omi_day_review", OMI_LANE_DAY, True), ("omi_day_review", "NIGHT_JOB omi_day_review status=llm_unreachable days=1\n", False),
-    ("night_mind", MIND_OFF, True),
+    ("night_mind", MIND_OFF, True), ("omi_day_review", OMI_NO_TIME, True), ("omi_day_review", OMI_NO_TIME_BUT_CALLS, False),
     ("dreaming", DREAM_QUIET, True), ("dreaming", DREAM_FAILED_QUIETLY, False), ("dreaming", "Dreaming cycle complete: 1 users processed\n", False),
     ("struggle_proposals", DIGEST_IDLE, False)])
 def test_job_idle_evidence_needs_the_jobs_own_word_that_it_had_nothing_to_do(name, text, expect):

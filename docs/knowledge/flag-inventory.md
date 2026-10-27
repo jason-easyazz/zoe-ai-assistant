@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-27T00:00:00Z
+timestamp: 2026-10-28T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-27T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-27. The table body is deterministic (sorted, no
+Last generated: 2026-10-28. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-776 flags; 726 not documented in `.env.example`.
+777 flags; 727 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -690,6 +690,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STRUCTURAL_READER` | `'shadow'` | yes | NO | `services/zoe-data/structural_reader.py` |
 | `ZOE_STRUCTURAL_VERIFIER` | `-` | no | NO | `services/zoe-data/structural_verifier.py` |
 | `ZOE_STRUGGLE_DETECT` | `-` | no | NO | `services/zoe-data/struggle_detector.py` |
+| `ZOE_STRUGGLE_OUTCOMES` | `-`, `False` | yes | NO | `services/zoe-data/turn_outcomes.py` |
 | `ZOE_STRUGGLE_PROPOSALS` | `-` | no | NO | `services/zoe-data/struggle_proposals.py` |
 | `ZOE_STRUGGLE_PROPOSAL_DAYS` | `7.0` | yes | NO | `services/zoe-data/struggle_proposals.py` |
 | `ZOE_STRUGGLE_PROPOSAL_MIN_EPISODES` | `3` | yes | NO | `services/zoe-data/struggle_proposals.py` |
