@@ -747,3 +747,13 @@ def test_untracked_file_with_undecodable_name_is_dirty_not_a_crash(repo, monkeyp
     rev = vrp.service_revision(sd)
     assert rev is not None and rev["dirty"] is True and rev["clean_verified"] is True
     assert len(rev["dirty_paths"]) == 1 and rev["dirty_paths"][0].startswith("bad")
+
+
+def test_unterminated_status_output_fails_dirty_even_for_an_allowlisted_tail():
+    tail = "?? services/zoe-data/data/router_head_shadow.jsonl.lock"
+    dirty, runtime = vrp._classify_status(tail)                   # no trailing NUL: truncated
+    assert dirty and runtime == []
+    dirty, runtime = vrp._classify_status(tail + "\0")            # terminated: forgiven
+    assert dirty == [] and runtime == ["services/zoe-data/data/router_head_shadow.jsonl.lock"]
+    dirty, runtime = vrp._classify_status("?? a.py\0" + tail)     # earlier records fine, tail truncated
+    assert "a.py" in dirty and any("unterminated" in d for d in dirty) and runtime == []

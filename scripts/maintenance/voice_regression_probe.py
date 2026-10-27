@@ -1137,6 +1137,11 @@ def _classify_status(porcelain_z: str) -> tuple[list[str], list[str]]:
     entries = porcelain_z.split("\0")
     if entries and entries[-1] == "":
         entries.pop()                            # the trailing NUL
+    elif porcelain_z:
+        # every record is NUL-TERMINATED: output that stops mid-record is truncated, so the last
+        # record cannot be trusted (an allowlisted-looking tail must not be forgiven). Fail dirty.
+        dirty.append("<unterminated status output (truncated)>")
+        entries.pop()                            # and the untrusted tail is never classified
     i = 0
     while i < len(entries):
         ent = entries[i]
