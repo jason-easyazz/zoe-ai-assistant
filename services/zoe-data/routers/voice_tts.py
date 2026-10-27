@@ -6552,13 +6552,23 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         # verified by voice, in-process memo; else a bound/fresh-PIN member; else guest), because the member's
         # manner block + user-model card sit ahead of the tool block and a guest warm cannot be resumed past
         # them (see zoe_flue_client._kv_warm_outbound). A wrong guess costs nothing over the old guest warm.
-        likely = _LAST_VOICE_SPEAKER.get(panel_id, "")
+        member = _real_user_or_none(
+            (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
+        ) or ""
+        likely = _LAST_VOICE_SPEAKER.get(panel_id, "") or member
+        if not likely:
+            # After a restart / eviction the memo is empty: ask for a fresh-PIN member, but only briefly so the
+            # warm is never held up (the lookup is re-awaited below for the worker + facts, unbounded as before).
+            try:
+                likely = await asyncio.wait_for(_resolve_fresh_panel_member(panel_id), timeout=0.4) or ""
+            except Exception:  # noqa: BLE001 - guest warm is the fallback
+                likely = ""
         kv_task = None
         if flue_lane:
             import zoe_flue_client
             kv_task = asyncio.ensure_future(zoe_flue_client.warm_kv_prefix(likely))
         session_id = _get_or_create_voice_session(panel_id)
-        member = _real_user_or_none(
+        member = member or _real_user_or_none(
             (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
         ) or ""
         if not member:

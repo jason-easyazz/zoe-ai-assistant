@@ -2204,6 +2204,8 @@ async def warm_kv_prefix(member: str = "") -> str:
         acquired = True
         session_id = _kv_warm_session_id()
         warm_msg, warm_key = await _kv_warm_outbound(member)
+        warm_key_box = [warm_key]
+
         async def _sequence() -> "tuple[str, int, int]":
             res = await _kv_warm_turn(session_id, state, warm_msg)
             # The sidecar serves the member's user-model card from a cache that this very request may have just
@@ -2214,11 +2216,18 @@ async def warm_kv_prefix(member: str = "") -> str:
             want, got = int(memo.get("system") or 0), int(state.get("system") or 0)
             if res[0] == "warmed" and want and got and abs(want - got) > 8:
                 state.update(settled=False, submission="")
-                res = await _kv_warm_turn(session_id, state, warm_msg)
+                # The first request kicked the card refresh: re-derive the message and key so the repeat (and the
+                # FLUE_KV_WARM line) describe the prompt that actually established the cache.
+                nonlocal_msg, nonlocal_key = await _kv_warm_outbound(member)
+                warm_key_box[0] = nonlocal_key
+                res = await _kv_warm_turn(session_id, state, nonlocal_msg)
                 logger.info("FLUE_KV_WARM_REPEAT session=%s system_want=%d system_got=%d", session_id, want, got)
             return res
 
-        outcome, prompt_n, cache_n = await asyncio.wait_for(_sequence(), timeout=_KV_WARM_MAX_S)
+        try:
+            outcome, prompt_n, cache_n = await asyncio.wait_for(_sequence(), timeout=_KV_WARM_MAX_S)
+        finally:
+            warm_key = warm_key_box[0]
     except asyncio.TimeoutError:
         outcome = "failed:timeout"
     except asyncio.CancelledError:

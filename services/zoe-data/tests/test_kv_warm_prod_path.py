@@ -96,12 +96,7 @@ def test_negative_control_without_the_turn_memo_the_warm_is_english(prod_turn):
     assert _manner_line(msg) != _manner_line(wire)
 
 
-def test_key_changes_with_the_card_version(prod_turn):
-    wire = prod_turn("How are you going tonight?")
-    assert zfc.prefix_key(wire, "cardv1") != zfc.prefix_key(wire, "cardv2")
-
-
-def test_warm_repeats_once_when_the_card_was_not_rendered(monkeypatch, prod_turn):
+def test_warm_repeats_once_when_the_card_was_not_rendered(monkeypatch, prod_turn, caplog):
     """Cold/stale card cache: the first warm renders a smaller system prompt than the member's last turn."""
     import httpx
 
@@ -111,6 +106,13 @@ def test_warm_repeats_once_when_the_card_was_not_rendered(monkeypatch, prod_turn
     zfc._LAST_TURN["zed_uid"]["system"] = 2942
     systems = iter([2380, 2942])
     posts = []
+    versions = iter(["cardv1", "cardv2", "cardv2", "cardv2"])
+
+    async def _card_seq(uid):   # the first warm kicks a refresh: the version moves between the two requests
+        return next(versions)
+
+    monkeypatch.setattr(zfc, "_card_version", _card_seq)
+    caplog.set_level("INFO", logger="zoe_flue_client")
 
     async def handler(request):
         posts.append(1)
@@ -128,4 +130,8 @@ def test_warm_repeats_once_when_the_card_was_not_rendered(monkeypatch, prod_turn
     monkeypatch.setattr(zfc, "_kv_warm_session", {"id": "", "uses": 0, "seq": 0})
     assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
     assert len(posts) == 2
+    line = [r.getMessage() for r in caplog.records if "FLUE_KV_WARM " in r.getMessage()][0]
+    wire = prod_turn("How are you going tonight?")
+    assert f"key={zfc.prefix_key(wire, 'cardv2')}" in line, "the key must describe the repeat, not the first request"
+    assert f"key={zfc.prefix_key(wire, 'cardv1')}" not in line
     brain_slot_guard.reset()
