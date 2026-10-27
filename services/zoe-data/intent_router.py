@@ -3566,6 +3566,12 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
     #   user_id; this default is defense-in-depth for future forgetful callers.
     await _speculative_side_effect_barrier(intent.name)
+    try:  # failure capture (ZOE_STRUGGLE_OUTCOMES, default off): the intent NAME that executed this user's turn - a deque append
+        import struggle_detector as _sd
+
+        _sd.note_handler("", user_id, "intent", intent.name)
+    except Exception:  # noqa: BLE001
+        pass
     if (_is_guest_identity(user_id) and intent.name in _GUEST_HOUSEHOLD_INTENTS
             and panel_principal.in_panel_turn()):
         # Anyone AT THE PANEL may add, tick off and read the HOUSEHOLD list (a fridge list). The executors resolve a
