@@ -2174,7 +2174,8 @@ OMI_NO_TIME_BUT_CALLS = 'NIGHT_JOB omi_day_review status=ok days=2 calls=3 store
 OMI_FILTERED = 'NIGHT_JOB omi_day_review status=ok days=2 calls=0 stored=0 no_time=0 skipped=2\n'                  # input entirely filtered out: no model call was due
 OMI_MIXED_DEFERRED_FILTERED = 'NIGHT_JOB omi_day_review status=ok days=3 calls=0 stored=0 no_time=1 skipped=2\n'
 OMI_ERROR_DAY = 'NIGHT_JOB omi_day_review status=ok days=2 calls=0 stored=0 no_time=0 skipped=1\n'                  # one day is neither deferred nor skipped (it errored): not idle
-DREAM_NO_USERS = "=== Dreaming memory cycle ===\nDreaming cycle complete: 0 users processed\n"
+DREAM_NO_USERS = "=== Dreaming memory cycle ===\nDREAMING_USERS lookup=ok users=0\nDreaming cycle complete: 0 users processed\n"
+DREAM_LOOKUP_SWALLOWED = "=== Dreaming memory cycle ===\nDreaming cycle complete: 0 users processed\n"      # what the service function's swallowed lookup failure printed: NO lookup=ok line
 DREAM_NO_USERS_BUT_FAILED = "Dreaming cycle failed: boom\nDreaming cycle complete: 0 users processed\n"
 MIND_OFF = json.dumps({"status": "ok", "members": [{"user_id": "a", "status": "off", "mode": "off"}]}) + "\n"
 OMI_NONE = 'INFO user_filters: omi_day_review: users kept=0\nNIGHT_JOB omi_day_review status=nothing_to_do days=0 calls=0 stored=0 no_time=0\n'
@@ -2188,7 +2189,7 @@ DREAM_FAILED_QUIETLY = "OPEN_LOOPS user=a extracted=0 status=llm_failed\nDreamin
     ("omi_day_review", OMI_NONE, True), ("omi_day_review", "INFO nothing here\n", False),
     ("omi_day_review", OMI_FLAG_OFF, True), ("omi_day_review", OMI_LANE_DAY, True), ("omi_day_review", "NIGHT_JOB omi_day_review status=llm_unreachable days=1\n", False),
     ("night_mind", MIND_OFF, True), ("omi_day_review", OMI_FILTERED, True), ("omi_day_review", OMI_MIXED_DEFERRED_FILTERED, True), ("omi_day_review", OMI_ERROR_DAY, False),
-    ("dreaming", DREAM_NO_USERS, True), ("dreaming", DREAM_NO_USERS_BUT_FAILED, False), ("dreaming", DREAM_QUIET + "Dreaming cycle failed: boom\n", False), ("dreaming", "Dreaming cycle complete: 3 users processed\n", False), ("omi_day_review", OMI_NO_TIME, True), ("omi_day_review", OMI_NO_TIME_BUT_CALLS, False),
+    ("dreaming", DREAM_NO_USERS, True), ("dreaming", DREAM_NO_USERS_BUT_FAILED, False), ("dreaming", DREAM_LOOKUP_SWALLOWED, False), ("dreaming", DREAM_QUIET + "Dreaming cycle failed: boom\n", False), ("dreaming", "Dreaming cycle complete: 3 users processed\n", False), ("omi_day_review", OMI_NO_TIME, True), ("omi_day_review", OMI_NO_TIME_BUT_CALLS, False),
     ("dreaming", DREAM_QUIET, True), ("dreaming", DREAM_FAILED_QUIETLY, False), ("dreaming", "Dreaming cycle complete: 1 users processed\n", False),
     ("struggle_proposals", DIGEST_IDLE, False)])
 def test_job_idle_evidence_needs_the_jobs_own_word_that_it_had_nothing_to_do(name, text, expect):
@@ -2402,3 +2403,32 @@ def test_a_refusal_after_the_household_stack_was_stopped_is_not_retry_eligible(t
     assert nw.retry_decision(cfg2.report_dir, _dt.datetime(2026, 10, 9, 3, 5))[0] is True
     _report(cfg2.report_dir, "2026-10-09-old", exit=nw.EXIT_REFUSED, jobs=[])                    # an old-format refusal (no stack_stopped key) cannot say: treated as ran
     assert nw.night_report_state(cfg2.report_dir, "2026-10-09")[0] == "ran"
+
+
+def test_the_dreaming_runner_makes_an_empty_user_set_a_positive_signal_and_a_failed_lookup_loud(monkeypatch, capsys):
+    import asyncio
+    import types
+    m = _load(REPO / "scripts/maintenance/zoe-nightly-dreaming.py", "zoe_nightly_dreaming_lookup")
+    ran = []
+
+    async def cycle(uid, db=None, run_agent_sync_phase=False):
+        ran.append((uid, run_agent_sync_phase))
+        return {"user_id": uid}
+    state = {"ids": [], "boom": False}
+
+    async def list_ids(sql, params=(), *, db=None):
+        if state["boom"]:
+            raise RuntimeError("db gone")
+        return list(state["ids"])
+    fake = types.SimpleNamespace(_list_user_ids=list_ids, _message_owner_users_sql=lambda **k: "SELECT 1", drop_synthetic_users=lambda ids, **k: [i for i in ids if not i.startswith("demo-")],
+                                 logger=None, run_dreaming_cycle=cycle)
+    monkeypatch.setitem(sys.modules, "memory_digest", fake)
+    assert asyncio.run(m.run_dreaming(object())) == []                                    # a REAL empty set: positive line, idle-eligible
+    out = capsys.readouterr().out
+    assert "DREAMING_USERS lookup=ok users=0" in out and nw.job_idle_evidence("dreaming", out + "Dreaming cycle complete: 0 users processed\n")
+    state["boom"] = True
+    with pytest.raises(RuntimeError):                                                     # a FAILED lookup raises (main prints "Dreaming cycle failed", exit 1) - never an empty list
+        asyncio.run(m.run_dreaming(object()))
+    state.update(boom=False, ids=["a", "demo-x", "b"])
+    assert len(asyncio.run(m.run_dreaming(object()))) == 2 and ran == [("a", True), ("b", False)]
+    assert "users=2" in capsys.readouterr().out
