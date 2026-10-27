@@ -12,6 +12,7 @@ Faked: STT/TTS/push/the Skybridge resolver's DB read, the extractors behind the 
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 import time
 import types
@@ -201,7 +202,10 @@ async def test_chat_turns_through_the_real_generator_land_and_the_report_cluster
 
     monkeypatch.setattr(chat_router, "get_db", fake_get_db)
 
-    async def save(*_a, **_k):
+    saved = []
+
+    async def save(*a, **k):
+        saved.append((a, k))
         return True
 
     monkeypatch.setattr(chat_router, "_save_chat_message", save)
@@ -216,13 +220,17 @@ async def test_chat_turns_through_the_real_generator_land_and_the_report_cluster
     user = {"user_id": MEMBER, "role": "admin", "username": MEMBER}
     for n, text in enumerate(("which waterfall is the tallest in the world", "which waterfall is the tallest in the world",
                               "that's not right"), start=1):
-        async for _ in chat_router.chat_stream_generator(text, "chat-e2e", user):
-            pass
+        page_ids = set()
+        async for chunk in chat_router.chat_stream_generator(text, "chat-e2e", user):
+            page_ids.update(re.findall(r'"messageId":\s*"(\w+)"', str(chunk)))
         for _ in range(100):          # the post-turn task is ensure_future'd: let it run, as it does after a real reply
             if sd.stats()["observed"] >= n:
                 break
             await asyncio.sleep(0.01)
         assert sd.stats()["observed"] == n, "the chat post-turn hook never ran"
+        # ONE id end to end: the id the chat page receives (and later rates) is the id the reply is saved under
+        assistant = [k for a, k in saved if a[1] == "assistant"]
+        assert len(page_ids) == 1 and assistant[-1].get("message_id") in page_ids, (page_ids, assistant)
     await sd.drain()
     rep = await struggles_report(days=1.0, scope="me", top=20, user=ADMIN)
     signals = {c["signal"]: c for c in rep["clusters"]}
