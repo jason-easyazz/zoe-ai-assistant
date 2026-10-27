@@ -465,7 +465,7 @@ def test_a_wait_that_runs_past_end_by_refuses_before_anything_stops_instead_of_g
     cfg.busy_wait_max_min = 60.0
     _waits_then_clears(host, 45)
     assert w.run() == nw.EXIT_REFUSED and "03:00 end-by deadline" in w.outcome and "Nothing was stopped" in w.outcome
-    assert stopped_nothing(host) and host.t <= at(3, 0) - 35 * 60 + 60 and not cfg.marker.exists()      # refused as soon as no window fits (waits are capped by end-by), not after waiting past it
+    assert stopped_nothing(host) and host.t <= at(3, 0) - 35 * 60 + 1 and not cfg.marker.exists()      # refused as soon as no window fits (waits are capped by end-by), not after waiting past it
 
 
 def test_a_short_wait_that_still_leaves_room_gets_a_cap_that_ends_at_or_before_the_original_deadline(tmp_path):
@@ -2218,8 +2218,11 @@ def test_a_zero_token_job_that_does_not_say_it_was_idle_is_degraded_and_fails_th
 
 
 def test_a_job_that_generated_tokens_stays_ok_whatever_its_log_says(tmp_path):
-    w, host, _ = make(tmp_path)
-    assert w.run() == nw.EXIT_OK and {j["status"] for j in w.jobs if j["backend"] == "12B"} <= {"ok", "skipped"}
+    w, host, cfg = make(tmp_path)
+    assert w.run() == nw.EXIT_OK
+    twelve = {j["name"]: j["status"] for j in w.jobs if j["backend"] == "12B"}
+    assert {"digest", "dreaming"} <= set(twelve) and set(twelve.values()) <= {"ok", "skipped"}
+    assert nw.night_ran_today(cfg.report_dir, "2026-10-09") == "2026-10-09.json"        # the REAL report name write_report produces is what --skip-if-done searches
 
 
 # the retry slots ---------------------------------------------------------------------------------
@@ -2263,6 +2266,7 @@ def delay_of(body):
 def test_the_timer_retries_after_the_first_attempt_inside_the_window_that_can_still_fit():
     body = _unit_body("zoe-night-window.timer")
     slots = sorted(int(h) * 60 + int(m) for h, m in re.findall(r"OnCalendar=\*-\*-\* (\d+):(\d+)", body))
+    assert slots == [2 * 60 + 50, 3 * 60 + 5, 3 * 60 + 15], "02:50 plus the 03:05 and 03:15 retries"
     assert slots[0] == 2 * 60 + 50 and len(slots) >= 3, "the 02:50 start plus at least two retries"
     cfg, delay = nw.NightCfg(), delay_of(body)
     assert cfg.end_by - (slots[0] + delay) >= 35 + cfg.reserve_min, "the first start keeps the full usable window (35 min + the restore reserve)"
@@ -2293,7 +2297,7 @@ def test_repeated_rewaits_are_capped_by_the_absolute_end_by_and_refuse_before_it
     cfg.quiet_wait_max_min = cfg.busy_wait_max_min = 20.0            # the production per-wait bound: far more than the room
     assert w.run() == nw.EXIT_REFUSED
     assert stopped_nothing(host) and w.lock_fd is None
-    assert host.t <= at(3, 55) - 35 * 60 + 60, "the process must give up while a 35 min window still fit before end-by, not after cycling past it"
+    assert host.t <= at(3, 55) - 35 * 60 + 1, "the process must give up while a 35 min window still fit before end-by, not after cycling past it"
     assert state["n"] >= 1
 
 

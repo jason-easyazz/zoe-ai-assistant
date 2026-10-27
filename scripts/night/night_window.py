@@ -1020,7 +1020,7 @@ class NightWindow(bk.Window):
             if self.host.mono() >= deadline:
                 raise Refused(f"still busy after {self.cfg.busy_wait_max_min:.0f} min: {why}")
             self.log(f"waiting: {why}")
-            self.host.sleep(self.cfg.busy_poll_s)
+            self.host.sleep(max(0.0, min(self.cfg.busy_poll_s, deadline - self.host.mono())))
 
     def poll_health(self, url: str, ok: "Callable[[str], bool]", timeout_s: float, unit: "Optional[str]" = None, guard: bool = True) -> bool:
         """True once ``ok(body)`` holds at ``url``; False on the timeout or when ``unit`` has died (checked every third poll). Never raises except through ``guard``."""
@@ -1099,6 +1099,7 @@ class NightWindow(bk.Window):
                         f"Run, then start again: {bk.operator_compact_command(cfg.drop_caches)}")
         with self.capped_waits(need_min):
             waiting = self.wait_until_idle() or waiting
+        with self.capped_waits(need_min):                  # a fresh cap per wait: the remaining room shrinks as the first one spends it
             waiting = self.wait_until_quiet() or waiting
         left = self.compute_cap()            # against the SAME absolute deadline as above: the waits may have eaten the room the window needs (or the deadline itself)
         if left < need_min:
@@ -1162,7 +1163,7 @@ class NightWindow(bk.Window):
             if self.host.mono() >= deadline:
                 self.refuse(why)
             self.event(f"waiting: {cfg.lock_path} is held (a landing, the samantha bar or the bake-off has the brain)")
-            self.host.sleep(cfg.busy_poll_s)
+            self.host.sleep(max(0.0, min(cfg.busy_poll_s, deadline - self.host.mono())))
             if self.probe_lock():
                 return f"the brain-window lock was busy for {(self.host.mono() - started) / 60.0:.0f} min"
 
@@ -1182,6 +1183,7 @@ class NightWindow(bk.Window):
             self.event(f"{busy} (it started after the quiet check): lock handed back, waiting again ({attempt}/{self.LOCK_RECHECKS}); nothing was stopped")
             with self.capped_waits(need_min):              # bounded by the ABSOLUTE end-by, not just per wait: LOCK_RECHECKS re-waits cannot add up past it
                 waiting = self.wait_until_idle() or waiting
+            with self.capped_waits(need_min):              # recomputed: the idle wait above has spent part of the room
                 waiting = self.wait_until_quiet() or waiting
             left = self.compute_cap()
             if left < need_min:
