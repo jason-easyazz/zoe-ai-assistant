@@ -2097,3 +2097,176 @@ def test_the_decode_baseline_ignores_trials_and_a_failing_alert_never_fails_the_
         raise OSError("disk gone")
     w.decode_history = boom                                         # a failing alert logs the failure; the night still reports its own outcome
     assert w.run() == nw.EXIT_OK and w.outcome == "ok" and not (cfg.report_dir / "ALARM").exists()
+
+
+# ── 2026-10-27: the refused night (a lander), the silent no-op, the retry slots ──────────────────
+
+def _hold_lock(cfg):
+    fd = os.open(cfg.lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fd
+
+
+def test_a_brain_lock_held_for_a_minute_is_waited_out_not_refused(tmp_path):
+    """2026-10-26: a lander held the box at 02:51 and the window refused with nothing stopped - the whole night lost. Nothing is stopped yet, so waiting is free."""
+    w, host, cfg = make(tmp_path)
+    box = {"fd": _hold_lock(cfg)}
+    real_sleep = host.sleep
+
+    def sleep(sec):
+        real_sleep(sec)
+        if box["fd"] is not None and host.t - at(2, 50) >= 60:
+            os.close(box["fd"])
+            box["fd"] = None                                  # the lander finishes and drops the lock a minute in
+    host.sleep = sleep
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert any("is held" in e["msg"] and e["msg"].startswith("waiting") for e in w.rec["events"])
+    assert host.idx("systemd-run") >= 0 and w.rec["waited_before_open_min"] >= 1.0       # the 12B ran, and the wait did not eat the window's own cap
+
+
+def test_a_lock_held_past_the_busy_wait_still_refuses_and_stops_nothing(tmp_path):
+    w, host, cfg = make(tmp_path)
+    fd = _hold_lock(cfg)
+    try:
+        assert w.run() == nw.EXIT_REFUSED
+    finally:
+        os.close(fd)
+    assert "is held" in w.outcome and stopped_nothing(host) and host.t - at(2, 50) >= 120      # it waited busy_wait_max_min (2 min in tests) first
+
+
+def test_a_lander_that_starts_in_the_gap_before_the_lock_is_waited_out_not_fatal(tmp_path):
+    """The exact 2026-10-26 shape: the quiet check passed, then the queue spawned land_voice_pr.sh, and the re-check AFTER taking the lock refused the whole night."""
+    w, host, cfg = make(tmp_path)
+    real, calls = w.busy_reason, {"n": 0}
+
+    def busy_reason():
+        calls["n"] += 1
+        return "a voice-PR landing is running" if calls["n"] == 2 else real()          # call 1: the quiet wait; call 2: the re-check under the lock
+    w.busy_reason = busy_reason
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert any("lock handed back, waiting again (1/" in e["msg"] for e in w.rec["events"])
+    assert host.idx("systemd-run") >= 0 and w.lock_fd is None
+
+
+def test_a_lander_that_never_goes_away_refuses_after_bounded_rechecks_with_the_lock_released(tmp_path):
+    w, host, cfg = make(tmp_path)
+    w.busy_reason = lambda: "a voice-PR landing is running" if w.lock_fd is not None else ""      # only ever visible under the lock
+    assert w.run() == nw.EXIT_REFUSED
+    assert "not clear after taking the lock" in w.outcome and "voice-PR landing" in w.outcome and stopped_nothing(host) and w.lock_fd is None
+    assert sum(1 for e in w.rec["events"] if "lock handed back" in e["msg"]) == nw.NightWindow.LOCK_RECHECKS
+
+
+# the silent no-op: exit 0, zero generated tokens, no sign the job had nothing to do ----------------
+
+DIGEST_IDLE = 'NIGHT_JOB digest {"attempted": 0, "effect_count": 0, "errors": 0, "input_seen": false, "skipped": 0, "users": 0, "verdict": "idle"} model=127.0.0.1:11500\n'
+DIGEST_SKIPPED = 'NIGHT_JOB digest {"attempted": 0, "errors": 0, "input_seen": true, "skipped": 1, "users": 1, "verdict": "all_skipped_insufficient_activity"} model=127.0.0.1:11500\n'
+DIGEST_BROKEN = 'NIGHT_JOB digest {"attempted": 1, "errors": 0, "input_seen": true, "skipped": 0, "users": 1, "verdict": "attempted_no_facts"} model=127.0.0.1:11500\n'
+MIND_QUIET = ("night_mind: users kept=2 skipped_synthetic=12\n" + json.dumps({"status": "ok", "members": [
+    {"user_id": "a", "status": "skipped", "skipped_reason": "quiet_day", "calls": 0}, {"user_id": "b", "status": "skipped", "skipped_reason": "quiet_day", "calls": 0}]}) + "\n")
+MIND_LOAD_ERROR = json.dumps({"status": "load_error", "members": [{"user_id": "a", "status": "load_error"}, {"user_id": "b", "status": "skipped", "skipped_reason": "quiet_day"}]}) + "\n"
+OMI_NONE = 'INFO user_filters: omi_day_review: users kept=0\nNIGHT_JOB omi_day_review status=nothing_to_do days=0 calls=0 stored=0 no_time=0\n'
+DREAM_QUIET = "OPEN_LOOPS user=a extracted=0 status=no_messages\nOPEN_LOOPS user=b extracted=0 status=no_messages\nDreaming cycle complete: 2 users processed\n"
+DREAM_FAILED_QUIETLY = "OPEN_LOOPS user=a extracted=0 status=llm_failed\nDreaming cycle complete: 1 users processed\n"
+
+
+@pytest.mark.parametrize("name,text,expect", [
+    ("digest", DIGEST_IDLE, True), ("digest", DIGEST_SKIPPED, True), ("digest", DIGEST_BROKEN, False), ("digest", "", False),
+    ("night_mind", MIND_QUIET, True), ("night_mind", MIND_LOAD_ERROR, False), ("night_mind", "night_mind: users kept=2\n", False),
+    ("omi_day_review", OMI_NONE, True), ("omi_day_review", "INFO nothing here\n", False),
+    ("dreaming", DREAM_QUIET, True), ("dreaming", DREAM_FAILED_QUIETLY, False), ("dreaming", "Dreaming cycle complete: 1 users processed\n", False),
+    ("struggle_proposals", DIGEST_IDLE, False)])
+def test_job_idle_evidence_needs_the_jobs_own_word_that_it_had_nothing_to_do(name, text, expect):
+    assert bool(nw.job_idle_evidence(name, text)) is expect
+
+
+def _zero_token_night(tmp_path, logs):
+    """A night whose jobs exit 0 and generate NOTHING (the 12B's token counter does not move), writing the given log per job script."""
+    script = tmp_path / "zoe-night-mind.py"
+    script.write_text("# stand-in")
+    omi = tmp_path / "zoe-omi-day-review.py"
+    omi.write_text("# stand-in")
+    w, host, cfg = make(tmp_path, cfg_kw={"night_mind_script": script, "omi_day_review_script": omi}, argv=["--jobs", "digest,dreaming,night_mind,omi_day_review"])
+    real = host.run_watched
+
+    def rw(argv, timeout, env, tick, log_path, interval=5.0):
+        res = real(argv, timeout, env, tick, log_path, interval)
+        name = os.path.basename(argv[1]) if len(argv) > 1 else ""
+        if name in logs:
+            log_path.write_text(logs[name])
+            host.tokens -= 1000                                           # the double adds 1000 tokens per job; take them back: the model generated nothing
+        return res
+    host.run_watched = rw
+    return w, host
+
+
+def test_jobs_that_report_no_input_are_idle_and_the_night_is_ok(tmp_path):
+    w, _ = _zero_token_night(tmp_path, {"night_digest.py": DIGEST_IDLE, "zoe-nightly-dreaming.py": DREAM_QUIET, "zoe-night-mind.py": MIND_QUIET, "zoe-omi-day-review.py": OMI_NONE})
+    assert w.run() == nw.EXIT_OK, w.outcome
+    twelve = {j["name"]: j["status"] for j in w.jobs if j["backend"] == "12B"}
+    assert twelve == {"digest": "idle", "dreaming": "idle", "night_mind": "idle", "omi_day_review": "idle"}
+    assert any("no input:" in n for j in w.jobs for n in j["notes"]) and "digest:idle@12B" in nw.summary_line({**w.rec, "outcome": "ok", "exit": 0, "jobs": w.jobs})
+
+
+def test_a_zero_token_job_that_does_not_say_it_was_idle_is_degraded_and_fails_the_night(tmp_path):
+    """The instrument that was missing: 'ok, 5 s, 0 tokens' for a job that did nothing must not read as ok."""
+    w, _ = _zero_token_night(tmp_path, {"night_digest.py": DIGEST_IDLE, "zoe-nightly-dreaming.py": "all done\n", "zoe-night-mind.py": MIND_QUIET, "zoe-omi-day-review.py": OMI_NONE})
+    assert w.run() == nw.EXIT_JOBS_FAILED, w.outcome
+    dream = next(j for j in w.jobs if j["name"] == "dreaming" and j["backend"] == "12B")
+    assert dream["status"] == "degraded" and any("SILENT NO-OP" in n for n in dream["notes"])
+    assert {j["name"] for j in w.jobs if j["status"] == "idle"} >= {"digest", "night_mind", "omi_day_review"}      # the honest idle ones stay idle
+
+
+def test_a_job_that_generated_tokens_stays_ok_whatever_its_log_says(tmp_path):
+    w, host, _ = make(tmp_path)
+    assert w.run() == nw.EXIT_OK and {j["status"] for j in w.jobs if j["backend"] == "12B"} <= {"ok", "skipped"}
+
+
+# the retry slots ---------------------------------------------------------------------------------
+
+def _report(d, name, **kw):
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.json").write_text(json.dumps({"mode": "night", "exit": 0, "outcome": "ok", "jobs": [{"backend": "12B"}], **kw}))
+
+
+def test_a_retry_only_makes_up_for_a_refused_night(tmp_path):
+    d = tmp_path / "r"
+    assert nw.night_ran_today(d, "2026-10-27") == ""                                       # no reports: run
+    _report(d, "2026-10-27", exit=nw.EXIT_REFUSED, outcome="refused: a voice-PR landing is running", jobs=[])
+    assert nw.night_ran_today(d, "2026-10-27") == ""                                       # the 2026-10-26 case: refused, nothing stopped -> retry
+    _report(d, "2026-10-27-0305", exit=nw.EXIT_OK)
+    assert nw.night_ran_today(d, "2026-10-27") == "2026-10-27-0305.json"                  # a real night ran -> no second window
+    assert nw.night_ran_today(d, "2026-10-28") == ""                                       # another day's report never counts
+    for code in (nw.EXIT_JOBS_FAILED, nw.EXIT_ABORTED, nw.EXIT_RESTORE_FAILED):
+        _report(d, f"2026-11-0{code}", exit=code, outcome="x")
+        assert nw.night_ran_today(d, f"2026-11-0{code}"), f"exit {code}: the window ran, a blind second sleep would not fix it"
+    _report(d, "2026-10-29-trial", mode="trial")
+    assert nw.night_ran_today(d, "2026-10-29") == ""                                       # a trial is not the night
+
+
+def test_skip_if_done_exits_ok_before_touching_the_box(tmp_path):
+    import datetime as _dt
+    cfg = nw.NightCfg(report_dir=tmp_path / "reports", night_dir=tmp_path / "night")
+    _report(cfg.report_dir, _dt.datetime.now().strftime("%Y-%m-%d"))
+
+    def no_host(_log):
+        raise AssertionError("the host was built: --skip-if-done must exit before anything is read or started")
+    assert nw.main(["--skip-if-done"], host_factory=no_host, cfg=cfg) == nw.EXIT_OK
+    with pytest.raises(AssertionError):                                                    # without a ran-today report the same flag proceeds to build the host
+        nw.main(["--skip-if-done"], host_factory=no_host, cfg=nw.NightCfg(report_dir=tmp_path / "empty", night_dir=tmp_path / "night2"))
+
+
+def delay_of(body):
+    return int(re.search(r"RandomizedDelaySec=(\d+)", body).group(1)) / 60.0
+
+
+def test_the_timer_retries_after_the_first_attempt_inside_the_window_that_can_still_fit():
+    body = _unit_body("zoe-night-window.timer")
+    slots = sorted(int(h) * 60 + int(m) for h, m in re.findall(r"OnCalendar=\*-\*-\* (\d+):(\d+)", body))
+    assert slots[0] == 2 * 60 + 50 and len(slots) >= 3, "the 02:50 start plus at least two retries"
+    cfg, delay = nw.NightCfg(), delay_of(body)
+    assert cfg.end_by - (slots[0] + delay) >= 35 + cfg.reserve_min, "the first start keeps the full usable window (35 min + the restore reserve)"
+    for slot in slots:
+        assert cfg.end_by - (slot + delay) >= 35, f"{slot // 60:02d}:{slot % 60:02d} + jitter leaves under the 35 min a window needs before end-by (the preflight would refuse it)"
+        assert cfg.night_hours[0] <= slot <= cfg.night_hours[1]
+    assert slots[-1] > 3 * 60                                                              # a retry actually lands after the old 03:00 horizon
+    assert "--skip-if-done" in _exec_start_args(), "every timer slot runs the service: only --skip-if-done keeps a retry off a night that already ran"

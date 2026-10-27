@@ -238,6 +238,77 @@ def parse_metrics(text: str) -> "dict[str, float]":
     return out
 
 
+#: the jobs that exist to call the model. A clean exit with ZERO generated tokens from one of these is either "there was nothing to do" or "it silently did nothing": the window must
+#: tell them apart, because both exit 0 in ~5 s (2026-10-25 and 10-27: four jobs "ok, 5.0 s, 0 tokens" - true, the household had no input, but indistinguishable from four broken jobs).
+MODEL_JOBS = ("digest", "dreaming", "night_mind", "omi_day_review")
+#: a job status that is a success: ``ok`` (it worked) or ``idle`` (it positively reported there was no input - zero model calls is then the correct answer)
+OK_JOB_STATUSES = ("ok", "idle")
+
+
+def _last_json_line(text: str) -> "dict[str, Any]":
+    for ln in reversed((text or "").splitlines()):
+        ln = ln.strip()
+        if ln.startswith("{") and ln.endswith("}"):
+            try:
+                d = json.loads(ln)
+            except ValueError:
+                continue
+            if isinstance(d, dict):
+                return d
+    return {}
+
+
+def job_idle_evidence(name: str, text: str) -> str:
+    """Why a model job's log POSITIVELY says it had nothing to do ('' = no such evidence: a silent no-op). Counts and verdicts only, read from the job's own log:
+
+    * digest: its ``NIGHT_JOB digest {json}`` verdict is ``idle`` (no owned turn in the lookback) or ``all_skipped_insufficient_activity``;
+    * night_mind: its summary JSON has members and EVERY one is ``skipped`` for ``quiet_day`` / ``opted_out`` (a ``load_error`` / ``error`` member is never idle), or ``nothing_to_do``;
+    * omi_day_review: ``NIGHT_JOB omi_day_review status=nothing_to_do``;
+    * dreaming: it finished (``Dreaming cycle complete``) and every ``OPEN_LOOPS`` line says ``status=no_messages``."""
+    text = text or ""
+    if name == "digest":
+        m = re.search(r"^NIGHT_JOB digest (\{.*?\})(?: model=\S+)?\s*$", text, re.M)
+        try:
+            d = json.loads(m.group(1)) if m else {}
+        except ValueError:
+            d = {}
+        if d.get("verdict") in ("idle", "all_skipped_insufficient_activity") and not d.get("errors") and not d.get("attempted"):
+            return f"digest verdict {d['verdict']}"
+    elif name == "night_mind":
+        d = _last_json_line(text)
+        members = d.get("members") if isinstance(d.get("members"), list) else []
+        if d.get("status") == "nothing_to_do" and not members:
+            return "no members to reflect on"
+        if members and all(isinstance(mb, dict) and mb.get("status") == "skipped" and mb.get("skipped_reason") in ("quiet_day", "opted_out") for mb in members):
+            return f"{len(members)} member(s), all skipped as a quiet day"
+    elif name == "omi_day_review":
+        if re.search(r"^NIGHT_JOB omi_day_review status=nothing_to_do\b", text, re.M):
+            return "no pendant day to review"
+    elif name == "dreaming":
+        loops = re.findall(r"^OPEN_LOOPS .*?\bstatus=(\S+)", text, re.M)
+        if loops and "Dreaming cycle complete" in text and all(st == "no_messages" for st in loops):
+            return f"{len(loops)} member(s), no messages to read"
+    return ""
+
+
+def night_ran_today(report_dir: Path, today: str) -> str:
+    """The report file name of a REAL night that already RAN today (mode ``night``, any exit except a refusal), or ''. The retry timer slots use it (``--skip-if-done``): a retry only
+    makes up for a night that was REFUSED (exit 2: a lander held the box, the hour, RAM) and so stopped nothing. A window that ran - even one whose jobs failed (5), aborted (3) or
+    failed to restore (4) - is never repeated blindly: the failure needs a human, and a second 12B sleep the same night would not fix it."""
+    try:
+        files = sorted(report_dir.glob(f"{today}*.json"))
+    except OSError:
+        return ""
+    for f in files:
+        try:
+            d = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict) and d.get("mode") == "night" and d.get("exit") != EXIT_REFUSED:
+            return f.name
+    return ""
+
+
 def digest_timeout_scale(decode_tps: "Optional[float]") -> int:
     """memory_digest's model-call timeouts assume about 11.4 tok/s (45 s for a 512-token extraction). Scale them for the measured decode speed with 1.5x slack."""
     if not decode_tps or decode_tps <= 0:
@@ -986,8 +1057,7 @@ class NightWindow(bk.Window):
         clash = self.blackout_conflict()
         if clash:
             self.refuse(clash)
-        if not self.probe_lock():
-            self.refuse(f"{cfg.lock_path} is held: a landing, the samantha bar, the bake-off or another window has the brain. Nothing was stopped.")
+        waiting = self.wait_for_lock()
         self.parked_text = host.read(cfg.deep_unit)
         if not self.parked_text.strip():
             self.refuse(f"the parked 12B unit {cfg.deep_unit} is missing or empty: nothing to generate the 12B command from")
@@ -1025,7 +1095,7 @@ class NightWindow(bk.Window):
         if not self.contiguous_ok(frag=frag0) and not have_sudo:
             self.refuse("physical memory is fragmented and passwordless sudo is not available, so the window cannot compact it: the 12B would die on cudaMalloc / NvMap error 12. "
                         f"Run, then start again: {bk.operator_compact_command(cfg.drop_caches)}")
-        waiting = self.wait_until_idle()
+        waiting = self.wait_until_idle() or waiting
         waiting = self.wait_until_quiet() or waiting
         left = self.compute_cap()            # against the SAME absolute deadline as above: the waits may have eaten the room the window needs (or the deadline itself)
         if left < need_min:
@@ -1034,7 +1104,7 @@ class NightWindow(bk.Window):
                         f"(zoe-data must be back by then); a window needs {need_min:.0f}. Nothing was stopped.")
         self.pre_stop_gate(m)
         if not self.dry:
-            self.take_lock()
+            waiting = self.take_lock_when_clear(waiting, need_min)
             # THE WINDOW'S CLOCK STARTS HERE, when it is cleared to stop the stack. Waiting for a quiet box (a running timer job, the voice harness, a recent voice turn) has its own
             # timeouts (``busy_wait_max_min`` / ``quiet_wait_max_min``) and costs Zoe nothing: nothing is stopped yet. Before this line it counted against the cap: the 2026-10-10 09:40 window
             # waited 20 min for the harness lock, the cells then had 932 s of a 50-minute cap, and four cells were skipped for budget.
@@ -1044,11 +1114,57 @@ class NightWindow(bk.Window):
             self.cap_min = self.compute_cap()             # the cap LENGTH restarts here, but never past the original absolute deadline
             if self.cap_min < need_min:
                 raise Refused(f"not clear after taking the lock: only {max(0.0, self.cap_min):.0f} min remain before the end-by deadline; a window needs {need_min:.0f}")
-            for recheck in (self.blackout_conflict(), self.busy_now(), self.busy_reason()):
-                if recheck:
-                    raise Refused(f"not clear after taking the lock: {recheck}")
+            clash = self.blackout_conflict()
+            if clash:
+                raise Refused(f"not clear after taking the lock: {clash}")
         self.event(f"preflight ok: lock {'free (dry-run: not taken)' if self.dry else 'held'}, MemAvailable {m:.0f} MB, cap {self.cap_min:.0f} min, "
                    f"will stop {', '.join(self.stop_set)}" + (f"; NOT idle right now ({waiting})" if waiting else ""))
+
+    def wait_for_lock(self) -> str:
+        """Block (bounded by ``busy_wait_max_min``) until the brain-window lock is free. '' once free; a dry run reports instead of waiting.
+
+        2026-10-27: this used to refuse at once, with nothing stopped - so a lander that grabbed the lock a few minutes before 02:50 (or one still waiting on CI with the probe's lock held)
+        cost the whole night (2026-10-26: "a voice-PR landing is running", no digest / night mind / omi day review / 12B dreaming). Nothing is stopped yet, so waiting costs Zoe nothing;
+        the end-by deadline still bounds the night, and the time-left check after the waits refuses when too little remains."""
+        cfg = self.cfg
+        why = f"{cfg.lock_path} is held: a landing, the samantha bar, the bake-off or another window has the brain. Nothing was stopped."
+        if self.probe_lock():
+            return ""
+        started = self.host.mono()
+        deadline = started + cfg.busy_wait_max_min * 60.0
+        while True:
+            if self.dry:
+                self.refuse(why)                       # records the dry-run refusal (the plan still prints)
+                return why
+            if self.host.mono() >= deadline:
+                self.refuse(why)
+            self.event(f"waiting: {cfg.lock_path} is held (a landing, the samantha bar or the bake-off has the brain)")
+            self.host.sleep(cfg.busy_poll_s)
+            if self.probe_lock():
+                return f"the brain-window lock was busy for {(self.host.mono() - started) / 60.0:.0f} min"
+
+    #: how many times the lock is taken, found to be shadowed by a lander / harness / nightly job that started in the gap, and given back to wait again
+    LOCK_RECHECKS = 6
+
+    def take_lock_when_clear(self, waiting: str, need_min: float) -> str:
+        """Take the lock, then look ONCE MORE for a lander, harness, nightly job or recent panel turn. Something that started in the gap between the quiet check and the lock
+        (2026-10-26: the queue spawned a ``land_voice_pr.sh`` a second before the window took the lock) no longer ends the night: the lock is handed back, the waits run again
+        (their own bounds apply), and only an end-by deadline that can no longer fit a window, or ``LOCK_RECHECKS`` such gaps in a row, refuses. Returns the updated ``waiting`` note."""
+        for attempt in range(1, self.LOCK_RECHECKS + 1):
+            self.take_lock()
+            busy = self.busy_now() or self.busy_reason()
+            if not busy:
+                return waiting
+            self.release_lock()
+            self.event(f"{busy} (it started after the quiet check): lock handed back, waiting again ({attempt}/{self.LOCK_RECHECKS}); nothing was stopped")
+            waiting = self.wait_until_idle() or waiting
+            waiting = self.wait_until_quiet() or waiting
+            left = self.compute_cap()
+            if left < need_min:
+                end_txt = dt.datetime.fromtimestamp(self.end_by_deadline()).strftime("%H:%M")
+                raise Refused(f"after waiting for {busy} it is {dt.datetime.fromtimestamp(self.host.now()):%H:%M} and {max(0.0, left):.0f} min remain before the {end_txt} end-by deadline; "
+                              f"a window needs {need_min:.0f}. Nothing was stopped.")
+        raise Refused(f"not clear after taking the lock {self.LOCK_RECHECKS} times: {busy}")
 
     def pre_stop_gate(self, avail_now: float) -> None:
         """Refuse BEFORE anything is stopped when even the optimistic prediction (every stopped unit frees ALL its PSS) cannot hold the smallest lever set."""
@@ -1429,8 +1545,20 @@ class NightWindow(bk.Window):
             rec["tokens_prompt"] = int(m1.get("prompt_tokens_total", 0) - m0.get("prompt_tokens_total", 0))
             rec["tokens_predicted"] = int(m1.get("tokens_predicted_total", 0) - m0.get("tokens_predicted_total", 0))
         rec["status"] = "ok" if res.rc == 0 else "timeout" if res.rc == 124 else "degraded" if res.rc == 3 else f"failed(rc {res.rc})"
-        rec["notes"] = [ln[:300] for ln in self.host.read(str(log_path)).splitlines() if ln.startswith("NIGHT_JOB ")][-3:]
-        self.event(f"job {job.name} {rec['status']} on the {backend}: {rec['wall_s']}s, {rec['tokens_prompt']} prompt / {rec['tokens_predicted']} generated tokens, MemAvailable low {rec['mem_low_mib']} MiB")
+        log_text = self.host.read(str(log_path))
+        rec["notes"] = [ln[:300] for ln in log_text.splitlines() if ln.startswith("NIGHT_JOB ")][-3:]
+        why = ""
+        if rec["status"] == "ok" and job.name in MODEL_JOBS and rec["tokens_predicted"] == 0:
+            # exit 0 and the model generated NOTHING: only a job that says it had no input may call that success (2026-10-27: idle nights and a silent no-op both read "ok, 5 s, 0 tokens")
+            evidence = job_idle_evidence(job.name, log_text)
+            if evidence:
+                rec["status"], why = "idle", f"no input: {evidence}"
+            else:
+                rec["status"] = "degraded"
+                why = "SILENT NO-OP: exit 0 but zero generated tokens and the job did not report that it had nothing to do (the model never answered, or the job swallowed a failure)"
+            rec["notes"].append(why)
+        self.event(f"job {job.name} {rec['status']} on the {backend}: {rec['wall_s']}s, {rec['tokens_prompt']} prompt / {rec['tokens_predicted']} generated tokens, MemAvailable low {rec['mem_low_mib']} MiB"
+                   + (f" ({why})" if why else ""))
         return rec
 
     def run_jobs(self) -> None:
@@ -2002,7 +2130,7 @@ class NightWindow(bk.Window):
         for job in planned:
             if not job.fallback_4b or not cfg.fallback_4b:
                 continue
-            done = any(r["name"] == job.name and r["backend"] == "12B" and r["status"] == "ok" for r in self.jobs)
+            done = any(r["name"] == job.name and r["backend"] == "12B" and r["status"] in OK_JOB_STATUSES for r in self.jobs)
             if done:
                 continue
             if job.needs_loop_miss and not self.digest_loop_missed():
@@ -2015,7 +2143,7 @@ class NightWindow(bk.Window):
             ran_full_dreaming = ran_full_dreaming or job.name == "dreaming"
             self.event(f"fallback: {job.name} did not finish on the 12B; running it on the live 4B")
             self.exec_job(dataclasses.replace(job, argv=argv), "4B", cfg.live_health_port, "", 1)
-        dreamt = any(r["name"] == "dreaming" and r["backend"] == "12B" and r["status"] == "ok" for r in self.jobs)
+        dreamt = any(r["name"] == "dreaming" and r["backend"] == "12B" and r["status"] in OK_JOB_STATUSES for r in self.jobs)
         if dreamt and not ran_full_dreaming:
             comp = JobSpec("index_compaction", [cfg.py, str(REPO / "scripts" / "maintenance" / "zoe-nightly-dreaming.py"), "--only-compaction"], cfg.job_timeout_s["compaction"])
             self.exec_job(comp, "4B", cfg.live_health_port, "", 1)
@@ -2083,7 +2211,7 @@ class NightWindow(bk.Window):
                 self.after_restore()
             except Exception as exc:  # noqa: BLE001
                 self.event(f"after-restore step failed: {type(exc).__name__}: {exc}")
-            if rc == EXIT_OK and any(j["status"] not in ("ok", "skipped") and not (j["backend"] == "12B" and self.fallback_covered(j))
+            if rc == EXIT_OK and any(j["status"] not in (*OK_JOB_STATUSES, "skipped") and not (j["backend"] == "12B" and self.fallback_covered(j))
                                      and not (j.get("best_effort") and j["status"] in ("no time", "timeout")) for j in self.jobs):
                 rc = EXIT_JOBS_FAILED
             self.release_lock()
@@ -2113,7 +2241,7 @@ class NightWindow(bk.Window):
 
     def fallback_covered(self, job_rec: "dict[str, Any]") -> bool:
         """A 12B job that failed is not a failure of the night when its 4B fallback finished."""
-        return any(r["name"] == job_rec["name"] and r["backend"] == "4B" and r["status"] == "ok" for r in self.jobs)
+        return any(r["name"] == job_rec["name"] and r["backend"] == "4B" and r["status"] in OK_JOB_STATUSES for r in self.jobs)
 
     # ── the report ──
     def report_lines(self, rc: int) -> "list[str]":
@@ -2332,6 +2460,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--sweep-fresh", action="store_true", help="ignore the rows an earlier invocation saved in sweep-state.json")
     ap.add_argument("--summary", action="store_true", help="print ONE line about the newest real night (outcome, exit, minutes, jobs, restore) from its report and exit; read-only (the timer unit pipes it to the journal)")
     ap.add_argument("--restore-only", action="store_true", help="put back whatever the marker file says a window stopped (idempotent)")
+    ap.add_argument("--skip-if-done", action="store_true", help="exit 0 at once when a real night window already RAN today, whatever its outcome (the timer's retry slots only make up for a REFUSED night)")
     ap.add_argument("--anytime", action="store_true", help="allow a start outside 01:30-03:40 (manual runs)")
     ap.add_argument("--keep-zoe-data", action="store_true", help="do NOT stop zoe-data (needs ~2 GB of other headroom; refused if the window would cross 03:00 / the Sunday 04:00 loop)")
     ap.add_argument("--model", choices=("auto", "qat", "q4km"), default="auto", help="auto = the QAT q4_0 file (smaller and trained for q4_0)")
@@ -2437,6 +2566,11 @@ def main(argv: "Optional[list[str]]" = None, host_factory: "Optional[Callable[[C
     if args.summary:
         print(latest_night_summary(cfg.report_dir))
         return EXIT_OK
+    if args.skip_if_done and not args.dry_run and not args.restore_only:
+        done = night_ran_today(cfg.report_dir, dt.datetime.now().strftime("%Y-%m-%d"))
+        if done:
+            print(f"[{dt.datetime.now():%H:%M:%S}] skip-if-done: tonight's window already ran ({done}); a retry only makes up for a refused night", flush=True)
+            return EXIT_OK
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     mode = "restore" if args.restore_only else "trial" if cfg.trial else "sweep" if cfg.sweep else "night"
     if not args.dry_run:
