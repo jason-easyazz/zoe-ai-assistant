@@ -280,11 +280,12 @@ def job_idle_evidence(name: str, text: str) -> str:
         members = d.get("members") if isinstance(d.get("members"), list) else []
         if d.get("status") == "nothing_to_do" and not members:
             return "no members to reflect on"
-        if d.get("status") == "ok" and members and all(isinstance(mb, dict) and mb.get("status") == "skipped" and mb.get("skipped_reason") in ("quiet_day", "opted_out") for mb in members):
-            return f"{len(members)} member(s), all skipped as a quiet day"
+        if d.get("status") == "ok" and members and all(isinstance(mb, dict) and (mb.get("status") == "off" or (mb.get("status") == "skipped" and mb.get("skipped_reason") in ("quiet_day", "opted_out"))) for mb in members):
+            return f"{len(members)} member(s), all skipped as a quiet day / opted out / mode off"
     elif name == "omi_day_review":
-        if re.search(r"^NIGHT_JOB omi_day_review status=nothing_to_do\b", text, re.M):
-            return "no pendant day to review"
+        m = re.search(r"^NIGHT_JOB omi_day_review status=(nothing_to_do|flag_off|lane_day_only)\b", text, re.M)
+        if m:         # flag_off (ZOE_OMI_DAY_REVIEW off - the default) and lane_day_only are the job's explicit opt-outs: a successful skip
+            return {"nothing_to_do": "no pendant day to review", "flag_off": "flag_off: the day review is switched off", "lane_day_only": "lane_day_only: the review runs on the day lane"}[m.group(1)]
     elif name == "dreaming":
         loops = re.findall(r"^OPEN_LOOPS .*?\bstatus=(\S+)", text, re.M)
         if loops and "Dreaming cycle complete" in text and all(st == "no_messages" for st in loops):
@@ -293,8 +294,8 @@ def job_idle_evidence(name: str, text: str) -> str:
 
 
 def night_report_state(report_dir: Path, today: str) -> "tuple[str, str]":
-    """('ran', file) when a REAL night window already RAN today (mode ``night``, any exit except a refusal), else ('refused', file) when one was REFUSED (exit 2: a lander held the box, the
-    hour, RAM; it stopped nothing), else ('none', ''). A window that ran - even one whose jobs failed (5), aborted (3) or failed to restore (4) - is never repeated blindly: the failure
+    """('ran', file) when a REAL night window already RAN today (mode ``night``, any exit except a refusal), else ('refused', file) when one was REFUSED with NOTHING STOPPED (exit 2 and ``stack_stopped`` false: a lander held the box, the
+    hour, RAM before the stops), else ('none', ''). A window that ran - even one whose jobs failed (5), aborted (3) or failed to restore (4) - is never repeated blindly: the failure
     needs a human, and a second 12B sleep the same night would not fix it."""
     refused = ""
     try:
@@ -307,7 +308,7 @@ def night_report_state(report_dir: Path, today: str) -> "tuple[str, str]":
         except (OSError, ValueError):
             continue
         if isinstance(d, dict) and d.get("mode") == "night":
-            if d.get("exit") != EXIT_REFUSED:
+            if d.get("exit") != EXIT_REFUSED or d.get("stack_stopped") is not False:      # a refusal AFTER the household stack was stopped (e.g. the 12B did not fit after the stops) - or an old report that cannot say - is not a no-op night
                 return "ran", f.name
             refused = refused or f.name
     return ("refused", refused) if refused else ("none", "")
@@ -900,6 +901,7 @@ class NightWindow(bk.Window):
         self.cap_min = cfg.cap_min
         self.end_by_epoch: "Optional[float]" = None     # the absolute --end-by deadline, set once per preflight (``end_by_deadline``)
         self.floor_armed = False
+        self.stack_stopped = False                     # the sleep/stop phase STARTED at least once (kept after the restore clears ``stopped``): a refusal after it is not a no-op night
         self.stopped: "list[str]" = []                 # units this window stopped and has not brought back yet (stop order)
         self.stop_set: "tuple[str, ...]" = ()
         self.t_down: "dict[str, float]" = {}
@@ -1244,6 +1246,7 @@ class NightWindow(bk.Window):
 
     # ── sleep ──
     def stop_one(self, unit: str) -> None:
+        self.stack_stopped = True
         if unit not in self.stopped:
             self.stopped.append(unit)
         self.write_marker()                                  # the marker lists the unit BEFORE it is stopped
@@ -2408,6 +2411,7 @@ class NightWindow(bk.Window):
             md, js = Path(str(base) + ".md"), Path(str(base) + ".json")
             md.write_text("\n".join(self.report_lines(rc)) + "\n")
             js.write_text(json.dumps({**self.rec, "trial_mode": self.cfg.trial_mode, "outcome": self.outcome, "exit": rc, "jobs": self.jobs, "elapsed_min": round(self.elapsed_min(), 1), "cap_min": self.cap_min,
+                                      "stack_stopped": self.stack_stopped, "fallback_4b_ran": any(j.get("backend") == "4B" for j in self.jobs),
                                       "restore_status": getattr(self, "restore_status", ""), "started": self.started_iso}, indent=1, default=str))
             for p in (md, js):
                 os.chmod(p, 0o600)

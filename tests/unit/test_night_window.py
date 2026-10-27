@@ -2167,6 +2167,9 @@ MIND_QUIET = ("night_mind: users kept=2 skipped_synthetic=12\n" + json.dumps({"s
     {"user_id": "a", "status": "skipped", "skipped_reason": "quiet_day", "calls": 0}, {"user_id": "b", "status": "skipped", "skipped_reason": "quiet_day", "calls": 0}]}) + "\n")
 MIND_QUIET_BUT_ERROR = json.dumps({"status": "error", "members": [{"user_id": "a", "status": "skipped", "skipped_reason": "quiet_day"}]}) + "\n"     # members look quiet, the run itself failed
 MIND_LOAD_ERROR = json.dumps({"status": "load_error", "members": [{"user_id": "a", "status": "load_error"}, {"user_id": "b", "status": "skipped", "skipped_reason": "quiet_day"}]}) + "\n"
+OMI_FLAG_OFF = 'NIGHT_JOB omi_day_review status=flag_off days=0 calls=0 stored=0 no_time=0\n'          # ZOE_OMI_DAY_REVIEW off: the default
+OMI_LANE_DAY = 'NIGHT_JOB omi_day_review status=lane_day_only days=0 calls=0 stored=0 no_time=0\n'
+MIND_OFF = json.dumps({"status": "ok", "members": [{"user_id": "a", "status": "off", "mode": "off"}]}) + "\n"
 OMI_NONE = 'INFO user_filters: omi_day_review: users kept=0\nNIGHT_JOB omi_day_review status=nothing_to_do days=0 calls=0 stored=0 no_time=0\n'
 DREAM_QUIET = "OPEN_LOOPS user=a extracted=0 status=no_messages\nOPEN_LOOPS user=b extracted=0 status=no_messages\nDreaming cycle complete: 2 users processed\n"
 DREAM_FAILED_QUIETLY = "OPEN_LOOPS user=a extracted=0 status=llm_failed\nDreaming cycle complete: 1 users processed\n"
@@ -2176,6 +2179,8 @@ DREAM_FAILED_QUIETLY = "OPEN_LOOPS user=a extracted=0 status=llm_failed\nDreamin
     ("digest", DIGEST_IDLE, True), ("digest", DIGEST_SKIPPED, True), ("digest", DIGEST_BROKEN, False), ("digest", "", False),
     ("night_mind", MIND_QUIET, True), ("night_mind", MIND_LOAD_ERROR, False), ("night_mind", MIND_QUIET_BUT_ERROR, False), ("night_mind", "night_mind: users kept=2\n", False),
     ("omi_day_review", OMI_NONE, True), ("omi_day_review", "INFO nothing here\n", False),
+    ("omi_day_review", OMI_FLAG_OFF, True), ("omi_day_review", OMI_LANE_DAY, True), ("omi_day_review", "NIGHT_JOB omi_day_review status=llm_unreachable days=1\n", False),
+    ("night_mind", MIND_OFF, True),
     ("dreaming", DREAM_QUIET, True), ("dreaming", DREAM_FAILED_QUIETLY, False), ("dreaming", "Dreaming cycle complete: 1 users processed\n", False),
     ("struggle_proposals", DIGEST_IDLE, False)])
 def test_job_idle_evidence_needs_the_jobs_own_word_that_it_had_nothing_to_do(name, text, expect):
@@ -2243,7 +2248,7 @@ def test_a_retry_only_makes_up_for_a_refused_night(tmp_path):
     d.mkdir()
     (d / "2026-10-27.json").write_text("{not json")
     assert nw.retry_decision(d, retry)[0] is False                                         # an unreadable report is not evidence either
-    _report(d, "2026-10-27", exit=nw.EXIT_REFUSED, outcome="refused: a voice-PR landing is running", jobs=[])
+    _report(d, "2026-10-27", exit=nw.EXIT_REFUSED, outcome="refused: a voice-PR landing is running", jobs=[], stack_stopped=False)
     assert nw.retry_decision(d, retry)[0] is True                                          # the 2026-10-26 case: refused, nothing stopped -> retry
     _report(d, "2026-10-27-0305", exit=nw.EXIT_OK)
     assert nw.night_ran_today(d, "2026-10-27") == "2026-10-27-0305.json" and nw.retry_decision(d, _dt.datetime(2026, 10, 27, 3, 15))[0] is False     # a real night ran
@@ -2366,3 +2371,26 @@ def test_a_late_lander_is_waited_on_past_the_per_wait_bound_when_the_end_by_leav
     w.busy_reason = lambda: "a voice-PR landing is running" if (w.lock_fd is not None and state["released"] is None) or (state["released"] is not None and host.t - state["released"] < 25 * 60) else ""
     assert w.run() == nw.EXIT_OK, w.outcome
     assert host.t - state["released"] >= 25 * 60 and host.idx("systemd-run") >= 0
+
+
+def test_a_refusal_after_the_household_stack_was_stopped_is_not_retry_eligible(tmp_path):
+    """choose() refuses AFTER the stops when the 12B cannot fit: exit 2, but Zoe was already put to sleep once - the 03:05 / 03:15 slots must not do it again."""
+    import datetime as _dt
+    w, host, cfg = make(tmp_path, freed=0.5)
+    assert w.run() == nw.EXIT_REFUSED and "no lever set fits" in w.outcome
+    rep = json.loads(next(cfg.report_dir.glob("*.json")).read_text())
+    assert rep["stack_stopped"] is True and "fallback_4b_ran" in rep
+    assert nw.retry_decision(cfg.report_dir, _dt.datetime(2026, 10, 9, 3, 5))[0] is False
+    assert nw.retry_decision(cfg.report_dir, _dt.datetime(2026, 10, 9, 3, 5))[1].startswith("tonight's window already ran")
+    w2, host2, cfg2 = make(tmp_path / "b")                                                      # control: a refusal with nothing stopped IS eligible
+    (tmp_path / "b").mkdir(exist_ok=True)
+    fd = _hold_lock(cfg2)
+    try:
+        assert w2.run() == nw.EXIT_REFUSED
+    finally:
+        os.close(fd)
+    rep2 = json.loads(next(cfg2.report_dir.glob("*.json")).read_text())
+    assert rep2["stack_stopped"] is False
+    assert nw.retry_decision(cfg2.report_dir, _dt.datetime(2026, 10, 9, 3, 5))[0] is True
+    _report(cfg2.report_dir, "2026-10-09-old", exit=nw.EXIT_REFUSED, jobs=[])                    # an old-format refusal (no stack_stopped key) cannot say: treated as ran
+    assert nw.night_report_state(cfg2.report_dir, "2026-10-09")[0] == "ran"
