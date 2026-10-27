@@ -463,7 +463,7 @@ def test_floor_fits_a_normal_daytime_box_and_leaves_the_voice_stack_headroom():
     # measured peak ~180 MB (container ~175 MB); the floor must be cap + voice headroom, and reachable by day
     assert drill.MEM_FLOOR_MB >= cap + 500                 # never starve the resident voice stack
     assert drill.MEM_FLOOR_MB <= 1300                      # below the 1.4-1.6 GB daytime norm, or it never runs
-    assert 1500 >= drill.MEM_FLOOR_MB < 2000               # the old 2000 MB floor refused at a normal 1500 MB
+    assert drill.MEM_FLOOR_MB == 1100                      # the measured value; the old 2000 refused at a normal 1500
 
 
 def test_floor_refuses_below_and_runs_at_or_above(monkeypatch):
@@ -542,3 +542,31 @@ def test_verify_script_fails_the_unit_on_loud_refusal_not_on_quiet(tmp_path):
     assert r4.returncode == 1 and "REFUSED to run" in r4.stderr   # loud refusal -> unit failed, named as a refusal
     assert run(3).returncode == 0                    # quiet (night window) -> not a failure
     assert run(0).returncode == 0                    # control: pass
+
+
+def test_loud_refusals_are_recorded_so_a_later_quiet_one_still_escalates(monkeypatch, tmp_path):
+    alerts: list[str] = []
+    _run_main(monkeypatch, tmp_path, avail=10, now=datetime(2026, 9, 20, 5, 30).astimezone(), alerts=alerts)
+    st = json.loads((tmp_path / "s" / "last_restore_drill.json").read_text())
+    assert st["first_refusal"].startswith("2026-09-20")            # recorded although this refusal alerted
+    alerts.clear()
+    rc = _run_main(monkeypatch, tmp_path, avail=4000, now=datetime(2026, 10, 25, 3, 0).astimezone(), alerts=alerts)
+    assert rc == drill.EXIT_REFUSED_LOUD and alerts                # 35 days after the first refusal: loud
+
+
+def test_failed_drill_keeps_the_refusal_anchor_and_a_pass_clears_it(monkeypatch, tmp_path):
+    s = tmp_path / "s"
+    s.mkdir()
+    (s / "last_restore_drill.json").write_text(json.dumps({"first_refusal": "2026-09-20T05:30:00+08:00"}))
+    monkeypatch.setattr(ob, "alert", lambda t: None)
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: 5000)
+    monkeypatch.setattr(drill, "unit_active", lambda u: False)
+    monkeypatch.setattr(ob.Paths, "from_env", classmethod(lambda cls: ob.Paths(
+        home=tmp_path, checkout=tmp_path, config_dir=tmp_path / "c", state_dir=s, stage_dir=tmp_path / "st")))
+    monkeypatch.setattr(drill.Sandbox, "default", classmethod(lambda cls: None))
+    for findings, kept in ((["x"], True), ([], False)):
+        monkeypatch.setattr(drill, "run_drill", lambda *a, _f=findings, **k: drill.Result(findings=list(_f)))
+        drill.main(["--ignore-window"])
+        st = json.loads((s / "last_restore_drill.json").read_text())
+        assert bool(st["first_refusal"]) is kept
+        (s / "last_restore_drill.json").write_text(json.dumps({"first_refusal": "2026-09-20T05:30:00+08:00"}))

@@ -622,7 +622,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             preflight(now, floor)
     except ob.Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
-        loud = exc.alert or note_refusal(state, now)
+        stale = note_refusal(state, now)          # always record, even when this refusal already alerts
+        loud = exc.alert or stale
         if loud:
             ob.alert(f"weekly restore drill refused: {exc}" if exc.alert else
                      f"weekly restore drill has not passed in {STALE_PASS_DAYS}+ days (latest refusal: {exc})")
@@ -630,9 +631,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         return EXIT_REFUSED_QUIET
     res = run_drill(p, backup_root, now, Sandbox.default(), python)
     try:
-        prev_ok = json.loads(state.read_text()).get("last_ok")
+        prev_state = json.loads(state.read_text())
+        prev_ok = prev_state.get("last_ok")
+        prev_first = prev_state.get("first_refusal")
     except (OSError, ValueError, AttributeError):
-        prev_ok = None
+        prev_ok = prev_first = None
     if res.findings and prev_ok:
         try:
             if now - ob._parse_time(prev_ok) > timedelta(days=STALE_PASS_DAYS):
@@ -643,7 +646,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ob._atomic_write(state, json.dumps({"time": stamp, "ok": not res.findings,
                                         "last_ok": stamp if not res.findings else prev_ok,
                                         "findings": res.findings, "notes": res.notes,
-                                        "first_refusal": None}, indent=1))
+                                        "first_refusal": None if not res.findings else prev_first}, indent=1))
     for n in res.notes:
         print(f"ok: {n}")
     for f in res.findings:
