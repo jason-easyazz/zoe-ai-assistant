@@ -251,11 +251,14 @@ has the same effect, so re-pin after a curation.
 **Flaky brain-wording tolerance (2026-10-15).** A pinned clip that falls through to the free-text brain
 has a verdict that depends on the brain's wording, and that varies run to run (same code: OK, OK,
 CANT_DO, so a PR failed ~1/3 of the time with no regression). When the FUNCTION comparison fails, the
-probe re-runs ONLY the clips that were OK in the baseline and are now `CANT_DO` *via the brain* on the
-baseline's route and transcript, up to 2 more times in the same harness on the same code, and counts a
-clip regressed only if it fails in >= 2 of its runs. A deterministic regression fails every run, and
-anything that is not brain wording (route/tier or STT-transcript change, `ERROR`, a non-brain
-`CANT_DO`) fails on the FIRST run with no retry. More than 3 candidates, a retry that cannot run, has
+probe re-runs ONLY the clips that were OK in the baseline and are now `CANT_DO` or `ERROR` with the
+IDENTICAL heard hash as the baseline (the clip did not change, only the reply or route did; widened
+2026-10-27 from brain wording on the baseline route, after a clip failed the gate one run in three with
+the STT unchanged), up to 2 more times in the same harness on the same code, and counts a
+clip regressed only if it fails in >= 2 of its runs. A retry passes only when it is `OK` on the reference
+route (the first run's for a brain `CANT_DO` that stayed on the baseline route, the baseline's otherwise).
+A deterministic regression fails every run, and a CHANGED STT transcript (or an `ERROR` with none)
+fails on the FIRST run with no retry. More than 3 candidates, a retry that cannot run, has
 no recall evidence or comes back on another route, is never tolerated; `--update-baseline` never
 retries (it records first-run truth). Artifact keys (additive): `flaky_retried`, `flaky_clips`
 (`clip_id`, per-run `runs`, `failures`, `of`, `regressed`, `note` such as "clip <id> flaky: 1/3 CANT_DO
@@ -265,6 +268,15 @@ this probe stores `summary.clip_profile` (per clip id: verdict, route, heard has
 it still gets the tolerance (route change then cannot be checked); re-record it once with
 `--update-baseline` in a quiet window to get the strict route check. Pinned by
 `tests/unit/test_voice_probe_flaky_retry.py`.
+
+**What makes `revision.dirty` true (2026-10-27).** `service_revision` reads `git status --porcelain -z
+--untracked-files=all` over the whole probe checkout. Ignored files (`.env`, `__pycache__`) never reach it.
+An UNTRACKED file matching `RUNTIME_ARTIFACT_GLOBS` (the router shadow log's `.lock` and rotated `.N`
+segments; `.env`; `*.pyc`) is listed under `runtime_artifacts_ignored` and does not count: it is written by
+the replay itself, so six probe runs on PR #2110 were refused as dirty. Every tracked modification, staged
+change, deletion and every other untracked file still counts and is named in `dirty_paths` (capped, paths
+only). A status git cannot read is still unverified, hence dirty. New runtime files under the repo should
+be `.gitignore`d; the list is the backstop. Pinned by the `repo` tests in `test_voice_probe_flaky_retry.py`.
 
 **A blank retry is inconclusive (owner decision 2026-10-20).** One pinned clip (id `d15a8f1d4fc3`) has an
 unstable STT: in 6 of 65 runs since 10-15 (on unrelated PRs; main's nightly always scored it OK) the first run

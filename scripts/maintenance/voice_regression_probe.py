@@ -316,12 +316,13 @@ def clip_profile(rows: list[dict[str, Any]], sample_dir: str) -> dict[str, dict[
 # Same code scored OK, OK, CANT_DO: a PR failed ~1/3 of the time with no regression.
 #
 # The tolerance is deliberately narrow. Only a clip that (a) was OK in the baseline,
-# (b) is CANT_DO now AFTER falling through to the brain (via_brain — the verdict is
-# a function of reply text), and (c) still takes the same route with the same
-# transcript as the baseline is re-run, in the same harness on the same code. It
-# counts as regressed if it fails in >= FLAKY_FAIL_MIN of its 3 runs. A deterministic
-# regression (route/tier change, STT change, crash, ERROR, a real refusal) fails
-# every run, so it still fails; anything that is not brain wording is never retried.
+# (b) is CANT_DO/ERROR now, and (c) heard the IDENTICAL transcript as the baseline
+# (heard hash equal: the clip did not change, only the reply did) is re-run, in the
+# same harness on the same code; a retry only counts as passing when it is OK on the
+# route the reference run took. It counts as regressed if it fails in >=
+# FLAKY_FAIL_MIN of its 3 runs. A deterministic regression (route/tier change, a
+# real refusal, a crash) fails every run, so it still fails; a changed transcript
+# is never retried.
 FLAKY_MAX_CLIPS = 3       # more candidates than this is a regression, not noise
 FLAKY_EXTRA_RUNS = 2      # runs 2 and 3
 FLAKY_FAIL_MIN = 2        # failures (of 3 runs) that make a clip regressed
@@ -378,12 +379,14 @@ def flaky_candidates(report: dict[str, Any], baseline: dict[str, Any] | None,
             if isinstance(b, dict) and b.get("verdict") in ("CANT_DO", "ERROR"):
                 pre_existing.append(cid)
                 continue
-            if not brain_wording or not isinstance(b, dict):
+            # The STT result is the evidence that the CLIP did not change: a CANT_DO/ERROR on a
+            # clip OK in the baseline with the IDENTICAL heard hash is retried whatever route it
+            # took (brain wording variance, a transient route flip, a one-off error) - a real
+            # regression fails every run and still fails. A different transcript, an
+            # unidentified clip or no baseline OK is deterministic: never retried.
+            if (real_id is None or not isinstance(b, dict) or b.get("verdict") != "OK"
+                    or not r.get("heard_hash") or b.get("heard") != r.get("heard_hash")):
                 hard.append(cid)
-                continue
-            if (b.get("verdict") != "OK" or b.get("via_brain") is not True
-                    or b.get("route") != r.get("route_hash") or b.get("heard") != r.get("heard_hash")):
-                hard.append(cid)       # route/tier/transcript changed: deterministic
                 continue
         elif not brain_wording:
             hard.append(cid)
@@ -473,11 +476,22 @@ def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | Non
     # CANT_DO (already checked equal to the baseline's), the BASELINE's for an EMPTY (an
     # empty transcript has no route of its own) or a route flip.
     prof = _profile_of(baseline) or {}
-    ref = {cid: (dict(route_hash=prof[cid].get("route"), sig=prof[cid].get("sig"),
-                      via_brain=prof[cid].get("via_brain"))
-                 if first[cid].get("verdict") in ("EMPTY", "OK") and isinstance(prof.get(cid), dict)
-                 else first[cid])
-           for cid in names}
+    def _ref(cid: str) -> dict[str, Any]:
+        f, b = first[cid], prof.get(cid)
+        base_ref = (dict(route_hash=b.get("route"), sig=b.get("sig"), via_brain=b.get("via_brain"))
+                    if isinstance(b, dict) else None)
+        if base_ref is None:
+            return f
+        if f.get("verdict") in ("EMPTY", "OK"):
+            return base_ref
+        # CANT_DO that stayed on the baseline's brain route: the first run is the reference
+        # (as before). Any other failure (ERROR, non-brain CANT_DO, another route) must come
+        # back on the BASELINE's route to count as passing.
+        if f.get("verdict") == "CANT_DO" and f.get("via_brain") is True and not _route_differs(b, f):
+            return f
+        return base_ref
+
+    ref = {cid: _ref(cid) for cid in names}
     passing: dict[str, dict[str, Any]] = {}
     problems: list[str] = []
     # clip -> index in runs[clip] of its one inconclusive (EMPTY) retry; never counted.
@@ -1094,6 +1108,43 @@ EMPTY_SUMMARY = {"n_samples": 0, "ok_rate": 0.0, "ok": 0, "fail": 0,
                  "verdicts": {}, "medians_ms": {}}
 
 
+# Untracked files the replay itself leaves in the checkout (never tracked, never code).
+# Matched against the repo-relative path of an UNTRACKED ("??") entry only; a tracked
+# or staged change to one of these paths is still dirty. A bare __pycache__ / .env is
+# normally covered by .gitignore already (and then never reaches git status at all);
+# this list is the belt-and-braces for artifacts a .gitignore did not anticipate, e.g.
+# the router shadow log's `.lock` and rotated `.N` segments (PR #2110 wrote them
+# unignored, so 6 probe runs on that PR were attributed to no commit).
+RUNTIME_ARTIFACT_GLOBS = (
+    "services/zoe-data/.env",
+    "services/zoe-data/data/router_head_shadow.jsonl*",
+    "*/__pycache__/*",
+    "*.pyc",
+)
+
+
+def _classify_status(porcelain_z: str) -> tuple[list[str], list[str]]:
+    """Split `git status --porcelain -z` output into (dirty paths, ignorable runtime artifacts)."""
+    import fnmatch
+    dirty: list[str] = []
+    runtime: list[str] = []
+    entries = porcelain_z.split("\0")
+    i = 0
+    while i < len(entries):
+        ent = entries[i]
+        i += 1
+        if len(ent) < 4:
+            continue
+        code, path = ent[:2], ent[3:]
+        if code[0] in "RC":          # rename/copy: the next NUL field is the source path
+            i += 1
+        if code == "??" and any(fnmatch.fnmatchcase(path, g) for g in RUNTIME_ARTIFACT_GLOBS):
+            runtime.append(path)
+        else:
+            dirty.append(path)
+    return dirty, runtime
+
+
 def service_revision(service_dir: Any) -> dict[str, Any] | None:
     """Git identity of the tree this probe actually EXERCISED.
 
@@ -1114,13 +1165,15 @@ def service_revision(service_dir: Any) -> dict[str, Any] | None:
     if not repo.exists():
         return None
 
-    def _git(*a: str) -> str | None:
+    def _git(*a: str, raw: bool = False) -> str | None:
         try:
             proc = subprocess.run(["git", "-C", str(repo), *a],
                                   capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             return None
-        return proc.stdout.strip() if proc.returncode == 0 else None
+        if proc.returncode != 0:
+            return None
+        return proc.stdout if raw else proc.stdout.strip()
 
     commit = _git("rev-parse", "HEAD")
     if not commit:
@@ -1134,12 +1187,21 @@ def service_revision(service_dir: Any) -> dict[str, Any] | None:
     # failed cleanliness check used to record the tree as CLEAN. That is a real
     # fail-open in the revision binding: cleanliness was never established, yet a
     # matching commit would clear `--expect-revision`. Unknown is not clean.
-    status = _git("status", "--porcelain")
+    #
+    # Untracked files that are KNOWN RUNTIME ARTIFACTS of the replay itself (see
+    # RUNTIME_ARTIFACT_GLOBS) do not make the tree dirty: they are written by the
+    # code under test while it runs, cannot change which commit was exercised, and
+    # are not code. Every tracked modification, staged change, conflict, deletion
+    # and every OTHER untracked file still counts - they are listed in `dirty_paths`.
+    status = _git("status", "--porcelain", "-z", "--untracked-files=all", raw=True)
     clean_verified = status is not None
+    dirty_paths, ignored_runtime = ([], []) if status is None else _classify_status(status)
     return {
         "commit": commit,
         "tree": _git("rev-parse", "HEAD^{tree}"),
-        "dirty": True if not clean_verified else bool(status),
+        "dirty": True if not clean_verified else bool(dirty_paths),
+        "dirty_paths": dirty_paths[:20],
+        "runtime_artifacts_ignored": ignored_runtime[:20],
         # Distinguishes "we looked and it was dirty" from "we could not look".
         # Both block, but only one of them is a repo state the operator can fix
         # by committing, so the gate's message should not have to guess.
