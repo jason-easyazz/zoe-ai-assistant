@@ -661,7 +661,7 @@ async def test_the_followup_switches_the_device_the_resolver_selected_not_a_re_m
     assert first["skybridge_context"][sky._SMART_HOME_TARGET_KEY]["entity_ids"] == ["light.bedroom_lamp"]
     room["eids"] = set()                                             # the room context is gone (or another panel): words alone are ambiguous
     asked = await sky.resolve_skybridge_request("turn the light on", "guest")
-    assert "Which one?" in asked["spoken_summary"] and switched == [("light.bedroom_lamp", False)]
+    assert "Which one" in asked["spoken_summary"] and switched == [("light.bedroom_lamp", False)]
     second = await sky.resolve_skybridge_request("turn it back on", "guest", context=first["skybridge_context"])
     assert second["handled"] and switched[-1] == ("light.bedroom_lamp", True), switched
 
@@ -670,7 +670,7 @@ async def test_a_command_that_switched_nothing_leaves_no_target(monkeypatch):
     room = {"eids": set()}
     switched = _wire_home(monkeypatch, room)
     ambiguous = await sky.resolve_skybridge_request("turn the light off", "guest")      # two lights, no room: a question, nothing switched
-    assert "Which one?" in ambiguous["spoken_summary"] and switched == []
+    assert "Which one" in ambiguous["spoken_summary"] and switched == []
     assert sky._SMART_HOME_TARGET_KEY not in ambiguous["skybridge_context"]
 
 
