@@ -1711,7 +1711,7 @@ def classify_skybridge_intent(
     calendar_followup = _calendar_followup_intent(raw_message, context)
     if calendar_followup is not None:
         return calendar_followup
-    smart_home_intent = _smart_home_followup_intent(raw_message, context) or _classify_smart_home(_home_text(raw_message, text))
+    smart_home_intent = _smart_home_followup_intent(raw_message, context) or _classify_home(raw_message, text)
     if smart_home_intent is not None:
         return _unless_delayed(smart_home_intent, text)
     if (
@@ -2457,6 +2457,34 @@ def _home_text(raw_message: str, text: str) -> str:
         return f" {bare} " if bare else text
     except Exception:  # noqa: BLE001 - never break a turn over filler stripping
         return text
+
+
+_FRAME_LEAD_WORDS = frozenset({"you", "can", "could", "would", "will", "please", "kindly", "hey", "zoe", "go", "just"})
+_FRAME_TAILS = ("please", "for me", "thanks", "thank you")
+
+
+def _original_parse_stands(intent: "SkybridgeIntent") -> bool:
+    """Existing-claim preservation: a parse of the UNstripped text is kept unless its device query visibly carries the polite
+    frame ("can you light", "lamp for me"). A scene activation or an exact entity is an explicit name - never re-parsed, so a
+    scene called "Thank You" or "Time for Me" keeps its whole name."""
+    if intent.action == "activate_scene" or intent.entity_id:
+        return True
+    q = (intent.query or "").strip().lower()
+    if not q:
+        return True
+    return q.split()[0] not in _FRAME_LEAD_WORDS and not any(q == t or q.endswith(" " + t) for t in _FRAME_TAILS)
+
+
+def _classify_home(raw_message: str, text: str) -> "SkybridgeIntent | None":
+    """The smart-home parse: the original text first (so every command that already worked keeps its exact result), and the
+    filler-stripped text only when the original parse failed or kept the polite frame in its device query."""
+    original = _classify_smart_home(text)
+    if original is not None and _original_parse_stands(original):
+        return original
+    stripped = _home_text(raw_message, text)
+    if stripped == text:
+        return original
+    return _classify_smart_home(stripped) or original
 
 
 def _classify_smart_home(text: str) -> "SkybridgeIntent | None":

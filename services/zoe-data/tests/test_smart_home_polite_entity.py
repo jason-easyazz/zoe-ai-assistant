@@ -68,6 +68,15 @@ def test_explicit_entity_marker_survives_filler_stripping(text, eid, action):
     assert got is not None and got.entity_id == eid and got.action == action, got
 
 
+@pytest.mark.parametrize("text,query", [
+    ("activate scene Thank You", "thank you"),
+    ("activate scene Time for Me", "time for me"),
+])
+def test_scene_names_ending_in_filler_words_keep_their_whole_name(text, query):
+    got = sky.classify_skybridge_intent(text)
+    assert got is not None and got.action == "activate_scene" and got.query == query, got
+
+
 def test_guard_non_commands_are_left_alone():
     assert sky.classify_skybridge_intent("can you hear me") is None
 
