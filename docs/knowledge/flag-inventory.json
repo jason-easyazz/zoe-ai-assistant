@@ -6861,6 +6861,17 @@
         ],
         "typed_env": false
       },
+      "ZOE_STRUGGLE_OUTCOMES": {
+        "defaults": [
+          "-",
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/turn_outcomes.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_STRUGGLE_PROPOSALS": {
         "defaults": [
           "-"
