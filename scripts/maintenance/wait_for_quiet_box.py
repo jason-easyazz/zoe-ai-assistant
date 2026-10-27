@@ -70,7 +70,7 @@ def wait_until_quiet(read: "Callable[[], Sample]", sleep: "Callable[[float], Non
     prev = read()
     streak, last_msg = 0, 0.0
     while True:
-        sleep(poll_s)
+        sleep(max(0.0, min(poll_s, max_wait_s - (mono() - start))))      # never sleep past the (clock-capped) bound
         cur = read()
         ok, why = judge(prev, cur, lim)
         prev = cur

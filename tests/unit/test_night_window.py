@@ -2188,7 +2188,7 @@ DREAM_FAILED_QUIETLY = "OPEN_LOOPS user=a extracted=0 status=llm_failed\nDreamin
     ("omi_day_review", OMI_NONE, True), ("omi_day_review", "INFO nothing here\n", False),
     ("omi_day_review", OMI_FLAG_OFF, True), ("omi_day_review", OMI_LANE_DAY, True), ("omi_day_review", "NIGHT_JOB omi_day_review status=llm_unreachable days=1\n", False),
     ("night_mind", MIND_OFF, True), ("omi_day_review", OMI_FILTERED, True), ("omi_day_review", OMI_MIXED_DEFERRED_FILTERED, True), ("omi_day_review", OMI_ERROR_DAY, False),
-    ("dreaming", DREAM_NO_USERS, True), ("dreaming", DREAM_NO_USERS_BUT_FAILED, False), ("dreaming", "Dreaming cycle complete: 3 users processed\n", False), ("omi_day_review", OMI_NO_TIME, True), ("omi_day_review", OMI_NO_TIME_BUT_CALLS, False),
+    ("dreaming", DREAM_NO_USERS, True), ("dreaming", DREAM_NO_USERS_BUT_FAILED, False), ("dreaming", DREAM_QUIET + "Dreaming cycle failed: boom\n", False), ("dreaming", "Dreaming cycle complete: 3 users processed\n", False), ("omi_day_review", OMI_NO_TIME, True), ("omi_day_review", OMI_NO_TIME_BUT_CALLS, False),
     ("dreaming", DREAM_QUIET, True), ("dreaming", DREAM_FAILED_QUIETLY, False), ("dreaming", "Dreaming cycle complete: 1 users processed\n", False),
     ("struggle_proposals", DIGEST_IDLE, False)])
 def test_job_idle_evidence_needs_the_jobs_own_word_that_it_had_nothing_to_do(name, text, expect):

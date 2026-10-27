@@ -124,3 +124,11 @@ def test_the_dropin_bounds_the_nightly_replays_start_before_landings_resume():
     body = (REPO / "scripts/setup/systemd/zoe-voice-regression.service.d/20-wait-quiet-box.conf").read_text()
     m = re.search(r"--not-after (\d\d):(\d\d)", "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#")))
     assert m and int(m.group(1)) * 60 + int(m.group(2)) <= 4 * 60 + 50, "the replay must not start after 04:50: landings resume at 04:55 (night_busy.sh)"
+
+
+def test_a_clock_capped_wait_ends_at_the_cap_not_one_poll_later():
+    """04:49:50 start with --not-after 04:50: the capped wait (10 s) must end at 10 s, not after a full 20 s poll."""
+    from datetime import datetime
+    cap, _ = wq.cap_by_clock(2700.0, datetime(2026, 10, 28, 4, 49, 50), "04:50")
+    ok, c = run(lambda t: (0.9, 0.0, 9.0), max_wait_s=cap)
+    assert ok is False and c.t == 10.0 and any("proceeding anyway" in m for m in c.said)

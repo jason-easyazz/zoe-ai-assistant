@@ -293,7 +293,7 @@ def job_idle_evidence(name: str, text: str) -> str:
             return {"nothing_to_do": "no pendant day to review", "flag_off": "flag_off: the day review is switched off", "lane_day_only": "lane_day_only: the review runs on the day lane"}[m.group(1)]
     elif name == "dreaming":
         loops = re.findall(r"^OPEN_LOOPS .*?\bstatus=(\S+)", text, re.M)
-        if loops and "Dreaming cycle complete" in text and all(st == "no_messages" for st in loops):
+        if loops and "Dreaming cycle complete" in text and "Dreaming cycle failed" not in text and all(st == "no_messages" for st in loops):
             return f"{len(loops)} member(s), no messages to read"
         if not loops and re.search(r"^Dreaming cycle complete: 0 users processed\s*$", text, re.M) and "Dreaming cycle failed" not in text:
             return "no users to dream for"       # the lookup SUCCEEDED and found nobody; a failed lookup prints `Dreaming cycle failed` and exits 1 (never reaches here)
