@@ -154,6 +154,24 @@ def lock_path(log: TextLog) -> Path:
 
 
 @contextlib.contextmanager
+def _bounded(lock: Any):
+    """Hold the in-process append ``lock`` for the block, waiting at most ``LOCK_WAIT_S`` for it (``TimeoutError``, like the flock). A
+    plain ``with lock`` waited FOREVER: the lock is a non-reentrant ``threading.Lock``, so a pass that re-entered ``locked`` on the
+    same thread, or any holder that never released, wedged the sweep / forget cascade (and its executor thread) with no error."""
+    acquire = getattr(lock, "acquire", None)
+    if acquire is None:
+        with lock:
+            yield
+        return
+    if not acquire(timeout=LOCK_WAIT_S):
+        raise TimeoutError(f"shadow-log in-process write lock busy for {LOCK_WAIT_S:.0f}s")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+@contextlib.contextmanager
 def locked(log: TextLog):
     """Hold the log's write lock for a whole multi-segment pass: the in-process append lock, then (router log only) an exclusive
     ``flock`` on ``<log>.lock`` - the SAME lock ``semantic_router._append_shadow_line`` takes around rotate + append, in the same order.
@@ -161,7 +179,7 @@ def locked(log: TextLog):
     had within ``LOCK_WAIT_S`` it raises ``TimeoutError`` (the sweep reports -1, the cascade step fails and is retried). BOTH logs take
     it: the intent-miss writer appends through ``append_line`` (same lock). The old-inode catch-up in ``rewrite`` stays as defence
     against a writer process still running the old, lock-less code."""
-    with _append_lock(log):
+    with _bounded(_append_lock(log)):
         path = lock_path(log)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
