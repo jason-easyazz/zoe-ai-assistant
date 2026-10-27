@@ -1151,7 +1151,7 @@ class NightWindow(bk.Window):
                    f"will stop {', '.join(self.stop_set)}" + (f"; NOT idle right now ({waiting})" if waiting else ""))
 
     @contextlib.contextmanager
-    def capped_waits(self, need_min: float):
+    def capped_waits(self, need_min: float, *, only_end_by: bool = False):
         """Every wait before the stops (lock, nightly job, quiet box) is capped at the time REMAINING to the absolute end-by deadline minus the ``need_min`` a window needs: no
         wait, and no sequence of re-waits, can run past the point where a window still fits. Already too late = refuse now, nothing stopped. Caps are restored on exit."""
         room_min = (self.end_by_deadline() - self.host.now()) / 60.0 - need_min
@@ -1159,11 +1159,14 @@ class NightWindow(bk.Window):
             end_txt = dt.datetime.fromtimestamp(self.end_by_deadline()).strftime("%H:%M")
             raise Refused(f"it is {dt.datetime.fromtimestamp(self.host.now()):%H:%M}: under the {need_min:.0f} min a window needs before the {end_txt} end-by deadline. Nothing was stopped.")
         cfg, saved = self.cfg, (self.cfg.busy_wait_max_min, self.cfg.quiet_wait_max_min)
-        cfg.busy_wait_max_min, cfg.quiet_wait_max_min = min(saved[0], room_min), min(saved[1], room_min)
+        if only_end_by:                                            # the late-lander re-waits: the end-by cutoff is the ONLY bound, not the first waits' 20/30 min
+            cfg.busy_wait_max_min = cfg.quiet_wait_max_min = room_min
+        else:
+            cfg.busy_wait_max_min, cfg.quiet_wait_max_min = min(saved[0], room_min), min(saved[1], room_min)
         try:
             yield
         except Refused as exc:
-            if room_min < max(saved):                                  # the end-by cap, not the per-wait bound, ended the wait: say so
+            if only_end_by or room_min < max(saved):                                  # the end-by cap, not the per-wait bound, ended the wait: say so
                 end_txt = dt.datetime.fromtimestamp(self.end_by_deadline()).strftime("%H:%M")
                 raise Refused(f"{exc} (the {end_txt} end-by deadline left {room_min:.0f} min of room; a window needs {need_min:.0f} min after the wait). Nothing was stopped.") from exc
             raise
@@ -1206,7 +1209,7 @@ class NightWindow(bk.Window):
             except Refused:                                # another process (a lander) took the lock in the gap since wait_for_lock: wait for it too, do not end the night
                 busy = f"{self.cfg.lock_path} was taken by another process"
                 self.event(f"{busy} after the lock wait: waiting again (cycle {attempt}); nothing was stopped")
-                with self.capped_waits(need_min):
+                with self.capped_waits(need_min, only_end_by=True):
                     waiting = self.wait_for_lock() or waiting
                 continue
             busy = self.busy_now() or self.busy_reason()
@@ -1214,10 +1217,10 @@ class NightWindow(bk.Window):
                 return waiting
             self.release_lock()
             self.event(f"{busy} (it started after the quiet check): lock handed back, waiting again (cycle {attempt}); nothing was stopped")
-            with self.capped_waits(need_min):              # bounded by the ABSOLUTE end-by: re-waits cannot add up past it
+            with self.capped_waits(need_min, only_end_by=True):              # bounded by the ABSOLUTE end-by: re-waits cannot add up past it
                 self.host.sleep(min(self.cfg.busy_poll_s, self.cfg.busy_wait_max_min * 60.0))      # progress guarantee: every cycle spends time
                 waiting = self.wait_until_idle() or waiting
-            with self.capped_waits(need_min):              # recomputed: the idle wait above has spent part of the room
+            with self.capped_waits(need_min, only_end_by=True):              # recomputed: the idle wait above has spent part of the room
                 waiting = self.wait_until_quiet() or waiting
             left = self.compute_cap()
             if left < need_min:

@@ -2350,3 +2350,19 @@ def test_a_lander_that_grabs_the_lock_between_the_lock_wait_and_taking_it_is_wai
     host.sleep = sleep
     assert w.run() == nw.EXIT_OK, w.outcome
     assert any("was taken by another process" in e["msg"] for e in w.rec["events"]) and host.idx("systemd-run") >= 0
+
+
+def test_a_late_lander_is_waited_on_past_the_per_wait_bound_when_the_end_by_leaves_room(tmp_path):
+    """Re-waits are bounded ONLY by end-by minus the window: 25 min of lander with 30 min of room must not be cut at the first waits' bound (2 min in these tests, 20/30 in production)."""
+    w, host, cfg = make(tmp_path)
+    state = {"released": None}
+    real_release = w.release_lock
+
+    def release():
+        if w.lock_fd is not None and state["released"] is None:
+            state["released"] = host.t
+        real_release()
+    w.release_lock = release
+    w.busy_reason = lambda: "a voice-PR landing is running" if (w.lock_fd is not None and state["released"] is None) or (state["released"] is not None and host.t - state["released"] < 25 * 60) else ""
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert host.t - state["released"] >= 25 * 60 and host.idx("systemd-run") >= 0
