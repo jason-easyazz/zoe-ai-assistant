@@ -585,3 +585,24 @@ def test_preflight_resolves_unit_active_at_call_time_so_host_state_cannot_leak(m
     with pytest.raises(ob.Refused) as e:
         drill.preflight(day, drill.MEM_FLOOR_MB)
     assert e.value.alert is False
+
+
+def test_preflight_resolves_sleep_at_call_time(monkeypatch):
+    day = datetime(2026, 10, 25, 5, 30)
+    slept: list[float] = []
+    calls = iter([True, False])
+    monkeypatch.setattr(drill, "unit_active", lambda u: u == "zoe-backup.service" and next(calls))
+    monkeypatch.setattr(drill.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: 5000)
+    drill.preflight(day, drill.MEM_FLOOR_MB)
+    assert slept == [30]                                           # waited via the patched sleep, no real 30 s
+
+
+def test_staleness_escalates_at_exactly_15_days_and_survives_an_unwritable_state(monkeypatch, tmp_path):
+    st = tmp_path / "last_restore_drill.json"
+    st.write_text(json.dumps({"last_ok": "2026-10-10T05:30:00+08:00"}))
+    at = datetime.fromisoformat("2026-10-25T05:30:00+08:00")
+    assert drill.note_refusal(st, at) is True                      # exactly 15 days
+    assert drill.note_refusal(st, at - drill.timedelta(seconds=1)) is False       # control: just under
+    monkeypatch.setattr(ob, "_atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError("ro")))
+    assert drill.note_refusal(st, at) is True                      # still loud when the state cannot be written

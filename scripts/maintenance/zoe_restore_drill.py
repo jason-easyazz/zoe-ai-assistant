@@ -594,13 +594,17 @@ def note_refusal(state: Path, now: datetime) -> bool:
     except (OSError, ValueError):
         prev = {}
     since = prev.get("last_ok") or prev.get("first_refusal") or now.isoformat(timespec="seconds")
+    try:
+        stale = now - ob._parse_time(since) >= timedelta(days=STALE_PASS_DAYS)
+    except ValueError:
+        stale = False
     prev["first_refusal"] = prev.get("first_refusal") or now.isoformat(timespec="seconds")
     prev["last_refusal"] = now.isoformat(timespec="seconds")
     try:
         ob._atomic_write(state, json.dumps(prev, indent=1))
-        return now - ob._parse_time(since) > timedelta(days=STALE_PASS_DAYS)
-    except (OSError, ValueError):
-        return False
+    except OSError:
+        pass                                   # an unwritable state file must not silence a known-stale drill
+    return stale
 
 
 def main(argv: Optional[list[str]] = None) -> int:
