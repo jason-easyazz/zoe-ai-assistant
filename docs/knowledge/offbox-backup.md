@@ -381,7 +381,7 @@ verify on 2026-10-25, and it would equally break a real disaster restore. The cl
 A synthetic source database in its own capped `--network none` container (the pinned image), a synthetic palace built with the
 real chromadb 1.5.9, a synthetic box, and the REAL scripts end to end: `postgres-nightly-backup.sh` + `pg_dump_manifest.py`,
 `mempalace-nightly-backup.sh`, `zoe_host_snapshot.py` + `zoe-ha-config-export`, `zoe_restore_drill.py` + `zoe-restore-drill-pg`.
-Gates: `night_busy.sh test`, 01:35-04:55, MemAvailable >= 1100 MB, the test-lane lock.
+Gates: `night_busy.sh test`, 01:35-04:55, MemAvailable >= 2000 MB at start (the lab runs a source DB AND the drill sandbox; its drill floor is set to 1500 MB inside the lab, separate from the weekly drill's measured 1100 MB floor), the test-lane lock.
 
 **2026-10-19: 18/18 cells** (Jetson, pgvector 0.8.6-pg17 pinned digest, chromadb 1.5.9). S1 the real nightly script's manifest:
 1,234 multi-line rows counted exactly, a quoted table name, a partitioned parent (0) and its partition (40), the biometric
