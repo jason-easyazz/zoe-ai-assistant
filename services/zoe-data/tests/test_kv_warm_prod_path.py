@@ -216,3 +216,22 @@ def test_warm_repeats_on_a_small_system_size_delta(monkeypatch, prod_turn):
     posts = _sidecar(monkeypatch, [2939, 2942], {"v": "cardv2"})
     assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
     assert len(posts) == 2
+
+
+def test_warm_repeats_when_the_sidecar_reports_no_system_size(monkeypatch, prod_turn):
+    """No size to compare (0 on either side) cannot confirm the card was rendered: repeat."""
+    prod_turn("How are you going tonight?")
+    zfc._LAST_TURN["zed_uid"]["system"] = 2942
+    zfc._LAST_TURN["zed_uid"]["card"] = "cardv2"
+    posts = _sidecar(monkeypatch, [0, 0], {"v": "cardv2"})
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
+    assert len(posts) == 2
+
+
+def test_warm_repeats_when_the_members_last_turn_had_no_size(monkeypatch, prod_turn):
+    prod_turn("How are you going tonight?")
+    zfc._LAST_TURN["zed_uid"]["system"] = 0
+    zfc._LAST_TURN["zed_uid"]["card"] = "cardv2"
+    posts = _sidecar(monkeypatch, [2942, 2942], {"v": "cardv2"})
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
+    assert len(posts) == 2

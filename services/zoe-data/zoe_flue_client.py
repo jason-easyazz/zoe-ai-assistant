@@ -2237,7 +2237,9 @@ async def warm_kv_prefix(member: str = "") -> str:
             # ...or the card VERSION moved since that turn (token counts alone can miss a same-size replacement):
             # the sidecar's cache still holds the old card on this request and refreshes behind it.
             moved = bool(memo) and (await _card_version((member or "").strip())) != memo.get("card", "")
-            if res[0] == "warmed" and ((want and got and want != got) or moved):
+            # A size missing on either side cannot confirm the card was rendered, so it counts as a mismatch.
+            unverified = bool(memo) and (not want or not got or want != got)
+            if res[0] == "warmed" and (unverified or moved):
                 state.update(settled=False, submission="")
                 # The first request kicked the card refresh: re-derive the message and key so the repeat (and the
                 # FLUE_KV_WARM line) describe the prompt that actually established the cache.
