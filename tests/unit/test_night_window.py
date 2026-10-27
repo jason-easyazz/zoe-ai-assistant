@@ -2171,6 +2171,11 @@ OMI_FLAG_OFF = 'NIGHT_JOB omi_day_review status=flag_off days=0 calls=0 stored=0
 OMI_LANE_DAY = 'NIGHT_JOB omi_day_review status=lane_day_only days=0 calls=0 stored=0 no_time=0\n'
 OMI_NO_TIME = 'NIGHT_JOB omi_day_review status=ok days=2 calls=0 stored=0 no_time=2\n'              # every pending day exceeded the budget: planned deferral
 OMI_NO_TIME_BUT_CALLS = 'NIGHT_JOB omi_day_review status=ok days=2 calls=3 stored=1 no_time=1\n'    # real work happened: not an idle verdict
+OMI_FILTERED = 'NIGHT_JOB omi_day_review status=ok days=2 calls=0 stored=0 no_time=0 skipped=2\n'                  # input entirely filtered out: no model call was due
+OMI_MIXED_DEFERRED_FILTERED = 'NIGHT_JOB omi_day_review status=ok days=3 calls=0 stored=0 no_time=1 skipped=2\n'
+OMI_ERROR_DAY = 'NIGHT_JOB omi_day_review status=ok days=2 calls=0 stored=0 no_time=0 skipped=1\n'                  # one day is neither deferred nor skipped (it errored): not idle
+DREAM_NO_USERS = "=== Dreaming memory cycle ===\nDreaming cycle complete: 0 users processed\n"
+DREAM_NO_USERS_BUT_FAILED = "Dreaming cycle failed: boom\nDreaming cycle complete: 0 users processed\n"
 MIND_OFF = json.dumps({"status": "ok", "members": [{"user_id": "a", "status": "off", "mode": "off"}]}) + "\n"
 OMI_NONE = 'INFO user_filters: omi_day_review: users kept=0\nNIGHT_JOB omi_day_review status=nothing_to_do days=0 calls=0 stored=0 no_time=0\n'
 DREAM_QUIET = "OPEN_LOOPS user=a extracted=0 status=no_messages\nOPEN_LOOPS user=b extracted=0 status=no_messages\nDreaming cycle complete: 2 users processed\n"
@@ -2182,7 +2187,8 @@ DREAM_FAILED_QUIETLY = "OPEN_LOOPS user=a extracted=0 status=llm_failed\nDreamin
     ("night_mind", MIND_QUIET, True), ("night_mind", MIND_LOAD_ERROR, False), ("night_mind", MIND_QUIET_BUT_ERROR, False), ("night_mind", "night_mind: users kept=2\n", False),
     ("omi_day_review", OMI_NONE, True), ("omi_day_review", "INFO nothing here\n", False),
     ("omi_day_review", OMI_FLAG_OFF, True), ("omi_day_review", OMI_LANE_DAY, True), ("omi_day_review", "NIGHT_JOB omi_day_review status=llm_unreachable days=1\n", False),
-    ("night_mind", MIND_OFF, True), ("omi_day_review", OMI_NO_TIME, True), ("omi_day_review", OMI_NO_TIME_BUT_CALLS, False),
+    ("night_mind", MIND_OFF, True), ("omi_day_review", OMI_FILTERED, True), ("omi_day_review", OMI_MIXED_DEFERRED_FILTERED, True), ("omi_day_review", OMI_ERROR_DAY, False),
+    ("dreaming", DREAM_NO_USERS, True), ("dreaming", DREAM_NO_USERS_BUT_FAILED, False), ("dreaming", "Dreaming cycle complete: 3 users processed\n", False), ("omi_day_review", OMI_NO_TIME, True), ("omi_day_review", OMI_NO_TIME_BUT_CALLS, False),
     ("dreaming", DREAM_QUIET, True), ("dreaming", DREAM_FAILED_QUIETLY, False), ("dreaming", "Dreaming cycle complete: 1 users processed\n", False),
     ("struggle_proposals", DIGEST_IDLE, False)])
 def test_job_idle_evidence_needs_the_jobs_own_word_that_it_had_nothing_to_do(name, text, expect):

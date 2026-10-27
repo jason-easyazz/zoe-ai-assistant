@@ -283,9 +283,11 @@ def job_idle_evidence(name: str, text: str) -> str:
         if d.get("status") == "ok" and members and all(isinstance(mb, dict) and (mb.get("status") == "off" or (mb.get("status") == "skipped" and mb.get("skipped_reason") in ("quiet_day", "opted_out"))) for mb in members):
             return f"{len(members)} member(s), all skipped as a quiet day / opted out / mode off"
     elif name == "omi_day_review":
-        d = re.search(r"^NIGHT_JOB omi_day_review status=ok days=\d+ calls=0 stored=0 no_time=([1-9]\d*)\s*$", text, re.M)
-        if d:         # the review PLANS inside its budget: every pending day exceeded what was left, so none was started (a deferral to tomorrow night, not a failure)
-            return f"deferred: {d.group(1)} day(s) did not fit the remaining budget (no_time)"
+        d = re.search(r"^NIGHT_JOB omi_day_review status=ok days=(\d+) calls=0 stored=0 no_time=(\d+)(?: skipped=(\d+))?\s*$", text, re.M)
+        if d and int(d.group(1)) > 0 and int(d.group(2)) + int(d.group(3) or 0) == int(d.group(1)):
+            # the review PLANS inside its budget and filters its input: every day was either deferred for budget (no_time) or had nothing left to review (skipped: filtered out, busy,
+            # deferred, erased) - no model call was due. An error / llm_unreachable day is in neither count, so it never lands here.
+            return f"{d.group(2)} day(s) deferred for budget (no_time), {d.group(3) or 0} with nothing left to review after filtering"
         m = re.search(r"^NIGHT_JOB omi_day_review status=(nothing_to_do|flag_off|lane_day_only)\b", text, re.M)
         if m:         # flag_off (ZOE_OMI_DAY_REVIEW off - the default) and lane_day_only are the job's explicit opt-outs: a successful skip
             return {"nothing_to_do": "no pendant day to review", "flag_off": "flag_off: the day review is switched off", "lane_day_only": "lane_day_only: the review runs on the day lane"}[m.group(1)]
@@ -293,6 +295,8 @@ def job_idle_evidence(name: str, text: str) -> str:
         loops = re.findall(r"^OPEN_LOOPS .*?\bstatus=(\S+)", text, re.M)
         if loops and "Dreaming cycle complete" in text and all(st == "no_messages" for st in loops):
             return f"{len(loops)} member(s), no messages to read"
+        if not loops and re.search(r"^Dreaming cycle complete: 0 users processed\s*$", text, re.M) and "Dreaming cycle failed" not in text:
+            return "no users to dream for"       # the lookup SUCCEEDED and found nobody; a failed lookup prints `Dreaming cycle failed` and exits 1 (never reaches here)
     return ""
 
 

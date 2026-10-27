@@ -24,6 +24,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable, Optional
 
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
@@ -86,6 +87,18 @@ def wait_until_quiet(read: "Callable[[], Sample]", sleep: "Callable[[float], Non
 
 
 # ── the real sampler (reads /proc; nothing is executed) ──
+
+def cap_by_clock(max_wait_s: float, now: "datetime", not_after: str) -> "tuple[float, str]":
+    """(max_wait_s, note) with the wait cut so that it never runs past the local clock time ``not_after`` (HH:MM) - but only for a run that STARTS within the hour before it.
+    A late catch-up fire (Persistent=true at noon, say) is unaffected. Why: the 04:30 nightly replay writes the single voice-gate artifact; it must be over before landings
+    resume at 04:55, so it may not start after 04:50."""
+    hh, mm = (int(x) for x in not_after.split(":"))
+    limit = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    left = (limit - now).total_seconds()
+    if 0 <= left <= 3600.0 and left < max_wait_s:
+        return left, f"capped at {not_after} ({left:.0f}s): the replay must not start after it"
+    return max_wait_s, ""
+
 
 def _read(path: str) -> str:
     try:
@@ -160,11 +173,17 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     ap.add_argument("--max-busy", type=float, default=Limits.max_busy)
     ap.add_argument("--max-serena-cores", type=float, default=Limits.max_serena_cores)
     ap.add_argument("--max-load1", type=float, default=Limits.max_load1)
+    ap.add_argument("--not-after", default="", metavar="HH:MM", help="a run starting in the hour before this local time never waits past it (proceeds and says so)")
     ap.add_argument("--no-serena", action="store_true", help="do not watch the Serena process tree")
     args = ap.parse_args(argv)
     lim = Limits(args.max_busy, args.max_serena_cores, args.max_load1)
     say = lambda m: print(f"wait_for_quiet_box: {m}", flush=True)  # noqa: E731
-    wait_until_quiet(lambda: real_sample(not args.no_serena), time.sleep, time.monotonic, lim, max_wait_s=args.max_wait_s, poll_s=args.poll_s,
+    max_wait_s = args.max_wait_s
+    if args.not_after:
+        max_wait_s, note = cap_by_clock(max_wait_s, datetime.now(), args.not_after)
+        if note:
+            say(note)
+    wait_until_quiet(lambda: real_sample(not args.no_serena), time.sleep, time.monotonic, lim, max_wait_s=max_wait_s, poll_s=args.poll_s,
                      consecutive=args.consecutive, say=say)
     return 0
 

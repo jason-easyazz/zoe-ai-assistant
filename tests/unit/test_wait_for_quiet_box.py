@@ -107,3 +107,20 @@ def test_the_dropin_is_bounded_ignores_a_missing_helper_and_leaves_the_speed_thr
     assert "wait_for_quiet_box" not in unit, "the template is voice-path scope: the wait ships as a drop-in"
     probe = (REPO / "scripts/maintenance/voice_regression_probe.py").read_text()
     assert '"--warn-ratio", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_RATIO", "1.5"))' in probe, "the 1.5x speed threshold must not be widened to hide contention"
+
+
+def test_the_wait_never_runs_past_not_after_when_the_run_starts_in_the_hour_before_it():
+    from datetime import datetime
+    cap, note = wq.cap_by_clock(2700.0, datetime(2026, 10, 28, 4, 30, 0), "04:50")
+    assert cap == 1200.0 and "04:50" in note                                          # the nightly replay may not START after 04:50
+    assert wq.cap_by_clock(600.0, datetime(2026, 10, 28, 4, 30, 0), "04:50") == (600.0, "")        # an already shorter wait is left alone
+    assert wq.cap_by_clock(2700.0, datetime(2026, 10, 28, 12, 0, 0), "04:50") == (2700.0, "")      # a noon catch-up fire is not clipped
+    assert wq.cap_by_clock(2700.0, datetime(2026, 10, 28, 2, 0, 0), "04:50") == (2700.0, "")        # nor one more than an hour before
+    assert wq.cap_by_clock(2700.0, datetime(2026, 10, 28, 4, 49, 30), "04:50")[0] == 30.0
+    assert wq.cap_by_clock(2700.0, datetime(2026, 10, 28, 4, 55, 0), "04:50") == (2700.0, "")       # past it already: outside the rule (the lander gate covers a late fire)
+
+
+def test_the_dropin_bounds_the_nightly_replays_start_before_landings_resume():
+    body = (REPO / "scripts/setup/systemd/zoe-voice-regression.service.d/20-wait-quiet-box.conf").read_text()
+    m = re.search(r"--not-after (\d\d):(\d\d)", "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#")))
+    assert m and int(m.group(1)) * 60 + int(m.group(2)) <= 4 * 60 + 50, "the replay must not start after 04:50: landings resume at 04:55 (night_busy.sh)"
