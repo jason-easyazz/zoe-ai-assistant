@@ -1179,13 +1179,16 @@ def service_revision(service_dir: Any) -> dict[str, Any] | None:
 
     def _git(*a: str, raw: bool = False) -> str | None:
         try:
+            # Bytes, decoded leniently: an untracked file whose NAME is not valid in the
+            # active text encoding must come back as a (dirty) path, never abort the probe.
             proc = subprocess.run(["git", "-C", str(repo), *a],
-                                  capture_output=True, text=True, timeout=30)
+                                  capture_output=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             return None
         if proc.returncode != 0:
             return None
-        return proc.stdout if raw else proc.stdout.strip()
+        out = proc.stdout.decode("utf-8", errors="replace")
+        return out if raw else out.strip()
 
     commit = _git("rev-parse", "HEAD")
     if not commit:

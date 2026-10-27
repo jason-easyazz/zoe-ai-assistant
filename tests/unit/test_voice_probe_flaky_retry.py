@@ -717,3 +717,33 @@ def test_cap_never_hides_a_dirty_path_behind_runtime_artifacts(repo):
     _untracked(repo, "zzz_last.py")
     rev = vrp.service_revision(sd)
     assert rev["dirty"] is True and rev["dirty_paths"] == ["zzz_last.py"]
+
+
+# -- review round 2: the PRODUCTION .gitignore, and undecodable names -----------------------------
+@pytest.mark.parametrize("name,ignored", [
+    ("router_head_shadow.jsonl", True),
+    ("router_head_shadow.jsonl.lock", True),
+    ("router_head_shadow.jsonl.1", True),
+    ("router_head_shadow.jsonl.12", True),
+    ("router_head_shadow.jsonl.keep", False),
+    ("router_head_shadow.jsonl.orig", False),
+    ("router_head_shadow.jsonl.1x", False),
+    ("router_head_shadow.jsonl.123", False),
+])
+def test_production_gitignore_hides_only_the_shadow_log_files(name, ignored):
+    import subprocess
+    proc = subprocess.run(["git", "-C", str(REPO), "check-ignore", "-q", f"services/zoe-data/data/{name}"],
+                          capture_output=True)
+    assert (proc.returncode == 0) is ignored, name
+
+
+def test_untracked_file_with_undecodable_name_is_dirty_not_a_crash(repo, monkeypatch):
+    r, sd = repo
+    monkeypatch.setenv("LC_ALL", "C")
+    try:
+        (r.__class__(os.fsdecode(os.fsencode(str(r)) + b"/bad\xff.py"))).write_bytes(b"x")
+    except OSError:
+        pytest.skip("filesystem rejects non-UTF-8 names")
+    rev = vrp.service_revision(sd)
+    assert rev is not None and rev["dirty"] is True and rev["clean_verified"] is True
+    assert len(rev["dirty_paths"]) == 1 and rev["dirty_paths"][0].startswith("bad")
