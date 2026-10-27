@@ -271,11 +271,11 @@ it still gets the tolerance (route change then cannot be checked); re-record it 
 
 **What makes `revision.dirty` true (2026-10-27).** `service_revision` reads `git status --porcelain -z
 --untracked-files=all` over the whole probe checkout. Ignored files (`.env`, `__pycache__`) never reach it.
-An UNTRACKED file matching `RUNTIME_ARTIFACT_GLOBS` (the router shadow log's `.lock` and rotated `.N`
-segments; `.env`; `*.pyc`) is listed under `runtime_artifacts_ignored` and does not count: it is written by
+An UNTRACKED file matching `RUNTIME_ARTIFACT_PATTERNS` (the router shadow log's `.lock` and rotated `.N`
+segments; `.env`; a `.pyc` directly inside a `__pycache__/`) is listed under `runtime_artifacts_ignored` and does not count: it is written by
 the replay itself, so six probe runs on PR #2110 were refused as dirty. Every tracked modification, staged
 change, deletion and every other untracked file still counts and is named in `dirty_paths` (capped, paths
-only). A status git cannot read is still unverified, hence dirty. New runtime files under the repo should
+only, 20 max; the verdict uses the full list). An unparseable status record or a status git cannot read is dirty (rename/copy records in either column consume their source field). New runtime files under the repo should
 be `.gitignore`d; the list is the backstop. Pinned by the `repo` tests in `test_voice_probe_flaky_retry.py`.
 
 **A blank retry is inconclusive (owner decision 2026-10-20).** One pinned clip (id `d15a8f1d4fc3`) has an

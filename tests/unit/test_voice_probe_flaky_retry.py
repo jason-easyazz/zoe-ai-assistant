@@ -607,3 +607,113 @@ def test_tracked_runtime_artifact_path_modified_is_still_dirty(repo):
     _vcs(r, "commit", "-q", "-m", "track it")
     (sd / "data" / "router_head_shadow.jsonl.1").write_text("b\n")
     assert vrp.service_revision(sd)["dirty"] is True
+
+
+# -- review round: the runtime-artifact patterns are narrow, the -z parser is exact ---------------
+def _untracked(repo, rel: str, data: bytes = b"x") -> None:
+    p = repo[0] / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+
+
+def test_root_pycache_pyc_is_a_runtime_artifact(repo):
+    _untracked(repo, "__pycache__/mod.cpython-312.pyc")
+    _untracked(repo, "pkg/__pycache__/mod.cpython-312.pyc")
+    rev = vrp.service_revision(repo[1])
+    assert rev["dirty"] is False
+    assert sorted(rev["runtime_artifacts_ignored"]) == ["__pycache__/mod.cpython-312.pyc",
+                                                        "pkg/__pycache__/mod.cpython-312.pyc"]
+
+
+def test_pyc_outside_pycache_is_dirty(repo):
+    _untracked(repo, "scratch.pyc")
+    _untracked(repo, "services/zoe-data/helper.pyc")
+    rev = vrp.service_revision(repo[1])
+    assert rev["dirty"] is True
+    assert sorted(rev["dirty_paths"]) == ["scratch.pyc", "services/zoe-data/helper.pyc"]
+
+
+def test_non_pyc_file_inside_pycache_is_dirty(repo):
+    _untracked(repo, "pkg/__pycache__/notes.txt")
+    _untracked(repo, "__pycache__/payload.py")
+    rev = vrp.service_revision(repo[1])
+    assert rev["dirty"] is True
+    assert sorted(rev["dirty_paths"]) == ["__pycache__/payload.py", "pkg/__pycache__/notes.txt"]
+
+
+def test_nested_path_under_pycache_and_lookalike_names_are_dirty(repo):
+    _untracked(repo, "__pycache__/sub/deep.pyc")                  # not a direct child
+    _untracked(repo, "notpycache/x.pyc")
+    _untracked(repo, "services/zoe-data/data/router_head_shadow.jsonl.bak")
+    rev = vrp.service_revision(repo[1])
+    assert rev["dirty"] is True and len(rev["dirty_paths"]) == 3
+
+
+def test_real_staged_rename_is_dirty_and_consumes_its_source_field(repo):
+    r, sd = repo
+    _untracked(repo, "services/zoe-data/data/router_head_shadow.jsonl.lock", b"")   # forgiven, after the rename
+    _vcs(r, "mv", "services/zoe-data/app.py", "services/zoe-data/app2.py")
+    rev = vrp.service_revision(sd)
+    assert rev["dirty"] is True
+    assert rev["dirty_paths"] == ["services/zoe-data/app2.py"]            # source path is not a second entry
+    assert rev["runtime_artifacts_ignored"] == ["services/zoe-data/data/router_head_shadow.jsonl.lock"]
+
+
+@pytest.mark.parametrize("code", ["R ", " R", "RM", "MR", "C ", " C", "CM", "MC", "RR", "CC"])
+def test_rename_and_copy_in_either_column_consume_the_source_field(code):
+    # `git status --porcelain -z`: "XY to\0from\0" when X or Y is R or C. The source here is the
+    # NAME of a runtime artifact: it must NOT be read as its own entry (and forgiven or listed).
+    out = (f"{code} new_name.py\0services/zoe-data/data/router_head_shadow.jsonl.lock\0"
+           "?? services/zoe-data/data/router_head_shadow.jsonl.1\0")
+    dirty, runtime = vrp._classify_status(out)
+    assert dirty == ["new_name.py"]
+    assert runtime == ["services/zoe-data/data/router_head_shadow.jsonl.1"]
+
+
+@pytest.mark.parametrize("bad", [
+    "garbage\0",                       # no XY and separator
+    "XYnew.py\0",                      # missing the separating space
+    "?? \0",                           # empty path
+    "R  to.py\0",                      # rename with no source field
+    "!!\0",
+])
+def test_unparseable_status_fails_dirty(bad):
+    dirty, runtime = vrp._classify_status(bad)
+    assert dirty and runtime == []
+
+
+def test_empty_status_is_clean():
+    assert vrp._classify_status("") == ([], [])
+
+
+def test_unreadable_git_status_is_dirty_and_unverified(repo, monkeypatch):
+    real = vrp.subprocess.run
+
+    def fake(cmd, *a, **k):
+        if "status" in cmd:
+            return vrp.subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: bad index")
+        return real(cmd, *a, **k)
+
+    monkeypatch.setattr(vrp.subprocess, "run", fake)
+    rev = vrp.service_revision(repo[1])
+    assert rev["dirty"] is True and rev["clean_verified"] is False
+    assert rev["dirty_paths"] == [] and rev["runtime_artifacts_ignored"] == []
+
+
+def test_dirty_and_ignored_lists_are_capped_at_twenty_but_dirty_uses_the_full_list(repo):
+    r, sd = repo
+    for i in range(25):
+        _untracked(repo, f"extra_{i:02d}.py")
+        _untracked(repo, f"pkg/__pycache__/m{i:02d}.cpython-312.pyc")
+    rev = vrp.service_revision(sd)
+    assert rev["dirty"] is True
+    assert len(rev["dirty_paths"]) == 20 and len(rev["runtime_artifacts_ignored"]) == 20
+
+
+def test_cap_never_hides_a_dirty_path_behind_runtime_artifacts(repo):
+    r, sd = repo
+    for i in range(25):
+        _untracked(repo, f"pkg/__pycache__/m{i:02d}.cpython-312.pyc")
+    _untracked(repo, "zzz_last.py")
+    rev = vrp.service_revision(sd)
+    assert rev["dirty"] is True and rev["dirty_paths"] == ["zzz_last.py"]

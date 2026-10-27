@@ -114,6 +114,7 @@ import importlib.util
 import json
 from datetime import datetime, timezone
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -1115,30 +1116,41 @@ EMPTY_SUMMARY = {"n_samples": 0, "ok_rate": 0.0, "ok": 0, "fail": 0,
 # this list is the belt-and-braces for artifacts a .gitignore did not anticipate, e.g.
 # the router shadow log's `.lock` and rotated `.N` segments (PR #2110 wrote them
 # unignored, so 6 probe runs on that PR were attributed to no commit).
-RUNTIME_ARTIFACT_GLOBS = (
-    "services/zoe-data/.env",
-    "services/zoe-data/data/router_head_shadow.jsonl*",
-    "*/__pycache__/*",
-    "*.pyc",
-)
+RUNTIME_ARTIFACT_PATTERNS = tuple(re.compile(p) for p in (
+    r"services/zoe-data/\.env",
+    r"services/zoe-data/data/router_head_shadow\.jsonl(?:\.[0-9]+|\.lock)?",
+    r"(?:.*/)?__pycache__/[^/]+\.pyc",          # a .pyc DIRECTLY inside a __pycache__ dir (root included)
+))
+
+
+def _is_runtime_artifact(path: str) -> bool:
+    return any(p.fullmatch(path) for p in RUNTIME_ARTIFACT_PATTERNS)
 
 
 def _classify_status(porcelain_z: str) -> tuple[list[str], list[str]]:
-    """Split `git status --porcelain -z` output into (dirty paths, ignorable runtime artifacts)."""
-    import fnmatch
+    """Split `git status --porcelain -z` (v1) output into (dirty paths, forgiven runtime artifacts).
+
+    Format: NUL-terminated `XY PATH` records; when X or Y is R or C the record is `XY to` followed by
+    one extra NUL field, the source path. Anything unparseable becomes a dirty entry (fail dirty)."""
     dirty: list[str] = []
     runtime: list[str] = []
     entries = porcelain_z.split("\0")
+    if entries and entries[-1] == "":
+        entries.pop()                            # the trailing NUL
     i = 0
     while i < len(entries):
         ent = entries[i]
         i += 1
-        if len(ent) < 4:
-            continue
         code, path = ent[:2], ent[3:]
-        if code[0] in "RC":          # rename/copy: the next NUL field is the source path
+        if len(ent) < 4 or ent[2] != " " or not path or code == "!!":
+            dirty.append(f"<unparseable status record {ent[:40]!r}>")
+            continue
+        if "R" in code or "C" in code:           # either column: the next field is the source path
+            if i >= len(entries):
+                dirty.append(f"<unparseable rename record {ent[:40]!r}>")
+                continue
             i += 1
-        if code == "??" and any(fnmatch.fnmatchcase(path, g) for g in RUNTIME_ARTIFACT_GLOBS):
+        if code == "??" and _is_runtime_artifact(path):
             runtime.append(path)
         else:
             dirty.append(path)
@@ -1189,7 +1201,7 @@ def service_revision(service_dir: Any) -> dict[str, Any] | None:
     # matching commit would clear `--expect-revision`. Unknown is not clean.
     #
     # Untracked files that are KNOWN RUNTIME ARTIFACTS of the replay itself (see
-    # RUNTIME_ARTIFACT_GLOBS) do not make the tree dirty: they are written by the
+    # RUNTIME_ARTIFACT_PATTERNS) do not make the tree dirty: they are written by the
     # code under test while it runs, cannot change which commit was exercised, and
     # are not code. Every tracked modification, staged change, conflict, deletion
     # and every OTHER untracked file still counts - they are listed in `dirty_paths`.
