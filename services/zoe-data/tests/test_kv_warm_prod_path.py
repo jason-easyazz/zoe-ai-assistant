@@ -205,4 +205,14 @@ def test_wake_fresh_pin_lookup_is_a_hard_bound(monkeypatch):
         return elapsed
 
     elapsed = asyncio.run(go())
-    assert seen == [""] and elapsed < 1.2
+    assert seen == [""] and elapsed < 0.8
+
+
+def test_warm_repeats_on_a_small_system_size_delta(monkeypatch, prod_turn):
+    """Any system-size difference from the member's last turn means a different prompt was rendered."""
+    prod_turn("How are you going tonight?")
+    zfc._LAST_TURN["zed_uid"]["system"] = 2942
+    zfc._LAST_TURN["zed_uid"]["card"] = "cardv2"
+    posts = _sidecar(monkeypatch, [2939, 2942], {"v": "cardv2"})
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
+    assert len(posts) == 2
