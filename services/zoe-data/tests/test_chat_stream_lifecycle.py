@@ -144,7 +144,7 @@ async def test_midstream_error_persists_partial_flagged_truncated(monkeypatch):
     # Capture every persisted chat message.
     saves: list[dict] = []
 
-    async def fake_save(session_id, role, content, user_id=None, *, truncated=False):
+    async def fake_save(session_id, role, content, user_id=None, *, truncated=False, **_kw):
         saves.append({"session_id": session_id, "role": role, "content": content,
                       "user_id": user_id, "truncated": truncated})
 
@@ -217,7 +217,7 @@ async def test_failed_normal_save_leaves_reply_recoverable(monkeypatch):
 
     saves: list[dict] = []
 
-    async def failing_save(session_id, role, content, user_id=None, *, truncated=False):
+    async def failing_save(session_id, role, content, user_id=None, *, truncated=False, **_kw):
         saves.append({"role": role, "content": content, "truncated": truncated})
         return False  # save did NOT land (e.g. DB failure — _save_chat_message swallows it)
 
@@ -250,7 +250,7 @@ async def test_failed_normal_save_reports_error_not_completed(monkeypatch):
 
     saves: list[dict] = []
 
-    async def failing_save(session_id, role, content, user_id=None, *, truncated=False):
+    async def failing_save(session_id, role, content, user_id=None, *, truncated=False, **_kw):
         saves.append({"role": role, "content": content, "truncated": truncated})
         return False
 
@@ -286,7 +286,7 @@ async def test_successful_normal_save_skips_truncated_fallback(monkeypatch):
 
     saves: list[dict] = []
 
-    async def ok_save(session_id, role, content, user_id=None, *, truncated=False):
+    async def ok_save(session_id, role, content, user_id=None, *, truncated=False, **_kw):
         saves.append({"role": role, "content": content, "truncated": truncated})
         return True
 

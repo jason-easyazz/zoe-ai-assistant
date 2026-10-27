@@ -62,6 +62,7 @@ from typing import Any, Awaitable, Callable, Iterable, Optional
 
 import evolution_queue as eq
 import struggle_signals as sig
+from bounded_await import bounded
 from struggle_detector import is_guest
 
 logger = logging.getLogger("struggle_proposals")
@@ -542,7 +543,7 @@ async def summarise(items: list[tuple[str, dict]], llm: LLM, *, budget_s: float 
         if time.monotonic() - t0 > budget_s:
             break
         try:
-            raw = await asyncio.wait_for(llm(messages_for(facts), max_tokens), per_call_s)
+            raw = await bounded(llm(messages_for(facts), max_tokens), per_call_s)
         except Exception as exc:  # noqa: BLE001 - the template stands
             logger.info("STRUGGLE_PROPOSALS summary skipped (%s)", type(exc).__name__)
             if isinstance(exc, (ConnectionError, OSError)):
@@ -1107,7 +1108,7 @@ async def run_pass(*, now: Optional[float] = None, llm: Optional[LLM] = None, dr
         return {"status": "off", "mode": m}
     t = time.time() if now is None else now
     span = lookback_days() if days is None else days
-    rows = await asyncio.wait_for(sd.get_backend().rows(t - span * DAY_S, None, limit=ROW_LIMIT), 60.0)
+    rows = await bounded(sd.get_backend().rows(t - span * DAY_S, None, limit=ROW_LIMIT), 60.0)
     clusters, skipped = cluster(rows, min_ep=min_ep)         # EVERY eligible cluster, best first: the cap below limits NEW proposals, never what is kept
     res: dict[str, Any] = {
         "status": "ok", "mode": m, "dry_run": dry_run, "days": span, "events": len(rows), "truncated": len(rows) >= ROW_LIMIT,
@@ -1268,7 +1269,7 @@ async def brief_line(user_id: str) -> Optional[str]:
     try:
         if mode() != "on":
             return None
-        waiting = (await asyncio.wait_for(counts(), STORE_TIMEOUT_S)).get(PROPOSED) or {}
+        waiting = (await bounded(counts(), STORE_TIMEOUT_S)).get(PROPOSED) or {}
         n = sum(waiting.values())
         if n <= 0:
             return None

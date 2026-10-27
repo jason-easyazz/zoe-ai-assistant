@@ -34,6 +34,7 @@ import uuid
 from typing import Any, Iterable, Optional
 
 import struggle_signals as sig
+from bounded_await import bounded
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +338,7 @@ def set_backend(backend: Optional[Any]) -> None:
 
 async def record(row: dict) -> bool:
     try:
-        await asyncio.wait_for(get_backend().add(row), STORE_TIMEOUT_S)
+        await bounded(get_backend().add(row), STORE_TIMEOUT_S)
         _count("rows")
         _count(f"rows_{row.get('traffic')}")
         return True
@@ -370,7 +371,7 @@ async def mark_failed(user_id: str, turn_id: str, signals: Iterable[str], label:
                     return True
             return False
 
-        done = await asyncio.wait_for(_run(), STORE_TIMEOUT_S)
+        done = await bounded(_run(), STORE_TIMEOUT_S)
         _count("marked_failed" if done else "mark_missed")
         return done
     except Exception as exc:  # noqa: BLE001
@@ -458,7 +459,7 @@ async def brief_line(user_id: str, *, days: float = REVIEW_DAYS) -> Optional[str
     try:
         if not enabled():
             return None
-        rep = await asyncio.wait_for(review(user_id, days=days), STORE_TIMEOUT_S)
+        rep = await bounded(review(user_id, days=days), STORE_TIMEOUT_S)
         n = int(rep.get("pending") or 0)
         if n <= 0:
             return None
@@ -478,7 +479,7 @@ async def confirmed_examples(limit: int = 500) -> list[dict]:
     if not enabled():       # capture off = nothing from here reaches training, whatever was confirmed while it was on
         return []
     try:
-        rows = await asyncio.wait_for(get_backend().confirmed(max(1, min(2000, int(limit)))), STORE_TIMEOUT_S)
+        rows = await bounded(get_backend().confirmed(max(1, min(2000, int(limit)))), STORE_TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001 - a missing table / DB blip: no examples from here
         logger.debug("turn_outcomes: confirmed read failed (%s)", type(exc).__name__)
         return []

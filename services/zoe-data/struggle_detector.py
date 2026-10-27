@@ -47,6 +47,7 @@ from collections import OrderedDict, deque
 from typing import Any, Optional
 
 import struggle_signals as sig
+from bounded_await import bounded
 import traffic_class
 
 logger = logging.getLogger(__name__)
@@ -409,7 +410,7 @@ async def drain(timeout: float = 5.0) -> None:
     """Wait until every queued turn is processed (tests, the CLI)."""
     q = _STATE.get("queue")
     if q is not None and _STATE.get("loop") is asyncio.get_running_loop():
-        await asyncio.wait_for(q.join(), timeout)
+        await bounded(q.join(), timeout)
 
 
 def reset() -> None:
@@ -534,7 +535,7 @@ async def process(item: tuple) -> list[sig.Event]:
             if not _erased_since(cur.user_id, cur.ts, _DELETED_AT):
                 try:
                     rows = [await _row(e) for e in events]
-                    await asyncio.wait_for(get_backend().add(rows), STORE_TIMEOUT_S)
+                    await bounded(get_backend().add(rows), STORE_TIMEOUT_S)
                 except Exception as exc:  # noqa: BLE001 - DB down / slow: counted, the turn already happened
                     _count("store_errors")
                     logger.warning("struggle_detector: event store failed (%s) events=%d channel=%s", type(exc).__name__,
@@ -592,7 +593,7 @@ async def _message_id_for(cur: sig.Turn) -> str:
         return ""
 
     try:
-        return await asyncio.wait_for(_look(), STORE_TIMEOUT_S)
+        return await bounded(_look(), STORE_TIMEOUT_S)
     except Exception:  # noqa: BLE001 - no id = a later rating of this reply is simply not attached (never a neighbouring turn)
         return ""
 
@@ -664,7 +665,7 @@ async def _keep_words_bounded(turn: sig.Turn, *texts: str) -> bool:
     """``_may_keep_words`` with a time bound: a slow forget-ledger lookup must not stall the worker (and so fill the queue);
     a lookup that runs out of time keeps NO words."""
     try:
-        return await asyncio.wait_for(_may_keep_words(turn, *texts), STORE_TIMEOUT_S)
+        return await bounded(_may_keep_words(turn, *texts), STORE_TIMEOUT_S)
     except Exception:  # noqa: BLE001 - TimeoutError included
         return False
 
@@ -735,7 +736,7 @@ async def _maybe_sweep(now: float) -> None:
         return
     _STATE["last_sweep"] = now
     try:
-        n = await asyncio.wait_for(get_backend().purge_before(now - retention_days() * 86400.0), STORE_TIMEOUT_S)
+        n = await bounded(get_backend().purge_before(now - retention_days() * 86400.0), STORE_TIMEOUT_S)
         _count("sweeps")
         _count("swept", int(n or 0))
     except Exception as exc:  # noqa: BLE001
@@ -744,7 +745,7 @@ async def _maybe_sweep(now: float) -> None:
     try:   # the outcome rows age out the same way, whatever the flag says now (rows written while it was on still go)
         import turn_outcomes
 
-        n = await asyncio.wait_for(turn_outcomes.get_backend().purge_before(now - retention_days() * 86400.0), STORE_TIMEOUT_S)
+        n = await bounded(turn_outcomes.get_backend().purge_before(now - retention_days() * 86400.0), STORE_TIMEOUT_S)
         _count("swept", int(n or 0))
     except Exception as exc:  # noqa: BLE001 - a missing table (0058 not run) included
         logger.warning("struggle_detector: outcome retention sweep failed (%s)", type(exc).__name__)
