@@ -1702,6 +1702,9 @@ def _log_context_budget(session_id: str, terminal: dict) -> None:
             keys = ("system", "tools", "history", "tail", "stale", "elided")
             logger.info("FLUE_CONTEXT_BUDGET session=%s " + " ".join(f"{k}=%d" for k in keys),
                         session_id, *(int(b.get(k) or 0) for k in keys))
+            u = _SESSION_UID.get(session_id)
+            if u and u in _LAST_TURN:
+                _LAST_TURN[u]["system"] = int(b.get("system") or 0)
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn
         pass
 
@@ -1983,7 +1986,7 @@ def _kv_warm_message() -> str:
 _ENVELOPE_LINE_RE = re.compile(r"^ zoe-(uid|manner|persona):([^\n]*)\n")
 
 
-def prefix_key(message: str) -> str:
+def prefix_key(message: str, card_version: str = "") -> str:
     """Short hash of the envelope lines of an outbound message that change the sidecar's SYSTEM-PROMPT bytes: the
     acting member (which selects the user-model card) plus the manner and persona blocks. Two requests with the
     same key render the same system prompt + tool block, so llama-server can reuse the slot across them; a
@@ -2003,46 +2006,107 @@ def prefix_key(message: str) -> str:
             seen[k.group(1)] = k.group(2)
         rest = rest[len(line):]
     h = hashlib.sha256()
+    h.update((card_version or "").encode("utf-8", "replace"))   # the user-model card the sidecar renders for this member
+    h.update(b"\x00")
     for name in ("uid", "manner", "persona"):
         h.update((seen.get(name) or ("guest" if name == "uid" else "")).encode("utf-8", "replace"))
         h.update(b"\x00")
     return h.hexdigest()[:10]
 
 
-def _log_prefix_key(kind: str, session_id: str, message: str) -> str:
+def _log_prefix_key(kind: str, session_id: str, message: str, card_version: str = "") -> str:
     """One ``FLUE_PREFIX_KEY`` line per turn, so a ``PANEL_KV_MISS`` explains itself: compare the ``key`` of the
     last ``FLUE_KV_WARM`` line with the turn's. ``slot=auto``: the brain runs ``--parallel 1`` and no request pins
     ``id_slot``, so every request lands in the one slot (a slot mismatch cannot be the cause). Never raises."""
     key = "-"
     try:
-        key = prefix_key(message)
-        logger.info("FLUE_PREFIX_KEY kind=%s session=%s key=%s slot=auto", kind, session_id, key)
+        key = prefix_key(message, card_version)
+        logger.info("FLUE_PREFIX_KEY kind=%s session=%s key=%s card=%s slot=auto", kind, session_id, key, card_version or "-")
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn
         pass
     return key
+
+
+# What each member's LAST real turn actually sent ahead of their words: the manner and persona envelope lines
+# (the manner block is chosen by the language of the utterance, so only a real turn knows it) and the sidecar's
+# system-prompt token estimate for that turn. The wake warm replays exactly these lines. Bounded.
+_LAST_TURN: "dict[str, dict]" = {}
+_SESSION_UID: "dict[str, str]" = {}
+_LAST_TURN_MAX = 64
+
+
+def _leading_envelope_lines(message: str) -> "dict[str, str]":
+    """The raw manner / persona envelope lines at the head of an outbound message ('' when absent)."""
+    out = {"manner": "", "persona": ""}
+    rest = message or ""
+    for _ in range(12):
+        m = re.match(r"^ zoe-([a-z]+):[^\n]*\n", rest)
+        if not m:
+            break
+        if m.group(1) in out:
+            out[m.group(1)] = m.group(0)
+        rest = rest[len(m.group(0)):]
+    return out
+
+
+async def _card_version(uid: str) -> str:
+    """Version (content hash) of the user-model card zoe-data serves for ``uid``; '' = none. Never raises."""
+    try:
+        import user_portrait
+
+        return str((await user_portrait.load_user_model_block(uid)).get("version") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _remember(d: dict, k: str, v: Any, cap: int) -> None:
+    d.pop(k, None)
+    d[k] = v
+    while len(d) > cap:
+        d.pop(next(iter(d)))
+
+
+async def _note_turn_envelope(uid: str, session_id: str, outbound_message: str) -> None:
+    """After a real turn's envelope is built: remember its manner/persona lines for the wake warm, and log the key."""
+    try:
+        card = await _card_version(uid)
+        _log_prefix_key("turn", session_id, outbound_message, card)
+        u = (uid or "").strip()
+        if not u or u.lower() in ("guest", "voice-guest"):
+            return
+        lines = _leading_envelope_lines(outbound_message)
+        prev = _LAST_TURN.get(u) or {}
+        _remember(_LAST_TURN, u, {**lines, "system": prev.get("system", 0)}, _LAST_TURN_MAX)
+        _remember(_SESSION_UID, session_id, u, 256)
+    except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+        pass
 
 
 async def _kv_warm_outbound(member: str) -> "tuple[str, str]":
     """(wire message, prefix key) for the warm turn.
 
     No ``member`` -> the explicit guest envelope, exactly as before. A ``member`` (the panel's likely speaker) ->
-    the SAME envelope lines a real turn of that member carries (identity -> the user-model card; the manner and
-    persona blocks), because the sidecar appends those to the system prompt AHEAD of the tool block: a guest warm
-    leaves ~500 tokens (tool block + message) after the point where the member's prompt diverges, which is more
-    than llama-server's 512-position SWA window can resume from, so the member's first turn re-prefilled all of it
-    (``first_cache_n=0``, 2026-10-27). The replay marker makes the warm's tool calls report-but-not-commit, so a
-    warm run as a member that is not actually present can write nothing."""
+    the SAME envelope lines that member's last real turn carried (identity -> the user-model card; the manner line,
+    which is language-dependent, and the persona line), because the sidecar appends those to the system prompt AHEAD
+    of the tool block: a guest warm leaves ~500 tokens (tool block + message) after the point where the member's
+    prompt diverges, more than llama-server's 512-position SWA window can resume from, so the member's first turn
+    re-prefilled all of it (``first_cache_n=0``, 2026-10-27). With no remembered turn the blocks are computed for the
+    warm instruction (English). The replay marker makes the warm's tool calls report-but-not-commit, so a warm run as
+    a member that is not actually present can write nothing."""
     uid = (member or "").strip().replace("\n", "").replace("\r", "")
     if not uid or uid.lower() in ("guest", "voice-guest"):
         msg = _kv_warm_message()
         return msg, prefix_key(msg)
-    manner = await _manner_context_block(uid, _KV_WARM_MESSAGE)
-    persona = await _persona_context_block(uid)
+    memo = _LAST_TURN.get(uid)
+    if memo:
+        manner_line, persona_line = memo.get("manner", ""), memo.get("persona", "")
+    else:
+        manner_line = _wrap_message_with_manner("", await _manner_context_block(uid, _KV_WARM_MESSAGE))
+        persona_line = _wrap_message_with_persona("", await _persona_context_block(uid))
     msg = _wrap_message_with_identity(_KV_WARM_MESSAGE, uid)
-    msg = _wrap_message_with_manner(msg, manner)
-    msg = _wrap_message_with_persona(msg, persona)
+    msg = persona_line + manner_line + msg
     msg = _wrap_message_with_replay(msg, True)
-    return msg, prefix_key(msg)
+    return msg, prefix_key(msg, await _card_version(uid))
 
 
 def _kv_warm_session_id() -> str:
@@ -2097,6 +2161,10 @@ async def _kv_warm_turn(session_id: str, state: dict, message: str = "") -> tupl
                     continue
                 if chunk.get("done"):
                     state["settled"] = True
+                    try:
+                        state["system"] = int((chunk.get("context_budget") or {}).get("system") or 0)
+                    except (TypeError, ValueError, AttributeError):
+                        state["system"] = 0
                     rounds = chunk.get("prompt_cache")
                     first = rounds[0] if isinstance(rounds, list) and rounds and isinstance(rounds[0], dict) else {}
                     try:
@@ -2136,8 +2204,21 @@ async def warm_kv_prefix(member: str = "") -> str:
         acquired = True
         session_id = _kv_warm_session_id()
         warm_msg, warm_key = await _kv_warm_outbound(member)
-        outcome, prompt_n, cache_n = await asyncio.wait_for(
-            _kv_warm_turn(session_id, state, warm_msg), timeout=_KV_WARM_MAX_S)
+        async def _sequence() -> "tuple[str, int, int]":
+            res = await _kv_warm_turn(session_id, state, warm_msg)
+            # The sidecar serves the member's user-model card from a cache that this very request may have just
+            # started refreshing (cold or past its TTL): then the warm rendered a different system prompt than the
+            # next turn will. A system-token estimate off the member's last real turn exposes it; the refresh has
+            # landed by now, so one repeat renders the card. Bounded to one repeat inside the same wall-clock cap.
+            memo = _LAST_TURN.get((member or "").strip()) or {}
+            want, got = int(memo.get("system") or 0), int(state.get("system") or 0)
+            if res[0] == "warmed" and want and got and abs(want - got) > 8:
+                state.update(settled=False, submission="")
+                res = await _kv_warm_turn(session_id, state, warm_msg)
+                logger.info("FLUE_KV_WARM_REPEAT session=%s system_want=%d system_got=%d", session_id, want, got)
+            return res
+
+        outcome, prompt_n, cache_n = await asyncio.wait_for(_sequence(), timeout=_KV_WARM_MAX_S)
     except asyncio.TimeoutError:
         outcome = "failed:timeout"
     except asyncio.CancelledError:
@@ -2528,7 +2609,7 @@ async def _run_flue_brain_streaming_turn(
     # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the
     # replay line and the identity line. "" (the default) = unchanged bytes.
     outbound_message = _wrap_message_with_persona(outbound_message, await _persona_context_block(uid))
-    _log_prefix_key("turn", session_id, outbound_message)
+    await _note_turn_envelope(uid, session_id, outbound_message)
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.
     outbound_message = _wrap_message_with_replay(

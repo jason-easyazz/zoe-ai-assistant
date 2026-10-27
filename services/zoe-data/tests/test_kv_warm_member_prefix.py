@@ -85,7 +85,7 @@ def test_prefix_key_line_names_both_sides(caplog):
     caplog.set_level("INFO", logger="zoe_flue_client")
     k = zfc._log_prefix_key("turn", "voice-panel-x-1", _turn_envelope("jason", MANNER))
     line = [r.getMessage() for r in caplog.records if "FLUE_PREFIX_KEY" in r.getMessage()]
-    assert line and f"kind=turn session=voice-panel-x-1 key={k} slot=auto" in line[0]
+    assert line and f"kind=turn session=voice-panel-x-1 key={k} card=- slot=auto" in line[0]
     assert k != zfc.prefix_key(_turn_envelope("guest", ""))
 
 
