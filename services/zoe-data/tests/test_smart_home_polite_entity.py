@@ -42,17 +42,24 @@ def test_dim_verb_strips_the_frame(text, pct):
     assert not set(got.query.split()) & {"you", "can", "could", "please", "me", "for"}
 
 
-def test_clean_device_backstop_drops_leftover_frame():
-    assert sky._clean_device("you light") == "light"
-    assert sky._clean_device("can you the lamp for me") == "lamp"
+@pytest.mark.parametrize("text,query", [
+    ("turn on the can light", "can light"),
+    ("turn on the zoe lamp", "zoe lamp"),
+    ("switch on the go lamp", "go lamp"),
+    ("turn the just lamp off", "just lamp"),
+    ("can you turn on the can light please", "can light"),
+])
+def test_filler_words_inside_a_device_name_survive(text, query):
+    got = sky.classify_skybridge_intent(text)
+    assert got is not None and got.query == query, got
 
 
-def test_a_named_device_still_resolves():
+def test_guard_a_named_device_still_resolves():
     got = sky.classify_skybridge_intent("can you turn on the kitchen lamp?")
     assert got.query == "kitchen lamp"
 
 
-def test_non_commands_are_left_alone():
+def test_guard_non_commands_are_left_alone():
     assert sky.classify_skybridge_intent("can you hear me") is None
 
 
@@ -71,7 +78,7 @@ def test_bare_light_two_room_matches_asks_among_those_two():
     targets, amb = shs._select_targets([A, B, C], "light", "turn_on", {"light.one", "light.two"})
     assert amb and {d["entity_id"] for d in targets} == {"light.one", "light.two"}
     q = shs._which_one(targets)
-    assert "Alpha Lamp or Beta Lamp" in q and "Gamma" not in q
+    assert q == "Which one \u2014 Alpha Lamp or Beta Lamp?"
 
 
 def test_bare_light_no_room_match_asks_which():

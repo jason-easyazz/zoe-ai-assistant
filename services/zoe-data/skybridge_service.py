@@ -2537,10 +2537,7 @@ def _clean_device(value: str) -> str:
     drop = {"turn", "flip", "put", "set", "dim", "dimmer", "brighten",
             "on", "off", "the", "a", "an", "my", "our", "to", "please",
             "show", "me", "see", "control", "manage", "is", "are", "what",
-            "which", "how", "status",
-            # leftover politeness / modal frame (the shared stripper takes the leading frame; these are the backstop)
-            "you", "can", "could", "would", "will", "for", "just", "hey", "zoe", "kindly", "go", "ahead", "and",
-            "thanks", "thank"}
+            "which", "how", "status"}
     kept = [w for w in words if w and w not in drop]
     return " ".join(kept).strip()
 
