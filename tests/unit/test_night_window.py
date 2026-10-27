@@ -2319,3 +2319,26 @@ def test_a_covered_silent_no_op_is_still_reported_as_degraded(tmp_path):
     assert next(j for j in w.jobs if j["name"] == "dreaming" and j["backend"] == "4B")["status"] == "ok"
     assert any("covered by the 4B fallback" in n for n in w.rec["notes"]) and any("still reported degraded" in e["msg"] for e in w.rec["events"])
     assert "dreaming:degraded@12B" in nw.summary_line({**w.rec, "outcome": "ok", "exit": 0, "jobs": w.jobs})
+
+
+def test_a_lander_that_grabs_the_lock_between_the_lock_wait_and_taking_it_is_waited_for_too(tmp_path):
+    """The window's own take_lock used to raise at once if another process won the lock in the gap after wait_for_lock saw it free."""
+    w, host, cfg = make(tmp_path)
+    box = {"fd": None, "n": 0}
+    real_take, real_sleep = w.take_lock, host.sleep
+
+    def take():
+        box["n"] += 1
+        if box["n"] == 1:
+            box["fd"] = _hold_lock(cfg)                    # the lander wins the race
+        real_take()
+    w.take_lock = take
+
+    def sleep(sec):
+        real_sleep(sec)
+        if box["fd"] is not None and host.t - at(2, 50) >= 60:
+            os.close(box["fd"])
+            box["fd"] = None
+    host.sleep = sleep
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert any("was taken by another process" in e["msg"] for e in w.rec["events"]) and host.idx("systemd-run") >= 0

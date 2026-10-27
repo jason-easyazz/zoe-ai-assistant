@@ -1175,7 +1175,14 @@ class NightWindow(bk.Window):
         (2026-10-26: the queue spawned a ``land_voice_pr.sh`` a second before the window took the lock) no longer ends the night: the lock is handed back, the waits run again
         (their own bounds apply), and only an end-by deadline that can no longer fit a window, or ``LOCK_RECHECKS`` such gaps in a row, refuses. Returns the updated ``waiting`` note."""
         for attempt in range(1, self.LOCK_RECHECKS + 1):
-            self.take_lock()
+            try:
+                self.take_lock()
+            except Refused:                                # another process (a lander) took the lock in the gap since wait_for_lock: wait for it too, do not end the night
+                busy = f"{self.cfg.lock_path} was taken by another process"
+                self.event(f"{busy} after the lock wait: waiting again ({attempt}/{self.LOCK_RECHECKS}); nothing was stopped")
+                with self.capped_waits(need_min):
+                    waiting = self.wait_for_lock() or waiting
+                continue
             busy = self.busy_now() or self.busy_reason()
             if not busy:
                 return waiting
