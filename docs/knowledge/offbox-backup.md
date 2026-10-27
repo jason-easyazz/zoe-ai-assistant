@@ -307,7 +307,7 @@ HNSW index, and ran at 03:30 inside the night window. Now:
    **host archive**: every file against its manifest sha256, every source label present, the HA export opens and holds
    `core.config_entries`; freshness (newest dump, tarball and archive under 26 h); the drill image vs the live container's.
 4. **Guards.** Refuses (quietly) inside 01:35-04:55 or while `zoe-night-window` runs; waits up to 45 min for `zoe-backup` /
-   `zoe-offbox-backup`; refuses **with an alert** below 2000 MB MemAvailable (the voice stack is resident). Findings alert over
+   `zoe-offbox-backup`; refuses **loudly (alert + failed unit, exit 4)** below 1100 MB MemAvailable (measured peak ~180 MB, container cap 512 MB) (the voice stack is resident). Findings alert over
    Telegram through the crash-loop watcher's sender; a drill that has not passed for 15 days says so. State:
    `~/.local/state/zoe-offbox/last_restore_drill.json`.
 
@@ -373,7 +373,7 @@ verify on 2026-10-25, and it would equally break a real disaster restore. The cl
 3. **Units**: `cp scripts/setup/systemd/zoe-backup{,-verify}.{service,timer} ~/.config/systemd/user/ && systemctl --user
    daemon-reload` (both timers are already enabled live; the verify moves from the live 03:30 to Sunday 05:30). The first
    night writes `~/.zoe-backups/host/` and the first dump manifests; run `python3 scripts/maintenance/zoe_restore_drill.py` by
-   hand once after that (outside 01:35-04:55, MemAvailable >= 2000 MB) and read its `ok:` lines.
+   hand once after that (outside 01:35-04:55, MemAvailable >= 1100 MB) and read its `ok:` lines.
 4. **Optional**: local encryption of the host archive (7.3), after section 4 step 3 exists.
 
 ### 7.5 The lab (`labs/restore-drill/run.sh`)
@@ -381,7 +381,7 @@ verify on 2026-10-25, and it would equally break a real disaster restore. The cl
 A synthetic source database in its own capped `--network none` container (the pinned image), a synthetic palace built with the
 real chromadb 1.5.9, a synthetic box, and the REAL scripts end to end: `postgres-nightly-backup.sh` + `pg_dump_manifest.py`,
 `mempalace-nightly-backup.sh`, `zoe_host_snapshot.py` + `zoe-ha-config-export`, `zoe_restore_drill.py` + `zoe-restore-drill-pg`.
-Gates: `night_busy.sh test`, 01:35-04:55, MemAvailable >= 2000 MB, the test-lane lock.
+Gates: `night_busy.sh test`, 01:35-04:55, MemAvailable >= 1100 MB, the test-lane lock.
 
 **2026-10-19: 18/18 cells** (Jetson, pgvector 0.8.6-pg17 pinned digest, chromadb 1.5.9). S1 the real nightly script's manifest:
 1,234 multi-line rows counted exactly, a quoted table name, a partitioned parent (0) and its partition (40), the biometric
