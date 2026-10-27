@@ -1711,7 +1711,7 @@ def classify_skybridge_intent(
     calendar_followup = _calendar_followup_intent(raw_message, context)
     if calendar_followup is not None:
         return calendar_followup
-    smart_home_intent = _smart_home_followup_intent(raw_message, context) or _classify_smart_home(text)
+    smart_home_intent = _smart_home_followup_intent(raw_message, context) or _classify_smart_home(_home_text(raw_message, text))
     if smart_home_intent is not None:
         return _unless_delayed(smart_home_intent, text)
     if (
@@ -2440,6 +2440,20 @@ _HOME_DEVICE_NOUN = re.compile(r"\b(lights?|lamps?|switch(?:es)?|plugs?|outlets?
 _NOT_BRIGHTNESS_RE = re.compile(r"\b(?:speed|position|volume|temperature|temp|colou?r|humidity|mode)\b")
 
 
+def _home_text(raw_message: str, text: str) -> str:
+    """The smart-home matcher's input: ``text`` with the polite / wake / modal frame off ("can you turn the light on?" ->
+    " turn the light on "). Uses the shared ``conversation_cues.strip_command_filler`` (lexicon section
+    ``command_filler``) so there is ONE stripper; falls back to ``text`` unchanged."""
+    try:
+        from conversation_cues import strip_command_filler
+
+        bare = strip_command_filler(re.sub(r"[.!?,;:]+$", "", raw_message.strip()))
+        bare = re.sub(r"[.!?,;:]+$", "", bare.lower().strip())
+        return f" {bare} " if bare else text
+    except Exception:  # noqa: BLE001 - never break a turn over filler stripping
+        return text
+
+
 def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     """Classify a smart-home command for the Home Assistant bridge. `text` is the
     lowercased message padded with surrounding spaces. Device control is
@@ -2523,7 +2537,10 @@ def _clean_device(value: str) -> str:
     drop = {"turn", "flip", "put", "set", "dim", "dimmer", "brighten",
             "on", "off", "the", "a", "an", "my", "our", "to", "please",
             "show", "me", "see", "control", "manage", "is", "are", "what",
-            "which", "how", "status"}
+            "which", "how", "status",
+            # leftover politeness / modal frame (the shared stripper takes the leading frame; these are the backstop)
+            "you", "can", "could", "would", "will", "for", "just", "hey", "zoe", "kindly", "go", "ahead", "and",
+            "thanks", "thank"}
     kept = [w for w in words if w and w not in drop]
     return " ".join(kept).strip()
 
