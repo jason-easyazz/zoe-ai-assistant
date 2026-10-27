@@ -34,6 +34,12 @@ def blocks(monkeypatch):
     async def _persona(uid):
         return ""
 
+    async def _card(uid):
+        return ""
+
+    monkeypatch.setattr(zfc, "_LAST_TURN", {})   # other tests' real turns must not leak a memo in
+    monkeypatch.setattr(zfc, "_SESSION_UID", {})
+    monkeypatch.setattr(zfc, "_card_version", _card)
     monkeypatch.setattr(zfc, "_manner_context_block", _manner)
     monkeypatch.setattr(zfc, "_persona_context_block", _persona)
 
