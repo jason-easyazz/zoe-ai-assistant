@@ -521,6 +521,17 @@ async def test_capture_off_stops_confirmed_examples_reaching_training(sql, monke
     assert len(await to.confirmed_examples()) == 1, "the rows were kept; only the read path is gated"
 
 
+async def test_queued_router_examples_honours_the_requested_statuses(sql):
+    # a confirmed failed turn is an ACCEPTED example: a proposed-only (or applied-only) view must not receive it
+    await failed_then_fixed()
+    rid = (await to.review(A))["items"][0]["id"]
+    await to.decide(rid, A, "confirm")
+    both = (sp.SOURCE_FOLLOWUP, sp.SOURCE_ROUTER)
+    assert len(await sp.queued_router_examples(sources=both)) == 1
+    assert await sp.queued_router_examples(sources=both, statuses=(sp.PROPOSED,)) == []
+    assert await sp.queued_router_examples(sources=both, statuses=(sp.APPLIED,)) == []
+
+
 async def test_an_insert_paused_across_a_forget_cannot_resurrect_the_words(fresh, monkeypatch):
     """A background outcome write is past its keep-words check when a forget runs. Without the per-user lock the forget finds nothing,
     finishes, and the paused insert then stores the forgotten name."""

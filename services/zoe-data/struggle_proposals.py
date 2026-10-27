@@ -894,7 +894,7 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
     # failure capture: failed turns the OWNER confirmed (``turn_outcomes``; a proposed / rejected / harness / guest row never comes back)
     import turn_outcomes
 
-    out.extend(ex for ex in await turn_outcomes.confirmed_examples(limit) if ex["label_source"] in sources)
+    out.extend(ex for ex in await turn_outcomes.confirmed_examples(limit) if ex["label_source"] in sources and ex["status"] in statuses)
     kept: list[dict] = []
     try:
         import memory_forgotten
