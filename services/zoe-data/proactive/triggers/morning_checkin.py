@@ -195,6 +195,15 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
                 ctx["struggle_proposals_line"] = pline
         except Exception as exc:
             log.debug("morning_checkin: struggle proposals line failed (non-fatal): %s", exc)
+        # The failed-turn LABEL line (ZOE_STRUGGLE_OUTCOMES=on only; a count of the owner's own failed turns waiting for an OK, no words).
+        try:
+            import turn_outcomes
+
+            tline = await turn_outcomes.brief_line(user_id)
+            if tline:
+                ctx["struggle_labels_line"] = tline
+        except Exception as exc:
+            log.debug("morning_checkin: struggle labels line failed (non-fatal): %s", exc)
 
     return ctx
 
@@ -247,6 +256,8 @@ def _compose_morning_message(ctx: dict, user_name: str, day_str: str) -> str:
         parts.append(ctx["struggle_line"])
     if ctx.get("struggle_proposals_line"):
         parts.append(ctx["struggle_proposals_line"])
+    if ctx.get("struggle_labels_line"):
+        parts.append(ctx["struggle_labels_line"])
 
     # Portrait-informed personal note (fallback generic)
     portrait = ctx.get("portrait_snippet", "")

@@ -62,6 +62,7 @@ from typing import Any, Awaitable, Callable, Iterable, Optional
 
 import evolution_queue as eq
 import struggle_signals as sig
+from bounded_await import bounded
 from struggle_detector import is_guest
 
 logger = logging.getLogger("struggle_proposals")
@@ -542,7 +543,7 @@ async def summarise(items: list[tuple[str, dict]], llm: LLM, *, budget_s: float 
         if time.monotonic() - t0 > budget_s:
             break
         try:
-            raw = await asyncio.wait_for(llm(messages_for(facts), max_tokens), per_call_s)
+            raw = await bounded(llm(messages_for(facts), max_tokens), per_call_s)
         except Exception as exc:  # noqa: BLE001 - the template stands
             logger.info("STRUGGLE_PROPOSALS summary skipped (%s)", type(exc).__name__)
             if isinstance(exc, (ConnectionError, OSError)):
@@ -849,6 +850,9 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
     * ``ts`` is when the FAILED turn finished (the event's ``about_ts``; the event's own time when that is missing) - the Phase 3 loop splits
       by it. ``split`` is the stable hash split (by normalised text); ``audio_ref`` the saved recording when it is unambiguous (``audio_ref``).
     * ``status`` / ``decided_by`` say how the proposal stands, so a caller can tell a person's accept from the loop's own policy.
+    * Plus the failed turns the owner CONFIRMED in review (``turn_outcomes.confirmed_examples``: ``proposal_id`` / ``event_id`` =
+      ``turn:<row id>``, ``decided_by`` = ``owner:<id>``, ``label_origin``); their words come from the member's own failed-turn row under
+      the same rules, and pass the same forget check below.
     Consumers re-label with their own independent oracle before training."""
     statuses = tuple(s for s in statuses if s in SEAM_STATUSES)
     if not sources or not statuses:
@@ -887,6 +891,10 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
                 out.append({"proposal_id": pid, "status": status, "decided_by": decided_by, "event_id": str(eid), "user_id": str(uid),
                             "label": label, "label_source": source, "split": split_of(text), "ts": round(when, 3), "text": text,
                             "audio_ref": audio_ref(about, latency_ms=latency) if str(channel) == "voice" else None})
+    # failure capture: failed turns the OWNER confirmed (``turn_outcomes``; a proposed / rejected / harness / guest row never comes back)
+    import turn_outcomes
+
+    out.extend(ex for ex in await turn_outcomes.confirmed_examples(limit) if ex["label_source"] in sources and ex["status"] in statuses)
     kept: list[dict] = []
     try:
         import memory_forgotten
@@ -1022,13 +1030,17 @@ def _forget_in_retrain(*, event_ids: Iterable[str] = (), user_id: Optional[str] 
     router_retrain_ledger.forget(event_ids=event_ids, user_id=user_id, text_keys=text_keys)
 
 
-async def forget_events(event_ids: list[str]) -> int:
+async def forget_events(event_ids: list[str], *, extra_texts: Iterable[str] = ()) -> int:
     """Take these events out of every proposal (the forget path). RAISES on a store failure so the forget is not confirmed; only a missing
-    table is "nothing stored". Returns proposals deleted."""
+    table is "nothing stored". Returns proposals deleted. ``extra_texts`` are failed wordings that live outside ``struggle_events`` (a
+    ``turn_outcomes`` row's words, read before it is deleted): their keys are tombstoned too, so the words stay out of training under ANY id."""
     ids = [str(i) for i in event_ids if i]
     if not ids:
         return 0
-    _forget_in_retrain(event_ids=ids, text_keys=await _wording_keys(ids))
+    import router_retrain_ledger
+
+    keys = await _wording_keys(ids) | {router_retrain_ledger.text_key(t) for t in extra_texts if t}
+    _forget_in_retrain(event_ids=ids, text_keys=keys)
     if not _sql_events():
         return 0
     try:
@@ -1096,7 +1108,7 @@ async def run_pass(*, now: Optional[float] = None, llm: Optional[LLM] = None, dr
         return {"status": "off", "mode": m}
     t = time.time() if now is None else now
     span = lookback_days() if days is None else days
-    rows = await asyncio.wait_for(sd.get_backend().rows(t - span * DAY_S, None, limit=ROW_LIMIT), 60.0)
+    rows = await bounded(sd.get_backend().rows(t - span * DAY_S, None, limit=ROW_LIMIT), 60.0)
     clusters, skipped = cluster(rows, min_ep=min_ep)         # EVERY eligible cluster, best first: the cap below limits NEW proposals, never what is kept
     res: dict[str, Any] = {
         "status": "ok", "mode": m, "dry_run": dry_run, "days": span, "events": len(rows), "truncated": len(rows) >= ROW_LIMIT,
@@ -1257,7 +1269,7 @@ async def brief_line(user_id: str) -> Optional[str]:
     try:
         if mode() != "on":
             return None
-        waiting = (await asyncio.wait_for(counts(), STORE_TIMEOUT_S)).get(PROPOSED) or {}
+        waiting = (await bounded(counts(), STORE_TIMEOUT_S)).get(PROPOSED) or {}
         n = sum(waiting.values())
         if n <= 0:
             return None
