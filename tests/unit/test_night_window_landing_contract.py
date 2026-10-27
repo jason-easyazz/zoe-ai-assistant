@@ -159,7 +159,7 @@ def test_preflight_waits_for_the_lock_and_a_quiet_box_and_rechecks_under_the_loc
     clear = inspect.getsource(nw.NightWindow.take_lock_when_clear)
     assert "self.busy_reason()" in clear and "self.busy_now()" in clear, "the post-lock recheck must still look for a lander"
     assert clear.index("self.take_lock()") < clear.index("self.busy_reason()") < clear.index("self.release_lock()") < clear.index("self.wait_until_quiet()")
-    assert "LOCK_RECHECKS" in clear, "the hand-back loop must be bounded"
+    assert "capped_waits" in clear and "self.host.sleep" in clear, "the hand-back loop is bounded by the end-by deadline and always spends time"
 
 
 def test_the_night_schedule_sits_inside_the_span_the_landers_keep_clear():

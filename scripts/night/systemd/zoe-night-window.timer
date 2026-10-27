@@ -9,7 +9,7 @@ Description=Zoe night window timer (02:50)
 
 # RETRIES (2026-10-27): the 02:50 start can be refused (2026-10-26: a voice lander held the box, the night was lost) and the only other attempt was a hand-run at 03:40 that the
 # 03:55 end-by refused ("only 15 min remain"). 03:05 and 03:15 are the same service again; the service passes --skip-if-done, so a retry exits 0 at once on a night whose window already
-# RAN (any outcome) and runs a full window only when the earlier attempt was REFUSED (stopped nothing). 03:15 (+<=2 min jitter) is the LAST slot the preflight accepts: a window needs 35 min before 03:55 (a test pins it).
+# RAN (any outcome) and runs a full window only on positive evidence that the earlier attempt was REFUSED (stopped nothing). 03:15 (+<=2 min jitter) is the LAST slot the preflight accepts: a window needs 35 min before 03:55 (a test pins it).
 # If the 02:50 run is still waiting on a lander (it waits up to 20 min) the timer's activation finds the unit running and does nothing.
 [Timer]
 OnCalendar=*-*-* 02:50:00

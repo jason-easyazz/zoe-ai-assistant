@@ -2144,16 +2144,18 @@ def test_a_lander_that_starts_in_the_gap_before_the_lock_is_waited_out_not_fatal
         return "a voice-PR landing is running" if calls["n"] == 2 else real()          # call 1: the quiet wait; call 2: the re-check under the lock
     w.busy_reason = busy_reason
     assert w.run() == nw.EXIT_OK, w.outcome
-    assert any("lock handed back, waiting again (1/" in e["msg"] for e in w.rec["events"])
+    assert any("lock handed back, waiting again (cycle 1)" in e["msg"] for e in w.rec["events"])
     assert host.idx("systemd-run") >= 0 and w.lock_fd is None
 
 
-def test_a_lander_that_never_goes_away_refuses_after_bounded_rechecks_with_the_lock_released(tmp_path):
+def test_a_lander_that_never_goes_away_is_waited_on_until_the_end_by_cutoff_then_refused_with_the_lock_released(tmp_path):
     w, host, cfg = make(tmp_path)
     w.busy_reason = lambda: "a voice-PR landing is running" if w.lock_fd is not None else ""      # only ever visible under the lock
     assert w.run() == nw.EXIT_REFUSED
-    assert "not clear after taking the lock" in w.outcome and "voice-PR landing" in w.outcome and stopped_nothing(host) and w.lock_fd is None
-    assert sum(1 for e in w.rec["events"] if "lock handed back" in e["msg"]) == nw.NightWindow.LOCK_RECHECKS
+    assert "Nothing was stopped" in w.outcome and stopped_nothing(host) and w.lock_fd is None
+    assert host.t >= at(3, 55) - 35 * 60 - 60, "it must keep waiting until a window no longer fits (no fixed attempt count ends the night early)"
+    assert host.t <= at(3, 55) - 35 * 60 + 1
+    assert sum(1 for e in w.rec["events"] if "lock handed back" in e["msg"]) > 6
 
 
 # the silent no-op: exit 0, zero generated tokens, no sign the job had nothing to do ----------------
@@ -2233,30 +2235,36 @@ def _report(d, name, **kw):
 
 
 def test_a_retry_only_makes_up_for_a_refused_night(tmp_path):
+    import datetime as _dt
     d = tmp_path / "r"
-    assert nw.night_ran_today(d, "2026-10-27") == ""                                       # no reports: run
+    first, retry = _dt.datetime(2026, 10, 27, 2, 50), _dt.datetime(2026, 10, 27, 3, 5)
+    assert nw.retry_decision(d, first)[0] is True                                          # the 02:50 slot ALWAYS starts (no report exists yet)
+    assert nw.retry_decision(d, retry)[0] is False                                         # a retry slot with no report at all: no positive refusal evidence, so no second window
+    d.mkdir()
+    (d / "2026-10-27.json").write_text("{not json")
+    assert nw.retry_decision(d, retry)[0] is False                                         # an unreadable report is not evidence either
     _report(d, "2026-10-27", exit=nw.EXIT_REFUSED, outcome="refused: a voice-PR landing is running", jobs=[])
-    assert nw.night_ran_today(d, "2026-10-27") == ""                                       # the 2026-10-26 case: refused, nothing stopped -> retry
+    assert nw.retry_decision(d, retry)[0] is True                                          # the 2026-10-26 case: refused, nothing stopped -> retry
     _report(d, "2026-10-27-0305", exit=nw.EXIT_OK)
-    assert nw.night_ran_today(d, "2026-10-27") == "2026-10-27-0305.json"                  # a real night ran -> no second window
+    assert nw.night_ran_today(d, "2026-10-27") == "2026-10-27-0305.json" and nw.retry_decision(d, _dt.datetime(2026, 10, 27, 3, 15))[0] is False     # a real night ran
     assert nw.night_ran_today(d, "2026-10-28") == ""                                       # another day's report never counts
     for code in (nw.EXIT_JOBS_FAILED, nw.EXIT_ABORTED, nw.EXIT_RESTORE_FAILED):
         _report(d, f"2026-11-0{code}", exit=code, outcome="x")
         assert nw.night_ran_today(d, f"2026-11-0{code}"), f"exit {code}: the window ran, a blind second sleep would not fix it"
     _report(d, "2026-10-29-trial", mode="trial")
-    assert nw.night_ran_today(d, "2026-10-29") == ""                                       # a trial is not the night
+    assert nw.night_ran_today(d, "2026-10-29") == "" and nw.retry_decision(d, _dt.datetime(2026, 10, 29, 3, 5))[0] is False      # a trial is not the night
 
 
-def test_skip_if_done_exits_ok_before_touching_the_box(tmp_path):
-    import datetime as _dt
+def test_skip_if_done_exits_ok_before_touching_the_box(tmp_path, monkeypatch):
     cfg = nw.NightCfg(report_dir=tmp_path / "reports", night_dir=tmp_path / "night")
-    _report(cfg.report_dir, _dt.datetime.now().strftime("%Y-%m-%d"))
 
     def no_host(_log):
-        raise AssertionError("the host was built: --skip-if-done must exit before anything is read or started")
-    assert nw.main(["--skip-if-done"], host_factory=no_host, cfg=cfg) == nw.EXIT_OK
-    with pytest.raises(AssertionError):                                                    # without a ran-today report the same flag proceeds to build the host
-        nw.main(["--skip-if-done"], host_factory=no_host, cfg=nw.NightCfg(report_dir=tmp_path / "empty", night_dir=tmp_path / "night2"))
+        raise AssertionError("the host was built")
+    monkeypatch.setattr(nw, "retry_decision", lambda d, now: (False, "already ran"))
+    assert nw.main(["--skip-if-done"], host_factory=no_host, cfg=cfg) == nw.EXIT_OK        # skipped before anything is read or started
+    monkeypatch.setattr(nw, "retry_decision", lambda d, now: (True, "first slot"))
+    with pytest.raises(AssertionError):                                                    # a go decision proceeds to build the host
+        nw.main(["--skip-if-done"], host_factory=no_host, cfg=cfg)
 
 
 def delay_of(body):
@@ -2278,7 +2286,7 @@ def test_the_timer_retries_after_the_first_attempt_inside_the_window_that_can_st
 
 
 def test_repeated_rewaits_are_capped_by_the_absolute_end_by_and_refuse_before_it(tmp_path):
-    """Every re-wait used to get its own full timeout, so LOCK_RECHECKS cycles could run past end-by. Now each is capped at the time left minus the 35 min a window needs."""
+    """Every re-wait used to get its own full timeout, so repeated re-waits could run past end-by. Now each is capped at the time left minus the 35 min a window needs."""
     w, host, cfg = make(tmp_path, start=at(3, 12))                  # 43 min before 03:55: 8 min of room
     state = {"released": None, "n": 0}
     real_release = w.release_lock

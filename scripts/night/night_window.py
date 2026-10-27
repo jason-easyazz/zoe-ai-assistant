@@ -292,22 +292,48 @@ def job_idle_evidence(name: str, text: str) -> str:
     return ""
 
 
-def night_ran_today(report_dir: Path, today: str) -> str:
-    """The report file name of a REAL night that already RAN today (mode ``night``, any exit except a refusal), or ''. The retry timer slots use it (``--skip-if-done``): a retry only
-    makes up for a night that was REFUSED (exit 2: a lander held the box, the hour, RAM) and so stopped nothing. A window that ran - even one whose jobs failed (5), aborted (3) or
-    failed to restore (4) - is never repeated blindly: the failure needs a human, and a second 12B sleep the same night would not fix it."""
+def night_report_state(report_dir: Path, today: str) -> "tuple[str, str]":
+    """('ran', file) when a REAL night window already RAN today (mode ``night``, any exit except a refusal), else ('refused', file) when one was REFUSED (exit 2: a lander held the box, the
+    hour, RAM; it stopped nothing), else ('none', ''). A window that ran - even one whose jobs failed (5), aborted (3) or failed to restore (4) - is never repeated blindly: the failure
+    needs a human, and a second 12B sleep the same night would not fix it."""
+    refused = ""
     try:
         files = sorted(report_dir.glob(f"{today}*.json"))
     except OSError:
-        return ""
+        return "none", ""
     for f in files:
         try:
             d = json.loads(f.read_text())
         except (OSError, ValueError):
             continue
-        if isinstance(d, dict) and d.get("mode") == "night" and d.get("exit") != EXIT_REFUSED:
-            return f.name
-    return ""
+        if isinstance(d, dict) and d.get("mode") == "night":
+            if d.get("exit") != EXIT_REFUSED:
+                return "ran", f.name
+            refused = refused or f.name
+    return ("refused", refused) if refused else ("none", "")
+
+
+def night_ran_today(report_dir: Path, today: str) -> str:
+    """The report file name of a real night that already RAN today, or ''."""
+    state, name = night_report_state(report_dir, today)
+    return name if state == "ran" else ""
+
+
+#: ``--skip-if-done`` only SKIPS from this local time on (minutes after midnight): before it, the run is the timer's first (02:50) slot and always starts; from it on, the run is a RETRY
+#: slot (03:05, 03:15) and needs positive evidence of a refused night
+RETRY_FROM_MIN = 3 * 60
+
+
+def retry_decision(report_dir: Path, now: "dt.datetime") -> "tuple[bool, str]":
+    """(run?, why) for ``--skip-if-done``. First slot (before 03:00): run. A retry slot: run ONLY if today has a refused night report and no ran one."""
+    if now.hour * 60 + now.minute < RETRY_FROM_MIN:
+        return True, "first slot"
+    state, name = night_report_state(report_dir, now.strftime("%Y-%m-%d"))
+    if state == "refused":
+        return True, f"tonight's earlier attempt was refused ({name}): retrying"
+    if state == "ran":
+        return False, f"tonight's window already ran ({name})"
+    return False, "no report of a refused attempt tonight (nothing to make up for)"
 
 
 def digest_timeout_scale(decode_tps: "Optional[float]") -> int:
@@ -1167,19 +1193,19 @@ class NightWindow(bk.Window):
             if self.probe_lock():
                 return f"the brain-window lock was busy for {(self.host.mono() - started) / 60.0:.0f} min"
 
-    #: how many times the lock is taken, found to be shadowed by a lander / harness / nightly job that started in the gap, and given back to wait again
-    LOCK_RECHECKS = 6
-
     def take_lock_when_clear(self, waiting: str, need_min: float) -> str:
         """Take the lock, then look ONCE MORE for a lander, harness, nightly job or recent panel turn. Something that started in the gap between the quiet check and the lock
-        (2026-10-26: the queue spawned a ``land_voice_pr.sh`` a second before the window took the lock) no longer ends the night: the lock is handed back, the waits run again
-        (their own bounds apply), and only an end-by deadline that can no longer fit a window, or ``LOCK_RECHECKS`` such gaps in a row, refuses. Returns the updated ``waiting`` note."""
-        for attempt in range(1, self.LOCK_RECHECKS + 1):
+        (2026-10-26: the queue spawned a ``land_voice_pr.sh`` a second before the window took the lock) no longer ends the night: the lock is handed back and the waits run again.
+        The ONLY bound is the absolute end-by deadline (``capped_waits`` refuses once less than a window's minimum remains); every cycle sleeps at least one poll so time always advances
+        and the loop always ends. Returns the updated ``waiting`` note."""
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 self.take_lock()
             except Refused:                                # another process (a lander) took the lock in the gap since wait_for_lock: wait for it too, do not end the night
                 busy = f"{self.cfg.lock_path} was taken by another process"
-                self.event(f"{busy} after the lock wait: waiting again ({attempt}/{self.LOCK_RECHECKS}); nothing was stopped")
+                self.event(f"{busy} after the lock wait: waiting again (cycle {attempt}); nothing was stopped")
                 with self.capped_waits(need_min):
                     waiting = self.wait_for_lock() or waiting
                 continue
@@ -1187,8 +1213,9 @@ class NightWindow(bk.Window):
             if not busy:
                 return waiting
             self.release_lock()
-            self.event(f"{busy} (it started after the quiet check): lock handed back, waiting again ({attempt}/{self.LOCK_RECHECKS}); nothing was stopped")
-            with self.capped_waits(need_min):              # bounded by the ABSOLUTE end-by, not just per wait: LOCK_RECHECKS re-waits cannot add up past it
+            self.event(f"{busy} (it started after the quiet check): lock handed back, waiting again (cycle {attempt}); nothing was stopped")
+            with self.capped_waits(need_min):              # bounded by the ABSOLUTE end-by: re-waits cannot add up past it
+                self.host.sleep(min(self.cfg.busy_poll_s, self.cfg.busy_wait_max_min * 60.0))      # progress guarantee: every cycle spends time
                 waiting = self.wait_until_idle() or waiting
             with self.capped_waits(need_min):              # recomputed: the idle wait above has spent part of the room
                 waiting = self.wait_until_quiet() or waiting
@@ -1197,7 +1224,6 @@ class NightWindow(bk.Window):
                 end_txt = dt.datetime.fromtimestamp(self.end_by_deadline()).strftime("%H:%M")
                 raise Refused(f"after waiting for {busy} it is {dt.datetime.fromtimestamp(self.host.now()):%H:%M} and {max(0.0, left):.0f} min remain before the {end_txt} end-by deadline; "
                               f"a window needs {need_min:.0f}. Nothing was stopped.")
-        raise Refused(f"not clear after taking the lock {self.LOCK_RECHECKS} times: {busy}")
 
     def pre_stop_gate(self, avail_now: float) -> None:
         """Refuse BEFORE anything is stopped when even the optimistic prediction (every stopped unit frees ALL its PSS) cannot hold the smallest lever set."""
@@ -2604,9 +2630,9 @@ def main(argv: "Optional[list[str]]" = None, host_factory: "Optional[Callable[[C
         print(latest_night_summary(cfg.report_dir))
         return EXIT_OK
     if args.skip_if_done and not args.dry_run and not args.restore_only:
-        done = night_ran_today(cfg.report_dir, dt.datetime.now().strftime("%Y-%m-%d"))
-        if done:
-            print(f"[{dt.datetime.now():%H:%M:%S}] skip-if-done: tonight's window already ran ({done}); a retry only makes up for a refused night", flush=True)
+        go, why = retry_decision(cfg.report_dir, dt.datetime.now())
+        if not go:
+            print(f"[{dt.datetime.now():%H:%M:%S}] skip-if-done: {why}; a retry only makes up for a refused night", flush=True)
             return EXIT_OK
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     mode = "restore" if args.restore_only else "trial" if cfg.trial else "sweep" if cfg.sweep else "night"
