@@ -442,7 +442,11 @@ def unit_active(unit: str) -> bool:
 
 
 def preflight(now: datetime, floor_mb: int, wait_s: int = WAIT_BUSY_S,
-              active: Callable[[str], bool] = unit_active, sleep: Callable[[float], None] = time.sleep) -> None:
+              active: Optional[Callable[[str], bool]] = None,
+              sleep: Optional[Callable[[float], None]] = None) -> None:
+    # resolved at CALL time (not as default arguments) so a monkeypatched unit_active / time.sleep takes effect
+    active = active or unit_active
+    sleep = sleep or time.sleep
     if ob.in_quiet_hours(now) or active(NIGHT_UNIT):
         raise ob.Refused("the night window owns the box", alert=False)
     deadline = time.monotonic() + wait_s

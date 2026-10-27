@@ -570,3 +570,18 @@ def test_failed_drill_keeps_the_refusal_anchor_and_a_pass_clears_it(monkeypatch,
         st = json.loads((s / "last_restore_drill.json").read_text())
         assert bool(st["first_refusal"]) is kept
         (s / "last_restore_drill.json").write_text(json.dumps({"first_refusal": "2026-09-20T05:30:00+08:00"}))
+
+
+def test_preflight_resolves_unit_active_at_call_time_so_host_state_cannot_leak(monkeypatch):
+    day = datetime(2026, 10, 25, 5, 30)
+    probed: list[str] = []
+    monkeypatch.setattr(drill, "unit_active", lambda u: probed.append(u) or False)   # host says: nothing active
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: 10)
+    with pytest.raises(ob.Refused) as e:
+        drill.preflight(day, drill.MEM_FLOOR_MB)                  # no active= passed: the patched probe must be used
+    assert e.value.alert is True and "MemAvailable" in str(e.value) and probed   # low-memory, not quiet/stalled
+    # control: the patched probe is what decides (an active night unit flips it to the quiet refusal)
+    monkeypatch.setattr(drill, "unit_active", lambda u: u == drill.NIGHT_UNIT)
+    with pytest.raises(ob.Refused) as e:
+        drill.preflight(day, drill.MEM_FLOOR_MB)
+    assert e.value.alert is False
