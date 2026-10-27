@@ -1160,7 +1160,7 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
 
 async def _save_chat_message(
     session_id: str, role: str, content: str, user_id: str | None = None,
-    *, truncated: bool = False, speaker_verified: bool | None = None, count_turn: bool = True,
+    *, truncated: bool = False, speaker_verified: bool | None = None, count_turn: bool = True, message_id: str | None = None,
 ) -> bool:
     """Persist a single chat turn to chat_messages.
 
@@ -1223,7 +1223,7 @@ async def _save_chat_message(
             await db.execute(
                 "INSERT INTO chat_messages (id, session_id, role, content, metadata) "
                 "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                (uuid.uuid4().hex, session_id, role, clean_content, metadata),
+                ((message_id or uuid.uuid4().hex), session_id, role, clean_content, metadata),
             )
             await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
@@ -1530,6 +1530,13 @@ async def chat_stream_generator(
     enc = EventEncoder()
     recorder = AgRunRecorder()
     run_id, assistant_message_id = new_run_ids()
+    # The chat page rates a streamed reply by ``assistant_message_id`` before it ever reloads history, so the FIRST assistant
+    # row this run saves is stored under that id (one id end to end: page, chat_messages, the failure-capture outcome row).
+    _mid_box = [assistant_message_id]
+
+    def _claim_mid() -> str | None:
+        return _mid_box.pop() if _mid_box else None
+
     run_mode = "hermes" if force_agent == "hermes" else "chat"
     # P3-A: accumulate brain tokens at generator scope so the error path can
     # recover the partial the user already saw. `persisted_assistant` guards
@@ -1636,7 +1643,7 @@ async def chat_stream_generator(
                 )
             yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
             if response_text.strip():
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id, message_id=_claim_mid()))
                 if user_id != "guest":
                     asyncio.ensure_future(
                         _persist_memory_candidates(user_id, session_id, message_for_processing, response_text)
@@ -1688,7 +1695,7 @@ async def chat_stream_generator(
                     response_text=followup,
                     metadata={"task_class": task_class, "missing_constraints": missing},
                 )
-                await _save_chat_message(session_id, "assistant", followup, user_id=user_id)
+                await _save_chat_message(session_id, "assistant", followup, user_id=user_id, message_id=_claim_mid())
                 return
         if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
             try:
@@ -1708,7 +1715,7 @@ async def chat_stream_generator(
             yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
             yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
             await _record_run_state(run_id, session_id, user_id, mode="chat", status="completed", request_text=message, response_text=capabilities_text)
-            await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id)
+            await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id, message_id=_claim_mid())
             return
 
         if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing) \
@@ -1784,7 +1791,7 @@ async def chat_stream_generator(
                     yield emit(CustomEvent(name="zoe.component", value=_fp_comp))
                 asyncio.ensure_future(chat_inject_background(message_for_processing, _fp_reply, f"fast:{_fp_res.domain}", user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, _fp_reply))
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", _fp_reply, user_id=user_id))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", _fp_reply, user_id=user_id, message_id=_claim_mid()))
                 yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
                 # Close out the run row (opened status="running" at the top); every
                 # other early exit here records completed/error before returning.
@@ -1942,7 +1949,7 @@ async def chat_stream_generator(
                     async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, _blurb):
                         yield line
                     yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", _blurb, user_id=user_id))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", _blurb, user_id=user_id, message_id=_claim_mid()))
                 return  # skip the standard execute_intent path
 
             # ── Touch Panel intents: AG-UI status cards ───────────────────────
@@ -1958,7 +1965,7 @@ async def chat_stream_generator(
                     yield line
                 yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
                 yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", panel_card_md, user_id=user_id))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", panel_card_md, user_id=user_id, message_id=_claim_mid()))
                 return
 
             # ── Multica board routing for long-running intents ────────────────
@@ -1983,7 +1990,7 @@ async def chat_stream_generator(
                             yield line
                         yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
                         yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
-                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", _card_text, user_id=user_id))
+                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", _card_text, user_id=user_id, message_id=_claim_mid()))
                         return
                 except ImportError:
                     pass  # Multica not installed — fall through to standard OpenClaw path
@@ -2022,7 +2029,7 @@ async def chat_stream_generator(
                 )
                 asyncio.ensure_future(chat_inject_background(message_for_processing, result, intent.name, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", result, user_id=user_id))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", result, user_id=user_id, message_id=_claim_mid()))
             else:
                 if intent.name in _OPENCLAW_DELEGATION_INTENTS:
                     logger.info("Intent %s delegating to Hermes/Multica", intent.name)
@@ -2116,7 +2123,7 @@ async def chat_stream_generator(
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
                 if response_text:
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id, message_id=_claim_mid()))
                 async for line in _stream_openclaw_assistant_ag(
                     enc, recorder, assistant_message_id, response_text,
                     intent_name=intent.name if intent else None,
@@ -2513,7 +2520,7 @@ async def chat_stream_generator(
                 # the truncated-partial fallback and silently lose the reply.
                 if response_text:
                     persisted_assistant = await _save_chat_message(
-                        session_id, "assistant", response_text, user_id=user_id
+                        session_id, "assistant", response_text, user_id=user_id, message_id=_claim_mid()
                     )
                     if not persisted_assistant:
                         raise RuntimeError("assistant reply save failed")
@@ -2569,7 +2576,7 @@ async def chat_stream_generator(
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
                 if response_text:
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id, message_id=_claim_mid()))
                 async for line in _stream_openclaw_assistant_ag(
                     enc, recorder, assistant_message_id, response_text
                 ):
@@ -2613,7 +2620,7 @@ async def chat_stream_generator(
         if full_response.strip() and not persisted_assistant:
             try:
                 await _save_chat_message(
-                    session_id, "assistant", full_response, user_id=user_id, truncated=True
+                    session_id, "assistant", full_response, user_id=user_id, truncated=True, message_id=_claim_mid()
                 )
             except Exception:
                 logger.debug("partial persist on error failed (non-fatal)", exc_info=True)
@@ -3330,6 +3337,12 @@ async def submit_feedback(interaction_id: str, request: Request, feedback_type: 
 
     await record_feedback(user_id, interaction_id, feedback_type, corrected)
     logger.info(f"Feedback {feedback_type} from {user_id} on {interaction_id}")
+    if feedback_type in ("thumbs_down", "correction"):
+        # failure capture (ZOE_STRUGGLE_OUTCOMES, default off = returns at once): queued for the struggle detector's worker, which marks
+        # the rated turn's outcome row failed (a put_nowait; never raises)
+        import struggle_detector
+
+        struggle_detector.observe_feedback(user_id, interaction_id, feedback_type)
     messages = {
         "thumbs_up": "Thanks — glad that helped.",
         "thumbs_down": "Thanks — we'll use that to improve.",
