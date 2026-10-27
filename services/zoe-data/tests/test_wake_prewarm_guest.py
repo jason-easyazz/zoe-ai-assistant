@@ -54,7 +54,7 @@ def wake(monkeypatch):
         calls["worker"].append((user_id, session_id, voice_mode))
         return True
 
-    async def _kv():
+    async def _kv(member=""):
         calls["kv"] += 1
         return "warmed"
 
@@ -382,7 +382,7 @@ def test_warm_never_raises_when_the_sidecar_is_unreachable(monkeypatch):
 
 
 def test_warm_is_wall_clock_bounded(sidecar, monkeypatch):
-    async def _hang(session_id, state):
+    async def _hang(session_id, state, message=""):
         await asyncio.sleep(60)
 
     monkeypatch.setattr(zfc, "_kv_warm_turn", _hang)
@@ -395,7 +395,7 @@ def test_a_cancelled_warm_restores_the_slot_guard_and_the_inflight_flag(sidecar,
     async def _go():
         gate = asyncio.Event()
 
-        async def _hang(session_id, state):
+        async def _hang(session_id, state, message=""):
             gate.set()
             await asyncio.sleep(60)
 

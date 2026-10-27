@@ -3704,6 +3704,7 @@ async def voice_command(
         identified_user_id, _bound_user, _panel_recent_user,
         _scope_identity_user, _has_scope_identity,
     )
+    _note_voice_speaker(panel_id, _scope_identity_user)
     # The day review's raise / pull (day_review_raise, ZOE_DAY_REVIEW_RAISE, default OFF = returns at once): who THIS turn
     # identified and who else this panel heard, keyed by session for the brain lane's first-turn brief - the streaming brain
     # runs outside this task, so a ContextVar would not reach it. In-memory only; never raises.
@@ -6496,6 +6497,23 @@ async def voice_turn_stream_speculation(payload: dict, caller: dict = Depends(_r
     return {"ok": True, "turn_id": turn_id, "action": action, "verdict": gate.verdict()}
 
 
+# panel_id -> the member whose voice this panel last verified (set per turn by voice_command, after identity
+# resolves). Used ONLY to choose which member's system prompt the wake KV warm renders - never as an identity.
+_LAST_VOICE_SPEAKER: "dict[str, str]" = {}
+_LAST_VOICE_SPEAKER_MAX = 64
+
+
+def _note_voice_speaker(panel_id: str, member: Optional[str]) -> None:
+    """Remember ``member`` as ``panel_id``'s likely next speaker (a real, server-verified member only)."""
+    real = _real_user_or_none(member)
+    if not panel_id or not real:
+        return
+    _LAST_VOICE_SPEAKER.pop(panel_id, None)
+    _LAST_VOICE_SPEAKER[panel_id] = real
+    while len(_LAST_VOICE_SPEAKER) > _LAST_VOICE_SPEAKER_MAX:
+        _LAST_VOICE_SPEAKER.pop(next(iter(_LAST_VOICE_SPEAKER)))
+
+
 def _brain_prewarm_on_wake_enabled() -> bool:
     return env_bool("ZOE_BRAIN_PREWARM_ON_WAKE", default=True)
 
@@ -6510,7 +6528,8 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
     * The brain's cacheable prefix (system prompt + tool block) is the same bytes for
       every user and session - the member's words, memory and persona ride the user
       message behind it - so ``zoe_flue_client.warm_kv_prefix`` loads it into llama-server's
-      one slot with an explicit-guest throwaway turn. This is what hides the ~2.7k-token cold
+      one slot with a throwaway turn (as the panel's likely speaker when known, else an explicit guest;
+      the member's manner block + card sit ahead of the tool block, so a guest warm cannot serve a member). This is what hides the ~2.7k-token cold
       prefill (TTFT ~4.8 s cold vs ~1.1-1.7 s warm). Live lane only.
     * The core (Pi) worker is keyed on (user, session): warmed for the member of a FRESH
       panel session, else for ``guest`` - the same key the turn's ``effective_user`` gets
@@ -6529,10 +6548,15 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         _t0 = time.monotonic()
         # Started FIRST: it needs neither a session nor an identity, so nothing below (a session lookup, the
         # identity read) can lose the wake its warm. Never raises; detached from this coroutine's own failures.
+        # The KV warm renders the system prompt of the panel's LIKELY speaker (the member this panel last
+        # verified by voice, in-process memo; else a bound/fresh-PIN member; else guest), because the member's
+        # manner block + user-model card sit ahead of the tool block and a guest warm cannot be resumed past
+        # them (see zoe_flue_client._kv_warm_outbound). A wrong guess costs nothing over the old guest warm.
+        likely = _LAST_VOICE_SPEAKER.get(panel_id, "")
         kv_task = None
         if flue_lane:
             import zoe_flue_client
-            kv_task = asyncio.ensure_future(zoe_flue_client.warm_kv_prefix())
+            kv_task = asyncio.ensure_future(zoe_flue_client.warm_kv_prefix(likely))
         session_id = _get_or_create_voice_session(panel_id)
         member = _real_user_or_none(
             (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
