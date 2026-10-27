@@ -17,6 +17,8 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # Lane step timeouts sum to 74 min; a healthy run is ~19. See test_required_gate_workflows.py.
+    timeout-minutes: 90
 
     env:
       CI_DB_PASSWORD: ${{ secrets.POSTGRES_CI_PASSWORD || 'ci-postgres-pw' }}
@@ -226,8 +228,10 @@ jobs:
       # module IDENTITY (test_metrics_auth_regression got the same fix).
       - name: Lane — zoe-data (ci_safe)
         if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        timeout-minutes: 24
         run: |
           pytest services/zoe-data/tests -m ci_safe \
+            -o faulthandler_timeout=1380 \
             --ignore=services/zoe-data/tests/samantha_live \
             --maxfail=200 -q \
             --override-ini="asyncio_mode=auto"
@@ -242,8 +246,10 @@ jobs:
 
       - name: Lane — Home Assistant MCP bridge
         if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        timeout-minutes: 5
         run: |
           pytest \
+            -o faulthandler_timeout=240 \
             services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
             services/homeassistant-mcp-bridge/tests/test_ha_tool_names.py \
             --maxfail=200 -q \
@@ -265,8 +271,10 @@ jobs:
       # still run in this lane. See tests/AGENTS.md.
       - name: Lane — tests/unit (ci_safe)
         if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        timeout-minutes: 30
         run: |
           PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
+            -o faulthandler_timeout=1740 \
             tests/unit -m ci_safe \
             --maxfail=200 -q \
             --override-ini="asyncio_mode=auto"
@@ -279,8 +287,10 @@ jobs:
       # silently dropped test_oidc_login / test_rbac / test_security).
       - name: Lane — zoe-auth (full)
         if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        timeout-minutes: 5
         run: |
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \
+            -o faulthandler_timeout=240 \
             services/zoe-auth/tests \
             --maxfail=200 -q
         env:
@@ -290,8 +300,10 @@ jobs:
 
       - name: People MemPalace integration cleanup
         if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        timeout-minutes: 5
         run: |
           PYTHONPATH="${{ github.workspace }}/services/zoe-data" pytest \
+            -o faulthandler_timeout=240 \
             tests/integration/test_people_mempalace_sync.py \
             -q \
             --override-ini="asyncio_mode=auto"
@@ -305,9 +317,11 @@ jobs:
       # here instead of a silent skip. It still skips cleanly everywhere else (no URL -> skipped).
       - name: People graph invariants on CI PostgreSQL
         if: ${{ !cancelled() && steps.alembic.outcome == 'success' && steps.lane_deps.outcome == 'success' }}
+        timeout-minutes: 5
         run: |
           pip install --quiet asyncpg
           PYTHONPATH="${{ github.workspace }}/services/zoe-data" pytest \
+            -o faulthandler_timeout=240 \
             services/zoe-data/tests/test_people_graph_postgres.py \
             -q -rs \
             --override-ini="asyncio_mode=auto"
@@ -342,6 +356,7 @@ jobs:
   # occurrence of that literal in the repo instead of two.
   zoe-data-py312:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
       - uses: actions/checkout@v7
@@ -371,9 +386,11 @@ jobs:
 
       - name: Lane — zoe-data (ci_safe) on Python 3.12
         if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        timeout-minutes: 22
         run: |
           python3 --version
           pytest services/zoe-data/tests -m ci_safe \
+            -o faulthandler_timeout=1260 \
             --ignore=services/zoe-data/tests/samantha_live \
             --maxfail=200 -q \
             --override-ini="asyncio_mode=auto"
@@ -405,6 +422,7 @@ jobs:
   # it has shown itself stable.
   deps-resolvable:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -539,6 +557,7 @@ jobs:
   # blocking gate moves here. See docs/knowledge/merge-queue-switch.md.
   secret-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:

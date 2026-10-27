@@ -377,3 +377,40 @@ def test_greptile_is_not_in_the_required_set():
     on the required path. If someone re-adds it, this test and the branch-protection
     change have to be argued for together."""
     assert not any("reptile" in c for c in REQUIRED_CONTEXTS), REQUIRED_CONTEXTS
+
+
+# --- hang bounds -------------------------------------------------------------
+# GitHub's default job timeout is 6 h. On 2026-10-27 `validate` hung ~4 h on #2110
+# and ~6 h on #2141 (real deadlocks in the PRs) with nothing alerting. A timeout
+# turns a hang into a FAILED job, which IS a conclusion, so the "required context
+# must always report" rule above still holds.
+
+def _pytest_steps(job: dict):
+    for step in job.get("steps", []):
+        if re.search(r"\bpytest\b", step.get("run", "") or ""):
+            yield step
+
+
+def test_every_pytest_step_in_validate_has_a_timeout_and_hang_dump():
+    jobs = _load("validate.yml")["jobs"]
+    seen = 0
+    for jname, job in jobs.items():
+        for step in _pytest_steps(job):
+            seen += 1
+            where = f"{jname}: {step.get('name')}"
+            tm = step.get("timeout-minutes")
+            assert isinstance(tm, int) and 0 < tm <= 60, f"{where}: needs a sane step timeout-minutes, got {tm!r}"
+            m = re.search(r"faulthandler_timeout=(\d+)", step["run"])
+            assert m, f"{where}: pytest must pass -o faulthandler_timeout so a hang dumps its stack"
+            assert int(m.group(1)) < tm * 60, f"{where}: faulthandler must fire before the step is killed"
+    assert seen >= 7, f"expected the known pytest lanes, found {seen}"
+
+
+def test_every_validate_workflow_job_has_a_job_timeout_above_its_step_sum():
+    for jname, job in _load("validate.yml")["jobs"].items():
+        jt = job.get("timeout-minutes")
+        assert isinstance(jt, int) and jt <= 120, f"{jname}: needs job-level timeout-minutes, got {jt!r}"
+        total = sum(s.get("timeout-minutes", 0) for s in _pytest_steps(job))
+        assert jt > total, f"{jname}: job timeout {jt} must exceed the pytest step timeouts ({total})"
+    for ctx in REQUIRED_CONTEXTS:
+        assert "timeout-minutes" in _load("validate.yml")["jobs"][ctx]
