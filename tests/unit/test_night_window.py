@@ -465,7 +465,7 @@ def test_a_wait_that_runs_past_end_by_refuses_before_anything_stops_instead_of_g
     cfg.busy_wait_max_min = 60.0
     _waits_then_clears(host, 45)
     assert w.run() == nw.EXIT_REFUSED and "03:00 end-by deadline" in w.outcome and "Nothing was stopped" in w.outcome
-    assert stopped_nothing(host) and host.t >= at(3, 5) and not cfg.marker.exists()
+    assert stopped_nothing(host) and host.t <= at(3, 0) - 35 * 60 + 60 and not cfg.marker.exists()      # refused as soon as no window fits (waits are capped by end-by), not after waiting past it
 
 
 def test_a_short_wait_that_still_leaves_room_gets_a_cap_that_ends_at_or_before_the_original_deadline(tmp_path):
@@ -2163,6 +2163,7 @@ DIGEST_SKIPPED = 'NIGHT_JOB digest {"attempted": 0, "errors": 0, "input_seen": t
 DIGEST_BROKEN = 'NIGHT_JOB digest {"attempted": 1, "errors": 0, "input_seen": true, "skipped": 0, "users": 1, "verdict": "attempted_no_facts"} model=127.0.0.1:11500\n'
 MIND_QUIET = ("night_mind: users kept=2 skipped_synthetic=12\n" + json.dumps({"status": "ok", "members": [
     {"user_id": "a", "status": "skipped", "skipped_reason": "quiet_day", "calls": 0}, {"user_id": "b", "status": "skipped", "skipped_reason": "quiet_day", "calls": 0}]}) + "\n")
+MIND_QUIET_BUT_ERROR = json.dumps({"status": "error", "members": [{"user_id": "a", "status": "skipped", "skipped_reason": "quiet_day"}]}) + "\n"     # members look quiet, the run itself failed
 MIND_LOAD_ERROR = json.dumps({"status": "load_error", "members": [{"user_id": "a", "status": "load_error"}, {"user_id": "b", "status": "skipped", "skipped_reason": "quiet_day"}]}) + "\n"
 OMI_NONE = 'INFO user_filters: omi_day_review: users kept=0\nNIGHT_JOB omi_day_review status=nothing_to_do days=0 calls=0 stored=0 no_time=0\n'
 DREAM_QUIET = "OPEN_LOOPS user=a extracted=0 status=no_messages\nOPEN_LOOPS user=b extracted=0 status=no_messages\nDreaming cycle complete: 2 users processed\n"
@@ -2171,7 +2172,7 @@ DREAM_FAILED_QUIETLY = "OPEN_LOOPS user=a extracted=0 status=llm_failed\nDreamin
 
 @pytest.mark.parametrize("name,text,expect", [
     ("digest", DIGEST_IDLE, True), ("digest", DIGEST_SKIPPED, True), ("digest", DIGEST_BROKEN, False), ("digest", "", False),
-    ("night_mind", MIND_QUIET, True), ("night_mind", MIND_LOAD_ERROR, False), ("night_mind", "night_mind: users kept=2\n", False),
+    ("night_mind", MIND_QUIET, True), ("night_mind", MIND_LOAD_ERROR, False), ("night_mind", MIND_QUIET_BUT_ERROR, False), ("night_mind", "night_mind: users kept=2\n", False),
     ("omi_day_review", OMI_NONE, True), ("omi_day_review", "INFO nothing here\n", False),
     ("dreaming", DREAM_QUIET, True), ("dreaming", DREAM_FAILED_QUIETLY, False), ("dreaming", "Dreaming cycle complete: 1 users processed\n", False),
     ("struggle_proposals", DIGEST_IDLE, False)])
@@ -2270,3 +2271,47 @@ def test_the_timer_retries_after_the_first_attempt_inside_the_window_that_can_st
         assert cfg.night_hours[0] <= slot <= cfg.night_hours[1]
     assert slots[-1] > 3 * 60                                                              # a retry actually lands after the old 03:00 horizon
     assert "--skip-if-done" in _exec_start_args(), "every timer slot runs the service: only --skip-if-done keeps a retry off a night that already ran"
+
+
+def test_repeated_rewaits_are_capped_by_the_absolute_end_by_and_refuse_before_it(tmp_path):
+    """Every re-wait used to get its own full timeout, so LOCK_RECHECKS cycles could run past end-by. Now each is capped at the time left minus the 35 min a window needs."""
+    w, host, cfg = make(tmp_path, start=at(3, 12))                  # 43 min before 03:55: 8 min of room
+    state = {"released": None, "n": 0}
+    real_release = w.release_lock
+
+    def release():
+        if w.lock_fd is not None:
+            state["released"], state["n"] = host.t, state["n"] + 1
+        real_release()
+    w.release_lock = release
+
+    def busy_reason():                                               # a lander under the lock, and for 15 more minutes after each hand-back (longer than the 8 min of room)
+        if w.lock_fd is not None or (state["released"] is not None and host.t - state["released"] < 900):
+            return "a voice-PR landing is running"
+        return ""
+    w.busy_reason = busy_reason
+    cfg.quiet_wait_max_min = cfg.busy_wait_max_min = 20.0            # the production per-wait bound: far more than the room
+    assert w.run() == nw.EXIT_REFUSED
+    assert stopped_nothing(host) and w.lock_fd is None
+    assert host.t <= at(3, 55) - 35 * 60 + 60, "the process must give up while a 35 min window still fit before end-by, not after cycling past it"
+    assert state["n"] >= 1
+
+
+def test_a_covered_silent_no_op_is_still_reported_as_degraded(tmp_path):
+    """A 4B fallback that finishes the job keeps the unit green (like every covered failure) but the silent no-op stays visible in jobs, log and report notes."""
+    w, host, cfg = make(tmp_path, argv=["--jobs", "dreaming"])
+    real = host.run_watched
+
+    def rw(argv, timeout, env, tick, log_path, interval=5.0):
+        res = real(argv, timeout, env, tick, log_path, interval)
+        if "11500" in (env or {}).get("GEMMA_SERVER_URL", "") and os.path.basename(argv[1]) == "zoe-nightly-dreaming.py":
+            log_path.write_text("all done\n")
+            host.tokens -= 1000                                        # the 12B generated nothing and said nothing; the 4B fallback below does real work
+        return res
+    host.run_watched = rw
+    assert w.run() == nw.EXIT_OK, w.outcome
+    twelve = next(j for j in w.jobs if j["name"] == "dreaming" and j["backend"] == "12B")
+    assert twelve["status"] == "degraded" and any("SILENT NO-OP" in n for n in twelve["notes"])
+    assert next(j for j in w.jobs if j["name"] == "dreaming" and j["backend"] == "4B")["status"] == "ok"
+    assert any("covered by the 4B fallback" in n for n in w.rec["notes"]) and any("still reported degraded" in e["msg"] for e in w.rec["events"])
+    assert "dreaming:degraded@12B" in nw.summary_line({**w.rec, "outcome": "ok", "exit": 0, "jobs": w.jobs})

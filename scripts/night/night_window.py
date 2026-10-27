@@ -31,6 +31,7 @@ docs/knowledge/night-window.md is the operator's page.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import datetime as dt
 import json
@@ -279,7 +280,7 @@ def job_idle_evidence(name: str, text: str) -> str:
         members = d.get("members") if isinstance(d.get("members"), list) else []
         if d.get("status") == "nothing_to_do" and not members:
             return "no members to reflect on"
-        if members and all(isinstance(mb, dict) and mb.get("status") == "skipped" and mb.get("skipped_reason") in ("quiet_day", "opted_out") for mb in members):
+        if d.get("status") == "ok" and members and all(isinstance(mb, dict) and mb.get("status") == "skipped" and mb.get("skipped_reason") in ("quiet_day", "opted_out") for mb in members):
             return f"{len(members)} member(s), all skipped as a quiet day"
     elif name == "omi_day_review":
         if re.search(r"^NIGHT_JOB omi_day_review status=nothing_to_do\b", text, re.M):
@@ -1057,7 +1058,8 @@ class NightWindow(bk.Window):
         clash = self.blackout_conflict()
         if clash:
             self.refuse(clash)
-        waiting = self.wait_for_lock()
+        with self.capped_waits(need_min):
+            waiting = self.wait_for_lock()
         self.parked_text = host.read(cfg.deep_unit)
         if not self.parked_text.strip():
             self.refuse(f"the parked 12B unit {cfg.deep_unit} is missing or empty: nothing to generate the 12B command from")
@@ -1095,8 +1097,9 @@ class NightWindow(bk.Window):
         if not self.contiguous_ok(frag=frag0) and not have_sudo:
             self.refuse("physical memory is fragmented and passwordless sudo is not available, so the window cannot compact it: the 12B would die on cudaMalloc / NvMap error 12. "
                         f"Run, then start again: {bk.operator_compact_command(cfg.drop_caches)}")
-        waiting = self.wait_until_idle() or waiting
-        waiting = self.wait_until_quiet() or waiting
+        with self.capped_waits(need_min):
+            waiting = self.wait_until_idle() or waiting
+            waiting = self.wait_until_quiet() or waiting
         left = self.compute_cap()            # against the SAME absolute deadline as above: the waits may have eaten the room the window needs (or the deadline itself)
         if left < need_min:
             end_txt = dt.datetime.fromtimestamp(self.end_by_deadline()).strftime("%H:%M")
@@ -1119,6 +1122,26 @@ class NightWindow(bk.Window):
                 raise Refused(f"not clear after taking the lock: {clash}")
         self.event(f"preflight ok: lock {'free (dry-run: not taken)' if self.dry else 'held'}, MemAvailable {m:.0f} MB, cap {self.cap_min:.0f} min, "
                    f"will stop {', '.join(self.stop_set)}" + (f"; NOT idle right now ({waiting})" if waiting else ""))
+
+    @contextlib.contextmanager
+    def capped_waits(self, need_min: float):
+        """Every wait before the stops (lock, nightly job, quiet box) is capped at the time REMAINING to the absolute end-by deadline minus the ``need_min`` a window needs: no
+        wait, and no sequence of re-waits, can run past the point where a window still fits. Already too late = refuse now, nothing stopped. Caps are restored on exit."""
+        room_min = (self.end_by_deadline() - self.host.now()) / 60.0 - need_min
+        if room_min <= 0:
+            end_txt = dt.datetime.fromtimestamp(self.end_by_deadline()).strftime("%H:%M")
+            raise Refused(f"it is {dt.datetime.fromtimestamp(self.host.now()):%H:%M}: under the {need_min:.0f} min a window needs before the {end_txt} end-by deadline. Nothing was stopped.")
+        cfg, saved = self.cfg, (self.cfg.busy_wait_max_min, self.cfg.quiet_wait_max_min)
+        cfg.busy_wait_max_min, cfg.quiet_wait_max_min = min(saved[0], room_min), min(saved[1], room_min)
+        try:
+            yield
+        except Refused as exc:
+            if room_min < max(saved):                                  # the end-by cap, not the per-wait bound, ended the wait: say so
+                end_txt = dt.datetime.fromtimestamp(self.end_by_deadline()).strftime("%H:%M")
+                raise Refused(f"{exc} (the {end_txt} end-by deadline left {room_min:.0f} min of room; a window needs {need_min:.0f} min after the wait). Nothing was stopped.") from exc
+            raise
+        finally:
+            cfg.busy_wait_max_min, cfg.quiet_wait_max_min = saved
 
     def wait_for_lock(self) -> str:
         """Block (bounded by ``busy_wait_max_min``) until the brain-window lock is free. '' once free; a dry run reports instead of waiting.
@@ -1157,8 +1180,9 @@ class NightWindow(bk.Window):
                 return waiting
             self.release_lock()
             self.event(f"{busy} (it started after the quiet check): lock handed back, waiting again ({attempt}/{self.LOCK_RECHECKS}); nothing was stopped")
-            waiting = self.wait_until_idle() or waiting
-            waiting = self.wait_until_quiet() or waiting
+            with self.capped_waits(need_min):              # bounded by the ABSOLUTE end-by, not just per wait: LOCK_RECHECKS re-waits cannot add up past it
+                waiting = self.wait_until_idle() or waiting
+                waiting = self.wait_until_quiet() or waiting
             left = self.compute_cap()
             if left < need_min:
                 end_txt = dt.datetime.fromtimestamp(self.end_by_deadline()).strftime("%H:%M")
@@ -2211,6 +2235,10 @@ class NightWindow(bk.Window):
                 self.after_restore()
             except Exception as exc:  # noqa: BLE001
                 self.event(f"after-restore step failed: {type(exc).__name__}: {exc}")
+            for j in self.jobs:                                  # a covered failure keeps the unit green (as every covered failure does) but NEVER disappears: it stays `degraded` in jobs, log and report
+                if j["status"] == "degraded" and j["backend"] == "12B" and self.fallback_covered(j) and any("SILENT NO-OP" in n for n in j["notes"]):
+                    self.event(f"job {j['name']}: SILENT NO-OP on the 12B (exit 0, zero tokens, no sign of idleness); the 4B fallback finished it - still reported degraded")
+                    self.rec["notes"].append(f"{j['name']}: SILENT NO-OP on the 12B, covered by the 4B fallback")
             if rc == EXIT_OK and any(j["status"] not in (*OK_JOB_STATUSES, "skipped") and not (j["backend"] == "12B" and self.fallback_covered(j))
                                      and not (j.get("best_effort") and j["status"] in ("no time", "timeout")) for j in self.jobs):
                 rc = EXIT_JOBS_FAILED
