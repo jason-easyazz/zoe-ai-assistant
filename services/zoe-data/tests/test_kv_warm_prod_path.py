@@ -36,8 +36,10 @@ def prod_turn(monkeypatch):
         return ""
 
     async def _card(uid):
+        zfc._CARD_SEEN[uid] = "cardv1"
         return "cardv1"
 
+    monkeypatch.setattr(zfc, "_CARD_SEEN", {"zed_uid": "cardv1"})
     monkeypatch.setattr(zfc, "_persona_context_block", _persona)
     monkeypatch.setattr(zfc, "_card_version", _card)
     monkeypatch.setattr(zfc, "_LAST_TURN", {})
@@ -114,6 +116,7 @@ def _sidecar(monkeypatch, systems, cur):
                               content=(body % next(sizes)).encode())
 
     async def _card(uid):
+        zfc._CARD_SEEN[uid] = cur["v"]
         return cur["v"]
 
     real = httpx.AsyncClient
@@ -148,7 +151,7 @@ def test_warm_repeats_when_only_the_card_version_moved_at_equal_size(monkeypatch
     prod_turn("How are you going tonight?")           # the memo records card=cardv1 (fixture)
     zfc._LAST_TURN["zed_uid"]["system"] = 2942
     caplog.set_level("INFO", logger="zoe_flue_client")
-    posts = _sidecar(monkeypatch, [2942, 2942], {"v": "cardv1"})
+    posts = _sidecar(monkeypatch, [2942, 2942], {"v": "cardv2"})   # zoe-data now serves a new card
     assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
     assert len(posts) == 2
     line = [r.getMessage() for r in caplog.records if "FLUE_KV_WARM " in r.getMessage()][0]
@@ -235,3 +238,53 @@ def test_warm_repeats_when_the_members_last_turn_had_no_size(monkeypatch, prod_t
     posts = _sidecar(monkeypatch, [2942, 2942], {"v": "cardv2"})
     assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
     assert len(posts) == 2
+
+
+def test_turn_path_awaits_no_card_lookup(monkeypatch, prod_turn):
+    """The real turn must not put a card/DB lookup on its critical path (it is only a diagnostic key)."""
+    calls = []
+
+    async def _boom(uid):
+        calls.append(uid)
+        raise AssertionError("the turn path awaited a card lookup")
+
+    monkeypatch.setattr(zfc, "_card_version", _boom)
+    wire = prod_turn("How are you going tonight?")
+    assert wire and not calls
+    assert zfc._LAST_TURN["zed_uid"]["card"] == "cardv1", "the key uses the in-memory last-requested version"
+
+
+def test_warm_preparation_is_inside_the_timeout_and_before_the_slot_guard(monkeypatch, prod_turn):
+    import brain_slot_guard
+
+    started = []
+    monkeypatch.setattr(brain_slot_guard, "turn_started", lambda *a, **k: started.append(1))
+
+    async def _slow(uid):
+        await asyncio.sleep(30)
+        return "x"
+
+    posts = _sidecar(monkeypatch, [2942], {"v": "cardv1"})
+    monkeypatch.setattr(zfc, "_card_version", _slow)
+    monkeypatch.setattr(zfc, "_KV_WARM_MAX_S", 0.2)
+    zfc._LAST_TURN.clear()
+    import time
+    t0 = time.monotonic()
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "failed:timeout"
+    assert time.monotonic() - t0 < 2
+    assert not started, "the slot guard must not be held while preparing"
+    assert not posts
+
+
+def test_warm_with_no_memo_repeats_once(monkeypatch, prod_turn):
+    """After a restart there is no remembered turn: the card cannot be confirmed rendered, so repeat once."""
+    zfc._LAST_TURN.clear()
+    posts = _sidecar(monkeypatch, [2380, 2942], {"v": "cardv1"})
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
+    assert len(posts) == 2
+
+
+def test_guest_warm_never_repeats(monkeypatch, prod_turn):
+    posts = _sidecar(monkeypatch, [2380, 2942], {"v": "cardv1"})
+    assert _run(zfc.warm_kv_prefix("")) == "warmed"
+    assert len(posts) == 1
