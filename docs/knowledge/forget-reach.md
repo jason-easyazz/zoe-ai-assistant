@@ -78,7 +78,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-104 stores: 33 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+105 stores: 34 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -88,6 +88,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `night_runs` | pg_table | metadata | reached | member: `night_mind.delete_user` | - |
 | `struggle_events` | pg_table | derived | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | - |
 | `struggle_proposal_events` | pg_table | derived | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | - |
+| `turn_outcomes` | pg_table | derived | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | - |
 | `restraint_mutes` | pg_table | derived | reached | member: `restraint.erase_user` / entity: `restraint.erase_entity` | - |
 | `restraint_classes` | pg_table | derived | reached | member: `restraint.erase_user` / entity: `restraint.erase_entity` | - |
 | `reply_sources` | pg_table | derived | reached | member: `reply_ledger.forget_user` | - |
