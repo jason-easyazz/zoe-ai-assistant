@@ -453,6 +453,8 @@ def _select_targets(
         in_room = _room_subset(pool, room_eids)
         if len(in_room) == 1:
             return in_room, False
+        if len(in_room) > 1:
+            return in_room, True  # a small set in THIS room: ask among those, not the whole house
         return pool, True  # one singular device implied but several match → ask
 
     # A name/room was given — score by token overlap within the named class.
@@ -612,6 +614,13 @@ def _summarize(devices: list[dict[str, Any]]) -> str:
     return f"{len(on)} on: {names}." if len(on) > 1 else f"{names} is on."
 
 
+def _which_one(targets: list[dict[str, Any]]) -> str:
+    """The clarifying question for a tie: "Which one — A or B?" (never a bare list)."""
+    names = [str(d.get("name") or d.get("entity_id")) for d in targets[:5]]
+    joined = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+    return f"Which one — {joined}?"
+
+
 # ── Skybridge resolver ────────────────────────────────────────────────────────
 
 async def resolve_smart_home(
@@ -703,9 +712,8 @@ async def resolve_smart_home(
         # A SPECIFIC command tied across several devices — ask rather than toggle
         # unintended ones. (Bare plural "the lights" sweeps and is not ambiguous.)
         if ambiguous:
-            names = ", ".join(str(d.get("name")) for d in targets)
             return _result(
-                f"I found a few matches: {names}. Which one?",
+                _which_one(targets),
                 _home_card(devices, scenes, status="Home", summary="Which device?"),
                 action,
             )
