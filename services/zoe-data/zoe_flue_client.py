@@ -2096,7 +2096,7 @@ async def _note_turn_envelope(uid: str, session_id: str, outbound_message: str) 
             return
         lines = _leading_envelope_lines(outbound_message)
         prev = _LAST_TURN.get(u) or {}
-        _remember(_LAST_TURN, u, {**lines, "system": prev.get("system", 0)}, _LAST_TURN_MAX)
+        _remember(_LAST_TURN, u, {**lines, "system": prev.get("system", 0), "card": card}, _LAST_TURN_MAX)
         _remember(_SESSION_UID, session_id, u, 256)
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn
         pass
@@ -2234,7 +2234,10 @@ async def warm_kv_prefix(member: str = "") -> str:
             # landed by now, so one repeat renders the card. Bounded to one repeat inside the same wall-clock cap.
             memo = _LAST_TURN.get((member or "").strip()) or {}
             want, got = int(memo.get("system") or 0), int(state.get("system") or 0)
-            if res[0] == "warmed" and want and got and abs(want - got) > 8:
+            # ...or the card VERSION moved since that turn (token counts alone can miss a same-size replacement):
+            # the sidecar's cache still holds the old card on this request and refreshes behind it.
+            moved = bool(memo) and (await _card_version((member or "").strip())) != memo.get("card", "")
+            if res[0] == "warmed" and ((want and got and abs(want - got) > 8) or moved):
                 state.update(settled=False, submission="")
                 # The first request kicked the card refresh: re-derive the message and key so the repeat (and the
                 # FLUE_KV_WARM line) describe the prompt that actually established the cache.

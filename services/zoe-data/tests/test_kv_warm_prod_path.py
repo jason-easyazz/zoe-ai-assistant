@@ -96,42 +96,113 @@ def test_negative_control_without_the_turn_memo_the_warm_is_english(prod_turn):
     assert _manner_line(msg) != _manner_line(wire)
 
 
-def test_warm_repeats_once_when_the_card_was_not_rendered(monkeypatch, prod_turn, caplog):
-    """Cold/stale card cache: the first warm renders a smaller system prompt than the member's last turn."""
+def _sidecar(monkeypatch, systems, cur):
+    """A fake sidecar: the first request 'refreshes' the card (cur moves to cardv2), each reports the next system size."""
     import httpx
 
     import brain_slot_guard
 
-    prod_turn("How are you going tonight?")
-    zfc._LAST_TURN["zed_uid"]["system"] = 2942
-    systems = iter([2380, 2942])
     posts = []
-    versions = iter(["cardv1", "cardv2", "cardv2", "cardv2"])
-
-    async def _card_seq(uid):   # the first warm kicks a refresh: the version moves between the two requests
-        return next(versions)
-
-    monkeypatch.setattr(zfc, "_card_version", _card_seq)
-    caplog.set_level("INFO", logger="zoe_flue_client")
+    sizes = iter(systems)
 
     async def handler(request):
-        posts.append(1)
+        posts.append(json.loads(request.content)["body"])
+        if len(posts) == 1:
+            cur["v"] = "cardv2"
         body = '"ready"\n{"done": true, "context_budget": {"system": %d}, "prompt_cache": [{"prompt_n": 5, "cache_n": 9}]}\n'
         return httpx.Response(200, headers={"content-type": "application/x-ndjson"},
-                              content=(body % next(systems)).encode())
+                              content=(body % next(sizes)).encode())
+
+    async def _card(uid):
+        return cur["v"]
 
     real = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: real(*a, transport=httpx.MockTransport(handler), **k))
+    monkeypatch.setattr(zfc, "_card_version", _card)
     monkeypatch.setenv("ZOE_FLUE_BRAIN_URL", "http://sidecar.test")
     monkeypatch.setenv("ZOE_BRAIN_TOKEN", "t")
     monkeypatch.delenv("ZOE_BRAIN_KV_WARM_ON_WAKE", raising=False)
     brain_slot_guard.reset()
     monkeypatch.setattr(zfc, "_kv_warm_inflight", False)
     monkeypatch.setattr(zfc, "_kv_warm_session", {"id": "", "uses": 0, "seq": 0})
+    return posts
+
+
+def test_warm_repeats_once_when_the_card_was_not_rendered(monkeypatch, prod_turn, caplog):
+    """Cold/stale card cache: the first warm renders a smaller system prompt than the member's last turn."""
+    prod_turn("How are you going tonight?")
+    zfc._LAST_TURN["zed_uid"]["system"] = 2942
+    zfc._LAST_TURN["zed_uid"]["card"] = "cardv2"      # unchanged version: only the size signal fires
+    caplog.set_level("INFO", logger="zoe_flue_client")
+    posts = _sidecar(monkeypatch, [2380, 2942], {"v": "cardv2"})
     assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
     assert len(posts) == 2
     line = [r.getMessage() for r in caplog.records if "FLUE_KV_WARM " in r.getMessage()][0]
     wire = prod_turn("How are you going tonight?")
-    assert f"key={zfc.prefix_key(wire, 'cardv2')}" in line, "the key must describe the repeat, not the first request"
+    assert f"key={zfc.prefix_key(wire, 'cardv2')}" in line
+
+
+def test_warm_repeats_when_only_the_card_version_moved_at_equal_size(monkeypatch, prod_turn, caplog):
+    """A same-size replacement card defeats the token heuristic; the version signal still forces the repeat, and the
+    FLUE_KV_WARM key names the refreshed version."""
+    prod_turn("How are you going tonight?")           # the memo records card=cardv1 (fixture)
+    zfc._LAST_TURN["zed_uid"]["system"] = 2942
+    caplog.set_level("INFO", logger="zoe_flue_client")
+    posts = _sidecar(monkeypatch, [2942, 2942], {"v": "cardv1"})
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
+    assert len(posts) == 2
+    line = [r.getMessage() for r in caplog.records if "FLUE_KV_WARM " in r.getMessage()][0]
+    wire = prod_turn("How are you going tonight?")
+    assert f"key={zfc.prefix_key(wire, 'cardv2')}" in line
     assert f"key={zfc.prefix_key(wire, 'cardv1')}" not in line
-    brain_slot_guard.reset()
+
+
+def test_warm_does_not_repeat_when_nothing_moved(monkeypatch, prod_turn):
+    prod_turn("How are you going tonight?")
+    zfc._LAST_TURN["zed_uid"]["system"] = 2942
+    zfc._LAST_TURN["zed_uid"]["card"] = "cardv2"
+    posts = _sidecar(monkeypatch, [2942, 2942], {"v": "cardv2"})
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
+    assert len(posts) == 1
+
+
+def test_wake_fresh_pin_lookup_is_a_hard_bound(monkeypatch):
+    """A lookup that ignores cancellation must not delay the warm past the 0.4 s cap."""
+    import time
+
+    import routers.voice_tts as v
+
+    seen = []
+
+    async def _kv(member=""):
+        seen.append(member)
+        return "warmed"
+
+    async def _stubborn(panel_id, fallback_db=None):
+        for _ in range(30):   # ~1.5 s, then it ends by itself so the loop can close
+            try:
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                continue   # swallows cancellation: wait_for would block on this
+
+    monkeypatch.setattr(v, "_brain_prewarm_on_wake_enabled", lambda: True)
+    monkeypatch.setattr(v, "_get_or_create_voice_session", lambda p: "voice-panel-t-1")
+    monkeypatch.setattr(v, "_VOICE_SESSIONS", {})
+    monkeypatch.setattr(v, "_LAST_VOICE_SPEAKER", {})
+    monkeypatch.setattr(v, "_resolve_fresh_panel_member", _stubborn)
+    monkeypatch.setattr(zfc, "warm_kv_prefix", _kv)
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "flue")
+
+    async def go():
+        t0 = time.monotonic()
+        task = asyncio.ensure_future(v._prewarm_brain_for_panel("p1"))
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if seen:
+                break
+        elapsed = time.monotonic() - t0
+        task.cancel()
+        return elapsed
+
+    elapsed = asyncio.run(go())
+    assert seen == [""] and elapsed < 1.2

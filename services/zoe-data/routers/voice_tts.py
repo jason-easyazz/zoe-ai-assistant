@@ -6559,8 +6559,12 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         if not likely:
             # After a restart / eviction the memo is empty: ask for a fresh-PIN member, but only briefly so the
             # warm is never held up (the lookup is re-awaited below for the worker + facts, unbounded as before).
+            # asyncio.wait, not wait_for: wait_for awaits the cancelled coroutine's unwind, so it is not a hard bound.
+            _lk = asyncio.ensure_future(_resolve_fresh_panel_member(panel_id))
+            _lk.add_done_callback(lambda t: t.cancelled() or t.exception())   # never an unretrieved exception
             try:
-                likely = await asyncio.wait_for(_resolve_fresh_panel_member(panel_id), timeout=0.4) or ""
+                _done, _ = await asyncio.wait({_lk}, timeout=0.4)
+                likely = (_lk.result() or "") if _done and not _lk.cancelled() and _lk.exception() is None else ""
             except Exception:  # noqa: BLE001 - guest warm is the fallback
                 likely = ""
         kv_task = None
