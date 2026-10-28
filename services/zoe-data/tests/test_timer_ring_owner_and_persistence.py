@@ -129,6 +129,27 @@ def test_wrongly_typed_snapshot_record_is_dropped_not_fatal(tmp_path):
     assert [t["timer_id"] for t in _TimerStore().list("jason")] == ["g"]
 
 
+def test_malformed_owner_collection_does_not_lose_other_owners(tmp_path):
+    import json
+
+    good = {"timer_id": "g", "label": "ok", "duration_seconds": 60, "expires_at": time.time() + 60}
+    (tmp_path / "timers.json").write_text(json.dumps({"by_owner": {"broken": None, "odd": 7, "jason": [good]}}))
+    assert [t["timer_id"] for t in _TimerStore().list("jason")] == ["g"]
+    (tmp_path / "timers.json").write_text(json.dumps({"by_owner": [1, 2]}))
+    assert _TimerStore().list("jason") == []
+
+
+def test_load_drops_timers_older_than_the_grace(tmp_path):
+    import json
+
+    import skybridge_service
+
+    old = {"timer_id": "o", "label": "x", "duration_seconds": 5, "expires_at": time.time() - skybridge_service.TIMER_RING_GRACE_S - 5}
+    (tmp_path / "timers.json").write_text(json.dumps({"by_owner": {"jason": [old]}}))
+    store = _TimerStore()
+    assert store.all_live() == []
+
+
 # -- a finished timer stays listed ("ringing") until dismissed or the grace ends --------------------------------------
 
 PANEL = {"user_id": "guest", "role": "guest", "panel_id": "p"}

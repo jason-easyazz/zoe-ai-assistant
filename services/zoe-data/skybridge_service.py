@@ -101,9 +101,10 @@ class _TimerStore:
         try:
             raw = json.loads(_timer_store_path().read_text())
             now = time.time()
-            for owner, timers in (raw.get("by_owner") or {}).items():
+            by_owner = raw.get("by_owner") if isinstance(raw, dict) else None
+            for owner, timers in (by_owner.items() if isinstance(by_owner, dict) else []):
                 live = []
-                for t in timers:
+                for t in (timers if isinstance(timers, list) else []):
                     try:  # normalise: a wrongly-typed record is dropped here, never allowed to reach _prune()
                         t = dict(t)
                         t["expires_at"] = float(t["expires_at"])
@@ -136,6 +137,11 @@ class _TimerStore:
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, path)
+            dfd = os.open(path.parent, os.O_RDONLY)  # make the rename itself durable
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
         except Exception as exc:  # noqa: BLE001
             logger.warning("timer store: could not save %s (%s)", path, type(exc).__name__)
 
