@@ -129,12 +129,11 @@ The window shares the brain with every landing and harness. The binding rule is 
 [scripts/AGENTS.md](../../scripts/AGENTS.md) "Brain-window quiet hours": it replaced the fixed 01:50-04:55
 blackout of 2026-10-13 (the window was measured finishing 02:52-03:10, not ~1 h), and the operator-local gate
 `night_busy.sh voice|deploy|test` is what every lander and harness consults before it starts. The rationale and the
-incident are in [merge-and-deploy.md](merge-and-deploy.md). The window refuses at once when
-`/tmp/zoe-brain-window.lock` is held, waits (`busy_wait_max_min` = 20 min, then refuses) on a live lander, a samantha
-bar, a voice probe or a held voice-harness lock, and waits (`NIGHT_QUIET_WAIT_MIN`, default 30 min) for a recent voice turn.
+incident are in [merge-and-deploy.md](merge-and-deploy.md). Since 2026-10-27 the window WAITS (bounded by
+`busy_wait_max_min` = 20 min, then refuses; `wait_for_lock()`) when `/tmp/zoe-brain-window.lock` is held, and the same bound applies
+to a live lander, a samantha bar, a voice probe or a held voice-harness lock; and waits (`NIGHT_QUIET_WAIT_MIN`, default 30 min) for a recent voice turn.
 Some lab/perf scripts still hard-code the old 01:50-04:55 span as a conservative refusal (`labs/relay`, `labs/p0-deroot`,
 `scripts/perf/measure_wake.py`, `scripts/perf/omi_voice_calibrate.py`); that is safe, only stricter than the pause.
-Whether it should WAIT (bounded) for the lock instead of refusing is a proposal, not a change: `open-problems.md`.
 
 ## 8. The first real attempts (2026-10-09 01:57-02:06) and why the 12B did not load
 

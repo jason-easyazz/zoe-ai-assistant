@@ -21,13 +21,13 @@ agent never runs: the items list stays empty, because only the UI's WebSocket cr
 ## The working recipe
 
 1. `POST /v1/sessions {"agent_id": "<id>", "title": "..."}` (list agents with `GET /v1/agents`).
-2. Stage the full brief as comments: `POST /v1/sessions/<SID>/comments {"path": "<any repo file>", "body": "<brief>",
-   "start_index": 0, "end_index": 0}` (comments are code-review-anchored; the path is nominal).
+2. Do NOT rely on staging the brief as session comments (`POST /v1/sessions/<SID>/comments`): that staging can fail
+   silently and the agent then starts without its task. The brief goes inline with `-p` in step 4.
 3. Launch a runner: `POST /v1/hosts/<host_id>/runners {"session_id": "<SID>", "workspace": "/workspace"}` (host from `GET /v1/hosts`).
 4. **The kick** (the part REST cannot do):
-   `docker exec -d zoe-omnigent sh -c "cd /workspace && omnigent run --server http://127.0.0.1:6767 --harness claude-sdk -r <SID> -p '<kickoff: fetch your comments and execute>' --no-log > /tmp/kick.log 2>&1"`.
-   The session goes `running` and survives the client shutting down, because everything lives in the container. Per the
-   cross-review notes, a brief passed inline with `-p` is more reliable than one staged as comments.
+   `docker exec -d zoe-omnigent sh -c "cd /workspace && omnigent run --server http://127.0.0.1:6767 --harness claude-sdk -r <SID> -p "$BRIEF" --no-log > /tmp/kick.log 2>&1"` with the FULL brief in `-p`, quoted the way `scripts/maintenance/cross_review_polly.sh`
+   does it (reuse that wrapper rather than hand-quoting). The session goes `running` and survives the client shutting down,
+   because everything lives in the container.
 5. Monitor: `GET /v1/sessions/<SID>` (status) and `.../items`; runner logs are under the in-container host-runner log directory.
    A session that is idle with zero ASSISTANT messages is an alarm, not a clean finish.
 
