@@ -37,7 +37,9 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    default on); the layout is self-validated and any mismatch is a no-op. Consequence for the pinned
    corpus: transcripts are now order-independent, so a few `heard` hashes recorded under the old
    history-dependent behaviour move once (re-record the baseline after the landing). The under-speech
-   streaming path shares the same Silero and is NOT reset (concurrent streams interleave on it).
+   streaming path shares the same Silero: `_open_moonshine_stream` resets it once at session start (best
+   effort, `acquire(timeout=0.25)` on the infer lock - skipped rather than stalling the first chunk), but
+   concurrent streams/batch calls still interleave on it mid-utterance; the library offers no per-stream VAD.
 2. **Brain — Gemma 4 E4B-QAT + MTP**, host-native `llama-server` on `:11434`. Since **#1322 a
    two-stage router runs as a fast-tier FRONT** for the brain (`ZOE_ROUTER_HEAD=active`, live-verified):
    a SetFit/MLP head (`models/router_head_mlp.joblib`) shortlists the top-3 domains + a chat gate,

@@ -2932,6 +2932,23 @@ def _moonshine_empty_reason(lines: list, audio, sample_rate: int) -> str:
     return f"reason={reason} lines={n_lines} audio_s={dur:.2f} active_s={active:.2f} peak={peak:.3f}"
 
 
+def _open_moonshine_stream():
+    """A started under-speech STT stream whose VAD begins from a clean Silero state (same reset as the batch path).
+
+    The reset takes the infer lock but only briefly (``acquire(timeout=0.25)``): behind a long batch/other-stream
+    inference it is skipped (best effort - the stream then just starts from the carried state, as before) rather than
+    stalling the first chunk of the turn."""
+    tr = _ensure_moonshine()
+    st = tr.create_stream()  # constructs the global Silero on first use, so reset after it
+    if env_bool("ZOE_MOONSHINE_VAD_RESET", default=True) and _moonshine_infer_lock.acquire(timeout=0.25):
+        try:
+            reset_silero_state(transcriber_lib(tr))
+        finally:
+            _moonshine_infer_lock.release()
+    st.start()
+    return st
+
+
 async def _run_moonshine(wav_path: str) -> str:
     from moonshine_voice.utils import load_wav_file
 
@@ -6468,14 +6485,8 @@ async def voice_stt_stream_chunk(payload: dict, caller: dict = Depends(_require_
     if not pcm:
         raise HTTPException(status_code=400, detail="empty chunk")
 
-    def _make():
-        tr = _ensure_moonshine()
-        st = tr.create_stream()
-        st.start()
-        return st
-
     sess = await asyncio.get_running_loop().run_in_executor(
-        None, _stt_stream.get_or_open, sid, seq, _make, _moonshine_infer_lock)
+        None, _stt_stream.get_or_open, sid, seq, _open_moonshine_stream, _moonshine_infer_lock)
     if sess is None:
         raise HTTPException(status_code=429, detail="stt stream refused (unknown stream or too many sessions)")
     return {"ok": sess.feed(seq, pcm), "samples": sess.samples_fed}

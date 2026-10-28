@@ -170,3 +170,53 @@ def test_non_empty_result_does_not_log_stt_empty(monkeypatch, tmp_path, caplog):
     caplog.set_level("INFO")
     assert _run_with(monkeypatch, tmp_path, ["turn on the lights"]) == "Turn on the lights"
     assert _empty_logs(caplog) == []
+
+
+# --- under-speech streaming sessions start from the same clean VAD state ----------------------------------------
+
+class _FakeStreamTr:
+    _lib = object()
+
+    def __init__(self, events):
+        self.events = events
+
+    def create_stream(self):
+        self.events.append("create")
+        ev = self.events
+        return types.SimpleNamespace(start=lambda: ev.append("start"))
+
+
+def _stream_setup(monkeypatch, flag="1"):
+    from routers import voice_tts
+
+    events = []
+    monkeypatch.setattr(voice_tts, "_ensure_moonshine", lambda: _FakeStreamTr(events))
+    monkeypatch.setattr(voice_tts, "reset_silero_state", lambda lib: events.append("reset") or True)
+    monkeypatch.setenv("ZOE_MOONSHINE_VAD_RESET", flag)
+    return voice_tts, events
+
+
+def test_stream_open_resets_after_create_and_before_start(monkeypatch):
+    vt, events = _stream_setup(monkeypatch)
+    vt._open_moonshine_stream()
+    assert events == ["create", "reset", "start"]
+    assert vt._moonshine_infer_lock.acquire(timeout=1), "infer lock must be released after the reset"
+    vt._moonshine_infer_lock.release()
+
+
+def test_stream_open_flag_off_does_not_reset(monkeypatch):
+    vt, events = _stream_setup(monkeypatch, flag="0")
+    vt._open_moonshine_stream()
+    assert events == ["create", "start"]
+
+
+def test_stream_open_skips_reset_instead_of_stalling_behind_a_held_infer_lock(monkeypatch):
+    vt, events = _stream_setup(monkeypatch)
+    assert vt._moonshine_infer_lock.acquire(timeout=1)
+    try:
+        t0 = __import__("time").monotonic()
+        vt._open_moonshine_stream()
+        assert __import__("time").monotonic() - t0 < 2.0
+    finally:
+        vt._moonshine_infer_lock.release()
+    assert events == ["create", "start"]
