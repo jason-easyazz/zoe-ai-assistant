@@ -183,7 +183,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--service-dir", required=True)
     ap.add_argument("--user", default="jason", help="the panel's likely speaker (member id)")
-    ap.add_argument("--wait-s", type=float, default=None, help="quiet window to wait (default: slot guard quiet_s + 2)")
+    ap.add_argument("--wait-s", type=float, default=None, help="wait before the cold first turn (default: 47 s fixed, independent of the slot guard quiet window)")
     ap.add_argument("--gap-s", type=float, default=1.5, help="wake word -> end of utterance gap before the turn")
     args = ap.parse_args()
     if os.environ.get("ZOE_PERF") != "1":   # like every scripts/perf harness: opt-in, it sends real brain turns
