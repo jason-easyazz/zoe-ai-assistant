@@ -156,7 +156,7 @@ livekit==1.1.20
 livekit-protocol==1.1.27
 # aiortc 1.15.0 caps av<18, so av 18 (>=3.11) is BLOCKED by aiortc, not by Python.
 aiortc==1.15.0
-av==17.1.0
+av==19.0.2
 
 # ── A2A federation + skill discovery + web search ─────────────────────────
 ddgs==9.16.0

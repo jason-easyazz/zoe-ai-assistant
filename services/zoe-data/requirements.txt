@@ -225,7 +225,7 @@ livekit-protocol==1.1.8
 # 16k mono s16 (the exact config that file uses) is BIT-IDENTICAL between 16.1.0
 # and 17.1.0, and deterministic across runs. Both ship cp310 aarch64 wheels.
 aiortc==1.15.0
-av==17.1.0
+av==19.0.2
 # A2A federation + skill discovery + web search
 # ddgs floor raised to the version verified on the box 2026-09-26 (9.16.0); the
 # 6.x/7.x line predates the current DuckDuckGo challenge handling.
