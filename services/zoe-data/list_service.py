@@ -155,7 +155,13 @@ def normalize_item_text(raw: str) -> str:
     return " ".join(words).strip(" ,;:") or text
 
 
+#: "-oes" plurals whose singular drops only the "s" ("tomatoes" -> "tomato"; "shoes" is not one of them)
+_OES_STEMS = frozenset({"tomato", "potato", "mango", "burrito", "avocado"})
+
+
 def _singular(word: str) -> str:
+    if word.endswith("oes") and word[:-2] in _OES_STEMS:
+        return word[:-2]
     if len(word) > 4 and word.endswith("ies"):
         return word[:-3] + "y"
     if len(word) > 4 and word.endswith(("ches", "shes", "xes", "sses", "zes")):

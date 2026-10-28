@@ -389,3 +389,10 @@ async def test_direct_path_reports_nothing_for_a_replayed_add(monkeypatch):
         intent_router.Intent("list_add", {"item": "milk", "list_type": "shopping"}), "jason")
     assert out == "Added milk to your shopping list."
     assert seen == [] and db.inserts == [] and not any("list_item_audit" in line for line in audited)
+
+
+def test_oes_plurals_match_their_singular():
+    for plural, single in (("tomatoes", "tomato"), ("Potatoes", "potato"), ("mangoes", "mango")):
+        assert list_service.item_key(plural) == list_service.item_key(single)
+        assert list_service.find_matching_item([{"text": single}], plural) is not None
+    assert list_service.item_key("shoes") == "shoe", "only the known -oes foods lose the 'es'"
