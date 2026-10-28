@@ -7961,6 +7961,26 @@
         ],
         "typed_env": true
       },
+      "ZOE_WARM_SPEAKER_MAX_AGE_S": {
+        "defaults": [
+          "'43200'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/warm_speaker.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_WARM_SPEAKER_STATE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/warm_speaker.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_WEATHER_CACHE_TTL_S": {
         "defaults": [
           "'600'"
