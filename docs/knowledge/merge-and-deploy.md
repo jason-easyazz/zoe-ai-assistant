@@ -227,7 +227,10 @@ The rule itself lives in [scripts/AGENTS.md](../../scripts/AGENTS.md) ("Brain-wi
 - agent test runs pause while the night window or `zoe-backup.service` is active;
 - any work at all pauses while `zoe-night-window.service` is active;
 - unchanged: nothing may hold `/tmp/zoe-brain-window.lock` or be a live lander past the window's 20-min busy grace
-  (gone by 03:10).
+  (gone by 03:10). Since 2026-10-27 the lander enforces this itself against `night_busy.sh deadline` (the next 02:40):
+  gate first, every wait deadline-bounded, no probe start with under 25 min left, lock held only for the probe, post-probe
+  CI wait bounded. The window waits for a held lock instead of refusing, and retries at 03:05 / 03:15 (see
+  [night-window.md](night-window.md) section 16).
 
 The operator-local gate that landers consult is `~/.zoe/agent-tools/night_busy.sh voice|deploy|test` (exit 0 =
 pause, 1 = may run). This section keeps the why.
