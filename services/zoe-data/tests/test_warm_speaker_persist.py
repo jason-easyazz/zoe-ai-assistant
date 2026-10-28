@@ -25,6 +25,8 @@ def state(monkeypatch, tmp_path):
     p = tmp_path / "warm-speaker.json"
     monkeypatch.setenv("ZOE_WARM_SPEAKER_STATE", str(p))
     monkeypatch.delenv("ZOE_WARM_SPEAKER_MAX_AGE_S", raising=False)
+    monkeypatch.setattr(zfc, "_LAST_TURN", dict(zfc._LAST_TURN))     # restored on teardown: _restart() clears these
+    monkeypatch.setattr(zfc, "_SESSION_UID", dict(zfc._SESSION_UID))
     ws.reset()
     yield p
     ws.reset()
@@ -214,3 +216,69 @@ def test_negative_control_an_expired_memo_is_the_guest_warm(monkeypatch, state, 
     ws.note("panel-1", "zed_uid", now=T0 - 13 * 3600, sync=True)               # 13 h old
     _restart()
     assert _prewarm_member(monkeypatch, "panel-1") == ""
+
+
+# -- review fixes: retry after a failed write, no I/O under the caller's lock, private from the first byte, typed env --------
+
+def test_a_failed_write_is_retried_on_the_next_turn(state, monkeypatch):
+    real_replace = ws.os.replace
+    monkeypatch.setattr(ws.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    ws.note("p1", "casey", now=T0, sync=True)
+    assert not state.exists() and "p1" not in ws._last_written, "a failed save is not recorded as written"
+    monkeypatch.setattr(ws.os, "replace", real_replace)
+    ws.note("p1", "casey", now=T0 + 5, sync=True)             # same member seconds later: still saved, because nothing was
+    assert json.loads(state.read_text())["p1"][0] == "casey"
+
+
+def test_note_does_not_wait_for_a_slow_save(state, monkeypatch):
+    import threading
+    import time
+
+    started, release = threading.Event(), threading.Event()
+    real_replace = ws.os.replace
+
+    def slow_replace(*a, **k):
+        started.set()
+        release.wait(5)
+        return real_replace(*a, **k)
+
+    monkeypatch.setattr(ws.os, "replace", slow_replace)
+    ws.note("p1", "casey", now=T0)                            # threaded save, now stuck mid-write
+    assert started.wait(5)
+    t0 = time.monotonic()
+    ws.note("p2", "dana", now=T0)                             # must not block behind the disk write
+    assert ws.get("p2", now=T0 + 1) == "dana"
+    assert time.monotonic() - t0 < 1.0
+    release.set()
+    for t in [t for t in threading.enumerate() if t.name == "warm-speaker-save"]:
+        t.join(5)
+
+
+def test_the_temp_file_is_private_before_any_byte_is_written(state, monkeypatch):
+    import os
+
+    old = os.umask(0o022)
+    modes = []
+    real_replace = ws.os.replace
+    try:
+        monkeypatch.setattr(ws.os, "replace", lambda src, dst: modes.append(os.stat(src).st_mode & 0o777) or real_replace(src, dst))
+        real_open = ws.os.open
+        opened = []
+        monkeypatch.setattr(ws.os, "open", lambda path, flags, mode=0o777: opened.append(mode) or real_open(path, flags, mode))
+        ws.note("p1", "casey", now=T0, sync=True)
+    finally:
+        os.umask(old)
+    assert opened == [0o600], "created with 0600 up front, not chmod-ed after the write"
+    assert modes == [0o600]
+
+
+def test_a_bad_age_setting_warns_and_uses_the_cap(monkeypatch, caplog):
+    monkeypatch.setenv("ZOE_WARM_SPEAKER_MAX_AGE_S", "twelve")
+    caplog.set_level("WARNING")
+    import typed_env
+
+    monkeypatch.setattr(typed_env, "_warned", set())
+    assert ws.max_age_s() == 43200.0
+    assert "ZOE_WARM_SPEAKER_MAX_AGE_S" in caplog.text, "the typo is reported, not silent"
+    monkeypatch.setenv("ZOE_WARM_SPEAKER_MAX_AGE_S", "3600")
+    assert ws.max_age_s() == 3600.0

@@ -186,3 +186,27 @@ def test_an_undelivered_alert_logs_why(monkeypatch, caplog, tmp_path):
     msgs = " ".join(r.getMessage() for r in caplog.records)
     assert "not delivered" in msgs and "timeout" in msgs
     assert "SECRET-tok" not in msgs and "123" not in msgs.replace("2026", "")
+
+
+def test_the_ops_send_failure_reason_does_not_redirect_the_process_stderr(monkeypatch):
+    """The sender reports its failure through a callback: sys.stderr is never swapped, so unrelated output is not swallowed."""
+    import sys
+    import types
+
+    seen = {}
+
+    def fake_telegram(text, report=None):
+        seen["stderr_untouched"] = sys.stderr is real_stderr
+        report("crash-watch: telegram send failed: HTTP Error 403: Forbidden")
+        return False
+
+    real_stderr = sys.stderr
+    fake = types.SimpleNamespace(_telegram=fake_telegram)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(kma.importlib.util, "spec_from_file_location",
+                        lambda *a, **k: types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda m: None)))
+    monkeypatch.setattr(kma.importlib.util, "module_from_spec", lambda spec: fake)
+    monkeypatch.setattr(kma, "_last_failure", "")
+    assert kma._ops_send("x") is False
+    assert seen["stderr_untouched"] is True
+    assert kma._last_failure == "http_403"

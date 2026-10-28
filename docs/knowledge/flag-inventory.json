@@ -7969,7 +7969,7 @@
         "readers": [
           "services/zoe-data/warm_speaker.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_WARM_SPEAKER_STATE": {
         "defaults": [

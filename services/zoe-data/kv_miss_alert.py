@@ -12,9 +12,7 @@ daemon thread). The day is marked alerted only after a successful send; a failed
 from __future__ import annotations
 
 import datetime
-import contextlib
 import importlib.util
-import io
 import json
 import logging
 import os
@@ -79,11 +77,10 @@ def _ops_send(text: str) -> bool:
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(mod)
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):   # the sender explains a failure on stderr (no token / no recipient / HTTP error)
-        ok = bool(mod._telegram(text))
+    lines: "list[str]" = []   # the sender reports a failure (no token / no recipient / HTTP error) through this, not the process-wide stderr
+    ok = bool(mod._telegram(text, report=lines.append))
     global _last_failure
-    _last_failure = "" if ok else _redact((err.getvalue().strip().splitlines() or ["no reason given"])[-1])
+    _last_failure = "" if ok else _redact((("\n".join(lines)).strip().splitlines() or ["no reason given"])[-1])
     return ok
 
 

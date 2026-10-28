@@ -27,14 +27,15 @@ from pathlib import Path
 from typing import Optional
 
 import user_filters
-from typed_env import env_str
+from typed_env import env_float, env_str
 
 logger = logging.getLogger(__name__)
 
 _MAX_PANELS = 64
 HARD_MAX_AGE_S = 43200.0   # 12 h: an upper bound no setting lifts
 _REWRITE_AFTER_S = 600.0   # an unchanged entry is not rewritten more often than this (a hot panel must not write every turn)
-_lock = threading.RLock()
+_lock = threading.RLock()      # guards the in-memory dicts only; never held across disk I/O
+_io_lock = threading.Lock()    # serialises the file writes
 _mem: "dict[str, tuple[str, float]]" = {}
 _loaded = False
 _last_written: "dict[str, tuple[str, float]]" = {}
@@ -46,11 +47,8 @@ def _nobody(member: str) -> bool:
 
 
 def max_age_s() -> float:
-    try:
-        v = float(os.environ.get("ZOE_WARM_SPEAKER_MAX_AGE_S", str(HARD_MAX_AGE_S)))
-        return min(HARD_MAX_AGE_S, max(0.0, v)) if math.isfinite(v) else HARD_MAX_AGE_S   # the env can shorten the cap, never lift it
-    except (TypeError, ValueError):
-        return HARD_MAX_AGE_S
+    v = env_float("ZOE_WARM_SPEAKER_MAX_AGE_S", HARD_MAX_AGE_S)   # a bad value warns once and falls back to the cap
+    return min(HARD_MAX_AGE_S, max(0.0, v)) if math.isfinite(v) else HARD_MAX_AGE_S   # the env can shorten the cap, never lift it
 
 
 def _path() -> "Optional[Path]":
@@ -86,32 +84,38 @@ def _ensure_loaded() -> None:
             for panel, ent in (raw or {}).items():
                 if isinstance(ent, list) and len(ent) == 2 and isinstance(ent[0], str) and not _nobody(ent[0]) and math.isfinite(float(ent[1])):
                     _mem.setdefault(str(panel), (ent[0], float(ent[1])))   # a newer in-process note wins
+                    _last_written.setdefault(str(panel), (ent[0], float(ent[1])))   # what the FILE holds; an unsaved note is not "written"
         except FileNotFoundError:
             pass
         except Exception:  # noqa: BLE001 - a corrupt file is no memo
             logger.warning("warm_speaker: state unreadable; starting empty", exc_info=True)
-        _last_written.update(_mem)
 
 
 def _persist() -> None:
-    """Write the current memo atomically."""
+    """Write the current memo atomically. Disk work holds only ``_io_lock`` (writers serialise, each snapshotting the
+    latest memo), never ``_lock``, so ``note()`` on the request path does not wait on storage."""
     p = _path()
     if p is None:
         return
     try:
         _ensure_loaded()   # on the save thread: merges what the file holds under whatever was noted before the first load
-        with _lock:
-            now = time.time()
-            for k in [k for k, (_m, t) in _mem.items() if now - t > max_age_s()]:
-                _mem.pop(k, None)                                   # an expired entry does not stay on disk
-            snap = {k: [m, t] for k, (m, t) in _mem.items()}
-            _last_written.clear()
-            _last_written.update(_mem)
-            p.parent.mkdir(parents=True, exist_ok=True)
+        with _io_lock:
+            with _lock:
+                now = time.time()
+                for k in [k for k, (_m, t) in _mem.items() if now - t > max_age_s()]:
+                    _mem.pop(k, None)                               # an expired entry does not stay on disk
+                snap = {k: [m, t] for k, (m, t) in _mem.items()}
+                written = dict(_mem)
+            p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             tmp = p.with_suffix(".tmp")
-            tmp.write_text(json.dumps(snap))
-            os.chmod(tmp, 0o600)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # private from the first byte, whatever the umask
+            with os.fdopen(fd, "w") as fh:
+                os.fchmod(fh.fileno(), 0o600)                       # a leftover temp file from a crash keeps its old mode otherwise
+                fh.write(json.dumps(snap))
             os.replace(tmp, p)
+            with _lock:
+                _last_written.clear()                               # only a SUCCESSFUL write counts: a failed one is retried next turn
+                _last_written.update(written)
     except Exception:  # noqa: BLE001
         logger.warning("warm_speaker: state not saved", exc_info=True)
 

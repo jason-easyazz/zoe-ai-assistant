@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-28T00:00:00Z
+timestamp: 2026-10-29T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-28T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-28. The table body is deterministic (sorted, no
+Last generated: 2026-10-29. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -797,7 +797,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_WARN_MS` | `'1500'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_WARN_RATIO` | `'1.5'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_WAKE_ACK_PHRASE` | `-` | yes | yes | `services/zoe-data/routers/voice_tts.py` |
-| `ZOE_WARM_SPEAKER_MAX_AGE_S` | `dynamic` | no | NO | `services/zoe-data/warm_speaker.py` |
+| `ZOE_WARM_SPEAKER_MAX_AGE_S` | `dynamic` | yes | NO | `services/zoe-data/warm_speaker.py` |
 | `ZOE_WARM_SPEAKER_STATE` | `-` | yes | NO | `services/zoe-data/warm_speaker.py` |
 | `ZOE_WEATHER_CACHE_TTL_S` | `'600'` | no | NO | `services/zoe-data/routers/weather.py` |
 | `ZOE_WEB_BROWSE_MAX_HTML` | `1500000` | yes | NO | `services/zoe-data/zoe_agent.py` |
