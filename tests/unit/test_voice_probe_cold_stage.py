@@ -32,6 +32,24 @@ def _load(name: str, rel: str):
 vrp = _load("vrp_cold", "scripts/maintenance/voice_regression_probe.py")
 mcf = _load("mcf_cold", "scripts/perf/measure_cold_first_turn.py")
 
+#: env keys the code under test writes DIRECTLY (os.environ[...] =), which monkeypatch cannot restore
+_DIRECT_ENV_WRITES = ("ZOE_FLUE_STREAM_ENABLED", "ZOE_TRAFFIC_CLASS")
+
+
+@pytest.fixture(autouse=True)
+def _restore_direct_env_writes():
+    """measure() / main() set these with os.environ directly; snapshot and restore them around EVERY test so a later
+    test in the lane never inherits streaming-on or a probe traffic class (test-order independence)."""
+    saved = {k: os.environ.get(k) for k in _DIRECT_ENV_WRITES}
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
 HIT = {"status": "ok", "warm": "warmed", "first_prompt_n": 120, "first_cache_n": 3400, "cache_frac": 0.966,
        "ttft_ms": 1300.0}
 MISS = {**HIT, "first_prompt_n": 3500, "first_cache_n": 0, "cache_frac": 0.0, "ttft_ms": 6100.0}
@@ -187,7 +205,9 @@ def _fake_service(monkeypatch, *, prompt_n, cache_n, chunks=("hello",), delay=0.
     for name, mod in (("brain_dispatch", bd), ("brain_slot_guard", sg), ("zoe_flue_client", zf), ("db_pool", dp),
                       ("manner_block", mb)):
         monkeypatch.setitem(sys.modules, name, mod)
-    monkeypatch.delenv("ZOE_FLUE_STREAM_ENABLED", raising=False)
+    # NOT monkeypatch.delenv: a second _fake_service call in one test would make monkeypatch record the stage's own "1" as
+    # the original and restore it at teardown, after the autouse restore below. The autouse fixture owns this key.
+    os.environ.pop("ZOE_FLUE_STREAM_ENABLED", None)
     return order
 
 
@@ -299,3 +319,9 @@ def test_the_quiet_gate_keeps_the_landing_exemption(monkeypatch):
     monkeypatch.delenv("ZOE_HARNESS_LANDING")
     assert not hq.check("measure_cold_first_turn", now=noon, panel=lambda: True).allowed
     assert mcf._quiet_gate.__code__.co_names.count("check") == 1   # the stage asks THIS gate, not a copy
+
+
+def test_zz_no_direct_env_write_leaks_past_a_measurement():
+    """Runs after the measurement tests in this module: none of their direct env writes may still be set."""
+    for k in _DIRECT_ENV_WRITES:
+        assert os.environ.get(k) in (None, ""), f"{k} leaked out of a measurement test"
