@@ -2907,9 +2907,9 @@ def _moonshine_empty_reason(lines: list, audio, sample_rate: int) -> str:
     """Why Moonshine produced nothing, as ``reason=... key=value`` for the log.
 
     ``no_segments``: the C-side VAD found no speech (zero lines) - the signature
-    of the fast (~0.1 s) empty: Moonshine's batch path shares ONE process-global
-    Silero VAD whose recurrent state is never reset between clips, so a borderline
-    clip decodes differently depending on the previous audio. ``blank_lines``: lines
+    of the fast (~0.1 s) empty. Leading hypothesis (not proven by a reset experiment):
+    Moonshine's batch path shares ONE process-global Silero VAD with no reset
+    between clips, so a borderline clip decodes differently by history. ``blank_lines``: lines
     came back but all blank (the decoder ran). ``audio_active_s`` (seconds above a
     low amplitude floor) separates "silence" from "speech the VAD missed". Numbers
     only - never the audio or any text."""
@@ -2923,8 +2923,12 @@ def _moonshine_empty_reason(lines: list, audio, sample_rate: int) -> str:
         peak = float(a.max()) if a.size else 0.0
     except Exception:
         dur = active = peak = -1.0
-    reason = "no_segments" if not lines else "blank_lines"
-    return f"reason={reason} lines={len(lines)} audio_s={dur:.2f} active_s={active:.2f} peak={peak:.3f}"
+    try:
+        n_lines = len(lines)
+    except Exception:
+        n_lines = -1
+    reason = "no_segments" if n_lines == 0 else "blank_lines"
+    return f"reason={reason} lines={n_lines} audio_s={dur:.2f} active_s={active:.2f} peak={peak:.3f}"
 
 
 async def _run_moonshine(wav_path: str) -> str:
