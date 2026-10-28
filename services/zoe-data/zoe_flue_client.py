@@ -2250,6 +2250,9 @@ async def warm_kv_prefix(member: str = "") -> str:
         # Re-check just before taking the guard, so a warm never queues behind / replaces a live conversation.
         if brain_slot_guard.is_hot():
             return "skipped:hot", -1, -1
+        # Preparation that swallowed its cancellation and returned late must not go on to take the guard and submit.
+        if asyncio.get_running_loop().time() - t0 >= _KV_WARM_MAX_S:
+            return "failed:timeout", -1, -1
         brain_slot_guard.turn_started()
         acquired = True
         starts_after_mine = brain_slot_guard.starts()   # any later start is a REAL turn, even one already finished
