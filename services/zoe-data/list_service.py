@@ -190,6 +190,10 @@ _COMPOUND_ITEMS = frozenset({
     "chips and dip", "oil and vinegar", "bacon and eggs", "ham and cheese", "salt and vinegar", "sweet and sour",
 })
 
+_COMPOUND_RE = re.compile(
+    r"(?<![\w'])(?:" + "|".join(re.escape(c).replace(r"\ ", r"\s+") for c in sorted(_COMPOUND_ITEMS, key=len, reverse=True)) + r")(?![\w'])",
+    re.IGNORECASE)
+
 
 def split_items(text: str) -> list:
     """The separate items in one spoken add ("eggs and milk", "eggs, milk and bread") - commas and " and " split; a known
@@ -199,9 +203,17 @@ def split_items(text: str) -> list:
         return []
     if flat.lower() in _COMPOUND_ITEMS:
         return [flat]
+    # Protect every known compound span ("eggs, mac and cheese" keeps "mac and cheese" whole) before the delimiters split.
+    spans: list = []
+
+    def _hold(m):
+        spans.append(m.group(0))
+        return f"\x00{len(spans) - 1}\x00"
+
+    protected = _COMPOUND_RE.sub(_hold, flat)
     out = []
-    for part in re.split(r",\s*(?:and\s+)?|\s+and\s+", flat, flags=re.IGNORECASE):
-        part = normalize_item_text(part)
+    for part in re.split(r",\s*(?:and\s+)?|\s+and\s+", protected, flags=re.IGNORECASE):
+        part = normalize_item_text(re.sub(r"\x00(\d+)\x00", lambda m: spans[int(m.group(1))], part))
         if part and part.lower() not in {"and", "also", "some"}:
             out.append(part)
     return out or [flat]

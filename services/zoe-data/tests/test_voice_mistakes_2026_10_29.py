@@ -254,6 +254,15 @@ def test_compound_foods_stay_one_item_and_lists_split():
     assert list_service.split_items("noodles? Noodles") == ["noodles"]
 
 
+def test_a_known_compound_stays_whole_beside_other_items():
+    """Contract (services/zoe-data/AGENTS.md): the exemption is per SPAN, not per whole utterance."""
+    assert list_service.split_items("eggs, mac and cheese") == ["eggs", "mac and cheese"]
+    assert list_service.split_items("Mac and Cheese, bread") == ["Mac and Cheese", "bread"]
+    assert list_service.split_items("milk, eggs, and fish and chips") == ["milk", "eggs", "fish and chips"]
+    assert list_service.split_items("salt and pepper and eggs") == ["salt and pepper", "eggs"]
+    assert list_service.split_items("macaroni and cheesecake") == ["macaroni", "cheesecake"], "a compound is a whole-word span"
+
+
 @pytest.mark.asyncio
 async def test_direct_add_path_reports_already_there_without_a_second_row():
     db = _ListDb(open_items=[{"id": "x1", "text": "Milk"}])
