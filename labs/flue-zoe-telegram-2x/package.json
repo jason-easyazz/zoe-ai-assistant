@@ -19,7 +19,7 @@
   "dependencies": {
     "@flue/runtime": "2.3.0",
     "grammy": "1.46.0",
-    "hono": "^4.13.13",
+    "hono": "^4.13.14",
     "valibot": "^1.1.0"
   },
   "devDependencies": {
