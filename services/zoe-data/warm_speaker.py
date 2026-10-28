@@ -35,6 +35,7 @@ _MAX_PANELS = 64
 HARD_MAX_AGE_S = 43200.0   # 12 h: an upper bound no setting lifts
 _REWRITE_AFTER_S = 600.0   # an unchanged entry is not rewritten more often than this (a hot panel must not write every turn)
 _lock = threading.RLock()      # guards the in-memory dicts only; never held across disk I/O
+_load_lock = threading.Lock()  # serialises the one lazy file read
 _io_lock = threading.Lock()    # serialises the file writes
 _mem: "dict[str, tuple[str, float]]" = {}
 _loaded = False
@@ -48,7 +49,10 @@ def _nobody(member: str) -> bool:
 
 def max_age_s() -> float:
     v = env_float("ZOE_WARM_SPEAKER_MAX_AGE_S", HARD_MAX_AGE_S)   # a bad value warns once and falls back to the cap
-    return min(HARD_MAX_AGE_S, max(0.0, v)) if math.isfinite(v) else HARD_MAX_AGE_S   # the env can shorten the cap, never lift it
+    if not math.isfinite(v):
+        logger.warning("warm_speaker: ZOE_WARM_SPEAKER_MAX_AGE_S is not finite; using the %.0f s cap", HARD_MAX_AGE_S)
+        return HARD_MAX_AGE_S
+    return min(HARD_MAX_AGE_S, max(0.0, v))   # the env can shorten the cap, never lift it
 
 
 def _path() -> "Optional[Path]":
@@ -71,24 +75,28 @@ def reset() -> None:
 
 
 def _ensure_loaded() -> None:
+    """One lazy read of the file. The read happens under ``_load_lock`` only (never ``_lock``), so ``note()`` never waits on it."""
     global _loaded
-    with _lock:
+    with _load_lock:
         if _loaded:
             return
-        _loaded = True
         p = _path()
-        if p is None:
-            return
-        try:
-            raw = json.loads(p.read_text())
-            for panel, ent in (raw or {}).items():
-                if isinstance(ent, list) and len(ent) == 2 and isinstance(ent[0], str) and not _nobody(ent[0]) and math.isfinite(float(ent[1])):
-                    _mem.setdefault(str(panel), (ent[0], float(ent[1])))   # a newer in-process note wins
-                    _last_written.setdefault(str(panel), (ent[0], float(ent[1])))   # what the FILE holds; an unsaved note is not "written"
-        except FileNotFoundError:
-            pass
-        except Exception:  # noqa: BLE001 - a corrupt file is no memo
-            logger.warning("warm_speaker: state unreadable; starting empty", exc_info=True)
+        loaded: "dict[str, tuple[str, float]]" = {}
+        if p is not None:
+            try:
+                raw = json.loads(p.read_text())
+                for panel, ent in (raw or {}).items():
+                    if isinstance(ent, list) and len(ent) == 2 and isinstance(ent[0], str) and not _nobody(ent[0]) and math.isfinite(float(ent[1])):
+                        loaded[str(panel)] = (ent[0], float(ent[1]))
+            except FileNotFoundError:
+                pass
+            except Exception:  # noqa: BLE001 - a corrupt file is no memo (not re-read every turn)
+                logger.warning("warm_speaker: state unreadable; starting empty", exc_info=True)
+        with _lock:
+            for panel, ent in loaded.items():
+                _mem.setdefault(panel, ent)            # a newer in-process note wins
+                _last_written.setdefault(panel, ent)   # what the FILE holds; an unsaved note is not "written"
+            _loaded = True
 
 
 def _persist() -> None:
@@ -97,6 +105,7 @@ def _persist() -> None:
     p = _path()
     if p is None:
         return
+    written: "dict[str, tuple[str, float]]" = {}
     try:
         _ensure_loaded()   # on the save thread: merges what the file holds under whatever was noted before the first load
         with _io_lock:
@@ -117,6 +126,10 @@ def _persist() -> None:
                 _last_written.clear()                               # only a SUCCESSFUL write counts: a failed one is retried next turn
                 _last_written.update(written)
     except Exception:  # noqa: BLE001
+        with _lock:
+            for k, v in written.items():
+                if _last_written.get(k) != v:
+                    _last_written.pop(k, None)   # this snapshot never reached disk: the next turn for it must save again
         logger.warning("warm_speaker: state not saved", exc_info=True)
 
 

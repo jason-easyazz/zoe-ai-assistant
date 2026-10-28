@@ -282,3 +282,54 @@ def test_a_bad_age_setting_warns_and_uses_the_cap(monkeypatch, caplog):
     assert "ZOE_WARM_SPEAKER_MAX_AGE_S" in caplog.text, "the typo is reported, not silent"
     monkeypatch.setenv("ZOE_WARM_SPEAKER_MAX_AGE_S", "3600")
     assert ws.max_age_s() == 3600.0
+
+
+def test_note_does_not_wait_for_a_slow_first_load(state, monkeypatch):
+    import pathlib
+    import threading
+    import time
+
+    state.write_text(json.dumps({"p9": ["dana", T0]}))
+    started, release = threading.Event(), threading.Event()
+    real_read = pathlib.Path.read_text
+
+    def slow_read(self, *a, **k):
+        if self == state:
+            started.set()
+            release.wait(5)
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", slow_read)
+    monkeypatch.setattr(ws, "_save", lambda sync: None)
+    t = threading.Thread(target=ws.get, args=("p9",))
+    t.start()                                                 # the lazy load, stuck mid-read
+    assert started.wait(5)
+    t0 = time.monotonic()
+    ws.note("p1", "casey", now=T0)
+    assert time.monotonic() - t0 < 1.0, "note() waited for the file read"
+    release.set()
+    t.join(5)
+    assert ws.get("p9", now=T0 + 1) == "dana" and ws.get("p1", now=T0 + 1) == "casey"
+
+
+def test_a_failed_refresh_after_a_good_save_is_retried(state, monkeypatch):
+    ws.note("p1", "casey", now=T0, sync=True)                 # T0 reached disk
+    real_replace = ws.os.replace
+    real_save = ws._save
+    monkeypatch.setattr(ws, "_save", lambda sync: None)
+    ws.note("p1", "casey", now=T0 + 100)                      # a queued refresh: memory has T0+100, disk still T0
+    monkeypatch.setattr(ws.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    ws._persist()                                             # ... and that queued write fails
+    monkeypatch.setattr(ws.os, "replace", real_replace)
+    monkeypatch.setattr(ws, "_save", real_save)
+    ws.note("p1", "casey", now=T0 + 110, sync=True)           # <600 s after the last GOOD write, but nothing newer is on disk: save
+    assert json.loads(state.read_text())["p1"][1] == T0 + 110
+
+
+def test_a_non_finite_age_setting_warns_and_uses_the_cap(monkeypatch, caplog):
+    caplog.set_level("WARNING")
+    for bad in ("nan", "inf"):
+        monkeypatch.setenv("ZOE_WARM_SPEAKER_MAX_AGE_S", bad)
+        caplog.clear()
+        assert ws.max_age_s() == 43200.0
+        assert "not finite" in caplog.text
