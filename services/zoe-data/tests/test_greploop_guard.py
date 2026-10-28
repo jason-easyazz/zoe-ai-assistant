@@ -115,6 +115,17 @@ def test_run_greploop_wrapper_switches_to_matching_pr_worktree(tmp_path):
     assert "switched-to-pr-worktree --pr 66 --once" in proc.stdout
 
 
+def _wrapper_in_fake_root(tmp_path):
+    """Copy the wrapper under a throwaway repo root: it sources ``<root>/.env`` (and ``services/zoe-data/.env``), so a test can
+    supply an env file there without touching the real checkout. ``~/.hermes/.env`` is no longer a source (Hermes retired, A6)."""
+    import shutil
+
+    wrapper = tmp_path / "fake-root" / "scripts" / "maintenance" / "run_greploop_guard.sh"
+    wrapper.parent.mkdir(parents=True)
+    shutil.copy2(greploop_guard.REPO_ROOT / "scripts/maintenance/run_greploop_guard.sh", wrapper)
+    return wrapper
+
+
 def test_run_greploop_wrapper_loads_env_before_pr_head_lookup(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -125,9 +136,8 @@ def test_run_greploop_wrapper_loads_env_before_pr_head_lookup(tmp_path):
     target_script = fake_worktree / "scripts" / "maintenance" / "run_greploop_guard.sh"
     target_script.parent.mkdir(parents=True)
     _write_executable(target_script, "#!/usr/bin/env bash\necho env-loaded\nexit 0\n")
-    hermes_env = fake_home / ".hermes" / ".env"
-    hermes_env.parent.mkdir()
-    hermes_env.write_text("ZOE_GITHUB_REPO=example/env-repo\n")
+    wrapper = _wrapper_in_fake_root(tmp_path)
+    (wrapper.parents[2] / ".env").write_text("ZOE_GITHUB_REPO=example/env-repo\n")
     _write_executable(
         bin_dir / "gh",
         "#!/usr/bin/env bash\n"
@@ -146,8 +156,8 @@ def test_run_greploop_wrapper_loads_env_before_pr_head_lookup(tmp_path):
     env.pop("ZOE_GITHUB_REPO", None)
 
     proc = subprocess.run(
-        [str(greploop_guard.REPO_ROOT / "scripts/maintenance/run_greploop_guard.sh"), "--pr", "66", "--packet-only"],
-        cwd=greploop_guard.REPO_ROOT,
+        [str(wrapper), "--pr", "66", "--packet-only"],
+        cwd=tmp_path,
         env=env,
         text=True,
         capture_output=True,
@@ -156,6 +166,51 @@ def test_run_greploop_wrapper_loads_env_before_pr_head_lookup(tmp_path):
 
     assert proc.returncode == 0
     assert "env-loaded" in proc.stdout
+
+
+def test_run_greploop_wrapper_no_longer_reads_hermes_env(tmp_path):
+    """Hermes is retired (A6): a leftover ``~/.hermes/.env`` must not steer the wrapper's repo any more."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    fake_worktree = tmp_path / "pr-worktree"
+    fake_worktree.mkdir()
+    target_script = fake_worktree / "scripts" / "maintenance" / "run_greploop_guard.sh"
+    target_script.parent.mkdir(parents=True)
+    _write_executable(target_script, "#!/usr/bin/env bash\necho default-repo-used\nexit 0\n")
+    wrapper = _wrapper_in_fake_root(tmp_path)
+    hermes_env = fake_home / ".hermes" / ".env"
+    hermes_env.parent.mkdir()
+    hermes_env.write_text("ZOE_GITHUB_REPO=example/hermes-repo\n")
+    _write_executable(
+        bin_dir / "gh",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" != *'--repo jason-easyazz/zoe-ai-assistant'* ]]; then echo \"$*\" >&2; exit 9; fi\n"
+        "printf 'main\\n'\n",
+    )
+    _write_executable(
+        bin_dir / "git",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *'branch --show-current'* ]]; then printf 'other\\n'; exit 0; fi\n"
+        f"if [[ \"$*\" == *'worktree list --porcelain'* ]]; then printf 'worktree {fake_worktree}\\nbranch refs/heads/main\\n'; exit 0; fi\n"
+        "exit 1\n",
+    )
+    env = {**os.environ, "HOME": str(fake_home), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env.pop("ZOE_GREPLOOP_SKIP_WORKTREE_SWITCH", None)
+    env.pop("ZOE_GITHUB_REPO", None)
+
+    proc = subprocess.run(
+        [str(wrapper), "--pr", "66", "--packet-only"],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "default-repo-used" in proc.stdout
 
 
 def test_run_greploop_wrapper_preserves_caller_repo_over_env_file(tmp_path):
@@ -168,9 +223,8 @@ def test_run_greploop_wrapper_preserves_caller_repo_over_env_file(tmp_path):
     target_script = fake_worktree / "scripts" / "maintenance" / "run_greploop_guard.sh"
     target_script.parent.mkdir(parents=True)
     _write_executable(target_script, "#!/usr/bin/env bash\necho caller-repo-kept\nexit 0\n")
-    hermes_env = fake_home / ".hermes" / ".env"
-    hermes_env.parent.mkdir()
-    hermes_env.write_text("ZOE_GITHUB_REPO=example/env-repo\n")
+    wrapper = _wrapper_in_fake_root(tmp_path)
+    (wrapper.parents[2] / ".env").write_text("ZOE_GITHUB_REPO=example/env-repo\n")
     _write_executable(
         bin_dir / "gh",
         "#!/usr/bin/env bash\n"
@@ -193,8 +247,8 @@ def test_run_greploop_wrapper_preserves_caller_repo_over_env_file(tmp_path):
     env.pop("ZOE_GREPLOOP_SKIP_WORKTREE_SWITCH", None)
 
     proc = subprocess.run(
-        [str(greploop_guard.REPO_ROOT / "scripts/maintenance/run_greploop_guard.sh"), "--pr", "66", "--packet-only"],
-        cwd=greploop_guard.REPO_ROOT,
+        [str(wrapper), "--pr", "66", "--packet-only"],
+        cwd=tmp_path,
         env=env,
         text=True,
         capture_output=True,

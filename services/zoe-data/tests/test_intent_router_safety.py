@@ -20,17 +20,19 @@ def test_detect_intent_miss_logging_mkdir_failure_does_not_abort(monkeypatch):
     assert mkdir_calls
 
 
-def test_detect_intent_miss_logging_home_failure_does_not_abort(monkeypatch):
-    home_calls = []
+def test_detect_intent_miss_logging_append_failure_does_not_abort(monkeypatch):
+    import local_text_logs
 
-    def boom():
-        home_calls.append(True)
-        raise RuntimeError("home directory cannot be resolved")
+    append_calls = []
 
-    monkeypatch.setattr(pathlib.Path, "home", boom)
+    def boom(*args, **kwargs):
+        append_calls.append(True)
+        raise RuntimeError("log directory cannot be resolved")
+
+    monkeypatch.setattr(local_text_logs, "append_line", boom)
 
     assert detect_intent("another unmatched safety regression phrase", log_miss=True) is None
-    assert home_calls
+    assert append_calls
 
 
 @pytest.mark.asyncio
