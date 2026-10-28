@@ -271,3 +271,31 @@ def test_a_failed_adult_lookup_is_an_error_not_an_absent_block(monkeypatch):
     _fake_service(monkeypatch, prompt_n=10, cache_n=900, manner_block_text="", turn_manner=False, adult_raises=True)
     r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
     assert r["status"] == "error" and "adult lookup failed" in r["reason"]
+
+
+def test_a_direct_run_obeys_the_harness_quiet_hours(monkeypatch, capsys):
+    """Run directly (not by the lander) in waking hours, the stage refuses before any brain traffic: it is an
+    unmeasured run (error), and measure() is never called."""
+    monkeypatch.setenv("ZOE_PERF", "1")
+    monkeypatch.setattr(sys, "argv", ["measure_cold_first_turn.py", "--service-dir", "/nonexistent"])
+    called: list = []
+    monkeypatch.setattr(mcf, "measure", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(mcf, "_quiet_gate", lambda: SimpleNamespace(allowed=False, reason="harness quiet hours (07:00-22:00)"))
+    assert mcf.main() == 0
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["status"] == "error" and "quiet hours" in out["reason"]
+    assert called == [], "no eviction / warm / turn may be sent once the gate refuses"
+
+
+def test_the_quiet_gate_keeps_the_landing_exemption(monkeypatch):
+    import datetime as dt
+
+    hq = _load("hq_cold", "scripts/maintenance/harness_quiet.py")
+    monkeypatch.setitem(sys.modules, "harness_quiet", hq)
+    noon = dt.datetime(2026, 10, 28, 12, 0, 0)
+    monkeypatch.delenv("ZOE_HARNESS_FORCE", raising=False)
+    monkeypatch.setenv("ZOE_HARNESS_LANDING", "1")
+    assert hq.check("measure_cold_first_turn", now=noon, panel=lambda: True).allowed
+    monkeypatch.delenv("ZOE_HARNESS_LANDING")
+    assert not hq.check("measure_cold_first_turn", now=noon, panel=lambda: True).allowed
+    assert mcf._quiet_gate.__code__.co_names.count("check") == 1   # the stage asks THIS gate, not a copy

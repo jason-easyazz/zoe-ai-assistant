@@ -1704,6 +1704,13 @@ def _panel_kv_alarm(session_id: str, first_prompt: int, first_cache: int, traffi
             panel_kv_miss_count.labels(kind=kind).inc()
         except Exception:  # noqa: BLE001
             pass
+        if kind == "first":   # a cold first reply is the regression we locked down: tell the owner (1/day)
+            try:
+                import kv_miss_alert
+
+                kv_miss_alert.note_first_miss(first_prompt, first_cache)
+            except Exception:  # noqa: BLE001
+                pass
         return kind
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn
         return None

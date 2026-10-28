@@ -36,6 +36,22 @@ def _is_reply_text(chunk: object) -> bool:
             and not chunk.startswith(("__TOOL__:", "__THINKING__:")))
 
 
+def _quiet_gate():
+    """The shared harness quiet-hours gate (scripts/maintenance/harness_quiet.py), loaded by path (scripts/ is no package)."""
+    import importlib.util
+
+    mod = sys.modules.get("harness_quiet")
+    if mod is None:
+        from pathlib import Path
+
+        spec = importlib.util.spec_from_file_location(
+            "harness_quiet", Path(__file__).resolve().parents[1] / "maintenance" / "harness_quiet.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["harness_quiet"] = mod
+        spec.loader.exec_module(mod)
+    return mod.check("measure_cold_first_turn")
+
+
 def _load_env(service_dir: str) -> None:
     path = os.path.join(service_dir, ".env")
     if not os.path.exists(path):
@@ -170,6 +186,13 @@ def main() -> int:
     args = ap.parse_args()
     if os.environ.get("ZOE_PERF") != "1":   # like every scripts/perf harness: opt-in, it sends real brain turns
         print(json.dumps({"status": "error", "reason": "set ZOE_PERF=1 (this sends real brain requests)"}))
+        return 0
+    # Harness quiet hours (binding, scripts/AGENTS.md): this evicts the household's cached prefix and queues brain work, so
+    # a DIRECT invocation obeys the shared gate too. Its landing exemption (ZOE_HARNESS_LANDING=1, inherited from the lander)
+    # and the owner's ZOE_HARNESS_FORCE=1 keep their meaning; a refusal is an unmeasured run, i.e. an error, never a pass.
+    verdict = _quiet_gate()
+    if not verdict.allowed:
+        print(json.dumps({"status": "error", "reason": f"refused by harness quiet hours: {verdict.reason}"}))
         return 0
     os.environ["ZOE_TRAFFIC_CLASS"] = "probe"
     sys.path.insert(0, args.service_dir)
