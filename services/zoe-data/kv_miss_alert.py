@@ -34,7 +34,8 @@ def _enabled() -> bool:
     if os.environ.get("PYTEST_CURRENT_TEST"):
         # an unrelated test must never write the live state file: only an explicit override OUTSIDE ~/.zoe counts
         override = os.environ.get("ZOE_KV_MISS_ALERT_STATE")
-        if not override or (Path.home() / ".zoe").resolve() in Path(override).resolve().parents:
+        live = (Path.home() / ".zoe").resolve()
+        if not override or Path(override).resolve() == live or live in Path(override).resolve().parents:
             return False
     return os.environ.get("ZOE_PANEL_KV_MISS_ALERT", "1").strip().lower() not in ("0", "off", "false", "no")
 

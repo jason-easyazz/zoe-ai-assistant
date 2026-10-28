@@ -61,6 +61,8 @@ def test_pytest_refuses_a_state_override_inside_the_live_dir(monkeypatch):
 
     monkeypatch.setenv("ZOE_KV_MISS_ALERT_STATE", str(Path.home() / ".zoe" / "kv-miss-alert.json"))
     assert kma._enabled() is False
+    monkeypatch.setenv("ZOE_KV_MISS_ALERT_STATE", str(Path.home() / ".zoe"))              # the directory itself
+    assert kma._enabled() is False
     monkeypatch.delenv("ZOE_KV_MISS_ALERT_STATE")
     assert kma._enabled() is False
 
