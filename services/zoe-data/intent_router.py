@@ -2720,11 +2720,11 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
         item_id = outcome["item_id"]
         # One audit line + one UI notification per item that really went onto the list: an item already there writes nothing.
         for one in outcome["outcomes"]:
-            if one.get("already"):
+            if one["deduped"]:       # already there, or a 10 s replay of the same turn: nothing was inserted, nothing to report
+                if not one.get("already"):
+                    logger.info("list add: duplicate %r within 10s on list %s — replay skipped", one["_text"], list_id)
                 continue
             logger.info("list_item_audit op=add actor=%s list=%s item=%s", actor, one["list_id"], one["item_id"])
-            if one["deduped"]:
-                logger.info("list add: duplicate %r within 10s on list %s — replay skipped", one["_text"], list_id)
             await _notify_lists_ui(
                 "list_updated",
                 {"action": "item_added", "list_id": list_id, "item": {"id": one["item_id"], "text": one["_text"]}, "actor": actor},

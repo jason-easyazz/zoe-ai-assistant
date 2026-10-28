@@ -149,8 +149,8 @@ class _ListDb:
         if sql.lstrip().upper().startswith("SELECT"):
             if "FROM list_items" in sql and "list_id=?" in sql and "created_at" not in sql:
                 return _Cursor(self.open_items)
-            if "created_at" in sql:        # the 10 s replay probe: nothing replayed
-                return _Cursor([])
+            if "created_at" in sql:        # the 10 s replay probe
+                return _Cursor([{"id": "replayed"}] if getattr(self, "replay", False) else [])
             return _Cursor([{"id": "L1"}])
         if "INSERT INTO list_items" in sql:
             self.inserts.append(params)
@@ -326,6 +326,8 @@ def test_already_reply_grammar_for_plurals_and_mixed_adds():
 @pytest.mark.asyncio
 async def test_direct_path_notifies_and_audits_only_items_really_added(monkeypatch):
     import intent_router
+    audited = []
+    monkeypatch.setattr(intent_router.logger, "info", lambda msg, *a, **k: audited.append(msg % a if a else msg))
 
     seen = []
 
@@ -346,4 +348,35 @@ async def test_direct_path_notifies_and_audits_only_items_really_added(monkeypat
     out = await intent_router._execute_list_add_direct(
         intent_router.Intent("list_add", {"item": "milk and eggs", "list_type": "shopping"}), "jason")
     assert seen == ["eggs"]                       # the existing item and the unsplit phrase are never announced
+    assert sum("list_item_audit op=add" in line for line in audited) == 1
     assert out == "Added eggs to your shopping list, and Milk's already on it."
+
+
+@pytest.mark.asyncio
+async def test_direct_path_reports_nothing_for_a_replayed_add(monkeypatch):
+    """A 10 s replay of the same turn still ANSWERS as added (idempotency), but inserted nothing: no audit line, no UI notification."""
+    import database
+    import intent_router
+
+    seen, audited = [], []
+
+    async def fake_notify(kind, data):
+        seen.append(data)
+
+    db = _ListDb()
+    db.replay = True
+
+    class _Ctx:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(database, "get_db_ctx", lambda: _Ctx())
+    monkeypatch.setattr(intent_router, "_notify_lists_ui", fake_notify)
+    monkeypatch.setattr(intent_router.logger, "info", lambda msg, *a, **k: audited.append(msg % a if a else msg))
+    out = await intent_router._execute_list_add_direct(
+        intent_router.Intent("list_add", {"item": "milk", "list_type": "shopping"}), "jason")
+    assert out == "Added milk to your shopping list."
+    assert seen == [] and db.inserts == [] and not any("list_item_audit" in line for line in audited)
