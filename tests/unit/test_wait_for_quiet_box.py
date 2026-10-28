@@ -120,10 +120,11 @@ def test_the_wait_never_runs_past_not_after_when_the_run_starts_in_the_hour_befo
     assert wq.cap_by_clock(2700.0, datetime(2026, 10, 28, 4, 55, 0), "04:50") == (2700.0, "")       # past it already: outside the rule (the lander gate covers a late fire)
 
 
-def test_the_dropin_bounds_the_nightly_replays_start_before_landings_resume():
+def test_the_dropin_waits_out_the_scan_and_relies_on_the_landing_gate():
     body = (REPO / "scripts/setup/systemd/zoe-voice-regression.service.d/20-wait-quiet-box.conf").read_text()
     m = re.search(r"--not-after (\d\d):(\d\d)", "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#")))
-    assert m and int(m.group(1)) * 60 + int(m.group(2)) <= 4 * 60 + 50, "the replay must not start after 04:50: landings resume at 04:55 (night_busy.sh)"
+    assert m is None, "no clock cap: a 04:50 cap ends the wait mid Serena-walk; the landing gate (night_busy.sh voice) pauses landers while this unit runs"
+    assert "night_busy.sh voice" in body and "activating or active" in body, "the drop-in must document the landing gate it relies on"
 
 
 def test_a_clock_capped_wait_ends_at_the_cap_not_one_poll_later():
