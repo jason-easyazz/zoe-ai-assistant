@@ -20,7 +20,7 @@ def sent(monkeypatch, tmp_path):
     out: list = []
     monkeypatch.setattr(kma, "_ops_send", lambda text: out.append(text) or True)
     monkeypatch.setattr(kma, "_alerted_day", "")
-    monkeypatch.setattr(kma, "_inflight_day", "")
+    monkeypatch.setattr(kma, "_inflight", set())
     monkeypatch.setattr(kma, "_attempts", {})
     return out
 
@@ -142,3 +142,13 @@ def test_the_voice_turn_does_no_state_io(sent, monkeypatch, tmp_path):
     target, args = started[0]
     target(*args)                                                       # the worker does it
     assert (tmp_path / "state.json").exists() and len(sent) == 1
+
+
+def test_a_send_that_crosses_midnight_does_not_free_the_next_days_claim(sent, monkeypatch):
+    """Yesterday's send finishes after today's send has claimed today: it must clear only its own day, or a later miss
+    today starts a duplicate alert."""
+    kma._inflight.add(kma._today(DAY2))                              # today's first send is in progress
+    monkeypatch.setattr(kma, "_ops_send", lambda text: False)        # yesterday's send ends (and fails) now
+    kma.note_first_miss(3400, 0, now=DAY1, sync=True)                # yesterday's worker clears ITS day only
+    assert kma._today(DAY2) in kma._inflight, "yesterday's worker must not free today's in-flight claim"
+    assert kma.note_first_miss(3400, 0, now=DAY2 + 60, sync=True) is None   # no second alert for today

@@ -85,7 +85,7 @@ def note_first_miss(first_prompt: int, first_cache: int, *, now: "float | None" 
 
 
 _attempts: dict = {}     # day -> send attempts this process made (the bound holds when the state file cannot be written)
-_inflight_day = ""       # a send in progress: a concurrent miss must not start a second one
+_inflight: set = set()   # days with a send in progress: a concurrent miss that day must not start a second one
 
 
 def _load(path: Path) -> dict:
@@ -107,7 +107,7 @@ def _save(path: Path, st: dict) -> None:
 
 def _record_and_send(first_prompt: int, first_cache: int, now: "float | None",
                      send: "Optional[Callable[[str], bool]]") -> "str | None":
-    global _alerted_day, _inflight_day
+    global _alerted_day
     try:
         day = _today(now)
         path = _state_path()
@@ -119,13 +119,13 @@ def _record_and_send(first_prompt: int, first_cache: int, now: "float | None",
                       "prev_count": int(st.get("count") or 0) if st.get("day") == _yesterday(now) else 0}
             st["count"] = int(st.get("count") or 0) + 1
             tries = max(int(st.get("attempts") or 0), int(_attempts.get(day, 0)))
-            fire = (not st.get("alerted") and _alerted_day != day and _inflight_day != day
+            fire = (not st.get("alerted") and _alerted_day != day and day not in _inflight
                     and tries < MAX_ATTEMPTS_PER_DAY)
             if fire:
                 tries += 1
                 st["attempts"] = tries
                 _attempts[day] = tries
-                _inflight_day = day
+                _inflight.add(day)
             _save(path, st)
         if not fire:
             return None
@@ -142,7 +142,7 @@ def _record_and_send(first_prompt: int, first_cache: int, now: "float | None",
             logger.warning("kv_miss_alert: send failed: %s (attempt %d/%d)", type(exc).__name__, tries,
                            MAX_ATTEMPTS_PER_DAY)
         with _lock:
-            _inflight_day = ""
+            _inflight.discard(day)   # only this worker's day: a send that crossed midnight never frees the next day's claim
             if ok:   # delivered: only now is the day done (a failed send stays eligible for a bounded retry)
                 _alerted_day = day
                 st2 = _load(path)
