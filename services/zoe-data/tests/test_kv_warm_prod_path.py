@@ -288,3 +288,24 @@ def test_guest_warm_never_repeats(monkeypatch, prod_turn):
     posts = _sidecar(monkeypatch, [2380, 2942], {"v": "cardv1"})
     assert _run(zfc.warm_kv_prefix("")) == "warmed"
     assert len(posts) == 1
+
+
+def test_a_late_terminal_from_an_older_session_does_not_overwrite_the_newer_turns_size(prod_turn):
+    prod_turn("How are you going tonight?")             # session voice-panel-t-1 is the member's latest turn
+    zfc._LAST_TURN["zed_uid"]["system"] = 2942
+    zfc._SESSION_UID["voice-panel-old-9"] = "zed_uid"   # an older overlapping session of the same member
+    zfc._log_context_budget("voice-panel-old-9", {"context_budget": {"system": 111}})
+    assert zfc._LAST_TURN["zed_uid"]["system"] == 2942
+    zfc._log_context_budget("voice-panel-t-1", {"context_budget": {"system": 3000}})
+    assert zfc._LAST_TURN["zed_uid"]["system"] == 3000
+
+
+def test_warm_does_not_repeat_for_a_same_size_same_version_stale_card(monkeypatch, prod_turn):
+    """DOCUMENTED KNOWN LIMIT: with equal size and an unchanged requested version nothing signals a stale sidecar card,
+    so the warm does not repeat (one miss, as before). Pinned so the limit cannot silently change."""
+    prod_turn("How are you going tonight?")
+    zfc._LAST_TURN["zed_uid"]["system"] = 2942
+    zfc._LAST_TURN["zed_uid"]["card"] = "cardv2"
+    posts = _sidecar(monkeypatch, [2942, 2942], {"v": "cardv2"})
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
+    assert len(posts) == 1

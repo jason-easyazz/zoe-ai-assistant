@@ -1722,7 +1722,7 @@ def _log_context_budget(session_id: str, terminal: dict) -> None:
             logger.info("FLUE_CONTEXT_BUDGET session=%s " + " ".join(f"{k}=%d" for k in keys),
                         session_id, *(int(b.get(k) or 0) for k in keys))
             u = _SESSION_UID.get(session_id)
-            if u and u in _LAST_TURN:
+            if u and u in _LAST_TURN and _LAST_TURN[u].get("session") == session_id:
                 _LAST_TURN[u]["system"] = int(b.get("system") or 0)
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn
         pass
@@ -2009,8 +2009,9 @@ _ENVELOPE_LINE_RE = re.compile(r"^ zoe-(uid|manner|persona):([^\n]*)\n")
 def prefix_key(message: str, requested_card_version: str = "") -> str:
     """Short hash of the envelope lines of an outbound message that change the sidecar's SYSTEM-PROMPT bytes: the
     acting member (which selects the user-model card) plus the manner and persona blocks. Two requests with the
-    same key render the same system prompt + tool block, so llama-server can reuse the slot across them; a
-    different key means the prompts diverge where those blocks are placed. Computed from the WIRE message, so the
+    same key were BUILT from the same zoe-data inputs; they are not proof that the sidecar rendered equal system
+    prompts (it may hold an older card: see the KNOWN LIMIT above ``_LAST_TURN``). A different key means the
+    prompts diverge where those blocks are placed. Computed from the WIRE message, so the
     warm and the turn are keyed by what they actually send. Pure; never raises."""
     import hashlib
 
@@ -2048,6 +2049,9 @@ def _log_prefix_key(kind: str, session_id: str, message: str, requested_card_ver
     return key
 
 
+# KNOWN LIMIT: "the card was rendered" is inferred (no remembered turn / system size missing or different / zoe-data's
+# requested card version moved), because the sidecar response does not expose the card version it rendered. A stale card of
+# exactly the same size, with an unchanged zoe-data version, is indistinguishable; the cost is one cache miss, as before.
 # What each member's LAST real turn actually sent ahead of their words: the manner and persona envelope lines
 # (the manner block is chosen by the language of the utterance, so only a real turn knows it) and the sidecar's
 # system-prompt token estimate for that turn. The wake warm replays exactly these lines. Bounded.
@@ -2108,7 +2112,9 @@ def _note_turn_envelope(uid: str, session_id: str, outbound_message: str) -> Non
             return
         lines = _leading_envelope_lines(outbound_message)
         prev = _LAST_TURN.get(u) or {}
-        _remember(_LAST_TURN, u, {**lines, "system": prev.get("system", 0), "card": card}, _LAST_TURN_MAX)
+        # "session" ties the later system-size write to THIS turn: a late terminal from an older, overlapping session of the
+        # same member must not overwrite the size of the newer turn the warm compares against.
+        _remember(_LAST_TURN, u, {**lines, "system": 0, "card": card, "session": session_id}, _LAST_TURN_MAX)
         _remember(_SESSION_UID, session_id, u, 256)
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn
         pass

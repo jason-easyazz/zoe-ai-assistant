@@ -6497,8 +6497,9 @@ async def voice_turn_stream_speculation(payload: dict, caller: dict = Depends(_r
     return {"ok": True, "turn_id": turn_id, "action": action, "verdict": gate.verdict()}
 
 
-# panel_id -> the member whose voice this panel last verified (set per turn by voice_command, after identity
-# resolves). Used ONLY to choose which member's system prompt the wake KV warm renders - never as an identity.
+# panel_id -> the member this panel's last turn was server-verified as (a voice match OR a signed-in/PIN session: the
+# turn's scope identity). A GUESS of who speaks next, used ONLY to choose which member's system prompt the wake KV warm
+# renders (a cache-shaping hint) - never as an identity, never to read or write anything for that member.
 _LAST_VOICE_SPEAKER: "dict[str, str]" = {}
 _LAST_VOICE_SPEAKER_MAX = 64
 
@@ -6526,8 +6527,8 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
     half (below); it is never a precondition for the warm itself:
 
     * The brain's cacheable prefix (system prompt + tool block) is the same bytes for
-      every user and session - the member's words, memory and persona ride the user
-      message behind it - so ``zoe_flue_client.warm_kv_prefix`` loads it into llama-server's
+      every user and session up to the member's manner block and user-model card, which the sidecar
+      appends to the system prompt ahead of the tool block - so ``zoe_flue_client.warm_kv_prefix`` loads it into llama-server's
       one slot with a throwaway turn (as the panel's likely speaker when known, else an explicit guest;
       the member's manner block + card sit ahead of the tool block, so a guest warm cannot serve a member). This is what hides the ~2.7k-token cold
       prefill (TTFT ~4.8 s cold vs ~1.1-1.7 s warm). Live lane only.
@@ -6560,6 +6561,7 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
             # After a restart / eviction the memo is empty: ask for a fresh-PIN member, but only briefly so the
             # warm is never held up (the lookup is re-awaited below for the worker + facts, unbounded as before).
             # asyncio.wait, not wait_for: wait_for awaits the cancelled coroutine's unwind, so it is not a hard bound.
+            # The 0.4 s bounds when the WARM STARTS; the detached lookup is left to finish (its exception is consumed).
             _lk = asyncio.ensure_future(_resolve_fresh_panel_member(panel_id))
             _lk.add_done_callback(lambda t: t.cancelled() or t.exception())   # never an unretrieved exception
             try:
