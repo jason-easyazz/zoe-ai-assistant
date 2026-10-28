@@ -2252,6 +2252,7 @@ async def warm_kv_prefix(member: str = "") -> str:
             return "skipped:hot", -1, -1
         brain_slot_guard.turn_started()
         acquired = True
+        starts_after_mine = brain_slot_guard.starts()   # any later start is a REAL turn, even one already finished
         session_id = _kv_warm_session_id()
         res = await _kv_warm_turn(session_id, state, warm_msg)
         # The sidecar serves the member's user-model card from a cache that this very request may have just started
@@ -2268,7 +2269,7 @@ async def warm_kv_prefix(member: str = "") -> str:
                 await asyncio.sleep(0.25)
                 # Nothing is prepared (and no storage is awaited) while the guard is held: the repeat re-sends the
                 # SAME envelope lines (the card version only enters the key), and is skipped if a real turn began.
-                if brain_slot_guard.active_turns() > 1:
+                if brain_slot_guard.starts() != starts_after_mine or brain_slot_guard.active_turns() > 1:
                     logger.info("FLUE_KV_WARM_REPEAT session=%s skipped=real_turn_started", session_id)
                     return res
                 requested_card = _CARD_SEEN.get(uid, "-") or "-"

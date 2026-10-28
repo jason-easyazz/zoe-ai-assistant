@@ -84,8 +84,9 @@ def reset() -> None:
 
 def turn_started() -> None:
     """A brain turn is about to fill the slot. Always paired with ``turn_finished`` (try/finally)."""
-    global _active, _last_activity
+    global _active, _last_activity, _starts
     _active += 1
+    _starts += 1
     _last_activity = _clock()
 
 
@@ -93,6 +94,15 @@ def turn_finished() -> None:
     global _active, _last_activity
     _active = max(0, _active - 1)
     _last_activity = _clock()
+
+
+_starts = 0                 # monotonic count of turn_started() calls (never reset): "did a turn begin since X"
+
+
+def starts() -> int:
+    """How many brain turns have started in this process (monotonic). Compare two readings to learn whether any turn
+    began in between, even one that has already finished."""
+    return _starts
 
 
 def active_turns() -> int:

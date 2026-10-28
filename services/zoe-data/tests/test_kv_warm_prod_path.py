@@ -349,3 +349,21 @@ def test_repeat_is_skipped_and_prepares_nothing_when_a_real_turn_starts_mid_warm
     assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
     assert len(posts) == 1 and len(prepared) == 1
     brain_slot_guard.reset()
+
+
+def test_repeat_is_skipped_when_a_real_turn_started_and_already_finished(monkeypatch, prod_turn):
+    import brain_slot_guard
+
+    zfc._LAST_TURN.clear()
+    posts = _sidecar(monkeypatch, [2380, 2942], {"v": "cardv1"})
+    real_sleep = asyncio.sleep
+
+    async def _sleep(t, *a, **k):
+        brain_slot_guard.turn_started()
+        brain_slot_guard.turn_finished()         # a whole real turn came and went during the repeat's beat
+        await real_sleep(0)
+
+    monkeypatch.setattr(zfc.asyncio, "sleep", _sleep)
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
+    assert len(posts) == 1
+    brain_slot_guard.reset()
