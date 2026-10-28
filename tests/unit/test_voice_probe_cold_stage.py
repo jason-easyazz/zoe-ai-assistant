@@ -112,7 +112,7 @@ def test_disabled_stage_is_a_recorded_skip():
 
 def _fake_service(monkeypatch, *, prompt_n, cache_n, chunks=("hello",), delay=0.0, pool_ok=True, evict="warmed",
                   manner_on=True, manner_block_text="BLOCK", turn_manner=True,
-                  persona_text="P", turn_persona=True):
+                  persona_text="P", turn_persona=True, adult=True, guest=False, adult_raises=False):
     """Stub the production modules the child imports: this tests ITS sequencing, arithmetic and guards."""
     order: list[str] = []
     bd = types.ModuleType("brain_dispatch")
@@ -132,6 +132,14 @@ def _fake_service(monkeypatch, *, prompt_n, cache_n, chunks=("hello",), delay=0.
     dp.init_pool, dp.close_pool = init_pool, close_pool
     mb = types.ModuleType("manner_block")
     mb.enabled = lambda: manner_on
+    mb.is_guest = lambda u: guest
+
+    async def _adult(u):
+        if adult_raises:
+            raise RuntimeError("db")
+        return adult
+
+    mb._account_is_adult = _adult
     zf = types.ModuleType("zoe_flue_client")
 
     zf._wrap_message_with_replay = lambda m, on: " zoe-replay:1\n" + m if on else m
@@ -251,3 +259,15 @@ def test_persona_block_rendered_for_the_member_must_be_in_the_measured_turn(monk
     assert r["status"] == "error" and "persona" in r["reason"]
     _fake_service(monkeypatch, prompt_n=10, cache_n=900, persona_text="", turn_persona=False)   # fixed persona: fine
     assert asyncio.run(mcf.measure("jason", 0.0, 0.0))["status"] == "ok"
+
+
+def test_ineligible_speakers_legitimately_have_no_manner_block(monkeypatch):
+    for kw in ({"guest": True}, {"adult": False}):                     # a guest, a child
+        _fake_service(monkeypatch, prompt_n=10, cache_n=900, manner_block_text="", turn_manner=False, **kw)
+        assert asyncio.run(mcf.measure("jason", 0.0, 0.0))["status"] == "ok", kw
+
+
+def test_a_failed_adult_lookup_is_an_error_not_an_absent_block(monkeypatch):
+    _fake_service(monkeypatch, prompt_n=10, cache_n=900, manner_block_text="", turn_manner=False, adult_raises=True)
+    r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
+    assert r["status"] == "error" and "adult lookup failed" in r["reason"]

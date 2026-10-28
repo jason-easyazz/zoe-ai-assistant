@@ -112,10 +112,19 @@ async def _measure(member: str, wait_s: float | None, gap_s: float) -> dict:
     # the member blocks the live prompt carries, computed through the same providers the turn calls
     import manner_block
 
+    # Distinguish a CONFIRMED ineligible speaker (a guest, a child: an empty block is the panel's prompt) from a failed
+    # lookup (which fails closed to the same empty block and must not be measured as if it were the panel's prompt).
+    adult = False
+    if manner_block.enabled() and not manner_block.is_guest(member):
+        try:
+            adult = bool(await manner_block._account_is_adult(member))
+        except Exception as exc:  # noqa: BLE001
+            return {**out, "status": "error", "reason": f"the adult lookup failed ({type(exc).__name__}): the manner "
+                                                         "block cannot be told from an absent one"}
     expect_manner = bool(await zfc._manner_context_block(member, UTTERANCE))
-    if manner_block.enabled() and not expect_manner:
-        return {**out, "status": "error", "reason": "manner blocks are on but none rendered for this member (adult "
-                                                     "lookup failing?): the measured prompt is not the panel's"}
+    if adult and not expect_manner:
+        return {**out, "status": "error", "reason": "manner blocks are on and this member is an adult, but none "
+                                                     "rendered: the measured prompt is not the panel's"}
     expect_persona = bool(await zfc._persona_context_block(member))   # "" is legitimate (member held on the fixed persona)
     envelope: dict = {}
     orig_note = zfc._note_turn_envelope
