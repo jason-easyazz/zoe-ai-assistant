@@ -111,11 +111,19 @@ def reset_silero_state(lib: Any, path: str = "batch") -> bool:
             for addr, orig in saved:
                 _safe_write(addr, bytes(len(orig)))
         except Exception:
+            failed = 0
             for addr, orig in saved:  # roll back whatever was zeroed: never one zeroed and one stale
-                try:
-                    _safe_write(addr, orig)
-                except Exception:
-                    pass
+                for _attempt in range(3):  # both targets were proven writable, so a retry is cheap insurance
+                    try:
+                        _safe_write(addr, orig)
+                        break
+                    except Exception:
+                        pass
+                else:
+                    failed += 1
+            if failed:  # cannot be made impossible (the memory itself went unwritable): say so loudly, not silently
+                logger.error("Moonshine VAD state rollback FAILED for %d of %d targets - Silero state may be "
+                             "partially reset", failed, len(saved))
             raise
         return True
     except Exception as exc:  # absent symbol, other build, unreadable object -> fix lost, never a crash

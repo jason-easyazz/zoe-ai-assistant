@@ -302,3 +302,32 @@ def test_stream_start_runs_under_the_same_infer_lock_hold_as_the_reset(monkeypat
     vt._open_moonshine_stream()
     assert held == [("reset", True), ("start", True)]
     assert not vt._moonshine_infer_lock.locked()
+
+
+def test_rollback_is_retried_and_a_rollback_that_still_fails_is_logged(monkeypatch, caplog):
+    obj = _FakeSilero()
+    monkeypatch.setattr(mvs, "_object_address", lambda lib: obj.address)
+    real = mvs._safe_write
+    state = {"zeros": 0, "restore_fail": 1}
+
+    def flaky(addr, data):
+        if not any(data):
+            state["zeros"] += 1
+            if state["zeros"] == 2:
+                raise OSError("zero failed")
+        elif state["zeros"] >= 2 and state["restore_fail"] > 0:
+            state["restore_fail"] -= 1
+            raise OSError("first restore attempt failed")
+        return real(addr, data)
+
+    monkeypatch.setattr(mvs, "_safe_write", flaky)
+    assert mvs.reset_silero_state(object()) is False
+    assert all(v == 1.0 for v in obj.state) and all(v == 1.0 for v in obj.context), "retry restored both"
+
+    # restore can never succeed -> state stays zeroed, and that is reported at ERROR rather than swallowed
+    obj2 = _FakeSilero()
+    monkeypatch.setattr(mvs, "_object_address", lambda lib: obj2.address)
+    state.update(zeros=0, restore_fail=10**6)
+    with caplog.at_level("ERROR"):
+        assert mvs.reset_silero_state(object()) is False
+    assert "rollback FAILED" in caplog.text
