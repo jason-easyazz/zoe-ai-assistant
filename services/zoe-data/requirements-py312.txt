@@ -108,9 +108,14 @@ joblib==1.5.3
 # tzinfo is converted to ZoneInfo) and a 3.10.4 read of the re-saved store still worked. So `pytz`
 # is now an EXPLICIT pin here -- never drop it while any persisted job might still hold a pytz
 # trigger. 3.11 also requires tzlocal>=3 (was 2.1; Zoe does not import tzlocal itself).
+# pytz is held at 2026.3, NOT newer: 3.11.3's util.astimezone() reads `obj._offset` for a pytz tz
+# with no zone name (pytz.FixedOffset), and pytz 2026.4/2026.5 renamed that field to `_utcoffset`
+# (AttributeError, measured; fixed upstream after 3.11.3, unreleased). Named zones (UTC,
+# Australia/Perth -- all Zoe registers) work on every version; 2026.3 also keeps a pickled
+# fixed-offset trigger restorable. Raise it only with an APScheduler release carrying the fix.
 APScheduler==3.11.3
 tzlocal==5.4.4
-pytz==2026.4
+pytz==2026.3
 SQLAlchemy==2.0.54
 pywebpush==2.5.0
 py-vapid==1.9.4
