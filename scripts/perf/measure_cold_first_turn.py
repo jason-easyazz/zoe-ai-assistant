@@ -105,6 +105,9 @@ def main() -> int:
     ap.add_argument("--wait-s", type=float, default=None, help="quiet window to wait (default: slot guard quiet_s + 2)")
     ap.add_argument("--gap-s", type=float, default=1.5, help="wake word -> end of utterance gap before the turn")
     args = ap.parse_args()
+    if os.environ.get("ZOE_PERF") != "1":   # like every scripts/perf harness: opt-in, it sends real brain turns
+        print(json.dumps({"status": "error", "reason": "set ZOE_PERF=1 (this sends real brain requests)"}))
+        return 0
     os.environ["ZOE_TRAFFIC_CLASS"] = "probe"
     sys.path.insert(0, args.service_dir)
     os.chdir(args.service_dir)

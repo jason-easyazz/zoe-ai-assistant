@@ -1193,7 +1193,8 @@ def run_cold_start_stage(args, baseline: dict[str, Any] | None) -> dict[str, Any
     if getattr(args, "cold_wait_s", None) is not None:
         cmd += ["--wait-s", str(args.cold_wait_s)]
     try:
-        proc = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=COLD_STAGE_TIMEOUT_S)
+        proc = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=COLD_STAGE_TIMEOUT_S,
+                              env={**os.environ, "ZOE_PERF": "1"})
         lines = [ln for ln in proc.stdout.splitlines() if ln.strip().startswith("{")]
         if not lines:
             return _cold_block("error", f"cold first-turn measurement printed no result (rc={proc.returncode}): "

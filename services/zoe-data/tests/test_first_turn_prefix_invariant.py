@@ -149,17 +149,34 @@ def test_generic_every_sidecar_envelope_token_is_classified():
     assert found == SYSTEM_PROMPT_LINES | TRANSPORT_ONLY_LINES, f"sidecar envelope tokens changed: {found}"
 
 
+_FRAGMENT = re.compile(r"[\"'`]\s?zoe-[\"'`]|zoe-\$\{|\"zoe-\"\s*\+|\+\s*[\"']zoe-[\"']")
+
+
+def test_no_envelope_name_is_assembled_dynamically():
+    """A static scan cannot see `" zoe-" + name + ":"` / `zoe-${name}:`: forbid the fragments, so a dynamically built
+    envelope line cannot hide from the token scans above (build it from a literal `zoe-<name>:` instead)."""
+    texts = [Path(zfc.__file__).read_text(encoding="utf-8")]
+    texts += [f.read_text(encoding="utf-8") for f in SIDECAR.rglob("*.ts")]
+    assert not any(_FRAGMENT.search(t) for t in texts)
+    assert _FRAGMENT.search('x = " zoe-" + name') and _FRAGMENT.search("`zoe-${name}:`")   # the guard itself works
+
+
+def _applypolicies_inputs_ok(ts: str) -> bool:
+    m = re.search(r"export function applyPolicies\(([^)]*)\)", ts)
+    if not m:
+        return False
+    params = [p.split(":")[0].split("=")[0].strip().rstrip("?") for p in m.group(1).split(",") if p.strip()]
+    body = ts[m.end():ts.index("\n}\n", m.end())]
+    return (params == ["context", "userModelSuffix", "turnHarness"]
+            and sorted(set(re.findall(r"\bwith(\w+Block)\(", body))) == ["MannerBlock", "PersonaBlock", "UserModelBlock"])
+
+
 def test_sidecar_prompt_construction_seam_is_pinned():
     """The per-member inputs of the sidecar's system prompt are exactly (persona, manner, user-model suffix); a NEW
     per-member input to `applyPolicies` (a parameter or another with*Block) is not seen by the client-wire comparison,
     so it fails here until the warm provably reproduces it."""
     ts = (SIDECAR / "providers" / "capped-completions.ts").read_text(encoding="utf-8")
-    m = re.search(r"export function applyPolicies\(([^)]*)\)", ts)
-    assert m, "applyPolicies signature moved: re-pin this test"
-    params = [p.split(":")[0].split("=")[0].strip().rstrip("?") for p in m.group(1).split(",") if p.strip()]
-    assert params == ["context", "userModelSuffix", "turnHarness"], params
-    body = ts[m.end():ts.index("\n}\n", m.end())]
-    assert sorted(set(re.findall(r"\bwith(\w+Block)\(", body))) == ["MannerBlock", "PersonaBlock", "UserModelBlock"]
+    assert _applypolicies_inputs_ok(ts), "applyPolicies gained/lost a per-member input: re-pin after proving the warm renders it"
 
 
 def test_generic_every_wrap_provider_is_known():
@@ -198,7 +215,8 @@ def test_negative_control_the_scans_see_an_inline_unnamed_provider():
     assert _tokens(src) == SYSTEM_PROMPT_LINES | TRANSPORT_ONLY_LINES | {"flavor"}
     ts = (SIDECAR / "providers" / "capped-completions.ts").read_text(encoding="utf-8")
     mutated = ts.replace("userModelSuffix = '',", "userModelSuffix = '', moodSuffix = '',")
-    assert mutated != ts and "moodSuffix" in re.search(r"export function applyPolicies\(([^)]*)\)", mutated).group(1)
+    assert mutated != ts and not _applypolicies_inputs_ok(mutated)    # the seam pin itself goes red
+    assert not _applypolicies_inputs_ok(ts.replace("withMannerBlock(", "withMannerBlock(withMoodBlock(x), "))
 
 
 def test_negative_control_hyphenated_turn_only_line_goes_red(prod, monkeypatch):
