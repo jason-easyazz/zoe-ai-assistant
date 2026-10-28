@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO="${ZOE_GITHUB_REPO:-jason-easyazz/zoe-ai-assistant}"
 CALLER_ZOE_GITHUB_REPO="${ZOE_GITHUB_REPO:-}"
 
-for env_file in "${ROOT}/services/zoe-data/.env" "${ROOT}/.env" "${HOME}/.hermes/.env"; do
+for env_file in "${ROOT}/services/zoe-data/.env" "${ROOT}/.env"; do
     if [[ -f "${env_file}" ]]; then
         set -a
         # shellcheck disable=SC1090

@@ -42,7 +42,7 @@ import httpx
 
 from agent_safety import CommandRejected, check_bash_command, guard_browser_page, is_public_url
 import persona_layer
-from typed_env import env_int, env_str
+from typed_env import env_bool, env_int, env_str
 
 logger = logging.getLogger(__name__)
 
@@ -3419,7 +3419,12 @@ async def _log_feedback_triple(
     format so they can be used directly in Phase 2 training without conversion.
 
     Non-blocking: failures are silently ignored so the user response is unaffected.
+
+    OFF by default (``ZOE_TRAINING_FEEDBACK_LOG=1`` opts in). The file holds the member's message AND Zoe's reply verbatim, outside
+    the forget cascade and with no retention; the LoRA training it fed is retired, so nothing reads it any more (deep dive A6).
     """
+    if not env_bool("ZOE_TRAINING_FEEDBACK_LOG", default=False):
+        return
     try:
         import datetime as _dt
         record = {
