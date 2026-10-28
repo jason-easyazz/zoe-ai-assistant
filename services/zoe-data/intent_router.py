@@ -785,6 +785,11 @@ def detect_intent(
     user_id: str = "unknown",
     _filler_retry: bool = True,
 ) -> Optional[Intent]:
+    try:
+        import local_text_logs as _ltl_epoch
+        _miss_epoch: Optional[int] = _ltl_epoch.erase_epoch()   # BEFORE detection: an erase finishing mid-detect drops the miss append
+    except Exception:  # noqa: BLE001 - unreadable guard: append stays in-progress-guarded only
+        _miss_epoch = None
     t = _normalize_chat_intent_text(text)
 
     # Bare name-as-question ("zoe?") — normalization strips the wake word to '', so
@@ -1714,16 +1719,16 @@ def detect_intent(
         try:
             # Write to intent-misses file for weekly self-review (PII stripped)
             import re as _re, json as _json, pathlib as _pathlib
-            _MISS_PATH = _pathlib.Path.home() / "training" / "data" / "intent-misses.jsonl"
-            _MISS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            import local_text_logs as _ltl   # the SAME path + lock the retention sweep / forget erase use (forgotten means forever)
             # Strip names, numbers, emails, URLs before writing
             _clean = _re.sub(r'\b[A-Z][a-z]+ [A-Z][a-z]+\b', '[NAME]', text)
             _clean = _re.sub(r'\b\d[\d\s\-]{6,}\b', '[NUMBER]', _clean)
             _clean = _re.sub(r'[\w.+-]+@[\w-]+\.\w+', '[EMAIL]', _clean)
             _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
-            with open(_MISS_PATH, "a") as _f:   # traffic_class (P-2): the weekly review drops the harness's misses
-                _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time(),
-                                      "traffic_class": traffic_class.current()}) + "\n")
+            # traffic_class (P-2): the weekly review drops the harness's misses
+            _ltl.append_line(_ltl.INTENT_MISSES, _json.dumps({"text": _clean, "ts": __import__("time").time(),
+                                                              "traffic_class": traffic_class.current()}),
+                            epoch=_miss_epoch)
         except Exception:
             pass  # Never let logging break intent routing
         try:

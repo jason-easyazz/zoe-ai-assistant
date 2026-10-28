@@ -483,7 +483,8 @@ def panel_idle_minutes() -> Optional[float]:
                 newest = max(newest, p.stat().st_mtime)
     except OSError:
         pass
-    log_path = Path(os.environ.get("ZOE_ROUTER_HEAD_LOG") or (rs.LIVE_SERVICE_DIR / "data" / "router_head_shadow.jsonl"))
+    import local_text_logs  # the one resolver the writer and the erasers use (zoe-data is on sys.path above)
+    log_path = local_text_logs.anchor_path(os.environ.get("ZOE_ROUTER_HEAD_LOG") or str(rs.LIVE_SERVICE_DIR / "data" / "router_head_shadow.jsonl"))
     for p in [log_path] + [log_path.with_name(f"{log_path.name}.{i}") for i in (1,)]:
         try:
             newest = max(newest, p.stat().st_mtime)

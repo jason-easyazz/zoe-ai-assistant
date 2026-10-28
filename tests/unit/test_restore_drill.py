@@ -447,3 +447,162 @@ def test_units_run_the_tracked_drill_and_host_backup():
     assert "zoe_restore_drill.py --teardown" in verify
     body = (MAINT / "zoe-backup-verify.sh").read_text()
     assert "zoe_restore_drill.py" in body and "createdb" not in body and "pg_restore" not in body
+
+
+# ── RAM floor, container cap, loud refusal (2026-10-27: the 2000 MB floor meant the drill never ran) ─────────────
+
+
+def _helper_mem_mb() -> int:
+    m = re.search(r'^MEM=(\d+)m$', (LIBEXEC / "zoe-restore-drill-pg").read_text(), re.M)
+    assert m
+    return int(m.group(1))
+
+
+def test_floor_fits_a_normal_daytime_box_and_leaves_the_voice_stack_headroom():
+    cap = _helper_mem_mb()
+    # measured peak ~180 MB (container ~175 MB); the floor must be cap + voice headroom, and reachable by day
+    assert drill.MEM_FLOOR_MB >= cap + 500                 # never starve the resident voice stack
+    assert drill.MEM_FLOOR_MB <= 1300                      # below the 1.4-1.6 GB daytime norm, or it never runs
+    assert drill.MEM_FLOOR_MB == 1100                      # the measured value; the old 2000 refused at a normal 1500
+
+
+def test_floor_refuses_below_and_runs_at_or_above(monkeypatch):
+    day = datetime(2026, 10, 25, 5, 30)
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: drill.MEM_FLOOR_MB - 1)
+    with pytest.raises(ob.Refused):
+        drill.preflight(day, drill.MEM_FLOOR_MB, active=lambda u: False)
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: drill.MEM_FLOOR_MB)
+    drill.preflight(day, drill.MEM_FLOOR_MB, active=lambda u: False)      # control: exactly the floor runs
+
+
+def test_container_is_hard_capped_with_swap_off_and_small_postgres():
+    h = (LIBEXEC / "zoe-restore-drill-pg").read_text()
+    assert '--memory "$MEM" --memory-swap "$MEM"' in h      # swap == cap: the drill can never push the box to swap
+    sb = int(re.search(r"shared_buffers=(\d+)MB", h).group(1))
+    assert sb * 2 <= _helper_mem_mb()                       # shared_buffers well inside the cap
+    assert "--pids-limit" in h
+
+
+def _run_main(monkeypatch, tmp_path, *, avail, now, alerts):
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: avail)
+    monkeypatch.setattr(ob, "alert", lambda t: alerts.append(t))
+    monkeypatch.setattr(drill, "unit_active", lambda u: False)
+
+    class _DT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+    monkeypatch.setattr(drill, "datetime", _DT)
+    monkeypatch.setattr(ob.Paths, "from_env", classmethod(lambda cls: ob.Paths(
+        home=tmp_path, checkout=tmp_path, config_dir=tmp_path / "c", state_dir=tmp_path / "s",
+        stage_dir=tmp_path / "st")))
+    (tmp_path / "s").mkdir(exist_ok=True)
+    return drill.main([])
+
+
+def test_low_memory_refusal_is_loud_exit_4_and_alerts(monkeypatch, tmp_path):
+    alerts: list[str] = []
+    rc = _run_main(monkeypatch, tmp_path, avail=drill.MEM_FLOOR_MB - 100,
+                   now=datetime(2026, 10, 25, 5, 30).astimezone(), alerts=alerts)
+    assert rc == drill.EXIT_REFUSED_LOUD == 4 and alerts and "refused" in alerts[0]
+
+
+def test_night_window_refusal_stays_quiet_exit_3_no_alert(monkeypatch, tmp_path):     # the kept brain-window guard
+    alerts: list[str] = []
+    rc = _run_main(monkeypatch, tmp_path, avail=4000,
+                   now=datetime(2026, 10, 25, 3, 0).astimezone(), alerts=alerts)
+    assert rc == drill.EXIT_REFUSED_QUIET == 3 and not alerts
+
+
+def test_quiet_refusals_turn_loud_once_the_drill_has_not_passed_for_15_days(monkeypatch, tmp_path):
+    alerts: list[str] = []
+    s = tmp_path / "s"
+    s.mkdir()
+    (s / "last_restore_drill.json").write_text(json.dumps({"last_ok": "2026-09-20T05:30:00+08:00"}))
+    rc = _run_main(monkeypatch, tmp_path, avail=4000,
+                   now=datetime(2026, 10, 25, 3, 0).astimezone(), alerts=alerts)
+    assert rc == drill.EXIT_REFUSED_LOUD and alerts and "has not passed" in alerts[0]
+    # control: a recent pass keeps the same quiet refusal quiet
+    alerts.clear()
+    (s / "last_restore_drill.json").write_text(json.dumps({"last_ok": "2026-10-20T05:30:00+08:00"}))
+    rc = _run_main(monkeypatch, tmp_path, avail=4000,
+                   now=datetime(2026, 10, 25, 3, 0).astimezone(), alerts=alerts)
+    assert rc == drill.EXIT_REFUSED_QUIET and not alerts
+
+
+def test_verify_script_fails_the_unit_on_loud_refusal_not_on_quiet(tmp_path):
+    def run(code: int) -> subprocess.CompletedProcess:
+        d = tmp_path / f"m{code}"
+        d.mkdir()
+        (d / "zoe-backup-verify.sh").write_text((MAINT / "zoe-backup-verify.sh").read_text())
+        (d / "zoe_restore_drill.py").write_text(f"import sys; sys.exit({code})\n")
+        return subprocess.run(["bash", str(d / "zoe-backup-verify.sh")], capture_output=True, text=True,
+                              env={**os.environ, "HOME": str(tmp_path)})
+    r4 = run(4)
+    assert r4.returncode == 1 and "REFUSED to run" in r4.stderr   # loud refusal -> unit failed, named as a refusal
+    assert run(3).returncode == 0                    # quiet (night window) -> not a failure
+    assert run(0).returncode == 0                    # control: pass
+
+
+def test_loud_refusals_are_recorded_so_a_later_quiet_one_still_escalates(monkeypatch, tmp_path):
+    alerts: list[str] = []
+    _run_main(monkeypatch, tmp_path, avail=10, now=datetime(2026, 9, 20, 5, 30).astimezone(), alerts=alerts)
+    st = json.loads((tmp_path / "s" / "last_restore_drill.json").read_text())
+    assert st["first_refusal"].startswith("2026-09-20")            # recorded although this refusal alerted
+    alerts.clear()
+    rc = _run_main(monkeypatch, tmp_path, avail=4000, now=datetime(2026, 10, 25, 3, 0).astimezone(), alerts=alerts)
+    assert rc == drill.EXIT_REFUSED_LOUD and alerts                # 35 days after the first refusal: loud
+
+
+def test_failed_drill_keeps_the_refusal_anchor_and_a_pass_clears_it(monkeypatch, tmp_path):
+    s = tmp_path / "s"
+    s.mkdir()
+    (s / "last_restore_drill.json").write_text(json.dumps({"first_refusal": "2026-09-20T05:30:00+08:00"}))
+    monkeypatch.setattr(ob, "alert", lambda t: None)
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: 5000)
+    monkeypatch.setattr(drill, "unit_active", lambda u: False)
+    monkeypatch.setattr(ob.Paths, "from_env", classmethod(lambda cls: ob.Paths(
+        home=tmp_path, checkout=tmp_path, config_dir=tmp_path / "c", state_dir=s, stage_dir=tmp_path / "st")))
+    monkeypatch.setattr(drill.Sandbox, "default", classmethod(lambda cls: None))
+    for findings, kept in ((["x"], True), ([], False)):
+        monkeypatch.setattr(drill, "run_drill", lambda *a, _f=findings, **k: drill.Result(findings=list(_f)))
+        drill.main(["--ignore-window"])
+        st = json.loads((s / "last_restore_drill.json").read_text())
+        assert bool(st["first_refusal"]) is kept
+        (s / "last_restore_drill.json").write_text(json.dumps({"first_refusal": "2026-09-20T05:30:00+08:00"}))
+
+
+def test_preflight_resolves_unit_active_at_call_time_so_host_state_cannot_leak(monkeypatch):
+    day = datetime(2026, 10, 25, 5, 30)
+    probed: list[str] = []
+    monkeypatch.setattr(drill, "unit_active", lambda u: probed.append(u) or False)   # host says: nothing active
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: 10)
+    with pytest.raises(ob.Refused) as e:
+        drill.preflight(day, drill.MEM_FLOOR_MB)                  # no active= passed: the patched probe must be used
+    assert e.value.alert is True and "MemAvailable" in str(e.value) and probed   # low-memory, not quiet/stalled
+    # control: the patched probe is what decides (an active night unit flips it to the quiet refusal)
+    monkeypatch.setattr(drill, "unit_active", lambda u: u == drill.NIGHT_UNIT)
+    with pytest.raises(ob.Refused) as e:
+        drill.preflight(day, drill.MEM_FLOOR_MB)
+    assert e.value.alert is False
+
+
+def test_preflight_resolves_sleep_at_call_time(monkeypatch):
+    day = datetime(2026, 10, 25, 5, 30)
+    slept: list[float] = []
+    calls = iter([True, False])
+    monkeypatch.setattr(drill, "unit_active", lambda u: u == "zoe-backup.service" and next(calls))
+    monkeypatch.setattr(drill.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: 5000)
+    drill.preflight(day, drill.MEM_FLOOR_MB)
+    assert slept == [30]                                           # waited via the patched sleep, no real 30 s
+
+
+def test_staleness_escalates_at_exactly_15_days_and_survives_an_unwritable_state(monkeypatch, tmp_path):
+    st = tmp_path / "last_restore_drill.json"
+    st.write_text(json.dumps({"last_ok": "2026-10-10T05:30:00+08:00"}))
+    at = datetime.fromisoformat("2026-10-25T05:30:00+08:00")
+    assert drill.note_refusal(st, at) is True                      # exactly 15 days
+    assert drill.note_refusal(st, at - drill.timedelta(seconds=1)) is False       # control: just under
+    monkeypatch.setattr(ob, "_atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError("ro")))
+    assert drill.note_refusal(st, at) is True                      # still loud when the state cannot be written

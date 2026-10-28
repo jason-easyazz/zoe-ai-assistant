@@ -347,8 +347,8 @@ def main() -> int:
         # ── N7 the memory floor refuses before any container exists
         r = drill(ZOE_DRILL_MEM_FLOOR_MB="999999")
         made = run("docker", "ps", "-a", "--filter", "name=zoe-restore-drill", "--format", "{{.Names}}").stdout.strip()
-        cell("N7 MemAvailable under the floor refuses (exit 3), no container created",
-             r.returncode == 3 and not [n for n in made.split() if n == "zoe-restore-drill"], f"rc={r.returncode}")
+        cell("N7 MemAvailable under the floor refuses LOUDLY (exit 4), no container created",
+             r.returncode == 4 and not [n for n in made.split() if n == "zoe-restore-drill"], f"rc={r.returncode}")
 
         # ── N8 the helper refuses arguments outside its fixed set
         bad = [["restore", "postgres"], ["psql", "template1"], ["up", "x"], ["restore"], ["exec", "zoe"]]

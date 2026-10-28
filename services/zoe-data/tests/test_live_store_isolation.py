@@ -75,6 +75,16 @@ def test_configure_logging_with_no_arguments_lands_in_the_pin():
         root.setLevel(level)
 
 
+def test_local_text_logs_are_pinned_off_the_live_logs():
+    """``MemoryService.delete_user`` and the forget cascade rewrite these (local_text_logs). Unpinned, a unit test of either strips the
+    household's real router shadow log and intent-miss log."""
+    import local_text_logs as ltl
+
+    assert ltl.log_path(ltl.ROUTER_SHADOW) == _pinned("ZOE_ROUTER_HEAD_LOG")
+    assert ltl.log_path(ltl.INTENT_MISSES) == _pinned("ZOE_INTENT_MISS_LOG")
+    assert ltl.log_path(ltl.INTENT_MISSES) != (_HOME / "training" / "data" / "intent-misses.jsonl").resolve()
+
+
 def test_router_retrain_ledger_is_pinned_off_home():
     """Every forget / user delete reaches the Phase 3 retrain ledger; a test's forget must never edit the live one."""
     path = _pinned("ZOE_ROUTER_RETRAIN_DIR")
