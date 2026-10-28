@@ -7671,6 +7671,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_VOICE_PROBE_COLD_CHECK": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_VOICE_PROBE_MIN_MEM_MB": {
         "defaults": [
           "-"
