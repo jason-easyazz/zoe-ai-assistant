@@ -29,7 +29,7 @@ SHIM = """#!/bin/sh
 echo "$@" >> "$DOCKER_LOG"
 case "$*" in
   *"config --services"*) printf 'a\\nb\\nc\\n' ;;
-  *"ps --services"*) printf 'a\\nc\\nzoe-ui\\n' ;;
+  *"ps --services"*) if [ -n "$DOCKER_A_DOWN" ]; then printf 'c\\nzoe-ui\\n'; else printf 'a\\nc\\nzoe-ui\\n'; fi ;;
   *"config -q"*) [ -n "$DOCKER_BAD_CONFIG" ] && exit 1 ;;
   *" up "*) [ -n "$DOCKER_UP_FAIL" ] && exit 1 ;;
 esac
@@ -64,15 +64,17 @@ def world(tmp_path: Path):
     shim = bindir / "docker"
     shim.write_text(SHIM)
     shim.chmod(0o755)
-    return {"live": live, "base": base, "bin": bindir, "log": tmp_path / "docker.log"}
+    return {"live": live, "base": base, "bin": bindir, "log": tmp_path / "docker.log", "state": tmp_path / "deploy-state"}
 
 
-def _run(world, old_sha: str | None, bad_config: bool = False, pre_pull_sha: str | None = None, up_fail: bool = False):
+def _run(world, old_sha: str | None, bad_config: bool = False, pre_pull_sha: str | None = None, up_fail: bool = False, a_down: bool = False):
     script = _step_run().replace("cd /home/zoe/assistant", f"cd {world['live']}", 1)
     env = {**os.environ, "PATH": f"{world['bin']}:{os.environ['PATH']}",
-           "DOCKER_LOG": str(world["log"])}
+           "DOCKER_LOG": str(world["log"]), "ZOE_DEPLOY_STATE_DIR": str(world["state"])}
     env.pop("DEPLOY_BASE_SHA", None); env.pop("OLD_SHA", None)
-    env.pop("DOCKER_BAD_CONFIG", None); env.pop("DOCKER_UP_FAIL", None)
+    env.pop("DOCKER_BAD_CONFIG", None); env.pop("DOCKER_UP_FAIL", None); env.pop("DOCKER_A_DOWN", None)
+    if a_down:
+        env["DOCKER_A_DOWN"] = "1"
     if up_fail:
         env["DOCKER_UP_FAIL"] = "1"
     if old_sha is not None:
@@ -149,3 +151,15 @@ def test_a_module_that_fails_startup_fails_the_deploy(world):
     r, log = _run(world, world["base"], up_fail=True)
     assert r.returncode != 0, "a failed module startup must fail the step"
     assert "--wait" in _ups(log)[0], log
+
+
+def test_a_module_left_down_by_a_failed_recreate_is_retried_on_the_rerun(world):
+    # attempt 1: a and c are running, the recreate fails (a dies). attempt 2: a no longer shows as running, but it is still a target
+    # (PENDING), so the re-run does not succeed with a still down; a clean recreate clears PENDING
+    _commit(world["live"], "docker-compose.modules.yml", "v2\n")
+    r1, _ = _run(world, world["base"], up_fail=True)
+    assert r1.returncode != 0
+    r2, log2 = _run(world, world["base"], a_down=True)
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert _ups(log2)[0].endswith(" a c"), _ups(log2)
+    assert not (world["state"] / "module-recreate-pending").exists(), "a healthy recreate clears the pending list"

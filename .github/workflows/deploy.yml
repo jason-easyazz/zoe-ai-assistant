@@ -459,9 +459,13 @@ jobs:
           # (e.g. music-assistant) that are stopped on purpose; a bare `up -d` would start
           # them. --no-deps: never cascade into the base stack.
           RUNNING="$(docker compose -f docker-compose.modules.yml ps --services --status running)"
+          # A recreate that failed (module exited / restarting) left its name in PENDING: keep it a target on the re-run even though
+          # it is no longer "running", or the retry would succeed with the module still down. Cleared only after a healthy --wait.
+          PENDING_FILE="${ZOE_DEPLOY_STATE_DIR:-$HOME/.zoe/deploy}/module-recreate-pending"
+          PENDING="$(cat "${PENDING_FILE}" 2>/dev/null || true)"
           TARGETS=""
           for svc in $(docker compose -f docker-compose.modules.yml config --services); do
-            if printf '%s\n' "${RUNNING}" | grep -qxF "${svc}"; then
+            if printf '%s\n' "${RUNNING}" "${PENDING}" | grep -qxF "${svc}"; then
               TARGETS="${TARGETS} ${svc}"
             fi
           done
@@ -470,11 +474,15 @@ jobs:
             exit 0
           fi
           echo "recreating changed module containers:${TARGETS}"
-          # shellcheck disable=SC2086
           # --wait: do not report success until each recreated module is running and healthy (its healthcheck,
           # or plain running when it has none); a module that dies during startup fails the deploy here, before
-          # last-deployed-sha advances, instead of passing silently.
+          # last-deployed-sha advances, instead of passing silently. PENDING_FILE survives that failure.
+          mkdir -p "$(dirname "${PENDING_FILE}")"
+          # shellcheck disable=SC2086
+          printf '%s\n' ${TARGETS} > "${PENDING_FILE}"
+          # shellcheck disable=SC2086
           docker compose -f docker-compose.modules.yml up -d --no-deps --wait --wait-timeout 180 ${TARGETS}
+          rm -f "${PENDING_FILE}"
 
       # zoe-data is a user service — no sudo needed.
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.
