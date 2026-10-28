@@ -53,6 +53,10 @@ jobs:
       # test_zoe_data_py312_cutover.py): there the pin follows requirements-py312.txt,
       # the LIVE lane, since the 3.10 manifest describes a rollback-only env
       # (uvicorn, ag-ui-protocol, livekit-protocol as of 2026-09-27).
+      # The 3.12-ONLY step-ups (websockets 17, starlette 1.8, APScheduler 3.11.3 + tzlocal 5.4 + pytz, fastapi 0.143.1;
+      # 2026-10-28) are deliberately NOT here: this list must install on Python 3.10 AND stay byte-identical to the
+      # zoe-data-py312 job's (tests/unit/test_ci_instrument_honesty.py). They are proven by the local full ci_safe run
+      # on a throwaway venv built from requirements-py312.txt (PR body), not by this lane.
       # Anything left unpinned here resolves to the newest release at CI time, so
       # the lane silently tests a DIFFERENT version than production runs — which is
       # exactly how uvicorn/websockets drifted (CI was exercising uvicorn 0.5x and
@@ -70,7 +74,7 @@ jobs:
             fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
             "ag-ui-protocol==1.0.0" "websockets==16.1.1" "pyjwt==2.15.0" passlib \
-            python-multipart "uvicorn[standard]==0.53.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
+            python-multipart "uvicorn[standard]==0.54.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
             pyyaml "icalendar==7.3.0"
 
       - name: Validate project structure
@@ -373,7 +377,7 @@ jobs:
             fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
             "ag-ui-protocol==1.0.0" "websockets==16.1.1" "pyjwt==2.15.0" passlib \
-            python-multipart "uvicorn[standard]==0.53.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
+            python-multipart "uvicorn[standard]==0.54.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
             pyyaml "icalendar==7.3.0"
 
       - name: Install lane deps (zoe-auth, numpy, LiveKit wheels)
