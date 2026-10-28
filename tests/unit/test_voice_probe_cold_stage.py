@@ -67,7 +67,8 @@ def test_no_cold_baseline_checks_the_floor_only_and_says_so():
 
 
 def test_nan_is_unmeasured_not_a_pass():
-    assert _judge({**HIT, "cache_frac": float("nan")})["status"] == "error"
+    lying = _judge({**MISS, "cache_frac": 1.0})           # a child reporting a good fraction over a cold miss
+    assert lying["status"] == "fail" and lying["cache_frac"] == 0.0
     assert _judge({**HIT, "ttft_ms": float("nan")})["status"] == "error"
 
 

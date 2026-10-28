@@ -105,20 +105,35 @@ def _warm(member: str) -> str:
     return asyncio.run(zfc._kv_warm_outbound(member))[0]
 
 
+# (id, uid, the words of the member's PREVIOUS real turn or None for a fresh process, the words of the first turn).
+# Production order is: [previous turn] -> wake warm -> first turn. The warm learns the manner (language-dependent)
+# only from a previous turn of that member; with none it renders the English one, so a fresh process is only
+# comparable for an English first turn.
 CASES = [
-    ("member", "zed_uid", ENGLISH),
-    ("guest", "guest", ENGLISH),
-    ("non_english_member", "zed_uid", SPANISH),
+    ("member_after_a_turn", "zed_uid", ENGLISH, ENGLISH),
+    ("member_fresh_process", "zed_uid", None, ENGLISH),
+    ("guest", "guest", None, ENGLISH),
+    ("non_english_member_after_a_turn", "zed_uid", SPANISH, SPANISH),
 ]
 
 
-@pytest.mark.parametrize("name,uid,words", CASES, ids=[c[0] for c in CASES])
-def test_warm_and_first_turn_share_the_system_prompt_prefix(prod, name, uid, words):
+@pytest.mark.parametrize("name,uid,previous,words", CASES, ids=[c[0] for c in CASES])
+def test_warm_and_first_turn_share_the_system_prompt_prefix(prod, name, uid, previous, words):
+    if previous is not None:
+        prod(previous, uid)                       # the member's last real turn (seeds what the warm replays)
+    if name.startswith("non_english"):
+        assert _manner_of(prod(ENGLISH, "zed_uid")) != _manner_of(prod(SPANISH, "zed_uid")), "fixture: Spanish block differs"
+        prod(previous, uid)
+    warm = _warm(uid)                             # the wake warm, BEFORE the first turn, as on the panel
     turn = prod(words, uid)
     if uid == "zed_uid":
         assert {"manner", "persona", "uid"} <= {n for n, _ in _prompt_prefix(turn)}, "fixture must exercise every block"
-    assert_prefix_identical(_warm(uid), turn)
-    assert zfc.prefix_key(_warm(uid), "cardv1") == zfc.prefix_key(turn, "cardv1")
+    assert_prefix_identical(warm, turn)
+    assert zfc.prefix_key(warm, "cardv1") == zfc.prefix_key(turn, "cardv1")
+
+
+def _manner_of(wire: str) -> str:
+    return next((ln for n, ln in _leading(wire) if n == "manner"), "")
 
 
 # `zoe-<name>:` tokens that are NOT prompt envelope lines (a render mark and a request header).

@@ -1148,12 +1148,14 @@ def judge_cold_start(measured: dict[str, Any] | None, baseline: dict[str, Any] |
     if warm != "warmed":
         return _cold_block("error", f"the wake prewarm did not run (outcome {warm!r}), so the first turn is not the "
                                     "panel's path - re-run when nothing else is warming the slot", **fields)
-    frac, ttft = m.get("cache_frac"), m.get("ttft_ms")
+    ttft = m.get("ttft_ms")
     counts = (m.get("first_prompt_n"), m.get("first_cache_n"))
-    if (not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (frac, ttft))
+    if (not (isinstance(ttft, (int, float)) and math.isfinite(ttft))
             or not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in counts)
             or counts[0] + counts[1] <= 0):
-        return _cold_block("error", "cold first-turn measurement carried no finite cache fraction / TTFT / token counts", **fields)
+        return _cold_block("error", "cold first-turn measurement carried no finite TTFT / token counts", **fields)
+    frac = counts[1] / (counts[0] + counts[1])   # recomputed from the validated counts, never trusted from the child
+    fields["cache_frac"] = round(frac, 4)
     problems: list[str] = []
     if frac < COLD_MIN_CACHE_FRAC:
         problems.append(f"COLD first turn missed the KV cache: {m.get('first_cache_n')} reused vs "
