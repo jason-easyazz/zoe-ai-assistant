@@ -1058,8 +1058,9 @@ and a new spelling on b9733 is the same failure in reverse):
   the written config is the served config.
 
 **Single slot: `--parallel 1` (correctness over concurrency).** Upstream
-[ggml-org/llama.cpp#28286](https://github.com/ggml-org/llama.cpp/issues/28286) (open, filed
-2026-09-03) reports that draft-MTP with `--parallel` > 1 leaks content between concurrent
+[ggml-org/llama.cpp#28286](https://github.com/ggml-org/llama.cpp/issues/28286) (filed
+2026-09-03; closed by the stale bot 2026-10-18 as not_planned, never fixed, reported on a Qwen hybrid on ROCm -
+see [brain-slot-isolation-2026-10-29.md](../research/brain-slot-isolation-2026-10-29.md)) reports that draft-MTP with `--parallel` > 1 leaks content between concurrent
 requests' prompts and completions, with no garbage-token signature to catch it by. The unit ran
 `--parallel 2` from 2026-07-21 until B0.4, so the live brain has been exposed. With one slot,
 concurrent requests (voice and chat) queue rather than run side by side, and the full
