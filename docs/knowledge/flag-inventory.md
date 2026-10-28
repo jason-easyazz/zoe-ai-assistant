@@ -797,7 +797,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_WARN_MS` | `'1500'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_WARN_RATIO` | `'1.5'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_WAKE_ACK_PHRASE` | `-` | yes | yes | `services/zoe-data/routers/voice_tts.py` |
-| `ZOE_WARM_SPEAKER_MAX_AGE_S` | `'43200'` | no | NO | `services/zoe-data/warm_speaker.py` |
+| `ZOE_WARM_SPEAKER_MAX_AGE_S` | `dynamic` | no | NO | `services/zoe-data/warm_speaker.py` |
 | `ZOE_WARM_SPEAKER_STATE` | `-` | yes | NO | `services/zoe-data/warm_speaker.py` |
 | `ZOE_WEATHER_CACHE_TTL_S` | `'600'` | no | NO | `services/zoe-data/routers/weather.py` |
 | `ZOE_WEB_BROWSE_MAX_HTML` | `1500000` | yes | NO | `services/zoe-data/zoe_agent.py` |

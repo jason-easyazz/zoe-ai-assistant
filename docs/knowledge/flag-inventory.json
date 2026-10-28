@@ -7963,7 +7963,7 @@
       },
       "ZOE_WARM_SPEAKER_MAX_AGE_S": {
         "defaults": [
-          "'43200'"
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [

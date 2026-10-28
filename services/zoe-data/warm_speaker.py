@@ -10,8 +10,8 @@ What it is NOT: an identity, an auth input, or a record of what anyone said. It 
 already holds a server-verified member for the turn (``routers.voice_tts._note_voice_speaker``: an unrecognised voice is
 a guest and never recorded), and it is read only to choose which envelope a THROWAWAY replay-marked warm turn renders
 (``zoe_flue_client._kv_warm_outbound``). A guest's real turn never takes this memo's envelope, so nothing of a member's
-manner or card can reach a guest's turn through it. An entry older than ``ZOE_WARM_SPEAKER_MAX_AGE_S`` (default 12 h)
-reads as no entry (the warm degrades to the guest envelope). ``forget_user`` (forget / voice-profile delete / consent
+manner or card can reach a guest's turn through it. An entry older than ``ZOE_WARM_SPEAKER_MAX_AGE_S`` (default and hard maximum 12 h; the env can only shorten it)
+reads as no entry and is pruned from the file on the next save (the warm degrades to the guest envelope). ``forget_user`` (forget / voice-profile delete / consent
 revoke) removes a member from memory and file. Never raises. ``note`` does no I/O (the save runs on a daemon thread, which also does the first load);
 ``get`` / ``forget_user`` do the one lazy load of a few hundred bytes, so async callers run them via ``asyncio.to_thread``.
 """
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -31,6 +32,7 @@ from typed_env import env_str
 logger = logging.getLogger(__name__)
 
 _MAX_PANELS = 64
+HARD_MAX_AGE_S = 43200.0   # 12 h: an upper bound no setting lifts
 _REWRITE_AFTER_S = 600.0   # an unchanged entry is not rewritten more often than this (a hot panel must not write every turn)
 _lock = threading.RLock()
 _mem: "dict[str, tuple[str, float]]" = {}
@@ -45,9 +47,10 @@ def _nobody(member: str) -> bool:
 
 def max_age_s() -> float:
     try:
-        return max(0.0, float(os.environ.get("ZOE_WARM_SPEAKER_MAX_AGE_S", "43200")))
+        v = float(os.environ.get("ZOE_WARM_SPEAKER_MAX_AGE_S", str(HARD_MAX_AGE_S)))
+        return min(HARD_MAX_AGE_S, max(0.0, v)) if math.isfinite(v) else HARD_MAX_AGE_S   # the env can shorten the cap, never lift it
     except (TypeError, ValueError):
-        return 43200.0
+        return HARD_MAX_AGE_S
 
 
 def _path() -> "Optional[Path]":
@@ -81,7 +84,7 @@ def _ensure_loaded() -> None:
         try:
             raw = json.loads(p.read_text())
             for panel, ent in (raw or {}).items():
-                if isinstance(ent, list) and len(ent) == 2 and isinstance(ent[0], str) and not _nobody(ent[0]):
+                if isinstance(ent, list) and len(ent) == 2 and isinstance(ent[0], str) and not _nobody(ent[0]) and math.isfinite(float(ent[1])):
                     _mem.setdefault(str(panel), (ent[0], float(ent[1])))   # a newer in-process note wins
         except FileNotFoundError:
             pass
@@ -98,6 +101,9 @@ def _persist() -> None:
     try:
         _ensure_loaded()   # on the save thread: merges what the file holds under whatever was noted before the first load
         with _lock:
+            now = time.time()
+            for k in [k for k, (_m, t) in _mem.items() if now - t > max_age_s()]:
+                _mem.pop(k, None)                                   # an expired entry does not stay on disk
             snap = {k: [m, t] for k, (m, t) in _mem.items()}
             _last_written.clear()
             _last_written.update(_mem)
@@ -116,7 +122,7 @@ def _save(sync: bool) -> None:
     if sync:
         _persist()
     else:
-        threading.Thread(target=_persist, name="warm-speaker-save").start()   # non-daemon: a SIGTERM restart waits the ms it takes
+        threading.Thread(target=_persist, name="warm-speaker-save").start()   # non-daemon: joined at interpreter exit on a graceful stop; a hard kill inside the few-ms window loses one write, which the next verified turn rewrites
 
 
 def note(panel_id: str, member: str, *, now: "float | None" = None, sync: bool = False) -> None:

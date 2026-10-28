@@ -17,7 +17,7 @@ from test_kv_warm_prod_path import prod_turn  # noqa: F401  (fixture: the produc
 
 pytestmark = pytest.mark.ci_safe
 
-T0 = 1_790_000_000.0
+T0 = __import__("time").time() - 60.0   # "now": entries are pruned by the real clock
 
 
 @pytest.fixture
@@ -81,6 +81,37 @@ def test_the_production_note_path_persists_without_sync_and_does_no_io_on_the_ca
         t.join(5)
     _restart()
     assert ws.get("p1") == "casey"
+
+
+def test_an_in_flight_note_save_cannot_resurrect_a_forgotten_member(state):
+    import threading
+
+    v._note_voice_speaker("p1", "casey")          # threaded save in flight
+    ws.forget_user("casey")                       # forget races it
+    for t in [t for t in threading.enumerate() if t.name == "warm-speaker-save"]:
+        t.join(5)
+    _restart()
+    assert ws.get("p1") == ""
+    assert "casey" not in (state.read_text() if state.exists() else "")
+
+
+def test_the_cap_is_hard_and_expired_entries_are_pruned_from_the_file(state, monkeypatch):
+    monkeypatch.setenv("ZOE_WARM_SPEAKER_MAX_AGE_S", "999999999")
+    assert ws.max_age_s() == 43200.0, "the env can shorten the cap, never lift it"
+    monkeypatch.setenv("ZOE_WARM_SPEAKER_MAX_AGE_S", "nan")
+    assert ws.max_age_s() == 43200.0
+    monkeypatch.delenv("ZOE_WARM_SPEAKER_MAX_AGE_S")
+    import time
+
+    ws.note("old", "casey", now=time.time() - 13 * 3600, sync=True)
+    ws.note("new", "dana", now=time.time(), sync=True)      # this save prunes the expired one
+    assert set(json.loads(state.read_text())) == {"new"}
+
+
+def test_a_nan_timestamp_on_load_is_not_an_immortal_entry(state):
+    state.write_text('{"p1": ["casey", NaN], "p2": ["dana", %r]}' % T0)
+    ws.reset()
+    assert ws.get("p1", now=T0) == "" and ws.get("p2", now=T0) == "dana"
 
 
 def test_age_cap_degrades_a_stale_guess_to_the_guest_warm(state):
@@ -180,6 +211,6 @@ def test_negative_control_without_the_persisted_memo_the_warm_is_the_guest_one(m
 
 def test_negative_control_an_expired_memo_is_the_guest_warm(monkeypatch, state, prod_turn):  # noqa: F811
     prod_turn("How are you going tonight?")
-    ws.note("panel-1", "zed_uid", now=T0, sync=True)               # a past instant: far older than 12 h by the real clock
+    ws.note("panel-1", "zed_uid", now=T0 - 13 * 3600, sync=True)               # 13 h old
     _restart()
     assert _prewarm_member(monkeypatch, "panel-1") == ""
