@@ -248,7 +248,8 @@ set -euo pipefail
 BK=/home/zoe/.zoe-backups/ha-pre-2026.10.4-<date>.tar.gz        # explicit path
 cd /home/zoe/assistant
 docker compose stop homeassistant
-tar -tzf "$BK" | grep -q '^homeassistant/\.storage/' && tar -tzf "$BK" | grep -q '^homeassistant/home-assistant_v2\.db$'   # re-prove the archive BEFORE deleting anything
+tar -tzf "$BK" > "$BK.list"
+grep -q '^homeassistant/\.storage/' "$BK.list" && grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list"   # re-prove the archive BEFORE deleting anything
 # edit docker-compose.yml: image -> 2026.10.2@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4 (and system_updates.py's tracked tag), or revert the pin commit
 rm -rf /home/zoe/assistant/homeassistant
 tar -C /home/zoe/assistant -xzf "$BK"
