@@ -405,7 +405,8 @@ async def _check_docker_service(
 
     # Registry-tracked components
     config_image = info.get("Config", {}).get("Image", image_ref or container_name)
-    tag_part = config_image.split(":")[-1] if ":" in config_image else config_image
+    config_image_nodigest = config_image.split("@", 1)[0]  # tag@sha256:... pins: show the tag, not the digest
+    tag_part = config_image_nodigest.split(":")[-1] if ":" in config_image_nodigest else config_image_nodigest
     installed_version = tag_part if tag_part not in ("latest", "stable", "") else f"{tag_part} ({created})"
 
     if local_build:
