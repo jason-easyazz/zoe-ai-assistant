@@ -513,6 +513,19 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   allow; skip/error/baseline-drift all block). Also gated since 2026-09-27: `voice_vad.py`,
   `voice_turn.py` and `*silero*` (see the VAD stage below).
 
+### The cold first-turn stage — what gates the wake warm (2026-10-28)
+
+The replay is warm, so it cannot see a first reply that re-prefills its whole prompt (6 s vs ~1.2 s; shipped three
+times when the wake warm stopped matching the real first turn). After the replay the probe runs
+`scripts/perf/measure_cold_first_turn.py` in the service interpreter: evict the single slot with an unrelated request,
+wait `brain_slot_guard.quiet_s()+2` (`--cold-wait-s`), call `zoe_flue_client.warm_kv_prefix(member)` (the panel's wake
+prewarm), then send ONE replay-isolated, `probe`-class first turn. The run **fails** when `cache_n/(cache_n+prompt_n)`
+< 80 % or the brain TTFT is `--warn-ratio`/`--warn-ms` worse than the baseline's `cold_first_turn.ttft_ms` (the baseline
+records it on `--update-baseline`; without one only the cache floor is judged). A wake warm that did not run, or a sidecar
+that reports no `prompt_cache`, is an **error**, never a pass. The artifact/trend carry `cold_first_turn_stage` and a
+`cold_first_turn` block (counts and ms only). `--no-cold-check` / `ZOE_VOICE_PROBE_COLD_CHECK=0` records a skip. The
+offline twin is `services/zoe-data/tests/test_first_turn_prefix_invariant.py`.
+
 ### The VAD stage — what gates a VAD model swap (2026-09-27)
 
 **Incident, two lines:** on 2026-09-26 `/home/zoe/models/silero_vad.onnx` was replaced with the

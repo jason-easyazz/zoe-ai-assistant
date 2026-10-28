@@ -2025,7 +2025,7 @@ def prefix_key(message: str, requested_card_version: str = "") -> str:
     seen: dict = {}
     rest = message or ""
     for _ in range(12):   # bounded: replay/spec/persona/manner/uid lines only ever lead the message
-        m = re.match(r"^ zoe-[a-z]+:[^\n]*\n", rest)
+        m = re.match(r"^ zoe-[a-z][a-z-]*:[^\n]*\n", rest)
         if not m:
             break
         line = m.group(0)
@@ -2072,7 +2072,7 @@ def _leading_envelope_lines(message: str) -> "dict[str, str]":
     out = {"manner": "", "persona": ""}
     rest = message or ""
     for _ in range(12):
-        m = re.match(r"^ zoe-([a-z]+):[^\n]*\n", rest)
+        m = re.match(r"^ zoe-([a-z][a-z-]*):[^\n]*\n", rest)
         if not m:
             break
         if m.group(1) in out:

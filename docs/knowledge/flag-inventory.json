@@ -4914,6 +4914,7 @@
           "scripts/perf/engine_bench.py",
           "scripts/perf/hop_placement_ab.py",
           "scripts/perf/kokoro_first_chunk_probe.py",
+          "scripts/perf/measure_cold_first_turn.py",
           "scripts/perf/measure_first_sound.py",
           "scripts/perf/measure_speed.py",
           "scripts/perf/measure_tts.py",
@@ -7688,6 +7689,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_PROBE_COLD_CHECK": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
         ],
         "typed_env": false
       },
