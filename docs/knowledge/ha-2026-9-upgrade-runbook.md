@@ -42,7 +42,7 @@ So the upgrade cannot break a tool-name call site today. The exposure is forward
 
 1. **This PR merged and the bridge container rebuilt** (`docker compose build homeassistant-mcp-bridge && docker compose up -d homeassistant-mcp-bridge`; `/app` is volume-mounted, so a restart alone also picks the code up). `curl -s localhost:8007/tools/names | python3 -c 'import json,sys; print(json.load(sys.stdin)["scheme"])'` → `legacy` against 2026.5.2 (no `jq` on the box).
 2. **Backup the config dir** (bind-mounted `./homeassistant:/config` in `docker-compose.yml`, i.e. `/home/zoe/assistant/homeassistant/` — `.storage/` holds the registries, config entries and auth, `home-assistant_v2.db` is the recorder history; neither is in git). The upgrade block below takes it **with HA stopped** (a hot copy of the SQLite recorder can be inconsistent) and **verifies the archive lists both `.storage/` and the recorder db before anything else runs**. Take a fresh one before EACH monthly step — `.storage` migrations AND recorder schema bumps are forward-only, and the backup from immediately before a step is that step's only rollback point.
-3. **Pin the image tag.** `docker-compose.yml` uses `ghcr.io/home-assistant/home-assistant:stable` (the `# pinned: sha256:…` comment is documentation, not a pin). A bare `docker compose pull` would jump 2026.5.2 → 2026.9.3 in one hop. For the stepped upgrade, edit the tag per step (`:2026.6.4`, `:2026.7.x`, `:2026.8.x`, `:2026.9.3` — use the latest patch of each month from `gh api repos/home-assistant/core/releases`) and only return to `:stable` at the end if that policy is kept.
+3. **Pin the image tag.** `docker-compose.yml` used `ghcr.io/home-assistant/home-assistant:stable` until 2026-10-28 (the `# pinned: sha256:…` comment was documentation, not a pin); it is now a real `tag@sha256:` pin guarded by `tests/unit/test_ha_image_pin.py`. A bare `docker compose pull` would jump 2026.5.2 → 2026.9.3 in one hop. For the stepped upgrade, edit the tag per step (`:2026.6.4`, `:2026.7.x`, `:2026.8.x`, `:2026.9.3` — use the latest patch of each month from `gh api repos/home-assistant/core/releases`) and only return to `:stable` at the end if that policy is kept.
 4. **Custom components on the box** (`/home/zoe/assistant/homeassistant/custom_components/`): `auth_oidc` (Zoe SSO — the login path), `hacs`, `localtuya`, `zoe_conversation`. These are the likeliest breakers; check each one's release page for the target HA version before every step, and keep the local `homeassistant` auth provider (it is configured — see `configuration.yaml`) as the fallback login if `auth_oidc` fails.
 5. Quiet window: HA Assist → `zoe_conversation` → bridge `/voice/*` is part of the panel's voice path; do this while nobody needs the panel. Do **not** touch the brain/STT/TTS services.
 6. Free disk for four image pulls (~1.5 GB each; 127 dangling images were noted in the review — `docker image prune` first if tight).
@@ -216,3 +216,53 @@ Once on 2026.10, Zoe can pass the panel's HA device id in `params._meta["io.home
   Rolling back the recorder db means **history recorded after that backup is lost** (energy/statistics included); that is the price of a consistent older-schema database, and it is why the backup is taken with HA stopped immediately before each step. The set-aside copy (the `$ASIDE` path the script prints) keeps the newer state for forensics; delete it once the rollback is confirmed good.
 - The bridge needs nothing on rollback: the scheme is re-detected on its next restart (or pin `HA_TOOL_NAME_SCHEME=legacy` in `.env` for the window and remove it afterwards).
 - Panel voice path is untouched by any of this; if it misbehaves after a step, the suspect is `zoe_conversation` or `auth_oidc` under the new core, not Zoe's services.
+
+## 2026.10.2 → 2026.10.4 (routine patch bump, prepared 2026-10-28)
+
+Pin: `ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133` (multi-arch index; arm64 child `5881590fca10`). Released 2026-10-24. Previous (running) pin: `2026.10.2@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4`.
+Delta is two patch releases (.3: about 25 integration fixes, Python 3.14.8, base image, frontend .5; .4: aiohttp header limit 64 KiB, pylutron-caseta). Nothing touches the installed integrations (wyoming, esphome, go2rtc, backup, shopping_list, google_translate, radio_browser, sun, analytics) or the custom ones (auth_oidc 1.1.1, hacs 2.0.5, localtuya 2026.07.0, zoe_conversation 0.1.0). HOLD 2026.11.x (Marketplace replaces HACS; MFA opt-in touches auth_oidc).
+
+Apply (operator, outside the night window; `.env` supplies `HA_ACCESS_TOKEN`; paste as one block, it stops on the first failure):
+
+```bash
+set -euo pipefail
+cd /home/zoe/assistant && git fetch -q origin && git merge --ff-only origin/main   # compose now carries the new pin
+set -a; . ./.env; set +a
+curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/states | python3 -c 'import sys,json;print(sum(1 for s in json.load(sys.stdin) if s["entity_id"].split(".")[0] in ("light","switch")))' | tee /tmp/ha-ls-before
+docker pull ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133
+docker compose stop homeassistant
+mkdir -p ~/.zoe-backups && BK=~/.zoe-backups/ha-pre-2026.10.4-$(date +%Y%m%d-%H%M%S).tar.gz && echo "BACKUP=$BK"
+# A unique name per attempt, never an overwrite: a retry after 2026.10.4 has run must not replace the pre-upgrade rollback point.
+[ ! -e "$BK" ] || { echo "BACKUP EXISTS: $BK — refusing to overwrite"; exit 1; }
+tar -C /home/zoe/assistant -czf "$BK" homeassistant/
+tar -tzf "$BK" > "$BK.list"
+grep -q '^homeassistant/\.storage/' "$BK.list" || { echo "BACKUP BAD: no .storage/ — HA left stopped, nothing changed"; exit 1; }
+grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list" || { echo "BACKUP BAD: no recorder db — HA left stopped, nothing changed"; exit 1; }
+echo "backup ok"
+docker compose up -d --no-deps homeassistant
+until curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/config >/dev/null; do sleep 5; done   # 1-3 min
+```
+
+Verify: `/api/config` reports `"version": "2026.10.4"`; the light+switch count equals `/tmp/ha-ls-before`; Zoe's bridge reaches HA (`curl -s localhost:8007/health`, then an entity listing through zoe-data); `docker logs homeassistant --since 5m` shows no auth_oidc errors; the "Zoe SSO" button on the HA login page completes a login via zoe-auth (the local-account login stays the fallback).
+
+Rollback (set `BK` to the explicit archive path printed as `BACKUP=` above; it does not survive a new shell):
+
+```bash
+set -euo pipefail
+BK=/home/zoe/.zoe-backups/ha-pre-2026.10.4-<YYYYmmdd-HHMMSS>.tar.gz   # the FIRST attempt's archive        # explicit path
+cd /home/zoe/assistant
+docker compose stop homeassistant
+tar -tzf "$BK" > "$BK.list"
+# Re-prove the archive BEFORE deleting anything; each check aborts on its own (a failed command inside an && list does not trip set -e).
+grep -q '^homeassistant/\.storage/' "$BK.list" || { echo "ARCHIVE BAD: no .storage/ — nothing deleted"; exit 1; }
+grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list" || { echo "ARCHIVE BAD: no recorder db — nothing deleted"; exit 1; }
+# Put the previous release back explicitly. Reverting the pin commit is NOT equivalent: it restores the old floating :stable tag, not 2026.10.2.
+PREV='2026.10.2@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4'
+sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$PREV#" docker-compose.yml
+grep -q "home-assistant/home-assistant:$PREV" docker-compose.yml || { echo "compose pin not rewritten — nothing deleted"; exit 1; }
+rm -rf /home/zoe/assistant/homeassistant
+tar -C /home/zoe/assistant -xzf "$BK"
+docker compose up -d --no-deps homeassistant
+```
+
+Then re-run the verify checks against 2026.10.2. The compose edit is a live-checkout change: re-pin through a PR (or `git checkout -- docker-compose.yml` once main carries the fix) so the next deploy does not bring 2026.10.4 back. A patch bump rarely migrates `.storage`, but restore regardless if HA logged a migration.
