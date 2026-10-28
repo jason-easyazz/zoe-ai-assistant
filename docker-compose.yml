@@ -138,7 +138,7 @@ services:
 
   # ── Home Assistant ─────────────────────────────────────────────────────────
   homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:stable  # pinned: sha256:449140e073d8d7814098cd62dfdbb326ad043f51a3c4d4721889369f46751d52
+    image: ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133  # 2026.10.4 (released 2026-10-24; multi-arch index digest, arm64 included, verified 2026-10-28). A REAL pin, not :stable. Bump deliberately per docs/knowledge/ha-2026-9-upgrade-runbook.md; hold 2026.11.x (Marketplace replaces HACS, MFA opt-in touches auth_oidc).
     container_name: homeassistant
     restart: unless-stopped
     logging: *default-logging
