@@ -327,3 +327,20 @@ def test_zz_no_direct_env_write_leaks_past_a_measurement():
     """Runs after the measurement tests in this module: none of their direct env writes may still be set."""
     for k in _DIRECT_ENV_WRITES:
         assert os.environ.get(k) == _ENV_AT_IMPORT[k], f"{k} leaked out of a measurement test"
+
+
+def test_the_default_wait_is_fixed_and_not_the_slot_guard_quiet_window(monkeypatch):
+    """The child never takes the guard, so the wait only simulates a pause: it must not grow with quiet_s() (180 s)."""
+    _fake_service(monkeypatch, prompt_n=10, cache_n=900)
+    sys.modules["brain_slot_guard"].quiet_s = lambda: 180.0
+    slept: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(s, *a, **k):
+        slept.append(s)
+        await real_sleep(0)
+
+    monkeypatch.setattr(mcf.asyncio, "sleep", fake_sleep)
+    r = asyncio.run(mcf.measure("jason", None, 0.0))
+    assert r["status"] == "ok" and r["wait_s"] == mcf.DEFAULT_WAIT_S == 47.0
+    assert 47.0 in slept and 182.0 not in slept

@@ -33,7 +33,7 @@ finished and before this one started:
 - **The 11 FULL warm misses** (`first_cache_n=0`): 10 on 10-12 17:20-18:42 - the helper-trio evictions that
   `brain_slot_guard` fixed that evening ([brain-prefix-cache-2026-10-12.md](brain-prefix-cache-2026-10-12.md)) - and
   one on 10-14 21:53, after 6 guarded helper calls ran in a 62 s conversational pause (the guard's quiet window,
-  `ZOE_BRAIN_SLOT_QUIET_S`, is 45 s).
+  `ZOE_BRAIN_SLOT_QUIET_S`, was 45 s; raised to 180 s on 2026-10-29, owner-approved, after `released_quiet` lines followed by ~1300-token re-prefills).
 - The 7 misses with nothing between are deep prompt divergence (the previous turn's recall block elided,
   the tool block growing): 523-1,363 tokens re-prefilled, which no slot policy changes.
 - zoe-data's own log shows no other Flue conversation (bar, Telegram, web) between any two warm panel turns;
@@ -113,7 +113,7 @@ removes. (The deep dive's 5.9 s p90 is mostly the full misses of 10-12, before `
 
 ## Not done, and why
 
-- `ZOE_BRAIN_SLOT_QUIET_S` 45 -> ~120 s would have kept the 10-14 21:53 helper flush out of a 62 s pause. One
+- DONE 2026-10-29 (now 180 s): `ZOE_BRAIN_SLOT_QUIET_S` 45 -> ~120 s would have kept the 10-14 21:53 helper flush out of a 62 s pause. One
   instance is not evidence; `PANEL_KV_MISS ... background_calls_between=` will show whether it recurs (owner flag).
 - Deep divergence (recall elision, tool growth) is a prompt-shape trade for the Samantha program, unchanged here.
 - The replay probe (in-process, straight to the sidecar) is invisible to zoe-data's counters; the slot trace is the
