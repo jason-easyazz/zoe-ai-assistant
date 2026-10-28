@@ -26,3 +26,16 @@ def test_homeassistant_image_is_tag_plus_digest():
     refs = re.findall(r"^\s*image:\s*(ghcr\.io/home-assistant/home-assistant\S*)", text, re.M)
     assert len(refs) == 1, f"expected exactly one Home Assistant image line, found {refs!r}"
     assert REF.match(refs[0]), f"HA image must be <version>@sha256:<64 hex>, got {refs[0]!r}"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "ghcr.io/home-assistant/home-assistant:stable",
+        "ghcr.io/home-assistant/home-assistant:2026.10.4",
+        "ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb",
+        "ghcr.io/home-assistant/home-assistant:stable@sha256:" + "a" * 64,
+    ],
+)
+def test_pin_pattern_rejects_floating_or_short_refs(bad):
+    assert not REF.match(bad)
