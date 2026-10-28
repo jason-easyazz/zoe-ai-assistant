@@ -1952,7 +1952,7 @@
    "defaults": [
     "unset"
    ],
-   "kind": "bool",
+   "kind": "str",
    "readers": 1
   },
   "ZOE_LAN_HOSTS": {

@@ -2914,7 +2914,7 @@
         "readers": [
           "services/zoe-data/kv_miss_alert.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_LAN_HOSTS": {
         "defaults": [
@@ -4847,13 +4847,13 @@
       },
       "ZOE_PANEL_KV_MISS_ALERT": {
         "defaults": [
-          "'1'"
+          "True"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/kv_miss_alert.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_PANEL_KV_MISS_TOKENS": {
         "defaults": [

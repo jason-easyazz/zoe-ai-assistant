@@ -20,6 +20,8 @@ def sent(monkeypatch, tmp_path):
     out: list = []
     monkeypatch.setattr(kma, "_ops_send", lambda text: out.append(text) or True)
     monkeypatch.setattr(kma, "_alerted_day", "")
+    monkeypatch.setattr(kma, "_inflight_day", "")
+    monkeypatch.setattr(kma, "_attempts", {})
     return out
 
 
@@ -51,7 +53,7 @@ def test_state_holds_counts_only(sent, tmp_path):
     import json
 
     st = json.loads((tmp_path / "state.json").read_text())
-    assert set(st) == {"day", "count", "alerted", "prev_count"}
+    assert set(st) == {"day", "count", "alerted", "attempts", "prev_count"}
     assert isinstance(st["day"], str) and len(st["day"]) == 10 and isinstance(st["alerted"], bool)
     assert isinstance(st["count"], int) and isinstance(st["prev_count"], int)
 
@@ -96,3 +98,47 @@ def test_one_a_day_holds_when_the_state_file_cannot_be_written(sent, monkeypatch
     for _ in range(3):
         kma.note_first_miss(3400, 0, now=DAY1, sync=True)
     assert len(sent) == 1
+
+
+def test_a_failed_send_is_retried_and_the_day_is_only_marked_after_delivery(sent, monkeypatch, tmp_path):
+    import json
+
+    calls: list = []
+
+    def flaky(text):
+        calls.append(text)
+        return len(calls) >= 2            # Telegram fails once, then works
+
+    monkeypatch.setattr(kma, "_ops_send", flaky)
+    assert kma.note_first_miss(3400, 0, now=DAY1, sync=True)           # attempt 1 fails
+    assert json.loads((tmp_path / "state.json").read_text())["alerted"] is False, "a failed send must not close the day"
+    assert kma.note_first_miss(3400, 0, now=DAY1 + 60, sync=True)      # attempt 2 delivers
+    assert kma.note_first_miss(3400, 0, now=DAY1 + 120, sync=True) is None   # delivered: no more today
+    assert len(calls) == 2 and json.loads((tmp_path / "state.json").read_text())["alerted"] is True
+
+
+def test_retries_are_bounded_per_day(sent, monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(kma, "_ops_send", lambda text: calls.append(text) and False)
+    for i in range(6):
+        kma.note_first_miss(3400, 0, now=DAY1 + i, sync=True)
+    assert len(calls) == kma.MAX_ATTEMPTS_PER_DAY
+
+
+def test_the_voice_turn_does_no_state_io(sent, monkeypatch, tmp_path):
+    """note_first_miss on the event loop only starts a thread: the state file is untouched until the worker runs."""
+    started: list = []
+
+    class _T:
+        def __init__(self, target=None, args=(), **k):
+            started.append((target, args))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(kma.threading, "Thread", _T)
+    assert kma.note_first_miss(3400, 0, now=DAY1) is None
+    assert not (tmp_path / "state.json").exists(), "state I/O must not run on the caller's thread"
+    target, args = started[0]
+    target(*args)                                                       # the worker does it
+    assert (tmp_path / "state.json").exists() and len(sent) == 1
