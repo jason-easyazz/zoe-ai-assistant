@@ -2943,8 +2943,10 @@ def _open_moonshine_stream():
     if env_bool("ZOE_MOONSHINE_VAD_RESET", default=True) and _moonshine_infer_lock.acquire(timeout=0.25):
         try:
             reset_silero_state(transcriber_lib(tr))
+            st.start()  # same lock hold: no batch call can re-dirty the Silero between the reset and the start
         finally:
             _moonshine_infer_lock.release()
+        return st
     st.start()
     return st
 

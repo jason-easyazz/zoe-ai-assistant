@@ -241,3 +241,19 @@ def test_stream_open_skips_reset_instead_of_stalling_behind_a_held_infer_lock(mo
     finally:
         vt._moonshine_infer_lock.release()
     assert events == ["create", "start"]
+
+
+def test_stream_start_runs_under_the_same_infer_lock_hold_as_the_reset(monkeypatch):
+    vt, events = _stream_setup(monkeypatch)
+    held = []
+    monkeypatch.setattr(
+        vt, "reset_silero_state", lambda lib: held.append(("reset", vt._moonshine_infer_lock.locked())) or True)
+
+    class _Tr(_FakeStreamTr):
+        def create_stream(self):
+            return types.SimpleNamespace(start=lambda: held.append(("start", vt._moonshine_infer_lock.locked())))
+
+    monkeypatch.setattr(vt, "_ensure_moonshine", lambda: _Tr(events))
+    vt._open_moonshine_stream()
+    assert held == [("reset", True), ("start", True)]
+    assert not vt._moonshine_infer_lock.locked()
