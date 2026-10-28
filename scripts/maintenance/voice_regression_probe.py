@@ -1135,7 +1135,7 @@ def cold_not_run(reason: str) -> dict[str, Any]:
 
 
 def judge_cold_start(measured: dict[str, Any] | None, baseline: dict[str, Any] | None,
-                     warn_ratio: float, warn_ms: float) -> dict[str, Any]:
+                     warn_ratio: float, warn_ms: float, *, recording_baseline: bool = False) -> dict[str, Any]:
     """Pure verdict on one cold-first-turn measurement. A cache miss or a TTFT regression is a FAIL; a measurement
     that could not be taken (no sidecar numbers, the wake warm did not run) is an ERROR, never a pass."""
     m = measured if isinstance(measured, dict) else {}
@@ -1164,7 +1164,9 @@ def judge_cold_start(measured: dict[str, Any] | None, baseline: dict[str, Any] |
     base_cold = (baseline or {}).get("cold_first_turn") if isinstance(baseline, dict) else None
     base_ms = base_cold.get("ttft_ms") if isinstance(base_cold, dict) else None
     note = ""
-    if isinstance(base_ms, (int, float)) and base_ms > 0:
+    if recording_baseline:
+        note = "recording a new baseline: the old cold TTFT is not the bar (warm, counts and cache floor still required)"
+    elif isinstance(base_ms, (int, float)) and base_ms > 0:
         delta, ratio = ttft - base_ms, ttft / base_ms
         fields.update(baseline_ttft_ms=base_ms, ttft_ratio=round(ratio, 3))
         if (ratio >= warn_ratio and delta >= RATIO_FLOOR_MS) or delta >= warn_ms:
@@ -1201,7 +1203,8 @@ def run_cold_start_stage(args, baseline: dict[str, Any] | None) -> dict[str, Any
         if not lines:
             return _cold_block("error", f"cold first-turn measurement printed no result (rc={proc.returncode}): "
                                         f"{proc.stderr[-300:]}")
-        return judge_cold_start(json.loads(lines[-1]), baseline, args.warn_ratio, args.warn_ms)
+        return judge_cold_start(json.loads(lines[-1]), baseline, args.warn_ratio, args.warn_ms,
+                                recording_baseline=bool(getattr(args, "update_baseline", False)))
     except Exception as exc:  # noqa: BLE001 - a stage that cannot run is an error, never a pass
         return _cold_block("error", f"cold first-turn stage crashed: {type(exc).__name__}: {exc}")
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -109,21 +110,42 @@ def test_disabled_stage_is_a_recorded_skip():
     assert r["status"] == "skip" and "disabled" in r["reason"]
 
 
-def _fake_service(monkeypatch, *, prompt_n, cache_n):
-    """Stub the three production modules the child imports: this tests ITS sequencing and arithmetic."""
+def _fake_service(monkeypatch, *, prompt_n, cache_n, chunks=("hello",), delay=0.0, pool_ok=True, evict="warmed",
+                  manner_on=True, manner_block_text="BLOCK", turn_manner=True):
+    """Stub the production modules the child imports: this tests ITS sequencing, arithmetic and guards."""
     order: list[str] = []
     bd = types.ModuleType("brain_dispatch")
     bd.use_flue_brain = lambda: True
     sg = types.ModuleType("brain_slot_guard")
     sg.quiet_s = lambda: 45.0
+    dp = types.ModuleType("db_pool")
+
+    async def init_pool():
+        if not pool_ok:
+            raise RuntimeError("no db")
+        order.append("pool_open")
+
+    async def close_pool():
+        order.append("pool_close")
+
+    dp.init_pool, dp.close_pool = init_pool, close_pool
+    mb = types.ModuleType("manner_block")
+    mb.enabled = lambda: manner_on
     zf = types.ModuleType("zoe_flue_client")
 
     zf._wrap_message_with_replay = lambda m, on: " zoe-replay:1\n" + m if on else m
 
+    async def manner_ctx(member, message):
+        return manner_block_text
+
+    zf._manner_context_block = manner_ctx
+    zf._leading_envelope_lines = lambda m: {"manner": "x" if turn_manner else "", "persona": ""}
+    zf._note_turn_envelope = lambda uid, sid, outbound: None
+
     async def kv_turn(sid, state, message=""):
         assert message.startswith(" zoe-replay:1\n"), "every raw sidecar request of the probe must be replay-isolated"
         order.append("evict")
-        return "warmed", 1, 0
+        return evict, 1, 0
 
     async def warm(member=""):
         order.append(f"warm:{member}")
@@ -134,9 +156,13 @@ def _fake_service(monkeypatch, *, prompt_n, cache_n):
 
     async def turn(message, session_id, user_id="", **kw):
         assert kw.get("replay_isolation") is True
+        assert os.environ.get("ZOE_FLUE_STREAM_ENABLED") == "1", "the stage must measure the streaming path the panel uses"
         order.append("turn")
+        zf._note_turn_envelope(user_id, session_id, "wire")
         zf._log_prompt_cache("s", {"prompt_cache": [{"prompt_n": prompt_n, "cache_n": cache_n}]})
-        yield "hello"
+        for c in chunks:
+            await asyncio.sleep(delay)
+            yield c
 
     async def wrapper(*a, **k):    # the brief / proactive claim-and-settle wrapper: the probe must never go through it
         raise AssertionError("cold probe called run_flue_brain_streaming: it claims household state")
@@ -144,20 +170,70 @@ def _fake_service(monkeypatch, *, prompt_n, cache_n):
 
     zf.run_flue_brain_streaming = wrapper
     zf._kv_warm_turn, zf.warm_kv_prefix, zf._log_prompt_cache, zf._run_flue_brain_streaming_turn = kv_turn, warm, log_cache, turn
-    for name, mod in (("brain_dispatch", bd), ("brain_slot_guard", sg), ("zoe_flue_client", zf)):
+    for name, mod in (("brain_dispatch", bd), ("brain_slot_guard", sg), ("zoe_flue_client", zf), ("db_pool", dp),
+                      ("manner_block", mb)):
         monkeypatch.setitem(sys.modules, name, mod)
+    monkeypatch.delenv("ZOE_FLUE_STREAM_ENABLED", raising=False)
     return order
 
 
 def test_child_sequence_and_arithmetic(monkeypatch):
     order = _fake_service(monkeypatch, prompt_n=100, cache_n=300)
     r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
-    assert order == ["evict", "warm:jason", "turn", "log"]            # evict -> wait -> wake warm -> first turn
+    # pool open -> evict -> wait -> wake warm -> first turn -> pool closed
+    assert order == ["pool_open", "evict", "warm:jason", "turn", "log", "pool_close"]
     assert r["status"] == "ok" and r["cache_frac"] == 0.75 and r["warm"] == "warmed" and r["ttft_ms"] >= 0
     assert _judge(r)["status"] == "fail"                              # 75% < the 80% floor, end to end
 
 
 def test_child_missing_counts_are_not_zeroed(monkeypatch):
-    order = _fake_service(monkeypatch, prompt_n=None, cache_n=300)       # prompt_n absent from the terminal
+    _fake_service(monkeypatch, prompt_n=None, cache_n=300)               # prompt_n absent from the terminal
     r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
     assert r["status"] == "error" and "prompt_cache" in r["reason"]
+
+
+def test_no_db_pool_is_an_error_not_a_blockless_measurement(monkeypatch):
+    order = _fake_service(monkeypatch, prompt_n=10, cache_n=900, pool_ok=False)
+    r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
+    assert r["status"] == "error" and "db pool" in r["reason"] and "evict" not in order
+
+
+def test_member_blocks_enabled_but_not_rendered_is_an_error(monkeypatch):
+    _fake_service(monkeypatch, prompt_n=10, cache_n=900, manner_block_text="")          # adult lookup failed closed
+    r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
+    assert r["status"] == "error" and "manner" in r["reason"]
+
+
+def test_turn_envelope_without_the_enabled_block_is_an_error(monkeypatch):
+    _fake_service(monkeypatch, prompt_n=10, cache_n=900, turn_manner=False)
+    r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
+    assert r["status"] == "error" and "no manner block" in r["reason"]
+
+
+def test_blocks_off_live_means_an_empty_envelope_is_fine(monkeypatch):
+    _fake_service(monkeypatch, prompt_n=10, cache_n=900, manner_on=False, manner_block_text="", turn_manner=False)
+    assert asyncio.run(mcf.measure("jason", 0.0, 0.0))["status"] == "ok"
+
+
+def test_ttft_is_the_first_reply_text_not_a_tool_or_thinking_sentinel(monkeypatch):
+    _fake_service(monkeypatch, prompt_n=10, cache_n=900, delay=0.06,
+                  chunks=("__THINKING__:{}", "__TOOL__:{}", "  ", "hello"))
+    r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
+    assert r["ttft_ms"] >= 3 * 60 * 0.9, r          # waited through three non-text chunks (the control: ~60 ms if counted)
+    assert mcf._is_reply_text("hello") and not mcf._is_reply_text("__TOOL__:x") and not mcf._is_reply_text("")
+
+
+def test_an_incomplete_eviction_is_an_error(monkeypatch):
+    order = _fake_service(monkeypatch, prompt_n=10, cache_n=900, evict="http_503")
+    r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
+    assert r["status"] == "error" and "eviction" in r["reason"] and not any(o.startswith("warm") for o in order)
+
+
+def test_recording_a_baseline_skips_the_old_ttft_bar_but_not_the_floor():
+    slow = {**HIT, "ttft_ms": 6000.0}
+    assert _judge(slow)["status"] == "fail"                                                  # normal run: regression
+    rec = vrp.judge_cold_start(slow, BASE, 1.5, 1500, recording_baseline=True)
+    assert rec["status"] == "pass" and rec["baseline_ttft_ms"] is None
+    assert vrp.judge_cold_start(MISS, BASE, 1.5, 1500, recording_baseline=True)["status"] == "fail"
+    assert vrp.judge_cold_start({**slow, "warm": "skipped:off"}, BASE, 1.5, 1500,
+                                recording_baseline=True)["status"] == "error"

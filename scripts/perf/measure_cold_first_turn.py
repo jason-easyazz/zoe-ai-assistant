@@ -30,6 +30,12 @@ import time
 UTTERANCE = "Good evening, how are you going tonight?"
 
 
+def _is_reply_text(chunk: object) -> bool:
+    """A real reply-text delta: not empty, not a __TOOL__ / __THINKING__ phase sentinel."""
+    return (isinstance(chunk, str) and chunk.strip() != ""
+            and not chunk.startswith(("__TOOL__:", "__THINKING__:")))
+
+
 def _load_env(service_dir: str) -> None:
     path = os.path.join(service_dir, ".env")
     if not os.path.exists(path):
@@ -42,11 +48,33 @@ def _load_env(service_dir: str) -> None:
 
 
 async def measure(member: str, wait_s: float | None, gap_s: float) -> dict:
+    """Open the DB pool the live service has (the manner block's adult lookup and the persona snapshot FAIL CLOSED
+    without it, dropping the member's blocks from the warm AND the turn), measure, close it."""
+    import db_pool
+
+    try:
+        await db_pool.init_pool()
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "reason": f"db pool unavailable ({type(exc).__name__}): the member's prompt blocks "
+                                              "would be dropped, so this is not the panel's prompt", "member": member}
+    try:
+        return await _measure(member, wait_s, gap_s)
+    finally:
+        try:
+            await db_pool.close_pool()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _measure(member: str, wait_s: float | None, gap_s: float) -> dict:
     import brain_dispatch
     import brain_slot_guard
     import zoe_flue_client as zfc
 
     out: dict = {"status": "ok", "reason": "", "member": member}
+    # The panel streams: sentence TTS starts on the first delta. Without the stream flag the turn yields the whole reply
+    # at once and "time to first delta" would be the full generation time.
+    os.environ["ZOE_FLUE_STREAM_ENABLED"] = "1"
     if not brain_dispatch.use_flue_brain():
         return {**out, "status": "skip", "reason": "ZOE_BRAIN_BACKEND is not flue: no Flue first turn to measure"}
     wait = brain_slot_guard.quiet_s() + 2.0 if wait_s is None else float(wait_s)
@@ -55,9 +83,12 @@ async def measure(member: str, wait_s: float | None, gap_s: float) -> dict:
     # 1. evict: a request that does not extend the conversation prompt replaces the slot's content
     try:
         # replay-isolated like every other request this script sends: even a tool call from the model would not commit
-        await zfc._kv_warm_turn("probe-cold-evict", {}, zfc._wrap_message_with_replay("Reply with the single word: ok.", True))
+        evicted = await zfc._kv_warm_turn("probe-cold-evict", {}, zfc._wrap_message_with_replay("Reply with the single word: ok.", True))
     except Exception as exc:  # noqa: BLE001
         return {**out, "status": "error", "reason": f"evict request failed: {type(exc).__name__}: {exc}"}
+    if not (isinstance(evicted, tuple) and evicted and evicted[0] == "warmed"):
+        # an eviction that did not complete leaves the conversation in the slot: the next turn would be warm, not cold
+        return {**out, "status": "error", "reason": f"the eviction request did not complete (outcome {evicted!r})"}
     # 2. wait out the quiet window
     await asyncio.sleep(max(0.0, wait))
     # 3. the panel's wake prewarm, then the gap between the wake word and the finished utterance
@@ -78,18 +109,37 @@ async def measure(member: str, wait_s: float | None, gap_s: float) -> dict:
             pass
         return orig(session_id, terminal)
 
+    # the member blocks the live prompt carries, computed through the same providers the turn calls
+    import manner_block
+
+    expect_manner = bool(await zfc._manner_context_block(member, UTTERANCE))
+    if manner_block.enabled() and not expect_manner:
+        return {**out, "status": "error", "reason": "manner blocks are on but none rendered for this member (adult "
+                                                     "lookup failing?): the measured prompt is not the panel's"}
+    envelope: dict = {}
+    orig_note = zfc._note_turn_envelope
+
+    def _note(uid, session_id, outbound):
+        envelope.update(zfc._leading_envelope_lines(outbound))
+        return orig_note(uid, session_id, outbound)
+
+    zfc._note_turn_envelope = _note
     zfc._log_prompt_cache = _spy
     t0 = time.monotonic()
     ttft = None
     try:
         async for chunk in zfc._run_flue_brain_streaming_turn(
                 UTTERANCE, f"voice-panel-probe-cold-{int(t0)}", member, replay_isolation=True):
-            if ttft is None and chunk:
+            if ttft is None and _is_reply_text(chunk):
                 ttft = (time.monotonic() - t0) * 1000.0
     except Exception as exc:  # noqa: BLE001
         return {**out, "status": "error", "reason": f"first turn failed: {type(exc).__name__}: {exc}"}
     finally:
         zfc._log_prompt_cache = orig
+        zfc._note_turn_envelope = orig_note
+    if expect_manner and not envelope.get("manner"):
+        return {**out, "status": "error", "reason": "the measured turn carried no manner block although one is enabled "
+                                                     "for this member: not the panel's prompt"}
     if "prompt_n" not in seen or ttft is None:
         return {**out, "status": "error",
                 "reason": "the sidecar reported no prompt_cache for the first turn (older sidecar, or no reply)"}
