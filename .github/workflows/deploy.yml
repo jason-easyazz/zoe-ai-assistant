@@ -440,11 +440,16 @@ jobs:
           # `docker compose up -d` only recreates a container whose config hash changed, so a
           # merged edit to docker-compose.modules.yml (loopback binds, mounts, image pins) sat
           # unapplied until someone recreated by hand. Skip when the file is untouched since
-          # the pre-pull checkout; an unknown OLD_SHA falls through (fail closed), and the
-          # per-container no-op of `up -d` keeps that safe.
-          if [ -n "${OLD_SHA:-}" ] \
-             && git diff --quiet "${OLD_SHA}" HEAD -- docker-compose.modules.yml; then
-            echo "docker-compose.modules.yml unchanged since ${OLD_SHA} — module containers left alone."
+          # the LAST SUCCESSFUL deploy (DEPLOY_BASE_SHA, not the pre-pull OLD_SHA: a deploy that
+          # failed after the reset and is re-run would otherwise see "unchanged" and never
+          # reconcile). An unknown base falls through (fail closed); `up -d` is a per-container
+          # no-op when nothing changed, so that stays safe.
+          # Profile-gated services (profiles: [multica]) are NOT enumerated on purpose: applying
+          # the merged Multica config is an owner step (it needs MULTICA_DEV_CODE set first,
+          # owner-steps-2026-10-28-security.md step 2); include them with `--profile "*"` once done.
+          if [ -n "${DEPLOY_BASE_SHA:-}" ] \
+             && git diff --quiet "${DEPLOY_BASE_SHA}" HEAD -- docker-compose.modules.yml; then
+            echo "docker-compose.modules.yml unchanged since the last deploy (${DEPLOY_BASE_SHA}) — module containers left alone."
             exit 0
           fi
           # Validate the NEW file before touching anything, so a bad edit fails here and not

@@ -66,14 +66,16 @@ def world(tmp_path: Path):
     return {"live": live, "base": base, "bin": bindir, "log": tmp_path / "docker.log"}
 
 
-def _run(world, old_sha: str | None, bad_config: bool = False):
+def _run(world, old_sha: str | None, bad_config: bool = False, pre_pull_sha: str | None = None):
     script = _step_run().replace("cd /home/zoe/assistant", f"cd {world['live']}", 1)
     env = {**os.environ, "PATH": f"{world['bin']}:{os.environ['PATH']}",
            "DOCKER_LOG": str(world["log"])}
-    env.pop("OLD_SHA", None)
+    env.pop("DEPLOY_BASE_SHA", None); env.pop("OLD_SHA", None)
     env.pop("DOCKER_BAD_CONFIG", None)
     if old_sha is not None:
-        env["OLD_SHA"] = old_sha
+        env["DEPLOY_BASE_SHA"] = old_sha
+    if pre_pull_sha is not None:
+        env["OLD_SHA"] = pre_pull_sha
     if bad_config:
         env["DOCKER_BAD_CONFIG"] = "1"
     world["log"].write_text("")
@@ -126,3 +128,12 @@ def test_cloudflared_is_pinned_by_digest_not_latest():
     m = re.search(r"^\s*image:\s*(cloudflare/cloudflared\S*)", compose, re.M)
     assert m, "cloudflared service present"
     assert re.fullmatch(r"cloudflare/cloudflared@sha256:[0-9a-f]{64}", m.group(1)), m.group(1)
+
+
+def test_a_rerun_after_a_failed_deploy_still_reconciles(world):
+    # the first attempt reset the checkout to HEAD and then failed: OLD_SHA (pre-pull) == HEAD now, but the last SUCCESSFUL deploy
+    # (DEPLOY_BASE_SHA) is still the old base, so the changed modules file must still be applied
+    head = _commit(world["live"], "docker-compose.modules.yml", "v2\n")
+    r, log = _run(world, world["base"], pre_pull_sha=head)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _ups(log), "a re-run must compare against the last successful deploy, not the pre-pull HEAD"
