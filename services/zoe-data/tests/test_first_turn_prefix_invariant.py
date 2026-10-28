@@ -121,24 +121,45 @@ def test_warm_and_first_turn_share_the_system_prompt_prefix(prod, name, uid, wor
     assert zfc.prefix_key(_warm(uid), "cardv1") == zfc.prefix_key(turn, "cardv1")
 
 
-def test_generic_every_python_envelope_prefix_is_classified():
-    """A new ``_X_ENVELOPE_PREFIX`` in the client fails here until it is classified (and the warm renders it)."""
-    names = {m.group(1) for k, v in vars(zfc).items()
-             if k.endswith("_ENVELOPE_PREFIX") and isinstance(v, str) and (m := re.match(r"^ zoe-([a-z]+):$", v))}
-    assert names == SYSTEM_PROMPT_LINES | TRANSPORT_ONLY_LINES, (
-        f"unclassified envelope provider(s): {names ^ (SYSTEM_PROMPT_LINES | TRANSPORT_ONLY_LINES)} -- if it reaches "
-        "the system prompt, _kv_warm_outbound must render it for the likely speaker, then list it in SYSTEM_PROMPT_LINES")
+# `zoe-<name>:` tokens that are NOT prompt envelope lines (a render mark and a request header).
+NOT_ENVELOPE_TOKENS = {"harness-render", "abort-on-cancel"}
+_TOKEN = re.compile(r"zoe-([a-z][a-z-]*):")
+SIDECAR = Path(__file__).resolve().parents[3] / "labs" / "flue-zoe-brain-2x" / "src"
 
 
-def test_generic_every_sidecar_envelope_prefix_is_classified():
-    """Same for the sidecar's parsers (it is where the system prompt is assembled and cannot run offline)."""
-    src = Path(__file__).resolve().parents[3] / "labs" / "flue-zoe-brain-2x" / "src"
-    if not src.is_dir():
-        pytest.skip("sidecar sources not in this checkout")
-    found = set()
-    for f in src.glob("*.ts"):
-        found |= set(re.findall(r"ENVELOPE_PREFIX\s*=\s*'\s*zoe-([a-z]+):'", f.read_text(encoding="utf-8")))
-    assert found == SYSTEM_PROMPT_LINES | TRANSPORT_ONLY_LINES, f"sidecar envelope prefixes changed: {found}"
+def _tokens(text: str) -> "set[str]":
+    return set(_TOKEN.findall(text)) - NOT_ENVELOPE_TOKENS
+
+
+def test_generic_every_python_envelope_token_is_classified():
+    """ANY `zoe-<name>:` literal in the client source (constant, f-string, inline, any quoting or wrapper name) must
+    be classified: a new envelope line fails here until the warm renders it and it is listed in SYSTEM_PROMPT_LINES."""
+    src = (Path(zfc.__file__)).read_text(encoding="utf-8")
+    assert _tokens(src) == SYSTEM_PROMPT_LINES | TRANSPORT_ONLY_LINES, (
+        f"unclassified envelope token(s): {_tokens(src) ^ (SYSTEM_PROMPT_LINES | TRANSPORT_ONLY_LINES)} -- if it "
+        "reaches the system prompt, _kv_warm_outbound must render it for the likely speaker, then list it above")
+
+
+def test_generic_every_sidecar_envelope_token_is_classified():
+    """Same for the sidecar's parsers, whatever the quoting/concatenation. The directory is load-bearing: absent = red."""
+    assert SIDECAR.is_dir(), "labs/flue-zoe-brain-2x/src missing: the sidecar side of the lock cannot be checked"
+    found: "set[str]" = set()
+    for f in SIDECAR.rglob("*.ts"):
+        found |= _tokens(f.read_text(encoding="utf-8"))
+    assert found == SYSTEM_PROMPT_LINES | TRANSPORT_ONLY_LINES, f"sidecar envelope tokens changed: {found}"
+
+
+def test_sidecar_prompt_construction_seam_is_pinned():
+    """The per-member inputs of the sidecar's system prompt are exactly (persona, manner, user-model suffix); a NEW
+    per-member input to `applyPolicies` (a parameter or another with*Block) is not seen by the client-wire comparison,
+    so it fails here until the warm provably reproduces it."""
+    ts = (SIDECAR / "providers" / "capped-completions.ts").read_text(encoding="utf-8")
+    m = re.search(r"export function applyPolicies\(([^)]*)\)", ts)
+    assert m, "applyPolicies signature moved: re-pin this test"
+    params = [p.split(":")[0].split("=")[0].strip().rstrip("?") for p in m.group(1).split(",") if p.strip()]
+    assert params == ["context", "userModelSuffix", "turnHarness"], params
+    body = ts[m.end():ts.index("\n}\n", m.end())]
+    assert sorted(set(re.findall(r"\bwith(\w+Block)\(", body))) == ["MannerBlock", "PersonaBlock", "UserModelBlock"]
 
 
 def test_generic_every_wrap_provider_is_known():
@@ -169,3 +190,12 @@ def test_negative_control_stale_manner_memo_goes_red(prod):
     zfc._LAST_TURN.clear()
     with pytest.raises(AssertionError):
         assert_prefix_identical(_warm("zed_uid"), turn)
+
+
+def test_negative_control_the_scans_see_an_inline_unnamed_provider():
+    """The scans are literal-based: an inline f-string line in a function with any name still changes the token set."""
+    src = Path(zfc.__file__).read_text(encoding="utf-8") + '\nasync def _sneaky(m, v):\n    return f" zoe-flavor:{v}\\n{m}"\n'
+    assert _tokens(src) == SYSTEM_PROMPT_LINES | TRANSPORT_ONLY_LINES | {"flavor"}
+    ts = (SIDECAR / "providers" / "capped-completions.ts").read_text(encoding="utf-8")
+    mutated = ts.replace("userModelSuffix = '',", "userModelSuffix = '', moodSuffix = '',")
+    assert mutated != ts and "moodSuffix" in re.search(r"export function applyPolicies\(([^)]*)\)", mutated).group(1)

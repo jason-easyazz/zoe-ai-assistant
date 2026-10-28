@@ -66,6 +66,11 @@ def test_no_cold_baseline_checks_the_floor_only_and_says_so():
     assert _judge(MISS, base={})["status"] == "fail"
 
 
+def test_nan_is_unmeasured_not_a_pass():
+    assert _judge({**HIT, "cache_frac": float("nan")})["status"] == "error"
+    assert _judge({**HIT, "ttft_ms": float("nan")})["status"] == "error"
+
+
 def test_unmeasurable_is_an_error_not_a_pass():
     assert _judge({"status": "error", "reason": "boom"})["status"] == "error"
     assert _judge({**HIT, "warm": "skipped:inflight"})["status"] == "error"
@@ -125,7 +130,12 @@ def _fake_service(monkeypatch, *, prompt_n, cache_n):
         zf._log_prompt_cache("s", {"prompt_cache": [{"prompt_n": prompt_n, "cache_n": cache_n}]})
         yield "hello"
 
-    zf._kv_warm_turn, zf.warm_kv_prefix, zf._log_prompt_cache, zf.run_flue_brain_streaming = kv_turn, warm, log_cache, turn
+    async def wrapper(*a, **k):    # the brief / proactive claim-and-settle wrapper: the probe must never go through it
+        raise AssertionError("cold probe called run_flue_brain_streaming: it claims household state")
+        yield ""
+
+    zf.run_flue_brain_streaming = wrapper
+    zf._kv_warm_turn, zf.warm_kv_prefix, zf._log_prompt_cache, zf._run_flue_brain_streaming_turn = kv_turn, warm, log_cache, turn
     for name, mod in (("brain_dispatch", bd), ("brain_slot_guard", sg), ("zoe_flue_client", zf)):
         monkeypatch.setitem(sys.modules, name, mod)
     return order

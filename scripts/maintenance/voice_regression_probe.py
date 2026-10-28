@@ -112,6 +112,7 @@ import glob
 import hashlib
 import importlib.util
 import json
+import math
 from datetime import datetime, timezone
 import os
 import re
@@ -1150,7 +1151,7 @@ def judge_cold_start(measured: dict[str, Any] | None, baseline: dict[str, Any] |
         return _cold_block("error", f"the wake prewarm did not run (outcome {warm!r}), so the first turn is not the "
                                     "panel's path - re-run when nothing else is warming the slot", **fields)
     frac, ttft = m.get("cache_frac"), m.get("ttft_ms")
-    if not isinstance(frac, (int, float)) or not isinstance(ttft, (int, float)):
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (frac, ttft)):
         return _cold_block("error", "cold first-turn measurement carried no cache fraction / TTFT", **fields)
     problems: list[str] = []
     if frac < COLD_MIN_CACHE_FRAC:

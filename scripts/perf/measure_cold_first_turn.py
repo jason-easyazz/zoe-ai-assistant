@@ -8,8 +8,10 @@ longer matching the real first turn: ~6 s cold vs ~1.2 s warm). This measures th
                 (what the post-turn background passes do);
   2. wait    -- the slot guard's quiet window (``brain_slot_guard.quiet_s()``), override ``--wait-s``;
   3. warm    -- ``zoe_flue_client.warm_kv_prefix(member)``, the exact call the panel's wake prewarm makes;
-  4. ask     -- ``run_flue_brain_streaming`` as the same member, replay-isolated (writes reported, never committed),
-                traffic class ``probe`` (so it never reaches the household alarms or the owner alert).
+  4. ask     -- ``_run_flue_brain_streaming_turn`` (the envelope/prompt path of every real turn, BELOW the wrapper that
+                claims the member's day brief and proactive raise: those write household state and have no dry-run mode)
+                as the same member, replay-isolated (tool writes reported, never committed), traffic class ``probe``
+                (so it never reaches the household alarms or the owner alert).
 
 Prints ONE JSON object on stdout: {status: ok|skip|error, reason, member, warm, wait_s, first_prompt_n, first_cache_n,
 cache_frac, ttft_ms}. ``prompt_n`` is the tokens RE-PREFILLED and ``cache_n`` the tokens reused, so cache_frac is
@@ -78,7 +80,7 @@ async def measure(member: str, wait_s: float | None, gap_s: float) -> dict:
     t0 = time.monotonic()
     ttft = None
     try:
-        async for chunk in zfc.run_flue_brain_streaming(
+        async for chunk in zfc._run_flue_brain_streaming_turn(
                 UTTERANCE, f"voice-panel-probe-cold-{int(t0)}", member, replay_isolation=True):
             if ttft is None and chunk:
                 ttft = (time.monotonic() - t0) * 1000.0
