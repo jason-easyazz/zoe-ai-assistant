@@ -44,6 +44,7 @@ class _FakeSilero:
 @pytest.fixture(autouse=True)
 def _supported(monkeypatch):
     monkeypatch.setattr(mvs, "_supported_version", lambda: True)
+    monkeypatch.setattr(mvs, "_warned", False)  # restored at teardown, so no test leaks the once-only warning state
 
 
 def test_reset_zeroes_state_and_context_only(monkeypatch):
@@ -93,12 +94,11 @@ def test_unreadable_vector_target_writes_nothing(monkeypatch):
 
 
 def test_no_silero_yet_or_missing_symbol_is_a_noop(monkeypatch):
-    monkeypatch.setattr(mvs, "_object_address", lambda lib: 0)
-    assert mvs.reset_silero_state(object()) is False  # pristine zeros already
-    monkeypatch.setattr(mvs, "_warned", False)
-    monkeypatch.undo()
-    monkeypatch.setattr(mvs, "_supported_version", lambda: True)
-    assert mvs.reset_silero_state(object()) is False  # a plain object has no symbol: ctypes raises -> swallowed
+    with monkeypatch.context() as m:
+        m.setattr(mvs, "_object_address", lambda lib: 0)
+        assert mvs.reset_silero_state(object()) is False  # pristine zeros already
+    # real _object_address on a plain object has no symbol: ctypes raises -> swallowed
+    assert mvs.reset_silero_state(object()) is False
 
 
 class _StatefulTranscriber:
