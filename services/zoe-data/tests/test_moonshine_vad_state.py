@@ -56,11 +56,15 @@ def test_reset_zeroes_state_and_context_only(monkeypatch):
 
 def test_unsupported_version_never_touches_memory(monkeypatch):
     obj = _FakeSilero()
-    monkeypatch.setattr(mvs, "_object_address", lambda lib: (_ for _ in ()).throw(AssertionError("dereferenced")))
+    looked = []
+    monkeypatch.setattr(mvs, "_object_address", lambda lib: looked.append(1) or obj.address)
     monkeypatch.setattr(mvs, "_supported_version", lambda: False)
     monkeypatch.setattr(mvs, "_warned", False)
     assert mvs.reset_silero_state(object()) is False
-    assert all(v == 1.0 for v in obj.state)
+    assert looked == [], "an unvalidated version must not even resolve the object"
+    assert all(v == 1.0 for v in obj.state) and all(v == 1.0 for v in obj.context)
+    monkeypatch.setattr(mvs, "_supported_version", lambda: True)  # control: same object resets once supported
+    assert mvs.reset_silero_state(object()) is True and not any(obj.state)
 
 
 def test_unexpected_layout_writes_nothing(monkeypatch):

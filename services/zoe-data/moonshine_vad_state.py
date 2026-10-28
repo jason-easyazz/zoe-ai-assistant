@@ -52,6 +52,17 @@ def _safe_read(addr: int, size: int) -> bytes:
     return data
 
 
+def _safe_zero(addr: int, size: int) -> None:
+    """Zero ``size`` bytes at ``addr`` through /proc/self/mem (fault-safe: an unwritable address raises OSError instead
+    of killing the process the way ``ctypes.memset`` would)."""
+    fd = os.open("/proc/self/mem", os.O_WRONLY)
+    try:
+        if os.pwrite(fd, bytes(size), addr) != size:
+            raise OSError("short write")
+    finally:
+        os.close(fd)
+
+
 def _supported_version() -> bool:
     try:
         import moonshine_voice
@@ -91,8 +102,8 @@ def reset_silero_state(lib: Any) -> bool:
         state = _vector_at(words, *_LAYOUT_STATE)
         _safe_read(ctx, _LAYOUT_CONTEXT[1] * 4)  # both write targets must be readable (mapped) before any write
         _safe_read(state, _LAYOUT_STATE[1] * 4)
-        ctypes.memset(state, 0, _LAYOUT_STATE[1] * 4)
-        ctypes.memset(ctx, 0, _LAYOUT_CONTEXT[1] * 4)
+        _safe_zero(state, _LAYOUT_STATE[1] * 4)
+        _safe_zero(ctx, _LAYOUT_CONTEXT[1] * 4)
         return True
     except Exception as exc:  # absent symbol, other build, unreadable object -> fix lost, never a crash
         if not _warned:
