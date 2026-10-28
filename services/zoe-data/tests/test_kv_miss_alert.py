@@ -9,7 +9,8 @@ import zoe_flue_client as zf
 pytestmark = pytest.mark.ci_safe
 
 DAY1 = 1_790_000_000.0          # an arbitrary instant
-DAY2 = DAY1 + 2 * 86400
+DAY2 = DAY1 + 86400             # the next calendar day (in any timezone: a whole 24 h later)
+DAY4 = DAY1 + 3 * 86400
 
 
 @pytest.fixture
@@ -28,6 +29,8 @@ def test_one_alert_a_day_with_the_daily_count(sent):
     assert len(sent) == 1 and "today: 1" in sent[0]
     again = kma.note_first_miss(3000, 10, now=DAY2, sync=True)       # next day: one more, naming yesterday's 4
     assert again and len(sent) == 2 and "today: 1" in sent[1] and "yesterday: 4" in sent[1]
+    kma.note_first_miss(3000, 10, now=DAY4, sync=True)               # after a gap yesterday had none: 0, not the old 1
+    assert "yesterday: 0" in sent[2]
 
 
 def test_off_switch_and_a_failing_sender_never_raise(monkeypatch, sent):
@@ -40,6 +43,22 @@ def test_off_switch_and_a_failing_sender_never_raise(monkeypatch, sent):
 
     monkeypatch.setattr(kma, "_ops_send", boom)
     assert kma.note_first_miss(3400, 0, now=DAY2, sync=True)          # swallowed
+
+
+def test_state_holds_counts_only(sent, tmp_path):
+    kma.note_first_miss(3400, 0, now=DAY1, sync=True)
+    import json
+
+    assert set(json.loads((tmp_path / "state.json").read_text())) == {"day", "count", "alerted", "prev_count"}
+
+
+def test_pytest_refuses_a_state_override_inside_the_live_dir(monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setenv("ZOE_KV_MISS_ALERT_STATE", str(Path.home() / ".zoe" / "kv-miss-alert.json"))
+    assert kma._enabled() is False
+    monkeypatch.delenv("ZOE_KV_MISS_ALERT_STATE")
+    assert kma._enabled() is False
 
 
 def test_alarm_wiring_first_household_only(sent, monkeypatch):

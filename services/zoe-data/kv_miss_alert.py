@@ -9,6 +9,7 @@ The message carries the day's miss count so far and yesterday's. State: ``~/.zoe
 """
 from __future__ import annotations
 
+import datetime
 import importlib.util
 import json
 import logging
@@ -29,8 +30,11 @@ def _state_path() -> Path:
 
 
 def _enabled() -> bool:
-    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("ZOE_KV_MISS_ALERT_STATE"):
-        return False   # an unrelated test must never write the live state file
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        # an unrelated test must never write the live state file: only an explicit override OUTSIDE ~/.zoe counts
+        override = os.environ.get("ZOE_KV_MISS_ALERT_STATE")
+        if not override or (Path.home() / ".zoe").resolve() in Path(override).resolve().parents:
+            return False
     return os.environ.get("ZOE_PANEL_KV_MISS_ALERT", "1").strip().lower() not in ("0", "off", "false", "no")
 
 
@@ -38,9 +42,14 @@ def _today(now: "float | None" = None) -> str:
     return time.strftime("%Y-%m-%d", time.localtime(time.time() if now is None else now))
 
 
+def _yesterday(now: "float | None" = None) -> str:
+    t = time.localtime(time.time() if now is None else now)
+    return (datetime.date(t.tm_year, t.tm_mon, t.tm_mday) - datetime.timedelta(days=1)).isoformat()
+
+
 def _ops_send(text: str) -> bool:
     """The repo's ops Telegram path. Under pytest it never reaches the network."""
-    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("ZOE_KV_MISS_ALERT_LIVE_TEST"):
+    if os.environ.get("PYTEST_CURRENT_TEST"):
         return False
     spec = importlib.util.spec_from_file_location(
         "_zoe_clw", _REPO_ROOT / "scripts" / "maintenance" / "zoe_crash_loop_watch.py")
@@ -65,8 +74,9 @@ def note_first_miss(first_prompt: int, first_cache: int, *, now: "float | None" 
             except Exception:  # noqa: BLE001
                 st = {}
             if st.get("day") != day:
+                # "yesterday" is the immediately preceding calendar day only: after a gap it is 0, not the last busy day
                 st = {"day": day, "count": 0, "alerted": False,
-                      "prev_count": int(st.get("count") or 0) if st.get("day") else 0}
+                      "prev_count": int(st.get("count") or 0) if st.get("day") == _yesterday(now) else 0}
             st["count"] = int(st.get("count") or 0) + 1
             fire = not st.get("alerted")
             if fire:
