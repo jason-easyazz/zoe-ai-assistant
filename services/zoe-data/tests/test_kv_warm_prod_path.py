@@ -367,3 +367,24 @@ def test_repeat_is_skipped_when_a_real_turn_started_and_already_finished(monkeyp
     assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
     assert len(posts) == 1
     brain_slot_guard.reset()
+
+
+def test_late_preparation_that_ignored_cancellation_never_submits(monkeypatch, prod_turn):
+    import brain_slot_guard
+
+    posts = _sidecar(monkeypatch, [2942], {"v": "cardv1"})
+    started = []
+    monkeypatch.setattr(brain_slot_guard, "turn_started", lambda *a, **k: started.append(1))
+    monkeypatch.setattr(zfc, "_KV_WARM_MAX_S", 0.1)
+
+    async def _stubborn_card(uid):
+        for _ in range(8):                       # ~0.4 s: past the cap, swallowing the cancel, then returning
+            try:
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                continue
+        return "cardv1"
+
+    monkeypatch.setattr(zfc, "_card_version", _stubborn_card)
+    assert _run(zfc.warm_kv_prefix("zed_uid")) in ("failed:timeout",)
+    assert not started and not posts
