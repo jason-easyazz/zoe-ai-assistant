@@ -110,8 +110,10 @@ def _telegram(text: str, report=None) -> bool:
         return False
     # Environment wins over the file, so an operator can point alerts somewhere
     # else without editing the bot's own env.
+    # An EMPTY variable is not an override: zoe-data's .env carries `TELEGRAM_BOT_TOKEN=` (blank) and loads it into
+    # os.environ, so in-process callers (the cold-first-turn alert) used to wipe the file's real token and fail silently.
     env = {**env, **{k: v for k, v in os.environ.items()
-                     if k in ("ZOE_ALERT_TELEGRAM_CHAT_IDS", "TELEGRAM_BOT_TOKEN")}}
+                     if k in ("ZOE_ALERT_TELEGRAM_CHAT_IDS", "TELEGRAM_BOT_TOKEN") and v.strip()}}
     token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
     users = _recipients(env)
     if not token or not users:
