@@ -54,7 +54,8 @@ async def measure(member: str, wait_s: float | None, gap_s: float) -> dict:
 
     # 1. evict: a request that does not extend the conversation prompt replaces the slot's content
     try:
-        await zfc._kv_warm_turn("probe-cold-evict", {}, "Reply with the single word: ok.")
+        # replay-isolated like every other request this script sends: even a tool call from the model would not commit
+        await zfc._kv_warm_turn("probe-cold-evict", {}, zfc._wrap_message_with_replay("Reply with the single word: ok.", True))
     except Exception as exc:  # noqa: BLE001
         return {**out, "status": "error", "reason": f"evict request failed: {type(exc).__name__}: {exc}"}
     # 2. wait out the quiet window

@@ -28,7 +28,7 @@ SYSTEM_PROMPT_LINES = {"uid", "manner", "persona"}
 # Lines the sidecar strips without touching the prompt text (transport / harness markers).
 TRANSPORT_ONLY_LINES = {"replay", "spec"}
 
-_LINE = re.compile(r"^ zoe-([a-z]+):[^\n]*\n")
+_LINE = re.compile(r"^ zoe-([a-z][a-z-]*):[^\n]*\n")   # same grammar as _TOKEN and the client
 
 
 def _leading(wire: str) -> "list[tuple[str, str]]":
@@ -199,3 +199,18 @@ def test_negative_control_the_scans_see_an_inline_unnamed_provider():
     ts = (SIDECAR / "providers" / "capped-completions.ts").read_text(encoding="utf-8")
     mutated = ts.replace("userModelSuffix = '',", "userModelSuffix = '', moodSuffix = '',")
     assert mutated != ts and "moodSuffix" in re.search(r"export function applyPolicies\(([^)]*)\)", mutated).group(1)
+
+
+def test_negative_control_hyphenated_turn_only_line_goes_red(prod, monkeypatch):
+    """A hyphenated per-member line (zoe-user-model:) must be compared too, not silently end the leading-line scan."""
+    orig = zfc._wrap_message_with_persona
+
+    def persona_plus(message, block):
+        out = orig(message, block)
+        return f" zoe-user-model:{json.dumps('card')}\n{out}" if block else out
+
+    monkeypatch.setattr(zfc, "_wrap_message_with_persona", persona_plus)
+    turn = prod(ENGLISH, "zed_uid")
+    assert any(n == "user-model" for n, _ in _leading(turn))
+    with pytest.raises(AssertionError):
+        assert_prefix_identical(_warm("zed_uid"), turn)

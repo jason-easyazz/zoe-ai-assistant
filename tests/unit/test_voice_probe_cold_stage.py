@@ -117,7 +117,10 @@ def _fake_service(monkeypatch, *, prompt_n, cache_n):
     sg.quiet_s = lambda: 45.0
     zf = types.ModuleType("zoe_flue_client")
 
+    zf._wrap_message_with_replay = lambda m, on: " zoe-replay:1\n" + m if on else m
+
     async def kv_turn(sid, state, message=""):
+        assert message.startswith(" zoe-replay:1\n"), "every raw sidecar request of the probe must be replay-isolated"
         order.append("evict")
         return "warmed", 1, 0
 
