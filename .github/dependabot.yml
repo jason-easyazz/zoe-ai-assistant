@@ -93,11 +93,13 @@ updates:
       # Deliberate pins (reasons in services/zoe-data/requirements*.txt). Dependabot
       # ignores by name across the whole directory, so these also stop the
       # requirements-py312.txt copies; each moves only through a deliberate PR.
-      - dependency-name: "APScheduler"      # 3.10.4: later 3.x unpickles persisted jobs differently - a reminder/autopilot whose pytz trigger fails to restore is permanently DELETED
+      - dependency-name: "APScheduler"      # 3.10.4 in the 3.10 file; the py312 lane moved to 3.11.3 BY HAND on 2026-10-28 with pytz pinned explicitly (3.11 without pytz DELETES persisted pytz-trigger jobs) - never auto-bump
+      - dependency-name: "websockets"       # 3.10 file holds 16.1.1 (17.x needs Python >=3.11, so it cannot resolve there: #2168); the py312 lane is on 17.2 by hand
+        update-types: ["version-update:semver-major"]
       - dependency-name: "onnxruntime"      # 1.23.2: last cp310 wheel; the 1.30+ step-up is a separate gated runbook move (voice VAD/embeddings)
       - dependency-name: "scikit-learn"     # held at the training pins while the ZOE_ROUTER_HEADS_BACKEND=joblib fallback can still unpickle .joblib heads
       - dependency-name: "joblib"           # same reason as scikit-learn
-      - dependency-name: "uvicorn"          # 3.10 file capped at 0.49.0 (py312 file crossed to 0.53.0 deliberately, replay-gated); websocket path moves only with the voice replay
+      - dependency-name: "uvicorn"          # 3.10 file capped at 0.49.0 (py312 file crossed to 0.53.0 then 0.54.0 deliberately, replay-gated); websocket path moves only with the voice replay
       - dependency-name: "SQLAlchemy"       # 2.1+ requires Python >=3.11, so it cannot resolve against the 3.10 requirements.txt (#2047/#2066 deps-resolvable); patch bumps within 2.0.x still flow
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "mempalace"        # moves with chromadb/B0.8 AND the pin in scripts/setup/jetson/install-jetson-agent.sh (tests/unit/test_jetson_agent_install_pins.py); a skewed side venv corrupts the palace
