@@ -409,3 +409,22 @@ def test_a_cancelled_warm_restores_the_slot_guard_and_the_inflight_flag(sidecar,
 
     _run(_go())
     assert zfc._kv_warm_inflight is False and brain_slot_guard._active == 0
+
+
+def test_a_real_turn_that_starts_during_warm_preparation_stops_the_warm(sidecar, monkeypatch):
+    """The entry is_hot() check runs BEFORE the (awaited) preparation; a real turn that starts while the warm prepares must
+    stop it before submission, or the warm queues behind the turn and replaces its resident conversation."""
+    seen, _ = sidecar
+    real = zfc._kv_warm_outbound
+
+    async def _prepare_while_a_turn_starts(member):
+        out = await real(member)
+        brain_slot_guard.turn_started()       # the member's real turn arrives mid-preparation
+        return out
+
+    monkeypatch.setattr(zfc, "_kv_warm_outbound", _prepare_while_a_turn_starts)
+    try:
+        assert _run(zfc.warm_kv_prefix()) == "skipped:hot"
+        assert seen == [], "nothing may be submitted once a real turn holds the slot"
+    finally:
+        brain_slot_guard.turn_finished()
