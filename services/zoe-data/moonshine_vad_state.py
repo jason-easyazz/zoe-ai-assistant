@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
 import struct
 from typing import Any, Optional
 
@@ -36,6 +37,19 @@ _LAYOUT_INPUT = (136, 576)
 _LAYOUT_STATE = (168, 256)
 
 _warned = False
+
+
+def _safe_read(addr: int, size: int) -> bytes:
+    """Read ``size`` bytes at ``addr`` of this process through /proc/self/mem: an unmapped/unreadable address raises
+    OSError instead of faulting (ctypes.string_at would SIGSEGV, which no ``except`` can catch)."""
+    fd = os.open("/proc/self/mem", os.O_RDONLY)
+    try:
+        data = os.pread(fd, size, addr)
+    finally:
+        os.close(fd)
+    if len(data) != size:
+        raise OSError(f"short read at object+{size}")
+    return data
 
 
 def _supported_version() -> bool:
@@ -71,10 +85,12 @@ def reset_silero_state(lib: Any) -> bool:
         obj = _object_address(lib)
         if not obj:
             return False  # no VAD constructed yet -> state is still the pristine zeros
-        words = struct.unpack(f"<{_SCAN_BYTES // 8}Q", ctypes.string_at(obj, _SCAN_BYTES))
+        words = struct.unpack(f"<{_SCAN_BYTES // 8}Q", _safe_read(obj, _SCAN_BYTES))
         ctx = _vector_at(words, *_LAYOUT_CONTEXT)
         _vector_at(words, *_LAYOUT_INPUT)
         state = _vector_at(words, *_LAYOUT_STATE)
+        _safe_read(ctx, _LAYOUT_CONTEXT[1] * 4)  # both write targets must be readable (mapped) before any write
+        _safe_read(state, _LAYOUT_STATE[1] * 4)
         ctypes.memset(state, 0, _LAYOUT_STATE[1] * 4)
         ctypes.memset(ctx, 0, _LAYOUT_CONTEXT[1] * 4)
         return True

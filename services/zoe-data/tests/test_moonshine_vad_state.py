@@ -71,6 +71,23 @@ def test_unexpected_layout_writes_nothing(monkeypatch):
     assert all(v == 1.0 for v in obj.state) and all(v == 1.0 for v in obj.context)
 
 
+def test_unmapped_object_address_is_an_error_not_a_fault(monkeypatch):
+    monkeypatch.setattr(mvs, "_object_address", lambda lib: 0x10)  # never mapped
+    monkeypatch.setattr(mvs, "_warned", False)
+    assert mvs.reset_silero_state(object()) is False
+
+
+def test_unreadable_vector_target_writes_nothing(monkeypatch):
+    obj = _FakeSilero()
+    words = list(struct.unpack("<27Q", obj.buf.raw[:216]))
+    words[21:24] = [0x20, 0x20 + 256 * 4, 0x20 + 256 * 4]  # plausible triple pointing at unmapped memory
+    ctypes.memmove(obj.buf, struct.pack("<27Q", *words), 216)
+    monkeypatch.setattr(mvs, "_object_address", lambda lib: obj.address)
+    monkeypatch.setattr(mvs, "_warned", False)
+    assert mvs.reset_silero_state(object()) is False
+    assert all(v == 1.0 for v in obj.context)
+
+
 def test_no_silero_yet_or_missing_symbol_is_a_noop(monkeypatch):
     monkeypatch.setattr(mvs, "_object_address", lambda lib: 0)
     assert mvs.reset_silero_state(object()) is False  # pristine zeros already
