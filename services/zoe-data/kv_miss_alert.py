@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _lock = threading.Lock()
+_alerted_day = ""   # in-process record: the 1/day limit holds even when the state file cannot be written
 
 
 def _state_path() -> Path:
@@ -78,9 +79,11 @@ def note_first_miss(first_prompt: int, first_cache: int, *, now: "float | None" 
                 st = {"day": day, "count": 0, "alerted": False,
                       "prev_count": int(st.get("count") or 0) if st.get("day") == _yesterday(now) else 0}
             st["count"] = int(st.get("count") or 0) + 1
-            fire = not st.get("alerted")
+            global _alerted_day
+            fire = not st.get("alerted") and _alerted_day != day
             if fire:
                 st["alerted"] = True
+                _alerted_day = day
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = path.with_suffix(".tmp")

@@ -19,6 +19,7 @@ def sent(monkeypatch, tmp_path):
     monkeypatch.delenv("ZOE_PANEL_KV_MISS_ALERT", raising=False)
     out: list = []
     monkeypatch.setattr(kma, "_ops_send", lambda text: out.append(text) or True)
+    monkeypatch.setattr(kma, "_alerted_day", "")
     return out
 
 
@@ -49,7 +50,10 @@ def test_state_holds_counts_only(sent, tmp_path):
     kma.note_first_miss(3400, 0, now=DAY1, sync=True)
     import json
 
-    assert set(json.loads((tmp_path / "state.json").read_text())) == {"day", "count", "alerted", "prev_count"}
+    st = json.loads((tmp_path / "state.json").read_text())
+    assert set(st) == {"day", "count", "alerted", "prev_count"}
+    assert isinstance(st["day"], str) and len(st["day"]) == 10 and isinstance(st["alerted"], bool)
+    assert isinstance(st["count"], int) and isinstance(st["prev_count"], int)
 
 
 def test_pytest_refuses_a_state_override_inside_the_live_dir(monkeypatch):
@@ -69,10 +73,24 @@ def test_alarm_wiring_first_household_only(sent, monkeypatch):
     assert calls == [(3400, 0)]
     assert zf._panel_kv_alarm(sid, 3400, 0, "household", now=1030.0) == "warm"      # warm miss: logged, no alert
     assert zf._panel_kv_alarm("voice-panel-p2", 3400, 0, "probe", now=1000.0) is None  # probe/harness traffic
+    assert zf._panel_kv_alarm("telegram-chat-9", 3400, 0, "household", now=1000.0) is None  # not a panel session
     assert zf._panel_kv_alarm("voice-panel-p3", 40, 3300, "household", now=1000.0) is None  # a hit
     assert calls == [(3400, 0)]
 
 
 def test_pytest_never_reaches_the_network(monkeypatch):
-    monkeypatch.delenv("ZOE_KV_MISS_ALERT_LIVE_TEST", raising=False)
+    """The guard must stop BEFORE the ops sender is even loaded: any attempt to load it fails the test."""
+    def boom(*a, **k):
+        raise AssertionError("the ops sender was loaded under pytest")
+
+    monkeypatch.setattr(kma.importlib.util, "spec_from_file_location", boom)
     assert kma._ops_send("x") is False
+
+
+def test_one_a_day_holds_when_the_state_file_cannot_be_written(sent, monkeypatch, tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    monkeypatch.setenv("ZOE_KV_MISS_ALERT_STATE", str(blocker / "state.json"))      # mkdir/write under a file fails
+    for _ in range(3):
+        kma.note_first_miss(3400, 0, now=DAY1, sync=True)
+    assert len(sent) == 1
