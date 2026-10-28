@@ -866,12 +866,34 @@ _LIST_NAME_RE = (
 )
 
 
+# STT renders a leading "Add" as "And" / "At" / "Ad" ("And eggs to the shopping list", live 2026-10-29: answered with a list READ).
+# Only the WHOLE-sentence shape "<lead> <item> to (the|my|our) <list>" is an add; "and what's on the list?" has no "to <list>" tail and
+# a question / navigation word as the item is refused, so real queries stay queries.
+_STT_ADD_LEAD_RE = re.compile(
+    rf"^\s*(?:and|at|ad|add)\s+(?P<item>.+?)\s+to\s+(?:the\s+|my\s+|our\s+){_LIST_NAME_RE}\s*[.!?]*\s*$", re.IGNORECASE)
+_NOT_AN_ITEM_LEAD = frozenset({"what", "what's", "whats", "which", "who", "where", "how", "when", "why", "is", "are", "do", "does",
+                               "go", "take", "show", "read", "tell", "give", "can", "could", "i", "we", "you"})
+
+
+def _stt_lead_list_add(message: str) -> tuple[str, str] | None:
+    match = _STT_ADD_LEAD_RE.match(message or "")
+    if not match:
+        return None
+    from list_service import clean_item_text, is_plausible_item
+
+    item = clean_item_text(_clean_action_text(match.group("item")))
+    if not is_plausible_item(item) or item.split()[0].lower().strip(",;:") in _NOT_AN_ITEM_LEAD:
+        return None
+    list_phrase = f" {re.sub(r'[- ]+', ' ', match.group('list').lower())} "
+    return item, _list_type_from_text(list_phrase) or ("shopping" if "grocery" in list_phrase else "") or "shopping"
+
+
 def _list_add_from_text(message: str) -> tuple[str, str] | None:
     """"add X to (the|my) <list>" / "put X on (the|my) <list>" - X cleaned (stutter, fillers, punctuation) and only ever a
     plausible ITEM: a sentence is not an item (see ``list_service.is_plausible_item``)."""
     head = _command_shaped(message, "add|put")
     if head is None:
-        return None
+        return _stt_lead_list_add(message)
     verb = head.group(0).lower()
     glue = r"to|into" if verb == "add" else r"on|onto|in|into|to"
     match = re.search(
@@ -2560,6 +2582,13 @@ def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     if m and has_device:
         action = "turn_on" if m.group(2) == "on" else "turn_off"
         return SkybridgeIntent(domain="smart_home", action=action, query=_clean_device(m.group(1)))
+    # A control verb + a device but NO on / off / level ("turn the light", "let's switch the lamp"): ask, never guess. Anything else
+    # that already parsed returned above; this only claims the bare verb-device shape.
+    m = re.search(r"\b(?:turn|switch|flip)\s+(?:the\s+|my\s+|our\s+)?([a-z' ]*?)\s*$", text)
+    if (m and has_device and _HOME_DEVICE_NOUN.fullmatch((m.group(1) or "").split()[-1] if (m.group(1) or "").split() else "")
+            and len((m.group(1) or "").split()) <= 3
+            and not re.search(r"\b(?:on|off|of|up|down|to|into|around|over|back|all|status|brighter|dimmer)\b", text)):
+        return SkybridgeIntent(domain="smart_home", action="clarify_state", query=_clean_device(m.group(1)))
     # Overview: "smart home", "show me the devices", "control the lights".
     if re.search(r"\bsmart\s*home\b|\bdevices?\b", text):
         return SkybridgeIntent(domain="smart_home", action="status")
@@ -3694,40 +3723,64 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     # created_at is a TEXT column — cast before the timestamp comparison, or
     # `created_at > now() - interval` throws `operator does not exist:
     # text > timestamp` on Postgres and breaks the skybridge fast path.
-    recent_dup = await db.fetchrow(
-        """
-        SELECT id FROM list_items
-        WHERE list_id = $1 AND lower(text) = lower($2) AND deleted = 0
-          AND created_at::timestamptz > now() - interval '10 seconds'
-        """,
-        list_id,
-        intent.item_text,
-    )
-    if recent_dup is not None:
-        # Answer as if the add just succeeded (it did) and point the card's
-        # "recent" highlight at the original row.
-        item_id = str(recent_dup["id"])
-        logger.info("skybridge list add: duplicate %r within 10s on list %s — replay skipped", intent.item_text, list_id)
-    else:
-        item_id = str(uuid.uuid4())
+    # An item ALREADY open on the list (case-, plural- and punctuation-insensitive) is never added twice: it is named in the
+    # reply instead ("Milk's already on the shopping list."). A spoken add may name several items ("eggs and milk").
+    from list_service import add_reply, find_matching_item, normalize_item_text, split_items
+
+    open_rows = [dict(r) for r in await db.fetch(
+        "SELECT id, text FROM list_items WHERE list_id = $1 AND deleted = 0 AND (completed IS NULL OR completed = 0)", list_id)]
+    added: list[str] = []
+    already: list[str] = []
+    new_ids: list[str] = []
+    item_id = ""
+    for part in (split_items(intent.item_text) if list_type == "shopping" else [normalize_item_text(intent.item_text)]) or [intent.item_text]:
+        recent_dup = await db.fetchrow(
+            """
+            SELECT id FROM list_items
+            WHERE list_id = $1 AND lower(text) = lower($2) AND deleted = 0
+              AND created_at::timestamptz > now() - interval '10 seconds'
+            """,
+            list_id,
+            part,
+        )
+        if recent_dup is not None:
+            # Answer as if the add just succeeded (it did) and point the card's "recent" highlight at the original row.
+            new_ids.append(str(recent_dup["id"]))
+            added.append(part)
+            logger.info("skybridge list add: duplicate %r within 10s on list %s — replay skipped", part, list_id)
+            continue
+        have = find_matching_item(open_rows, part)
+        if have is not None:
+            already.append(normalize_item_text(have["text"]))
+            if not item_id:
+                item_id = str(have["id"])
+            continue
+        new_id = str(uuid.uuid4())
         await db.execute(
             """
             INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             """,
-            item_id,
+            new_id,
             list_id,
-            intent.item_text,
+            normalize_item_text(part) or part,
             "normal",
             "",
             "",
             None,
             None,
         )
+        open_rows.append({"id": new_id, "text": part})
+        new_ids.append(new_id)
+        added.append(normalize_item_text(part) or part)
+    if new_ids:
         await _maybe_commit(db)
+        item_id = new_ids[0]
     # The item is on the list now (inserted, or already there from a replayed add): the receipt the write-claim guard reads.
-    write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", item_id, "skybridge:add_item")
-    _audit_list_item("add", user_id, list_id, item_id)
+    for _rid in (new_ids or [item_id]):
+        write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", _rid, "skybridge:add_item")
+        if _rid in new_ids:
+            _audit_list_item("add", user_id, list_id, _rid)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
     card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
     items = card_content.get("items")
@@ -3754,8 +3807,8 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
         items.sort(key=lambda row: 0 if isinstance(row, dict) and str(row.get("id") or "") == item_id else 1)
         card_content["recent_item_id"] = item_id
     refreshed["intent"] = {"domain": "lists", "action": "add_item", "list_type": list_type, "item_id": item_id}
-    refreshed["spoken_summary"] = f"Added {intent.item_text} to the {list_type} list."
-    refreshed["actions"] = [{"type": "created", "domain": "lists", "id": item_id, "list_id": list_id}]
+    refreshed["spoken_summary"] = add_reply(added, already, f"the {list_type} list")
+    refreshed["actions"] = [{"type": "created", "domain": "lists", "id": rid, "list_id": list_id} for rid in new_ids]
     return refreshed
 
 
@@ -3767,6 +3820,13 @@ def _match_list_items_by_text(items: list[dict[str, Any]], wanted: str) -> list[
     exact = [item for item in items if str(item.get("text") or "").strip().lower() == target]
     if exact:
         return exact
+    # Tolerant of the STT artefact ("noodles? Noodles") and of case / plural / punctuation: the same ITEM by list_service.item_key.
+    from list_service import item_key
+
+    want = item_key(target)
+    same = [item for item in items if want and item_key(str(item.get("text") or "")) == want]
+    if same:
+        return same
     if re.search(r"\b(?:and|or)\b|&", target):
         # "milk and eggs" is ONE item only if an item is literally called that; a substring guess would act on one of
         # two things the user named.
@@ -3904,7 +3964,9 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
         refreshed["actions"] = []
         return refreshed
     await _maybe_commit(db)
-    item_text = str(target_item.get("text") or intent.item_text)
+    from list_service import normalize_item_text
+
+    item_text = normalize_item_text(str(target_item.get("text") or intent.item_text))
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     _audit_list_item("remove", user_id, list_id, item_id)
     refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}

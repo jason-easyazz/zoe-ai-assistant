@@ -226,7 +226,9 @@ async def test_dedup_window_zero_skips_the_probe():
         dedup_window_s=0,
     )
     assert outcome["deduped"] is False
-    assert len(db.selects) == 1  # resolve only — no duplicate probe
+    # resolve + the open-items probe; NO replay-window probe
+    assert len(db.selects) == 2
+    assert not any('created_at::timestamptz' in q for q, _ in db.selects)
     assert len(_writes(db, "list_items")) == 1
 
 

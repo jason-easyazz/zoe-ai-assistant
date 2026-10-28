@@ -236,6 +236,50 @@ def calendar_followup(text: str) -> bool:
     return False
 
 
+def turn_continuation_ttl_s() -> float:
+    """``ZOE_TURN_CONTINUATION_TTL_S`` (default 60): how long after a turn a bare "what else?" still follows that turn's domain."""
+    try:
+        return max(0.0, float(os.environ.get("ZOE_TURN_CONTINUATION_TTL_S", "60")))
+    except (TypeError, ValueError):
+        return 60.0
+
+
+def turn_continuation(text: str) -> bool:
+    """True when ``text`` is a short CONTEXT-FREE continuation ("what else?", "and?", "tell me more", "anything else", "go on").
+    It names no topic, so its own embedding is noise (live 2026-10-29: four "what else?" after a memory answer all routed to
+    ``lists``); the caller makes it follow the previous turn. The WHOLE utterance must match a lexicon pattern once lead-ins and
+    fillers are taken off the ends ("what else do you know about me" is a real question, not a continuation)."""
+    try:
+        s = _norm(text)
+        s = re.sub(r"[.!?,;:]+", " ", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        if not s:
+            return False
+        for lang in _langs(s, "turn_continuation"):
+            sec = lexicons.load(lang)["turn_continuation"]
+            lead = sorted((str(x).lower() for x in sec.get("lead_ins") or []), key=len, reverse=True)
+            tail = sorted((str(x).lower() for x in sec.get("fillers") or []), key=len, reverse=True)
+            pats = sec.get("patterns") or []
+            if any(re.fullmatch(frag, s) for frag in pats):
+                return True
+            core, changed = s, True
+            while changed and core:
+                changed = False
+                for frag in lead:
+                    if core.startswith(frag + " "):
+                        core, changed = core[len(frag):].strip(), True
+                        break
+                for frag in tail:
+                    if core.endswith(" " + frag):
+                        core, changed = core[: -len(frag)].strip(), True
+                        break
+            if core and any(re.fullmatch(frag, core) for frag in pats):
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
 def ends_with_offer(reply: str) -> bool:
     """True when the END of Zoe's reply makes an offer ("how about ...?", "would you like ...?", "want me to ...?")."""
     try:
