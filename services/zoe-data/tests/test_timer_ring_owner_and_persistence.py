@@ -127,3 +127,62 @@ def test_wrongly_typed_snapshot_record_is_dropped_not_fatal(tmp_path):
     bad = {"timer_id": "b", "label": "x", "duration_seconds": 60, "expires_at": "soon"}
     (tmp_path / "timers.json").write_text(json.dumps({"by_owner": {"jason": [bad, good]}}))
     assert [t["timer_id"] for t in _TimerStore().list("jason")] == ["g"]
+
+
+# -- a finished timer stays listed ("ringing") until dismissed or the grace ends --------------------------------------
+
+PANEL = {"user_id": "guest", "role": "guest", "panel_id": "p"}
+
+
+def _clock(monkeypatch, offset):
+    import skybridge_service
+
+    real = time.time
+    monkeypatch.setattr(skybridge_service.time, "time", lambda: real() + offset[0])
+
+
+def test_five_second_timer_polled_twenty_seconds_later_still_rings(monkeypatch):
+    offset = [0.0]
+    _clock(monkeypatch, offset)
+    _as_panel(monkeypatch, True)
+    create_timer_direct("jason", minutes=5 / 60)
+    offset[0] = 20.0
+    seen = _get(PANEL)
+    assert len(seen) == 1 and seen[0]["status"] == "ringing"
+    assert seen[0]["expires_at_ms"] < (time.time() + 20.0) * 1000  # past due on first sight: the kiosk rings at once
+
+
+def test_dismissed_timer_does_not_reappear_and_grace_expires(monkeypatch):
+    import skybridge_service
+
+    offset = [0.0]
+    _clock(monkeypatch, offset)
+    _as_panel(monkeypatch, True)
+    tid = _tid(create_timer_direct("jason", minutes=5 / 60))
+    offset[0] = 20.0
+    assert len(_get(PANEL)) == 1
+    out = asyncio.run(sky_router.cancel_skybridge_timer(object(), {"timer_id": tid}, PANEL))
+    assert out["ok"] is True
+    assert _get(PANEL) == []
+    # an UNacknowledged one is dropped once the grace passes
+    create_timer_direct("jason", minutes=5 / 60)
+    offset[0] = 20.0 + 5 + skybridge_service.TIMER_RING_GRACE_S + 1
+    assert _get(PANEL) == []
+
+
+def test_a_ringing_timer_is_not_a_running_one_for_speech(monkeypatch):
+    offset = [0.0]
+    _clock(monkeypatch, offset)
+    create_timer_direct("jason", minutes=5 / 60)
+    offset[0] = 20.0
+    assert _timers.list("jason") == []  # "how long is left" / "cancel my timer" never target a finished one
+    assert _timers.cancel("jason") is None
+    assert len(_timers.all_live()) == 1
+
+
+def test_kiosk_dismiss_acknowledges_through_cancel():
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "zoe-ui", "dist", "touch", "home.html")
+    html = open(path, encoding="utf-8").read()
+    assert "timerAlarm(due.join(' / '),ids)" in html
+    alarm = html.split("function timerAlarm")[1].split("_tAlarmRefresh();")[0]
+    assert "apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id})" in alarm

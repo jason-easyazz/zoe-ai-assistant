@@ -75,6 +75,10 @@ _WORD_NUMBERS = command_shapes.WORD_NUMBERS
 _COMPOUND_WORD_NUMBERS = command_shapes.COMPOUND_WORD_NUMBERS
 
 MAX_TIMER_SECONDS = 24 * 3600
+# A finished timer stays listed to the PANEL ("ringing") until it is dismissed (cancel-by-id) or this long passes: the
+# kiosk learns timers by polling every 15 s and every voice turn reloads its page, so a timer that ended between polls
+# (or just after a reload) must still ring. Spoken queries ("how long left", "cancel") only ever see running timers.
+TIMER_RING_GRACE_S = 90
 
 
 def _timer_store_path() -> Path:
@@ -110,7 +114,7 @@ class _TimerStore:
                         t["timer_id"] = str(t["timer_id"])
                     except (KeyError, TypeError, ValueError):
                         continue
-                    if t["expires_at"] > now:
+                    if t["expires_at"] > now - TIMER_RING_GRACE_S:
                         live.append(t)
                 if live and not self._by_owner.get(str(owner)):
                     self._by_owner[str(owner)] = live
@@ -139,7 +143,7 @@ class _TimerStore:
         self._load()
         now = time.time()
         before = self._by_owner.get(owner, [])
-        live = [t for t in before if t["expires_at"] > now]
+        live = [t for t in before if t["expires_at"] > now - TIMER_RING_GRACE_S]
         if live:
             self._by_owner[owner] = live
         else:
@@ -148,7 +152,7 @@ class _TimerStore:
             self._save()
 
     def all_live(self) -> list[dict[str, Any]]:
-        """Every running timer of every owner, soonest first (the wall panel rings for whoever set one)."""
+        """Every running OR ringing (finished, within the grace) timer of every owner, soonest first."""
         self._load()
         for owner in list(self._by_owner):
             self._prune(owner)
@@ -181,11 +185,12 @@ class _TimerStore:
 
     def list(self, owner: str) -> list[dict[str, Any]]:
         self._prune(owner)
-        return sorted(self._by_owner.get(owner, []), key=lambda t: t["expires_at"])
+        now = time.time()  # RUNNING timers only: a ringing one is the panel's business (all_live)
+        return sorted((t for t in self._by_owner.get(owner, []) if t["expires_at"] > now), key=lambda t: t["expires_at"])
 
     def cancel(self, owner: str, label: str | None = None) -> dict[str, Any] | None:
         self._prune(owner)
-        timers = self._by_owner.get(owner, [])
+        timers = self.list(owner)
         if not timers:
             return None
         target = None
@@ -194,10 +199,7 @@ class _TimerStore:
             target = next((t for t in timers if t["label"].lower() == wanted), None)
         if target is None:  # no name (or no match) → cancel the soonest-expiring
             target = min(timers, key=lambda t: t["expires_at"])
-        timers.remove(target)
-        self._prune(owner)
-        self._save()
-        return target
+        return self.cancel_by_id(owner, target["timer_id"])
 
     def find(self, owner: str, label: str = "", start_seconds: int = 0) -> tuple[dict[str, Any] | None, str]:
         """The ONE running timer a command means, or (None, why): ``none`` (nothing running), ``no_match`` (the
@@ -234,7 +236,7 @@ class _TimerStore:
         """Move a running timer's end by ``delta_seconds`` (negative = shorter). The panel reads ``expires_at`` from
         ``GET /api/skybridge/timers`` (``active_timers_for``), so the new end reaches it on its next poll."""
         self._prune(owner)
-        timer = next((t for t in self._by_owner.get(owner, []) if t["timer_id"] == timer_id), None)
+        timer = next((t for t in self.list(owner) if t["timer_id"] == timer_id), None)
         if timer is None:
             return None
         timer["expires_at"] += int(delta_seconds)
@@ -359,8 +361,10 @@ def active_timers_for(owner: str) -> list[dict[str, Any]]:
 
 
 def all_active_timers() -> list[dict[str, Any]]:
-    """Every running timer in the house as card props - what the WALL PANEL sees (it is not a person)."""
-    return [_timer_card(t)["props"] for t in _timers.all_live()]
+    """Every timer in the house as card props, finished-but-unacknowledged ones flagged ``ringing`` - what the WALL PANEL
+    sees (it is not a person)."""
+    now = time.time()
+    return [_timer_card(t, status="running" if t["expires_at"] > now else "ringing")["props"] for t in _timers.all_live()]
 
 
 def cancel_any_timer(timer_id: str) -> dict[str, Any] | None:
