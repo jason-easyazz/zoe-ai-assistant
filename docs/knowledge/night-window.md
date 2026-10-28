@@ -123,13 +123,17 @@ Refuses before stopping anything: the brain-window lock (`/tmp/zoe-brain-window.
 
 During: the MemAvailable floor (1,200 MiB) is checked every 5 s once the 12B is loaded and kills the running job and ends the window if breached; the hard cap; every exception, signal and refusal after the first stop runs the restore. Wake: each unit's own `/health` (not `systemctl is-active`), one retry with a restart (a fresh compaction before the brain; and, for the brain, the cold-start page-cache drop loop `scripts/maintenance/brain_cold_start.sh` while the 4B loads: the unit runs it itself as `ExecStartPre` when the `50-cold-start.conf` drop-in is installed, otherwise the window runs it just before `systemctl start`, never both; see `brain-cold-start.md`), then **loud**: `*** RESTORE FAILED ***` lines, `~/.zoe/night-reports/ALARM` naming the units and the exact commands, the marker kept so `--restore-only` retries exactly those, exit 4 (a failed unit in `systemctl --user`). The bake-off's restore never checked anything but the brain. A unit that is down never stops the others from being woken.
 
-### Landings must stay out of the night (2026-10-13)
+### Landings must stay out of the night (measured pause, 2026-10-19)
 
-The window shares the brain with every landing and harness. The binding rule (no landing or harness starts,
-holds `/tmp/zoe-brain-window.lock`, or stays alive as a process between 01:50 and 04:55) is in
-[scripts/AGENTS.md](../../scripts/AGENTS.md) "Brain-window quiet hours"; the rationale and the incident are in
-[merge-and-deploy.md](merge-and-deploy.md). The window refuses at once on a held lock and waits (30 min, then
-refuses) on a live lander, a samantha bar, a voice probe, a held voice-harness lock or a recent voice turn.
+The window shares the brain with every landing and harness. The binding rule is the MEASURED pause in
+[scripts/AGENTS.md](../../scripts/AGENTS.md) "Brain-window quiet hours": it replaced the fixed 01:50-04:55
+blackout of 2026-10-13 (the window was measured finishing 02:52-03:10, not ~1 h), and the operator-local gate
+`night_busy.sh voice|deploy|test` is what every lander and harness consults before it starts. The rationale and the
+incident are in [merge-and-deploy.md](merge-and-deploy.md). The window refuses at once when
+`/tmp/zoe-brain-window.lock` is held, waits (`busy_wait_max_min` = 20 min, then refuses) on a live lander, a samantha
+bar, a voice probe or a held voice-harness lock, and waits (`NIGHT_QUIET_WAIT_MIN`, default 30 min) for a recent voice turn.
+Some lab/perf scripts still hard-code the old 01:50-04:55 span as a conservative refusal (`labs/relay`, `labs/p0-deroot`,
+`scripts/perf/measure_wake.py`, `scripts/perf/omi_voice_calibrate.py`); that is safe, only stricter than the pause.
 Whether it should WAIT (bounded) for the lock instead of refusing is a proposal, not a change: `open-problems.md`.
 
 ## 8. The first real attempts (2026-10-09 01:57-02:06) and why the 12B did not load
