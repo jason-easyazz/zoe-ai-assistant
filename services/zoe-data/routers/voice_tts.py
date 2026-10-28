@@ -32,6 +32,7 @@ import voice_first_sound as _first_sound
 import voice_speculation as _speculation
 import voice_stt_stream as _stt_stream
 import voice_utterance_shape as _utterance_shape
+from moonshine_vad_state import reset_silero_state, transcriber_lib
 import speaker_adaptation
 import speaker_models
 import traffic_class
@@ -2907,9 +2908,9 @@ def _moonshine_empty_reason(lines: list, audio, sample_rate: int) -> str:
     """Why Moonshine produced nothing, as ``reason=... key=value`` for the log.
 
     ``no_segments``: the C-side VAD found no speech (zero lines) - the signature
-    of the fast (~0.1 s) empty. Leading hypothesis (not proven by a reset experiment):
-    Moonshine's batch path shares ONE process-global Silero VAD with no reset
-    between clips, so a borderline clip decodes differently by history. ``blank_lines``: lines
+    of the fast (~0.1 s) empty. Moonshine's batch path shares ONE process-global
+    Silero VAD, so a borderline clip used to segment differently by history (proven;
+    cleared per call by ``moonshine_vad_state`` - see docs/knowledge/voice-pipeline.md). ``blank_lines``: lines
     came back but all blank (the decoder ran). ``audio_active_s`` (seconds above a
     low amplitude floor) separates "silence" from "speech the VAD missed". Numbers
     only - never the audio or any text."""
@@ -2931,6 +2932,25 @@ def _moonshine_empty_reason(lines: list, audio, sample_rate: int) -> str:
     return f"reason={reason} lines={n_lines} audio_s={dur:.2f} active_s={active:.2f} peak={peak:.3f}"
 
 
+def _open_moonshine_stream():
+    """A started under-speech STT stream whose VAD begins from a clean Silero state (same reset as the batch path).
+
+    The reset takes the infer lock but only briefly (``acquire(timeout=0.25)``): behind a long batch/other-stream
+    inference it is skipped (best effort - the stream then just starts from the carried state, as before) rather than
+    stalling the first chunk of the turn."""
+    tr = _ensure_moonshine()
+    st = tr.create_stream()  # constructs the global Silero on first use, so reset after it
+    if env_bool("ZOE_MOONSHINE_VAD_RESET", default=True) and _moonshine_infer_lock.acquire(timeout=0.25):
+        try:
+            reset_silero_state(transcriber_lib(tr), path="stream")
+            st.start()  # same lock hold: no batch call can re-dirty the Silero between the reset and the start
+        finally:
+            _moonshine_infer_lock.release()
+        return st
+    st.start()
+    return st
+
+
 async def _run_moonshine(wav_path: str) -> str:
     from moonshine_voice.utils import load_wav_file
 
@@ -2949,6 +2969,11 @@ async def _run_moonshine(wav_path: str) -> str:
             logger.info("STT_EMPTY reason=bad_sample_rate")
             return ""
         with _stt_stream.infer_guard(_moonshine_infer_lock):
+            if env_bool("ZOE_MOONSHINE_VAD_RESET", default=True):
+                # Moonshine's batch VAD is ONE process-global Silero whose recurrent state is never cleared, so a
+                # clip's segmentation (hence transcript, or an empty one) depended on the audio heard before it.
+                # Zero it so every clip is segmented exactly as in a fresh process. See moonshine_vad_state.py.
+                reset_silero_state(transcriber_lib(tr), path="batch")
             out = tr.transcribe_without_streaming(audio, sr)
         # Moonshine segments speech into lines and emits the wake phrase ("Hey Zoe.")
         # as its own leading line. Strip the wake word from those lines so the
@@ -6463,14 +6488,8 @@ async def voice_stt_stream_chunk(payload: dict, caller: dict = Depends(_require_
     if not pcm:
         raise HTTPException(status_code=400, detail="empty chunk")
 
-    def _make():
-        tr = _ensure_moonshine()
-        st = tr.create_stream()
-        st.start()
-        return st
-
     sess = await asyncio.get_running_loop().run_in_executor(
-        None, _stt_stream.get_or_open, sid, seq, _make, _moonshine_infer_lock)
+        None, _stt_stream.get_or_open, sid, seq, _open_moonshine_stream, _moonshine_infer_lock)
     if sess is None:
         raise HTTPException(status_code=429, detail="stt stream refused (unknown stream or too many sessions)")
     return {"ok": sess.feed(seq, pcm), "samples": sess.samples_fed}

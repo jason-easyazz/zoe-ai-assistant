@@ -26,6 +26,20 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    and said-vs-did passed, but STT ran +43 % median / ~1.9× per file slower on the Orin CPU. The
    box moved to 0.1.3 instead on 2026-09-27 (STT at parity with 0.0.62). Numbers, method and
    retest conditions are in [moonshine-0-1-5-upgrade.md](moonshine-0-1-5-upgrade.md).
+   **VAD state (2026-10-28).** moonshine-voice 0.1.3 and 0.1.5 segment every batch clip with ONE
+   process-global Silero (`VoiceActivityDetector::silero_vad`, `core/voice-activity-detector.cpp`
+   L22/L35) whose LSTM state + 64-sample context (`core/silero-vad.cpp` L48-49) are never cleared, so a
+   clip's segmentation, and thus its transcript or an empty one, depended on the audio heard before it
+   (measured: one clip after 19 different predecessors gave up to 12 segmentations / 5 transcripts;
+   identical segmentations always decoded identically, so the model is stateless). 0.1.5 does not fix
+   it, and priming with silence/noise does not converge. `moonshine_vad_state.reset_silero_state`
+   zeroes the state under the infer lock before each `_run_moonshine` call (`ZOE_MOONSHINE_VAD_RESET`,
+   default on); the layout is self-validated and any mismatch is a no-op. Consequence for the pinned
+   corpus: transcripts are now order-independent, so a few `heard` hashes recorded under the old
+   history-dependent behaviour move once (re-record the baseline after the landing). The under-speech
+   streaming path shares the same Silero: `_open_moonshine_stream` resets it once at session start (best
+   effort, `acquire(timeout=0.25)` on the infer lock - skipped rather than stalling the first chunk), but
+   concurrent streams/batch calls still interleave on it mid-utterance; the library offers no per-stream VAD.
 2. **Brain — Gemma 4 E4B-QAT + MTP**, host-native `llama-server` on `:11434`. Since **#1322 a
    two-stage router runs as a fast-tier FRONT** for the brain (`ZOE_ROUTER_HEAD=active`, live-verified):
    a SetFit/MLP head (`models/router_head_mlp.joblib`) shortlists the top-3 domains + a chat gate,
