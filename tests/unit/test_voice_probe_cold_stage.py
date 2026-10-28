@@ -34,6 +34,8 @@ mcf = _load("mcf_cold", "scripts/perf/measure_cold_first_turn.py")
 
 #: env keys the code under test writes DIRECTLY (os.environ[...] =), which monkeypatch cannot restore
 _DIRECT_ENV_WRITES = ("ZOE_FLUE_STREAM_ENABLED", "ZOE_TRAFFIC_CLASS")
+#: the caller's own values at import: a restore is judged against THESE, never against "unset"
+_ENV_AT_IMPORT = {k: os.environ.get(k) for k in _DIRECT_ENV_WRITES}
 
 
 @pytest.fixture(autouse=True)
@@ -324,4 +326,4 @@ def test_the_quiet_gate_keeps_the_landing_exemption(monkeypatch):
 def test_zz_no_direct_env_write_leaks_past_a_measurement():
     """Runs after the measurement tests in this module: none of their direct env writes may still be set."""
     for k in _DIRECT_ENV_WRITES:
-        assert os.environ.get(k) in (None, ""), f"{k} leaked out of a measurement test"
+        assert os.environ.get(k) == _ENV_AT_IMPORT[k], f"{k} leaked out of a measurement test"
