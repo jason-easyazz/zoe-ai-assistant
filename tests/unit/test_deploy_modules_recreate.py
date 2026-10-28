@@ -31,6 +31,7 @@ case "$*" in
   *"config --services"*) printf 'a\\nb\\nc\\n' ;;
   *"ps --services"*) printf 'a\\nc\\nzoe-ui\\n' ;;
   *"config -q"*) [ -n "$DOCKER_BAD_CONFIG" ] && exit 1 ;;
+  *" up "*) [ -n "$DOCKER_UP_FAIL" ] && exit 1 ;;
 esac
 exit 0
 """
@@ -66,12 +67,14 @@ def world(tmp_path: Path):
     return {"live": live, "base": base, "bin": bindir, "log": tmp_path / "docker.log"}
 
 
-def _run(world, old_sha: str | None, bad_config: bool = False, pre_pull_sha: str | None = None):
+def _run(world, old_sha: str | None, bad_config: bool = False, pre_pull_sha: str | None = None, up_fail: bool = False):
     script = _step_run().replace("cd /home/zoe/assistant", f"cd {world['live']}", 1)
     env = {**os.environ, "PATH": f"{world['bin']}:{os.environ['PATH']}",
            "DOCKER_LOG": str(world["log"])}
     env.pop("DEPLOY_BASE_SHA", None); env.pop("OLD_SHA", None)
-    env.pop("DOCKER_BAD_CONFIG", None)
+    env.pop("DOCKER_BAD_CONFIG", None); env.pop("DOCKER_UP_FAIL", None)
+    if up_fail:
+        env["DOCKER_UP_FAIL"] = "1"
     if old_sha is not None:
         env["DEPLOY_BASE_SHA"] = old_sha
     if pre_pull_sha is not None:
@@ -101,7 +104,7 @@ def test_changed_modules_file_recreates_only_running_module_services(world):
     assert r.returncode == 0, r.stdout + r.stderr
     ups = _ups(log)
     assert len(ups) == 1, log
-    assert ups[0].endswith("up -d --no-deps a c"), ups  # b is stopped on purpose; zoe-ui is not a module
+    assert ups[0].endswith("up -d --no-deps --wait --wait-timeout 180 a c"), ups  # b is stopped on purpose; zoe-ui is not a module
 
 
 def test_unknown_old_sha_fails_closed_into_the_recreate_path(world):
@@ -137,3 +140,12 @@ def test_a_rerun_after_a_failed_deploy_still_reconciles(world):
     r, log = _run(world, world["base"], pre_pull_sha=head)
     assert r.returncode == 0, r.stdout + r.stderr
     assert _ups(log), "a re-run must compare against the last successful deploy, not the pre-pull HEAD"
+
+
+def test_a_module_that_fails_startup_fails_the_deploy(world):
+    # `up --wait` returns non-zero when a recreated module never becomes healthy; the step must fail with it, so the deploy
+    # never advances last-deployed-sha past a broken module
+    _commit(world["live"], "docker-compose.modules.yml", "v2\n")
+    r, log = _run(world, world["base"], up_fail=True)
+    assert r.returncode != 0, "a failed module startup must fail the step"
+    assert "--wait" in _ups(log)[0], log

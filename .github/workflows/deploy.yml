@@ -471,7 +471,10 @@ jobs:
           fi
           echo "recreating changed module containers:${TARGETS}"
           # shellcheck disable=SC2086
-          docker compose -f docker-compose.modules.yml up -d --no-deps ${TARGETS}
+          # --wait: do not report success until each recreated module is running and healthy (its healthcheck,
+          # or plain running when it has none); a module that dies during startup fails the deploy here, before
+          # last-deployed-sha advances, instead of passing silently.
+          docker compose -f docker-compose.modules.yml up -d --no-deps --wait --wait-timeout 180 ${TARGETS}
 
       # zoe-data is a user service — no sudo needed.
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.
