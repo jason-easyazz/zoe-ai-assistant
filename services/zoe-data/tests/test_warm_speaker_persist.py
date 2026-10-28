@@ -25,6 +25,9 @@ def state(monkeypatch, tmp_path):
     p = tmp_path / "warm-speaker.json"
     monkeypatch.setenv("ZOE_WARM_SPEAKER_STATE", str(p))
     monkeypatch.delenv("ZOE_WARM_SPEAKER_MAX_AGE_S", raising=False)
+    monkeypatch.setattr(ws, "_mem", {})                              # restored on teardown (module globals via monkeypatch)
+    monkeypatch.setattr(ws, "_last_written", {})
+    monkeypatch.setattr(ws, "_loaded", False)
     monkeypatch.setattr(zfc, "_LAST_TURN", dict(zfc._LAST_TURN))     # restored on teardown: _restart() clears these
     monkeypatch.setattr(zfc, "_SESSION_UID", dict(zfc._SESSION_UID))
     ws.reset()
@@ -333,3 +336,16 @@ def test_a_non_finite_age_setting_warns_and_uses_the_cap(monkeypatch, caplog):
         caplog.clear()
         assert ws.max_age_s() == 43200.0
         assert "not finite" in caplog.text
+
+
+def test_a_failed_forget_stays_pending_and_is_retried(state, monkeypatch):
+    ws.note("p1", "casey", now=T0, sync=True)
+    real_replace = ws.os.replace
+    monkeypatch.setattr(ws.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    ws.forget_user("casey")                                   # the write fails: casey is still in the file
+    assert "casey" in state.read_text()
+    monkeypatch.setattr(ws.os, "replace", real_replace)
+    ws.forget_user("casey")                                   # the retry finds nothing in memory but must still clean the file
+    assert "casey" not in state.read_text()
+    _restart()
+    assert ws.get("p1", now=T0 + 1) == ""

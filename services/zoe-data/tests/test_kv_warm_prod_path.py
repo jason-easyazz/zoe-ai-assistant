@@ -192,6 +192,9 @@ def test_wake_fresh_pin_lookup_is_a_hard_bound(monkeypatch):
     monkeypatch.setattr(v, "_get_or_create_voice_session", lambda p: "voice-panel-t-1")
     monkeypatch.setattr(v, "_VOICE_SESSIONS", {})
     import warm_speaker
+    monkeypatch.setattr(warm_speaker, "_mem", {})
+    monkeypatch.setattr(warm_speaker, "_last_written", {})
+    monkeypatch.setattr(warm_speaker, "_loaded", False)
     warm_speaker.reset()
     monkeypatch.setattr(v, "_resolve_fresh_panel_member", _stubborn)
     monkeypatch.setattr(zfc, "warm_kv_prefix", _kv)

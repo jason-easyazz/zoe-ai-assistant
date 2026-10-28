@@ -189,7 +189,8 @@ def forget_user(member_id: str, *, sync: bool = True) -> int:
             gone = [k for k, (u, _) in _mem.items() if u == m]
             for k in gone:
                 _mem.pop(k, None)
-        if gone:
+            on_disk = any(u == m for u, _t in _last_written.values())   # a write that failed leaves the member in the file: retry
+        if gone or on_disk:
             _save(sync)
         return len(gone)
     except Exception:  # noqa: BLE001
