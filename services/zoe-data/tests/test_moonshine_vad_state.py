@@ -31,7 +31,8 @@ class _FakeSilero:
         words[6:9] = [a(self.context), a(self.context) + 64 * 4, a(self.context) + 64 * 4]
         words[17:20] = [a(self.inp), a(self.inp) + 576 * 4, a(self.inp) + 576 * 4]
         words[21:24] = [a(self.state), a(self.state) + 256 * 4, a(self.state) + 256 * 4]
-        if extra_state_vector:  # a second 256-float vector -> ambiguous layout, must refuse
+        if extra_state_vector:  # state vector moved off its measured offset -> different layout, must refuse
+            words[21:24] = [0x1111] * 3
             words[24:27] = [a(self.state2), a(self.state2) + 256 * 4, a(self.state2) + 256 * 4]
         self.buf = ctypes.create_string_buffer(struct.pack("<27Q", *words), 27 * 8 + 64)
 
@@ -40,12 +41,26 @@ class _FakeSilero:
         return ctypes.addressof(self.buf)
 
 
+@pytest.fixture(autouse=True)
+def _supported(monkeypatch):
+    monkeypatch.setattr(mvs, "_supported_version", lambda: True)
+
+
 def test_reset_zeroes_state_and_context_only(monkeypatch):
     obj = _FakeSilero()
     monkeypatch.setattr(mvs, "_object_address", lambda lib: obj.address)
     assert mvs.reset_silero_state(object()) is True
     assert not any(obj.state) and not any(obj.context)
     assert all(v == 1.0 for v in obj.inp), "the per-call input scratch buffer is not state and must be left alone"
+
+
+def test_unsupported_version_never_touches_memory(monkeypatch):
+    obj = _FakeSilero()
+    monkeypatch.setattr(mvs, "_object_address", lambda lib: (_ for _ in ()).throw(AssertionError("dereferenced")))
+    monkeypatch.setattr(mvs, "_supported_version", lambda: False)
+    monkeypatch.setattr(mvs, "_warned", False)
+    assert mvs.reset_silero_state(object()) is False
+    assert all(v == 1.0 for v in obj.state)
 
 
 def test_unexpected_layout_writes_nothing(monkeypatch):
@@ -60,9 +75,9 @@ def test_no_silero_yet_or_missing_symbol_is_a_noop(monkeypatch):
     monkeypatch.setattr(mvs, "_object_address", lambda lib: 0)
     assert mvs.reset_silero_state(object()) is False  # pristine zeros already
     monkeypatch.setattr(mvs, "_warned", False)
-    assert mvs.reset_silero_state(object()) is False  # a plain object has no symbol: ctypes raises -> swallowed
     monkeypatch.undo()
-    assert mvs.reset_silero_state(object()) is False
+    monkeypatch.setattr(mvs, "_supported_version", lambda: True)
+    assert mvs.reset_silero_state(object()) is False  # a plain object has no symbol: ctypes raises -> swallowed
 
 
 class _StatefulTranscriber:

@@ -10,12 +10,13 @@ segmentations / 5 distinct transcripts across 19 different predecessors, and ide
 identically (so the model is stateless; only the VAD carries history). Feeding silence or noise first does NOT
 converge (8 s of zeros still left 5 distinct outcomes), so the only way to a clean state is to clear it.
 
-HOW. The Silero object's address is the exported data symbol ``_ZN21VoiceActivityDetector10silero_vadE``. We read
-the first bytes of the object, find the two ``std::vector<float>`` members by their exact shape (begin/end/cap
-pointers spanning 256 floats for ``_state`` and 64 floats for ``_context``) and zero them -- the same values a fresh
-process starts with. Nothing is written unless BOTH vectors are found exactly once; anything unexpected (other
-library build, symbol absent, no VAD created yet) is a harmless no-op that returns False, so a library bump can at
-worst lose the fix, never corrupt memory. Callers must hold the Moonshine infer lock.
+HOW. The Silero object's address is the exported data symbol ``_ZN21VoiceActivityDetector10silero_vadE``. Only for
+the library versions whose layout was measured (``_SUPPORTED_VERSIONS``; silero-vad.{h,cpp} are byte-identical in
+0.1.3 and 0.1.5) do we read the object's head and require ``std::vector<float>`` (begin, end, cap) triples of
+exactly 64 floats at byte 48 (``_context``), 576 at 136 (``input``) and 256 at 168 (``_state``) - the offsets
+measured on the live 0.1.3 build. Only if all three match is anything written (the first two zeroed). Any other
+version or layout is a harmless no-op returning False, so a library bump can at worst lose the fix. Callers must
+hold the Moonshine infer lock.
 """
 from __future__ import annotations
 
@@ -27,24 +28,31 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 _SYMBOL = "_ZN21VoiceActivityDetector10silero_vadE"
-_SCAN_BYTES = 216  # SileroVad members before the first non-vector tail; sizeof(SileroVad) is larger, so reads stay in-object
-_STATE_FLOATS = 2 * 1 * 128  # silero-vad.h ``size_state``
-_CONTEXT_FLOATS = 64  # silero-vad.h ``context_samples`` at 16 kHz
+_SCAN_BYTES = 216  # head of SileroVad; sizeof is larger, so the read stays in-object (on supported versions)
+_SUPPORTED_VERSIONS = frozenset({"0.1.3", "0.1.5"})
+# (byte offset, float count): _context, input (per-call scratch, checked only to confirm the layout), _state
+_LAYOUT_CONTEXT = (48, 64)
+_LAYOUT_INPUT = (136, 576)
+_LAYOUT_STATE = (168, 256)
 
 _warned = False
 
 
-def _vector_spans(obj_addr: int) -> list[tuple[int, int]]:
-    """(begin_address, byte_length) of every plausible ``std::vector<float>`` (begin, end, cap) triple in the head of
-    the object. Pure read of in-object bytes."""
-    raw = ctypes.string_at(obj_addr, _SCAN_BYTES)
-    words = struct.unpack(f"<{len(raw) // 8}Q", raw)
-    spans = []
-    for i in range(len(words) - 2):
-        begin, end, cap = words[i], words[i + 1], words[i + 2]
-        if begin and begin % 4 == 0 and begin <= end <= cap:
-            spans.append((begin, end - begin))
-    return spans
+def _supported_version() -> bool:
+    try:
+        import moonshine_voice
+
+        return getattr(moonshine_voice, "__version__", None) in _SUPPORTED_VERSIONS
+    except Exception:
+        return False
+
+
+def _vector_at(words: tuple, offset: int, floats: int) -> int:
+    """Begin address of the ``std::vector<float>`` at byte ``offset`` iff it holds exactly ``floats`` floats."""
+    begin, end, cap = words[offset // 8 : offset // 8 + 3]
+    if not begin or begin % 4 or not (begin <= end <= cap) or end - begin != floats * 4:
+        raise RuntimeError(f"unexpected Silero layout at +{offset}")
+    return begin
 
 
 def _object_address(lib: Any) -> int:
@@ -58,16 +66,17 @@ def reset_silero_state(lib: Any) -> bool:
     validated. Never raises."""
     global _warned
     try:
+        if not _supported_version():
+            raise RuntimeError("unvalidated moonshine-voice version")
         obj = _object_address(lib)
         if not obj:
             return False  # no VAD constructed yet -> state is still the pristine zeros
-        spans = _vector_spans(obj)
-        states = [a for a, n in spans if n == _STATE_FLOATS * 4]
-        ctxs = [a for a, n in spans if n == _CONTEXT_FLOATS * 4]
-        if len(states) != 1 or len(ctxs) != 1:
-            raise RuntimeError(f"unexpected Silero layout: state matches={len(states)} context matches={len(ctxs)}")
-        ctypes.memset(states[0], 0, _STATE_FLOATS * 4)
-        ctypes.memset(ctxs[0], 0, _CONTEXT_FLOATS * 4)
+        words = struct.unpack(f"<{_SCAN_BYTES // 8}Q", ctypes.string_at(obj, _SCAN_BYTES))
+        ctx = _vector_at(words, *_LAYOUT_CONTEXT)
+        _vector_at(words, *_LAYOUT_INPUT)
+        state = _vector_at(words, *_LAYOUT_STATE)
+        ctypes.memset(state, 0, _LAYOUT_STATE[1] * 4)
+        ctypes.memset(ctx, 0, _LAYOUT_CONTEXT[1] * 4)
         return True
     except Exception as exc:  # absent symbol, other build, unreadable object -> fix lost, never a crash
         if not _warned:
