@@ -332,7 +332,7 @@ def test_zz_no_direct_env_write_leaks_past_a_measurement():
 def test_the_default_wait_is_fixed_and_not_the_slot_guard_quiet_window(monkeypatch):
     """The child never takes the guard, so the wait only simulates a pause: it must not grow with quiet_s() (180 s)."""
     _fake_service(monkeypatch, prompt_n=10, cache_n=900)
-    sys.modules["brain_slot_guard"].quiet_s = lambda: 180.0
+    monkeypatch.setattr(sys.modules["brain_slot_guard"], "quiet_s", lambda: 180.0)
     slept: list[float] = []
     real_sleep = asyncio.sleep
 
