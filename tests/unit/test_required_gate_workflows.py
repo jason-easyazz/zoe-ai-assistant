@@ -387,7 +387,10 @@ def test_greptile_is_not_in_the_required_set():
 
 def _pytest_steps(job: dict):
     for step in job.get("steps", []):
-        if re.search(r"\bpytest\b", step.get("run", "") or ""):
+        code = "\n".join(
+            ln for ln in (step.get("run", "") or "").splitlines() if not ln.lstrip().startswith("#")
+        )
+        if re.search(r"\bpytest\b", code):
             yield step
 
 

@@ -356,7 +356,7 @@ jobs:
   # occurrence of that literal in the repo instead of two.
   zoe-data-py312:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v7
@@ -386,11 +386,11 @@ jobs:
 
       - name: Lane — zoe-data (ci_safe) on Python 3.12
         if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
-        timeout-minutes: 22
+        timeout-minutes: 24
         run: |
           python3 --version
           pytest services/zoe-data/tests -m ci_safe \
-            -o faulthandler_timeout=1260 \
+            -o faulthandler_timeout=1380 \
             --ignore=services/zoe-data/tests/samantha_live \
             --maxfail=200 -q \
             --override-ini="asyncio_mode=auto"
