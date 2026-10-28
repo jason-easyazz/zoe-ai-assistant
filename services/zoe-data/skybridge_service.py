@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -63,8 +64,10 @@ class SkybridgeIntent:
 # A REAL countdown timer (not the old speak-only stub). The store is the
 # authoritative source for spoken "how long left" / "cancel" queries; the panel
 # ticks and rings from the absolute expires_at so firing is immediate and
-# survives a reload. In-memory is intentional: timers are short-lived and the
-# panel persists its own copy, so a service restart losing one is acceptable.
+# survives a reload. The registry is snapshotted to a small JSON file on every
+# change and reloaded on first use, so a zoe-data restart (several a day on this
+# box) no longer drops a running timer. The panel does NOT keep its own copy: it
+# learns timers only by polling ``GET /api/skybridge/timers``.
 
 # The number vocabulary and the duration parser live in command_shapes (shared with
 # intent_router, so the two matchers never disagree about a duration).
@@ -74,19 +77,76 @@ _COMPOUND_WORD_NUMBERS = command_shapes.COMPOUND_WORD_NUMBERS
 MAX_TIMER_SECONDS = 24 * 3600
 
 
+def _timer_store_path() -> Path:
+    """Where running timers are snapshotted (``ZOE_TIMER_STORE``; default ``~/.zoe/timers.json``)."""
+    raw = os.environ.get("ZOE_TIMER_STORE", "").strip()
+    return Path(raw).expanduser() if raw else Path.home() / ".zoe" / "timers.json"
+
+
 class _TimerStore:
-    """Process-local registry of active countdown timers, keyed by owner."""
+    """Registry of active countdown timers, keyed by owner, snapshotted to disk so it survives a restart."""
 
     def __init__(self) -> None:
         self._by_owner: dict[str, list[dict[str, Any]]] = {}
+        self._loaded = False
+
+    def _load(self) -> None:
+        """Reload the snapshot ONCE per process, on first use (never at import). Expired timers are dropped."""
+        if self._loaded:
+            return
+        self._loaded = True
+        try:
+            raw = json.loads(_timer_store_path().read_text())
+            now = time.time()
+            for owner, timers in (raw.get("by_owner") or {}).items():
+                live = [t for t in timers if float(t.get("expires_at", 0)) > now and t.get("timer_id")]
+                if live and not self._by_owner.get(owner):
+                    self._by_owner[owner] = live
+        except FileNotFoundError:
+            pass
+        except Exception as exc:  # noqa: BLE001 - a corrupt snapshot must never break the voice path
+            logger.warning("timer store: could not reload %s (%s)", _timer_store_path(), type(exc).__name__)
+
+    def _save(self) -> None:
+        """Atomic snapshot (tmp + rename, 0600). Best-effort: a full disk costs durability, never the timer itself."""
+        path = _timer_store_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                json.dump({"by_owner": self._by_owner}, fh)
+            os.replace(tmp, path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("timer store: could not save %s (%s)", path, type(exc).__name__)
 
     def _prune(self, owner: str) -> None:
+        self._load()
         now = time.time()
-        live = [t for t in self._by_owner.get(owner, []) if t["expires_at"] > now]
+        before = self._by_owner.get(owner, [])
+        live = [t for t in before if t["expires_at"] > now]
         if live:
             self._by_owner[owner] = live
         else:
             self._by_owner.pop(owner, None)
+        if len(live) != len(before):
+            self._save()
+
+    def all_live(self) -> list[dict[str, Any]]:
+        """Every running timer of every owner, soonest first (the wall panel rings for whoever set one)."""
+        self._load()
+        for owner in list(self._by_owner):
+            self._prune(owner)
+        return sorted((t for ts in self._by_owner.values() for t in ts), key=lambda t: t["expires_at"])
+
+    def cancel_any(self, timer_id: str) -> dict[str, Any] | None:
+        """Cancel a timer by id whoever owns it (the panel's per-card tap-cancel)."""
+        self._load()
+        for owner in list(self._by_owner):
+            hit = self.cancel_by_id(owner, timer_id)
+            if hit is not None:
+                return hit
+        return None
 
     def create(self, owner: str, label: str, seconds: int) -> dict[str, Any]:
         self._prune(owner)
@@ -100,6 +160,7 @@ class _TimerStore:
             "expires_at": now + int(seconds),
         }
         self._by_owner.setdefault(owner, []).append(timer)
+        self._save()
         write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
         return timer
 
@@ -120,6 +181,7 @@ class _TimerStore:
             target = min(timers, key=lambda t: t["expires_at"])
         timers.remove(target)
         self._prune(owner)
+        self._save()
         return target
 
     def find(self, owner: str, label: str = "", start_seconds: int = 0) -> tuple[dict[str, Any] | None, str]:
@@ -162,6 +224,7 @@ class _TimerStore:
             return None
         timer["expires_at"] += int(delta_seconds)
         timer["duration_seconds"] = int(timer["duration_seconds"]) + int(delta_seconds)
+        self._save()
         write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
         return timer
 
@@ -172,6 +235,7 @@ class _TimerStore:
         if target is not None:
             timers.remove(target)
             self._prune(owner)
+            self._save()
         return target
 
 
@@ -277,6 +341,16 @@ def _timer_card(timer: dict[str, Any], *, status: str = "running") -> dict[str, 
 def active_timers_for(owner: str) -> list[dict[str, Any]]:
     """Public helper for the reload-resume endpoint: the panel's authoritative set."""
     return [_timer_card(t)["props"] for t in _timers.list(owner or "guest")]
+
+
+def all_active_timers() -> list[dict[str, Any]]:
+    """Every running timer in the house as card props - what the WALL PANEL sees (it is not a person)."""
+    return [_timer_card(t)["props"] for t in _timers.all_live()]
+
+
+def cancel_any_timer(timer_id: str) -> dict[str, Any] | None:
+    """Cancel one timer by id whoever set it (the wall panel's per-card tap-cancel)."""
+    return _timers.cancel_any(timer_id)
 
 
 def cancel_timer_by_id(owner: str, timer_id: str) -> dict[str, Any] | None:
