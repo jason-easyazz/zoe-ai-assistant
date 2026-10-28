@@ -132,7 +132,7 @@ _DOCKER_SERVICES: list[tuple[str, str, str, str, str, bool]] = [
         "Home Assistant",
         "Home automation hub",
         "homeassistant",
-        "ghcr.io/home-assistant/home-assistant:stable",
+        "ghcr.io/home-assistant/home-assistant:2026.10.4",  # keep in step with the docker-compose.yml pin
         False,
     ),
     (

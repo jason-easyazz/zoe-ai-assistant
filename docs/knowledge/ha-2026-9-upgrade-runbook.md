@@ -222,20 +222,37 @@ Once on 2026.10, Zoe can pass the panel's HA device id in `params._meta["io.home
 Pin: `ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133` (multi-arch index; arm64 child `5881590fca10`). Released 2026-10-24. Previous (running) pin: `2026.10.2@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4`.
 Delta is two patch releases (.3: about 25 integration fixes, Python 3.14.8, base image, frontend .5; .4: aiohttp header limit 64 KiB, pylutron-caseta). Nothing touches the installed integrations (wyoming, esphome, go2rtc, backup, shopping_list, google_translate, radio_browser, sun, analytics) or the custom ones (auth_oidc 1.1.1, hacs 2.0.5, localtuya 2026.07.0, zoe_conversation 0.1.0). HOLD 2026.11.x (Marketplace replaces HACS; MFA opt-in touches auth_oidc).
 
-Apply (operator, outside the night window; `.env` supplies `HA_ACCESS_TOKEN`):
+Apply (operator, outside the night window; `.env` supplies `HA_ACCESS_TOKEN`; paste as one block, it stops on the first failure):
 
 ```bash
-cd /home/zoe/assistant && git merge --ff-only origin/main            # compose now carries the new pin
+set -euo pipefail
+cd /home/zoe/assistant && git fetch -q origin && git merge --ff-only origin/main   # compose now carries the new pin
 set -a; . ./.env; set +a
 curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/states | python3 -c 'import sys,json;print(sum(1 for s in json.load(sys.stdin) if s["entity_id"].split(".")[0] in ("light","switch")))' | tee /tmp/ha-ls-before
 docker pull ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133
 docker compose stop homeassistant
-mkdir -p ~/.zoe-backups && BK=~/.zoe-backups/ha-pre-2026.10.4-$(date +%F).tar.gz
-tar -C /home/zoe/assistant -czf "$BK" homeassistant/ && tar -tzf "$BK" | grep -q '^homeassistant/\.storage/' && echo backup ok
+mkdir -p ~/.zoe-backups && BK=~/.zoe-backups/ha-pre-2026.10.4-$(date +%F).tar.gz && echo "BACKUP=$BK"
+tar -C /home/zoe/assistant -czf "$BK" homeassistant/
+tar -tzf "$BK" > "$BK.list"
+grep -q '^homeassistant/\.storage/' "$BK.list" && grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list" && echo "backup ok"
 docker compose up -d --no-deps homeassistant
 until curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/config >/dev/null; do sleep 5; done   # 1-3 min
 ```
 
 Verify: `/api/config` reports `"version": "2026.10.4"`; the light+switch count equals `/tmp/ha-ls-before`; Zoe's bridge reaches HA (`curl -s localhost:8007/health`, then an entity listing through zoe-data); `docker logs homeassistant --since 5m` shows no auth_oidc errors; the "Zoe SSO" button on the HA login page completes a login via zoe-auth (the local-account login stays the fallback).
 
-Rollback: `docker compose stop homeassistant`; revert the pin commit (or edit the compose image line back to the previous pin above); restore config with `rm -rf homeassistant && tar -C /home/zoe/assistant -xzf "$BK"` (a patch bump rarely migrates `.storage`, but restore anyway if HA logs a migration); `docker compose up -d --no-deps homeassistant`; re-run the verify checks against 2026.10.2.
+Rollback (set `BK` to the explicit archive path printed as `BACKUP=` above; it does not survive a new shell):
+
+```bash
+set -euo pipefail
+BK=/home/zoe/.zoe-backups/ha-pre-2026.10.4-<date>.tar.gz        # explicit path
+cd /home/zoe/assistant
+docker compose stop homeassistant
+tar -tzf "$BK" | grep -q '^homeassistant/\.storage/' && tar -tzf "$BK" | grep -q '^homeassistant/home-assistant_v2\.db$'   # re-prove the archive BEFORE deleting anything
+# edit docker-compose.yml: image -> 2026.10.2@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4 (and system_updates.py's tracked tag), or revert the pin commit
+rm -rf /home/zoe/assistant/homeassistant
+tar -C /home/zoe/assistant -xzf "$BK"
+docker compose up -d --no-deps homeassistant
+```
+
+Then re-run the verify checks against 2026.10.2. A patch bump rarely migrates `.storage`, but restore regardless if HA logged a migration.
