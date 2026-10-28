@@ -231,7 +231,9 @@ set -a; . ./.env; set +a
 curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/states | python3 -c 'import sys,json;print(sum(1 for s in json.load(sys.stdin) if s["entity_id"].split(".")[0] in ("light","switch")))' | tee /tmp/ha-ls-before
 docker pull ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133
 docker compose stop homeassistant
-mkdir -p ~/.zoe-backups && BK=~/.zoe-backups/ha-pre-2026.10.4-$(date +%F).tar.gz && echo "BACKUP=$BK"
+mkdir -p ~/.zoe-backups && BK=~/.zoe-backups/ha-pre-2026.10.4-$(date +%Y%m%d-%H%M%S).tar.gz && echo "BACKUP=$BK"
+# A unique name per attempt, never an overwrite: a retry after 2026.10.4 has run must not replace the pre-upgrade rollback point.
+[ ! -e "$BK" ] || { echo "BACKUP EXISTS: $BK — refusing to overwrite"; exit 1; }
 tar -C /home/zoe/assistant -czf "$BK" homeassistant/
 tar -tzf "$BK" > "$BK.list"
 grep -q '^homeassistant/\.storage/' "$BK.list" || { echo "BACKUP BAD: no .storage/ — HA left stopped, nothing changed"; exit 1; }
@@ -247,7 +249,7 @@ Rollback (set `BK` to the explicit archive path printed as `BACKUP=` above; it d
 
 ```bash
 set -euo pipefail
-BK=/home/zoe/.zoe-backups/ha-pre-2026.10.4-<date>.tar.gz        # explicit path
+BK=/home/zoe/.zoe-backups/ha-pre-2026.10.4-<YYYYmmdd-HHMMSS>.tar.gz   # the FIRST attempt's archive        # explicit path
 cd /home/zoe/assistant
 docker compose stop homeassistant
 tar -tzf "$BK" > "$BK.list"
