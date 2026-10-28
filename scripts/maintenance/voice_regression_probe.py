@@ -112,6 +112,7 @@ import glob
 import hashlib
 import importlib.util
 import json
+import math
 from datetime import datetime, timezone
 import os
 import re
@@ -1100,6 +1101,123 @@ def fold_vad_status(status: str, vad: dict[str, Any] | None) -> str:
     return status
 
 
+# ── COLD FIRST-TURN stage ────────────────────────────────────────────────────
+# The replay times WARM turns, so it cannot see the regression that shipped three times: the wake warm no longer
+# matching the real first turn (6 s cold vs ~1.2 s warm). scripts/perf/measure_cold_first_turn.py evicts the slot,
+# waits out the quiet window, runs the panel's wake prewarm, then sends ONE first turn and reports what llama-server
+# re-prefilled (prompt_n) vs reused (cache_n) and the brain time to first token. The stage FAILS the run when the turn
+# misses the cache (cache_n / (cache_n + prompt_n) below COLD_MIN_CACHE_FRAC) or its TTFT regresses against the
+# baseline's own cold TTFT by the SAME ratio+ms gate as the other stages (--warn-ratio / --warn-ms; unchanged).
+COLD_MIN_CACHE_FRAC = 0.80
+COLD_STAGE_TIMEOUT_S = 240
+MEASURE_COLD = REPO / "scripts" / "perf" / "measure_cold_first_turn.py"
+
+
+def _cold_block(status: str, reason: str = "", **fields: Any) -> dict[str, Any]:
+    block: dict[str, Any] = {
+        "status": status,                 # pass | fail | skip | error
+        "reason": reason,
+        "warm": None,                     # outcome of the wake prewarm (must be "warmed")
+        "first_prompt_n": None,           # tokens re-prefilled by the first turn
+        "first_cache_n": None,            # tokens reused from the slot
+        "cache_frac": None,
+        "min_cache_frac": COLD_MIN_CACHE_FRAC,
+        "ttft_ms": None,                  # brain time to first chunk
+        "baseline_ttft_ms": None,
+        "ttft_ratio": None,
+    }
+    block.update(fields)
+    return block
+
+
+def cold_not_run(reason: str) -> dict[str, Any]:
+    return _cold_block("skip", reason)
+
+
+def judge_cold_start(measured: dict[str, Any] | None, baseline: dict[str, Any] | None,
+                     warn_ratio: float, warn_ms: float, *, recording_baseline: bool = False) -> dict[str, Any]:
+    """Pure verdict on one cold-first-turn measurement. A cache miss or a TTFT regression is a FAIL; a measurement
+    that could not be taken (no sidecar numbers, the wake warm did not run) is an ERROR, never a pass."""
+    m = measured if isinstance(measured, dict) else {}
+    st = m.get("status")
+    if st != "ok":   # includes a child "skip" (no Flue brain): an ENABLED stage that measured nothing is not a pass
+        return _cold_block("error", str(m.get("reason") or "cold first-turn measurement failed"))
+    warm = m.get("warm")
+    fields = {"warm": warm, "first_prompt_n": m.get("first_prompt_n"), "first_cache_n": m.get("first_cache_n"),
+              "cache_frac": m.get("cache_frac"), "ttft_ms": m.get("ttft_ms"), "wait_s": m.get("wait_s")}
+    if warm != "warmed":
+        return _cold_block("error", f"the wake prewarm did not run (outcome {warm!r}), so the first turn is not the "
+                                    "panel's path - re-run when nothing else is warming the slot", **fields)
+    ttft = m.get("ttft_ms")
+    counts = (m.get("first_prompt_n"), m.get("first_cache_n"))
+    if (not (isinstance(ttft, (int, float)) and math.isfinite(ttft))
+            or not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in counts)
+            or counts[0] + counts[1] <= 0):
+        return _cold_block("error", "cold first-turn measurement carried no finite TTFT / token counts", **fields)
+    frac = counts[1] / (counts[0] + counts[1])   # recomputed from the validated counts, never trusted from the child
+    fields["cache_frac"] = round(frac, 4)
+    problems: list[str] = []
+    if frac < COLD_MIN_CACHE_FRAC:
+        problems.append(f"COLD first turn missed the KV cache: {m.get('first_cache_n')} reused vs "
+                        f"{m.get('first_prompt_n')} re-prefilled ({frac:.0%} cached, floor {COLD_MIN_CACHE_FRAC:.0%}) "
+                        "- the wake warm no longer matches the real first turn")
+    base_cold = (baseline or {}).get("cold_first_turn") if isinstance(baseline, dict) else None
+    base_ms = base_cold.get("ttft_ms") if isinstance(base_cold, dict) else None
+    note = ""
+    if recording_baseline:
+        note = "recording a new baseline: the old cold TTFT is not the bar (warm, counts and cache floor still required)"
+    elif isinstance(base_ms, (int, float)) and base_ms > 0:
+        delta, ratio = ttft - base_ms, ttft / base_ms
+        fields.update(baseline_ttft_ms=base_ms, ttft_ratio=round(ratio, 3))
+        if (ratio >= warn_ratio and delta >= RATIO_FLOOR_MS) or delta >= warn_ms:
+            problems.append(f"COLD first-turn TTFT {ttft:.0f}ms vs baseline {base_ms:.0f}ms ({ratio:.2f}x, +{delta:.0f}ms)")
+    else:
+        note = "no cold-turn baseline yet (cache floor checked, TTFT not): re-baseline with --update-baseline"
+    if problems:
+        return _cold_block("fail", "; ".join(problems), **fields)
+    return _cold_block("pass", note, **fields)
+
+
+def fold_cold_status(status: str, cold: dict[str, Any] | None) -> str:
+    """Only ever TIGHTENS (same shape as fold_vad_status): a cold fail fails a pass/skip run, a cold error turns a
+    pass into an error, a cold skip changes nothing."""
+    cs = (cold or {}).get("status")
+    if cs == "fail" and status in ("pass", "skip"):
+        return "fail"
+    if cs == "error" and status == "pass":
+        return "error"
+    return status
+
+
+def run_cold_start_stage(args, baseline: dict[str, Any] | None) -> dict[str, Any]:
+    """Run the measurement in the service interpreter (it imports the production client) and judge it."""
+    if not getattr(args, "cold_check", True):
+        return cold_not_run("disabled (--no-cold-check / ZOE_VOICE_PROBE_COLD_CHECK=0)")
+    cmd = [args.python, str(MEASURE_COLD), "--service-dir", args.service_dir, "--user", args.user]
+    if getattr(args, "cold_wait_s", None) is not None:
+        cmd += ["--wait-s", str(args.cold_wait_s)]
+    try:
+        proc = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=COLD_STAGE_TIMEOUT_S,
+                              env={**os.environ, "ZOE_PERF": "1"})
+        lines = [ln for ln in proc.stdout.splitlines() if ln.strip().startswith("{")]
+        if not lines:
+            return _cold_block("error", f"cold first-turn measurement printed no result (rc={proc.returncode}): "
+                                        f"{proc.stderr[-300:]}")
+        return judge_cold_start(json.loads(lines[-1]), baseline, args.warn_ratio, args.warn_ms,
+                                recording_baseline=bool(getattr(args, "update_baseline", False)))
+    except Exception as exc:  # noqa: BLE001 - a stage that cannot run is an error, never a pass
+        return _cold_block("error", f"cold first-turn stage crashed: {type(exc).__name__}: {exc}")
+
+
+def _print_cold(cold: dict[str, Any]) -> None:
+    if cold.get("ttft_ms") is not None:
+        print(f"  COLD first turn: {cold.get('first_cache_n')} cached / {cold.get('first_prompt_n')} re-prefilled "
+              f"({(cold.get('cache_frac') or 0):.0%}, floor {COLD_MIN_CACHE_FRAC:.0%}), brain TTFT "
+              f"{cold['ttft_ms']:.0f}ms (baseline {cold.get('baseline_ttft_ms')}) -> {cold['status'].upper()}")
+    else:
+        print(f"  COLD first turn: {str(cold.get('status')).upper()} - {cold.get('reason')}")
+
+
 # Skip/error paths never reach summarize(); this keeps the artifact SHAPE identical so
 # a reader never has to branch on which path wrote it. ok_rate stays 0.0 rather than
 # None purely for back-compat with existing consumers of the skip/error artifact —
@@ -1236,7 +1354,8 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
                 vad: dict[str, Any] | None = None,
                 speed_comparison: str = "not-applicable",
                 flaky: dict[str, Any] | None = None,
-                clip_eval: dict[str, Any] | None = None) -> dict[str, Any]:
+                clip_eval: dict[str, Any] | None = None,
+                cold: dict[str, Any] | None = None) -> dict[str, Any]:
     """Write the durable, machine-readable RESULT ARTIFACT — on EVERY exit path.
 
     This is the whole point of the gate's hardening: a skip / timeout / error
@@ -1292,6 +1411,9 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
         # "no opinion on VAD", so pre-stage artifacts keep working.
         "vad_stage": True,
         "vad": vad if isinstance(vad, dict) else vad_not_run("VAD stage not run on this exit path"),
+        # COLD FIRST-TURN stage (see judge_cold_start): counts + ms only, never text. Every exit path writes the block.
+        "cold_first_turn_stage": True,
+        "cold_first_turn": cold if isinstance(cold, dict) else cold_not_run("cold stage not run on this exit path"),
         # PER-CLIP OUTCOME ASSERTIONS (T-3, voice_clip_checks). `clip_checks: true` is this
         # artifact's CLAIM that every pinned clip was held to its expectation; the deploy
         # checker then re-derives the verdict from `clip_summary` (a pass with a failed or
@@ -1804,6 +1926,12 @@ def main(reexec: bool = False) -> int:
     ap.add_argument("--vad-clips", type=int,
                     default=int(os.environ.get("ZOE_VOICE_PROBE_VAD_CLIPS", str(VAD_DEFAULT_CLIPS))),
                     help="newest N usable corpus clips the VAD stage scores")
+    ap.add_argument("--cold-check", action=argparse.BooleanOptionalAction,
+                    default=os.environ.get("ZOE_VOICE_PROBE_COLD_CHECK", "1") not in ("0", "false", "no"),
+                    help="after the replay, send ONE cold first turn (evict the slot, wait the quiet window, wake "
+                         "prewarm, ask) and FAIL on a KV-cache miss or a TTFT regression vs the baseline (default on)")
+    ap.add_argument("--cold-wait-s", type=float, default=None,
+                    help="quiet window the cold stage waits (default: brain_slot_guard.quiet_s() + 2)")
     ap.add_argument("--sample-dir", default=DEFAULT_SAMPLE_DIR,
                     help="voice corpus dir for the replay and the VAD stage (default: ZOE_VOICE_SAMPLE_DIR "
                          "or ~zoe/.zoe-voice-samples, the replay harness's own default)")
@@ -2016,6 +2144,10 @@ def main(reexec: bool = False) -> int:
         speed_comparison = ("refused: " if speed_warn else "skipped: ") + speed_note
     said_vs_did = [w for w in warnings if w.startswith("FUNCTION")]
     speed_deltas = stage_speed_deltas(summary, baseline)
+    # ONE cold first turn, after the replay (so the replay's peak never overlaps it) and BEFORE the baseline write
+    # below, so a re-baseline records this run's cold TTFT as the bar.
+    cold = run_cold_start_stage(args, baseline) if not fault_error else cold_not_run("replay carried an injected fault")
+    _print_cold(cold)
 
     m = summary["medians_ms"]
     _rate = "n/a" if summary["ok_rate"] is None else f"{summary['ok_rate']:.0%}"
@@ -2047,6 +2179,10 @@ def main(reexec: bool = False) -> int:
     if (args.update_baseline or not args.baseline.exists()) and not summary.get("clip_ids"):
         # A baseline with no pinned set re-opens the very drift this guards.
         pin_error = "no replayed clip could be identified; refusing to write a baseline with no pinned set"
+    if ((args.update_baseline or not args.baseline.exists()) and not pin_error
+            and cold.get("status") in ("fail", "error")):
+        # A cold first turn that missed the cache (or could not be measured) must never become the bar.
+        pin_error = f"refusing to write a baseline: the cold first-turn stage {cold['status']}: {cold.get('reason')}"
     if fault_error:
         print(f"ERROR: {fault_error}", file=sys.stderr)
     elif recall_error:
@@ -2055,10 +2191,17 @@ def main(reexec: bool = False) -> int:
     elif pin_error:
         print(f"ERROR: {pin_error}", file=sys.stderr)
     elif args.update_baseline or not args.baseline.exists():
-        write_json(args.baseline, {
+        new_baseline = {
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "summary": summary,
-        })
+        }
+        if cold.get("status") == "pass" and isinstance(cold.get("ttft_ms"), (int, float)):
+            # the cold-turn bar: only a measurement that itself cleared the cache floor is ever recorded
+            new_baseline["cold_first_turn"] = {k: cold.get(k) for k in
+                                               ("ttft_ms", "first_prompt_n", "first_cache_n", "cache_frac")}
+        elif isinstance(baseline, dict) and isinstance(baseline.get("cold_first_turn"), dict):
+            new_baseline["cold_first_turn"] = baseline["cold_first_turn"]   # keep the old bar over a failed measurement
+        write_json(args.baseline, new_baseline)
         print(f"Baseline saved: {args.baseline}")
         wrote_baseline = True
         # This run IS the new bar now — reload so baseline_ref points at it.
@@ -2075,8 +2218,10 @@ def main(reexec: bool = False) -> int:
 
     # a failed sweep is a warning-level exit: results are valid but the
     # calendar/lists are dirty and the systemd unit shows non-zero.
-    status = fold_vad_status("pass" if (not warnings and cleanup_ok) else "fail", vad)
+    status = fold_cold_status(fold_vad_status("pass" if (not warnings and cleanup_ok) else "fail", vad), cold)
     reason_parts = list(warnings)
+    if cold.get("status") in ("fail", "error"):
+        reason_parts.append(f"COLD {cold['status'].upper()}: {cold.get('reason')}")
     if wrote_baseline and status == "pass":
         # A run that WRITES the bar is never evidence for the deploy gate. A re-pin is
         # judged against the OLD profile (clips the new set shares are checked, new ones
@@ -2106,7 +2251,7 @@ def main(reexec: bool = False) -> int:
         reason_parts.append(f"VAD {vad['status'].upper()}: {vad.get('reason')}")
     emit_result(args, status=status, summary=summary, said_vs_did=said_vs_did,
                 speed_deltas=speed_deltas, baseline=baseline, reason="; ".join(reason_parts),
-                vad=vad, speed_comparison=speed_comparison, flaky=flaky, clip_eval=clip_eval)
+                vad=vad, speed_comparison=speed_comparison, flaky=flaky, clip_eval=clip_eval, cold=cold)
 
     print(f"Results: {args.results}  Trend: {args.trend}  (status={status})")
     if status == "error":

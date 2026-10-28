@@ -149,3 +149,11 @@ def _no_owner_voice_clip_expectations(monkeypatch, tmp_path):
     read by default; a unit test must never pick up the household's file. Point it at an absent temp path (a test
     that wants labels writes its own and passes ``--expectations``)."""
     monkeypatch.setenv("ZOE_VOICE_CLIP_EXPECTATIONS", str(tmp_path / "no-owner-clip-expectations.json"))
+
+
+@pytest.fixture(autouse=True)
+def _no_live_cold_first_turn(monkeypatch):
+    """The probe's cold first-turn stage sends a REAL brain turn (evict, quiet-window wait, wake warm, ask). A unit test
+    that drives a probe ``main()`` must never reach the brain: switch the stage off by its own env default (the stage's
+    own tests call ``judge_cold_start`` / ``run_cold_start_stage`` directly)."""
+    monkeypatch.setenv("ZOE_VOICE_PROBE_COLD_CHECK", "0")

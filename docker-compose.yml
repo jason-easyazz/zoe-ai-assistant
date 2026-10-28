@@ -23,7 +23,7 @@ services:
 
   # ── UI ─────────────────────────────────────────────────────────────────────
   zoe-ui:
-    image: nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f  # nginx:alpine as of 2026-10-04; same digest in deploy.yml + validate.yml (pinned by test_nginx_delivery_layer.py)
+    image: nginx@sha256:1ef7ca94d7879df82421428ce13bd1eaa412404953859cf7a5b6512c25e67a60  # nginx:1.31.8-alpine as of 2026-10-28 (14 Oct CVE fixes); same digest in deploy.yml + validate.yml (pinned by test_nginx_delivery_layer.py)
     container_name: zoe-ui
     ports:
     - 80:80
@@ -309,7 +309,7 @@ services:
 
   # ── Cloudflare Tunnel ─────────────────────────────────────────────────────
   cloudflared:
-    image: cloudflare/cloudflared:latest  # pinned: sha256:21f3607baf2384c54d592b0efe76dd5f548c0dbc083e62fa22c7fac3923d077f
+    image: cloudflare/cloudflared@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07  # cloudflared 2026.10.0 (released 2026-10-05; registry index digest verified 2026-10-28). Bump deliberately, never :latest.
     container_name: zoe-cloudflared
     command: --config /etc/cloudflared/config.yml --no-autoupdate tunnel run
     restart: unless-stopped
