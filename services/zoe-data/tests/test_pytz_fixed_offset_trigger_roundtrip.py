@@ -18,8 +18,11 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe
 
-pytz = pytest.importorskip("pytz")
 apscheduler = pytest.importorskip("apscheduler")
+try:  # NOT importorskip: on the 3.12 set a missing pytz must fail loudly, not vanish as a green skip
+    import pytz
+except ImportError:  # pragma: no cover - exercised only if pytz leaves the dependency set
+    pytz = None
 
 
 def _aps_version() -> tuple[int, ...]:
@@ -29,6 +32,13 @@ def _aps_version() -> tuple[int, ...]:
 _needs_311 = pytest.mark.skipif(
     _aps_version() < (3, 11), reason="pytz->ZoneInfo conversion only exists in APScheduler 3.11+"
 )
+
+
+@_needs_311
+def test_pytz_is_present_on_the_312_dependency_set():
+    # APScheduler 3.11 still restores pytz zones from pickled jobs; if pytz drops out of requirements-py312.txt the
+    # round-trip tests below cannot run, and saved fixed-offset jobs are no longer guarded. Fail, never skip.
+    assert pytz is not None, "pytz missing from the APScheduler 3.11+ dependency set - the FixedOffset hold is unguarded"
 
 
 @_needs_311
