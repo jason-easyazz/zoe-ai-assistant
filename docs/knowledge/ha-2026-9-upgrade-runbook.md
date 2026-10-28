@@ -234,7 +234,9 @@ docker compose stop homeassistant
 mkdir -p ~/.zoe-backups && BK=~/.zoe-backups/ha-pre-2026.10.4-$(date +%F).tar.gz && echo "BACKUP=$BK"
 tar -C /home/zoe/assistant -czf "$BK" homeassistant/
 tar -tzf "$BK" > "$BK.list"
-grep -q '^homeassistant/\.storage/' "$BK.list" && grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list" && echo "backup ok"
+grep -q '^homeassistant/\.storage/' "$BK.list" || { echo "BACKUP BAD: no .storage/ — HA left stopped, nothing changed"; exit 1; }
+grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list" || { echo "BACKUP BAD: no recorder db — HA left stopped, nothing changed"; exit 1; }
+echo "backup ok"
 docker compose up -d --no-deps homeassistant
 until curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/config >/dev/null; do sleep 5; done   # 1-3 min
 ```
@@ -249,11 +251,16 @@ BK=/home/zoe/.zoe-backups/ha-pre-2026.10.4-<date>.tar.gz        # explicit path
 cd /home/zoe/assistant
 docker compose stop homeassistant
 tar -tzf "$BK" > "$BK.list"
-grep -q '^homeassistant/\.storage/' "$BK.list" && grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list"   # re-prove the archive BEFORE deleting anything
-# edit docker-compose.yml: image -> 2026.10.2@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4 (and system_updates.py's tracked tag), or revert the pin commit
+# Re-prove the archive BEFORE deleting anything; each check aborts on its own (a failed command inside an && list does not trip set -e).
+grep -q '^homeassistant/\.storage/' "$BK.list" || { echo "ARCHIVE BAD: no .storage/ — nothing deleted"; exit 1; }
+grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list" || { echo "ARCHIVE BAD: no recorder db — nothing deleted"; exit 1; }
+# Put the previous release back explicitly. Reverting the pin commit is NOT equivalent: it restores the old floating :stable tag, not 2026.10.2.
+PREV='2026.10.2@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4'
+sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$PREV#" docker-compose.yml
+grep -q "home-assistant/home-assistant:$PREV" docker-compose.yml || { echo "compose pin not rewritten — nothing deleted"; exit 1; }
 rm -rf /home/zoe/assistant/homeassistant
 tar -C /home/zoe/assistant -xzf "$BK"
 docker compose up -d --no-deps homeassistant
 ```
 
-Then re-run the verify checks against 2026.10.2. A patch bump rarely migrates `.storage`, but restore regardless if HA logged a migration.
+Then re-run the verify checks against 2026.10.2. The compose edit is a live-checkout change: re-pin through a PR (or `git checkout -- docker-compose.yml` once main carries the fix) so the next deploy does not bring 2026.10.4 back. A patch bump rarely migrates `.storage`, but restore regardless if HA logged a migration.
