@@ -122,16 +122,24 @@ def reset_silero_state(lib: Any, path: str = "batch") -> bool:
                 else:
                     failed += 1
             if failed:  # cannot be made impossible (the memory itself went unwritable): say so loudly, not silently
-                logger.error("Moonshine VAD state rollback FAILED for %d of %d targets - Silero state may be "
-                             "partially reset", failed, len(saved))
+                _log_safely(logger.error, "Moonshine VAD state rollback FAILED for %d of %d targets - Silero state "
+                            "may be partially reset", failed, len(saved))
             raise
         return True
     except Exception as exc:  # absent symbol, other build, unreadable object -> fix lost, never a crash
         if not _warned:
             _warned = True
-            logger.warning("Moonshine VAD state reset unavailable on the %s STT path (%s) - STT keeps its carried "
-                           "VAD state", path, exc)
+            _log_safely(logger.warning, "Moonshine VAD state reset unavailable on the %s STT path (%s) - STT keeps "
+                        "its carried VAD state", path, exc)
         return False
+
+
+def _log_safely(emit: Any, *args: Any) -> None:
+    """A broken log handler must not turn the never-raises reset into a raising one."""
+    try:
+        emit(*args)
+    except Exception:
+        pass
 
 
 def transcriber_lib(transcriber: Any) -> Optional[Any]:
