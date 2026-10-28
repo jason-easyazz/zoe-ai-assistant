@@ -25,6 +25,11 @@ Description=Rotate size-bloated zoe log files in ~/.zoe-logs
 
 [Service]
 Type=oneshot
+# The text-log retention pass reads ZOE_TEXT_LOG_RETENTION_DAYS / ZOE_ROUTER_HEAD_LOG from the zoe-data env files (the same ones,
+# same order, as zoe-data.service) so an owner's `keep` is honoured. The script also parses these files itself, so a unit that was
+# not re-installed is still correct; re-install it to make the unit match the repo.
+EnvironmentFile=-%h/assistant/.env
+EnvironmentFile=-%h/assistant/services/zoe-data/.env
 ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/rotate_service_logs.py
 Nice=10
 IOSchedulingClass=idle

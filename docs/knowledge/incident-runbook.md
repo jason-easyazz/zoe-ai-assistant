@@ -668,7 +668,7 @@ Two neighbours from the same day:
 2. Mint: `POST /api/panels/{panel}/token` with header `X-Session-ID: <admin session>`; note the
    new token and its id. Never write a placeholder into any env file.
 3. Install it in BOTH places: on the Pi, `/home/pi/.zoe-voice/.env.voice` `DEVICE_TOKEN` (the
-   daemon); on the Zoe box, `/home/zoe/.hermes/.env` `ZOE_DEVICE_TOKEN` (the replay/latency probe).
+   daemon); on the Zoe box, `services/zoe-data/.env` `ZOE_DEVICE_TOKEN` (`~/.hermes/.env` is retired; see open-problems "hermes .env retirement") (the replay/latency probe).
 4. `systemctl --user restart zoe-voice`; the journal must show `Speaker profiles synced` and no
    `API auth failure … (401)` line.
 5. Only THEN revoke the old id: `DELETE /api/panels/{panel}/token/{old_token_id}` (admin).

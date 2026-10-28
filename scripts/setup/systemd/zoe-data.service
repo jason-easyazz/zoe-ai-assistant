@@ -19,7 +19,6 @@ RestartSec=5
 # install steps in README.md.
 EnvironmentFile=%h/assistant/.env
 EnvironmentFile=%h/assistant/services/zoe-data/.env
-EnvironmentFile=-%h/.hermes/.env
 
 # Local LLM (llama-server) endpoint.
 Environment=GEMMA_SERVER_URL=http://127.0.0.1:11434/v1
