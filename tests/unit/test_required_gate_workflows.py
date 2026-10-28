@@ -435,6 +435,9 @@ _STEP_BUDGET_MIN = {
 _JOB_BUDGET_MIN = {"validate": 90, "zoe-data-py312": 45, "deps-resolvable": 15, "secret-scan": 10}
 
 
+_PER_TEST_HANG_S = 300   # no ci_safe test legitimately runs 5 minutes
+
+
 def test_lane_timeout_budgets_are_pinned_exactly():
     jobs = _load("validate.yml")["jobs"]
     assert set(jobs) == set(_JOB_BUDGET_MIN), "new job in validate.yml: give it a budget here"
@@ -443,6 +446,8 @@ def test_lane_timeout_budgets_are_pinned_exactly():
     for (jname, sname), want in _STEP_BUDGET_MIN.items():
         step = next(s for s in jobs[jname]["steps"] if s.get("name") == sname)
         assert step.get("timeout-minutes") == want, (jname, sname)
-        assert f"faulthandler_timeout={want * 60 - 60}" in step["run"], (jname, sname)
+        # faulthandler_timeout is PER TEST (pytest restarts the timer for every test), so it is a short per-test hang budget, not the step
+        # budget: a test hanging late in a 24-min lane must still dump its stack well before the step is killed.
+        assert f"faulthandler_timeout={min(_PER_TEST_HANG_S, want * 60 - 60)}" in step["run"], (jname, sname)
     found = {(j, s["name"]) for j, job in jobs.items() for s in _pytest_steps(job)}
     assert found == set(_STEP_BUDGET_MIN), found ^ set(_STEP_BUDGET_MIN)

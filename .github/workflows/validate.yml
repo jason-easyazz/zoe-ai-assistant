@@ -231,7 +231,7 @@ jobs:
         timeout-minutes: 24
         run: |
           pytest services/zoe-data/tests -m ci_safe \
-            -o faulthandler_timeout=1380 \
+            -o faulthandler_timeout=300 \
             --ignore=services/zoe-data/tests/samantha_live \
             --maxfail=200 -q \
             --override-ini="asyncio_mode=auto"
@@ -274,7 +274,7 @@ jobs:
         timeout-minutes: 30
         run: |
           PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
-            -o faulthandler_timeout=1740 \
+            -o faulthandler_timeout=300 \
             tests/unit -m ci_safe \
             --maxfail=200 -q \
             --override-ini="asyncio_mode=auto"
@@ -390,7 +390,7 @@ jobs:
         run: |
           python3 --version
           pytest services/zoe-data/tests -m ci_safe \
-            -o faulthandler_timeout=1380 \
+            -o faulthandler_timeout=300 \
             --ignore=services/zoe-data/tests/samantha_live \
             --maxfail=200 -q \
             --override-ini="asyncio_mode=auto"
