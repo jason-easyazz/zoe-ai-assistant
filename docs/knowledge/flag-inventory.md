@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-781 flags; 731 not documented in `.env.example`.
+783 flags; 733 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -302,6 +302,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_KOKORO_SIDECAR_URL` | `'http://127.0.0.1:10201'` | yes | NO | `scripts/perf/measure_tts.py`<br>`services/zoe-data/main.py`<br>`services/zoe-data/system_stats.py`<br>`services/zoe-data/tts_waterfall.py` |
 | `ZOE_KOKORO_VOICE` | `''`, `'af_sky'` | no | yes | `scripts/perf/measure_tts.py`<br>`services/zoe-data/voice_settings.py` |
 | `ZOE_KOKORO_VOICES` | `''` | no | NO | `services/zoe-data/voice_settings.py` |
+| `ZOE_KV_MISS_ALERT_STATE` | `-` | no | NO | `services/zoe-data/kv_miss_alert.py` |
 | `ZOE_LAN_HOSTS` | `''` | no | NO | `services/zoe-data/auth_handoff.py` |
 | `ZOE_LATENCY_BASELINE` | `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_LATENCY_RESULTS` | `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
@@ -492,6 +493,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PANEL_KIOSK_CREDENTIAL_TTL_S` | `dynamic` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
 | `ZOE_PANEL_KIOSK_SECRET` | `-` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
 | `ZOE_PANEL_KIOSK_TICKET_TTL_S` | `60` | no | NO | `services/zoe-data/panel_kiosk_credential.py` |
+| `ZOE_PANEL_KV_MISS_ALERT` | `'1'` | no | NO | `services/zoe-data/kv_miss_alert.py` |
 | `ZOE_PANEL_KV_MISS_TOKENS` | `'500'` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_PANEL_PUSH_PROOF` | `'enforce'` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_PANEL_REVIEW_CARDS` | `False` | yes | NO | `services/zoe-data/panel_review_cards.py` |

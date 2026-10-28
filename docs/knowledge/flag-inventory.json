@@ -2906,6 +2906,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_KV_MISS_ALERT_STATE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kv_miss_alert.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LAN_HOSTS": {
         "defaults": [
           "''"
@@ -4832,6 +4842,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/panel_kiosk_credential.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_KV_MISS_ALERT": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kv_miss_alert.py"
         ],
         "typed_env": false
       },
