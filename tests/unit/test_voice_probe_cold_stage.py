@@ -75,7 +75,11 @@ def test_unmeasurable_is_an_error_not_a_pass():
     assert _judge({"status": "error", "reason": "boom"})["status"] == "error"
     assert _judge({**HIT, "warm": "skipped:inflight"})["status"] == "error"
     assert _judge(None)["status"] == "error"
-    assert _judge({"status": "skip", "reason": "not flue"})["status"] == "skip"
+    assert _judge({"status": "skip", "reason": "not flue"})["status"] == "error"   # enabled but measured nothing
+    for drop in ("first_prompt_n", "first_cache_n"):
+        assert _judge({k: v for k, v in HIT.items() if k != drop})["status"] == "error"   # absent is not zero
+    assert _judge({**HIT, "first_prompt_n": 0, "first_cache_n": 0})["status"] == "error"
+    assert _judge({**HIT, "first_prompt_n": -1})["status"] == "error"
 
 
 def test_fold_only_tightens():
@@ -147,3 +151,9 @@ def test_child_sequence_and_arithmetic(monkeypatch):
     assert order == ["evict", "warm:jason", "turn", "log"]            # evict -> wait -> wake warm -> first turn
     assert r["status"] == "ok" and r["cache_frac"] == 0.75 and r["warm"] == "warmed" and r["ttft_ms"] >= 0
     assert _judge(r)["status"] == "fail"                              # 75% < the 80% floor, end to end
+
+
+def test_child_missing_counts_are_not_zeroed(monkeypatch):
+    order = _fake_service(monkeypatch, prompt_n=None, cache_n=300)       # prompt_n absent from the terminal
+    r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
+    assert r["status"] == "error" and "prompt_cache" in r["reason"]

@@ -1140,9 +1140,7 @@ def judge_cold_start(measured: dict[str, Any] | None, baseline: dict[str, Any] |
     that could not be taken (no sidecar numbers, the wake warm did not run) is an ERROR, never a pass."""
     m = measured if isinstance(measured, dict) else {}
     st = m.get("status")
-    if st == "skip":
-        return cold_not_run(str(m.get("reason") or "cold first-turn stage skipped"))
-    if st != "ok":
+    if st != "ok":   # includes a child "skip" (no Flue brain): an ENABLED stage that measured nothing is not a pass
         return _cold_block("error", str(m.get("reason") or "cold first-turn measurement failed"))
     warm = m.get("warm")
     fields = {"warm": warm, "first_prompt_n": m.get("first_prompt_n"), "first_cache_n": m.get("first_cache_n"),
@@ -1151,8 +1149,11 @@ def judge_cold_start(measured: dict[str, Any] | None, baseline: dict[str, Any] |
         return _cold_block("error", f"the wake prewarm did not run (outcome {warm!r}), so the first turn is not the "
                                     "panel's path - re-run when nothing else is warming the slot", **fields)
     frac, ttft = m.get("cache_frac"), m.get("ttft_ms")
-    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (frac, ttft)):
-        return _cold_block("error", "cold first-turn measurement carried no cache fraction / TTFT", **fields)
+    counts = (m.get("first_prompt_n"), m.get("first_cache_n"))
+    if (not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (frac, ttft))
+            or not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in counts)
+            or counts[0] + counts[1] <= 0):
+        return _cold_block("error", "cold first-turn measurement carried no finite cache fraction / TTFT / token counts", **fields)
     problems: list[str] = []
     if frac < COLD_MIN_CACHE_FRAC:
         problems.append(f"COLD first turn missed the KV cache: {m.get('first_cache_n')} reused vs "
@@ -2172,6 +2173,10 @@ def main(reexec: bool = False) -> int:
     if (args.update_baseline or not args.baseline.exists()) and not summary.get("clip_ids"):
         # A baseline with no pinned set re-opens the very drift this guards.
         pin_error = "no replayed clip could be identified; refusing to write a baseline with no pinned set"
+    if ((args.update_baseline or not args.baseline.exists()) and not pin_error
+            and cold.get("status") in ("fail", "error")):
+        # A cold first turn that missed the cache (or could not be measured) must never become the bar.
+        pin_error = f"refusing to write a baseline: the cold first-turn stage {cold['status']}: {cold.get('reason')}"
     if fault_error:
         print(f"ERROR: {fault_error}", file=sys.stderr)
     elif recall_error:

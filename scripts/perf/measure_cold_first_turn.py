@@ -70,8 +70,9 @@ async def measure(member: str, wait_s: float | None, gap_s: float) -> dict:
         try:
             rounds = terminal.get("prompt_cache")
             if isinstance(rounds, list) and rounds and isinstance(rounds[0], dict):
-                seen["prompt_n"] = int(rounds[0].get("prompt_n") or 0)
-                seen["cache_n"] = int(rounds[0].get("cache_n") or 0)
+                if rounds[0].get("prompt_n") is not None and rounds[0].get("cache_n") is not None:   # absent != 0
+                    seen["prompt_n"] = int(rounds[0]["prompt_n"])
+                    seen["cache_n"] = int(rounds[0]["cache_n"])
         except Exception:  # noqa: BLE001
             pass
         return orig(session_id, terminal)
