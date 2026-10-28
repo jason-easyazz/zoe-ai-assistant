@@ -157,7 +157,8 @@ def main(argv: "list[str] | None" = None) -> int:
     print(json.dumps(summary, separators=(",", ":")))
     tot = summary.get("days") or []
     print(f"NIGHT_JOB omi_day_review status={summary['status']} days={len(tot)} calls={sum(d.get('calls', 0) for d in tot)} "
-          f"stored={sum(d.get('stored', 0) for d in tot)} no_time={sum(1 for d in tot if d.get('status') == 'no_time')}", file=sys.stderr)
+          f"stored={sum(d.get('stored', 0) for d in tot)} no_time={sum(1 for d in tot if d.get('status') == 'no_time')} "
+          f"skipped={sum(1 for d in tot if not d.get('calls') and d.get('status') not in ('no_time', 'error', 'llm_unreachable'))}", file=sys.stderr)
     return code
 
 

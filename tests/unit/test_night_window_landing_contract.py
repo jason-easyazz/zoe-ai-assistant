@@ -148,13 +148,18 @@ def test_the_default_lock_is_the_one_the_contract_names():
     assert f"/{LOCK_NAME}" in inspect.getsource(bk.Cfg)
 
 
-def test_preflight_still_refuses_on_the_lock_and_waits_for_a_quiet_box():
-    """preflight consults the lock before stopping anything; the quiet wait and the post-lock recheck use busy_reason."""
+def test_preflight_waits_for_the_lock_and_a_quiet_box_and_rechecks_under_the_lock():
+    """preflight WAITS (bounded) for the lock before stopping anything, then for a quiet box, and the post-lock recheck still looks for a lander - handing the lock back and
+    waiting again instead of refusing the night on the first sighting (2026-10-26: a lander spawned a second before the lock was taken)."""
     src = inspect.getsource(nw.NightWindow.preflight)
-    assert "self.probe_lock()" in src and "has the brain. Nothing was stopped" in src
-    assert "self.wait_until_quiet()" in src
-    assert "self.busy_reason()" in src, "the post-lock recheck must still look for a lander"
-    assert src.index("self.probe_lock()") < src.index("self.wait_until_quiet()") < src.index("self.take_lock()")
+    assert "self.wait_for_lock()" in src and "self.wait_until_quiet()" in src and "self.take_lock_when_clear(" in src
+    assert src.index("self.wait_for_lock()") < src.index("self.wait_until_quiet()") < src.index("self.take_lock_when_clear(")
+    lock = inspect.getsource(nw.NightWindow.wait_for_lock)
+    assert "self.probe_lock()" in lock and "has the brain. Nothing was stopped" in lock and "self.refuse(why)" in lock, "a lock still held after the bounded wait must refuse, nothing stopped"
+    clear = inspect.getsource(nw.NightWindow.take_lock_when_clear)
+    assert "self.busy_reason()" in clear and "self.busy_now()" in clear, "the post-lock recheck must still look for a lander"
+    assert clear.index("self.take_lock()") < clear.index("self.busy_reason()") < clear.index("self.release_lock()") < clear.index("self.wait_until_quiet()")
+    assert "capped_waits" in clear and "self.host.sleep" in clear, "the hand-back loop is bounded by the end-by deadline and always spends time"
 
 
 def test_the_night_schedule_sits_inside_the_span_the_landers_keep_clear():
