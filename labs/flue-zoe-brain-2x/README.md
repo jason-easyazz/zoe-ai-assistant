@@ -573,7 +573,7 @@ env-only: `ZOE_FLUE_WIRE=2` + `ZOE_FLUE_BRAIN_URL` together, never one alone
 
 `ZOE_BRAIN_BACKEND=flue` already lives in `services/zoe-data/.env`, and that is
 the file the **live** `zoe-data.service` actually loads (`systemctl --user cat
-zoe-data` — the installed unit reads `services/zoe-data/.env` and `~/.hermes/.env`;
+zoe-data` — the installed unit reads `services/zoe-data/.env` (it also read `~/.hermes/.env` until that retired);
 it does *not* read the repo-root `.env` the tracked template lists). Both new
 vars go in the same file. One copy-paste block:
 

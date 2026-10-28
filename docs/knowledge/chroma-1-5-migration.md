@@ -362,7 +362,7 @@ STEP=rss
 grep -E 'VmRSS|VmSwap' /proc/$(systemctl --user show -p MainPID --value zoe-data)/status   # before: 1028 MB RSS, 0 swap
 
 STEP=replay               # writes the artifact the deploy gate needs; Kokoro stopped for its duration
-set -a; . ~/.hermes/.env; set +a
+set -a; . ~/assistant/services/zoe-data/.env; set +a
 KOKORO_STOPPED=1; systemctl --user stop kokoro-tts      # the EXIT trap restores it on any exit
 ZOE_VOICE_REPLAY_STT=remote flock /tmp/zoe-voice-harness.lock nice -n 5 ~/.zoe/venvs/zoe-data-py312/bin/python \
   $WT/scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote \
