@@ -2903,6 +2903,34 @@ def _prepare_audio_for_moonshine(audio, sample_rate: int):
     return resampled.tolist(), _MOONSHINE_SAMPLE_RATE
 
 
+def _moonshine_empty_reason(lines: list, audio, sample_rate: int) -> str:
+    """Why Moonshine produced nothing, as ``reason=... key=value`` for the log.
+
+    ``no_segments``: the C-side VAD found no speech (zero lines) - the signature
+    of the fast (~0.1 s) empty. Leading hypothesis (not proven by a reset experiment):
+    Moonshine's batch path shares ONE process-global Silero VAD with no reset
+    between clips, so a borderline clip decodes differently by history. ``blank_lines``: lines
+    came back but all blank (the decoder ran). ``audio_active_s`` (seconds above a
+    low amplitude floor) separates "silence" from "speech the VAD missed". Numbers
+    only - never the audio or any text."""
+    try:
+        import numpy as np
+
+        a = np.abs(np.asarray(audio, dtype=np.float32).reshape(-1))
+        rate = sample_rate if isinstance(sample_rate, int) and sample_rate > 0 else _MOONSHINE_SAMPLE_RATE
+        dur = a.size / rate
+        active = float((a > 0.02).sum()) / rate
+        peak = float(a.max()) if a.size else 0.0
+    except Exception:
+        dur = active = peak = -1.0
+    try:
+        n_lines = len(lines)
+    except Exception:
+        n_lines = -1
+    reason = "no_segments" if n_lines == 0 else "blank_lines"
+    return f"reason={reason} lines={n_lines} audio_s={dur:.2f} active_s={active:.2f} peak={peak:.3f}"
+
+
 async def _run_moonshine(wav_path: str) -> str:
     from moonshine_voice.utils import load_wav_file
 
@@ -2918,6 +2946,7 @@ async def _run_moonshine(wav_path: str) -> str:
             # call. Treat the clip as unusable -> empty transcript (the caller's
             # empty_transcript handling re-prompts).
             logger.warning("Moonshine: unusable sample rate %r for %s — skipping clip", sr, wav_path)
+            logger.info("STT_EMPTY reason=bad_sample_rate")
             return ""
         with _stt_stream.infer_guard(_moonshine_infer_lock):
             out = tr.transcribe_without_streaming(audio, sr)
@@ -2933,6 +2962,7 @@ async def _run_moonshine(wav_path: str) -> str:
         flat = getattr(out, "text", None)
         if isinstance(flat, str) and flat.strip():
             return _strip_wake_word([flat])
+        logger.info("STT_EMPTY %s", _moonshine_empty_reason(lines, audio, sr))
         return ""
 
     return await asyncio.get_running_loop().run_in_executor(None, _work)
