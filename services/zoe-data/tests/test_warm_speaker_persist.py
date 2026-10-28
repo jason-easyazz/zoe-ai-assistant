@@ -68,6 +68,21 @@ def test_memo_round_trips_through_the_file_with_ids_only(state):
     assert ws.get("p2", now=T0 + 60) == "", "another panel's speaker is not borrowed"
 
 
+def test_the_production_note_path_persists_without_sync_and_does_no_io_on_the_caller(state, monkeypatch):
+    """voice_tts calls note() with the default (threaded) save; the restart survives it, and the caller thread reads nothing."""
+    import threading
+
+    reads = []
+    real_loaded = ws._ensure_loaded
+    monkeypatch.setattr(ws, "_ensure_loaded", lambda: reads.append(threading.current_thread().name) or real_loaded())
+    v._note_voice_speaker("p1", "casey")
+    assert reads == [] or all(n == "warm-speaker-save" for n in reads), "note() read the file on the caller's thread"
+    for t in [t for t in threading.enumerate() if t.name == "warm-speaker-save"]:
+        t.join(5)
+    _restart()
+    assert ws.get("p1") == "casey"
+
+
 def test_age_cap_degrades_a_stale_guess_to_the_guest_warm(state):
     ws.note("p1", "casey", now=T0, sync=True)
     _restart()

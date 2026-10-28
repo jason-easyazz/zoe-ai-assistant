@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _lock = threading.Lock()
-_last_failure = ""   # why the last send failed (the ops sender's own stderr line; never the token: it prints errors, not secrets)
+_last_failure = ""   # why the last send failed (a closed category of the ops sender's stderr line: never free text, see _redact)
 _alerted_day = ""   # in-process record: the 1/day limit holds even when the state file cannot be written
 
 
@@ -57,8 +57,17 @@ def _yesterday(now: "float | None" = None) -> str:
 
 
 def _redact(line: str) -> str:
-    """One stderr line safe to log: a Telegram bot token in a URL is masked."""
-    return re.sub(r"bot\d+:[\w-]+", "bot<redacted>", line)[:160]
+    """The sender's stderr line as a CLOSED category, never free text: the line can carry a recipient, a chat id or a URL
+    with the bot token, so only a fixed vocabulary (and an HTTP status number) is ever logged."""
+    low = (line or "").lower()
+    m = re.search(r"http error (\d{3})", low)
+    if m:
+        return f"http_{m.group(1)}"
+    for needle, label in (("no alert recipient", "no_recipient"), ("cannot read telegram env", "no_env"),
+                          ("timed out", "timeout"), ("urlopen error", "network"), ("telegram send failed", "send_failed")):
+        if needle in low:
+            return label
+    return "other"
 
 
 def _ops_send(text: str) -> bool:

@@ -177,10 +177,12 @@ def test_an_undelivered_alert_logs_why(monkeypatch, caplog, tmp_path):
 
     def sender(text):
         kma._last_failure = kma._redact("crash-watch: telegram send failed: <urlopen error timed out> /bot123:SECRET-tok/sendMessage")
+        assert kma._redact("recipient jason@example.com chat_id=123456 failed") == "other", "free text never reaches the log"
+        assert kma._redact("crash-watch: telegram send failed: HTTP Error 403: Forbidden") == "http_403"
         return False
 
     caplog.set_level("WARNING", logger="kv_miss_alert")
     kma.note_first_miss(1087, 2154, now=DAY1, send=sender, sync=True)
     msgs = " ".join(r.getMessage() for r in caplog.records)
-    assert "not delivered" in msgs and "timed out" in msgs
-    assert "SECRET-tok" not in msgs and "bot<redacted>" in msgs
+    assert "not delivered" in msgs and "timeout" in msgs
+    assert "SECRET-tok" not in msgs and "123" not in msgs.replace("2026", "")

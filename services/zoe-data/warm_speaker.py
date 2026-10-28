@@ -116,7 +116,7 @@ def _save(sync: bool) -> None:
     if sync:
         _persist()
     else:
-        threading.Thread(target=_persist, name="warm-speaker-save", daemon=True).start()
+        threading.Thread(target=_persist, name="warm-speaker-save").start()   # non-daemon: a SIGTERM restart waits the ms it takes
 
 
 def note(panel_id: str, member: str, *, now: "float | None" = None, sync: bool = False) -> None:
