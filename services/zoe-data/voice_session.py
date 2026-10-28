@@ -472,7 +472,7 @@ async def revoke_member(member_id: str, reason: str = "consent_revoked") -> None
     try:
         import warm_speaker
 
-        warm_speaker.forget_user(str(member_id or ""))
+        await asyncio.to_thread(warm_speaker.forget_user, str(member_id or ""))
     except Exception:  # noqa: BLE001
         pass
     try:

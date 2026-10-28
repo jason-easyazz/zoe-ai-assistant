@@ -77,7 +77,7 @@ def test_age_cap_degrades_a_stale_guess_to_the_guest_warm(state):
 
 
 def test_a_guest_or_sentinel_is_never_recorded(state):
-    for who in ("guest", "voice-guest", "", "  "):
+    for who in ("guest", "voice-guest", "", "  ", "anonymous", "voice-daemon", "guest-ab12", "GUEST-ab12"):
         ws.note("p1", who, now=T0, sync=True)
     assert not state.exists()
     v._note_voice_speaker("p1", "voice-guest")
@@ -119,9 +119,11 @@ def test_corrupt_or_foreign_state_is_no_memo(state):
     state.write_text("{not json")
     ws.reset()
     assert ws.get("p1", now=T0) == ""
-    state.write_text(json.dumps({"p1": ["voice-guest", T0], "p2": "casey", "p3": ["dana", T0]}))
+    state.write_text(json.dumps({"p1": ["voice-guest", T0], "p2": "casey", "p3": ["dana", T0], "p4": ["anonymous", T0],
+                                 "p5": ["guest-ab12", T0]}))
     ws.reset()
     assert ws.get("p1", now=T0) == "" and ws.get("p2", now=T0) == "" and ws.get("p3", now=T0) == "dana"
+    assert ws.get("p4", now=T0) == "" and ws.get("p5", now=T0) == "", "the load boundary does not trust the file"
 
 
 def test_unchanged_entry_is_not_rewritten_every_turn(state, monkeypatch):

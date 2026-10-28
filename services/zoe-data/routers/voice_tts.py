@@ -6606,7 +6606,7 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         ) or ""
         import warm_speaker
 
-        likely = warm_speaker.get(panel_id) or member
+        likely = await asyncio.to_thread(warm_speaker.get, panel_id) or member
         if not likely:
             # After a restart / eviction the memo is empty: ask for a fresh-PIN member, but only briefly so the
             # warm is never held up (the lookup is re-awaited below for the worker + facts, unbounded as before).

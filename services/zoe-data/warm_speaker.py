@@ -12,8 +12,8 @@ a guest and never recorded), and it is read only to choose which envelope a THRO
 (``zoe_flue_client._kv_warm_outbound``). A guest's real turn never takes this memo's envelope, so nothing of a member's
 manner or card can reach a guest's turn through it. An entry older than ``ZOE_WARM_SPEAKER_MAX_AGE_S`` (default 12 h)
 reads as no entry (the warm degrades to the guest envelope). ``forget_user`` (forget / voice-profile delete / consent
-revoke) removes a member from memory and file. Never raises; saves run on a daemon thread, the only caller-thread I/O
-is one lazy load of a few hundred bytes.
+revoke) removes a member from memory and file. Never raises. ``note`` does no I/O (the save runs on a daemon thread, which also does the first load);
+``get`` / ``forget_user`` do the one lazy load of a few hundred bytes, so async callers run them via ``asyncio.to_thread``.
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import user_filters
 from typed_env import env_str
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,11 @@ _lock = threading.RLock()
 _mem: "dict[str, tuple[str, float]]" = {}
 _loaded = False
 _last_written: "dict[str, tuple[str, float]]" = {}
-_GUESTS = ("guest", "voice-guest", "")
+
+
+def _nobody(member: str) -> bool:
+    """The repo's own guest predicate (every sentinel and any ``guest-<id>`` principal): never a recordable speaker."""
+    return user_filters.is_unidentified(member)
 
 
 def max_age_s() -> float:
@@ -76,8 +81,8 @@ def _ensure_loaded() -> None:
         try:
             raw = json.loads(p.read_text())
             for panel, ent in (raw or {}).items():
-                if isinstance(ent, list) and len(ent) == 2 and isinstance(ent[0], str) and ent[0].lower() not in _GUESTS:
-                    _mem[str(panel)] = (ent[0], float(ent[1]))
+                if isinstance(ent, list) and len(ent) == 2 and isinstance(ent[0], str) and not _nobody(ent[0]):
+                    _mem.setdefault(str(panel), (ent[0], float(ent[1])))   # a newer in-process note wins
         except FileNotFoundError:
             pass
         except Exception:  # noqa: BLE001 - a corrupt file is no memo
@@ -91,6 +96,7 @@ def _persist() -> None:
     if p is None:
         return
     try:
+        _ensure_loaded()   # on the save thread: merges what the file holds under whatever was noted before the first load
         with _lock:
             snap = {k: [m, t] for k, (m, t) in _mem.items()}
             _last_written.clear()
@@ -117,10 +123,9 @@ def note(panel_id: str, member: str, *, now: "float | None" = None, sync: bool =
     """Record ``member`` (server-verified by the caller) as ``panel_id``'s likely next speaker."""
     try:
         m = (member or "").strip()
-        if not panel_id or m.lower() in _GUESTS:
+        if not panel_id or _nobody(m):
             return
         t = time.time() if now is None else float(now)
-        _ensure_loaded()
         with _lock:
             prev = _last_written.get(panel_id)
             _mem.pop(panel_id, None)
