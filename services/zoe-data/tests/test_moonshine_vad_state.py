@@ -21,7 +21,7 @@ class _FakeSilero:
     """A heap object laid out like SileroVad's head: 27 8-byte words with std::vector<float> triples where the real
     class has them (``_context`` @48, ``input`` @136, ``_state`` @168), other words being pointers/ints."""
 
-    def __init__(self, extra_state_vector=False):
+    def __init__(self, extra_state_vector=False, state_triple=None):
         self.context = (ctypes.c_float * 64)(*([1.0] * 64))
         self.inp = (ctypes.c_float * 576)(*([1.0] * 576))
         self.state = (ctypes.c_float * 256)(*([1.0] * 256))
@@ -34,6 +34,8 @@ class _FakeSilero:
         if extra_state_vector:  # state vector moved off its measured offset -> different layout, must refuse
             words[21:24] = [0x1111] * 3
             words[24:27] = [a(self.state2), a(self.state2) + 256 * 4, a(self.state2) + 256 * 4]
+        if state_triple is not None:  # (begin_off, end_off, cap_off) in BYTES from the real state buffer
+            words[21:24] = [a(self.state) + o for o in state_triple]
         self.buf = ctypes.create_string_buffer(struct.pack("<27Q", *words), 27 * 8 + 64)
 
     @property
@@ -74,6 +76,49 @@ def test_unexpected_layout_writes_nothing(monkeypatch):
     monkeypatch.setattr(mvs, "_warned", False)
     assert mvs.reset_silero_state(object()) is False
     assert all(v == 1.0 for v in obj.state) and all(v == 1.0 for v in obj.context)
+
+
+# Every target below is MAPPED and WRITABLE (a real buffer), so only the layout guard can refuse: with the guard
+# removed the reset would zero these bytes and the assertions fail.
+@pytest.mark.parametrize("triple", [
+    (0, 255 * 4, 255 * 4),     # wrong element count (255 floats, not 256)
+    (0, 256 * 4, 256 * 4 + 2),  # cap off by 2 bytes: unaligned
+    (0, 256 * 4 + 2, 256 * 4 + 4),  # end unaligned
+    (2, 256 * 4 + 2, 256 * 4 + 2),  # begin unaligned (right size)
+    (0, 256 * 4, 256 * 4 - 4),  # cap < end
+], ids=["count", "cap_unaligned", "end_unaligned", "begin_unaligned", "cap_below_end"])
+def test_wrong_layout_in_writable_memory_is_refused(monkeypatch, triple):
+    obj = _FakeSilero(state_triple=triple)
+    monkeypatch.setattr(mvs, "_object_address", lambda lib: obj.address)
+    before = (bytes(obj.state), bytes(obj.context), bytes(obj.inp))
+    assert mvs.reset_silero_state(object()) is False
+    assert (bytes(obj.state), bytes(obj.context), bytes(obj.inp)) == before
+
+
+def test_second_write_failure_leaves_state_and_context_both_unchanged(monkeypatch):
+    obj = _FakeSilero()
+    monkeypatch.setattr(mvs, "_object_address", lambda lib: obj.address)
+    real = mvs._safe_write
+    zeroing = []
+
+    def flaky(addr, data):
+        if not any(data):  # a zeroing write (the no-op probe and the restores carry the live non-zero bytes)
+            zeroing.append(addr)
+            if len(zeroing) == 2:  # state zeroed, then context fails
+                raise OSError("simulated write failure")
+        return real(addr, data)
+
+    monkeypatch.setattr(mvs, "_safe_write", flaky)
+    assert mvs.reset_silero_state(object()) is False
+    assert len(zeroing) == 2, "the first (state) zero must have happened before the injected failure"
+    assert all(v == 1.0 for v in obj.state) and all(v == 1.0 for v in obj.context), "rolled back, not half-zeroed"
+
+
+def test_failure_warning_names_the_path(monkeypatch, caplog):
+    monkeypatch.setattr(mvs, "_object_address", lambda lib: 0x10)
+    with caplog.at_level("WARNING"):
+        mvs.reset_silero_state(object(), path="stream")
+    assert "stream STT path" in caplog.text
 
 
 def test_unmapped_object_address_is_an_error_not_a_fault(monkeypatch):
@@ -120,7 +165,7 @@ def _run_two_turns(monkeypatch, tmp_path, flag):
 
     tr = _StatefulTranscriber()
     monkeypatch.setattr(voice_tts, "_ensure_moonshine", lambda: tr)
-    monkeypatch.setattr(voice_tts, "reset_silero_state", lambda lib: setattr(tr, "dirty", False) or True)
+    monkeypatch.setattr(voice_tts, "reset_silero_state", lambda lib, **kw: setattr(tr, "dirty", False) or True)
     fake_utils = types.SimpleNamespace(load_wav_file=lambda p: ([0.1, 0.2, 0.3], 16000))
     monkeypatch.setitem(sys.modules, "moonshine_voice.utils", fake_utils)
     monkeypatch.setitem(sys.modules, "moonshine_voice", types.SimpleNamespace(utils=fake_utils))
@@ -212,7 +257,7 @@ def _stream_setup(monkeypatch, flag="1"):
 
     events = []
     monkeypatch.setattr(voice_tts, "_ensure_moonshine", lambda: _FakeStreamTr(events))
-    monkeypatch.setattr(voice_tts, "reset_silero_state", lambda lib: events.append("reset") or True)
+    monkeypatch.setattr(voice_tts, "reset_silero_state", lambda lib, **kw: events.append("reset") or True)
     monkeypatch.setenv("ZOE_MOONSHINE_VAD_RESET", flag)
     return voice_tts, events
 
@@ -237,7 +282,7 @@ def test_stream_open_skips_reset_instead_of_stalling_behind_a_held_infer_lock(mo
     try:
         t0 = __import__("time").monotonic()
         vt._open_moonshine_stream()
-        assert __import__("time").monotonic() - t0 < 2.0
+        assert __import__("time").monotonic() - t0 < 1.0
     finally:
         vt._moonshine_infer_lock.release()
     assert events == ["create", "start"]
@@ -247,7 +292,7 @@ def test_stream_start_runs_under_the_same_infer_lock_hold_as_the_reset(monkeypat
     vt, events = _stream_setup(monkeypatch)
     held = []
     monkeypatch.setattr(
-        vt, "reset_silero_state", lambda lib: held.append(("reset", vt._moonshine_infer_lock.locked())) or True)
+        vt, "reset_silero_state", lambda lib, **kw: held.append(("reset", vt._moonshine_infer_lock.locked())) or True)
 
     class _Tr(_FakeStreamTr):
         def create_stream(self):

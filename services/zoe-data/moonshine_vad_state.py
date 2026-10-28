@@ -52,12 +52,12 @@ def _safe_read(addr: int, size: int) -> bytes:
     return data
 
 
-def _safe_zero(addr: int, size: int) -> None:
-    """Zero ``size`` bytes at ``addr`` through /proc/self/mem (fault-safe: an unwritable address raises OSError instead
+def _safe_write(addr: int, data: bytes) -> None:
+    """Write ``data`` at ``addr`` through /proc/self/mem (fault-safe: an unwritable address raises OSError instead
     of killing the process the way ``ctypes.memset`` would)."""
     fd = os.open("/proc/self/mem", os.O_WRONLY)
     try:
-        if os.pwrite(fd, bytes(size), addr) != size:
+        if os.pwrite(fd, data, addr) != len(data):
             raise OSError("short write")
     finally:
         os.close(fd)
@@ -75,7 +75,8 @@ def _supported_version() -> bool:
 def _vector_at(words: tuple, offset: int, floats: int) -> int:
     """Begin address of the ``std::vector<float>`` at byte ``offset`` iff it holds exactly ``floats`` floats."""
     begin, end, cap = words[offset // 8 : offset // 8 + 3]
-    if not begin or begin % 4 or not (begin <= end <= cap) or end - begin != floats * 4:
+    if (not begin or begin % 4 or end % 4 or cap % 4 or not (begin <= end <= cap)
+            or end - begin != floats * 4):
         raise RuntimeError(f"unexpected Silero layout at +{offset}")
     return begin
 
@@ -84,11 +85,13 @@ def _object_address(lib: Any) -> int:
     return ctypes.c_void_p.in_dll(lib, _SYMBOL).value or 0
 
 
-def reset_silero_state(lib: Any) -> bool:
+def reset_silero_state(lib: Any, path: str = "batch") -> bool:
     """Zero the Silero ``_state`` + ``_context`` inside the already-loaded libmoonshine ``lib`` (ctypes CDLL).
 
-    True when both were cleared; False (and nothing written) when there is no Silero yet or the layout is not the one
-    validated. Never raises."""
+    True when both were cleared; False when there is no Silero yet or the layout is not the one validated, with
+    state and context both left unchanged (all-or-nothing: both targets are proven writable by a no-op write first,
+    and a failure mid-way restores the original bytes of whatever was already zeroed). ``path`` ("batch" or
+    "stream") only labels the warning. Never raises."""
     global _warned
     try:
         if not _supported_version():
@@ -100,15 +103,26 @@ def reset_silero_state(lib: Any) -> bool:
         ctx = _vector_at(words, *_LAYOUT_CONTEXT)
         _vector_at(words, *_LAYOUT_INPUT)
         state = _vector_at(words, *_LAYOUT_STATE)
-        _safe_read(ctx, _LAYOUT_CONTEXT[1] * 4)  # both write targets must be readable (mapped) before any write
-        _safe_read(state, _LAYOUT_STATE[1] * 4)
-        _safe_zero(state, _LAYOUT_STATE[1] * 4)
-        _safe_zero(ctx, _LAYOUT_CONTEXT[1] * 4)
+        targets = [(state, _LAYOUT_STATE[1] * 4), (ctx, _LAYOUT_CONTEXT[1] * 4)]
+        saved = [(addr, _safe_read(addr, size)) for addr, size in targets]  # both mapped + readable
+        for addr, orig in saved:  # both writable, proven before anything changes (writes the bytes already there)
+            _safe_write(addr, orig)
+        try:
+            for addr, orig in saved:
+                _safe_write(addr, bytes(len(orig)))
+        except Exception:
+            for addr, orig in saved:  # roll back whatever was zeroed: never one zeroed and one stale
+                try:
+                    _safe_write(addr, orig)
+                except Exception:
+                    pass
+            raise
         return True
     except Exception as exc:  # absent symbol, other build, unreadable object -> fix lost, never a crash
         if not _warned:
             _warned = True
-            logger.warning("Moonshine VAD state reset unavailable (%s) - batch STT keeps its carried VAD state", exc)
+            logger.warning("Moonshine VAD state reset unavailable on the %s STT path (%s) - STT keeps its carried "
+                           "VAD state", path, exc)
         return False
 
 

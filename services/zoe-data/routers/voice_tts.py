@@ -2942,7 +2942,7 @@ def _open_moonshine_stream():
     st = tr.create_stream()  # constructs the global Silero on first use, so reset after it
     if env_bool("ZOE_MOONSHINE_VAD_RESET", default=True) and _moonshine_infer_lock.acquire(timeout=0.25):
         try:
-            reset_silero_state(transcriber_lib(tr))
+            reset_silero_state(transcriber_lib(tr), path="stream")
             st.start()  # same lock hold: no batch call can re-dirty the Silero between the reset and the start
         finally:
             _moonshine_infer_lock.release()
@@ -2973,7 +2973,7 @@ async def _run_moonshine(wav_path: str) -> str:
                 # Moonshine's batch VAD is ONE process-global Silero whose recurrent state is never cleared, so a
                 # clip's segmentation (hence transcript, or an empty one) depended on the audio heard before it.
                 # Zero it so every clip is segmented exactly as in a fresh process. See moonshine_vad_state.py.
-                reset_silero_state(transcriber_lib(tr))
+                reset_silero_state(transcriber_lib(tr), path="batch")
             out = tr.transcribe_without_streaming(audio, sr)
         # Moonshine segments speech into lines and emits the wake phrase ("Hey Zoe.")
         # as its own leading line. Strip the wake word from those lines so the
