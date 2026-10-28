@@ -109,7 +109,8 @@ def test_wake_warms_the_last_verified_speaker_not_a_guest(monkeypatch):
     monkeypatch.setattr(v, "_get_or_create_voice_session", lambda p: "voice-panel-t-1")
     monkeypatch.setattr(v, "_VOICE_SESSIONS", {})
     monkeypatch.setattr(v, "_resolve_fresh_panel_member", _none)
-    monkeypatch.setattr(v, "_LAST_VOICE_SPEAKER", {})
+    import warm_speaker
+    warm_speaker.reset()
     monkeypatch.setattr(zfc, "warm_kv_prefix", _kv)
     monkeypatch.setenv("ZOE_BRAIN_BACKEND", "flue")
     monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)

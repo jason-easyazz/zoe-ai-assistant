@@ -191,7 +191,8 @@ def test_wake_fresh_pin_lookup_is_a_hard_bound(monkeypatch):
     monkeypatch.setattr(v, "_brain_prewarm_on_wake_enabled", lambda: True)
     monkeypatch.setattr(v, "_get_or_create_voice_session", lambda p: "voice-panel-t-1")
     monkeypatch.setattr(v, "_VOICE_SESSIONS", {})
-    monkeypatch.setattr(v, "_LAST_VOICE_SPEAKER", {})
+    import warm_speaker
+    warm_speaker.reset()
     monkeypatch.setattr(v, "_resolve_fresh_panel_member", _stubborn)
     monkeypatch.setattr(zfc, "warm_kv_prefix", _kv)
     monkeypatch.setenv("ZOE_BRAIN_BACKEND", "flue")
