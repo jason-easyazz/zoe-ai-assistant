@@ -230,6 +230,15 @@ cd /home/zoe/assistant && git fetch -q origin && git merge --ff-only origin/main
 set -a; . ./.env; set +a
 curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/states | python3 -c 'import sys,json;print(sum(1 for s in json.load(sys.stdin) if s["entity_id"].split(".")[0] in ("light","switch")))' | tee /tmp/ha-ls-before
 docker pull ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133
+# A container named homeassistant that compose did not create (no com.docker.compose.project label) is invisible to
+# `docker compose stop` and blocks `compose up` ("name already in use"). Stop it FIRST, so the backup below is taken
+# with nothing writing, then keep it under another name for an instant rollback.
+if docker inspect homeassistant >/dev/null 2>&1 && \
+   [ -z "$(docker inspect homeassistant --format '{{index .Config.Labels "com.docker.compose.project"}}')" ]; then
+  docker stop homeassistant || { echo "could not stop the hand-started container - nothing changed"; exit 1; }
+  [ "$(docker inspect homeassistant --format '{{.State.Running}}')" = false ] || { echo "still running - aborting"; exit 1; }
+  docker rename homeassistant homeassistant-pre-2026104 || { echo "rename failed - restart it with: docker start homeassistant"; exit 1; }
+fi
 docker compose stop homeassistant
 mkdir -p ~/.zoe-backups && BK=~/.zoe-backups/ha-pre-2026.10.4-$(date +%Y%m%d-%H%M%S).tar.gz && echo "BACKUP=$BK"
 # A unique name per attempt, never an overwrite: a retry after 2026.10.4 has run must not replace the pre-upgrade rollback point.
@@ -237,16 +246,12 @@ mkdir -p ~/.zoe-backups && BK=~/.zoe-backups/ha-pre-2026.10.4-$(date +%Y%m%d-%H%
 # .storage/ is written by the container as root (mode 0600): a host-side tar fails with "Permission denied".
 # Archive from a throwaway container on the already-pulled image (read-only mount), then hand the file back.
 IMG=ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133
-docker run --rm --entrypoint tar -v /home/zoe/assistant/homeassistant:/src/homeassistant:ro -v "$HOME/.zoe-backups":/out "$IMG" -C /src -czf "/out/$(basename "$BK")" homeassistant
-docker run --rm --entrypoint chown -v "$HOME/.zoe-backups":/out "$IMG" "$(id -u):$(id -g)" "/out/$(basename "$BK")"
+docker run --rm --pull=never --entrypoint tar -v /home/zoe/assistant/homeassistant:/src/homeassistant:ro -v "$HOME/.zoe-backups":/out "$IMG" -C /src -czf "/out/$(basename "$BK")" homeassistant
+docker run --rm --pull=never --entrypoint chown -v "$HOME/.zoe-backups":/out "$IMG" "$(id -u):$(id -g)" "/out/$(basename "$BK")"
 tar -tzf "$BK" > "$BK.list"
 grep -q '^homeassistant/\.storage/' "$BK.list" || { echo "BACKUP BAD: no .storage/ — HA left stopped, nothing changed"; exit 1; }
 grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list" || { echo "BACKUP BAD: no recorder db — HA left stopped, nothing changed"; exit 1; }
 echo "backup ok"
-# If an older container named homeassistant exists that compose did not create (no com.docker.compose.project label),
-# compose refuses with "container name already in use". Keep it for an instant rollback instead of deleting it:
-[ -n "$(docker inspect homeassistant --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)" ] || \
-  { docker inspect homeassistant >/dev/null 2>&1 && docker rename homeassistant homeassistant-pre-2026104; }
 docker compose up -d --no-deps homeassistant
 until curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/config >/dev/null; do sleep 5; done   # 1-3 min
 ```
