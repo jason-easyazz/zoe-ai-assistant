@@ -116,6 +116,7 @@ async def _measure(member: str, wait_s: float | None, gap_s: float) -> dict:
     if manner_block.enabled() and not expect_manner:
         return {**out, "status": "error", "reason": "manner blocks are on but none rendered for this member (adult "
                                                      "lookup failing?): the measured prompt is not the panel's"}
+    expect_persona = bool(await zfc._persona_context_block(member))   # "" is legitimate (member held on the fixed persona)
     envelope: dict = {}
     orig_note = zfc._note_turn_envelope
 
@@ -139,6 +140,9 @@ async def _measure(member: str, wait_s: float | None, gap_s: float) -> dict:
         zfc._note_turn_envelope = orig_note
     if expect_manner and not envelope.get("manner"):
         return {**out, "status": "error", "reason": "the measured turn carried no manner block although one is enabled "
+                                                     "for this member: not the panel's prompt"}
+    if expect_persona and not envelope.get("persona"):
+        return {**out, "status": "error", "reason": "the measured turn carried no persona block although one renders "
                                                      "for this member: not the panel's prompt"}
     if "prompt_n" not in seen or ttft is None:
         return {**out, "status": "error",

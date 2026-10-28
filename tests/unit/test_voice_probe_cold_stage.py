@@ -111,7 +111,8 @@ def test_disabled_stage_is_a_recorded_skip():
 
 
 def _fake_service(monkeypatch, *, prompt_n, cache_n, chunks=("hello",), delay=0.0, pool_ok=True, evict="warmed",
-                  manner_on=True, manner_block_text="BLOCK", turn_manner=True):
+                  manner_on=True, manner_block_text="BLOCK", turn_manner=True,
+                  persona_text="P", turn_persona=True):
     """Stub the production modules the child imports: this tests ITS sequencing, arithmetic and guards."""
     order: list[str] = []
     bd = types.ModuleType("brain_dispatch")
@@ -139,7 +140,12 @@ def _fake_service(monkeypatch, *, prompt_n, cache_n, chunks=("hello",), delay=0.
         return manner_block_text
 
     zf._manner_context_block = manner_ctx
-    zf._leading_envelope_lines = lambda m: {"manner": "x" if turn_manner else "", "persona": ""}
+    zf._leading_envelope_lines = lambda m: {"manner": "x" if turn_manner else "", "persona": "p" if turn_persona else ""}
+
+    async def persona_ctx(member):
+        return persona_text
+
+    zf._persona_context_block = persona_ctx
     zf._note_turn_envelope = lambda uid, sid, outbound: None
 
     async def kv_turn(sid, state, message=""):
@@ -237,3 +243,11 @@ def test_recording_a_baseline_skips_the_old_ttft_bar_but_not_the_floor():
     assert vrp.judge_cold_start(MISS, BASE, 1.5, 1500, recording_baseline=True)["status"] == "fail"
     assert vrp.judge_cold_start({**slow, "warm": "skipped:off"}, BASE, 1.5, 1500,
                                 recording_baseline=True)["status"] == "error"
+
+
+def test_persona_block_rendered_for_the_member_must_be_in_the_measured_turn(monkeypatch):
+    _fake_service(monkeypatch, prompt_n=10, cache_n=900, turn_persona=False)
+    r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
+    assert r["status"] == "error" and "persona" in r["reason"]
+    _fake_service(monkeypatch, prompt_n=10, cache_n=900, persona_text="", turn_persona=False)   # fixed persona: fine
+    assert asyncio.run(mcf.measure("jason", 0.0, 0.0))["status"] == "ok"
