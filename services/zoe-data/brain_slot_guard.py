@@ -95,6 +95,11 @@ def turn_finished() -> None:
     _last_activity = _clock()
 
 
+def active_turns() -> int:
+    """Brain turns currently in flight (a caller that holds one itself counts as one)."""
+    return _active
+
+
 def is_hot(now: Optional[float] = None) -> bool:
     """True while a brain turn is in flight or the last one ended less than ``quiet_s`` ago."""
     if _active > 0:

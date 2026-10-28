@@ -2246,6 +2246,10 @@ async def warm_kv_prefix(member: str = "") -> str:
         nonlocal acquired, session_id, warm_key, requested_card
         warm_msg, warm_key = await _kv_warm_outbound(member)
         requested_card = _CARD_SEEN.get(uid, "-") or "-"
+        # The preparation above awaited storage: a real turn may have started meanwhile (the entry check is stale).
+        # Re-check just before taking the guard, so a warm never queues behind / replaces a live conversation.
+        if brain_slot_guard.is_hot():
+            return "skipped:hot", -1, -1
         brain_slot_guard.turn_started()
         acquired = True
         session_id = _kv_warm_session_id()
@@ -2262,8 +2266,13 @@ async def warm_kv_prefix(member: str = "") -> str:
             if unverified or moved:
                 state.update(settled=False, submission="")
                 await asyncio.sleep(0.25)
-                warm_msg, warm_key = await _kv_warm_outbound(member)
+                # Nothing is prepared (and no storage is awaited) while the guard is held: the repeat re-sends the
+                # SAME envelope lines (the card version only enters the key), and is skipped if a real turn began.
+                if brain_slot_guard.active_turns() > 1:
+                    logger.info("FLUE_KV_WARM_REPEAT session=%s skipped=real_turn_started", session_id)
+                    return res
                 requested_card = _CARD_SEEN.get(uid, "-") or "-"
+                warm_key = prefix_key(warm_msg, _CARD_SEEN.get(uid, ""))
                 res = await _kv_warm_turn(session_id, state, warm_msg)
                 logger.info("FLUE_KV_WARM_REPEAT session=%s system_want=%d system_got=%d memo=%d",
                             session_id, want, got, int(bool(memo)))

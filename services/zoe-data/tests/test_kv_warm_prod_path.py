@@ -309,3 +309,43 @@ def test_warm_does_not_repeat_for_a_same_size_same_version_stale_card(monkeypatc
     posts = _sidecar(monkeypatch, [2942, 2942], {"v": "cardv2"})
     assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
     assert len(posts) == 1
+
+
+def test_warm_is_skipped_when_a_real_turn_started_during_preparation(monkeypatch, prod_turn):
+    import brain_slot_guard
+
+    posts = _sidecar(monkeypatch, [2942], {"v": "cardv1"})
+
+    async def _slow_card(uid):
+        brain_slot_guard.turn_started()      # the real turn begins while the warm awaits storage
+        return "cardv1"
+
+    monkeypatch.setattr(zfc, "_card_version", _slow_card)
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "skipped:hot"
+    assert not posts
+    brain_slot_guard.reset()
+
+
+def test_repeat_is_skipped_and_prepares_nothing_when_a_real_turn_starts_mid_warm(monkeypatch, prod_turn):
+    import brain_slot_guard
+
+    zfc._LAST_TURN.clear()                       # no memo -> would repeat
+    posts = _sidecar(monkeypatch, [2380, 2942], {"v": "cardv1"})
+    prepared = []
+    real_outbound = zfc._kv_warm_outbound
+
+    async def _counting(member):
+        prepared.append(1)
+        return await real_outbound(member)
+
+    monkeypatch.setattr(zfc, "_kv_warm_outbound", _counting)
+    real_sleep = asyncio.sleep
+
+    async def _sleep(t, *a, **k):
+        brain_slot_guard.turn_started()          # the real turn arrives during the repeat's beat
+        await real_sleep(0)
+
+    monkeypatch.setattr(zfc.asyncio, "sleep", _sleep)
+    assert _run(zfc.warm_kv_prefix("zed_uid")) == "warmed"
+    assert len(posts) == 1 and len(prepared) == 1
+    brain_slot_guard.reset()
