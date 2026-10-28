@@ -45,7 +45,10 @@ Scripts (read-only, counts only, not committed): `kv_miss_cause.py` (zoe-data lo
 ## 2. A second llama slot: blocked on correctness, not RAM
 
 - `--parallel 2` with `--spec-type draft-mtp` leaks content between concurrent requests (upstream
-  ggml-org/llama.cpp#28286, OPEN; no garbage-token signature). MTP is part of the brain rock, so
+  ggml-org/llama.cpp#28286; no garbage-token signature). **Correction 2026-10-29:** that issue was filed against a
+  downstream fork running a Qwen Gated-DeltaNet hybrid on ROCm, and was closed by the stale bot on 2026-10-18 as
+  `not_planned` - not fixed, not shown to affect Gemma 4 on CUDA; the rule stays until a content-isolation test on this
+  model passes ([brain-slot-isolation-2026-10-29.md](../research/brain-slot-isolation-2026-10-29.md)). MTP is part of the brain rock, so
   `tests/unit/test_llama_server_unit_flags.py::test_draft_mtp_implies_single_slot` keeps `--parallel 1`. A
   dedicated panel slot would put the household's prompts in the slot next to the harness's: the exact leak.
 - RAM, for the record (computed from the GGUF metadata, cross-checked against the live host-cache entries):
