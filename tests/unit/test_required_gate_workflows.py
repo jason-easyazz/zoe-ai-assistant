@@ -412,8 +412,37 @@ def test_every_pytest_step_in_validate_has_a_timeout_and_hang_dump():
 def test_every_validate_workflow_job_has_a_job_timeout_above_its_step_sum():
     for jname, job in _load("validate.yml")["jobs"].items():
         jt = job.get("timeout-minutes")
-        assert isinstance(jt, int) and jt <= 120, f"{jname}: needs job-level timeout-minutes, got {jt!r}"
+        assert isinstance(jt, int) and 0 < jt <= 120, f"{jname}: needs job-level timeout-minutes, got {jt!r}"
         total = sum(s.get("timeout-minutes", 0) for s in _pytest_steps(job))
         assert jt > total, f"{jname}: job timeout {jt} must exceed the pytest step timeouts ({total})"
     for ctx in REQUIRED_CONTEXTS:
         assert "timeout-minutes" in _load("validate.yml")["jobs"][ctx]
+
+
+# Exact budgets, from p90 of 15 green runs (2026-10): tests/unit 602 s, zoe-data 466 s,
+# py312 428 s, every other pytest step < 20 s; whole `validate` job ~19 min. Loosening
+# one is a deliberate edit to this table (floor: >= 2x p90, so a slow runner never
+# turns a healthy lane red; ceiling: well under GitHub's 6 h default).
+_STEP_BUDGET_MIN = {
+    ("validate", "Lane — zoe-data (ci_safe)"): 24,
+    ("validate", "Lane — Home Assistant MCP bridge"): 5,
+    ("validate", "Lane — tests/unit (ci_safe)"): 30,
+    ("validate", "Lane — zoe-auth (full)"): 5,
+    ("validate", "People MemPalace integration cleanup"): 5,
+    ("validate", "People graph invariants on CI PostgreSQL"): 5,
+    ("zoe-data-py312", "Lane — zoe-data (ci_safe) on Python 3.12"): 24,
+}
+_JOB_BUDGET_MIN = {"validate": 90, "zoe-data-py312": 45, "deps-resolvable": 15, "secret-scan": 10}
+
+
+def test_lane_timeout_budgets_are_pinned_exactly():
+    jobs = _load("validate.yml")["jobs"]
+    assert set(jobs) == set(_JOB_BUDGET_MIN), "new job in validate.yml: give it a budget here"
+    for jname, want in _JOB_BUDGET_MIN.items():
+        assert jobs[jname].get("timeout-minutes") == want, jname
+    for (jname, sname), want in _STEP_BUDGET_MIN.items():
+        step = next(s for s in jobs[jname]["steps"] if s.get("name") == sname)
+        assert step.get("timeout-minutes") == want, (jname, sname)
+        assert f"faulthandler_timeout={want * 60 - 60}" in step["run"], (jname, sname)
+    found = {(j, s["name"]) for j, job in jobs.items() for s in _pytest_steps(job)}
+    assert found == set(_STEP_BUDGET_MIN), found ^ set(_STEP_BUDGET_MIN)
