@@ -234,16 +234,24 @@ docker compose stop homeassistant
 mkdir -p ~/.zoe-backups && BK=~/.zoe-backups/ha-pre-2026.10.4-$(date +%Y%m%d-%H%M%S).tar.gz && echo "BACKUP=$BK"
 # A unique name per attempt, never an overwrite: a retry after 2026.10.4 has run must not replace the pre-upgrade rollback point.
 [ ! -e "$BK" ] || { echo "BACKUP EXISTS: $BK — refusing to overwrite"; exit 1; }
-tar -C /home/zoe/assistant -czf "$BK" homeassistant/
+# .storage/ is written by the container as root (mode 0600): a host-side tar fails with "Permission denied".
+# Archive from a throwaway container on the already-pulled image (read-only mount), then hand the file back.
+IMG=ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133
+docker run --rm --entrypoint tar -v /home/zoe/assistant/homeassistant:/src/homeassistant:ro -v "$HOME/.zoe-backups":/out "$IMG" -C /src -czf "/out/$(basename "$BK")" homeassistant
+docker run --rm --entrypoint chown -v "$HOME/.zoe-backups":/out "$IMG" "$(id -u):$(id -g)" "/out/$(basename "$BK")"
 tar -tzf "$BK" > "$BK.list"
 grep -q '^homeassistant/\.storage/' "$BK.list" || { echo "BACKUP BAD: no .storage/ — HA left stopped, nothing changed"; exit 1; }
 grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list" || { echo "BACKUP BAD: no recorder db — HA left stopped, nothing changed"; exit 1; }
 echo "backup ok"
+# If an older container named homeassistant exists that compose did not create (no com.docker.compose.project label),
+# compose refuses with "container name already in use". Keep it for an instant rollback instead of deleting it:
+[ -n "$(docker inspect homeassistant --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)" ] || \
+  { docker inspect homeassistant >/dev/null 2>&1 && docker rename homeassistant homeassistant-pre-2026104; }
 docker compose up -d --no-deps homeassistant
 until curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/config >/dev/null; do sleep 5; done   # 1-3 min
 ```
 
-Verify: `/api/config` reports `"version": "2026.10.4"`; the light+switch count equals `/tmp/ha-ls-before`; Zoe's bridge reaches HA (`curl -s localhost:8007/health`, then an entity listing through zoe-data); `docker logs homeassistant --since 5m` shows no auth_oidc errors; the "Zoe SSO" button on the HA login page completes a login via zoe-auth (the local-account login stays the fallback).
+Verify: `/api/config` reports `"version": "2026.10.4"`; the light+switch count equals `/tmp/ha-ls-before`; Zoe's bridge reaches HA (`curl -s localhost:8007/` reports `ha_connected: true`, and `curl -s localhost:8007/switches` lists the same entities); `docker logs homeassistant --since 5m` shows no auth_oidc errors; the "Zoe SSO" button on the HA login page completes a login via zoe-auth (the local-account login stays the fallback).
 
 Rollback (set `BK` to the explicit archive path printed as `BACKUP=` above; it does not survive a new shell):
 
@@ -266,3 +274,5 @@ docker compose up -d --no-deps homeassistant
 ```
 
 Then re-run the verify checks against 2026.10.2. The compose edit is a live-checkout change: re-pin through a PR (or `git checkout -- docker-compose.yml` once main carries the fix) so the next deploy does not bring 2026.10.4 back. A patch bump rarely migrates `.storage`, but restore regardless if HA logged a migration.
+
+Applied 2026-10-29: version 2026.10.4, 5/5 light+switch entities present, bridge connected, no errors, both auth providers listed. Two things the block above now handles: the backup must be taken from a container (root-owned `.storage/`), and the old container had been started by hand (privileged, no compose labels), so it was renamed `homeassistant-pre-2026104` and the compose definition (not privileged) took over. Four ESPHome switches read `unavailable` before and after: they belong to a retired panel voice service whose API port no longer listens, not to the upgrade. Rollback from that point: `docker stop homeassistant && docker rename homeassistant homeassistant-2026104 && docker rename homeassistant-pre-2026104 homeassistant && docker start homeassistant`, plus the state restore above if HA logged a migration. Remove `homeassistant-pre-2026104` once 2026.10.4 has run cleanly for a week.
