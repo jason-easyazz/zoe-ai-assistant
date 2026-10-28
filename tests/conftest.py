@@ -50,6 +50,17 @@ if "memory_service" not in sys.modules:
     # Unpinned, a tests/unit delete_user test tombstoned a synthetic user in the live ~/.zoe/router_retrain (2026-10-19).
     os.environ["ZOE_ROUTER_RETRAIN_DIR"] = os.path.join(_stores, "router_retrain")
 
+# The local utterance-text logs + one-off backup dir (local_text_logs): MemoryService.delete_user / the forget cascade REWRITE them
+# household-wide. UNCONDITIONAL (not inside the memory_service guard above): unpinned, a tests/unit delete_user test strips the
+# household's real router text and empties its real intent-miss log. Guarded by tests/unit/test_text_log_isolation.py.
+_text_dir = os.environ.get("ZOE_TEST_STORES_DIR") or tempfile.mkdtemp(prefix="zoe-test-stores-")
+if "ZOE_TEST_STORES_DIR" not in os.environ:
+    os.environ["ZOE_TEST_STORES_DIR"] = _text_dir
+    atexit.register(shutil.rmtree, _text_dir, ignore_errors=True)
+os.environ["ZOE_ROUTER_HEAD_LOG"] = os.path.join(_text_dir, "router_head_shadow.jsonl")
+os.environ["ZOE_INTENT_MISS_LOG"] = os.path.join(_text_dir, "intent-misses.jsonl")
+os.environ["ZOE_ADHOC_BACKUP_DIR"] = os.path.join(_text_dir, "adhoc-backups")
+
 
 @pytest.fixture(scope="session")
 def event_loop():
