@@ -27,10 +27,11 @@ container's image name), and the palace check refuses ``~/.mempalace``.
 
 Guards: refuses inside the night window (01:35-04:55) or while ``zoe-night-window`` runs (quietly: a Persistent=
 catch-up after a night boot), waits up to 45 min for a running ``zoe-backup`` / ``zoe-offbox-backup``, and refuses
-(with an alert) when MemAvailable is under the floor (2000 MB; the voice stack is resident). Findings alert
+(LOUDLY) when MemAvailable is under the floor (1100 MB; the voice stack is resident). Findings alert
 over Telegram through the crash-loop watcher's sender (``zoe_offbox.alert``).
 
-Exit: 0 all checks pass, 1 findings (alerted), 3 refused.
+Exit: 0 all checks pass, 1 findings (alerted), 3 refused QUIETLY (night window: expected, not a failure),
+4 refused LOUDLY (low memory, backup stuck, or no pass for STALE_PASS_DAYS: alerted, and the unit shows failed).
 """
 from __future__ import annotations
 
@@ -58,7 +59,13 @@ HELPER_REPO = REPO / "scripts" / "setup" / "p0-deroot" / "libexec" / "zoe-restor
 HELPER_INSTALLED = Path("/usr/local/libexec/zoe-priv/zoe-restore-drill-pg")
 PALACE_CHECK = HERE / "palace_drill_check.py"
 DBS = ("zoe", "multica")
-MEM_FLOOR_MB = 2000
+# MEASURED 2026-10-27 on the live Orin (3 runs): the whole drill (pg17 container + palace chromadb + host check)
+# drops MemAvailable by ~180 MB, the container itself peaks ~175 MB; its hard cap is 512 MB (zoe-restore-drill-pg
+# MEM, swap == cap). Floor = that cap + ~600 MB left for the resident voice stack. The old 2000 MB sat above the
+# daytime norm (1.4-1.6 GB), so the drill refused every week and never ran.
+MEM_FLOOR_MB = 1100
+EXIT_REFUSED_QUIET = 3
+EXIT_REFUSED_LOUD = 4
 FRESH_HOURS = 26
 WAIT_BUSY_S = 45 * 60
 STALE_PASS_DAYS = 15
@@ -435,7 +442,11 @@ def unit_active(unit: str) -> bool:
 
 
 def preflight(now: datetime, floor_mb: int, wait_s: int = WAIT_BUSY_S,
-              active: Callable[[str], bool] = unit_active, sleep: Callable[[float], None] = time.sleep) -> None:
+              active: Optional[Callable[[str], bool]] = None,
+              sleep: Optional[Callable[[float], None]] = None) -> None:
+    # resolved at CALL time (not as default arguments) so a monkeypatched unit_active / time.sleep takes effect
+    active = active or unit_active
+    sleep = sleep or time.sleep
     if ob.in_quiet_hours(now) or active(NIGHT_UNIT):
         raise ob.Refused("the night window owns the box", alert=False)
     deadline = time.monotonic() + wait_s
@@ -573,6 +584,29 @@ def run_drill(p, backup_root: Path, now: datetime, sb: Sandbox, python: str) -> 
     return res
 
 
+def note_refusal(state: Path, now: datetime) -> bool:
+    """Record a refusal; True when the drill has gone STALE_PASS_DAYS without a pass (so even a quiet refusal must
+    now be loud: a drill that refuses week after week has to show up)."""
+    try:
+        prev = json.loads(state.read_text())
+        if not isinstance(prev, dict):
+            prev = {}
+    except (OSError, ValueError):
+        prev = {}
+    since = prev.get("last_ok") or prev.get("first_refusal") or now.isoformat(timespec="seconds")
+    try:
+        stale = now - ob._parse_time(since) >= timedelta(days=STALE_PASS_DAYS)
+    except ValueError:
+        stale = False
+    prev["first_refusal"] = prev.get("first_refusal") or now.isoformat(timespec="seconds")
+    prev["last_refusal"] = now.isoformat(timespec="seconds")
+    try:
+        ob._atomic_write(state, json.dumps(prev, indent=1))
+    except OSError:
+        pass                                   # an unwritable state file must not silence a known-stale drill
+    return stale
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--ignore-window", action="store_true", help="lab / manual: skip the night-window guard")
@@ -596,14 +630,20 @@ def main(argv: Optional[list[str]] = None) -> int:
             preflight(now, floor)
     except ob.Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
-        if exc.alert:
-            ob.alert(f"weekly restore drill refused: {exc}")
-        return 3
+        stale = note_refusal(state, now)          # always record, even when this refusal already alerts
+        loud = exc.alert or stale
+        if loud:
+            ob.alert(f"weekly restore drill refused: {exc}" if exc.alert else
+                     f"weekly restore drill has not passed in {STALE_PASS_DAYS}+ days (latest refusal: {exc})")
+            return EXIT_REFUSED_LOUD
+        return EXIT_REFUSED_QUIET
     res = run_drill(p, backup_root, now, Sandbox.default(), python)
     try:
-        prev_ok = json.loads(state.read_text()).get("last_ok")
+        prev_state = json.loads(state.read_text())
+        prev_ok = prev_state.get("last_ok")
+        prev_first = prev_state.get("first_refusal")
     except (OSError, ValueError, AttributeError):
-        prev_ok = None
+        prev_ok = prev_first = None
     if res.findings and prev_ok:
         try:
             if now - ob._parse_time(prev_ok) > timedelta(days=STALE_PASS_DAYS):
@@ -613,7 +653,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     stamp = now.isoformat(timespec="seconds")
     ob._atomic_write(state, json.dumps({"time": stamp, "ok": not res.findings,
                                         "last_ok": stamp if not res.findings else prev_ok,
-                                        "findings": res.findings, "notes": res.notes}, indent=1))
+                                        "findings": res.findings, "notes": res.notes,
+                                        "first_refusal": None if not res.findings else prev_first}, indent=1))
     for n in res.notes:
         print(f"ok: {n}")
     for f in res.findings:
