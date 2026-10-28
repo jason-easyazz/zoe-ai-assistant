@@ -2908,9 +2908,9 @@ def _moonshine_empty_reason(lines: list, audio, sample_rate: int) -> str:
     """Why Moonshine produced nothing, as ``reason=... key=value`` for the log.
 
     ``no_segments``: the C-side VAD found no speech (zero lines) - the signature
-    of the fast (~0.1 s) empty. Leading hypothesis (not proven by a reset experiment):
-    Moonshine's batch path shares ONE process-global Silero VAD with no reset
-    between clips, so a borderline clip decodes differently by history. ``blank_lines``: lines
+    of the fast (~0.1 s) empty. Moonshine's batch path shares ONE process-global
+    Silero VAD, so a borderline clip used to segment differently by history (proven;
+    cleared per call by ``moonshine_vad_state`` - see docs/knowledge/voice-pipeline.md). ``blank_lines``: lines
     came back but all blank (the decoder ran). ``audio_active_s`` (seconds above a
     low amplitude floor) separates "silence" from "speech the VAD missed". Numbers
     only - never the audio or any text."""
