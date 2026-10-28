@@ -872,7 +872,8 @@ _LIST_NAME_RE = (
 _STT_ADD_LEAD_RE = re.compile(
     rf"^\s*(?:and|at|ad|add)\s+(?P<item>.+?)\s+to\s+(?:the\s+|my\s+|our\s+){_LIST_NAME_RE}\s*[.!?]*\s*$", re.IGNORECASE)
 _NOT_AN_ITEM_LEAD = frozenset({"what", "what's", "whats", "which", "who", "where", "how", "when", "why", "is", "are", "do", "does",
-                               "go", "take", "show", "read", "tell", "give", "can", "could", "i", "we", "you"})
+                               "go", "take", "show", "read", "tell", "give", "can", "could", "i", "we", "you",
+                               "navigate", "head", "open", "bring", "switch", "jump", "scroll"})
 
 
 def _stt_lead_list_add(message: str) -> tuple[str, str] | None:

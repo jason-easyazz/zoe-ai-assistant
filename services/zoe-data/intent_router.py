@@ -2716,15 +2716,19 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 # already done instead of inserting a duplicate.
                 dedup_window_s=10,
             )
-        logger.info("list_item_audit op=add actor=%s list=%s item=%s", actor, outcome["list_id"], outcome["item_id"])
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
-        if outcome["deduped"]:
-            logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
-        await _notify_lists_ui(
-            "list_updated",
-            {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}, "actor": actor},
-        )
+        # One audit line + one UI notification per item that really went onto the list: an item already there writes nothing.
+        for one in outcome["outcomes"]:
+            if one.get("already"):
+                continue
+            logger.info("list_item_audit op=add actor=%s list=%s item=%s", actor, one["list_id"], one["item_id"])
+            if one["deduped"]:
+                logger.info("list add: duplicate %r within 10s on list %s — replay skipped", one["_text"], list_id)
+            await _notify_lists_ui(
+                "list_updated",
+                {"action": "item_added", "list_id": list_id, "item": {"id": one["item_id"], "text": one["_text"]}, "actor": actor},
+            )
         friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
         return _format_response(
             intent,

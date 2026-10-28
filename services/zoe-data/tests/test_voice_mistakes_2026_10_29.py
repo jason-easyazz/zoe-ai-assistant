@@ -149,6 +149,8 @@ class _ListDb:
         if sql.lstrip().upper().startswith("SELECT"):
             if "FROM list_items" in sql and "list_id=?" in sql and "created_at" not in sql:
                 return _Cursor(self.open_items)
+            if "created_at" in sql:        # the 10 s replay probe: nothing replayed
+                return _Cursor([])
             return _Cursor([{"id": "L1"}])
         if "INSERT INTO list_items" in sql:
             self.inserts.append(params)
@@ -172,7 +174,8 @@ def test_stt_and_for_add_is_an_add(text, item):
 
 
 @pytest.mark.parametrize("text", ["what's on the list?", "and what's on the list?", "and what's on the shopping list", "show the shopping list",
-                                  "and go to the shopping list", "and what is on my shopping list?"])
+                                  "and go to the shopping list", "and what is on my shopping list?",
+                                  "and navigate to the shopping list", "and head to the shopping list"])
 def test_real_list_queries_stay_queries(text):
     intent = classify(text, None)
     assert intent is None or intent.action != "add_item"
@@ -312,3 +315,35 @@ def test_misheard_wake_word_is_stripped(lines, want):
 @pytest.mark.parametrize("lines", [["A zoe is a cat"], ["Azure sky today"], ["a zoo trip please"]])
 def test_real_words_that_start_alike_are_kept(lines):
     assert _strip_wake_word(lines).lower() == lines[0].lower()
+
+
+def test_already_reply_grammar_for_plurals_and_mixed_adds():
+    assert list_service.add_reply([], ["eggs"], "the shopping list") == "Eggs are already on the shopping list."
+    assert list_service.add_reply([], ["milk", "bread"], "the shopping list") == "Milk and bread are already on the shopping list."
+    assert list_service.add_reply(["milk"], ["eggs"], "the shopping list") == "Added milk to the shopping list, and eggs are already on it."
+
+
+@pytest.mark.asyncio
+async def test_direct_path_notifies_and_audits_only_items_really_added(monkeypatch):
+    import intent_router
+
+    seen = []
+
+    async def fake_notify(kind, data):
+        seen.append(data["item"]["text"])
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _ListDb(open_items=[{"id": "x1", "text": "Milk"}])
+
+        async def __aexit__(self, *a):
+            return False
+
+    import database
+
+    monkeypatch.setattr(database, "get_db_ctx", lambda: _Ctx())
+    monkeypatch.setattr(intent_router, "_notify_lists_ui", fake_notify)
+    out = await intent_router._execute_list_add_direct(
+        intent_router.Intent("list_add", {"item": "milk and eggs", "list_type": "shopping"}), "jason")
+    assert seen == ["eggs"]                       # the existing item and the unsplit phrase are never announced
+    assert out == "Added eggs to your shopping list, and Milk's already on it."

@@ -222,8 +222,10 @@ def add_reply(added: list, existing: list, where: str) -> str:
         return ""
     if not added:
         names = [existing[0][:1].upper() + existing[0][1:]] + existing[1:]
-        return f"{names[0]}'s already on {where}." if len(names) == 1 else f"{_join(names)} are already on {where}."
-    tail = f"{existing[0]}'s already on it" if len(existing) == 1 else f"{_join(existing)} are already on it"
+        plural = len(names) > 1 or (names[0].lower().endswith("s") and not names[0].lower().endswith(("ss", "us")))
+        return f"{_join(names)} are already on {where}." if plural else f"{names[0]}'s already on {where}."
+    plural = len(existing) > 1 or (existing[0].lower().endswith("s") and not existing[0].lower().endswith(("ss", "us")))
+    tail = f"{_join(existing)} are already on it" if plural else f"{existing[0]}'s already on it"
     return f"Added {_join(added)} to {where}, and {tail}."
 
 
@@ -525,7 +527,9 @@ async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
         out = await add_item_to_list(db, text=part, **kwargs)
         outcomes.append(out)
         ids.append(out["item_id"])
-        (already if out.get("already") else added).append(out.get("text") or normalize_item_text(part))
+        shown = out.get("text") or normalize_item_text(part)
+        out["_text"] = shown      # what this outcome is about, for the caller's per-item audit / notification
+        (already if out.get("already") else added).append(shown)
     last = outcomes[-1]
     return {**last, "item_id": ids[0] if ids else last["item_id"], "item_ids": ids, "added": added, "already": already,
             "outcomes": outcomes}
