@@ -6546,11 +6546,11 @@ async def voice_turn_stream_speculation(payload: dict, caller: dict = Depends(_r
     return {"ok": True, "turn_id": turn_id, "action": action, "verdict": gate.verdict()}
 
 
-# panel_id -> the member this panel's last turn was server-verified as (a voice match OR a signed-in/PIN session: the
-# turn's scope identity). A GUESS of who speaks next, used ONLY to choose which member's system prompt the wake KV warm
-# renders (a cache-shaping hint) - never as an identity, never to read or write anything for that member.
-_LAST_VOICE_SPEAKER: "dict[str, str]" = {}
-_LAST_VOICE_SPEAKER_MAX = 64
+# The member this panel's last turn was server-verified as (a voice match OR a signed-in/PIN session: the turn's scope
+# identity) is a GUESS of who speaks next, used ONLY to choose which member's system prompt the wake KV warm renders (a
+# cache-shaping hint) - never as an identity, never to read or write anything for that member. It lives in ``warm_speaker``
+# (persisted across restarts, 12 h age cap, removed by forget): a process-only memo left the first wake after every deploy
+# on the guest envelope and the member's first turn re-prefilled ~1k tokens (2026-10-28).
 
 
 def _note_voice_speaker(panel_id: str, member: Optional[str]) -> None:
@@ -6558,10 +6558,9 @@ def _note_voice_speaker(panel_id: str, member: Optional[str]) -> None:
     real = _real_user_or_none(member)
     if not panel_id or not real:
         return
-    _LAST_VOICE_SPEAKER.pop(panel_id, None)
-    _LAST_VOICE_SPEAKER[panel_id] = real
-    while len(_LAST_VOICE_SPEAKER) > _LAST_VOICE_SPEAKER_MAX:
-        _LAST_VOICE_SPEAKER.pop(next(iter(_LAST_VOICE_SPEAKER)))
+    import warm_speaker
+
+    warm_speaker.note(panel_id, real)
 
 
 def _brain_prewarm_on_wake_enabled() -> bool:
@@ -6599,13 +6598,15 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         # Started FIRST: it needs neither a session nor an identity, so nothing below (a session lookup, the
         # identity read) can lose the wake its warm. Never raises; detached from this coroutine's own failures.
         # The KV warm renders the system prompt of the panel's LIKELY speaker (the member this panel last
-        # verified by voice, in-process memo; else a bound/fresh-PIN member; else guest), because the member's
+        # verified by voice, persisted memo; else a bound/fresh-PIN member; else guest), because the member's
         # manner block + user-model card sit ahead of the tool block and a guest warm cannot be resumed past
         # them (see zoe_flue_client._kv_warm_outbound). A wrong guess costs nothing over the old guest warm.
         member = _real_user_or_none(
             (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
         ) or ""
-        likely = _LAST_VOICE_SPEAKER.get(panel_id, "") or member
+        import warm_speaker
+
+        likely = warm_speaker.get(panel_id) or member
         if not likely:
             # After a restart / eviction the memo is empty: ask for a fresh-PIN member, but only briefly so the
             # warm is never held up (the lookup is re-awaited below for the worker + facts, unbounded as before).

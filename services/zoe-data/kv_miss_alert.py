@@ -12,10 +12,13 @@ daemon thread). The day is marked alerted only after a successful send; a failed
 from __future__ import annotations
 
 import datetime
+import contextlib
 import importlib.util
+import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -26,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _lock = threading.Lock()
+_last_failure = ""   # why the last send failed (the ops sender's own stderr line; never the token: it prints errors, not secrets)
 _alerted_day = ""   # in-process record: the 1/day limit holds even when the state file cannot be written
 
 
@@ -52,6 +56,11 @@ def _yesterday(now: "float | None" = None) -> str:
     return (datetime.date(t.tm_year, t.tm_mon, t.tm_mday) - datetime.timedelta(days=1)).isoformat()
 
 
+def _redact(line: str) -> str:
+    """One stderr line safe to log: a Telegram bot token in a URL is masked."""
+    return re.sub(r"bot\d+:[\w-]+", "bot<redacted>", line)[:160]
+
+
 def _ops_send(text: str) -> bool:
     """The repo's ops Telegram path. Under pytest it never reaches the network."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -61,7 +70,12 @@ def _ops_send(text: str) -> bool:
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(mod)
-    return bool(mod._telegram(text))
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):   # the sender explains a failure on stderr (no token / no recipient / HTTP error)
+        ok = bool(mod._telegram(text))
+    global _last_failure
+    _last_failure = "" if ok else _redact((err.getvalue().strip().splitlines() or ["no reason given"])[-1])
+    return ok
 
 
 MAX_ATTEMPTS_PER_DAY = 3   # a failed send (Telegram down) is retried on later misses that day, never more than this
@@ -137,7 +151,8 @@ def _record_and_send(first_prompt: int, first_cache: int, now: "float | None",
         try:
             ok = bool((send or _ops_send)(text))
             if not ok:
-                logger.warning("kv_miss_alert: alert not delivered (attempt %d/%d)", tries, MAX_ATTEMPTS_PER_DAY)
+                logger.warning("kv_miss_alert: alert not delivered (attempt %d/%d): %s", tries, MAX_ATTEMPTS_PER_DAY,
+                               _last_failure or "unknown")
         except Exception as exc:  # noqa: BLE001
             logger.warning("kv_miss_alert: send failed: %s (attempt %d/%d)", type(exc).__name__, tries,
                            MAX_ATTEMPTS_PER_DAY)

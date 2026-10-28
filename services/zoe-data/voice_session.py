@@ -467,7 +467,14 @@ def close_member(member_id: str, reason: str) -> list:
 
 
 async def revoke_member(member_id: str, reason: str = "consent_revoked") -> None:
-    """``close_member`` + tell the panels. Safe to call with the flag off (nothing is open then). Never raises."""
+    """``close_member`` + tell the panels. Safe to call with the flag off (nothing is open then). Never raises.
+    Also drops the member from the wake-warm speaker memo (consent revoked / voice profile deleted)."""
+    try:
+        import warm_speaker
+
+        warm_speaker.forget_user(str(member_id or ""))
+    except Exception:  # noqa: BLE001
+        pass
     try:
         evs = close_member(str(member_id or ""), reason)
         if evs:

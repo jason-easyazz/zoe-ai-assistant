@@ -7,13 +7,15 @@ longer matching the real first turn: ~6 s cold vs ~1.2 s warm). This measures th
   1. evict   -- one unrelated tiny request, so llama-server's single slot stops holding the conversation prefix
                 (what the post-turn background passes do);
   2. wait    -- the slot guard's quiet window (``brain_slot_guard.quiet_s()``), override ``--wait-s``;
-  3. warm    -- ``zoe_flue_client.warm_kv_prefix(member)``, the exact call the panel's wake prewarm makes;
+  3. warm    -- ``zoe_flue_client.warm_kv_prefix(likely)``, the exact call the panel's wake prewarm makes, where ``likely`` comes
+                ONLY from the persisted speaker memo read as a freshly restarted process would (``_restart_memo``), never
+                from the ``--user`` argument directly;
   4. ask     -- ``_run_flue_brain_streaming_turn`` (the envelope/prompt path of every real turn, BELOW the wrapper that
                 claims the member's day brief and proactive raise: those write household state and have no dry-run mode)
                 as the same member, replay-isolated (tool writes reported, never committed), traffic class ``probe``
                 (so it never reaches the household alarms or the owner alert).
 
-Prints ONE JSON object on stdout: {status: ok|skip|error, reason, member, warm, wait_s, first_prompt_n, first_cache_n,
+Prints ONE JSON object on stdout: {status: ok|skip|error, reason, member, warm, memo_restart, wait_s, first_prompt_n, first_cache_n,
 cache_frac, ttft_ms}. ``prompt_n`` is the tokens RE-PREFILLED and ``cache_n`` the tokens reused, so cache_frac is
 cache_n / (cache_n + prompt_n). One extra brain turn plus ~2 tiny requests; run it under the voice harness lock
 (``scripts/maintenance/voice_regression_probe.py`` does). Needs the live service env and the Flue brain.
@@ -82,6 +84,38 @@ async def measure(member: str, wait_s: float | None, gap_s: float) -> dict:
             pass
 
 
+PROBE_PANEL = "probe-cold-panel"
+
+
+def _restart_memo(member: str, zfc) -> "tuple[str, str]":
+    """Record ``member`` as the probe panel's speaker in a THROWAWAY state file, then look the memo up the way a fresh process
+    does (in-process memos emptied, only the file left). Returns (likely speaker, error). Never touches the live state file."""
+    import tempfile
+
+    import warm_speaker
+
+    key = "ZOE_WARM_SPEAKER_STATE"
+    saved = os.environ.get(key)
+    with tempfile.TemporaryDirectory(prefix="zoe-cold-probe-") as d:
+        os.environ[key] = os.path.join(d, "warm-speaker.json")
+        try:
+            warm_speaker.reset()
+            warm_speaker.note(PROBE_PANEL, member, sync=True)
+            warm_speaker.reset()                                   # the process restarts: only the file remains
+            getattr(zfc, "_LAST_TURN", {}).clear()                 # ... and so does the turn memo the warm replays
+            likely = warm_speaker.get(PROBE_PANEL)
+        finally:
+            warm_speaker.reset()
+            if saved is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = saved
+    if member and not likely:
+        return "", ("the persisted speaker memo did not survive a simulated restart (warm_speaker.get returned nothing): the "
+                    "wake warm would render the guest envelope, not the member's")
+    return likely, ""
+
+
 async def _measure(member: str, wait_s: float | None, gap_s: float) -> dict:
     import brain_dispatch
     import brain_slot_guard
@@ -107,8 +141,15 @@ async def _measure(member: str, wait_s: float | None, gap_s: float) -> dict:
         return {**out, "status": "error", "reason": f"the eviction request did not complete (outcome {evicted!r})"}
     # 2. wait out the quiet window
     await asyncio.sleep(max(0.0, wait))
-    # 3. the panel's wake prewarm, then the gap between the wake word and the finished utterance
-    out["warm"] = await zfc.warm_kv_prefix(member)
+    # 3. the panel's wake prewarm, then the gap between the wake word and the finished utterance. The warm is NOT told the
+    #    member: like a freshly restarted zoe-data, it has only the persisted speaker memo (warm_speaker) to go on, and the
+    #    in-process turn memo is empty. 2026-10-28: a memo that did not survive a restart warmed the guest envelope and the
+    #    member's first reply re-prefilled ~1k tokens, which a probe that named the member could not see.
+    likely, why = _restart_memo(member, zfc)
+    if why:
+        return {**out, "status": "error", "reason": why}
+    out["memo_restart"] = True
+    out["warm"] = await zfc.warm_kv_prefix(likely)
     await asyncio.sleep(max(0.0, gap_s))
     # 4. the first real turn
     seen: dict = {}
