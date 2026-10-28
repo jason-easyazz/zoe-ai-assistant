@@ -34,8 +34,14 @@ def _isolate(tmp_path, monkeypatch):
     _timers._by_owner.clear()
 
 
+_MODES: list = []
+
+
 def _as_panel(monkeypatch, is_panel: bool):
+    _MODES.clear()
+
     async def fake(request, user, db=None, *, mode=None):
+        _MODES.append(mode)
         return is_panel
 
     monkeypatch.setattr(panel_principal, "is_panel_guest", fake)
@@ -95,3 +101,29 @@ def test_expired_timer_is_not_resurrected_and_cancel_persists():
 def test_corrupt_snapshot_is_harmless(tmp_path):
     (tmp_path / "timers.json").write_text("{not json")
     assert _TimerStore().list("jason") == []
+
+
+def test_route_asks_the_strict_registered_predicate(monkeypatch):
+    _as_panel(monkeypatch, False)
+    _get({"user_id": "guest"})
+    asyncio.run(sky_router.cancel_skybridge_timer(object(), {"timer_id": "x"}, {"user_id": "guest"}))
+    assert _MODES == ["registered", "registered"]  # a weaker mode ("lan": any phone with a guest session) must fail here
+
+
+def test_real_predicate_panel_principal_sees_all_member_does_not():
+    create_timer_direct("jason", minutes=1)
+    panel = {"user_id": "guest", "role": "guest", "panel_id": "zoe-touch-pi"}
+    assert len(_get(panel)) == 1  # the REAL is_panel_guest: a device-token principal carries panel_id
+    # a signed-in member who is not the panel never gets the household view (and sees only their own bucket)
+    assert _get({"user_id": "someone-else", "role": "member"}) == []
+    # an auth-outage guest is never evidence of the panel
+    assert _get({"user_id": "guest", "role": "guest", "panel_id": "x", "auth_degraded": True}) == []
+
+
+def test_wrongly_typed_snapshot_record_is_dropped_not_fatal(tmp_path):
+    import json
+
+    good = {"timer_id": "g", "label": "ok", "duration_seconds": 60, "expires_at": time.time() + 60}
+    bad = {"timer_id": "b", "label": "x", "duration_seconds": 60, "expires_at": "soon"}
+    (tmp_path / "timers.json").write_text(json.dumps({"by_owner": {"jason": [bad, good]}}))
+    assert [t["timer_id"] for t in _TimerStore().list("jason")] == ["g"]

@@ -94,28 +94,43 @@ class _TimerStore:
         """Reload the snapshot ONCE per process, on first use (never at import). Expired timers are dropped."""
         if self._loaded:
             return
-        self._loaded = True
         try:
             raw = json.loads(_timer_store_path().read_text())
             now = time.time()
             for owner, timers in (raw.get("by_owner") or {}).items():
-                live = [t for t in timers if float(t.get("expires_at", 0)) > now and t.get("timer_id")]
-                if live and not self._by_owner.get(owner):
-                    self._by_owner[owner] = live
+                live = []
+                for t in timers:
+                    try:  # normalise: a wrongly-typed record is dropped here, never allowed to reach _prune()
+                        t = dict(t)
+                        t["expires_at"] = float(t["expires_at"])
+                        t["duration_seconds"] = int(t["duration_seconds"])
+                        t["set_seconds"] = int(t.get("set_seconds", t["duration_seconds"]))
+                        t["created_at"] = float(t.get("created_at", now))
+                        t["label"] = str(t.get("label") or "Timer")
+                        t["timer_id"] = str(t["timer_id"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if t["expires_at"] > now:
+                        live.append(t)
+                if live and not self._by_owner.get(str(owner)):
+                    self._by_owner[str(owner)] = live
         except FileNotFoundError:
             pass
         except Exception as exc:  # noqa: BLE001 - a corrupt snapshot must never break the voice path
             logger.warning("timer store: could not reload %s (%s)", _timer_store_path(), type(exc).__name__)
+        self._loaded = True  # only once the registry is complete (zoe-data is one asyncio worker; no await in here)
 
     def _save(self) -> None:
         """Atomic snapshot (tmp + rename, 0600). Best-effort: a full disk costs durability, never the timer itself."""
         path = _timer_store_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(path.name + ".tmp")
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")  # per-process: never a shared scratch name
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as fh:
                 json.dump({"by_owner": self._by_owner}, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(tmp, path)
         except Exception as exc:  # noqa: BLE001
             logger.warning("timer store: could not save %s (%s)", path, type(exc).__name__)
