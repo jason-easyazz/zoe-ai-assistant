@@ -88,17 +88,33 @@ def test_the_production_note_path_persists_without_sync_and_does_no_io_on_the_ca
     assert ws.get("p1") == "casey"
 
 
-def test_an_in_flight_note_save_cannot_resurrect_a_forgotten_member(state):
+def test_an_in_flight_note_save_cannot_resurrect_a_forgotten_member(state, monkeypatch):
     import threading
 
-    with ws._io_lock:                             # hold the writers so the order is forced, not scheduled:
-        v._note_voice_speaker("p1", "casey")      # the note's save thread is started and parked on the lock ...
-        ws.forget_user("casey", sync=False)       # ... and forget's memory purge lands before either writer snapshots
+    ws.note("p1", "casey", now=T0, sync=True)                 # casey is on disk
+    real_replace = ws.os.replace
+    at_replace, go = threading.Event(), threading.Event()
+
+    def paused(src, dst):
+        if threading.current_thread().name == "warm-speaker-save":
+            at_replace.set()
+            go.wait(10)                                       # the background writer is parked AFTER snapshotting dana
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(ws.os, "replace", paused)
+    ws.note("p1", "dana", now=T0 + 1)                         # background save of dana: snapshot taken, replace pending
+    assert at_replace.wait(5)
+    ws.note("p1", "casey", now=T0 + 2)                        # unchanged vs the file and recent: schedules no save
+    forgot = threading.Thread(target=ws.forget_user, args=("dana",))
+    forgot.start()                                            # memory and _last_written no longer name dana ...
+    forgot.join(0.3)
+    go.set()                                                  # ... but the in-flight writer now lands dana in the file
+    forgot.join(5)
     for t in [t for t in threading.enumerate() if t.name == "warm-speaker-save"]:
         t.join(5)
+    assert "dana" not in state.read_text()                    # forget's rewrite is ordered AFTER the in-flight write
     _restart()
-    assert ws.get("p1") == ""
-    assert "casey" not in (state.read_text() if state.exists() else "")
+    assert ws.get("p1", now=T0 + 3) != "dana"
 
 
 def test_the_cap_is_hard_and_expired_entries_are_pruned_from_the_file(state, monkeypatch):

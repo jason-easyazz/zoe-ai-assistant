@@ -22,6 +22,7 @@ def sent(monkeypatch, tmp_path):
     monkeypatch.setattr(kma, "_alerted_day", "")
     monkeypatch.setattr(kma, "_inflight", set())
     monkeypatch.setattr(kma, "_attempts", {})
+    monkeypatch.setattr(zf, "_panel_kv_prev", {})
     return out
 
 

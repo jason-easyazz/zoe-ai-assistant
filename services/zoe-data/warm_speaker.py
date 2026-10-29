@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -119,12 +120,18 @@ def _persist() -> None:
                 snap = {k: [m, t] for k, (m, t) in _mem.items()}
                 written = dict(_mem)
             p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            tmp = p.with_suffix(".tmp")
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # private from the first byte, whatever the umask
-            with os.fdopen(fd, "w") as fh:
-                os.fchmod(fh.fileno(), 0o600)                       # a leftover temp file from a crash keeps its old mode otherwise
-                fh.write(json.dumps(snap))
-            os.replace(tmp, p)
+            fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=p.name + ".", suffix=".tmp")   # unique per write, 0600 from the first byte
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    os.fchmod(fh.fileno(), 0o600)
+                    fh.write(json.dumps(snap))
+                os.replace(tmp, p)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
             with _lock:
                 _last_written.clear()                               # only a SUCCESSFUL write counts: a failed one is retried next turn
                 _last_written.update(written)
@@ -193,9 +200,10 @@ def forget_user(member_id: str, *, sync: bool = True) -> int:
             gone = [k for k, (u, _) in _mem.items() if u == m]
             for k in gone:
                 _mem.pop(k, None)
-            on_disk = any(u == m for u, _t in _last_written.values())   # a write that failed leaves the member in the file: retry
-        if gone or on_disk:
-            _save(sync)
+        # ALWAYS rewrite, synchronously: _persist takes _io_lock, so a save already in flight (which may hold this member in a
+        # snapshot neither _mem nor _last_written shows) lands first and is then overwritten from the post-forget memory. A
+        # failed write leaves _save_failed set and the member on disk; the next forget/note rewrites it again.
+        _persist()
         return len(gone)
     except Exception:  # noqa: BLE001
         return 0
