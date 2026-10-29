@@ -105,3 +105,12 @@ async def test_failing_second_insert_rolls_back_the_first_and_records_no_receipt
     monkeypatch.setattr(list_service, "create_item_record", real)
     ok = await _add(world, 0, "bread")
     assert ok["added"] == ["bread"]
+
+
+async def test_concurrent_first_adds_to_a_list_that_does_not_exist_make_one_list_one_item(world):
+    # no _seed_list: the list is created by the race itself
+    a, b = await asyncio.gather(_add(world, 0, "tea bags"), _add(world, 1, "Tea Bag"))
+    assert sorted([len(a["added"]), len(b["added"])]) == [0, 1]
+    lists = await world.conns[0].fetch("SELECT id FROM lists WHERE user_id=$1 AND name=$2", world.uid, world.name)
+    assert len(lists) == 1
+    assert len(await _open_texts(world, lists[0]["id"])) == 1

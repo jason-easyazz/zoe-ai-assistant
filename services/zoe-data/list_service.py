@@ -538,6 +538,13 @@ async def add_item_to_list(
         return outcome
 
     async def _write_new_list_and_item() -> dict:
+        if callable(getattr(db, "transaction", None)):
+            # Two first-ever adds racing would each mint a list (no shared list_id to lock yet): serialise on the list's
+            # identity, then re-resolve - the loser finds the winner's committed list and takes the existing-list path.
+            await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (f"list_create|{list_type}|{list_name}",))
+            raced = await find_list_id(db, user_id=user_id, list_type=list_type, name=list_name)
+            if raced is not None:
+                return {"_raced": True}
         new_list = await create_list_record(
             db,
             # A guest has no users row to own a list; the household does. A guest-created list is always family-visible.
@@ -563,6 +570,10 @@ async def add_item_to_list(
     else:
         # Fallback (e.g. a DB shim without transaction support).
         outcome = await _write_new_list_and_item()
+    if outcome.get("_raced"):
+        return await add_item_to_list(
+            db, user_id=user_id, list_type=list_type, list_name=list_name, text=text, quantity=quantity,
+            category=category, new_list_visibility=new_list_visibility, dedup_window_s=dedup_window_s, receipts=receipts)
     if receipts is not None:
         receipts.append((user_id, outcome["item_id"], "add_item_to_list:new_list"))
     else:
