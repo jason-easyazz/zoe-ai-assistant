@@ -39,6 +39,24 @@ _ENV_AT_IMPORT = {k: os.environ.get(k) for k in _DIRECT_ENV_WRITES}
 
 
 @pytest.fixture(autouse=True)
+def _isolate_warm_speaker(monkeypatch):
+    """measure() runs the real warm_speaker.reset(), which clears its module globals; give every test its own copies
+    (monkeypatch restores the originals) so no later test depends on execution order."""
+    try:
+        import warm_speaker
+    except Exception:  # noqa: BLE001 - not importable in this lane: nothing to isolate
+        yield
+        return
+    for name in ("_mem", "_last_written"):
+        if isinstance(getattr(warm_speaker, name, None), dict):
+            monkeypatch.setattr(warm_speaker, name, dict(getattr(warm_speaker, name)))
+    for name in ("_loaded", "_save_failed"):
+        if hasattr(warm_speaker, name):
+            monkeypatch.setattr(warm_speaker, name, getattr(warm_speaker, name))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _restore_direct_env_writes():
     """measure() / main() set these with os.environ directly; snapshot and restore them around EVERY test so a later
     test in the lane never inherits streaming-on or a probe traffic class (test-order independence)."""

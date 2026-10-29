@@ -183,6 +183,18 @@ def test_revoke_member_reaches_the_memo(state):
     assert "casey" in state.read_text()
 
 
+def test_revoke_closes_the_sessions_before_the_memo_rewrite(state, monkeypatch):
+    """Access is removed FIRST: a slow memo rewrite (disk stall, another save holding the I/O lock) must not keep a
+    revoked member's voice sessions - and so their private cards - open for the length of that wait."""
+    import voice_session
+
+    order = []
+    monkeypatch.setattr(voice_session, "close_member", lambda m, r: order.append("close") or [])
+    monkeypatch.setattr(ws, "forget_user", lambda m: order.append("forget") or 0)
+    asyncio.run(voice_session.revoke_member("casey", "consent_revoked"))
+    assert order == ["close", "forget"]
+
+
 def test_corrupt_or_foreign_state_is_no_memo(state):
     state.write_text("{not json")
     ws.reset()
