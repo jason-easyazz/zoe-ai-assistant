@@ -136,6 +136,9 @@ def _persist() -> None:
                 _last_written.clear()                               # only a SUCCESSFUL write counts: a failed one is retried next turn
                 _last_written.update(written)
                 _save_failed = False
+                stale = dict(_mem) != written   # a note landed while this write was in flight, and note() judged it against the old file
+        if stale:
+            _save(False)                        # follow-up: the file must end up holding the latest memo, not this older snapshot
     except Exception:  # noqa: BLE001
         with _lock:
             _save_failed = True

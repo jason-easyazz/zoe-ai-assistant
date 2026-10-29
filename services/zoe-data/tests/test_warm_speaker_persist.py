@@ -379,3 +379,33 @@ def test_a_failed_speaker_change_does_not_hide_the_old_member_from_forget(state,
     assert "casey" not in state.read_text()
     _restart()
     assert ws.get("p1", now=T0 + 6) != "casey"
+
+
+def test_a_speaker_change_saved_while_another_save_is_in_flight_does_not_leave_the_wrong_speaker(state, monkeypatch):
+    import threading
+
+    ws.note("p1", "casey", now=T0, sync=True)                 # casey on disk
+    real_replace = ws.os.replace
+    at_replace, go = threading.Event(), threading.Event()
+    first = []
+
+    def paused(src, dst):
+        if threading.current_thread().name == "warm-speaker-save" and not first:
+            first.append(1)
+            at_replace.set()
+            go.wait(10)                                       # dana's writer parked after its snapshot
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(ws.os, "replace", paused)
+    ws.note("p1", "dana", now=T0 + 1)
+    assert at_replace.wait(5)
+    ws.note("p1", "casey", now=T0 + 2)                        # back to casey; _last_written still says casey: no save scheduled
+    go.set()                                                  # dana's stale snapshot lands
+    for _ in range(50):
+        for t in [t for t in threading.enumerate() if t.name == "warm-speaker-save"]:
+            t.join(5)
+        if json.loads(state.read_text())["p1"][0] == "casey":
+            break
+    assert json.loads(state.read_text())["p1"][0] == "casey"
+    _restart()
+    assert ws.get("p1", now=T0 + 3) == "casey"
