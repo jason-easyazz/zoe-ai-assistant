@@ -362,9 +362,9 @@ async def held(db, curator: Account, member_id: str, *, svc: Any = None) -> list
     out = []
     for ref in await svc.list_by_status(user_id=pol.member.user_id, status="disputed", limit=500):
         cid = str((ref.metadata or dict()).get("contradicts_id") or "")
-        for _ in range(5):
-            if cid in mine or cid not in succ:
-                break
+        seen = set()
+        while cid not in mine and cid in succ and cid not in seen:        # any number of failed accepts; a cycle ends it
+            seen.add(cid)
             cid = succ[cid]
         against = mine.get(cid)
         if against is not None:

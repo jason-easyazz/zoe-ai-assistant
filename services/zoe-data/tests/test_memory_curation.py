@@ -130,7 +130,7 @@ def env(monkeypatch, tmp_path):
         return []
 
     monkeypatch.setattr(pa, "load_people", no_people)
-    caller = dict(user=None)
+    caller = dict(user=None, auth_calls=0)
     from auth import get_current_user
     from routers.memories_curation import router
 
@@ -138,6 +138,7 @@ def env(monkeypatch, tmp_path):
     app.include_router(router)
 
     async def _user(request: Request):
+        caller["auth_calls"] += 1
         return dict(caller["user"])
 
     app.dependency_overrides[get_current_user] = _user
@@ -453,6 +454,13 @@ def test_an_accept_that_failed_to_close_the_note_stays_visible_and_retryable(env
     assert env.col.rows[rid][1]["status"] == "superseded"
     (again,) = c.get(f"/api/memories/curation/members/{KID}/held", headers=H).json()["held"]   # not stranded
     assert again["id"] == note["id"]
+    for i in range(7):                                    # more supersedes than any hop cap (each failed retry adds one)
+        (cur,) = c.get(f"/api/memories/curation/members/{KID}/rows", headers=H).json()["rows"]
+        assert c.post(f"/api/memories/curation/members/{KID}/rows/{cur['id']}/edit", json=dict(text=f"Mia's teacher is Ms {chr(65 + i)}"),
+                      headers=H).status_code == 200
+    (again,) = c.get(f"/api/memories/curation/members/{KID}/held", headers=H).json()["held"]
+    assert again["id"] == note["id"]
+    calls["n"] = 99                                       # the close works again
     assert c.post(url, json=dict(action="keep"), headers=H).status_code == 200
     assert not c.get(f"/api/memories/curation/members/{KID}/held", headers=H).json()["held"]
 
@@ -477,6 +485,7 @@ def test_flag_off_is_404_before_authentication(env, monkeypatch):
     monkeypatch.delenv("ZOE_MEMORIES_CURATORS")
     env.caller["user"] = dict(user_id="guest", role="guest")
     assert env.client.get("/api/memories/curation/me").status_code == 404           # no session header, a guest: still 404
+    assert env.caller["auth_calls"] == 0, "the flag answers before authentication ever runs"
     monkeypatch.setenv("ZOE_MEMORIES_CURATORS", "1")
     assert env.client.get("/api/memories/curation/me").status_code in (401, 403)    # control: on, the wall answers
 
