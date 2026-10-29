@@ -6,7 +6,9 @@ longer matching the real first turn: ~6 s cold vs ~1.2 s warm). This measures th
 
   1. evict   -- one unrelated tiny request, so llama-server's single slot stops holding the conversation prefix
                 (what the post-turn background passes do);
-  2. wait    -- the slot guard's quiet window (``brain_slot_guard.quiet_s()``), override ``--wait-s``;
+  2. wait    -- a fixed pause (``DEFAULT_WAIT_S``, 47 s), override ``--wait-s``. Not the slot guard's quiet window: this
+                process never takes the guard, so the wait only simulates a pause, and tracking ``quiet_s()`` (180 s)
+                would make every probe run 3 minutes slower;
   3. warm    -- ``zoe_flue_client.warm_kv_prefix(likely)``, the exact call the panel's wake prewarm makes, where ``likely`` comes
                 ONLY from the persisted speaker memo read as a freshly restarted process would (``_restart_memo``), never
                 from the ``--user`` argument directly;
@@ -29,6 +31,7 @@ import os
 import sys
 import time
 
+DEFAULT_WAIT_S = 47.0   # the pause the stage was built and baselined with (the old 45 s quiet window + 2)
 UTTERANCE = "Good evening, how are you going tonight?"
 
 
@@ -118,7 +121,6 @@ def _restart_memo(member: str, zfc) -> "tuple[str, str]":
 
 async def _measure(member: str, wait_s: float | None, gap_s: float) -> dict:
     import brain_dispatch
-    import brain_slot_guard
     import zoe_flue_client as zfc
 
     out: dict = {"status": "ok", "reason": "", "member": member}
@@ -127,7 +129,7 @@ async def _measure(member: str, wait_s: float | None, gap_s: float) -> dict:
     os.environ["ZOE_FLUE_STREAM_ENABLED"] = "1"
     if not brain_dispatch.use_flue_brain():
         return {**out, "status": "skip", "reason": "ZOE_BRAIN_BACKEND is not flue: no Flue first turn to measure"}
-    wait = brain_slot_guard.quiet_s() + 2.0 if wait_s is None else float(wait_s)
+    wait = DEFAULT_WAIT_S if wait_s is None else float(wait_s)
     out["wait_s"] = round(wait, 1)
 
     # 1. evict: a request that does not extend the conversation prompt replaces the slot's content
@@ -222,7 +224,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--service-dir", required=True)
     ap.add_argument("--user", default="jason", help="the panel's likely speaker (member id)")
-    ap.add_argument("--wait-s", type=float, default=None, help="quiet window to wait (default: slot guard quiet_s + 2)")
+    ap.add_argument("--wait-s", type=float, default=None, help="wait before the cold first turn (default: 47 s fixed, independent of the slot guard quiet window)")
     ap.add_argument("--gap-s", type=float, default=1.5, help="wake word -> end of utterance gap before the turn")
     args = ap.parse_args()
     if os.environ.get("ZOE_PERF") != "1":   # like every scripts/perf harness: opt-in, it sends real brain turns

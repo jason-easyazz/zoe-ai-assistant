@@ -169,3 +169,14 @@ def test_the_streaming_turn_brackets_the_slot():
     src = inspect.getsource(zoe_flue_client.run_flue_brain_streaming)
     assert "brain_slot_guard.turn_started()" in src and "brain_slot_guard.turn_finished()" in src
     assert src.index("turn_started()") < src.index("try:\n        async for delta in turn:")
+
+
+def test_the_default_quiet_window_is_180s_and_stays_under_the_max_defer(monkeypatch):
+    """Owner-approved 2026-10-29: 45 s let a helper evict the slot in any longer pause (next turn re-prefilled ~1300 tokens).
+
+    The quiet window must stay below the max defer, or a hot conversation could never release a waiting helper before
+    the backlog flush."""
+    monkeypatch.delenv(g.ENV_QUIET_S, raising=False)
+    monkeypatch.delenv(g.ENV_MAX_DEFER_S, raising=False)
+    assert g.DEFAULT_QUIET_S == 180.0 and g.quiet_s() == 180.0
+    assert g.quiet_s() < g.max_defer_s() and g.DEFAULT_QUIET_S < g.DEFAULT_MAX_DEFER_S
