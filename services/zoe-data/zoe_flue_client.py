@@ -1725,8 +1725,13 @@ class _ToolTally:
     result text or user content. ``feed`` never raises and does no I/O."""
 
     _MAX_TOOLS = 24
-    _EMPTY_MARK = "don't have anything stored"
-    _ERROR_MARKS = ("couldn't reach my memory", "not sure whose memories")
+    # The sidecar's COMPLETE canned replies (labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts recallMemory). Matched
+    # against the WHOLE result, never as a substring: a real packet may contain these phrases.
+    _EMPTY_REPLIES = frozenset({"i don't have anything stored about that yet."})
+    _ERROR_REPLIES = frozenset({
+        "i couldn't reach my memory right now.",
+        "i'm not sure whose memories i'd be recalling, so i can't do that safely right now.",
+    })
 
     def __init__(self) -> None:
         self._t0 = time.monotonic()
@@ -1761,10 +1766,10 @@ class _ToolTally:
                 res = ev.get("result")
                 if not isinstance(res, str):
                     return
-                low = res.lower()
-                if not res.strip() or self._EMPTY_MARK in low:
+                low = res.strip().lower()
+                if not low or low in self._EMPTY_REPLIES:
                     self._recall_result = "empty"
-                elif any(m in low for m in self._ERROR_MARKS):
+                elif low in self._ERROR_REPLIES:
                     self._recall_result = "error"
                 else:
                     self._recall_result = "packet"

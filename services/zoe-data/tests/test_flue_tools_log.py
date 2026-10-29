@@ -220,3 +220,17 @@ def test_name_sanitised_and_capped():
     for i in range(40):
         t.feed("__TOOL__:" + json.dumps({"phase": "start", "id": f"i{i}", "name": "a b\nc;" + "x" * 80}))
     assert len(t._names) == 24 and all(len(n) <= 40 and re.fullmatch(r"[A-Za-z0-9_.-]+", n) for n in t._names)
+
+
+@pytest.mark.parametrize("text", [
+    "[What you remember] Jason said \"I don't have anything stored about that yet\" once.",
+    "[What you remember] the sensor says I couldn't reach my memory right now, retry",
+    "I'm not sure whose memories I'd be recalling, so I can't do that safely right now. Also: locker beef42",
+])
+def test_real_packet_containing_canned_phrases_is_still_a_packet(caplog, text):
+    t = zoe_flue_client._ToolTally()
+    t.feed("__TOOL__:" + json.dumps({"phase": "start", "id": "a", "name": "recall_memory"}))
+    t.feed("__TOOL__:" + json.dumps({"phase": "result", "id": "a", "result": text}))
+    with caplog.at_level(logging.INFO, logger=zoe_flue_client.logger.name):
+        t.log("s")
+    assert "result:packet" in _tool_lines(caplog)[0]
