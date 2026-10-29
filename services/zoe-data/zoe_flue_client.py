@@ -1716,6 +1716,85 @@ def _panel_kv_alarm(session_id: str, first_prompt: int, first_cache: int, traffi
         return None
 
 
+class _ToolTally:
+    """Names-only record of the brain's own tool calls in ONE turn, fed from the
+    ``__TOOL__:`` sentinels already on the NDJSON stream. Exists because a tool
+    call was invisible in zoe-data's logs, so "no memory sources" could not be
+    told from "the model never called recall_memory". Keeps tool NAMES, the
+    ``recall_memory`` outcome class and a wall-clock total - never arguments,
+    result text or user content. ``feed`` never raises and does no I/O."""
+
+    _MAX_TOOLS = 24
+    # The sidecar's COMPLETE canned replies (labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts recallMemory). Matched
+    # against the WHOLE result, never as a substring: a real packet may contain these phrases.
+    _EMPTY_REPLIES = frozenset({"i don't have anything stored about that yet."})
+    _ERROR_REPLIES = frozenset({
+        "i couldn't reach my memory right now.",
+        "i'm not sure whose memories i'd be recalling, so i can't do that safely right now.",
+    })
+
+    def __init__(self) -> None:
+        self._t0 = time.monotonic()
+        self._names: list[str] = []
+        self._by_id: dict[str, str] = {}
+        self._recall_ids: set[str] = set()
+        self._recall_result: Optional[str] = None  # packet | empty | error | unknown
+        self._logged = False
+
+    def feed(self, sentinel: str) -> None:
+        try:
+            if not isinstance(sentinel, str) or not sentinel.startswith(_TOOL_SENTINEL_PREFIX):
+                return
+            ev = json.loads(sentinel[len(_TOOL_SENTINEL_PREFIX):])
+            if not isinstance(ev, dict):
+                return
+            phase, tc_id = ev.get("phase"), str(ev.get("id") or "")
+            if phase in ("start", "args"):
+                name = re.sub(r"[^A-Za-z0-9_.-]", "", str(ev.get("name") or ""))[:40]
+                if not name or (tc_id and tc_id in self._by_id):
+                    return
+                if tc_id:
+                    self._by_id[tc_id] = name
+                if len(self._names) < self._MAX_TOOLS:
+                    self._names.append(name)
+                if name == "recall_memory":
+                    if tc_id:
+                        self._recall_ids.add(tc_id)
+                    if self._recall_result is None:
+                        self._recall_result = "unknown"
+            elif phase == "result" and tc_id in self._recall_ids:
+                res = ev.get("result")
+                if not isinstance(res, str):
+                    return
+                low = res.strip().lower()
+                if not low or low in self._EMPTY_REPLIES:
+                    self._recall_result = "empty"
+                elif low in self._ERROR_REPLIES:
+                    self._recall_result = "error"
+                else:
+                    self._recall_result = "packet"
+        except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+            pass
+
+    def log(self, session_id: str) -> None:
+        """One ``FLUE_TOOLS`` line, at most once per turn (idempotent). Never raises."""
+        try:
+            if self._logged:
+                return
+            self._logged = True
+            if self._recall_result is None:
+                recall = "called:no"
+            else:
+                recall = f"called:yes result:{self._recall_result}"
+            logger.info(
+                "FLUE_TOOLS session=%s tools=[%s] recall_memory=%s ms=%d",
+                session_id, ",".join(self._names), recall,
+                int((time.monotonic() - self._t0) * 1000),
+            )
+        except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+            pass
+
+
 def _log_context_budget(session_id: str, terminal: dict) -> None:
     """One ``FLUE_CONTEXT_BUDGET`` line from the terminal's ``context_budget``:
     the sidecar's chars/4 estimate of the first model call's prompt sections
@@ -1828,6 +1907,7 @@ async def _run_turn_aggregated_wire2(
     # the sidecar has taken ownership of the turn.
     admitted = False
     stream_died = False
+    tally = _ToolTally()
     try:
         async with httpx.AsyncClient(timeout=_timeout_s()) as client:
             async with client.stream(
@@ -1885,6 +1965,7 @@ async def _run_turn_aggregated_wire2(
                         # exactly as the wire-1 whole-result path never sees them.
                         if chunk.startswith((_TOOL_SENTINEL_PREFIX, _THINKING_SENTINEL_PREFIX)):
                             _note_tool_sentinel(session_id, chunk)
+                            tally.feed(chunk)
                             continue
                         parts.append(chunk)
                         continue
@@ -1892,9 +1973,11 @@ async def _run_turn_aggregated_wire2(
                         if chunk.get("done"):
                             done_seen = True
                             _log_prompt_cache(session_id, chunk)
+                            tally.log(session_id)
                             break
                         if "error" in chunk:
                             error_terminal = str(chunk["error"])[:200]
+                            tally.log(session_id)
                             break
     except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
         # No re-POST on either branch: a 2.x turn is fire-and-forget, so the
@@ -1914,6 +1997,8 @@ async def _run_turn_aggregated_wire2(
         # Partial text survives — the turn ran and is reported below as a failed
         # (truncated) turn rather than a clean success.
         stream_died = True
+    finally:
+        tally.log(session_id)  # idempotent: one line per turn on EVERY exit (EOF, error, cancel)
 
     text = "".join(parts)
     # A success is ONLY a {"done": true} terminal. An {"error": ...} terminal or
@@ -2725,6 +2810,7 @@ async def _run_flue_brain_streaming_turn(
         submission_id = ""
         terminal_seen = False
         emitted_chars = emitted_deltas = 0
+        tally = _ToolTally()
         try:
             import httpx
 
@@ -2779,6 +2865,7 @@ async def _run_flue_brain_streaming_turn(
                                         emitted_deltas += 1
                                     else:
                                         _note_tool_sentinel(session_id, chunk)
+                                        tally.feed(chunk)
                                     yield chunk
                                 continue
                             if isinstance(chunk, dict):
@@ -2787,8 +2874,10 @@ async def _run_flue_brain_streaming_turn(
                                     finished = True
                                     done_ok = True
                                     _log_prompt_cache(session_id, chunk)
+                                    tally.log(session_id)
                                     break
                                 if "error" in chunk:
+                                    tally.log(session_id)
                                     logger.warning("flue stream reported error: %s", str(chunk["error"])[:200])
                                     finished = True  # sidecar owned + reported the failure
                                     stream_error = str(chunk["error"])[:160]
@@ -2896,6 +2985,8 @@ async def _run_flue_brain_streaming_turn(
                 yield _FALLBACK_TEXT
                 return
             logger.warning("flue stream request failed pre-admission (%s) — falling back to wait=result", exc)
+        finally:
+            tally.log(session_id)  # idempotent: one line per turn on EVERY exit (EOF, error, cancel)
 
     # WIRE-1 ONLY BELOW. Both wire-2 routes into this block return above; this
     # guard makes that structural fact checkable rather than merely argued, so a
