@@ -20,8 +20,17 @@ pytestmark = pytest.mark.ci_safe
 T0 = __import__("time").time() - 60.0   # "now": entries are pruned by the real clock
 
 
+def _drain_background_saves():
+    """Join any in-flight background save (thread "warm-speaker-save") so one test's write never lands inside the next."""
+    import threading
+    for t in threading.enumerate():
+        if t.name == "warm-speaker-save" and t is not threading.current_thread():
+            t.join(5)
+
+
 @pytest.fixture
 def state(monkeypatch, tmp_path):
+    _drain_background_saves()
     p = tmp_path / "warm-speaker.json"
     monkeypatch.setenv("ZOE_WARM_SPEAKER_STATE", str(p))
     monkeypatch.delenv("ZOE_WARM_SPEAKER_MAX_AGE_S", raising=False)
@@ -32,6 +41,7 @@ def state(monkeypatch, tmp_path):
     monkeypatch.setattr(zfc, "_SESSION_UID", dict(zfc._SESSION_UID))
     ws.reset()
     yield p
+    _drain_background_saves()
     ws.reset()
 
 
@@ -193,6 +203,42 @@ def test_revoke_closes_the_sessions_before_the_memo_rewrite(state, monkeypatch):
     monkeypatch.setattr(ws, "forget_user", lambda m: order.append("forget") or 0)
     asyncio.run(voice_session.revoke_member("casey", "consent_revoked"))
     assert order == ["close", "forget"]
+
+
+def test_a_stalled_panel_publish_never_blocks_the_memo_removal(state, monkeypatch):
+    """A panel socket that never answers must not delay - or, if the revoke is cancelled, skip - the memo cleanup:
+    the revoked member's hint must not come back after a restart."""
+    import voice_session
+
+    ws.note("p1", "casey", now=T0, sync=True)
+    stuck = {}
+
+    async def _stalled_publish(evs):
+        stuck["hit"] = True
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(voice_session, "close_member", lambda m, r: [{"type": "voice_session_closed"}])
+    monkeypatch.setattr(voice_session, "publish", _stalled_publish)
+
+    async def _run_and_cancel():
+        task = asyncio.ensure_future(voice_session.revoke_member("casey", "consent_revoked"))
+        for _ in range(200):                          # until the publish is stuck
+            await asyncio.sleep(0.01)
+            if stuck:
+                break
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        for _ in range(200):                          # the worker thread finishes on its own
+            if "casey" not in state.read_text():
+                break
+            await asyncio.sleep(0.01)
+
+    asyncio.run(_run_and_cancel())
+    assert stuck, "the publish was reached"
+    assert "casey" not in state.read_text(), "a stalled/cancelled publish left the revoked member in the memo"
 
 
 def test_corrupt_or_foreign_state_is_no_memo(state):
