@@ -20,6 +20,13 @@ _HEALTHY = [{"domain": "ytmusic", "enabled": True, "last_error": None, "instance
 
 
 @pytest.fixture(autouse=True)
+def _signing_secret(monkeypatch):
+    # music_setup.mint() would otherwise generate a secret and write it straight into os.environ, leaking into later
+    # tests; a monkeypatched one is used instead and restored on teardown.
+    monkeypatch.setenv("ZOE_MUSIC_SETUP_SECRET", "test-music-setup-secret")
+
+
+@pytest.fixture(autouse=True)
 def _pin_ma_287(monkeypatch):
     async def info():
         return {"server_version": "2.8.7", "schema_version": 29}
