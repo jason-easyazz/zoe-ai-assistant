@@ -1931,7 +1931,7 @@ def main(reexec: bool = False) -> int:
                     help="after the replay, send ONE cold first turn (evict the slot, wait the quiet window, wake "
                          "prewarm, ask) and FAIL on a KV-cache miss or a TTFT regression vs the baseline (default on)")
     ap.add_argument("--cold-wait-s", type=float, default=None,
-                    help="quiet window the cold stage waits (default: brain_slot_guard.quiet_s() + 2)")
+                    help="quiet window the cold stage waits (default: 47, fixed - independent of the slot guard quiet window)")
     ap.add_argument("--sample-dir", default=DEFAULT_SAMPLE_DIR,
                     help="voice corpus dir for the replay and the VAD stage (default: ZOE_VOICE_SAMPLE_DIR "
                          "or ~zoe/.zoe-voice-samples, the replay harness's own default)")
