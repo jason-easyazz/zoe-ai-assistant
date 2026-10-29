@@ -3728,52 +3728,57 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     # reply instead ("Milk's already on the shopping list."). A spoken add may name several items ("eggs and milk").
     from list_service import add_reply, find_matching_item, normalize_item_text, split_items
 
-    open_rows = [dict(r) for r in await db.fetch(
-        "SELECT id, text FROM list_items WHERE list_id = $1 AND deleted = 0 AND (completed IS NULL OR completed = 0)", list_id)]
     added: list[str] = []
     already: list[str] = []
     new_ids: list[str] = []
     item_id = ""
-    for part in (split_items(intent.item_text) if list_type == "shopping" else [normalize_item_text(intent.item_text)]) or [intent.item_text]:
-        recent_dup = await db.fetchrow(
-            """
-            SELECT id FROM list_items
-            WHERE list_id = $1 AND lower(text) = lower($2) AND deleted = 0
-              AND created_at::timestamptz > now() - interval '10 seconds'
-            """,
-            list_id,
-            part,
-        )
-        if recent_dup is not None:
-            # Answer as if the add just succeeded (it did) and point the card's "recent" highlight at the original row.
-            new_ids.append(str(recent_dup["id"]))
-            added.append(part)
-            logger.info("skybridge list add: duplicate %r within 10s on list %s — replay skipped", part, list_id)
-            continue
-        have = find_matching_item(open_rows, part)
-        if have is not None:
-            already.append(normalize_item_text(have["text"]))
-            if not item_id:
-                item_id = str(have["id"])
-            continue
-        new_id = str(uuid.uuid4())
-        await db.execute(
-            """
-            INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            """,
-            new_id,
-            list_id,
-            normalize_item_text(part) or part,
-            "normal",
-            "",
-            "",
-            None,
-            None,
-        )
-        open_rows.append({"id": new_id, "text": part})
-        new_ids.append(new_id)
-        added.append(normalize_item_text(part) or part)
+    from list_service import list_write_txn
+
+    # ONE transaction + per-list advisory lock around the read-check-insert loop: overlapping adds serialise, a failed item
+    # rolls the whole add back.
+    async with list_write_txn(db, list_id):
+        open_rows = [dict(r) for r in await db.fetch(
+            "SELECT id, text FROM list_items WHERE list_id = $1 AND deleted = 0 AND (completed IS NULL OR completed = 0)", list_id)]
+        for part in (split_items(intent.item_text) if list_type == "shopping" else [normalize_item_text(intent.item_text)]) or [intent.item_text]:
+            recent_dup = await db.fetchrow(
+                """
+                SELECT id FROM list_items
+                WHERE list_id = $1 AND lower(text) = lower($2) AND deleted = 0
+                  AND created_at::timestamptz > now() - interval '10 seconds'
+                """,
+                list_id,
+                part,
+            )
+            if recent_dup is not None:
+                # Answer as if the add just succeeded (it did) and point the card's "recent" highlight at the original row.
+                new_ids.append(str(recent_dup["id"]))
+                added.append(part)
+                logger.info("skybridge list add: duplicate %r within 10s on list %s — replay skipped", part, list_id)
+                continue
+            have = find_matching_item(open_rows, part)
+            if have is not None:
+                already.append(normalize_item_text(have["text"]))
+                if not item_id:
+                    item_id = str(have["id"])
+                continue
+            new_id = str(uuid.uuid4())
+            await db.execute(
+                """
+                INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                new_id,
+                list_id,
+                normalize_item_text(part) or part,
+                "normal",
+                "",
+                "",
+                None,
+                None,
+            )
+            open_rows.append({"id": new_id, "text": part})
+            new_ids.append(new_id)
+            added.append(normalize_item_text(part) or part)
     if new_ids:
         await _maybe_commit(db)
         item_id = new_ids[0]

@@ -7335,13 +7335,13 @@
       },
       "ZOE_TURN_CONTINUATION_TTL_S": {
         "defaults": [
-          "'60'"
+          "60.0"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/conversation_cues.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_UNAUTHENTICATED_ROLE": {
         "defaults": [

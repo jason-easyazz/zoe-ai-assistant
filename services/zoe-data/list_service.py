@@ -20,6 +20,7 @@ still carry their own list INSERTs.
 from __future__ import annotations
 
 import re
+from contextlib import asynccontextmanager
 import uuid
 from typing import Optional
 
@@ -159,9 +160,15 @@ def normalize_item_text(raw: str) -> str:
 _OES_STEMS = frozenset({"tomato", "potato", "mango", "burrito", "avocado"})
 
 
+#: "-ie" nouns whose plural is just "+s" ("cookies" -> "cookie"), unlike "berries" -> "berry"
+_IE_STEMS = frozenset({"cookie", "brownie", "smoothie", "pie", "veggie", "zombie", "movie", "hoagie", "calorie", "selfie", "rookie"})
+
+
 def _singular(word: str) -> str:
     if word.endswith("oes") and word[:-2] in _OES_STEMS:
         return word[:-2]
+    if word.endswith("ies") and word[:-1] in _IE_STEMS:
+        return word[:-1]      # cookies -> cookie, brownies -> brownie (NOT "cooky")
     if len(word) > 4 and word.endswith("ies"):
         return word[:-3] + "y"
     if len(word) > 4 and word.endswith(("ches", "shes", "xes", "sses", "zes")):
@@ -446,6 +453,20 @@ async def _find_recent_duplicate(db, *, list_id: str, text: str, window_s: int) 
     return row["id"] if row else None
 
 
+@asynccontextmanager
+async def list_write_txn(db, list_id):
+    """One transaction around a list add holding a per-list advisory lock, so two overlapping adds (panel + brain) serialise
+    on the "is it already there?" check instead of both inserting, and a multi-item add is all-or-nothing. Nested use is a
+    savepoint (the lock is held to the outer commit). A DB shim without ``transaction`` runs unwrapped."""
+    txn = getattr(db, "transaction", None)
+    if not callable(txn):
+        yield
+        return
+    async with txn():
+        await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (f"list_add|{list_id}",))
+        yield
+
+
 async def add_item_to_list(
     db,
     *,
@@ -457,6 +478,7 @@ async def add_item_to_list(
     category: Optional[str] = None,
     new_list_visibility: str,
     dedup_window_s: int = 0,
+    receipts: Optional[list] = None,
 ) -> dict:
     """Resolve-or-create a list and add one item — the shared voice/MCP add.
 
@@ -482,28 +504,38 @@ async def add_item_to_list(
         # A guest adds to a household list that exists; it never conjures a new list of another type.
         raise HouseholdListUnavailable(list_type)
     if list_id is not None:
-        if dedup_window_s > 0:
-            dup_id = await _find_recent_duplicate(
-                db, list_id=list_id, text=text, window_s=dedup_window_s
-            )
-            if dup_id is not None:
-                # the item IS on the list (a replayed add), so a reply that says so is true
-                write_receipts.record(user_id, "list", dup_id, "add_item_to_list:dedup")
-                return {"list_id": list_id, "item_id": dup_id, "created_list": False, "deduped": True}
-        # The item is already OPEN on the list (case-, plural- and punctuation-insensitive): no duplicate row; the caller says so.
-        cursor = await db.execute(
-            "SELECT id, text FROM list_items WHERE list_id=? AND deleted=0 AND (completed IS NULL OR completed=0)", (list_id,))
-        have = find_matching_item(await cursor.fetchall(), text)
-        if have is not None:
-            write_receipts.record(user_id, "list", have["id"], "add_item_to_list:already")
-            return {"list_id": list_id, "item_id": have["id"], "created_list": False, "deduped": True, "already": True,
-                    "text": normalize_item_text(have["text"])}
-        # Existing list: a single INSERT is already atomic.
-        item = await create_item_record(
-            db, list_id=list_id, text=text, quantity=quantity, category=category
-        )
-        write_receipts.record(user_id, "list", item["id"], "add_item_to_list")
-        return {"list_id": list_id, "item_id": item["id"], "created_list": False, "deduped": False}
+        pending: list[tuple] = []
+        async with list_write_txn(db, list_id):
+            if dedup_window_s > 0:
+                dup_id = await _find_recent_duplicate(
+                    db, list_id=list_id, text=text, window_s=dedup_window_s
+                )
+                if dup_id is not None:
+                    # the item IS on the list (a replayed add), so a reply that says so is true
+                    pending.append((dup_id, "add_item_to_list:dedup"))
+                    outcome = {"list_id": list_id, "item_id": dup_id, "created_list": False, "deduped": True}
+            if not pending:
+                # The item is already OPEN on the list (case-, plural- and punctuation-insensitive): no duplicate row; the caller says so.
+                cursor = await db.execute(
+                    "SELECT id, text FROM list_items WHERE list_id=? AND deleted=0 AND (completed IS NULL OR completed=0)", (list_id,))
+                have = find_matching_item(await cursor.fetchall(), text)
+                if have is not None:
+                    pending.append((have["id"], "add_item_to_list:already"))
+                    outcome = {"list_id": list_id, "item_id": have["id"], "created_list": False, "deduped": True, "already": True,
+                               "text": normalize_item_text(have["text"])}
+                else:
+                    item = await create_item_record(
+                        db, list_id=list_id, text=text, quantity=quantity, category=category
+                    )
+                    pending.append((item["id"], "add_item_to_list"))
+                    outcome = {"list_id": list_id, "item_id": item["id"], "created_list": False, "deduped": False}
+        # Receipts land only once the write has committed (a rolled-back add must not read as done).
+        for rid, why in pending:
+            if receipts is not None:
+                receipts.append((user_id, rid, why))
+            else:
+                write_receipts.record(user_id, "list", rid, why)
+        return outcome
 
     async def _write_new_list_and_item() -> dict:
         new_list = await create_list_record(
@@ -531,8 +563,21 @@ async def add_item_to_list(
     else:
         # Fallback (e.g. a DB shim without transaction support).
         outcome = await _write_new_list_and_item()
-    write_receipts.record(user_id, "list", outcome["item_id"], "add_item_to_list:new_list")
+    if receipts is not None:
+        receipts.append((user_id, outcome["item_id"], "add_item_to_list:new_list"))
+    else:
+        write_receipts.record(user_id, "list", outcome["item_id"], "add_item_to_list:new_list")
     return outcome
+
+
+@asynccontextmanager
+async def _outer_add_txn(db):
+    txn = getattr(db, "transaction", None)
+    if not callable(txn):
+        yield
+        return
+    async with txn():
+        yield
 
 
 async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
@@ -541,13 +586,18 @@ async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
     added, already, ids, outcomes = [], [], [], []
     # Only a SHOPPING list is a list of separate things: "call mum and dad" on a to-do list is one task.
     parts = (split_items(text) if kwargs.get("list_type") == "shopping" else [normalize_item_text(text)]) or [text]
-    for part in parts:
-        out = await add_item_to_list(db, text=part, **kwargs)
-        outcomes.append(out)
-        ids.append(out["item_id"])
-        shown = out.get("text") or normalize_item_text(part)
-        out["_text"] = shown      # what this outcome is about, for the caller's per-item audit / notification
-        (already if out.get("already") else added).append(shown)
+    receipts: list[tuple] = []
+    # ONE transaction for the whole spoken add: all items land or none do, and receipts are recorded after it commits.
+    async with _outer_add_txn(db):
+        for part in parts:
+            out = await add_item_to_list(db, text=part, receipts=receipts, **kwargs)
+            outcomes.append(out)
+            ids.append(out["item_id"])
+            shown = out.get("text") or normalize_item_text(part)
+            out["_text"] = shown      # what this outcome is about, for the caller's per-item audit / notification
+            (already if out.get("already") else added).append(shown)
+    for uid, rid, why in receipts:
+        write_receipts.record(uid, "list", rid, why)
     last = outcomes[-1]
     return {**last, "item_id": ids[0] if ids else last["item_id"], "item_ids": ids, "added": added, "already": already,
             "outcomes": outcomes}

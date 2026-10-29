@@ -21,6 +21,7 @@ from functools import lru_cache
 from typing import Optional
 
 import lexicons
+from typed_env import env_float
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 #: what may be left of a turn once the small-talk phrase and its lead-in are taken out, before it stops being small talk
@@ -238,10 +239,7 @@ def calendar_followup(text: str) -> bool:
 
 def turn_continuation_ttl_s() -> float:
     """``ZOE_TURN_CONTINUATION_TTL_S`` (default 60): how long after a turn a bare "what else?" still follows that turn's domain."""
-    try:
-        return max(0.0, float(os.environ.get("ZOE_TURN_CONTINUATION_TTL_S", "60")))
-    except (TypeError, ValueError):
-        return 60.0
+    return max(0.0, env_float("ZOE_TURN_CONTINUATION_TTL_S", 60.0))
 
 
 def turn_continuation(text: str) -> bool:
