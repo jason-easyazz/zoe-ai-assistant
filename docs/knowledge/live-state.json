@@ -5002,7 +5002,7 @@
   },
   "ZOE_TURN_CONTINUATION_TTL_S": {
    "defaults": [
-    "60"
+    "60.0"
    ],
    "kind": "number",
    "readers": 1
