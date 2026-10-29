@@ -66,6 +66,24 @@ os.environ["ZOE_ADHOC_BACKUP_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "adhoc-bac
 # The router retrain ledger (router_retrain_ledger, Phase 3 of the struggle loop) lives under ~/.zoe/router_retrain by default, and every
 # forget / user delete reaches it (struggle_proposals.forget_events / forget_user): a test's forget must never edit the live ledger.
 os.environ["ZOE_ROUTER_RETRAIN_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "router_retrain")
+# Every other state path that defaults under ``~/.zoe`` (2026-10-29: the suite wrote 6 test panel ids into the LIVE ``~/.zoe/warm-speaker.json``.
+# ``warm_speaker._path()`` refuses the live file only while ``PYTEST_CURRENT_TEST`` is set, and its ``warm-speaker-save`` thread outlives the
+# test that spawned it - the save ran with the guard off and landed on the real path). A session-wide pin makes the real path unreachable
+# from ANY thread at ANY time; the autouse fixture below gives each test its own file so no state leaks between tests.
+# Deliberately NOT pinned: ``ZOE_KV_MISS_ALERT_STATE`` - setting it would switch ``kv_miss_alert`` ON under test (it sends a Telegram alert).
+_STATE_PINS = (
+    ("ZOE_WARM_SPEAKER_STATE", "warm-speaker.json"),
+    ("ZOE_OMI_AUDIT_PATH", "omi-audit.jsonl"),
+    ("ZOE_OMI_AUDIO_DIR", "omi-recordings"),
+    ("ZOE_CHANGE_NOTICES_STATE_DIR", "change-notices"),
+    ("ZOE_DEPLOY_STATE_DIR", "deploy"),
+    ("NIGHT_DIR", "night-window"),
+    ("ZOE_PIPELINE_STORE_PATH", "engineering_pipeline_runs.jsonl"),
+    ("ZOE_MULTICA_DISPATCH_PAUSE_FILE", "multica_dispatch_paused"),
+    ("ZOE_VOICE_GREETING_STATE_PATH", "voice_greeting_state.json"),
+)
+for _var, _leaf in _STATE_PINS:
+    os.environ[_var] = os.path.join(ZOE_TEST_STORE_DIR, _leaf)
 
 
 import pytest  # noqa: E402
@@ -87,6 +105,22 @@ def _exact_words_in_process_index():
     night_store.set_backend(None)
     struggle_detector.reset()     # the worker task belongs to this test's loop
     struggle_detector.set_backend(None)
+
+
+@pytest.fixture(autouse=True)
+def _warm_speaker_private_state(monkeypatch, tmp_path):
+    """Each test gets its OWN warm-speaker memo file and a fresh in-process view, so a ``note()`` in one test is neither written to
+    the live ``~/.zoe/warm-speaker.json`` nor read back by the next test through the shared session file."""
+    monkeypatch.setenv("ZOE_WARM_SPEAKER_STATE", str(tmp_path / "warm-speaker.json"))
+    try:
+        import warm_speaker
+    except Exception:  # noqa: BLE001 - a slim lane without the module's deps has nothing to isolate
+        yield
+        return
+    monkeypatch.setattr(warm_speaker, "_mem", {})            # restored on teardown (module globals via monkeypatch)
+    monkeypatch.setattr(warm_speaker, "_last_written", {})
+    monkeypatch.setattr(warm_speaker, "_loaded", False)
+    yield
 
 
 @pytest.fixture(autouse=True)

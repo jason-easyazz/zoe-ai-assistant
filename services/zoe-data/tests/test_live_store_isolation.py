@@ -92,3 +92,59 @@ def test_router_retrain_ledger_is_pinned_off_home():
 
     assert router_retrain_ledger.root().resolve() == path
     assert path != (_HOME / ".zoe" / "router_retrain").resolve()
+
+
+_STATE_VARS = (
+    "ZOE_WARM_SPEAKER_STATE", "ZOE_TIMER_STORE", "ZOE_OMI_AUDIT_PATH", "ZOE_OMI_AUDIO_DIR", "ZOE_CHANGE_NOTICES_STATE_DIR",
+    "ZOE_DEPLOY_STATE_DIR", "NIGHT_DIR", "ZOE_PIPELINE_STORE_PATH", "ZOE_MULTICA_DISPATCH_PAUSE_FILE", "ZOE_VOICE_GREETING_STATE_PATH",
+)
+
+
+@pytest.mark.parametrize("var", _STATE_VARS)
+def test_every_dot_zoe_state_path_is_off_the_live_home(var):
+    """2026-10-29: the suite wrote 6 test panel ids into the live ``~/.zoe/warm-speaker.json``. Every state path that defaults under
+    ``~/.zoe`` must be pinned off it for the whole session (new knobs: add to ``conftest._STATE_PINS`` AND this tuple)."""
+    value = os.environ.get(var)
+    assert value, f"{var} must be pinned by services/zoe-data/tests/conftest.py"
+    resolved = pathlib.Path(value).resolve()
+    assert not str(resolved).startswith(str(_HOME / ".zoe") + "/"), f"{var}={resolved} is under the live ~/.zoe"
+    if var != "ZOE_WARM_SPEAKER_STATE":     # that one is per test (autouse fixture, pytest tmp_path); the rest are session-wide
+        assert "zoe-test-stores-" in str(resolved)
+
+
+def test_warm_speaker_save_after_the_test_ends_still_cannot_reach_the_live_file(monkeypatch):
+    """The real leak: ``warm_speaker``'s guard keys on ``PYTEST_CURRENT_TEST``, but its save thread outlives the test, so the save ran with
+    the guard off and hit ``~/.zoe``. With the state path pinned, the path is the throwaway one even when that variable is gone."""
+    import warm_speaker
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    path = warm_speaker._path()
+    assert path is not None
+    assert (_HOME / ".zoe").resolve() not in path.resolve().parents
+
+
+def test_exercising_the_state_writers_under_an_empty_home_leaves_it_empty(tmp_path):
+    """Behavioural control: run the files that exercise warm_speaker / the voice-turn note / the timer store with ``HOME`` an empty dir
+    and nothing may appear under it. Red when the conftest pins are removed (``.zoe/warm-speaker.json`` appears under the fake HOME)."""
+    import subprocess
+    import sys
+
+    here = pathlib.Path(__file__).resolve().parent
+    home = tmp_path / "home"
+    home.mkdir()
+    files = [
+        "test_kv_warm_member_prefix.py", "test_kv_warm_prod_path.py", "test_voice_facts_warm.py", "test_wake_prewarm_guest.py",
+        "test_warm_speaker_persist.py", "test_timer_ring_owner_and_persistence.py",
+    ]
+    env = {k: v for k, v in os.environ.items() if k not in _STATE_VARS and k != "PYTEST_CURRENT_TEST"}
+    import site
+
+    env["PYTHONUSERBASE"] = site.getuserbase()      # the installed packages live under the real HOME; only the DATA paths move
+    env["HOME"] = str(home)
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *[str(here / f) for f in files]],
+        cwd=str(here.parent), env=env, capture_output=True, text=True, timeout=600,
+    )
+    leaked = sorted(str(p.relative_to(home)) for p in home.rglob("*"))
+    assert not leaked, f"tests wrote under the real-HOME stand-in: {leaked}"
+    assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-1000:]
