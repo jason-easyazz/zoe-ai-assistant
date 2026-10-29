@@ -14872,6 +14872,25 @@
         },
         "typed_env": false
       },
+      "ZOE_TIMER_STORE": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/skybridge_service.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "'' = ~/.zoe/timers.json (the snapshot file of running voice timers)",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_TIMEZONE": {
         "defaults": [
           "''",

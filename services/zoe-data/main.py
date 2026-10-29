@@ -2042,6 +2042,12 @@ async def lifespan(app: FastAPI):
     except Exception as _lk_exc:
         logger.warning("LiveKit setup (non-fatal): %s", _lk_exc)
 
+    try:  # one-time timer snapshot read, off the event loop, before the first request is served
+        import skybridge_service as _sky_timers
+        await _sky_timers.preload_timers()
+    except Exception as _tm_exc:  # noqa: BLE001
+        logger.warning("timer store preload (non-fatal): %s", _tm_exc)
+
     yield
     # Reap run_to_completion children BEFORE interpreter teardown:
     # ThreadPoolExecutor's exit hook joins workers ahead of ordinary atexit
