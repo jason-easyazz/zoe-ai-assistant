@@ -96,14 +96,17 @@ def _recipients(env: dict) -> list[str]:
     return []
 
 
-def _telegram(text: str) -> bool:
-    """Best-effort send. Returns True if delivered."""
+def _telegram(text: str, report=None) -> bool:
+    """Best-effort send. Returns True if delivered. Failure lines go to ``report`` (a callable taking one line) when given,
+    else to stderr; a caller that wants the reason passes ``report`` rather than redirecting the process-wide stderr."""
+    if report is None:
+        def report(line: str) -> None:
+            print(line, file=sys.stderr)
     try:
         with open(TELEGRAM_ENV) as fh:
             env = dict(re.findall(r"^(\w+)=(.*)$", fh.read(), re.M))
     except Exception as exc:
-        print(f"crash-watch: cannot read telegram env ({exc}); alert NOT delivered",
-              file=sys.stderr)
+        report(f"crash-watch: cannot read telegram env ({exc}); alert NOT delivered")
         return False
     # Environment wins over the file, so an operator can point alerts somewhere
     # else without editing the bot's own env.
@@ -114,9 +117,9 @@ def _telegram(text: str) -> bool:
     token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
     users = _recipients(env)
     if not token or not users:
-        print("crash-watch: NO ALERT RECIPIENT CONFIGURED — a crash loop would go "
-              "unreported. Set ZOE_ALERT_TELEGRAM_CHAT_IDS (comma-separated chat "
-              f"ids) in {TELEGRAM_ENV} or the environment.", file=sys.stderr)
+        report("crash-watch: NO ALERT RECIPIENT CONFIGURED — a crash loop would go "
+               "unreported. Set ZOE_ALERT_TELEGRAM_CHAT_IDS (comma-separated chat "
+               f"ids) in {TELEGRAM_ENV} or the environment.")
         return False
     ok = False
     for chat_id in users:
@@ -127,7 +130,7 @@ def _telegram(text: str) -> bool:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 ok = ok or resp.status == 200
         except Exception as exc:
-            print(f"crash-watch: telegram send failed: {exc}", file=sys.stderr)
+            report(f"crash-watch: telegram send failed: {exc}")
     return ok
 
 

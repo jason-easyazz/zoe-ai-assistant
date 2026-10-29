@@ -467,13 +467,36 @@ def close_member(member_id: str, reason: str) -> list:
 
 
 async def revoke_member(member_id: str, reason: str = "consent_revoked") -> None:
-    """``close_member`` + tell the panels. Safe to call with the flag off (nothing is open then). Never raises."""
+    """``close_member`` + tell the panels. Safe to call with the flag off (nothing is open then). Never raises.
+    Also drops the member from the wake-warm speaker memo (consent revoked / voice profile deleted).
+
+    ORDER MATTERS: (1) access is removed FIRST, in memory, synchronously - a slow disk or a stalled panel socket can
+    never keep a revoked member's sessions (and private cards) open; (2) the memo cleanup is STARTED next, on a worker
+    thread that runs to completion even if this coroutine is cancelled or a panel socket never answers; (3) only then
+    are the panels told."""
+    evs = []
     try:
-        evs = close_member(str(member_id or ""), reason)
+        evs = close_member(str(member_id or ""), reason) or []
+    except Exception as exc:  # pragma: no cover
+        logger.warning("voice_session revoke failed for %s: %s", member_id, exc)
+    forget = None
+    try:
+        import warm_speaker
+
+        forget = asyncio.ensure_future(asyncio.to_thread(warm_speaker.forget_user, str(member_id or "")))
+        forget.add_done_callback(lambda t: t.cancelled() or t.exception())   # never an unretrieved exception
+    except Exception:  # noqa: BLE001
+        forget = None
+    try:
         if evs:
             await publish(evs)
     except Exception as exc:  # pragma: no cover
-        logger.warning("voice_session revoke failed for %s: %s", member_id, exc)
+        logger.warning("voice_session revoke publish failed for %s: %s", member_id, exc)
+    if forget is not None:
+        try:
+            await asyncio.shield(forget)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # -- the panel side ---------------------------------------------------------------------------------------------------

@@ -901,6 +901,8 @@ _ENTRIES = (
     _f('ZOE_VOICE_WARN_MS', 'int', 1500),
     _f('ZOE_VOICE_WARN_RATIO', 'float', 1.5),
     _f('ZOE_WAKE_ACK_PHRASE', 'str', '', doc='docs/guides/OPERATOR_RUNBOOK.md'),
+    _f('ZOE_WARM_SPEAKER_MAX_AGE_S', 'float', 43200.0, doc='docs/knowledge/brain-prefix-cache-2026-10-12.md'),
+    _f('ZOE_WARM_SPEAKER_STATE', 'str', '', doc='docs/knowledge/brain-prefix-cache-2026-10-12.md'),
     _f('ZOE_WEATHER_CACHE_TTL_S', 'int', 600, doc='docs/research/self-building-skills-2026-10-04.md'),
     _f('ZOE_WEB_BROWSE_MAX_HTML', 'int', 1500000),
     _f('ZOE_WEB_FALLBACK_PROVIDER', 'str', 'auto', doc='docs/architecture/beat-the-bar-2026-program.md'),
