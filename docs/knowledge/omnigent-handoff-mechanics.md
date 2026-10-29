@@ -25,8 +25,12 @@ agent never runs: the items list stays empty, because only the UI's WebSocket cr
    silently and the agent then starts without its task. The brief goes inline with `-p` in step 4.
 3. Launch a runner: `POST /v1/hosts/<host_id>/runners {"session_id": "<SID>", "workspace": "/workspace"}` (host from `GET /v1/hosts`).
 4. **The kick** (the part REST cannot do):
-   `docker exec -d zoe-omnigent sh -c "cd /workspace && omnigent run --server http://127.0.0.1:6767 --harness claude-sdk -r <SID> -p "$BRIEF" --no-log > /tmp/kick.log 2>&1"` with the FULL brief in `-p`, quoted the way `scripts/maintenance/cross_review_polly.sh`
-   does it (reuse that wrapper rather than hand-quoting). The session goes `running` and survives the client shutting down,
+   ```sh
+   BRIEF_B64=$(printf %s "$BRIEF" | base64 -w0)        # base64 survives both shells intact; the container decodes it
+   docker exec -d zoe-omnigent sh -c "cd /workspace && omnigent run --server http://127.0.0.1:6767 --harness claude-sdk -r <SID> -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > /tmp/kick.log 2>&1"
+   ```
+   This is the quoting `scripts/maintenance/cross_review_polly.sh` uses (reuse that wrapper where you can). A bare `"$BRIEF"` inside
+   the outer double quotes closes and reopens them, so `sh -c` gets only the first word of the task. The session goes `running` and survives the client shutting down,
    because everything lives in the container.
 5. Monitor: `GET /v1/sessions/<SID>` (status) and `.../items`; runner logs are under the in-container host-runner log directory.
    A session that is idle with zero ASSISTANT messages is an alarm, not a clean finish.
