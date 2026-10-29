@@ -262,3 +262,38 @@ def test_autoland_queues_a_voice_pr_but_not_a_head_the_loop_parked(rig):
     (rig.home / "probe-failed-heads.txt").write_text(f"7:{HEAD[:12]}\n")
     run_once(rig, "autoland.sh", rig.repo, ZOE_LANDING_REPO=str(REPO))
     assert pending.read_text() == "", "a parked head must not be refilled"
+
+
+# ---- second review round (2026-10-29) ----------------------------------------------------------------------------
+
+def test_a_push_after_the_failed_probe_requeues_the_new_head_and_does_not_park_it(rig):
+    prs(rig, headRefOid="c" * 40)
+    snapshot(rig, head=HEAD, **dict(SPEED_ONLY, said_vs_did_regressions=["x"]))      # the artifact is for the OLD head
+    assert decide(rig) == "requeue"
+    assert not (rig.home / "probe-failed-heads.txt").exists()
+
+
+def test_queue_never_spawns_a_lander_for_a_parked_head_and_the_loop_drops_it(rig):
+    prs(rig)
+    (rig.home / "probe-failed-heads.txt").write_text(f"7:{HEAD[:12]}\n")
+    q = rig.tmp / "q.txt"
+    q.write_text("7 /wt feature/x pr7\n")
+    r = rig.run("land_queue.sh", str(q), ZOE_LANDING_NOW_EPOCH=NOON)
+    assert "parked" in r.stdout and (rig.home / "last-results.txt").read_text().split() == ["7", "11"]
+    assert not any(c.startswith("pr merge") for c in rig.gh_calls())
+    assert decide(rig, rc="11") == "drop"
+
+
+def test_the_probe_is_capped_by_the_time_left_before_the_night_deadline(rig):
+    cap = lambda n: subprocess.run(["bash", "-c", f'. "{LANDING}/landing_lib.sh"; landing_probe_timeout {n}'], capture_output=True, text=True).stdout.strip()
+    assert (cap(1500), cap(901), cap(180), cap(10), cap(-5)) == ("1380", "781", "60", "60", "60")
+    code = "\n".join(ln for ln in (LANDING / "land_voice_pr.sh").read_text().splitlines() if not ln.lstrip().startswith("#"))
+    assert 'timeout -k 20 "$(landing_probe_timeout' in code, "run_probe must run under the cap"
+
+
+def test_a_push_during_the_lock_waits_leaves_kokoro_untouched(rig):
+    prs(rig, headRefOid="f" * 40)                      # window() is told the probed head is HEAD
+    script, env, log, lane, probe_log = window(rig)
+    r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+    assert "rc=9" in r.stdout and not probe_log.exists() and (not log.exists() or log.read_text() == "")
+    assert subprocess.run(["flock", "-n", str(lane), "true"]).returncode == 0

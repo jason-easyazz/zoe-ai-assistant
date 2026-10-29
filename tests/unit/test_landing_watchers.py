@@ -153,3 +153,22 @@ def test_chain_pauses_during_the_measured_deploy_pause(rig):
     state(rig, {"21": dict(GREEN, files=["docs/x.md"])}, {"21": {"total": 0, "unresolved": []}})
     chain_run(rig, ZOE_LANDING_NOW_EPOCH=str(epoch("2026-10-29", "02:46")))
     assert merges(rig) == [] and "deploy pause" in (rig.home / "logs" / "land_queue.log").read_text()
+
+
+def test_chain_skips_the_pass_when_the_changed_file_list_is_unreadable_or_empty(rig):
+    for variant in ({"files_fail": True}, {"empty": True}):
+        pr = dict(GREEN, files=[] if variant.get("empty") else ["docs/x.md"])
+        rig.set_state({"prs": {"21": pr}, "threads": {"21": {"total": 0, "unresolved": []}}, **{k: v for k, v in variant.items() if k == "files_fail"}})
+        chain_run(rig)
+        assert merges(rig) == [], variant
+
+
+def test_chain_arms_bound_to_the_head_it_classified(rig):
+    rig.set_state({"prs": {"21": dict(GREEN, files=["docs/x.md"], headRefOid="d" * 40)}, "threads": {"21": {"total": 0, "unresolved": []}}})
+    import subprocess
+    try:
+        chain_run(rig, timeout=3)
+    except subprocess.TimeoutExpired:
+        pass
+    calls = [c for c in rig.gh_calls() if c.startswith("pr merge 21 --squash --auto")]
+    assert calls and all("--match-head-commit " + "d" * 40 in c for c in calls), calls
