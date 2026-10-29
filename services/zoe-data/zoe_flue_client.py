@@ -1734,6 +1734,7 @@ class _ToolTally:
         self._by_id: dict[str, str] = {}
         self._recall_ids: set[str] = set()
         self._recall_result: Optional[str] = None  # packet | empty | error | unknown
+        self._logged = False
 
     def feed(self, sentinel: str) -> None:
         try:
@@ -1752,7 +1753,8 @@ class _ToolTally:
                 if len(self._names) < self._MAX_TOOLS:
                     self._names.append(name)
                 if name == "recall_memory":
-                    self._recall_ids.add(tc_id)
+                    if tc_id:
+                        self._recall_ids.add(tc_id)
                     if self._recall_result is None:
                         self._recall_result = "unknown"
             elif phase == "result" and tc_id in self._recall_ids:
@@ -1770,8 +1772,11 @@ class _ToolTally:
             pass
 
     def log(self, session_id: str) -> None:
-        """One ``FLUE_TOOLS`` line. Never raises."""
+        """One ``FLUE_TOOLS`` line, at most once per turn (idempotent). Never raises."""
         try:
+            if self._logged:
+                return
+            self._logged = True
             if self._recall_result is None:
                 recall = "called:no"
             else:
@@ -1897,6 +1902,7 @@ async def _run_turn_aggregated_wire2(
     # the sidecar has taken ownership of the turn.
     admitted = False
     stream_died = False
+    tally = _ToolTally()
     try:
         async with httpx.AsyncClient(timeout=_timeout_s()) as client:
             async with client.stream(
@@ -1940,7 +1946,6 @@ async def _run_turn_aggregated_wire2(
                     )
                     yield _FALLBACK_TEXT
                     return
-                tally = _ToolTally()
                 async for line in resp.aiter_lines():
                     line = (line or "").strip()
                     if not line:
@@ -1987,6 +1992,8 @@ async def _run_turn_aggregated_wire2(
         # Partial text survives — the turn ran and is reported below as a failed
         # (truncated) turn rather than a clean success.
         stream_died = True
+    finally:
+        tally.log(session_id)  # idempotent: one line per turn on EVERY exit (EOF, error, cancel)
 
     text = "".join(parts)
     # A success is ONLY a {"done": true} terminal. An {"error": ...} terminal or
@@ -2798,6 +2805,7 @@ async def _run_flue_brain_streaming_turn(
         submission_id = ""
         terminal_seen = False
         emitted_chars = emitted_deltas = 0
+        tally = _ToolTally()
         try:
             import httpx
 
@@ -2835,7 +2843,6 @@ async def _run_flue_brain_streaming_turn(
                         finished = False
                         done_ok = False
                         stream_error = ""
-                        tally = _ToolTally()
                         async for line in resp.aiter_lines():
                             line = (line or "").strip()
                             if not line:
@@ -2973,6 +2980,8 @@ async def _run_flue_brain_streaming_turn(
                 yield _FALLBACK_TEXT
                 return
             logger.warning("flue stream request failed pre-admission (%s) — falling back to wait=result", exc)
+        finally:
+            tally.log(session_id)  # idempotent: one line per turn on EVERY exit (EOF, error, cancel)
 
     # WIRE-1 ONLY BELOW. Both wire-2 routes into this block return above; this
     # guard makes that structural fact checkable rather than merely argued, so a

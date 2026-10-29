@@ -176,3 +176,47 @@ def test_feed_and_log_never_raise(bad, monkeypatch):
     t.feed(bad)
     monkeypatch.setattr(zoe_flue_client.logger, "info", lambda *a, **k: 1 / 0)
     t.log("s")  # a failing logger must not escape
+
+
+@pytest.mark.parametrize("stream", ["1", "0"], ids=["streaming", "aggregated"])
+@pytest.mark.asyncio
+async def test_eof_without_terminal_still_logs_once(wire2, monkeypatch, caplog, stream):
+    lines = [json.dumps("Hi "), _tool(phase="start", id="c1", name="get_time"), json.dumps("there.")]
+    out = await _run(wire2, monkeypatch, caplog, stream, lines)
+    assert "Hi" in "".join(c for c in out if not c.startswith("__TOOL__"))
+    got = _tool_lines(caplog)
+    assert len(got) == 1 and "tools=[get_time]" in got[0], got
+
+
+@pytest.mark.asyncio
+async def test_consumer_closing_the_stream_still_logs_once(wire2, monkeypatch, caplog):
+    monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "1")
+    wire2.stream_response = _FakeStreamResponse(
+        lines=[_tool(phase="start", id="c1", name="recall_memory"), json.dumps("Hi "), json.dumps("there."),
+               json.dumps({"done": True})])
+    with caplog.at_level(logging.INFO, logger=zoe_flue_client.logger.name):
+        gen = zoe_flue_client.run_flue_brain_streaming("hi", "voice-s1", "jason")
+        async for chunk in gen:
+            if not chunk.startswith("__TOOL__"):
+                break  # barge-in: the consumer goes away mid-turn
+        await gen.aclose()
+    got = _tool_lines(caplog)
+    assert len(got) == 1 and "recall_memory=called:yes result:unknown" in got[0], got
+
+
+def test_log_is_idempotent_and_idless_recall_result_is_ignored(caplog):
+    t = zoe_flue_client._ToolTally()
+    t.feed("__TOOL__:" + json.dumps({"phase": "start", "name": "recall_memory"}))
+    t.feed("__TOOL__:" + json.dumps({"phase": "result", "result": "a packet"}))
+    with caplog.at_level(logging.INFO, logger=zoe_flue_client.logger.name):
+        t.log("s")
+        t.log("s")
+    got = _tool_lines(caplog)
+    assert len(got) == 1 and "result:unknown" in got[0], got
+
+
+def test_name_sanitised_and_capped():
+    t = zoe_flue_client._ToolTally()
+    for i in range(40):
+        t.feed("__TOOL__:" + json.dumps({"phase": "start", "id": f"i{i}", "name": "a b\nc;" + "x" * 80}))
+    assert len(t._names) == 24 and all(len(n) <= 40 and re.fullmatch(r"[A-Za-z0-9_.-]+", n) for n in t._names)
