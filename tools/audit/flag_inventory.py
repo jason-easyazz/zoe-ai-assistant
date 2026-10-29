@@ -70,6 +70,7 @@ ENV_EXAMPLE_RE = re.compile(r"\s*#?\s*([A-Z][A-Z0-9_]+)\s*=")
 DYNAMIC = "dynamic"
 REQUIRED = "(required)"
 NO_DEFAULT = "-"
+REGISTRY_READ = "(registry)"   # a typed_env.flag("X") read: its default is whatever the registry declares
 
 REGISTRY_REL = "services/zoe-data/flag_registry.py"
 RATCHET_REL = "docs/knowledge/flag-ratchet.json"
@@ -301,7 +302,7 @@ class _FlagVisitor(ast.NodeVisitor):
                 # ``typed_env.flag("X")`` has no default argument ON PURPOSE: the registry supplies it, so by construction it cannot
                 # contradict the registry and must not be compared against the other readers as "unset".
                 registry_read = name == "flag" and default is None
-                self._record(env, DYNAMIC if (is_set or registry_read) else _literal_repr(default), typed)
+                self._record(env, DYNAMIC if is_set else (REGISTRY_READ if registry_read else _literal_repr(default)), typed)
                 if FLAG_RE.match(env):
                     self.on_read(env, node, name)
         self.generic_visit(node)
@@ -414,7 +415,7 @@ def normalize_default(v: object) -> object:
 def effective_default(d: str) -> object:
     """A scanner default string (``repr`` of a literal, ``-``, ``dynamic``, ``(required)``) → comparable
     value, or ``_SKIP`` when it is not comparable (``dynamic``/``(required)``/unparseable)."""
-    if d in (DYNAMIC, REQUIRED):
+    if d in (DYNAMIC, REQUIRED, REGISTRY_READ):
         return _SKIP
     if d == NO_DEFAULT:
         return None
@@ -565,6 +566,24 @@ def scan_repo(repo: Path, files: list[str] | None = None, registry: dict[str, di
                 info["registered"] = flag in registry
                 info["spec"] = registry.get(flag)
 
+    # A ``flag("X")`` read returns the registry's declared default, so it is compared AS that default: it agrees with a legacy
+    # reader that hard-codes the same value and conflicts with one that hard-codes another or none (unset).
+    if registry is not None:
+        for section_flags in inventory.values():
+            for flag, info in section_flags.items():
+                spec = registry.get(flag)
+                if spec and REGISTRY_READ in info["defaults"]:
+                    declared = repr(tuple(spec["default"]) if isinstance(spec["default"], list) else spec["default"])
+                    info["defaults"] = sorted({declared if d == REGISTRY_READ else d for d in info["defaults"]})
+        for flag, files_map in by_file.items():
+            spec = registry.get(flag)
+            if spec:
+                declared = repr(tuple(spec["default"]) if isinstance(spec["default"], list) else spec["default"])
+                for ds in files_map.values():
+                    if REGISTRY_READ in ds:
+                        ds.discard(REGISTRY_READ)
+                        ds.add(declared)
+
     # Conflicts: prod flags whose readers hard-code different EFFECTIVE defaults.
     conflicts: dict[str, dict] = {}
     for flag, files_map in by_file.items():
@@ -666,7 +685,7 @@ def _owner_doc(name: str, idx: dict[str, Counter]) -> str:
 def _infer_spec(flag: str, info: dict, typed_funcs: dict[str, set[str]], doc_idx: dict[str, Counter]) -> dict:
     """Best-effort starting spec for a flag the registry has not seen (hand-correct after the sync)."""
     fn = typed_funcs.get(flag, set())
-    literal = [d for d in info["defaults"] if d not in (DYNAMIC, REQUIRED, NO_DEFAULT)]
+    literal = [d for d in info["defaults"] if d not in (DYNAMIC, REQUIRED, NO_DEFAULT, REGISTRY_READ)]
     eff = [effective_default(d) for d in literal]
     ftype = None
     for f, t in (("env_bool", "bool"), ("env_int", "int"), ("env_float", "float"), ("env_float_failsafe", "float"),

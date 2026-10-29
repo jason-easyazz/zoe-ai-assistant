@@ -329,3 +329,18 @@ def test_control_a_registry_read_next_to_a_matching_legacy_read_is_not_a_conflic
     )
     d = _scan(repo)
     assert "ZOE_TIMEOUT" not in d["conflicts"] and "ZOE_TIMEOUT" not in d["divergences"]
+    assert d["flags"]["prod"]["ZOE_TIMEOUT"]["defaults"] == ["5"]   # shown as the value it resolves to
+
+
+def test_control_a_registry_read_next_to_an_unset_legacy_read_is_still_a_conflict(tmp_path):
+    """The other half: ``flag("X")`` resolves to the declared 5, so a bare ``os.getenv("X")`` beside it IS a contradiction."""
+    repo = _make_repo(
+        tmp_path,
+        "    _f('ZOE_TIMEOUT', 'int', 5),",
+        **{
+            "services/zoe-data/a.py": 'import os\nT = os.getenv("ZOE_TIMEOUT")\n',
+            "services/zoe-data/b.py": 'from typed_env import flag\nT = flag("ZOE_TIMEOUT")\n',
+        },
+    )
+    c = _scan(repo)["conflicts"]["ZOE_TIMEOUT"]
+    assert c["acknowledged"] is False and c["unacknowledged_sites"] == ["services/zoe-data/a.py"]
