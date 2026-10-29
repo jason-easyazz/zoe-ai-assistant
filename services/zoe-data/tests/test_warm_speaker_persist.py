@@ -91,8 +91,9 @@ def test_the_production_note_path_persists_without_sync_and_does_no_io_on_the_ca
 def test_an_in_flight_note_save_cannot_resurrect_a_forgotten_member(state):
     import threading
 
-    v._note_voice_speaker("p1", "casey")          # threaded save in flight
-    ws.forget_user("casey")                       # forget races it
+    with ws._io_lock:                             # hold the writers so the order is forced, not scheduled:
+        v._note_voice_speaker("p1", "casey")      # the note's save thread is started and parked on the lock ...
+        ws.forget_user("casey", sync=False)       # ... and forget's memory purge lands before either writer snapshots
     for t in [t for t in threading.enumerate() if t.name == "warm-speaker-save"]:
         t.join(5)
     _restart()
