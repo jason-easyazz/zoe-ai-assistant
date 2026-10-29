@@ -153,6 +153,7 @@ aider_env/
 *.sh
 !scripts/maintenance/*.sh
 !scripts/night/*.sh
+!scripts/landing/*.sh
 !scripts/deploy/*.sh
 !scripts/permanent/*.sh
 !scripts/setup/*.sh
