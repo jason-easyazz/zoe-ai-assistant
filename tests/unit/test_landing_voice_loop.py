@@ -247,3 +247,40 @@ def test_only_positive_speed_evidence_earns_a_retry(rig):
     snapshot(rig, **dict(SPEED_ONLY, cold_first_turn={"status": "pass"}))
     (rig.home / "voice-probe-retried.txt").write_text("")
     assert decide(rig) == "retry-once"
+
+
+# ---- armed merges never outlive the lander (2026-10-29) ------------------------------------------------------------
+
+def run_lib(rig, body, **extra):
+    return subprocess.run(["bash", "-c", f'. "{LANDING}/landing_lib.sh"; {body}'], env=rig.env(ZOE_LANDING_WAIT_STEP_S="0", **extra),
+                          capture_output=True, text=True, timeout=30)
+
+
+def disarms(rig):
+    return [c for c in rig.gh_calls() if c.startswith("pr merge 7 --disable-auto")]
+
+
+def test_a_head_change_after_arming_disarms_at_once(rig):
+    prs(rig, headRefOid="f" * 40, armed=True)           # armed on HEAD, then a writer pushed
+    r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 5; echo rc=$?")
+    assert "rc=5" in r.stdout and len(disarms(rig)) == 1
+
+
+def test_not_merged_in_the_wait_disarms_even_when_the_head_is_unchanged(rig):
+    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED")
+    r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3; echo rc=$?")
+    assert "rc=1" in r.stdout and len(disarms(rig)) == 1
+
+
+def test_a_merged_pr_is_left_alone(rig):
+    prs(rig, state="MERGED", headRefOid=HEAD)
+    r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3; echo rc=$?; landing_disarm_unless_merged 7")
+    assert "rc=0" in r.stdout and disarms(rig) == []
+
+
+def test_the_exit_trap_disarms_an_unmerged_pr_and_the_lander_installs_it(rig):
+    prs(rig, armed=True)
+    run_lib(rig, 'trap \'landing_disarm_unless_merged 7\' EXIT; exit 9')
+    assert len(disarms(rig)) == 1
+    code = "\n".join(ln for ln in (LANDING / "land_voice_pr.sh").read_text().splitlines() if not ln.lstrip().startswith("#"))
+    assert "landing_disarm_unless_merged" in code and "landing_wait_merged" in code and "arm kept" not in code
