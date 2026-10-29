@@ -1515,9 +1515,10 @@ def record_trend(path: Path, line: dict[str, Any], binding: dict[str, Any], prom
     line = {**line, "bound": binding["bound"], "tree": binding.get("tree"),
             "tracked_dirty": binding.get("tracked_dirty"), "diff_sha256": binding.get("diff_sha256"),
             "unbound_reason": binding.get("reason")}
-    if prompt:
-        line.update({"prompt_packets": prompt["packets"], "prompt_chars_mean": prompt["chars_mean"],
-                     "prompt_chars_p95": prompt["chars_p95"], "prompt_chars_max": prompt["chars_max"]})
+    # the columns are ALWAYS present: null = no packet was read (never a zero, which would read as "measured: empty")
+    prompt = prompt or {}
+    line.update({"prompt_packets": prompt.get("packets"), "prompt_chars_mean": prompt.get("chars_mean"),
+                 "prompt_chars_p95": prompt.get("chars_p95"), "prompt_chars_max": prompt.get("chars_max")})
     target = path if binding["bound"] else path.with_name(path.stem + ".unbound" + path.suffix)
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "a", encoding="utf-8") as fh:

@@ -1928,7 +1928,10 @@ def test_require_bound_refuses_before_running(monkeypatch, tmp_path):
 
 def test_prompt_size_column_summarises_the_packets_the_run_read(monkeypatch, tmp_path):
     live = sb.Live("t", "", "dsn", False)
-    assert sb.prompt_size_summary(live) is None            # no packet read -> no column, never a zero
+    assert sb.prompt_size_summary(live) is None            # no packet read -> null columns, never a zero
+    empty = json.loads(sb.record_trend(tmp_path / "e.jsonl", {"ts": "x"}, {"bound": True, "tree": "T"}, None).read_text())
+    assert {k: empty[k] for k in ("prompt_packets", "prompt_chars_mean", "prompt_chars_p95", "prompt_chars_max")} == \
+        dict.fromkeys(("prompt_packets", "prompt_chars_mean", "prompt_chars_p95", "prompt_chars_max"))   # the schema stays
     monkeypatch.setattr(sb.Live, "_req", lambda self, *a, **k: (200, {"packet": "x" * 400}))
     live.packet(A, "q")
     monkeypatch.setattr(sb.Live, "_req", lambda self, *a, **k: (500, {}))
