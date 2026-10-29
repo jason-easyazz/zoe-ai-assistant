@@ -212,27 +212,34 @@ async def test_freshest_foreground_panel_wins(monkeypatch):
 _KIOSK = [("zoe-touch-pi", "member-a", "default")]
 
 
+def _later(*args, **kwargs):
+    """A row FACTORY. ``parametrize`` arguments are evaluated at COLLECTION, so a ``_row(...)`` there is stamped when the lane
+    starts; a lane longer than the 900 s window (the full ci_safe run is ~20 min) then reads every such row as stale and the
+    owner/bound_guest cases fail late in the run. The test calls the factory, stamping the row when the test actually runs."""
+    return lambda: _row(*args, **kwargs)
+
+
 @pytest.mark.parametrize("rows, bindings, who, expected", [
     # Guest-held kiosk whose default member is the user: the panel is on, the
     # member is NOT confirmed there → bound_guest (non-sensitive line only).
-    ([_row("zoe-touch-pi", "guest", age_s=60)], _KIOSK, "member-a",
+    ([_later("zoe-touch-pi", "guest", age_s=60)], _KIOSK, "member-a",
      ("bound_guest", "zoe-touch-pi")),
-    ([_row("zoe-touch-pi", "member-a", age_s=60)], _KIOSK, "member-a",
+    ([_later("zoe-touch-pi", "member-a", age_s=60)], _KIOSK, "member-a",
      ("owner", "zoe-touch-pi")),
     # An owner row anywhere beats a fresher bound_guest row.
-    ([_row("zoe-touch-pi", "guest", age_s=10), _row("panel-hall", "member-a", age_s=300)],
+    ([_later("zoe-touch-pi", "guest", age_s=10), _later("panel-hall", "member-a", age_s=300)],
      _KIOSK, "member-a", ("owner", "panel-hall")),
-    ([_row("zoe-touch-pi", "guest", age_s=60)], _KIOSK, "member-b", ("absent", None)),
-    ([_row("zoe-touch-pi", "guest", age_s=60)],
+    ([_later("zoe-touch-pi", "guest", age_s=60)], _KIOSK, "member-b", ("absent", None)),
+    ([_later("zoe-touch-pi", "guest", age_s=60)],
      [("zoe-touch-pi", "member-a", "allowed")], "member-a", ("absent", None)),
-    ([_row("zoe-touch-pi", "guest", age_s=3600), _row("panel-hall", "guest", foreground=0)],
+    ([_later("zoe-touch-pi", "guest", age_s=3600), _later("panel-hall", "guest", foreground=0)],
      _KIOSK + [("panel-hall", "member-a", "default")], "member-a", ("absent", None)),
     # Only the guest sentinel is borrowed, never another member's panel.
-    ([_row("zoe-touch-pi", "member-b", age_s=60)], _KIOSK, "member-a", ("absent", None)),
+    ([_later("zoe-touch-pi", "member-b", age_s=60)], _KIOSK, "member-a", ("absent", None)),
 ], ids=["guest-row-default-member", "owner-row", "owner-beats-bound-guest", "unbound-user",
         "allowed-not-default", "stale-or-background", "other-member-owns"])
 async def test_presence_tier(monkeypatch, rows, bindings, who, expected):
-    _patch_db(monkeypatch, SemanticPanelDB(rows, bindings))
+    _patch_db(monkeypatch, SemanticPanelDB([make() for make in rows], bindings))  # rows aged NOW, not at collection
     assert await presence.panel_presence_tier(who) == expected
     # The legacy panel-only API answers for the OWNER tier alone.
     owner_panel = expected[1] if expected[0] == "owner" else None
