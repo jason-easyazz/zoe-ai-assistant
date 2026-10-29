@@ -172,3 +172,21 @@ def test_chain_arms_bound_to_the_head_it_classified(rig):
         pass
     calls = [c for c in rig.gh_calls() if c.startswith("pr merge 21 --squash --auto")]
     assert calls and all("--match-head-commit " + "d" * 40 in c for c in calls), calls
+
+
+def test_chain_disarms_an_armed_pr_that_gained_a_voice_file(rig):
+    state(rig, {"21": dict(GREEN, armed=True, files=["docs/x.md", "services/zoe-data/routers/voice_tts.py"])}, {"21": {"total": 0, "unresolved": []}})
+    chain_run(rig)
+    assert [c for c in rig.gh_calls() if c.startswith("pr merge 21 --disable-auto")]
+    state(rig, {"21": dict(GREEN, armed=False, files=["docs/x.md", "services/zoe-data/routers/voice_tts.py"])}, {"21": {"total": 0, "unresolved": []}})
+    rig.gh_log.write_text("")
+    chain_run(rig)
+    assert not [c for c in rig.gh_calls() if "--disable-auto" in c], "an unarmed PR needs no disarm"
+
+
+def test_watchd_reports_unknown_not_zero_when_the_thread_read_fails(rig):
+    rig.set_state({"prs": {"21": {"mergeStateStatus": "BLOCKED", "armed": True, "required": {"validate": "pass"}}},
+                   "threads": {}, "graphql_fails": True})
+    watchd(rig)
+    ev = events(rig)
+    assert len(ev) == 1 and "BLOCKED: unknown unresolved thread(s)" in ev[0], ev
