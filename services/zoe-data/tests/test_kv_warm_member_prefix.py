@@ -109,7 +109,11 @@ def test_wake_warms_the_last_verified_speaker_not_a_guest(monkeypatch):
     monkeypatch.setattr(v, "_get_or_create_voice_session", lambda p: "voice-panel-t-1")
     monkeypatch.setattr(v, "_VOICE_SESSIONS", {})
     monkeypatch.setattr(v, "_resolve_fresh_panel_member", _none)
-    monkeypatch.setattr(v, "_LAST_VOICE_SPEAKER", {})
+    import warm_speaker
+    monkeypatch.setattr(warm_speaker, "_mem", {})
+    monkeypatch.setattr(warm_speaker, "_last_written", {})
+    monkeypatch.setattr(warm_speaker, "_loaded", False)
+    warm_speaker.reset()
     monkeypatch.setattr(zfc, "warm_kv_prefix", _kv)
     monkeypatch.setenv("ZOE_BRAIN_BACKEND", "flue")
     monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
@@ -123,6 +127,38 @@ def test_wake_warms_the_last_verified_speaker_not_a_guest(monkeypatch):
     assert seen[-1] == "jason"
     _run(v._prewarm_brain_for_panel("p2"))
     assert seen[-1] == "", "another panel's speaker is not borrowed"
+
+
+def test_a_slow_memo_read_never_holds_up_the_wake_warm(monkeypatch):
+    """The first wake after a restart reads the memo file; a stalled disk must not delay the warm while the user speaks.
+    Past the bound the warm starts with the fallback (here: guest) instead of waiting."""
+    import threading
+    import time as _time
+    seen, gate = [], threading.Event()
+
+    async def _kv(member=""):
+        seen.append((member, _time.monotonic()))
+        return "warmed"
+
+    async def _none(panel_id, fallback_db=None):
+        return None
+
+    import warm_speaker
+    monkeypatch.setattr(v, "_brain_prewarm_on_wake_enabled", lambda: True)
+    monkeypatch.setattr(v, "_get_or_create_voice_session", lambda p: "voice-panel-t-1")
+    monkeypatch.setattr(v, "_VOICE_SESSIONS", {})
+    monkeypatch.setattr(v, "_resolve_fresh_panel_member", _none)
+    monkeypatch.setattr(warm_speaker, "get", lambda panel, **k: gate.wait(3.0) and "jason")   # the disk is stuck
+    monkeypatch.setattr(zfc, "warm_kv_prefix", _kv)
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "flue")
+    monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
+    t0 = _time.monotonic()
+    try:
+        _run(v._prewarm_brain_for_panel("p1"))
+    finally:
+        gate.set()
+    assert seen and seen[0][0] == "", "fell back to a guest warm instead of waiting for the stuck memo"
+    assert seen[0][1] - t0 < 1.0, f"the warm waited {seen[0][1] - t0:.2f}s on the memo read"
 
 
 def test_warm_wire_body_carries_the_member_envelope(monkeypatch, blocks):
