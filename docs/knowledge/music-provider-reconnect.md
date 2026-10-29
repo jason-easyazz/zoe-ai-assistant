@@ -23,9 +23,8 @@ A non-Premium account will not.
 
 Music card -> Browse -> **Sources** tab -> YouTube Music shows an amber **Reconnect** -> tap -> a **QR** appears -> scan on a
 phone and sign in. The credential only touches the provider's own sign-in page; Zoe never sees it. This follows the standing
-rule that connecting an account hands off to the phone. Reconnecting is panel-only today: "connect youtube music" by voice
-replies "already connected" for a provider that needs attention and its card skips connected providers, so it offers no
-reconnect (recorded in [open-problems.md](open-problems.md)).
+rule that connecting an account hands off to the phone. Saying "connect youtube music" by voice answers honestly: a connected provider whose `needs_attention` is set gets "YouTube Music needs signing in again - open Music, then Sources on the panel, and tap Reconnect" (a first connect gets the matching "tap Connect" wording). The returned Skybridge QR card is NOT rendered on a voice turn, so the reply never promises a code. The tap path reconnects the existing instance in place; a free provider needing attention is refreshed in place. A healthy connected provider still answers "already connected". Opening the authCard QR directly from a voice turn is recorded in [open-problems.md](open-problems.md). Pinned by
+`services/zoe-data/tests/test_music_voice_reconnect.py`.
 
 ## Invariants (do not regress)
 
