@@ -711,3 +711,8 @@ Rows 1 (`--swa-full`) and 3a (`--cache-ram` re-sized to 1024) of the record's ra
 
 - The recorded baseline (2026-10-28) ran the probe with `--stt inprocess` (STT median 467 ms); landing probes run `--stt remote`, which sends STT to the LIVE zoe-data service. That service runs none of the PR's code, so an STT-only speed failure on a landing cannot be caused by the PR, yet it blocks it: one PR failed twice on STT alone (974 ms, 710 ms; brain and end-to-end were faster than baseline, 18/18 clips correct) while two other PRs in the same hour passed at ~540 ms.
 - Fix: re-record the baseline the way landings run (`--stt remote`, same pinned clips), or have the gate compare STT only when the probe ran it in-process. Until then, an STT-only failure on a landing is retried, not triaged as a regression.
+
+## Music: a voice reconnect should open the panel's authCard QR directly (2026-10-29)
+
+- "connect/reconnect <music service>" by voice now replies honestly ("open Music, then Sources on the panel, and tap Reconnect / Connect") because the returned Skybridge `_qr_card` is never rendered on a voice turn (`routers/voice_tts.py::_broadcast_skybridge_ui` sends cards + summary; `dist/js/touch-ui-executor.js` consumes only payload.type/data). The only working QR UI is `touch/home.html::authCard`, opened by tapping Connect/Reconnect on Browse -> Sources.
+- Fix: a voice-path change that navigates the panel to Browse -> Sources and opens `authCard` for the provider (replay-gated), so the code appears without a tap.

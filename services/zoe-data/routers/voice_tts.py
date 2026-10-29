@@ -1513,50 +1513,16 @@ async def _broadcast_calendar_ui(
         logger.debug("voice calendar ui enqueue failed (non-fatal): %s", exc)
 
 
-def _music_connect_target(skybridge_result: dict) -> Optional[tuple[str, str]]:
-    """(provider domain, display name) when a Skybridge result is the music
-    account-connect QR hand-off (first connect or reconnect), else None.
-
-    A voice turn never renders the returned QR card itself (the executor only
-    shows the summary text), so the panel is sent to Music -> Sources with
-    ``connect=<provider>`` and home.html opens its shared ``authCard`` there."""
-    intent = skybridge_result.get("intent") or {}
-    if (intent.get("domain"), intent.get("action")) != ("music", "setup"):
-        return None
-    for card in skybridge_result.get("cards") or []:
-        try:
-            content = card.get("content") or {}
-            if card.get("card_type") == "music_setup" and content.get("mode") == "qr" and content.get("provider"):
-                name = str(content.get("title") or "").removeprefix("Connect ").strip()
-                return str(content["provider"]), name or str(content["provider"])
-        except Exception:  # noqa: BLE001 - a malformed card just means no hand-off
-            continue
-    return None
-
-
-def _music_connect_honest_reply(skybridge_result: dict, delivered: Optional[bool], reply: str) -> str:
-    """The QR only appears if the panel got the navigation. For a music connect turn
-    anything short of a confirmed delivery (not pushed, or the enqueue failed) must not
-    promise a code that is not on a screen: say where to find it instead."""
-    if delivered is not True and _music_connect_target(skybridge_result):
-        return "I can't reach the panel screen right now. Open Music, then Sources, on the panel to sign in."
-    return reply
-
-
 async def _broadcast_skybridge_ui(
     panel_id: str,
     skybridge_result: dict,
     *,
     utterance: str = "",
     turn_key: Optional[str] = None,
-) -> Optional[bool]:
-    """Display a Skybridge result on the touch panel without routing to a domain page.
-
-    Returns whether the panel navigation was delivered over a live push (None when
-    there was nothing to deliver or the enqueue failed)."""
+) -> None:
+    """Display a Skybridge result on the touch panel without routing to a domain page."""
     if not skybridge_result or not skybridge_result.get("handled"):
-        return None
-    nav_delivered: Optional[bool] = None
+        return
     delivery_key = turn_key or str(time.monotonic_ns())
     # Voice lands on the ESTATE home with display-only params (heard/say/domain):
     # the estate shows the transcript + summary and opens the matching screen.
@@ -1564,13 +1530,7 @@ async def _broadcast_skybridge_ui(
     query = quote_plus(str(utterance or "")[:200])
     say = quote_plus(str(skybridge_result.get("spoken_summary") or "")[:300])
     domain = quote_plus(str((skybridge_result.get("intent") or {}).get("domain") or ""))
-    connect = ""
-    _mc = _music_connect_target(skybridge_result)
-    if _mc:
-        # Land on Browse -> Sources and open the QR there (home.html authCard).
-        domain = "music_sources"
-        connect = f"connect={quote_plus(_mc[0])}&cname={quote_plus(_mc[1][:60])}"
-    params = "&".join(p for p in (f"heard={query}" if query else "", f"say={say}" if say else "", f"domain={domain}" if domain else "", connect) if p)
+    params = "&".join(p for p in (f"heard={query}" if query else "", f"say={say}" if say else "", f"domain={domain}" if domain else "") if p)
     url = "/touch/home.html" + (f"?{params}" if params else "")
     cards = skybridge_result.get("cards") if isinstance(skybridge_result.get("cards"), list) else []
     summary = str(skybridge_result.get("spoken_summary") or "Showing this in Skybridge.")
@@ -1658,11 +1618,11 @@ async def _broadcast_skybridge_ui(
                     panel_id, _panel_user_id, _sup_exc,
                 )
             await _db.commit()
-            nav_delivered = bool(await broadcaster.broadcast(
+            nav_delivered = await broadcaster.broadcast(
                 _panel_channel(panel_id),
                 "ui_action",
                 {**nav_message, "payload": nav_payload},
-            ))
+            )
             # Keep the card queued. Navigating the old Skybridge page immediately
             # can unload the socket before a following show_card frame is handled;
             # the freshly loaded page will poll /api/ui/actions/pending and render it.
@@ -1684,8 +1644,6 @@ async def _broadcast_skybridge_ui(
             "voice skybridge ui_actions enqueue failed for panel=%s — skybridge card/navigate dropped (non-fatal): %s",
             panel_id, exc,
         )
-        return None
-    return nav_delivered
 
 
 def _parse_voice_form_field(text: str, panel_type: str) -> dict:
@@ -4472,13 +4430,12 @@ async def voice_command(
                 except Exception as _vs_card_exc:
                     logger.debug("voice/command private card failed (falls back to Skybridge UI): %s", _vs_card_exc)
             if not _vs_card_sent:
-                _sky_delivered = await _broadcast_skybridge_ui(
+                await _broadcast_skybridge_ui(
                     panel_id,
                     _skybridge_result,
                     utterance=text,
                     turn_key=_turn_key,
                 )
-                _skybridge_reply = _music_connect_honest_reply(_skybridge_result, _sky_delivered, _skybridge_reply)
             _bcast_dt = time.monotonic() - _bcast_t0
             _synth_t0 = time.monotonic()
             # In stream mode, /turn_stream synthesizes the reply sentence-by-

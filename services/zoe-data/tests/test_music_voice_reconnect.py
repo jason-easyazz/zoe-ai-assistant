@@ -2,7 +2,7 @@
 
 resolve_music_setup used to answer "already connected" for ANY configured
 provider, so an expired YouTube Music Premium sign-in could not be repaired by
-voice. Now a connected provider with `needs_attention` gets the QR hand-off and
+voice. Now a connected provider with `needs_attention` gets an honest "open Music, then Sources, tap Reconnect" reply (the QR card is not rendered on voice) and
 the phone's save reconnects the EXISTING instance in place (never a duplicate).
 A healthy connected provider still says "already connected".
 """
@@ -48,7 +48,8 @@ async def test_needs_attention_offers_qr_and_reconnects_in_place(monkeypatch):
 
     res = await music_service.resolve_music_setup("ytmusic")
     text = str(res)
-    assert "needs signing in again" in text and "scan the code on the panel" in text
+    assert "YouTube Music needs signing in again - open Music, then Sources on the panel, and tap Reconnect." in text
+    assert "scan the code" not in text  # the reply must not promise a code that voice never renders
     assert "already connected" not in text
     assert minted["token"], "a one-time QR token was not minted"
     assert "music-qr-ytmusic" in text  # the QR card, not the catalogue
@@ -83,7 +84,7 @@ async def test_not_connected_flow_unchanged(monkeypatch):
     _ma(monkeypatch, [], [])
     res = await music_service.resolve_music_setup("ytmusic")
     text = str(res)
-    assert "Scan the code to connect YouTube Music from your phone." in text
+    assert "To connect YouTube Music, open Music, then Sources on the panel, and tap Connect." in text
     assert "needs signing in again" not in text
 
 

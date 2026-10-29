@@ -1813,8 +1813,11 @@ async def resolve_music_setup(provider_query: str) -> dict[str, Any]:
     qr_path = music_setup.qr_path(minted["token"], match["domain"])
     # The phone's save (routers/music_setup.setup_save / music_oauth._run_flow) looks up
     # the existing instance itself, so a reconnect through this QR stays in place.
+    # The returned QR card is NOT rendered on a voice turn (only the summary is), so the
+    # reply must not promise a code: it points at the panel's Sources tab, whose Connect /
+    # Reconnect button opens the real QR (home.html authCard).
     if reconnect:
-        msg = f"{match['name']} needs signing in again - scan the code on the panel with your phone."
+        msg = f"{match['name']} needs signing in again - open Music, then Sources on the panel, and tap Reconnect."
     else:
-        msg = f"Scan the code to connect {match['name']} from your phone."
+        msg = f"To connect {match['name']}, open Music, then Sources on the panel, and tap Connect."
     return _result(msg, _qr_card(match["domain"], match["name"], qr_path), "setup")
