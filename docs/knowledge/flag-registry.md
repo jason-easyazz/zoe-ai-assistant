@@ -51,7 +51,7 @@ matching test red; removing each restores green (recorded in the PR).
 ## Scope limits
 
 Shell scripts and systemd `Environment=` lines set or default flags but are not scanned; `in os.environ` membership tests are
-not reads; a dynamically built name (`f"ZOE_{x}"`) is invisible. TS reads count (the live brain under `labs/flue-zoe-brain-2x`
+not reads; a dynamically built name (`f"ZOE_{x}"`, `"ZOE_" + x`, an `os.environ.items()` prefix scan) is invisible - the rules are a ratchet against accidental drift, not a defence against a deliberately hidden read; a reader that hard-codes no value (a bare `os.getenv("ZOE_X")`) asserts no default, so on its own it cannot contradict the registry; `divergent_ok` acknowledges a whole FILE, with the reason recorded beside it. TS reads count (the live brain under `labs/flue-zoe-brain-2x`
 and `services/zoe-core`: 44 flags are read from TS, 40 of them only from TS). Non-`ZOE_` names are inventoried (255; 75 are read by `services/`) but not registered.
 
 ## The 15 conflicting read defaults (decisions)

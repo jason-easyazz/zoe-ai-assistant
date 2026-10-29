@@ -664,11 +664,13 @@
       },
       "ZOE_BRAIN_URL": {
         "defaults": [
-          "'http://127.0.0.1:3579'"
+          "'http://127.0.0.1:3579'",
+          "'http://127.0.0.1:8000'"
         ],
         "in_env_example": false,
         "readers": [
-          "labs/flue-zoe-brain-2x/parity/flue_wire.py"
+          "labs/flue-zoe-brain-2x/parity/flue_wire.py",
+          "labs/flue-zoe-telegram-2x/src/brain.ts"
         ],
         "registered": true,
         "spec": {
@@ -704,7 +706,7 @@
       "ZOE_DATA_URL": {
         "defaults": [
           "'http://127.0.0.1:8000'",
-          "dynamic"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -3164,6 +3166,7 @@
       },
       "ZOE_CORE_MODEL_URL": {
         "defaults": [
+          "-",
           "dynamic"
         ],
         "in_env_example": false,
@@ -17567,6 +17570,7 @@
         "scripts/night/jobs/night_digest.py",
         "scripts/perf/measure_speed.py",
         "services/zoe-core/bench/pi_brain_latency.py",
+        "services/zoe-core/extensions/provider-local-gemma.ts",
         "services/zoe-data/gemma_endpoint.py",
         "services/zoe-data/memory_digest.py",
         "services/zoe-data/night_mind.py",

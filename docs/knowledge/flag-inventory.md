@@ -169,7 +169,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_CORE_MODEL_CONTEXT` | str | `''` | - | - | `-` | no | NO | `services/zoe-core/extensions/provider-local-gemma.ts` |
 | `ZOE_CORE_MODEL_ID` | str | `'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'` | - | `services/zoe-data/tests/AGENTS.md` | `'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'` | no | NO | `services/zoe-core/bench/pi_brain_latency.py`<br>`services/zoe-core/extensions/provider-local-gemma.ts`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_MODEL_MAXTOKENS` | str | `''` | - | - | `-` | no | NO | `services/zoe-core/extensions/provider-local-gemma.ts` |
-| `ZOE_CORE_MODEL_URL` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-core/bench/pi_brain_latency.py`<br>`services/zoe-core/extensions/provider-local-gemma.ts` |
+| `ZOE_CORE_MODEL_URL` | str | `''` | - | - | `-`, `dynamic` | no | NO | `services/zoe-core/bench/pi_brain_latency.py`<br>`services/zoe-core/extensions/provider-local-gemma.ts` |
 | `ZOE_CORE_PI_COMMAND` | str | `'pi'` | - | - | `'pi'` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_PROVIDER` | str | `'local-gemma'` | - | - | `'local-gemma'` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_SOUL_PATH` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-core/extensions/soul.ts` |
@@ -882,9 +882,9 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_TEMPERATURE` | str | `''` | - | `docs/research/inference-speech-stack-2026-10-03.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/providers/capped-completions.ts` |
 | `ZOE_BRAIN_TOKEN` | str | `''` | - | `docs/knowledge/self-model.md` | `''`, `-` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py`<br>`labs/flue-zoe-brain-2x/src/auth.ts` |
 | `ZOE_BRAIN_TOOL_TIMEOUT_MS` | str | `''` | - | - | `-` | no | NO | `labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts` |
-| `ZOE_BRAIN_URL` | str | `''` | - | - | `'http://127.0.0.1:3579'` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py` |
+| `ZOE_BRAIN_URL` | str | `''` | - | - | `'http://127.0.0.1:3579'`, `'http://127.0.0.1:8000'` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py`<br>`labs/flue-zoe-telegram-2x/src/brain.ts` |
 | `ZOE_BRAIN_USER_ID` | str | `''` | - | `docs/knowledge/user-model-ab.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/providers/capped-completions.ts`<br>`labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts` |
-| `ZOE_DATA_URL` | str | `'http://127.0.0.1:8000'` | - | `docs/research/telegram-calls-voice-photos-2026-10-04.md` | `'http://127.0.0.1:8000'`, `dynamic` | no | NO | `labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts`<br>`labs/flue-zoe-brain-2x/src/user-model.ts`<br>`labs/flue-zoe-telegram-2x/src/brain.ts` |
+| `ZOE_DATA_URL` | str | `'http://127.0.0.1:8000'` | - | `docs/research/telegram-calls-voice-photos-2026-10-04.md` | `'http://127.0.0.1:8000'`, `-` | no | NO | `labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts`<br>`labs/flue-zoe-brain-2x/src/user-model.ts`<br>`labs/flue-zoe-telegram-2x/src/brain.ts` |
 | `ZOE_ENV_FILE` | str | `'/home/zoe/assistant/services/zoe-data/.env'` | - | - | `dynamic` | no | NO | `labs/flue-executor/src/config.ts` |
 | `ZOE_EXECUTOR_DISPATCH` | str | `'dry'` | - | `docs/architecture/multica-executor-migration.md` | `'dry'` | no | NO | `labs/flue-executor/src/config.ts` |
 | `ZOE_EXECUTOR_MODE` | str | `'lab'` | - | `docs/architecture/multica-executor-migration.md` | `'lab'` | no | NO | `labs/flue-executor/src/config.ts` |
@@ -984,7 +984,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `FOLLOW_UP_MAX_TURNS` | `'5'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `FOLLOW_UP_VAD_THRESHOLD` | `'0.35'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `FORCE_FULL_CONTEXT` | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
-| `GEMMA_SERVER_URL` | `''`, `'http://127.0.0.1:11434'`, `'http://127.0.0.1:11434/v1'`, `-`, `dynamic` | no | NO | `scripts/maintenance/music_discovery_batch.py`<br>`scripts/maintenance/zoe-struggle-proposals.py`<br>`scripts/night/jobs/night_digest.py`<br>`scripts/perf/measure_speed.py`<br>`services/zoe-core/bench/pi_brain_latency.py`<br>`services/zoe-data/gemma_endpoint.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/ui_compose.py`<br>`services/zoe-data/zoe_agent.py` |
+| `GEMMA_SERVER_URL` | `''`, `'http://127.0.0.1:11434'`, `'http://127.0.0.1:11434/v1'`, `-`, `dynamic` | no | NO | `scripts/maintenance/music_discovery_batch.py`<br>`scripts/maintenance/zoe-struggle-proposals.py`<br>`scripts/night/jobs/night_digest.py`<br>`scripts/perf/measure_speed.py`<br>`services/zoe-core/bench/pi_brain_latency.py`<br>`services/zoe-core/extensions/provider-local-gemma.ts`<br>`services/zoe-data/gemma_endpoint.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/ui_compose.py`<br>`services/zoe-data/zoe_agent.py` |
 | `GITHUB_OUTPUT` | `-` | no | NO | `scripts/maintenance/voice_gate_check.py` |
 | `GITHUB_STEP_SUMMARY` | `-` | no | NO | `scripts/maintenance/pytest_junit_guard.py` |
 | `GREPTILE_API_KEY` | `-` | no | NO | `services/zoe-data/greptile_client.py` |

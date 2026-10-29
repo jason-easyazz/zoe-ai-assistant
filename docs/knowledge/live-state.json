@@ -757,7 +757,8 @@
   },
   "ZOE_CORE_MODEL_URL": {
    "defaults": [
-    "dynamic"
+    "dynamic",
+    "unset"
    ],
    "kind": "unknown",
    "readers": 2

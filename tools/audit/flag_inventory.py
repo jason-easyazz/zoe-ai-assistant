@@ -326,7 +326,7 @@ class _FlagVisitor(ast.NodeVisitor):
 
 _TS_READ_RE = re.compile(
     r"""process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\])"""
-    r"""(?P<tail>\s*(?:\?\?|\|\|)\s*(?P<lit>"[^"\n]*"|'[^'\n]*'|`[^`$\n]*`|-?\d[\d_]*(?:\.\d+)?|true\b|false\b|null\b|[^\s,;)\]]+))?"""
+    r"""(?P<tail>\s*(?:\?\?|\|\|)\s*(?!process\.env)(?P<lit>"[^"\n]*"|'[^'\n]*'|`[^`$\n]*`|-?\d[\d_]*(?:\.\d+)?|true\b|false\b|null\b|[^\s,;)\]]+))?"""
 )
 _TS_WRITE_RE = re.compile(r"\s*=(?!=)")
 

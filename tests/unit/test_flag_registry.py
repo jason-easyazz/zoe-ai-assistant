@@ -298,3 +298,16 @@ def test_sync_registry_adds_new_flags_without_touching_hand_edits(tmp_path):
     before = (repo / fi.REGISTRY_REL).read_text()
     assert fi.sync_registry(repo, fi.scan_repo(repo, files=files, registry={}), files) == []
     assert (repo / fi.REGISTRY_REL).read_text() == before
+
+
+def test_control_chained_typescript_env_reads_are_each_seen(tmp_path):
+    """``process.env.A ?? process.env.B ?? "x"``: the second read must not be swallowed as the first's fallback
+    (the shape ``labs/flue-zoe-telegram-2x/src/brain.ts`` already has)."""
+    repo = _make_repo(
+        tmp_path,
+        "    _f('ZOE_KNOWN', 'bool', False),",
+        **{"services/zoe-core/x.ts": 'const a = process.env.ZOE_TS_A ?? process.env.ZOE_TS_B ?? "x";\n'},
+    )
+    d = _scan(repo)
+    assert fi.unregistered_reads(d) == ["ZOE_TS_A", "ZOE_TS_B"]
+    assert d["flags"]["prod"]["ZOE_TS_B"]["defaults"] == ["'x'"]
