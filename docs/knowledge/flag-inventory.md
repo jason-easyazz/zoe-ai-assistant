@@ -130,7 +130,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_CAP_SELF_CAPS` | int | `2000` | - | - | `2000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_WEB_BROWSE` | int | `6000` | - | - | `6000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_WEB_RESEARCH` | int | `6000` | - | - | `6000` | yes | NO | `services/zoe-data/zoe_agent.py` |
-| `ZOE_CHANGE_NOTICES` | str | `'False'` | - | `docs/knowledge/change-notices.md` | `'off'` | yes | NO | `services/zoe-data/change_notices.py` |
+| `ZOE_CHANGE_NOTICES` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/change-notices.md` | `'off'` | yes | NO | `services/zoe-data/change_notices.py` |
 | `ZOE_CHANGE_NOTICES_INTERVAL_S` | int | `600` | - | `docs/knowledge/change-notices.md` | `600` | yes | NO | `services/zoe-data/change_notices.py` |
 | `ZOE_CHANGE_NOTICES_STALE_MIN` | int | `60` | - | `docs/knowledge/change-notices.md` | `60` | yes | NO | `services/zoe-data/change_notices.py` |
 | `ZOE_CHANGE_NOTICES_STATE_DIR` | str | `''` | - | - | `-` | yes | NO | `services/zoe-data/change_notices.py` |
@@ -514,13 +514,13 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_OMI_REVIEW_TELEGRAM` | str | `''` | - | `docs/knowledge/omi-day-review.md` | `-` | yes | NO | `services/zoe-data/omi_review_digest.py` |
 | `ZOE_OMI_REVIEW_TELEGRAM_HOUR` | int | `8` | - | `docs/knowledge/omi-day-review.md` | `8` | yes | NO | `services/zoe-data/omi_review_digest.py` |
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | int | `14` | - | `docs/knowledge/omi-voice-tagging.md` | `14` | yes | NO | `services/zoe-data/omi_voices.py` |
-| `ZOE_OMI_SPEAKER_TAG` | str | `'False'` | - | `docs/knowledge/omi-voice-tagging.md` | `'off'` | yes | NO | `services/zoe-data/omi_diarize.py` |
+| `ZOE_OMI_SPEAKER_TAG` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/omi-voice-tagging.md` | `'off'` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_SUGGEST_MARGIN` | float | `0.1` | - | `docs/knowledge/omi-voice-tagging.md` | `0.1` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_SUGGEST_MIN` | float | `0.45` | - | `docs/knowledge/omi-voice-tagging.md` | `0.45` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_SYNC_ENABLED` | bool | `False` | - | `docs/knowledge/omi-pendant-health.md` | `False` | yes | NO | `services/zoe-data/omi_recordings.py`<br>`services/zoe-data/panel_review_cards.py` |
 | `ZOE_OMI_TAG_MODEL_DIR` | str | `''` | - | `docs/knowledge/omi-voice-tagging.md` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
-| `ZOE_OMI_TAG_OTHER_MAX` | float | `0.0` | - | `docs/architecture/memories-space.md` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
-| `ZOE_OMI_TAG_YOU_MIN` | float | `0.0` | - | `docs/knowledge/omi-voice-tagging.md` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
+| `ZOE_OMI_TAG_OTHER_MAX` | float | `0.15` | - | `docs/architecture/memories-space.md` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
+| `ZOE_OMI_TAG_YOU_MIN` | float | `0.351` | - | `docs/knowledge/omi-voice-tagging.md` | `dynamic` | yes | NO | `services/zoe-data/omi_diarize.py` |
 | `ZOE_OMI_VOICEPRINT_IDLE_DAYS` | int | `0` | - | `docs/architecture/memories-space.md` | `0` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` | int | `0` | - | `docs/knowledge/omi-voice-tagging.md` | `0` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_VOICE_CLUSTER_MIN` | float | `0.45` | - | `docs/knowledge/omi-voice-tagging.md` | `0.45` | yes | NO | `services/zoe-data/omi_voices.py` |
@@ -725,8 +725,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_SPEAKER_ADAPT_MIN_SCORE` | float | `0.85` | - | `docs/research/speaker-resnet34-optimisation-2026-10.md` | `0.85` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ADAPT_MIN_SPEECH_S` | float | `2.0` | - | - | `2.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ADAPT_PIN_WINDOW_S` | float | `900.0` | - | - | `900.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
-| `ZOE_SPEAKER_ADAPT_RESNET34_ANCHOR_FLOOR` | float | `0.0` | - | - | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
-| `ZOE_SPEAKER_ADAPT_RESNET34_MIN_SCORE` | float | `0.0` | - | `docs/knowledge/speaker-resnet34-switch.md` | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_ADAPT_RESNET34_ANCHOR_FLOOR` | float | `0.45` | - | - | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_ADAPT_RESNET34_MIN_SCORE` | float | `0.342` | - | `docs/knowledge/speaker-resnet34-switch.md` | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_ID_THRESHOLD` | float | `0.82` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'0.82'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_SPEAKER_MODEL` | str | `'resemblyzer'` | - | `docs/knowledge/speaker-resnet34-switch.md` | `''`, `'resemblyzer'` | yes | yes | `scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/speaker_models.py`<br>`services/zoe-data/voice_session.py` |
 | `ZOE_SPEAKER_RESNET34_THRESHOLD_LONG` | float | `0.0` | - | - | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |

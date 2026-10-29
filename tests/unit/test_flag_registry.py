@@ -73,6 +73,9 @@ def test_registry_entries_are_well_formed():
             problems.append(f"{name}: list flag with default {s.default!r}")
         if s.type == "str" and not isinstance(s.default, str):
             problems.append(f"{name}: str flag with default {s.default!r}")
+        if s.type == "str" and s.default in ("True", "False"):
+            # a bool spelled as a string is a sync-inference slip: a mode flag ('off'|'shadow'|'on') would silently get 'False'
+            problems.append(f"{name}: str flag with the boolean-looking default {s.default!r} (declare bool, or the real mode default + allowed)")
         if s.allowed:
             if s.type != "str":
                 problems.append(f"{name}: allowed values only apply to str flags")
@@ -311,3 +314,18 @@ def test_control_chained_typescript_env_reads_are_each_seen(tmp_path):
     d = _scan(repo)
     assert fi.unregistered_reads(d) == ["ZOE_TS_A", "ZOE_TS_B"]
     assert d["flags"]["prod"]["ZOE_TS_B"]["defaults"] == ["'x'"]
+
+
+def test_control_a_registry_read_next_to_a_matching_legacy_read_is_not_a_conflict(tmp_path):
+    """Migrating one reader to ``typed_env.flag("X")`` (no default argument: the registry supplies it) must not turn a
+    flag whose legacy readers agree with the registry into an 'unset vs 5' conflict."""
+    repo = _make_repo(
+        tmp_path,
+        "    _f('ZOE_TIMEOUT', 'int', 5),",
+        **{
+            "services/zoe-data/a.py": 'from typed_env import env_int\nT = env_int("ZOE_TIMEOUT", 5)\n',
+            "services/zoe-data/b.py": 'from typed_env import flag\nT = flag("ZOE_TIMEOUT")\n',
+        },
+    )
+    d = _scan(repo)
+    assert "ZOE_TIMEOUT" not in d["conflicts"] and "ZOE_TIMEOUT" not in d["divergences"]

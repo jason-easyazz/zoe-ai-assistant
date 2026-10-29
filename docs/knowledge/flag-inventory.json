@@ -2417,8 +2417,12 @@
         ],
         "registered": true,
         "spec": {
-          "allowed": null,
-          "default": "False",
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/change-notices.md",
@@ -9885,8 +9889,12 @@
         ],
         "registered": true,
         "spec": {
-          "allowed": null,
-          "default": "False",
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/omi-voice-tagging.md",
@@ -9982,7 +9990,7 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": 0.0,
+          "default": 0.15,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/architecture/memories-space.md",
@@ -10001,7 +10009,7 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": 0.0,
+          "default": 0.351,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/omi-voice-tagging.md",
@@ -13965,7 +13973,7 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": 0.0,
+          "default": 0.45,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
@@ -13984,7 +13992,7 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": 0.0,
+          "default": 0.342,
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/speaker-resnet34-switch.md",
@@ -14050,7 +14058,7 @@
           "allowed": null,
           "default": 0.0,
           "divergent_ok": {},
-          "note": "",
+          "note": "NaN = no override: the reader falls back to the per-length table in speaker_models.py. 0.0 here is a PLACEHOLDER, not the effective default - do not migrate this read to flag().",
           "owner_doc": "",
           "type": "float"
         },
@@ -14069,7 +14077,7 @@
           "allowed": null,
           "default": 0.0,
           "divergent_ok": {},
-          "note": "",
+          "note": "NaN = no override: the reader falls back to the per-length table in speaker_models.py. 0.0 here is a PLACEHOLDER, not the effective default - do not migrate this read to flag().",
           "owner_doc": "docs/knowledge/speaker-resnet34-switch.md",
           "type": "float"
         },

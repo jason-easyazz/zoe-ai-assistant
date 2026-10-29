@@ -298,7 +298,10 @@ class _FlagVisitor(ast.NodeVisitor):
                     default = self._lits[default.id]
                 # ``environ.setdefault("X", v)`` SETS v for child processes: it is not a reader's default, so not comparable.
                 is_set = isinstance(node.func, ast.Attribute) and node.func.attr == "setdefault"
-                self._record(env, DYNAMIC if is_set else _literal_repr(default), typed)
+                # ``typed_env.flag("X")`` has no default argument ON PURPOSE: the registry supplies it, so by construction it cannot
+                # contradict the registry and must not be compared against the other readers as "unset".
+                registry_read = name == "flag" and default is None
+                self._record(env, DYNAMIC if (is_set or registry_read) else _literal_repr(default), typed)
                 if FLAG_RE.match(env):
                     self.on_read(env, node, name)
         self.generic_visit(node)
