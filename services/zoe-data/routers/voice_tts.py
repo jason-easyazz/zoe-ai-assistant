@@ -3492,6 +3492,11 @@ async def voice_command(
     Zoe routes the text through the chat pipeline and returns a JSON response
     with the reply text and synthesised audio (base64) so the Pi can play it back.
     """
+    try:  # read FIRST, before any await: a revoke that completes during this turn must win over its speaker note
+        import warm_speaker as _ws_mod
+        _ws_forget_epoch = _ws_mod.forget_epoch()
+    except Exception:  # noqa: BLE001 - the memo is a cache hint; no epoch = the old unconditional note
+        _ws_forget_epoch = None
     text = str((payload or {}).get("text", "")).strip()
     # SERVER-DECIDED identity (2026-10-18): the panel is the token's own (``_lane_panel_id``); ``identified_user_id`` counts only
     # on the internal PIN replay (``panel_auth.submit_pin``, source ``pin_resume``). Over HTTP it is a raw payload field: ignored.
@@ -3767,7 +3772,7 @@ async def voice_command(
         identified_user_id, _bound_user, _panel_recent_user,
         _scope_identity_user, _has_scope_identity,
     )
-    _note_voice_speaker(panel_id, _scope_identity_user)
+    _note_voice_speaker(panel_id, _scope_identity_user, epoch=_ws_forget_epoch)
     # The day review's raise / pull (day_review_raise, ZOE_DAY_REVIEW_RAISE, default OFF = returns at once): who THIS turn
     # identified and who else this panel heard, keyed by session for the brain lane's first-turn brief - the streaming brain
     # runs outside this task, so a ContextVar would not reach it. In-memory only; never raises.
@@ -6561,14 +6566,15 @@ async def voice_turn_stream_speculation(payload: dict, caller: dict = Depends(_r
 # on the guest envelope and the member's first turn re-prefilled ~1k tokens (2026-10-28).
 
 
-def _note_voice_speaker(panel_id: str, member: Optional[str]) -> None:
-    """Remember ``member`` as ``panel_id``'s likely next speaker (a real, server-verified member only)."""
+def _note_voice_speaker(panel_id: str, member: Optional[str], epoch: Optional[int] = None) -> None:
+    """Remember ``member`` as ``panel_id``'s likely next speaker (a real, server-verified member only). ``epoch`` is
+    ``warm_speaker.forget_epoch()`` read at the START of the turn: a forget during the turn makes this a no-op."""
     real = _real_user_or_none(member)
     if not panel_id or not real:
         return
     import warm_speaker
 
-    warm_speaker.note(panel_id, real)
+    warm_speaker.note(panel_id, real, epoch=epoch)
 
 
 def _brain_prewarm_on_wake_enabled() -> bool:

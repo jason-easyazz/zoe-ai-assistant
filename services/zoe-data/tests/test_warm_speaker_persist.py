@@ -264,6 +264,30 @@ def test_a_stalled_disk_never_piles_up_save_threads(state, monkeypatch):
     assert '"casey"' in state.read_text() and '"dana"' not in state.read_text(), "the last noted speaker is what lands"
 
 
+def test_a_turn_that_straddles_a_forget_cannot_note_the_member_back(state):
+    """An accepted turn reads the forget epoch when it starts; if the member is forgotten (consent revoked) while the
+    turn is still routing, its later note is dropped. A NEW turn after the forget may record the member again."""
+    ws.note("p1", "casey", now=T0, sync=True)
+    started = ws.forget_epoch()                 # the turn starts (claim accepted) ...
+    assert ws.forget_user("casey") == 1         # ... consent is revoked while it is still routing ...
+    ws.note("p1", "casey", now=T0 + 1, sync=True, epoch=started)   # ... then it resumes and notes the speaker
+    assert ws.get("p1", now=T0 + 2) == "" and "casey" not in state.read_text(), "a stale turn resurrected the member"
+    ws.note("p1", "casey", now=T0 + 3, sync=True, epoch=ws.forget_epoch())   # a newly verified turn after the forget
+    assert ws.get("p1", now=T0 + 4) == "casey"
+
+
+def test_voice_command_reads_the_forget_epoch_before_its_first_await_and_passes_it_to_the_note():
+    """Wiring: the epoch must be read before the turn awaits anything (claim, routing, panel lookup), or a revoke that
+    completes during those awaits would not be detected; and the speaker note must carry it."""
+    import inspect
+    from routers import voice_tts
+
+    src = inspect.getsource(voice_tts.voice_command)
+    read_at, first_await = src.find("_ws_mod.forget_epoch()"), src.find("await ")
+    assert read_at != -1 and (first_await == -1 or read_at < first_await)
+    assert "_note_voice_speaker(panel_id, _scope_identity_user, epoch=_ws_forget_epoch)" in src
+
+
 def test_corrupt_or_foreign_state_is_no_memo(state):
     state.write_text("{not json")
     ws.reset()

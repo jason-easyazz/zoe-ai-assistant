@@ -184,14 +184,29 @@ def _save(sync: bool) -> None:
     threading.Thread(target=_bg_saver, name="warm-speaker-save").start()
 
 
-def note(panel_id: str, member: str, *, now: "float | None" = None, sync: bool = False) -> None:
-    """Record ``member`` (server-verified by the caller) as ``panel_id``'s likely next speaker."""
+# Bumped by every forget. A voice turn reads it when it STARTS (forget_epoch()) and passes it to note(): a turn that
+# began before a forget finished cannot write that member back after it ("forgotten means forever"). A later, newly
+# verified turn reads the new epoch and records the member normally.
+_forget_epoch = 0
+
+
+def forget_epoch() -> int:
+    with _lock:
+        return _forget_epoch
+
+
+def note(panel_id: str, member: str, *, now: "float | None" = None, sync: bool = False,
+         epoch: "int | None" = None) -> None:
+    """Record ``member`` (server-verified by the caller) as ``panel_id``'s likely next speaker. ``epoch`` (from
+    ``forget_epoch()`` at the start of the turn) makes a note from a turn that straddled a forget a no-op."""
     try:
         m = (member or "").strip()
         if not panel_id or _nobody(m):
             return
         t = time.time() if now is None else float(now)
         with _lock:
+            if epoch is not None and epoch != _forget_epoch:
+                return                                  # a forget happened during this turn: never resurrect
             prev = _last_written.get(panel_id)
             _mem.pop(panel_id, None)
             _mem[panel_id] = (m, t)
@@ -227,7 +242,9 @@ def forget_user(member_id: str, *, sync: bool = True) -> int:
         if not m:
             return 0
         _ensure_loaded()
+        global _forget_epoch
         with _lock:
+            _forget_epoch += 1                          # in-flight turns that started before now can no longer note()
             gone = [k for k, (u, _) in _mem.items() if u == m]
             for k in gone:
                 _mem.pop(k, None)
