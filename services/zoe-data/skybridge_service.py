@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -93,6 +94,12 @@ class _TimerStore:
     def __init__(self) -> None:
         self._by_owner: dict[str, list[dict[str, Any]]] = {}
         self._loaded = False
+        # Disk writes (two fsyncs) run on ONE background worker, never on the event loop (services/zoe-data/AGENTS.md:
+        # no blocking main-thread I/O): a slow disk must not stall unrelated requests or voice streams. One worker =
+        # writes land in submission order, and every write is a full snapshot taken on the caller's thread, so the
+        # last submitted state always wins.
+        self._writer: "concurrent.futures.ThreadPoolExecutor | None" = None
+        self._last_write: "concurrent.futures.Future[None] | None" = None
 
     def _load(self) -> None:
         """Reload the snapshot ONCE per process, on first use (never at import). Expired timers are dropped."""
@@ -126,14 +133,32 @@ class _TimerStore:
         self._loaded = True  # only once the registry is complete (zoe-data is one asyncio worker; no await in here)
 
     def _save(self) -> None:
+        """Queue an atomic snapshot write. The JSON is built HERE (cheap, in memory, consistent with the registry at
+        this instant); only the file I/O moves to the single background writer."""
+        try:
+            payload = json.dumps({"by_owner": self._by_owner})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("timer store: could not serialise (%s)", type(exc).__name__)
+            return
+        if self._writer is None:
+            self._writer = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="timer-store")
+        self._last_write = self._writer.submit(self._write_snapshot, _timer_store_path(), payload)
+
+    def wait_saved(self, timeout: float = 5.0) -> None:
+        """Block until the most recent queued snapshot has been written (tests, shutdown)."""
+        fut = self._last_write
+        if fut is not None:
+            concurrent.futures.wait([fut], timeout=timeout)
+
+    @staticmethod
+    def _write_snapshot(path: Path, payload: str) -> None:
         """Atomic snapshot (tmp + rename, 0600). Best-effort: a full disk costs durability, never the timer itself."""
-        path = _timer_store_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")  # per-process: never a shared scratch name
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as fh:
-                json.dump({"by_owner": self._by_owner}, fh)
+                fh.write(payload)
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, path)

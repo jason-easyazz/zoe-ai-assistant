@@ -85,6 +85,7 @@ def test_panel_can_cancel_a_members_timer(monkeypatch):
 
 def test_timers_survive_a_restart():
     tid = _tid(create_timer_direct("jason", minutes=2))
+    _timers.wait_saved()     # the snapshot is written by the background writer, not on the event loop
     reborn = _TimerStore()  # a fresh process: nothing in memory
     assert [x["timer_id"] for x in reborn.list("jason")] == [tid]
 
@@ -94,8 +95,10 @@ def test_expired_timer_is_not_resurrected_and_cancel_persists():
     gone = store.create("jason", "old", 1)
     gone["expires_at"] = time.time() - 5
     kept = store.create("jason", "keep", 600)  # create() saves, expired one is pruned on the way
+    store.wait_saved()
     assert [t["timer_id"] for t in _TimerStore().list("jason")] == [kept["timer_id"]]
     store.cancel_by_id("jason", kept["timer_id"])
+    store.wait_saved()
     assert _TimerStore().list("jason") == []
 
 
@@ -241,3 +244,28 @@ def test_kiosk_dismiss_acknowledges_every_timer_that_rang_before_it():
     out = subprocess.run([node, "-e", _ALARM_HARNESS, path], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout.strip().splitlines()[-1]) == ["t1", "t2"]
+
+
+def test_a_slow_disk_never_blocks_the_caller(monkeypatch):
+    """Timer writes (two fsyncs) run on the store's single background writer, never on the event loop
+    (services/zoe-data/AGENTS.md: no blocking main-thread I/O). A disk that takes 1 s per write must not make
+    create() take 1 s, and the write still lands, in order."""
+    import threading
+    gate = threading.Event()
+    real_fsync = os.fsync
+
+    def slow_fsync(fd):
+        gate.wait(2.0)                  # the "disk" is stuck until the test releases it
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", slow_fsync)
+    store = _TimerStore()
+    t0 = time.monotonic()
+    a = store.create("jason", "first", 300)
+    b = store.create("jason", "second", 600)
+    elapsed = time.monotonic() - t0
+    gate.set()
+    store.wait_saved()
+    assert elapsed < 0.5, f"create() blocked on the disk for {elapsed:.2f}s"
+    ids = [t["timer_id"] for t in _TimerStore().list("jason")]
+    assert ids == [a["timer_id"], b["timer_id"]]   # the later snapshot won: both timers are on disk
