@@ -2398,6 +2398,10 @@ def _remember_smart_home_target(intent: "SkybridgeIntent", out: dict[str, Any]) 
     target is what the resolver actually SELECTED (``out["controlled_entities"]`` - the room-disambiguated light, the fuzzy match),
     never the words of the command: a follow-up must switch the very device that was switched."""
     ctx = out.get("skybridge_context")
+    if out.get("handled") and isinstance(ctx, dict) and intent.action == "clarify_state" and intent.query:
+        # "turn the bedroom lamp" -> "On or off?": the NAMED device waits for the one-word answer ("on" / "turn it on").
+        ctx[_SMART_HOME_TARGET_KEY] = {"action": "clarify_state", "query": intent.query, "entity_ids": [], "ts": time.time()}
+        return
     entities = [str(e) for e in out.get("controlled_entities") or [] if e]
     if out.get("handled") and isinstance(ctx, dict) and intent.action in ("turn_on", "turn_off") and entities:
         ctx[_SMART_HOME_TARGET_KEY] = {
@@ -2408,12 +2412,17 @@ def _remember_smart_home_target(intent: "SkybridgeIntent", out: dict[str, Any]) 
 def _smart_home_followup_intent(raw_message: str, context: dict[str, Any] | None) -> "SkybridgeIntent | None":
     """A bare pronoun command ("turn it back on again", "switch them off", "turn it back") about the device just controlled."""
     mem = context.get(_SMART_HOME_TARGET_KEY) if isinstance(context, dict) else None
-    if not isinstance(mem, dict) or mem.get("action") not in ("turn_on", "turn_off"):
+    if not isinstance(mem, dict) or mem.get("action") not in ("turn_on", "turn_off", "clarify_state"):
         return None
-    from conversation_cues import smart_home_followup, smart_home_followup_ttl_s
+    from conversation_cues import smart_home_followup, smart_home_followup_ttl_s, smart_home_state_answer
 
     if time.time() - float(mem.get("ts") or 0.0) > smart_home_followup_ttl_s():
         return None
+    if mem.get("action") == "clarify_state":
+        answer = smart_home_state_answer(raw_message)
+        if answer is None or not mem.get("query"):
+            return None
+        return SkybridgeIntent(domain="smart_home", action="turn_on" if answer == "on" else "turn_off", query=str(mem["query"]))
     verdict = smart_home_followup(raw_message)
     if verdict is None:
         return None

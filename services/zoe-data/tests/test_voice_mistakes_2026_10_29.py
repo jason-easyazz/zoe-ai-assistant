@@ -29,10 +29,8 @@ pytestmark = pytest.mark.ci_safe
 
 # ── 1. continuation follows the previous domain ──────────────────────────────
 @pytest.fixture(autouse=True)
-def _clean_continuation_state():
-    turn_continuation._LAST.clear()
-    yield
-    turn_continuation._LAST.clear()
+def _clean_continuation_state(monkeypatch):
+    monkeypatch.setattr(turn_continuation, "_LAST", {})
 
 
 def _decision(routed, tool=None):
@@ -396,3 +394,20 @@ def test_oes_plurals_match_their_singular():
         assert list_service.item_key(plural) == list_service.item_key(single)
         assert list_service.find_matching_item([{"text": single}], plural) is not None
     assert list_service.item_key("shoes") == "shoe", "only the known -oes foods lose the 'es'"
+
+
+# ── "turn the bedroom lamp" -> "On or off?" -> "on" ─────────────────────────
+def test_on_or_off_answer_completes_the_named_device():
+    import skybridge_service as sb
+    from skybridge_service import SkybridgeIntent
+
+    asked = SkybridgeIntent(domain="smart_home", action="clarify_state", query="bedroom lamp")
+    out = {"handled": True, "skybridge_context": {}}
+    sb._remember_smart_home_target(asked, out)
+    for said, action in (("on", "turn_on"), ("turn it on", "turn_on"), ("off please", "turn_off"), ("switch it off", "turn_off")):
+        got = sb._smart_home_followup_intent(said, out["skybridge_context"])
+        assert got is not None and got.action == action and got.query == "bedroom lamp", said
+    for said in ("on the table", "turn it on and play jazz", "what time is it"):
+        assert sb._smart_home_followup_intent(said, out["skybridge_context"]) is None, said
+    out["skybridge_context"][sb._SMART_HOME_TARGET_KEY]["ts"] -= 3600       # stale: no longer the pending question
+    assert sb._smart_home_followup_intent("on", out["skybridge_context"]) is None

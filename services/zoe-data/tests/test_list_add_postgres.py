@@ -30,6 +30,14 @@ async def world(monkeypatch):
     conns = [await asyncpg.connect(URL) for _ in range(3)]
     await conns[0].execute("INSERT INTO users (id, name) VALUES ($1, 'pg test')", uid)
     receipts = []
+
+    # Resolve ONLY this test's own list (by owner + random name): the real resolver prefers any family-visible list of the type,
+    # which in a scratch database that already has data would send these adds into an unrelated list.
+    async def own_list_only(db, *, user_id, list_type, name):
+        row = await db.fetchrow("SELECT id FROM lists WHERE user_id=$1 AND name=$2 AND deleted=0 LIMIT 1", user_id, name)
+        return row["id"] if row else None
+
+    monkeypatch.setattr(list_service, "find_list_id", own_list_only)
     monkeypatch.setattr(list_service.write_receipts, "record", lambda *a, **k: receipts.append(a))
     dbs = [db_pool.AsyncpgCompat(c) for c in conns]
     yield type("W", (), {"uid": uid, "name": name, "conns": conns, "dbs": dbs, "receipts": receipts})
