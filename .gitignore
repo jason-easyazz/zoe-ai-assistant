@@ -482,6 +482,8 @@ modules/omnigent/wheels/
 # The ResNet34 speaker embedder's PUBLIC artifacts (cohort centring vector from LibriSpeech, self-test reference of a synthetic signal):
 # the panel daemon refuses to run without it, so it must be tracked. No voiceprint, no household data.
 !scripts/setup/zoe_speaker_resnet34_artifacts.json
+# the memory writer-map role notes - plain data read by a ci_safe test, no secrets
+!docs/knowledge/memory-writer-notes.json
 
 # Relay listener (panel-anywhere R1): the household CA / leaf and the rendered nginx listener live on the box only.
 ssl/relay/
