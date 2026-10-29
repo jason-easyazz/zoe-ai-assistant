@@ -8,7 +8,7 @@ timestamp: 2026-10-13T00:00:00Z
 
 # The ResNet34 speaker-model switch
 
-**Status: built, FLAG-DARK. Nothing changes live until the owner re-enrols and flips the flag.** With `ZOE_SPEAKER_MODEL` unset
+**Status (re-read 2026-10-29): the running zoe-data process has `ZOE_SPEAKER_MODEL=resnet34` - the flip happened; the build text below describes the original flag-dark rollout.** Original status: built, FLAG-DARK; nothing changed live until the owner re-enrolled and flipped the flag. With `ZOE_SPEAKER_MODEL` unset
 (= `resemblyzer`) the panel imports nothing new, makes the sync request it always made, writes the shadow rows it always wrote, and the
 server serves only Resemblyzer profiles. The spec is the measured record
 [speaker-resnet34-optimisation-2026-10.md](../research/speaker-resnet34-optimisation-2026-10.md) (bake-off:

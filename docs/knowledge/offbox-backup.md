@@ -247,7 +247,7 @@ Every cap is at least 1.3 x peak (`tests/unit/test_ops_hygiene_b9.py`); the valu
 
 ## 7. Host sources, the weekly restore drill, local encryption (deep dive 2 S0-8, 2026-10-19)
 
-Source: [deep dive 2](../research/architecture-deep-dive-2-2026-10-19.md) section 10 (S0-8) and lane J section 6.3 (what a
+Source: deep dive round 2 (PR #2123, not yet on main) section 10 (S0-8) and lane J section 6.3 (what a
 dead disk lost even with this backup installed). Nothing here is installed live: scripts, templates and owner steps.
 
 ### 7.1 Sources added, to BOTH copies
