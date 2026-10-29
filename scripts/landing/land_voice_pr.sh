@@ -110,5 +110,12 @@ NOWHEAD=$(gh pr view "$PR" --json headRefOid --jq .headRefOid); [ "$NOWHEAD" != 
 MS=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus); case "$MS" in BEHIND|DIRTY) log "mergeState=$MS after the probe - NOT arming (an update-branch would move the head past its probe, sig #36); re-queue"; exit 5;; esac
 # last look before arming: the PR must still be a non-draft (it was checked at the top; a convert-to-draft since then is the owner pulling it back)
 [ "$(gh pr view "$PR" --json isDraft --jq .isDraft 2>/dev/null)" = false ] || { log "PR is a draft (or unreadable) at arm time - NOT arming (exit 6)"; exit 6; }
+# Never leave a voice PR armed behind this process: --match-head-commit only binds the request, a later writer push would keep the arm and merge an
+# unprobed head. So any exit after arming while the PR is not MERGED disarms (EXIT trap), and the wait below disarms the instant the head moves.
+trap 'systemctl --user start kokoro-tts.service >/dev/null 2>&1; [ "${ARMED:-0}" = 1 ] && landing_disarm_unless_merged "$PR"' EXIT
+ARMED=1
 gh pr merge "$PR" --squash --auto --match-head-commit "$HEAD_SHA" >/dev/null 2>&1 && log "auto-merge armed (bound to the probed head ${HEAD_SHA:0:8}: a later push cannot merge unprobed)"
-for i in $(seq 1 180); do s=$(gh pr view "$PR" --json state --jq .state); [ "$s" = MERGED ] && break; [ "$(left)" -gt 120 ] || { log "night deadline reached - leaving; the merge stays armed on the probed head"; break; }; sleep 10; done; if [ "$s" != MERGED ]; then NOW=$(gh pr view "$PR" --json headRefOid,mergeStateStatus --jq "\"\(.headRefOid) \(.mergeStateStatus)\""); set -- $NOW; if [ "$1" = "$HEAD_SHA" ] && [ "$2" = BLOCKED ]; then log "not merged yet - required checks still running on the PROBED head; arm kept (head unchanged)"; else gh pr merge "$PR" --disable-auto >/dev/null 2>&1; log "not merged - head/mergeState=$2 - auto-merge DISARMED (voice-gate is not a required check; a later push would merge unprobed, sig #36)"; fi; fi; log "state: $s $(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)"
+landing_wait_merged "$PR" "$HEAD_SHA"; WAIT_RC=$?
+[ "$WAIT_RC" = 5 ] && { log "head moved after arming - auto-merge DISARMED at once; re-queue (exit 5)"; exit 5; }
+[ "$WAIT_RC" = 0 ] || log "not merged within the wait - auto-merge DISARMED (the voice loop re-queues it; never left armed)"
+log "state: $(gh pr view "$PR" --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"')"
