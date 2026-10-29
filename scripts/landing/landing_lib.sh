@@ -88,8 +88,12 @@ landing_run_watching_head(){
 #   Every other rc keeps today's behaviour: back in the queue.
 landing_requeue_decision(){
   local pr=$1 rc=${2:-} head key marks="$LANDING_HOME/voice-probe-retried.txt"
+  if [ "$rc" = 11 ]; then echo drop; return; fi   # parked head already: do not run it again
   if [ "$rc" != 4 ]; then echo requeue; return; fi
   head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null); key="$pr:${head:0:12}"
+  # an artifact for an OLDER head means a push landed after the failed probe: the new head is untested, not failed - requeue it
+  local arev; arev=$(python3 -c 'import json,sys;print((json.load(open(sys.argv[1])).get("revision") or {}).get("commit","")[:8])' "$LANDING_ARTIFACT_DIR/$pr.json" 2>/dev/null)
+  if [ -n "$arev" ] && [ "$arev" != "${head:0:8}" ]; then echo requeue; return; fi
   # the per-PR snapshot the lander took right after ITS probe (the shared artifact slot belongs to whichever probe ran last)
   if landing_probe_speed_only "$LANDING_ARTIFACT_DIR/$pr.json" "$head" && ! grep -qxF "$key" "$marks" 2>/dev/null; then
     echo "$key" >> "$marks"; echo retry-once
@@ -97,6 +101,9 @@ landing_requeue_decision(){
     echo "$key" >> "$LANDING_HOME/probe-failed-heads.txt"; echo park-probe-failed
   fi
 }
+
+# landing_probe_timeout <seconds-left>: wall-clock cap for the probe command = time left minus a 120 s cleanup margin (floor 60).
+landing_probe_timeout(){ if [ "$1" -gt 180 ]; then echo $(( $1 - 120 )); else echo 60; fi; }
 
 # landing_head_parked <pr>: 0 when the PR's CURRENT head was parked after a non-retryable probe fail (autoland must not refill it).
 landing_head_parked(){
@@ -125,6 +132,7 @@ landing_probe_window(){
   exec 8>"${ZOE_TEST_LANE_LOCK:-/tmp/zoe-test-lane.lock}"
   flock -x -w "$wait_s" 8 || { exec 8>&-; return 9; }
   # the lane wait can eat the whole budget: re-validate (night gate + probe time left) BEFORE Kokoro is touched
+  [ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)" = "$head" ] || { flock -u 8; exec 8>&-; return 9; }   # a push during the lock waits: do not silence Zoe for a stale head
   if declare -F landing_pre_stop >/dev/null && ! landing_pre_stop; then flock -u 8; exec 8>&-; return 9; fi
   systemctl --user stop kokoro-tts.service
   if [ "${ZOE_LANDING_SETTLE_S:-15}" != 0 ]; then

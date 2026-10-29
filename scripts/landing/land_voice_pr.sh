@@ -87,7 +87,7 @@ need_probe_time "holding the brain lock"
 # 2026-10-29: the TEST-LANE lock is taken BEFORE Kokoro is stopped (landing_probe_window, landing_lib.sh): flock is not FIFO, agents' test runs
 # kept winning the lane and the probe waited 60+ min with Kokoro already stopped = Zoe mute in the daytime. A lane not won in time = exit 9, Kokoro untouched.
 landing_pre_stop(){ ! bash "$LANDING_DIR/night_busy.sh" voice && [ "$(left)" -ge 900 ]; }   # re-run after the lane wait
-run_probe(){ flock -w 120 /tmp/zoe-voice-harness.lock nice -n 5 "$LANDING_PYTHON" scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote --service-dir "$PWT/services/zoe-data" </dev/null 8>&- 2>&1 | grep -E 'probe —|medians|status=|SKIP|ERROR' | cut -c1-200; }
+run_probe(){ flock -w 120 /tmp/zoe-voice-harness.lock timeout -k 20 "$(landing_probe_timeout "$(left)")" nice -n 5 "$LANDING_PYTHON" scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote --service-dir "$PWT/services/zoe-data" </dev/null 8>&- 2>&1 | grep -E 'probe —|medians|status=|SKIP|ERROR' | cut -c1-200; }
 # 2026-10-29: the probe runs under a head watcher - a push mid-probe aborts it at once (rc 75) instead of finishing a 15-45 min run whose artifact is for a dead head.
 PROBE_T0=$(date +%s)
 landing_probe_window $(( $(left) - 900 > 60 ? $(left) - 900 : 60 )) "$PR" "$HEAD_SHA" run_probe; PROBE_RC=$?

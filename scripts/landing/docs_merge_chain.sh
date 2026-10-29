@@ -16,12 +16,13 @@ for PR in "$@"; do
     [ -e "$HOME/.zoe/night-window/WINDOW_OPEN" ] && { log "#$PR night window open (WINDOW_OPEN) - chain paused, no update/arm until it closes"; sleep 120; continue; }
     landing_is_held "$PR" && { log "#$PR went on HOLD - skipping"; break; }
     bash "$LANDING_DIR/night_busy.sh" deploy && { log "deploy pause (night_busy deploy) - chain paused, no update/arm"; sleep "$NIGHT_S"; continue; }
-    st=$(gh pr view "$PR" --json state,mergeStateStatus,autoMergeRequest,isDraft --jq '"\(.state) \(.mergeStateStatus) \(.autoMergeRequest!=null) \(.isDraft)"'); set -- $st; state=$1; ms=$2; armed=$3; draft=${4:-unknown}
+    st=$(gh pr view "$PR" --json state,mergeStateStatus,autoMergeRequest,isDraft --jq '"\(.state) \(.mergeStateStatus) \(.autoMergeRequest!=null) \(.isDraft) \(.headRefOid)"'); set -- $st; state=$1; ms=$2; armed=$3; draft=${4:-unknown}; head=${5:-}
     [ "$state" = MERGED ] && { log "#$PR MERGED"; break; }
     [ "$state" = CLOSED ] && { log "#$PR CLOSED"; break; }
     [ "$draft" != false ] && { log "#$PR is a draft (or unreadable) - not touching it"; break; }
     # the scope is re-read on EVERY pass (a push can add a voice file after autoland classified the PR): only CLEAR proceeds, anything else goes to the voice lander
-    gh pr view "$PR" --json files --jq '.files[].path' > "$LANDING_HOME/logs/chain-files-$PR.txt" 2>/dev/null
+    # an unreadable or EMPTY file list would classify as CLEAR: treat it as unknown and skip this pass
+    { gh pr view "$PR" --json files --jq '.files[].path' > "$LANDING_HOME/logs/chain-files-$PR.txt" 2>/dev/null && [ -s "$LANDING_HOME/logs/chain-files-$PR.txt" ]; } || { log "#$PR changed-file list unreadable - skipping this pass"; sleep "$STEP_S"; continue; }
     scope=$(cd "$LANDING_REPO" && python3 scripts/maintenance/voice_gate_check.py --scope-only --changed-files-from "$LANDING_HOME/logs/chain-files-$PR.txt" 2>&1 | grep -o 'scope: [A-Z]*' | awk '{print $2}')
     [ "$scope" = CLEAR ] || { log "#$PR voice scope is '${scope:-unreadable}', not CLEAR - leaving it to the voice lander"; break; }
     unres=$(landing_unresolved_count "$PR" || echo 99)
@@ -33,7 +34,7 @@ for PR in "$@"; do
       if RESOLVE_BEHIND=1 $P_RESOLVE "$PR"; then updated=$((updated+1)); log "#$PR branch updated locally + inventory regenerated (#$updated)"; sleep "$STEP_S"; continue; fi
       gh pr update-branch "$PR" >/dev/null 2>&1 && { updated=$((updated+1)); log "#$PR branch updated (#$updated)"; sleep "$STEP_S"; continue; }
     fi
-    if [ "$armed" = false ] && [ "$pend" = 0 ] && [ "$(gh pr view "$PR" --json isDraft --jq .isDraft 2>/dev/null)" = false ]; then gh pr merge "$PR" --squash --auto >/dev/null 2>&1 && log "#$PR auto-merge armed (threads 0, required checks green)"; fi
+    if [ "$armed" = false ] && [ "$pend" = 0 ] && [ "$(gh pr view "$PR" --json isDraft --jq .isDraft 2>/dev/null)" = false ]; then gh pr merge "$PR" --squash --auto ${head:+--match-head-commit "$head"} >/dev/null 2>&1 && log "#$PR auto-merge armed (threads 0, required checks green)"; fi
     sleep "$STEP_S"
   done
 done; log "CHAIN DONE"

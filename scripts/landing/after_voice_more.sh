@@ -17,6 +17,7 @@ while true; do
     case "$(landing_requeue_decision "$pr" "$rc")" in
       park-probe-failed) echo "$pr $rest" >> "$P/probe-failed.txt"; echo "[$(date '+%F %T')] voice-loop #$pr PARKED: probe NOT PASS and not retryable (probe-failed.txt) - not retried" >> "$LANDING_LOG";;
       retry-once) echo "[$(date '+%F %T')] voice-loop #$pr speed-only probe fail - ONE automatic re-queue" >> "$LANDING_LOG"; echo "$pr $rest" >> "$P/voice-pending.txt";;
+      drop) :;;
       *) echo "$pr $rest" >> "$P/voice-pending.txt";;
     esac
   done < "$P/queue-voice-batch.txt"
