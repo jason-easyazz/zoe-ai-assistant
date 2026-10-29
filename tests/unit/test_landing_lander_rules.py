@@ -207,7 +207,7 @@ def test_speed_only_probe_fail_is_requeued_once_per_head(rig):
     assert decide(rig) == "retry-once"
     assert decide(rig) == "park-probe-failed"             # same head, second fail -> a human
     prs(rig, headRefOid="c" * 40)                         # a new push earns one more automatic retry...
-    assert decide(rig) == "park-probe-failed"             # ...but only on an artifact FOR that head (the old one is stale)
+    assert decide(rig) == "requeue"                       # ...an artifact for the OLD head says nothing about the new, untested one
     snapshot(rig, head="c" * 40, **SPEED_ONLY)
     assert decide(rig) == "retry-once"
 

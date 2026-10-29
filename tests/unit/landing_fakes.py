@@ -44,6 +44,8 @@ def pr_of(n):
 
 if argv[:2] == ["pr", "view"]:
     p = pr_of(argv[2])
+    if state.get("files_fail") and "files" in (opt("--json") or ""):
+        sys.exit(1)
     if state.get("pr_view_fails"):
         sys.exit(1)
     emit({

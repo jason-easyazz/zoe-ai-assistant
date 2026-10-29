@@ -11,6 +11,7 @@ RESULTS="$LANDING_HOME/last-results.txt"; : > "$RESULTS"
 while read -r pr wt br title; do
   [ -z "$pr" ] && continue
   if landing_is_held "$pr"; then log "#$pr on a hold list - not spawning a lander"; echo "$pr 10" >> "$RESULTS"; continue; fi
+  if landing_head_parked "$pr"; then log "#$pr head is parked (probe-failed-heads.txt) - not spawning a lander"; echo "$pr 11" >> "$RESULTS"; continue; fi
   if bash "$LANDING_DIR/night_busy.sh" voice; then log "#$pr night pause - not spawning a lander"; echo "$pr 9" >> "$RESULTS"; continue; fi
   log "=== #$pr"
   out=$(bash "$LANDING_DIR/land_voice_pr.sh" "$pr" "$wt" "$br" "$title" </dev/null 2>&1); rc=$?
