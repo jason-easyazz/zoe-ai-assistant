@@ -49,6 +49,7 @@ case "$1" in
   */scripts/perf/samantha_*.py)
     echo "$1" >> "$HARNESS_STARTED"; echo "$*" >> "$HARNESS_ARGS"
     [ -f "${1%/scripts/perf/*}/labs/flue-zoe-brain-2x/dist/server.mjs" ] && echo linked >> "$HARNESS_FLUE"
+    git -C "${1%/scripts/perf/*}" status --porcelain >> "$HARNESS_STATUS"
     exit 0 ;;
 esac
 exec "$REAL_PY" "$@"
@@ -82,7 +83,9 @@ def _run(tmp_path: Path, start: str, after_lock: str, stale_build: bool = False)
     flue = live / "labs" / "flue-zoe-brain-2x"
     flue.mkdir(parents=True)
     (flue / "package.json").write_text("{}\n")
-    _git("add", "a.txt", "labs/flue-zoe-brain-2x/package.json", cwd=live)
+    (flue / "src").mkdir()
+    (flue / "src" / "brain.ts").write_text("export {}\n")
+    _git("add", "a.txt", "labs/flue-zoe-brain-2x/package.json", "labs/flue-zoe-brain-2x/src/brain.ts", cwd=live)
     _git("commit", "-q", "-m", "c", cwd=live)
     fake = tmp_path / "bin"
     fake.mkdir()
@@ -92,8 +95,11 @@ def _run(tmp_path: Path, start: str, after_lock: str, stale_build: bool = False)
     _exe(fake / "timeout", _FAKE_TIMEOUT)
     (flue / "dist").mkdir()                       # the gitignored sidecar build a fresh clone does not have
     (flue / "dist" / "server.mjs").write_text("//\n")
-    if stale_build:                               # a source file newer than the build: a failed rebuild
+    if stale_build is True:                       # a source file newer than the build: a failed rebuild
         os.utime(flue / "dist" / "server.mjs", (1, 1))
+    elif stale_build == "dirty":                  # a FRESH build of uncommitted sources
+        (flue / "src" / "brain.ts").write_text("export const x = 1\n")
+        os.utime(flue / "dist" / "server.mjs", (4102444800, 4102444800))
     state = tmp_path / "state"
     state.write_text(start)
     started = tmp_path / "started"
@@ -102,7 +108,7 @@ def _run(tmp_path: Path, start: str, after_lock: str, stale_build: bool = False)
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home), "ZOE_ASSISTANT_ROOT": str(live),
            "FAKE_STATE": str(state), "FAKE_AFTER_LOCK": after_lock, "HARNESS_STARTED": str(started),
            "REAL_PY": sys.executable, "TMPDIR": str(tmp_path),
-           "HARNESS_ARGS": str(tmp_path / "args"), "HARNESS_FLUE": str(tmp_path / "flue"), "TIMEOUT_ARGS": str(tmp_path / "timeout")}
+           "HARNESS_ARGS": str(tmp_path / "args"), "HARNESS_FLUE": str(tmp_path / "flue"), "HARNESS_STATUS": str(tmp_path / "status"), "TIMEOUT_ARGS": str(tmp_path / "timeout")}
     before = _git("status", "--porcelain=v1", "--ignored", cwd=live), sorted(p.name for p in live.iterdir())
     res = subprocess.run(["bash", str(_SCRIPT)], env=env, capture_output=True, text=True, timeout=120)
     after = _git("status", "--porcelain=v1", "--ignored", cwd=live), sorted(p.name for p in live.iterdir())
@@ -166,3 +172,19 @@ def test_a_flue_build_older_than_its_sources_is_not_linked(tmp_path):
     res, started, live_untouched = _run(tmp_path, start="day", after_lock="day", stale_build=True)
     assert "older than its sources" in res.stderr
     assert not (tmp_path / "flue").exists(), "a stale sidecar build was linked into the clone"
+
+
+@needs_git
+def test_a_fresh_build_of_uncommitted_sources_is_not_linked(tmp_path):
+    res, started, live_untouched = _run(tmp_path, start="day", after_lock="day", stale_build="dirty")
+    assert "not linked" in res.stderr
+    assert not (tmp_path / "flue").exists(), "a build of uncommitted live sources was linked into a 'clean' clone"
+
+
+@needs_git
+def test_the_clone_stays_clean_with_the_links_in_place(tmp_path):
+    # --record-baseline needs a clean clone; dist/ and node_modules/ in .gitignore do not match symlinks
+    res, started, live_untouched = _run(tmp_path, start="day", after_lock="day")
+    assert res.returncode == 0, (res.stdout, res.stderr)
+    assert (tmp_path / "flue").exists()
+    assert (tmp_path / "status").read_text() == "", (tmp_path / "status").read_text()

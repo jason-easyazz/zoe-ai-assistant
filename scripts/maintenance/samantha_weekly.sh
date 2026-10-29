@@ -93,12 +93,16 @@ FLUE_REL="labs/flue-zoe-brain-2x"
 # Only when the build is NEWER than every source file it is built from (a failed rebuild after the checkout advanced would
 # otherwise score old JavaScript under the new tree's name): a stale build is not linked and the scratch stack refuses.
 if [ -f "$LIVE/$FLUE_REL/dist/server.mjs" ] && [ -d "$WORK/repo/$FLUE_REL" ] \
+   && [ -z "$(git -C "$LIVE" status --porcelain -- "$FLUE_REL/src" "$FLUE_REL/package.json" "$FLUE_REL/package-lock.json")" ] \
    && [ -z "$(find "$LIVE/$FLUE_REL/src" "$LIVE/$FLUE_REL/package.json" "$LIVE/$FLUE_REL/package-lock.json" \
               -type f -newer "$LIVE/$FLUE_REL/dist/server.mjs" 2>/dev/null | head -n 1)" ]; then
+  # .gitignore's `dist/` / `node_modules/` match directories, not symlinks: exclude the links in THIS clone only, so the
+  # clone stays clean for the strict baseline-cleanliness gate (--record-baseline).
+  printf '%s\n' "/$FLUE_REL/dist" "/$FLUE_REL/node_modules" >> "$WORK/repo/.git/info/exclude"
   ln -s "$LIVE/$FLUE_REL/dist" "$WORK/repo/$FLUE_REL/dist"
   [ -d "$LIVE/$FLUE_REL/node_modules" ] && ln -s "$LIVE/$FLUE_REL/node_modules" "$WORK/repo/$FLUE_REL/node_modules"
 else
-  echo "samantha_weekly: no Flue build at $LIVE/$FLUE_REL/dist, or it is older than its sources - not linked, the scratch stack will refuse (rebuild it there first)" >&2
+  echo "samantha_weekly: no Flue build at $LIVE/$FLUE_REL/dist, or it is older than its sources or the live sources differ from the pinned commit - not linked, the scratch stack will refuse (rebuild it there first)" >&2
 fi
 
 export ZOE_PERF=1
