@@ -152,7 +152,11 @@ def test_gate_refuses_a_target_that_is_not_a_descendant_of_live_head(tmp_path):
 
 # ------------------------------------------------------------------ the lander
 def _lander_fetches() -> list[str]:
-    return re.findall(r"git (?:-C \"\$WT\" )?fetch [^;&|]*", _code(LANDER.read_text()))
+    code = _code(LANDER.read_text())
+    found = re.findall(r"git (?:-C \S+ )?fetch [^;&|]*", code)
+    # every `fetch` word in executable code must be inside a match, so a differently-formatted fetch cannot hide
+    assert len(re.findall(r"(?<![-\w])fetch(?![-\w])", code)) == len(found), "a lander fetch is not covered by the pattern"
+    return found
 
 
 def _explicit(fetch: str) -> bool:
