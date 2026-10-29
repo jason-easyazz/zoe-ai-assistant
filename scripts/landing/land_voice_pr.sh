@@ -86,8 +86,10 @@ need_probe_time "holding the brain lock"
 # Kokoro is paused only now - after wait_deploy - so a long deploy wait no longer costs minutes of TTS downtime (units log review 2026-10-04)
 # 2026-10-29: the TEST-LANE lock is taken BEFORE Kokoro is stopped (landing_probe_window, landing_lib.sh): flock is not FIFO, agents' test runs
 # kept winning the lane and the probe waited 60+ min with Kokoro already stopped = Zoe mute in the daytime. A lane not won in time = exit 9, Kokoro untouched.
+landing_pre_stop(){ ! bash "$LANDING_DIR/night_busy.sh" voice && [ "$(left)" -ge 900 ]; }   # re-run after the lane wait
 run_probe(){ flock -w 120 /tmp/zoe-voice-harness.lock nice -n 5 "$LANDING_PYTHON" scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote --service-dir "$PWT/services/zoe-data" </dev/null 8>&- 2>&1 | grep -E 'probe —|medians|status=|SKIP|ERROR' | cut -c1-200; }
 # 2026-10-29: the probe runs under a head watcher - a push mid-probe aborts it at once (rc 75) instead of finishing a 15-45 min run whose artifact is for a dead head.
+PROBE_T0=$(date +%s)
 landing_probe_window $(( $(left) - 900 > 60 ? $(left) - 900 : 60 )) "$PR" "$HEAD_SHA" run_probe; PROBE_RC=$?
 [ "$PROBE_RC" = 9 ] && { log "test lane busy (waited as long as the deadline allows) - Kokoro untouched - exit 9"; flock -u 9; exec 9>&-; exit 9; }
 systemctl --user start kokoro-tts.service
@@ -96,6 +98,7 @@ git -C "$LANDING_REPO" worktree remove --force "$PWT" >/dev/null 2>&1
 [ "$PROBE_RC" = 75 ] && { log "head moved DURING the probe - probe aborted, nothing armed; re-queue (exit 5)"; exit 5; }
 for i in $(seq 1 90); do curl -sf -m 3 http://127.0.0.1:10201/health 2>/dev/null | grep -q pipeline_loaded.:true && break; sleep 2; done; log "kokoro back: $(curl -s -m 3 http://127.0.0.1:10201/health | head -c 60)"
 PROBE_STATUS=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('status'), (d.get('revision') or {}).get('commit','')[:8])" "$LANDING_VOICE_ARTIFACT" 2>/dev/null); log "probe status/rev: $PROBE_STATUS"
+landing_artifact_fresh "$LANDING_VOICE_ARTIFACT" "$PROBE_T0" || { log "probe artifact was not written by THIS attempt (stale same-head result) - NOT arming - exit 9, re-queued"; exit 9; }
 case "$PROBE_STATUS" in *" ${HEAD_SHA:0:8}") :;; *) log "probe artifact is not for this head (${HEAD_SHA:0:8}) - the probe did not run or was cut short; NOT arming - exit 9, re-queued"; exit 9;; esac
 # keep THIS probe's artifact per PR: the shared slot is overwritten by the next probe, and the voice loop's retry decision must read this one
 case "$PROBE_STATUS" in pass*) :;; *) mkdir -p "$LANDING_ARTIFACT_DIR"; cp -f "$LANDING_VOICE_ARTIFACT" "$LANDING_ARTIFACT_DIR/$PR.json" 2>/dev/null; log "PROBE NOT PASS - not arming auto-merge; leaving #$PR for triage"; exit 4;; esac

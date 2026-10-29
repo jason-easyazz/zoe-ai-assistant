@@ -5,6 +5,7 @@
 #   ZOE_WATCHD_VOICE_LOG    the voice loop's log (default $ZOE_LANDING_HOME/logs/after_voice_more.log)
 #   ZOE_WATCHD_ONCE=1       one pass then exit (tests) ; ZOE_WATCHD_INTERVAL seconds between passes (default 120)
 . "$(dirname "${BASH_SOURCE[0]}")/landing_lib.sh"
+cd "$LANDING_REPO" || exit 1   # gh needs a repo cwd
 mkdir -p "$LANDING_HOME/logs"
 LQ=$LANDING_LOG
 VL=${ZOE_WATCHD_VOICE_LOG:-$LANDING_HOME/logs/after_voice_more.log}

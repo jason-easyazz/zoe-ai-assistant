@@ -94,9 +94,18 @@ landing_requeue_decision(){
   if landing_probe_speed_only "$LANDING_ARTIFACT_DIR/$pr.json" "$head" && ! grep -qxF "$key" "$marks" 2>/dev/null; then
     echo "$key" >> "$marks"; echo retry-once
   else
-    echo park-probe-failed
+    echo "$key" >> "$LANDING_HOME/probe-failed-heads.txt"; echo park-probe-failed
   fi
 }
+
+# landing_head_parked <pr>: 0 when the PR's CURRENT head was parked after a non-retryable probe fail (autoland must not refill it).
+landing_head_parked(){
+  local head; head=$(gh pr view "$1" --json headRefOid --jq .headRefOid 2>/dev/null)
+  [ -n "$head" ] && grep -qxF "$1:${head:0:12}" "$LANDING_HOME/probe-failed-heads.txt" 2>/dev/null
+}
+
+# landing_artifact_fresh <artifact> <t0-epoch>: 0 only if the artifact file was (re)written at or after <t0> - i.e. by THIS probe attempt.
+landing_artifact_fresh(){ [ "$(stat -c %Y "$1" 2>/dev/null || echo 0)" -ge "$2" ]; }
 
 # landing_others_busy: 0 while another chain/lander is running anywhere on the box (the voice loop waits for quiet).
 # ZOE_LANDING_NO_BUSY_WAIT=1 (tests) reports "never busy" - pgrep is system-wide and would see the live loops.
@@ -115,6 +124,8 @@ landing_probe_window(){
   local wait_s=$1 pr=$2 head=$3 rc i; shift 3
   exec 8>"${ZOE_TEST_LANE_LOCK:-/tmp/zoe-test-lane.lock}"
   flock -x -w "$wait_s" 8 || { exec 8>&-; return 9; }
+  # the lane wait can eat the whole budget: re-validate (night gate + probe time left) BEFORE Kokoro is touched
+  if declare -F landing_pre_stop >/dev/null && ! landing_pre_stop; then flock -u 8; exec 8>&-; return 9; fi
   systemctl --user stop kokoro-tts.service
   if [ "${ZOE_LANDING_SETTLE_S:-15}" != 0 ]; then
     for i in $(seq 1 30); do [ "$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)" -ge 1500 ] && break; sleep 2; done
