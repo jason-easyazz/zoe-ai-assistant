@@ -3,7 +3,7 @@ type: Reference
 title: Zoe Tool Stack
 description: The agent tooling installed in Zoe and how the pieces relate — knowledge graph, source cache, agent orchestration, the brain, memory, and skill security.
 tags: [tooling, architecture, agents]
-timestamp: 2026-06-18T00:00:00Z
+timestamp: 2026-10-29T00:00:00Z
 ---
 
 # Zoe Tool Stack
@@ -16,10 +16,10 @@ Descriptive map of the tools in Zoe's agent layer. See [index](index.md). For *b
 - **opensrc** (`~/.local/bin/opensrc`, vercel-labs) — third-party source cache at `~/.opensrc/`, refreshed weekly by `~/bin/refresh-opensrc.sh` (`zoe-opensrc-refresh.timer`) and pinned to Zoe's *installed* versions. Bare `opensrc path pypi:<pkg>` resolves to the latest published version, so pin versions to match the running stack.
 
 ## Agents & orchestration
-- **Pi** (`pi`, earendil-works/pi-coding-agent) — the local coding-agent runtime; backs the **Zoe** brain agent on local Gemma 4 E2B (`:11434`). Reads `AGENTS.md` on demand, supports progressively-disclosed skills, and has no built-in subagents (use an extension such as `pi-subagents`, pi-spawns-pi, or Multica routing).
+- **Pi** (`pi`, earendil-works/pi-coding-agent) — the local coding-agent runtime; backs the **Zoe** brain agent on local Gemma 4 E4B (`:11434`). Reads `AGENTS.md` on demand, supports progressively-disclosed skills, and has no built-in subagents (use an extension such as `pi-subagents`, pi-spawns-pi, or Multica routing).
 - **Multica** (`multica`, multica-ai) — agent/board orchestration. A systemd daemon auto-detects runtimes (`pi`, `hermes`, `cursor`, `openclaw`, …) and runs autopilots; squads let a leader agent route to members.
-- **Hermes** (`hermes`, NousResearch, GPT-5.4) — default engineering agent (planning, code, review, repair, Greptile loops). Heavy work is delegated here from the lean voice brain via `escalate_to_hermes` / `a2a_delegate`.
-- **OpenClaw** (`openclaw`) — Pi plus multi-agent orchestration, a skills marketplace, and messaging ("OpenClaw is Pi, plus everything built on top"). Runs local Gemma 4 E2B, not Codex. Explicit/manual fallback, not the default route.
+- **Hermes** (`hermes`, NousResearch, GPT-5.4) — named the default engineering agent in the root `AGENTS.md`, but `hermes-agent.service` was INACTIVE on 2026-10-29 (`zoe_ground_truth.sh`); check the live process before routing work to it. When running: planning, code, review, repair, Greptile loops. Heavy work is delegated here from the lean voice brain via `escalate_to_hermes` / `a2a_delegate`.
+- **OpenClaw** (`openclaw`) — RETIRED (operator decision 2026-07-22; see the root `AGENTS.md` Hermes-First section): `openclaw-gateway` is inactive and no work is routed to it. Kept here only so the name is recognisable.
 - **mcporter** (`~/bin/mcporter-safe` wrapper → npm `mcporter`) — CLI MCP client; `intent_router._run_mcporter` uses it as the out-of-process fallback for intents with no in-process direct executor, spawning `services/zoe-data/mcp_server.py` over stdio per `~/.mcporter/mcporter.json`. **Never bake `POSTGRES_URL` (or any rotatable secret) into mcporter.json**: MCP stdio children get a sanitized env, and a pre-set key blocks `bootstrap_runtime_env()`'s canonical `.env` load, so the baked value silently rots on rotation — root cause of the 2026-07 `ok:false` write-intent class. The subprocess self-loads the current credential from `services/zoe-data/.env`; on pool-init failure it exits 1 loudly (regression-tested in `tests/test_mcporter_fallback.py`).
 
 ## Memory & safety

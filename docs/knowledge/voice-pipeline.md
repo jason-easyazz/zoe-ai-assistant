@@ -532,7 +532,7 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
 The replay is warm, so it cannot see a first reply that re-prefills its whole prompt (6 s vs ~1.2 s; shipped three
 times when the wake warm stopped matching the real first turn). After the replay the probe runs
 `scripts/perf/measure_cold_first_turn.py` in the service interpreter: evict the single slot with an unrelated request,
-wait `brain_slot_guard.quiet_s()+2` (`--cold-wait-s`), call `zoe_flue_client.warm_kv_prefix(member)` (the panel's wake
+wait a fixed 47 s (`--cold-wait-s`; deliberately NOT `quiet_s()+2` - the child never takes the guard, so the wait only simulates a conversational pause, and tracking the 180 s quiet window would make every gate run 3 minutes longer), call `zoe_flue_client.warm_kv_prefix(member)` (the panel's wake
 prewarm), then send ONE replay-isolated, `probe`-class first turn. The run **fails** when `cache_n/(cache_n+prompt_n)`
 < 80 % or the brain TTFT is `--warn-ratio`/`--warn-ms` worse than the baseline's `cold_first_turn.ttft_ms` (the baseline
 records it on `--update-baseline`; without one only the cache floor is judged). A wake warm that did not run, or a sidecar

@@ -703,3 +703,15 @@ Rows 1 (`--swa-full`) and 3a (`--cache-ram` re-sized to 1024) of the record's ra
 - **2026-10-29** · Voice latency · `_FIRST_UNIT_CLAUSE_MIN` is still 60 (record row 6, -0.2 to -0.4 s first audio) · `services/zoe-data/routers/voice_tts.py:1149` · needs a TTS-inclusive measure, not the replay gate · first-audio median measured before and after
 - **2026-10-29** · Voice, unverified · record rows 7-10 (Kokoro fixed-cost split and `empty_cache`, keep the Jabra sink open on the Pi, `-ub` sweep for cold prefill, barge-in false-interruption resume) were not checked for completion here; row 4 (streaming STT) has code (`voice_stt_stream.py`) but its latency gain was never confirmed on the Orin · record section 3 · agent · each row either measured and closed or deleted with a reason
 - **2026-10-29** · Docs, stale · upstream llama.cpp#28286 was closed by the stale bot on 2026-10-18 as `not_planned` (never fixed, never shown to affect Gemma); the unit header still says "OPEN" and the `brain_slot_guard.py` and `tests/unit/test_llama_server_unit_flags.py` docstrings cite it as the reason without saying so (voice-path files, so they change at the replay-gated landing) · `docs/research/brain-slot-isolation-2026-10-29.md` section 2 · agent, with the two-slot landing · the three places say "closed stale, unproven for Gemma"
+
+## Voice-gate instrument: landing STT is measured against an in-process baseline (2026-10-29)
+
+- The recorded baseline (2026-10-28) ran the probe with `--stt inprocess` (STT median 467 ms); landing probes run `--stt remote`, which sends STT to the LIVE zoe-data service. That service runs none of the PR's code, so an STT-only speed failure on a landing cannot be caused by the PR, yet it blocks it: one PR failed twice on STT alone (974 ms, 710 ms; brain and end-to-end were faster than baseline, 18/18 clips correct) while two other PRs in the same hour passed at ~540 ms.
+- Fix: re-record the baseline the way landings run (`--stt remote`, same pinned clips), or have the gate compare STT only when the probe ran it in-process. Until then, an STT-only failure on a landing is retried, not triaged as a regression.
+
+## Music: a voice reconnect cannot repair a broken provider (2026-10-29)
+
+- "connect youtube music" reaches `resolve_music_setup("ytmusic")`, which answers "already connected" even when the provider's
+  `needs_attention` is set, and the returned card skips connected providers, so no Reconnect button is offered. The only working
+  path is the panel's Browse -> Sources -> Reconnect. Fix: treat `needs_attention` as not-connected in the voice setup path and
+  offer the same in-place reconnect (QR on the panel, finish on the phone). Found by review on the doc-system audit PR.
