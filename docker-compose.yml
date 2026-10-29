@@ -23,11 +23,14 @@ services:
 
   # ── UI ─────────────────────────────────────────────────────────────────────
   zoe-ui:
-    image: nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f  # nginx:alpine as of 2026-10-04; same digest in deploy.yml + validate.yml (pinned by test_nginx_delivery_layer.py)
+    image: nginx@sha256:1ef7ca94d7879df82421428ce13bd1eaa412404953859cf7a5b6512c25e67a60  # nginx:1.31.8-alpine as of 2026-10-28 (14 Oct CVE fixes); same digest in deploy.yml + validate.yml (pinned by test_nginx_delivery_layer.py)
     container_name: zoe-ui
     ports:
     - 80:80
     - 443:443
+    # Relay listener (panel-anywhere R1): host LOOPBACK only, for frpc on this host. Nothing listens behind it until
+    # scripts/setup/relay/enable_relay_listener.py installs ssl/relay/listener.conf (connection refused until then).
+    - 127.0.0.1:9443:9443
     volumes:
     - ./services/zoe-ui/dist:/usr/share/nginx/html
     # nginx.conf is a single-FILE mount: pinned to an inode, so a git sync that replaces the
@@ -135,7 +138,7 @@ services:
 
   # ── Home Assistant ─────────────────────────────────────────────────────────
   homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:stable  # pinned: sha256:449140e073d8d7814098cd62dfdbb326ad043f51a3c4d4721889369f46751d52
+    image: ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133  # 2026.10.4 (released 2026-10-24; multi-arch index digest, arm64 included, verified 2026-10-28). A REAL pin, not :stable. Bump deliberately per docs/knowledge/ha-2026-9-upgrade-runbook.md; hold 2026.11.x (Marketplace replaces HACS, MFA opt-in touches auth_oidc).
     container_name: homeassistant
     restart: unless-stopped
     logging: *default-logging
@@ -306,7 +309,7 @@ services:
 
   # ── Cloudflare Tunnel ─────────────────────────────────────────────────────
   cloudflared:
-    image: cloudflare/cloudflared:latest  # pinned: sha256:21f3607baf2384c54d592b0efe76dd5f548c0dbc083e62fa22c7fac3923d077f
+    image: cloudflare/cloudflared@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07  # cloudflared 2026.10.0 (released 2026-10-05; registry index digest verified 2026-10-28). Bump deliberately, never :latest.
     container_name: zoe-cloudflared
     command: --config /etc/cloudflared/config.yml --no-autoupdate tunnel run
     restart: unless-stopped

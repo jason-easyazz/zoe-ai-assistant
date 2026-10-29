@@ -1,4 +1,4 @@
-"""Shared Hermes helpers (gateway auth, CLI path).
+"""Shared Hermes helpers (gateway auth only: nothing in this repo may exec the hermes CLI).
 
 ``zoe_repo_root`` moved to ``repo_paths.py`` — it never had Hermes semantics,
 and living here made six path-only modules look Hermes-coupled.
@@ -7,20 +7,8 @@ and living here made six path-only modules look Hermes-coupled.
 from __future__ import annotations
 
 import os
-import shutil
 
 from runtime_env import bootstrap_runtime_env
-
-
-def hermes_bin() -> str:
-    """Locate the hermes CLI; honour HERMES_BIN override."""
-    override = os.environ.get("HERMES_BIN", "").strip()
-    if override:
-        return override
-    found = shutil.which("hermes")
-    if found:
-        return found
-    return os.path.expanduser("~/.local/bin/hermes")
 
 
 def hermes_api_key() -> str:

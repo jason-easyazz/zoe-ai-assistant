@@ -10,6 +10,8 @@ test_canonical_invariants.py and test_voice_smoke_ci.py.
 
 Production TTS is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py),
 reached over HTTP by _synthesize_kokoro_sidecar. There is no in-process TTS model.
+By default (ZOE_TTS_MODE=kokoro, see tts_mode) Kokoro is the ONLY engine used —
+the Edge/espeak/local engines below run only under an explicitly set legacy mode.
 """
 import asyncio
 import concurrent.futures
@@ -26,8 +28,21 @@ from typing import Any, Optional
 import httpx
 
 import voice_settings
+from typed_env import env_str
 
 logger = logging.getLogger(__name__)
+
+
+# ZOE_TTS_MODE. Default "kokoro" = the Kokoro sidecar ONLY: no fallback voice,
+# and reply text never leaves the box (owner decision 2026-10-21 — Edge TTS
+# sends the text to Microsoft). The other modes keep the legacy waterfall for
+# anyone who sets them explicitly: hybrid (kokoro → local → edge → espeak),
+# local, offline (kokoro → espeak), cloud/edge.
+TTS_MODE_KOKORO = "kokoro"
+
+
+def tts_mode() -> str:
+    return env_str("ZOE_TTS_MODE", "kokoro").lower()
 
 
 def _has_espeak_ng() -> bool:

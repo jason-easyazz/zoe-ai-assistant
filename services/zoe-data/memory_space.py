@@ -263,7 +263,7 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     if await curated_locked(user_id, ref.metadata):
         return "protected"
     exp = mp.Explained(seq=0, row_id=rid, ts=0.0, text=ref.text or "")
-    twins = await pa.twins_of(user_id, ref, svc=svc)
+    twins = await pa.twins_of(user_id, ref, svc=svc, strict=True)    # a failed lookup stops us BEFORE the forget: retryable
     if status == "approved":
         if await svc.review(ref.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
             raise RuntimeError("memory store refused the forget")
@@ -316,8 +316,8 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
         succ = await asyncio.wait_for(svc.get(succ_id), pa.READ_BUDGET_S) if succ_id else None
         if (succ is not None and pa._owns(succ.metadata or {}, user_id)
                 and " ".join((succ.text or "").split()) == new and correction_apply.enabled()):
-            twins = [tw for tw in await pa.twins_of(user_id, ref, svc=svc) if tw.id != succ_id]
-            await _retire_twins(user_id, twins, svc)
+            twins = [tw for tw in await pa.twins_of(user_id, ref, svc=svc, strict=True) if tw.id != succ_id]
+            await retire_twins(user_id, twins, svc)
             logger.info("MEMORY_SPACE_CORRECT user=%s twins=%d (retry finished)", user_id, len(twins))
             return "corrected"
         return "gone"
@@ -329,17 +329,17 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
         return "off"
     if not new:
         return "refused"
-    twins = await pa.twins_of(user_id, ref, svc=svc)
+    twins = await pa.twins_of(user_id, ref, svc=svc, strict=True)     # a failed lookup stops us BEFORE the edit: retryable, no blind write
     res = await correction_apply.apply_row_correction(user_id, rid, new, utterance=utterance or new, session_id=session_id,
                                                       svc=svc)
     if res is None:
         return "refused"
-    await _retire_twins(user_id, twins, svc)
+    await retire_twins(user_id, twins, svc)
     logger.info("MEMORY_SPACE_CORRECT user=%s twins=%d", user_id, len(twins))
     return "corrected"
 
 
-async def _retire_twins(user_id: str, twins: list, svc: Any) -> None:
+async def retire_twins(user_id: str, twins: list, svc: Any) -> None:
     """Reject every twin that still holds the old value. RAISES when one could not be retired (the store refused or failed): a
     correction is not acknowledged while a sibling still recalls the old value; calling :func:`correct_row` again with the same
     words finishes the remaining twins (its superseded-retry path)."""

@@ -62,10 +62,16 @@ STEP_UP_DIVERGENCE: dict[str, str] = {
     # lane is the hand-managed system site-packages, now rollback-only (the service
     # runs the 3.12 venv), and requirements.txt must describe what it actually has
     # (drift check) — nothing installs into it.
-    "uvicorn": "3.12 lane 0.53.0 (ws sans-I/O, replay-gated); 3.10 rollback env holds 0.49.0",
+    "uvicorn": "3.12 lane 0.54.0 (ws sans-I/O, replay-gated); 3.10 rollback env holds 0.49.0",
     "ag-ui-protocol": "3.12 lane 1.0.0 (SSE byte-identical); 3.10 rollback env holds 0.1.19",
     "fastembed": "3.12 lane 0.8.1 (vectors bit-identical); 3.10 rollback env holds 0.8.0",
     "livekit-protocol": "3.12 lane 1.1.27; 3.10 rollback env holds 1.1.8",
+    # 2026-10-28 routine batch: websockets 17 needs Python >=3.11 (16.1.1 is the last 3.10 release);
+    # APScheduler 3.11 needs tzlocal>=3 and drops pytz (see requirements-py312.txt for the jobstore
+    # evidence); fastapi is a patch step. The 3.10 rollback env keeps its hand-installed versions.
+    "fastapi": "3.12 lane 0.143.1; 3.10 rollback env holds 0.143.0",
+    "websockets": "3.12 lane 17.2 (needs >=3.11); 3.10 rollback env holds 16.1.1",
+    "apscheduler": "3.12 lane 3.11.3 (+ tzlocal 5.4.4, pytz pinned explicitly); 3.10 rollback env holds 3.10.4 + tzlocal 2.1",
 }
 
 

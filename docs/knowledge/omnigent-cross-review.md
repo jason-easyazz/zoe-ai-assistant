@@ -45,7 +45,13 @@ order, and stops at the first cross-vendor report:
    ChatGPT-account Codex rejects invented ids (`gpt-5-codex`, `gpt-5.1-codex` -> HTTP 400;
    polly's brief now says to omit `args.model` for the codex worker too).
 3. **pi, one lean pass** — only when codex is unavailable (quota, auth, crash, timeout):
-   `pi --provider openrouter --model z-ai/glm-5.2 --no-tools --no-session`, diff on stdin.
+   `pi --provider openrouter --model openai/gpt-6.1-sol --no-tools --no-session`, diff on stdin.
+   The model was chosen by the 2026-10-19 bake-off against 12 Codex-confirmed blocking bugs
+   ([reviewer-bakeoff-2026-10-19.md](reviewer-bakeoff-2026-10-19.md)): 31/40 vs 9/40 for the old
+   `z-ai/glm-5.2` default. `CROSS_REVIEW_PI_MODEL` must be ONE concrete non-Anthropic model id;
+   a router or alias slug (`openrouter/*`, `*/auto`, `typesafe/jev-router`, `nvidia/switchyard`,
+   `~*-latest`, `@preset/*`) is refused, because the `REVIEWER-VENDOR:` line could then not
+   name the model that actually answered (`openrouter/auto-beta` served Claude Sonnet).
 
 If all three fail it exits **2** with `ALARM: cross-review unavailable` and each backend's
 reason on stderr — a caller can never mistake that for a clean review. There is deliberately
@@ -62,7 +68,8 @@ with under 120 s left is skipped, not started. Tests (stubbed polly/codex/pi/gh)
 
 **The pi cap is deterministic, not a budget it can exhaust.** An Omnigent-dispatched pi
 worker hit its $1.50 cap on a 3366-line diff and returned nothing. The direct pass is one
-tool-less completion (`--no-tools`), the diff is capped at 200 KB (~50k tokens, cents), and
+tool-less completion (`--no-tools`), the diff is capped at 600 KB (~150k tokens, the codex cap;
+about US$0.15-0.35 a pass), and
 the run is bounded by a timeout. pi has no summary-on-budget-exhaustion flag, so instead
 the prompt demands findings in priority order, a truncated diff is labelled
 `PARTIAL COVERAGE`, and a timed-out run keeps what it streamed, labelled `PARTIAL`.
@@ -334,9 +341,16 @@ had survived the author's own negative control, later independently confirmed
 by Codex. Model A/B on ground-truth diffs (same brief, three OpenRouter
 models): GLM-5.2 best (4 real + 1 novel catch, correct severities);
 MiniMax M3 sharpest single catch but failed report discipline (unusable for
-automation); DeepSeek V4-Pro disciplined but caught least. Pi's default is
-`z-ai/glm-5.2` (rollback: `config.yaml.bak-minimax` in the zoe-omnigent
-container). Raw scorecard: session records, 2026-07-27.
+automation); DeepSeek V4-Pro disciplined but caught least. The Omnigent pi
+worker's default is `z-ai/glm-5.2` (rollback: `config.yaml.bak-minimax` in the
+zoe-omnigent container). Raw scorecard: session records, 2026-07-27.
+
+**Superseded for `cross_review.sh`'s direct pi pass (2026-10-19):** on three real
+security PRs with 12 Codex-confirmed blocking bugs, GLM-5.2 found 9/40 bug-instances
+over 10 runs and called #2152 CLEAN twice; `openai/gpt-6.1-sol` found 31/40 at about
+twice the cost and with no failed run. The direct pass now defaults to it; the
+Omnigent worker config above is unchanged. Record:
+[reviewer-bakeoff-2026-10-19.md](reviewer-bakeoff-2026-10-19.md).
 
 No single model caught everything — the union of two vendors covered all known
 defects. That is the argument for cross-vendor review in one sentence.

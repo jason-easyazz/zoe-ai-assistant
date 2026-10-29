@@ -27,6 +27,7 @@ import digest_pack
 import httpx
 import memory_authority
 import own_words
+import trait_challenge
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from typed_env import env_float
@@ -917,6 +918,12 @@ async def run_turn_digest(
     if not await _skip_forgotten_turns(user_id, [user_message], "turn_digest"):
         result["skipped_reason"] = "forgotten_entity"
         return result
+
+    # The person doubts a trait Zoe holds about them ("I'm not sure I'm a man of faith"): stop serving the row and
+    # queue it for review (trait_challenge). Runs before the extractor, which only ever reads what a person IS.
+    _challenged = await trait_challenge.apply_challenge(user_id, user_message, speaker_verified=speaker_verified)
+    if _challenged:
+        result["trait_challenged"] = len(_challenged)
 
     try:
         from memory_service import get_memory_service, MemoryServiceError  # type: ignore[import]
@@ -2712,6 +2719,9 @@ async def _deep_sleep_pass(user_id: str) -> dict:
             score = _promotion_score(meta)
             uqc = int(meta.get("unique_query_count", 0) or 0)
             added_at = meta.get("added_at") or ""
+
+            if meta.get("challenged_by_turn"):
+                continue    # the owner doubted this: held for a person to decide, never auto-approved or auto-archived
 
             if score >= 0.8 and uqc >= 3:
                 meta["status"] = "approved"

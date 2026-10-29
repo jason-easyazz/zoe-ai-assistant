@@ -415,7 +415,7 @@ jobs:
           # old inode, so `docker exec zoe-ui nginx -t` would test the OLD config).
           # Same digest as docker-compose.yml's image (pinned by tests/unit/test_nginx_delivery_layer.py):
           # the parser that pre-flights must be the parser that serves.
-          NGINX_IMAGE="nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f"
+          NGINX_IMAGE="nginx@sha256:1ef7ca94d7879df82421428ce13bd1eaa412404953859cf7a5b6512c25e67a60"
           docker run --rm --add-host zoe-auth:127.0.0.1 --add-host host.docker.internal:127.0.0.1 \
             -v "$PWD/services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
             -v "$PWD/services/zoe-ui/nginx.d:/etc/nginx/zoe:ro" \
@@ -433,6 +433,56 @@ jobs:
           docker logs --tail=40 zoe-ui
           echo "::error::zoe-ui unhealthy after nginx restart."
           exit 1
+
+      - name: Recreate module containers (if docker-compose.modules.yml changed)
+        run: |
+          cd /home/zoe/assistant
+          # `docker compose up -d` only recreates a container whose config hash changed, so a
+          # merged edit to docker-compose.modules.yml (loopback binds, mounts, image pins) sat
+          # unapplied until someone recreated by hand. Skip when the file is untouched since
+          # the LAST SUCCESSFUL deploy (DEPLOY_BASE_SHA, not the pre-pull OLD_SHA: a deploy that
+          # failed after the reset and is re-run would otherwise see "unchanged" and never
+          # reconcile). An unknown base falls through (fail closed); `up -d` is a per-container
+          # no-op when nothing changed, so that stays safe.
+          # Profile-gated services (profiles: [multica]) are NOT enumerated on purpose: applying
+          # the merged Multica config is an owner step (it needs MULTICA_DEV_CODE set first,
+          # owner-steps-2026-10-28-security.md step 2); include them with `--profile "*"` once done.
+          if [ -n "${DEPLOY_BASE_SHA:-}" ] \
+             && git diff --quiet "${DEPLOY_BASE_SHA}" HEAD -- docker-compose.modules.yml; then
+            echo "docker-compose.modules.yml unchanged since the last deploy (${DEPLOY_BASE_SHA}) — module containers left alone."
+            exit 0
+          fi
+          # Validate the NEW file before touching anything, so a bad edit fails here and not
+          # halfway through a recreate.
+          docker compose -f docker-compose.modules.yml config -q
+          # Only services that are running NOW: this file also holds optional modules
+          # (e.g. music-assistant) that are stopped on purpose; a bare `up -d` would start
+          # them. --no-deps: never cascade into the base stack.
+          RUNNING="$(docker compose -f docker-compose.modules.yml ps --services --status running)"
+          # A recreate that failed (module exited / restarting) left its name in PENDING: keep it a target on the re-run even though
+          # it is no longer "running", or the retry would succeed with the module still down. Cleared only after a healthy --wait.
+          PENDING_FILE="${ZOE_DEPLOY_STATE_DIR:-$HOME/.zoe/deploy}/module-recreate-pending"
+          PENDING="$(cat "${PENDING_FILE}" 2>/dev/null || true)"
+          TARGETS=""
+          for svc in $(docker compose -f docker-compose.modules.yml config --services); do
+            if printf '%s\n' "${RUNNING}" "${PENDING}" | grep -qxF "${svc}"; then
+              TARGETS="${TARGETS} ${svc}"
+            fi
+          done
+          if [ -z "${TARGETS}" ]; then
+            echo "no running module containers to recreate."
+            exit 0
+          fi
+          echo "recreating changed module containers:${TARGETS}"
+          # --wait: do not report success until each recreated module is running and healthy (its healthcheck,
+          # or plain running when it has none); a module that dies during startup fails the deploy here, before
+          # last-deployed-sha advances, instead of passing silently. PENDING_FILE survives that failure.
+          mkdir -p "$(dirname "${PENDING_FILE}")"
+          # shellcheck disable=SC2086
+          printf '%s\n' ${TARGETS} > "${PENDING_FILE}"
+          # shellcheck disable=SC2086
+          docker compose -f docker-compose.modules.yml up -d --no-deps --wait --wait-timeout 180 ${TARGETS}
+          rm -f "${PENDING_FILE}"
 
       # zoe-data is a user service — no sudo needed.
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.

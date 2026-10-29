@@ -62,6 +62,9 @@ FORGET_PRIVATE_REPLY = ("I can only forget things for someone I know is here. Sa
                         "or unlock with your PIN.")
 TOPIC_WALL_REPLY = ("That's private, so I won't say it out loud here. Ask me on your phone or in chat.")
 NOT_FOUND_REPLY = "I couldn't find that in what I know about you, so there was nothing to forget."
+DIFFERENT_REPLY = ("I have a note that says something a little different from that, so I haven't forgotten anything. "
+                   "Say it the way I have it, or tell me more.")
+RETRY_TTL_S = 300.0
 WHICH_REPLY = "I've got more than one note like that. Say a bit more about which one."
 CURATED_REPLY = "A grown-up added that one for you, so I'll leave it as it is. Ask them to change it."
 NOTHING_REPLY = pa.NOTHING_KNOWN_REPLY
@@ -148,7 +151,7 @@ _TOKEN_STOP = frozenset({
 
 def _tokens(text: str) -> set:
     out = set()
-    for w in re.findall(r"[a-z][a-z'’]+", str(text or "").lower()):
+    for w in re.findall(r"\d+|[a-z][a-z'’]*", str(text or "").lower()):   # numbers count: "12 Main Street" is not "14 Main Street"
         w = w.replace("’", "'")
         if w in _TOKEN_STOP:
             continue
@@ -157,9 +160,62 @@ def _tokens(text: str) -> set:
     return out
 
 
+def _norm(text: str) -> str:
+    """The words of a row in order, lower-case, punctuation gone: two texts are 'the same words' only if this is equal. A token SET
+    is not enough - "I love Sam" and "Sam loves me" share one."""
+    return " ".join(re.findall(r"[a-z0-9']+", str(text or "").lower().replace("\u2019", "'")))
+
+
+_SUFFIXES = (("ing", 3), ("ed", 3), ("es", 3), ("er", 4), ("ly", 4), ("s", 3))   # (suffix, shortest stem left after stripping it)
+
+
+def _stem(w: str) -> str:
+    """A word reduced to its inflectional stem so only TRUE variants compare equal (plan/plans/planned, love/loves/loved/loving) -
+    never a bare prefix: "plan" is not "planet", and forgetting is permanent. Pure."""
+    cut = ""
+    for suf, keep in _SUFFIXES:
+        if w.endswith(suf) and not (suf == "s" and w.endswith("ss")) and len(w) - len(suf) >= keep:
+            w, cut = w[: -len(suf)], suf
+            break
+    if len(w) > 3 and w.endswith("e"):
+        w = w[:-1]
+    if cut in ("ing", "ed") and len(w) > 3 and w[-1] == w[-2] and w[-1] not in "aeiou":
+        w = w[:-1]                                        # planned -> plann -> plan (but matter is not mat)
+    return w
+
+
 def _covers(want: set, have: set) -> bool:
-    return bool(want) and all(any(t == u or (min(len(t), len(u)) >= 4 and (t.startswith(u) or u.startswith(t))) for u in have)
-                              for t in want)
+    stems = {_stem(u) for u in have}
+    return bool(want) and all(t in have or _stem(t) in stems for t in want)
+
+
+_NEGATION_RE = re.compile(r"\b(?:not|no|never|none|nothing|nobody|cannot|without)\b|n['’]t\b", re.I)
+#: a temporal qualifier changes WHEN a claim holds ("I used to like jazz" is not "I like jazz"); the stopwords drop most of them
+_TEMPORAL_RE = re.compile(r"\bused\s+to\b|\bno\s+longer\b|\bany\s?more\b|\bback\s+then\b|\bpreviously\b|\bformerly\b|"
+                          r"\bthese\s+days\b|\bnowadays\b|\bcurrently\b|\bat\s+the\s+moment\b|\bnow\b", re.I)
+_ME_WORDS = frozenset({"i", "i'm", "im", "i've", "i'd", "me", "my", "mine", "myself", "we", "we're", "our", "user", "user's", "users"})
+
+
+def _i_lead(text: str) -> Optional[bool]:
+    """Whether the speaker ("I", "me", "my", the store's "User") comes BEFORE the first content word: "I love Sam" True, "Sam loves
+    me" False, no first person at all None. It is who-did-what: the same words, the other way round, are a different fact."""
+    words = re.findall(r"[a-z0-9']+", str(text or "").lower().replace("\u2019", "'"))
+    me = next((n for n, w in enumerate(words) if w in _ME_WORDS), None)
+    if me is None:
+        return None
+    content = next((n for n, w in enumerate(words) if w not in _TOKEN_STOP and w not in _ME_WORDS), None)
+    return content is None or me < content
+
+
+def _same_claim(said: str, row: str) -> bool:
+    """False when ``row`` covers the words but claims something else: it is negated or time-qualified (used to, no longer, now) and the member's words are not (or the reverse),
+    or the person named and "I" swap who does what. Forgetting is permanent, so a mismatch is asked about, never erased. Pure."""
+    if bool(_NEGATION_RE.search(said)) != bool(_NEGATION_RE.search(row)):
+        return False
+    if bool(_TEMPORAL_RE.search(said)) != bool(_TEMPORAL_RE.search(row)):
+        return False                                     # "used to like jazz" must not erase "likes jazz" (or the reverse)
+    a, b = _i_lead(said), _i_lead(row)
+    return a is None or b is None or a == b
 
 
 _FIRST_PERSON = ((re.compile(r"^i['’]m\b", re.I), "you're"), (re.compile(r"^i\s+am\b", re.I), "you are"),
@@ -196,6 +252,21 @@ class Wall:
     people: list = field(default_factory=list)     # PersonEntry with a name or a relation, newest first
     private: int = 0                                # rows held back (private classes, restraint classes, feelings)
     unsure: int = 0                                 # inferred rows nothing the member said supports: never listed
+    people_rows: list = field(default_factory=list)  # the source Items behind ``people`` (so a time window filters rows, not entries)
+    known_people: Any = None
+
+
+def _build_people(people_items: list, known_people: Any) -> list:
+    out = []
+    told = {e.key: e for e in pa.people_entries([i for i in people_items if not i.inferred], known_people)}
+    for e in pa.people_entries(people_items, known_people):
+        if not (e.name or e.rel):
+            continue
+        t = told.get(e.key)           # a fact no row the member told or confirmed supports is one Zoe worked out
+        e.inferred = {k for _, k in e.facts if not (t and any(pa._same_fact(k, tk) for _, tk in t.facts))}
+        e.facts = [(f, k) for f, k in e.facts if wall_safe(f)]
+        out.append(e)
+    return out
 
 
 async def gather_wall(member: str, *, svc: Any = None) -> Wall:
@@ -213,11 +284,8 @@ async def gather_wall(member: str, *, svc: Any = None) -> Wall:
         named = it.group == "people" and bool(pa._NL_PERSON_RE.match(txt) or (pa._DERIVED_RE.match(txt) and it.mtype in (
             "person", "relationship")))
         (people_items if named else w.items).append(it)
-    for e in pa.people_entries(people_items, known.people):
-        if not (e.name or e.rel):
-            continue
-        e.facts = [(f, k) for f, k in e.facts if wall_safe(f)]
-        w.people.append(e)
+    w.people_rows, w.known_people = people_items, known.people
+    w.people = _build_people(people_items, known.people)
     return w
 
 
@@ -234,8 +302,18 @@ def _told_first(items: list) -> list:
     return sorted(items, key=lambda i: (bool(i.inferred), -(i.epoch or 0.0)))
 
 
+def _told_facts(e: Any) -> list:
+    """A person's facts, told or confirmed ones before those Zoe worked out (``e.inferred``)."""
+    inf = getattr(e, "inferred", None) or set()
+    return sorted(e.facts, key=lambda fk: fk[1] in inf)
+
+
+def _inferred_count(people: list) -> int:
+    return sum(1 for e in people for _, k in e.facts if k in (getattr(e, "inferred", None) or set()))
+
+
 def _person_line(e: Any) -> str:
-    facts = [pa.trim(f, 70) for f, _ in e.facts[:2]]
+    facts = [pa.trim(f, 70) for f, _ in _told_facts(e)[:2]]
     return "; ".join(facts)
 
 
@@ -254,7 +332,8 @@ def build_card(panel_id: str, member: str, wall: Wall, *, title: str, people: Op
         if e.name:
             reg[key] = {"type": "person", "ref": e.name}
             acts = [{"key": "forget_person", "label": "Forget", "choices": [{"key": "yes", "label": f"Yes, forget {e.name}"}]}]
-        out.append({"id": key, "group": "people", "text": e.label(), "meta": _person_line(e), "actions": acts})
+        out.append({"id": key, "group": "people", "text": e.label(), "meta": _person_line(e), "soft": bool(e.facts) and _inferred_count([e]) == len(e.facts),
+                    "actions": acts})
     by_group: dict = {g: [] for g in GROUP_ORDER}
     for it in _told_first(rows):
         by_group[card_group(it)].append(it)
@@ -309,7 +388,7 @@ def spoken_me(wall: Wall, *, on_screen: bool = True) -> str:
     ex = _examples(wall.items, SPOKEN_FACTS)
     if ex:
         s.append(f"You've told me things like {pa._join_spoken(ex)}.")
-    inferred = sum(1 for i in wall.items if i.inferred)
+    inferred = sum(1 for i in wall.items if i.inferred) + _inferred_count(wall.people)
     if inferred:
         s.append(f"I've also worked out {pa._plural(inferred, 'thing')} on my own"
                  + ("; they're marked on the screen." if on_screen else "."))
@@ -320,10 +399,27 @@ def spoken_me(wall: Wall, *, on_screen: bool = True) -> str:
     return " ".join(s)
 
 
+def _recent_cutoff(window: str, now: float) -> float:
+    """Epoch a window opens at. ``today`` is local midnight in the household zone, not now minus 24 h."""
+    if window == "today":
+        import calendar_ical
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        try:
+            tz = ZoneInfo(calendar_ical.household_tz())
+            return datetime.fromtimestamp(now, tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        except Exception:
+            pass
+    return now - RECENT_WINDOWS.get(window, 7 * 86400)
+
+
 def recent_rows(wall: Wall, window: str, now: Optional[float] = None) -> tuple:
-    cutoff = (time.time() if now is None else now) - RECENT_WINDOWS.get(window, 7 * 86400)
+    cutoff = _recent_cutoff(window, time.time() if now is None else now)
     items = [i for i in wall.items if i.epoch and i.epoch >= cutoff]
-    people = [e for e in wall.people if e.epoch and e.epoch >= cutoff]
+    # filter the SOURCE rows before they merge into people entries, so a new fact does not drag an old one in with it
+    rows = [i for i in wall.people_rows if i.epoch and i.epoch >= cutoff]
+    people = _build_people(rows, wall.known_people) if rows else []
     return people, items
 
 
@@ -340,7 +436,7 @@ def spoken_recent(people: list, items: list, window: str, *, on_screen: bool = T
         named = next((e for e in people if e.name), None)
         if named:
             s.append(f"Like {pa._spoken_person(named)}.")
-    inferred = sum(1 for i in items if i.inferred)
+    inferred = sum(1 for i in items if i.inferred) + _inferred_count(people)
     if inferred:
         s.append(f"{pa._plural(inferred, 'of them', 'of them')} I worked out myself"
                  + ("; they're marked on the screen." if on_screen else "."))
@@ -351,18 +447,33 @@ def spoken_recent(people: list, items: list, window: str, *, on_screen: bool = T
 
 def spoken_person(e: Any, *, on_screen: bool = True) -> str:
     subject = e.name or (f"your {e.rel}" if e.rel else "")
+    inf = getattr(e, "inferred", None) or set()
     said = []
-    for f, _ in e.facts[:SPOKEN_FACTS]:
+    for f, k in e.facts:
+        if k in inf:
+            continue                                      # an inferred fact is never said as something the member told me
         clause = pa.trim(f, 80).removesuffix("...").rstrip(" .")
         said.append(f"{subject} {clause}" if clause[:1].islower() and subject else clause)
+        if len(said) >= SPOKEN_FACTS:
+            break
+    worked = _inferred_count([e])
     head = f"Here's what I know about {pa._spoken_person(e)}: "
     tail = f" {SCREEN_TAIL}" if on_screen else ""
-    return head + "; ".join(said) + "." + tail
+    mine = ""
+    if worked:
+        mine = f" I worked out {pa._plural(worked, 'thing')} on my own" + ("; marked on the screen." if on_screen else ".")
+    if not said:
+        return (f"I know {pa._spoken_person(e)}, but nothing you've told me about them yet." if worked else head + "not much yet.") + mine + tail
+    return head + "; ".join(said) + "." + mine + tail
 
 
 async def _find_person(member: str, wall: Wall, name: str) -> Optional[Any]:
-    first = name.split()[0].lower()
-    hits = [e for e in wall.people if e.name and (e.name.lower() == name.lower() or e.name.split()[0].lower() == first)]
+    parts = name.split()
+    first = parts[0].lower()
+    exact = [e for e in wall.people if e.name and e.name.lower() == name.lower()]
+    if exact or len(parts) > 1:   # a spoken surname must match in full: "Sam Wilson" is not "Sam Patel"
+        return exact[0] if len(exact) == 1 else None
+    hits = [e for e in wall.people if e.name and e.name.split()[0].lower() == first]
     return hits[0] if len(hits) == 1 else None
 
 
@@ -396,6 +507,19 @@ def _take_tap(panel_id: str, now: Optional[float] = None) -> Optional[Tap]:
 
 def reset() -> None:
     _TAPS.clear()
+    _RETRY.clear()
+
+
+def _is_command(text: str) -> bool:
+    """True when the words are a command the intent router already understands ("mute", "shuffle", "volume up", "turn the lights
+    off"): the one matcher, not a hand list. A bare command is never a correction value. A matcher failure reads as a command -
+    nothing is written on a doubt."""
+    try:
+        import intent_router
+
+        return intent_router.detect_intent(text, log_miss=False) is not None
+    except Exception:  # noqa: BLE001
+        return True
 
 
 async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: str, *, svc: Any = None) -> Optional[str]:
@@ -403,29 +527,101 @@ async def _tapped(tp: Tap, text: str, member: str, session_id: str, panel_id: st
     if _CANCEL_RE.match(t):
         return LEAVE_IT_REPLY
     st = pa.parse_stateful(t)
+    if st is None or st.kind != "forget_it":
+        # Off the record beats a correction: pa.handle applies this precedence on a normal turn, but a tapped turn is taken here
+        # first, and review(edit) would otherwise store the words permanently. Nothing is written, the row is untouched, the tap
+        # stays spent, and the turn is claimed so no extractor keeps it either.
+        try:
+            cue = mp.parse_off_record(t) if mp.enabled() else None
+        except Exception:  # noqa: BLE001
+            cue = None
+        if cue is not None:
+            mp.claim_turn(member, t)
+            return pa.OFF_RECORD_ACKS.get(cue.cue, pa.OFF_RECORD_ACKS["off_the_record"])
+        # An earlier BARE cue marks this whole turn off the record (claim_turn ran first) though these words carry no cue.
+        try:
+            marked = mp.is_off_record(member, t)
+        except Exception:  # noqa: BLE001
+            marked = False
+        if marked:
+            return pa.OFF_RECORD_ACKS["off_the_record"]
     value = ""
     if st is None:
         if (tp.awaiting and t and len(t.split()) <= 14 and "?" not in t and not pa._NOT_A_FIX_RE.match(t)
-                and not _NOT_AN_ANSWER_RE.match(t) and not parse(t)):
+                and not _NOT_AN_ANSWER_RE.match(t) and not parse(t) and not _is_command(t)):
             value = pa._clean_value(re.sub(rf"^(?:{pa._IT_IS}\s+)", "", t, flags=re.IGNORECASE))
         if not value:
-            return None
+            return None                                   # not a correction/forget: the command guard ran, no permission lookup
+    refused = await review_refusal(member)                # forget / fix are memories.review actions, asked only when requested
+    if refused:
+        return refused
+    if st is None:
+        pass
     elif st.kind == "forget_it":
-        return await _forget_one(member, tp.row_id, tp.text, svc=svc)
+        reply = await _forget_one(member, tp.row_id, tp.text, svc=svc)
+        if reply == pa.STORE_DOWN_REPLY:
+            tap(panel_id, member, tp.row_id, tp.text)  # half done: repeating "forget it" must still have its target
+        return reply
     else:
         value = st.value
     m = _ON_WHEN_RE.match(value)
     if m:
         value = m.group("v")                              # "on Saturday" / "at 10am": the value, not the preposition
-    ref = await asyncio.wait_for((svc or pa._svc_default()).get(tp.row_id), pa.READ_BUDGET_S)
+    try:
+        ref = await asyncio.wait_for((svc or pa._svc_default()).get(tp.row_id), pa.READ_BUDGET_S)
+    except Exception as exc:  # noqa: BLE001 - the tap was spent before this read: keep it armed, the retry finishes the fix
+        logger.warning("memories_voice: preflight read failed (%s)", type(exc).__name__)
+        tap(panel_id, member, tp.row_id, tp.text)
+        return pa.STORE_DOWN_REPLY
     if ref is not None and await memory_space.curated_locked(member, ref.metadata):
         return CURATED_REPLY
     exp = mp.Explained(seq=0, row_id=tp.row_id, ts=time.time(), text=tp.text)
-    reply = await pa.fix(member, session_id, text, value, exp, svc=svc)
-    if reply in (pa.ASK_FIX_REPLY, pa.FIX_NEEDS_SENTENCE):
+    reply = await pa.fix(member, session_id, text, value, exp, svc=svc, strict_twins=True)
+    if reply in (pa.ASK_FIX_REPLY, pa.FIX_NEEDS_SENTENCE, pa.STORE_DOWN_REPLY):
         tap(panel_id, member, tp.row_id, tp.text)          # the next turn is still the answer
     logger.info("MEMORIES_VOICE fix=1 user=%s", member)
     return reply
+
+
+# -- who may change memories ---------------------------------------------------------------------------------------------------------
+GROWN_UP_REPLY = "That's one for a grown-up to change."
+NO_REVIEW_REPLY = "I can't change memories for this account."
+
+
+async def review_verdict(member: str) -> str:
+    """``"ok"`` | ``"child"`` | ``"denied"``: may this member change memories (the ``memories.review`` capability)? The ONE authority
+    the phone routes, the card route and every spoken write share. Reads the AUTHORITATIVE account (zoe-auth's ``auth_users``, not
+    the data-plane ``users`` mirror chat writes as 'member' for everyone) + ``require_feature_access`` + ``manner_block.is_adult``.
+    Fail-closed: any lookup error or unknown account is ``"denied"``."""
+    try:
+        from fastapi import HTTPException
+
+        from db_compat import get_compat_db
+        from guest_policy import require_feature_access
+        from manner_block import is_adult
+
+        async with get_compat_db() as db:
+            cur = await db.execute("SELECT role FROM auth_users WHERE user_id = ?", (member,))
+            row = await cur.fetchone()
+            role = (row[0] if row else None) or ""
+            if not role:
+                return "denied"
+            try:
+                await require_feature_access(db, {"user_id": member, "role": role}, feature="memories", action="review")
+            except HTTPException:
+                return "child" if role == "child" else "denied"
+            if not await is_adult(member, db=db):          # a kid member_mode locks even an adult-looking role
+                return "child"
+            return "ok"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memories_voice: role lookup failed (%s)", type(exc).__name__)
+        return "denied"
+
+
+async def review_refusal(member: str) -> Optional[str]:
+    """None when ``member`` may change memories, else the gentle spoken refusal (nothing is written)."""
+    v = await review_verdict(member)
+    return None if v == "ok" else GROWN_UP_REPLY if v == "child" else NO_REVIEW_REPLY
 
 
 # -- forgetting ----------------------------------------------------------------------------------------------------------------------
@@ -447,31 +643,57 @@ async def _forget_one(member: str, row_id: str, text: str, *, svc: Any = None) -
     return f"Done - I've forgotten that {said}."
 
 
+_RETRY: dict = {}      # (member, the member's words) -> (row id, row text, monotonic ts): a forget that stopped half way
+
+
 async def forget_fact(member: str, words: str, *, svc: Any = None) -> str:
     """"forget that I like jazz": the ONE row of the member's that says it (with its twins) goes through the audited row forget.
-    Two different rows -> ask which; none -> say so. A private row is never read back."""
+    Two different rows -> ask which; none -> say so; a row that says the opposite or the other way round -> ask, never erase.
+    A private row is never read back."""
     want = _tokens(words)
     if not want:
         return NOT_FOUND_REPLY
+    said = _norm(words)
+    key = (str(member), said)
+    pend = _RETRY.pop(key, None)
+    if pend is not None and time.monotonic() - pend[2] <= RETRY_TTL_S:
+        # the last attempt rejected the row but the twin cleanup failed: the row is no longer "approved", so a fresh search would
+        # say NOT_FOUND and the cleanup would never finish. Repeating the same words finishes the SAME row.
+        reply = await _forget_one(member, pend[0], pend[1], svc=svc)
+        if reply == pa.STORE_DOWN_REPLY:
+            _RETRY[key] = (pend[0], pend[1], time.monotonic())
+        return reply
     try:
         known = await pa.gather(member, svc=svc)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memories_voice: gather failed (%s)", type(exc).__name__)
         return pa.STORE_DOWN_REPLY
     pool = list(known.items) + [i for lst in known.private.values() for i in lst]
-    hits = [i for i in pool if _covers(want, _tokens(i.text))]
-    if not hits:
+    covered = [i for i in pool if _covers(want, _tokens(i.text))]
+    if not covered:
         return NOT_FOUND_REPLY
-    hits.sort(key=lambda i: (len(_tokens(i.text) - want), -(i.epoch or 0.0)))
+    hits = [i for i in covered if _norm(i.text) == said or _same_claim(words, i.text)]
+    if not hits:
+        return DIFFERENT_REPLY
+    exact = {i.id for i in hits if _norm(i.text) == said}
+    hits.sort(key=lambda i: (i.id not in exact, len(_tokens(i.text) - want), -(i.epoch or 0.0)))
     first = hits[0]
-    if len(hits) > 1 and _tokens(first.text) - want:
-        # more than one row says it and none says EXACTLY that: the twins of one utterance are one fact, anything else is asked
+    # Forgetting is permanent, so the first-sorted row goes alone only when it is PROVEN the one: it says something beyond the
+    # words (then it is not the tie), or it is the single row whose text is exactly the member's words. Equal token sets alone
+    # prove nothing ("I love Sam" / "Sam loves me"): more than one row says it and none is proven -> the twins of one utterance
+    # are one fact, anything else is asked.
+    tied = any(not (_tokens(h.text) - want) for h in hits[1:])
+    proven = first.id in exact and len(exact) == 1
+    if len(hits) > 1 and (_tokens(first.text) - want or (tied and not proven)):
         svc = svc or pa._svc_default()
         ref = await asyncio.wait_for(svc.get(first.id), pa.READ_BUDGET_S)
         twins = {t.id for t in await pa.twins_of(member, ref, svc=svc)} if ref is not None else set()
         if [h for h in hits[1:] if h.id not in twins]:
             return WHICH_REPLY
-    return await _forget_one(member, first.id, first.text, svc=svc)
+    reply = await _forget_one(member, first.id, first.text, svc=svc)
+    if reply == pa.STORE_DOWN_REPLY:
+        _RETRY[key] = (first.id, first.text, time.monotonic())
+    return reply
 
 
 async def forget_person(member: str, name: str) -> str:
@@ -479,17 +701,21 @@ async def forget_person(member: str, name: str) -> str:
     the cascade (people row, edges, loops, the learned voice). The member's own calendar events and list items stay (owner D6)."""
     from intent_router import Intent, execute_intent
 
+    refused = await review_refusal(member)
+    if refused:
+        return refused
     return str(await execute_intent(Intent("memory_forget_entity", {"name": name}), member) or "")
 
 
 # -- the turn ------------------------------------------------------------------------------------------------------------------------
-async def _push(frame: Optional[dict]) -> None:
+async def _push(frame: Optional[dict]) -> int:
+    """Send the card; how many screens got it (0 = none, so the reply must not say "it's on the screen")."""
     try:
         import voice_cards
 
-        await voice_cards.push(frame)
+        return int(await voice_cards.push(frame) or 0)
     except Exception:  # noqa: BLE001 - the card is an addition to the spoken answer
-        pass
+        return 0
 
 
 async def answer(text: str, user_id: str, session_id: str = "", *, channel: str, extra_ctx: Optional[dict],
@@ -514,6 +740,9 @@ async def answer(text: str, user_id: str, session_id: str = "", *, channel: str,
             return FORGET_PRIVATE_REPLY
         if not allow_writes:
             return None                                   # a dry / speculative turn never forgets
+        refused = await review_refusal(member)
+        if refused:
+            return refused
         return await forget_fact(member, ask.value, svc=svc)
     if not on_panel:
         return None                                       # chat keeps the existing answers (provenance_answers)
@@ -545,21 +774,24 @@ async def answer(text: str, user_id: str, session_id: str = "", *, channel: str,
         e = await _find_person(member, wall, ask.value)
         if e is None or not e.facts:
             return None                                   # not one of MY people (or nothing to say): the recall path answers
+        shown = True                                      # a dry turn pushes nothing and claims nothing it cannot check
         if allow_writes:
-            await _push(build_card(panel_id, member, wall, title=TITLES["person"].format(name=e.label()), people=[e], items=[]))
+            shown = await _push(build_card(panel_id, member, wall, title=TITLES["person"].format(name=e.label()), people=[e], items=[])) > 0
         logger.info("MEMORIES_VOICE read=person user=%s", member)
-        return spoken_person(e)
+        return spoken_person(e, on_screen=shown)
     if ask.kind == "recent":
         people, items = recent_rows(wall, ask.value)
+        shown = True
         if allow_writes:
             when = "today" if ask.value == "today" else "this month" if ask.value == "this month" else "this week"
-            await _push(build_card(panel_id, member, wall, title=TITLES["recent"].format(when=when), people=people, items=items))
+            shown = await _push(build_card(panel_id, member, wall, title=TITLES["recent"].format(when=when), people=people, items=items)) > 0
         logger.info("MEMORIES_VOICE read=recent user=%s", member)
-        return spoken_recent(people, items, ask.value)
+        return spoken_recent(people, items, ask.value, on_screen=shown)
+    shown = True
     if allow_writes:
-        await _push(build_card(panel_id, member, wall, title=TITLES["me"]))
+        shown = await _push(build_card(panel_id, member, wall, title=TITLES["me"])) > 0
     logger.info("MEMORIES_VOICE read=me user=%s", member)
-    return spoken_me(wall)
+    return spoken_me(wall, on_screen=shown)
 
 
 async def tier(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None,

@@ -17,6 +17,8 @@ stored anywhere new):
                               names them too, and their synced source cards become content-free tombstones the next sync skips
   * ``voiceprints``         - the voiceprint the member's Omi tagging taught Zoe for that person (``learned_voiceprints``,
                               owner decision 2026-10-14) is DELETED (``contacts_store.forget_voiceprints``)
+  * ``text_logs``           - the local JSONL logs that keep utterance text (``local_text_logs``: the router shadow log, the intent-miss
+                              log): a record whose text names the entity is DROPPED, hash included
   * ``event_attendees``     - on the member's OWN events (alembic 0052): an attendee linked to the forgotten person,
                               or whose name / email names the entity, loses the link AND the name and email (the row
                               stays, anonymous, so the event keeps its shape); the desktop calendar's legacy
@@ -64,7 +66,7 @@ DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", 
                       "calendar_attendees"))
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
-              "calendar_attendees", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review")
+              "calendar_attendees", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs")
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -194,6 +196,12 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         # candidate whose text no longer names them - the person was renamed since - still goes. The name pass above covers a retry.
         return n + await omi_day_review.forget_people(user_id, res.person_ids)
 
+    async def text_logs() -> int:
+        import local_text_logs
+
+        # the local JSONL logs that keep utterance text (router shadow log, intent misses): a record naming the entity is dropped
+        return await asyncio.to_thread(local_text_logs.erase_entity, rx)
+
     if want("restraint_mutes"):
         await _step("restraint_mutes", mutes, res)
     if want("commitments"):
@@ -202,6 +210,8 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         await _step("omi_recordings", omi, res)
     if want("omi_day_review"):
         await _step("omi_day_review", omi_review, res)
+    if want("text_logs"):
+        await _step("text_logs", text_logs, res)
 
 
 async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:

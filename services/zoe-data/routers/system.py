@@ -145,20 +145,6 @@ async def get_system_status(
     db=Depends(get_db),
 ):
     """System status for Zoe's active runtime services."""
-    gateway_status = "unknown"
-    gateway_model = None
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get("http://127.0.0.1:18789/health")
-            if r.status_code == 200:
-                gateway_status = "connected"
-                data = r.json()
-                gateway_model = data.get("model")
-            else:
-                gateway_status = "error"
-    except Exception:
-        gateway_status = "offline"
-
     db_status = "ok"
     try:
         cursor = await db.execute("SELECT 1")
@@ -218,10 +204,6 @@ async def get_system_status(
 
     return {
         "database": db_status,
-        "openclaw_gateway": gateway_status,
-        "openclaw_default_route": False,
-        "openclaw_manual_fallback": gateway_status == "connected",
-        "openclaw_model": gateway_model,
         "llama_server": llama_status,
         "llama_model": llama_model,
         "ha_bridge": ha_bridge_status,
@@ -1118,19 +1100,6 @@ def _build_agent_card() -> dict:
             "model": os.environ.get("ZOE_LOCAL_MODEL", "Gemma 4 E4B-QAT"),
             "status": "online" if _RUNTIME_HEALTH.get("local_llm") else "offline",
         },
-        {
-            "tier": 1.5,
-            "name": "hermes",
-            "model": "GPT-5.4/Codex",
-            "status": "online" if _RUNTIME_HEALTH.get("hermes") else "offline",
-        },
-        {
-            "tier": 2,
-            "name": "openclaw",
-            "model": "Gemma 4 E4B-QAT",
-            "browser": True,
-            "status": "online" if _RUNTIME_HEALTH.get("openclaw") else "offline",
-        },
     ]
 
     return {
@@ -1189,39 +1158,6 @@ class _EngineeringTaskRequest(BaseModel):
 
 class _EngineeringGuardRunRequest(BaseModel):
     packet_only: bool = False
-
-
-@_agent_card_router.post("/tasks")
-async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_a2a_caller)):
-    """
-    A2A task intake endpoint.
-
-    Accepts a natural-language task from another agent and routes it through
-    Zoe's standard pipeline (intent router -> Zoe Agent -> Hermes escalation).
-
-    Returns a task_id immediately. Results available via GET /api/agent/tasks/{task_id}.
-    For streaming, POST to /api/agent/tasks/stream instead.
-
-    Auth: ``Authorization: Bearer <ZOE_A2A_TOKEN>`` (A2A agents) or
-    ``X-Session-ID`` / ``X-Device-Token`` (UI/voice paths).
-    """
-    user_id = user.get("user_id", "a2a-agent")
-    session_id = body.session_id or f"a2a-{body.caller}-{__import__('uuid').uuid4().hex[:8]}"
-
-    logger.info(
-        "A2A task received: caller=%s user=%s task=%s",
-        body.caller, user_id, body.task[:80],
-    )
-
-    from background_runner import enqueue_background_task  # type: ignore[import]
-    task_id = await enqueue_background_task(body.task, user_id, session_id)
-    return {
-        "task_id": task_id,
-        "session_id": session_id,
-        "status": "queued",
-        "caller": body.caller,
-        "result_endpoint": f"/api/agent/tasks/{task_id}",
-    }
 
 
 @_agent_card_router.post("/tasks/stream")
@@ -1543,23 +1479,9 @@ async def delegate_to_agent(
         )
 
     if agent_name == "hermes":
-        from background_runner import enqueue_background_task  # type: ignore[import]
-        user_id = user.get("user_id", "unknown")
-        session_id = body.get("session_id") or None
-        task_id = await enqueue_background_task(
-            task,
-            user_id,
-            session_id=session_id,
-            request_depth=int(body.get("request_depth") or 0),
-        )
-        return {
-            "agent": agent_name,
-            "result": {
-                "status": "queued",
-                "task_id": task_id,
-                "result_endpoint": f"/api/agent/tasks/{task_id}",
-            },
-        }
+        # Hermes is retired and nothing may launch it (the old branch queued the task for
+        # `hermes --accept-hooks` with HERMES_YOLO_MODE as the zoe user - deep dive S0-7).
+        raise HTTPException(status_code=410, detail="Hermes is retired; no agent can be launched for this task.")
 
     registry = _load_registry()
     agent_info = registry.get("agents", {}).get(agent_name)
@@ -1612,16 +1534,6 @@ async def get_agent_runtimes():
                 "port": 11434,
                 "description": "llama-server (Gemma 4 E4B-QAT, fast-path agent)",
                 "online": _RUNTIME_HEALTH.get("local_llm", False),
-            },
-            "hermes": {
-                "port": 8642,
-                "description": "Hermes Agent (GPT-5.4/Codex)",
-                "online": _RUNTIME_HEALTH.get("hermes", False),
-            },
-            "openclaw": {
-                "port": 18789,
-                "description": "OpenClaw Gateway (Gemma 4 E4B-QAT, browser/exec)",
-                "online": _RUNTIME_HEALTH.get("openclaw", False),
             },
         },
     }
@@ -1901,6 +1813,47 @@ async def _require_multica_webhook_secret(request: Request) -> None:
         raise HTTPException(status_code=401, detail="webhook secret required")
 
 
+_BOARD_STATUSES = ("in_progress", "done", "cancelled")
+
+
+async def _board_status_to_queue(db, multica_issue_id: str, board_status: str) -> int:
+    """The Multica board moved an issue: the linked proposals follow through the queue legal moves only (``evolution_queue``).
+    in_progress -> approved (a decision; the proposal stays open); done -> applied, then kept (the maintainer PR landed);
+    cancelled -> rejected while open, reverted once applied. A move the queue refuses is logged and skipped, never forced.
+    Struggle proposals are never board-linked. Returns the number of proposals moved."""
+    import evolution_queue as eq  # type: ignore[import]
+
+    rows = await db.fetch(
+        "SELECT id, status, decision FROM evolution_proposals WHERE multica_issue_id=$1 AND source <> 'struggle'",
+        multica_issue_id,
+    )
+    moved = 0
+    for r in rows:
+        pid, st = r["id"], r["status"]
+        try:
+            if board_status == "in_progress":
+                if st in eq.OPEN and r["decision"] != "approved":
+                    await eq.decide(db, pid, "approved", actor="multica:board")
+                    moved += 1
+            elif board_status == "done":
+                # ONE transaction: applied -> kept lands together or not at all (a refused second move takes the first back)
+                async with eq.atomic(db):
+                    if st in eq.OPEN:
+                        await eq.transition(db, pid, "applied", actor="multica:board", frm=st, note="board: done")
+                        st = "applied"
+                    if st in ("applied", "canary"):
+                        await eq.transition(db, pid, "kept", actor="multica:board", frm=st, note="board: done")
+                        moved += 1
+            elif board_status == "cancelled":
+                to = "rejected" if st in eq.OPEN else ("reverted" if st in eq.LANDED else None)
+                if to:
+                    await eq.transition(db, pid, to, actor="multica:board", frm=st, note="board: cancelled")
+                    moved += 1
+        except eq.QueueError as exc:
+            logger.warning("Multica webhook: proposal %s not moved (%s): %s", pid, board_status, exc)
+    return moved
+
+
 @_agent_card_router.post("/board/webhook", dependencies=[Depends(_require_multica_webhook_secret)])
 async def multica_webhook(request: Request):
     """Receive Multica webhook events and update evolution proposal status."""
@@ -1917,27 +1870,17 @@ async def multica_webhook(request: Request):
             # If the issue maps to an evolution proposal, sync status back
             multica_issue_id = issue.get("id")
             new_status = issue.get("status", "")
-            if multica_issue_id and new_status:
-                _status_map = {
-                    "in_progress": "approved",
-                    "done": "validated",
-                    "cancelled": "failed",
-                }
-                proposal_status = _status_map.get(new_status)
-                if proposal_status:
-                    try:
-                        from db_pool import get_db_ctx as _get_pg_db  # type: ignore[import]
-                        async with _get_pg_db() as db:
-                            await db.execute(
-                                "UPDATE evolution_proposals SET status=$1 WHERE multica_issue_id=$2",
-                                proposal_status, multica_issue_id,
-                            )
-                            logger.info(
-                                "Multica webhook: synced proposal multica_id=%s → status=%s",
-                                multica_issue_id, proposal_status,
-                            )
-                    except Exception as db_exc:
-                        logger.warning("Multica webhook DB sync error: %s", db_exc)
+            if multica_issue_id and new_status in _BOARD_STATUSES:
+                try:
+                    from db_pool import get_db_ctx as _get_pg_db  # type: ignore[import]
+                    async with _get_pg_db() as db:
+                        moved = await _board_status_to_queue(db, multica_issue_id, new_status)
+                        logger.info(
+                            "Multica webhook: synced proposal multica_id=%s board=%s moved=%d",
+                            multica_issue_id, new_status, moved,
+                        )
+                except Exception as db_exc:
+                    logger.warning("Multica webhook DB sync error: %s", db_exc)
 
         elif event == "issue.assigned" and issue:
             logger.info(
@@ -1982,19 +1925,36 @@ async def get_evolution_proposals(
     limit: int = 20,
     user: dict = Depends(get_current_user),
 ):
-    """List evolution proposals by status (pending|approved|rejected|deployed|validated|failed)."""
+    """List evolution proposals by status. Takes the pre-0062 names (pending|approved|deployed|validated|failed|rejected; pending =
+    open and undecided, approved = open and approved) or the queue names (proposed|probed|applied|canary|kept|reverted|rejected).
+    ``status`` in the answer is the legacy name (this API and its readers predate the queue), ``queue_status`` the queue one. The
+    struggle detector proposals are decided at /api/system/struggles/proposals and are not listed here. An unknown status lists
+    nothing."""
     from db_pool import get_db_ctx as _get_pg_db
+    import evolution_queue as _eq  # type: ignore[import]
 
+    if status in _eq.LEGACY_STATUS:
+        q_statuses, q_decision = _eq.LEGACY_STATUS[status]
+    elif status in _eq.STATUSES:
+        q_statuses, q_decision = (status,), None
+    else:
+        return {"proposals": [], "count": 0}
+    args: list = [limit, *q_statuses]
+    marks = ", ".join(f"${i}" for i in range(2, 2 + len(q_statuses)))
+    by_decision = ""
+    if q_decision is not None:
+        args.append(q_decision)
+        by_decision = f" AND decision=${len(args)}"
     async with _get_pg_db() as db:
         rows = await db.fetch(
             """SELECT id, type, title, description, evidence, target_patterns,
-                      status, multica_issue_id, proposed_at, reviewed_at, deployed_at,
+                      status, decision, multica_issue_id, proposed_at, reviewed_at, deployed_at,
                       validation_result, next_review_at
                FROM evolution_proposals
-               WHERE status=$1
+               WHERE status IN (""" + marks + """) AND source <> 'struggle'""" + by_decision + """
                ORDER BY proposed_at DESC
-               LIMIT $2""",
-            status, limit,
+               LIMIT $1""",
+            *args,
         )
     return {
         "proposals": [
@@ -2004,7 +1964,8 @@ async def get_evolution_proposals(
                 "title": r["title"],
                 "description": r["description"],
                 "evidence": r["evidence"],
-                "status": r["status"],
+                "status": _eq.legacy_status(r["status"], r["decision"]),
+                "queue_status": r["status"],
                 "proposed_at": r["proposed_at"],
             }
             for r in rows
@@ -2098,8 +2059,25 @@ async def evolution_proposal_action(
         if not rows:
             raise HTTPException(status_code=404, detail="Proposal not found")
         proposal = dict(rows[0])
+        import evolution_queue as _eq  # type: ignore[import]  # every status / decision write goes through the queue
+        _actor = str(user.get("user_id") or user.get("username") or "admin")[:80]
+        if proposal.get("source") == "struggle":
+            raise HTTPException(status_code=409, detail="struggle proposals are decided at /api/system/struggles/proposals")
 
         if action == "approve":
+            if proposal.get("status") in ("rejected", "reverted") and body.get("retry") is True:
+                # the explicit retry of a failed board run (cancelled on the board = rejected / reverted here): a REOPEN, the one
+                # legal way back to an open proposal; the bridge below then decides whether a new run is enqueued
+                try:
+                    await _eq.transition(db, proposal_id, "proposed", actor=_actor, note="reopened for retry")
+                except _eq.QueueError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                proposal["status"] = "proposed"
+            if proposal.get("status") not in _eq.OPEN:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"proposal is {proposal.get('status')}: only an open proposal can be approved",
+                )
             # Decide auto-execution ONCE, up front (admin + execution gate,
             # fail-closed), so the REST display-sync below can be skipped for
             # auto-executing proposals.
@@ -2171,31 +2149,31 @@ async def evolution_proposal_action(
                 # SELECT and here would decouple "what the gate authorized" from
                 # "what was persisted" (TOCTOU). 0 rows → the contract moved under
                 # us → refuse rather than execute on a stale authorization.
-                _upd = await db.execute(
-                    """UPDATE evolution_proposals
-                       SET status='approved', reviewed_at=$1
-                       WHERE id=$2
-                         AND autonomy_class IS NOT DISTINCT FROM $3
-                         AND approval_required IS NOT DISTINCT FROM $4""",
-                    _time.time(), proposal_id,
-                    proposal.get("autonomy_class"), proposal.get("approval_required"),
-                )
-                # db is AsyncpgCompat: execute() returns a _Cursor whose rowcount
-                # is parsed from asyncpg's status tag — NOT the status string
-                # itself (a string check here compared against a _Cursor repr and
-                # never fired; caught by review).
-                if getattr(_upd, "rowcount", None) == 0:
+                # the decision is recorded only while the autonomy contract the gate read still holds (the queue
+                # compare-and-swap); 0 rows means it moved under us, so refuse rather than execute on a stale authorization
+                try:
+                    await _eq.decide(
+                        db, proposal_id, "approved", actor=_actor,
+                        guard={"autonomy_class": proposal.get("autonomy_class"),
+                               "approval_required": proposal.get("approval_required")},
+                    )
+                except _eq.Conflict:
                     raise HTTPException(
                         status_code=409,
                         detail="Proposal's autonomy contract changed during approval — re-read and retry",
                     )
             else:
-                await db.execute(
-                    """UPDATE evolution_proposals
-                       SET status='approved', reviewed_at=$1, multica_issue_id=$2
-                       WHERE id=$3""",
-                    _time.time(), multica_issue_id, proposal_id,
-                )
+                # ONE transaction: the approval and its board link land together or not at all. The detail column goes first,
+                # then the queue write (decide), the lock order the rest of the queue takes; a Conflict rolls the link back.
+                try:
+                    async with _eq.atomic(db):
+                        await db.execute(
+                            "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                            multica_issue_id, proposal_id,
+                        )
+                        await _eq.decide(db, proposal_id, "approved", actor=_actor)
+                except _eq.Conflict as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
             # Hermes PROPOSAL pre-review gate — REVIEW-ONLY proposals only.
             # An auto-executing proposal is skipped here: it is already authorized
             # (admin + execution gate) and the CODE it produces is reviewed
@@ -2228,9 +2206,7 @@ async def evolution_proposal_action(
                                 logger.warning(
                                     "evolution_approve: could not append Hermes feedback to Multica issue: %s", _exc
                                 )
-                        await db.execute(
-                            "UPDATE evolution_proposals SET status='pending' WHERE id=$1", proposal_id
-                        )
+                        await _eq.decide(db, proposal_id, "", actor="hermes:review", note="review concerns")
                         return {"ok": True, "action": "hermes_review_required", "feedback": _h_feedback}
                     logger.info("evolution_approve: Hermes cleared proposal %s", proposal_id)
                 except Exception as exc:
@@ -2353,12 +2329,10 @@ async def evolution_proposal_action(
         elif action == "deploy":
             # Called by background runner when Hermes completes implementation
             now = _time.time()
-            await db.execute(
-                """UPDATE evolution_proposals
-                   SET status='deployed', deployed_at=$1
-                   WHERE id=$2""",
-                now, proposal_id,
-            )
+            try:
+                await _eq.transition(db, proposal_id, "applied", actor=_actor, note="deployed", now=now)
+            except _eq.QueueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             # Sync deployed status to Multica
             existing_multica_id = proposal.get("multica_issue_id")
             if existing_multica_id:
@@ -2372,19 +2346,95 @@ async def evolution_proposal_action(
             return {"ok": True, "action": "deployed", "deployed_at": now}
 
         elif action == "reject":
-            await db.execute(
-                "UPDATE evolution_proposals SET status='rejected', reviewed_at=$1 WHERE id=$2",
-                _time.time(), proposal_id,
-            )
+            try:
+                await _eq.transition(db, proposal_id, "rejected", actor=_actor, note="rejected")
+            except _eq.QueueError as exc:      # an applied change is reverted, not rejected
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             return {"ok": True, "action": "rejected"}
 
         elif action == "defer":
             next_review = _time.time() + 7 * 86400
-            await db.execute(
-                "UPDATE evolution_proposals SET status='pending', next_review_at=$1 WHERE id=$2",
-                next_review, proposal_id,
-            )
+            # ONE transaction: the delay and the withdrawn decision land together or not at all. The detail column goes first,
+            # then the queue write (decide), the order the rest of the queue takes the row lock in; a Conflict from decide
+            # (not open any more) rolls the delay back with it.
+            try:
+                async with _eq.atomic(db):
+                    await db.execute(
+                        "UPDATE evolution_proposals SET next_review_at=$1 WHERE id=$2",
+                        next_review, proposal_id,
+                    )
+                    await _eq.decide(db, proposal_id, "", actor=_actor, note="deferred 7 days")
+            except _eq.Conflict as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             return {"ok": True, "action": "deferred", "next_review_in_days": 7}
+
+
+# ── The evolution queue: the ONE read API (the Zoe score page) ───────────────
+#
+# Every proposal writer feeds ``evolution_proposals`` through ``evolution_queue`` (self-evolution Phase 0, migration 0062). These
+# routes READ it: the queue fields only (class, risk tier, component, status, decision, the JSON gate evidence, lesson id), never the
+# legacy free-text evidence. Human admin only.
+
+async def _require_queue_reader(user: dict = Depends(require_admin)) -> dict:
+    """The household admin as a person: a panel device token authenticates a panel, not a person."""
+    if "device_token_role" in user or str(user.get("username", "")).startswith("panel:"):
+        raise HTTPException(status_code=403, detail="Sign in as the household admin to see the evolution queue.")
+    return user
+
+
+def _queue_unavailable(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=503, detail=f"evolution queue unavailable ({type(exc).__name__})")
+
+
+@router.get("/evolution/queue")
+async def evolution_queue_list(
+    status: Optional[str] = Query(None, max_length=16),
+    change_class: Optional[str] = Query(None, alias="class", max_length=16),
+    component: Optional[str] = Query(None, max_length=64),
+    source: Optional[str] = Query(None, max_length=64),
+    limit: int = Query(50, ge=1, le=500),
+    user: dict = Depends(_require_queue_reader),
+):
+    """Newest first, filtered by exact status / class / component / source, with the summary counts."""
+    import evolution_queue as eq  # type: ignore[import]
+
+    try:
+        rows = await eq.list_queue(status=status, change_class=change_class, component=component, source=source, limit=limit)
+        summ = await eq.summary()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - a missing table / DB blip is a 503, never a traceback
+        raise _queue_unavailable(exc) from exc
+    return {"summary": summ, "proposals": rows}
+
+
+@router.get("/evolution/queue/summary")
+async def evolution_queue_summary(
+    days: float = Query(30.0, gt=0, le=365),
+    user: dict = Depends(_require_queue_reader),
+):
+    """Counts only: by class and status, open, kept / reverted in the last ``days``, the oldest open age."""
+    import evolution_queue as eq  # type: ignore[import]
+
+    try:
+        return await eq.summary(since_s=days * 86400.0)
+    except Exception as exc:  # noqa: BLE001
+        raise _queue_unavailable(exc) from exc
+
+
+@router.get("/evolution/queue/{proposal_id}")
+async def evolution_queue_item(proposal_id: str, user: dict = Depends(_require_queue_reader)):
+    """One proposal with its history (every status move and decision, oldest first)."""
+    import evolution_queue as eq  # type: ignore[import]
+
+    try:
+        item = await eq.get(proposal_id)
+        item["history"] = await eq.history(proposal_id)
+        return item
+    except eq.NotFound as exc:
+        raise HTTPException(status_code=404, detail="no such proposal") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _queue_unavailable(exc) from exc
 
 
 # ── Updates Hub ──────────────────────────────────────────────────────────────

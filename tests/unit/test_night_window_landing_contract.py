@@ -2,8 +2,11 @@
 
 The contract (docs/knowledge/merge-and-deploy.md "Landings and the night window"): no landing and no harness may
 hold the brain-window lock (zoe-brain-window.lock under the system temp dir), nor be a live ``land_voice_pr.sh``
-process, between 01:50 and 04:55. The night window REFUSES on a held lock and WAITS (bounded, then refuses) on a
-live lander, so a lander that sleeps through 01:50 makes the 12B window refuse. The operator landers keep their
+process, past the window's 20-min busy grace (gone by 03:10). Since 2026-10-19 the pause is MEASURED (the
+operator-local night_busy.sh: voice landings do not start from 01:55 until the window has finished), not a fixed
+01:50-04:55 span; the 01:50-04:55 constants below are only the conservative envelope the window's own schedule is
+asserted to sit inside. The night window REFUSES on a held lock and WAITS (bounded, then refuses) on a
+live lander, so a lander that sleeps through 02:50 makes the 12B window refuse. The operator landers keep their
 side of the contract; this file pins the side of the window: its busy detection really does cover the lander and
 the lock, and its schedule stays inside the span the landers promise to keep clear.
 
@@ -145,17 +148,22 @@ def test_the_default_lock_is_the_one_the_contract_names():
     assert f"/{LOCK_NAME}" in inspect.getsource(bk.Cfg)
 
 
-def test_preflight_still_refuses_on_the_lock_and_waits_for_a_quiet_box():
-    """preflight consults the lock before stopping anything; the quiet wait and the post-lock recheck use busy_reason."""
+def test_preflight_waits_for_the_lock_and_a_quiet_box_and_rechecks_under_the_lock():
+    """preflight WAITS (bounded) for the lock before stopping anything, then for a quiet box, and the post-lock recheck still looks for a lander - handing the lock back and
+    waiting again instead of refusing the night on the first sighting (2026-10-26: a lander spawned a second before the lock was taken)."""
     src = inspect.getsource(nw.NightWindow.preflight)
-    assert "self.probe_lock()" in src and "has the brain. Nothing was stopped" in src
-    assert "self.wait_until_quiet()" in src
-    assert "self.busy_reason()" in src, "the post-lock recheck must still look for a lander"
-    assert src.index("self.probe_lock()") < src.index("self.wait_until_quiet()") < src.index("self.take_lock()")
+    assert "self.wait_for_lock()" in src and "self.wait_until_quiet()" in src and "self.take_lock_when_clear(" in src
+    assert src.index("self.wait_for_lock()") < src.index("self.wait_until_quiet()") < src.index("self.take_lock_when_clear(")
+    lock = inspect.getsource(nw.NightWindow.wait_for_lock)
+    assert "self.probe_lock()" in lock and "has the brain. Nothing was stopped" in lock and "self.refuse(why)" in lock, "a lock still held after the bounded wait must refuse, nothing stopped"
+    clear = inspect.getsource(nw.NightWindow.take_lock_when_clear)
+    assert "self.busy_reason()" in clear and "self.busy_now()" in clear, "the post-lock recheck must still look for a lander"
+    assert clear.index("self.take_lock()") < clear.index("self.busy_reason()") < clear.index("self.release_lock()") < clear.index("self.wait_until_quiet()")
+    assert "capped_waits" in clear and "self.host.sleep" in clear, "the hand-back loop is bounded by the end-by deadline and always spends time"
 
 
 def test_the_night_schedule_sits_inside_the_span_the_landers_keep_clear():
-    """01:50-04:55 must cover the timer, the latest allowed start, the end-by deadline and the voice-gate blackout."""
+    """The conservative 01:50-04:55 envelope must cover the timer, the latest allowed start, the end-by deadline and the voice-gate blackout."""
     cfg = nw.NightCfg()
     start_lo, start_hi = cfg.night_hours
     assert start_lo < CLEAR_FROM, "a manual run may start before 01:50: it waits on a lander, by design (the timer never does)"
@@ -173,8 +181,8 @@ def test_the_night_schedule_sits_inside_the_span_the_landers_keep_clear():
 def test_the_binding_rule_lives_in_agents_md_and_the_docs_only_point_at_it():
     """Binding rules belong in AGENTS.md (DOX); docs/knowledge keeps the rationale and links to it."""
     rule = (REPO / "scripts/AGENTS.md").read_text()
-    for needle in ("01:50", "04:55", LOCK_NAME, "land_voice_pr.sh"):
+    for needle in ("01:55", "04:55", "night_busy.sh", LOCK_NAME, "land_voice_pr.sh"):
         assert needle in rule, f"scripts/AGENTS.md must carry the landing contract ({needle!r} missing)"
-    assert "scripts/AGENTS.md" in (REPO / "AGENTS.md").read_text() and "01:50" in (REPO / "AGENTS.md").read_text()
+    assert "scripts/AGENTS.md" in (REPO / "AGENTS.md").read_text() and "01:55" in (REPO / "AGENTS.md").read_text()
     for doc in ("docs/knowledge/merge-and-deploy.md", "docs/knowledge/night-window.md"):
         assert "scripts/AGENTS.md" in (REPO / doc).read_text(), f"{doc} must point at the binding rule"

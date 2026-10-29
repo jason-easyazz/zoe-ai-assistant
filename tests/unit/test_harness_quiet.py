@@ -184,3 +184,192 @@ def test_the_shared_harness_gate_really_refuses_at_noon(monkeypatch):
     monkeypatch.setenv("ZOE_HARNESS_FORCE", "1")              # the deliberate override reaches the next gate
     with pytest.raises(pytest.fail.Exception, match="went past quiet hours"):
         uma._gates(None, None, print)
+
+
+# ---- the brain window (01:50-04:55), owned by the multi-step orchestrator record_bench_baselines.sh -------------------
+
+def _at(hh, mm=0, day=19):
+    return dt.datetime(2026, 10, day, hh, mm)
+
+
+@pytest.mark.parametrize("when,ok", [
+    (_at(22, 0), True), (_at(23, 30), True), (_at(1, 5), True),        # 01:05 + 45 min = 01:50 exactly: finishes in time
+    (_at(1, 6), False), (_at(1, 30), False),                             # cannot finish before 01:50
+    (_at(1, 50), False), (_at(2, 51), False), (_at(4, 0), False),
+    (_at(4, 45), False),                                                 # the documented-wrong start: inside the 04:10-04:52 voice gate
+    (_at(4, 54), False), (_at(4, 55), True), (_at(5, 0), True), (_at(6, 45), True),
+])
+def test_brain_window_blocks_inside_and_late_starts(when, ok):
+    v = hq.brain_window_verdict("record_bench_baselines", now=when)
+    assert v.allowed is ok, v.reason
+    assert ok or v.kind == "brain-window"
+
+
+def test_brain_window_budget_is_respected_and_force_does_not_bypass(monkeypatch):
+    assert hq.brain_window_verdict("x", budget_min=20, now=_at(1, 30)).allowed        # a 20-min step fits before 01:50
+    assert not hq.brain_window_verdict("x", budget_min=21, now=_at(1, 30)).allowed
+    monkeypatch.setenv("ZOE_HARNESS_FORCE", "1")                                       # force skips quiet hours, NOT this
+    assert not hq.brain_window_verdict("x", now=_at(4, 45)).allowed
+
+
+def test_brain_window_cli_exit_codes(capsys):
+    assert hq.main(["brain-window", "x", "--now", "2026-10-19T04:45:00"]) == hq.EXIT_REFUSED
+    assert "brain window" in capsys.readouterr().out
+    assert hq.main(["brain-window", "x", "--now", "2026-10-19T05:00:00"]) == 0
+
+
+def _stub_tree(tmp_path, refuse_after, deadline=600, body=None):
+    """A copy of the orchestrator over stub scripts: harness_quiet.py ``check`` allows, ``brain-window`` allows its first
+    ``refuse_after`` calls then refuses (exit 3); every harness step just drops a marker file."""
+    import shutil
+    m = tmp_path / "scripts" / "maintenance"
+    (tmp_path / "scripts" / "perf").mkdir(parents=True)
+    m.mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / "scripts" / "maintenance" / "record_bench_baselines.sh", m / "record_bench_baselines.sh")
+    (m / "harness_quiet.py").write_text(
+        "import sys, pathlib\n"
+        f"n = pathlib.Path({str(tmp_path / 'calls')!r})\n"
+        "if sys.argv[1] == 'brain-window-wait':\n"
+        "    print(7)\n"
+        "    sys.exit(0)\n"
+        "if sys.argv[1] == 'brain-window-deadline':\n"
+        f"    print({deadline})\n"
+        "    sys.exit(0)\n"
+        "if sys.argv[1] == 'brain-window':\n"
+        "    c = int(n.read_text()) if n.exists() else 0\n"
+        "    n.write_text(str(c + 1))\n"
+        f"    sys.exit(0 if c < {refuse_after} else 3)\n"
+        "sys.exit(0)\n")
+    for rel in ("maintenance/voice_regression_probe.py", "perf/samantha_bar.py", "perf/samantha_day_sim.py",
+                "perf/samantha_person.py"):
+        (tmp_path / "scripts" / rel).write_text(
+            "import sys, pathlib\n"
+            f"pathlib.Path({str(tmp_path)!r}, 'ran-' + pathlib.Path(sys.argv[0]).stem).write_text('x')\n"
+            + (body or ""))
+    return m / "record_bench_baselines.sh"
+
+
+def _run_orchestrator(tmp_path, refuse_after, **kw):
+    import subprocess
+    sh = _stub_tree(tmp_path, refuse_after, **kw)
+    env = {**os.environ, "HOME": str(tmp_path), "ZOE_HARNESS_LOCK": str(tmp_path / "lock")}
+    r = subprocess.run(["bash", str(sh)], env=env, capture_output=True, text=True, timeout=60)
+    return r, sorted(p.name for p in tmp_path.glob("ran-*"))
+
+
+def test_orchestrator_refuses_up_front_in_the_brain_window_and_runs_nothing(tmp_path):
+    r, ran = _run_orchestrator(tmp_path, refuse_after=0)
+    assert r.returncode == 3 and ran == [], (r.stdout, r.stderr)
+
+
+def test_orchestrator_rechecks_inside_the_lock_before_each_step(tmp_path):
+    # up-front check passes, the first step's in-lock check passes, the rest are refused: one step ran, three did not
+    r, ran = _run_orchestrator(tmp_path, refuse_after=2)
+    assert r.returncode == 1 and ran == ["ran-voice_regression_probe"], (ran, r.stdout)
+
+
+def test_orchestrator_positive_control_runs_every_step_when_clear(tmp_path):
+    r, ran = _run_orchestrator(tmp_path, refuse_after=99)
+    assert r.returncode == 0 and len(ran) == 4, (ran, r.stdout, r.stderr)
+
+
+def test_night_pause_verdict_gate_go_still_enforces_the_run_budget(monkeypatch, tmp_path):
+    g = tmp_path / "night_busy.sh"
+    g.write_text("#!/bin/sh\nexit 1\n")
+    g.chmod(0o755)
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(g))
+    assert not hq.night_pause_verdict("x", budget_min=45, now=_at(1, 30)).allowed   # would still run at 01:50
+    assert hq.night_pause_verdict("x", budget_min=10, now=_at(1, 30)).allowed       # finishes first
+    assert hq.night_pause_verdict("x", budget_min=45, now=_at(3, 40)).allowed       # inside the span: the gate decides
+
+
+def test_night_pause_verdict_gate_go_checks_the_next_nights_window_too(monkeypatch, tmp_path):
+    g = tmp_path / "night_busy.sh"
+    g.write_text("#!/bin/sh\nexit 1\n")
+    g.chmod(0o755)
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(g))
+    assert not hq.night_pause_verdict("x", budget_min=240, now=_at(23, 0)).allowed   # crosses tomorrow's 01:50
+    assert hq.night_pause_verdict("x", budget_min=30, now=_at(23, 0)).allowed        # finishes by 23:30
+    assert hq.night_pause_verdict("x", budget_min=45, now=_at(3, 40)).allowed        # after tonight's window
+    assert not hq.night_pause_verdict("x", budget_min=24 * 60, now=_at(3, 40)).allowed  # but not past the next 01:50
+
+
+@pytest.mark.parametrize("when,secs", [
+    (_at(1, 20), 600),        # 30 min to the window - the 20-min step budget = 10 min, not the 30-min cap
+    (_at(1, 30), 0),          # the step cannot finish in time: never queue
+    (_at(1, 0), 1800),        # plenty of time: the cap
+    (_at(2, 51), 0),          # inside the window
+    (_at(4, 55), 1800), (_at(23, 0), 1800),
+])
+def test_lock_wait_cannot_cross_the_brain_window(when, secs):
+    assert hq.lock_wait_s(20, now=when) == secs
+
+
+def test_orchestrator_bounds_each_lock_wait_by_the_brain_window(tmp_path):
+    """Codex P1: the in-lock re-check runs only AFTER ``flock -w`` returns, so a start just before the cutoff could queue up
+    to 30 min inside the protected window. Every step must pass the brain-window-wait value (the stub says 7) to flock -w."""
+    import subprocess
+    sh = _stub_tree(tmp_path, refuse_after=99)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    real = subprocess.run(["which", "flock"], capture_output=True, text=True).stdout.strip()
+    stub = bindir / "flock"
+    stub.write_text(f'#!/bin/bash\necho "$2" >> {tmp_path}/flock-waits\nexec {real} "$@"\n')
+    stub.chmod(0o755)
+    env = {**os.environ, "HOME": str(tmp_path), "ZOE_HARNESS_LOCK": str(tmp_path / "lock"),
+           "PATH": f"{bindir}:{os.environ['PATH']}"}
+    r = subprocess.run(["bash", str(sh)], env=env, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert (tmp_path / "flock-waits").read_text().split() == ["7"] * 4
+
+
+def test_night_pause_verdict_asks_the_gate_and_fails_back_to_the_fixed_window(monkeypatch, tmp_path):
+    g = tmp_path / "night_busy.sh"
+    g.write_text("#!/bin/sh\nexit 1\n")
+    g.chmod(0o755)
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(g))
+    assert hq.night_pause_verdict("x", now=_at(3, 40)).allowed                    # gate: free, though inside the old span
+    g.write_text("#!/bin/sh\nexit 0\n")
+    assert not hq.night_pause_verdict("x", now=_at(12, 0)).allowed                # gate: pause
+    g.write_text("#!/bin/sh\nexit 7\n")                                          # unreadable answer -> the fixed rule
+    assert not hq.night_pause_verdict("x", now=_at(3, 40)).allowed
+    assert hq.night_pause_verdict("x", now=_at(12, 0)).allowed
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(tmp_path / "missing.sh"))             # no gate installed -> the fixed rule
+    assert not hq.night_pause_verdict("x", now=_at(3, 40)).allowed
+
+
+@pytest.mark.parametrize("when,secs", [
+    (_at(1, 20), 30 * 60 - 120),    # 30 min to the window minus the 2-min teardown margin
+    (_at(1, 49), 0),                # inside the margin: no room, refuse
+    (_at(2, 51), 0),                # inside the window
+    (_at(23, 0), 2 * 3600 + 50 * 60 - 120),
+])
+def test_step_deadline_is_the_window_minus_margin(when, secs):
+    assert hq.deadline_s(now=when) == secs
+
+
+def test_orchestrator_kills_a_step_that_outlives_its_deadline(tmp_path):
+    """Codex P1: the start check trusts an estimate; a step that overruns (waits, hang) must be KILLED at the deadline and the
+    run must not report success. Without the timeout wrapper the 30 s sleep runs to completion and rc stays 0."""
+    import time
+    t0 = time.monotonic()
+    r, _ = _run_orchestrator(tmp_path, refuse_after=99, deadline=1, body="import time; time.sleep(30)\n")
+    assert time.monotonic() - t0 < 25, "a step outlived its deadline"
+    assert r.returncode == 1, (r.stdout, r.stderr)
+
+
+def test_orchestrator_refuses_a_step_with_no_deadline_room(tmp_path):
+    r, ran = _run_orchestrator(tmp_path, refuse_after=99, deadline=0)
+    assert r.returncode == 1 and ran == [], (ran, r.stdout)
+
+
+def test_kill_grace_covers_bar_teardown_but_lands_before_the_window():
+    """Greptile P1: `timeout -k 20` SIGKILLed samantha_bar.py mid-teardown (needs >= 30 s). The grace must be >= 30 s yet
+    (TERM at deadline = window - margin) the final KILL must still land before the quiet window, i.e. grace < margin."""
+    import inspect
+    import re
+    text = (ROOT / "scripts/maintenance/record_bench_baselines.sh").read_text()
+    m = re.search(r'timeout -k (\d+) "\$d"', text)
+    assert m, "record_bench_baselines.sh lost its hard deadline wrapper"
+    margin = inspect.signature(hq.deadline_s).parameters["margin_s"].default
+    assert 30 <= int(m.group(1)) < margin

@@ -30,6 +30,7 @@ import panel_principal
 import traffic_class
 from list_service import HouseholdListUnavailable
 from time_utils import today_for_zoe_tz
+from typed_env import env_str
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
 if TYPE_CHECKING:
@@ -40,6 +41,11 @@ logger = logging.getLogger(__name__)
 _DAILY_BRIEFING_RESPONSE_CACHE: dict[str, tuple[float, str]] = {}
 _DAILY_BRIEFING_CACHE_TTL_SECONDS = float(os.environ.get("ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS", "120"))
 _DAILY_BRIEFING_CACHE_MAX_USERS = max(1, int(os.environ.get("ZOE_DAILY_BRIEFING_CACHE_MAX_USERS", "64")))
+
+
+def _self_url() -> str:
+    """This zoe-data instance (P-2: a harness instance sets ZOE_SELF_URL, so its self-calls never reach the live service)."""
+    return env_str("ZOE_SELF_URL", "http://localhost:8000").rstrip("/")
 
 
 def _daily_briefing_cache_sweep(now: float | None = None) -> None:
@@ -496,6 +502,10 @@ _ACK_RE = re.compile(
     r"|^(?:no\s+(?:problem|worries)|all\s+good)\s*[!.,]*$",
     re.IGNORECASE,
 )
+# Spoken replies to a bare thanks / acknowledgement: short, casual, varied, never a self-introduction.
+THANKS_REPLIES = ("You're welcome!", "Anytime.", "Happy to help.", "No worries.", "No dramas.", "Not a problem.", "Any time!",
+                  "You got it.", "Pleasure.")
+ACK_REPLIES = ("Got it.", "Sure thing.", "Okay.", "No problem.", "No worries.", "Righto.", "All good.")
 _STATUS_CHECK_RE = re.compile(
     r"^(?:are\s+you\s+|you\s+)?(?:there|listening|awake|around|still\s+(?:there|listening|awake|with\s+me))\s*\??$"
     r"|^(?:can\s+you\s+)?hear\s+me(?:\s+(?:ok|okay|now))?\s*\??$"
@@ -775,6 +785,11 @@ def detect_intent(
     user_id: str = "unknown",
     _filler_retry: bool = True,
 ) -> Optional[Intent]:
+    try:
+        import local_text_logs as _ltl_epoch
+        _miss_epoch: Optional[int] = _ltl_epoch.erase_epoch()   # BEFORE detection: an erase finishing mid-detect drops the miss append
+    except Exception:  # noqa: BLE001 - unreadable guard: append stays in-progress-guarded only
+        _miss_epoch = None
     t = _normalize_chat_intent_text(text)
 
     # Bare name-as-question ("zoe?") — normalization strips the wake word to '', so
@@ -1704,16 +1719,16 @@ def detect_intent(
         try:
             # Write to intent-misses file for weekly self-review (PII stripped)
             import re as _re, json as _json, pathlib as _pathlib
-            _MISS_PATH = _pathlib.Path.home() / "training" / "data" / "intent-misses.jsonl"
-            _MISS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            import local_text_logs as _ltl   # the SAME path + lock the retention sweep / forget erase use (forgotten means forever)
             # Strip names, numbers, emails, URLs before writing
             _clean = _re.sub(r'\b[A-Z][a-z]+ [A-Z][a-z]+\b', '[NAME]', text)
             _clean = _re.sub(r'\b\d[\d\s\-]{6,}\b', '[NUMBER]', _clean)
             _clean = _re.sub(r'[\w.+-]+@[\w-]+\.\w+', '[EMAIL]', _clean)
             _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
-            with open(_MISS_PATH, "a") as _f:   # traffic_class (P-2): the weekly review drops the harness's misses
-                _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time(),
-                                      "traffic_class": traffic_class.current()}) + "\n")
+            # traffic_class (P-2): the weekly review drops the harness's misses
+            _ltl.append_line(_ltl.INTENT_MISSES, _json.dumps({"text": _clean, "ts": __import__("time").time(),
+                                                              "traffic_class": traffic_class.current()}),
+                            epoch=_miss_epoch)
         except Exception:
             pass  # Never let logging break intent routing
         try:
@@ -3556,6 +3571,12 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
     #   user_id; this default is defense-in-depth for future forgetful callers.
     await _speculative_side_effect_barrier(intent.name)
+    try:  # failure capture (ZOE_STRUGGLE_OUTCOMES, default off): the intent NAME that executed this user's turn - a deque append
+        import struggle_detector as _sd
+
+        _sd.note_handler("", user_id, "intent", intent.name)
+    except Exception:  # noqa: BLE001
+        pass
     if (_is_guest_identity(user_id) and intent.name in _GUEST_HOUSEHOLD_INTENTS
             and panel_principal.in_panel_turn()):
         # Anyone AT THE PANEL may add, tick off and read the HOUSEHOLD list (a fridge list). The executors resolve a
@@ -3627,8 +3648,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "acknowledgement":
         import random
         if intent.slots.get("kind") == "thanks":
-            return random.choice(["You're welcome!", "Anytime.", "Happy to help.", "No worries."])
-        return random.choice(["Got it.", "Sure thing.", "Okay.", "No problem."])
+            return random.choice(THANKS_REPLIES)
+        return random.choice(ACK_REPLIES)
 
     if intent.name == "status_check":
         import random
@@ -4118,9 +4139,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             import httpx as _httpx
             async with _httpx.AsyncClient(timeout=5) as _cli:
                 reg_resp, squad_resp, runtime_resp = await asyncio.gather(
-                    _cli.get("http://localhost:8000/api/agent/registry"),
-                    _cli.get("http://localhost:8000/api/agent/squad"),
-                    _cli.get("http://localhost:8000/api/agent/runtimes"),
+                    _cli.get(_self_url() + "/api/agent/registry"),
+                    _cli.get(_self_url() + "/api/agent/squad"),
+                    _cli.get(_self_url() + "/api/agent/runtimes"),
                     return_exceptions=True,
                 )
             reg = reg_resp.json() if not isinstance(reg_resp, Exception) else {}
@@ -4196,7 +4217,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         try:
             import httpx as _httpx
             async with _httpx.AsyncClient(timeout=5) as _cli:
-                resp = await _cli.get("http://localhost:8000/api/agent/board")
+                resp = await _cli.get(_self_url() + "/api/agent/board")
                 board = resp.json()
 
             available = board.get("available", False)
@@ -4409,7 +4430,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             import httpx as _httpx
             async with _httpx.AsyncClient(timeout=5) as _cli:
                 resp = await _cli.get(
-                    "http://localhost:8000/api/agent/evolution/proposals",
+                    _self_url() + "/api/agent/evolution/proposals",
                     params={"status": "pending", "limit": "5"},
                 )
                 data = resp.json()

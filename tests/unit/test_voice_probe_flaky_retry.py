@@ -193,10 +193,11 @@ def test_deterministic_cant_do_fails_after_one_retry_not_three_runs(tmp_path, mo
 
 # -- first-run hard failures (deterministic): never retried --------------------
 @pytest.mark.parametrize("label,row_kw", [
-    ("route/tier change", dict(verdict="CANT_DO", route="other-route")),
     ("STT transcript change", dict(verdict="CANT_DO", heard="changed")),
-    ("non-brain CANT_DO (extractor empty)", dict(verdict="CANT_DO", brain=False, route="tier")),
-    ("ERROR (brain lane dead / crash)", dict(verdict="ERROR")),
+    ("STT transcript change on a non-brain CANT_DO", dict(verdict="CANT_DO", heard="changed", brain=False,
+                                                          route="tier")),
+    ("ERROR with a changed transcript", dict(verdict="ERROR", heard="changed")),
+    ("ERROR with no transcript at all", dict(verdict="ERROR", heard=None)),
 ])
 def test_deterministic_failures_fail_on_the_first_run_with_no_retry(
         tmp_path, monkeypatch, world, label, row_kw):
@@ -210,7 +211,7 @@ def test_deterministic_failures_fail_on_the_first_run_with_no_retry(
 
 def test_hard_failure_alongside_a_flaky_one_is_not_retried(tmp_path, monkeypatch, world):
     d, names, base = world
-    run1 = _with(names, **{"1": dict(verdict="CANT_DO"), "3": dict(verdict="ERROR")})
+    run1 = _with(names, **{"1": dict(verdict="CANT_DO"), "3": dict(verdict="CANT_DO", heard="changed")})
     rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, [_row(names[1])]])
     assert (rc, art["status"]) == (1, "fail") and calls == [names]
     assert "deterministic" in art["flaky_note"]
@@ -278,7 +279,10 @@ def test_legacy_baseline_without_a_clip_profile_still_gets_the_tolerance(tmp_pat
     run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
     ok = [_row(names[2])]
     rc, art, calls = _drive(tmp_path, monkeypatch, d, legacy, [run1, ok, ok])
-    assert (rc, art["status"]) == (0, "pass") and len(calls) == 3
+    assert len(calls) == 3 and art["flaky_clips"][0]["regressed"] is False   # the tolerance still applies...
+    # ...but since T-3 a baseline with no per-clip profile judges no clip, and judging nothing is never a pass
+    assert (rc, art["status"]) == (1, "fail")
+    assert any("no pinned clip has a per-clip expectation" in w for w in art["said_vs_did_regressions"])
     # ...but a deterministic non-brain failure on a legacy baseline (which had 0 fails) is hard
     rc2, art2, calls2 = _drive(tmp_path, monkeypatch, d, legacy,
                                [_with(names, **{"2": dict(verdict="CANT_DO"), "4": dict(verdict="ERROR")}), ok])
@@ -336,7 +340,8 @@ def test_a_regressed_clip_does_not_show_as_tolerated_in_the_gate_message(tmp_pat
     run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
     rc, art, _ = _drive(tmp_path, monkeypatch, d, base, [run1, [_row(names[2], "CANT_DO")]])
     assert art["status"] == "fail"
-    forced = dict(art, status="pass")
+    # forced past BOTH the status and the per-clip block (which would refuse the failed clip on its own)
+    forced = dict(art, status="pass", clip_checks=False)
     ok, why = vgc.evaluate(forced, now_epoch=time.time(), max_age_s=3600, baseline=None)
     assert ok and "tolerated" not in why                     # only non-regressed clips are reported tolerated
 
@@ -359,3 +364,396 @@ def test_measure_voice_rows_carry_content_free_route_identity(tmp_path, monkeypa
     assert got[0]["route_hash"] != got[1]["route_hash"] and len(got[0]["route_hash"]) == 8
     blob = json.dumps(got)
     assert "lamp" not in blob and "lights" not in blob       # hashes only, never the outcome label or text
+
+
+# -- a BLANK retry is inconclusive (owner decision 2026-10-20) ----------------------
+# Pattern in 6 of 65 runs: first run CANT_DO or EMPTY, the flaky retry then heard
+# nothing (EMPTY) and the clip counted as regressed on an unrelated PR. A blank retry
+# is re-run ONCE; only a non-blank result counts; a second blank fails as before.
+def _blank(names):
+    return [_row(names[2], "EMPTY", heard="")]
+
+
+@pytest.mark.parametrize("first", ["CANT_DO", "EMPTY"])
+def test_blank_retry_then_ok_passes_and_is_flagged(tmp_path, monkeypatch, world, first):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict=first)})
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, _blank(names), [_row(names[2])]])
+    assert (rc, art["status"]) == (0, "pass"), art
+    assert calls == [names, [names[2]], [names[2]]]          # the blank retry re-run exactly once
+    c = art["flaky_clips"][0]
+    assert c["runs"] == [first, "EMPTY", "OK"] and c["regressed"] is False
+    assert c["retry_empty_rerun"] is True and (c["failures"], c["of"]) == (1, 2)
+    assert "blank retry was re-run once" in c["note"]
+    assert art["said_vs_did_regressions"] == []
+
+
+def test_blank_retry_then_blank_again_fails(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [run1, _blank(names), _blank(names), [_row(names[2])]])
+    assert (rc, art["status"]) == (1, "fail")
+    assert len(calls) == 3                                   # no third retry: the OK scripted last is never reached
+    c = art["flaky_clips"][0]
+    assert c["runs"] == ["CANT_DO", "EMPTY", "EMPTY"] and c["regressed"] is True
+    assert c["retry_empty_rerun"] is True
+
+
+def test_blank_retry_then_cant_do_fails(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [run1, _blank(names), [_row(names[2], "CANT_DO")], [_row(names[2])]])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 3
+    assert art["flaky_clips"][0]["runs"] == ["CANT_DO", "EMPTY", "CANT_DO"]
+    assert art["flaky_clips"][0]["regressed"] is True and art["said_vs_did_regressions"]
+
+
+def test_negative_control_real_regressions_fail_exactly_as_before(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
+    # a retry that CANT_DOs (no blank anywhere): decided at 2 runs, no extra retry, no flag
+    bad = [_row(names[2], "CANT_DO")]
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, bad, [_row(names[2])]])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 2
+    c = art["flaky_clips"][0]
+    assert c["runs"] == ["CANT_DO", "CANT_DO"] and c["retry_empty_rerun"] is False
+    # a retry OK on the WRONG route is a failure, and does not earn the blank's extra retry
+    moved = [_row(names[2], "OK", brain=False, route="tier")]
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, moved, moved])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 2
+    assert art["flaky_clips"][0]["runs"] == ["CANT_DO", "ROUTE-CHANGED"]
+    assert art["flaky_clips"][0]["retry_empty_rerun"] is False
+    # a first-run change of TRANSCRIPT is still never retried at all
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [_with(names, **{"2": dict(verdict="CANT_DO", heard="other")}), _blank(names)])
+    assert (rc, art["status"]) == (1, "fail") and calls == [names]
+    # a route change on the SAME transcript is retried (2026-10-27) but never forgiven: blanks do not pass it
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [_with(names, **{"2": dict(verdict="CANT_DO", route="other-route")}), _blank(names)])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) >= 2
+
+
+def test_extra_retry_for_a_blank_happens_at_most_once_per_clip(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO")})
+    # blank forever: the old budget of two retries, never more
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, _blank(names)])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 3
+    # the worst case is OK, blank, then blank: the hard ceiling of THREE retries per clip
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [run1, [_row(names[2])], _blank(names), _blank(names), [_row(names[2])]])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 4
+    assert art["flaky_clips"][0]["runs"] == ["CANT_DO", "OK", "EMPTY", "EMPTY"]
+    # and OK, blank, OK passes inside the same ceiling
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [run1, [_row(names[2])], _blank(names), [_row(names[2])]])
+    assert (rc, art["status"]) == (0, "pass") and len(calls) == 4
+    assert art["flaky_clips"][0]["retry_empty_rerun"] is True
+
+
+def test_blank_tolerance_unit_counts_calls_directly(world):
+    d, names, base = world
+    rep = _report(_with(names, **{"2": dict(verdict="CANT_DO")}))
+    seen: list = []
+
+    def rerun(ns):
+        seen.append(list(ns))
+        return _report([_row(n, "EMPTY", heard="") for n in ns])
+
+    out = vrp.apply_flaky_tolerance(rep, base, rerun, str(d))
+    assert len(seen) == 2 and out["clips"][0]["regressed"] is True      # the old two retries, nothing more
+
+
+# -- same transcript, any CANT_DO/ERROR: retried, majority decides (2026-10-27) ---------
+# Incident: a clip CANT_DO on one run in three with the STT identical to the baseline's.
+# Only brain wording on the baseline route used to be retried; the same heard hash on
+# any other route / as an ERROR was a hard first-run failure.
+def test_same_heard_hash_cant_do_on_another_route_flaky_passes_after_retry(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO", brain=False, route="tier")})
+    ok = [_row(names[2])]                                    # back on the baseline's brain route
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, ok, ok])
+    assert (rc, art["status"]) == (0, "pass"), art
+    assert calls == [names, [names[2]], [names[2]]]
+    c = art["flaky_clips"][0]
+    assert (c["failures"], c["of"], c["regressed"]) == (1, 3, False)
+
+
+def test_same_heard_hash_error_flaky_passes_after_retry(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="ERROR")})
+    ok = [_row(names[2])]
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, ok, ok])
+    assert (rc, art["status"]) == (0, "pass") and len(calls) == 3
+    assert art["flaky_clips"][0]["runs"] == ["ERROR", "OK", "OK"]
+
+
+@pytest.mark.parametrize("first_kw", [
+    dict(verdict="CANT_DO"),
+    dict(verdict="CANT_DO", brain=False, route="tier"),
+    dict(verdict="ERROR"),
+])
+def test_same_heard_hash_consistent_failure_still_fails(tmp_path, monkeypatch, world, first_kw):
+    d, names, base = world
+    bad = [_row(names[2], first_kw["verdict"], brain=first_kw.get("brain", True),
+                route=first_kw.get("route"))]
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [_with(names, **{"2": first_kw}), bad, bad])
+    assert (rc, art["status"]) == (1, "fail")
+    assert len(calls) == 2                                   # decided at 2/2
+    assert art["flaky_clips"][0]["regressed"] is True and art["said_vs_did_regressions"]
+
+
+def test_same_heard_hash_failing_in_the_majority_of_runs_fails(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO", brain=False, route="tier")})
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base,
+                            [run1, [_row(names[2])], [_row(names[2], "CANT_DO")]])
+    assert (rc, art["status"]) == (1, "fail") and len(calls) == 3
+    assert art["flaky_clips"][0]["runs"] == ["CANT_DO", "OK", "CANT_DO"]
+
+
+def test_changed_heard_hash_cant_do_is_never_retried_even_if_a_retry_would_pass(tmp_path, monkeypatch, world):
+    d, names, base = world
+    run1 = _with(names, **{"2": dict(verdict="CANT_DO", heard="other-transcript")})
+    ok = [_row(names[2])]
+    rc, art, calls = _drive(tmp_path, monkeypatch, d, base, [run1, ok, ok])
+    assert (rc, art["status"]) == (1, "fail") and calls == [names]
+    assert art["flaky_retried"] is False
+
+
+# -- the dirty-tree verdict (revision.dirty) ---------------------------------------
+def _vcs(repo: Path, *a: str) -> None:
+    import subprocess
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                   check=True, capture_output=True)
+
+
+@pytest.fixture
+def repo(tmp_path):
+    r = tmp_path / "wt"
+    sd = r / "services" / "zoe-data"
+    (sd / "data").mkdir(parents=True)
+    (r / ".gitignore").write_text("services/zoe-data/data/router_head_shadow.jsonl\n")
+    (sd / ".gitignore").write_text(".env\n__pycache__/\n")
+    (sd / "app.py").write_text("x = 1\n")
+    _vcs(r, "init", "-q")
+    _vcs(r, "add", "-A")
+    _vcs(r, "commit", "-q", "-m", "init")
+    return r, sd
+
+
+def test_clean_checkout_is_not_dirty(repo):
+    r, sd = repo
+    rev = vrp.service_revision(sd)
+    assert rev["dirty"] is False and rev["clean_verified"] is True and rev["dirty_paths"] == []
+
+
+def test_ignored_env_and_pycache_do_not_mark_the_tree_dirty(repo):
+    r, sd = repo
+    (sd / ".env").write_text("SECRET=1\n")
+    (sd / "__pycache__").mkdir()
+    (sd / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"\0")
+    assert vrp.service_revision(sd)["dirty"] is False
+
+
+def test_unignored_replay_runtime_artifacts_do_not_mark_the_tree_dirty(repo):
+    # PR #2110: the router shadow log's .lock + rotated segments were not in .gitignore
+    r, sd = repo
+    (sd / "data" / "router_head_shadow.jsonl.lock").write_text("")
+    (sd / "data" / "router_head_shadow.jsonl.1").write_text("{}\n")
+    rev = vrp.service_revision(sd)
+    assert rev["dirty"] is False
+    assert sorted(rev["runtime_artifacts_ignored"]) == [
+        "services/zoe-data/data/router_head_shadow.jsonl.1",
+        "services/zoe-data/data/router_head_shadow.jsonl.lock"]
+
+
+def test_modified_tracked_file_marks_the_tree_dirty(repo):
+    r, sd = repo
+    (sd / "app.py").write_text("x = 2\n")
+    rev = vrp.service_revision(sd)
+    assert rev["dirty"] is True and rev["dirty_paths"] == ["services/zoe-data/app.py"]
+
+
+def test_staged_deleted_and_untracked_source_files_mark_the_tree_dirty(repo):
+    r, sd = repo
+    (sd / "new_module.py").write_text("y = 1\n")             # untracked, NOT a known runtime artifact
+    assert vrp.service_revision(sd)["dirty"] is True
+    (sd / "new_module.py").unlink()
+    (sd / "app.py").unlink()
+    assert vrp.service_revision(sd)["dirty"] is True
+    _vcs(r, "checkout", "--", "services/zoe-data/app.py")
+    (sd / "app.py").write_text("x = 3\n")
+    _vcs(r, "add", "services/zoe-data/app.py")
+    assert vrp.service_revision(sd)["dirty"] is True
+
+
+def test_runtime_artifact_beside_a_real_modification_is_still_dirty(repo):
+    r, sd = repo
+    (sd / "data" / "router_head_shadow.jsonl.lock").write_text("")
+    (sd / "app.py").write_text("x = 9\n")
+    rev = vrp.service_revision(sd)
+    assert rev["dirty"] is True and rev["dirty_paths"] == ["services/zoe-data/app.py"]
+
+
+def test_tracked_runtime_artifact_path_modified_is_still_dirty(repo):
+    # the allowlist only forgives UNTRACKED files: a committed-then-edited path is a real change
+    r, sd = repo
+    (sd / "data" / "router_head_shadow.jsonl.1").write_text("a\n")
+    _vcs(r, "add", "-f", "services/zoe-data/data/router_head_shadow.jsonl.1")
+    _vcs(r, "commit", "-q", "-m", "track it")
+    (sd / "data" / "router_head_shadow.jsonl.1").write_text("b\n")
+    assert vrp.service_revision(sd)["dirty"] is True
+
+
+# -- review round: the runtime-artifact patterns are narrow, the -z parser is exact ---------------
+def _untracked(repo, rel: str, data: bytes = b"x") -> None:
+    p = repo[0] / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+
+
+def test_root_pycache_pyc_is_a_runtime_artifact(repo):
+    _untracked(repo, "__pycache__/mod.cpython-312.pyc")
+    _untracked(repo, "pkg/__pycache__/mod.cpython-312.pyc")
+    rev = vrp.service_revision(repo[1])
+    assert rev["dirty"] is False
+    assert sorted(rev["runtime_artifacts_ignored"]) == ["__pycache__/mod.cpython-312.pyc",
+                                                        "pkg/__pycache__/mod.cpython-312.pyc"]
+
+
+def test_pyc_outside_pycache_is_dirty(repo):
+    _untracked(repo, "scratch.pyc")
+    _untracked(repo, "services/zoe-data/helper.pyc")
+    rev = vrp.service_revision(repo[1])
+    assert rev["dirty"] is True
+    assert sorted(rev["dirty_paths"]) == ["scratch.pyc", "services/zoe-data/helper.pyc"]
+
+
+def test_non_pyc_file_inside_pycache_is_dirty(repo):
+    _untracked(repo, "pkg/__pycache__/notes.txt")
+    _untracked(repo, "__pycache__/payload.py")
+    rev = vrp.service_revision(repo[1])
+    assert rev["dirty"] is True
+    assert sorted(rev["dirty_paths"]) == ["__pycache__/payload.py", "pkg/__pycache__/notes.txt"]
+
+
+def test_nested_path_under_pycache_and_lookalike_names_are_dirty(repo):
+    _untracked(repo, "__pycache__/sub/deep.pyc")                  # not a direct child
+    _untracked(repo, "notpycache/x.pyc")
+    _untracked(repo, "services/zoe-data/data/router_head_shadow.jsonl.bak")
+    rev = vrp.service_revision(repo[1])
+    assert rev["dirty"] is True and len(rev["dirty_paths"]) == 3
+
+
+def test_real_staged_rename_is_dirty_and_consumes_its_source_field(repo):
+    r, sd = repo
+    _untracked(repo, "services/zoe-data/data/router_head_shadow.jsonl.lock", b"")   # forgiven, after the rename
+    _vcs(r, "mv", "services/zoe-data/app.py", "services/zoe-data/app2.py")
+    rev = vrp.service_revision(sd)
+    assert rev["dirty"] is True
+    assert rev["dirty_paths"] == ["services/zoe-data/app2.py"]            # source path is not a second entry
+    assert rev["runtime_artifacts_ignored"] == ["services/zoe-data/data/router_head_shadow.jsonl.lock"]
+
+
+@pytest.mark.parametrize("code", ["R ", " R", "RM", "MR", "C ", " C", "CM", "MC", "RR", "CC"])
+def test_rename_and_copy_in_either_column_consume_the_source_field(code):
+    # `git status --porcelain -z`: "XY to\0from\0" when X or Y is R or C. The source here is the
+    # NAME of a runtime artifact: it must NOT be read as its own entry (and forgiven or listed).
+    out = (f"{code} new_name.py\0services/zoe-data/data/router_head_shadow.jsonl.lock\0"
+           "?? services/zoe-data/data/router_head_shadow.jsonl.1\0")
+    dirty, runtime = vrp._classify_status(out)
+    assert dirty == ["new_name.py"]
+    assert runtime == ["services/zoe-data/data/router_head_shadow.jsonl.1"]
+
+
+@pytest.mark.parametrize("bad", [
+    "garbage\0",                       # no XY and separator
+    "XYnew.py\0",                      # missing the separating space
+    "?? \0",                           # empty path
+    "R  to.py\0",                      # rename with no source field
+    "!!\0",
+])
+def test_unparseable_status_fails_dirty(bad):
+    dirty, runtime = vrp._classify_status(bad)
+    assert dirty and runtime == []
+
+
+def test_empty_status_is_clean():
+    assert vrp._classify_status("") == ([], [])
+
+
+def test_unreadable_git_status_is_dirty_and_unverified(repo, monkeypatch):
+    real = vrp.subprocess.run
+
+    def fake(cmd, *a, **k):
+        if "status" in cmd:
+            return vrp.subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: bad index")
+        return real(cmd, *a, **k)
+
+    monkeypatch.setattr(vrp.subprocess, "run", fake)
+    rev = vrp.service_revision(repo[1])
+    assert rev["dirty"] is True and rev["clean_verified"] is False
+    assert rev["dirty_paths"] == [] and rev["runtime_artifacts_ignored"] == []
+
+
+def test_dirty_and_ignored_lists_are_capped_at_twenty_but_dirty_uses_the_full_list(repo):
+    r, sd = repo
+    for i in range(25):
+        _untracked(repo, f"extra_{i:02d}.py")
+        _untracked(repo, f"pkg/__pycache__/m{i:02d}.cpython-312.pyc")
+    rev = vrp.service_revision(sd)
+    assert rev["dirty"] is True
+    assert len(rev["dirty_paths"]) == 20 and len(rev["runtime_artifacts_ignored"]) == 20
+
+
+def test_cap_never_hides_a_dirty_path_behind_runtime_artifacts(repo):
+    r, sd = repo
+    for i in range(25):
+        _untracked(repo, f"pkg/__pycache__/m{i:02d}.cpython-312.pyc")
+    _untracked(repo, "zzz_last.py")
+    rev = vrp.service_revision(sd)
+    assert rev["dirty"] is True and rev["dirty_paths"] == ["zzz_last.py"]
+
+
+# -- review round 2: the PRODUCTION .gitignore, and undecodable names -----------------------------
+@pytest.mark.parametrize("name,ignored", [
+    ("router_head_shadow.jsonl", True),
+    ("router_head_shadow.jsonl.lock", True),
+    ("router_head_shadow.jsonl.1", True),
+    ("router_head_shadow.jsonl.12", True),
+    ("router_head_shadow.jsonl.keep", False),
+    ("router_head_shadow.jsonl.orig", False),
+    ("router_head_shadow.jsonl.1x", False),
+    ("router_head_shadow.jsonl.123", False),
+])
+def test_production_gitignore_hides_only_the_shadow_log_files(name, ignored):
+    import subprocess
+    proc = subprocess.run(["git", "-C", str(REPO), "check-ignore", "-q", f"services/zoe-data/data/{name}"],
+                          capture_output=True)
+    assert (proc.returncode == 0) is ignored, name
+
+
+def test_untracked_file_with_undecodable_name_is_dirty_not_a_crash(repo, monkeypatch):
+    r, sd = repo
+    monkeypatch.setenv("LC_ALL", "C")
+    try:
+        (r.__class__(os.fsdecode(os.fsencode(str(r)) + b"/bad\xff.py"))).write_bytes(b"x")
+    except OSError:
+        pytest.skip("filesystem rejects non-UTF-8 names")
+    rev = vrp.service_revision(sd)
+    assert rev is not None and rev["dirty"] is True and rev["clean_verified"] is True
+    assert len(rev["dirty_paths"]) == 1 and rev["dirty_paths"][0].startswith("bad")
+
+
+def test_unterminated_status_output_fails_dirty_even_for_an_allowlisted_tail():
+    tail = "?? services/zoe-data/data/router_head_shadow.jsonl.lock"
+    dirty, runtime = vrp._classify_status(tail)                   # no trailing NUL: truncated
+    assert dirty and runtime == []
+    dirty, runtime = vrp._classify_status(tail + "\0")            # terminated: forgiven
+    assert dirty == [] and runtime == ["services/zoe-data/data/router_head_shadow.jsonl.lock"]
+    dirty, runtime = vrp._classify_status("?? a.py\0" + tail)     # earlier records fine, tail truncated
+    assert "a.py" in dirty and any("unterminated" in d for d in dirty) and runtime == []

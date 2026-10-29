@@ -50,8 +50,8 @@ also resolves on 3.12, held for its own gated move.
 | package | current (box) | cp312 target | wheel on PyPI (aarch64) | measured / notes |
 |---|---|---|---|---|
 | fastapi | 0.141.1 | 0.141.1 | pure | imports |
-| uvicorn[standard] | 0.49.0 | **0.53.0** (2026-09-27) | pure (+uvloop/httptools/watchfiles cp312) | Was capped at 0.49 (`--ws auto` → legacy `websockets_impl`). Crossed deliberately 2026-09-27: `auto` → `websockets_sansio_impl` (same websockets 16.1.1; no wsproto); real-socket A/B identical except the deflate window (12 bits). The build smoke now asserts sansio. Rationale + rollback: `requirements.txt`. |
-| websockets | 16.1.1 | 16.1.1 | cp312 + pure | **step-up 17.1** (≥3.11): keeps `websockets.legacy.*` and the deprecated `websockets.server.WebSocketServerProtocol` lazy alias that uvicorn's legacy impl (the `--ws websockets` rollback; 0.53.0's default is sans-I/O) imports (verified in source + by import). Replay-gate the move. |
+| uvicorn[standard] | 0.49.0 | **0.54.0** (0.53.0 2026-09-27; 0.54.0 2026-10-28) | pure (+uvloop/httptools/watchfiles cp312) | Was capped at 0.49 (`--ws auto` → legacy `websockets_impl`). Crossed deliberately 2026-09-27: `auto` → `websockets_sansio_impl` (same websockets 16.1.1; no wsproto); real-socket A/B identical except the deflate window (12 bits). The build smoke now asserts sansio. Rationale + rollback: `requirements.txt`. |
+| websockets | 16.1.1 | **17.2** (2026-10-28; 17.3 held, <14 days) | cp312 + pure | **step-up taken 2026-10-28** (≥3.11; Zoe uses only `websockets.connect(open_timeout=, max_size=)`, unchanged in 17; uvicorn's sans-I/O server imports `websockets.server.ServerProtocol`/`frames`/`http11`, unchanged). Rollback: re-pin 16.1.1. Original note: keeps `websockets.legacy.*` and the deprecated `websockets.server.WebSocketServerProtocol` lazy alias that uvicorn's legacy impl (the `--ws websockets` rollback; 0.53.0's default is sans-I/O) imports (verified in source + by import). Replay-gate the move. |
 | pydantic / -core | 2.13.5 | 2.13.5 | cp312 | imports |
 | aiosqlite, asyncpg, alembic, psycopg2-binary, python-multipart, httpx, aiohttp | as pinned | same | cp312 / pure | all import; asyncpg 0.31.0 `manylinux_2_28`, psycopg2-binary 2.9.12 `2_27/2_28` |
 | PyJWT (python-jose removed 2026-10-09, GHSA-3qf3-8w2g-rqmx) | 2.15.0 | same | pure; cryptography 50.0.1 cp312 abi3 | imports |
@@ -64,7 +64,7 @@ also resolves on 3.12, held for its own gated move.
 | transformers | 5.17.0 | 5.17.0 | pure | `WhisperFeatureExtractor` imports |
 | fastembed | 0.8.0 | **0.8.1** (2026-09-27) | pure | imports; bge-small vectors bit-identical to 0.8.0; first load re-downloads the model once (cache dir case changed) |
 | scikit-learn / joblib | 1.7.2 / 1.5.3 | 1.7.2 / 1.5.3 | cp312 | **Head loads, `predict_proba` OK.** Step-up 1.9.1 (≥3.11): the 1.7.2 artifact loads with `InconsistentVersionWarning` and predicts **bit-identically** (max Δproba = 0.0 on probe vectors, numpy 2.5.3). Re-export is a CONTRACT matter (`services/zoe-data/AGENTS.md`: pins must equal training pins in `labs/setfit-router/requirements.txt`), not a correctness blocker — retrain/re-export in the same PR that moves the pin. |
-| APScheduler / tzlocal / SQLAlchemy | 3.10.4 / 2.1 / 2.0.54 | same exact | pure / cp312 | `SQLAlchemyJobStore` imports, `pytz` present, local zone resolves. **`SQLAlchemy>=2.0,<3.0` resolves to 2.1.1 on 3.12** — pinned to the box's 2.0.54 so B0.9's jobstore question is not silently reopened. |
+| APScheduler / tzlocal / SQLAlchemy | 3.10.4 / 2.1 / 2.0.54 | **3.11.3 / 5.4.4** / 2.0.54 (2026-10-28; `pytz==2026.3` now pinned explicitly - NOT newer: 2026.4/2026.5 break 3.11.3's handling of pickled fixed-offset pytz zones) | pure / cp312 | **APScheduler 3.11.3 + tzlocal 5.4.4 taken 2026-10-28.** Jobstore hazard MEASURED: a store written by 3.10.4 and read by 3.11.3 WITHOUT pytz lost 4 of 5 jobs ("Unable to restore job -- removing it"); WITH pytz all 5 restored (named-zone pytz tzinfo converted to ZoneInfo; fixed-offset zones need pytz <=2026.3) and 3.10.4 can still read the re-saved store. Hence the explicit pytz pin. `SQLAlchemyJobStore` imports, local zone resolves. **`SQLAlchemy>=2.0,<3.0` resolves to 2.1.1 on 3.12** — pinned to the box's 2.0.54 so B0.9's jobstore question is not silently reopened. |
 | pywebpush / py-vapid | 2.5.0 / 1.9.4 | same | pure; `http-ece` 1.2.1 is a **pure-Python sdist** (only sdist in the set) | builds in uv's isolated build env |
 | **prometheus-client** | 0.25.0 (box), **undeclared** | 0.25.0 | pure | **Unguarded module-level import** in `memory_metrics.py`, `voice_metrics.py`, `guest_policy.py`. Declared in both manifests this PR. |
 | **livekit-protocol** | 1.1.8 (box), **undeclared** | **1.1.27** (2026-09-27) | pure | `livekit_aiortc.py` does `from livekit.protocol import rtc`; `livekit` does NOT depend on it — it rode in on the unused `livekit-agents` (CI hand-installs it). Found because the ci_safe lane failed collection without it. Declared in both manifests. |
@@ -103,7 +103,7 @@ distribution that lost files to a removal (shared paths; the `webrtcvad` sdist a
 `webrtcvad-wheels` both ship `webrtcvad.py`) → `uv pip install --no-deps resemblyzer==0.1.4`
 (phase 2, §3 blocker 1; AFTER the sync, which would strip it) → import smoke (fails the
 build if any load-bearing import fails; asserts `--ws auto` resolves to the sans-I/O
-`websockets_sansio_impl` (uvicorn 0.53.0 since 2026-09-27 — any other selection fails the build) and
+`websockets_sansio_impl` (uvicorn 0.53.0 since 2026-09-27, 0.54.0 since 2026-10-28 — any other selection fails the build) and
 that torch has no CUDA). It refuses to install when `MemAvailable` < 500 MB (`ZOE_PY312_MIN_MEM_MB`)
 and runs everything under `nice -n 15`.
 
@@ -239,15 +239,15 @@ All of it is executed against stubs by `tests/unit/test_zoe_data_py312_cutover.p
 5. **The `/ws/voice/` lane — the only gate that exercises it.** Speak one idle→first-utterance
    turn through a `/ws/voice/` client (`voice.html` / `touch/voice.html` — the in-repo clients)
    and confirm a reply plays; the build smoke only proves `--ws auto` *selects* the sans-I/O
-   `websockets_sansio_impl` (uvicorn 0.53.0), and gates 2 and 4 never open a WebSocket.
+   `websockets_sansio_impl` (uvicorn 0.54.0), and gates 2 and 4 never open a WebSocket.
    Watch `journalctl --user -u zoe-data` (and `~/.zoe-logs/`) through it for WebSocket errors and
    `InconsistentVersionWarning`/`DeprecationWarning` floods; then run
    `requirements_drift_check.py` with the venv interpreter (0 MISMATCH expected — it also checks
    that torch is the pinned CPU wheel URL, not an index build).
 
-Then, one at a time, each its own PR + replay gate: websockets 17.1 → onnxruntime 1.30.0 →
+Then, one at a time, each its own PR + replay gate (websockets 17 and APScheduler 3.11.3 landed in the 2026-10-28 routine batch): onnxruntime 1.30.0 →
 numpy 2.x (re-export the router head with sklearn 1.9 in the same PR) → B0.8 (chromadb 1.5.x +
-mempalace 3.10 on a palace copy) → B0.9 (APScheduler 3.11 with `export_jobs`/`import_jobs`).
+mempalace 3.10 on a palace copy) → APScheduler 4 (alpha; held).
 
 ## 6. Rollback
 

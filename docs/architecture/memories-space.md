@@ -538,7 +538,7 @@ act until T8 has measured the RSS delta and the voice replay has passed with a t
      below), and never as anything else.
    - Drop routine stretches with a cheap cue filter (no date, time, list word, "remind", "need", "buy", "meeting",
      "call", or name), like the night mind's `is_routine`.
-   - Cut into chunks of about 2,400 tokens, at most `ZOE_OMI_DAY_REVIEW_MAX_CALLS` (default 8). A full day keeps its
+   - Cut into chunks of about 2,400 tokens, at most `ZOE_OMI_DAY_REVIEW_MAX_CALLS` (default 16). A full day keeps its
      highest-scoring chunks and reports what it skipped.
 2. **Prompt.**
    - Each line is rendered `[s<id> YOU 09:14] text` or `[s<id> OTHER 09:15] text`. Text is passed through the
@@ -825,7 +825,7 @@ omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_con
 | `ZOE_OMI_TAG_WINDOW_S` / `_HOP_S` | 2.0 / 1.0 | windowing |
 | `ZOE_OMI_DAY_REVIEW` | off | `shadow`: analyse and store candidates, shown on the desktop Pendant tab only, with no mention, no raise and no voice. `on`: the raise, the pull, the dialogue and the cards. |
 | `ZOE_OMI_DAY_REVIEW_LANE` | `night` | `night` (the 12B night window, last; owner decision 2026-10-18) / `day` (the idle 4B, opt-in) / `both` |
-| `ZOE_OMI_DAY_REVIEW_IDLE_S` / `_MAX_CALLS` | 600 / 8 | lane E gate and budget |
+| `ZOE_OMI_DAY_REVIEW_IDLE_S` / `_MAX_CALLS` | 600 / 16 | lane E gate and budget |
 | `ZOE_OMI_REVIEW_UNTAGGED` | on (in shadow) | analyse untagged days in the reduced form of §5.2 (D4) |
 | `ZOE_OMI_CANDIDATE_RETENTION_DAYS` | 14 | candidate text retention after close |
 | `ZOE_OMI_LEARN_VOICES` | off | learned voiceprints from member tags + suggestions (§2.6) |
@@ -900,7 +900,7 @@ Each phase is one PR (or a small workstream), flag-dark, with its tests, and say
 | P4 | speaker tagging (`ZOE_OMI_SPEAKER_TAG=shadow`), segments, per-line labels and corrections, pendant enrolment, "Who is this?" labels | `ZOE_SPEAKER_MODEL` past `resemblyzer` (#2024 is merged), ResNet34 built on the Jetson, owner re-enrolled; T8 measured | lines say You / Someone else; Zoe can learn the pendant voice |
 | P4b | learned voices (`ZOE_OMI_LEARN_VOICES`): segment embeddings, voiceprints from tags, suggestions, the "Voices I've learned" list, the forget step | P4 | "this sounds like Sam, right?" |
 | P5 | **backend built flag-dark (Phase 1 of the day review, migration 0054: `omi_day_review.py`, `omi_review_apply.py`, `routers/omi_day_review.py`; kinds add `person` and `owner_fact`, statuses pending / approved / dismissed, the omi_segments speaker vocabulary)**; day analysis (`ZOE_OMI_DAY_REVIEW=shadow`), candidates on the desktop Pendant tab with approve / edit / skip and real writes **on approval** | P2 (P4 for the full form) | "Zoe found these in your day" on the computer |
-| P6 | the conversation: raise / pull / orb, the voice dialogue tier (replay-gated), the panel private card (touch), the crowded-room phone send | P5, the voice session live | "I went through your day ..." on the next turn |
+| P6 | **raise / pull / orb + the crowded-room phone send built flag-dark (`day_review_raise.py`, `ZOE_DAY_REVIEW_RAISE`; record [day-review-raise.md](../knowledge/day-review-raise.md)): the raise rides the first-turn brief, not `[RAISE]` / `proactive_candidates`; a crowded raise is not made; snooze after two ignored raises or one decline.** The private card is #2129's. Not built: the voice dialogue tier (`omi_review_dialog`) | P5, the voice session live | "I went through your day ..." on the next turn |
 | P7 | caregiver curation: **built flag-dark (API + desktop/phone UI, migration 0061)**; the spoken curator intent is a separate voice-path PR | owner decisions D7, D9, D10 (answered 2026-10-19) | a parent can add memories for a child |
 | P8 | 12B night lane; naming consented household members in tags; linking tags to `person_directory` | identity Phase 4, omi plan §5 consent | quality, people layer |
 

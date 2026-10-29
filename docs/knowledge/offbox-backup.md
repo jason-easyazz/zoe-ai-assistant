@@ -1,9 +1,9 @@
 ---
 type: Runbook
 title: Off-box encrypted backup to the411 (A5) and the B9 ops-hygiene owner steps
-description: How the box's nightly backup leaves the box - restic into an append-only rest-server on the411, household words and secrets also age-encrypted to a key that never touches the box - what is in each tier and what is never shipped, retention reconciled with "forgotten means forever" (time-bounded 35 days for the household tier), the monthly restore drill, the DNS decision, the threat model, the owner's install steps on the411 and the box, the lab result, and the owner steps for the B9 hygiene items (units, health check, container caps, .env reaping, file modes, the VAPID key, the chromadb finding).
-tags: [backup, restic, age, the411, forget, retention, drill, systemd, docker, secrets, runbook]
-timestamp: 2026-10-18T21:00:00+08:00
+description: How the box's nightly backup leaves the box - restic into an append-only rest-server on the411, household words and secrets also age-encrypted to a key that never touches the box - what is in each tier and what is never shipped, retention reconciled with "forgotten means forever" (time-bounded 35 days for the household tier), the monthly restore drill, the DNS decision, the threat model, the owner's install steps on the411 and the box, the lab result, the owner steps for the B9 hygiene items (units, health check, container caps, .env reaping, file modes, the VAPID key, the chromadb finding), and (deep dive 2 S0-8) the host sources added to both copies, the weekly restore drill into a throwaway container, local encryption at rest, and their owner steps.
+tags: [backup, restic, age, the411, forget, retention, drill, restore, systemd, docker, secrets, home-assistant, runbook]
+timestamp: 2026-10-19T06:00:00+08:00
 ---
 
 # Off-box encrypted backup (A5) and ops hygiene (B9)
@@ -55,8 +55,8 @@ including words that were since forgotten.
 
 | tier | contents | encryption | retention |
 |---|---|---|---|
-| `household` | newest on-box Postgres dumps (`zoe`, `multica`; biometric table data already excluded by `postgres-nightly-backup.sh`), `pg_dumpall --globals-only`, newest MemPalace tarball, `~/.zoe` filtered, `~/.zoe-voice-samples` | age + restic | one per day for 7 days, one per week for 34 days; **never older than 35 days**, no monthly |
-| `secrets` | the live checkout's `.env`, `.env.*`, `services|labs|modules/*/.env*` (never `*.example`, `*.bak*`), `ssl/`, `config/`, `~/.zoe/env`, `~/.zoe/secrets` | age + restic | 7 daily, 4 weekly, 6 monthly |
+| `household` | newest on-box Postgres dumps (`zoe`, `multica`; biometric table data already excluded by `postgres-nightly-backup.sh`) and their manifests, `pg_dumpall --globals-only`, newest MemPalace tarball, `~/.zoe` filtered, `~/.zoe-voice-samples`; **host sources (section 7)**: HA config (minus `.storage`, logs, recorder, tts, deps) + the newest `.storage`/`.cloud` helper export, `services/zoe-data/data/` (minus the router shadow log, the VAPID key and the dead `zoe.db`), the models lock | age + restic | one per day for 7 days, one per week for 34 days; **never older than 35 days**, no monthly |
+| `secrets` | the live checkout's `.env`, `.env.*`, `services|labs|modules/*/.env*` (never `*.example`, `*.bak*`), `ssl/`, `config/`, `~/.zoe/env`, `~/.zoe/secrets`; **host config (section 7)**: HA `secrets.yaml`, `~/.config/systemd/user` (units + drop-ins), `/etc/systemd/system/*.d`, `~/bin`, the crontab | age + restic | 7 daily, 4 weekly, 6 monthly |
 | `artefacts` | `labs/functiongemma-finetune/runs/gen1/merged` (the router lineage checkpoint: NEVER delete), `~/models/functiongemma-router`, and `~/.zoe/backups/panel` (the panel's custom wake model `hey_zoe.onnx`, in no git; sha256 in `models.lock`) | restic | 7 daily, 4 weekly, 6 monthly |
 
 Never shipped from `~/.zoe` (each is an fnmatch on any path component, `ZOE_TREE_EXCLUDES`): anything `*backup*` (backups of
@@ -91,7 +91,9 @@ tier time-bounded at 35 days on the411; restore => re-issue the forget") so the 
 
 ### 1.4 The restore drill and alerts
 
-- **Monthly** (the weekly `zoe-backup-verify` runs it once per 28 days, Sunday 05:45): for each tier, restore the newest snapshot
+- **Weekly, on the box** (Sunday 05:30): the restore drill of section 7.2 - the on-box dumps restored into a throwaway
+  container, the palace opened and queried, the host archive checked. It runs first in `zoe-backup-verify`.
+- **Monthly** (the weekly `zoe-backup-verify` runs it once per 28 days, Sunday 05:30): for each tier, restore the newest snapshot
   from the411 into a scratch dir (`~/.cache/zoe-offbox/drill-*`, removed after), compare every file's sha256 with the manifest the
   box recorded when it SENT that snapshot, read one twelfth of the repo's data (`restic check --read-data-subset=<month>/12`, the
   whole repo once a year), and check retention: a household snapshot more than 35 days older than the newest (no slack) means the411's prune
@@ -155,7 +157,8 @@ All as root over SSH. Placeholders as in `labs/relay/RUNBOOK-R1.md` (this repo i
    whole corpus at the 2 MiB/s default cap; later nights send only changes), then `... drill --force`.
 6. Install the units: `cp scripts/setup/systemd/zoe-{backup,backup-verify,offbox-backup}.{service,timer} ~/.config/systemd/user/`,
    `systemctl --user daemon-reload`, `systemctl --user enable --now zoe-offbox-backup.timer` (the two on-box timers are already
-   enabled; the copies move the MemPalace step and the verify script into the repo and the verify to Sunday 05:45).
+   enabled; the copies move the MemPalace step and the verify script into the repo, add the host archive step, and turn the
+   verify into the section 7.2 restore drill at Sunday 05:30).
 7. `systemctl --user list-timers 'zoe-*backup*'`; after the first night, `~/.zoe-logs/offbox-backup.log` ends with three
    `snapshot` lines and `~/.local/state/zoe-offbox/last_backup.json` has `"problems": []`.
 
@@ -241,3 +244,161 @@ Every cap is at least 1.3 x peak (`tests/unit/test_ops_hygiene_b9.py`); the valu
 | zoe-smb-drop (`docker run`) | 26 | `docker update` 256m | 384m |
 | zoe-database | 217 | none (exempt: an OOM kill is an outage of every data path) | - |
 | livekit | 19 idle | 512m in #2108 (A10) | 512m |
+
+## 7. Host sources, the weekly restore drill, local encryption (deep dive 2 S0-8, 2026-10-19)
+
+Source: deep dive round 2 (PR #2123, not yet on main) section 10 (S0-8) and lane J section 6.3 (what a
+dead disk lost even with this backup installed). Nothing here is installed live: scripts, templates and owner steps.
+
+### 7.1 Sources added, to BOTH copies
+
+One list, in `zoe_offbox.py` (`host_household_sources`, `host_secret_sources`, `crontab_source`). The on-box copy is
+`zoe_host_snapshot.py`, the third step of `zoe-backup.service`: `~/.zoe-backups/host/host-<ts>.tar.gz` (0600 in a 0700 dir,
+7 kept) with `MANIFEST.json` inside (every file's sha256, every source label, and which were missing). The off-box copy
+mirrors the same sources file by file (so restic de-duplicates them).
+
+| source | tier | how it is read | left out, and why |
+|---|---|---|---|
+| HA config (`homeassistant/`: YAML, blueprints, `custom_components`) | household | walked as `zoe` | `.storage`/`.cloud` (next row), the recorder DB (state history; a live root-owned SQLite HA rebuilds), `tts`, `deps`, `.cache`, logs |
+| HA `.storage` + `.cloud` (integrations, auth, device/area registries; several files `0600 root`) | household | **root helper** `zoe-ha-config-export storage` through `sudo -n` (7.4) -> `~/.zoe-backups/host/ha-storage-<ts>.tar.gz` | until the owner installs the helper: not captured, reported (backup log line; weekly drill finding) |
+| HA `secrets.yaml` (`zoe`-owned) | secrets | walked | |
+| `services/zoe-data/data/` (`music_discovery/`, `music_prefs.json`, anything new) | household | walked | `router_head_shadow.jsonl*` (raw utterance text; #2110 strips it at 30 days and it regenerates), `vapid_keys.json` (already in the secrets tier), `zoe.db*` (the dead pre-Postgres SQLite, deep dive 2 D-2) |
+| `~/.config/systemd/user` (units + the ~25 drop-ins) and `/etc/systemd/system` (system units such as `serena-bridge` and the Jetson's `nv*`, plus `*.d` drop-ins) | secrets | walked (drop-ins carry env lines) | symlinks (`*.wants`), snapd's generated `snap-*` / `snap.*` units |
+| `~/bin` | secrets | walked (one script holds a DB password) | |
+| crontab | secrets | `crontab -l` at run time | |
+| `~/.zoe/backups/panel/` (panel config + `hey_zoe.onnx`, written by the panel-as-code work, V-3) | on-box host archive only; off the box it rides in the `artefacts` tier (#2142), not twice | walked (the `~/.zoe` tree excludes `*backup*`, so it is its own source) | |
+| models lock (`~/assistant/models.lock`, `~/models/models.lock` or `~/.zoe/models.lock`; `ZOE_MODELS_LOCK` names another) | household | the first that exists | the 80 GB of weights: the lock (paths + sha256) is the restore recipe. The panel-as-code PR (#2142) adds it at the repo root (so git holds it too); until it lands the source is reported missing |
+| Postgres dump manifests (7.2) | household | beside each dump | |
+
+**Pendant transcripts (owner decision OD3, 2026-10-19): kept.** They live in Postgres (`omi_recordings`, `omi_segments`, the
+day-review tables), which every dump carries in full; only the biometric tables' DATA is excluded
+(`learned_voiceprints`, `learned_voiceprint_segments`, `omi_segment_embeddings`, `omi_voice_clusters`). How long a transcript
+lasts in backups after it is deleted live: on-box up to ~5 weeks (7 daily dumps + 4 Sunday weeklies), off-box at most 35 days.
+Pendant **audio** (`~/.zoe/omi-recordings`) stays excluded from both. Pinned by `test_od3_pendant_transcripts_are_kept_audio_is_not`.
+
+Not added (and why): the Flue brain session store (447 MB, append-only, no forget hook: shipping it would copy what the forget
+path cannot reach; decide with D-1), Docker named volumes other than the database (`multica-uploads`: lab-grade), the ONNX MiniLM
+cache and HF weights (re-downloadable; the lock covers the brain), the Pi itself (the panel's own backup is V-3's).
+
+### 7.2 The weekly restore drill (`zoe_restore_drill.py`, Sunday 05:30)
+
+The old weekly check restored the newest dumps **into the live Postgres instance**, counted two tables, never loaded the palace's
+HNSW index, and ran at 03:30 inside the night window. Now:
+
+1. **Manifest at backup time.** `postgres-nightly-backup.sh` runs `pg_dump_manifest.py` after each dump: the table list from the
+   dump's TOC (`pg_restore -l`) and each table's row count from its COPY block (`pg_restore --data-only -f -`, SQL to stdout, no
+   connection), so the counts are exactly what the dump holds; plus, from the live catalog (SELECTs only), the table set, the
+   extension versions and the Alembic revision. A live table missing from the dump is flagged on the spot.
+2. **Throwaway sandbox.** `zoe-restore-drill-pg up` starts `zoe-restore-drill`: the same image digest as the live `zoe-database`
+   (test-pinned to compose), its own `--internal` network, no bind and no named volume (only the image's own anonymous data
+   volume), no published port, 512 MB memory+swap, 256 pids, caps dropped, trust auth inside that network only. The helper
+   trusts objects by the ids `up` RECORDED (root-owned state under `/run` once installed), never by name: a container or
+   network planted under the drill's name is refused, never exec'd into or removed (lab N9). `down` removes the recorded
+   container WITH its anonymous volume (`rm -v`: the restored household data) and network; it is also the unit's
+   `ExecStopPost`.
+3. **Checks** (each a finding on failure): the dump's sha256 vs its manifest and a full gunzip; a sectioned
+   `pg_restore --exit-on-error` into the sandbox (see *Restoring a dump with data-excluded tables* below); **every table's `count(*) FROM ONLY`** equal to the manifest, no table missing or extra, the dump's table
+   set equal to the live catalog's at backup time; the **pgvector extension version** equal to the dump's; the Alembic revision;
+   every HNSW index in the restore valid and USED by a nearest-neighbour query that returns the probed row; and always an HNSW
+   index **built** in the sandbox (2,000 synthetic vectors) and queried with `enable_seqscan=off` (no live table has one today,
+   so this is what proves the image's pgvector builds and uses one); the newest **palace** tarball extracted to a temp dir and
+   opened with the zoe-data py3.12 venv's chromadb (`palace_drill_check.py`: the `palace_client` format guard, collection counts
+   vs the SQLite rows, and per collection a stored vector queried back to itself, which loads HNSW from the segment files); the
+   **host archive**: every file against its manifest sha256, every source label present, the HA export opens and holds
+   `core.config_entries`; freshness (newest dump, tarball and archive under 26 h); the drill image vs the live container's.
+4. **Guards.** Refuses (quietly) inside 01:35-04:55 or while `zoe-night-window` runs; waits up to 45 min for `zoe-backup` /
+   `zoe-offbox-backup`; refuses **loudly (alert + failed unit, exit 4)** below 1100 MB MemAvailable (measured peak ~180 MB, container cap 512 MB) (the voice stack is resident). Findings alert over
+   Telegram through the crash-loop watcher's sender; a drill that has not passed for 15 days says so. State:
+   `~/.local/state/zoe-offbox/last_restore_drill.json`.
+
+Never touched: the live database (the drill only reads its image name), the live palace (`palace_drill_check.py` refuses
+`~/.mempalace`), the live backups (read only).
+
+#### Restoring a dump with data-excluded tables (FKs into the biometric tables)
+
+The nightly dump leaves out the DATA of `learned_voiceprints`, `learned_voiceprint_segments`, `omi_segment_embeddings` and
+`omi_voice_clusters` (owner privacy rule; manifest `data_excluded`). A table that IS backed up but has a foreign key into one of
+them (today `omi_segments.voice_cluster_id` -> `omi_voice_clusters`) restores its rows but not the parents, so a plain
+`pg_restore` ends with `violates foreign key constraint "omi_segments_voice_cluster_id_fkey"` and exit 1. That broke the weekly
+verify on 2026-10-25, and it would equally break a real disaster restore. The class is fixed, not the one FK:
+
+- **Decision: restore in sections and NULL the dangling column**, rather than dump the excluded tables' key columns. A cluster id
+  is a stable handle to a biometric row, so keeping ids would put (pseudonymous but real) biometric structure back into every
+  backup and the off-box copies; a link to a re-learnable cluster is itself re-learnable (the pipeline re-clusters the
+  segments). The row, the constraint and everything else are kept; only the link is cleared.
+- **Discovery is from the dump itself** (`pg_restore -s -f -`, no connection; `scripts/maintenance/pg_restore_plan.py`): every FK
+  whose parent is data-excluded and whose child is not. A new FK of this kind needs no code change. The backup records the same
+  list in the manifest as `excluded_fks` (audit trail); an old manifest without it, or none, falls back to the dump's TOC.
+- **Manual / disaster restore** of such a dump: `pg_restore -d <db> --section=pre-data`, then `--section=data`, then run
+  `nulling_sql(plan_for(<pg_restore -l>, <pg_restore -s -f ->))` (one `UPDATE <child> SET <col> = NULL WHERE <col> IS NOT NULL`
+  per FK) in `psql -v ON_ERROR_STOP=1`, then `--section=post-data`. The weekly drill does exactly this
+  (`Sandbox.restore`, through the root helper's `restore <db> <section>` and `inspect list|schema`).
+- **Nothing is blanket-ignored:** every section runs `--exit-on-error`, so any OTHER error still fails the drill. A NOT NULL
+  referencing column makes the UPDATE fail loudly instead of inventing a value.
+- After such a restore the biometric tables are empty and the nulled links are gone: re-enrol / let the pipeline re-learn them.
+
+### 7.3 Encryption at rest for the local backups: recommended for the host archive only
+
+- **Host archive: yes, once the age recipient exists** (section 4 step 2). It holds credentials (drop-in env lines, `~/bin`, HA's
+  secrets and auth), and old copies of rotated secrets are what a stolen disk or a copied backup dir leaks. Set
+  `Environment=ZOE_LOCAL_BACKUP_ENCRYPT=1` in a `zoe-backup.service` drop-in: the archive becomes `host-<ts>.tar.gz.age`, to the
+  SAME public recipient as the off-box tiers (`~/.config/zoe-backup/age-recipients.txt`). Cost: the box can no longer read it
+  (the identity never lives here). So the plaintext is checked against its manifest just BEFORE encryption, and a
+  `host-<ts>.tar.gz.age.sha256` sidecar records the ciphertext's sha256; the weekly drill checks the age header and that
+  sha256 (a truncated or bit-rotted archive goes red, lab N10) and says the contents are readable only with the owner's
+  identity. A local restore of host config then needs that identity.
+- **Postgres dumps and the palace tarball: no.** Their job is a fast local restore (a bad migration, a corrupted palace) without
+  the owner's vault, and the drill must be able to restore them. Whoever can read `~/.zoe-backups` (0700) can already read the live
+  database. The protection that actually covers a stolen box is full-disk encryption (LUKS on the NVMe), an owner decision with
+  a boot-unlock cost on a headless Jetson.
+
+### 7.4 Owner steps
+
+1. **HA helper** (any time; needed before HA `.storage` is backed up):
+   `sudo install -m 0755 -o root -g root scripts/setup/p0-deroot/libexec/zoe-ha-config-export /usr/local/libexec/zoe-priv/`,
+   then `sudo -n /usr/local/libexec/zoe-priv/zoe-ha-config-export storage | tar -tzf -` lists `.storage/...`. Until P0-3 the
+   `zoe-temp` grant lets `sudo -n` run it; from P0-0 the `ZOE_BACKUP` alias in `60-zoe-deroot` does. **At P0-2** (HA config to
+   `/srv/zoe/homeassistant`), change its `HA_CONFIG` line.
+2. **Drill helper** (optional before P0; required at P0-3, when `zoe` can no longer create containers):
+   `sudo install -m 0755 -o root -g root scripts/setup/p0-deroot/libexec/zoe-restore-drill-pg /usr/local/libexec/zoe-priv/`.
+   Once installed the drill uses it through `sudo -n`; before that it runs the repo copy as `zoe` (docker group). When the
+   `zoe-database` image is bumped, bump `PINNED_IMAGE` in it too (a test fails until both match) and re-install.
+   **If the helper and `60-zoe-deroot` are already installed**, re-install both: the sectioned restore needs the new argv
+   (`restore <db> pre-data|data|post-data`, `inspect list|schema`); the old `restore <db>` is gone.
+   **The installed `~/scripts/maintenance/zoe-backup-verify.sh` is a stale May-2026 copy** that still restores into the live
+   instance with a bare `pg_restore` and discards its stderr - it is what failed on 2026-10-25. Replace it with the tracked
+   script (`install -m 0755 scripts/maintenance/zoe-backup-verify.sh ~/scripts/maintenance/`, with `zoe_restore_drill.py`,
+   `zoe_offbox.py`, `pg_dump_manifest.py` and `pg_restore_plan.py` alongside it - the script finds them next to itself), or point
+   `zoe-backup-verify.service` at the repo copy.
+3. **Units**: `cp scripts/setup/systemd/zoe-backup{,-verify}.{service,timer} ~/.config/systemd/user/ && systemctl --user
+   daemon-reload` (both timers are already enabled live; the verify moves from the live 03:30 to Sunday 05:30). The first
+   night writes `~/.zoe-backups/host/` and the first dump manifests; run `python3 scripts/maintenance/zoe_restore_drill.py` by
+   hand once after that (outside 01:35-04:55, MemAvailable >= 1100 MB) and read its `ok:` lines.
+4. **Optional**: local encryption of the host archive (7.3), after section 4 step 3 exists.
+
+### 7.5 The lab (`labs/restore-drill/run.sh`)
+
+A synthetic source database in its own capped `--network none` container (the pinned image), a synthetic palace built with the
+real chromadb 1.5.9, a synthetic box, and the REAL scripts end to end: `postgres-nightly-backup.sh` + `pg_dump_manifest.py`,
+`mempalace-nightly-backup.sh`, `zoe_host_snapshot.py` + `zoe-ha-config-export`, `zoe_restore_drill.py` + `zoe-restore-drill-pg`.
+Gates: `night_busy.sh test`, 01:35-04:55, MemAvailable >= 2000 MB at start (the lab runs a source DB AND the drill sandbox; its drill floor is set to 1500 MB inside the lab, separate from the weekly drill's measured 1100 MB floor), the test-lane lock.
+
+**2026-10-19: 18/18 cells** (Jetson, pgvector 0.8.6-pg17 pinned digest, chromadb 1.5.9). S1 the real nightly script's manifest:
+1,234 multi-line rows counted exactly, a quoted table name, a partitioned parent (0) and its partition (40), the biometric
+table listed as data-excluded, pgvector 0.8.6, Alembic 0057, live table set equal; S2 the real palace tarball; S3 the host
+archive holds exactly the new sources and none of the exclusions (shadow log, VAPID key, dead `zoe.db`, HA log, recorder,
+tts); S4 the HA helper export (`.storage` + `.cloud`, 0600); **D1 the drill green**: every table count, pgvector, Alembic, the
+dump's own HNSW index valid + used + returning the probed row, a synthetic HNSW built and used, the palace opened with
+chromadb and queried, 14 host files checksum-verified. Negative controls, each red for its own reason only: **N1** bytes
+flipped in a dump (sha256 + gzip CRC); **N1b** a dump corrupted inside its zlib blocks with a matching sha256 (`pg_restore`
+fails); **N2** a dump missing `chat_messages` (table missing after restore); **N3** the box's older `pgvector/pgvector:pg17`
+image as the sandbox (pgvector 0.8.2 vs the dump's 0.8.6); **N4** a palace tarball without its HNSW segment dirs (chromadb
+`Error finding id`); **N5** one host file changed (differs from the manifest); **N6** the HA helper refuses a symlinked
+`.storage`, skips a symlinked file inside it and refuses a symlinked parent; **N7** a memory floor above MemAvailable
+refuses (exit 3) before any container exists; **N8** the drill helper refuses five out-of-set argument lists (exit 2);
+**N9** a container planted under the drill's name is refused and left exactly as it was (never started, exec'd or
+removed); **S5** with `ZOE_LOCAL_BACKUP_ENCRYPT=1` the host archive is age-encrypted (pinned age v1.3.2), the drill finds
+the ciphertext intact and an off-box identity opens it; **N10** the same archive truncated goes red; **T1** teardown
+leaves no container, network, anonymous volume or scratch dir, and the live database's database list is unchanged.
+The A5 lab (`labs/offbox-backup`) was re-run with the host sources in its synthetic box: 19/19 (B2 ships exactly the
+new sources to each tier; B4 an unchanged crontab re-encrypts nothing).

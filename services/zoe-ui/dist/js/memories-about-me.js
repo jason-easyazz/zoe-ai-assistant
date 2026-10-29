@@ -26,7 +26,7 @@
         forgotten: 'Forgotten.',
     };
     const PRIVATE_WORDS = { health: 'health', money: 'money', personal: 'personal', feelings: 'feelings' };
-    const state = { doc: null, section: null, trigger: null, actions: null, busy: false };
+    const state = { doc: null, section: null, trigger: null, actions: null, busy: false, listening: false };
 
     function el(tag, cls, text) {
         const n = state.doc.createElement(tag);
@@ -85,7 +85,7 @@
         const pane = el('div', 'am-pane');
         const note = el('p', 'am-note', '');
         if (state.actions && state.actions.correct) bar.appendChild(button('Fix this', '', () => fixPane(it, row, pane, note)));
-        bar.appendChild(button('Forget', 'am-danger', () => forgetPane(it, row, pane, note)));
+        if (state.actions && state.actions.forget) bar.appendChild(button('Forget', 'am-danger', () => forgetPane(it, row, pane, note)));
         row.appendChild(bar);
         row.appendChild(pane);
         row.appendChild(note);
@@ -199,11 +199,22 @@
         await load();
     }
 
+    function clearHash() {
+        // Leave no '#about-me' behind: with it still in the URL, tapping the menu link again changes nothing, so no hashchange fires
+        // and the section would never reopen.
+        try {
+            const loc = root.location;
+            if (loc && loc.hash === '#about-me' && root.history && root.history.replaceState)
+                root.history.replaceState(null, '', (loc.pathname || '') + (loc.search || ''));
+        } catch (_e) { /* the URL is a convenience: closing still works */ }
+    }
+
     function close() {
         if (!state.section) return;
         clear(state.section);
         state.section.__list = null;
         state.section.hidden = true;
+        clearHash();
     }
 
     async function init(doc, opts) {
@@ -222,7 +233,13 @@
             state.trigger.hidden = false;
             state.trigger.addEventListener('click', open);
         }
+        const nav = state.doc.getElementById('aboutMeNav');   // the phone menu's deep link: only once the server has offered the list
+        if (nav) nav.hidden = false;
         const hash = opts.hash !== undefined ? opts.hash : (root.location && root.location.hash) || '';
+        if (!state.listening && typeof root.addEventListener === 'function') {
+            state.listening = true;
+            root.addEventListener('hashchange', () => { if (root.location && root.location.hash === '#about-me') open(); });
+        }
         if (hash === '#about-me') await open();
         return true;
     }

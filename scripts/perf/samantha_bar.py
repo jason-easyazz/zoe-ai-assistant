@@ -110,6 +110,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_dir import resolve_service_dir  # noqa: E402
 import self_model_cells  # noqa: E402  (S28-S31: the self-awareness cells, judged against the generated self-model)
 import promise_cells  # noqa: E402  (S32-S33: the persisted provenance ledger and the commitment tracker; in-process cells)
+import bench_baseline  # noqa: E402  (T-4: complete, clean, commit-bound baselines; refuse a comparison with missing cells)
 
 HARNESS_VERSION = "0.1"
 DATA_BASE = os.environ.get("ZOE_DATA_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -1262,8 +1263,14 @@ def compare_baseline(current: dict[str, str], baseline: dict[str, Any] | None) -
         notes.append("judge rubric changed since the baseline — judged verdicts are not comparable")
     if base and "PASS" not in base.values():
         notes.append("baseline holds no PASS verdict — nothing can regress against it")
+    if base and new:
+        # T-4: a scored cell the baseline does not hold is UNMEASURED, and unmeasured is
+        # never green (the live baseline held S1-S8, so 15 cells could not regress).
+        notes.append(f"baseline lacks {', '.join(new)} — those cells cannot be judged; "
+                     "re-record a full baseline")
     return {"has_baseline": bool(base), "regressions": regressions,
-            "improvements": improvements, "new": new, "red": bool(regressions), "notes": notes}
+            "improvements": improvements, "new": new,
+            "red": bool(regressions) or bool(base and new), "notes": notes}
 
 
 def restrict_baseline(baseline: dict[str, Any] | None, selected: "frozenset[str] | None") -> dict[str, Any] | None:
@@ -1278,7 +1285,8 @@ def restrict_baseline(baseline: dict[str, Any] | None, selected: "frozenset[str]
 def make_baseline(results: list[dict], revision: dict | None, samples: int) -> dict[str, Any]:
     return {"harness_version": HARNESS_VERSION,
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-            "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
+            "revision": revision, "commit": (revision or {}).get("commit"),
+            "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
             "samples": samples, "scenarios": verdict_map(results)}
 
 
@@ -1325,6 +1333,54 @@ def harness_quiet_refusal(name: str | None = None) -> str | None:
     return None if verdict.allowed else verdict.reason
 
 
+def _harness_scratch():
+    """``scripts/perf/harness_scratch.py`` (P-2: the throwaway Zoe), loaded once by file path like ``harness_quiet``."""
+    import importlib.util
+
+    mod = sys.modules.get("harness_scratch")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("harness_scratch", Path(__file__).resolve().parent / "harness_scratch.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["harness_scratch"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def scratch_stack_for(service_dir: Path, name: str, ctx: dict, log) -> tuple[Any, str | None]:
+    """P-2: a live run writes ONLY to its own throwaway Zoe - a scratch Postgres (the live image, its own network, migrated to
+    head) and a harness zoe-data + Flue pair on it (``harness_scratch.py``) - never to the live database. The quiet-hours guard is
+    asked FIRST, so nothing starts in waking hours. On success ``DATA_BASE`` points at the scratch zoe-data and the stack is in
+    ``ctx`` for ``close_scratch``. Returns (stack, None) or (None, the refusal)."""
+    if in_nightly_window(dt.datetime.now()):                  # every refusal BEFORE anything starts (Postgres, zoe-data, a brain warm-up)
+        return None, "inside (or within 30 min of) the 01:45-03:15 nightly window"
+    quiet = harness_quiet_refusal(name)
+    if quiet:
+        return None, quiet
+    busy, detail = deploy_in_progress()
+    if busy is None or busy:
+        return None, f"deploy check: {detail}"
+    hs = _harness_scratch()
+    tag = re.sub(r"[^a-z0-9-]", "-", f"{name[:18]}-{os.getpid()}".lower())
+    stack = hs.ScratchStack(service_dir, serve=True, tag=tag, log=log)
+    ctx["stack"] = stack
+    try:
+        stack.__enter__()
+        hs.assert_not_live(stack.dsn, env_file_value(service_dir, "POSTGRES_URL"))
+    except hs.Refused as exc:
+        return None, f"scratch stack: {exc}"
+    global DATA_BASE
+    DATA_BASE = stack.base_url
+    log(f"scratch stack up ({stack.tag}): {json.dumps(stack.public().get('ram'))}")
+    return stack, None
+
+
+def close_scratch(ctx: dict) -> None:
+    """Tear the run's scratch stack down (every exit path: the harness main wrappers call this in ``finally``)."""
+    stack = ctx.pop("stack", None)
+    if stack is not None:
+        stack.__exit__(None, None, None)
+
+
 def mem_available_mb() -> int:
     try:
         with open("/proc/meminfo") as fh:
@@ -1354,6 +1410,13 @@ def deploy_in_progress(runner: Callable[..., Any] = subprocess.run) -> tuple[boo
         except json.JSONDecodeError:
             return None, "gh returned non-JSON"
     return bool(found), f"{len(found)} deploy.yml run(s) queued/in progress"
+
+
+def code_checkout_dir() -> Path:
+    """The zoe-data tree the scratch stack actually SERVES (harness_scratch runs THIS checkout's code). Revision metadata, the
+    clean-baseline gate and the fallback markers come from here; ``service_dir`` stays the source of live settings only (in a linked
+    worktree without its own .env it resolves to the main checkout, which is not what is being measured)."""
+    return Path(__file__).resolve().parents[2] / "services" / "zoe-data"
 
 
 def service_revision(service_dir: Path | None) -> dict[str, Any] | None:
@@ -2456,6 +2519,14 @@ def _pending_teardown(live: Live, path: Path, log) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ctx: dict = {}
+    try:
+        return _main(argv, ctx)
+    finally:
+        close_scratch(ctx)
+
+
+def _main(argv: list[str] | None, ctx: dict) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print the plan; no network, no writes")
@@ -2517,8 +2588,8 @@ def main(argv: list[str] | None = None) -> int:
 
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = resolve_service_dir(args.service_dir)
-    revision = service_revision(service_dir)
-    load_source_fallback_markers(service_dir)  # the checkout's own "brain did not answer" texts
+    revision = service_revision(code_checkout_dir())  # the checkout actually served, not the settings dir
+    load_source_fallback_markers(code_checkout_dir())  # the checkout's own "brain did not answer" texts
     lock_fd = _acquire_lock()  # noqa: F841 — held for the process lifetime
     try:
         cur = os.nice(0)
@@ -2527,10 +2598,9 @@ def main(argv: list[str] | None = None) -> int:
     except OSError:
         pass
 
-    token = env_file_value(service_dir, "ZOE_INTERNAL_TOKEN")
-    dsn = env_file_value(service_dir, "POSTGRES_URL")
-    admin = os.environ.get("ZOE_BAR_ADMIN_SESSION", "").strip()
-    live = Live(token, admin, dsn, args.keep_replies)
+    # P-2: the live token and DSN are never read here - the run gets a scratch stack below, after the gates
+    token = dsn = ""
+    live = None
 
     # Gates -----------------------------------------------------------------
     baseline, baseline_problem = load_baseline(args.baseline)
@@ -2539,6 +2609,22 @@ def main(argv: list[str] | None = None) -> int:
                        revision)
     if baseline_problem and args.baseline.exists():
         log(f"baseline ignored ({baseline_problem})")
+    if args.compare_baseline:
+        # T-4: refuse BEFORE the run when the baseline lacks a cell this run will score
+        # (each such cell would be "new", i.e. unmeasured, and could never regress).
+        wanted = selected if selected is not None else frozenset(SCENARIO_IDS)
+        lacking = bench_baseline.missing_cells(baseline, wanted, key="scenarios")
+        if lacking:
+            return _refuse(args, f"the baseline lacks {len(lacking)} of the {len(wanted)} scenario(s) this run "
+                                 f"scores ({', '.join(lacking)}): they cannot regress against it, so the "
+                                 "comparison would be partly vacuous — re-record a FULL baseline on a clean tree "
+                                 "(--record-baseline --samples 3)", revision)
+    if args.record_baseline:
+        # ...and a dirty / unverifiable tree can never become the bar: refuse before spending a run.
+        why = bench_baseline.record_problem(revision, status="ok", partial=False,
+                                            verdicts={s: "PASS" for s in SCENARIO_IDS}, cells=SCENARIO_IDS)
+        if why:
+            return _refuse(args, f"--record-baseline: {why}", revision)
     if args.compare_baseline:
         # A majority-of-3 bar compared against a single stochastic answer is not a
         # comparison: inherit the baseline's count, refuse an explicit mismatch.
@@ -2560,6 +2646,11 @@ def main(argv: list[str] | None = None) -> int:
     busy, detail = deploy_in_progress()
     if busy is None or busy:
         return _refuse(args, f"deploy check: {detail}", revision)
+    stack, refusal = scratch_stack_for(service_dir, "samantha_bar", ctx, log)
+    if refusal:
+        return _refuse(args, refusal, revision)
+    token, dsn = stack.token, stack.dsn          # the live admin session means nothing to the scratch instance: token teardown
+    live = Live(stack.token, "", stack.dsn, args.keep_replies)
     if not token or not dsn:
         return _refuse(args, "ZOE_INTERNAL_TOKEN / POSTGRES_URL not resolvable from the service .env",
                        revision)
@@ -2627,24 +2718,37 @@ def main(argv: list[str] | None = None) -> int:
                          or {r["id"] for r in results} != set(expected_ids)) \
         else ("regression" if (args.compare_baseline and cmp["red"])
               else ("partial" if partial else "ok"))
+    record_why = bench_baseline.record_problem(revision, status=status, partial=partial,
+                                               verdicts=verdict_map(results), cells=SCENARIO_IDS)
+    errored = sorted(r["id"] for r in results if r["verdict"] == "ERROR")
+    if not record_why and errored:
+        # an ERROR is the instrument failing (judge unavailable, recall packet unread), not a result: recorded as the
+        # bar it would leave that scenario with no regression protection (only a baseline PASS can regress)
+        record_why = (f"{len(errored)} scenario(s) ERRORED ({', '.join(errored)}): an errored scenario is the "
+                      "instrument, not a result")
+    if args.record_baseline and record_why and status != "error":
+        # asked to record a bar and REFUSED: that is a failed run (exit 2, status error), never a quiet success that leaves the
+        # baseline missing or stale for record_bench_baselines.sh to report as done
+        status = "error"
     payload = {"harness_version": HARNESS_VERSION, "status": status, "run_error": run_error,
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
                "backdate": not args.no_backdate, "partial": partial,
                "selected": sorted(expected_ids) if partial else None,
-               "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
+               "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256, "scratch": stack.public(),
                "scenarios": results, "compare": cmp, "teardown": td,
                "baseline_ref": {"path": str(args.baseline),
                                 "created_at": (baseline or {}).get("created_at"),
                                 "commit": ((baseline or {}).get("revision") or {}).get("commit")}}
     write_json(args.results, payload)
     append_trend(args.trend, payload)
-    if args.record_baseline and status == "ok" and not partial:  # a partial run NEVER records
+    if args.record_baseline and not record_why:  # a partial / errored / dirty / incomplete run NEVER records
         write_json(args.baseline, make_baseline(results, revision, args.samples))
-        log(f"baseline recorded: {args.baseline}")
+        log(f"baseline recorded: {args.baseline} (commit {(revision or {}).get('commit', '?')[:10]}, "
+            f"{len(results)} scenarios)")
     elif args.record_baseline:
-        log("baseline NOT recorded: the run errored or its teardown is unproven")
+        log(f"baseline NOT recorded: {record_why}")  # status is already "error" -> exit 2
 
     for r in results:
         exp = f"  (expected {r['expected']}: a target)" if r.get("expected") else ""

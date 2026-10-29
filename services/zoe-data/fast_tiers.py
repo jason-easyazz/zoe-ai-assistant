@@ -465,6 +465,13 @@ async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional
                              speaker_verified=(extra_ctx or {}).get("speaker_verified"), commit=not dry)
         if res is None:
             return None
+        # The pendant day review (day_review_raise, ZOE_DAY_REVIEW_RAISE, default OFF = ""): one counts-only sentence when it is
+        # waiting, for the identified member only and never in a crowded room. Read-only.
+        import day_review_raise as _drr
+
+        _extra = await _drr.pull_addendum(user_id, lane, extra_ctx, dry=dry)
+        if _extra:
+            res.reply = _extra if res.reply == _pl.EMPTY_REPLY else f"{res.reply} {_extra}"
         return _xd.DispatchResult(domain="proactive", reply=res.reply, intent="pull",
                                   ui=res.ui, tier="pull", meta={"delivered": res.delivered})
     except Exception as exc:  # never let the tier break a turn
@@ -821,6 +828,18 @@ def _calc_tier(text: str, user_id: str, session_id: str):
 
 @_functools.wraps(_resolve_core)
 async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
+    res = await _resolve_tiers(text, user_id, session_id, **kwargs)
+    if res is not None:
+        try:  # failure capture (ZOE_STRUGGLE_OUTCOMES, default off): WHICH tier answered - one deque append, never raises
+            import struggle_detector as _sd
+
+            _sd.note_handler(session_id, user_id, "tier", f"{getattr(res, 'tier', '') or 'tier1.5'}/{getattr(res, 'intent', '') or '-'}")
+        except Exception:  # noqa: BLE001
+            pass
+    return res
+
+
+async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
     # (distress, provenance, feedback, self-model) are part of the conversation half, so they must not run - or count the turn - twice.
     if kwargs.get("phase") != "domain":
@@ -866,6 +885,18 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
 
             answered = await _ss.tier(text, user_id, session_id, channel=kwargs.get("channel"),
                                       extra_ctx=kwargs.get("extra_ctx"))
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
+        # the day review as a conversation (ZOE_DAY_REVIEW_RAISE + ZOE_OMI_DAY_REVIEW=on, default OFF = returns before any work):
+        # "what did you find in my day?" / "anything from today?" - a counts-only summary + the private card for the identified
+        # member, the phone in a crowded room; a "not now" right after a raise is recorded and passes on. Read-only.
+        try:
+            import day_review_raise as _drr
+
+            answered = await _drr.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                       extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
         except Exception:  # noqa: BLE001 - the tier never breaks a turn
             answered = None
         if answered is not None:

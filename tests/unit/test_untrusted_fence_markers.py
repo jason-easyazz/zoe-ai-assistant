@@ -72,14 +72,42 @@ def test_zoe_data_recognises_the_fence_as_a_whole_line_only():
     assert data.untrusted_source_in(None) is None
 
 
-def test_chat_keeps_a_fenced_message_off_the_intent_fast_path_in_both_paths():
-    """Both /api/chat paths (stream + non-stream) decide ``use_intent_fast_path``; each must veto it for a fenced message."""
-    src = CHAT.read_text()
-    decisions = [m.start() for m in re.finditer(r"use_intent_fast_path = \(not force_openclaw\) and _ALL_TOOLS_ENABLED", src)]
-    assert len(decisions) == 2, decisions
+# The decision line names whichever gate constant chat.py currently uses (_ALL_TOOLS_ENABLED before B3, _INTENT_FAST_PATH_ENABLED
+# after) - match the shape, not the constant, so a rename cannot silently zero the count and skip the pin.
+_FAST_PATH_DECISION = r"use_intent_fast_path = \(not force_openclaw\) and \w+"
+
+
+def _fence_veto_violations(src: str) -> list[str]:
+    """Return what is wrong with how ``src`` (chat.py text) vetoes the intent fast path for a fenced message."""
+    decisions = [m.start() for m in re.finditer(_FAST_PATH_DECISION, src)]
+    problems = [] if len(decisions) == 2 else [f"expected 2 fast-path decisions (stream + non-stream), found {len(decisions)}"]
     for start in decisions:
         window = src[start:start + 1600]
         guard = window.find("if untrusted_content.untrusted_source_in(message_for_processing):")
         fast = window.find("if use_intent_fast_path:")
-        assert 0 <= guard < fast, "the fence veto must come before the fast path runs"
-        assert "use_intent_fast_path = False" in window[guard:fast]
+        if not 0 <= guard < fast:
+            problems.append(f"decision at {start}: the fence veto must come before the fast path runs")
+        elif "use_intent_fast_path = False" not in window[guard:fast]:
+            problems.append(f"decision at {start}: the fence veto does not switch the fast path off")
+    return problems
+
+
+def test_chat_keeps_a_fenced_message_off_the_intent_fast_path_in_both_paths():
+    """Both /api/chat paths (stream + non-stream) decide ``use_intent_fast_path``; each must veto it for a fenced message."""
+    assert _fence_veto_violations(CHAT.read_text()) == []
+
+
+def test_the_fence_veto_pin_catches_a_missing_or_misplaced_veto():
+    """Negative control: the pin above must go red when a path loses its veto, runs it too late, or the decisions vanish."""
+    src = CHAT.read_text()
+    guard = "if untrusted_content.untrusted_source_in(message_for_processing):"
+    assert src.count(guard) >= 2
+    first = src.index(guard)
+    # veto removed from one path (keeps the line, drops the effect)
+    no_effect = src[:first] + guard + "\n            pass\n" + src[src.index("use_intent_fast_path = False", first) + len("use_intent_fast_path = False"):]
+    assert _fence_veto_violations(no_effect), "a veto that no longer disables the fast path must be flagged"
+    # a path whose decision line is renamed away (the exact B3 failure mode) must not pass vacuously
+    assert _fence_veto_violations(src.replace("use_intent_fast_path = (not force_openclaw)", "fast = (not force_openclaw)")), "zero decisions must be flagged"
+    # veto placed after the fast path runs
+    late = src.replace(guard, "if False:", 1)
+    assert _fence_veto_violations(late), "a missing veto must be flagged"

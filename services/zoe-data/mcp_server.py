@@ -36,8 +36,12 @@ if __name__ == "__main__":
 _STDIO_WORKER = __name__ == "__main__"
 
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
-_BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
-_OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
+# P-2: a harness instance (scripts/perf/harness_scratch.py) sets ZOE_SELF_URL so it broadcasts to ITSELF, never to the live panels
+def _broadcast_url() -> str:
+    """Read per call (typed_env, stripped), so a blank ZOE_SELF_URL means the default and a late-set one is honoured."""
+    return env_str("ZOE_SELF_URL", "http://127.0.0.1:8000").rstrip("/") + "/api/internal/broadcast"
+
+
 _INTERNAL_TOKEN = env_str("ZOE_INTERNAL_TOKEN")
 # A tools/call that names no user is REFUSED (A3, 2026-10-19: strict is the default). The one caller that relied on the
 # family-admin fallback - intent_router's mcporter subprocess, which sent no user and so wrote as family-admin - is gone;
@@ -53,7 +57,7 @@ import logging as _mcp_logging
 _mcp_log = _mcp_logging.getLogger("mcp_server")
 from browser_broker import create_default_browser_broker
 
-_BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
+_BROWSER_BROKER = create_default_browser_broker()
 
 
 async def _notify_ui(channel: str, event_type: str, data: dict):
@@ -63,7 +67,7 @@ async def _notify_ui(channel: str, event_type: str, data: dict):
         if _INTERNAL_TOKEN:
             headers["X-Internal-Token"] = _INTERNAL_TOKEN
         async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(_BROADCAST_URL, json={
+            await client.post(_broadcast_url(), json={
                 "channel": channel,
                 "event_type": event_type,
                 "data": data,
@@ -75,20 +79,10 @@ async def _notify_ui(channel: str, event_type: str, data: dict):
 def _active_agents_list() -> list:
     """Derive the active-agent display list from env, mirroring chat.py routing logic.
 
-    - active_agents: tier-1 local model + Hermes (the default reasoning agent)
-    - OpenClaw is NOT included here; callers that need it should use available_fallback.
+    - active_agents: the tier-1 local model only. Hermes and OpenClaw are retired
+      (B3, 2026-10-18) and are no longer listed.
     """
-    agents: list = []
-    jetson = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
-    pi = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
-    if jetson:
-        agents.append("Jetson Agent (Gemma 4 GPU)")
-    elif pi:
-        agents.append("Zoe Agent (Gemma 4 CPU)")
-    else:
-        agents.append("Gemma Agent (local)")
-    agents.append("Hermes (reasoning/default)")
-    return agents
+    return ["Jetson Agent (Gemma 4 GPU)"]
 
 
 def _load_agents_registry() -> dict:
@@ -428,9 +422,8 @@ TOOLS = [
         "name": "a2a_delegate",
         "description": (
             "Delegate a task to a named peer agent via A2A federation. "
-            "Use agent_name='hermes' for reasoning, code-review, browser, and long agentic workflows. "
-            "OpenClaw remains available as a manual/future fallback, but Hermes is the default escalation agent. "
-            "Returns the task result or a task_id for async polling."
+            "Hermes and OpenClaw are retired: delegating to either is refused. "
+            "Only a registered peer agent that is actually running can take a task."
         ),
         "inputSchema": {
             "type": "object",
@@ -1777,13 +1770,14 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             await _ensure_dashboard_layout_row(db, uid)
             row = await _fetch_dashboard_layout_for_update(db, uid)
             current = _decode_dashboard_layout(row["layout"]) if row else []
-            existing = {w.get("id") for w in current if isinstance(w, dict)}
+            # stored cards are instances {uid, type}; legacy ones are {id}
+            existing = {(w.get("type") or w.get("id")) for w in current if isinstance(w, dict)}
             max_y = max((w.get("y", 0) + w.get("h", 2) for w in current), default=0)
             added = []
             for wid in to_add:
                 if wid in existing:
                     continue
-                current.append({"id": wid, "x": 0, "y": max_y, "w": 2, "h": 2})
+                current.append({"uid": uuid.uuid4().hex[:16], "type": wid, "x": 0, "y": max_y, "w": 2, "h": 2})
                 max_y += 2
                 added.append(wid)
             await db.execute(
@@ -1952,7 +1946,6 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             cpu = None
         return {
             "active_agents": _active_agents_list(),
-            "available_fallback": ["OpenClaw (on-demand)"],
             "platform": platform.machine(),
             "python": platform.python_version(),
             "cpu_percent": cpu,
@@ -2047,27 +2040,14 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                 "error": (
                     "OpenClaw is available only as an explicit fallback. "
                     "Set allow_openclaw=true after the user/operator specifically asks for OpenClaw; "
-                    "otherwise use agent_name='hermes'."
+                    "otherwise delegate to a registered peer agent."
                 )
             }
         try:
             if agent_name == "hermes":
-                from background_runner import enqueue_background_task  # type: ignore[import]
-                session_id = args.get("session_id") or None
-                task_id = await enqueue_background_task(
-                    task,
-                    str(user_id),
-                    session_id=str(session_id) if session_id else None,
-                    request_depth=int(args.get("request_depth") or 0),
-                )
-                return {
-                    "agent": "hermes",
-                    "result": {
-                        "status": "queued",
-                        "task_id": task_id,
-                        "result_endpoint": f"/api/agent/tasks/{task_id}",
-                    },
-                }
+                # Hermes is retired and nothing may launch it (the old branch queued the task for
+                # `hermes --accept-hooks` with HERMES_YOLO_MODE as the zoe user - deep dive S0-7).
+                return {"error": "Hermes is retired; no agent can be launched for this task."}
             _reg = _load_agents_registry()
             _info = _reg.get("agents", {}).get(agent_name)
             if not _info:
@@ -2146,9 +2126,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         services = [
             {"name": "zoe-data",         "port": 8000,  "up": _port_open("127.0.0.1", 8000)},
             {"name": "zoe-auth",         "port": 8002,  "up": _port_open("127.0.0.1", 8002)},
-            {"name": "hermes-agent",     "port": 8642,  "up": _port_open("127.0.0.1", 8642)},
             {"name": "llama-server",     "port": 11434, "up": _port_open("127.0.0.1", 11434)},
-            {"name": "openclaw-gateway", "port": 18789, "up": _port_open("127.0.0.1", 18789), "status": "available_not_default"},
             {"name": "nginx",            "port": 80,    "up": _port_open("127.0.0.1", 80)},
         ]
 
@@ -3337,17 +3315,13 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                 user_id=proposal_user_id,
             )
             row_payload = intake.to_legacy_row()
-            await db.execute(
-                """INSERT INTO evolution_proposals
-                   (id, title, description, evidence, target_patterns, type, status, proposed_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)""",
-                row_payload["id"],
-                row_payload["title"],
-                row_payload["description"],
-                row_payload["evidence"],
-                row_payload["target_patterns"],
-                row_payload["type"],
-                _time.time(),
+            import evolution_queue  # type: ignore[import]  # the single proposal queue: its only writer
+            await evolution_queue.propose(
+                db, source="mcp:create_evolution_proposal", change_class="code",
+                component=evolution_queue.component_for_type(row_payload["type"]),
+                proposal_id=row_payload["id"], legacy_type=row_payload["type"], title=row_payload["title"],
+                description=row_payload["description"], legacy_evidence=row_payload["evidence"],
+                target_patterns=row_payload["target_patterns"], now=_time.time(),
             )
             multica_payload = dict(intake.multica_payload)
             multica_id = await sync_evolution_proposal_to_multica(**multica_payload)

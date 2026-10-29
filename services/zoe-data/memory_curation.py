@@ -315,16 +315,33 @@ async def edit(db, curator: Account, member_id: str, row_id: str, text: str, *, 
     return _view(ref, pol.member)
 
 
+async def _rejected_curated(pol: Policy, row_id: str, svc: Any) -> Any:
+    """A curated row already rejected by an earlier forget whose physical erase did not finish (retryable, never stranded)."""
+    for ref in await _svc(svc).list_by_status(user_id=pol.member.user_id, status="rejected", limit=100000):
+        if ref.id == str(row_id or "") and _is_curated(ref.metadata or dict(), pol.member.user_id):
+            return ref
+    return None
+
+
 async def forget(db, curator: Account, member_id: str, row_id: str, *, svc: Any = None) -> None:
-    """The audited forget: reject through ``MemoryService.review`` (its audit row), then erase for real when physical erase is on."""
+    """The audited forget: reject through ``MemoryService.review`` (its audit row), then erase for real when physical erase is on.
+    A retry after a failed erase finds the already-rejected row and finishes the erase."""
     from memory_service import physical_erase_enabled
 
     svc = _svc(svc)
     pol = await policy(db, curator, member_id)
-    old = await _one(pol, row_id, svc)
+    try:
+        old = await _one(pol, row_id, svc)
+        rejected = False
+    except CurationRefused:
+        old = await _rejected_curated(pol, row_id, svc)
+        if old is None:
+            raise
+        rejected = True
     cat = str((old.metadata or dict()).get("curated_category") or "")
     await _audited(db, curator.user_id, pol.member.user_id, "forget", cat, old.id)
-    ok = await svc.review(old.id, decision="reject", actor=curator.user_id, origin=WRITER, note="removed by a curator") is not None
+    ok = rejected or await svc.review(old.id, decision="reject", actor=curator.user_id, origin=WRITER,
+                                      note="removed by a curator") is not None
     if ok and hasattr(svc, "erase_rows") and physical_erase_enabled():
         await svc.erase_rows(pol.member.user_id, [old.id], actor=curator.user_id, reason="curated note removed by a curator")
     await _finished(db, curator.user_id, pol.member.user_id, "forget", ok, cat, old.id)
@@ -337,9 +354,19 @@ async def held(db, curator: Account, member_id: str, *, svc: Any = None) -> list
     pol = await policy(db, curator, member_id)
     svc = _svc(svc)
     mine = dict((r.id, r) for r in await curated_rows(pol, svc=svc))
+    # An accept that edited the curated row but did not close the held note leaves the note pointing at the SUPERSEDED row:
+    # follow it to the row that replaced it, so the note stays visible and a retry can close it.
+    succ = dict((r.id, str((r.metadata or dict()).get("superseded_by_id") or ""))
+                for r in await svc.list_by_status(user_id=pol.member.user_id, status="superseded", limit=100000)
+                if _is_curated(r.metadata or dict(), pol.member.user_id))
     out = []
     for ref in await svc.list_by_status(user_id=pol.member.user_id, status="disputed", limit=500):
-        against = mine.get(str((ref.metadata or dict()).get("contradicts_id") or ""))
+        cid = str((ref.metadata or dict()).get("contradicts_id") or "")
+        for _ in range(5):
+            if cid in mine or cid not in succ:
+                break
+            cid = succ[cid]
+        against = mine.get(cid)
         if against is not None:
             out.append(dict(id=ref.id, text=show_text(ref.text, pol.member), against=_view(against, pol.member)))
     return out
@@ -428,11 +455,22 @@ async def set_my_optin(db, user_id: str, category: str, on: bool, *, svc: Any = 
         raise CurationRefused(403, "A grown-up in your household looks after this for you.")
     action = "optin" if on else "optout"
     await _audited(db, user_id, user_id, action, cat)
-    changed = await _set_optin(db, user_id, cat, on, user_id)
     svc = _svc(svc)
-    ids = [r.id for r in await svc.list_by_status(user_id=user_id, status="approved", limit=1000)
-           if _is_curated(r.metadata or dict(), user_id) and str((r.metadata or dict()).get("curated_category") or "") == cat]
-    restamped = await svc.set_curated_standing(user_id, ids, protect=on, actor=user_id) if ids else 0
+    # Exhaustive and fail-loud (a storage failure raises -> 503, nothing half-applied). An opt-OUT releases the rows BEFORE the
+    # setting flips: a failure leaves the category on and the rows protected, never "off" with rows still locked. An opt-IN
+    # flips the setting first, then protects.
+    async def _restamp() -> int:
+        rows = await svc.list_all_by_status_strict(user_id=user_id, status="approved")
+        ids = [r.id for r in rows
+               if _is_curated(r.metadata or dict(), user_id) and str((r.metadata or dict()).get("curated_category") or "") == cat]
+        return await svc.set_curated_standing(user_id, ids, protect=on, actor=user_id) if ids else 0
+
+    restamped = 0
+    if not on:
+        restamped = await _restamp()
+    changed = await _set_optin(db, user_id, cat, on, user_id)
+    if on:
+        restamped = await _restamp()
     await _finished(db, user_id, user_id, action, True, cat)
     return dict(category=cat, on=on, changed=changed, rows=restamped)
 

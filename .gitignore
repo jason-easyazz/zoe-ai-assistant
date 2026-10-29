@@ -166,6 +166,8 @@ aider_env/
 !labs/p0-deroot/run.sh
 !labs/p0-deroot/lab/provision.sh
 !labs/omi-firmware/*.sh
+!labs/credential-vault/run.sh
+!labs/credential-vault/lab/provision.sh
 !RESTART_SERVICES.sh
 !start-zoe.sh
 !stop-zoe.sh
@@ -411,6 +413,9 @@ services/zoe-data/models/*
 !services/zoe-data/models/restraint_head.npz
 !services/zoe-data/models/restraint_head.json
 services/zoe-data/data/router_head_shadow.jsonl
+services/zoe-data/data/router_head_shadow.jsonl.lock
+services/zoe-data/data/router_head_shadow.jsonl.[0-9]
+services/zoe-data/data/router_head_shadow.jsonl.[0-9][0-9]
 
 # Router self-training loop — miner (labs/router-selftrain/) + orchestrator
 # (scripts/maintenance/router_selftrain.py). Candidate datasets are mined from
@@ -477,3 +482,6 @@ modules/omnigent/wheels/
 # The ResNet34 speaker embedder's PUBLIC artifacts (cohort centring vector from LibriSpeech, self-test reference of a synthetic signal):
 # the panel daemon refuses to run without it, so it must be tracked. No voiceprint, no household data.
 !scripts/setup/zoe_speaker_resnet34_artifacts.json
+
+# Relay listener (panel-anywhere R1): the household CA / leaf and the rendered nginx listener live on the box only.
+ssl/relay/

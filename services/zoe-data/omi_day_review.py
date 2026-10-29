@@ -19,7 +19,8 @@ THE PASS (model points, code decides)
   2. PACK (code). Broadcast stretches (TV, radio, a video: broadcast cue words, or a long run with almost no first person) are
      dropped; lines with no cue (a date, a time, a list word, a commitment, the first person, a name) and no cued neighbour are
      dropped as routine. What is left is chunked to the slot (``night_mind``'s budget: 2,400 tokens at 8k) and at most
-     ``ZOE_OMI_DAY_REVIEW_MAX_CALLS`` (8) chunks are sent, the best-scoring ones; the rest are counted as skipped.
+     ``ZOE_OMI_DAY_REVIEW_MAX_CALLS`` (default ceiling 16: a full day fits whole) chunks are sent, the best-scoring ones; any beyond
+     that are counted as skipped (``chunks_skipped``) AND logged at WARNING - never dropped silently.
   3. ASK (model, one call per chunk). The lines are fenced as DATA. The model returns ``{"items": [...]}``: kind, cited line ids,
      an exact quote, ``heard_from`` (conversation | media | unsure), ``about`` (me | other | both) and the kind's fields.
   4. VERIFY (code, never repaired, every drop counted by reason): cited ids must be in the chunk and the quote an exact span of a
@@ -106,7 +107,10 @@ STATUSES = ("pending", "approving", "approved", "dismissed")
 PROVENANCE = "pendant"
 WRITER = "omi_review"
 
-DEFAULT_MAX_CALLS = 8
+#: the ceiling on chunks sent per member-day when ``ZOE_OMI_DAY_REVIEW_MAX_CALLS`` is unset. It used to be 8, which silently dropped
+#: the rest of a 12-hour day (11-13 chunks measured 2026-10-25); a normal full day now fits whole, and a day that does not FIT THE
+#: NIGHT's time is not trimmed - it is not started (``no_time``) and the next night retries it, so nothing is dropped for time.
+DEFAULT_MAX_CALLS = 16
 MAX_ITEMS_PER_CHUNK = 6
 ITEM_MAX_TOKENS = 900
 LINE_CHARS = 400
@@ -1570,6 +1574,9 @@ async def _store(user_id: str, day: str, cfg: Config, recs: list, merged: list, 
 def _log(res: dict, counts: dict) -> None:
     res["counts"] = {k: v for k, v in counts.items() if isinstance(v, int)}        # counts only, never text
     dropped = ",".join(f"{k[5:]}:{v}" for k, v in sorted(counts.items()) if k.startswith("drop_") and v)
+    if counts.get("chunks_skipped", 0):
+        logger.warning("OMI_DAY_REVIEW user=%s day=%s chunks_skipped=%s of %s (over the %s-call ceiling; ZOE_OMI_DAY_REVIEW_MAX_CALLS raises it)",
+                       res.get("user_id"), res.get("day"), counts.get("chunks_skipped", 0), counts.get("chunks_total", 0), max_calls())
     logger.info("OMI_DAY_REVIEW user=%s day=%s status=%s calls=%s invalid=%s proposed=%s kept=%s stored=%s media_lines=%s routine_lines=%s "
                 "chunks=%s skipped=%s dropped=%s", res.get("user_id"), res.get("day"), res.get("status"), res.get("calls"),
                 res.get("calls_invalid"), res.get("proposed"), res.get("kept"), res.get("stored"), counts.get("lines_media", 0),
@@ -1648,6 +1655,25 @@ async def voices_to_name(user_id: str, limit: int = VOICES_PER_CARD) -> list[dic
              "last_heard_at": v["last_heard_at"], "sample": (v["samples"] or [{}])[0]} for v in voices[:max(0, limit)]]
 
 
+async def annotate_evidence(user_id: str, cands: list) -> list:
+    """For the owner's review surface (the Pendant page): every diarised evidence entry gets ``audio_kept`` (the clip route would
+    play that line now) and ``offset_ms`` (where it starts in its recording), from ``omi_recordings.segment_lines`` - the member's
+    OWN lines only, pointers only, never an audio path or another line's words. In place; returns ``cands``."""
+    seg_ids = [e.get("segment_id") for c in cands for e in (c.get("evidence") or []) if isinstance(e, dict) and e.get("segment_id")]
+    if not seg_ids:
+        return cands
+    import omi_recordings
+    lines = await omi_recordings.segment_lines(user_id, seg_ids)
+    for c in cands:
+        for e in c.get("evidence") or []:
+            if isinstance(e, dict) and e.get("segment_id"):
+                got = lines.get(str(e["segment_id"])) or {}
+                e["audio_kept"] = bool(got.get("audio_kept"))
+                if "offset_ms" in got:
+                    e["offset_ms"] = got["offset_ms"]
+    return cands
+
+
 async def pending_counts(user_id: str) -> dict:
     """{kind: n} of the member's pending candidates. The SEAM for the next phase (the first-turn mention / the Memories space):
     a code-composed count, never text."""
@@ -1658,6 +1684,21 @@ async def pending_counts(user_id: str) -> dict:
         return {r["kind"]: int(r["n"]) for r in rows}
     except Exception:  # noqa: BLE001
         return {}
+
+
+async def raise_facts(user_id: str, since: str = "") -> dict:
+    """``{counts: {kind: n}, newest, decided_since}`` - the SEAM for the day-review raise (``day_review_raise``): counts and
+    timestamps only, never text. ``newest`` is the created_at of the newest pending candidate; ``decided_since`` = the member
+    approved or dismissed any candidate at or after ``since`` (they took the review up). RAISES on a read error, so the raise
+    fails closed."""
+    async with _db() as db:
+        rows = await _fetch(db, "SELECT kind, COUNT(*) AS n, MAX(created_at) AS newest FROM omi_day_candidates "
+                                "WHERE user_id = ? AND status = 'pending' GROUP BY kind", (user_id,))
+        decided = bool(since) and bool(await _fetch(
+            db, "SELECT 1 FROM omi_day_candidates WHERE user_id = ? AND decided_at IS NOT NULL AND decided_at >= ? LIMIT 1",
+            (user_id, since)))
+    return {"counts": {r["kind"]: int(r["n"]) for r in rows},
+            "newest": max((str(r["newest"] or "") for r in rows), default=""), "decided_since": decided}
 
 
 # --- forgetting ---------------------------------------------------------------------------------------------------
