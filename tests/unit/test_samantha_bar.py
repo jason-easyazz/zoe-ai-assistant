@@ -749,6 +749,10 @@ class _FakeStack:
         return {"tag": "fake", "ram": {"total_mb": 1.0}}
 
 
+_CLEAN_REV = {"commit": "c0ffee", "tree": "7ree", "dirty": False, "tracked_dirty": False,
+              "untracked_files": 0, "diff_sha256": None, "clean_verified": True}
+
+
 def _gates_open(monkeypatch, tmp_path, forget_ok=True):
     monkeypatch.setattr(sb, "scratch_stack_for", lambda service_dir, name, ctx, log: (_FakeStack(), None))
     monkeypatch.setenv("ZOE_PERF", "1")
@@ -759,8 +763,8 @@ def _gates_open(monkeypatch, tmp_path, forget_ok=True):
     monkeypatch.setattr(sb, "deploy_in_progress", lambda: (False, "0"))
     monkeypatch.setattr(sb, "_readyz", lambda: (True, "ok"))
     monkeypatch.setattr(sb, "mem_available_mb", lambda: 4096)
-    monkeypatch.setattr(sb, "service_revision", lambda d: {"commit": "c0ffee", "tree": "7ree", "dirty": False,
-                                                           "clean_verified": True})
+    monkeypatch.setattr(sb, "service_revision", lambda d: dict(_CLEAN_REV))
+    monkeypatch.setattr(sb, "harness_revision", lambda: dict(_CLEAN_REV))
     monkeypatch.setattr(sb.Live, "forget_ok", lambda self: forget_ok)
     monkeypatch.setattr(sb.os, "nice", lambda n: 5)
     return ["--results", str(tmp_path / "r.json"), "--trend", str(tmp_path / "t.jsonl"),
@@ -1837,3 +1841,115 @@ def test_the_bm5_scorers_never_pass_on_empty_or_canned_text():
 def test_plan_text_lists_the_bm5_scenarios():
     text = sb.plan_text(1)
     assert all(f"{sid} " in text for sid in ("S23", "S24", "S25"))
+
+
+# ── evidence binding (deep dive B8): a score must be attributable to a commit ──────────────────────
+
+def _git(cwd, *a):
+    import subprocess
+    subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True,
+                   env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                        "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin", "HOME": str(cwd)})
+
+
+@pytest.fixture
+def repo(tmp_path):
+    r = tmp_path / "svc"
+    r.mkdir()
+    _git(r, "init", "-q")
+    (r / "a.py").write_text("x = 1\n")
+    _git(r, "add", "a.py")
+    _git(r, "commit", "-q", "-m", "init")
+    return r
+
+
+def test_service_revision_untracked_only_is_dirty_but_not_tracked_dirty(repo):
+    (repo / "cruft.log").write_text("junk")
+    rev = sb.service_revision(repo)
+    assert rev["dirty"] is True            # strict, fail-closed bit kept for older readers
+    assert rev["tracked_dirty"] is False   # the tracked tree IS the commit
+    assert rev["untracked_files"] == 1 and rev["diff_sha256"] is None and rev["tree"]
+    assert sb.evidence_binding(rev, rev)["bound"] is True
+
+
+def test_service_revision_tracked_modification_is_unbound_and_pins_the_diff(repo):
+    (repo / "a.py").write_text("x = 2\n")
+    rev = sb.service_revision(repo)
+    assert rev["tracked_dirty"] is True and rev["diff_sha256"]
+    b = sb.evidence_binding(rev, rev)
+    assert b["bound"] is False and "tracked modifications" in b["reason"] and rev["diff_sha256"] in b["reason"]
+
+
+def test_binding_needs_the_harness_to_be_the_code_under_test(repo, tmp_path):
+    rev = sb.service_revision(repo)
+    other = dict(rev, tree="a-different-tree")
+    assert sb.evidence_binding(rev, other)["bound"] is False
+    assert "harness tree != service tree" in sb.evidence_binding(rev, other)["reason"]
+    assert "not running from a git checkout" in sb.evidence_binding(rev, None)["reason"]
+    assert "unknown" in sb.evidence_binding(None, rev)["reason"]
+    unverified = dict(rev, clean_verified=False)
+    assert sb.evidence_binding(unverified, rev)["bound"] is False   # fail closed when git status cannot be read
+    assert sb.evidence_binding(rev, dict(rev, tracked_dirty=True))["bound"] is False
+
+
+def test_unbound_run_never_reaches_the_trend_or_the_baseline(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    monkeypatch.setattr(sb, "service_revision", lambda d: dict(_CLEAN_REV, tracked_dirty=True, diff_sha256="abc123"))
+    monkeypatch.setattr(sb, "run_scenarios", lambda live, a, b, samples, backdate, log, selected=None:
+                        [{"id": s, "verdict": "PASS", "evidence": {}} for s in sb.SCENARIO_IDS])
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+    assert sb.main(args + ["--record-baseline"]) == 2     # asked to record a bar and REFUSED: a failed run, never a quiet success
+    assert not (tmp_path / "t.jsonl").exists()            # the trend holds bound evidence only
+    assert not (tmp_path / "b.json").exists()             # and a dirty full run can never become the bar
+    line = json.loads((tmp_path / "t.unbound.jsonl").read_text().splitlines()[-1])
+    assert line["bound"] is False and "tracked modifications" in line["unbound_reason"] and line["diff_sha256"] == "abc123"
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["evidence"]["bound"] is False   # the result file still says so
+
+
+def test_bound_full_run_lands_in_the_trend_with_the_tree_and_records_a_baseline(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    monkeypatch.setattr(sb, "run_scenarios", lambda live, a, b, samples, backdate, log, selected=None:
+                        [{"id": s, "verdict": "PASS", "evidence": {}} for s in sb.SCENARIO_IDS])
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+    assert sb.main(args + ["--record-baseline"]) == 0
+    line = json.loads((tmp_path / "t.jsonl").read_text().splitlines()[-1])
+    assert line["bound"] is True and line["tree"] == "7ree" and line["commit"] == "c0ffee"
+    assert (tmp_path / "b.json").exists() and not (tmp_path / "t.unbound.jsonl").exists()
+
+
+def test_require_bound_refuses_before_running(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    monkeypatch.setattr(sb, "service_revision", lambda d: dict(_CLEAN_REV, tracked_dirty=True))
+    calls = _must_not_run(monkeypatch)
+    assert sb.main(args + ["--require-bound"]) == 2 and calls == []
+    assert "unbound evidence" in json.loads((tmp_path / "r.json").read_text())["reason"]
+
+
+def test_prompt_size_column_summarises_the_packets_the_run_read(monkeypatch, tmp_path):
+    live = sb.Live("t", "", "dsn", False)
+    assert sb.prompt_size_summary(live) is None            # no packet read -> null columns, never a zero
+    empty = json.loads(sb.record_trend(tmp_path / "e.jsonl", {"ts": "x"}, {"bound": True, "tree": "T"}, None).read_text())
+    assert {k: empty[k] for k in ("prompt_packets", "prompt_chars_mean", "prompt_chars_p95", "prompt_chars_max")} == \
+        dict.fromkeys(("prompt_packets", "prompt_chars_mean", "prompt_chars_p95", "prompt_chars_max"))   # the schema stays
+    monkeypatch.setattr(sb.Live, "_req", lambda self, *a, **k: (200, {"packet": "x" * 400}))
+    live.packet(A, "q")
+    monkeypatch.setattr(sb.Live, "_req", lambda self, *a, **k: (500, {}))
+    assert live.packet(A, "q") is None                     # a failed read is not a size
+    monkeypatch.setattr(sb.Live, "_req", lambda self, *a, **k: (200, {"packet": "y" * 1200}))
+    live.packet(A, "q")
+    ps = sb.prompt_size_summary(live)
+    assert ps == {"packets": 2, "chars_mean": 800, "chars_p95": 1200, "chars_max": 1200, "est_tokens_p95": 300}
+    line_path = sb.record_trend(tmp_path / "t.jsonl", {"ts": "x"}, {"bound": True, "tree": "T"}, ps)
+    row = json.loads(line_path.read_text())
+    assert row["prompt_chars_p95"] == 1200 and row["prompt_packets"] == 2 and row["bound"] is True
+
+
+def test_prompt_size_p95_is_nearest_rank_not_the_next_order_statistic():
+    live = sb.Live("t", "", "dsn", False)
+    live.packet_chars = list(range(1, 21))                 # n=20: nearest-rank p95 is the 19th value, not the max
+    assert sb.prompt_size_summary(live)["chars_p95"] == 19
+    live.packet_chars = list(range(1, 101))
+    assert sb.prompt_size_summary(live)["chars_p95"] == 95
+    live.packet_chars = [7]
+    assert sb.prompt_size_summary(live)["chars_p95"] == 7

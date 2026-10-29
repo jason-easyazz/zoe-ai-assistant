@@ -2039,6 +2039,12 @@ class MemoryService:
                 await restraint.erase_user(user_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
+            # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
+            try:
+                import warm_speaker
+                await asyncio.to_thread(warm_speaker.forget_user, user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
             needles: list[str] = []
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)

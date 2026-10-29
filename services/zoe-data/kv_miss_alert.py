@@ -16,6 +16,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _lock = threading.Lock()
+_last_failure = ""   # why the last send failed (a closed category of the ops sender's stderr line: never free text, see _redact)
 _alerted_day = ""   # in-process record: the 1/day limit holds even when the state file cannot be written
 
 
@@ -52,6 +54,20 @@ def _yesterday(now: "float | None" = None) -> str:
     return (datetime.date(t.tm_year, t.tm_mon, t.tm_mday) - datetime.timedelta(days=1)).isoformat()
 
 
+def _redact(line: str) -> str:
+    """The sender's stderr line as a CLOSED category, never free text: the line can carry a recipient, a chat id or a URL
+    with the bot token, so only a fixed vocabulary (and an HTTP status number) is ever logged."""
+    low = (line or "").lower()
+    m = re.search(r"http error (\d{3})", low)
+    if m:
+        return f"http_{m.group(1)}"
+    for needle, label in (("no alert recipient", "no_recipient"), ("cannot read telegram env", "no_env"),
+                          ("timed out", "timeout"), ("urlopen error", "network"), ("telegram send failed", "send_failed")):
+        if needle in low:
+            return label
+    return "other"
+
+
 def _ops_send(text: str) -> bool:
     """The repo's ops Telegram path. Under pytest it never reaches the network."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -61,7 +77,11 @@ def _ops_send(text: str) -> bool:
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(mod)
-    return bool(mod._telegram(text))
+    lines: "list[str]" = []   # the sender reports a failure (no token / no recipient / HTTP error) through this, not the process-wide stderr
+    ok = bool(mod._telegram(text, report=lines.append))
+    global _last_failure
+    _last_failure = "" if ok else _redact((("\n".join(lines)).strip().splitlines() or ["no reason given"])[-1])
+    return ok
 
 
 MAX_ATTEMPTS_PER_DAY = 3   # a failed send (Telegram down) is retried on later misses that day, never more than this
@@ -137,7 +157,8 @@ def _record_and_send(first_prompt: int, first_cache: int, now: "float | None",
         try:
             ok = bool((send or _ops_send)(text))
             if not ok:
-                logger.warning("kv_miss_alert: alert not delivered (attempt %d/%d)", tries, MAX_ATTEMPTS_PER_DAY)
+                logger.warning("kv_miss_alert: alert not delivered (attempt %d/%d): %s", tries, MAX_ATTEMPTS_PER_DAY,
+                               _last_failure or "unknown")
         except Exception as exc:  # noqa: BLE001
             logger.warning("kv_miss_alert: send failed: %s (attempt %d/%d)", type(exc).__name__, tries,
                            MAX_ATTEMPTS_PER_DAY)

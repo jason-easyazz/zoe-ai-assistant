@@ -14872,6 +14872,25 @@
         },
         "typed_env": false
       },
+      "ZOE_TIMER_STORE": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/skybridge_service.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "'' = ~/.zoe/timers.json (the snapshot file of running voice timers)",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_TIMEZONE": {
         "defaults": [
           "''",
@@ -16317,6 +16336,44 @@
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/guides/OPERATOR_RUNBOOK.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_WARM_SPEAKER_MAX_AGE_S": {
+        "defaults": [
+          "43200.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/warm_speaker.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 43200.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/brain-prefix-cache-2026-10-12.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_WARM_SPEAKER_STATE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/warm_speaker.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/brain-prefix-cache-2026-10-12.md",
           "type": "str"
         },
         "typed_env": true
@@ -18818,7 +18875,8 @@
       "readers": [
         "services/zoe-data/kv_miss_alert.py",
         "services/zoe-data/live_store_guard.py",
-        "services/zoe-data/router_retrain_ledger.py"
+        "services/zoe-data/router_retrain_ledger.py",
+        "services/zoe-data/warm_speaker.py"
       ],
       "typed_env": false
     },

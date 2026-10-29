@@ -4363,26 +4363,35 @@
   // future) are pruned so they never alarm.
   var _tAlarm={known:{},fired:{},chime:null};
   function _tAlarmRefresh(){timersGet().then(function(d){
-    var seen={},now=Date.now();
+    var seen={},now=Date.now(),acks=_acksGet();
     ((d&&d.timers)||[]).forEach(function(t){var id=String(t.timer_id||t.id||''),exp=+t.expires_at_ms||0;if(!id||!exp)return;seen[id]=1;
+      if(acks[id]){_ackSend(id);return;}  // dismissed but the cancel never landed: retry it, never ring it again
       if(!_tAlarm.fired[id])_tAlarm.known[id]={exp:exp,label:t.label||t.title||'Timer'};});
+    Object.keys(acks).forEach(function(id){if(!seen[id]){delete acks[id];}});_acksSet(acks);  // server forgot it: nothing to retry
     Object.keys(_tAlarm.known).forEach(function(id){if(!seen[id]&&_tAlarm.known[id].exp>now+1500)delete _tAlarm.known[id];});
     // Bound `fired` on a long-lived kiosk: drop ids fired >6h ago (their timers
     // are long gone, so they can never re-appear and re-fire).
     Object.keys(_tAlarm.fired).forEach(function(id){if(_tAlarm.fired[id]<now-21600000)delete _tAlarm.fired[id];});
   }).catch(function(){});}
-  function _tAlarmTick(){var now=Date.now(),due=[];
+  function _tAlarmTick(){var now=Date.now(),due=[],ids=[];
     Object.keys(_tAlarm.known).forEach(function(id){var t=_tAlarm.known[id];
-      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];due.push(t.label);}});
+      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];due.push(t.label);ids.push(id);}});
     // Batch same-tick expiries into ONE alarm ("Pasta / Eggs") so a second
     // timer finishing doesn't overwrite the first's label + speech.
-    if(due.length)timerAlarm(due.join(' / '));}
+    if(due.length)timerAlarm(due.join(' / '),ids);}
   function _beep(){try{if(!_tAlarm.ctx)_tAlarm.ctx=new (window.AudioContext||window.webkitAudioContext)();var c=_tAlarm.ctx;
     if(c.state==='suspended')c.resume();
     function ping(t0){var o=c.createOscillator(),g=c.createGain();o.type='sine';o.frequency.value=880;o.connect(g);g.connect(c.destination);
       g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(.45,t0+.02);g.gain.linearRampToValueAtTime(0,t0+.4);o.start(t0);o.stop(t0+.42);}
     var t=c.currentTime;ping(t);ping(t+.55);ping(t+1.1);}catch(e){}}
-  function timerAlarm(label){
+  var _ACK_KEY='zoe_timer_acks';
+  function _acksGet(){try{return JSON.parse(localStorage.getItem(_ACK_KEY)||'{}')||{};}catch(e){return {};}}
+  function _acksSet(o){try{localStorage.setItem(_ACK_KEY,JSON.stringify(o));}catch(e){}}
+  function _ackSend(id){return apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id}).then(function(){var a=_acksGet();delete a[id];_acksSet(a);}).catch(function(){});}
+  function timerAlarm(label,ids){
+    // Cumulative: a second timer ending before Dismiss must not drop the first one's id, or the first stays
+    // "ringing" on the server and re-rings after the next voice-turn reload inside the grace window.
+    _tAlarm.pending=_tAlarm.pending||{};(ids||[]).forEach(function(id){_tAlarm.pending[id]=1;});
     var ov=document.getElementById('tmrAlarm');
     if(!ov){ov=document.createElement('div');ov.id='tmrAlarm';(document.getElementById('stage')||document.body).appendChild(ov);}
     ov.innerHTML='<div class="tab"><div class="tak">⏱ Timer done</div><div class="tal">'+esc(label||'Timer')+'</div><button class="tad" id="tmrAlarmX">Dismiss</button></div>';
@@ -4392,7 +4401,15 @@
     // isn't in view — browser TTS fallback; a Kokoro-voiced server announce is
     // the nicer follow-up but this needs no backend.
     try{if(window.speechSynthesis){var u=new SpeechSynthesisUtterance((label||'Timer')+' timer is done');u.rate=.96;speechSynthesis.cancel();speechSynthesis.speak(u);}}catch(e){}
-    document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');if(_tAlarm.chime){clearInterval(_tAlarm.chime);_tAlarm.chime=null;}
+    // Dismiss = the ACK: the server keeps a finished timer listed ("ringing") until it is cancelled or a grace
+    // window passes, because every voice turn reloads this page (panel_navigate) and a page that was reloaded
+    // - or first polled - after the end must still ring it. Cancelling the id is what stops a reload re-ringing it.
+    document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');
+      var acked=Object.keys(_tAlarm.pending||{});_tAlarm.pending={};
+      // Persist the ack BEFORE sending it and drop it only once the server confirms: a failed cancel (restart, network)
+      // is retried by every poll, and survives a page reload, so a dismissed alarm never sounds again inside the grace.
+      var a=_acksGet();acked.forEach(function(id){a[id]=1;});_acksSet(a);
+      acked.forEach(_ackSend);_tmMemo.p=null;if(_tAlarm.chime){clearInterval(_tAlarm.chime);_tAlarm.chime=null;}
       if(_cur==='timer'&&typeof wireTimer==='function'){}};
   }
   _tAlarmRefresh();setInterval(_tAlarmRefresh,15000);setInterval(_tAlarmTick,1000);
