@@ -128,3 +128,23 @@ landing_probe_window(){
   flock -u 8; exec 8>&-
   return "$rc"
 }
+
+# landing_disarm_unless_merged <pr>: disable auto-merge unless the PR is already MERGED (EXIT-trap safe).
+landing_disarm_unless_merged(){
+  [ "$(gh pr view "$1" --json state --jq .state 2>/dev/null)" = MERGED ] || gh pr merge "$1" --disable-auto >/dev/null 2>&1
+}
+
+# landing_wait_merged <pr> <armed-head> [tries]: poll state AND head after arming. 0 = MERGED; 5 = the head moved off <armed-head>
+# (auto-merge disabled immediately); 1 = not merged in the wait or the night deadline came (auto-merge disabled). If the caller defines
+# `left` (seconds to the night deadline) the wait stops 120 s short of it.
+landing_wait_merged(){
+  local pr=$1 head=$2 tries=${3:-180} i v
+  for ((i=0; i<tries; i++)); do
+    v=$(gh pr view "$pr" --json state,headRefOid --jq '"\(.state) \(.headRefOid)"' 2>/dev/null); set -- $v
+    [ "${1:-}" = MERGED ] && return 0
+    if [ -n "${2:-}" ] && [ "$2" != "$head" ]; then gh pr merge "$pr" --disable-auto >/dev/null 2>&1; return 5; fi
+    if declare -F left >/dev/null && [ "$(left)" -le 120 ]; then break; fi
+    sleep "${ZOE_LANDING_WAIT_STEP_S:-10}"
+  done
+  gh pr merge "$pr" --disable-auto >/dev/null 2>&1; return 1
+}

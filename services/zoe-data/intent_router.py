@@ -2699,10 +2699,10 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     actor = panel_principal.household_actor({"user_id": user_id})  # the member, or "panel" for an unidentified guest
     try:
         from database import get_db_ctx
-        from list_service import add_item_to_list, default_visibility
+        from list_service import add_items_to_list, add_reply, default_visibility
 
         async with get_db_ctx() as db:
-            outcome = await add_item_to_list(
+            outcome = await add_items_to_list(
                 db,
                 user_id=user_id,
                 list_type=lt,
@@ -2716,18 +2716,25 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 # already done instead of inserting a duplicate.
                 dedup_window_s=10,
             )
-        logger.info("list_item_audit op=add actor=%s list=%s item=%s", actor, outcome["list_id"], outcome["item_id"])
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
-        if outcome["deduped"]:
-            logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
-        await _notify_lists_ui(
-            "list_updated",
-            {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}, "actor": actor},
-        )
+        # One audit line + one UI notification per item that really went onto the list: an item already there writes nothing.
+        for one in outcome["outcomes"]:
+            if one["deduped"]:       # already there, or a 10 s replay of the same turn: nothing was inserted, nothing to report
+                if not one.get("already"):
+                    logger.info("list add: duplicate %r within 10s on list %s — replay skipped", one["_text"], list_id)
+                continue
+            logger.info("list_item_audit op=add actor=%s list=%s item=%s", actor, one["list_id"], one["item_id"])
+            await _notify_lists_ui(
+                "list_updated",
+                {"action": "item_added", "list_id": list_id, "item": {"id": one["item_id"], "text": one["_text"]}, "actor": actor},
+            )
+        friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
         return _format_response(
             intent,
-            json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item, "status": "added"}),
+            json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item,
+                        "status": "already" if not outcome["added"] else "added",
+                        "reply": add_reply(outcome["added"], outcome["already"], f"your {friendly}")}),
         )
     except HouseholdListUnavailable:
         return f"There isn't a household {lt.replace('_', ' ')} list yet, and I can only start a shopping list from here."
@@ -2769,6 +2776,18 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
                     (user_id, lt, f"%{_escape_like_pattern(item)}%"),
                 )
                 row = await cursor.fetchone()
+            if not row:
+                # Same ITEM spelled differently (plural / case / STT punctuation): list_service.item_key decides.
+                from list_service import find_matching_item
+
+                cursor = await db.execute(
+                    "SELECT li.id, li.list_id, li.text FROM list_items li JOIN lists l ON li.list_id = l.id"
+                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=?"
+                    " AND li.deleted=0 AND l.deleted=0 AND (li.completed IS NULL OR li.completed=0)"
+                    " ORDER BY l.created_at ASC, li.id ASC",
+                    (user_id, lt),
+                )
+                row = find_matching_item(await cursor.fetchall(), item)
             if not row:
                 # Not on the list is a clean success, not a failure.
                 friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
@@ -5570,6 +5589,8 @@ def _format_response(intent: Intent, raw_output: str) -> str:
         return f"Sorry, that didn't work: {data['error']}"
 
     if intent.name == "list_add":
+        if isinstance(data, dict) and data.get("reply"):
+            return str(data["reply"])
         item = s.get("item", "something")
         lt = s.get("list_type", "shopping")
         friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
