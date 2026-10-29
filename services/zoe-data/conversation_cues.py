@@ -21,6 +21,7 @@ from functools import lru_cache
 from typing import Optional
 
 import lexicons
+from typed_env import env_float
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 #: what may be left of a turn once the small-talk phrase and its lead-in are taken out, before it stops being small talk
@@ -195,6 +196,30 @@ def smart_home_followup(text: str) -> Optional[str]:
     return None
 
 
+def smart_home_state_answer(text: str) -> Optional[str]:
+    """``"on"`` / ``"off"`` when ``text`` is ONLY the answer to "On or off?" ("on", "turn it on", "off please", "switch it off"):
+    lexicon verbs / pronouns / fillers around exactly one of on / off, else ``None`` ("on the table", "turn it on and play jazz")."""
+    try:
+        s = _norm(text)
+        if not s:
+            return None
+        toks = re.findall(r"[^\W_]+", s)
+        for lang in _langs(s, "smart_home_followup"):
+            sec = lexicons.load(lang)["smart_home_followup"]
+            on, off = set(sec.get("on") or []), set(sec.get("off") or [])
+            allowed = (set(sec.get("verbs") or []) | set(sec.get("pronouns") or []) | set(sec.get("self_contained") or [])
+                       | on | off | set(sec.get("back") or []))
+            core = [t for t in toks if t not in set(sec.get("fillers") or [])]
+            if not core or any(t not in allowed for t in core):
+                continue
+            has_on, has_off = any(t in on for t in core), any(t in off for t in core)
+            if has_on != has_off:
+                return "on" if has_on else "off"
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def calendar_followup_ttl_s() -> float:
     """``ZOE_CALENDAR_FOLLOWUP_TTL_S`` (default 90): how long after a calendar answer "what is it" still means those events."""
     try:
@@ -230,6 +255,47 @@ def calendar_followup(text: str) -> bool:
                         core, changed = core[: -len(frag)].strip(), True
                         break
             if core and any(re.fullmatch(frag, core) for frag in sec.get("patterns") or []):
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+def turn_continuation_ttl_s() -> float:
+    """``ZOE_TURN_CONTINUATION_TTL_S`` (default 60): how long after a turn a bare "what else?" still follows that turn's domain."""
+    return max(0.0, env_float("ZOE_TURN_CONTINUATION_TTL_S", 60.0))
+
+
+def turn_continuation(text: str) -> bool:
+    """True when ``text`` is a short CONTEXT-FREE continuation ("what else?", "and?", "tell me more", "anything else", "go on").
+    It names no topic, so its own embedding is noise (live 2026-10-29: four "what else?" after a memory answer all routed to
+    ``lists``); the caller makes it follow the previous turn. The WHOLE utterance must match a lexicon pattern once lead-ins and
+    fillers are taken off the ends ("what else do you know about me" is a real question, not a continuation)."""
+    try:
+        s = _norm(text)
+        s = re.sub(r"[.!?,;:]+", " ", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        if not s:
+            return False
+        for lang in _langs(s, "turn_continuation"):
+            sec = lexicons.load(lang)["turn_continuation"]
+            lead = sorted((str(x).lower() for x in sec.get("lead_ins") or []), key=len, reverse=True)
+            tail = sorted((str(x).lower() for x in sec.get("fillers") or []), key=len, reverse=True)
+            pats = sec.get("patterns") or []
+            if any(re.fullmatch(frag, s) for frag in pats):
+                return True
+            core, changed = s, True
+            while changed and core:
+                changed = False
+                for frag in lead:
+                    if core.startswith(frag + " "):
+                        core, changed = core[len(frag):].strip(), True
+                        break
+                for frag in tail:
+                    if core.endswith(" " + frag):
+                        core, changed = core[: -len(frag)].strip(), True
+                        break
+            if core and any(re.fullmatch(frag, core) for frag in pats):
                 return True
     except Exception:  # noqa: BLE001
         return False
