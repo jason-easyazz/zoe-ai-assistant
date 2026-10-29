@@ -94,8 +94,9 @@ updates:
       # ignores by name across the whole directory, so these also stop the
       # requirements-py312.txt copies; each moves only through a deliberate PR.
       - dependency-name: "APScheduler"      # 3.10.4 in the 3.10 file; the py312 lane moved to 3.11.3 BY HAND on 2026-10-28 with pytz pinned explicitly (3.11 without pytz DELETES persisted pytz-trigger jobs) - never auto-bump
-      - dependency-name: "websockets"       # 3.10 file holds 16.1.1 (17.x needs Python >=3.11, so it cannot resolve there: #2168); the py312 lane is on 17.2 by hand
+      - dependency-name: "websockets"       # 3.10 file holds 16.1.1 (17.x needs Python >=3.11, so it cannot resolve there: #2168); the py312 lane is on 17.2 by hand (17.x minor/patch bumps still flow through the normal 14-day review)
         update-types: ["version-update:semver-major"]
+      - dependency-name: "pytz"             # py312 lane held at 2026.3: APScheduler 3.11.3 breaks on pytz.FixedOffset from 2026.4 (fixed upstream, unreleased); explicit pin exists so persisted pytz-trigger jobs stay restorable
       - dependency-name: "onnxruntime"      # 1.23.2: last cp310 wheel; the 1.30+ step-up is a separate gated runbook move (voice VAD/embeddings)
       - dependency-name: "scikit-learn"     # held at the training pins while the ZOE_ROUTER_HEADS_BACKEND=joblib fallback can still unpickle .joblib heads
       - dependency-name: "joblib"           # same reason as scikit-learn
