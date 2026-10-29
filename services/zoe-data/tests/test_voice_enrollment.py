@@ -140,8 +140,9 @@ def sql(env, query, params=()):
 
 
 def enrol(env, uid, samples=3, consent=True):
-    sql(env, "INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, sample_count, consent_at) VALUES (?,?,?,?,?,?)",
-        (f"p-{uid}", uid, uid, b"\x00" * 1024, samples, "2026-09-01 00:00:00" if consent else None))
+    sql(env, "INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, sample_count, consent_at, model_id) VALUES (?,?,?,?,?,?,?)",
+        (f"p-{uid}", uid, uid, b"\x00" * 1024, samples, "2026-09-01 00:00:00" if consent else None,
+         "wespeaker_resnet34+i8qdq-u8s8+c1"))      # a ResNet34 profile: the only model the server acts on (a NULL model_id is the retired one)
 
 
 def queued(env, trigger=None):

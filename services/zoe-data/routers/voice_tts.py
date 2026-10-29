@@ -36,7 +36,7 @@ from moonshine_vad_state import reset_silero_state, transcriber_lib
 import speaker_adaptation
 import speaker_models
 import traffic_class
-from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
+from voice_speaker_id import _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
 # tests/replay_samples.py, scripts/perf/measure_tts.py) keep working unchanged.
@@ -6877,7 +6877,8 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
 
 
 def _speaker_id_threshold() -> float:
-    """Resemblyzer cosine acceptance threshold, read per call so .env flips apply."""
+    """Legacy flat cosine threshold the sync feed still advertises, read per call so .env flips apply (the ResNet34 bar is
+    per length group: ``speaker_models.claim_threshold``)."""
     try:
         return float(os.environ.get("ZOE_SPEAKER_ID_THRESHOLD", "0.82"))
     except ValueError:
@@ -6978,7 +6979,7 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
         # threshold): never honoured, whatever its value. The flag is flipped on BOTH hosts (docs/knowledge/speaker-resnet34-switch.md).
         logger.info("voice claim rejected: model %r is not the acting model %r", model_id[:48], speaker_models.acting_model())
         return None
-    threshold = speaker_models.claim_threshold(model_id, speech_s, _speaker_id_threshold())
+    threshold = speaker_models.claim_threshold(model_id, speech_s)
     if threshold is not None and score >= threshold:
         return user
     logger.info(
@@ -7025,16 +7026,6 @@ async def _accepted_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     return None
 
 
-def _speaker_engine_unavailable_detail() -> str:
-    """The 503 body when no voice embedding could be computed: WHY (the exception type and message ``voice_speaker_id`` recorded and
-    logged at WARNING), and where the fix is. It used to say "resemblyzer not available" for a broken linker path and a missing
-    package alike."""
-    import voice_speaker_id
-
-    why = voice_speaker_id.last_failure() or "the speaker engine is not installed"
-    return f"Voice signature engine unavailable: {why}. See docs/knowledge/python-312-venv-migration.md (LD_LIBRARY_PATH)."
-
-
 @router.post("/enroll")
 async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """Enroll a speaker voice profile. ONE ``speaker_profiles`` row per (member, ``model_id``); profiles of different
@@ -7042,12 +7033,10 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
 
     Two request shapes:
 
-    * ``audio_base64`` (+ ``user_id``, ``display_name``, ``panel_id``, ``consent``) - a WAV the SERVER embeds with
-      Resemblyzer (the legacy path, the only model the server computes). The embedding is averaged into the member's
-      existing Resemblyzer profile, as it always was.
-    * ``embedding_base64`` + ``model_id`` (+ ``sample_count``) - a finished 256-float PROFILE built ON THE PANEL (device
-      token only: for ResNet34 the audio never leaves the panel). It REPLACES the member's profile of that model - a fresh
-      5-clip enrolment is not blended with an old session - and drops that row's adapted profile.
+    ``embedding_base64`` + ``model_id`` (+ ``user_id``, ``display_name``, ``panel_id``, ``consent``, ``sample_count``) - a
+    finished 256-float PROFILE built ON THE PANEL (device token only: the audio never leaves the panel). It REPLACES the
+    member's profile of that model - a fresh 5-clip enrolment is not blended with an old session - and drops that row's
+    adapted profile. The server no longer embeds uploaded audio (Resemblyzer was retired): ``audio_base64`` is refused.
     """
     from database import get_db
     import uuid as _uuid
@@ -7061,6 +7050,11 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
         raise HTTPException(status_code=403, detail="voice enrolment is not available through the relay")
     b64 = str(payload.get("audio_base64", "")).strip()
     emb_b64 = str(payload.get("embedding_base64", "")).strip()
+    if b64 and not emb_b64:
+        # The server has no audio encoder (Resemblyzer was retired): a profile from uploaded audio would be stored yet never
+        # recognise anyone. Refuse before anything else, and say where to go.
+        raise HTTPException(status_code=409, detail="Voice profiles are now built at the panel: say \"Zoe, learn my voice\" "
+                                                    "to the panel (nothing was stored).")
     model_id = speaker_models.model_id_field(payload, "model_id")
     if model_id is None:
         raise HTTPException(status_code=400, detail="model_id must be a non-empty string")
@@ -7081,93 +7075,47 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     _consent_raw = payload.get("consent")
     consent: Optional[bool] = None if _consent_raw is None else bool(_consent_raw)
 
-    finished_profile = None      # the panel-built profile (float32 bytes) when this is the embedding shape
-    clips = 0                    # the audio path keeps the column default (0), exactly as before models existed
-    if emb_b64:
-        if caller.get("source") != "device":
-            raise HTTPException(status_code=403, detail="a finished voice profile may only be uploaded by a panel (device token)")
-        # A finished profile says which space it lives in; it is never assumed to be the legacy model.
-        _raw_model = payload.get("model_id")
-        if not isinstance(_raw_model, str) or not _raw_model.strip():
-            raise HTTPException(status_code=400, detail="model_id is required with embedding_base64")
-        try:
-            vec = speaker_models.validate_embedding(base64.b64decode(emb_b64, validate=True), model_id)
-        except Exception:
-            vec = None
-        if vec is None:
-            raise HTTPException(status_code=400, detail="invalid embedding for this model")
-        finished_profile = vec.astype("float32").tobytes()
-        try:
-            clips = max(1, min(int(payload.get("sample_count") or 1), 16))
-        except (TypeError, ValueError):
-            clips = 1
-        embedding_bytes = finished_profile
-    else:
-        if speaker_models.acting_model() != speaker_models.LEGACY_MODEL_ID:
-            # ZOE_SPEAKER_MODEL=resnet34: a Resemblyzer profile from uploaded audio would be stored and reported as success yet
-            # never recognise anyone (the acting model is ResNet34, built only on the panel). Refuse, and say where to go.
-            raise HTTPException(status_code=409, detail="Voice profiles are now built at the panel: say \"Zoe, learn my voice\" "
-                                                        "to the panel (nothing was stored).")
-        if not b64:
-            raise HTTPException(status_code=400, detail="audio_base64 or embedding_base64 is required")
-        if model_id != speaker_models.LEGACY_MODEL_ID:
-            raise HTTPException(status_code=400, detail="the server embeds audio with resemblyzer only; this model's profile is built on the panel")
-        try:
-            raw = base64.b64decode(b64, validate=True)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(raw)
-            wav_path = tmp.name
-
-        try:
-            # Off the event loop: the first call loads resemblyzer/torch (~6 s) and
-            # every call is CPU-bound — inline, it stalled every live voice turn.
-            embedding_bytes = await asyncio.to_thread(_compute_resemblyzer_embedding, wav_path)
-        finally:
-            try:
-                os.unlink(wav_path)
-            except OSError:
-                pass
-
-        if embedding_bytes is None:
-            raise HTTPException(status_code=503, detail=_speaker_engine_unavailable_detail())
+    if not emb_b64:
+        raise HTTPException(status_code=400, detail="embedding_base64 is required")
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="a finished voice profile may only be uploaded by a panel (device token)")
+    # A finished profile says which space it lives in; it is never assumed.
+    _raw_model = payload.get("model_id")
+    if not isinstance(_raw_model, str) or not _raw_model.strip():
+        raise HTTPException(status_code=400, detail="model_id is required with embedding_base64")
+    try:
+        vec = speaker_models.validate_embedding(base64.b64decode(emb_b64, validate=True), model_id)
+    except Exception:
+        vec = None
+    if vec is None:
+        raise HTTPException(status_code=400, detail="invalid embedding for this model")
+    finished_profile = vec.astype("float32").tobytes()
+    try:
+        clips = max(1, min(int(payload.get("sample_count") or 1), 16))
+    except (TypeError, ValueError):
+        clips = 1
+    embedding_bytes = finished_profile
 
     profile_id = str(_uuid.uuid4())
     try:
         async with _get_compat_db() as db:
             # Check if the user already has a profile OF THIS MODEL — update it, never touch another model's row.
             async with db.execute(
-                "SELECT id, embedding_blob, sample_count FROM speaker_profiles WHERE user_id=? AND "
+                "SELECT id FROM speaker_profiles WHERE user_id=? AND "
                 + speaker_models.MODEL_SQL + " = ?",
                 (user_id, model_id)
             ) as cur:
                 existing = await cur.fetchone()
             if existing:
-                import numpy as np
-                old_id, old_blob, old_count = existing
-                if finished_profile is not None:
-                    # A finished panel-built profile REPLACES the old one. Its adapted profile started from the old anchor,
-                    # so it goes too (the sample_count may be unchanged, which alone would not invalidate it).
-                    await db.execute(
-                        """UPDATE speaker_profiles SET embedding_blob=?, sample_count=?, display_name=?,
-                           enrolled_at=CURRENT_TIMESTAMP, adapted_blob=NULL, adapted_from_count=NULL, adapt_count=0,
-                           adapted_at=NULL WHERE id=?""",
-                        (finished_profile, clips, display_name, old_id),
-                    )
-                else:
-                    old_emb = np.frombuffer(old_blob, dtype=np.float32)
-                    new_emb = np.frombuffer(embedding_bytes, dtype=np.float32)
-                    # Weighted average of embeddings.
-                    n = old_count or 1
-                    averaged = (old_emb * n + new_emb) / (n + 1)
-                    averaged_norm = averaged / (np.linalg.norm(averaged) + 1e-9)
-                    await db.execute(
-                        """UPDATE speaker_profiles SET embedding_blob=?, sample_count=sample_count+1,
-                           display_name=? WHERE id=?""",
-                        (averaged_norm.astype(np.float32).tobytes(), display_name, old_id),
-                    )
+                old_id = existing[0]
+                # A finished panel-built profile REPLACES the old one. Its adapted profile started from the old anchor,
+                # so it goes too (the sample_count may be unchanged, which alone would not invalidate it).
+                await db.execute(
+                    """UPDATE speaker_profiles SET embedding_blob=?, sample_count=?, display_name=?,
+                       enrolled_at=CURRENT_TIMESTAMP, adapted_blob=NULL, adapted_from_count=NULL, adapt_count=0,
+                       adapted_at=NULL WHERE id=?""",
+                    (finished_profile, clips, display_name, old_id),
+                )
                 if consent is True:
                     await db.execute(
                         "UPDATE speaker_profiles SET consent_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -7204,10 +7152,7 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
         import voice_session as _vs_revoke
 
         await _vs_revoke.revoke_member(user_id, "consent_revoked")
-    out = dict(ok=True, profile_id=profile_id, user_id=user_id, display_name=display_name)
-    if model_id != speaker_models.LEGACY_MODEL_ID:
-        out["model_id"] = model_id      # the legacy response shape is a pinned contract; only a new model adds a field
-    return out
+    return dict(ok=True, profile_id=profile_id, user_id=user_id, display_name=display_name, model_id=model_id)
 
 
 @router.post("/identify")
@@ -7216,10 +7161,9 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
 
     Accepts two request formats:
     - { "embedding_base64": "...", "panel_id": "..." }  — pre-computed float32 embedding bytes
-      (sent by zoe_voice_daemon.py which computes the embedding locally on Pi/Jetson). ``model_id`` names the embedding
-      space it was computed in (default resemblyzer) and ``speech_s`` its clip length; ONLY profiles of that same model
-      are compared, and the threshold is that model's (``speaker_models.claim_threshold``).
-    - { "audio_base64": "...", "panel_id": "..." }  — raw WAV bytes; server computes the (Resemblyzer) embedding
+      (sent by zoe_voice_daemon.py which computes the embedding locally on the panel). ``model_id`` names the embedding
+      space it was computed in and ``speech_s`` its clip length; ONLY profiles of that same model are compared, and the
+      threshold is that model's (``speaker_models.claim_threshold``). The server embeds no audio (Resemblyzer was retired).
     Returns best-match profile with confidence score.
     """
     from db_compat import get_compat_db as _get_compat_db
@@ -7231,41 +7175,13 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
     if not speaker_models.is_known(model_id):
         raise HTTPException(status_code=400, detail="unknown model_id")
 
-    # Fast path: pre-computed embedding from the voice daemon
     emb_b64 = str(payload.get("embedding_base64", "")).strip()
-    if emb_b64:
-        try:
-            query_emb = base64.b64decode(emb_b64, validate=True)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="invalid base64 embedding") from exc
-    else:
-        # Fallback: raw WAV bytes — compute embedding server-side
-        b64 = str(payload.get("audio_base64", "")).strip()
-        if not b64:
-            raise HTTPException(status_code=400, detail="embedding_base64 or audio_base64 is required")
-        if model_id != speaker_models.LEGACY_MODEL_ID:
-            raise HTTPException(status_code=400, detail="the server embeds audio with resemblyzer only")
-
-        try:
-            raw = base64.b64decode(b64, validate=True)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(raw)
-            wav_path = tmp.name
-
-        try:
-            # Off the event loop (see voice_enroll).
-            query_emb = await asyncio.to_thread(_compute_resemblyzer_embedding, wav_path)
-        finally:
-            try:
-                os.unlink(wav_path)
-            except OSError:
-                pass
-
-        if query_emb is None:
-            raise HTTPException(status_code=503, detail=_speaker_engine_unavailable_detail())
+    if not emb_b64:
+        raise HTTPException(status_code=400, detail="embedding_base64 is required (the server no longer embeds audio)")
+    try:
+        query_emb = base64.b64decode(emb_b64, validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid base64 embedding") from exc
 
     if model_id not in speaker_models.visible_models():
         return dict(ok=True, identified=False, reason="model_not_served")
@@ -7300,8 +7216,7 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
             best_user_id = uid
             best_name = dname
 
-    # Resemblyzer cosine similarity > 0.82 is typically a match; ResNet34 has its own length-group thresholds.
-    threshold = speaker_models.claim_threshold(model_id, payload.get("speech_s"), _speaker_id_threshold())
+    threshold = speaker_models.claim_threshold(model_id, payload.get("speech_s"))
     if threshold is not None and best_score >= threshold:
         return dict(ok=True, identified=True, profile_id=best_id, user_id=best_user_id, display_name=best_name,
                     confidence=round(best_score, 4), model_id=model_id)
@@ -7309,8 +7224,8 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
 
 
 def _parse_models_param(models: Optional[str]) -> frozenset:
-    """The model ids a panel says it can match (``?models=a,b``). A panel that says nothing is a legacy one and gets the
-    Resemblyzer profiles only - it must never be handed a vector from a space it does not know about."""
+    """The model ids a panel says it can match (``?models=a,b``). A panel that says nothing is a legacy one (Resemblyzer, retired)
+    and so is served nothing - it must never be handed a vector from a space it does not know about."""
     wanted = frozenset(m.strip() for m in (models or "").split(",") if m.strip())
     return wanted or frozenset([speaker_models.LEGACY_MODEL_ID])
 
@@ -7401,14 +7316,13 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
         async with _get_compat_db() as db:
             async with db.execute(sql, params) as cur:
                 rows = await cur.fetchall()
-        mode = speaker_models.speaker_mode()
         profiles = []
         for r in rows:
             mid = speaker_models.row_model_id(r, 6)
             profiles.append(dict(id=r[0], user_id=r[1], display_name=r[2], sample_count=r[3] or 1, panel_id=r[4],
                                  consented=r[5] is not None, model_id=mid,
-                                 acting=mid == speaker_models.acting_model(mode),
-                                 model_label=speaker_models.model_label(mid, mode)))
+                                 acting=mid == speaker_models.acting_model(),
+                                 model_label=speaker_models.model_label(mid)))
         # deterministic: per member, the profile that recognises them first, then the others by model id
         profiles.sort(key=lambda p: (str(p["display_name"] or ""), str(p["user_id"] or ""), 0 if p["acting"] else 1,
                                      p["model_id"]))
