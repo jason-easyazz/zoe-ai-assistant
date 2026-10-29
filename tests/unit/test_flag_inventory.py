@@ -308,3 +308,67 @@ def test_the_zoe_data_env_example_counts_as_documentation(tmp_path):
     (tmp_path / "services" / "zoe-data" / ".env.example").write_text("# ZOE_IN_SERVICE_EXAMPLE=1\n")
     prod = flag_inventory.scan_repo(tmp_path, files=["services/m.py"])["flags"]["prod"]
     assert prod["ZOE_IN_SERVICE_EXAMPLE"]["in_env_example"] is True and prod["ZOE_IN_NO_EXAMPLE"]["in_env_example"] is False
+
+
+def test_from_os_import_environ_and_or_defaults_and_non_zoe_names(tmp_path):
+    """B6: ``from os import environ`` reads, ``environ.get(X) or "d"`` defaults, the module-literal default
+    (``... or DEFAULT_TZ``) and non-``ZOE_`` names (separate ``other_env`` table, strict read shapes only)."""
+    (tmp_path / "m.py").write_text(
+        "from os import environ, getenv\n"
+        'DEFAULT_TZ = "Australia/Perth"\n'
+        'A = environ.get("ZOE_FROM_IMPORT", "7")\n'
+        'B = environ["ZOE_FROM_IMPORT_REQ"]\n'
+        'C = (environ.get("ZOE_OR_LIT") or "fallback").strip()\n'
+        'D = environ.get("ZOE_OR_CONST") or DEFAULT_TZ\n'
+        'E = environ.get("ZOE_OR_DYN") or compute()\n'
+        'F = getenv("SOME_SERVICE_URL", "http://x")\n'
+        'G = _env("NOT_ZOE_WRAPPER_NAME", 1)\n'  # loose wrappers never feed the non-ZOE table
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    prod = data["flags"]["prod"]
+    assert prod["ZOE_FROM_IMPORT"]["defaults"] == ["'7'"]
+    assert prod["ZOE_FROM_IMPORT_REQ"]["defaults"] == ["(required)"]
+    assert prod["ZOE_OR_LIT"]["defaults"] == ["'fallback'"]
+    assert prod["ZOE_OR_CONST"]["defaults"] == ["'Australia/Perth'"]
+    assert prod["ZOE_OR_DYN"]["defaults"] == ["dynamic"]
+    assert set(data["other_env"]) == {"SOME_SERVICE_URL"}
+    assert data["legacy_reads"] == {"m.py": 5}  # every ZOE_* read above bypasses typed_env
+
+
+def test_effective_default_normalisation_is_spelling_blind_but_value_sensitive():
+    d = flag_inventory.effective_default
+    assert d("'1'") == d("True") == d("1") == True  # noqa: E712 - the point: bool-ish spellings are one default
+    assert d("''") is None and d("-") is None       # an empty default and no default are both "unset"
+    assert d("dynamic") is flag_inventory._SKIP and d("(required)") is flag_inventory._SKIP
+    assert flag_inventory.distinct_defaults([d("'8192'"), d("8192")]) == [8192]
+    assert len(flag_inventory.distinct_defaults([d("'http://a'"), d("'http://b'")])) == 2
+    assert len(flag_inventory.distinct_defaults([d("False"), d("-")])) == 1   # off == unset for a flag
+    assert len(flag_inventory.distinct_defaults([d("'x'"), d("-")])) == 2     # a value vs unset is a real difference
+
+
+def test_aliased_reads_keyword_names_and_setdefault_are_seen(tmp_path):
+    """Review of #2116: an alias must not hide a read. ``from os import environ as E``, ``getenv as ge``, ``env = os.environ``,
+    ``env_bool(key="ZOE_X")`` and ``environ.setdefault`` are all reads; a setdefault VALUE is not a reader's default."""
+    (tmp_path / "m.py").write_text(
+        "import os\n"
+        "from os import environ as E, getenv as ge\n"
+        "env = os.environ\n"
+        'A = E.get("ZOE_VIA_ALIAS", "1")\n'
+        'B = ge("ZOE_VIA_GETENV_ALIAS", "2")\n'
+        'C = env.get("ZOE_VIA_ASSIGNED", "3")\n'
+        'D = env_bool(key="ZOE_VIA_KEYWORD", default=True)\n'
+        'os.environ.setdefault("ZOE_VIA_SETDEFAULT", "child-value")\n'
+        'F = E["ZOE_VIA_ALIAS_SUBSCRIPT"]\n'
+    )
+    prod = flag_inventory.scan_repo(tmp_path, files=["m.py"])["flags"]["prod"]
+    assert set(prod) == {"ZOE_VIA_ALIAS", "ZOE_VIA_GETENV_ALIAS", "ZOE_VIA_ASSIGNED", "ZOE_VIA_KEYWORD",
+                         "ZOE_VIA_SETDEFAULT", "ZOE_VIA_ALIAS_SUBSCRIPT"}
+    assert prod["ZOE_VIA_KEYWORD"]["typed_env"] is True and prod["ZOE_VIA_KEYWORD"]["defaults"] == ["True"]
+    assert prod["ZOE_VIA_SETDEFAULT"]["defaults"] == ["dynamic"]
+
+
+def test_nan_and_inf_defaults_are_words_not_numbers():
+    d = flag_inventory.effective_default
+    assert d("'nan'") == "nan" and d("'nan'") == d("'nan'")   # nan != nan would make a flag conflict with itself
+    assert d("'inf'") == "inf"
+    assert d("'1.5'") == 1.5
