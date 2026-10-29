@@ -34,6 +34,7 @@ Stdlib + numpy. No import of ``semantic_router`` at module import time.
 """
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import logging
@@ -62,6 +63,7 @@ _QUEUE: "queue.Queue[Optional[str]]" = queue.Queue(maxsize=DEFER_MAX)
 _PENDING: "OrderedDict[str, None]" = OrderedDict()  # parked texts, oldest first; guarded by _CACHE_LOCK
 _PENDING_DROPPED = 0                               # how many parked texts the bound pushed out (a counter, for the log and the tests)
 _WORKER: Optional[threading.Thread] = None
+_STOP = threading.Event()                          # set by ``stop_worker``: the worker exits at its next wake-up
 _STATE: dict[str, Any] = {}                       # "head": (classes, W, b, thr, meta) | None (tried and absent)
 _CACHE: "OrderedDict[str, tuple[str, ...]]" = OrderedDict()
 _MISMATCH_LOGGED = False                           # the model-identity warning is logged once per process
@@ -307,19 +309,48 @@ def _embed_or_park(raw: str) -> None:
 
 
 def _run_worker() -> None:
-    while True:
+    while not _STOP.is_set():
         try:
             text = _QUEUE.get(timeout=RETRY_S if _PENDING else None)
         except queue.Empty:
             retry_pending()                        # nothing new for a while: has the model arrived for what is parked?
             continue
         try:
-            if text is not None:                   # None is only a wake-up (``reset``)
+            if text is not None and not _STOP.is_set():  # None is only a wake-up (``reset`` / ``stop_worker``)
                 _embed_or_park(text)
         except Exception as exc:  # noqa: BLE001 - the worker outlives any one text
             logger.debug("restraint head worker: %r", exc)
         finally:
             _QUEUE.task_done()
+
+
+def stop_worker(timeout: float = 5.0) -> bool:
+    """Stop the background worker and wait for it (True when none is left running). Used at interpreter exit and by the test
+    teardown: a daemon thread still inside the native tokenizer / ONNX session while the interpreter finalizes, or while the next
+    test loads its own model, is how the 2026-10-29 segfaults happened. ``defer`` starts a fresh worker on demand afterwards."""
+    global _WORKER
+    with _LOCK:
+        w = _WORKER
+    if w is None or not w.is_alive():
+        return True
+    _STOP.set()
+    try:
+        try:
+            _QUEUE.put_nowait(None)                # wake it out of ``get``
+        except queue.Full:
+            pass
+        w.join(timeout)
+        alive = w.is_alive()
+    finally:
+        if not w.is_alive():
+            _STOP.clear()
+            with _LOCK:
+                if _WORKER is w:
+                    _WORKER = None
+    return not alive
+
+
+atexit.register(stop_worker, 2.0)
 
 
 def defer(text: Any) -> bool:

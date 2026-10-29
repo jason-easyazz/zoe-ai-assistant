@@ -154,6 +154,17 @@ def _db_pool_never_initialised(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _restraint_head_worker_never_outlives_its_test():
+    """``restraint_head.defer`` starts a daemon worker that embeds through the (native) tokenizer + ONNX session. Left running it
+    races the NEXT test's model load / the interpreter's finalisation - the 2026-10-29 ``Fatal Python error: Segmentation fault`` in
+    ``tokenize <- restraint_head._run_worker`` ~95% through the ci_safe lane. Join it after every test that started one."""
+    yield
+    mod = sys.modules.get("restraint_head")
+    if mod is not None:
+        mod.stop_worker(5.0)
+
+
 @pytest.fixture
 def jason_signed_in_at_the_panel(monkeypatch):
     """OPT-IN (never autouse): "jason" holds a fresh PIN sign-in at whatever panel asks, so a DEVICE-token biometric enrolment
