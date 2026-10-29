@@ -30,13 +30,16 @@ class _DetectingModel:
         self.peak = 0
 
     def embed(self, texts):
-        with self._guard:
-            self.inside += 1
-            self.peak = max(self.peak, self.inside)
-        time.sleep(0.002)                       # long enough for an unserialised second caller to overlap
-        with self._guard:
-            self.inside -= 1
-        return iter([np.ones(4, dtype=np.float32) for _ in texts])
+        # LAZY like fastembed: the native work happens while the caller reads the iterator, so the overlap is measured there
+        # and a regression that moves ``next()`` outside the lock is caught too.
+        for _ in texts:
+            with self._guard:
+                self.inside += 1
+                self.peak = max(self.peak, self.inside)
+            time.sleep(0.002)                   # long enough for an unserialised second caller to overlap
+            with self._guard:
+                self.inside -= 1
+            yield np.ones(4, dtype=np.float32)
 
 
 @pytest.fixture
@@ -158,3 +161,23 @@ def test_stop_leaves_no_stray_wakeup_that_would_hang_drain(monkeypatch):
     assert restraint_head.drain(5.0)
     assert restraint_head.stop_worker(5.0) is True
     assert restraint_head.drain(2.0)                    # nothing unfinished is left behind
+
+
+def test_defer_overlapping_a_stop_never_strands_the_old_worker(monkeypatch):
+    """Review: a replacement worker must not steal the old worker's wake-up (each worker polls its OWN stop event)."""
+    monkeypatch.setattr(restraint_head, "_load", lambda: ("c", None, None, None, {}))
+    monkeypatch.setattr(restraint_head, "_model_pending", lambda: False)
+    monkeypatch.setattr(restraint_head, "lookup", lambda raw, embed=False: None)
+    monkeypatch.setattr(restraint_head, "_POLL_S", 0.05)
+    restraint_head.reset()
+    for rnd in range(15):
+        restraint_head.defer(f"idle worker {rnd}")
+        assert restraint_head.drain(5.0)
+        old = restraint_head._WORKER
+        t = threading.Thread(target=lambda: restraint_head.defer(f"racing text {rnd}"))
+        t.start()
+        assert restraint_head.stop_worker(5.0) is True       # the old (idle) worker exits within the timeout every time
+        t.join(5)
+        assert not old.is_alive()
+    assert restraint_head.stop_worker(5.0) is True
+    assert restraint_head._STOPPING == []

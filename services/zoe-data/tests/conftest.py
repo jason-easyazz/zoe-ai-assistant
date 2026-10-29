@@ -162,7 +162,8 @@ def _restraint_head_worker_never_outlives_its_test():
     yield
     mod = sys.modules.get("restraint_head")
     if mod is not None:
-        mod.stop_worker(5.0)
+        if not mod.stop_worker(30.0):
+            pytest.fail("restraint_head worker still running 30s after its test ended (stuck inside the embedder?)")
 
 
 @pytest.fixture

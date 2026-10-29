@@ -41,6 +41,7 @@ import logging
 import queue
 import sys
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -63,6 +64,7 @@ _QUEUE: "queue.Queue[Optional[str]]" = queue.Queue(maxsize=DEFER_MAX)
 _PENDING: "OrderedDict[str, None]" = OrderedDict()  # parked texts, oldest first; guarded by _CACHE_LOCK
 _PENDING_DROPPED = 0                               # how many parked texts the bound pushed out (a counter, for the log and the tests)
 _WORKER: Optional[threading.Thread] = None
+_STOPPING: "list[threading.Thread]" = []           # workers told to stop whose join has not (yet) succeeded
 _WORKER_STOP: Optional[threading.Event] = None    # the running worker's own stop event (``stop_worker`` sets it)
 _STATE: dict[str, Any] = {}                       # "head": (classes, W, b, thr, meta) | None (tried and absent)
 _CACHE: "OrderedDict[str, tuple[str, ...]]" = OrderedDict()
@@ -308,15 +310,21 @@ def _embed_or_park(raw: str) -> None:
     lookup(raw, embed=True)
 
 
+_POLL_S = 0.5                                      # how often an idle worker re-checks its own stop event
+
+
 def _run_worker(stop: threading.Event) -> None:
+    last_retry = time.monotonic()
     while not stop.is_set():
         try:
-            text = _QUEUE.get(timeout=RETRY_S if _PENDING else None)
+            text = _QUEUE.get(timeout=min(_POLL_S, RETRY_S))
         except queue.Empty:
-            retry_pending()                        # nothing new for a while: has the model arrived for what is parked?
+            if _PENDING and time.monotonic() - last_retry >= RETRY_S:
+                last_retry = time.monotonic()
+                retry_pending()                    # nothing new for a while: has the model arrived for what is parked?
             continue
         try:
-            if text is not None and not stop.is_set():  # None is only a wake-up (``reset`` / ``stop_worker``)
+            if text is not None and not stop.is_set():  # None is only a wake-up (``reset``)
                 _embed_or_park(text)
         except Exception as exc:  # noqa: BLE001 - the worker outlives any one text
             logger.debug("restraint head worker: %r", exc)
@@ -324,47 +332,25 @@ def _run_worker(stop: threading.Event) -> None:
             _QUEUE.task_done()
 
 
-def _discard_wakeups() -> None:
-    """Remove the ``None`` wake-ups ``stop_worker`` queued that no worker consumed (a worker already past its loop test never
-    reads them), keeping every real text in order and the queue's unfinished-task count honest so ``drain`` cannot hang."""
-    kept: list[str] = []
-    while True:
-        try:
-            item = _QUEUE.get_nowait()
-        except queue.Empty:
-            break
-        _QUEUE.task_done()
-        if item is not None:
-            kept.append(item)
-    for item in kept:
-        try:
-            _QUEUE.put_nowait(item)
-        except queue.Full:
-            break
-
-
 def stop_worker(timeout: float = 5.0) -> bool:
-    """Stop the background worker and wait for it (True when it has exited). Used at interpreter exit and by the test teardown: a
-    daemon thread still inside the native tokenizer / ONNX session while the interpreter finalizes, or while the next test loads
-    its own model, is how the 2026-10-29 segfaults happened. Each worker owns its stop event and is unregistered BEFORE the join,
-    so a concurrent ``defer`` starts a fresh worker (fresh event) instead of queueing onto a dying one, and a join that times out
-    cannot poison later restarts."""
+    """Stop the background worker and wait for it (True when EVERY worker ever stopped has exited). Used at interpreter exit and by
+    the test teardown: a daemon thread still inside the native tokenizer / ONNX session while the interpreter finalizes, or while
+    the next test loads its own model, is how the 2026-10-29 segfaults happened. Each worker owns its stop event, which it polls
+    (no shared wake-up a replacement worker could steal), and is unregistered BEFORE the join so a concurrent ``defer`` starts a
+    fresh worker. A worker whose join times out stays in ``_STOPPING`` and is joined again by the next call."""
     global _WORKER, _WORKER_STOP
     with _LOCK:
-        w, stop = _WORKER, _WORKER_STOP
+        if _WORKER is not None and _WORKER_STOP is not None:
+            _WORKER_STOP.set()
+            _STOPPING.append(_WORKER)
         _WORKER, _WORKER_STOP = None, None
-    if w is None or stop is None or not w.is_alive():
-        return True
-    stop.set()
-    try:
-        _QUEUE.put_nowait(None)                    # wake it out of ``get``
-    except queue.Full:
-        pass                                       # a full queue means ``get`` returns at once anyway
-    w.join(timeout)
-    if w.is_alive():
-        return False
-    _discard_wakeups()
-    return True
+        pending = list(_STOPPING)
+    deadline = time.monotonic() + timeout
+    for w in pending:
+        w.join(max(0.0, deadline - time.monotonic()))
+    with _LOCK:
+        _STOPPING[:] = [w for w in _STOPPING if w.is_alive()]
+        return not _STOPPING
 
 
 atexit.register(stop_worker, 2.0)
