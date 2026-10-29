@@ -6567,6 +6567,9 @@ def _brain_prewarm_on_wake_enabled() -> bool:
     return env_bool("ZOE_BRAIN_PREWARM_ON_WAKE", default=True)
 
 
+_WARM_MEMO_READ_TIMEOUT_S = 0.2   # how long a wake's KV warm waits for the persisted likely-speaker memo
+
+
 async def _prewarm_brain_for_panel(panel_id: str) -> None:
     """On wake-word, warm what the first turn would otherwise pay for cold. Fully
     best-effort and backgrounded - must never delay or break the wake acknowledgement.
@@ -6606,7 +6609,16 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         ) or ""
         import warm_speaker
 
-        likely = await asyncio.to_thread(warm_speaker.get, panel_id) or member
+        # Bounded like the fresh-PIN lookup below: the first wake after a restart reads the memo file, and a slow disk
+        # must not eat the time the user is speaking. Past 0.2 s the warm starts with the fallback (member / guest);
+        # the detached read is left to finish (its exception consumed) and the memo is warm for the next wake.
+        _mk = asyncio.ensure_future(asyncio.to_thread(warm_speaker.get, panel_id))
+        _mk.add_done_callback(lambda t: t.cancelled() or t.exception())   # never an unretrieved exception
+        try:
+            _mdone, _ = await asyncio.wait({_mk}, timeout=_WARM_MEMO_READ_TIMEOUT_S)
+            likely = ((_mk.result() or "") if _mdone and not _mk.cancelled() and _mk.exception() is None else "") or member
+        except Exception:  # noqa: BLE001 - the member / guest warm is the fallback
+            likely = member
         if not likely:
             # After a restart / eviction the memo is empty: ask for a fresh-PIN member, but only briefly so the
             # warm is never held up (the lookup is re-awaited below for the worker + facts, unbounded as before).
