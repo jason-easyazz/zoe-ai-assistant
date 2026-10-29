@@ -814,7 +814,8 @@ learned_voiceprint_segments (                              -- each contribution,
 omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_confirmed'))
              + suggested_person_id text NULL, suggested_score real NULL     -- a suggestion, never a tag
 
--- P7 (caregiving): memory_curators, section 2.3
+-- P7 (caregiving, built as migration 0061): memory_curation_optins (member, category, opted_in_by, revoked_at) +
+--   memory_curation_audit (ids, action, category, row hash; never text). No grant table (D7).
 ```
 
 | Flag | Default | Meaning |
@@ -831,7 +832,7 @@ omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_con
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | 14 | life of an untagged segment embedding |
 | `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` | 0 / 0 | learned-voice expiry; 0 = kept until forgotten (D15) |
 | `ZOE_OMI_SUGGEST_MIN` / `_MARGIN` | measured in the shadow fortnight | suggestion threshold and runner-up margin |
-| `ZOE_MEMORIES_CURATORS` | off | caregiver grants and curated writes |
+| `ZOE_MEMORIES_CURATORS` | off | caregiver curation: the `/api/memories/curation/*` routes and the Family memories page (off = 404) |
 
 ## 8. APIs: what exists and what is needed
 
@@ -846,7 +847,7 @@ omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_con
 | Day review | none | `GET /api/omi/reviews?status=`, `GET /api/omi/reviews/{id}` (candidates), `POST /api/omi/candidates/{id}` `{action: approve|edit|skip, fields?}`, `POST /api/omi/reviews/{id}/approve-ticked` (P5) |
 | Raise / pull / orb | `proactive_candidates`, selector, pull | kind `day_review` + `_ASK` entry (P6) |
 | Learned voices | none | `GET /api/omi/voices` (the member's own list), `PATCH /api/omi/voices/{id}` `{learning_enabled}`, `DELETE /api/omi/voices/{id}` (forget the voice, keep the person), `POST /api/omi/segments/{id}/suggestion` `{answer: yes|no|someone_else}` (P4b) |
-| Caregiving | none | `GET/PUT/DELETE /api/memories/curators` (admin + member consent), `POST /api/memories/for/{member}` (curator write) (P7) |
+| Caregiving | none | built (P7): `/api/memories/curation/me[/{category}]` (own opt-ins), `/members`, `/members/{m}/rows[/{id}/edit|forget]`, `/members/{m}/sensitive/{category}`, `/members/{m}/held[/{id}]` |
 
 ## 9. Phases (F): minimum useful product first
 
@@ -879,6 +880,16 @@ voice-session view is the panel review cards' private card (a card token, card-l
 exact words behind a row ("Where's this from?") need a fresh PIN too (D13); a fact forget is the existing row forget, not a ledger
 entry (the ledger holds names).
 
+**Build status (2026-10-19): P7 (caregiver curation) is built, flag-dark** (`ZOE_MEMORIES_CURATORS`; `memory_curation.py`,
+`routers/memories_curation.py`, `js/memories-curation.js`, migration 0061; record [memory-curation.md](../knowledge/memory-curation.md)).
+It follows the owner answers of 2026-10-19 (section 11) and differs from 2.3 on purpose: NO `memory_curators` grant table (D7: every
+adult admin is the implicit curator of every child); an adult is curated only in a category that adult opted in themself
+(`memory_curation_optins`, D9; the carer-without-consent case, D8, is not built); the curated authority is a new class `curated`
+(rank 6, changed only by a curator or an operator: the child's passing remark is held as a `disputed` note the curator keeps or
+accepts); an adult's opt-out releases their curated rows to `user_stated`. A curator sees all curated rows of the member (any
+curator's, so two parents share them), never the member's other memories. The spoken curator intent at the panel ("Zoe, remember
+that Mia's swimming is on Tuesdays") is a separate, replay-gated PR.
+
 Each phase is one PR (or a small workstream), flag-dark, with its tests, and says what changes for the family.
 
 | Phase | What | Needs | Changes for the family |
@@ -890,7 +901,7 @@ Each phase is one PR (or a small workstream), flag-dark, with its tests, and say
 | P4b | learned voices (`ZOE_OMI_LEARN_VOICES`): segment embeddings, voiceprints from tags, suggestions, the "Voices I've learned" list, the forget step | P4 | "this sounds like Sam, right?" |
 | P5 | **backend built flag-dark (Phase 1 of the day review, migration 0054: `omi_day_review.py`, `omi_review_apply.py`, `routers/omi_day_review.py`; kinds add `person` and `owner_fact`, statuses pending / approved / dismissed, the omi_segments speaker vocabulary)**; day analysis (`ZOE_OMI_DAY_REVIEW=shadow`), candidates on the desktop Pendant tab with approve / edit / skip and real writes **on approval** | P2 (P4 for the full form) | "Zoe found these in your day" on the computer |
 | P6 | **raise / pull / orb + the crowded-room phone send built flag-dark (`day_review_raise.py`, `ZOE_DAY_REVIEW_RAISE`; record [day-review-raise.md](../knowledge/day-review-raise.md)): the raise rides the first-turn brief, not `[RAISE]` / `proactive_candidates`; a crowded raise is not made; snooze after two ignored raises or one decline.** The private card is #2129's. Not built: the voice dialogue tier (`omi_review_dialog`) | P5, the voice session live | "I went through your day ..." on the next turn |
-| P7 | caregiver curation | owner decisions D7-D10 | parents and carers can add memories for someone |
+| P7 | caregiver curation: **built flag-dark (API + desktop/phone UI, migration 0061)**; the spoken curator intent is a separate voice-path PR | owner decisions D7, D9, D10 (answered 2026-10-19) | a parent can add memories for a child |
 | P8 | 12B night lane; naming consented household members in tags; linking tags to `person_directory` | identity Phase 4, omi plan §5 consent | quality, people layer |
 
 ## 10. Tests and lab cells (each with its negative control)
@@ -957,16 +968,16 @@ against `~/.zoe-voice-samples` per AGENTS.md.
 3. **D3 Lane**: 4B evening (recommended) or 12B night, or both. The night window is already full.
 4. **D4 Untagged days**: analyse in the reduced form (recommended) or wait for pendant enrolment?
 5. **D5 Follow-ups**: DECIDED 2026-10-18 - an open loop (no alarm, nothing proactive), reviewed on the panel.
-6. **D6 Forget scope**: does "forget Sam" delete approved calendar events and list items naming Sam
-   (recommendation: no, they are the owner's)?
-7. **D7 Children**: is every admin the implicit curator for every child, or is an explicit grant required?
-8. **D8 Carers for adults**: is consent from the member always required? What happens when they cannot give it?
-   (This is a lawyer question, not a setting.)
-9. **D9 Curated authority**: protect a child's curated rows from the child's own passing statements (recommended)?
-   For adults, the member's word wins unless they opt a category in?
-10. **D10 Sensitive categories in curation** (health, medication, money): off by default. Allowed at all?
-11. **D11 Sensitive classes for the owner's own day review and Memories panel view**: never proposed and never on
-    the wall (recommended), or opt-in per class?
+6. **D6 Forget scope**: DECIDED 2026-10-19 - "forget Sam" keeps the owner's own calendar events and list items.
+7. **D7 Children**: DECIDED 2026-10-19 - every adult admin is the implicit curator of every child; no grant.
+8. **D8 Carers for adults**: OPEN - is consent from the member always required? What happens when they cannot give it?
+   (This is a lawyer question, not a setting; nothing acts without the adult's own opt-in until it is answered.)
+9. **D9 Curated authority**: DECIDED 2026-10-19 - a child's curated rows are protected from the child's own passing
+   statements; for an adult, the member's own word wins unless they opt a category in to curation.
+10. **D10 Sensitive categories in curation** (health, medication, money): DECIDED 2026-10-19 - off by default, allowed
+    when opted in (per child by a curator; by the adult themself).
+11. **D11 Sensitive classes for the owner's own day review and Memories panel view**: DECIDED 2026-10-19 - never
+    proposed on the owner's own wall.
 12. **D12 Tagging other household members** in pendant transcripts, including learning their voice for suggestions
     (§2.6; paused until this is answered): allowed as a private, member-only label, or only once they
     opt in (omi plan §5 `ambient_consent_at`)?

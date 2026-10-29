@@ -3522,6 +3522,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MEMORIES_CURATORS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_curation.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MEMORIES_VOICE": {
         "defaults": [
           "False"
