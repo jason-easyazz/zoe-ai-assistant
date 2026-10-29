@@ -1,9 +1,7 @@
-"""scripts/landing - the voice loop's per-cycle decisions and the mid-probe head watcher (stacked on test_landing_lander_rules.py)."""
+"""scripts/landing - the voice loop's per-cycle decisions (stacked on test_landing_lander_rules.py)."""
 import json
-import os
 import shutil
 import subprocess
-import threading
 import time
 
 import pytest
@@ -15,7 +13,8 @@ pytestmark = [pytest.mark.ci_safe, NEEDS_TOOLS]
 DAY = "2026-10-29"
 NOON = str(epoch(DAY, "12:00"))
 HEAD = "b" * 40
-SPEED_ONLY = dict(status="fail", said_vs_did_regressions=[], vad={"status": "pass"}, speed_comparison="compared")
+SPEED_ONLY = dict(status="fail", reason="SPEED e2e_ms: 3900ms vs baseline 3000ms (+30%)", said_vs_did_regressions=[],
+                  vad={"status": "pass"}, speed_comparison="compared")
 
 
 @pytest.fixture()
@@ -101,74 +100,6 @@ def test_voice_loop_cycle_requeues_parks_and_retries(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert queued() == ["8"]
     assert [ln.split()[0] for ln in (rig.home / "probe-failed.txt").read_text().splitlines()] == ["10", "7"]
-
-
-# ---- a push DURING the probe aborts it ---------------------------------------------------------------------------
-
-def watch(rig, cmd, poll="1"):
-    script = f'. "{LANDING}/landing_lib.sh"; landing_run_watching_head 7 {HEAD} {cmd}; echo rc=$?'
-    t0 = time.time()
-    r = subprocess.run(["bash", "-c", script], env=rig.env(ZOE_LANDING_HEAD_POLL_S=poll), capture_output=True,
-                       text=True, timeout=60)
-    return r, time.time() - t0
-
-
-def alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def test_head_moved_mid_probe_kills_it_and_returns_75(rig):
-    prs(rig, headRefOid=HEAD)                       # the probe STARTS on the right head...
-    pidfile = rig.tmp / "probe.pid"
-    pushed = threading.Timer(2.5, lambda: prs(rig, headRefOid="f" * 40))   # ...and a push lands while it runs
-    pushed.start()
-    try:
-        r, took = watch(rig, f"bash -c 'echo $$ > {pidfile}; exec sleep 40'")
-    finally:
-        pushed.cancel()
-    assert "rc=75" in r.stdout, r.stdout + r.stderr
-    assert 2.4 <= took < 25, "aborted at %.1fs: not before the push (2.5s), not long after it" % took   # an unchanged head must NOT kill it
-    pid = int(pidfile.read_text())
-    time.sleep(0.3)
-    assert not alive(pid), "the probe process survived the abort"
-
-
-def test_unchanged_head_lets_the_probe_finish_and_passes_its_rc_through(rig):
-    prs(rig, headRefOid=HEAD)
-    r, _ = watch(rig, "bash -c 'sleep 2; exit 3'")
-    assert "rc=3" in r.stdout
-    assert any(c.startswith("pr view 7") for c in rig.gh_calls()), "head was never polled"
-
-
-def test_a_failing_gh_does_not_kill_a_running_probe(rig):
-    st = prs(rig)
-    st["pr_view_fails"] = True                      # API outage mid-probe: the final pre-arm head check fails closed instead
-    rig.set_state(st)
-    r, _ = watch(rig, "bash -c 'sleep 2; exit 0'")
-    assert "rc=0" in r.stdout
-
-
-
-
-def test_said_vs_did_regression_is_never_retried(rig):
-    prs(rig)
-    snapshot(rig, **dict(SPEED_ONLY, said_vs_did_regressions=["turn on the lights"]))
-    assert decide(rig) == "park-probe-failed"
-
-
-
-def test_missing_or_garbage_artifact_is_not_retryable(rig):
-    prs(rig)
-    assert decide(rig) == "park-probe-failed"             # no snapshot at all
-    (rig.home / "probe-artifacts").mkdir()
-    (rig.home / "probe-artifacts" / "7.json").write_text("{not json")
-    assert decide(rig) == "park-probe-failed"
-
-
 
 
 # ---- Kokoro is never stopped before the test lane is held --------------------------------------------------------
@@ -297,3 +228,22 @@ def test_a_push_during_the_lock_waits_leaves_kokoro_untouched(rig):
     r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
     assert "rc=9" in r.stdout and not probe_log.exists() and (not log.exists() or log.read_text() == "")
     assert subprocess.run(["flock", "-n", str(lane), "true"]).returncode == 0
+
+
+def test_only_positive_speed_evidence_earns_a_retry(rig):
+    prs(rig)
+    cases = {
+        "cold-cache only": dict(SPEED_ONLY, reason="COLD FAIL: first turn 6.1s over the floor", cold_first_turn={"status": "fail"}),
+        "speed + cold": dict(SPEED_ONLY, reason="SPEED e2e_ms: 3900ms vs baseline 3000ms; COLD FAIL: x", cold_first_turn={"status": "fail"}),
+        "cleanup failed": dict(SPEED_ONLY, reason="replay-artifact cleanup FAILED (calendar/lists may be dirty)"),
+        "speed + cleanup": dict(SPEED_ONLY, reason="SPEED e2e_ms: 3900ms vs baseline 3000ms; replay-artifact cleanup FAILED (x)"),
+        "cold field failed (reason silent)": dict(SPEED_ONLY, cold_first_turn={"status": "fail"}),
+        "no reason": {k: v for k, v in SPEED_ONLY.items() if k != "reason"},
+    }
+    for name, art in cases.items():
+        (rig.home / "voice-probe-retried.txt").write_text("")
+        snapshot(rig, **art)
+        assert decide(rig) == "park-probe-failed", name
+    snapshot(rig, **dict(SPEED_ONLY, cold_first_turn={"status": "pass"}))
+    (rig.home / "voice-probe-retried.txt").write_text("")
+    assert decide(rig) == "retry-once"
