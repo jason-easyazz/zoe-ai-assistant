@@ -20,6 +20,7 @@ still carry their own list INSERTs.
 from __future__ import annotations
 
 import re
+from contextlib import asynccontextmanager
 import uuid
 from typing import Optional
 
@@ -132,6 +133,125 @@ def clean_item_text(raw: str) -> str:
         # item "milk, Actually no, add eggs". Only a repetition collapses (above); anything else is declined as ambiguous.
         return ""
     return _EDGE_PUNCT_RE.sub("", "".join(kept))
+
+
+_QM_RE = re.compile(r"[?!]+")
+
+
+def normalize_item_text(raw: str) -> str:
+    """The text a list item is STORED (and compared) as: STT question / exclamation marks stripped from anywhere in it, and an
+    immediate case-insensitive repeat of the whole phrase collapsed ("noodles? Noodles" -> "noodles", "eggs eggs" -> "eggs").
+    Casing of the first copy is kept. Pure; never raises; a value with nothing left comes back as the stripped original."""
+    text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not text:
+        return ""
+    flat = re.sub(r"\s+", " ", _QM_RE.sub(" ", text)).strip(" ,;:")
+    words = flat.split()
+    for size in range(1, len(words) // 2 + 1):
+        if len(words) % size == 0:
+            chunk = [w.lower().strip(",;:.") for w in words[:size]]
+            if all([w.lower().strip(",;:.") for w in words[i:i + size]] == chunk for i in range(0, len(words), size)):
+                words = words[:size]
+                break
+    return " ".join(words).strip(" ,;:") or text
+
+
+#: "-oes" plurals whose singular drops only the "s" ("tomatoes" -> "tomato"; "shoes" is not one of them)
+_OES_STEMS = frozenset({"tomato", "potato", "mango", "burrito", "avocado"})
+
+
+#: "-ie" nouns whose plural is just "+s" ("cookies" -> "cookie"), unlike "berries" -> "berry"
+_IE_STEMS = frozenset({"cookie", "brownie", "smoothie", "pie", "veggie", "zombie", "movie", "hoagie", "calorie", "selfie", "rookie"})
+
+
+def _singular(word: str) -> str:
+    if word.endswith("oes") and word[:-2] in _OES_STEMS:
+        return word[:-2]
+    if word.endswith("ies") and word[:-1] in _IE_STEMS:
+        return word[:-1]      # cookies -> cookie, brownies -> brownie (NOT "cooky")
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 4 and word.endswith(("ches", "shes", "xes", "sses", "zes")):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+
+def item_key(text: str) -> str:
+    """Identity of a list item for "is it already there?" and remove matching: normalised, case-, punctuation- and
+    plural-insensitive ("Eggs" == "egg"; "noodles? Noodles" == "noodles")."""
+    flat = re.sub(r"[^\w\s']", " ", normalize_item_text(text).lower())
+    return " ".join(_singular(w) for w in flat.split())
+
+
+def find_matching_item(rows, text: str):
+    """The first of ``rows`` (mappings with a ``text``) that is the same item as ``text`` by :func:`item_key`, else None."""
+    want = item_key(text)
+    if not want:
+        return None
+    for row in rows or []:
+        if item_key(str(dict(row).get("text") or "")) == want:
+            return row
+    return None
+
+
+#: "and" inside these is part of ONE item, never a list of two ("add salt and pepper" adds one thing)
+_COMPOUND_ITEMS = frozenset({
+    "salt and pepper", "mac and cheese", "macaroni and cheese", "fish and chips", "bread and butter", "rice and beans",
+    "peanut butter and jelly", "surf and turf", "pots and pans", "tea and coffee", "cheese and crackers", "milk and honey",
+    "chips and dip", "oil and vinegar", "bacon and eggs", "ham and cheese", "salt and vinegar", "sweet and sour",
+})
+
+_COMPOUND_RE = re.compile(
+    r"(?<![\w'])(?:" + "|".join(re.escape(c).replace(r"\ ", r"\s+") for c in sorted(_COMPOUND_ITEMS, key=len, reverse=True)) + r")(?![\w'])",
+    re.IGNORECASE)
+
+
+def split_items(text: str) -> list:
+    """The separate items in one spoken add ("eggs and milk", "eggs, milk and bread") - commas and " and " split; a known
+    compound ("salt and pepper") stays one. One item comes back as a one-element list; nothing as []."""
+    flat = normalize_item_text(text)
+    if not flat:
+        return []
+    if flat.lower() in _COMPOUND_ITEMS:
+        return [flat]
+    # Protect every known compound span ("eggs, mac and cheese" keeps "mac and cheese" whole) before the delimiters split.
+    spans: list = []
+
+    def _hold(m):
+        spans.append(m.group(0))
+        return f"\x00{len(spans) - 1}\x00"
+
+    protected = _COMPOUND_RE.sub(_hold, flat)
+    out = []
+    for part in re.split(r",\s*(?:and\s+)?|\s+and\s+", protected, flags=re.IGNORECASE):
+        part = normalize_item_text(re.sub(r"\x00(\d+)\x00", lambda m: spans[int(m.group(1))], part))
+        if part and part.lower() not in {"and", "also", "some"}:
+            out.append(part)
+    return out or [flat]
+
+
+def _join(names: list) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def add_reply(added: list, existing: list, where: str) -> str:
+    """The one-sentence answer to an add. ``where`` is the spoken place ("the shopping list"). Nothing new: "Milk's already on
+    the shopping list."; some of each: "Added eggs to the shopping list, and milk's already on it."."""
+    added = [normalize_item_text(x) for x in added if normalize_item_text(x)]
+    existing = [normalize_item_text(x) for x in existing if normalize_item_text(x)]
+    if added and not existing:
+        return f"Added {_join(added)} to {where}."
+    if not existing:
+        return ""
+    if not added:
+        names = [existing[0][:1].upper() + existing[0][1:]] + existing[1:]
+        plural = len(names) > 1 or (names[0].lower().endswith("s") and not names[0].lower().endswith(("ss", "us")))
+        return f"{_join(names)} are already on {where}." if plural else f"{names[0]}'s already on {where}."
+    plural = len(existing) > 1 or (existing[0].lower().endswith("s") and not existing[0].lower().endswith(("ss", "us")))
+    tail = f"{_join(existing)} are already on it" if plural else f"{existing[0]}'s already on it"
+    return f"Added {_join(added)} to {where}, and {tail}."
 
 
 # Auxiliaries that are also common nouns: "my can opener", "our can of paint", "my spare can", "your last will".
@@ -249,6 +369,7 @@ async def create_item_record(
     DB default the narrower voice/MCP INSERTs relied on by omitting the column.
     """
     item_id = str(uuid.uuid4())
+    text = normalize_item_text(text) or text
     await db.execute(
         """INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -332,6 +453,20 @@ async def _find_recent_duplicate(db, *, list_id: str, text: str, window_s: int) 
     return row["id"] if row else None
 
 
+@asynccontextmanager
+async def list_write_txn(db, list_id):
+    """One transaction around a list add holding a per-list advisory lock, so two overlapping adds (panel + brain) serialise
+    on the "is it already there?" check instead of both inserting, and a multi-item add is all-or-nothing. Nested use is a
+    savepoint (the lock is held to the outer commit). A DB shim without ``transaction`` runs unwrapped."""
+    txn = getattr(db, "transaction", None)
+    if not callable(txn):
+        yield
+        return
+    async with txn():
+        await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (f"list_add|{list_id}",))
+        yield
+
+
 async def add_item_to_list(
     db,
     *,
@@ -343,6 +478,7 @@ async def add_item_to_list(
     category: Optional[str] = None,
     new_list_visibility: str,
     dedup_window_s: int = 0,
+    receipts: Optional[list] = None,
 ) -> dict:
     """Resolve-or-create a list and add one item — the shared voice/MCP add.
 
@@ -357,31 +493,58 @@ async def add_item_to_list(
     transaction (asyncpg auto-commits each statement, so without it a failed
     item insert orphans an empty list — the MCP-path bug this module fixes).
 
-    Returns ``{"list_id", "item_id", "created_list", "deduped"}``; on a dedup
+    Returns ``{"list_id", "item_id", "created_list", "deduped"}`` (plus ``"already": True`` and the stored ``"text"`` when the item
+    was already open on the list - nothing is written then); on a dedup
     hit ``item_id`` is the existing duplicate row's id and nothing is written.
     """
+    text = normalize_item_text(text) or text
     guest = panel_principal.is_guest_id(user_id)
     list_id = await find_list_id(db, user_id=user_id, list_type=list_type, name=list_name)
     if list_id is None and guest and list_type not in GUEST_CREATABLE_LIST_TYPES:
         # A guest adds to a household list that exists; it never conjures a new list of another type.
         raise HouseholdListUnavailable(list_type)
     if list_id is not None:
-        if dedup_window_s > 0:
-            dup_id = await _find_recent_duplicate(
-                db, list_id=list_id, text=text, window_s=dedup_window_s
-            )
-            if dup_id is not None:
-                # the item IS on the list (a replayed add), so a reply that says so is true
-                write_receipts.record(user_id, "list", dup_id, "add_item_to_list:dedup")
-                return {"list_id": list_id, "item_id": dup_id, "created_list": False, "deduped": True}
-        # Existing list: a single INSERT is already atomic.
-        item = await create_item_record(
-            db, list_id=list_id, text=text, quantity=quantity, category=category
-        )
-        write_receipts.record(user_id, "list", item["id"], "add_item_to_list")
-        return {"list_id": list_id, "item_id": item["id"], "created_list": False, "deduped": False}
+        pending: list[tuple] = []
+        async with list_write_txn(db, list_id):
+            if dedup_window_s > 0:
+                dup_id = await _find_recent_duplicate(
+                    db, list_id=list_id, text=text, window_s=dedup_window_s
+                )
+                if dup_id is not None:
+                    # the item IS on the list (a replayed add), so a reply that says so is true
+                    pending.append((dup_id, "add_item_to_list:dedup"))
+                    outcome = {"list_id": list_id, "item_id": dup_id, "created_list": False, "deduped": True}
+            if not pending:
+                # The item is already OPEN on the list (case-, plural- and punctuation-insensitive): no duplicate row; the caller says so.
+                cursor = await db.execute(
+                    "SELECT id, text FROM list_items WHERE list_id=? AND deleted=0 AND (completed IS NULL OR completed=0)", (list_id,))
+                have = find_matching_item(await cursor.fetchall(), text)
+                if have is not None:
+                    pending.append((have["id"], "add_item_to_list:already"))
+                    outcome = {"list_id": list_id, "item_id": have["id"], "created_list": False, "deduped": True, "already": True,
+                               "text": normalize_item_text(have["text"])}
+                else:
+                    item = await create_item_record(
+                        db, list_id=list_id, text=text, quantity=quantity, category=category
+                    )
+                    pending.append((item["id"], "add_item_to_list"))
+                    outcome = {"list_id": list_id, "item_id": item["id"], "created_list": False, "deduped": False}
+        # Receipts land only once the write has committed (a rolled-back add must not read as done).
+        for rid, why in pending:
+            if receipts is not None:
+                receipts.append((user_id, rid, why))
+            else:
+                write_receipts.record(user_id, "list", rid, why)
+        return outcome
 
     async def _write_new_list_and_item() -> dict:
+        if callable(getattr(db, "transaction", None)):
+            # Two first-ever adds racing would each mint a list (no shared list_id to lock yet): serialise on the list's
+            # identity, then re-resolve - the loser finds the winner's committed list and takes the existing-list path.
+            await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (f"list_create|{list_type}|{list_name}",))
+            raced = await find_list_id(db, user_id=user_id, list_type=list_type, name=list_name)
+            if raced is not None:
+                return {"_raced": True}
         new_list = await create_list_record(
             db,
             # A guest has no users row to own a list; the household does. A guest-created list is always family-visible.
@@ -407,5 +570,45 @@ async def add_item_to_list(
     else:
         # Fallback (e.g. a DB shim without transaction support).
         outcome = await _write_new_list_and_item()
-    write_receipts.record(user_id, "list", outcome["item_id"], "add_item_to_list:new_list")
+    if outcome.get("_raced"):
+        return await add_item_to_list(
+            db, user_id=user_id, list_type=list_type, list_name=list_name, text=text, quantity=quantity,
+            category=category, new_list_visibility=new_list_visibility, dedup_window_s=dedup_window_s, receipts=receipts)
+    if receipts is not None:
+        receipts.append((user_id, outcome["item_id"], "add_item_to_list:new_list"))
+    else:
+        write_receipts.record(user_id, "list", outcome["item_id"], "add_item_to_list:new_list")
     return outcome
+
+
+@asynccontextmanager
+async def _outer_add_txn(db):
+    txn = getattr(db, "transaction", None)
+    if not callable(txn):
+        yield
+        return
+    async with txn():
+        yield
+
+
+async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
+    """:func:`add_item_to_list` for a spoken add that may name several items: each item is added unless it is already open on
+    the list. Returns the LAST outcome's ``list_id`` plus ``added`` / ``already`` (item texts), ``item_ids`` and ``outcomes``."""
+    added, already, ids, outcomes = [], [], [], []
+    # Only a SHOPPING list is a list of separate things: "call mum and dad" on a to-do list is one task.
+    parts = (split_items(text) if kwargs.get("list_type") == "shopping" else [normalize_item_text(text)]) or [text]
+    receipts: list[tuple] = []
+    # ONE transaction for the whole spoken add: all items land or none do, and receipts are recorded after it commits.
+    async with _outer_add_txn(db):
+        for part in parts:
+            out = await add_item_to_list(db, text=part, receipts=receipts, **kwargs)
+            outcomes.append(out)
+            ids.append(out["item_id"])
+            shown = out.get("text") or normalize_item_text(part)
+            out["_text"] = shown      # what this outcome is about, for the caller's per-item audit / notification
+            (already if out.get("already") else added).append(shown)
+    for uid, rid, why in receipts:
+        write_receipts.record(uid, "list", rid, why)
+    last = outcomes[-1]
+    return {**last, "item_id": ids[0] if ids else last["item_id"], "item_ids": ids, "added": added, "already": already,
+            "outcomes": outcomes}
