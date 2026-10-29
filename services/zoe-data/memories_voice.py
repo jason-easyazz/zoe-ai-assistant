@@ -18,6 +18,8 @@ tap-to-"that" bridge. No SQL on a memory table, no delete of its own.
     "what do you remember about Sam?" (Sam is in MY people)          Sam's facts (at most two spoken) + Sam's card
     "what do you know about my health?" (on the wall)                never said aloud on the panel: "ask me on your phone"
     "forget that I like jazz"                                        forgets the ONE row that says it (voice and chat)
+    "remember that Mia's swimming is on Tuesdays" (a curator)      a curated note for that child (P7, ZOE_MEMORIES_CURATORS;
+                                                                     ``memory_curation.by_voice``; anyone else falls through)
     tap "That's wrong", then say "it's on Saturday" / "forget it"    corrects / forgets THAT row (the next turn, same member,
                                                                      same panel, within ``TAP_TTL_S``)
 
@@ -794,14 +796,40 @@ async def answer(text: str, user_id: str, session_id: str = "", *, channel: str,
     return spoken_me(wall, on_screen=shown)
 
 
+async def _curate(text: str, user_id: str, extra_ctx: Optional[dict], allow_writes: bool) -> Optional[str]:
+    """Caregiver curation by voice (memories-space P7, ``ZOE_MEMORIES_CURATORS``): "remember that Mia's swimming is on Tuesdays" from
+    a curator in THEIR OWN panel identity (``scope_user``: a verified voice session or a fresh PIN; never the panel binding, never a
+    speaker the gate rejected). A guest, a child or any other member falls through untouched (their own teach path)."""
+    import memory_curation as mc
+
+    ctx = extra_ctx or dict()
+    if not allow_writes or not mc.enabled() or not ctx.get("panel_id") or "scope_user" not in ctx:
+        return None
+    if ctx.get("speaker_verified") is False:
+        return None
+    if mc.parse_voice(text) is None:                 # the one anchored regex first: a turn of any other shape costs nothing more
+        return None
+    member = prc._member(user_id, "voice", ctx)
+    if member is None:
+        return None
+    reply = await mc.by_voice(text, member)
+    if reply:
+        logger.info("MEMORIES_VOICE curate user=%s", member)
+    return reply
+
+
 async def tier(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None,
                extra_ctx: Optional[dict[str, Any]] = None, allow_writes: bool = True):
     """The fast-tier hook (voice and chat): a ``DispatchResult`` or None. Off = None before any work. NEVER raises."""
     try:
         ch = (channel or "").strip().lower()
-        if ch not in ("voice", "chat") or not enabled():
+        if ch not in ("voice", "chat"):
             return None
-        reply = await answer(text, user_id, session_id, channel=ch, extra_ctx=extra_ctx, allow_writes=allow_writes)
+        reply = await _curate(text, user_id, extra_ctx, allow_writes) if ch == "voice" else None
+        if not reply:
+            if not enabled():
+                return None
+            reply = await answer(text, user_id, session_id, channel=ch, extra_ctx=extra_ctx, allow_writes=allow_writes)
         if not reply:
             return None
         import expert_dispatch as _xd
