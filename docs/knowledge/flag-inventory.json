@@ -15137,6 +15137,25 @@
         },
         "typed_env": false
       },
+      "ZOE_TURN_CONTINUATION_TTL_S": {
+        "defaults": [
+          "60.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/conversation_cues.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 60.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
       "ZOE_UNAUTHENTICATED_ROLE": {
         "defaults": [
           "'guest'"

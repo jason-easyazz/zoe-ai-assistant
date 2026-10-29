@@ -784,6 +784,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_TTS_LEAD_GUARD_MS` | int | `20` | - | - | `20` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_TTS_MODE` | str | `'kokoro'` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'kokoro'` | yes | yes | `services/zoe-data/tts_waterfall.py` |
 | `ZOE_TTS_TRIM_SILENCE` | bool | `True` | - | - | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_TURN_CONTINUATION_TTL_S` | float | `60.0` | - | `services/zoe-data/AGENTS.md` | `60.0` | yes | NO | `services/zoe-data/conversation_cues.py` |
 | `ZOE_UNAUTHENTICATED_ROLE` | str | `'guest'` | - | `docs/architecture/panel-anywhere.md` | `'guest'` | no | yes | `services/zoe-data/auth.py` |
 | `ZOE_UPDATE_CHECK_ENABLED` | bool | `True` | - | - | `'true'` | no | NO | `services/zoe-data/system_updates.py` |
 | `ZOE_URL` | str | `'https://zoe.local'` | - | `docs/knowledge/mac-virtual-panel.md` | `''`, `'http://127.0.0.1:8000'`, `'https://zoe.local'`, `-`, `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`scripts/setup/mac_panel/preflight.py`<br>`scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |

@@ -5087,6 +5087,13 @@
    "kind": "bool",
    "readers": 1
   },
+  "ZOE_TURN_CONTINUATION_TTL_S": {
+   "defaults": [
+    "60.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
   "ZOE_UNAUTHENTICATED_ROLE": {
    "defaults": [
     "guest"
