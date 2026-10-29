@@ -14,6 +14,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 LANDING = REPO / "scripts" / "landing"
 
@@ -68,14 +70,18 @@ elif argv[:2] == ["api", "graphql"]:
     start = int(after); end = min(start + 100, t["total"])
     nodes = [{"id": "T%d" % i, "isResolved": i not in t["unresolved"], "path": "f.py", "line": i,
               "comments": {"nodes": [{"author": {"login": "bot"}, "body": "thread %d" % i}]}} for i in range(start, end)]
-    emit({"data": {"repository": {"pullRequest": {"reviewThreads": {
-        "pageInfo": {"hasNextPage": end < t["total"], "endCursor": str(end)}, "nodes": nodes}}}}})
+    out = {"data": {"repository": {"pullRequest": {"reviewThreads": {
+        "pageInfo": {"hasNextPage": end < t["total"], "endCursor": str(end)}, "nodes": nodes}}}}}
+    if state.get("graphql_errors"):
+        out["errors"] = [{"message": "partial failure"}]
+    emit(out)
 # pr merge / ready / update-branch, run ..., anything else: logged, succeed silently
 '''
 
 FAKE_SYSTEMCTL = r'''#!/bin/bash
 # fake `systemctl --user ...`: is-active from $FAKE_ACTIVE (space separated units), show from FAKE_NW_* env
 shift   # --user
+[ -n "$FAKE_SYSTEMCTL_LOG" ] && case "$1" in stop|start) echo "$1 $2 lane_held=$(flock -n "$ZOE_TEST_LANE_LOCK" true && echo no || echo yes)" >> "$FAKE_SYSTEMCTL_LOG";; esac
 case "$1" in
   is-active) for u in $FAKE_ACTIVE; do [ "$u" = "$2" ] && { echo active; exit 0; }; done; echo inactive; exit 3;;
   show) case "$*" in
@@ -142,3 +148,7 @@ class Rig:
 
 def tools_available() -> bool:
     return bool(shutil.which("jq") and shutil.which("bash") and shutil.which("flock"))
+
+
+# A box without jq/flock skips with the reason - but never under CI (GitHub sets $CI), where a skip would hide the whole file.
+NEEDS_TOOLS = pytest.mark.skipif(not tools_available() and not os.environ.get("CI"), reason="needs bash + jq + flock")

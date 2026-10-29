@@ -20,7 +20,7 @@ while [ "$(date +%s)" -lt "$STOP_AT" ]; do
     gh pr view "$pr" --json files --jq '.files[].path' > "$C/files-$pr.txt" 2>/dev/null || continue
     scope=$(cd "$LANDING_REPO" && python3 scripts/maintenance/voice_gate_check.py --scope-only --changed-files-from "$C/files-$pr.txt" 2>&1 | grep -o 'scope: [A-Z]*' | awk '{print $2}')
     if [ "$scope" = VOICE ]; then
-      grep -qE "^$pr " "$P/voice-pending.txt" 2>/dev/null || { echo "$pr $HOME/.worktrees/land-$pr $br pr$pr" >> "$P/voice-pending.txt"; log "#$pr voice-path -> queued for the voice loop"; }
+      grep -qE "^$pr " "$P/voice-pending.txt" 2>/dev/null || { echo "$pr $LANDING_WORKTREES/land-$pr $br pr$pr" >> "$P/voice-pending.txt"; log "#$pr voice-path -> queued for the voice loop"; }
       continue
     fi
     exec 9>"$C/docs-chain.lock"; flock 9

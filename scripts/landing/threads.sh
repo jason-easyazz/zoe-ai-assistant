@@ -13,7 +13,7 @@ for n in "$@"; do
   after=""; total=0
   while :; do
     page=$(gh api graphql -F o="$OWNER" -F r="$NAME" -F n="$n" ${after:+-F a="$after"} -f query="$Q") || { echo "threads.sh: gh api failed for #$n" >&2; exit 1; }
-    echo "$page" | jq -e '.data.repository.pullRequest.reviewThreads.nodes' >/dev/null 2>&1 || { echo "threads.sh: unreadable page for #$n" >&2; exit 1; }
+    echo "$page" | jq -e '(has("errors") | not) and (.data.repository.pullRequest.reviewThreads.nodes != null)' >/dev/null 2>&1 || { echo "threads.sh: unreadable page for #$n" >&2; exit 1; }
     if [ "$COUNT" = 1 ]; then
       c=$(echo "$page" | jq -r '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false)] | length')
       total=$((total + c))

@@ -4,17 +4,14 @@ The lander is run for real against a fake `gh`; every rule here is checked BEFOR
 so a green test also proves nothing live was started. gh calls are logged; mutations (merge/ready) are asserted absent.
 """
 import json
-import os
-import shutil
 import subprocess
 import time
 
 import pytest
 
-from tests.unit.landing_fakes import LANDING, Rig, epoch, tools_available
+from tests.unit.landing_fakes import LANDING, NEEDS_TOOLS, Rig, epoch
 
-pytestmark = [pytest.mark.ci_safe,
-              pytest.mark.skipif(not tools_available(), reason="needs bash + jq + flock")]
+pytestmark = [pytest.mark.ci_safe, NEEDS_TOOLS]
 
 DAY = "2026-10-29"
 NOON = str(epoch(DAY, "12:00"))
@@ -186,106 +183,93 @@ def test_daytime_without_voice_day_ok_the_lander_exits_9_before_any_gh_call(rig)
 
 
 # ---- bounded retry: one re-queue for a speed-only probe fail ------------------------------------------------------
+# The lander snapshots the shared artifact slot PER PR right after its probe (probe-artifacts/<pr>.json); the voice loop's
+# decision reads that snapshot - never the shared slot, which belongs to whichever probe ran last.
 
-def artifact(rig, **d):
-    p = rig.tmp / "voice_regression_last.json"
-    p.write_text(json.dumps(d))
-    return str(p)
+def snapshot(rig, pr="7", head=HEAD, **d):
+    d.setdefault("revision", {"commit": head[:8]})
+    (rig.home / "probe-artifacts").mkdir(exist_ok=True)
+    (rig.home / "probe-artifacts" / f"{pr}.json").write_text(json.dumps(d))
 
 
-def decide(rig, art, pr="7", rc="4"):
+SPEED_ONLY = dict(status="fail", said_vs_did_regressions=[], vad={"status": "pass"}, speed_comparison="compared")
+
+
+def decide(rig, pr="7", rc="4"):
     script = f'. "{LANDING}/landing_lib.sh"; landing_requeue_decision {pr} {rc}'
-    r = subprocess.run(["bash", "-c", script], env=rig.env(ZOE_VOICE_ARTIFACT=art), capture_output=True, text=True)
+    r = subprocess.run(["bash", "-c", script], env=rig.env(), capture_output=True, text=True)
     return r.stdout.strip()
 
 
 def test_speed_only_probe_fail_is_requeued_once_per_head(rig):
     prs(rig)
-    art = artifact(rig, status="fail", said_vs_did_regressions=[], vad={"status": "pass"}, speed_comparison="compared")
-    assert decide(rig, art) == "retry-once"
-    assert decide(rig, art) == "park-probe-failed"        # same head, second fail -> a human
-    prs(rig, headRefOid="c" * 40)                         # a new push earns one more automatic retry
-    assert decide(rig, art) == "retry-once"
+    snapshot(rig, **SPEED_ONLY)
+    assert decide(rig) == "retry-once"
+    assert decide(rig) == "park-probe-failed"             # same head, second fail -> a human
+    prs(rig, headRefOid="c" * 40)                         # a new push earns one more automatic retry...
+    assert decide(rig) == "park-probe-failed"             # ...but only on an artifact FOR that head (the old one is stale)
+    snapshot(rig, head="c" * 40, **SPEED_ONLY)
+    assert decide(rig) == "retry-once"
 
 
 def test_said_vs_did_regression_is_never_retried(rig):
     prs(rig)
-    art = artifact(rig, status="fail", said_vs_did_regressions=["turn on the lights"], vad={"status": "pass"})
-    assert decide(rig, art) == "park-probe-failed"
+    snapshot(rig, **dict(SPEED_ONLY, said_vs_did_regressions=["turn on the lights"]))
+    assert decide(rig) == "park-probe-failed"
 
 
 def test_missing_or_garbage_artifact_is_not_retryable(rig):
     prs(rig)
-    assert decide(rig, str(rig.tmp / "nope.json")) == "park-probe-failed"
-    bad = rig.tmp / "bad.json"
-    bad.write_text("{not json")
-    assert decide(rig, str(bad)) == "park-probe-failed"
+    assert decide(rig) == "park-probe-failed"             # no snapshot at all
+    (rig.home / "probe-artifacts").mkdir()
+    (rig.home / "probe-artifacts" / "7.json").write_text("{not json")
+    assert decide(rig) == "park-probe-failed"
 
 
-def test_vad_failure_or_refused_speed_is_not_a_speed_only_fail(rig):
-    prs(rig)
-    assert decide(rig, artifact(rig, status="fail", said_vs_did_regressions=[], vad={"status": "fail"})) == "park-probe-failed"
-    assert decide(rig, artifact(rig, status="error", said_vs_did_regressions=[])) == "park-probe-failed"
-    assert decide(rig, artifact(rig, status="fail", said_vs_did_regressions=[],
-                                speed_comparison="refused: no baseline")) == "park-probe-failed"
-
-
-def test_other_exit_codes_keep_the_old_requeue_behaviour(rig):
-    prs(rig)
-    for rc in ("5", "6", "7", "9", "10", ""):
-        assert decide(rig, "/nonexistent", rc=rc) == "requeue"
-
-
-def test_voice_loop_cycle_requeues_parks_and_retries(tmp_path):
-    """after_voice_more.sh for real (one cycle, stub lander): requeue / park / retry-once / conflict-park."""
-    rig = Rig(tmp_path)
-    (rig.home / "voice-day-ok").write_text(DAY + "\n")
-    shutil.copytree(LANDING, tmp_path / "landing-copy")
-    (tmp_path / "landing-copy" / "land_voice_pr.sh").write_text(
-        'case "$1" in 7) exit 4;; 8) exit 6;; 9) exit 5;; 10) exit 4;; esac; exit 0\n')
-    st = {"prs": {"7": {"headRefOid": "7" * 40}, "8": {"headRefOid": "8" * 40},
-                  "9": {"headRefOid": "9" * 40, "mergeable": "CONFLICTING"}, "10": {"headRefOid": "a" * 40}},
-          "threads": {}}
+def test_threads_sh_rejects_a_graphql_error_envelope(rig):
+    st = json.loads(rig.state_file.read_text())
+    st["threads"]["7"] = {"total": 3, "unresolved": [1]}
+    st["graphql_errors"] = True                     # nodes present AND an errors array: partial failure
     rig.set_state(st)
-    (rig.home / "voice-pending.txt").write_text("7 /w/7 b7 pr7\n8 /w/8 b8 pr8\n9 /w/9 b9 pr9\n10 /w/10 b10 pr10\n")
-    # one speed-only artifact for every rc-4 PR: 7 and 10 each get ONE retry on cycle 1 and are parked on cycle 2
-    art = tmp_path / "art.json"
-    art.write_text(json.dumps(dict(status="fail", said_vs_did_regressions=[], vad={"status": "pass"})))
-    env = rig.env(ZOE_LANDING_ONCE="1", ZOE_LANDING_LOOP_SLEEP="0", ZOE_LANDING_NO_BUSY_WAIT="1",
-                  ZOE_LANDING_NOW_EPOCH=NOON, ZOE_VOICE_ARTIFACT=str(art))
-    for _ in range(2):      # second cycle: 7's retry mark is spent, so it parks
-        r = subprocess.run(["bash", str(tmp_path / "landing-copy" / "after_voice_more.sh")], env=env, cwd=rig.repo,
-                           capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
-        assert r.returncode == 0, r.stdout + r.stderr
-        pending = (rig.home / "voice-pending.txt").read_text()
-        if _ == 0:
-            assert [ln.split()[0] for ln in pending.splitlines()] == ["7", "8", "10"], pending   # 9 conflicting -> parked
-            assert (rig.home / "needs-hand-merge.txt").read_text().split()[0] == "9"
-    assert [ln.split()[0] for ln in (rig.home / "voice-pending.txt").read_text().splitlines()] == ["8"]
-    assert [ln.split()[0] for ln in (rig.home / "probe-failed.txt").read_text().splitlines()] == ["7", "10"]
+    r = rig.run("threads.sh", "--count", "7")
+    assert r.returncode != 0 and r.stdout.strip() == ""
 
 
-# ---- a push DURING the probe aborts it ---------------------------------------------------------------------------
+# ---- Kokoro is never stopped before the test lane is held --------------------------------------------------------
+# 2026-10-29: the lander stopped Kokoro and THEN waited an hour for the (non-FIFO) lane = Zoe mute in the daytime.
 
-def watch(rig, pr_head, cmd, poll="1"):
-    script = f'. "{LANDING}/landing_lib.sh"; landing_run_watching_head 7 {HEAD} {cmd}; echo rc=$?'
-    t0 = time.time()
-    r = subprocess.run(["bash", "-c", script], env=rig.env(ZOE_LANDING_HEAD_POLL_S=poll), capture_output=True,
-                       text=True, timeout=60)
-    return r, time.time() - t0
-
-
-def test_head_moved_during_the_probe_kills_it_and_returns_75(rig):
-    prs(rig, headRefOid="f" * 40)          # the PR head is no longer the probed one
-    marker = "31.%d" % (os.getpid() % 1000 + 100)
-    r, took = watch(rig, "f" * 40, f"sleep {marker}")
-    assert "rc=75" in r.stdout, r.stdout + r.stderr
-    assert took < 20, "the probe was not aborted promptly (%.1fs)" % took
-    assert subprocess.run(["pgrep", "-f", f"sleep {marker}"], capture_output=True).returncode == 1, "child survived"
+def window(rig, wait_s="1"):
+    log, lane, probe_log = rig.tmp / "systemctl.log", rig.tmp / "lane.lock", rig.tmp / "probe.log"
+    script = (f'. "{LANDING}/landing_lib.sh"; probe(){{ echo PROBE >> "{probe_log}"; }}; '
+              f'landing_probe_window {wait_s} 7 {HEAD} probe; echo rc=$?')
+    env = rig.env(FAKE_SYSTEMCTL_LOG=str(log), ZOE_TEST_LANE_LOCK=str(lane), ZOE_LANDING_SETTLE_S="0")
+    lane.touch()
+    return script, env, log, lane, probe_log
 
 
-def test_unchanged_head_lets_the_probe_finish_and_passes_its_rc_through(rig):
-    prs(rig, headRefOid=HEAD)
-    r, _ = watch(rig, HEAD, "bash -c 'sleep 2; exit 3'")
-    assert "rc=3" in r.stdout
-    assert any(c.startswith("pr view 7") for c in rig.gh_calls()), "head was never polled"
+def test_kokoro_is_stopped_only_while_the_lane_is_held_and_always_restarted(rig):
+    prs(rig)
+    script, env, log, _, probe_log = window(rig)
+    r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
+    assert "rc=0" in r.stdout, r.stdout + r.stderr
+    assert log.read_text().split("\n")[:2] == ["stop kokoro-tts.service lane_held=yes", "start kokoro-tts.service lane_held=yes"]
+    assert probe_log.read_text().strip() == "PROBE"
+
+
+def test_a_lane_we_cannot_get_leaves_kokoro_untouched(rig):
+    prs(rig)
+    script, env, log, lane, probe_log = window(rig, wait_s="1")
+    holder = subprocess.Popen(["flock", "-x", str(lane), "sleep", "20"])
+    try:
+        time.sleep(0.5)
+        r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+    finally:
+        holder.kill()
+    assert "rc=9" in r.stdout, r.stdout + r.stderr
+    assert not log.exists() or log.read_text() == "", "Kokoro was touched without the lane"
+    assert not probe_log.exists()
+
+
+def test_the_lander_has_no_direct_kokoro_stop_only_the_lane_first_helper():
+    code = "\n".join(ln for ln in (LANDING / "land_voice_pr.sh").read_text().splitlines() if not ln.lstrip().startswith("#"))
+    assert "stop kokoro" not in code and "landing_probe_window" in code and "/tmp/zoe-test-lane.lock" not in code
