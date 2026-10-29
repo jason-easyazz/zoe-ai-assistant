@@ -27,12 +27,15 @@
 # cap, APScheduler 3.10.4 pickled-pytz jobstore, chromadb 0.6.3 palace format,
 # aiortc/av moving together) are not repeated; they still apply.
 # ═══════════════════════════════════════════════════════════════════════════
-# 0.143.1 since 2026-10-28 (14 days old on the day; 0.144-0.162 are all <14 days and held).
+# 0.162.0 since 2026-10-29 (owner waived the 14-day age rule for the dev phase, 2026-10-17). 0.144-0.162
+# breaking list checked against Zoe's usage (form/file/query-default/JSON-null semantics, **extra on
+# Query/Body, root_path/openapi_prefix): Zoe has one `Form("")` + `File(...)` route (voice_livekit
+# /livekit-audio), no param models, no root_path/openapi_prefix/**extra - see the PR body.
 # Starlette is pinned EXPLICITLY below: FastAPI only floors it (>=0.46), so it used to float.
-fastapi==0.143.1
-# 1.8.0 since 2026-10-28 (15 days old; 1.9/1.10 are <14 days and held). 1.8 needs Python >=3.11,
+fastapi==0.162.0
+# 1.10.0 since 2026-10-29 (1.8.0 on 2026-10-28). 1.8+ needs Python >=3.11,
 # so this is a 3.12-lane-only pin (the 3.10 rollback env cannot take it).
-starlette==1.8.0
+starlette==1.10.0
 # 0.54.0 since 2026-10-28 (0.53.0 since 2026-09-27; voice path, replay-gated). 0.53->0.54 touches ONLY the
 # opt-in zttp HTTP/2 implementation (early hints + trailers) and typing; the HTTP/1.1 and WebSocket
 # code paths Zoe serves are byte-identical (diffed against the 0.53.0 sdist). From 0.50 `--ws auto`
@@ -46,7 +49,7 @@ uvicorn[standard]==0.54.0
 pydantic==2.14.1
 aiosqlite==0.22.1
 asyncpg==0.32.0
-alembic==1.20.0
+alembic==1.20.1
 psycopg2-binary==2.9.13
 python-multipart==0.0.32
 httpx==0.28.1
@@ -114,11 +117,11 @@ joblib==1.5.3
 # Australia/Perth -- all Zoe registers) work on every version; 2026.3 also keeps a pickled
 # fixed-offset trigger restorable. Raise it only with an APScheduler release carrying the fix.
 APScheduler==3.11.3
-tzlocal==5.4.4
+tzlocal==5.4.5
 pytz==2026.3
-SQLAlchemy==2.0.54
+SQLAlchemy==2.0.55
 pywebpush==2.5.0
-py-vapid==1.9.4
+py-vapid==1.9.6
 # DIRECT, UNGUARDED module-level imports (memory_metrics.py, voice_metrics.py,
 # guest_policy.py) that no manifest declared — found by an AST scan of every
 # third-party import in zoe-data against this venv (the only way to find what a
@@ -148,18 +151,19 @@ librosa==0.11.0
 scipy==1.17.1
 
 # ── WebRTC / LiveKit ──────────────────────────────────────────────────────
-livekit==1.1.20
+livekit==1.1.21
 # `livekit_aiortc.py` does `from livekit.protocol import rtc` — a SEPARATE
 # distribution (`livekit-protocol`) that `livekit` does not depend on; it only
 # ever arrived via the unused livekit-agents. CI already installs it by hand
 # (validate.yml). 1.1.27 since 2026-09-27 (needs protobuf>=5; box has 7.x).
 livekit-protocol==1.1.27
-# aiortc 1.15.0 caps av<18, so av 18 (>=3.11) is BLOCKED by aiortc, not by Python.
+# aiortc 1.15.0 (latest release) declares av>=14,<18, so av 18/19 is BLOCKED by aiortc, not by Python
+# (re-checked 2026-10-29 against the 1.15.0 pyproject; Dependabot #2214 av 19.0.2 would break resolution).
 aiortc==1.15.0
 av==17.1.0
 
 # ── A2A federation + skill discovery + web search ─────────────────────────
-ddgs==9.16.0
+ddgs==9.16.1
 cloakbrowser==0.3.32
 PyYAML==6.0.3
 segno==1.6.6
