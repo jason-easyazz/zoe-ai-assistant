@@ -61,8 +61,8 @@ EOF
 fi
 
 # Serialize against the CONTINUOUS-DEPLOY runner. `.github/workflows/deploy.yml`
-# runs on every push to main and does `git fetch origin main` + `git reset --hard
-# FETCH_HEAD` on THIS same shared .git/worktree. If a merge lands while this
+# runs on every push to main and fetches main into refs/zoe-deploy/main + `git reset --hard`
+# onto it on THIS same shared .git/worktree. If a merge lands while this
 # script runs, both paths advance main at once and lose the ref-lock race
 # ("cannot lock ref …") — the runner has 5 fetch retries, this manual path had
 # zero coordination and aborted mid-op. Hold a shared flock across the whole
@@ -105,8 +105,20 @@ prev="$(git -C "$LIVE" rev-parse HEAD)"
 # head of an up-to-date squash merge) — not merely fresh. Same binding as
 # deploy.yml, including the fallback to the stricter exact-commit binding when
 # the checker copy predates --expect-tree-of (never to an unbound check).
-git -C "$LIVE" fetch --quiet origin main
-target="$(git -C "$LIVE" rev-parse FETCH_HEAD)"
+# Explicit refspec into a ref only deploys use - NEVER FETCH_HEAD, a single file in the
+# shared .git that any other `git fetch` (the voice lander's PR-branch fetch) overwrites
+# (incident 2026-10-30: the CD runner deployed an unmerged branch commit that way).
+git -C "$LIVE" fetch --quiet --no-write-fetch-head origin "+refs/heads/main:refs/zoe-deploy/main"
+target="$(git -C "$LIVE" rev-parse --verify "refs/zoe-deploy/main^{commit}")"
+remote_main="$(git -C "$LIVE" ls-remote origin refs/heads/main | cut -f1)"
+if [[ -z "$remote_main" || "$target" != "$remote_main" ]]; then
+    echo "REFUSING TO DEPLOY: fetched target ${target:0:7} != the remote's main '${remote_main:0:7}'." >&2
+    exit 1
+fi
+if ! git -C "$LIVE" merge-base --is-ancestor "$prev" "$target"; then
+    echo "REFUSING TO DEPLOY: ${target:0:7} is not a descendant of the live HEAD ${prev:0:7}." >&2
+    exit 1
+fi
 bind_flag="--expect-tree-of"
 if ! grep -q -- '--expect-tree-of' "$SCRIPT_DIR/voice_gate_check.py"; then
     echo "⚠ voice_gate_check.py predates --expect-tree-of; binding to the exact commit instead." >&2

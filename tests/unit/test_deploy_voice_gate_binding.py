@@ -73,7 +73,7 @@ def _git(repo: Path, *args: str, env=None) -> str:
 
 
 def _squash_landing(tmp_path: Path, checker_src: str) -> tuple[Path, dict[str, str]]:
-    """Live tree at `prev`; FETCH_HEAD = the squash merge of a voice-path PR
+    """Live tree at `prev`; refs/zoe-deploy/main = the squash merge of a voice-path PR
     (new sha, PR head's exact tree). `other` is an unrelated landing."""
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
@@ -98,7 +98,7 @@ def _squash_landing(tmp_path: Path, checker_src: str) -> tuple[Path, dict[str, s
     _git(repo, "commit", "-qm", "unrelated", env=env)
     other = _git(repo, "rev-parse", "HEAD")
     _git(repo, "reset", "-q", "--hard", prev)
-    (repo / ".git" / "FETCH_HEAD").write_text(f"{merge}\t\tbranch 'main' of origin\n")
+    _git(repo, "update-ref", "refs/zoe-deploy/main", merge)   # what the step's fetch writes
     return repo, {"prev": prev, "head": head, "merge": merge, "other": other}
 
 
