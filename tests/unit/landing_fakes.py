@@ -48,13 +48,15 @@ if argv[:2] == ["pr", "view"]:
         sys.exit(1)
     if state.get("pr_view_fails"):
         sys.exit(1)
-    emit({
+    want = (opt("--json") or "").split(",")
+    full = {
         "state": p.get("state", "OPEN"), "isDraft": p.get("isDraft", False),
         "headRefOid": p.get("headRefOid", "a" * 40), "mergeStateStatus": p.get("mergeStateStatus", "CLEAN"),
         "mergeable": p.get("mergeable", "MERGEABLE"),
         "autoMergeRequest": ({"enabledBy": "x"} if p.get("armed") else None),
         "files": [{"path": f} for f in p.get("files", [])],
-    })
+    }
+    emit({k: (full.get(k) if k in want else None) for k in full} if want != [""] else full)
 elif argv[:2] == ["pr", "list"]:
     emit([{"number": int(n), "isDraft": p.get("isDraft", False), "headRefName": "b%s" % n}
           for n, p in state["prs"].items() if p.get("state", "OPEN") == "OPEN"])
