@@ -1799,13 +1799,22 @@ async def resolve_music_setup(provider_query: str) -> dict[str, Any]:
     match = next((p for p in cat if p["domain"] == q or p["name"].lower() == q), None)
     if match is None:
         return _result("What would you like to add?", _catalogue_card(cat), "setup")
-    if match.get("connected"):
+    reconnect = bool(match.get("connected") and match.get("needs_attention"))
+    if match.get("connected") and not reconnect:
         return _result(f"{match['name']} is already connected.", _catalogue_card(cat), "setup")
     if match["auth"] == "free":
-        saved = await save_provider(match["domain"], {})
+        # A free provider that needs attention is refreshed IN PLACE: a save
+        # without the existing instance_id would mint a duplicate provider.
+        iid = await provider_instance_id(match["domain"]) if reconnect else None
+        saved = await save_provider(match["domain"], {}, instance_id=iid)
         msg = f"Added {match['name']}. Ask me to play a station." if saved else "I couldn't add that."
         return _result(msg, _catalogue_card(await provider_catalogue()), "setup")
     minted = music_setup.mint(match["domain"])
     qr_path = music_setup.qr_path(minted["token"], match["domain"])
-    return _result(f"Scan the code to connect {match['name']} from your phone.",
-                   _qr_card(match["domain"], match["name"], qr_path), "setup")
+    # The phone's save (routers/music_setup.setup_save / music_oauth._run_flow) looks up
+    # the existing instance itself, so a reconnect through this QR stays in place.
+    if reconnect:
+        msg = f"{match['name']} needs signing in again - scan the code on the panel with your phone."
+    else:
+        msg = f"Scan the code to connect {match['name']} from your phone."
+    return _result(msg, _qr_card(match["domain"], match["name"], qr_path), "setup")
