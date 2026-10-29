@@ -40,6 +40,7 @@ _io_lock = threading.Lock()    # serialises the file writes
 _mem: "dict[str, tuple[str, float]]" = {}
 _loaded = False
 _last_written: "dict[str, tuple[str, float]]" = {}
+_save_failed = False   # the last save failed: the next note() saves again however recent the file's copy looks
 
 
 def _nobody(member: str) -> bool:
@@ -67,10 +68,11 @@ def _path() -> "Optional[Path]":
 
 def reset() -> None:
     """Forget the in-process view and re-read the file on next use (tests; also exactly what a fresh process looks like)."""
-    global _loaded
+    global _loaded, _save_failed
     with _lock:
         _mem.clear()
         _last_written.clear()
+        _save_failed = False
         _loaded = False
 
 
@@ -102,6 +104,7 @@ def _ensure_loaded() -> None:
 def _persist() -> None:
     """Write the current memo atomically. Disk work holds only ``_io_lock`` (writers serialise, each snapshotting the
     latest memo), never ``_lock``, so ``note()`` on the request path does not wait on storage."""
+    global _save_failed
     p = _path()
     if p is None:
         return
@@ -125,11 +128,12 @@ def _persist() -> None:
             with _lock:
                 _last_written.clear()                               # only a SUCCESSFUL write counts: a failed one is retried next turn
                 _last_written.update(written)
+                _save_failed = False
     except Exception:  # noqa: BLE001
         with _lock:
-            for k, v in written.items():
-                if _last_written.get(k) != v:
-                    _last_written.pop(k, None)   # this snapshot never reached disk: the next turn for it must save again
+            _save_failed = True
+        # _last_written is what the FILE holds and a failed save left the file untouched, so it stays as it was: dropping an
+        # entry would hide an old member still on disk from forget_user. _save_failed makes the next note() save again.
         logger.warning("warm_speaker: state not saved", exc_info=True)
 
 
@@ -155,7 +159,7 @@ def note(panel_id: str, member: str, *, now: "float | None" = None, sync: bool =
             _mem[panel_id] = (m, t)
             while len(_mem) > _MAX_PANELS:
                 _mem.pop(next(iter(_mem)))
-            changed = prev is None or prev[0] != m or t - prev[1] >= _REWRITE_AFTER_S
+            changed = _save_failed or prev is None or prev[0] != m or t - prev[1] >= _REWRITE_AFTER_S
         if changed:
             _save(sync)
     except Exception:  # noqa: BLE001

@@ -349,3 +349,16 @@ def test_a_failed_forget_stays_pending_and_is_retried(state, monkeypatch):
     assert "casey" not in state.read_text()
     _restart()
     assert ws.get("p1", now=T0 + 1) == ""
+
+
+def test_a_failed_speaker_change_does_not_hide_the_old_member_from_forget(state, monkeypatch):
+    ws.note("p1", "casey", now=T0, sync=True)                 # casey is on disk
+    real_replace = ws.os.replace
+    monkeypatch.setattr(ws.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    ws.note("p1", "dana", now=T0 + 5, sync=True)              # the change to dana fails: the file still says casey
+    assert "casey" in state.read_text()
+    monkeypatch.setattr(ws.os, "replace", real_replace)
+    ws.forget_user("casey")                                   # memory holds dana, but casey is still on disk: must rewrite
+    assert "casey" not in state.read_text()
+    _restart()
+    assert ws.get("p1", now=T0 + 6) != "casey"
