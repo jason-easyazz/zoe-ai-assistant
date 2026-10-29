@@ -101,3 +101,31 @@ def test_home_html_opens_the_shared_auth_card_for_connect():
     assert "startProviderConnect(_cn" in src
     # reuse of the one authCard flow, no new renderer
     assert "authCard({kind:'music'" in src
+
+
+@pytest.mark.parametrize("delivered", [False, None])
+def test_reply_is_honest_unless_delivery_confirmed(delivered):
+    out = voice_tts._music_connect_honest_reply(_QR_RESULT, delivered, "scan the code on the panel")
+    assert "scan the code" not in out and "Open Music, then Sources" in out
+
+
+def test_reply_kept_when_delivered_or_not_a_connect():
+    assert voice_tts._music_connect_honest_reply(_QR_RESULT, True, "r") == "r"
+    assert voice_tts._music_connect_honest_reply(_CATALOGUE_RESULT, False, "r") == "r"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_failure_returns_none(monkeypatch):
+    async def get_db():
+        raise RuntimeError("db down")
+        yield  # pragma: no cover
+    monkeypatch.setitem(sys.modules, "database", types.SimpleNamespace(get_db=get_db))
+    monkeypatch.setitem(sys.modules, "ui_orchestrator", types.SimpleNamespace(enqueue_ui_action=None))
+    monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=None))
+    assert await voice_tts._broadcast_skybridge_ui("panel-1", _QR_RESULT, utterance="x", turn_key="t4") is None
+
+
+def test_malformed_card_does_not_hide_a_later_valid_one():
+    bad = {"handled": True, "intent": {"domain": "music", "action": "setup"},
+           "cards": ["junk", _QR_RESULT["cards"][0]]}
+    assert voice_tts._music_connect_target(bad) == ("ytmusic", "YouTube Music")

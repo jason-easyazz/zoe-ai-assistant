@@ -1520,17 +1520,27 @@ def _music_connect_target(skybridge_result: dict) -> Optional[tuple[str, str]]:
     A voice turn never renders the returned QR card itself (the executor only
     shows the summary text), so the panel is sent to Music -> Sources with
     ``connect=<provider>`` and home.html opens its shared ``authCard`` there."""
-    try:
-        if ((skybridge_result.get("intent") or {}).get("domain"), (skybridge_result.get("intent") or {}).get("action")) != ("music", "setup"):
-            return None
-        for card in skybridge_result.get("cards") or []:
-            content = (card or {}).get("content") or {}
+    intent = skybridge_result.get("intent") or {}
+    if (intent.get("domain"), intent.get("action")) != ("music", "setup"):
+        return None
+    for card in skybridge_result.get("cards") or []:
+        try:
+            content = card.get("content") or {}
             if card.get("card_type") == "music_setup" and content.get("mode") == "qr" and content.get("provider"):
                 name = str(content.get("title") or "").removeprefix("Connect ").strip()
                 return str(content["provider"]), name or str(content["provider"])
-    except Exception:  # noqa: BLE001 - a malformed card just means no hand-off
-        return None
+        except Exception:  # noqa: BLE001 - a malformed card just means no hand-off
+            continue
     return None
+
+
+def _music_connect_honest_reply(skybridge_result: dict, delivered: Optional[bool], reply: str) -> str:
+    """The QR only appears if the panel got the navigation. For a music connect turn
+    anything short of a confirmed delivery (not pushed, or the enqueue failed) must not
+    promise a code that is not on a screen: say where to find it instead."""
+    if delivered is not True and _music_connect_target(skybridge_result):
+        return "I can't reach the panel screen right now. Open Music, then Sources, on the panel to sign in."
+    return reply
 
 
 async def _broadcast_skybridge_ui(
@@ -4463,11 +4473,7 @@ async def voice_command(
                     utterance=text,
                     turn_key=_turn_key,
                 )
-                if _sky_delivered is False and _music_connect_target(_skybridge_result):
-                    # The QR only appears if the panel got the navigation. Never promise a
-                    # code that is not on a screen: say where to find it instead.
-                    _skybridge_reply = ("I can't reach the panel screen right now. Open Music, then Sources, "
-                                        "on the panel to sign in.")
+                _skybridge_reply = _music_connect_honest_reply(_skybridge_result, _sky_delivered, _skybridge_reply)
             _bcast_dt = time.monotonic() - _bcast_t0
             _synth_t0 = time.monotonic()
             # In stream mode, /turn_stream synthesizes the reply sentence-by-
