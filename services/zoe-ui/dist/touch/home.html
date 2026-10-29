@@ -4947,6 +4947,10 @@
     // "Set up music" lands on Browse → Sources, where Connect shows the phone QR.
     if(dom==='music_sources'){_qtabNext='sources';dest='browse';}
     show(dest);
+    // Voice "connect/reconnect <service>": open the shared authCard (QR on the panel, finish on the phone).
+    var _cn=sp.get('connect');
+    if(dom==='music_sources'&&_cn&&/^[a-z0-9_]{1,40}$/.test(_cn))
+      setTimeout(function(){startProviderConnect(_cn,'Connect',sp.get('cname')||_cn);},0);
     // Chat answers land on the Ask surface; every other domain shows the
     // transcript then the spoken summary in the DOCK (never the old
     // top-of-screen toast) before the pinned controls return.

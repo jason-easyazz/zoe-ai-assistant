@@ -25,7 +25,10 @@ Music card -> Browse -> **Sources** tab -> YouTube Music shows an amber **Reconn
 phone and sign in. The credential only touches the provider's own sign-in page; Zoe never sees it. This follows the standing
 rule that connecting an account hands off to the phone. Saying "connect youtube music" by voice works too: a connected provider whose `needs_attention` is set gets the same QR hand-off
 ("YouTube Music needs signing in again - scan the code on the panel with your phone"), and the phone's save reconnects the
-existing instance in place. A healthy connected provider still answers "already connected". Pinned by
+existing instance in place. A voice turn does not render the Skybridge QR card itself, so `voice_tts._broadcast_skybridge_ui`
+navigates the panel to `home.html?domain=music_sources&connect=<provider>` and home.html opens the shared `authCard` there (the
+same QR as the Sources tab; also used for a first connect). If the navigation was not delivered to a live panel, the reply says
+to open Music then Sources on the panel instead of promising a code. A healthy connected provider still answers "already connected". Pinned by
 `services/zoe-data/tests/test_music_voice_reconnect.py`.
 
 ## Invariants (do not regress)
