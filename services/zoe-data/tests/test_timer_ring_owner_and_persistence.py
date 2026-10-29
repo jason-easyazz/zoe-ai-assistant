@@ -10,6 +10,7 @@ Two defects, both pinned here:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -207,3 +208,36 @@ def test_kiosk_dismiss_acknowledges_through_cancel():
     assert "timerAlarm(due.join(' / '),ids)" in html
     alarm = html.split("function timerAlarm")[1].split("_tAlarmRefresh();")[0]
     assert "apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id})" in alarm
+
+
+_ALARM_HARNESS = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+const body = 'function timerAlarm' + src.split('function timerAlarm')[1].split('_tAlarmRefresh();')[0];
+const els = {};
+function mk(id){ return els[id] = els[id] || {id, innerHTML:'', onclick:null, classList:{add(){}, remove(){}}, appendChild(){}}; }
+const document = {getElementById: id => (id === 'tmrAlarm' || id === 'tmrAlarmX') ? mk(id) : null,
+                  createElement: () => mk('tmrAlarm'), body: mk('body')};
+const cancelled = [];
+const apiJson = (m, url, b) => { cancelled.push(b.timer_id); return Promise.resolve({}); };
+const _tAlarm = {known:{}, fired:{}, chime:null}, _tmMemo = {p:1}, _cur = 'home', window = {};
+const esc = x => x, _beep = () => {}, setInterval = () => 1, clearInterval = () => {};
+eval(body);
+timerAlarm('Pasta', ['t1']);
+timerAlarm('Eggs', ['t2']);            // a second timer ends before the first alarm is dismissed
+els.tmrAlarmX.onclick();
+console.log(JSON.stringify(cancelled.sort()));
+"""
+
+
+def test_kiosk_dismiss_acknowledges_every_timer_that_rang_before_it():
+    """Two timers ending on different ticks before Dismiss: BOTH ids are cancelled (review 2026-10-29). Acking only
+    the last one left the first "ringing" on the server, so the next voice-turn reload re-rang it."""
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "zoe-ui", "dist", "touch", "home.html")
+    out = subprocess.run([node, "-e", _ALARM_HARNESS, path], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout.strip().splitlines()[-1]) == ["t1", "t2"]

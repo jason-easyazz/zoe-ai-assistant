@@ -4383,6 +4383,9 @@
       g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(.45,t0+.02);g.gain.linearRampToValueAtTime(0,t0+.4);o.start(t0);o.stop(t0+.42);}
     var t=c.currentTime;ping(t);ping(t+.55);ping(t+1.1);}catch(e){}}
   function timerAlarm(label,ids){
+    // Cumulative: a second timer ending before Dismiss must not drop the first one's id, or the first stays
+    // "ringing" on the server and re-rings after the next voice-turn reload inside the grace window.
+    _tAlarm.pending=_tAlarm.pending||{};(ids||[]).forEach(function(id){_tAlarm.pending[id]=1;});
     var ov=document.getElementById('tmrAlarm');
     if(!ov){ov=document.createElement('div');ov.id='tmrAlarm';(document.getElementById('stage')||document.body).appendChild(ov);}
     ov.innerHTML='<div class="tab"><div class="tak">⏱ Timer done</div><div class="tal">'+esc(label||'Timer')+'</div><button class="tad" id="tmrAlarmX">Dismiss</button></div>';
@@ -4396,7 +4399,8 @@
     // window passes, because every voice turn reloads this page (panel_navigate) and a page that was reloaded
     // - or first polled - after the end must still ring it. Cancelling the id is what stops a reload re-ringing it.
     document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');
-      (ids||[]).forEach(function(id){apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id}).catch(function(){});});_tmMemo.p=null;if(_tAlarm.chime){clearInterval(_tAlarm.chime);_tAlarm.chime=null;}
+      var acked=Object.keys(_tAlarm.pending||{});_tAlarm.pending={};
+      acked.forEach(function(id){apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id}).catch(function(){});});_tmMemo.p=null;if(_tAlarm.chime){clearInterval(_tAlarm.chime);_tAlarm.chime=null;}
       if(_cur==='timer'&&typeof wireTimer==='function'){}};
   }
   _tAlarmRefresh();setInterval(_tAlarmRefresh,15000);setInterval(_tAlarmTick,1000);
