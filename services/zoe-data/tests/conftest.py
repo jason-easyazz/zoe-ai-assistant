@@ -66,11 +66,13 @@ os.environ["ZOE_ADHOC_BACKUP_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "adhoc-bac
 # The router retrain ledger (router_retrain_ledger, Phase 3 of the struggle loop) lives under ~/.zoe/router_retrain by default, and every
 # forget / user delete reaches it (struggle_proposals.forget_events / forget_user): a test's forget must never edit the live ledger.
 os.environ["ZOE_ROUTER_RETRAIN_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "router_retrain")
-# Every other state path that defaults under ``~/.zoe`` (2026-10-29: the suite wrote 6 test panel ids into the LIVE ``~/.zoe/warm-speaker.json``.
+# The known state paths that default under ``~/.zoe`` (2026-10-29: the suite wrote 6 test panel ids into the LIVE ``~/.zoe/warm-speaker.json``.
 # ``warm_speaker._path()`` refuses the live file only while ``PYTEST_CURRENT_TEST`` is set, and its ``warm-speaker-save`` thread outlives the
 # test that spawned it - the save ran with the guard off and landed on the real path). A session-wide pin makes the real path unreachable
 # from ANY thread at ANY time; the autouse fixture below gives each test its own file so no state leaks between tests.
 # Deliberately NOT pinned: ``ZOE_KV_MISS_ALERT_STATE`` - setting it would switch ``kv_miss_alert`` ON under test (it sends a Telegram alert).
+# Not yet pinned (config-object / flag-gated-off paths, none written by a default test): the ``ZOE_PI_*`` evidence + shadow jsonl under
+# ``~/.zoe/data``, the memory-loop log and palace-compaction backups. A path found leaking goes in ``_STATE_PINS`` + the test's ``_STATE_VARS``.
 _STATE_PINS = (
     ("ZOE_WARM_SPEAKER_STATE", "warm-speaker.json"),
     ("ZOE_OMI_AUDIT_PATH", "omi-audit.jsonl"),
@@ -81,9 +83,14 @@ _STATE_PINS = (
     ("ZOE_PIPELINE_STORE_PATH", "engineering_pipeline_runs.jsonl"),
     ("ZOE_MULTICA_DISPATCH_PAUSE_FILE", "multica_dispatch_paused"),
     ("ZOE_VOICE_GREETING_STATE_PATH", "voice_greeting_state.json"),
+    ("ZOE_MULTICA_KILL_SWITCH", "multica_kill_switch"),
+    ("ZOE_BLUETOOTH_AUDIT_PATH", "bluetooth-audit.jsonl"),
+    ("ZOE_VAPID_KEY_PATH", "vapid_keys.json"),
 )
 for _var, _leaf in _STATE_PINS:
     os.environ[_var] = os.path.join(ZOE_TEST_STORE_DIR, _leaf)
+# The session-wide value, kept so test_live_store_isolation can prove this layer on its own (the per-test fixture overrides the variable).
+os.environ["ZOE_TEST_SESSION_WARM_SPEAKER_STATE"] = os.environ["ZOE_WARM_SPEAKER_STATE"]
 
 
 import pytest  # noqa: E402
@@ -107,21 +114,31 @@ def _exact_words_in_process_index():
     struggle_detector.set_backend(None)
 
 
+def _drain_warm_speaker_savers():
+    """Join any in-flight ``warm-speaker-save`` thread so one test's background write never lands inside the next test."""
+    import threading
+    for t in threading.enumerate():
+        if t.name == "warm-speaker-save" and t is not threading.current_thread():
+            t.join(5)
+
+
 @pytest.fixture(autouse=True)
 def _warm_speaker_private_state(monkeypatch, tmp_path):
     """Each test gets its OWN warm-speaker memo file and a fresh in-process view, so a ``note()`` in one test is neither written to
-    the live ``~/.zoe/warm-speaker.json`` nor read back by the next test through the shared session file."""
+    the live ``~/.zoe/warm-speaker.json`` nor read back by the next test through the shared session file. The background saver is
+    drained before the globals are swapped and again on teardown, so a thread from test A cannot observe or persist test B's state."""
+    import warm_speaker      # stdlib-only module; an import failure here is a real regression and must fail loudly
+
+    _drain_warm_speaker_savers()
     monkeypatch.setenv("ZOE_WARM_SPEAKER_STATE", str(tmp_path / "warm-speaker.json"))
-    try:
-        import warm_speaker
-    except Exception:  # noqa: BLE001 - a slim lane without the module's deps has nothing to isolate
-        yield
-        return
     monkeypatch.setattr(warm_speaker, "_mem", {})            # restored on teardown (module globals via monkeypatch)
     monkeypatch.setattr(warm_speaker, "_last_written", {})
     monkeypatch.setattr(warm_speaker, "_loaded", False)
+    monkeypatch.setattr(warm_speaker, "_save_failed", False)
+    monkeypatch.setattr(warm_speaker, "_bg_running", False)
+    monkeypatch.setattr(warm_speaker, "_bg_pending", False)
     yield
-
+    _drain_warm_speaker_savers()
 
 @pytest.fixture(autouse=True)
 def _db_pool_never_initialised(monkeypatch):

@@ -97,6 +97,7 @@ def test_router_retrain_ledger_is_pinned_off_home():
 _STATE_VARS = (
     "ZOE_WARM_SPEAKER_STATE", "ZOE_TIMER_STORE", "ZOE_OMI_AUDIT_PATH", "ZOE_OMI_AUDIO_DIR", "ZOE_CHANGE_NOTICES_STATE_DIR",
     "ZOE_DEPLOY_STATE_DIR", "NIGHT_DIR", "ZOE_PIPELINE_STORE_PATH", "ZOE_MULTICA_DISPATCH_PAUSE_FILE", "ZOE_VOICE_GREETING_STATE_PATH",
+    "ZOE_MULTICA_KILL_SWITCH", "ZOE_BLUETOOTH_AUDIT_PATH", "ZOE_VAPID_KEY_PATH",
 )
 
 
@@ -112,39 +113,37 @@ def test_every_dot_zoe_state_path_is_off_the_live_home(var):
         assert "zoe-test-stores-" in str(resolved)
 
 
-def test_warm_speaker_save_after_the_test_ends_still_cannot_reach_the_live_file(monkeypatch):
+def test_warm_speaker_session_pin_holds_when_the_test_guard_is_off(monkeypatch):
     """The real leak: ``warm_speaker``'s guard keys on ``PYTEST_CURRENT_TEST``, but its save thread outlives the test, so the save ran with
-    the guard off and hit ``~/.zoe``. With the state path pinned, the path is the throwaway one even when that variable is gone."""
+    the guard off and hit ``~/.zoe``. Prove the SESSION layer on its own (the per-test fixture overrides the variable, so read the value
+    conftest recorded): with the guard variable gone and only the session pin in place, the path is the throwaway file."""
     import warm_speaker
 
+    session = os.environ.get("ZOE_TEST_SESSION_WARM_SPEAKER_STATE")
+    assert session and "zoe-test-stores-" in session, "conftest must record the session-wide warm-speaker pin"
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    path = warm_speaker._path()
-    assert path is not None
-    assert (_HOME / ".zoe").resolve() not in path.resolve().parents
+    monkeypatch.setenv("ZOE_WARM_SPEAKER_STATE", session)
+    assert warm_speaker._path() == pathlib.Path(session)
 
 
-def test_exercising_the_state_writers_under_an_empty_home_leaves_it_empty(tmp_path):
-    """Behavioural control: run the files that exercise warm_speaker / the voice-turn note / the timer store with ``HOME`` an empty dir
-    and nothing may appear under it. Red when the conftest pins are removed (``.zoe/warm-speaker.json`` appears under the fake HOME)."""
-    import subprocess
-    import sys
+def test_per_test_fixture_gives_each_test_its_own_warm_speaker_file():
+    """The autouse fixture's own layer: the file is under pytest's tmp_path (not the shared session file) and the memo starts empty."""
+    import warm_speaker
 
-    here = pathlib.Path(__file__).resolve().parent
-    home = tmp_path / "home"
-    home.mkdir()
-    files = [
-        "test_kv_warm_member_prefix.py", "test_kv_warm_prod_path.py", "test_voice_facts_warm.py", "test_wake_prewarm_guest.py",
-        "test_warm_speaker_persist.py", "test_timer_ring_owner_and_persistence.py",
-    ]
-    env = {k: v for k, v in os.environ.items() if k not in _STATE_VARS and k != "PYTEST_CURRENT_TEST"}
-    import site
+    path = pathlib.Path(os.environ["ZOE_WARM_SPEAKER_STATE"])
+    assert path != pathlib.Path(os.environ["ZOE_TEST_SESSION_WARM_SPEAKER_STATE"])
+    assert not path.exists() and warm_speaker._mem == {} and warm_speaker._loaded is False
 
-    env["PYTHONUSERBASE"] = site.getuserbase()      # the installed packages live under the real HOME; only the DATA paths move
-    env["HOME"] = str(home)
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *[str(here / f) for f in files]],
-        cwd=str(here.parent), env=env, capture_output=True, text=True, timeout=600,
-    )
-    leaked = sorted(str(p.relative_to(home)) for p in home.rglob("*"))
-    assert not leaked, f"tests wrote under the real-HOME stand-in: {leaked}"
-    assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-1000:]
+
+@pytest.mark.parametrize("module, accessor", [
+    ("skybridge_service", "_timer_store_path"), ("voice_greeting", "_state_path"), ("pipeline_store", "store_path"),
+    ("multica_dispatch_control", "pause_path"), ("change_notices", "state_dir"), ("change_notices", "deploy_marker"),
+    ("omi_devices", "audit_path"),
+])
+def test_resolved_state_paths_are_off_the_live_home(monkeypatch, module, accessor):
+    """Behavioural control, no subprocess: ask each module where it WOULD write (guard variable gone, as in a background thread) and
+    require an answer off ``~/.zoe``. Red when a pin is removed from conftest."""
+    mod = pytest.importorskip(module)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    resolved = pathlib.Path(str(getattr(mod, accessor)())).resolve()
+    assert not str(resolved).startswith(str(_HOME / ".zoe") + "/"), f"{module}.{accessor}() -> {resolved}"
