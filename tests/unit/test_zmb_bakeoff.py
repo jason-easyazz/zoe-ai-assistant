@@ -574,10 +574,24 @@ def _spawn(tmp_path, name, *, interp=True):
     return subprocess.Popen(argv)
 
 
+class _OwnChildrenHost(bakeoff.Host):
+    """The REAL pgrep against REAL command lines, scoped to this test's own children (``pgrep -P <pid>``).
+
+    Unscoped, ``pgrep -f`` sees the whole box: a voice landing, regression probe or bar that is genuinely running on the dev box (an
+    agent's, or the nightly one) made "nothing is running yet" fail at random in the full lane (2026-10-29, twice). Scoping keeps what the
+    test exists to prove - the anchored patterns against real processes - and drops only the box-wide view the test cannot control."""
+
+    def run(self, argv, timeout=60.0, mutating=True, env=None):
+        if argv and argv[0] == "pgrep":
+            argv = [argv[0], "-P", str(os.getpid()), *argv[1:]]
+        return super().run(argv, timeout=timeout, mutating=mutating, env=env)
+
+
 @pytest.mark.parametrize("name,label", [("samantha_bar.py", "samantha bar"), ("samantha_bar_conv.py", "samantha bar"),
                                         ("samantha_day_sim.py", "samantha bar"), ("voice_regression_probe.py", "voice regression probe")])
-def test_a_running_bar_or_probe_is_seen_by_its_interpreter_and_a_mere_mention_is_not(box, tmp_path, name, label):
-    w = make_window(box, bakeoff.Host(lambda _m: None))
+def test_a_running_bar_or_probe_is_seen_by_its_interpreter_and_a_mere_mention_is_not(box, tmp_path, monkeypatch, name, label):
+    monkeypatch.setattr(bakeoff.Window, "HARNESS_LOCK", str(tmp_path / "harness.lock"))   # the box's real lock is held during any probe
+    w = make_window(box, _OwnChildrenHost(lambda _m: None))
     assert w.landing_running() == ""
     decoy = _spawn(tmp_path, name, interp=False)                 # an editor / tail / shell that only names the script
     try:
@@ -596,7 +610,7 @@ def test_a_running_bar_or_probe_is_seen_by_its_interpreter_and_a_mere_mention_is
 def test_the_voice_harness_lock_held_means_a_probe_is_using_the_brain(box, tmp_path, monkeypatch):
     lock = tmp_path / "harness.lock"
     monkeypatch.setattr(bakeoff.Window, "HARNESS_LOCK", str(lock))
-    w = make_window(box, bakeoff.Host(lambda _m: None))
+    w = make_window(box, _OwnChildrenHost(lambda _m: None))       # a real landing on the box would otherwise answer first
     assert w.landing_running() == ""                              # no file: nobody ever took it
     fd = os.open(str(lock), os.O_CREAT | os.O_RDWR)
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
