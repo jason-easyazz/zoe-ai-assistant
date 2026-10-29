@@ -1,7 +1,7 @@
 """scripts/landing/watchd.sh + docs_merge_chain.sh - the watcher's events and the chain's hold/draft refusals."""
 import pytest
 
-from tests.unit.landing_fakes import NEEDS_TOOLS, Rig, epoch
+from tests.unit.landing_fakes import NEEDS_TOOLS, REPO, Rig, epoch
 
 pytestmark = [pytest.mark.ci_safe, NEEDS_TOOLS]
 
@@ -77,7 +77,7 @@ def test_watchd_flags_a_required_job_running_too_long(rig):
 # ---- docs_merge_chain.sh ----------------------------------------------------------------------------------------
 
 def chain(rig, pr="21"):
-    r = rig.run("docs_merge_chain.sh", pr, timeout=60, ZOE_LANDING_NOW_EPOCH=NOON)
+    r = rig.run("docs_merge_chain.sh", pr, timeout=60, ZOE_LANDING_NOW_EPOCH=NOON, ZOE_LANDING_REPO=str(REPO))
     return r, (rig.home / "logs" / "land_queue.log").read_text()
 
 
@@ -94,33 +94,33 @@ def test_chain_skips_held_prs(rig, holdfile):
 
 
 def test_chain_never_arms_a_draft(rig):
-    state(rig, {"21": {"isDraft": True, "mergeStateStatus": "CLEAN", "checks": [{"name": "validate", "state": "SUCCESS"}]}})
+    state(rig, {"21": {"isDraft": True, "mergeStateStatus": "CLEAN", "checks": [{"name": "validate", "state": "SUCCESS"}], "files": ["docs/x.md"]}})
     r, log = chain(rig)
     assert r.returncode == 0 and "draft" in log and merges(rig) == []
 
 
 def test_chain_does_not_arm_with_an_unresolved_thread_past_page_one(rig):
-    state(rig, {"21": {"mergeStateStatus": "CLEAN", "checks": [{"name": "validate", "state": "SUCCESS"},
+    state(rig, {"21": {"mergeStateStatus": "CLEAN", "files": ["docs/x.md"], "checks": [{"name": "validate", "state": "SUCCESS"},
                                                                {"name": "secret-scan", "state": "SUCCESS"}]}},
           {"21": {"total": 130, "unresolved": [110]}})
     r = rig.run("docs_merge_chain.sh", "21", ZOE_LANDING_CHAIN_HOLD_S="0", ZOE_LANDING_CHAIN_STEP_S="0",
-                ZOE_LANDING_NOW_EPOCH=NOON)
+                ZOE_LANDING_NOW_EPOCH=NOON, ZOE_LANDING_REPO=str(REPO))
     log = (rig.home / "logs" / "land_queue.log").read_text()
     assert r.returncode == 0 and "1 unresolved review thread(s)" in log and "still has unresolved" in log
     assert merges(rig) == []
 
 
 def test_chain_does_not_arm_when_threads_are_unreadable(rig):
-    st = {"prs": {"21": {"mergeStateStatus": "CLEAN", "checks": [{"name": "validate", "state": "SUCCESS"}]}},
+    st = {"prs": {"21": {"mergeStateStatus": "CLEAN", "files": ["docs/x.md"], "checks": [{"name": "validate", "state": "SUCCESS"}]}},
           "threads": {}, "graphql_fails": True}
     rig.set_state(st)
-    rig.run("docs_merge_chain.sh", "21", ZOE_LANDING_CHAIN_HOLD_S="0", ZOE_LANDING_CHAIN_STEP_S="0", ZOE_LANDING_NOW_EPOCH=NOON)
+    rig.run("docs_merge_chain.sh", "21", ZOE_LANDING_CHAIN_HOLD_S="0", ZOE_LANDING_CHAIN_STEP_S="0", ZOE_LANDING_NOW_EPOCH=NOON, ZOE_LANDING_REPO=str(REPO))
     assert merges(rig) == []
 
 
 def test_chain_arms_a_clean_nondraft_pr_with_all_threads_resolved(rig):
     # the positive control: without it the refusals above could be passing because the chain never arms anything
-    st = {"prs": {"21": {"mergeStateStatus": "CLEAN", "checks": [{"name": "validate", "state": "SUCCESS"},
+    st = {"prs": {"21": {"mergeStateStatus": "CLEAN", "files": ["docs/x.md"], "checks": [{"name": "validate", "state": "SUCCESS"},
                                                                   {"name": "secret-scan", "state": "SUCCESS"}]}},
           "threads": {"21": {"total": 130, "unresolved": []}}}
     rig.set_state(st)
@@ -129,7 +129,27 @@ def test_chain_arms_a_clean_nondraft_pr_with_all_threads_resolved(rig):
     import subprocess
     try:
         rig.run("docs_merge_chain.sh", "21", ZOE_LANDING_CHAIN_HOLD_S="0", ZOE_LANDING_CHAIN_STEP_S="0",
-                ZOE_LANDING_NOW_EPOCH=NOON, timeout=3)
+                ZOE_LANDING_NOW_EPOCH=NOON, ZOE_LANDING_REPO=str(REPO), timeout=3)
     except subprocess.TimeoutExpired:
         pass
     assert any(c.startswith("pr merge 21 --squash --auto") for c in rig.gh_calls())
+
+
+def chain_run(rig, **extra):
+    return rig.run("docs_merge_chain.sh", "21", ZOE_LANDING_CHAIN_HOLD_S="0", ZOE_LANDING_CHAIN_STEP_S="0",
+                   ZOE_LANDING_CHAIN_NIGHT_S="0", ZOE_LANDING_REPO=str(REPO), **{"ZOE_LANDING_NOW_EPOCH": NOON, **extra})
+
+
+GREEN = {"mergeStateStatus": "CLEAN", "checks": [{"name": "validate", "state": "SUCCESS"}, {"name": "secret-scan", "state": "SUCCESS"}]}
+
+
+def test_chain_defers_a_pr_that_gained_a_voice_file(rig):
+    state(rig, {"21": dict(GREEN, files=["docs/x.md", "services/zoe-data/routers/voice_tts.py"])}, {"21": {"total": 0, "unresolved": []}})
+    chain_run(rig)
+    assert merges(rig) == [] and "not CLEAR" in (rig.home / "logs" / "land_queue.log").read_text()
+
+
+def test_chain_pauses_during_the_measured_deploy_pause(rig):
+    state(rig, {"21": dict(GREEN, files=["docs/x.md"])}, {"21": {"total": 0, "unresolved": []}})
+    chain_run(rig, ZOE_LANDING_NOW_EPOCH=str(epoch("2026-10-29", "02:46")))
+    assert merges(rig) == [] and "deploy pause" in (rig.home / "logs" / "land_queue.log").read_text()
