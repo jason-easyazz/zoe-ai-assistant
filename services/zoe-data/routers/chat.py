@@ -6,8 +6,8 @@ Tiered architecture (Jetson + Pi):
   handled directly in <5ms without any LLM.
 - Tier 1: Zoe Agent — Gemma 4 E4B-QAT with MemPalace memory, HA control,
   bash tools, and Hermes escalation. True SSE streaming, first token fast.
-  Active when JETSON_AGENT_MODE=true OR HERMES_FAST_PATH=false.
-  Pi: CPU, 7 TPS, port 11434.  Jetson: GPU, 40+ TPS, port 11434.
+  Always active (the HERMES_FAST_PATH / JETSON_AGENT_MODE gates were removed in B3).
+  Jetson: GPU, 40+ TPS, port 11434.
 - Tier 2: Hermes — reasoning/review/development repair plus browser work through Zoe CloakBrowser tools.
   Activated via escalation from Tier 1.
   Also used as direct path when Zoe Agent is bypassed.
@@ -369,7 +369,7 @@ from research_evidence import (
     missing_brief_fields,
     package_needs_web_fallback,
 )
-from risk_policy import classify_request, is_whatsapp_connect_request
+from risk_policy import is_whatsapp_connect_request
 from chat_session_title import derive_session_title, title_is_weak
 from session_continuity import mint as mint_session_id, resolve_session_id
 import traffic_class
@@ -545,10 +545,12 @@ _FORM_BLURB: dict[str, str] = {
     "timer_create":    "",   # timer tile speaks for itself
 }
 _MEMORY_AUTO_INGEST = os.environ.get("MEMORY_AUTO_INGEST", "false").lower() == "true"
-# Approval guard: disabled in Zoe Agent mode — Zoe Agent handles safety natively
-_ZOE_AGENT_MODE    = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
-_JETSON_AGENT_MODE = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
-_USE_ZOE_AGENT = _ZOE_AGENT_MODE or _JETSON_AGENT_MODE
+# B3 (2026-10-18): the HERMES_FAST_PATH / JETSON_AGENT_MODE env gates are gone. On
+# the only host that exists (the Jetson) they resolved to Zoe-Agent mode, so the
+# constant is pinned there; the OpenClaw/Hermes-first lane they selected against
+# has no live service behind it. Kept as a module constant (not env) so tests can
+# still steer the lane.
+_USE_ZOE_AGENT = True
 
 # Production cutover: the brain is now zoe-core (Pi full-agent on local Gemma).
 # Defaults ON. ZOE_USE_CORE_BRAIN=false falls back to the legacy zoe_agent brain
@@ -603,16 +605,14 @@ async def maybe_compose_event(user_message, answer_text, *, user_id, emitted_dom
         return None
 
 
-_GUARDED_AUTO = (
-    os.environ.get("OPENCLAW_GUARDED_AUTO", "true").lower() == "true"
-    and not _USE_ZOE_AGENT
-)
-_ALL_TOOLS_ENABLED = os.environ.get("OPENCLAW_ALL_TOOLS_ENABLED", "true").lower() == "true"
+# Tier-1.5 intent fast path. Was OPENCLAW_ALL_TOOLS_ENABLED (default on, never set
+# off live); a module constant now so tests can still switch it off. The old
+# OPENCLAW_GUARDED_AUTO risk-gate was already unreachable (it required
+# `not _USE_ZOE_AGENT`) and is deleted with its two call sites.
+_INTENT_FAST_PATH_ENABLED = True
 _WHATSAPP_FLOW_ENABLED = os.environ.get("WHATSAPP_FLOW_ENABLED", "true").lower() == "true"
 
-_OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW",
-    os.environ.get("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:18789"))
-_BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
+_BROWSER_BROKER = create_default_browser_broker()
 
 # ── Frustration signal detection ──────────────────────────────────────────────
 # Lightweight in-memory tracker: session_id → list of (normalized_msg, ts) tuples
@@ -1160,7 +1160,7 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
 
 async def _save_chat_message(
     session_id: str, role: str, content: str, user_id: str | None = None,
-    *, truncated: bool = False, speaker_verified: bool | None = None, count_turn: bool = True,
+    *, truncated: bool = False, speaker_verified: bool | None = None, count_turn: bool = True, message_id: str | None = None,
 ) -> bool:
     """Persist a single chat turn to chat_messages.
 
@@ -1223,7 +1223,7 @@ async def _save_chat_message(
             await db.execute(
                 "INSERT INTO chat_messages (id, session_id, role, content, metadata) "
                 "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                (uuid.uuid4().hex, session_id, role, clean_content, metadata),
+                ((message_id or uuid.uuid4().hex), session_id, role, clean_content, metadata),
             )
             await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
@@ -1530,6 +1530,13 @@ async def chat_stream_generator(
     enc = EventEncoder()
     recorder = AgRunRecorder()
     run_id, assistant_message_id = new_run_ids()
+    # The chat page rates a streamed reply by ``assistant_message_id`` before it ever reloads history, so the FIRST assistant
+    # row this run saves is stored under that id (one id end to end: page, chat_messages, the failure-capture outcome row).
+    _mid_box = [assistant_message_id]
+
+    def _claim_mid() -> str | None:
+        return _mid_box.pop() if _mid_box else None
+
     run_mode = "hermes" if force_agent == "hermes" else "chat"
     # P3-A: accumulate brain tokens at generator scope so the error path can
     # recover the partial the user already saw. `persisted_assistant` guards
@@ -1582,53 +1589,6 @@ async def chat_stream_generator(
                     value={"level": "info", "message": "Approval accepted. Executing requested action."},
                 )
             )
-
-        if _GUARDED_AUTO:
-            risk = classify_request(message_for_processing)
-            if risk.requires_confirmation and not approval_token:
-                approval_id = await _create_pending_approval(
-                    user_id=user_id,
-                    session_id=session_id,
-                    message=message_for_processing,
-                    risk_level=risk.level,
-                    reason=risk.reason,
-                    normalized_action=risk.normalized_action,
-                )
-                yield emit(
-                    CustomEvent(
-                        name="zoe.ui_component",
-                        value={
-                            "component": "confirmation",
-                            "props": {
-                                "title": "Approval Required",
-                                "description": f"{risk.reason}. Approve to continue.",
-                                "yes_text": "Approve",
-                                "no_text": "Cancel",
-                                "yes_action": f"/approve {approval_id}",
-                            },
-                        },
-                    )
-                )
-                yield emit(
-                    CustomEvent(
-                        name="zoe.run_log",
-                        value={"level": "warn", "message": f"Action gated ({risk.level} risk). Pending approval id: {approval_id}"},
-                    )
-                )
-                yield emit(
-                    RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id)
-                )
-                await _record_run_state(
-                    run_id,
-                    session_id,
-                    user_id,
-                    mode=run_mode,
-                    status="completed",
-                    request_text=message,
-                    response_text="Approval required",
-                    metadata={"approval_id": approval_id, "risk": risk.level},
-                )
-                return
 
         if force_agent == "hermes":
             _h_portrait, _h_facts, _h_semantic = await asyncio.gather(
@@ -1683,7 +1643,7 @@ async def chat_stream_generator(
                 )
             yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
             if response_text.strip():
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id, message_id=_claim_mid()))
                 if user_id != "guest":
                     asyncio.ensure_future(
                         _persist_memory_candidates(user_id, session_id, message_for_processing, response_text)
@@ -1735,7 +1695,7 @@ async def chat_stream_generator(
                     response_text=followup,
                     metadata={"task_class": task_class, "missing_constraints": missing},
                 )
-                await _save_chat_message(session_id, "assistant", followup, user_id=user_id)
+                await _save_chat_message(session_id, "assistant", followup, user_id=user_id, message_id=_claim_mid())
                 return
         if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
             try:
@@ -1755,7 +1715,7 @@ async def chat_stream_generator(
             yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
             yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
             await _record_run_state(run_id, session_id, user_id, mode="chat", status="completed", request_text=message, response_text=capabilities_text)
-            await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id)
+            await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id, message_id=_claim_mid())
             return
 
         if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing) \
@@ -1784,7 +1744,7 @@ async def chat_stream_generator(
                 "and remediation steps. Use guarded execution and ask for confirmation before any write/auth step."
             )
 
-        use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
+        use_intent_fast_path = (not force_openclaw) and _INTENT_FAST_PATH_ENABLED
         if task_class == "research":
             # Research requests must flow through the evidence path, not terse intent handlers.
             use_intent_fast_path = False
@@ -1831,7 +1791,7 @@ async def chat_stream_generator(
                     yield emit(CustomEvent(name="zoe.component", value=_fp_comp))
                 asyncio.ensure_future(chat_inject_background(message_for_processing, _fp_reply, f"fast:{_fp_res.domain}", user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, _fp_reply))
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", _fp_reply, user_id=user_id))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", _fp_reply, user_id=user_id, message_id=_claim_mid()))
                 yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
                 # Close out the run row (opened status="running" at the top); every
                 # other early exit here records completed/error before returning.
@@ -1989,7 +1949,7 @@ async def chat_stream_generator(
                     async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, _blurb):
                         yield line
                     yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", _blurb, user_id=user_id))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", _blurb, user_id=user_id, message_id=_claim_mid()))
                 return  # skip the standard execute_intent path
 
             # ── Touch Panel intents: AG-UI status cards ───────────────────────
@@ -2005,7 +1965,7 @@ async def chat_stream_generator(
                     yield line
                 yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
                 yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", panel_card_md, user_id=user_id))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", panel_card_md, user_id=user_id, message_id=_claim_mid()))
                 return
 
             # ── Multica board routing for long-running intents ────────────────
@@ -2030,7 +1990,7 @@ async def chat_stream_generator(
                             yield line
                         yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
                         yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
-                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", _card_text, user_id=user_id))
+                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", _card_text, user_id=user_id, message_id=_claim_mid()))
                         return
                 except ImportError:
                     pass  # Multica not installed — fall through to standard OpenClaw path
@@ -2069,7 +2029,7 @@ async def chat_stream_generator(
                 )
                 asyncio.ensure_future(chat_inject_background(message_for_processing, result, intent.name, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", result, user_id=user_id))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", result, user_id=user_id, message_id=_claim_mid()))
             else:
                 if intent.name in _OPENCLAW_DELEGATION_INTENTS:
                     logger.info("Intent %s delegating to Hermes/Multica", intent.name)
@@ -2163,7 +2123,7 @@ async def chat_stream_generator(
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
                 if response_text:
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id, message_id=_claim_mid()))
                 async for line in _stream_openclaw_assistant_ag(
                     enc, recorder, assistant_message_id, response_text,
                     intent_name=intent.name if intent else None,
@@ -2173,7 +2133,7 @@ async def chat_stream_generator(
             logger.info("intent_outcome=no_match fast_path=%s", bool(use_intent_fast_path))
             if _USE_LOCAL_BRAIN:
                 # ── Zoe Agent: Gemma 4 E4B-QAT with MemPalace + tools — true SSE streaming ──
-                tier_label = "Jetson" if _JETSON_AGENT_MODE else "Pi"
+                tier_label = "Jetson"
                 yield emit(
                     StateSnapshotEvent(
                         type=EventType.STATE_SNAPSHOT,
@@ -2436,17 +2396,10 @@ async def chat_stream_generator(
                                 ),
                             )
                     elif is_background:
-                        # Queue as a background task and ack immediately
-                        logger.info("chat: Zoe Agent background escalation — reason=%s", reason.strip())
-                        try:
-                            from background_runner import enqueue_background_task
-                            task_id = await enqueue_background_task(
-                                task=oc_task_text, user_id=user_id, session_id=session_id
-                            )
-                            ack_text = f"On it! I'll work on that in the background and let you know when it's done. (Task #{task_id})"
-                        except Exception as _bge:
-                            logger.warning("background task enqueue failed: %s", _bge)
-                            ack_text = "I'll get started on that. I'll let you know when I'm done!"
+                        # Background execution is gone (it launched an agent with auto-approve as the zoe
+                        # user - deep dive S0-7). Say so; never queue, never run anything.
+                        logger.info("chat: background escalation refused - no background executor (reason=%s)", reason.strip())
+                        ack_text = "I can't run background tasks any more, so I haven't started that."
                         yield emit(TextMessageChunkEvent(
                             type=EventType.TEXT_MESSAGE_CHUNK,
                             message_id=assistant_message_id,
@@ -2567,7 +2520,7 @@ async def chat_stream_generator(
                 # the truncated-partial fallback and silently lose the reply.
                 if response_text:
                     persisted_assistant = await _save_chat_message(
-                        session_id, "assistant", response_text, user_id=user_id
+                        session_id, "assistant", response_text, user_id=user_id, message_id=_claim_mid()
                     )
                     if not persisted_assistant:
                         raise RuntimeError("assistant reply save failed")
@@ -2623,7 +2576,7 @@ async def chat_stream_generator(
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
                 if response_text:
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id, message_id=_claim_mid()))
                 async for line in _stream_openclaw_assistant_ag(
                     enc, recorder, assistant_message_id, response_text
                 ):
@@ -2667,7 +2620,7 @@ async def chat_stream_generator(
         if full_response.strip() and not persisted_assistant:
             try:
                 await _save_chat_message(
-                    session_id, "assistant", full_response, user_id=user_id, truncated=True
+                    session_id, "assistant", full_response, user_id=user_id, truncated=True, message_id=_claim_mid()
                 )
             except Exception:
                 logger.debug("partial persist on error failed (non-fatal)", exc_info=True)
@@ -2860,33 +2813,6 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                     return {"error": "Invalid approval token", "session_id": session_id}
                 message_for_processing = approved.get("request_text") or message_for_processing
 
-            if _GUARDED_AUTO and not approval_token:
-                risk = classify_request(message_for_processing)
-                if risk.requires_confirmation:
-                    approval_id = await _create_pending_approval(
-                        user_id=user_id,
-                        session_id=session_id,
-                        message=message_for_processing,
-                        risk_level=risk.level,
-                        reason=risk.reason,
-                        normalized_action=risk.normalized_action,
-                    )
-                    return {
-                        "response": "Approval required before executing this action.",
-                        "session_id": session_id,
-                        "ui_components": [
-                            {
-                                "component": "confirmation",
-                                "props": {
-                                    "description": f"{risk.reason}. Approve to continue.",
-                                    "yes_text": "Approve",
-                                    "no_text": "Cancel",
-                                    "yes_action": f"/approve {approval_id}",
-                                },
-                            }
-                        ],
-                    }
-
             lc = message_for_processing.lower().strip()
             task_class = classify_query(message_for_processing)
             if task_class == "research":
@@ -2916,7 +2842,7 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                 await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id)
                 return {"response": capabilities_text, "session_id": session_id}
 
-            use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
+            use_intent_fast_path = (not force_openclaw) and _INTENT_FAST_PATH_ENABLED
             if task_class == "research":
                 # Keep research prompts on the evidence-producing flow.
                 use_intent_fast_path = False
@@ -3411,6 +3337,12 @@ async def submit_feedback(interaction_id: str, request: Request, feedback_type: 
 
     await record_feedback(user_id, interaction_id, feedback_type, corrected)
     logger.info(f"Feedback {feedback_type} from {user_id} on {interaction_id}")
+    if feedback_type in ("thumbs_down", "correction"):
+        # failure capture (ZOE_STRUGGLE_OUTCOMES, default off = returns at once): queued for the struggle detector's worker, which marks
+        # the rated turn's outcome row failed (a put_nowait; never raises)
+        import struggle_detector
+
+        struggle_detector.observe_feedback(user_id, interaction_id, feedback_type)
     messages = {
         "thumbs_up": "Thanks — glad that helped.",
         "thumbs_down": "Thanks — we'll use that to improve.",
@@ -3423,31 +3355,7 @@ async def submit_feedback(interaction_id: str, request: Request, feedback_type: 
     }
 
 
-# ── Background task endpoints ─────────────────────────────────────────────────
-
-@router.post("/task")
-async def create_background_task(request: Request, user: dict = Depends(get_current_user)):
-    """Queue a long-running task for background execution.
-
-    Body: {"message": "find the cheapest hotel in Perth under $150"}
-    Returns: {"task_id": 42, "ack": "On it! I'll let you know when done."}
-    """
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-    task_text = body.get("message", "").strip()
-    if not task_text:
-        return {"error": "message is required"}
-    from background_runner import enqueue_background_task
-    user_id = user["user_id"]
-    task_id = await enqueue_background_task(task=task_text, user_id=user_id)
-    return {
-        "task_id": task_id,
-        "ack": "On it! I'll work on that in the background and let you know when it's done.",
-    }
-
+# ── Background task results (read side only; there is no executor) ───────────
 
 @router.get("/tasks/pending")
 async def get_pending_tasks(user: dict = Depends(get_current_user)):

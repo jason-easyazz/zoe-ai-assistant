@@ -11,6 +11,8 @@ import hmac
 from fastapi import Request, HTTPException, Depends
 from typing import Any, Optional, Dict, Tuple
 
+import relay_ingress
+
 logger = logging.getLogger(__name__)
 
 ZOE_AUTH_URL = os.environ.get("ZOE_AUTH_URL", "http://localhost:8002")
@@ -185,6 +187,14 @@ async def get_current_user(request: Request) -> dict:
     the PANEL principal (guest-class + ``panel_id``), never the panel's bound
     member (``panel_auth._resolve_device_token_user``, security fix 2026-10-17).
     """
+    # RELAY INGRESS (flag-dark, ZOE_RELAY_INGRESS): a request that came through the panel relay is never a guest and has no
+    # address. It must prove a bound client certificate AND a device token / kiosk credential for the same panel (401 otherwise);
+    # it resolves to the PANEL principal, or to a member only with a fresh sign-in at the panel. Everything below - the
+    # anonymous-guest fallback, ZOE_UNAUTHENTICATED_ROLE, a degraded guest - is LAN-only. relay_ingress.is_relay is False
+    # whenever the flag is off, so with the flag off this line changes nothing.
+    if relay_ingress.is_relay(request):
+        return await relay_ingress.resolve_user(request)
+
     session_id = request.headers.get("X-Session-ID", "")
     device_token = request.headers.get("X-Device-Token", "")
 

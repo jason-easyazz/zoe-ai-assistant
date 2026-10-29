@@ -1,10 +1,13 @@
-# Sunday 05:45, moved from 03:30: the off-box drill refuses to run inside the night window (01:35-04:55).
+# Sunday 05:30 (deep dive 2 S0-8): after the night window (01:35-04:55; the 12B runs 02:50 to ~03:10) and the 02:30
+# on-box backup, before the household's day. The on-box restore drill also refuses inside the window or while
+# zoe-night-window runs, waits for a running zoe-backup / zoe-offbox-backup (05:10), and refuses below its
+# MemAvailable floor (1100 MB, measured) loudly: alert + failed unit.
 [Unit]
-Description=Weekly restore-verify of Zoe backups (Sunday 05:45 local)
+Description=Weekly restore drill of Zoe backups (Sunday 05:30 local)
 
 [Timer]
-OnCalendar=Sun *-*-* 05:45:00
-RandomizedDelaySec=600
+OnCalendar=Sun *-*-* 05:30:00
+RandomizedDelaySec=300
 Persistent=true
 Unit=zoe-backup-verify.service
 

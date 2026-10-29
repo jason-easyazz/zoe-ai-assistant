@@ -29,7 +29,15 @@ from panel_principal import require_member
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/memories/curation", tags=["memories"])
+async def _dark_gate() -> None:
+    """Flag-dark: off = 404 for EVERY caller. A router-level dependency, so it runs before ``require_member`` resolves."""
+    import memory_curation as mc
+
+    if not mc.enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+router = APIRouter(prefix="/api/memories/curation", tags=["memories"], dependencies=[Depends(_dark_gate)])
 
 
 def _out(content: Any) -> JSONResponse:

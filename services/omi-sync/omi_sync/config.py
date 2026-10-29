@@ -32,6 +32,16 @@ def _addresses(multi: str, single: str) -> tuple:
     return tuple(out)
 
 
+def _require_bond(raw: str) -> tuple:
+    """``OMI_SYNC_REQUIRE_BOND``: unset/0/off = none; 1/all/true = every pendant (``*``); else a list of addresses."""
+    v = (raw or "").strip()
+    if v.lower() in ("", "0", "off", "false", "no"):
+        return ()
+    if v.lower() in ("1", "all", "true", "yes", "on", "*"):
+        return ("*",)
+    return tuple(a.lower() for a in _addresses(v, ""))
+
+
 def _opt_int(raw: str) -> Optional[int]:
     try:
         return int(raw.strip()) if raw.strip() else None
@@ -62,6 +72,12 @@ class Settings:
     away_backoff_max_s: float    # the longest wait between tries for a pendant that is not answering (exponential up to this)
     health: bool                 # send the numbers-only health heartbeat to Zoe (kill switch; read-only, default on)
     health_heartbeat_s: float    # ... at least this often when nothing changed
+    require_bond: tuple = ()     # phase-2 firmware: pendants that must be bonded + encrypted ('*' = every pendant); default none
+    bluez_adapter: str = "hci0"  # the adapter whose BlueZ bond the check reads
+
+    def requires_bond(self, address: str) -> bool:
+        """True when ``address`` is listed in ``OMI_SYNC_REQUIRE_BOND`` (or it says ``all``). Once true, never an open link."""
+        return "*" in self.require_bond or address.strip().lower() in self.require_bond
 
     @property
     def spool_path(self) -> Path:
@@ -97,4 +113,6 @@ def load(env: dict | None = None) -> Settings:
         away_backoff_max_s=max(_float("OMI_SYNC_SCAN_INTERVAL_S", 30.0, e), _float("OMI_SYNC_AWAY_BACKOFF_MAX_S", 600.0, e)),
         health=_truthy(get("OMI_SYNC_HEALTH", "1")),
         health_heartbeat_s=max(60.0, _float("OMI_SYNC_HEALTH_HEARTBEAT_S", 900.0, e)),
+        require_bond=_require_bond(get("OMI_SYNC_REQUIRE_BOND")),
+        bluez_adapter=get("OMI_SYNC_BLUEZ_ADAPTER", "hci0").strip() or "hci0",
     )

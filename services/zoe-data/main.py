@@ -9,9 +9,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import httpx
 from database import init_db
 from gemma_endpoint import gemma_base
-from typed_env import env_float, env_int, env_list, env_str
+from typed_env import env_bool, env_float, env_int, env_list, env_str
 from push import broadcaster
 from auth import require_internal_token
+import relay_ingress
 from routers import (
     calendar_router,
     lists_router,
@@ -48,7 +49,6 @@ from routers.system import (
     _agent_card_router,
 )
 from system_updates import start_zoe_update_background_tasks
-from routers.openclaw import router as openclaw_router
 import logging
 from middleware.logging import setup_json_logging
 from log_throttle import log_throttled
@@ -72,8 +72,6 @@ _memory_capture_health: dict[str, str] = {"status": "unknown", "detail": "startu
 # routers.system can read it for agent card tier status.
 _RUNTIME_HEALTH: dict[str, bool] = {
     "local_llm": False,
-    "hermes": False,
-    "openclaw": False,
 }
 # Timestamp of the last probe (ISO string); exposed via GET /api/agent/runtimes
 _RUNTIME_LAST_PROBED: str = ""
@@ -145,7 +143,15 @@ async def _check_brain_ready(timeout_s: float = 2.0) -> dict:
         return detail
 
 
+def _stt_disabled() -> bool:
+    """``ZOE_STT_DISABLED=1``: the isolated text-harness instance never transcribes (no model, no download), so it neither warms
+    Moonshine nor waits on it for readiness. Never set on the live service."""
+    return env_bool("ZOE_STT_DISABLED", default=False)
+
+
 async def _check_stt_ready() -> dict:
+    if _stt_disabled():
+        return {"ok": True, "engine": "moonshine", "disabled": True, "loaded": False}
     try:
         from routers import voice_tts
 
@@ -169,11 +175,13 @@ async def _check_stt_ready() -> dict:
 async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
     from routers import voice_tts
 
-    mode = env_str("ZOE_TTS_MODE", "hybrid").lower()
+    mode = voice_tts.tts_mode()
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     detail: dict = {
         "ok": False,
-        "engine": "kokoro-waterfall",
+        # Default mode is Kokoro-only (owner decision 2026-10-21): no fallback
+        # voice, so readiness is exactly "is the Kokoro sidecar up".
+        "engine": "kokoro" if mode == voice_tts.TTS_MODE_KOKORO else "kokoro-waterfall",
         "mode": mode,
         "sidecar_url": sidecar_url,
     }
@@ -207,6 +215,9 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
         detail["error"] = f"http_{response.status_code}"
     except Exception as exc:
         detail["error"] = exc.__class__.__name__
+    if mode == voice_tts.TTS_MODE_KOKORO:
+        # No fallback voice in kokoro-only mode: Kokoro down = TTS not ready.
+        return detail
     detail["espeak_available"] = bool(voice_tts._has_espeak_ng())
     if mode in {"hybrid", "local", "offline"} and detail["espeak_available"]:
         detail["ok"] = True
@@ -876,17 +887,10 @@ async def _probe_runtimes() -> None:
             return False
 
     _RUNTIME_HEALTH["local_llm"] = await _check_port(11434)
-    _RUNTIME_HEALTH["hermes"] = await _check_port(8642)
-    _RUNTIME_HEALTH["openclaw"] = await _check_port(18789)
     global _RUNTIME_LAST_PROBED
     from datetime import datetime, timezone
     _RUNTIME_LAST_PROBED = datetime.now(timezone.utc).isoformat()
-    logger.info(
-        "Runtime health probe: local_llm=%s hermes=%s openclaw=%s",
-        _RUNTIME_HEALTH["local_llm"],
-        _RUNTIME_HEALTH["hermes"],
-        _RUNTIME_HEALTH["openclaw"],
-    )
+    logger.info("Runtime health probe: local_llm=%s", _RUNTIME_HEALTH["local_llm"])
 
 
 async def _runtime_health_refresh_loop() -> None:
@@ -1213,9 +1217,12 @@ async def lifespan(app: FastAPI):
         logger.warning("event-loop lag monitor unavailable (non-fatal): %s", _lag_exc)
 
     try:
-        from routers.voice_tts import warm_moonshine
-        asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
-        logger.info("Voice STT warmup scheduled (Moonshine — the only STT engine)")
+        if _stt_disabled():
+            logger.info("Voice STT warmup skipped (ZOE_STT_DISABLED=1: isolated text-harness instance)")
+        else:
+            from routers.voice_tts import warm_moonshine
+            asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
+            logger.info("Voice STT warmup scheduled (Moonshine — the only STT engine)")
         try:
             import semantic_router as _sr
             if _sr.is_enabled():
@@ -1249,6 +1256,12 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_change_notices.run_loop(), name="change_notices")
     except Exception as _cn_exc:
         logger.warning("change notices loop not started (non-fatal): %s", _cn_exc)
+    try:  # the owner's once-a-day Telegram digest of pending day-review candidates (flag-dark ZOE_OMI_REVIEW_TELEGRAM)
+        import omi_review_digest as _omi_rd
+        if _omi_rd.enabled():
+            asyncio.create_task(_omi_rd.run_loop(), name="omi_review_digest")
+    except Exception as _omi_rd_exc:
+        logger.warning("omi review digest loop not started (non-fatal): %s", _omi_rd_exc)
     try:  # the pendant day review's DAYTIME fallback lane (flag-dark ZOE_OMI_DAY_REVIEW; the night window is the primary lane)
         import omi_day_review as _omi_dr
         if _omi_dr.enabled() and _omi_dr.lane() != "night":
@@ -1267,18 +1280,15 @@ async def lifespan(app: FastAPI):
         logger.info("Background task watchdog started")
     except Exception as _wd_exc:
         logger.warning("Task watchdog not started (non-fatal): %s", _wd_exc)
-    # Zoe Agent: warm Gemma's KV cache in background so first real query is fast
-    # Check env directly to avoid circular import from routers.chat
-    _pi_mode = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
-    _jetson_mode = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
-    if _pi_mode or _jetson_mode:
-        try:
-            from zoe_agent import warmup_kv_cache
-            asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
-            tier = "Jetson" if _jetson_mode else "Pi"
-            logger.info("%s Agent: Gemma KV cache warmup scheduled (fires in 8s)", tier)
-        except Exception as _wup_exc:
-            logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
+    # Zoe Agent: warm Gemma's KV cache in background so first real query is fast.
+    # Unconditional: the HERMES_FAST_PATH / JETSON_AGENT_MODE gates were pinned to
+    # the Zoe-Agent side on the only host that exists (B3, 2026-10-18).
+    try:
+        from zoe_agent import warmup_kv_cache
+        asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
+        logger.info("Jetson Agent: Gemma KV cache warmup scheduled (fires in 8s)")
+    except Exception as _wup_exc:
+        logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
 
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
@@ -1298,14 +1308,12 @@ async def lifespan(app: FastAPI):
         from proactive.triggers.reminder_scan import ReminderScanTrigger
         from proactive.triggers.morning_checkin import MorningCheckInTrigger
         from proactive.triggers.evening_windown import EveningWindDownTrigger
-        from proactive.triggers.openclaw_trigger import OpenClawTrigger
         from proactive.triggers.people_health import PeopleHealthTrigger
         from proactive.triggers.people_birthday import PeopleBirthdayTrigger
         from proactive.triggers.emotional_followup import EmotionalFollowUpTrigger
         register_trigger(ReminderScanTrigger())
         register_trigger(MorningCheckInTrigger())
         register_trigger(EveningWindDownTrigger())
-        register_trigger(OpenClawTrigger())
         register_trigger(PeopleHealthTrigger())
         register_trigger(PeopleBirthdayTrigger())
         # Samantha proactivity: gentle follow-up on captured worries. Registered
@@ -1319,7 +1327,7 @@ async def lifespan(app: FastAPI):
         except ImportError:
             logger.info(
                 "Proactive engine started (ReminderScanTrigger, MorningCheckInTrigger,"
-                " EveningWindDownTrigger, OpenClawTrigger registered)"
+                " EveningWindDownTrigger registered)"
             )
         start_proactive_engine()
         # Reconcile after the scheduler is live: re-register any unfired reminder
@@ -2163,7 +2171,10 @@ def _allowed_browser_origins() -> frozenset[str]:
     here cannot leave the HTTP and WebSocket policies inconsistent.
     """
     extra = env_list("ZOE_ALLOWED_WS_ORIGINS")
-    return frozenset(ALLOWED_ORIGINS) | _SELF_LAN_ORIGINS | frozenset(extra)
+    # The relay origin (https://<hid>.zoe.internal, from ZOE_RELAY_HOSTNAME) joins ONLY while ZOE_RELAY_INGRESS is on: the kiosk
+    # opened over the relay presents it, and without it the push socket refuses the kiosk (the 2026-07-03 incident class).
+    relay_origin = relay_ingress.origin()
+    return frozenset(ALLOWED_ORIGINS) | _SELF_LAN_ORIGINS | frozenset(extra) | (frozenset({relay_origin}) if relay_origin else frozenset())
 
 
 def _ws_origin_allowed(websocket: WebSocket) -> bool:
@@ -2219,6 +2230,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Relay ingress gate (flag-dark, ZOE_RELAY_INGRESS - a no-op while it is off). Added LAST so it is the OUTERMOST middleware: a
+# relayed request without a bound client certificate AND a matching device credential is refused before CORS or any route runs.
+app.add_middleware(relay_ingress.RelayIngressMiddleware)
+
 app.include_router(calendar_router)
 app.include_router(lists_router)
 app.include_router(people_router)
@@ -2233,7 +2248,6 @@ app.include_router(_agent_card_router)
 app.include_router(notifications_router)
 app.include_router(chat_router)
 app.include_router(ui_router)
-app.include_router(openclaw_router)
 app.include_router(voice_tts_router)
 from routers.voice_settings import router as voice_settings_router  # noqa: E402
 from routers.face_id import router as face_id_router  # noqa: E402
@@ -2256,6 +2270,10 @@ app.include_router(panel_provision_router)
 # Flag-dark (ZOE_PANEL_KIOSK_CREDENTIAL); both routes 404 while it is off.
 from routers.panel_kiosk import router as panel_kiosk_router
 app.include_router(panel_kiosk_router)
+# Relay client-certificate binding (panel-anywhere R1): /api/panels/PANEL/client-certs. 404 while ZOE_RELAY_INGRESS is off.
+from routers.panel_relay import gate_router as panel_relay_gate_router, router as panel_relay_router
+app.include_router(panel_relay_router)
+app.include_router(panel_relay_gate_router)
 # Registered AFTER panel_provision on purpose: that router's more specific
 # /api/panels/provision/{code} must win over /api/panels/{device_id}/config
 # (FastAPI matches routes in registration order).
@@ -2263,10 +2281,15 @@ from routers.panel_config import router as panel_config_router
 app.include_router(panel_config_router)
 from routers.rooms import router as rooms_router
 app.include_router(rooms_router)
+# GET /api/system/stats - the desktop dashboard's System card (member-only, read-only).
+from routers.system_stats import router as system_stats_router
+app.include_router(system_stats_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
 from routers.music_setup import router as music_setup_router
 app.include_router(music_setup_router)
+from routers.music_ma_ui import router as music_ma_ui_router
+app.include_router(music_ma_ui_router)
 from routers.handoff import router as handoff_router
 app.include_router(handoff_router)
 from routers.smart_home_setup import router as smart_home_setup_router
@@ -2283,6 +2306,8 @@ app.include_router(geo_router)
 
 from routers.ha_control import router as ha_control_router
 app.include_router(ha_control_router)
+from routers.ha_ui import router as ha_ui_router
+app.include_router(ha_ui_router)
 
 from routers.auth import router as auth_router
 app.include_router(auth_router)
@@ -2294,6 +2319,10 @@ app.include_router(struggles_router)
 # Change notices (change_notices, ZOE_CHANGE_NOTICES): the owner's preferences, status and kill switch; admin persons only.
 from routers.change_notices import router as change_notices_router  # noqa: E402
 app.include_router(change_notices_router)
+
+# Zoe's own iPhone app, M0 (phone_app, ZOE_PHONE_APP, default off = every route 404s): pairing by panel QR + push-token registry.
+from routers.phone_app import router as phone_app_router  # noqa: E402
+app.include_router(phone_app_router)
 
 try:
     from routers.voice_livekit import router as voice_livekit_router
@@ -2474,7 +2503,63 @@ def _is_ws_guest(user: dict) -> bool:
     return str(user.get("user_id") or "") == GUEST_USER_ID or str(user.get("role") or "").lower() == "guest"
 
 
-async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> str | None:
+def _push_channel_is_panel(channel: str) -> bool:
+    """``panel_<id>`` and ``push.NO_PANEL_CHANNEL`` (``panel:none``): channels only a panel's own socket joins."""
+    return str(channel or "").strip().lower().startswith(("panel_", "panel:"))
+
+
+def _device_token_may_join(device_info: dict, panel_id: str) -> bool:
+    """A device token joins only ITS OWN panel's channel (``ZOE_PANEL_PUSH_PROOF``: enforce refuses another
+    panel's, shadow admits and logs, off skips). A token row without a panel id names no panel: refused too."""
+    import panel_principal
+
+    token_panel = str((device_info or {}).get("panel_id") or "").strip()
+    if token_panel and token_panel == str(panel_id or "").strip():
+        return True
+    mode = panel_principal.panel_push_mode()
+    if mode == "off":
+        return True
+    log_throttled(
+        logger, logging.WARNING, f"panel-push-token:{token_panel}:{panel_id}",
+        "panel push: %s panel %s's device token joining panel %s",
+        "WOULD REFUSE (shadow)" if mode == "shadow" else "refused", token_panel[:64], str(panel_id)[:64],
+    )
+    return mode == "shadow"
+
+
+async def _panel_push_proven(websocket, panel_id: str) -> bool:
+    """A socket WITHOUT a member session may join ``panel_<panel_id>`` only when it proves it IS that
+    panel (``panel_principal.request_is_this_panel``: the kiosk credential naming it, or its registered
+    address via nginx's X-Real-IP). The device-token path is checked in ``websocket_push`` itself.
+
+    ``ZOE_PANEL_PUSH_PROOF`` (per call): ``enforce`` (default) refuses, ``shadow`` admits and logs
+    "would refuse", ``off`` skips the check. No socket (a direct call) cannot prove anything: refused
+    under enforce. Never raises."""
+    import panel_principal
+
+    mode = panel_principal.panel_push_mode()
+    if mode == "off":
+        return True
+    try:
+        proven = websocket is not None and await panel_principal.request_is_this_panel(websocket, panel_id)
+    except Exception:  # noqa: BLE001 - fail closed
+        proven = False
+    if proven:
+        return True
+    try:
+        peer = panel_principal.trusted_client_ip(websocket) if websocket is not None else ""
+    except Exception:  # noqa: BLE001
+        peer = ""
+    log_throttled(
+        logger, logging.WARNING, f"panel-push-proof:{panel_id}:{peer}",
+        "panel push: %s a subscriber for panel %s from %s without the panel's credential (no member session, "
+        "no device token, kiosk credential or registered address)",
+        "WOULD REFUSE (shadow)" if mode == "shadow" else "refused", str(panel_id)[:64], str(peer)[:64],
+    )
+    return mode == "shadow"
+
+
+async def _resolve_subscribable_panel(panel_id: str, session_id: str | None, websocket=None) -> str | None:
     """Resolve the *canonical* panel channel a browser push socket may subscribe to.
 
     Returns the panel_id whose ``panel_{id}`` channel the socket should join, or
@@ -2509,12 +2594,14 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
       * a VALID guest session (role/user_id ``guest``) uses its bound row when it has one,
         else the SAME registered-panel guest policy (``panels.allow_guest``) -- no wider
         than a session-less socket, so the member->guest reclaim window cannot deafen it.
+      * a socket with NO member session (none, invalid, or a guest) must ALSO prove it is the
+        panel it joins (``_panel_push_proven``; ``websocket`` is the handshake it is judged by).
     A user can never reach a panel their session/account isn't bound to (every
     query filters on ``user_id``).
     """
     user = await _resolve_ws_session(session_id)
     if user is None:
-        if panel_id and await _panel_allows_guest_push(panel_id):
+        if panel_id and await _panel_allows_guest_push(panel_id) and await _panel_push_proven(websocket, panel_id):
             return panel_id
         return None
     user_id = str(user.get("user_id") or "")
@@ -2522,6 +2609,9 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     if not user_id:
         return None
     if _is_ws_guest(user):
+        # A guest session is not evidence of anything (POST /api/auth/guest mints one for any
+        # caller), so every panel channel a guest reaches - its bound row or the guest policy -
+        # also needs the panel's own proof (_panel_push_proven, 2026-10-19).
         # A VALID guest session (a kiosk that recovered from an expired PIN session mints one).
         # Its own ui_panel_sessions row does not exist yet while the panel is still owned by the
         # member it replaced (routers/ui_actions._authorize_panel refuses the guest's bind with
@@ -2536,8 +2626,8 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
             return None
         resolved = await _resolve_bound_panel(user_id, session_id, panel_id)
         if resolved:
-            return resolved
-        if await _panel_allows_guest_push(panel_id):
+            return resolved if await _panel_push_proven(websocket, resolved) else None
+        if await _panel_allows_guest_push(panel_id) and await _panel_push_proven(websocket, panel_id):
             return panel_id
         return None
     if role in {"admin", "agent"}:
@@ -2708,11 +2798,20 @@ async def websocket_push(
         # socket joins the channel pushes are actually sent to even when the client
         # connected under a different alias id.
         subscribe_panel_id = panel_id
+        if device_info and not _device_token_may_join(device_info, panel_id):
+            await websocket.close(1008, "Device token is for another panel")
+            return
         if not device_info:
-            subscribe_panel_id = await _resolve_subscribable_panel(panel_id, session_id)
+            subscribe_panel_id = await _resolve_subscribable_panel(panel_id, session_id, websocket)
             if not subscribe_panel_id:
                 await websocket.close(1008, "Invalid device token")
                 return
+        # RELAYED socket: it may only join the channel of the panel its certificate + credential were proven to be (a stolen panel
+        # must not listen in on the household's other panels). `subscribe_panel_id` is the RESOLVED id (an alias maps to its
+        # registered panel first), so an alias of its own panel still works.
+        if not relay_ingress.panel_subscription_allowed(subscribe_panel_id):
+            await websocket.close(1008, "Panel not bound to this certificate")
+            return
         # Panel token or bound browser session verified; subscribe to panel push.
         await broadcaster.connect_panel(websocket, subscribe_panel_id)
         # Clean up under the RESOLVED id we actually subscribed to — not the
@@ -2742,6 +2841,20 @@ async def websocket_push(
         if not _ws_role_signed_in(user):
             await websocket.close(1008, "Insufficient privileges")
             return
+        # A panel's channel is joined through ?panel_id= (the panel's own proof, above), never
+        # by NAME: ?channel=panel_<id> let any signed-in socket read another panel's per-turn
+        # cards and counted as a live panel subscriber. Admin/agent keep it (as with panel_id).
+        if _push_channel_is_panel(channel) and not _ws_may_subscribe_for_anyone(user):
+            import panel_principal
+
+            if panel_principal.panel_push_mode() == "enforce":
+                await websocket.close(1008, "Panel channels need the panel")
+                return
+            if panel_principal.panel_push_mode() == "shadow":
+                log_throttled(
+                    logger, logging.WARNING, f"panel-push-by-name:{channel}",
+                    "panel push: WOULD REFUSE (shadow) a member socket joining %s by name", str(channel)[:64],
+                )
         # Auth OK – connect to requested channel
         await broadcaster.connect(
             websocket, channel, user_id=str(user.get("user_id") or "")
@@ -2933,9 +3046,18 @@ async def _resolve_ws_session(session_id: str | None) -> dict | None:
     from fastapi import HTTPException
 
     try:
-        return await _validate_with_auth_service(session_id)
+        user = await _validate_with_auth_service(session_id)
     except HTTPException:
         return None
+    if user is not None and relay_ingress.current_panel() is not None:
+        # RELAYED socket: a bare session id is not enough for a member (the kiosk's browser keeps one in storage). The member
+        # needs a fresh sign-in at the panel the socket was proven to be; a guest session passes unchanged (panel-guest policy),
+        # and an auth-outage principal is refused (never downgraded to a guest over the relay).
+        if user.get("auth_degraded") or user.get("__zoe_degraded__"):
+            return None
+        if _ws_role_signed_in(user) and not await relay_ingress.member_allowed_here(str(user.get("user_id") or "")):
+            return None
+    return user
 
 
 if __name__ == "__main__":

@@ -66,8 +66,9 @@ const VIEW = {
 };
 
 function makeEnv(opts = {}) {
-    const ids = { aboutMe: new Node('section'), aboutMeOpen: new Node('button') };
+    const ids = { aboutMe: new Node('section'), aboutMeOpen: new Node('button'), aboutMeNav: new Node('a') };
     ids.aboutMe.hidden = true;
+    ids.aboutMeNav.hidden = true;
     ids.aboutMeOpen.hidden = true;
     const doc = { createElement: (t) => new Node(t), getElementById: (id) => ids[id] || null };
     const calls = [];
@@ -76,7 +77,7 @@ function makeEnv(opts = {}) {
         const method = (o.method || 'GET').toUpperCase();
         calls.push({ method, url, body: o.body === undefined ? undefined : JSON.parse(o.body) });
         const reply = (status, json) => ({ ok: status >= 200 && status < 300, status, json: async () => json });
-        if (url === '/api/memories/mine/actions') return opts.actions === 404 ? reply(404, { detail: 'Not Found' }) : reply(200, { forget: true, correct: opts.correct !== false });
+        if (url === '/api/memories/mine/actions') return opts.actions === 404 ? reply(404, { detail: 'Not Found' }) : reply(200, { forget: opts.forget !== false, correct: opts.correct !== false });
         if (url === '/api/memories/mine') return opts.mine ? reply(opts.mine, { detail: 'Sign in' }) : reply(200, view);
         if (/\/correct$/.test(url)) {
             view.groups[1].items[0].text = 'You like oat milk';
@@ -85,10 +86,23 @@ function makeEnv(opts = {}) {
         if (/\/forget$/.test(url)) return reply(200, { forgotten: true });
         return reply(404, { detail: 'not found' });
     };
-    const win = { fetch, location: { hash: opts.hash || '' }, encodeURIComponent, JSON, Promise, String, Number, Object, Array };
+    const listeners = [];
+    const location = { hash: opts.hash || '', pathname: '/memories.html', search: '' };
+    const replaced = [];
+    const history = { replaceState: (_s, _t, url) => { replaced.push(url); location.hash = ''; } };   // a real replaceState drops the fragment
+    const addEventListener = (type, fn) => listeners.push({ type, fn });
+    const win = { fetch, location, history, addEventListener, encodeURIComponent, JSON, Promise, String, Number, Object, Array };
     win.window = win;
     vm.runInContext(fs.readFileSync(SRC, 'utf8'), vm.createContext(win), { filename: 'memories-about-me.js' });
-    return { ids, doc, calls, Z: win.ZoeAboutMe };
+    // the phone menu's link: sets the fragment, and the browser fires hashchange only if the fragment actually changed
+    const tapNav = async (hash) => {
+        if (location.hash === hash) return false;
+        location.hash = hash;
+        listeners.filter(l => l.type === 'hashchange').forEach(l => l.fn());
+        await new Promise(r => setTimeout(r, 0));
+        return true;
+    };
+    return { ids, doc, calls, replaced, location, tapNav, Z: win.ZoeAboutMe };
 }
 
 const byText = (root, text) => root.all(n => n.tagName === 'BUTTON' && n._text === text);
@@ -107,6 +121,7 @@ async function check(label, fn) {
         const e = makeEnv({ actions: 404, hash: '#about-me' });
         assert.strictEqual(await e.Z.init(e.doc), false);
         assert.strictEqual(e.ids.aboutMeOpen.hidden, true);
+        assert.strictEqual(e.ids.aboutMeNav.hidden, true, 'the phone menu link stays hidden while the flag is off');
         assert.strictEqual(e.ids.aboutMe.hidden, true);
         assert.deepStrictEqual(e.calls.map(c => c.url), ['/api/memories/mine/actions']);
     });
@@ -115,6 +130,7 @@ async function check(label, fn) {
         const e = makeEnv({ hash: '#about-me' });
         assert.strictEqual(await e.Z.init(e.doc), true);
         assert.strictEqual(e.ids.aboutMeOpen.hidden, false);
+        assert.strictEqual(e.ids.aboutMeNav.hidden, false, 'the phone menu link appears once the server offers the list');
         assert.strictEqual(e.ids.aboutMe.hidden, false);
         const txt = e.ids.aboutMe.textContent;
         assert(txt.includes('Robin (sister)') && txt.includes('lives in Eastvale'), 'people');
@@ -176,6 +192,13 @@ async function check(label, fn) {
         assert.strictEqual(byText(e.ids.aboutMe, 'Fix this').length, 0);
     });
 
+    await check('no Forget button when the role may not review', async () => {
+        const e = makeEnv({ hash: '#about-me', forget: false, correct: false });
+        await e.Z.init(e.doc);
+        assert.strictEqual(byText(e.ids.aboutMe, 'Forget').length, 0);
+        assert(e.ids.aboutMe.textContent.includes('dark roast'), 'the rows still show');
+    });
+
     await check('signed out: the sign-in line and no rows', async () => {
         const e = makeEnv({ hash: '#about-me', mine: 401 });
         await e.Z.init(e.doc);
@@ -192,12 +215,25 @@ async function check(label, fn) {
         assert.strictEqual(e.ids.aboutMe.textContent, '');
     });
 
+    await check('close drops the #about-me fragment so the menu link can reopen the section', async () => {
+        const e = makeEnv({ hash: '#about-me' });
+        await e.Z.init(e.doc);
+        assert.strictEqual(e.ids.aboutMe.hidden, false);
+        await byText(e.ids.aboutMe, 'Close')[0].click();
+        assert.strictEqual(e.location.hash, '', 'the fragment must be gone after close');
+        assert.deepStrictEqual(e.replaced, ['/memories.html'], 'replaceState keeps the path, drops the fragment');
+        assert.strictEqual(await e.tapNav('#about-me'), true, 'the second tap now changes the hash');
+        assert.strictEqual(e.ids.aboutMe.hidden, false, 'and reopens the section');
+    });
+
     await check('the page loads the module after auth.js and is gated', async () => {
         const html = fs.readFileSync(path.join(__dirname, 'memories.html'), 'utf8');
         const auth = html.indexOf('src="js/auth.js"');
         const mod = html.indexOf('/js/memories-about-me.js?v=');
         assert(auth > 0 && mod > auth, 'module after auth.js');
         assert(html.includes('id="aboutMe"') && html.includes('id="aboutMeOpen"'));
+        assert(/id="aboutMeNav"[^>]*\shidden/.test(html), 'the phone menu deep link ships hidden');
+        assert(html.includes('.mobile-nav-item[hidden]'), 'display:flex must not override hidden on the menu link');
     });
 
     if (failures.length) {

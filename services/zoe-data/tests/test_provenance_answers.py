@@ -680,6 +680,26 @@ def test_a_neighbour_saved_within_five_minutes_is_not_a_twin_unless_it_lies_whol
     assert {r.id for r in got} == {"t", "s"}
 
 
+def test_a_same_turn_row_with_a_different_content_noun_is_not_a_twin():
+    class _R:
+        def __init__(self, id, text, **meta):
+            self.id, self.text = id, text
+            self.metadata = {"user_id": UID, "added_ts": 1000.0, "user_turn_id": "t1",
+                             "source_excerpt": "I keep my bike in the shed and my tools in the shed", **meta}
+
+    class _L:
+        def __init__(self, *rows):
+            self._rows = list(rows)
+
+        async def list_by_status(self, **_kw):
+            return self._rows
+    ref = _R("a", "User keeps the bike in the shed")
+    tools = _R("tools", "User keeps the tools in the shed")                    # same utterance, different fact
+    restated = _R("r", "The bike is in the shed")                              # the same claim worded again
+    got = asyncio.run(pa.twins_of(UID, ref, svc=_L(tools, restated)))
+    assert {r.id for r in got} == {"r"}
+
+
 def test_forget_it_from_another_conversation_does_not_take_the_row_named_in_this_one(svc):
     explained_state(svc)                                              # the answer named the sister row in session s1
     assert say("forget it", session="voice-panel-7") is None           # the same member, another session: not this tier's turn

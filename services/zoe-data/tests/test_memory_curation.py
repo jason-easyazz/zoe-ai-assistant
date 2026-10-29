@@ -130,7 +130,7 @@ def env(monkeypatch, tmp_path):
         return []
 
     monkeypatch.setattr(pa, "load_people", no_people)
-    caller = dict(user=None)
+    caller = dict(user=None, auth_calls=0)
     from auth import get_current_user
     from routers.memories_curation import router
 
@@ -138,6 +138,7 @@ def env(monkeypatch, tmp_path):
     app.include_router(router)
 
     async def _user(request: Request):
+        caller["auth_calls"] += 1
         return dict(caller["user"])
 
     app.dependency_overrides[get_current_user] = _user
@@ -411,6 +412,82 @@ def test_a_held_decision_is_audited_before_anything_changes(env, monkeypatch):
     r = c.post(f"/api/memories/curation/members/{KID}/held/{note['id']}", json=dict(action="accept"), headers=H)
     assert r.status_code == 503
     assert env.col.rows[rid][1]["status"] == "approved" and env.col.rows[note["id"]][1]["status"] == "disputed"
+
+
+def test_a_forget_whose_erase_failed_is_retryable(env):
+    rid = _curated_teacher(env)
+    real = env.svc.erase_rows
+
+    async def boom(*a, **k):
+        raise memory_service.MemoryServiceError("disk")
+
+    env.svc.erase_rows = boom
+    url = f"/api/memories/curation/members/{KID}/rows/{rid}/forget"
+    assert as_(env, PARENT, "admin").post(url, headers=H).status_code == 503
+    assert env.col.rows[rid][1]["status"] == "rejected" and not env.erased        # rejected, text still on disk
+    env.svc.erase_rows = real
+    assert as_(env, PARENT, "admin").post(url, headers=H).status_code == 200      # the retry finishes the erase
+    assert env.erased == [(KID, [rid], PARENT)]
+    # control: a row that was never a curated row of this member is still a 404
+    other = run(env.svc.ingest("User likes dinosaurs.", user_id=KID, source="chat_regex", status="approved"))
+    assert as_(env, PARENT, "admin").post(f"/api/memories/curation/members/{KID}/rows/{other.id}/forget", headers=H).status_code == 404
+
+
+def test_an_accept_that_failed_to_close_the_note_stays_visible_and_retryable(env):
+    rid = _curated_teacher(env)
+    run(env.svc.ingest("User's teacher is Mr Brown.", user_id=KID, source="chat_regex", status="approved"))
+    c = as_(env, PARENT, "admin")
+    (note,) = c.get(f"/api/memories/curation/members/{KID}/held", headers=H).json()["held"]
+    real = env.svc.review
+    calls = dict(n=0)
+
+    async def flaky(mem_id, **kw):
+        if kw.get("decision") == "reject":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None                               # the close fails once, after the edit went through
+        return await real(mem_id, **kw)
+
+    env.svc.review = flaky
+    url = f"/api/memories/curation/members/{KID}/held/{note['id']}"
+    assert c.post(url, json=dict(action="accept"), headers=H).status_code == 409
+    assert env.col.rows[rid][1]["status"] == "superseded"
+    (again,) = c.get(f"/api/memories/curation/members/{KID}/held", headers=H).json()["held"]   # not stranded
+    assert again["id"] == note["id"]
+    for i in range(7):                                    # more supersedes than any hop cap (each failed retry adds one)
+        (cur,) = c.get(f"/api/memories/curation/members/{KID}/rows", headers=H).json()["rows"]
+        assert c.post(f"/api/memories/curation/members/{KID}/rows/{cur['id']}/edit", json=dict(text=f"Mia's teacher is Ms {chr(65 + i)}"),
+                      headers=H).status_code == 200
+    (again,) = c.get(f"/api/memories/curation/members/{KID}/held", headers=H).json()["held"]
+    assert again["id"] == note["id"]
+    calls["n"] = 99                                       # the close works again
+    assert c.post(url, json=dict(action="keep"), headers=H).status_code == 200
+    assert not c.get(f"/api/memories/curation/members/{KID}/held", headers=H).json()["held"]
+
+
+def test_an_opt_out_that_cannot_list_rows_changes_nothing(env, monkeypatch):
+    a = as_(env, ADULT, "user")
+    assert a.put("/api/memories/curation/me/routines", json=dict(on=True), headers=H).status_code == 200
+    assert curate(env, "Robin's bins go out on Monday night", "routines", member=ADULT).status_code == 200
+
+    async def down(**kw):
+        raise memory_service.MemoryServiceError("store down")
+
+    monkeypatch.setattr(env.svc, "list_all_by_status_strict", down)
+    a = as_(env, ADULT, "user")                                             # curate() switched the caller
+    assert a.put("/api/memories/curation/me/routines", json=dict(on=False), headers=H).status_code == 503
+    assert a.get("/api/memories/curation/me", headers=H).json()["on"] == ["routines"]      # still on, rows still protected
+    (row,) = rows_of(env, ADULT)
+    assert row.metadata["authority_class"] == ma.CURATED
+
+
+def test_flag_off_is_404_before_authentication(env, monkeypatch):
+    monkeypatch.delenv("ZOE_MEMORIES_CURATORS")
+    env.caller["user"] = dict(user_id="guest", role="guest")
+    assert env.client.get("/api/memories/curation/me").status_code == 404           # no session header, a guest: still 404
+    assert env.caller["auth_calls"] == 0, "the flag answers before authentication ever runs"
+    monkeypatch.setenv("ZOE_MEMORIES_CURATORS", "1")
+    assert env.client.get("/api/memories/curation/me").status_code in (401, 403)    # control: on, the wall answers
 
 
 def test_a_curator_cannot_forget_the_child_other_memories(env):

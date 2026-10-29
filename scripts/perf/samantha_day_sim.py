@@ -78,12 +78,18 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import samantha_bar as sb  # noqa: E402
 import user_model_ab as uma  # noqa: E402  (whole-word / negation-aware scoring, app-log reader)
+import bench_baseline  # noqa: E402  (T-4: complete, clean, commit-bound baselines)
 
 HARNESS_VERSION = "0.1"
 CACHE = sb.CACHE
 DEFAULT_RESULTS = CACHE / "samantha_day_sim_last.json"
 DEFAULT_TREND = CACHE / "samantha_day_sim_trend.jsonl"
 DEFAULT_PENDING = CACHE / "samantha_day_sim_pending_teardown.json"
+# One baseline PER MODE: the default mode SKIPs the brief + card asks by construction and
+# the allowlisted mode SKIPs the selector asks, so their verdict maps are not comparable.
+DEFAULT_BASELINE = {"default": CACHE / "samantha_day_sim_baseline.json",
+                    "allowlisted": CACHE / "samantha_day_sim_baseline_allowlisted.json"}
+ASK_VERDICTS = ("PASS", "FAIL", "SKIP", "ERROR")
 
 # The fixed id the operator allowlists for --allowlisted (bar-family, harness-shaped,
 # so assert_demo_user, the backdate and db_teardown apply unchanged).
@@ -1264,6 +1270,13 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
 # main
 # ─────────────────────────────────────────────────────────────────────────────
 
+def point_log_at_scratch(stack) -> Path:
+    """Read raise / seam-hop evidence from the scratch instance's app log (``harness_env`` sets ``ZOE_LOG_DIR`` to
+    ``<stack root>/logs``). ``uma.APP_LOG`` defaults to the live service's log, which the scratch turns never touch."""
+    uma.APP_LOG = Path(stack.state["root"]) / "logs" / "zoe-data.app.log"
+    return uma.APP_LOG
+
+
 def _refuse(path: Path, reason: str, revision: dict | None, mode: str) -> int:
     print(f"REFUSED: {reason}", file=sys.stderr)
     sb.write_json(path, {"status": "refused", "reason": reason, "mode": mode, "revision": revision,
@@ -1289,6 +1302,14 @@ def _pending(live: DayLive, path: Path, log) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ctx: dict = {}
+    try:
+        return _main(argv, ctx)
+    finally:
+        sb.close_scratch(ctx)           # P-2: the run scratch stack goes, whatever happened
+
+
+def _main(argv: list[str] | None, ctx: dict) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print the plan; no network, no writes")
@@ -1309,6 +1330,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pending", type=Path, default=DEFAULT_PENDING)
     ap.add_argument("--mem-wait-s", type=int, default=900)
     ap.add_argument("--ready-wait-s", type=int, default=1200)
+    ap.add_argument("--record-baseline", action="store_true",
+                    help="save this run as the mode's baseline (a FULL run, status ok, on a CLEAN tree; "
+                         "never with --compare-baseline or --only)")
+    ap.add_argument("--compare-baseline", action="store_true",
+                    help="exit 1 when an ask that PASSED in the baseline no longer passes; refuses (exit 2) "
+                         "without a valid, complete baseline for this mode")
+    ap.add_argument("--baseline", type=Path, default=None,
+                    help="baseline file (default: one per mode under ~/.cache/zoe/)")
     args = ap.parse_args(argv)
     if args.samples < 1 or args.samples % 2 == 0:
         ap.error("--samples must be a positive odd number (majority vote)")
@@ -1319,6 +1348,11 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(str(exc))
     if only and mode == "allowlisted":
         ap.error("--only is a default-mode partial run (the hop needs no card)")
+    if args.record_baseline and args.compare_baseline:
+        ap.error("--record-baseline and --compare-baseline are mutually exclusive")
+    if args.record_baseline and only:
+        ap.error("--record-baseline is refused with --only: a partial run never records a baseline")
+    args.baseline = args.baseline or DEFAULT_BASELINE[mode]
     if args.dry_run:
         print(plan_text(mode, dt.date.today(), args.samples))
         return 0
@@ -1328,8 +1362,8 @@ def main(argv: list[str] | None = None) -> int:
 
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = sb.resolve_service_dir(args.service_dir)
-    revision = sb.service_revision(service_dir)
-    sb.load_source_fallback_markers(service_dir)
+    revision = sb.service_revision(sb.code_checkout_dir())  # the checkout actually served
+    sb.load_source_fallback_markers(sb.code_checkout_dir())
     lock_fd = sb._acquire_lock()  # noqa: F841 — held for the process lifetime
     try:
         cur = os.nice(0)
@@ -1337,14 +1371,26 @@ def main(argv: list[str] | None = None) -> int:
             os.nice(5 - cur)
     except OSError:
         pass
-    admin = os.environ.get("ZOE_BAR_ADMIN_SESSION", "").strip()
-    live = DayLive(sb.env_file_value(service_dir, "ZOE_INTERNAL_TOKEN"), admin,
-                   sb.env_file_value(service_dir, "POSTGRES_URL"), args.keep_replies)
-
-    if mode == "allowlisted" and not admin:
-        return _refuse(args.results, "--allowlisted needs ZOE_BAR_ADMIN_SESSION: forget-synthetic "
-                                     "refuses an allowlisted id by design, so only the admin forget "
-                                     "can prove the teardown", revision, mode)
+    admin = ""                          # P-2: a live admin session means nothing to the scratch instance
+    if mode == "allowlisted":
+        return _refuse(args.results, "--allowlisted needs an admin session to prove the teardown of an allowlisted id, "
+                                     "and the scratch instance (P-2) has none: run the default mode", revision, mode)
+    stack, refusal = sb.scratch_stack_for(service_dir, "samantha_day_sim", ctx, log)
+    if refusal:
+        return _refuse(args.results, refusal, revision, mode)
+    point_log_at_scratch(stack)         # the turns go to the scratch zoe-data, so the evidence is ITS app log, not the household's
+    live = DayLive(stack.token, admin, stack.dsn, args.keep_replies)
+    baseline = None
+    if args.compare_baseline:
+        baseline, problem = bench_baseline.load(args.baseline, ASK_VERDICTS)
+        problem = problem or baseline_mismatch(baseline, mode, args.samples, only)
+        if problem:
+            return _refuse(args.results, f"--compare-baseline: {problem}", revision, mode)
+    if args.record_baseline:
+        why = bench_baseline.record_problem(revision, status="ok", partial=False,
+                                            verdicts={a: "PASS" for a in ASK_IDS}, cells=ASK_IDS)
+        if why:
+            return _refuse(args.results, f"--record-baseline: {why}", revision, mode)
     refusal = uma._gates(args, live, log)
     if refusal:
         return _refuse(args.results, refusal, revision, mode)
@@ -1401,13 +1447,34 @@ def main(argv: list[str] | None = None) -> int:
     summary = overall(asks)
     status = "error" if (run_error or not td["proven"] or len(asks) != (len(only) if only else len(ASK_IDS))) \
         else ("partial" if only else "ok")
+    verdicts = {a["id"]: a["verdict"] for a in asks}
+    cmp = None
+    if args.compare_baseline:
+        cmp = bench_baseline.compare(verdicts, baseline, only or ASK_IDS)
+        cmp["uncovered"] = sorted(a for a, v in ((baseline or {}).get("cells") or {}).items() if v != "PASS")
+        if status in ("ok", "partial") and cmp["red"]:
+            status = "regression"
     payload = {"harness_version": HARNESS_VERSION, "status": status, "mode": mode, "run_error": run_error,
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
-               "revision": revision, "criteria_sha256": CRITERIA_SHA256,
-               "plan": day_plan(mode, dt.date.today()), "overall": summary, **week, "teardown": td}
+               "revision": revision, "criteria_sha256": CRITERIA_SHA256, "scratch": stack.public(),
+               "plan": day_plan(mode, dt.date.today()), "overall": summary, "compare": cmp,
+               "baseline_ref": {"path": str(args.baseline), "commit": (cmp or {}).get("baseline_commit")},
+               **week, "teardown": td}
     sb.write_json(args.results, payload)
+    if args.record_baseline:
+        why = bench_baseline.record_problem(revision, status=status, partial=bool(only), verdicts=verdicts,
+                                            cells=ASK_IDS)
+        if not why and summary["errors"]:
+            why = f"{summary['errors']} ask(s) ERRORED: an errored ask is the instrument, not a result"
+        if why:
+            log(f"baseline NOT recorded: {why}")
+        else:
+            bench_baseline.write(args.baseline, bench_baseline.make(
+                "samantha_day_sim", HARNESS_VERSION, verdicts, revision, mode=mode, samples=args.samples,
+                criteria_sha256=CRITERIA_SHA256))
+            log(f"baseline recorded: {args.baseline} (mode {mode}, commit {revision.get('commit', '?')[:10]})")
     args.trend.parent.mkdir(parents=True, exist_ok=True)
     with open(args.trend, "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"ts": payload["finished_at"], "status": status, "mode": mode,
@@ -1421,9 +1488,31 @@ def main(argv: list[str] | None = None) -> int:
         f"complete={summary['complete']} status={status} results={args.results}")
     if not summary["complete"] and mode == "default":
         log(f"INCOMPLETE: the brief + card asks need the allowlisted run — {OPERATOR_ALLOWLIST_STEPS}")
+    if cmp is not None:
+        log(f"vs baseline {str(cmp.get('baseline_commit') or '?')[:10]}: regressions={cmp['regressions']} "
+            f"improvements={cmp['improvements']} not-PASS-in-baseline (cannot regress)={cmp['uncovered']}")
     if status == "error" or summary["verdict"] == "ERROR":
         return 2
+    if cmp is not None:   # compare mode: only an ask that PASSED in the baseline can make it red
+        return 1 if status == "regression" else 0
     return 1 if summary["verdict"] == "FAIL" else 0
+
+
+def baseline_mismatch(baseline: dict[str, Any] | None, mode: str, samples: int, only: frozenset | None) -> str | None:
+    """Why this baseline cannot judge this run, or None: another mode, another sample count,
+    another criteria sha, or an ask the run scores that the baseline lacks."""
+    if baseline is None:
+        return "no baseline"
+    if baseline.get("mode") != mode:
+        return f"the baseline is for mode {baseline.get('mode')!r}, this run is {mode!r}"
+    if baseline.get("samples") != samples:
+        return f"--samples {samples} does not match the baseline's samples={baseline.get('samples')}"
+    if baseline.get("criteria_sha256") != CRITERIA_SHA256:
+        return "the pre-committed criteria changed since the baseline (criteria sha differs) - re-record it"
+    lacking = bench_baseline.missing_cells(baseline, only or ASK_IDS)
+    if lacking:
+        return f"the baseline lacks ask(s) {', '.join(lacking)} - re-record a full baseline"
+    return None
 
 
 if __name__ == "__main__":

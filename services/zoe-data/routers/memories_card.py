@@ -70,6 +70,13 @@ async def fresh_pin(card: prc.Card, caller: Optional[dict]) -> bool:
         return False
 
 
+async def _require_review(card: prc.Card) -> None:
+    """Forget / correct are ``memories.review`` actions, the same capability the phone routes and the spoken writes check
+    (``memories_voice.review_verdict``, the one authority). The card token proves the member, not their role. Fail-closed."""
+    if await mv.review_verdict(card.member_id) != "ok":
+        raise HTTPException(status_code=403, detail="Your role does not have access to this action.")
+
+
 class _Act(BaseModel):
     item: str
     action: str
@@ -110,6 +117,8 @@ async def act(body: _Act, request: Request, card: prc.Card = Depends(_require_ca
     import memory_space
 
     it = _item(card, body.item)
+    if body.action in ("forget", "wrong", "forget_person"):
+        await _require_review(card)
     out: dict
     if it["type"] == "memory" and body.action == "forget":
         if body.choice != "yes":

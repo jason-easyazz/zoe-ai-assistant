@@ -207,3 +207,58 @@ def test_steady_state_heartbeat_returns_after_the_interval(rig, capsys, monkeypa
     t[0] += 2
     mod.check(threshold=5, cooldown=1800, dry_run=False)
     assert "healthy" in capsys.readouterr().out
+
+
+def test_an_empty_env_var_does_not_wipe_the_files_token(monkeypatch, tmp_path):
+    """zoe-data loads `TELEGRAM_BOT_TOKEN=` (blank) from its .env into os.environ; an in-process alert must still use
+    the ops file's token, not the blank override (the 2026-10-28 cold-first-turn alert failed silently this way)."""
+    envf = tmp_path / "tg.env"
+    envf.write_text("TELEGRAM_BOT_TOKEN=123:abc\nZOE_ALERT_TELEGRAM_CHAT_IDS=42\n")
+    monkeypatch.setattr(mod, "TELEGRAM_ENV", str(envf))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("ZOE_ALERT_TELEGRAM_CHAT_IDS", "  ")
+    sent: list = []
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"ok":true}'
+
+    def fake_urlopen(req, timeout=None):
+        sent.append(req.full_url)
+        return _Resp()
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    assert mod._telegram("x") is True
+    assert sent and "/bot123:abc/" in sent[0], "the file's token must be used when the env var is blank"
+
+
+def test_a_nonempty_env_var_still_overrides(monkeypatch, tmp_path):
+    envf = tmp_path / "tg.env"
+    envf.write_text("TELEGRAM_BOT_TOKEN=123:abc\nZOE_ALERT_TELEGRAM_CHAT_IDS=42\n")
+    monkeypatch.setattr(mod, "TELEGRAM_ENV", str(envf))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "999:zzz")
+    sent: list = []
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"ok":true}'
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda req, timeout=None: sent.append(req.full_url) or _Resp())
+    assert mod._telegram("x") is True
+    assert "/bot999:zzz/" in sent[0]

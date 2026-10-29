@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 ENV = "ZOE_BRAIN_SLOT_GUARD"            # on (default) | off
 ENV_QUIET_S = "ZOE_BRAIN_SLOT_QUIET_S"  # a conversation is "hot" this long after its last brain turn started/ended
 ENV_MAX_DEFER_S = "ZOE_BRAIN_SLOT_MAX_DEFER_S"
-DEFAULT_QUIET_S = 45.0
+DEFAULT_QUIET_S = 180.0   # owner-approved 2026-10-29: a pause under 3 min keeps the conversation resident (was 45 s)
 DEFAULT_MAX_DEFER_S = 240.0
 _POLL_S = 0.5
 
@@ -84,8 +84,9 @@ def reset() -> None:
 
 def turn_started() -> None:
     """A brain turn is about to fill the slot. Always paired with ``turn_finished`` (try/finally)."""
-    global _active, _last_activity
+    global _active, _last_activity, _starts
     _active += 1
+    _starts += 1
     _last_activity = _clock()
 
 
@@ -93,6 +94,20 @@ def turn_finished() -> None:
     global _active, _last_activity
     _active = max(0, _active - 1)
     _last_activity = _clock()
+
+
+_starts = 0                 # monotonic count of turn_started() calls (never reset): "did a turn begin since X"
+
+
+def starts() -> int:
+    """How many brain turns have started in this process (monotonic). Compare two readings to learn whether any turn
+    began in between, even one that has already finished."""
+    return _starts
+
+
+def active_turns() -> int:
+    """Brain turns currently in flight (a caller that holds one itself counts as one)."""
+    return _active
 
 
 def is_hot(now: Optional[float] = None) -> bool:

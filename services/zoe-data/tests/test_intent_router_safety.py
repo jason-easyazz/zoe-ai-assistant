@@ -20,17 +20,19 @@ def test_detect_intent_miss_logging_mkdir_failure_does_not_abort(monkeypatch):
     assert mkdir_calls
 
 
-def test_detect_intent_miss_logging_home_failure_does_not_abort(monkeypatch):
-    home_calls = []
+def test_detect_intent_miss_logging_append_failure_does_not_abort(monkeypatch):
+    import local_text_logs
 
-    def boom():
-        home_calls.append(True)
-        raise RuntimeError("home directory cannot be resolved")
+    append_calls = []
 
-    monkeypatch.setattr(pathlib.Path, "home", boom)
+    def boom(*args, **kwargs):
+        append_calls.append(True)
+        raise RuntimeError("log directory cannot be resolved")
+
+    monkeypatch.setattr(local_text_logs, "append_line", boom)
 
     assert detect_intent("another unmatched safety regression phrase", log_miss=True) is None
-    assert home_calls
+    assert append_calls
 
 
 @pytest.mark.asyncio
@@ -58,12 +60,7 @@ def test_identity_param_defaults_fail_open_to_guest():
     import inspect
 
     from routers.chat import chat_inject_background, run_openclaw_agent
-    from proactive.triggers.openclaw_trigger import OpenClawTrigger
 
     for fn in (execute_intent, detect_and_extract_intent, run_openclaw_agent, chat_inject_background):
         default = inspect.signature(fn).parameters["user_id"].default
         assert default == "guest", f"{fn.__name__} user_id default must be 'guest', got {default!r}"
-
-    assert OpenClawTrigger._user_id == "guest", (
-        f"OpenClawTrigger._user_id must default to 'guest', got {OpenClawTrigger._user_id!r}"
-    )

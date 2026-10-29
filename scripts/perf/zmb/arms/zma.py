@@ -49,7 +49,7 @@ INTEGRATION = {
     "one_night": "Z0's digest + conflict pass and MemPalace's closet pass in one idle window on one brain",
 }
 BRAIN_TOOLS = ("mempalace_status", "mempalace_search")
-SOURCES = ("labs/flue-zoe-brain-2x/src/soul.ts", "labs/flue-zoe-brain-2x/src/agents/zoe.ts", "labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts")
+SOURCES = ("labs/flue-zoe-brain-2x/src/soul.ts", "labs/flue-zoe-brain-2x/src/doctrines.ts", "labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts")
 _ARRAYS = ("IN_SESSION_CONTEXT_DOCTRINE", "RECALL_PRECEDENCE_DOCTRINE")
 
 
@@ -345,7 +345,7 @@ class ZMAArm(Arm):
         z0_static = est_tokens(z0_text)
         return {"z0_memory_prompt_tokens": z0_static, "mpa_static_tokens": mp["total"], "mpa_parts": {k: v for k, v in mp.items() if k not in ("total", "estimator")},
                 "zma_added_tokens": mp["total"], "per_turn": per_turn, "slot_tokens": slot, "output_reserve": out_reserve,
-                "fits_with_z0_prompt": z0_static + mp["total"] + out_reserve < slot, "estimator": mp["estimator"], "z0_basis": "committed soul.ts / agents/zoe.ts / zoe-tools.ts literals"}
+                "fits_with_z0_prompt": z0_static + mp["total"] + out_reserve < slot, "estimator": mp["estimator"], "z0_basis": "committed soul.ts / doctrines.ts / zoe-tools.ts literals"}
 
 
 __all__ = ["ZMAArm", "INTEGRATION", "BRAIN_TOOLS", "ShimEmbeddingFunction", "z0_memory_prompt_text", "RESERVED_ROOMS", "MpaControls"]

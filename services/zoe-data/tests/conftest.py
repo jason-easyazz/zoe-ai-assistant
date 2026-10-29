@@ -55,6 +55,15 @@ os.environ["ZOE_BRAIN_SLOT_GUARD"] = "off"
 # 2026-10-13: three CI-runner pytest runs (118 lines each) and one agent worktree run put 355 synthetic-user ``memory_forget_cascade:
 # no database`` / ``NOT erased`` warnings into it, indistinguishable from a real half-done forget. Read at call time, so this pin holds.
 os.environ["ZOE_LOG_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "logs")
+# The local utterance-text logs (local_text_logs): the forget cascade and MemoryService.delete_user REWRITE them, so unpinned a unit test of
+# either would strip the household's real router shadow log / intent-miss log. Read at call time, so this pin holds.
+os.environ["ZOE_ROUTER_HEAD_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "router_head_shadow.jsonl")
+os.environ["ZOE_INTENT_MISS_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "intent-misses.jsonl")
+# ... and ``local_text_logs.sweep()`` DELETES the owner scripts' one-off backups (router-shadow-*, migrate-hermes-env-*, dead-units-*) past 14 days.
+os.environ["ZOE_ADHOC_BACKUP_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "adhoc-backups")
+# The router retrain ledger (router_retrain_ledger, Phase 3 of the struggle loop) lives under ~/.zoe/router_retrain by default, and every
+# forget / user delete reaches it (struggle_proposals.forget_events / forget_user): a test's forget must never edit the live ledger.
+os.environ["ZOE_ROUTER_RETRAIN_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "router_retrain")
 
 
 import pytest  # noqa: E402

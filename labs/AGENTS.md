@@ -3,9 +3,16 @@
 ## Purpose
 
 Throwaway-grade experiments and de-risking spikes that must run **isolated from
-the Zoe runtime**. Nothing here is imported, built, or executed by any production
-service, Docker image, or CI job. Lab work proves (or kills) an idea before any
-prod migration — per the Samantha guardrail: **lab-prove before prod**.
+the Zoe runtime**. Most of `labs/` is never imported, built, or executed by any
+production service, Docker image, or CI job — lab work proves (or kills) an idea
+before any prod migration, per the Samantha guardrail: **lab-prove before prod**.
+
+**Two lab directories are NOT lab-only: they are live production services.**
+`flue-zoe-brain-2x/` is the voice brain sidecar (:3579, `flue-zoe-brain-2x.service`,
+Pi on the Gemma 4 E4B+MTP rock) and `flue-zoe-telegram-2x/` is the Telegram bot
+(:3582, `flue-zoe-telegram.service`). Both are auto-deployed on any diff (see
+Forbidden). Treat edits there as production edits; they are lab-hosted until the
+architecture deep-dive task B1 promotes them to `services/`.
 
 ## Ownership
 
@@ -251,7 +258,21 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   Telegram bot (`src/untrusted.ts`) and zoe-data (`untrusted_content.py`) and pinned equal
   by `tests/unit/test_untrusted_fence_markers.py`: change all three or none
   (`test/quoted_untrusted.test.ts`).
-  Regression net (hand-run, not CI-wired): `npm test` — 35 `test/*.test.ts` files
+  Carries the **harness overlay seam** (flag-dark `ZOE_BRAIN_HARNESS_DIR`, self-evolution
+  Phase 0 S-M, `src/harness.ts`, README "Harness overlay"): soul, the seven overlay doctrine
+  slots (`src/doctrines.ts`), the English manner block, tool DESCRIPTIONS and the recall
+  tool's shape may be loaded from an overlay directory; unset = `ZOE_INSTRUCTIONS` byte for
+  byte, absent file = compiled-in text, anything outside `OVERLAY_SCHEMA` refuses the whole
+  overlay (fail closed, loud log, `/health`). Versions + ledger + hot reload (SIGHUP, ~6 ms)
+  via `scripts/harness-overlay.ts`. **Contract:** the self-evolution loop edits only overlay
+  versions and switches them only through that script; restraint, authority, forget, guest
+  policy, identity, the untrusted-content fence and tool permissions stay in code —
+  `OVERLAY_SCHEMA` changes only by PR, with `test/harness_boundary.test.ts` edited beside it;
+  an overlay soul must keep the persona opening and the recall floor verbatim; a turn keeps
+  the harness it started under (bound to its AbortSignal).
+  `src/soul.ts` is the soul's source of truth: `services/zoe-core/SOUL.md` plus the declared
+  flue-only paragraphs, pinned by `test/soul_source.test.ts`.
+  Regression net (hand-run, not CI-wired): `npm test` — 39 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a
@@ -338,7 +359,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   turns real family traffic into labelled training examples of the router's own
   measured mistakes. Joins the hash-keyed shadow log to raw text (forward: the
   `ZOE_ROUTER_SHADOW_TEXT=1` opt-in adds `utt_text` to the shadow-log FILE, default
-  OFF, never leaves the box; bootstrap: re-hash `chat_messages.content` with the
+  OFF, only while a round is open (`ZOE_ROUTER_SHADOW_TEXT_UNTIL`, <= 30 days), never leaves the box; bootstrap: re-hash `chat_messages.content` with the
   router's own `sha256(text)[:12]` and join), mines three reasons (disagreement /
   abstention / chat-negative), and labels each with the local Gemma brain
   (`:11434`, `json_schema`-constrained, serial + `/slots`-gated — a labeling
@@ -362,6 +383,10 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
   never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
+  `prod_path_eval.py` (the frozen corpus through the real production router) is
+  the eval both router loops call; `--corpus` swaps in another cases file of
+  the same shape (the struggle-fed retrain scores its held-out failures with it;
+  its results then carry ids + verdicts only, the caller strips `args`).
 - `b3-1-supersession/` — B3.1 lab: **bi-temporal supersession + keep-the-richer-fact
   reconciliation**, pure Python, no model, no I/O, flag-dark
   (`ZOE_BITEMPORAL_SUPERSEDE`, default off, read by nothing in prod). Graphiti's
@@ -398,6 +423,23 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   lab measures) lives in `services/omi-sync/` + `zoe-data/omi_recordings.py`,
   not here; this lab stays the hand-run hardware measurement tool (live-stream
   packet loss, WER) and the source of the codec facts.
+- `omi-firmware/` — **Omi phase-2 firmware** (owner decision OD1 2026-10-19; closes gap-audit P0-1): a patch series +
+  overlay on the PINNED upstream `Omi_CV1_v3.0.21` (fetched sparse by `fetch.sh`, never vendored) that makes every Omi
+  characteristic and the SMP/OTA service require an encrypted link, refuses pairing outside a physical button window
+  (LE Secure Connections, one bond, stock-era bonds wiped; no automatic window), CRYPTO-WIPES on every new bond (key
+  destroyed, ring emptied, other bonds deleted, ordered behind persisted intents; unreadable records and a failed ring
+  clear fail closed), and encrypts the SD ring at rest
+  (AES-128-CTR, on-device key, persisted monotonic per-batch salt + re-key), and drives the status LED (dim blue
+  normal; documented states and priority). `build.sh` compiles it in the pinned Zephyr CI image (NCS v2.9.0) with a capped container
+  (refuses below 2000 MB `MemAvailable` or while `night_busy` says pause; holds the test lane); signing keys stay outside the
+  repo. Never flashes and never touches a pendant: flashing, pairing and recovery are owner steps in `RUNBOOK.md`. Pi side
+  lives in `services/omi-sync` (`OMI_SYNC_REQUIRE_BOND`) and `services/panel-bluetooth` (`omi_bond`). Regression net
+  (hand-run, never CI): `nice -n 10 python3 -m pytest labs/omi-firmware/host-test -q -p no:cacheprovider` (32 tests: the
+  ring-crypt IV layout and CTR against an independent reference, the re-key, the salt allocator, the gesture, and the REAL
+  `zoe_ble_sec.c` against stubbed Zephyr - pairing gate, wipe ordering with a power cut before each MODELLED persistent
+  step, unreadable records, a failed ring clear, reconnect-never-wipes, the LED state/priority/pattern map; it re-states `sd_card.c` / `zoe_ring_crypt_psa.c`
+  through the same pure decisions rather than running them - README section 2.1 says what it does not prove). README is
+  the record.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%
@@ -414,7 +456,28 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   negative controls: wrong password, append-only delete, cross-household, identity on the
   box, wrong identity, the 35-day retention bound). Hand-run via `run.sh` (01:35-04:55
   refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`, asserts its own
-  teardown). 19/19 on 2026-10-18.
+  teardown). 19/19 on 2026-10-18. Its tier-policy cell (B2) also covers the deep dive 2
+  S0-8 host sources.
+- `restore-drill/` — **S0-8 weekly restore drill + host sources** (`docs/knowledge/offbox-backup.md`
+  section 7): a synthetic source database in its own capped `--network none` container
+  (the pinned live image), a synthetic chromadb 1.5.9 palace, a synthetic box, and the
+  REAL nightly scripts, `zoe_host_snapshot.py`, `zoe_restore_drill.py` and the two backup
+  root helpers (repo copies, run unprivileged). Cells S1-S5, D1, negative controls N1-N10
+  (corrupted dump, missing table, wrong pgvector, palace without HNSW, tampered host file,
+  a planted same-name container, a truncated encrypted archive,
+  planted symlinks, memory floor, helper argv), T1 teardown + the live database's database
+  list unchanged. Hand-run via `run.sh` (`night_busy.sh test`, 01:35-04:55 refused,
+  `MemAvailable` >= 2000 MB, the test-lane lock). 18/18 on 2026-10-19.
+- `comms-matrix/` — **household comms gates 1 and 2** (deep dive 2026-10-18 section 8): a hermetic
+  Docker lab (internal network, nothing published, every container memory-capped, homeservers
+  on 2 CPUs) running Tuwunel 1.9.4 or Synapse 1.163.0 + Postgres one at a time, an nginx TLS
+  front as `hs.lab`, LiveKit + lk-jwt-service (the MatrixRTC focus) and `lk load-test`. Cells:
+  boot/idle RAM, synthetic accounts, federation off, a room + DMs + 300 messages, MSC4140
+  delayed events, MSC4143 focus, OpenID -> LiveKit token, a 20 s two-party audio call. Hand-run
+  via `run.sh` (refuses while `night_busy.sh test` says pause, `MemAvailable` >= 2000 MB before
+  the lock, `flock /tmp/zoe-test-lane.lock`, tears down with `compose down -v`). README holds the
+  2026-10-19 results and the Matrix vs Plan B recommendation (a record, not a contract); raw
+  reports in `results/`. Never deployed to the411.
 - `relay/` — **F0 / R0 of panel anywhere** (`docs/architecture/panel-anywhere.md`
   section 10): a hermetic Docker lab (internal network, nothing published) with an nginx
   stream front + frp v0.71.0 `frps` behind a fail-closed preflight, a session-master
@@ -437,3 +500,13 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   (01:35-04:55 refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`,
   asserts its own teardown). Host cgroup namespace (systemd will not boot otherwise),
   not `--privileged`. 47/47 on 2026-10-18; README is the record.
+- `credential-vault/` — **phases V0 + V1 of the credential vault** (`docs/architecture/credential-vault.md`
+  section 16): an internal Docker network (no route out, cell H1) with Vaultwarden 1.37.4 (digest-pinned, non-root,
+  256 MB), the test sites + witness (96 MB) and a client (768 MB) holding the official `bw` CLI 2026.9.1 (sha256-pinned
+  OSS build in `.bin/`, gitignored), a scripted synthetic family with canary values, and the REAL broker
+  `services/zoe-vaultd/` under its own uids (core, browser, phone; `zoe-svc` stands in for zoe-data). Negative
+  controls are monkeypatches in `lab/labcore.py`, never switches in the broker. Hand-run via `run.sh` in PIECES
+  (v0, A-F): each piece brings the lab up, seeds, runs one cell group and tears down inside ONE hold of
+  `flock /tmp/zoe-test-lane.lock` (watchdog cap 15 min), releasing the lane between pieces; refuses while
+  `night_busy.sh test|deploy` says pause and 02:05-02:45, waits for `MemAvailable` >= 2000 MB, asserts its teardown.
+  Unit net for the broker: `tests/unit/test_zoe_vaultd.py` (ci_safe). README is the record.

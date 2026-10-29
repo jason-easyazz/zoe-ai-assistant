@@ -32,6 +32,7 @@ AUTH_DEPENDENCIES = frozenset({
     "get_a2a_caller", "_require_voice_auth", "_require_owner", "_require_human_admin", "_require_device", "_member",
     "_require_member", "_require_member_session", "_require_caller", "_require_livekit_media_auth", "_require_livekit_auth",
     "_validate_device_token", "_require_multica_webhook_secret", "require_member_panel_or_jukebox",
+    "require_phone_device", "require_pairing_code",
     "_require_card",  # routers/panel_review_cards: the X-Panel-Card token, honoured only for its member's open voice session or own session
 })
 
@@ -59,11 +60,13 @@ GUEST_ADMITTING = frozenset({"get_current_user"})
 # body: the role matrix, an owner check, the fridge rule, or "guests may do this"). Shrink it; never grow it without review.
 GUEST_ADMITTING_BASELINE = {
     "routers/auth.py": {"logout"},
-    "routers/chat.py": {"cancel_latest_run", "create_background_task", "create_session", "delete_session", "resume_run", "save_message", "submit_feedback", "whatsapp_connect"},
+    "routers/chat.py": {"cancel_latest_run", "create_session", "delete_session", "resume_run", "save_message", "submit_feedback", "whatsapp_connect"},
     "routers/dashboard.py": {"add_widgets", "remove_widget", "save_layout"},
+    "routers/ha_ui.py": {"session"},  # panel_principal.member_or_panel in the body: a member or the strictly registered panel, else 403
     "routers/journal.py": {"create_entry", "delete_entry", "update_entry"},
     "routers/lists.py": {"add_item", "create_list", "delete_item", "delete_list", "update_item", "update_list"},
     "routers/memories.py": {"create_memory_proposal", "forget_my_memory", "link_preview", "review_memory", "set_memory_opt_out"},
+    "routers/music_ma_ui.py": {"session"},  # ma_ui_gate.principal_ok in the body: a member or the strictly registered panel, else 403
     "routers/notes.py": {"create_note", "delete_note", "patch_note", "update_note"},
     "routers/notifications.py": {"create_notification", "delete_notification", "mark_read", "track_interaction"},
     "routers/panel_auth.py": {"create_pin_challenge"},

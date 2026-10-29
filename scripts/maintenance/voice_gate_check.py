@@ -489,6 +489,34 @@ VOICE_PATH_PATTERNS = (
     "services/zoe-data/voice_vad.py",
     "services/zoe-data/voice_turn.py",
     "*silero*",
+    # THE REPLAY'S OWN DECISION PATH THAT WAS NOT HERE (deep dive 2, T-3, 2026-10-19).
+    # By static import closure, 202 of the 214 zoe-data modules the replay reaches were
+    # out of scope; these five are the ones a voice turn runs on EVERY utterance:
+    #   - intent_router.py: Tier-0 keyword intents (detect_intent), imported by the
+    #     replay itself and by fast_tiers; a pattern edit re-routes turns silently.
+    #   - stt_snap.py: snaps the transcript to known names/items before routing.
+    #   - memory_service.py: the recall the brain turn is built on (load_for_prompt).
+    #   - auth.py + panel_principal.py: WHO a voice turn is (server-decided identity,
+    #     #2097) and therefore whose lists / memory / calendar it touches.
+    # Evidence, stated: the replay exercises intent_router / stt_snap / memory_service
+    # directly; it replays as a fixed member id, so for auth.py / panel_principal.py a
+    # green artifact certifies the turn path still runs, not identity decisions (those
+    # are verified by test_voice_path_identity.py in `validate`). The same
+    # forcing-function bargain as the serving units above.
+    "services/zoe-data/intent_router.py",
+    "services/zoe-data/stt_snap.py",
+    "services/zoe-data/memory_service.py",
+    "services/zoe-data/auth.py",
+    "services/zoe-data/panel_principal.py",
+    # THE INSTRUMENT ITSELF: what `status: pass` MEANS is decided by the probe's
+    # comparison, the per-clip checks and measure_voice's aggregation (the argument
+    # made for replay_samples.py above). Gating them forces a fresh measurement when
+    # the judge changes; their correctness is pinned by the ci_safe suites
+    # (test_voice_probe_*.py, test_voice_regression_probe_scoring.py) and by the
+    # probe's --self-test, which must go red on injected faults.
+    "scripts/maintenance/voice_regression_probe.py",
+    "scripts/maintenance/voice_clip_checks.py",
+    "scripts/perf/measure_voice.py",
 )
 # Paths that are NEVER voice scope, whatever the globs above say. `*kokoro*`,
 # `*moonshine*` and `*silero*` are substring globs and fnmatch's `*` crosses `/`, so
@@ -737,6 +765,56 @@ def vad_block_ok(artifact: dict[str, Any]) -> tuple[bool, str]:
     return True, f"VAD {detected}/{clips}"
 
 
+def clip_block_ok(artifact: dict[str, Any]) -> tuple[bool, str]:
+    """The per-clip outcome checks (T-3). Returns (ok, note).
+
+    BACKWARD COMPATIBILITY, as with the VAD stage: an artifact without
+    `clip_checks: true` predates the checks and is NO OPINION. An artifact that CLAIMS
+    them must show its work, and the verdict is RE-DERIVED from the per-clip rows, never
+    taken from the producer's status label or its summary counts alone:
+      - `clip_summary` missing / malformed, or `clip_results` not a list of rows with
+        a unique `clip_id` and a result in pass | fail | unchecked -> block
+      - the summary disagrees with the rows (checked / passed / failed / unchecked
+        counted from the rows) -> block: a truncated or padded block is not evidence
+      - checked == 0 -> block: nothing was judged (a re-pin / first baseline run, or
+        a baseline with no per-clip profile, is not evidence)
+      - any failed clip -> block
+    """
+    if artifact.get("clip_checks") is not True:
+        return True, ""
+    cs = artifact.get("clip_summary")
+    keys = ("checked", "passed", "failed", "unchecked")
+    ints = isinstance(cs, dict) and all(isinstance(cs.get(k), int) and not isinstance(cs.get(k), bool)
+                                        and cs.get(k) >= 0 for k in keys)
+    if not ints:
+        return False, ("artifact claims per-clip checks (clip_checks: true) but carries no well-formed "
+                       "`clip_summary` - the checks' result is missing, which is NOT a pass")
+    rows = artifact.get("clip_results")
+    good_rows = (isinstance(rows, list) and all(isinstance(r, dict) and isinstance(r.get("clip_id"), str)
+                                                 and r.get("result") in ("pass", "fail", "unchecked")
+                                                 for r in rows))
+    if not good_rows or len({r["clip_id"] for r in rows}) != len(rows):
+        return False, ("per-clip checks: `clip_results` is missing, malformed or has duplicate clip ids - "
+                       "the per-clip evidence is not shown, which is NOT a pass")
+    counted = {k: sum(1 for r in rows if r["result"] == v)
+               for k, v in (("passed", "pass"), ("failed", "fail"), ("unchecked", "unchecked"))}
+    counted["checked"] = counted["passed"] + counted["failed"]
+    if any(counted[k] != cs[k] for k in keys):
+        return False, (f"per-clip checks: the summary {dict((k, cs[k]) for k in keys)} disagrees with the "
+                       f"{len(rows)} per-clip rows {counted} - not evidence")
+    pinned = (artifact.get("baseline_ref") or {}).get("clip_set_size")
+    if isinstance(pinned, int) and not isinstance(pinned, bool) and len(rows) < pinned:
+        return False, (f"per-clip checks: {len(rows)} per-clip rows for a {pinned}-clip pinned set - every "
+                       "pinned clip must be accounted for")
+    if counted["checked"] == 0:
+        return False, ("per-clip checks judged 0 clips (a re-pin / first baseline run, or a baseline "
+                       "with no clip profile) - not evidence; run the probe against the current baseline")
+    if counted["failed"]:
+        return False, (f"per-clip checks: {counted['failed']} of {counted['checked']} pinned clip(s) did not "
+                       "hold their expected outcome")
+    return True, f"{counted['passed']}/{counted['checked']} clips held their expected outcome"
+
+
 def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: float,
              baseline: dict[str, Any] | None = None,
              expect_revision: str | None = None,
@@ -752,6 +830,9 @@ def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: fl
     if artifact is None:
         return False, ("no voice replay-gate result artifact — the gate never ran "
                        "(a missing artifact is NOT a pass)")
+    if artifact.get("self_test") is True:
+        return False, ("the artifact is a probe SELF-TEST (injected faults, red by design) — never "
+                       "evidence; the self-test writes its own file, so this path is misconfigured")
     status = artifact.get("status")
     if status != "pass":
         return False, (f"voice replay-gate status={status!r} "
@@ -778,12 +859,16 @@ def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: fl
     ok, vad_note = vad_block_ok(artifact)
     if not ok:
         return False, vad_note
+    ok, clip_note = clip_block_ok(artifact)
+    if not ok:
+        return False, clip_note
     bound = ""
     if expect_revision:
         bound = f", bound to {expect_revision[:8]}"
     elif tree_note:
         bound = f", {tree_note}"
     vad_part = f", {vad_note}" if vad_note else ""
+    vad_part += f", {clip_note}" if clip_note else ""
     # Additive + informational: a pass that tolerated a flaky brain-wording clip
     # says so (the probe's flaky_clips), so the tolerance is never invisible.
     flaky = [c for c in (artifact.get("flaky_clips") or []) if isinstance(c, dict) and not c.get("regressed")]

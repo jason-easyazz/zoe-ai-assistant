@@ -14,6 +14,8 @@ break-the-fix control in this file (the ``test_control_*`` tests patch the wall 
 """
 from __future__ import annotations
 
+import types
+
 import asyncio
 import contextlib
 import sqlite3
@@ -359,6 +361,36 @@ def test_two_different_rows_ask_which(env):
     assert len([t for t in approved(env) if "dark roast" in t]) == 2
 
 
+def test_forget_names_the_number_not_just_the_words(env):
+    # Codex P1 on #2144: the tokenizer dropped digits, so "12 Main Street" and "14 Main Street" were the same token set, the
+    # ambiguity check never fired and the first-sorted row was forgotten whichever the member named.
+    put(env, "My pickup is at 12 Main Street.")
+    put(env, "My pickup is at 14 Main Street.", when="2026-10-06T05:00:00Z")
+    assert say("forget that my pickup is at 12 Main Street", ME).startswith("Done")
+    left = [t for t in approved(env) if "Main Street" in t]
+    assert left == ["My pickup is at 14 Main Street."], left
+    put(env, "My pickup is at 16 Main Street.", when="2026-10-06T07:00:00Z")
+    assert say("forget that my pickup is at Main Street", ME) == mv.WHICH_REPLY     # no number named: ask, never guess
+    assert len([t for t in approved(env) if "Main Street" in t]) == 2
+
+
+def test_equal_token_sets_from_different_rows_ask_which(env):
+    # Codex P1 on #2144: two different rows that normalise to the same token set ({sam, love}) left the leftover-words check with
+    # nothing to compare, so the first-sorted (newest) row was forgotten for good whichever the member meant. Neither says
+    # exactly what was asked -> ask, forget nothing.
+    put(env, "Sam, I love.", when="2026-10-06T02:00:00Z")
+    put(env, "Sam loves me.", when="2026-10-06T08:00:00Z")
+    assert say("forget that I love Sam", ME) in (mv.WHICH_REPLY, mv.DIFFERENT_REPLY)   # either way: asked, nothing erased
+    assert sorted(t for t in approved(env) if "Sam" in t) == ["Sam loves me.", "Sam, I love."], "nothing forgotten"
+
+
+def test_an_exact_text_match_still_forgets_uniquely_among_equal_token_sets(env):
+    put(env, "I love Sam.", when="2026-10-06T02:00:00Z")
+    put(env, "Sam loves me.", when="2026-10-06T08:00:00Z")      # newer, so it sorts first on token set + recency alone
+    assert say("forget that I love Sam", ME).startswith("Done")
+    assert [t for t in approved(env) if "Sam" in t] == ["Sam loves me."], "only the row that says exactly that"
+
+
 # ── the card: taps ────────────────────────────────────────────────────────────────────────────
 
 def _member_card(env):
@@ -421,6 +453,27 @@ def test_a_tap_is_only_for_the_next_turn_of_the_same_member(seeded):
     assert not any("dark roast" in t for t in approved(seeded))
 
 
+def test_a_tapped_forget_that_hits_a_store_hiccup_keeps_the_tap_armed(seeded, monkeypatch):
+    # Codex P2 on #2144: the tap was consumed before the forget ran, so after STORE_DOWN_REPLY the "forget it" the reply invites
+    # had no target. Forgetting is permanent, so the retry must finish the same row.
+    rid = row_id(seeded, "dark roast")
+    real, down = memory_space.forget_row, {"on": True}
+
+    async def flaky(*a, **kw):
+        if down["on"]:
+            raise RuntimeError("store hiccup")
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(memory_space, "forget_row", flaky)
+    mv.tap(PANEL, ME, rid, ME_LIKE)
+    assert say("forget it", ME) == pa.STORE_DOWN_REPLY
+    assert any("dark roast" in t for t in approved(seeded)), "nothing was forgotten yet"
+    down["on"] = False
+    assert say("forget it", ME).startswith("Done"), "the tap stayed armed: the repeat finishes the same row"
+    assert not any("dark roast" in t for t in approved(seeded))
+    assert say("forget it", ME) is None, "the tap is spent once the forget succeeded"
+
+
 def test_a_tap_expires(seeded):
     mv.tap(PANEL, ME, row_id(seeded, "dark roast"), ME_LIKE, now=time.monotonic() - mv.TAP_TTL_S - 1)
     assert say("forget it", ME) is None
@@ -472,7 +525,7 @@ def test_forgetting_a_person_needs_a_fresh_pin_and_uses_the_existing_intent(seed
     assert r.status_code == 200 and calls == [(ME, "Marisol")]
 
 
-def test_forget_person_is_the_memory_forget_entity_intent(monkeypatch):
+def test_forget_person_is_the_memory_forget_entity_intent(env, monkeypatch):
     import intent_router
 
     seen = []
@@ -528,7 +581,7 @@ def test_a_correction_is_not_acknowledged_while_a_twin_still_holds_the_old_value
     put(env, "My bike lives in the shed behind the garage.")
     ra, rb = row_id(env, "keep my bike"), row_id(env, "bike lives")
 
-    async def twins(user_id, ref, *, svc=None):
+    async def twins(user_id, ref, *, svc=None, **_kw):
         b = await env.svc.get(rb)
         return [b] if ref.id == ra and b is not None and (b.metadata or {}).get("status", "approved") == "approved" else []
 
@@ -550,6 +603,64 @@ def test_a_correction_is_not_acknowledged_while_a_twin_still_holds_the_old_value
     assert any("in the garage" in t for t in approved(env))
     # a superseded row asked for DIFFERENT words is not a retry of this correction: one answer, gone
     assert run(memory_space.correct_row(ME, ra, "I keep my bike at work.")) == "gone"
+
+
+def test_a_tapped_correction_is_not_acknowledged_while_a_twin_holds_the_old_value(env, monkeypatch):
+    # Codex P1 on #2144: the tapped path used provenance_answers.fix, whose twin loop swallowed a refused retire and said "Fixed"
+    # with the tap consumed - repeating the correction could never retire the stale approved twin. Now: not acknowledged, the tap
+    # stays armed, and saying it again finishes the twin.
+    put(env, "Swimming is on Friday at 9")
+    put(env, "Swimming lessons are on Friday at 9 am")
+    ra, rb = row_id(env, "Swimming is"), row_id(env, "Swimming lessons")
+
+    async def twins(user_id, ref, *, svc=None, **_kw):
+        b = await env.svc.get(rb)
+        return [b] if ref.id == ra and b is not None and (b.metadata or {}).get("status", "approved") == "approved" else []
+
+    monkeypatch.setattr(pa, "twins_of", twins)
+    real_review, refuse = env.svc.review, {"on": True}
+
+    async def review(mem_id, *a, **kw):
+        if refuse["on"] and mem_id == rb and kw.get("decision") == "reject":
+            return None                                  # the store refused the twin's retire
+        return await real_review(mem_id, *a, **kw)
+
+    monkeypatch.setattr(env.svc, "review", review)
+    mv.tap(PANEL, ME, ra, "Swimming is on Friday at 9")
+    assert say("it's on Saturday", ME) == pa.STORE_DOWN_REPLY, "a stale approved twin must not be acknowledged as fixed"
+    assert any("lessons are on Friday" in t for t in approved(env)), "the twin still recalls the old value"
+    refuse["on"] = False
+    reply = say("it's on Saturday", ME)                   # the tap stayed armed: the same words finish the job
+    assert reply.startswith("Fixed"), reply
+    assert not any("Friday" in t for t in approved(env)), approved(env)
+    assert "Swimming is on Saturday at 9" in approved(env)
+
+
+def test_a_failed_twin_lookup_stops_the_write_before_it_happens(env, monkeypatch):
+    # Codex P1 on #2144: twins_of swallowed a transient list_by_status failure and returned [], so a correction (or forget) went
+    # ahead, retired nothing and reported success while an approved twin still recalled the old value. Now the write is not made.
+    put(env, "Swimming is on Friday at 9")
+    put(env, "Swimming lessons are on Friday at 9 am")
+    ra = row_id(env, "Swimming is")
+    real_list, down = env.svc.list_by_status, {"on": True}
+
+    async def list_by_status(*a, **kw):
+        if down["on"]:
+            raise RuntimeError("store hiccup")
+        return await real_list(*a, **kw)
+
+    monkeypatch.setattr(env.svc, "list_by_status", list_by_status)
+    with pytest.raises(RuntimeError):
+        run(memory_space.correct_row(ME, ra, "Swimming is on Saturday at 9"))
+    with pytest.raises(RuntimeError):
+        run(memory_space.forget_row(ME, ra))
+    assert env.col.rows[ra][1]["status"] == "approved", "nothing was written while the twins could not be looked up"
+    mv.tap(PANEL, ME, ra, "Swimming is on Friday at 9")
+    assert say("it's on Saturday", ME) == pa.STORE_DOWN_REPLY          # the tapped path is strict too, and stays armed
+    assert env.col.rows[ra][1]["status"] == "approved"
+    down["on"] = False
+    assert say("it's on Saturday", ME).startswith("Fixed")             # the same words, store back: the whole job
+    assert not any("Friday" in t for t in approved(env)), approved(env)
 
 
 def test_a_child_whose_users_mirror_says_member_is_still_locked(env):
@@ -632,7 +743,9 @@ def test_phone_correct_refuses_guests_and_other_members_rows(seeded):
     r = c.post(f"/api/memories/mine/{rid}/correct", json={"text": "My neighbour keeps a cat."}, headers=H)
     assert r.status_code == 404
     assert any("Biscuit" in t for t in approved(seeded, OTHER))
-    for guest in ({"user_id": "guest", "role": "guest"}, {"user_id": ME, "role": "guest"}):
+    for guest in ({"user_id": "guest", "role": "guest"}, {"user_id": ME, "role": "guest"},
+                  {"user_id": ME, "role": "user", "device_token_role": "panel"},          # the panel device token
+                  {"user_id": ME, "role": "user", "auth_degraded": True}):              # an auth outage
         mine = row_id(seeded, "14 March")
         assert _phone(guest).post(f"/api/memories/mine/{mine}/correct", json={"text": "x y z w"},
                                   headers=H).status_code in (401, 403)
@@ -704,3 +817,435 @@ def test_control_without_the_owner_filter_another_members_row_would_be_forgotten
     assert reply != mv.NOT_FOUND_REPLY, "own-rows-only reading is what kept another member's row out of reach"
     # the store's own owner check is a second wall: the reject is refused, so the row survives even then
     assert any("Biscuit" in t for t in approved(seeded, OTHER))
+
+
+# ── Codex round 3 on #2144 ──────────────────────────────────────────────────────────────────────
+
+def test_covers_matches_true_inflections_only_never_a_prefix():
+    tok = mv._tokens
+    assert mv._covers(tok("I like plans"), tok("I like planned trips and plans"))
+    assert not mv._covers(tok("I like plans"), tok("I like planets")), "plan is a prefix of planet, not a variant of it"
+    assert not mv._covers(tok("I like plant"), tok("I like plans")) and not mv._covers(tok("I like plan"), tok("I like plant"))
+    for a, b in (("plan", "plans"), ("love", "loves"), ("love", "loved"), ("love", "loving"), ("plan", "planned"), ("walk", "walking")):
+        assert mv._covers(tok(a), tok(b)) and mv._covers(tok(b), tok(a)), (a, b)
+    for a, b in (("plan", "planet"), ("mat", "matter"), ("walk", "walnut"), ("cart", "carton")):
+        assert not mv._covers(tok(a), tok(b)), (a, b)
+
+
+def test_forget_that_i_like_plans_does_not_erase_planets(env):
+    put(env, "I like planets and telescopes")
+    assert say("forget that I like plans", ME) == mv.NOT_FOUND_REPLY
+    assert any("planets" in t for t in approved(env)), "forgetting is permanent: a near-miss word must not take the row"
+    put(env, "I like plans on Sundays")
+    assert say("forget that I like plans", ME).startswith("Done")
+    assert any("planets" in t for t in approved(env)) and not any("plans on Sundays" in t for t in approved(env))
+
+
+def test_a_tapped_correction_whose_preflight_read_fails_keeps_the_tap_armed(env, monkeypatch):
+    put(env, "Swimming is on Friday at 9")
+    rid = row_id(env, "Swimming")
+    real, down = env.svc.get, {"on": True}
+
+    async def flaky(row):
+        if down["on"]:
+            raise RuntimeError("store hiccup")
+        return await real(row)
+
+    monkeypatch.setattr(env.svc, "get", flaky)
+    mv.tap(PANEL, ME, rid, "Swimming is on Friday at 9")
+    assert say("it's on Saturday", ME) == pa.STORE_DOWN_REPLY, "said, not silently dropped to another tier"
+    assert "Swimming is on Friday at 9" in approved(env)
+    down["on"] = False
+    assert say("it's on Saturday", ME).startswith("Fixed"), "the tap stayed armed: the retry finishes the same row"
+
+
+@pytest.mark.parametrize("question", ["what do you know about me?", "what did you learn about me this week", "what do you remember about Marisol"])
+def test_the_reply_only_says_it_is_on_the_screen_if_a_card_was_delivered(seeded, monkeypatch, question):
+    put(seeded, "I like quiet mornings", when=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))   # inside "this week", whenever this runs
+    assert "on the screen" in say(question, ME)                       # delivered (the fixture's push returns 1)
+    sent: list = []
+
+    async def nowhere(frame):
+        sent.append(frame)
+        return 0                                                      # no live socket on that panel
+
+    monkeypatch.setattr(voice_cards, "push", nowhere)
+    reply = say(question, ME)
+    assert sent and reply, "a card was attempted"
+    assert "screen" not in reply.lower() and "tap one" not in reply.lower(), reply
+
+
+# -- Codex round 5 on #2144 -----------------------------------------------------------------------------------------------------
+
+def test_single_letter_terms_distinguish_facts(env):
+    assert mv._tokens("I take vitamin C") != mv._tokens("I take vitamin D")
+    put(env, "I take vitamin D daily")
+    assert say("forget that I take vitamin C", ME) == mv.NOT_FOUND_REPLY, "forgetting is permanent: C is not D"
+    assert any("vitamin D" in t for t in approved(env))
+
+
+def test_find_person_requires_the_full_name_when_a_surname_is_spoken():
+    import asyncio
+    from types import SimpleNamespace as NS
+    wall = NS(people=[NS(name="Sam Patel")])
+
+    def find(n):
+        return asyncio.run(mv._find_person(ME, wall, n))
+
+    assert find("Sam Wilson") is None
+    assert find("Sam Patel") is wall.people[0]
+    assert find("Sam") is wall.people[0], "a bare first name keeps the unique-first-name fallback"
+
+
+def test_phone_actions_follow_the_role_capabilities(seeded, monkeypatch):
+    import routers.memories as rm
+    from fastapi import HTTPException
+
+    denied = set()
+
+    async def fake(db, user, *, feature, action, surface="api"):
+        if action in denied:
+            raise HTTPException(status_code=403, detail="no")
+
+    monkeypatch.setattr(rm, "require_feature_access", fake)
+    c = _phone({"user_id": ME, "role": "user"})
+    denied.add("review")
+    assert c.get("/api/memories/mine/actions", headers=H).json() == {"forget": False, "correct": False}
+    denied.add("read")
+    assert c.get("/api/memories/mine/actions", headers=H).status_code == 403
+
+
+# ── last review round on #2144 ────────────────────────────────────────────────────────────────
+def test_a_lone_opposite_polarity_row_is_never_erased(env):
+    put(env, "I don't like jazz.")
+    assert say("forget that I like jazz", ME) == mv.DIFFERENT_REPLY
+    assert approved(env) == ["I don't like jazz."]
+    put(env, "I like blues music.")
+    assert say("forget that I don't like blues music", ME) in (mv.DIFFERENT_REPLY, mv.NOT_FOUND_REPLY)
+    assert "I like blues music." in approved(env)
+
+
+def test_a_lone_row_with_who_did_what_swapped_is_never_erased(env):
+    put(env, "Sam loves me.")
+    assert say("forget that I love Sam", ME) == mv.DIFFERENT_REPLY
+    assert approved(env) == ["Sam loves me."]
+
+
+def test_the_agreeing_row_goes_when_an_opposite_one_sits_beside_it(env):
+    put(env, "I don't like jazz.", when="2026-10-06T02:00:00Z")
+    put(env, "I like jazz.", when="2026-10-06T03:00:00Z")
+    assert say("forget that I like jazz", ME).startswith("Done")
+    assert approved(env) == ["I don't like jazz."]
+
+
+def test_a_retry_after_a_half_done_untapped_forget_finishes_the_same_row(seeded, monkeypatch):
+    real, state = pa._erase_words, {"down": True, "ran": 0}
+
+    async def flaky(*a, **kw):
+        state["ran"] += 1
+        if state["down"]:
+            raise RuntimeError("cleanup failed")    # the row is already rejected when the cleanup step fails
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(pa, "_erase_words", flaky)
+    assert say("forget that I like dark roast coffee", ME) == pa.STORE_DOWN_REPLY
+    assert not any("dark roast" in t for t in approved(seeded)), "the row is already rejected: a fresh search cannot see it"
+    state["down"] = False
+    assert say("forget that I like dark roast coffee", ME) != mv.NOT_FOUND_REPLY, "the repeat finds the same row"
+    assert state["ran"] == 2, "and re-runs the cleanup step that failed"
+    assert say("forget that I like dark roast coffee", ME) == mv.NOT_FOUND_REPLY, "the retry target is spent"
+
+
+def test_panel_card_actions_need_the_review_capability(seeded, monkeypatch):
+    from fastapi import HTTPException
+
+    seeded.sessions[PANEL] = ME
+    say("what do you know about me", ME)
+    frame = last_card(seeded)
+    token = frame["card_token"]
+    item = next(it for it in frame["items"] if "dark roast" in it["text"])["id"]
+    denied = {"on": True}
+
+    async def fake(db, user, *, feature, action, surface="api"):
+        assert (feature, action) == ("memories", "review") and user["user_id"] == ME
+        if denied["on"]:
+            raise HTTPException(status_code=403, detail="no")
+
+    import guest_policy
+    monkeypatch.setattr(guest_policy, "require_feature_access", fake)
+    assert tap(seeded, token, item, "forget", "yes").status_code == 403
+    assert tap(seeded, token, item, "wrong", "voice").status_code == 403
+    assert any("dark roast" in t for t in approved(seeded)), "nothing changed"
+    assert say("forget it", ME) is None, "no correction was armed"
+    assert tap(seeded, token, item, "source").status_code == 200, "reading where it came from is not a review action"
+    denied["on"] = False
+    assert tap(seeded, token, item, "forget", "yes").status_code == 200
+    assert not any("dark roast" in t for t in approved(seeded))
+
+
+def test_an_inferred_person_fact_is_not_said_as_told(env):
+    put(env, "User's sister Marisol lives in Lisbon.")
+    put(env, "User's sister Marisol is a nurse.", when="2026-10-06T03:00:00Z")
+    rows = run(env.svc.list_by_status(user_id=ME, status="approved", limit=50))
+    lisbon = next(r for r in rows if "Lisbon" in r.text)
+    real = pa.gather
+
+    async def gather(member, **kw):
+        known = await real(member, **kw)
+        for it in known.items:
+            if it.id == lisbon.id:
+                it.inferred = True
+        return known
+
+    import pytest as _p
+    mp_ = _p.MonkeyPatch()
+    mp_.setattr(pa, "gather", gather)
+    try:
+        wall = run(mv.gather_wall(ME))
+    finally:
+        mp_.undo()
+    e = next(x for x in wall.people if x.name == "Marisol")
+    assert mv._inferred_count([e]) == 1
+    said = mv.spoken_person(e)
+    assert "Lisbon" not in said and "nurse" in said and "worked out 1 thing" in said, said
+    assert "worked out 1 thing" in mv.spoken_me(wall)
+
+
+# ── three more findings on #2144 ──────────────────────────────────────────────────────────────
+def test_a_child_card_cannot_forget_or_correct_even_with_a_member_mirror_role(env):
+    # the card owner's role is read from the AUTHORITATIVE account (auth_users), not the users mirror chat writes as 'member'
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    env.db.conn.execute("UPDATE users SET role = 'member' WHERE id = ?", (OTHER,))
+    env.db.conn.commit()
+    child = SimpleNamespace(member_id=OTHER)
+    with pytest.raises(HTTPException) as exc:
+        run(memories_card._require_review(child))
+    assert exc.value.status_code == 403
+    run(memories_card._require_review(SimpleNamespace(member_id=ME)))        # an adult still passes
+    env.db.conn.execute("DELETE FROM auth_users WHERE user_id = ?", (ME,))     # no authoritative account: fail closed
+    env.db.conn.commit()
+    with pytest.raises(HTTPException):
+        run(memories_card._require_review(SimpleNamespace(member_id=ME)))
+
+
+def test_a_kid_member_mode_blocks_the_card_even_for_an_adult_role(env):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    env.db.conn.execute("INSERT INTO member_modes VALUES (?, 'kid', 1)", (ME,))
+    env.db.conn.commit()
+    with pytest.raises(HTTPException):
+        run(memories_card._require_review(SimpleNamespace(member_id=ME)))
+
+
+def test_a_used_to_forget_never_erases_the_present_tense_row_and_the_reverse(env):
+    put(env, "I like jazz.")
+    assert say("forget that I used to like jazz", ME) == mv.DIFFERENT_REPLY
+    assert say("forget that I no longer like jazz", ME) in (mv.DIFFERENT_REPLY, mv.NOT_FOUND_REPLY)
+    assert approved(env) == ["I like jazz."]
+    assert say("forget that I like jazz", ME).startswith("Done")             # the exact claim still goes
+    assert approved(env) == []
+    put(env, "I used to like jazz.")
+    assert say("forget that I like jazz", ME) == mv.DIFFERENT_REPLY
+    assert approved(env) == ["I used to like jazz."]
+    assert say("forget that I used to like jazz", ME).startswith("Done")
+
+
+def test_a_bare_command_after_the_wrong_tap_runs_and_is_not_the_correction(env):
+    put(env, "I live in Lisbon")
+    rid = row_id(env, "Lisbon")
+    for word in ("mute", "unmute", "shuffle", "pause", "next", "volume up"):
+        mv.tap(PANEL, ME, rid, "I live in Lisbon")
+        assert say(word, ME) is None, word
+        assert approved(env) == ["I live in Lisbon"], word
+
+
+# ── spoken writes need memories.review too (Codex + Greptile on #2144) ────────────────────────
+def test_a_child_cannot_forget_by_voice(env):
+    put(env, "I like jazz.", user=OTHER)
+    assert say("forget that I like jazz", OTHER) == mv.GROWN_UP_REPLY
+    assert approved(env, OTHER) == ["I like jazz."]
+
+
+def test_a_member_without_review_cannot_forget_by_voice(env, monkeypatch):
+    import guest_policy
+    from fastapi import HTTPException
+
+    async def deny(*_a, **_k):
+        raise HTTPException(status_code=403, detail="no")
+
+    monkeypatch.setattr(guest_policy, "require_feature_access", deny)
+    put(env, "I like jazz.")
+    assert say("forget that I like jazz", ME) == mv.NO_REVIEW_REPLY
+    assert approved(env) == ["I like jazz."]
+    assert run(mv.forget_person(ME, "Marisol")) == mv.NO_REVIEW_REPLY
+
+
+def test_an_adult_can_still_forget_by_voice(env):
+    put(env, "I like jazz.")
+    say("forget that I like jazz", ME)
+    assert "I like jazz." not in approved(env)
+
+
+def test_a_role_lookup_error_refuses_the_spoken_forget(env, monkeypatch):
+    @contextlib.asynccontextmanager
+    async def boom():
+        raise RuntimeError("db down")
+        yield
+
+    monkeypatch.setattr(db_compat, "get_compat_db", boom)
+    put(env, "I like jazz.")
+    assert say("forget that I like jazz", ME) == mv.NO_REVIEW_REPLY
+    assert approved(env) == ["I like jazz."]
+
+
+def test_a_child_tapped_forget_is_refused(env):
+    put(env, "Swimming is on Friday", user=OTHER)
+    rid = row_id(env, "Swimming", OTHER)
+    mv.tap(PANEL, OTHER, rid, "Swimming is on Friday")
+    assert say("forget it", OTHER) == mv.GROWN_UP_REPLY
+    assert approved(env, OTHER) == ["Swimming is on Friday"]
+
+
+# ── review round 2 on #2144 ───────────────────────────────────────────────────────────────────
+def test_a_command_after_the_wrong_tap_runs_even_when_the_permission_lookup_fails(env, monkeypatch):
+    # the command guard runs BEFORE the memories.review lookup: "pause" is a command, not a memory write, so a lookup failure
+    # must not answer it with a memory-permission refusal. A real correction is still refused.
+    put(env, "I live in Lisbon")
+    rid = row_id(env, "Lisbon")
+
+    @contextlib.asynccontextmanager
+    async def boom():
+        raise RuntimeError("db down")
+        yield
+
+    monkeypatch.setattr(db_compat, "get_compat_db", boom)
+    mv.tap(PANEL, ME, rid, "I live in Lisbon")
+    assert say("pause", ME) is None
+    mv.tap(PANEL, ME, rid, "I live in Lisbon")
+    assert say("forget it", ME) == mv.NO_REVIEW_REPLY
+    assert approved(env) == ["I live in Lisbon"]
+
+
+def test_the_tapped_retry_waits_for_the_speculation_barrier(env, monkeypatch):
+    import correction_apply
+
+    calls = []
+
+    async def barrier():
+        calls.append("barrier")
+        raise RuntimeError("turn not committed")
+
+    async def finish(*a, **k):
+        calls.append("write")
+        return "Fixed."
+
+    monkeypatch.setattr(pa, "_speculation_barrier", barrier)
+    monkeypatch.setattr(pa, "_finish_superseded", finish)
+    monkeypatch.setattr(correction_apply, "enabled", lambda: True)
+    put(env, "Swimming is on Friday")
+    rid = row_id(env, "Swimming")
+    exp = mv.mp.Explained(seq=0, row_id=rid, ts=time.time(), text="Swimming is on Friday")
+    reply = run(pa.fix(ME, "s1", "it's Saturday", "Saturday", exp, svc=env.svc, strict_twins=True))
+    assert calls == ["barrier"], "nothing mutates before the turn commits"
+    assert reply == pa.STORE_DOWN_REPLY
+
+
+def test_today_anchors_to_household_midnight(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")
+    tz = ZoneInfo("Australia/Perth")
+    now = datetime(2026, 10, 20, 8, 0, tzinfo=tz).timestamp()
+    yesterday = datetime(2026, 10, 19, 16, 0, tzinfo=tz).timestamp()
+    this_morning = datetime(2026, 10, 20, 6, 0, tzinfo=tz).timestamp()
+    w = mv.Wall(items=[types.SimpleNamespace(epoch=yesterday), types.SimpleNamespace(epoch=this_morning)])
+    _, items = mv.recent_rows(w, "today", now=now)
+    assert [i.epoch for i in items] == [this_morning]
+
+
+def test_recent_people_filter_rows_before_merging(env):
+    now = time.time()
+    iso = lambda d: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - d * 86400))
+    put(env, "User's sister Marisol works as a nurse at the clinic", when=iso(60))
+    put(env, "User's sister Marisol is flying in from Lisbon on Thursday", when=iso(1))
+    wall = run(mv.gather_wall(ME, svc=env.svc))
+    people, _ = mv.recent_rows(wall, "this week")
+    text = " ".join(f for e in people for f, _ in e.facts).lower()
+    assert "lisbon" in text and "nurse" not in text
+
+
+# -- off the record beats a tapped correction ----------------------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _fresh_provenance():
+    import memory_provenance
+
+    memory_provenance.reset()
+    yield
+    memory_provenance.reset()
+
+
+OTR_FIX = "actually my birthday is on 5 March, off the record"
+
+
+def test_an_off_the_record_correction_after_a_tap_writes_nothing(env):
+    put(env, ME_BIRTHDAY)
+    old = row_id(env, "birthday")
+    before = dict(env.col.rows[old][1])
+    mv.tap(PANEL, ME, old, ME_BIRTHDAY)
+    reply = say(OTR_FIX, ME)
+    assert reply == pa.OFF_RECORD_ACKS["off_the_record"], reply
+    assert approved(env) == [ME_BIRTHDAY], "nothing new stored"
+    assert env.col.rows[old][1] == before, "the original row is unchanged"
+    assert len(env.col.rows) == 1
+    assert not mv._TAPS, "nothing re-armed"
+
+
+def test_a_correction_after_an_earlier_bare_cue_and_a_tap_writes_nothing(env):
+    import memory_provenance as mpv
+
+    put(env, ME_BIRTHDAY)
+    old = row_id(env, "birthday")
+    before = dict(env.col.rows[old][1])
+    assert mpv.claim_turn(ME, "off the record") is False          # a bare cue arms the next turn
+    mv.tap(PANEL, ME, old, ME_BIRTHDAY)
+    fix = "actually my birthday is on 5 March"                    # no cue in these words
+    assert mpv.claim_turn(ME, fix) is True                        # the pipeline claims the turn before the tap sees it
+    reply = say(fix, ME)
+    assert reply == pa.OFF_RECORD_ACKS["off_the_record"], reply
+    assert approved(env) == [ME_BIRTHDAY] and len(env.col.rows) == 1
+    assert env.col.rows[old][1] == before
+
+
+def test_review_edit_refuses_a_turn_already_marked_off_the_record(env):
+    import memory_provenance as mpv
+
+    put(env, ME_BIRTHDAY)
+    old = row_id(env, "birthday")
+    mpv.claim_turn(ME, "off the record")
+    assert mpv.claim_turn(ME, "My birthday is on 5 March") is True
+    assert run(env.svc.review(old, decision="edit", edits="My birthday is on 5 March", actor=ME)) is None
+    assert approved(env) == [ME_BIRTHDAY] and len(env.col.rows) == 1
+
+
+def test_a_normal_correction_after_a_tap_still_works(env):
+    put(env, ME_BIRTHDAY)
+    old = row_id(env, "birthday")
+    mv.tap(PANEL, ME, old, ME_BIRTHDAY)
+    reply = say("actually my birthday is on 5 March", ME)
+    assert reply.startswith("Fixed"), reply
+    assert any("5 March" in t for t in approved(env))
+
+
+def test_review_edit_refuses_text_with_an_off_the_record_cue(env):
+    put(env, ME_BIRTHDAY)
+    old = row_id(env, "birthday")
+    out = run(env.svc.review(old, decision="edit", edits="My birthday is on 5 March, off the record", actor=ME))
+    assert out is None
+    assert approved(env) == [ME_BIRTHDAY] and len(env.col.rows) == 1
+    ok = run(env.svc.review(old, decision="edit", edits="My birthday is on 5 March", actor=ME))
+    assert ok is not None

@@ -467,7 +467,7 @@ measured on their kept WAVs (32 held by then; read-only, under the voice-harness
 
 What changed: `measure_wav` adds `clipped`, `rms_median` and `active_s`; the WARNING's reason gains `transient_only` (sound
 reached Moonshine only because of a click) beside `voiced_but_no_text` (sustained sound, still no words — the one worth a look).
-It is a label, never a gate: a click recording is still transcribed (Moonshine's own VAD decides). The wake click itself is a
+The label itself is not a gate. Since 2026-10-25 a separate per-chunk pre-STT skip (`ZOE_OMI_QUIET_SKIP`, default on: fewer than 3 100 ms windows at RMS >= 200) keeps a lone click from costing a Moonshine call; a word after a click is 3+ windows and still goes through, and an all-empty recording keeps its WAV. The wake click itself is a
 firmware matter (upstream; this repo never writes the pendant).
 
 ### 4.4 Retention, review, forgetting
@@ -581,6 +581,13 @@ each file's docstring.
   — the bootloader trusts MCUboot's public default RSA key (committed with its private half), so an OTA image is signable; the
   change is a small gate in front of the codec plus a button toggle; the cost is that a bad image can only be recovered over
   SWD (get a probe first); the public key is also a security hole in the stock device.
+- **Phase 2 security - BUILT as a lab, 2026-10-19 (owner decision OD1: top priority):**
+  [`labs/omi-firmware/`](../../labs/omi-firmware/README.md) - a patch series on the pinned 3.0.21 source: every Omi
+  characteristic and the SMP/OTA service need an encrypted link, pairing is refused outside a button window (LE Secure
+  Connections, one bond with the panel Pi, stock-era bonds wiped), and the SD ring is encrypted at rest (AES-128-CTR,
+  on-device key). Pi side: `omi-sync` `OMI_SYNC_REQUIRE_BOND` (bonded + encrypted or no sync) and panel-bluetooth
+  `omi_bond` (the owner-run pairing). Not flashed: the owner steps (probe, flash, pair, prove) are its `RUNBOOK.md`.
+  Press-to-record is NOT in it (separate owner decisions, research section 8).
 - **Speaker gate on recordings** (the section-5 machinery applied to a recording instead of a live segment) and a
   **reviewed → promoted** path into the memory admission gate. Until then the table is read by nothing.
   **Designed 2026-10-14:** [`memories-space.md`](memories-space.md) — per-line You / Someone-else tagging at

@@ -39,6 +39,13 @@ link can never show a proposal or an example.
 
 NOTHING APPLIES ITSELF. ``accept`` records the decision and the follow-up (a queue marker or a task stub); only ``mark_applied`` (the
 Phase 3 seam, an ``accepted`` proposal only) moves a row to ``applied``. No code path in the night job decides.
+
+ONE QUEUE (migration 0062, ``evolution_queue.py``): every proposal here is also a row of the single evolution proposal queue
+(``evolution_proposals``, the SAME id, ``source`` = struggle). The STATUS and the decision live only there and every status move goes
+through ``evolution_queue`` (legal moves enforced in code, history kept); ``struggle_proposals`` keeps the struggle-domain detail
+(fingerprint, counts, the text-free pattern, label, sentence, follow-up). The four statuses of this module are a VIEW of the queue:
+open with no decision = proposed, open + approved = accepted, applied / canary / kept = applied, rejected / reverted = rejected.
+A withdrawn or forgotten proposal leaves BOTH tables.
 """
 from __future__ import annotations
 
@@ -53,7 +60,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Optional
 
+import evolution_queue as eq
 import struggle_signals as sig
+from bounded_await import bounded
 from struggle_detector import is_guest
 
 logger = logging.getLogger("struggle_proposals")
@@ -534,7 +543,7 @@ async def summarise(items: list[tuple[str, dict]], llm: LLM, *, budget_s: float 
         if time.monotonic() - t0 > budget_s:
             break
         try:
-            raw = await asyncio.wait_for(llm(messages_for(facts), max_tokens), per_call_s)
+            raw = await bounded(llm(messages_for(facts), max_tokens), per_call_s)
         except Exception as exc:  # noqa: BLE001 - the template stands
             logger.info("STRUGGLE_PROPOSALS summary skipped (%s)", type(exc).__name__)
             if isinstance(exc, (ConnectionError, OSError)):
@@ -551,6 +560,19 @@ async def summarise(items: list[tuple[str, dict]], llm: LLM, *, budget_s: float 
 _PCOLS = ("id", "fingerprint", "kind", "status", "pattern", "domain", "label", "label_source", "signals", "episode_count", "event_count", "user_count",
           "day_count", "first_seen", "last_seen", "confidence", "summary", "summary_source", "followup", "decision_note", "created_at",
           "updated_at", "decided_at", "decided_by", "mode")
+
+#: the queue (0062) holds the status and the decision; this maps the row keys above that come from it
+QUEUE_SOURCE = "struggle"
+#: kind -> (change class, component, risk tier) of its queue row
+QUEUE_CLASS = {KIND_ROUTER_EXAMPLE: ("harness", "router", 1), KIND_INTENT_GAP: ("code", "intent_router", 3),
+               KIND_ANSWER_QUALITY: ("harness", "brain", 1), KIND_STT_TERM: ("harness", "stt", 1)}
+_QUEUE_COLS = {"status": "", "decided_at": "q.reviewed_at", "decided_by": "q.decided_by", "decision_note": "q.decision_note"}
+_STATUS_SQL = ("(CASE WHEN q.status IN ('applied', 'canary', 'kept') THEN 'applied' WHEN q.status IN ('rejected', 'reverted') "
+               "THEN 'rejected' WHEN q.decision = 'approved' THEN 'accepted' ELSE 'proposed' END)")
+_FROM = "struggle_proposals sp JOIN evolution_proposals q ON q.id = sp.id"
+_SEL = ", ".join(_STATUS_SQL if c == "status" else (_QUEUE_COLS.get(c) or "sp." + c) for c in _PCOLS)
+#: what struggle_proposals itself still holds
+_DCOLS = tuple(c for c in _PCOLS if c not in _QUEUE_COLS)
 
 
 def _ctx():
@@ -570,7 +592,8 @@ def _chunks(seq: list, n: int = _IN_CHUNK):
 
 def _missing_table(exc: BaseException) -> bool:
     msg = f"{type(exc).__name__} {exc}".lower()
-    return "undefinedtable" in msg or "no such table" in msg or (("struggle_proposal" in msg or "struggle_events" in msg) and "does not exist" in msg)
+    return "undefinedtable" in msg or "no such table" in msg or (
+        ("struggle_proposal" in msg or "struggle_events" in msg or "evolution_proposal" in msg) and "does not exist" in msg)
 
 
 def _row(vals: Iterable[Any]) -> dict:
@@ -626,16 +649,16 @@ async def list_proposals(*, status: Optional[str] = None, kind: Optional[str] = 
     """Proposals with live evidence only (one whose events are all gone is not shown), best first. The live-evidence test is part of the
     query, BEFORE ``ORDER BY`` / ``LIMIT``: filtering after the limit let evidence-less proposals (events forgotten or retired, not yet
     reconciled) use up the page and hide live ones that ranked below them."""
-    sql = (f"SELECT {', '.join(_PCOLS)} FROM struggle_proposals WHERE 1 = 1 AND EXISTS ("
-           "SELECT 1 FROM struggle_proposal_events pe JOIN struggle_events se ON se.id = pe.event_id WHERE pe.proposal_id = struggle_proposals.id)")
+    sql = (f"SELECT {_SEL} FROM {_FROM} WHERE 1 = 1 AND EXISTS ("
+           "SELECT 1 FROM struggle_proposal_events pe JOIN struggle_events se ON se.id = pe.event_id WHERE pe.proposal_id = sp.id)")
     params: list[Any] = []
     if status:
-        sql += " AND status = ?"
+        sql += f" AND {_STATUS_SQL} = ?"
         params.append(status)
     if kind:
-        sql += " AND kind = ?"
+        sql += " AND sp.kind = ?"
         params.append(kind)
-    sql += " ORDER BY confidence DESC, last_seen DESC LIMIT ?"
+    sql += " ORDER BY sp.confidence DESC, sp.last_seen DESC LIMIT ?"
     params.append(int(max(1, min(500, limit))))
     async with _ctx() as db:
         cur = await db.execute(sql, tuple(params))
@@ -660,7 +683,7 @@ async def get_proposal(pid: str, *, with_evidence: bool = True) -> dict:
 
 
 async def _fetch_one(db, pid: str) -> Optional[dict]:
-    cur = await db.execute(f"SELECT {', '.join(_PCOLS)} FROM struggle_proposals WHERE id = ?", (pid,))
+    cur = await db.execute(f"SELECT {_SEL} FROM {_FROM} WHERE sp.id = ?", (pid,))
     r = await cur.fetchone()
     return _row(r) if r else None
 
@@ -713,16 +736,19 @@ async def decide(pid: str, action: str, by: str, reason: str = "") -> dict:
         if row["status"] != PROPOSED:
             raise Conflict(f"already {row['status']}")
         pub = public(row, live[pid])
-        new_status = ACCEPTED if action == "accept" else REJECTED
         followup = build_followup(pub, now) if action == "accept" else {}
-        cur = await db.execute(
-            "UPDATE struggle_proposals SET status = ?, followup = ?, decision_note = ?, decided_at = ?, decided_by = ?, updated_at = ? "
-            "WHERE id = ? AND status = ?",
-            (new_status, json.dumps(followup, sort_keys=True), reason or "", now, str(by or "")[:80], now, pid, PROPOSED))
-        changed = int(getattr(cur, "rowcount", 0) or 0)
+        try:
+            async with eq._atomic(db):   # ONE transaction: the verdict and its follow-up land together or not at all
+                # LOCK ORDER (every path): the struggle DETAIL row first, the QUEUE row second - so a concurrent forget / pass cannot deadlock it
+                await db.execute("UPDATE struggle_proposals SET followup = ?, updated_at = ? WHERE id = ?",
+                                 (json.dumps(followup, sort_keys=True), now, pid))
+                if action == "accept":   # a person verdict on an OPEN queue row: the status stays open, accepting applies nothing
+                    await eq.decide(db, pid, "approved", actor=str(by or "")[:80], note=reason or "", guard={"decision": ""}, now=now)
+                else:
+                    await eq.transition(db, pid, "rejected", actor=str(by or "")[:80], note=reason or "", require_decision="", now=now)
+        except (eq.Conflict, eq.IllegalTransition) as exc:
+            raise Conflict("already decided") from exc
         await db.commit()
-        if changed <= 0:
-            raise Conflict("already decided")
     return await get_proposal(pid)
 
 
@@ -736,13 +762,16 @@ async def mark_applied(pid: str, ref: str = "") -> dict:
         row = await _fetch_one(db, pid)
         if row is None:
             raise NotFound(pid)
-        cur = await db.execute(
-            "UPDATE struggle_proposals SET status = ?, decision_note = ?, updated_at = ? WHERE id = ? AND status = ?",
-            (APPLIED, (((row["decision_note"] + " ") if row["decision_note"] else "") + f"applied: {ref}")[:120], now, pid, ACCEPTED))
-        changed = int(getattr(cur, "rowcount", 0) or 0)
+        note = (((row["decision_note"] + " ") if row["decision_note"] else "") + f"applied: {ref}")[:120]
+        try:
+            async with _atomic(db):     # the detail touch and the queue move land together; DETAIL row first (the one lock order)
+                await db.execute("UPDATE struggle_proposals SET updated_at = ? WHERE id = ?", (now, pid))
+                if row["status"] != ACCEPTED:
+                    raise eq.Conflict(row["status"])
+                await eq.transition(db, pid, "applied", actor="struggle_proposals:mark_applied", note=note, require_decision="approved", now=now)
+        except (eq.Conflict, eq.IllegalTransition) as exc:
+            raise Conflict(f"only an accepted proposal can be applied (this one is {row['status']})") from exc
         await db.commit()
-        if changed <= 0:
-            raise Conflict(f"only an accepted proposal can be applied (this one is {row['status']})")
     return await get_proposal(pid, with_evidence=False)
 
 
@@ -750,8 +779,12 @@ async def mark_applied(pid: str, ref: str = "") -> dict:
 #: never moves between train and holdout from one night to the next and duplicate phrasings never straddle the two (a model that trained on a
 #: wording cannot be scored on the same wording)
 HOLDOUT_MOD = 5
-#: the saved utterance of a voice turn is looked for this long before the turn finished (STT, then the brain's time to answer)
+#: the saved utterance of a voice turn is looked for this long before the turn finished (STT, then the brain's time to answer) when the
+#: turn's own latency is unknown
 AUDIO_LOOKBACK_S = 90.0
+#: the clip is copied right after STT, a moment before the route note that starts the turn's latency clock: how far before that start a
+#: clip may sit and still be this turn's
+AUDIO_CAPTURE_LEAD_S = 15.0
 AUDIO_AMBIGUOUS_S = 5.0
 
 
@@ -762,69 +795,106 @@ def split_of(text: str) -> str:
     return "holdout" if int(hashlib.sha1(f"router-holdout|{key}".encode("utf-8")).hexdigest()[:8], 16) % HOLDOUT_MOD == 0 else "train"
 
 
-def audio_ref(about_ts: Any, *, sample_dir: Optional[str] = None) -> Optional[dict]:
+def audio_ref(about_ts: Any, *, latency_ms: Any = None, sample_dir: Optional[str] = None) -> Optional[dict]:
     """The saved audio of the FAILED turn, as a bare file name in the operator's voice-sample corpus (``ZOE_VOICE_SAVE_AUDIO``), or None.
 
-    The corpus keeps real utterances as ``HHMMSS_mmm.wav`` with no turn id, so the file is found by TIME: the latest sample written in
-    the ``AUDIO_LOOKBACK_S`` before the failed turn finished. Two samples within ``AUDIO_AMBIGUOUS_S`` of each other make it ambiguous and
-    no reference is given (a wrong recording is worse than none). Nothing is read, copied or moved; the corpus is never pruned."""
+    The corpus keeps real utterances as ``HHMMSS_mmm.wav`` with no turn id and no panel id (the capture sits in a replay-gated voice file),
+    so the clip is found by TIME and handed out only when that is UNAMBIGUOUS: exactly ONE clip in the turn's guard window. With the turn's
+    latency known the window is tight - from ``AUDIO_CAPTURE_LEAD_S`` + ``AUDIO_AMBIGUOUS_S`` before the turn's route started to 3 s after
+    it finished, and the clip itself must predate the route start - and without it, the ``AUDIO_LOOKBACK_S`` before it finished. Any second
+    clip in the window (another panel capturing while this turn was answered, the previous turn's clip) WITHHOLDS the reference: a wrong
+    recording attached to a training or replay example is worse than none. ``mtime`` / ``size`` let a consumer prove the file is still that
+    clip (the names repeat every day). Nothing is read, copied or moved; the corpus is never pruned."""
     import os
 
     try:
         ts = float(about_ts)
     except (TypeError, ValueError):
         return None
+    try:
+        lat = float(latency_ms) / 1000.0 if latency_ms is not None else None
+    except (TypeError, ValueError):
+        lat = None
+    if lat is not None and not 0.0 <= lat <= 600.0:
+        lat = None
+    lo = ts - lat - AUDIO_CAPTURE_LEAD_S - AUDIO_AMBIGUOUS_S if lat is not None else ts - AUDIO_LOOKBACK_S
+    hi = ts + 3.0
     d = sample_dir or os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
     try:
-        found = sorted((os.stat(os.path.join(d, n)).st_mtime, n) for n in os.listdir(d) if n.endswith(".wav"))
-    except OSError:
+        stats = [(os.stat(os.path.join(d, n)), n) for n in os.listdir(d) if n.endswith(".wav")]
+    except (OSError, TypeError):
         return None
-    near = [(m, n) for m, n in found if ts - AUDIO_LOOKBACK_S <= m <= ts + 3.0]
-    if not near:
+    near = [(st, n) for st, n in stats if lo <= st.st_mtime <= hi]
+    if len(near) != 1:
         return None
-    if len(near) > 1 and near[-1][0] - near[-2][0] < AUDIO_AMBIGUOUS_S:
-        return None
-    return {"file": near[-1][1], "age_s": round(ts - near[-1][0], 1)}
+    st, name = near[0]
+    if lat is not None and st.st_mtime > ts - lat + 1.0:
+        return None                     # written after this turn had started routing: another utterance, not the failed one
+    return {"file": name, "age_s": round(ts - st.st_mtime, 1), "mtime": round(st.st_mtime, 3), "size": int(st.st_size)}
 
 
-async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLLOWUP,)) -> list[dict]:
-    """THE PHASE 3 SEAM. Candidate router training pairs from ACCEPTED ``router_example`` proposals, newest decision first:
-    ``[{proposal_id, event_id, user_id, label, label_source, split, text, audio_ref}]``.
+#: the statuses whose examples the seam may hand out. A REJECTED proposal never: the admin said no.
+SEAM_STATUSES = (PROPOSED, ACCEPTED, APPLIED)
+
+
+async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLLOWUP,), statuses: tuple = (ACCEPTED,)) -> list[dict]:
+    """THE PHASE 3 SEAM. Candidate router training pairs from ``router_example`` proposals (ACCEPTED ones unless the caller asks for more of
+    ``SEAM_STATUSES``), newest decision first:
+    ``[{proposal_id, status, decided_by, event_id, user_id, label, label_source, split, ts, text, audio_ref}]``.
 
     * ``label`` is the fast domain that answered the follow-up that worked (``label_source`` = ``followup``); only those are handed out
       unless the caller asks for ``SOURCE_ROUTER`` too (the router's own belief, no proof).
     * ``text`` is resolved NOW from the member's own ``struggle_events.summary`` (the FAILED turn's words only; member rows only; never a
       guest's; not a word that names a thing the member has forgotten), so a forget that erased the row has already removed the example and
       nothing outside ``struggle_events`` holds the words. Any doubt drops the example (a forget-ledger lookup that fails drops it).
-    * ``split`` is the stable train / holdout assignment (by normalised text); ``audio_ref`` the saved recording's file name when one can be found unambiguously.
+    * ``ts`` is when the FAILED turn finished (the event's ``about_ts``; the event's own time when that is missing) - the Phase 3 loop splits
+      by it. ``split`` is the stable hash split (by normalised text); ``audio_ref`` the saved recording when it is unambiguous (``audio_ref``).
+    * ``status`` / ``decided_by`` say how the proposal stands, so a caller can tell a person's accept from the loop's own policy.
+    * Plus the failed turns the owner CONFIRMED in review (``turn_outcomes.confirmed_examples``: ``proposal_id`` / ``event_id`` =
+      ``turn:<row id>``, ``decided_by`` = ``owner:<id>``, ``label_origin``); their words come from the member's own failed-turn row under
+      the same rules, and pass the same forget check below.
     Consumers re-label with their own independent oracle before training."""
-    if not sources:
+    statuses = tuple(s for s in statuses if s in SEAM_STATUSES)
+    if not sources or not statuses:
         return []
     out: list[dict] = []
     async with _ctx() as db:
         # Only proposals that can yield an example are candidates, decided BEFORE the LIMIT: a recent accepted proposal whose evidence is
         # gone (forgotten / retired), or whose label_source the caller does not want, must not use up the page.
         cur = await db.execute(
-            "SELECT id, label, label_source, followup FROM struggle_proposals WHERE kind = ? AND status = ? "
-            f"AND label_source IN ({_marks(len(sources))}) AND EXISTS (SELECT 1 FROM struggle_proposal_events pe JOIN struggle_events se "
-            "ON se.id = pe.event_id WHERE pe.proposal_id = struggle_proposals.id AND se.is_guest = 0 AND se.summary <> '') "
-            "ORDER BY decided_at DESC LIMIT ?",
-            (KIND_ROUTER_EXAMPLE, ACCEPTED, *sources, int(max(1, min(200, limit)))))
-        props = [(str(r[0]), str(r[1]), str(r[2]), _json(r[3])) for r in await cur.fetchall()]
-        for pid, label, source, fu in props:
-            if fu.get("type") != FOLLOWUP_ROUTER_QUEUE or label not in sig.FAST_DOMAINS or source not in sources:
+            f"SELECT sp.id, sp.label, sp.label_source, sp.followup, {_STATUS_SQL}, q.decided_by FROM {_FROM} WHERE sp.kind = ? "
+            f"AND {_STATUS_SQL} IN ({_marks(len(statuses))}) "
+            f"AND sp.label_source IN ({_marks(len(sources))}) AND EXISTS (SELECT 1 FROM struggle_proposal_events pe JOIN struggle_events se "
+            "ON se.id = pe.event_id WHERE pe.proposal_id = sp.id AND se.is_guest = 0 AND se.summary <> '') "
+            "ORDER BY COALESCE(q.reviewed_at, sp.updated_at) DESC LIMIT ?",
+            (KIND_ROUTER_EXAMPLE, *statuses, *sources, int(max(1, min(200, limit)))))
+        props = [(str(r[0]), str(r[1]), str(r[2]), _json(r[3]), str(r[4]), str(r[5] or "")) for r in await cur.fetchall()]
+        for pid, label, source, fu, status, decided_by in props:
+            if label not in sig.FAST_DOMAINS or source not in sources or status not in statuses:
                 continue
+            if status != PROPOSED and fu.get("type") != FOLLOWUP_ROUTER_QUEUE:
+                continue                    # a decided proposal must carry the router-queue follow-up its accept recorded
             cur = await db.execute(
-                "SELECT se.id, se.user_id, se.summary, se.prev_turn_id, se.channel, se.detail FROM struggle_proposal_events pe "
+                "SELECT se.id, se.user_id, se.summary, se.prev_turn_id, se.channel, se.detail, se.ts, se.latency_ms FROM struggle_proposal_events pe "
                 "JOIN struggle_events se ON se.id = pe.event_id WHERE pe.proposal_id = ? AND se.is_guest = 0 AND se.summary <> '' "
                 "ORDER BY se.ts DESC", (pid,))
-            for eid, uid, summary, prev, channel, detail in await cur.fetchall():
+            for eid, uid, summary, prev, channel, detail, ets, latency in await cur.fetchall():
                 text = str(summary).split(" -> ")[0].strip() if prev else str(summary).strip()
                 if not text or is_guest(str(uid)):
                     continue
-                out.append({"proposal_id": pid, "event_id": str(eid), "user_id": str(uid), "label": label, "label_source": source,
-                            "split": split_of(text), "text": text,
-                            "audio_ref": audio_ref(parse_detail(detail).get("about_ts")) if str(channel) == "voice" else None})
+                det = parse_detail(detail)
+                about = det.get("about_ts")
+                try:
+                    when = float(about) if about is not None else float(ets)
+                except (TypeError, ValueError):
+                    when = float(ets or 0.0)
+                out.append({"proposal_id": pid, "status": status, "decided_by": decided_by, "event_id": str(eid), "user_id": str(uid),
+                            "label": label, "label_source": source, "split": split_of(text), "ts": round(when, 3), "text": text,
+                            "audio_ref": audio_ref(about, latency_ms=latency) if str(channel) == "voice" else None})
+    # failure capture: failed turns the OWNER confirmed (``turn_outcomes``; a proposed / rejected / harness / guest row never comes back)
+    import turn_outcomes
+
+    out.extend(ex for ex in await turn_outcomes.confirmed_examples(limit) if ex["label_source"] in sources and ex["status"] in statuses)
     kept: list[dict] = []
     try:
         import memory_forgotten
@@ -843,6 +913,35 @@ async def queued_router_examples(limit: int = 500, sources: tuple = (SOURCE_FOLL
 
 # ── forgetting (called by struggle_detector BEFORE the events go; fail closed) ──
 
+def _signal(kind: str, st: dict, confidence: float) -> dict:
+    """The queue row evidence of a struggle proposal: COUNTS only (never a word, never an event id)."""
+    return {"signal": {"source": QUEUE_SOURCE, "kind": kind, "episodes": st["episodes"], "events": st["events"], "users": st["users"],
+                       "user_days": st["user_days"], "signals": st["signals"], "confidence": round(float(confidence), 3)}}
+
+
+async def _sync_queue(db, pid: str, kind: str, st: dict, confidence: float, sentence: str) -> None:
+    """The queue row follows a recount: its sentence (counts only) and its evidence. Never its status."""
+    await eq.update_text(db, pid, title=sentence, description=sentence)
+    await eq.attach_evidence(db, pid, _signal(kind, st, confidence))
+
+
+async def _drop(db, pid: str) -> None:
+    """A proposal leaves BOTH tables (withdrawn, or its evidence was forgotten)."""
+    async with _atomic(db):     # ONE transaction (a savepoint inside an open one): a failed queue removal leaves the detail in place
+        await db.execute("DELETE FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
+        await db.execute("DELETE FROM struggle_proposals WHERE id = ?", (pid,))
+        await eq.remove(db, [pid], source=QUEUE_SOURCE)
+
+
+async def _prune_queue(db) -> int:
+    """A queue row of this source whose detail row is gone (a crash between the two inserts) leaves the queue too."""
+    cur = await db.execute("SELECT id FROM evolution_proposals WHERE source = ? AND id NOT IN (SELECT id FROM struggle_proposals)",
+                           (QUEUE_SOURCE,))
+    ids = [str(r[0]) for r in await cur.fetchall()]
+    await eq.remove(db, ids, source=QUEUE_SOURCE)
+    return len(ids)
+
+
 async def _refresh(db, pids: Iterable[str]) -> int:
     """Recount ``pids`` from their remaining links; a proposal with none (or a still-``proposed`` one that no longer recurs) is deleted; a
     recounted one gets the template sentence back (the old one named counts that are no longer true). Returns proposals deleted."""
@@ -850,7 +949,7 @@ async def _refresh(db, pids: Iterable[str]) -> int:
     for pid in sorted(set(pids)):
         row = await _fetch_one(db, pid)
         if row is None:
-            await db.execute("DELETE FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
+            await _drop(db, pid)
             continue
         # the remaining LIVE evidence only (joined back to the events), with each event's own confidence
         cur = await db.execute(
@@ -861,8 +960,7 @@ async def _refresh(db, pids: Iterable[str]) -> int:
         st = stats_of(links)
         mean = sum(c for *_, c in live) / len(live) if live else 0.0
         if not links or (row["status"] == PROPOSED and not eligible(st, mean)):
-            await db.execute("DELETE FROM struggle_proposal_events WHERE proposal_id = ?", (pid,))
-            await db.execute("DELETE FROM struggle_proposals WHERE id = ?", (pid,))
+            await _drop(db, pid)
             deleted += 1
             continue
         if (st["events"], st["episodes"], st["users"], st["user_days"]) != (row["event_count"], row["episode_count"], row["user_count"], row["day_count"]):
@@ -872,6 +970,8 @@ async def _refresh(db, pids: Iterable[str]) -> int:
                 (json.dumps(st["signals"], sort_keys=True), st["episodes"], st["events"], st["users"], st["user_days"], st["first_seen"],
                  st["last_seen"], confidence_of(mean, st),
                  template_summary(row["kind"], row["pattern"], row["domain"], row["label"], st, row["label_source"]), time.time(), pid))
+            await _sync_queue(db, pid, row["kind"], st, confidence_of(mean, st),
+                              template_summary(row["kind"], row["pattern"], row["domain"], row["label"], st, row["label_source"]))
     return deleted
 
 
@@ -887,19 +987,70 @@ def _sql_events() -> bool:
     return isinstance(sd.get_backend(), sd.SqlBackend)
 
 
-async def forget_events(event_ids: list[str]) -> int:
+def _failed_words(summary: Any, prev: Any) -> str:
+    """The FAILED turn's words of a struggle row - exactly what ``queued_router_examples`` hands out as ``text``."""
+    return str(summary or "").split(" -> ")[0].strip() if prev else str(summary or "").strip()
+
+
+async def _wording_keys(ids: Optional[list[str]] = None, *, user_id: Optional[str] = None) -> set[str]:
+    """The retrain ledger's wording keys of these struggle rows (by event id, or every row of ``user_id``), read WHILE THEY STILL EXIST
+    (the forget path calls this before the rows go). RAISES on a store failure: a forget that cannot tombstone the wording must not be
+    confirmed."""
+    import router_retrain_ledger
+    import struggle_detector as sd
+
+    texts: list[str] = []
+    if _sql_events():
+        try:
+            async with _ctx() as db:
+                if user_id is not None:
+                    cur = await db.execute("SELECT summary, prev_turn_id FROM struggle_events WHERE user_id = ?", (user_id,))
+                    texts += [_failed_words(r[0], r[1]) for r in await cur.fetchall()]
+                for part in _chunks(list(ids or [])):
+                    cur = await db.execute(f"SELECT summary, prev_turn_id FROM struggle_events WHERE id IN ({_marks(len(part))})", tuple(part))
+                    texts += [_failed_words(r[0], r[1]) for r in await cur.fetchall()]
+        except Exception as exc:
+            if _missing_table(exc):
+                return set()
+            raise
+    else:
+        want = set(ids or [])
+        texts = [_failed_words(r.get("summary"), r.get("prev_turn_id"))
+                 for r in await sd.get_backend().rows(0.0, None, limit=ROW_LIMIT)
+                 if str(r.get("id")) in want or (user_id is not None and r.get("user_id") == user_id)]
+    return {router_retrain_ledger.text_key(t) for t in texts if t}
+
+
+def _forget_in_retrain(*, event_ids: Iterable[str] = (), user_id: Optional[str] = None, text_keys: Iterable[str] = ()) -> None:
+    """Phase 3: the router retrain ledger loses these examples (tombstoned by event id AND wording, so they never re-enter even before any
+    run recorded them; a served generation that learned one - directly or through its lineage - is flagged for retrain; leftover run
+    texts deleted). RAISES on a failure, like the rest of the forget path (``router_retrain_ledger.forget``)."""
+    import router_retrain_ledger
+
+    router_retrain_ledger.forget(event_ids=event_ids, user_id=user_id, text_keys=text_keys)
+
+
+async def forget_events(event_ids: list[str], *, extra_texts: Iterable[str] = ()) -> int:
     """Take these events out of every proposal (the forget path). RAISES on a store failure so the forget is not confirmed; only a missing
-    table is "nothing stored". Returns proposals deleted."""
+    table is "nothing stored". Returns proposals deleted. ``extra_texts`` are failed wordings that live outside ``struggle_events`` (a
+    ``turn_outcomes`` row's words, read before it is deleted): their keys are tombstoned too, so the words stay out of training under ANY id."""
     ids = [str(i) for i in event_ids if i]
-    if not ids or not _sql_events():
+    if not ids:
+        return 0
+    import router_retrain_ledger
+
+    keys = await _wording_keys(ids) | {router_retrain_ledger.text_key(t) for t in extra_texts if t}
+    _forget_in_retrain(event_ids=ids, text_keys=keys)
+    if not _sql_events():
         return 0
     try:
         async with _ctx() as db:
-            pids: set[str] = set()
-            for part in _chunks(ids):
-                pids.update(await _proposals_of(db, f"event_id IN ({_marks(len(part))})", tuple(part)))
-                await db.execute(f"DELETE FROM struggle_proposal_events WHERE event_id IN ({_marks(len(part))})", tuple(part))
-            gone = await _refresh(db, pids)
+            async with _atomic(db):     # link removal + recount + queue update are ONE transaction: a failed queue sync leaves nothing changed
+                pids: set[str] = set()
+                for part in _chunks(ids):
+                    pids.update(await _proposals_of(db, f"event_id IN ({_marks(len(part))})", tuple(part)))
+                    await db.execute(f"DELETE FROM struggle_proposal_events WHERE event_id IN ({_marks(len(part))})", tuple(part))
+                gone = await _refresh(db, pids)
             await db.commit()
             return gone
     except Exception as exc:
@@ -910,13 +1061,17 @@ async def forget_events(event_ids: list[str]) -> int:
 
 async def forget_user(user_id: str) -> int:
     """Take every event of ``user_id`` out of every proposal (the audited user delete). RAISES on a store failure."""
-    if not (user_id or "").strip() or not _sql_events():
+    if not (user_id or "").strip():
+        return 0
+    _forget_in_retrain(user_id=user_id, text_keys=await _wording_keys(user_id=user_id))
+    if not _sql_events():
         return 0
     try:
         async with _ctx() as db:
-            pids = set(await _proposals_of(db, "user_id = ?", (user_id,)))
-            await db.execute("DELETE FROM struggle_proposal_events WHERE user_id = ?", (user_id,))
-            gone = await _refresh(db, pids)
+            async with _atomic(db):     # one transaction, as in forget_events
+                pids = set(await _proposals_of(db, "user_id = ?", (user_id,)))
+                await db.execute("DELETE FROM struggle_proposal_events WHERE user_id = ?", (user_id,))
+                gone = await _refresh(db, pids)
             await db.commit()
             return gone
     except Exception as exc:
@@ -929,13 +1084,8 @@ async def reconcile() -> int:
     """Drop evidence links whose event no longer exists (retention sweep, a forget that ran between a read and a write), recount, delete
     what is left empty. Returns proposals deleted."""
     async with _ctx() as db:
-        cur = await db.execute(
-            "SELECT DISTINCT proposal_id FROM struggle_proposal_events WHERE event_id NOT IN (SELECT id FROM struggle_events)")
-        pids = [str(r[0]) for r in await cur.fetchall()]
-        if not pids:
-            return 0
-        await db.execute("DELETE FROM struggle_proposal_events WHERE event_id NOT IN (SELECT id FROM struggle_events)")
-        gone = await _refresh(db, pids)
+        async with _atomic(db):
+            gone = await _reconcile_in(db)
         await db.commit()
         return gone
 
@@ -958,7 +1108,7 @@ async def run_pass(*, now: Optional[float] = None, llm: Optional[LLM] = None, dr
         return {"status": "off", "mode": m}
     t = time.time() if now is None else now
     span = lookback_days() if days is None else days
-    rows = await asyncio.wait_for(sd.get_backend().rows(t - span * DAY_S, None, limit=ROW_LIMIT), 60.0)
+    rows = await bounded(sd.get_backend().rows(t - span * DAY_S, None, limit=ROW_LIMIT), 60.0)
     clusters, skipped = cluster(rows, min_ep=min_ep)         # EVERY eligible cluster, best first: the cap below limits NEW proposals, never what is kept
     res: dict[str, Any] = {
         "status": "ok", "mode": m, "dry_run": dry_run, "days": span, "events": len(rows), "truncated": len(rows) >= ROW_LIMIT,
@@ -980,7 +1130,8 @@ async def run_pass(*, now: Optional[float] = None, llm: Optional[LLM] = None, dr
                     res["deferred"] += 1       # RANKED, not dropped: a cluster beyond the nightly cap of NEW proposals waits for a later night
                     continue
                 fresh += 1
-            action = await _upsert(db, c, old, t, m)
+            async with _atomic(db):
+                action = await _upsert(db, c, old, t, m)
             res[action[0]] = res.get(action[0], 0) + 1
             if action[1]:
                 keep.add(action[1])
@@ -988,8 +1139,7 @@ async def run_pass(*, now: Optional[float] = None, llm: Optional[LLM] = None, dr
                 keep.add(old["id"])
         for fp, old in existing.items():
             if old["status"] == PROPOSED and old["id"] not in keep:
-                await db.execute("DELETE FROM struggle_proposal_events WHERE proposal_id = ?", (old["id"],))
-                await db.execute("DELETE FROM struggle_proposals WHERE id = ?", (old["id"],))
+                await _drop(db, old["id"])
                 res["withdrawn"] += 1
         await db.commit()
     # evidence that vanished between the read and the write (a forget racing this pass) is taken back out before anything is summarised
@@ -1007,11 +1157,12 @@ def _by_kind(kinds: Iterable[Optional[str]]) -> dict[str, int]:
 
 
 async def _all(db) -> list[dict]:
-    cur = await db.execute(f"SELECT {', '.join(_PCOLS)} FROM struggle_proposals")
+    cur = await db.execute(f"SELECT {_SEL} FROM {_FROM}")
     return [_row(r) for r in await cur.fetchall()]
 
 
 async def _reconcile_in(db) -> int:
+    await _prune_queue(db)
     cur = await db.execute("SELECT DISTINCT proposal_id FROM struggle_proposal_events WHERE event_id NOT IN (SELECT id FROM struggle_events)")
     pids = [str(r[0]) for r in await cur.fetchall()]
     if not pids:
@@ -1027,17 +1178,29 @@ async def _write_links(db, pid: str, c: Cluster) -> None:
                          (pid, eid, uid, ts, s))
 
 
+def _atomic(db):
+    """ONE transaction around a proposal's queue row, its detail row and its evidence links (asyncpg ``conn.transaction()``; a savepoint
+    inside an open one). ``AsyncpgCompat.commit()`` is a no-op, so without this each statement autocommits and a concurrent pass can prune
+    the half-written queue row. A test double without transactions runs the statements as they come."""
+    return eq.atomic(db)
+
+
 async def _upsert(db, c: Cluster, old: Optional[dict], now: float, m: str) -> tuple[str, Optional[str]]:
     """Insert / refresh one cluster's proposal. Returns (counter name, proposal id or None when it was suppressed)."""
     st = c.stats
     sentence = template_summary(c.kind, c.pattern, c.domain, c.label, st, c.label_source)
     if old is None:
         pid = uuid.uuid4().hex
+        cls, comp, tier = QUEUE_CLASS[c.kind]
+        # the queue row FIRST (status lives there); a crash before the detail row leaves a queue orphan that _prune_queue removes
+        await eq.propose(db, source=QUEUE_SOURCE, change_class=cls, component=comp, risk_tier=tier, title=sentence, description=sentence,
+                         evidence=_signal(c.kind, st, c.confidence), proposal_id=pid, legacy_type="struggle_" + c.kind,
+                         actor="struggle_proposals", now=now)
         await db.execute(
-            f"INSERT INTO struggle_proposals ({', '.join(_PCOLS)}) VALUES ({_marks(len(_PCOLS))})",
-            (pid, c.fingerprint, c.kind, PROPOSED, c.pattern, c.domain, c.label, c.label_source, json.dumps(st["signals"], sort_keys=True), st["episodes"],
-             st["events"], st["users"], st["user_days"], st["first_seen"], st["last_seen"], c.confidence, sentence, "template", "{}", "",
-             now, now, None, "", m))
+            f"INSERT INTO struggle_proposals ({', '.join(_DCOLS)}) VALUES ({_marks(len(_DCOLS))})",
+            (pid, c.fingerprint, c.kind, c.pattern, c.domain, c.label, c.label_source, json.dumps(st["signals"], sort_keys=True), st["episodes"],
+             st["events"], st["users"], st["user_days"], st["first_seen"], st["last_seen"], c.confidence, sentence, "template", "{}",
+             now, now, m))
         await _write_links(db, pid, c)
         return "created", pid
     status = old["status"]
@@ -1046,8 +1209,8 @@ async def _upsert(db, c: Cluster, old: Optional[dict], now: float, m: str) -> tu
         since = [(u, ts) for _, u, ts, _ in c.links if ts > decided]
         if now - decided < REJECT_SUPPRESS_DAYS * DAY_S or episodes_of(since) < min_episodes():
             return "suppressed", None
-        await db.execute("UPDATE struggle_proposals SET status = ?, followup = '{}', decision_note = '', decided_at = NULL, decided_by = '' WHERE id = ?",
-                         (PROPOSED, old["id"]))
+        await db.execute("UPDATE struggle_proposals SET followup = '{}' WHERE id = ?", (old["id"],))    # DETAIL row first (the one lock order)
+        await eq.transition(db, old["id"], "proposed", actor="struggle_proposals", note="", now=now)    # a reopen clears the verdict
         counter = "reopened"
     else:
         counter = "updated"
@@ -1058,6 +1221,7 @@ async def _upsert(db, c: Cluster, old: Optional[dict], now: float, m: str) -> tu
         "last_seen = ?, confidence = ?, summary = ?, summary_source = ?, updated_at = ? WHERE id = ?",
         (json.dumps(st["signals"], sort_keys=True), st["episodes"], st["events"], st["users"], st["user_days"], st["first_seen"], st["last_seen"],
          c.confidence, old["summary"] if keep_sentence else sentence, "model" if keep_sentence else "template", now, old["id"]))
+    await _sync_queue(db, old["id"], c.kind, st, c.confidence, old["summary"] if keep_sentence else sentence)
     await _write_links(db, old["id"], c)
     return counter, old["id"]
 
@@ -1066,7 +1230,7 @@ async def _write_summaries(res: dict, llm: Optional[LLM], budget_s: float) -> No
     """Ask the night model for a one-sentence rewording of each proposal still on its template (live ones only), validate, store."""
     async with _ctx() as db:
         cur = await db.execute(
-            f"SELECT {', '.join(_PCOLS)} FROM struggle_proposals WHERE status = ? AND summary_source = 'template' ORDER BY confidence DESC", (PROPOSED,))
+            f"SELECT {_SEL} FROM {_FROM} WHERE {_STATUS_SQL} = ? AND sp.summary_source = 'template' ORDER BY sp.confidence DESC", (PROPOSED,))
         rows = [_row(r) for r in await cur.fetchall()]
     res["summaries_template"] = len(rows)
     if llm is None or not rows:
@@ -1080,8 +1244,13 @@ async def _write_summaries(res: dict, llm: Optional[LLM], budget_s: float) -> No
         return
     async with _ctx() as db:
         for pid, text in got.items():
-            await db.execute("UPDATE struggle_proposals SET summary = ?, summary_source = 'model', updated_at = ? WHERE id = ? AND status = ?",
-                             (text, time.time(), pid, PROPOSED))
+            async with _atomic(db):     # the detail sentence and the queue sentence change together or not at all
+                cur = await db.execute(
+                    "UPDATE struggle_proposals SET summary = ?, summary_source = 'model', updated_at = ? WHERE id = ? AND id IN "
+                    "(SELECT id FROM evolution_proposals WHERE id = ? AND status IN ('proposed', 'probed') AND decision = '')",
+                    (text, time.time(), pid, pid))
+                if int(getattr(cur, "rowcount", 0) or 0) > 0:
+                    await eq.update_text(db, pid, title=text, description=text)
         await db.commit()
     res["summaries_model"] = len(got)
     res["summaries_template"] -= len(got)
@@ -1100,7 +1269,7 @@ async def brief_line(user_id: str) -> Optional[str]:
     try:
         if mode() != "on":
             return None
-        waiting = (await asyncio.wait_for(counts(), STORE_TIMEOUT_S)).get(PROPOSED) or {}
+        waiting = (await bounded(counts(), STORE_TIMEOUT_S)).get(PROPOSED) or {}
         n = sum(waiting.values())
         if n <= 0:
             return None

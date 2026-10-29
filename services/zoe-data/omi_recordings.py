@@ -46,8 +46,9 @@ import uuid
 import wave
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional
 
+import live_voice_gate
 import user_erase_gate as erase_gate
 from typed_env import env_bool, env_int, env_str
 
@@ -65,7 +66,7 @@ TRANSIENT_ONLY_S = 0.5            # under this much sustained sound, a "voiced" 
 MAX_ATTEMPTS = 3
 #: Bump whenever transcription or its empty-transcript diagnostics change. The first loop pass after a deploy that changes it requeues
 #: every held empty/failed recording ONCE (``requeue_after_pipeline_change``), so the change reaches audio still inside its retention.
-TRANSCRIBE_PIPELINE = "2026-10-16.transient-robust-levels"
+TRANSCRIBE_PIPELINE = "2026-10-25.click-skip-keep-wav"
 STALE_CLAIM_S = 30 * 60
 POLL_S = 60.0
 VOICE_BUSY_S = 45.0              # a voice turn this recent = "in flight": it aborts/holds a running job
@@ -207,9 +208,15 @@ def voice_busy(now_mono: Optional[float] = None) -> bool:
     return age is not None and age < VOICE_BUSY_S
 
 
+def live_busy_reason() -> Optional[str]:
+    """Seam over ``live_voice_gate.busy_reason``: live STT in flight, the voice-harness flock, the night-window unit, a cool-off."""
+    return live_voice_gate.busy_reason()
+
+
 # Gate reasons: the human string ``may_transcribe_now`` returns, and the stable code the log line / API use.
 WHY_VOICE = "voice turn in flight"
 WHY_NOT_IDLE = "panel not idle"
+WHY_LIVE_PREFIX = "live voice: "       # + a ``live_voice_gate`` code (live_stt / harness / cooloff); night_unit maps to "night window"
 WHY_MEM_PREFIX = "MemAvailable"
 
 
@@ -220,6 +227,8 @@ def reason_code(why: str) -> str:
         return "voice_active"
     if why == WHY_NOT_IDLE:
         return "panel_not_idle"
+    if why.startswith(WHY_LIVE_PREFIX):
+        return "voice_harness" if why.endswith("harness") else "voice_active"
     if why == "night window":
         return "night_window"
     if why == "flag off":
@@ -230,7 +239,7 @@ def reason_code(why: str) -> str:
 def is_transient(why: str) -> bool:
     """A closure a RUNNING job should wait out (a voice turn ends, RAM comes back) rather than abort on. The flag and the night
     window are decisions, not weather: they end the job at once."""
-    return reason_code(why) in ("low_memory", "voice_active", "panel_not_idle")
+    return reason_code(why) in ("low_memory", "voice_active", "voice_harness", "panel_not_idle")
 
 
 def may_transcribe_now(now: Optional[datetime] = None, *, continuing: bool = False) -> tuple[bool, str]:
@@ -243,6 +252,11 @@ def may_transcribe_now(now: Optional[datetime] = None, *, continuing: bool = Fal
         return False, "night window"
     if voice_busy():
         return False, WHY_VOICE
+    live = live_busy_reason()
+    if live == "night_unit":
+        return False, "night window"
+    if live:
+        return False, WHY_LIVE_PREFIX + live
     if not continuing:
         age = last_voice_age_s()
         if age is not None and age < idle_s():
@@ -404,6 +418,53 @@ def iter_wave_chunks(w: Any, *, target_s: float = CHUNK_S, search_s: float = SPL
 def peak(pcm: bytes) -> int:
     a = _samples(pcm)
     return max(map(abs, a)) if len(a) else 0
+
+
+QUIET_SKIP_RMS = ACTIVE_RMS // 3  # a 100 ms window at/above this RMS counts toward "something sustained happened" (pre-STT skip only)
+QUIET_MIN_WINDOWS = 3             # a click/ringing spans at most 2 windows; a word is >= 3. Fewer sustained windows = nothing to transcribe
+
+
+def quiet_skip_enabled() -> bool:
+    """``ZOE_OMI_QUIET_SKIP`` (default on) - a chunk whose only loud part is a click (fewer than ``QUIET_MIN_WINDOWS`` 100 ms windows at
+    or above ``QUIET_SKIP_RMS``) is not sent to Moonshine. The recording keeps its WAV when nothing at all came out (empty_transcript),
+    so a wrong skip is recoverable inside the retention."""
+    return env_bool("ZOE_OMI_QUIET_SKIP", True)
+
+
+def sustained_windows(pcm: bytes) -> int:
+    """Count of 100 ms windows at or above ``QUIET_SKIP_RMS``. Pure; call it off the event loop for a 20 s chunk."""
+    a = _samples(pcm)
+    win = SAMPLE_RATE // 10
+    n = 0
+    for i in range(0, len(a) - win + 1, win):
+        part = a[i:i + win]
+        if (sum(v * v for v in part) / win) ** 0.5 >= QUIET_SKIP_RMS:
+            n += 1
+    return n
+
+
+CLICK_PEAK_SHARE = 0.5            # a click puts >= this share of the chunk's loud-window energy into ONE 10 ms slice; a voiced word spreads it
+
+
+def is_click_only(pcm: bytes) -> bool:
+    """True only for a lone sharp transient: fewer than ``QUIET_MIN_WINDOWS`` loud windows AND (when there is any loud window) the
+    energy is peak-dominated - one 10 ms slice holds >= ``CLICK_PEAK_SHARE`` of it. A short voiced word ("no", ~200 ms) has a
+    normal envelope, so it fails the second test and still reaches Moonshine. Pure; call it off the event loop."""
+    a = _samples(pcm)
+    win = SAMPLE_RATE // 10
+    sl = SAMPLE_RATE // 100
+    loud = 0
+    total = 0.0
+    top = 0.0
+    for i in range(0, len(a) - win + 1, win):
+        part = a[i:i + win]
+        if (sum(v * v for v in part) / win) ** 0.5 >= QUIET_SKIP_RMS:
+            loud += 1
+            total += sum(v * v for v in part)
+            top = max(top, max(sum(v * v for v in part[j:j + sl]) for j in range(0, win, sl)))
+    if loud >= QUIET_MIN_WINDOWS:
+        return False
+    return loud == 0 or total <= 0 or top / total >= CLICK_PEAK_SHARE
 
 
 def _measure_reader(w: Any) -> dict:
@@ -866,6 +927,11 @@ async def transcribe_wave(w: Any, *, gate=None, pause_s: float = 0.4, stats: Opt
                 if spans is not None:
                     spans.append((start_ms, pos * 1000 // SAMPLE_RATE, ""))
                 continue
+            if quiet_skip_enabled() and await asyncio.to_thread(is_click_only, piece):
+                st["quiet_skipped"] = st.get("quiet_skipped", 0) + 1    # a lone click above the peak floor: Moonshine would say nothing
+                if spans is not None:
+                    spans.append((start_ms, pos * 1000 // SAMPLE_RATE, ""))
+                continue
             st["voiced"] += 1
             text = (await _transcribe_file(_chunk_wav(piece, tmp, i)) or "").strip()
             if text:
@@ -1080,6 +1146,11 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
             if not cur or cur[0]["status"] != "transcribing":      # deleted while we worked: write nothing
                 return False
             keep = bool(cur[0]["keep_audio"])
+            if seen_chunks.get("quiet_skipped"):
+                # a chunk was skipped before STT: other chunks' text must not make the recording look complete and delete the only
+                # copy of audio nobody transcribed. Held until its retention expiry (audio_expires_at), like any kept recording.
+                keep = True
+                await db.execute("UPDATE omi_recordings SET keep_audio = 1 WHERE id = ?", (rid,))
             if not text.strip():
                 # An EMPTY transcript is not a successful transcription: nothing was understood, so the audio is the only copy of
                 # whatever the pendant heard. Keep the WAV (its retention expiry still bounds it) and say so loudly.
@@ -1087,10 +1158,10 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                                  "WHERE id = ? AND status = 'transcribing'", (_iso(_now()), rid))
                 await db.commit()
                 logger.warning("OMI_EMPTY_TRANSCRIPT id=%s seconds=%s peak=%s rms=%s clipped=%s rms_median=%s active_s=%s rate=%s "
-                               "voiced_chunks=%s/%s reason=%s - WAV kept until retention",
+                               "voiced_chunks=%s/%s quiet_skipped=%s reason=%s - WAV kept until retention",
                                rid, level.get("seconds"), level.get("peak"), level.get("rms"), level.get("clipped"),
                                level.get("rms_median"), level.get("active_s"), level.get("rate"),
-                               seen_chunks.get("voiced"), seen_chunks.get("chunks"), empty_reason(seen_chunks, level))
+                               seen_chunks.get("voiced"), seen_chunks.get("chunks"), seen_chunks.get("quiet_skipped", 0), empty_reason(seen_chunks, level))
                 return True
             seg_ids: list = []
             if segs is not None:              # segments land BEFORE the row says done, and the WAV goes only after both
@@ -1316,6 +1387,31 @@ async def release_tagged_audio(user_id: Optional[str] = None) -> int:
     return n
 
 
+#: when ``segment_clip`` serves a line's audio: its recording is done, still holds a WAV, and is inside retention (past retention a
+#: clip is never served, even before the hourly purge runs). ONE predicate for the clip and for ``segment_lines``' ``audio_kept``.
+_CLIP_HELD = "r.status = 'done' AND r.audio_path != '' AND (r.audio_expires_at IS NULL OR r.audio_expires_at > ?)"
+
+
+async def segment_lines(user_id: str, segment_ids: Iterable[str]) -> dict[str, dict]:
+    """``{segment_id: {"offset_ms", "audio_kept"}}`` for the member's OWN lines among ``segment_ids`` (anyone else's id = absent):
+    where the line starts in its recording, and whether ``segment_clip`` would play it now (the same ``_CLIP_HELD`` predicate). For
+    the day review's quotes on the Pendant page; never the audio path. Fail-soft: an unreadable store = {}."""
+    ids = sorted({str(s) for s in segment_ids if s})[:200]
+    if not ids:
+        return {}
+    from db_compat import get_compat_db
+    base = ("FROM omi_segments s JOIN omi_recordings r ON r.id = s.recording_id WHERE s.user_id = ? AND r.user_id = ? "
+            "AND s.id IN (%s)" % ",".join("?" * len(ids)))
+    try:
+        async with get_compat_db() as db:
+            rows = await _fetch(db, "SELECT s.id, s.start_ms " + base, (user_id, user_id, *ids))
+            held = {r["id"] for r in await _fetch(db, f"SELECT s.id {base} AND {_CLIP_HELD}", (user_id, user_id, *ids, _iso(_now())))}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("omi_recordings: segment_lines unavailable (%s)", type(exc).__name__)
+        return {}
+    return {r["id"]: {"offset_ms": max(0, int(r["start_ms"] or 0)), "audio_kept": r["id"] in held} for r in rows}
+
+
 async def segment_clip(user_id: str, segment_id: str, *, max_s: float = CLIP_MAX_S) -> Optional[bytes]:
     """A short WAV (at most ``max_s``, from the start of the turn) of one of the member's OWN lines, cut from its recording's
     still-held WAV; None when the line is not theirs, its recording is not done, or no audio is held. The file must sit inside
@@ -1323,9 +1419,8 @@ async def segment_clip(user_id: str, segment_id: str, *, max_s: float = CLIP_MAX
     from db_compat import get_compat_db
     async with get_compat_db() as db:
         rows = await _fetch(db, "SELECT s.start_ms, s.end_ms, r.audio_path FROM omi_segments s JOIN omi_recordings r ON r.id = s.recording_id "
-                                "WHERE s.id = ? AND s.user_id = ? AND r.user_id = ? AND r.status = 'done' AND r.audio_path != '' "
-                                "AND (r.audio_expires_at IS NULL OR r.audio_expires_at > ?)",      # past retention: never served, even
-                            (segment_id, user_id, user_id, _iso(_now())))                               # before the hourly purge runs
+                                f"WHERE s.id = ? AND s.user_id = ? AND r.user_id = ? AND {_CLIP_HELD}",
+                            (segment_id, user_id, user_id, _iso(_now())))
     if not rows:
         return None
     path = Path(rows[0]["audio_path"])

@@ -114,13 +114,14 @@ async def test_create_evolution_proposal_stores_runtime_intake_contract_snapshot
     proposal_calls = [call for call in db.calls if "evolution_proposals" in call[0]]
     assert len(proposal_calls) == 2
     assert len(sync_calls) == 1
-    insert_sql, insert_args = proposal_calls[0]
+    insert_sql, (insert_args,) = proposal_calls[0]        # evolution_queue.propose: ONE params tuple
     update_sql, update_args = proposal_calls[1]
     assert "target_patterns" in insert_sql
     assert "target_patterns" not in update_sql
+    assert (insert_args[6], insert_args[8], insert_args[9], insert_args[13]) == ("proposed", "code", 3, "mcp:create_evolution_proposal")
 
-    insert_evidence = json.loads(insert_args[3])
-    insert_contract = json.loads(insert_args[4])
+    insert_evidence = json.loads(insert_args[4])
+    insert_contract = json.loads(insert_args[5])
     assert insert_evidence["source"] == "runtime_evolution_intake"
     assert insert_evidence["signal"]["source"] == "mcp:create_evolution_proposal"
     assert insert_evidence["signal"]["scope"] == "personal"
@@ -139,7 +140,7 @@ async def test_create_evolution_proposal_stores_runtime_intake_contract_snapshot
     assert proposal["approval_gate"]["allowed_to_execute"] is False
     assert sync_calls[0]["proposal_id"] == insert_args[0]
     assert sync_calls[0]["proposal_type"] == "intent_pattern"
-    assert sync_calls[0]["contract_snapshot"] == insert_args[4]
+    assert sync_calls[0]["contract_snapshot"] == insert_args[5]
     assert update_args == ("multica-issue-123", result["proposal_id"])
 
 
@@ -170,18 +171,19 @@ async def test_create_evolution_proposal_attributes_legacy_fallback_to_family_ad
     assert result["ok"] is True
     assert result["multica_issue_id"] is None
     assert result["contract_schema"] == "zoe_evolution_proposal"
-    assert len(db.calls) == 1
-    insert_sql, insert_args = db.calls[0]
+    inserts = [call for call in db.calls if call[0].startswith("INSERT INTO evolution_proposals ")]
+    assert len(inserts) == 1
+    insert_sql, (insert_args,) = inserts[0]
     assert "target_patterns" in insert_sql
-    contract = json.loads(insert_args[4])
-    evidence = json.loads(insert_args[3])
+    contract = json.loads(insert_args[5])
+    evidence = json.loads(insert_args[4])
     assert evidence["source"] == "runtime_evolution_intake"
     assert evidence["signal"]["source"] == "mcp:create_evolution_proposal"
     assert evidence["signal"]["scope"] == "personal"
     assert evidence["signal"]["user_id"] == "family-admin"
     assert contract["schema"] == "zoe_evolution_proposal"
     assert contract["legacy_writer"] == "runtime_evolution_intake"
-    assert insert_args[5] == "code_improvement"
+    assert insert_args[1] == "code_improvement"
     assert contract["proposal"]["metadata"]["legacy_proposal_type"] == "code_improvement"
     assert contract["proposal"]["metadata"]["selected_candidate_id"] == "existing_zoe_code_improvement"
     assert contract["proposal"]["multica_issue_id"] is None

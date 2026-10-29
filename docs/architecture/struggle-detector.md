@@ -1,9 +1,9 @@
 ---
 type: architecture
-title: Struggle detector - notice where Zoe struggled, propose how to fix it (Phases 1-2 of the self-correction loop; Phase 3 designed)
-status: phase-1 built (ZOE_STRUGGLE_DETECT default shadow); phase-2 built (ZOE_STRUGGLE_PROPOSALS default shadow); phase-3 designed here, not built
-owner: services/zoe-data (struggle_signals.py, struggle_detector.py, struggle_digest.py, struggle_proposals.py, routers/struggles.py)
-updated: 2026-10-18
+title: Struggle detector - notice where Zoe struggled, propose how to fix it, retrain the router on it (Phases 1-3 of the self-correction loop) + failure capture
+status: phase-1 built (ZOE_STRUGGLE_DETECT default shadow); phase-2 built (ZOE_STRUGGLE_PROPOSALS default shadow); phase-3 built flag-dark (ZOE_ROUTER_STRUGGLE_FEED default off); failure capture built (ZOE_STRUGGLE_OUTCOMES default off)
+owner: services/zoe-data (struggle_signals.py, struggle_detector.py, struggle_digest.py, struggle_proposals.py, turn_outcomes.py, router_retrain_ledger.py, routers/struggles.py) + scripts/maintenance/router_struggle_retrain.py, scripts/maintenance/zoe-struggle-labels.py
+updated: 2026-10-19
 ---
 
 # Struggle detector
@@ -17,8 +17,8 @@ contract. **Phase 1 (this build) is step 1: notice.** It detects, records and re
 | 1. notice | per-turn struggle signals, stored + reported | 1 | **built** |
 | 2. explain overnight | the night window clusters the week's events into problem statements (code groups; the 12B only rewords the counts) | 2 | **built** |
 | 3. propose | a cluster becomes a stored proposal with a fix class and its evidence ids; failed->success pairs become labelled router examples | 2 | **built** |
-| 4. prove | a retrained router is scored on held-out failures AND the golden eval + voice replay before it ships | 3 | designed below |
-| 5. apply | router retraining adopted automatically **within its gates**; code changes only as PRs; **rocks never change** | 3 | designed below |
+| 4. prove | a retrained router is scored on held-out failures AND the golden eval + voice replay before it ships | 3 | **built** (flag-dark) |
+| 5. apply | router retraining adopted automatically **within its gates**; code changes only as PRs; **rocks never change** | 3 | **built** (flag-dark; `on` only) |
 
 ## Where it sits (and why it cannot hurt a turn)
 
@@ -180,7 +180,7 @@ that fails drops it). `struggle_detector.erase_entity` / `delete_user` take the 
 evidence left deleted); every read joins back to `struggle_events`, so an orphaned link can never show a proposal or an example;
 `reconcile` clears the leftovers each night. Audio: `~/.zoe-voice-samples` keeps the real utterance when `ZOE_VOICE_SAVE_AUDIO` is on
 (a permanent regression corpus, never pruned); the seam hands out a bare FILE NAME for the failed turn (`audio_ref`, found by time -
-`HHMMSS_mmm.wav` carries no turn id - and withheld when two clips are within 5 s of each other) and nothing reads, copies or moves the audio.
+`HHMMSS_mmm.wav` carries no turn id - and withheld whenever another clip shares the turn's window; Phase 3 -> *Audio*) and nothing reads, copies or moves the audio.
 
 **Nothing applies itself.** The night job only creates / updates / withdraws `proposed` rows. `POST .../accept` records the decision and the
 follow-up: `router_example` -> `{type: router_selftrain_queue, consumer: ZOE_ROUTER_SELFTRAIN, label}`; any other kind -> a task stub
@@ -206,71 +206,166 @@ into the proposals (one notice source, not two) is open.
 (0 clusters; by kind: 2 answer_quality, 1 router_example, 1 stt_term events, all below the floor) - the loop is built ahead of its data.
 The tests are synthetic (`tests/test_struggle_proposals.py`, real SQLite + the real migrations, negative controls recorded in its header).
 
-## Phase 3 - prove + apply (DESIGN ONLY in this PR; code is the next PR)
+## Phase 3 - prove + apply (built, flag-dark; `scripts/maintenance/router_struggle_retrain.py`, `router_retrain_ledger.py`, flag `ZOE_ROUTER_STRUGGLE_FEED`)
 
-**The closed loop.** Zoe fails a turn; the user's next attempt works; that success labels the failure; the labelled failures retrain the
-router overnight; the new router is adopted only if it provably fixes real failures without breaking anything; the struggle detector then
-watches whether the cluster shrank.
+**The closed loop** (owner, 2026-10-18: "save users' voice turns, like the ones that fail, update the router, test against these fails;
+if the success rate improves then it adopts it"). Zoe fails a turn; the user's next attempt works; that success labels the failure; the
+labelled failures retrain the router; the new router is adopted only if it provably fixes real failures without breaking anything.
 
 ```
-fail -> (P1) event + follow-up facts -> (P2) failed->success router_example proposals (label_source=followup) -> queue
-     -> nightly: delta set (seam) -> oracle re-label -> warm-start continuation of the router -> candidate GGUF
-     -> gate (a) held-out failures  AND  gate (b) golden eval + voice replay  -> ADOPT (or discard) -> record -> watch the cluster
+fail -> (P1) event + follow-up facts -> (P2) failed->success router_example proposals -> seam queued_router_examples
+     -> COLLECT (strong labels, forget tombstones out, frozen corpus out, one row per wording, TIME split)
+     -> ORACLE (the brain labels blind; kept on agreement) -> TRAIN (warm-start continuation, measured) -> candidate GGUF
+     -> GATE (a) held-out failures  (b) frozen corpus per case  (c) voice replay OF THE CANDIDATE  (d) forget-clean
+     -> ADOPT (`on` only: router_selftrain.deploy) | record "would adopt" (`shadow`) | record why not
 ```
 
-**What may change: only the router** (FunctionGemma-270M stage 2, `functiongemma-router.service`). Gemma (the brain), Moonshine (STT) and
-Kokoro (TTS) are rocks and never a fix target; stage 1 (the SetFit head) is hand-committed and outside the loop. `intent_gap`,
-`answer_quality` and `stt_term` proposals stay human work (task stubs; code changes arrive as PRs).
+**What may change: only the router** (FunctionGemma-270M stage 2, `functiongemma-router.service`). Gemma, Moonshine and Kokoro are rocks;
+stage 1 (the SetFit head) is hand-committed and outside the loop. `intent_gap`, `answer_quality` and `stt_term` proposals stay human work.
 
-**The feed.** A new flag `ZOE_ROUTER_STRUGGLE_FEED` (`off` default | `shadow` builds and scores but never adopts | `on`). In `on`, the
-strong-label (`label_source = followup`) `router_example` proposals that cleared the Phase 2 thresholds are queued by POLICY
-(`decided_by = policy:struggle-feed`) instead of waiting for a person: adoption is guarded by the gates below, so a manual accept adds no
-safety and would stall the loop. An admin can still reject a proposal before the night (it leaves the queue and is suppressed for 30
-days). `label_source = router` examples are not fed.
+| flag / knob | default | meaning |
+|---|---|---|
+| `ZOE_ROUTER_STRUGGLE_FEED` | `off` | `off` = the scheduled run is a no-op line; `shadow` = collect, train, gate and record, NEVER swap; `on` = shadow + adopt a candidate that passes every gate. Read per run. `--shadow` forces a shadow pass whatever the flag; nothing on the command line can make a run adopt (no force flag; a test pins it) |
+| `ZOE_ROUTER_RETRAIN_DIR` | `~/.zoe/router_retrain` | ledger, journals, scratch work, generations (0700 / 0600, outside git) |
+| `ZOE_ROUTER_RETRAIN_STOP_BRAIN` | unset | `1` lets a run stop the brain for the TRAINING step only, when memory needs it, no voice turn for 30 min and the night window is not running; always restarted (`--recover` / the unit's `ExecStopPost` retry it) |
+| `ZOE_ROUTER_TRAIN_PYTHON` | `/usr/bin/python3` | the trainer's interpreter (the py312 service venv has no peft / datasets) - shared with `router_selftrain.py` |
+| `ZOE_ROUTER_RETRAIN_HOLDOUT_FRAC` / `_REPLAY` / `_DELTA_REPEAT` / `_EPOCHS` / `_LR` | 0.2 / 300 / 2 / 1 / 1e-4 | the split and the continuation recipe |
 
-**Training (inside the existing machinery, not beside it).** The job extends `scripts/maintenance/router_selftrain.py` (its ratchet,
-`decide_promotion`, `deploy`, `restore_lkg`, journal and scoreboard stay the only path to a live model); the delta set is a second candidate
-source next to the miner's. Steps: (1) read `queued_router_examples()` (train + holdout split from `split_of`, a hash of the normalised failed text - an
-example never moves between sets from one night to the next and duplicate phrasings never straddle the two); (2) re-label each example with the loop's independent grammar-constrained
-oracle and keep only those where oracle and follow-up AGREE (two sources, as for mined candidates); (3) refuse any text that overlaps the
-frozen 81-case corpus (the loop's existing held-out guard); (4) warm-start from `ZOE_ROUTER_WARM_START` (`runs/<gen>/merged`, **never
-deleted**) on the train split plus a replay sample of the previous training set (against forgetting); (5) export a candidate GGUF.
-*Time is the open constraint:* the window is capped at 65 minutes and must end before the 04:10 voice gate, CPU training on this Jetson takes
-hours for a full set, and the scratch-rig eval needs a quiet box. The first Phase 3 task is therefore to MEASURE a continuation run on a
-few hundred examples; the design then either fits the slice into the window's tail (after the 12B stops) or checkpoints and RESUMES across
-nights, adopting when a generation completes. Nothing here assumes the measurement.
+**Collect (the data).** The seam `queued_router_examples(statuses=SEAM_STATUSES)` resolves each example's words at read time from the
+member's own `struggle_events.summary` (forget-gated, member-only, the failed turn only) - never the redacted router shadow log. Kept:
+`label_source = followup` examples of `proposed` / `accepted` / `applied` proposals (a `rejected` one never), and a `label_source = router`
+example only when a PERSON accepted it (an owner correction; the loop's own policy accept never upgrades a weak label). Dropped and
+counted: forget tombstones, frozen-corpus texts, bad labels. One row per normalised wording (a wording with two labels is dropped). **Time
+split, no leakage:** a wording's time is its NEWEST failure; the newest 20% of wordings the incumbent cannot have learned are the held-out "known failures"; every older wording -
+and any wording the incumbent MAY have learned: the served and previous generations' WHOLE warm-start lineage (`parent` links; a generation
+holds what every ancestor learned) and the committed corpus every generation descends from - is train, so every held-out failure happened
+after every new trained one and never shares a wording with it. The training rows are rebuilt with every held-out wording removed from
+EVERY source (the train split and the committed-corpus replay sample), and the run aborts if one is still there (`prepare_training`,
+`leaked`). Fewer than 10 held-out (about 50 labelled wordings) or 10 train = "not enough evidence": nothing is trained.
 
-**Adoption gate. Both (a) and (b) must hold; any miss discards the candidate and the incumbent keeps serving.**
+**Train.** The brain re-labels every example blind (the miner's grammar-constrained oracle, full tool menu, no hint) and only agreement
+survives; the train split (x2) plus a 300-row replay sample of the committed corpus (against forgetting) is a warm-start continuation of
+the SERVED generation's checkpoint (`ZOE_ROUTER_WARM_START`, gen1, before the first adoption), 1 epoch at lr 1e-4, `nice` + OOM-first. Every
+run MEASURES itself (wall minutes, the trainer's own peak RSS via `wait4`, the lowest MemAvailable) into the ledger, and the next run's
+plan uses the measured peak x 1.15 (4000 MB assumed until then). A watchdog terminates the trainer if MemAvailable falls under 700 MB.
 
-* **(a) Real improvement on held-out failures.** The holdout is the 20% of labelled failures never trained on. Both models are scored on it
-  back-to-back on the same scratch rig (the loop's like-for-like rule). Requires: at least 10 holdout examples (fewer = "not enough evidence",
-  no adoption); candidate `fixed - broken >= max(3, 25% of the items the incumbent got wrong)` where `fixed` = incumbent wrong and candidate
-  right, `broken` = the reverse. Memorising the train split cannot pass this.
-* **(b) No regression anywhere else.** (i) the full golden router eval set (the 81-case frozen corpus): **per case**, every case the incumbent
-  answered correctly the candidate also answers correctly (stricter than the existing aggregate `>=`), chat false positives == 0, p50 under
-  budget, same case count; (ii) the voice replay corpus `~/.zoe-voice-samples` through `voice_regression_probe.py` under
-  `flock /tmp/zoe-voice-harness.lock`: said-vs-did must not regress (a previously-working command that now fails is a bug) and per-stage speed
-  must not regress; a skipped replay is not a pass. Failed turns whose audio is in the corpus (`audio_ref`) are in the replay set by
-  construction.
-* **Instrument checks (run when the pipeline changes, not nightly):** a shuffled-label control must FAIL gate (a); an injected regression
-  (one golden case flipped) must FAIL gate (b); the measurement-validity abort (incumbent live vs scratch within 10 points) stays.
+**Adoption gate (`decide_adoption`; deterministic, no model-judged score; every check must hold).** Both models on the SAME scratch rig,
+back to back, after the incumbent's live-vs-scratch validity check (> 10 points apart = inconclusive):
 
-**Rollback and record.** The previous generation stays serving until the new one passes; the adopted model keeps the loop's last-known-good
-GGUF, post-deploy verification and auto-rollback; `runs/<gen>/merged` of every generation is kept (the lineage rule) and the last two GGUFs
-stay on disk for an instant swap (`ZOE_ROUTER_HEAD=off` is the global kill switch). Everything is recorded: the journal and scoreboard rows
-(candidate and incumbent scores, holdout ids by hash, fixed / broken lists as ids, gate verdicts, timings), the proposals moved to `applied`
-with the generation id (`mark_applied`), and a counts-only line in the night report.
+* **(a) the held-out failures:** >= 10 cases, scored by domain through the real production router (`prod_path_eval.py --corpus`);
+  `fixed` = incumbent wrong and candidate right, `broken` = the reverse; requires the incumbent to miss at least one and
+  `fixed - broken >= max(3, ceil(25% of the incumbent's misses))`. A shuffled-label control fails this (a test pins it).
+* **(b) no regression elsewhere:** on the frozen 81-case corpus no case the incumbent answers may break (`GOLDEN_MAX_BROKEN = 0`; one case
+  is 1.2 points), the aggregate holds (>=), chat false positives 0, p50 < 600 ms, the same case count.
+* **(c) the voice replay** of the CANDIDATE (`router_selftrain.replay_gate(candidate_gguf=...)` serves it on the scratch port and points
+  the probe at it, under `flock /tmp/zoe-voice-harness.lock`, into the loop's own results file - never the shared voice-gate artifact):
+  it must RUN and pass; a skip is not a pass.
+* **(d) forget-clean:** no example the run used was tombstoned while it ran.
 
-**Watching it work.** For 7 nights after an adoption the struggle detector's counts for the applied clusters (same fingerprints) are compared
-with the 7 nights before: a cluster that does not shrink, or another signal that grows, raises an alarm and queues a rollback proposal
-(the human decides; the loop never rolls back on a trend alone, only on the loop's own post-deploy check).
+Any miss leaves the incumbent serving and records the reasons. **Adopt** (`on` + every check) is one transaction: (1) RESERVE - under
+the ledger lock, re-check the tombstones and insert the run as `adopting` (a forget from then on flags it); (2) a durable
+`adopt_in_progress.json` marker; (3) `router_selftrain.deploy` (LKG archived first, atomic swap, restart, `/props` identity, post-deploy LIVE
+eval, auto-rollback); (4) PUBLISH - the checkpoint moves to `generations/<gen>/merged` (**never deleted** - the lineage rule; it becomes the
+next warm start) and, under the lock, the record commits as `adopted` with `served` / `previous` updated - unless a forget flagged it during
+the swap. Any failure or flag after the swap restores the outgoing model (`restore_lkg`), removes the half-made generation and records
+`rolled_back_at_publish`; a process killed mid-publication leaves the marker, and `--recover` (the unit's `ExecStopPost`) finishes the
+rollback unless the commit had landed. Then the proposals it learned from move to `applied` (a still-proposed one is accepted by `policy:struggle-feed` first, so the
+record says who decided). `--rollback` puts the previous model back instantly (`restore_lkg`, validated, archive-only). A candidate that
+did not become a generation is scratch: its checkpoint is deleted at the end of the run; the newest shadow candidate GGUF is kept.
 
-**Limits stated up front.** (1) A follow-up that succeeded is evidence, not proof - the user may have asked for something different; the
-oracle-agreement step and the holdout exist for that. (2) Forgetting cannot reach into weights: a generation trained on a phrasing keeps
-having learned it. Mitigation: the delta set is rebuilt from the seam each run (a forgotten example is never retrained), kept generations
-are limited to the last two plus the lineage checkpoint, everything is local, and the next adopted generation supersedes. The A6
-router-log redaction work in flight covers the shadow log, not this path. (3) With one household the volume of strong labels is small; the
-gate's "not enough evidence" is the expected outcome for a while, and that is correct.
+**Forget.** `struggle_proposals.forget_events` / `forget_user` (the forget / delete cascade, fail closed) call
+`router_retrain_ledger.forget` first, with the failed turns' WORDING keys read from the struggle rows while they still exist: the example
+leaves every run record, its wording key, event id (and, for a deleted user, the user key) become tombstones - also when no run has
+recorded it yet - so it never re-enters even if the same words are said again, any leftover run text is deleted, and a served (or
+being-swapped-in) generation that LEARNED it - itself or through any ancestor - is flagged `needs_retrain` (`--status` shows it). A pytest
+session can never reach the live ledger (`root()` refuses it; both conftests pin `ZOE_ROUTER_RETRAIN_DIR`). Weights cannot unlearn: the next adopted
+generation, trained without it, is the remedy. The ledger holds no words (event ids and truncated hashes); the words exist only for one
+run in `work/<stamp>/*.texts.jsonl` (0600) and are deleted when it ends.
+
+**Audio (the #2109 blocker, closed).** `audio_ref` is now bound to the turn by time and withheld whenever that is ambiguous: with the
+failed turn's latency known, the clip must sit in [route start - 20 s, route start + 1 s] and be the ONLY clip from there to 3 s after the
+turn finished (another panel capturing while the turn was answered withholds it); without the latency, the only clip in the 90 s before
+it finished. It carries `mtime` / `size` (the names repeat daily). An exact binding still needs a turn id in the sample name (a
+replay-gated voice change; open-problems).
+
+**Where and when.** The run refuses when the night window unit is running, when it would overlap 02:45-03:15 or 04:00-04:55 (estimated from
+the last measured run, 120 min until then), when a voice turn happened in the last 30 minutes (the panel is in use), or when training would
+leave MemAvailable under 700 MB with the voice stack up and stopping the brain is not allowed. Template units
+`scripts/setup/systemd/zoe-router-retrain.{service,timer}` (Saturday 00:30; installing them is an owner step).
+
+**Evidence (2026-10-19).** The live store holds 4 struggle events in 30 days (the last on 2026-10-15) and 0 router_example proposals, so
+the real shadow run (`--shadow`, recorded in the ledger) stopped at COLLECT: 0 seam rows, "not enough evidence: 0 held-out < 10 (~50
+labelled wordings needed)". Training was NOT measured: MemAvailable was 1.5-2.1 GB with the voice stack up and the owner at the panel,
+under the 4000 MB assumed peak + 700 MB floor, and the brain was not to be stopped. The first shadow run in a training window measures it.
+Tests: `tests/unit/test_router_struggle_retrain.py` (gate, split, forget, shadow, rollback, window, memory; negative controls in its header)
+and the Phase 3 cases in `services/zoe-data/tests/test_struggle_proposals.py`.
+
+**Limits stated up front.** (1) A follow-up that succeeded is evidence, not proof; the oracle agreement and the holdout exist for that.
+(2) Weights cannot unlearn (above). (3) With one household, labelled failures arrive slowly; "not enough evidence" is the expected outcome
+for a while, and that is correct. (4) Watching an adopted cluster shrink over the next 7 nights (and queueing a rollback proposal if it
+does not) is not built yet.
+
+## Failure capture - per-turn outcomes and the owner's label check (built, flag-dark: `ZOE_STRUGGLE_OUTCOMES`)
+
+**Why the loop had no fuel (measured 2026-10-19, counts only).** The detector went live 2026-10-14 ~12:00 (shadow) and saw ~2.5 days of
+household use before the owner went away: the app log holds 51 real-panel voice turns after that (10-14 26, 10-15 21, 10-16 4, none
+since), and the store took 4 events (3 voice, 1 chat). Four causes, in order of weight: (1) **little traffic** - no household turn after
+10-16; (2) **69% of those turns were attributed to `guest`** (35 of 51; voice identity recognised nobody until the 10-18 flip), and a guest
+row keeps no words and makes no router example, so even a caught struggle could not become a label; (3) **most use is conversation** (42
+of 51 turns had no routed domain, 35 went to the brain), so router failures are rare by construction; (4) the heaviest burst (10-14
+21:49-21:55) ran BEFORE the recall round (#2052, merged 23:01): replaying the same log with today's rules finds 10 events in that burst
+where the live detector stored 2. Phase 2 then needs 3 episodes on 2 user-days, so 1 router-training event proposes nothing. Beside those:
+no per-turn record existed (a turn that worked left no trace, so there was no denominator), the handler / tool that ran was never logged,
+`chat_feedback` has 0 rows (a guest cannot write one, and the panel's voice surface has no thumbs-down), and 97% of brain turns are the
+harness, which nothing tagged.
+
+**What is captured now, per turn** (`turn_outcomes.py`, migration `0058`, written by the detector's ONE worker after the reply - never on
+the reply path): the route (`route_domain` + `route_conf` + `route_source` two_stage | two_stage_failed | similarity, `head_top`); what
+EXECUTED it (`handler` = `tier:<tier>/<intent>` from `fast_tiers.resolve`, `intent:<name>` from `intent_router.execute_intent`,
+`skybridge:<domain>.<action>`; `tools` = the brain's tool NAMES from the Flue `__TOOL__` phase=start sentinels); the `outcome` (did |
+cant_do | fell_through | brain | error | interrupted); `path_served`, `latency_ms`; and `traffic` (`traffic_class`, P-2: household | harness |
+probe | ci - derived SERVER-SIDE per turn: a synthetic user id or harness panel forces its class, else the class the request middleware bound). No audio, no reply text. In-turn
+cost: the hooks are deque appends behind two env reads (`test_note_overhead_is_tiny`, Jetson 2026-10-19: p50 0.008 ms, p99 0.009 ms for one
+handler + one tool note per turn); the row write is one INSERT (plus one UPDATE when a later turn reveals a failure) in the existing
+background worker, whose CPU per turn grows ~0.15 ms (p50 1.73 -> 1.88 ms with in-process stores; the DB round trip is async).
+
+**Concurrency and flag.** Outcome / event writes and `erase_entity` / `delete_user` take the same per-user lock (the writer re-checks the erase marks inside it), so a write parked between its keep-words check and its insert cannot land after a forget finished. `ZOE_STRUGGLE_OUTCOMES` gates the read path too: off, `confirmed_examples` returns nothing (rows already kept stay for the retention sweep and forget). DB write failures log at WARNING with names and counts only, never words.
+
+**Failed turns and their labels.** A row is FAILED when its outcome is cant_do / fell_through / error or a struggle signal fires about it
+(an over-long answer alone does not count) - at once for a single-turn signal, or when a later turn reveals it: a re-ask, rephrase,
+correction, "that was wrong", or the chat **thumbs-down / correction button** (queued to the same worker, which marks the rated turn
+by the assistant message id stored with the outcome row (an exact match; a reply with no row of its own is skipped, never attached to a neighbouring turn) - and keeps its words only while the turn is still in the
+detector's 10-minute in-process history). A failed household member row keeps the member's own words under exactly the event `summary`
+rules (PII-scrubbed raw, display form, <= 160 chars; never a guest's, off-the-record, distress or forgotten-entity turn; never across two
+identities) and a PROPOSED route: the fast domain that answered the follow-up that worked (`followup`), else the router's own belief
+(`router`). Successful turns and harness rows hold no words.
+
+**Approve-before-train** (user-stated > confirmed > inferred). The owner reviews the week's failed turns - `GET /api/system/struggles/turns`
+(admin persons, own turns and words only), `scripts/maintenance/zoe-struggle-labels.py --user ID`, and one morning-brief line when some
+wait - and confirms the proposed route, gives the right one (a fast domain, or `chat` = the brain was right) or rejects it
+(`POST .../turns/{id}/confirm {label?}` / `.../reject`). **Only a confirmed row with a fast-domain label reaches the router**:
+`struggle_proposals.queued_router_examples` appends `turn_outcomes.confirmed_examples()` (`event_id` = `proposal_id` = `turn:<row id>`,
+`status` accepted, `decided_by` `owner:<id>`, `label_source` followup when the owner kept a follow-up-proven label, else router with a
+PERSON as decider - the shape the Phase 3 driver (#2128) treats as strong), and the seam's forget re-check applies. Phase 3's own policy
+feed of follow-up proposals is unchanged; this path adds owner-confirmed pairs beside it.
+
+**Walls** (`tests/test_turn_outcomes.py`, negative controls in its header): harness rows are text-free and can never be failed, reviewed,
+confirmed or handed out; a guest row cannot be confirmed; a member decides only their own rows (another member's reads as "no such
+turn"); a proposed or rejected label never reaches the seam; forget (`erase_entity`) and user delete reach the rows and fail closed, their
+seam ids leaving the proposals / retrain ledger first (`struggle_proposals.forget_events(["turn:<id>"])`); retention is the detector's
+`ZOE_STRUGGLE_RETENTION_DAYS` sweep.
+
+| flag | default | meaning |
+|---|---|---|
+| `ZOE_STRUGGLE_OUTCOMES` | `off` | `off` = no notes, no rows, nothing in review or the seam; `on` = the record above (needs `ZOE_STRUGGLE_DETECT` != off) + the morning-brief label line |
+
+With the flag off the detector skips exactly what it always skipped (a harness panel, a synthetic user); the wider traffic class
+applies only when it is on. Known limit: `intent_router.execute_intent` knows the user but not the session, so its note is joined by
+user and could land on the wrong row when one member has two turns in flight at once (voice and chat); a tier, Skybridge or tool note is
+per session or per user as stated.
+
+VOICE-PATH file touched: `fast_tiers.py` (one note in the `resolve` wrapper after a tier answered) - replay-gated. `zoe_flue_client.py`,
+`intent_router.py`, `skybridge_service.py` and `routers/chat.py` carry one guarded note each.
 
 ## Known gaps (also in docs/knowledge/open-problems.md)
 
