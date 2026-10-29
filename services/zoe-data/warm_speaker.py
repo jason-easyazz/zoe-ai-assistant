@@ -147,13 +147,41 @@ def _persist() -> None:
         logger.warning("warm_speaker: state not saved", exc_info=True)
 
 
+# ONE background saver at a time. A stalled disk must not let every verified turn start another thread queued on
+# _io_lock (unbounded threads, and a restart that waits on all of them): while a saver runs, a new request only sets
+# _bg_pending, and the running saver writes once more - always the LATEST memo, since each _persist snapshots it.
+_bg_lock = threading.Lock()
+_bg_running = False
+_bg_pending = False
+
+
+def _bg_saver() -> None:
+    global _bg_running, _bg_pending
+    while True:
+        _persist()
+        with _bg_lock:
+            if _bg_pending:
+                _bg_pending = False
+                continue
+            _bg_running = False
+            return
+
+
 def _save(sync: bool) -> None:
+    global _bg_running, _bg_pending
     if _path() is None:
         return
     if sync:
         _persist()
-    else:
-        threading.Thread(target=_persist, name="warm-speaker-save").start()   # non-daemon: joined at interpreter exit on a graceful stop; a hard kill inside the few-ms window loses one write, which the next verified turn rewrites
+        return
+    with _bg_lock:
+        if _bg_running:
+            _bg_pending = True          # the running saver writes again when it finishes: coalesced, never another thread
+            return
+        _bg_running = True
+    # non-daemon: joined at interpreter exit on a graceful stop; a hard kill inside the few-ms window loses one write,
+    # which the next verified turn rewrites. There is never more than one of these.
+    threading.Thread(target=_bg_saver, name="warm-speaker-save").start()
 
 
 def note(panel_id: str, member: str, *, now: "float | None" = None, sync: bool = False) -> None:

@@ -241,6 +241,29 @@ def test_a_stalled_panel_publish_never_blocks_the_memo_removal(state, monkeypatc
     assert "casey" not in state.read_text(), "a stalled/cancelled publish left the revoked member in the memo"
 
 
+def test_a_stalled_disk_never_piles_up_save_threads(state, monkeypatch):
+    """While one background save is stuck on the disk, further verified turns coalesce into ONE follow-up write instead
+    of starting a thread each; when the disk recovers the file ends with the latest speaker."""
+    import threading
+
+    gate = threading.Event()
+    real_replace = ws.os.replace
+
+    def _stuck_replace(src, dst):
+        gate.wait(5)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(ws.os, "replace", _stuck_replace)
+    for i, member in enumerate(["casey", "dana", "casey", "dana", "casey", "dana", "casey"]):
+        ws.note("p1", member, now=T0 + i)
+    savers = [t for t in threading.enumerate() if t.name == "warm-speaker-save"]
+    gate.set()
+    for t in savers:
+        t.join(5)
+    assert len(savers) == 1, f"{len(savers)} save threads piled up on a stalled disk"
+    assert '"casey"' in state.read_text() and '"dana"' not in state.read_text(), "the last noted speaker is what lands"
+
+
 def test_corrupt_or_foreign_state_is_no_memo(state):
     state.write_text("{not json")
     ws.reset()
