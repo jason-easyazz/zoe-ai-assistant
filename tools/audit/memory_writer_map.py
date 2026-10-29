@@ -58,7 +58,7 @@ RAW_METHODS = frozenset({"upsert", "update", "delete", "add"})
 # A call that RETURNS a drawers collection: whatever name it is bound to inside a function
 # (`d = get_drawers_collection(..)`, `with leased_drawers() as d:`) is a raw handle there, so `d.upsert(...)`
 # is a writer under any alias.
-COLLECTION_FACTORY = re.compile(r"^(await )?(\w+\.)*(get_drawers_collection|leased_drawers|get_collection)\(")
+COLLECTION_FACTORY = re.compile(r"^(await )?(\w+\.)*(get_drawers_collection|leased_drawers|get_collection|get_or_create_collection|create_collection)\(")
 
 
 class _Walker(ast.NodeVisitor):

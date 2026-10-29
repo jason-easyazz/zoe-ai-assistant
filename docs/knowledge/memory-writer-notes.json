@@ -10,7 +10,7 @@
   "services/zoe-data/memory_disputes.py": "A held-back write becomes one question to the person: accepting approves the candidate, declining rejects it (review).",
   "services/zoe-data/memory_extractor.py": "The per-turn extractor (regex + LLM, chat_regex/voice_regex): ingests new facts and edits a same-attribute row on a stated change (review edit).",
   "services/zoe-data/memory_retire.py": "Quote-backed retirement: a one-word change of state (\"I gave up the cello\") retires the right fact with the owner's words attached (retire_with_quote).",
-  "services/zoe-data/memory_service.py": "The STORAGE LAYER (funnel): its own raw drawers writes - _write_row, restore, compaction. Every other writer should reach the store through MemoryService, not around it.",
+  "services/zoe-data/memory_service.py": "The STORAGE LAYER (funnel): its own raw drawers writes - _write_row, restore, compaction, and the drawers-index rebuild (_rebuild_drawers: create_collection then add). Every other writer should reach the store through MemoryService, not around it.",
   "services/zoe-data/memory_space.py": "The panel's Memories space: per-item forget (review reject, with the exact-words twin).",
   "services/zoe-data/memory_supersede.py": "Implicit supersession: a stated change of state retires the fact it replaces (supersede_by); ZOE_MEMORY_IMPLICIT_SUPERSEDE.",
   "services/zoe-data/mempalace_baseline.py": "Benchmark fixtures: ingests synthetic rows to score the store. Bench/lab use; never real members.",

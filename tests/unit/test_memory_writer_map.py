@@ -136,9 +136,11 @@ def test_control_a_raw_write_through_any_alias_of_a_collection_factory_is_seen(t
         tmp_path,
         **{"alias.py": "def f():\n    drawer = get_drawers_collection('p')\n    drawer.upsert(ids=[1])\n"
                        "async def g():\n    async with leased_drawers() as d:\n        d.delete(ids=[1])\n"
+                       "def r(client):\n    new = client.create_collection('drawers')\n    new.add(ids=[1])\n"
+                       "def r2(client):\n    c = client.get_or_create_collection('drawers')\n    c.update(ids=[1])\n"
                        "def h(other, d):\n    other.upsert('not a collection')\n    d.delete('another scope, not bound here')\n"},
     )
-    assert mwm.collect(repo, files)["services/zoe-data/alias.py"] == {"f": ["raw_upsert"], "g": ["raw_delete"]}
+    assert mwm.collect(repo, files)["services/zoe-data/alias.py"] == {"f": ["raw_upsert"], "g": ["raw_delete"], "r": ["raw_add"], "r2": ["raw_update"]}
 
 
 # The methods of the REAL MemoryService that only read. Every other public method is a write and MUST be in the

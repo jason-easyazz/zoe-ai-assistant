@@ -11,11 +11,11 @@ tags: [memory, writers, generated, audit]
 role lines live in [`memory-writer-notes.json`](memory-writer-notes.json) (one per writer module - a new writer
 module fails `tests/unit/test_memory_writer_map.py` until it has one).
 
-**72 write sites in 28 modules** (the 2026-10-05 fidelity audit counted 31 by hand; the 2026-10-18
+**73 write sites in 28 modules** (the 2026-10-05 fidelity audit counted 31 by hand; the 2026-10-18
 deep dive found at least 39). A *write site* is one (module, enclosing function) that calls a `MemoryService`
 write method or upserts a drawers collection directly.
 
-Kinds: `archive_by_entity` 1, `archive_duplicate` 1, `compact_index` 1, `delete_user` 2, `erase_rows` 5, `flag_challenged` 1, `forget_last` 1, `ingest` 25, `raw_delete` 3, `raw_update` 6, `raw_upsert` 7, `record_candidate` 3, `relink_entity` 4, `retire_with_quote` 1, `review` 23, `scrub_residue` 1, `supersede_by` 4, `sweep_soft_archive` 1, `tick_access` 1.
+Kinds: `archive_by_entity` 1, `archive_duplicate` 1, `compact_index` 1, `delete_user` 2, `erase_rows` 5, `flag_challenged` 1, `forget_last` 1, `ingest` 25, `raw_add` 1, `raw_delete` 3, `raw_update` 6, `raw_upsert` 7, `record_candidate` 3, `relink_entity` 4, `retire_with_quote` 1, `review` 23, `scrub_residue` 1, `supersede_by` 4, `sweep_soft_archive` 1, `tick_access` 1.
 
 ## What counts
 
@@ -47,7 +47,7 @@ the Flue/TS callers (`services/zoe-core/extensions/memory.ts`), which reach the 
 | `memory_disputes.py` | A held-back write becomes one question to the person: accepting approves the candidate, declining rejects it (review). | `expire_stale`: review<br>`resolve`: review |
 | `memory_extractor.py` | The per-turn extractor (regex + LLM, chat_regex/voice_regex): ingests new facts and edits a same-attribute row on a stated change (review edit). | `extract_and_ingest`: ingest, review |
 | `memory_retire.py` | Quote-backed retirement: a one-word change of state ("I gave up the cello") retires the right fact with the owner's words attached (retire_with_quote). | `decide`: retire_with_quote |
-| `memory_service.py` | The STORAGE LAYER (funnel): its own raw drawers writes - _write_row, restore, compaction. Every other writer should reach the store through MemoryService, not around it. | `MemoryService._append_audit_sync`: raw_upsert<br>`MemoryService._delete_audit_for_rows_sync`: raw_delete<br>`MemoryService._delete_audit_for_user_sync`: raw_delete<br>`MemoryService._delete_ids`: raw_delete<br>`MemoryService._relink_entity_sync`: raw_update<br>`MemoryService._restore_superseded_sync`: raw_update, raw_upsert<br>`MemoryService._retire_with_quote_sync`: raw_update<br>`MemoryService._supersede_by_sync`: raw_update<br>`MemoryService._tick_access_sync`: raw_update<br>`MemoryService._tick_consolidation_sync`: raw_update<br>`MemoryService._write_row`: raw_upsert |
+| `memory_service.py` | The STORAGE LAYER (funnel): its own raw drawers writes - _write_row, restore, compaction, and the drawers-index rebuild (_rebuild_drawers: create_collection then add). Every other writer should reach the store through MemoryService, not around it. | `MemoryService._append_audit_sync`: raw_upsert<br>`MemoryService._delete_audit_for_rows_sync`: raw_delete<br>`MemoryService._delete_audit_for_user_sync`: raw_delete<br>`MemoryService._delete_ids`: raw_delete<br>`MemoryService._relink_entity_sync`: raw_update<br>`MemoryService._restore_superseded_sync`: raw_update, raw_upsert<br>`MemoryService._retire_with_quote_sync`: raw_update<br>`MemoryService._supersede_by_sync`: raw_update<br>`MemoryService._tick_access_sync`: raw_update<br>`MemoryService._tick_consolidation_sync`: raw_update<br>`MemoryService._write_row`: raw_upsert<br>`_rebuild_drawers`: raw_add |
 | `memory_space.py` | The panel's Memories space: per-item forget (review reject, with the exact-words twin). | `forget_row`: erase_rows, review<br>`retire_twins`: review |
 | `memory_supersede.py` | Implicit supersession: a stated change of state retires the fact it replaces (supersede_by); ZOE_MEMORY_IMPLICIT_SUPERSEDE. | `nightly_conflict_pass`: supersede_by<br>`retire_by_claims`: supersede_by<br>`supersede_for_turn`: supersede_by |
 | `mempalace_baseline.py` | Benchmark fixtures: ingests synthetic rows to score the store. Bench/lab use; never real members. | `run_mempalace_baseline`: ingest |
