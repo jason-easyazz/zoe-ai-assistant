@@ -3593,6 +3593,14 @@ async def voice_command(
             _router_decision = _rr
             logger.warning("ROUTER_SHADOW text=%r -> routed=%s (best=%s %.2f) %.1fms scores=%s",
                            text[:70], _rr["routed"], _rr["domain"], _rr["score"], _rr["ms"], _rr["scores"])
+            # A bare "what else?" names no topic: it follows the panel's previous turn, never a random fast domain.
+            import turn_continuation as _turn_cont
+
+            _router_decision = _turn_cont.follow(
+                str((payload or {}).get("session_id") or panel_id or ""), text, _rr)
+            if (_router_decision or {}).get("continuation"):
+                logger.warning("ROUTER_CONTINUATION text=%r follows %s (router said %s)", text[:40],
+                               _router_decision["routed"], _router_decision.get("continuation_of"))
     except Exception as _rexc:
         logger.debug("semantic router shadow failed: %s", _rexc)
 
