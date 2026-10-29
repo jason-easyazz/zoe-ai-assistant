@@ -10,12 +10,14 @@ P=$LANDING_HOME
 STOP_AT=${STOP_AT:-$(date -d 'tomorrow 12:00' +%s)}
 quiet(){ bash "$LANDING_DIR/night_busy.sh" deploy; }   # 2026-10-19: measured night window, not a fixed blackout
 log(){ echo "[$(date '+%F %T')] autoland $*" >> "$LANDING_LOG"; }
+cd "$LANDING_REPO" || exit 1   # gh needs a repo cwd (cutover starts this from anywhere)
 mkdir -p "$C" "$P/logs"; touch "$C/hold.txt"
 while [ "$(date +%s)" -lt "$STOP_AT" ]; do
   while quiet; do sleep 300; done
   for row in $(gh pr list --state open --limit 40 --json number,isDraft,headRefName --jq '.[] | select(.isDraft==false) | "\(.number):\(.headRefName)"'); do
     pr=${row%%:*}; br=${row#*:}
     landing_is_held "$pr" && continue
+    landing_head_parked "$pr" && continue   # parked by the voice loop for THIS head: a push is the only way back in
     quiet && break
     gh pr view "$pr" --json files --jq '.files[].path' > "$C/files-$pr.txt" 2>/dev/null || continue
     scope=$(cd "$LANDING_REPO" && python3 scripts/maintenance/voice_gate_check.py --scope-only --changed-files-from "$C/files-$pr.txt" 2>&1 | grep -o 'scope: [A-Z]*' | awk '{print $2}')

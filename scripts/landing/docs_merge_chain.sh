@@ -5,7 +5,7 @@
 . "$(dirname "${BASH_SOURCE[0]}")/landing_lib.sh"
 cd "$LANDING_REPO" || exit 1   # gh needs a repo cwd (sig: "failed to run git: not a git repository")
 P_RESOLVE=$LANDING_RESOLVE_SCRIPT
-HOLD_S=${ZOE_LANDING_CHAIN_HOLD_S:-120}; STEP_S=${ZOE_LANDING_CHAIN_STEP_S:-60}   # poll cadence (tests shrink it)
+NIGHT_S=${ZOE_LANDING_CHAIN_NIGHT_S:-300}; HOLD_S=${ZOE_LANDING_CHAIN_HOLD_S:-120}; STEP_S=${ZOE_LANDING_CHAIN_STEP_S:-60}   # poll cadence (tests shrink it)
 mkdir -p "$(dirname "$LANDING_LOG")"
 log(){ echo "[$(date '+%F %T')] chain $*" >> "$LANDING_LOG"; }
 for PR in "$@"; do
@@ -15,10 +15,15 @@ for PR in "$@"; do
     h=$(date -d "@$(landing_now)" +%H%M); if [ "$h" -ge 0350 ] && [ "$h" -le 0455 ]; then log "nightly voice gate window - chain paused (no update/arm until 04:55)"; sleep 300; continue; fi
     [ -e "$HOME/.zoe/night-window/WINDOW_OPEN" ] && { log "#$PR night window open (WINDOW_OPEN) - chain paused, no update/arm until it closes"; sleep 120; continue; }
     landing_is_held "$PR" && { log "#$PR went on HOLD - skipping"; break; }
+    bash "$LANDING_DIR/night_busy.sh" deploy && { log "deploy pause (night_busy deploy) - chain paused, no update/arm"; sleep "$NIGHT_S"; continue; }
     st=$(gh pr view "$PR" --json state,mergeStateStatus,autoMergeRequest,isDraft --jq '"\(.state) \(.mergeStateStatus) \(.autoMergeRequest!=null) \(.isDraft)"'); set -- $st; state=$1; ms=$2; armed=$3; draft=${4:-unknown}
     [ "$state" = MERGED ] && { log "#$PR MERGED"; break; }
     [ "$state" = CLOSED ] && { log "#$PR CLOSED"; break; }
     [ "$draft" != false ] && { log "#$PR is a draft (or unreadable) - not touching it"; break; }
+    # the scope is re-read on EVERY pass (a push can add a voice file after autoland classified the PR): only CLEAR proceeds, anything else goes to the voice lander
+    gh pr view "$PR" --json files --jq '.files[].path' > "$LANDING_HOME/logs/chain-files-$PR.txt" 2>/dev/null
+    scope=$(cd "$LANDING_REPO" && python3 scripts/maintenance/voice_gate_check.py --scope-only --changed-files-from "$LANDING_HOME/logs/chain-files-$PR.txt" 2>&1 | grep -o 'scope: [A-Z]*' | awk '{print $2}')
+    [ "$scope" = CLEAR ] || { log "#$PR voice scope is '${scope:-unreadable}', not CLEAR - leaving it to the voice lander"; break; }
     unres=$(landing_unresolved_count "$PR" || echo 99)
     pend=$(gh pr checks "$PR" --json name,state --jq '[.[]|select(.name=="validate" or .name=="secret-scan")|select(.state!="SUCCESS")]|length' 2>/dev/null || echo 9)
     if [ "$unres" != 0 ]; then holds=$((${holds:-0}+1)); log "#$PR holding - $unres unresolved review thread(s) ($holds/3)"; [ "$holds" -ge 3 ] && { log "#$PR still has unresolved threads - skipping for now (re-queued by the loop)"; break; }; sleep "$HOLD_S"; continue; fi

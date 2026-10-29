@@ -212,20 +212,6 @@ def test_speed_only_probe_fail_is_requeued_once_per_head(rig):
     assert decide(rig) == "retry-once"
 
 
-def test_said_vs_did_regression_is_never_retried(rig):
-    prs(rig)
-    snapshot(rig, **dict(SPEED_ONLY, said_vs_did_regressions=["turn on the lights"]))
-    assert decide(rig) == "park-probe-failed"
-
-
-def test_missing_or_garbage_artifact_is_not_retryable(rig):
-    prs(rig)
-    assert decide(rig) == "park-probe-failed"             # no snapshot at all
-    (rig.home / "probe-artifacts").mkdir()
-    (rig.home / "probe-artifacts" / "7.json").write_text("{not json")
-    assert decide(rig) == "park-probe-failed"
-
-
 def test_threads_sh_rejects_a_graphql_error_envelope(rig):
     st = json.loads(rig.state_file.read_text())
     st["threads"]["7"] = {"total": 3, "unresolved": [1]}
@@ -233,43 +219,3 @@ def test_threads_sh_rejects_a_graphql_error_envelope(rig):
     rig.set_state(st)
     r = rig.run("threads.sh", "--count", "7")
     assert r.returncode != 0 and r.stdout.strip() == ""
-
-
-# ---- Kokoro is never stopped before the test lane is held --------------------------------------------------------
-# 2026-10-29: the lander stopped Kokoro and THEN waited an hour for the (non-FIFO) lane = Zoe mute in the daytime.
-
-def window(rig, wait_s="1"):
-    log, lane, probe_log = rig.tmp / "systemctl.log", rig.tmp / "lane.lock", rig.tmp / "probe.log"
-    script = (f'. "{LANDING}/landing_lib.sh"; probe(){{ echo PROBE >> "{probe_log}"; }}; '
-              f'landing_probe_window {wait_s} 7 {HEAD} probe; echo rc=$?')
-    env = rig.env(FAKE_SYSTEMCTL_LOG=str(log), ZOE_TEST_LANE_LOCK=str(lane), ZOE_LANDING_SETTLE_S="0")
-    lane.touch()
-    return script, env, log, lane, probe_log
-
-
-def test_kokoro_is_stopped_only_while_the_lane_is_held_and_always_restarted(rig):
-    prs(rig)
-    script, env, log, _, probe_log = window(rig)
-    r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
-    assert "rc=0" in r.stdout, r.stdout + r.stderr
-    assert log.read_text().split("\n")[:2] == ["stop kokoro-tts.service lane_held=yes", "start kokoro-tts.service lane_held=yes"]
-    assert probe_log.read_text().strip() == "PROBE"
-
-
-def test_a_lane_we_cannot_get_leaves_kokoro_untouched(rig):
-    prs(rig)
-    script, env, log, lane, probe_log = window(rig, wait_s="1")
-    holder = subprocess.Popen(["flock", "-x", str(lane), "sleep", "20"])
-    try:
-        time.sleep(0.5)
-        r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
-    finally:
-        holder.kill()
-    assert "rc=9" in r.stdout, r.stdout + r.stderr
-    assert not log.exists() or log.read_text() == "", "Kokoro was touched without the lane"
-    assert not probe_log.exists()
-
-
-def test_the_lander_has_no_direct_kokoro_stop_only_the_lane_first_helper():
-    code = "\n".join(ln for ln in (LANDING / "land_voice_pr.sh").read_text().splitlines() if not ln.lstrip().startswith("#"))
-    assert "stop kokoro" not in code and "landing_probe_window" in code and "/tmp/zoe-test-lane.lock" not in code

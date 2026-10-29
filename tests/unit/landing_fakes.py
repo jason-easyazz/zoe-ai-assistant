@@ -25,6 +25,8 @@ state = json.load(open(os.environ["FAKE_GH_STATE"]))
 argv = sys.argv[1:]
 with open(os.environ["FAKE_GH_LOG"], "a") as fh:
     fh.write(" ".join(argv) + "\n")
+if os.environ.get("FAKE_GH_CWD_LOG"):
+    open(os.environ["FAKE_GH_CWD_LOG"], "a").write(os.getcwd() + "\n")
 
 def opt(name):
     return argv[argv.index(name) + 1] if name in argv else None
