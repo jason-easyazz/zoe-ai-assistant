@@ -198,7 +198,7 @@ async def test_adaptation_refuses_the_retired_model(world):
     out = await spk.process_adaptation(world.db, panel_id="panel1", mode="on", now=None,
                                        payload={"voice_user_id": "jason", "embedding_base64": _b64(at_cos(0.9)),
                                                 "voice_score": 0.9, "speech_s": 3.0, "model_id": "resemblyzer"})
-    assert not out.get("updated") and out.get("reason") not in (None, "")
+    assert not out.get("applied") and out.get("reason") == "unknown_model"
 
 
 # -- the server embeds no audio ---------------------------------------------------------------------------------------
@@ -216,6 +216,12 @@ async def test_uploaded_audio_is_refused_for_enrol_and_identify_and_nothing_is_s
         with pytest.raises(HTTPException) as e2:
             await voice_tts.voice_identify(dict(audio_base64=audio, model_id=R34), caller=DEVICE)
         assert e2.value.status_code == 400 and "embedding_base64" in e2.value.detail
+        with pytest.raises(HTTPException) as e3:                                # audio alongside a vector is refused too, not ignored
+            await voice_tts.voice_enroll(
+                dict(audio_base64=audio, embedding_base64=_b64(at_cos(0.8)), model_id=R34, user_id="jason", panel_id="panel1"),
+                caller=DEVICE)
+        assert e3.value.status_code == 409
+        assert world.db.conn.execute("SELECT COUNT(*) FROM speaker_profiles").fetchone()[0] == before
         out = await voice_tts.voice_enroll(                                     # negative control: a finished panel profile still enrols
             dict(embedding_base64=_b64(at_cos(0.8)), model_id=R34, sample_count=5, user_id="jason", panel_id="panel1", consent=True),
             caller=DEVICE)

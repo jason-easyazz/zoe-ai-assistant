@@ -7050,7 +7050,7 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
         raise HTTPException(status_code=403, detail="voice enrolment is not available through the relay")
     b64 = str(payload.get("audio_base64", "")).strip()
     emb_b64 = str(payload.get("embedding_base64", "")).strip()
-    if b64 and not emb_b64:
+    if b64:
         # The server has no audio encoder (Resemblyzer was retired): a profile from uploaded audio would be stored yet never
         # recognise anyone. Refuse before anything else, and say where to go.
         raise HTTPException(status_code=409, detail="Voice profiles are now built at the panel: say \"Zoe, learn my voice\" "
