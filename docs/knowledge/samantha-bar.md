@@ -96,6 +96,38 @@ covers a store cutover. It also waits (up to 15 minutes) for MemAvailable ≥ 1.
 takes the shared `/tmp/zoe-voice-harness.lock`, because it uses the brain slot, and it
 raises its niceness to at least 5.
 
+## Evidence binding, the weekly clean-checkout run and the prompt-size column (deep dive B8, 2026-10-18)
+
+Until 2026-10-18 every full run in the trend was `dirty: true` (the harness read the live checkout, which always carries
+untracked files), so no score was attributable to a commit - the defect the voice gate fixed with `--expect-revision`.
+Now the three harnesses (bar, day-sim, person bench; the shared code is in `samantha_bar.py`) decide, per run, whether the
+result is **bound to a commit** (`evidence_binding`):
+
+- the live service's TRACKED files equal its commit (`tracked_dirty` false; `dirty` stays the old strict bit and still counts
+  untracked files; `untracked_files` and, for a tracked change, `diff_sha256` are recorded so an unbound run still says what it ran);
+- the harness itself runs from a checkout with no tracked modifications (`harness_revision`);
+- harness tree == service tree (the scripts that asked the questions are the code under test).
+
+A **bound** run lands in `*_trend.jsonl` with `bound: true` and the `tree`. An **unbound** run still executes (a developer wants
+the scores) and writes its `*_last.json` (with `evidence.reason`), but its trend line goes to a sibling `*_trend.unbound.jsonl`,
+it can never record a baseline, and the run says so out loud. `--require-bound` (all three) refuses before spending the run.
+The existing trend (67 bar lines, last full run 2026-10-09, all dirty) is left as history; read `bound` to tell new from old.
+
+**Weekly, from a clean checkout:** `scripts/maintenance/samantha_weekly.sh` clones (`git clone --shared`, nothing written to the
+live checkout) the commit the live service is on, runs the bar then the day-sim from that clone with `--require-bound
+--service-dir <live>/services/zoe-data` (the live Flue build is linked into the clone) under `/tmp/zoe-voice-harness.lock`, and writes `~/.cache/zoe/samantha_weekly_last.json`. It refuses to start
+inside 01:50-04:55 local (exit 4), and bounds each step's lock wait and run time to end 5 min before the window next opens. Template units, NOT installed (operator opt-in): `scripts/setup/systemd/zoe-samantha-weekly.{service,timer}`
+(Sunday 05:30, after the 12B night window and the 04:30 voice probe; `Persistent=false`). `--with-person` adds the person bench,
+`--record-baseline` records the bar (bound runs only), `--dry-run` prints the plan.
+
+**Prompt-size column:** every recall packet a run reads (`Live.packet`, the packet the brain would get) is measured; the result carries
+`prompt_size` (`packets`, `chars_mean`, `chars_p95`, `chars_max`, `est_tokens_p95` at ~4 chars/token) and each trend line carries
+`prompt_packets`, `prompt_chars_mean`, `prompt_chars_p95`, `prompt_chars_max`. The chars are exact and comparable run to run; a
+rising p95 with flat scores is prompt bloat the pass/fail verdicts cannot see.
+
+Tests: `tests/unit/test_samantha_bar.py` (binding on a real temp git repo: untracked-only is bound, a tracked edit is not; an unbound run
+leaves the trend and the baseline untouched; `--require-bound` refuses; the prompt-size summary).
+
 ## Scenarios
 
 The facts are synthetic and deliberately distinctive: Marisol from Lisbon, Dunedin then
