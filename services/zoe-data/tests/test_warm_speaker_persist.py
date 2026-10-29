@@ -37,6 +37,9 @@ def state(monkeypatch, tmp_path):
     monkeypatch.setattr(ws, "_mem", {})                              # restored on teardown (module globals via monkeypatch)
     monkeypatch.setattr(ws, "_last_written", {})
     monkeypatch.setattr(ws, "_loaded", False)
+    monkeypatch.setattr(ws, "_forget_epoch", ws._forget_epoch)       # forget_user bumps it: restored on teardown
+    monkeypatch.setattr(ws, "_bg_running", False)
+    monkeypatch.setattr(ws, "_bg_pending", False)
     monkeypatch.setattr(zfc, "_LAST_TURN", dict(zfc._LAST_TURN))     # restored on teardown: _restart() clears these
     monkeypatch.setattr(zfc, "_SESSION_UID", dict(zfc._SESSION_UID))
     ws.reset()
