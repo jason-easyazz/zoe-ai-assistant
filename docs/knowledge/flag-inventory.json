@@ -7196,6 +7196,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_TIMER_STORE": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/skybridge_service.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_TIMEZONE": {
         "defaults": [
           "''",
