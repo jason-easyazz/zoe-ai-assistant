@@ -90,11 +90,15 @@ echo "samantha_weekly: harness checkout $WORK/repo at ${COMMIT:0:12} (service: $
 # (so a fresh clone has none). Link the live checkout's build (and its node_modules) in read-only: the sidecar is the
 # deployed build of that same commit, while the Python under test is the clone's. No build is run here.
 FLUE_REL="labs/flue-zoe-brain-2x"
-if [ -f "$LIVE/$FLUE_REL/dist/server.mjs" ] && [ -d "$WORK/repo/$FLUE_REL" ]; then
+# Only when the build is NEWER than every source file it is built from (a failed rebuild after the checkout advanced would
+# otherwise score old JavaScript under the new tree's name): a stale build is not linked and the scratch stack refuses.
+if [ -f "$LIVE/$FLUE_REL/dist/server.mjs" ] && [ -d "$WORK/repo/$FLUE_REL" ] \
+   && [ -z "$(find "$LIVE/$FLUE_REL/src" "$LIVE/$FLUE_REL/package.json" "$LIVE/$FLUE_REL/package-lock.json" \
+              -type f -newer "$LIVE/$FLUE_REL/dist/server.mjs" 2>/dev/null | head -n 1)" ]; then
   ln -s "$LIVE/$FLUE_REL/dist" "$WORK/repo/$FLUE_REL/dist"
   [ -d "$LIVE/$FLUE_REL/node_modules" ] && ln -s "$LIVE/$FLUE_REL/node_modules" "$WORK/repo/$FLUE_REL/node_modules"
 else
-  echo "samantha_weekly: no Flue build at $LIVE/$FLUE_REL/dist - the scratch stack will refuse (build it there first)" >&2
+  echo "samantha_weekly: no Flue build at $LIVE/$FLUE_REL/dist, or it is older than its sources - not linked, the scratch stack will refuse (rebuild it there first)" >&2
 fi
 
 export ZOE_PERF=1
@@ -141,6 +145,9 @@ for s in "${STEPS[@]}"; do
     exec timeout --kill-after=60 "$left" nice -n 5 python3 "$@"' _ "$WIN_START_MIN" "$WIN_END_MIN" "$GRACE_S" "$WORK/repo/$s" --require-bound --service-dir "$LIVE/services/zoe-data" ${extra[@]+"${extra[@]}"}
   rc=$?
   echo "samantha_weekly: $s exit $rc"
+  # A step killed by the deadline (timeout) can die before it tears its scratch stack down: sweep stacks whose harness pid is gone.
+  python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import harness_scratch as h; h.sweep_stale()' "$WORK/repo/scripts/perf" \
+    || echo "samantha_weekly: scratch sweep failed - check docker ps for zoe.harness.scratch containers" >&2
   [ "$rc" -gt "$worst" ] && worst=$rc
 done
 

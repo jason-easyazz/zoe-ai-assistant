@@ -74,7 +74,7 @@ def _git(*args: str, cwd: Path) -> str:
                                "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}).stdout
 
 
-def _run(tmp_path: Path, start: str, after_lock: str):
+def _run(tmp_path: Path, start: str, after_lock: str, stale_build: bool = False):
     live = tmp_path / "live"
     live.mkdir()
     _git("init", "-q", cwd=live)
@@ -92,6 +92,8 @@ def _run(tmp_path: Path, start: str, after_lock: str):
     _exe(fake / "timeout", _FAKE_TIMEOUT)
     (flue / "dist").mkdir()                       # the gitignored sidecar build a fresh clone does not have
     (flue / "dist" / "server.mjs").write_text("//\n")
+    if stale_build:                               # a source file newer than the build: a failed rebuild
+        os.utime(flue / "dist" / "server.mjs", (1, 1))
     state = tmp_path / "state"
     state.write_text(start)
     started = tmp_path / "started"
@@ -157,3 +159,10 @@ def test_each_step_is_bounded_by_the_deadline_passes_the_service_dir_and_gets_th
     assert all("--require-bound" in a for a in args)
     assert (tmp_path / "flue").read_text().split() == ["linked", "linked"]   # the clone sees the live checkout's sidecar build
     assert live_untouched
+
+
+@needs_git
+def test_a_flue_build_older_than_its_sources_is_not_linked(tmp_path):
+    res, started, live_untouched = _run(tmp_path, start="day", after_lock="day", stale_build=True)
+    assert "older than its sources" in res.stderr
+    assert not (tmp_path / "flue").exists(), "a stale sidecar build was linked into the clone"
