@@ -35,7 +35,7 @@ while true; do
     st=$(gh pr view "$n" --json mergeStateStatus,autoMergeRequest --jq '"\(.mergeStateStatus) \(.autoMergeRequest!=null)"' 2>/dev/null)
     if [ "$st" = "BLOCKED true" ]; then
       req=$(gh pr checks "$n" --required 2>/dev/null | awk '{print $2}' | sort -u | tr '\n' ' ')
-      unres=$(bash "$LANDING_DIR/threads.sh" "$n" 2>/dev/null | grep -c "^--- ")
+      unres=$(landing_unresolved_count "$n") || unres=unknown   # a failed read is "unknown", never 0 or a partial count
       [ "$req" = "pass " ] && emit "#$n armed + required checks green but BLOCKED: $unres unresolved thread(s) $(date +%F)"
     fi
     gh pr checks "$n" --json name,state,startedAt 2>/dev/null \

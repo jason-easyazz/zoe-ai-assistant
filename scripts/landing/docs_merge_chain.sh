@@ -25,7 +25,7 @@ for PR in "$@"; do
     # an unreadable or EMPTY file list would classify as CLEAR: treat it as unknown and skip this pass
     { gh pr view "$PR" --json files --jq '.files[].path' > "$LANDING_HOME/logs/chain-files-$PR.txt" 2>/dev/null && [ -s "$LANDING_HOME/logs/chain-files-$PR.txt" ]; } || { log "#$PR changed-file list unreadable - skipping this pass"; sleep "$STEP_S"; continue; }
     scope=$(cd "$LANDING_REPO" && python3 scripts/maintenance/voice_gate_check.py --scope-only --changed-files-from "$LANDING_HOME/logs/chain-files-$PR.txt" 2>&1 | grep -o 'scope: [A-Z]*' | awk '{print $2}')
-    [ "$scope" = CLEAR ] || { log "#$PR voice scope is '${scope:-unreadable}', not CLEAR - leaving it to the voice lander"; break; }
+    [ "$scope" = CLEAR ] || { [ "$armed" = true ] && gh pr merge "$PR" --disable-auto >/dev/null 2>&1; log "#$PR voice scope is '${scope:-unreadable}', not CLEAR - leaving it to the voice lander (auto-merge disabled if it was armed)"; break; }
     unres=$(landing_unresolved_count "$PR" || echo 99)
     pend=$(gh pr checks "$PR" --json name,state --jq '[.[]|select(.name=="validate" or .name=="secret-scan")|select(.state!="SUCCESS")]|length' 2>/dev/null || echo 9)
     if [ "$unres" != 0 ]; then holds=$((${holds:-0}+1)); log "#$PR holding - $unres unresolved review thread(s) ($holds/3)"; [ "$holds" -ge 3 ] && { log "#$PR still has unresolved threads - skipping for now (re-queued by the loop)"; break; }; sleep "$HOLD_S"; continue; fi
