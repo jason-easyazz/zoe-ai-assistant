@@ -807,6 +807,8 @@ async def _curate(text: str, user_id: str, extra_ctx: Optional[dict], allow_writ
         return None
     if ctx.get("speaker_verified") is False:
         return None
+    if mc.parse_voice(text) is None:                 # the one anchored regex first: a turn of any other shape costs nothing more
+        return None
     member = prc._member(user_id, "voice", ctx)
     if member is None:
         return None
