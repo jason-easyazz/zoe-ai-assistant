@@ -204,3 +204,101 @@ def test_lander_fetch_leaves_fetch_head_untouched(tmp_path):
 def test_negative_control_the_old_plain_fetch_clobbers_fetch_head(tmp_path):
     before, after = _run_fetch(tmp_path, 'git fetch -q origin "$BR"')
     assert before != after, "instrument check: a plain branch fetch must rewrite FETCH_HEAD"
+
+
+# ------------------------------- executed: remote verification + retry loop
+VERIFY = '[ "$(git rev-parse "${deploy_ref}")" = "$remote_main" ]'
+LIVE_VERIFY = '[[ -z "$remote_main" || "$target" != "$remote_main" ]]'
+HOOK = (  # advance origin's main just before `ls-remote` answers (a push landing mid-deploy)
+    'git() { if [ "$1" = ls-remote ] && { [ -n "$ALWAYS" ] || [ ! -e "$MARK" ]; }; then touch "$MARK";'
+    ' ( cd "$ORIGIN" && command git -c user.name=t -c user.email=t@e commit -q --allow-empty -m adv ); fi;'
+    ' command git "$@"; }\n')
+
+
+def _loop_snippet(run: str | None = None) -> str:
+    lines = (run or _pull_run()).splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.strip().startswith('deploy_ref="refs/zoe-deploy/main"'))
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "done")
+    return "sleep() { :; }\nAUTH_HEADER=x\n" + "\n".join(lines[start:end + 1])
+
+
+def _origin_and_clone(tmp_path: Path):
+    tmp_path.mkdir(exist_ok=True)
+    origin, clone = tmp_path / "origin", tmp_path / "clone"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(origin)], check=True)
+    (origin / "a").write_text("1\n")
+    _git(origin, "add", "-A")
+    _git(origin, "commit", "-qm", "m")
+    subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True)
+    return origin, clone
+
+
+def _run_loop(tmp_path: Path, snippet: str, always: bool):
+    origin, clone = _origin_and_clone(tmp_path)
+    env = {**GIT_ENV, "ORIGIN": str(origin), "MARK": str(tmp_path / "mark"), "ALWAYS": "1" if always else ""}
+    r = subprocess.run(["bash", "-c", HOOK + snippet], cwd=clone, env=env, capture_output=True, text=True)
+    return r, origin, clone
+
+
+def test_loop_retries_when_main_advances_mid_verification_then_succeeds(tmp_path):
+    r, origin, clone = _run_loop(tmp_path / "real", _loop_snippet(), always=False)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "retrying" in r.stdout
+    assert _git(clone, "rev-parse", "refs/zoe-deploy/main") == _git(origin, "rev-parse", "main")
+    # NEGATIVE CONTROL: with the equality check gutted there is no retry and a STALE ref is accepted
+    _, origin2, clone2 = _run_loop(tmp_path / "ctl", _loop_snippet(_pull_run().replace(VERIFY, "true")), always=False)
+    assert _git(clone2, "rev-parse", "refs/zoe-deploy/main") != _git(origin2, "rev-parse", "main")
+
+
+def test_loop_exits_1_with_a_clear_message_when_verification_never_matches(tmp_path):
+    r, _, _ = _run_loop(tmp_path / "real", _loop_snippet(), always=True)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "did not match the remote's main after 5 attempts" in r.stdout
+    assert r.stdout.count("retrying") == 4
+    r2, _, _ = _run_loop(tmp_path / "ctl", _loop_snippet(_pull_run().replace(VERIFY, "true")), always=True)
+    assert r2.returncode == 0, "negative control: with the check gutted the stale target is accepted"
+
+
+def _live_snippet(clone: Path, text: str | None = None) -> str:
+    lines = (text or DEPLOY_LIVE.read_text()).splitlines()
+    start = next(i for i, ln in enumerate(lines) if "fetch --quiet --no-write-fetch-head" in ln)
+    end = next(i for i, ln in enumerate(lines) if ln.strip().startswith('bind_flag="--expect-tree-of"'))
+    return f'LIVE={clone}\nprev="$(git -C "$LIVE" rev-parse HEAD)"\n' + "\n".join(lines[start:end])
+
+
+def _run_live(tmp_path: Path, text: str | None, fake_remote: str = "", ahead: bool = False):
+    origin, clone = _origin_and_clone(tmp_path)
+    if ahead:  # live HEAD has a commit origin/main lacks -> origin main is NOT a descendant of it
+        (clone / "b").write_text("x\n")
+        _git(clone, "add", "-A")
+        _git(clone, "commit", "-qm", "local")
+    hook = (f'git() {{ for a in "$@"; do if [ "$a" = ls-remote ]; then printf "%s\\trefs/heads/main\\n" {fake_remote}; return; fi; done;'
+            ' command git "$@"; }\n') if fake_remote else ""
+    return subprocess.run(["bash", "-c", "set -eu\n" + hook + _live_snippet(clone, text)],
+                          cwd=clone, env=GIT_ENV, capture_output=True, text=True)
+
+
+BOGUS = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+
+def test_deploy_live_accepts_a_matching_descendant_target(tmp_path):
+    r = _run_live(tmp_path / "real", None)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_deploy_live_refuses_a_mismatched_remote_main(tmp_path):
+    r = _run_live(tmp_path / "real", None, fake_remote=BOGUS)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "!= the remote's main" in r.stderr
+    weak = DEPLOY_LIVE.read_text().replace(LIVE_VERIFY, "false")
+    assert weak != DEPLOY_LIVE.read_text()
+    assert _run_live(tmp_path / "ctl", weak, fake_remote=BOGUS).returncode == 0, "negative control"
+
+
+def test_deploy_live_refuses_a_non_descendant_target(tmp_path):
+    r = _run_live(tmp_path / "real", None, ahead=True)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "not a descendant of the live HEAD" in r.stderr
+    weak = DEPLOY_LIVE.read_text().replace('merge-base --is-ancestor "$prev" "$target"', "version")
+    assert weak != DEPLOY_LIVE.read_text()
+    assert _run_live(tmp_path / "ctl", weak, ahead=True).returncode == 0, "negative control"
