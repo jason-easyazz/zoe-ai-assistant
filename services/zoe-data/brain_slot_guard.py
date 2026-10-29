@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 ENV = "ZOE_BRAIN_SLOT_GUARD"            # on (default) | off
 ENV_QUIET_S = "ZOE_BRAIN_SLOT_QUIET_S"  # a conversation is "hot" this long after its last brain turn started/ended
 ENV_MAX_DEFER_S = "ZOE_BRAIN_SLOT_MAX_DEFER_S"
-DEFAULT_QUIET_S = 45.0
+DEFAULT_QUIET_S = 180.0   # owner-approved 2026-10-29: a pause under 3 min keeps the conversation resident (was 45 s)
 DEFAULT_MAX_DEFER_S = 240.0
 _POLL_S = 0.5
 
