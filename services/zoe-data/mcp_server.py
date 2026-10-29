@@ -1556,11 +1556,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {"lists": list(lists_map.values())}
 
     elif name == "list_add_item":
-        from list_service import add_item_to_list, default_visibility
+        from list_service import add_items_to_list, add_reply, default_visibility
 
         lt = args["list_type"]
         ln = args.get("list_name", lt.capitalize())
-        outcome = await add_item_to_list(
+        outcome = await add_items_to_list(
             db,
             user_id=user_id,
             list_type=lt,
@@ -1572,8 +1572,14 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         )
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
-        result = {"item_id": item_id, "list": ln, "list_id": list_id, "text": args["text"], "status": "added"}
-        await _notify_ui("lists", "list_updated", {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": args["text"]}})
+        result = {"item_id": item_id, "list": ln, "list_id": list_id, "text": args["text"],
+                  "status": "added" if outcome["added"] else "already_on_list"}
+        if outcome["already"]:
+            # the brain relays this sentence: an item already on the list is never added twice
+            result["already_on_list"] = outcome["already"]
+            result["reply"] = add_reply(outcome["added"], outcome["already"], f"the {lt.replace('_', ' ')} list")
+        if outcome["added"]:
+            await _notify_ui("lists", "list_updated", {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": args["text"]}})
         return result
 
     elif name == "list_remove_item":
