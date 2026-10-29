@@ -192,7 +192,8 @@ def snapshot(rig, pr="7", head=HEAD, **d):
     (rig.home / "probe-artifacts" / f"{pr}.json").write_text(json.dumps(d))
 
 
-SPEED_ONLY = dict(status="fail", said_vs_did_regressions=[], vad={"status": "pass"}, speed_comparison="compared")
+SPEED_ONLY = dict(status="fail", reason="SPEED e2e_ms: 3900ms vs baseline 3000ms (+30%)", said_vs_did_regressions=[],
+                  vad={"status": "pass"}, speed_comparison="compared")
 
 
 def decide(rig, pr="7", rc="4"):

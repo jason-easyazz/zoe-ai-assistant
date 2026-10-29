@@ -16,9 +16,10 @@ for PR in "$@"; do
     [ -e "$HOME/.zoe/night-window/WINDOW_OPEN" ] && { log "#$PR night window open (WINDOW_OPEN) - chain paused, no update/arm until it closes"; sleep 120; continue; }
     landing_is_held "$PR" && { log "#$PR went on HOLD - skipping"; break; }
     bash "$LANDING_DIR/night_busy.sh" deploy && { log "deploy pause (night_busy deploy) - chain paused, no update/arm"; sleep "$NIGHT_S"; continue; }
-    st=$(gh pr view "$PR" --json state,mergeStateStatus,autoMergeRequest,isDraft --jq '"\(.state) \(.mergeStateStatus) \(.autoMergeRequest!=null) \(.isDraft) \(.headRefOid)"'); set -- $st; state=$1; ms=$2; armed=$3; draft=${4:-unknown}; head=${5:-}
+    st=$(gh pr view "$PR" --json state,mergeStateStatus,autoMergeRequest,isDraft,headRefOid --jq '"\(.state) \(.mergeStateStatus) \(.autoMergeRequest!=null) \(.isDraft) \(.headRefOid)"'); set -- $st; state=$1; ms=$2; armed=$3; draft=${4:-unknown}; head=${5:-}
     [ "$state" = MERGED ] && { log "#$PR MERGED"; break; }
     [ "$state" = CLOSED ] && { log "#$PR CLOSED"; break; }
+    case "$head" in ????????????????????????????????????????) :;; *) log "#$PR head unreadable ('$head') - skipping this pass"; sleep "$STEP_S"; continue;; esac
     [ "$draft" != false ] && { log "#$PR is a draft (or unreadable) - not touching it"; break; }
     # the scope is re-read on EVERY pass (a push can add a voice file after autoland classified the PR): only CLEAR proceeds, anything else goes to the voice lander
     # an unreadable or EMPTY file list would classify as CLEAR: treat it as unknown and skip this pass

@@ -40,9 +40,10 @@ landing_unresolved_count(){
   echo "$out"
 }
 
-# landing_probe_speed_only <artifact> [head]: 0 only when the artifact is status=fail purely on SPEED: no said-vs-did regressions,
-# VAD not failed/errored, speed explicitly "compared" (a missing field is NOT retryable) and - when <head> is given - the artifact's
-# recorded revision is that head. Missing/unreadable/anything else = 1 (not retryable).
+# landing_probe_speed_only <artifact> [head]: 0 ONLY with positive evidence of a pure speed failure: status=fail, `reason` made solely
+# of "SPEED ..." clauses (split on "; " - a COLD, VAD, cleanup, clip-expectation or error clause disqualifies), no said-vs-did
+# regressions, VAD pass, cold_first_turn pass/absent/disabled, speed explicitly "compared", and - when <head> is given - the artifact's
+# revision is that head. Missing/unreadable/anything else = 1 (park, not retry).
 landing_probe_speed_only(){
   python3 - "$1" "${2:-}" <<'PY'
 import json, sys
@@ -50,35 +51,17 @@ try:
     d = json.load(open(sys.argv[1]))
 except Exception:
     sys.exit(1)
-vad = (d.get("vad") or {}).get("status")
+parts = [p for p in str(d.get("reason") or "").split("; ") if p.strip()]
+cold = (d.get("cold_first_turn") or {}).get("status")
 rev = ((d.get("revision") or {}).get("commit") or "")
-ok = (d.get("status") == "fail" and not d.get("said_vs_did_regressions")
-      and vad not in ("fail", "error") and d.get("speed_comparison") == "compared"
+ok = (d.get("status") == "fail" and parts and all(p.startswith("SPEED ") for p in parts)
+      and not d.get("said_vs_did_regressions")
+      and (d.get("vad") or {}).get("status") == "pass"
+      and cold in (None, "pass", "disabled")
+      and d.get("speed_comparison") == "compared"
       and (not sys.argv[2] or (rev != "" and rev[:8] == sys.argv[2][:8])))
 sys.exit(0 if ok else 1)
 PY
-}
-
-# landing_run_watching_head <pr> <expected-head> <cmd...>: run <cmd> (own process group) and poll the PR head every
-# ZOE_LANDING_HEAD_POLL_S (default 45) seconds. A push mid-run makes the result worthless (the artifact binds to the old
-# head), so the command is TERMed (KILLed after 20 s) and 75 is returned instead of burning the rest of the probe.
-landing_run_watching_head(){
-  local pr=$1 head=$2 poll=${ZOE_LANDING_HEAD_POLL_S:-45} pid cur moved=0 i rc was_m=0; shift 2
-  case $- in *m*) was_m=1;; esac
-  set -m; "$@" & pid=$!
-  while kill -0 "$pid" 2>/dev/null; do
-    for ((i=0; i<poll; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-    kill -0 "$pid" 2>/dev/null || break
-    cur=$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)
-    if [ -n "$cur" ] && [ "$cur" != "$head" ]; then
-      moved=1; kill -TERM -- "-$pid" 2>/dev/null
-      for ((i=0; i<20; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-      kill -KILL -- "-$pid" 2>/dev/null; break
-    fi
-  done
-  wait "$pid" 2>/dev/null; rc=$?; [ "$was_m" = 1 ] || set +m
-  [ "$moved" = 1 ] && return 75
-  return "$rc"
 }
 
 # landing_requeue_decision <pr> <rc>: what the voice loop does with a PR whose lander exited <rc> and is still open.
@@ -123,7 +106,8 @@ landing_others_busy(){
 
 # landing_probe_window <lane-wait-s> <pr> <head> <cmd...>: the Kokoro-silent part of a landing, in the ONLY safe order:
 #   1. take the test-lane lock (fd 8) - bounded by <lane-wait-s>; not won = return 9 with Kokoro NEVER touched
-#   2. only then stop Kokoro, settle, run <cmd> under landing_run_watching_head (rc 75 = head moved)
+#   2. only then stop Kokoro, settle, run <cmd> TO COMPLETION (the caller bounds it with `timeout`; a push mid-probe is caught by the
+#      artifact-revision == current-head check before anything is armed)
 #   3. always restart Kokoro and release the lane. <cmd> must close fd 8 for its children (8>&-).
 # (2026-10-29: Kokoro used to be stopped first, then the probe waited an hour for the lane - Zoe mute all morning.)
 # ZOE_TEST_LANE_LOCK / ZOE_LANDING_SETTLE_S are overridable for tests.
@@ -139,7 +123,7 @@ landing_probe_window(){
     for i in $(seq 1 30); do [ "$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)" -ge 1500 ] && break; sleep 2; done
     sleep "${ZOE_LANDING_SETTLE_S:-15}"
   fi
-  landing_run_watching_head "$pr" "$head" "$@"; rc=$?
+  "$@"; rc=$?
   systemctl --user start kokoro-tts.service
   flock -u 8; exec 8>&-
   return "$rc"
