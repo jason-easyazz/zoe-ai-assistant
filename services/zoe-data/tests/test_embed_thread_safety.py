@@ -117,3 +117,44 @@ def test_stop_worker_joins_the_background_thread(monkeypatch):
     assert restraint_head.defer("another text")
     assert restraint_head.drain(5.0)
     assert restraint_head.stop_worker(5.0) is True
+
+
+def test_a_timed_out_stop_does_not_poison_the_next_worker(monkeypatch):
+    """Cross-review finding: a join that times out must leave the worker restartable (per-worker stop event, unregistered up front)."""
+    gate = threading.Event()
+    entered = threading.Event()
+    seen: list[str] = []
+
+    def slow_lookup(raw, embed=False):
+        entered.set()
+        gate.wait(10)                                   # the first text holds the worker inside "native" code
+        seen.append(raw)
+        return None
+
+    monkeypatch.setattr(restraint_head, "_load", lambda: ("c", None, None, None, {}))
+    monkeypatch.setattr(restraint_head, "_model_pending", lambda: False)
+    monkeypatch.setattr(restraint_head, "lookup", slow_lookup)
+    restraint_head.reset()
+    assert restraint_head.defer("first, blocks the worker")
+    assert entered.wait(5)
+    old = restraint_head._WORKER
+    assert restraint_head.stop_worker(0.05) is False    # join timed out
+    gate.set()                                          # the old worker finishes, sees its own stop event, exits
+    old.join(5)
+    assert not old.is_alive()
+    assert restraint_head.defer("second, needs a live worker")
+    assert restraint_head.drain(5.0)
+    assert "second, needs a live worker" in seen
+    assert restraint_head._WORKER is not None and restraint_head._WORKER.is_alive()
+    assert restraint_head.stop_worker(5.0) is True
+
+
+def test_stop_leaves_no_stray_wakeup_that_would_hang_drain(monkeypatch):
+    monkeypatch.setattr(restraint_head, "_load", lambda: ("c", None, None, None, {}))
+    monkeypatch.setattr(restraint_head, "_model_pending", lambda: False)
+    monkeypatch.setattr(restraint_head, "lookup", lambda raw, embed=False: None)
+    restraint_head.reset()
+    restraint_head.defer("start the worker")
+    assert restraint_head.drain(5.0)
+    assert restraint_head.stop_worker(5.0) is True
+    assert restraint_head.drain(2.0)                    # nothing unfinished is left behind
