@@ -4999,7 +4999,7 @@
    "defaults": [
     "unset"
    ],
-   "kind": "unknown",
+   "kind": "str",
    "readers": 1
   },
   "ZOE_TIMEZONE": {

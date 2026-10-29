@@ -4363,9 +4363,11 @@
   // future) are pruned so they never alarm.
   var _tAlarm={known:{},fired:{},chime:null};
   function _tAlarmRefresh(){timersGet().then(function(d){
-    var seen={},now=Date.now();
+    var seen={},now=Date.now(),acks=_acksGet();
     ((d&&d.timers)||[]).forEach(function(t){var id=String(t.timer_id||t.id||''),exp=+t.expires_at_ms||0;if(!id||!exp)return;seen[id]=1;
+      if(acks[id]){_ackSend(id);return;}  // dismissed but the cancel never landed: retry it, never ring it again
       if(!_tAlarm.fired[id])_tAlarm.known[id]={exp:exp,label:t.label||t.title||'Timer'};});
+    Object.keys(acks).forEach(function(id){if(!seen[id]){delete acks[id];}});_acksSet(acks);  // server forgot it: nothing to retry
     Object.keys(_tAlarm.known).forEach(function(id){if(!seen[id]&&_tAlarm.known[id].exp>now+1500)delete _tAlarm.known[id];});
     // Bound `fired` on a long-lived kiosk: drop ids fired >6h ago (their timers
     // are long gone, so they can never re-appear and re-fire).
@@ -4382,6 +4384,10 @@
     function ping(t0){var o=c.createOscillator(),g=c.createGain();o.type='sine';o.frequency.value=880;o.connect(g);g.connect(c.destination);
       g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(.45,t0+.02);g.gain.linearRampToValueAtTime(0,t0+.4);o.start(t0);o.stop(t0+.42);}
     var t=c.currentTime;ping(t);ping(t+.55);ping(t+1.1);}catch(e){}}
+  var _ACK_KEY='zoe_timer_acks';
+  function _acksGet(){try{return JSON.parse(localStorage.getItem(_ACK_KEY)||'{}')||{};}catch(e){return {};}}
+  function _acksSet(o){try{localStorage.setItem(_ACK_KEY,JSON.stringify(o));}catch(e){}}
+  function _ackSend(id){return apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id}).then(function(){var a=_acksGet();delete a[id];_acksSet(a);}).catch(function(){});}
   function timerAlarm(label,ids){
     // Cumulative: a second timer ending before Dismiss must not drop the first one's id, or the first stays
     // "ringing" on the server and re-rings after the next voice-turn reload inside the grace window.
@@ -4400,7 +4406,10 @@
     // - or first polled - after the end must still ring it. Cancelling the id is what stops a reload re-ringing it.
     document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');
       var acked=Object.keys(_tAlarm.pending||{});_tAlarm.pending={};
-      acked.forEach(function(id){apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id}).catch(function(){});});_tmMemo.p=null;if(_tAlarm.chime){clearInterval(_tAlarm.chime);_tAlarm.chime=null;}
+      // Persist the ack BEFORE sending it and drop it only once the server confirms: a failed cancel (restart, network)
+      // is retried by every poll, and survives a page reload, so a dismissed alarm never sounds again inside the grace.
+      var a=_acksGet();acked.forEach(function(id){a[id]=1;});_acksSet(a);
+      acked.forEach(_ackSend);_tmMemo.p=null;if(_tAlarm.chime){clearInterval(_tAlarm.chime);_tAlarm.chime=null;}
       if(_cur==='timer'&&typeof wireTimer==='function'){}};
   }
   _tAlarmRefresh();setInterval(_tAlarmRefresh,15000);setInterval(_tAlarmTick,1000);

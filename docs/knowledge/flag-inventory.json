@@ -14880,9 +14880,16 @@
         "readers": [
           "services/zoe-data/skybridge_service.py"
         ],
-        "registered": false,
-        "spec": null,
-        "typed_env": false
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "'' = ~/.zoe/timers.json (the snapshot file of running voice timers)",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_TIMEZONE": {
         "defaults": [
@@ -16778,7 +16785,7 @@
     "services/zoe-data/routers/weather.py": 8,
     "services/zoe-data/semantic_router.py": 13,
     "services/zoe-data/setup_qr.py": 1,
-    "services/zoe-data/skybridge_service.py": 4,
+    "services/zoe-data/skybridge_service.py": 3,
     "services/zoe-data/smart_home_service.py": 1,
     "services/zoe-data/smart_home_setup.py": 2,
     "services/zoe-data/structural_claims.py": 1,

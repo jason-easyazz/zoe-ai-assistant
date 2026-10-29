@@ -28,11 +28,14 @@ pytestmark = pytest.mark.ci_safe
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
+    """Shared isolation: a private snapshot file and a private registry, all restored by monkeypatch on teardown
+    (never direct assignment), with queued background writes drained before the temp dir goes away."""
     monkeypatch.setenv("ZOE_TIMER_STORE", str(tmp_path / "timers.json"))
-    _timers._by_owner.clear()
-    _timers._loaded = True
+    monkeypatch.setattr(_timers, "_by_owner", {})
+    monkeypatch.setattr(_timers, "_loaded", True)
+    monkeypatch.setattr(_timers, "_last_write", None)
     yield
-    _timers._by_owner.clear()
+    _timers.wait_saved()
 
 
 _MODES: list = []
@@ -209,17 +212,18 @@ def test_kiosk_dismiss_acknowledges_through_cancel():
     path = os.path.join(os.path.dirname(__file__), "..", "..", "zoe-ui", "dist", "touch", "home.html")
     html = open(path, encoding="utf-8").read()
     assert "timerAlarm(due.join(' / '),ids)" in html
-    alarm = html.split("function timerAlarm")[1].split("_tAlarmRefresh();")[0]
+    alarm = html.split("function timerAlarm")[1].split("_tAlarmRefresh();")[0] + html.split("function _ackSend")[1].split("function timerAlarm")[0]
     assert "apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id})" in alarm
 
 
 _ALARM_HARNESS = r"""
 const src = require('fs').readFileSync(process.argv[1], 'utf8');
-const body = 'function timerAlarm' + src.split('function timerAlarm')[1].split('_tAlarmRefresh();')[0];
+const body = 'var _ACK_KEY' + src.split('var _ACK_KEY')[1].split('_tAlarmRefresh();')[0];
 const els = {};
 function mk(id){ return els[id] = els[id] || {id, innerHTML:'', onclick:null, classList:{add(){}, remove(){}}, appendChild(){}}; }
 const document = {getElementById: id => (id === 'tmrAlarm' || id === 'tmrAlarmX') ? mk(id) : null,
                   createElement: () => mk('tmrAlarm'), body: mk('body')};
+const store = {}; const localStorage = {getItem:k => (k in store ? store[k] : null), setItem:(k,v) => { store[k] = v; }};
 const cancelled = [];
 const apiJson = (m, url, b) => { cancelled.push(b.timer_id); return Promise.resolve({}); };
 const _tAlarm = {known:{}, fired:{}, chime:null}, _tmMemo = {p:1}, _cur = 'home', window = {};
@@ -269,3 +273,81 @@ def test_a_slow_disk_never_blocks_the_caller(monkeypatch):
     assert elapsed < 0.5, f"create() blocked on the disk for {elapsed:.2f}s"
     ids = [t["timer_id"] for t in _TimerStore().list("jason")]
     assert ids == [a["timer_id"], b["timer_id"]]   # the later snapshot won: both timers are on disk
+
+
+_RELOAD_HARNESS = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+const alarmBody = 'var _ACK_KEY' + src.split('var _ACK_KEY')[1].split('_tAlarmRefresh();')[0];
+const refreshBody = 'function _tAlarmRefresh' + src.split('function _tAlarmRefresh')[1].split('function _tAlarmTick')[0];
+const store = {}; const localStorage = {getItem:k => (k in store ? store[k] : null), setItem:(k,v) => { store[k] = v; }};
+function page(serverUp, listed) {                  // one page load: fresh in-memory state, the SAME localStorage
+  const els = {}; const mk = id => els[id] = els[id] || {id, innerHTML:'', onclick:null, classList:{add(){}, remove(){}}, appendChild(){}};
+  const document = {getElementById: id => (id === 'tmrAlarm' || id === 'tmrAlarmX') ? mk(id) : null, createElement: () => mk('tmrAlarm'), body: mk('body')};
+  const cancelled = [];
+  const apiJson = (m, url, b) => serverUp ? (cancelled.push(b.timer_id), Promise.resolve({})) : Promise.reject(new Error('down'));
+  const timersGet = () => Promise.resolve({timers: listed.map(id => ({timer_id: id, expires_at_ms: Date.now() - 1000, label: id}))});
+  const _tAlarm = {known:{}, fired:{}, chime:null}, _tmMemo = {p:1}, _cur = 'home', window = {};
+  const esc = x => x, _beep = () => {}, setInterval = () => 1, clearInterval = () => {};
+  eval(alarmBody + refreshBody + '; globalThis.__p = {timerAlarm, _tAlarmRefresh, _tAlarm, els, cancelled};');
+  return globalThis.__p;
+}
+const tick = () => new Promise(r => setTimeout(r, 20));
+(async () => {
+  const p1 = page(false, ['t1']);                  // server down: the cancel fails
+  p1.timerAlarm('Pasta', ['t1']); p1.els.tmrAlarmX.onclick(); await tick();
+  const p2 = page(false, ['t1']);                  // reload while the server still lists t1 as ringing
+  await p2._tAlarmRefresh(); await tick();
+  const rangAfterReload = Object.keys(p2._tAlarm.known);
+  const p3 = page(true, ['t1']);                   // server back: the poll retries the ack
+  await p3._tAlarmRefresh(); await tick();
+  const p4 = page(true, ['t1']);                   // acked for good: nothing left to retry
+  await p4._tAlarmRefresh(); await tick();
+  console.log(JSON.stringify({rangAfterReload, retried: p3.cancelled, retriedAgain: p4.cancelled, left: store.zoe_timer_acks}));
+})();
+"""
+
+
+def _node_json(script):
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "zoe-ui", "dist", "touch", "home.html")
+    out = subprocess.run([node, "-e", script, path], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_failed_dismiss_is_retried_and_never_rings_again_after_a_reload():
+    """Review 2026-10-29: Dismiss dropped a failed cancel, so a reload inside the 90 s grace re-rang an alarm the
+    user had already dismissed. The ack is persisted, survives the reload, is retried by the next poll, and is
+    forgotten once the server confirms."""
+    r = _node_json(_RELOAD_HARNESS)
+    assert r["rangAfterReload"] == []          # reloaded page does NOT ring the dismissed timer
+    assert r["retried"] == ["t1"]              # ...and the poll retried the ack once the server was back
+    assert r["retriedAgain"] == []             # confirmed: no more retries
+    assert r["left"] in ("{}", None)
+
+
+def test_flag_is_registered_and_read_through_typed_env():
+    import flag_registry
+    assert any(e.name == "ZOE_TIMER_STORE" for e in flag_registry._ENTRIES)
+    src = open(os.path.join(os.path.dirname(__file__), "..", "skybridge_service.py"), encoding="utf-8").read()
+    assert 'os.environ.get("ZOE_TIMER_STORE"' not in src and 'env_str("ZOE_TIMER_STORE"' in src
+
+
+def test_preload_reads_the_snapshot_off_the_event_loop(monkeypatch):
+    """The one-time snapshot read runs on a worker thread (startup preload), not on the event loop."""
+    import threading
+    import skybridge_service
+    store = _TimerStore()
+    tid = _tid(create_timer_direct("jason", minutes=2))
+    _timers.wait_saved()
+    monkeypatch.setattr(skybridge_service, "_timers", store)
+    seen = []
+    real = store._load
+    monkeypatch.setattr(store, "_load", lambda: (seen.append(threading.current_thread() is threading.main_thread()), real())[1])
+    asyncio.run(skybridge_service.preload_timers())
+    assert seen == [False]
+    assert [t["timer_id"] for t in store.list("jason")] == [tid]

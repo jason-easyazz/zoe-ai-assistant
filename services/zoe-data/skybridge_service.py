@@ -27,6 +27,7 @@ from card_service import card_service
 from database import get_db_ctx
 from people_utils import row_to_person
 from time_utils import today_for_zoe_tz
+from typed_env import env_str
 from weather_speech import WeatherAsk, classify_weather_ask, speak_weather
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ TIMER_RING_GRACE_S = 90
 
 def _timer_store_path() -> Path:
     """Where running timers are snapshotted (``ZOE_TIMER_STORE``; default ``~/.zoe/timers.json``)."""
-    raw = os.environ.get("ZOE_TIMER_STORE", "").strip()
+    raw = env_str("ZOE_TIMER_STORE", "")
     return Path(raw).expanduser() if raw else Path.home() / ".zoe" / "timers.json"
 
 
@@ -288,6 +289,12 @@ class _TimerStore:
 
 
 _timers = _TimerStore()
+
+
+async def preload_timers() -> None:
+    """Read the timer snapshot on a worker thread (startup, before serving) so the first timer request never does
+    that file read on the event loop. ``_load`` stays the lazy fallback for any caller that runs before this."""
+    await asyncio.to_thread(_timers._load)
 
 
 def _parse_timer_duration(text: str) -> int:
