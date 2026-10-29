@@ -115,8 +115,8 @@ The existing trend (67 bar lines, last full run 2026-10-09, all dirty) is left a
 
 **Weekly, from a clean checkout:** `scripts/maintenance/samantha_weekly.sh` clones (`git clone --shared`, nothing written to the
 live checkout) the commit the live service is on, runs the bar then the day-sim from that clone with `--require-bound
---service-dir <live>` under `/tmp/zoe-voice-harness.lock`, and writes `~/.cache/zoe/samantha_weekly_last.json`. It refuses to start
-inside 01:50-04:55 local (exit 4). Template units, NOT installed (operator opt-in): `scripts/setup/systemd/zoe-samantha-weekly.{service,timer}`
+--service-dir <live>/services/zoe-data` (the live Flue build is linked into the clone) under `/tmp/zoe-voice-harness.lock`, and writes `~/.cache/zoe/samantha_weekly_last.json`. It refuses to start
+inside 01:50-04:55 local (exit 4), and bounds each step's lock wait and run time to end 5 min before the window next opens. Template units, NOT installed (operator opt-in): `scripts/setup/systemd/zoe-samantha-weekly.{service,timer}`
 (Sunday 05:30, after the 12B night window and the 04:30 voice probe; `Persistent=false`). `--with-person` adds the person bench,
 `--record-baseline` records the bar (bound runs only), `--dry-run` prints the plan.
 

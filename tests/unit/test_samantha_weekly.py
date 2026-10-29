@@ -31,8 +31,8 @@ needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not inst
 _FAKE_DATE = """#!/usr/bin/env bash
 state="$(cat "$FAKE_STATE")"
 case "$1" in
-  +%H) [ "$state" = night ] && echo 03 || echo 12 ;;
-  +%M) echo 00 ;;
+  +%H) case "$state" in night) echo 03 ;; near) echo 01 ;; *) echo 12 ;; esac ;;
+  +%M) [ "$state" = near ] && echo 48 || echo 00 ;;
   *) exec /bin/date "$@" ;;
 esac
 """
@@ -46,9 +46,20 @@ exec "$@"
 # `python3` shim: the harness steps only record that they started; anything else is the real interpreter.
 _FAKE_PY = """#!/usr/bin/env bash
 case "$1" in
-  */scripts/perf/samantha_*.py) echo "$1" >> "$HARNESS_STARTED"; exit 0 ;;
+  */scripts/perf/samantha_*.py)
+    echo "$1" >> "$HARNESS_STARTED"; echo "$*" >> "$HARNESS_ARGS"
+    [ -f "${1%/scripts/perf/*}/labs/flue-zoe-brain-2x/dist/server.mjs" ] && echo linked >> "$HARNESS_FLUE"
+    exit 0 ;;
 esac
 exec "$REAL_PY" "$@"
+"""
+
+
+# `timeout` shim: records the deadline it was given, then runs the command unbounded.
+_FAKE_TIMEOUT = """#!/usr/bin/env bash
+echo "$*" >> "$TIMEOUT_ARGS"
+shift 2   # --kill-after=60 <seconds>
+exec "$@"
 """
 
 
@@ -68,13 +79,19 @@ def _run(tmp_path: Path, start: str, after_lock: str):
     live.mkdir()
     _git("init", "-q", cwd=live)
     (live / "a.txt").write_text("x\n")
-    _git("add", "a.txt", cwd=live)
+    flue = live / "labs" / "flue-zoe-brain-2x"
+    flue.mkdir(parents=True)
+    (flue / "package.json").write_text("{}\n")
+    _git("add", "a.txt", "labs/flue-zoe-brain-2x/package.json", cwd=live)
     _git("commit", "-q", "-m", "c", cwd=live)
     fake = tmp_path / "bin"
     fake.mkdir()
     _exe(fake / "date", _FAKE_DATE)
     _exe(fake / "flock", _FAKE_FLOCK)
     _exe(fake / "python3", _FAKE_PY)
+    _exe(fake / "timeout", _FAKE_TIMEOUT)
+    (flue / "dist").mkdir()                       # the gitignored sidecar build a fresh clone does not have
+    (flue / "dist" / "server.mjs").write_text("//\n")
     state = tmp_path / "state"
     state.write_text(start)
     started = tmp_path / "started"
@@ -82,7 +99,8 @@ def _run(tmp_path: Path, start: str, after_lock: str):
     (home / ".cache" / "zoe").mkdir(parents=True)
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home), "ZOE_ASSISTANT_ROOT": str(live),
            "FAKE_STATE": str(state), "FAKE_AFTER_LOCK": after_lock, "HARNESS_STARTED": str(started),
-           "REAL_PY": sys.executable, "TMPDIR": str(tmp_path)}
+           "REAL_PY": sys.executable, "TMPDIR": str(tmp_path),
+           "HARNESS_ARGS": str(tmp_path / "args"), "HARNESS_FLUE": str(tmp_path / "flue"), "TIMEOUT_ARGS": str(tmp_path / "timeout")}
     before = _git("status", "--porcelain=v1", "--ignored", cwd=live), sorted(p.name for p in live.iterdir())
     res = subprocess.run(["bash", str(_SCRIPT)], env=env, capture_output=True, text=True, timeout=120)
     after = _git("status", "--porcelain=v1", "--ignored", cwd=live), sorted(p.name for p in live.iterdir())
@@ -116,4 +134,26 @@ def test_outside_the_window_the_harness_runs_from_a_clone_and_the_live_checkout_
     steps = started.read_text().split()
     assert len(steps) == 2 and all("/repo/scripts/perf/samantha_" in s for s in steps)
     assert str(tmp_path / "live") not in "".join(steps), "the harness must run from the clone, not the live checkout"
+    assert live_untouched
+
+
+@needs_git
+def test_a_start_just_before_the_window_is_refused(tmp_path):
+    # 01:48 -> the window opens in 2 min, inside the 5 min grace: the wrapper must not start a multi-hour bench.
+    res, started, live_untouched = _run(tmp_path, start="near", after_lock="near")
+    assert res.returncode == 4, (res.returncode, res.stdout, res.stderr)
+    assert "not starting" in res.stderr and not started.exists()
+    assert live_untouched
+
+
+@needs_git
+def test_each_step_is_bounded_by_the_deadline_passes_the_service_dir_and_gets_the_flue_build(tmp_path):
+    res, started, live_untouched = _run(tmp_path, start="day", after_lock="day")
+    assert res.returncode == 0, (res.stdout, res.stderr)
+    # 12:00 -> window at 01:50 = 13 h 50 min = 49800 s, minus the 300 s grace
+    assert (tmp_path / "timeout").read_text().split()[:2] == ["--kill-after=60", "49500"]
+    args = (tmp_path / "args").read_text().splitlines()
+    assert all(f"--service-dir {tmp_path / 'live'}/services/zoe-data" in a for a in args), args   # the service dir, not the repo root
+    assert all("--require-bound" in a for a in args)
+    assert (tmp_path / "flue").read_text().split() == ["linked", "linked"]   # the clone sees the live checkout's sidecar build
     assert live_untouched

@@ -13,7 +13,9 @@
 # asserted by the harness itself.
 #
 # When: AFTER the night window (the 12B owns the box ~02:50-04:10, the daily voice probe runs 04:30). The script
-# refuses to start inside 01:50-04:55 local. The shipped timer fires Sunday 05:30.
+# refuses to start inside 01:50-04:55 local, and every step is bounded: the lock wait and the harness's run time end
+# 5 min before the window next opens (a manual start at 23:00 gets a ~2 h budget, not an open-ended one). The shipped
+# timer fires Sunday 05:30.
 #
 # Usage (operator / the timer; ZOE_PERF is set here because starting this is the explicit opt-in):
 #     scripts/maintenance/samantha_weekly.sh                 # bar + day-sim
@@ -51,6 +53,13 @@ in_night_window() {
   local m=$((10#$(date +%H) * 60 + 10#$(date +%M)))
   [ "$m" -ge "$WIN_START_MIN" ] && [ "$m" -lt "$WIN_END_MIN" ]
 }
+# Minutes until the window next OPENS (0 inside it): bounds the lock wait AND the harness's run time, so a manual start
+# before 01:50 cannot leave a bench (or this wrapper's lock) alive into the night window.
+mins_to_window() {
+  local m=$((10#$(date +%H) * 60 + 10#$(date +%M)))
+  echo $(((WIN_START_MIN - m + 1440) % 1440))
+}
+GRACE_S=300   # stop this long before the window opens
 if [ "$DRY" -eq 0 ] && in_night_window; then
   echo "samantha_weekly: inside the night window (01:50-04:55) - not starting" >&2
   exit 4
@@ -77,6 +86,17 @@ git clone --quiet --shared --no-checkout "$LIVE" "$WORK/repo" || { echo "samanth
 git -C "$WORK/repo" checkout --quiet --detach "$COMMIT" || { echo "samantha_weekly: checkout of $COMMIT failed" >&2; exit 2; }
 echo "samantha_weekly: harness checkout $WORK/repo at ${COMMIT:0:12} (service: $LIVE)"
 
+# The scratch stack serves the Flue brain sidecar from THIS checkout's labs/flue-zoe-brain-2x/dist, which is gitignored
+# (so a fresh clone has none). Link the live checkout's build (and its node_modules) in read-only: the sidecar is the
+# deployed build of that same commit, while the Python under test is the clone's. No build is run here.
+FLUE_REL="labs/flue-zoe-brain-2x"
+if [ -f "$LIVE/$FLUE_REL/dist/server.mjs" ] && [ -d "$WORK/repo/$FLUE_REL" ]; then
+  ln -s "$LIVE/$FLUE_REL/dist" "$WORK/repo/$FLUE_REL/dist"
+  [ -d "$LIVE/$FLUE_REL/node_modules" ] && ln -s "$LIVE/$FLUE_REL/node_modules" "$WORK/repo/$FLUE_REL/node_modules"
+else
+  echo "samantha_weekly: no Flue build at $LIVE/$FLUE_REL/dist - the scratch stack will refuse (build it there first)" >&2
+fi
+
 export ZOE_PERF=1
 STARTED="$(date +%s)"   # the summary only reports artifacts written by THIS run (a step that exits 3 writes nothing)
 worst=0
@@ -92,18 +112,33 @@ for s in "${STEPS[@]}"; do
     [ 4 -gt "$worst" ] && worst=4
     break
   fi
-  echo "samantha_weekly: === $s ==="
+  left=$(($(mins_to_window) * 60 - GRACE_S))
+  if [ "$left" -lt 120 ]; then
+    echo "samantha_weekly: less than $((GRACE_S / 60)) min before the night window - not starting $s" >&2
+    [ 4 -gt "$worst" ] && worst=4
+    break
+  fi
+  wait_s=$((left < 7200 ? left : 7200))
+  echo "samantha_weekly: === $s === (deadline ${left}s before the window; lock wait <= ${wait_s}s)"
   # The lock wait can span the start of the window, so the window is re-checked AFTER the lock is held, in the
   # command flock runs (exit 4 = refused). `exec` keeps flock as the harness's parent, which is how the harness
   # recognises it is already serialised by this wrapper's lock.
-  flock -E 3 -w 7200 "$LOCK" bash -c '
+  # `timeout` bounds the run itself by the same deadline (TERM, then KILL after 60 s); it sits between flock and the
+  # harness, which still finds the wrapper's lock by walking its ancestors.
+  # shellcheck disable=SC2016  # the inner bash expands these, deliberately
+  flock -E 3 -w "$wait_s" "$LOCK" bash -c '
     m=$((10#$(date +%H) * 60 + 10#$(date +%M)))
     if [ "$m" -ge "$1" ] && [ "$m" -lt "$2" ]; then
       echo "samantha_weekly: the night window opened while waiting for the lock - not starting" >&2
       exit 4
     fi
-    shift 2
-    exec nice -n 5 python3 "$@"' _ "$WIN_START_MIN" "$WIN_END_MIN" "$WORK/repo/$s" --require-bound --service-dir "$LIVE" ${extra[@]+"${extra[@]}"}
+    left=$(( ( ($1 - m + 1440) % 1440 ) * 60 - $3 ))
+    if [ "$left" -lt 120 ]; then
+      echo "samantha_weekly: the night window is too close after waiting for the lock - not starting" >&2
+      exit 4
+    fi
+    shift 3
+    exec timeout --kill-after=60 "$left" nice -n 5 python3 "$@"' _ "$WIN_START_MIN" "$WIN_END_MIN" "$GRACE_S" "$WORK/repo/$s" --require-bound --service-dir "$LIVE/services/zoe-data" ${extra[@]+"${extra[@]}"}
   rc=$?
   echo "samantha_weekly: $s exit $rc"
   [ "$rc" -gt "$worst" ] && worst=$rc
