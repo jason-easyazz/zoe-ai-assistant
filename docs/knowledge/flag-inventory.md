@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 797 prod flags; 207 read through `typed_env`.
+- 798 prod flags; 208 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-797 flags; 747 not documented in `.env.example`.
+798 flags; 748 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -771,6 +771,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_TELEGRAM_VOICE_MAX_S` | int | `60` | - | `docs/knowledge/telegram-voice-notes.md` | `'60'` | no | yes | `services/zoe-data/routers/telegram_media.py` |
 | `ZOE_TEMPORAL_RELATIONSHIPS_ENABLED` | str | `''` | - | `docs/knowledge/relationship-memory-flag-enable.md` | `''` | no | NO | `services/zoe-data/person_extractor.py` |
 | `ZOE_TEXT_LOG_RETENTION_DAYS` | str | `''` | - | `docs/knowledge/forget-reach.md` | `-` | no | NO | `services/zoe-data/local_text_logs.py` |
+| `ZOE_TIMER_STORE` | str | `''` | - | `services/zoe-data/AGENTS.md` | `''` | yes | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_TIMEZONE` | str | `'Australia/Perth'` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''`, `'Australia/Perth'` | no | NO | `services/zoe-data/calendar_ical.py`<br>`services/zoe-data/identity_facts.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/multica_autopilot_sync.py`<br>`services/zoe-data/proactive/arrival.py`<br>`services/zoe-data/proactive/engine.py`<br>`services/zoe-data/proactive/triggers/emotional_followup.py`<br>`services/zoe-data/proactive/triggers/evening_windown.py`<br>`services/zoe-data/proactive/triggers/evolution_weekly_digest.py`<br>`services/zoe-data/proactive/triggers/people_birthday.py`<br>`services/zoe-data/proactive/triggers/people_health.py`<br>`services/zoe-data/proactive/triggers/reminder_scan.py`<br>`services/zoe-data/routers/weather.py`<br>`services/zoe-data/time_utils.py`<br>`services/zoe-data/voice_greeting.py` |
 | `ZOE_TOUCH_PANEL_OFFLINE_CACHE` | bool | `False` | - | `docs/knowledge/ui-deep-review-2026-10-04.md` | `'0'` | no | NO | `services/zoe-auth/touch_panel/quick_auth.py` |
 | `ZOE_TOUCH_PROBE_DEVICE_TOKEN` | str | `''` | - | - | `''` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import json
 import logging
 import os
 import re
@@ -25,6 +27,7 @@ from card_service import card_service
 from database import get_db_ctx
 from people_utils import row_to_person
 from time_utils import today_for_zoe_tz
+from typed_env import env_str
 from weather_speech import WeatherAsk, classify_weather_ask, speak_weather
 
 logger = logging.getLogger(__name__)
@@ -63,8 +66,10 @@ class SkybridgeIntent:
 # A REAL countdown timer (not the old speak-only stub). The store is the
 # authoritative source for spoken "how long left" / "cancel" queries; the panel
 # ticks and rings from the absolute expires_at so firing is immediate and
-# survives a reload. In-memory is intentional: timers are short-lived and the
-# panel persists its own copy, so a service restart losing one is acceptable.
+# survives a reload. The registry is snapshotted to a small JSON file on every
+# change and reloaded on first use, so a zoe-data restart (several a day on this
+# box) no longer drops a running timer. The panel does NOT keep its own copy: it
+# learns timers only by polling ``GET /api/skybridge/timers``.
 
 # The number vocabulary and the duration parser live in command_shapes (shared with
 # intent_router, so the two matchers never disagree about a duration).
@@ -72,21 +77,127 @@ _WORD_NUMBERS = command_shapes.WORD_NUMBERS
 _COMPOUND_WORD_NUMBERS = command_shapes.COMPOUND_WORD_NUMBERS
 
 MAX_TIMER_SECONDS = 24 * 3600
+# A finished timer stays listed to the PANEL ("ringing") until it is dismissed (cancel-by-id) or this long passes: the
+# kiosk learns timers by polling every 15 s and every voice turn reloads its page, so a timer that ended between polls
+# (or just after a reload) must still ring. Spoken queries ("how long left", "cancel") only ever see running timers.
+TIMER_RING_GRACE_S = 90
+
+
+def _timer_store_path() -> Path:
+    """Where running timers are snapshotted (``ZOE_TIMER_STORE``; default ``~/.zoe/timers.json``)."""
+    raw = env_str("ZOE_TIMER_STORE", "")
+    return Path(raw).expanduser() if raw else Path.home() / ".zoe" / "timers.json"
 
 
 class _TimerStore:
-    """Process-local registry of active countdown timers, keyed by owner."""
+    """Registry of active countdown timers, keyed by owner, snapshotted to disk so it survives a restart."""
 
     def __init__(self) -> None:
         self._by_owner: dict[str, list[dict[str, Any]]] = {}
+        self._loaded = False
+        # Disk writes (two fsyncs) run on ONE background worker, never on the event loop (services/zoe-data/AGENTS.md:
+        # no blocking main-thread I/O): a slow disk must not stall unrelated requests or voice streams. One worker =
+        # writes land in submission order, and every write is a full snapshot taken on the caller's thread, so the
+        # last submitted state always wins.
+        self._writer: "concurrent.futures.ThreadPoolExecutor | None" = None
+        self._last_write: "concurrent.futures.Future[None] | None" = None
+
+    def _load(self) -> None:
+        """Reload the snapshot ONCE per process, on first use (never at import). Expired timers are dropped."""
+        if self._loaded:
+            return
+        try:
+            raw = json.loads(_timer_store_path().read_text())
+            now = time.time()
+            by_owner = raw.get("by_owner") if isinstance(raw, dict) else None
+            for owner, timers in (by_owner.items() if isinstance(by_owner, dict) else []):
+                live = []
+                for t in (timers if isinstance(timers, list) else []):
+                    try:  # normalise: a wrongly-typed record is dropped here, never allowed to reach _prune()
+                        t = dict(t)
+                        t["expires_at"] = float(t["expires_at"])
+                        t["duration_seconds"] = int(t["duration_seconds"])
+                        t["set_seconds"] = int(t.get("set_seconds", t["duration_seconds"]))
+                        t["created_at"] = float(t.get("created_at", now))
+                        t["label"] = str(t.get("label") or "Timer")
+                        t["timer_id"] = str(t["timer_id"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if t["expires_at"] > now - TIMER_RING_GRACE_S:
+                        live.append(t)
+                if live and not self._by_owner.get(str(owner)):
+                    self._by_owner[str(owner)] = live
+        except FileNotFoundError:
+            pass
+        except Exception as exc:  # noqa: BLE001 - a corrupt snapshot must never break the voice path
+            logger.warning("timer store: could not reload %s (%s)", _timer_store_path(), type(exc).__name__)
+        self._loaded = True  # only once the registry is complete (zoe-data is one asyncio worker; no await in here)
+
+    def _save(self) -> None:
+        """Queue an atomic snapshot write. The JSON is built HERE (cheap, in memory, consistent with the registry at
+        this instant); only the file I/O moves to the single background writer."""
+        try:
+            payload = json.dumps({"by_owner": self._by_owner})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("timer store: could not serialise (%s)", type(exc).__name__)
+            return
+        if self._writer is None:
+            self._writer = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="timer-store")
+        self._last_write = self._writer.submit(self._write_snapshot, _timer_store_path(), payload)
+
+    def wait_saved(self, timeout: float = 5.0) -> None:
+        """Block until the most recent queued snapshot has been written (tests, shutdown)."""
+        fut = self._last_write
+        if fut is not None:
+            concurrent.futures.wait([fut], timeout=timeout)
+
+    @staticmethod
+    def _write_snapshot(path: Path, payload: str) -> None:
+        """Atomic snapshot (tmp + rename, 0600). Best-effort: a full disk costs durability, never the timer itself."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")  # per-process: never a shared scratch name
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+            dfd = os.open(path.parent, os.O_RDONLY)  # make the rename itself durable
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("timer store: could not save %s (%s)", path, type(exc).__name__)
 
     def _prune(self, owner: str) -> None:
+        self._load()
         now = time.time()
-        live = [t for t in self._by_owner.get(owner, []) if t["expires_at"] > now]
+        before = self._by_owner.get(owner, [])
+        live = [t for t in before if t["expires_at"] > now - TIMER_RING_GRACE_S]
         if live:
             self._by_owner[owner] = live
         else:
             self._by_owner.pop(owner, None)
+        if len(live) != len(before):
+            self._save()
+
+    def all_live(self) -> list[dict[str, Any]]:
+        """Every running OR ringing (finished, within the grace) timer of every owner, soonest first."""
+        self._load()
+        for owner in list(self._by_owner):
+            self._prune(owner)
+        return sorted((t for ts in self._by_owner.values() for t in ts), key=lambda t: t["expires_at"])
+
+    def cancel_any(self, timer_id: str) -> dict[str, Any] | None:
+        """Cancel a timer by id whoever owns it (the panel's per-card tap-cancel)."""
+        self._load()
+        for owner in list(self._by_owner):
+            hit = self.cancel_by_id(owner, timer_id)
+            if hit is not None:
+                return hit
+        return None
 
     def create(self, owner: str, label: str, seconds: int) -> dict[str, Any]:
         self._prune(owner)
@@ -100,16 +211,18 @@ class _TimerStore:
             "expires_at": now + int(seconds),
         }
         self._by_owner.setdefault(owner, []).append(timer)
+        self._save()
         write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
         return timer
 
     def list(self, owner: str) -> list[dict[str, Any]]:
         self._prune(owner)
-        return sorted(self._by_owner.get(owner, []), key=lambda t: t["expires_at"])
+        now = time.time()  # RUNNING timers only: a ringing one is the panel's business (all_live)
+        return sorted((t for t in self._by_owner.get(owner, []) if t["expires_at"] > now), key=lambda t: t["expires_at"])
 
     def cancel(self, owner: str, label: str | None = None) -> dict[str, Any] | None:
         self._prune(owner)
-        timers = self._by_owner.get(owner, [])
+        timers = self.list(owner)
         if not timers:
             return None
         target = None
@@ -118,9 +231,7 @@ class _TimerStore:
             target = next((t for t in timers if t["label"].lower() == wanted), None)
         if target is None:  # no name (or no match) → cancel the soonest-expiring
             target = min(timers, key=lambda t: t["expires_at"])
-        timers.remove(target)
-        self._prune(owner)
-        return target
+        return self.cancel_by_id(owner, target["timer_id"])
 
     def find(self, owner: str, label: str = "", start_seconds: int = 0) -> tuple[dict[str, Any] | None, str]:
         """The ONE running timer a command means, or (None, why): ``none`` (nothing running), ``no_match`` (the
@@ -157,11 +268,12 @@ class _TimerStore:
         """Move a running timer's end by ``delta_seconds`` (negative = shorter). The panel reads ``expires_at`` from
         ``GET /api/skybridge/timers`` (``active_timers_for``), so the new end reaches it on its next poll."""
         self._prune(owner)
-        timer = next((t for t in self._by_owner.get(owner, []) if t["timer_id"] == timer_id), None)
+        timer = next((t for t in self.list(owner) if t["timer_id"] == timer_id), None)
         if timer is None:
             return None
         timer["expires_at"] += int(delta_seconds)
         timer["duration_seconds"] = int(timer["duration_seconds"]) + int(delta_seconds)
+        self._save()
         write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
         return timer
 
@@ -172,10 +284,17 @@ class _TimerStore:
         if target is not None:
             timers.remove(target)
             self._prune(owner)
+            self._save()
         return target
 
 
 _timers = _TimerStore()
+
+
+async def preload_timers() -> None:
+    """Read the timer snapshot on a worker thread (startup, before serving) so the first timer request never does
+    that file read on the event loop. ``_load`` stays the lazy fallback for any caller that runs before this."""
+    await asyncio.to_thread(_timers._load)
 
 
 def _parse_timer_duration(text: str) -> int:
@@ -277,6 +396,18 @@ def _timer_card(timer: dict[str, Any], *, status: str = "running") -> dict[str, 
 def active_timers_for(owner: str) -> list[dict[str, Any]]:
     """Public helper for the reload-resume endpoint: the panel's authoritative set."""
     return [_timer_card(t)["props"] for t in _timers.list(owner or "guest")]
+
+
+def all_active_timers() -> list[dict[str, Any]]:
+    """Every timer in the house as card props, finished-but-unacknowledged ones flagged ``ringing`` - what the WALL PANEL
+    sees (it is not a person)."""
+    now = time.time()
+    return [_timer_card(t, status="running" if t["expires_at"] > now else "ringing")["props"] for t in _timers.all_live()]
+
+
+def cancel_any_timer(timer_id: str) -> dict[str, Any] | None:
+    """Cancel one timer by id whoever set it (the wall panel's per-card tap-cancel)."""
+    return _timers.cancel_any(timer_id)
 
 
 def cancel_timer_by_id(owner: str, timer_id: str) -> dict[str, Any] | None:
