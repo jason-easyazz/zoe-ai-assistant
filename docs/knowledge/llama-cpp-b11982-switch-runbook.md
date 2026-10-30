@@ -39,7 +39,8 @@ free -m | awk '/Mem:/{print "MemAvailable MB:", $7}'                            
 ## 1. Back up, then repoint
 
 ```bash
-D=~/.zoe/unit-backups/$(date +%F)-llama-b11982; mkdir -p "$D"
+D=~/.zoe/unit-backups/$(date +%F-%H%M%S)-llama-b11982
+mkdir -p ~/.zoe/unit-backups && mkdir "$D" || { echo "backup dir exists - stop"; false; }   # never reuse a backup dir: a re-run must not overwrite the b11194 copies
 cp -a ~/.config/systemd/user/llama-server.service "$D"/
 cp -a ~/.config/systemd/user/llama-server.service.d/80-swa-full.conf "$D"/
 # record the running command line (names/flags only) to compare after the switch
@@ -113,11 +114,11 @@ probe artifact for that PR head is a separate run against that head.
 
 ## ROLLBACK (one command)
 
-Restores both host-local files from the backup directory and restarts the brain on b11194. Safe to run at any point after step 1
+Restores both host-local files from the backup directory and restarts the brain on b11194. Safe to run at any point after step 1; the leading `exec 9>&-` releases the step-2 lock first (a second `flock` on the same file from the same shell would otherwise wait on it forever)
 (`$D` is the backup dir from step 1; if the shell is gone, `D=$(ls -dt ~/.zoe/unit-backups/*-llama-b11982 | head -1)`).
 
 ```bash
-cp -a "$D"/llama-server.service ~/.config/systemd/user/ && cp -a "$D"/80-swa-full.conf ~/.config/systemd/user/llama-server.service.d/ && systemctl --user daemon-reload && flock -x /tmp/zoe-brain-window.lock systemctl --user restart llama-server && curl -sf http://127.0.0.1:11434/health
+exec 9>&- ; cp -a "$D"/llama-server.service ~/.config/systemd/user/ && cp -a "$D"/80-swa-full.conf ~/.config/systemd/user/llama-server.service.d/ && systemctl --user daemon-reload && flock -x /tmp/zoe-brain-window.lock systemctl --user restart llama-server && curl -sf http://127.0.0.1:11434/health
 ```
 
 After a rollback, `readlink /proc/$(systemctl --user show -p MainPID --value llama-server)/exe` must name `llama.cpp-b11194`.
