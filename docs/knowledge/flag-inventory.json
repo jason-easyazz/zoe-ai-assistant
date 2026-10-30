@@ -231,7 +231,7 @@
     "ZOE_SPEAKER_MODEL": {
       "acknowledged": true,
       "effective": [
-        "'resemblyzer'",
+        "'resnet34'",
         "unset"
       ],
       "sites": {
@@ -242,10 +242,7 @@
           "''"
         ],
         "services/zoe-data/speaker_models.py": [
-          "'resemblyzer'"
-        ],
-        "services/zoe-data/voice_session.py": [
-          "'resemblyzer'"
+          "'resnet34'"
         ]
       }
     },
@@ -14022,24 +14019,23 @@
       "ZOE_SPEAKER_MODEL": {
         "defaults": [
           "''",
-          "'resemblyzer'"
+          "'resnet34'"
         ],
         "in_env_example": true,
         "readers": [
           "scripts/setup/zoe_enroll_flow.py",
           "scripts/setup/zoe_voice_daemon.py",
-          "services/zoe-data/speaker_models.py",
-          "services/zoe-data/voice_session.py"
+          "services/zoe-data/speaker_models.py"
         ],
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "resemblyzer",
+          "default": "resnet34",
           "divergent_ok": {
             "scripts/setup/zoe_enroll_flow.py": "client-side: '' = let the server decide",
             "scripts/setup/zoe_voice_daemon.py": "client-side: '' = let the server decide"
           },
-          "note": "code default resemblyzer; live .env pins dual (kept: registry never changes live behaviour); live .env: dual",
+          "note": "ResNet34 is the only supported value (unset = resnet34); resemblyzer / dual raise at start-up (speaker_models.UnsupportedSpeakerModel)",
           "owner_doc": "docs/knowledge/speaker-resnet34-switch.md",
           "type": "str"
         },
@@ -16093,25 +16089,6 @@
         "typed_env": true
       },
       "ZOE_VOICE_SESSION": {
-        "defaults": [
-          "False"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/voice_session.py"
-        ],
-        "registered": true,
-        "spec": {
-          "allowed": null,
-          "default": false,
-          "divergent_ok": {},
-          "note": "",
-          "owner_doc": "docs/knowledge/voice-verified-session.md",
-          "type": "bool"
-        },
-        "typed_env": true
-      },
-      "ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER": {
         "defaults": [
           "False"
         ],

@@ -177,10 +177,9 @@ def _enrolled_key(row) -> str:
 async def _voice_state(db, uid: str) -> dict:
     """The voice fields of ``SetupState`` (a failed read raises: the caller reports 'unknown', never 'no').
 
-    Model-aware in EVERY mode (``speaker_models``): enrolled means a CONSENTED profile in every model the current
-    ``ZOE_SPEAKER_MODEL`` mode enrols (the default mode: Resemblyzer only, so a member who holds only a ResNet34 row - e.g. after a
-    rollback - is NOT enrolled and is offered the re-enrolment the acting model needs). ``dual`` needs both. ``voice_upgrade`` means
-    the ACTING model does recognise the member, but the mode wants another profile too - only then may Zoe say she knows the voice."""
+    Model-aware (``speaker_models``): enrolled means a CONSENTED profile in the ACTING model (ResNet34). A member who holds only a
+    leftover Resemblyzer row is NOT enrolled and is offered the re-enrolment the acting model needs. ``voice_upgrade`` stays in the
+    shape for callers but is False whenever the acting model recognises the member."""
     async with db.execute(
         "SELECT sample_count, enrolled_at, consent_at, " + speaker_models.MODEL_SQL + " FROM speaker_profiles WHERE user_id = ?",
         (uid,),

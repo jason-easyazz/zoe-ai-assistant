@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Voice-verified panel session - "an identified voice is a password"
-description: Why a spoken calendar / list / reminders answer was speech-only on the live panel, and the flag-dark fix - a short-lived per-panel voice session that a verified voice opens (model-gated to ResNet34), private result cards on the panel's own push channel, a PIN step-up tier that a voice never satisfies, and an audit line per open / renew / close. Flags ZOE_VOICE_SESSION (default off), ZOE_VOICE_SESSION_TTL_S, ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER.
+description: Why a spoken calendar / list / reminders answer was speech-only on the live panel, and the flag-dark fix - a short-lived per-panel voice session that a verified voice opens (model-gated to ResNet34), private result cards on the panel's own push channel, a PIN step-up tier that a voice never satisfies, and an audit line per open / renew / close. Flags ZOE_VOICE_SESSION (default off), ZOE_VOICE_SESSION_TTL_S.
 tags: [voice-path, auth, speaker-id, skybridge, touch-ui, zoe-data, flag-dark]
 timestamp: 2026-10-13T00:00:00+08:00
 ---
@@ -86,17 +86,12 @@ the PIN-resumed replay) stays on the freshness chain. Pinned by `tests/test_voic
   up again.
 
 **Model gate.** A session opens only when the ACTING speaker model is WeSpeaker ResNet34 (`ZOE_SPEAKER_MODEL=resnet34`,
-PR #2024; `speaker_models.acting_model()` when that module is present, the same env read when it is not) AND the panel's
-claim names that model (`speaker.model_id` / `voice_model_id`; a claim naming none is Resemblyzer). With the flag on and
+PR #2024; `speaker_models.acting_model()`) AND the panel's
+claim names that model (`speaker.model_id` / `voice_model_id`; a claim naming none is Resemblyzer, which is retired and never opens a session). With the flag on and
 the gate unmet, a verified claim still ATTRIBUTES the turn (memory provenance `speaker_verified=True`) but no longer
 unlocks private data by itself - private reads ask for the PIN.
 
-> **WARNING - `ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER=1`.** This lets a Resemblyzer claim open a session. Resemblyzer
-> misses the owner about **11 %** of the time at a 1 % false-accept rate; ResNet34 about **0.3 %** (record:
-> `docs/research/speaker-resnet34-optimisation-2026-10.md`). Measured on public far-field speakers, not on a family
-> member who sounds alike. A 1 % false-accept rate means roughly one stranger turn in a hundred is taken for a member,
-> and with this override that turn reads the member's calendar, lists and reminders. Use it only as an explicit owner
-> decision, and never with children's profiles enrolled.
+> **`ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER` was REMOVED (2026-10)** along with the server's Resemblyzer path: it let a Resemblyzer claim (owner miss ~11 % at FAR 1 %) open a session; only ResNet34 (~0.3 %) can now.
 
 **Rich result cards (voice reads).** For an AUTHORISED read (the session's member, or a fresh PIN sign-in) the panel
 gets one `voice_card` push frame with the real rows - the events (title, time), the list items (done or not), the

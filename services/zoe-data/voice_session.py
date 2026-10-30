@@ -22,11 +22,10 @@ session); skip the STEP-UP tier (``lexicons_data/voice_session_policy.json`` + t
 payments, security / admin / settings, biometrics, forgetting a person, anything for another member still ask for the
 PIN, reusing the existing panel PIN challenge.
 
-Model gate. Resemblyzer misses the owner ~11 % of the time at FAR 1 %; WeSpeaker ResNet34 ~0.3 %. A session opens only
-when the ACTING speaker model (``ZOE_SPEAKER_MODEL``, ``speaker_models.acting_model`` when PR #2024 is present) is
-ResNet34 AND the panel's claim names that model; ``ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER=1`` is the owner's explicit,
-loudly documented override. With the flag ON and the gate unmet, a verified claim still attributes the turn (memory
-provenance) but no longer unlocks private data by itself.
+Model gate. A session opens only when the panel's claim names the ACTING speaker model (``speaker_models.acting_model``:
+WeSpeaker ResNet34, ~0.3 % owner miss at FAR 1 %; Resemblyzer, ~11 %, was retired and its override flag removed). With the
+flag ON and the gate unmet, a verified claim still attributes the turn (memory provenance) but no longer unlocks private
+data by itself.
 
 Audit: every open / renew / close / refusal is one ``zoe.voice_session`` log line with the member id, the panel and the
 reason - never audio, never a score.
@@ -47,14 +46,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 import lexicons
-from typed_env import env_bool, env_int, env_str
+from typed_env import env_bool, env_int
 
 logger = logging.getLogger(__name__)
 audit = logging.getLogger("zoe.voice_session")
 
 LEGACY_MODEL_ID = "resemblyzer"
-#: mirrors ``speaker_models.RESNET34_MODEL_ID`` (PR #2024); used only when that module is absent.
-RESNET34_MODEL_ID = "wespeaker_resnet34+i8qdq-u8s8+c1"
+RESNET34_MODEL_ID = "wespeaker_resnet34+i8qdq-u8s8+c1"   # mirrors ``speaker_models.RESNET34_MODEL_ID`` (a test pins it)
 
 _POLICY_PATH = Path(__file__).with_name("lexicons_data") / "voice_session_policy.json"
 _SENTINELS = frozenset({"", "guest", "voice-guest", "voice-daemon", "family-admin"})
@@ -76,14 +74,10 @@ def ttl_s() -> int:
 # -- the model gate --------------------------------------------------------------------------------------------------
 
 def acting_model() -> str:
-    """The speaker model whose claims the server honours: ``speaker_models.acting_model()`` when PR #2024's module is
-    present, else ``ZOE_SPEAKER_MODEL`` read the same way (``resnet34`` -> ResNet34, anything else -> Resemblyzer)."""
-    try:
-        import speaker_models  # type: ignore[import-not-found]
+    """The speaker model whose claims the server honours (``speaker_models.acting_model()``: ResNet34, the only one)."""
+    import speaker_models
 
-        return str(speaker_models.acting_model())
-    except Exception:
-        return RESNET34_MODEL_ID if env_str("ZOE_SPEAKER_MODEL", "resemblyzer").lower() == "resnet34" else LEGACY_MODEL_ID
+    return str(speaker_models.acting_model())
 
 
 def claim_model(payload: Optional[dict]) -> str:
@@ -99,16 +93,11 @@ def claim_model(payload: Optional[dict]) -> str:
 def model_gate(payload: Optional[dict]) -> tuple[bool, str]:
     """``(ok, reason)``: may a verified claim in this turn open / renew a session?
 
-    The claim must be in the ACTING model's space (a Resemblyzer score on a server acting on ResNet34 is meaningless),
-    and that model must be ResNet34 unless the owner set ``ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER=1``."""
+    The claim must be in the ACTING model's space (ResNet34; a score from any other space is meaningless)."""
     claimed, acting = claim_model(payload), acting_model()
     if claimed != acting:
         return False, "claim_not_acting_model"
-    if acting == RESNET34_MODEL_ID:
-        return True, "resnet34"
-    if acting == LEGACY_MODEL_ID and env_bool("ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER", default=False):
-        return True, "resemblyzer_allowed"
-    return False, "model_below_minimum"
+    return True, "resnet34"
 
 
 # -- language data ----------------------------------------------------------------------------------------------------

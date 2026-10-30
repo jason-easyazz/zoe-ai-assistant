@@ -203,6 +203,9 @@ def _pin_replay(member):
 async def _turn(seen, text="what's on my calendar", **payload):
     # No session_id: the Pi daemon never sends one, so the panel's voice session (and its binding slot) is the server's.
     caller = payload.pop("_caller", None) or dict(DEVICE)
+    if "voice_user_id" in payload:
+        # a panel claim names the speaker model (ResNet34 is the only one the server acts on; Resemblyzer was retired)
+        payload.setdefault("voice_model_id", "wespeaker_resnet34+i8qdq-u8s8+c1")
     body = {"text": text, "panel_id": PANEL, **payload}
     resp = await voice_command(body, caller=caller, stream=False, db=object())
     if seen["spawned"]:

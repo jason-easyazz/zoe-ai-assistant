@@ -7,20 +7,18 @@ model_ids are never compared** - not in the sync feed, not in ``/identify``, not
 
 A ``model_id`` names everything that changes the embedding space:
 
-  ``resemblyzer``                       the incumbent (GE2E d-vector); also what a NULL / empty column means (every row
-                                        enrolled before 0051).
+  ``resemblyzer``                       RETIRED (2026-10): the old GE2E d-vector; also what a NULL / empty column means
+                                        (every row enrolled before 0051). Such rows stay in the table but are never
+                                        compared, claimed, synced or adapted - the server no longer has an encoder for them.
   ``wespeaker_resnet34+i8qdq-u8s8+c1``  WeSpeaker ResNet34, static INT8 QDQ (U8 activations, S8 per-channel weights),
                                         centred on public-cohort mean vector ``c1``. Change the model file, the
                                         quantisation or the centring vector and the id MUST change - an INT8 profile and
                                         an FP32 query do not mix (cosine ~0.97 between the two kinds for one clip).
 
-The flag ``ZOE_SPEAKER_MODEL`` = ``resemblyzer`` (DEFAULT) | ``dual`` | ``resnet34`` (read per call; anything else is
-``resemblyzer``). It is mirrored by the panel daemon (``scripts/setup/zoe_voice_daemon.py``):
-
-  resemblyzer  today's behaviour, byte for byte. ResNet34 profiles are never served to a panel.
-  dual         the panel embeds with BOTH and logs both decisions, but ACTS only on Resemblyzer. Enrolment builds BOTH
-               profiles from the same clips. The sync feed carries both (to a client that asks for them).
-  resnet34     ResNet34 acts. Resemblyzer is no longer matched, claimed or synced.
+The flag ``ZOE_SPEAKER_MODEL`` has ONE supported value, ``resnet34`` (also what an unset / empty variable means). The
+retired values ``resemblyzer`` and ``dual`` - and any typo - raise ``UnsupportedSpeakerModel`` at start-up (``main.py``
+calls ``speaker_mode()`` in the lifespan) rather than quietly running a model nobody can match against. The panel daemon
+(``scripts/setup/zoe_voice_daemon.py``) reads the same variable on its own host.
 
 The numbers (record: ``docs/research/speaker-resnet34-optimisation-2026-10.md``) are MIRRORED in
 ``scripts/setup/zoe_speaker_resnet34.py`` (the Pi cannot import this file) and drift-pinned by
@@ -39,7 +37,7 @@ from typed_env import env_float, env_str
 LEGACY_MODEL_ID = "resemblyzer"
 RESNET34_MODEL_ID = "wespeaker_resnet34+i8qdq-u8s8+c1"
 
-MODES = ("resemblyzer", "dual", "resnet34")
+MODES = ("resnet34",)
 
 #: SQL that reads a row's model id, treating NULL / '' (every pre-0051 row) as the legacy model.
 MODEL_SQL = "COALESCE(NULLIF(model_id, ''), 'resemblyzer')"
@@ -67,47 +65,50 @@ class ModelSpec:
 
 
 MODELS = dict([
-    (LEGACY_MODEL_ID, ModelSpec(LEGACY_MODEL_ID, 256, "Resemblyzer (GE2E d-vector)")),
     (RESNET34_MODEL_ID, ModelSpec(RESNET34_MODEL_ID, 256, "WeSpeaker ResNet34, INT8 QDQ, cohort-centred (c1)")),
 ])
 
 
 # -- mode -----------------------------------------------------------------------------------------------------------
 
+class UnsupportedSpeakerModel(RuntimeError):
+    """``ZOE_SPEAKER_MODEL`` names a speaker model this build no longer carries."""
+
+
 def speaker_mode() -> str:
-    """``ZOE_SPEAKER_MODEL``: ``resemblyzer`` (default) | ``dual`` | ``resnet34``. Unknown values are ``resemblyzer``."""
-    raw = env_str("ZOE_SPEAKER_MODEL", "resemblyzer").lower()
-    return raw if raw in MODES else "resemblyzer"
+    """``ZOE_SPEAKER_MODEL``: ``resnet34`` (the default, and the only value). Anything else - the retired ``resemblyzer`` /
+    ``dual`` included - raises ``UnsupportedSpeakerModel`` with the fix, so a stale ``.env`` fails loud instead of running a
+    server that can recognise nobody."""
+    raw = env_str("ZOE_SPEAKER_MODEL", "resnet34").strip().lower() or "resnet34"
+    if raw not in MODES:
+        raise UnsupportedSpeakerModel(
+            "ZOE_SPEAKER_MODEL=%r is not supported: Resemblyzer and dual mode were retired (2026-10). Remove the variable or set "
+            "ZOE_SPEAKER_MODEL=resnet34 (and the same on the panel's .env.voice). See docs/knowledge/speaker-resnet34-switch.md."
+            % raw[:40])
+    return raw
 
 
-def acting_model(mode: Optional[str] = None) -> str:
+def acting_model() -> str:
     """The model whose claims the server honours and whose embeddings drive decisions."""
-    return RESNET34_MODEL_ID if (mode or speaker_mode()) == "resnet34" else LEGACY_MODEL_ID
+    speaker_mode()
+    return RESNET34_MODEL_ID
 
 
-def enrolled_models(mode: Optional[str] = None) -> tuple:
-    """The models a (re-)enrolment builds a profile for. ``dual`` enrols BOTH from the same clips."""
-    m = mode or speaker_mode()
-    if m == "resnet34":
-        return (RESNET34_MODEL_ID,)
-    if m == "dual":
-        return (LEGACY_MODEL_ID, RESNET34_MODEL_ID)
-    return (LEGACY_MODEL_ID,)
+def enrolled_models() -> tuple:
+    """The models a (re-)enrolment builds a profile for."""
+    speaker_mode()
+    return (RESNET34_MODEL_ID,)
 
 
-def visible_models(mode: Optional[str] = None) -> frozenset:
-    """Models whose profiles the sync feed may hand to a panel in this mode."""
-    m = mode or speaker_mode()
-    if m == "resnet34":
-        return frozenset([RESNET34_MODEL_ID])
-    if m == "dual":
-        return frozenset([LEGACY_MODEL_ID, RESNET34_MODEL_ID])
-    return frozenset([LEGACY_MODEL_ID])
+def visible_models() -> frozenset:
+    """Models whose profiles the sync feed may hand to a panel."""
+    speaker_mode()
+    return frozenset([RESNET34_MODEL_ID])
 
 
-def clips_needed(mode: Optional[str] = None) -> int:
-    """Enrolment clips the guided flow asks for: 3 for the legacy model alone (unchanged), 5 whenever ResNet34 is enrolled."""
-    return RESNET34_ENROLL_CLIPS if RESNET34_MODEL_ID in enrolled_models(mode) else 3
+def clips_needed() -> int:
+    """Enrolment clips the guided flow asks for."""
+    return RESNET34_ENROLL_CLIPS
 
 
 # -- identity of a model --------------------------------------------------------------------------------------------
@@ -132,15 +133,10 @@ def model_id_field(mapping: Any, key: str) -> Optional[str]:
     return None
 
 
-def model_label(model_id: str, mode: Optional[str] = None) -> str:
-    """How a member's profile of ``model_id`` is described to them: ``current`` (the model that recognises them now),
-    ``new model, testing`` (enrolled for the shadow comparison in ``dual``), or ``not in use``."""
-    m = mode or speaker_mode()
-    if model_id == acting_model(m):
-        return "current"
-    if model_id in enrolled_models(m):
-        return "new model, testing"
-    return "not in use"
+def model_label(model_id: str) -> str:
+    """How a member's profile of ``model_id`` is described to them: ``current`` (the model that recognises them now) or
+    ``not in use`` (a retired model's leftover row)."""
+    return "current" if model_id == acting_model() else "not in use"
 
 
 def is_known(model_id: str) -> bool:
@@ -211,10 +207,8 @@ def resnet34_threshold(group: str, tier: Optional[str] = None) -> float:
     return override if math.isfinite(override) else table[g]
 
 
-def claim_threshold(model_id: str, speech_s: Any, legacy_threshold: float) -> Optional[float]:
+def claim_threshold(model_id: str, speech_s: Any) -> Optional[float]:
     """The acceptance bar for a panel's claim made in ``model_id``'s space, or None when the model is unknown (reject)."""
-    if model_id == LEGACY_MODEL_ID:
-        return legacy_threshold
     if model_id == RESNET34_MODEL_ID:
         return resnet34_threshold(length_group(speech_s))
     return None
@@ -232,7 +226,7 @@ def thresholds_public(model_id: str) -> dict:
 
 def adapt_guard_overrides(model_id: str) -> dict:
     """The (min_score, anchor_floor) the #2002 adaptation guards use for ``model_id``; ``{}`` = the AdaptConfig defaults
-    (Resemblyzer scale). Per-model env: ``ZOE_SPEAKER_ADAPT_RESNET34_MIN_SCORE`` / ``..._ANCHOR_FLOOR``."""
+    (the retired Resemblyzer scale). Per-model env: ``ZOE_SPEAKER_ADAPT_RESNET34_MIN_SCORE`` / ``..._ANCHOR_FLOOR``."""
     if model_id == RESNET34_MODEL_ID:
         d_score, d_anchor = RESNET34_ADAPT_MIN_SCORE, RESNET34_ADAPT_ANCHOR_FLOOR
         s = env_float("ZOE_SPEAKER_ADAPT_RESNET34_MIN_SCORE", d_score)

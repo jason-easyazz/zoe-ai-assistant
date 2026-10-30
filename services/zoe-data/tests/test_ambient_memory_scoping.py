@@ -24,6 +24,8 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe
 
+R34 = "wespeaker_resnet34+i8qdq-u8s8+c1"      # the only speaker model the server acts on (Resemblyzer was retired)
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import db_compat  # noqa: E402
@@ -161,7 +163,7 @@ async def test_ambient_with_an_accepted_voice_claim_is_filed_under_that_member(c
     _consent(monkeypatch)
     compat_db.session_user, compat_db.owner = "jason", "jason"
 
-    result = await _post({"voice_user_id": "user-b", "voice_score": 0.99}, DEVICE)
+    result = await _post({"voice_user_id": "user-b", "voice_score": 0.99, "voice_model_id": R34}, DEVICE)
 
     assert result["stored"] is True
     assert len(compat_db.inserts) == 1
@@ -177,7 +179,7 @@ async def test_ambient_with_a_refused_claim_is_not_filed(compat_db, monkeypatch,
     _consent(monkeypatch, consented)
     compat_db.session_user = "jason"
 
-    result = await _post({"voice_user_id": "user-b", "voice_score": score}, DEVICE)
+    result = await _post({"voice_user_id": "user-b", "voice_score": score, "voice_model_id": R34}, DEVICE)
 
     assert result["stored"] is False
     assert compat_db.inserts == []
@@ -199,7 +201,7 @@ async def test_ambient_from_a_members_own_session_is_filed_under_them(compat_db,
     _consent(monkeypatch)
     compat_db.session_user = "jason"
 
-    result = await _post({"voice_user_id": "jason", "voice_score": 0.99},
+    result = await _post({"voice_user_id": "jason", "voice_score": 0.99, "voice_model_id": R34},
                          {"source": "session", "user_id": "user-b", "role": "user"})
 
     assert result["stored"] is True

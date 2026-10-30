@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 import auth
 import panel_principal
 import smart_home_service
+import speaker_models
 import routers.voice_tts as voice_tts
 from test_ha_control_auth import GUEST_SID, MEMBER_SID, PANEL_IP, PANEL_TOKEN, PHONE_IP, PROXY, RegistryDb
 from test_voice_identity_freshness import IDLE_WINDOW_S, _PanelStore, _ts, _wire
@@ -466,7 +467,7 @@ async def test_a_fresh_member_turn_upgrades_a_refused_caller_verdict(monkeypatch
 # ── 4. over the relay: no panel-computed claim, no enrolment, no adaptation ──────────────────────────────────────────────
 
 def _claim(member="alice", score=0.99):
-    return {"voice_user_id": member, "voice_score": score}
+    return {"voice_user_id": member, "voice_score": score, "voice_model_id": speaker_models.RESNET34_MODEL_ID}
 
 
 def test_a_claim_is_honoured_on_the_lan_and_refused_over_the_relay():

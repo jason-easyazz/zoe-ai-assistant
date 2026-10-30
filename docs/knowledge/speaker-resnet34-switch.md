@@ -8,11 +8,31 @@ timestamp: 2026-10-13T00:00:00Z
 
 # The ResNet34 speaker-model switch
 
-**Status (re-read 2026-10-29): the running zoe-data process has `ZOE_SPEAKER_MODEL=resnet34` - the flip happened; the build text below describes the original flag-dark rollout.** Original status: built, FLAG-DARK; nothing changed live until the owner re-enrolled and flipped the flag. With `ZOE_SPEAKER_MODEL` unset
+**Status (2026-10-29): RESNET34 IS THE ONLY SPEAKER MODEL zoe-data supports. The running process had `ZOE_SPEAKER_MODEL=resnet34` (the flip happened), and Resemblyzer + `dual` were then RETIRED from zoe-data - see *Retirement of Resemblyzer* below. The sections after that describe the original flag-dark rollout (history; `resemblyzer`/`dual` rows in the tables are no longer reachable on the server).** Original status: built, FLAG-DARK; nothing changed live until the owner re-enrolled and flipped the flag. With `ZOE_SPEAKER_MODEL` unset
 (= `resemblyzer`) the panel imports nothing new, makes the sync request it always made, writes the shadow rows it always wrote, and the
 server serves only Resemblyzer profiles. The spec is the measured record
 [speaker-resnet34-optimisation-2026-10.md](../research/speaker-resnet34-optimisation-2026-10.md) (bake-off:
 [speaker-model-bakeoff-2026-10.md](../research/speaker-model-bakeoff-2026-10.md)); this page is what was built from it and how to turn it on.
+
+## Retirement of Resemblyzer (zoe-data side, 2026-10-29)
+
+- `ZOE_SPEAKER_MODEL` accepts `resnet34` (also what unset/empty means). `resemblyzer`, `dual` and any typo raise
+  `speaker_models.UnsupportedSpeakerModel` from `main.lifespan`, so zoe-data **refuses to start** with a message naming the fix, rather
+  than running a server that recognises nobody. The Pi's `.env.voice` must say `resnet34` too (the daemon code still carries the
+  legacy modes; that side is untouched here).
+- Removed from services/zoe-data: the Resemblyzer encoder, its clean-subprocess `LD_LIBRARY_PATH` workaround, server-side embedding of
+  uploaded audio (`/enroll` with `audio_base64` -> 409 "built at the panel"; `/identify` needs `embedding_base64`), `dual`/legacy
+  branches of the mode helpers, the `ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER` override, and `resemblyzer`, `torch`, `librosa`,
+  `webrtcvad-wheels` from `requirements-py312.txt` / `requirements.txt` (plus the build script's `--no-deps` phase 2). `scipy`,
+  `scikit-learn` and `joblib` stay (the joblib router-head fallback); `transformers` stays pinned for one parity test only.
+- **Old voiceprints are not a crash.** A `speaker_profiles` row with `model_id` `resemblyzer` (or NULL/empty, every pre-0051 row) stays
+  in the table (the member's own "forget my voice" still deletes it) but is never compared, claimed, synced or adapted: every reader
+  filters on the acting model's id, and the enrolment state reports such a member as not enrolled so Zoe offers the ResNet34 enrolment.
+- **Deploy does NOT uninstall.** `deploy.yml` runs `build_py312_venv.sh --refresh`, an ADDITIVE `uv pip install -r`, so merging this
+  stops requiring torch but does not remove it from the live venv; `build_py312_venv.sh --check` will flag the leftovers as EXTRANEOUS.
+  Reclaim the disk with an operator rebuild (no args: freeze -> compile -> sync) or `uv pip uninstall torch resemblyzer librosa
+  webrtcvad-wheels`. The resident-memory win is potential, not live: the live process never loaded torch in `resnet34` mode (no
+  `libtorch` mapped in the running process, 2026-10-29), so what is avoided is the ~360 MB a Resemblyzer load would have cost.
 
 ## The recommended configuration, as built
 
