@@ -106,9 +106,11 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
 - **`zoe-database`** — PostgreSQL (asyncpg, `$1` placeholders). Relational + temporal memory.
 - **Chroma / MemPalace** — vector store for memory (raw-first).
 - **`llama-server`** (host-native, `:11434`) — serves the brain rock above. Tracked unit
-  `scripts/setup/systemd/llama-server.service` targets **llama.cpp b11194** (`9f70b2cec`) with
+  `scripts/setup/systemd/llama-server.service` targets **llama.cpp b11982** (`8a199ad31`, moved from b11194 on 2026-10-30) with
   `--flash-attn on` + q8_0 K/V cache beside the MTP drafter (B0.4, replay-gated 2026-09-27).
-  **Applied and live** (measured 2026-10-03/04 from the running process: `~/llama.cpp-b11194`,
+  A/B 2026-10-29: +6% prompt processing, otherwise equal; b11194 kept on disk for rollback
+  ([record](knowledge/llama-cpp-bump-b11982-ab.md), [switch runbook](knowledge/llama-cpp-b11982-switch-runbook.md)).
+  Flags **applied and live** (measured 2026-10-03/04 from the running process, then on `~/llama.cpp-b11194`,
   `--spec-type draft-mtp --ctx-size 8192 --cache-type-k/v q8_0 --cache-ram 1024 --swa-full --flash-attn on`; the last two since 2026-10-04);
   the b9733/FA-off build is retired. `ps -o args= -C llama-server` remains the authority for what
   is live. The build and flags can change; the rock does not.
