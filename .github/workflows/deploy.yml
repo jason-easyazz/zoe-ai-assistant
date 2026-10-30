@@ -173,17 +173,31 @@ jobs:
           # concurrent `git fetch` can lose the ref-lock race on refs/remotes/origin/main
           # ("cannot lock ref ... is at X but expected Y") and fail the whole deploy.
           # A few retries make the deploy robust to that transient collision.
+          #
+          # NEVER READ FETCH_HEAD (incident 2026-10-30 01:43, run 40924021148): it is
+          # ONE file in this shared .git, and the voice lander's `git fetch origin
+          # <pr-branch>` overwrote it between this fetch and the rev-parse, so the
+          # deploy targeted an UNMERGED PR branch commit instead of main. The fetch
+          # below writes an explicit refspec into a ref ONLY this step uses, and the
+          # result is VERIFIED against the remote's main as GitHub reports it.
+          deploy_ref="refs/zoe-deploy/main"
           for attempt in 1 2 3 4 5; do
             if GIT_CONFIG_COUNT=1 \
                GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
                GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_HEADER}" \
-                 git fetch origin main; then
+                 git fetch --no-write-fetch-head origin "+refs/heads/main:${deploy_ref}" \
+               && remote_main="$(GIT_CONFIG_COUNT=1 \
+                    GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+                    GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_HEADER}" \
+                    git ls-remote origin refs/heads/main | cut -f1)" \
+               && [ -n "$remote_main" ] \
+               && [ "$(git rev-parse "${deploy_ref}")" = "$remote_main" ]; then
               break
             fi
             if [ "$attempt" = 5 ]; then
-              echo "git fetch failed after 5 attempts"; exit 1
+              echo "::error::git fetch of main failed or did not match the remote's main after 5 attempts"; exit 1
             fi
-            echo "git fetch attempt ${attempt} failed (likely a concurrent ref-lock); retrying in 5s..."
+            echo "git fetch/verify attempt ${attempt} failed (concurrent ref-lock, or main advanced mid-fetch); retrying in 5s..."
             sleep 5
           done
           unset AUTH_HEADER GITHUB_TOKEN
@@ -216,7 +230,15 @@ jobs:
           # (--expect-revision, which every copy since #1594 supports) — never to
           # an unbound check.
           prev="$(git rev-parse HEAD)" || exit 1
-          target="$(git rev-parse FETCH_HEAD)" || exit 1
+          # Resolved from the deploy-only ref (see the fetch above), never FETCH_HEAD,
+          # and refused unless it is a fast-forward of what is live: a commit on an
+          # unmerged branch is not a descendant of live main in any normal case, and a
+          # rewound/foreign ref must never be reset onto the live checkout.
+          target="$(git rev-parse --verify "refs/zoe-deploy/main^{commit}")" || exit 1
+          if ! git merge-base --is-ancestor "$prev" "$target"; then
+            echo "::error::REFUSING TO DEPLOY: target ${target:0:7} is not a descendant of the live HEAD ${prev:0:7} (not a fast-forward of main). Live tree stays at ${prev}."
+            exit 1
+          fi
           bind_flag="--expect-tree-of"
           if ! grep -q -- '--expect-tree-of' scripts/maintenance/voice_gate_check.py; then
             echo "::warning::live voice_gate_check.py predates --expect-tree-of; binding to the exact commit (--expect-revision) for this run."
@@ -248,7 +270,7 @@ jobs:
             echo "docs/knowledge/merge-and-deploy.md \"The CD path enforces the voice replay-gate\"."
             exit 1
           fi
-          # Reset to EXACTLY the gate-checked SHA — not FETCH_HEAD, which a
+          # Reset to EXACTLY the gate-checked SHA — not a re-read ref, which a
           # concurrent fetch on this shared .git could have advanced to a commit
           # pushed after the gate ran (a silent bypass of the gate above).
           git reset --hard "$target"

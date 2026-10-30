@@ -31,8 +31,11 @@ UNRES=$(landing_unresolved_count "$PR") || { log "review threads unreadable - no
 [ "$UNRES" != 0 ] && { log "$UNRES unresolved review thread(s) - not landing yet (exit 6)"; exit 6; }
 H0=$(gh pr view "$PR" --json headRefOid --jq .headRefOid); grep -qxF "$H0" "$LANDING_HOME/validate-failed-heads.txt" 2>/dev/null && { log "head $H0 already failed validate - not re-landing until it moves (exit 7)"; exit 7; }
 # The lander owns its OWN detached worktree: it hard-resets WT, so it must never use an agent's worktree (2026-10-14 sig: reset a worker's branch).
-WT="$LANDING_WORKTREES/land-$PR"; git fetch -q origin "$BR" || exit 1
-[ -d "$WT" ] || git worktree add -q --detach "$WT" "origin/$BR" || { log "could not create lander worktree - exit 5"; exit 5; }
+WT="$LANDING_WORKTREES/land-$PR"; LREF="refs/zoe-landing/$BR"
+# explicit refspec into the lander's OWN ref namespace: a plain `git fetch origin <branch>` rewrites the shared .git/FETCH_HEAD
+# (2026-10-30: it made the CD runner deploy this unmerged branch)
+git fetch -q --no-write-fetch-head origin "+refs/heads/$BR:$LREF" || exit 1
+[ -d "$WT" ] || git worktree add -q --detach "$WT" "$LREF" || { log "could not create lander worktree - exit 5"; exit 5; }
 panel_quiet(){ [ -z "$LANDING_PANEL_HOST" ] && return 0; last=$(timeout 8 ssh -o BatchMode=yes -o ConnectTimeout=6 "$LANDING_PANEL_HOST" "grep -a 'Wake word detected\|Follow-up speech detected' $LANDING_PANEL_LOG | tail -1 | cut -c1-19" 2>/dev/null); [ -z "$last" ] && return 0; age=$(( $(date +%s) - $(date -d "$last" +%s 2>/dev/null || echo 0) )); [ $age -ge 600 ]; }
 for i in $(seq 1 180); do panel_quiet && break; need_probe_time "waiting for the panel"; log "panel in use - waiting"; sleep 60; done
 # night quiet time (2026-10-13): the 12B night window (timer 02:50) REFUSES if the brain-window lock is held (no retry = a lost night),
@@ -49,7 +52,7 @@ export ZOE_HARNESS_LANDING=1
 for i in $(seq 1 90); do pgrep -f docs_merge_chain.sh >/dev/null || break; need_probe_time "waiting for the docs chain"; log "docs chain running - waiting"; sleep 60; done
 gh pr update-branch "$PR" >/dev/null 2>&1 && log "branch updated" || log "update-branch: $(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)"
 if [ "$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)" = DIRTY ]; then if "$LANDING_RESOLVE_SCRIPT" "$PR"; then log "DIRTY -> inventory/ledger conflict auto-resolved (sig 48)"; sleep 90; gh pr update-branch "$PR" >/dev/null 2>&1; else log "DIRTY -> needs a hand merge (sig 48) - NOT landing"; exit 8; fi; fi
-sleep 8; git -C "$WT" fetch -q origin && git -C "$WT" reset -q --hard "origin/$BR"; cp -n "$LANDING_REPO/services/zoe-data/.env" "$WT/services/zoe-data/.env" 2>/dev/null || true
+sleep 8; git -C "$WT" fetch -q --no-write-fetch-head origin "+refs/heads/$BR:$LREF" && git -C "$WT" reset -q --hard "$LREF"; cp -n "$LANDING_REPO/services/zoe-data/.env" "$WT/services/zoe-data/.env" 2>/dev/null || true
 # flag-inventory papercut: regenerate on the merged tree and push before the probe binds the head
 ( cd "$WT" && python3 tools/audit/flag_inventory.py >/dev/null 2>&1 && { [ ! -f tools/audit/live_state.py ] || python3 tools/audit/live_state.py >/dev/null 2>&1; } && git add docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json && { [ ! -f docs/knowledge/live-state.json ] || git add docs/knowledge/live-state.json; } && git -c core.editor=true commit -q -m "chore: regenerate flag inventory + live state after branch update" 2>/dev/null && git push -q origin "HEAD:$BR" 2>/dev/null && echo "[$(date +%T)] #$PR inventory regenerated + pushed" ) || true
 HEAD_SHA=$(git -C "$WT" rev-parse HEAD); log "probing head ${HEAD_SHA:0:8}"
@@ -59,7 +62,7 @@ PWT="$LANDING_WORKTREES/voice-probe-$PR"; git -C "$LANDING_REPO" worktree remove
 git -C "$LANDING_REPO" worktree add -q --detach "$PWT" "$HEAD_SHA" || { log "could not create the probe worktree - exit 5"; exit 5; }
 cp -n "$LANDING_REPO/services/zoe-data/.env" "$PWT/services/zoe-data/.env" 2>/dev/null; chmod 600 "$PWT/services/zoe-data/.env" 2>/dev/null
 [ -n "$(git -C "$PWT" status --porcelain)" ] && { log "probe worktree not clean - exit 5"; exit 5; }
-wait_deploy(){ for i in $(seq 1 90); do git fetch -q origin main 2>/dev/null; M=$(git rev-parse origin/main); age=$(( $(date +%s) - $(git log -1 --format=%ct origin/main) ))
+wait_deploy(){ for i in $(seq 1 90); do git fetch -q --no-write-fetch-head origin "+refs/heads/main:refs/zoe-landing/main" 2>/dev/null; M=$(git rev-parse refs/zoe-landing/main); age=$(( $(date +%s) - $(git log -1 --format=%ct refs/zoe-landing/main) ))
     inprog=$(gh run list --workflow deploy.yml --limit 3 --json status --jq '[.[]|select(.status!="completed")]|length' 2>/dev/null)
     done_for_M=$(gh run list --workflow deploy.yml --limit 8 --json status,headSha --jq "[.[]|select(.headSha==\"$M\" and .status==\"completed\")]|length" 2>/dev/null)
     if [ "${inprog:-0}" = 0 ] && { [ "${done_for_M:-0}" -ge 1 ] || [ $age -ge 480 ]; }; then return; fi; need_probe_time "waiting for the main deploy"; log "waiting for main ${M:0:8} deploy"; sleep 15; done; }

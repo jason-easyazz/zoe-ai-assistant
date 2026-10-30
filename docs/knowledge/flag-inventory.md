@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-29T00:00:00Z
+timestamp: 2026-10-30T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-29T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-29. The table body is deterministic (sorted, no
+Last generated: 2026-10-30. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 800 prod flags; 210 read through `typed_env`.
+- 799 prod flags; 209 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
@@ -52,13 +52,13 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MOONSHINE_ARCH` | `'MEDIUM_STREAMING'` | `'MEDIUM_STREAMING'`, `'v2'` | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PANEL_ID` | `'zoe-touch-pi'` | `'post-merge-probe'`, `'zoe-touch-pi'` | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_SELF_URL` | `'http://127.0.0.1:8000'` | `'http://127.0.0.1:8000'`, `'http://localhost:8000'` | `services/zoe-data/intent_router.py` |
-| `ZOE_SPEAKER_MODEL` | `'resemblyzer'` | `'resemblyzer'`, `unset` | `scripts/setup/zoe_enroll_flow.py`, `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_SPEAKER_MODEL` | `'resnet34'` | `'resnet34'`, `unset` | `scripts/setup/zoe_enroll_flow.py`, `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_TIMEZONE` | `'Australia/Perth'` | `'Australia/Perth'`, `unset` | `services/zoe-data/identity_facts.py` |
 | `ZOE_URL` | `'https://zoe.local'` | `'http://127.0.0.1:8000'`, `'https://zoe.local'`, `unset` | `scripts/maintenance/zoe_latency_probe.py`, `scripts/setup/mac_panel/preflight.py` |
 
 ## Production flags
 
-800 flags; 750 not documented in `.env.example`.
+799 flags; 749 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -728,7 +728,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_SPEAKER_ADAPT_RESNET34_ANCHOR_FLOOR` | float | `0.45` | - | - | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_ADAPT_RESNET34_MIN_SCORE` | float | `0.342` | - | `docs/knowledge/speaker-resnet34-switch.md` | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_ID_THRESHOLD` | float | `0.82` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'0.82'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
-| `ZOE_SPEAKER_MODEL` | str | `'resemblyzer'` | - | `docs/knowledge/speaker-resnet34-switch.md` | `''`, `'resemblyzer'` | yes | yes | `scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/speaker_models.py`<br>`services/zoe-data/voice_session.py` |
+| `ZOE_SPEAKER_MODEL` | str | `'resnet34'` | - | `docs/knowledge/speaker-resnet34-switch.md` | `''`, `'resnet34'` | yes | yes | `scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_RESNET34_THRESHOLD_LONG` | float | `0.0` | - | - | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT` | float | `0.0` | - | `docs/knowledge/speaker-resnet34-switch.md` | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_RESNET34_TIER` | str | `'far1'` | - | `docs/knowledge/speaker-resnet34-switch.md` | `'far1'` | yes | yes | `scripts/setup/zoe_speaker_resnet34.py`<br>`services/zoe-data/speaker_models.py` |
@@ -834,7 +834,6 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_VOICE_SAMPLE_DIR` | str | `'/home/zoe/.zoe-voice-samples'` | - | `docs/research/arousal-detection-licence-scope-2026-10-04.md` | `'/home/zoe/.zoe-voice-samples'`, `dynamic` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/router_struggle_retrain.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_corpus_strata.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/struggle_proposals.py` |
 | `ZOE_VOICE_SAVE_AUDIO` | bool | `False` | - | `docs/knowledge/voice-pipeline.md` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_SESSION` | bool | `False` | - | `docs/knowledge/voice-verified-session.md` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
-| `ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER` | bool | `False` | - | `docs/knowledge/voice-verified-session.md` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
 | `ZOE_VOICE_SESSION_TTL_S` | int | `120` | - | `docs/knowledge/voice-verified-session.md` | `120` | yes | NO | `services/zoe-data/voice_session.py` |
 | `ZOE_VOICE_STITCH_ENABLED` | bool | `False` | - | `docs/knowledge/voice-pipeline.md` | `'0'` | no | NO | `services/zoe-data/main.py`<br>`services/zoe-data/voice_stitch.py` |
 | `ZOE_VOICE_STREAM` | bool | `True` | - | `docs/research/inference-speech-stack-2026-10-03.md` | `'1'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |

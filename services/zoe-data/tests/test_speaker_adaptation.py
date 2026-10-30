@@ -41,6 +41,7 @@ from alembic.operations import Operations
 pytestmark = pytest.mark.ci_safe
 
 import speaker_adaptation as spk
+import speaker_models
 from speaker_adaptation import AdaptConfig, AdaptState, evaluate
 
 SVC = Path(__file__).resolve().parents[1]
@@ -285,7 +286,11 @@ def _b64(v) -> str:
 
 
 class World:
-    def __init__(self, tmp_path):
+    """``model_id`` None = the pre-0051 rows (NULL = the retired Resemblyzer model); this file's own fixture builds a ResNet34 world,
+    the only model the server acts on, so its offers name it."""
+
+    def __init__(self, tmp_path, model_id=None):
+        self.model_id = model_id
         self.path = str(tmp_path / "zoe.db")
         _build_db(self.path)
         self.db = SqliteCompat(self.path)
@@ -294,10 +299,10 @@ class World:
 
     def add_profile(self, uid, vec, *, consent=True, sample_count=3):
         self.db.conn.execute(
-            "INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, sample_count, consent_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, sample_count, consent_at, model_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (f"pid-{uid}", uid, uid.title(), np.asarray(vec, dtype=np.float32).tobytes(), sample_count,
-             "2026-01-01 00:00:00" if consent else None))
+             "2026-01-01 00:00:00" if consent else None, self.model_id))
         self.db.conn.commit()
 
     def bind(self, panel, uid):
@@ -317,13 +322,15 @@ class World:
     async def offer(self, emb=None, *, mode="on", now=NOW, panel="panel1", cfg=CFG, **payload):
         body = {"voice_user_id": "jason", "embedding_base64": _b64(at_cos(0.90) if emb is None else emb),
                 "voice_score": 0.90, "speech_s": 3.0}
+        if self.model_id:
+            body["model_id"] = self.model_id
         body.update(payload)
         return await spk.process_adaptation(self.db, panel_id=panel, payload=body, now=now, mode=mode, cfg=cfg)
 
 
 @pytest.fixture
 def world(tmp_path):
-    return World(tmp_path)
+    return World(tmp_path, model_id=speaker_models.RESNET34_MODEL_ID)
 
 
 # ── migration ──────────────────────────────────────────────────────────
@@ -576,7 +583,8 @@ async def test_forget_my_voice_removes_anchor_and_adapted_profile(world, monkeyp
 async def _sync(world, monkeypatch):
     from routers import voice_tts
     with _compat_db(monkeypatch, world.db):
-        return await voice_tts.voice_profiles_sync(caller={"source": "device", "panel_id": "panel1", "via_relay": False, "via_tunnel": False})
+        return await voice_tts.voice_profiles_sync(models=speaker_models.RESNET34_MODEL_ID,
+                                                   caller={"source": "device", "panel_id": "panel1", "via_relay": False, "via_tunnel": False})
 
 
 @pytest.mark.asyncio
@@ -613,7 +621,8 @@ async def test_identify_matches_against_the_adapted_profile_only_in_on_mode(worl
         monkeypatch.setenv("ZOE_SPEAKER_ADAPT", mode)
         with _compat_db(monkeypatch, world.db):
             results[mode] = await voice_tts.voice_identify(
-                {"embedding_base64": probe}, caller={"source": "device", "panel_id": "panel1"})
+                {"embedding_base64": probe, "model_id": speaker_models.RESNET34_MODEL_ID, "speech_s": 3.0},
+                caller={"source": "device", "panel_id": "panel1"})
     off_score = results["off"].get("confidence", results["off"].get("best_confidence"))
     assert results["on"]["confidence"] == pytest.approx(1.0, abs=1e-3)       # the adapted profile matches itself
     assert off_score < results["on"]["confidence"]                           # the anchor-only feed does not
@@ -655,7 +664,8 @@ async def test_adapt_route_end_to_end_uses_the_callers_panel(world, monkeypatch)
     from routers import voice_speaker_adapt as route
 
     monkeypatch.setenv("ZOE_SPEAKER_ADAPT", "on")
-    body = {"voice_user_id": "jason", "embedding_base64": _b64(at_cos(0.9)), "voice_score": 0.9, "speech_s": 3.0}
+    body = {"voice_user_id": "jason", "embedding_base64": _b64(at_cos(0.9)), "voice_score": 0.9, "speech_s": 3.0,
+            "model_id": speaker_models.RESNET34_MODEL_ID}
     with _compat_db(monkeypatch, world.db):
         out = await route.voice_adapt(dict(body), caller={"source": "device", "panel_id": "panel1"})
     assert out["applied"] is True

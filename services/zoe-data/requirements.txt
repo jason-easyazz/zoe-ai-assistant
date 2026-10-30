@@ -107,7 +107,7 @@ python-json-logger>=4.1.0
 # on NumPy 2.x, and several packages here declare a bare unbounded `numpy`, so
 # this ceiling is what stops a resolver pulling NumPy 2.x. NumPy 2 is a C-ABI
 # break, and the packages compiled against 1.x here are kokoro, moonshine-voice,
-# ctranslate2, soundfile, soxr and Resemblyzer — i.e. both canonical rocks. On
+# ctranslate2, soundfile and soxr — i.e. both canonical rocks. On
 # aarch64 the realistic failure is "no matching wheel" and a dead voice path.
 numpy<2
 # ONNX Runtime is a DIRECT dependency, not merely a transitive one: `voice_vad.py`
@@ -161,12 +161,9 @@ transformers==5.17.0
 fastembed==0.8.0
 # NOT imported by zoe-data at runtime since 2026-09-27: the stage-1 router heads
 # are served by router_heads_numpy.py from models/router_head_*.npz (numpy only).
-# Still pinned because librosa (pulled in by resemblyzer, below) declares both as
-# install requirements, so they are installed either way — the pin only stops
-# them floating. Held AT the training pins (labs/setfit-router/requirements.txt)
+# Still pinned: held AT the training pins (labs/setfit-router/requirements.txt)
 # while the one-release ZOE_ROUTER_HEADS_BACKEND=joblib fallback exists, since
-# that fallback unpickles the .joblib artefacts; once it is removed these become
-# plain librosa-transitive pins.
+# that fallback unpickles the .joblib artefacts; drop them with that fallback.
 scikit-learn==1.7.2
 joblib==1.5.3
 # Speaker diarization for ambient memory (Jetson CUDA only)
@@ -204,8 +201,7 @@ py-vapid==1.9.6
 # import scan, docs/knowledge/python-312-venv-migration.md) — it only ever
 # arrived transitively. 0.25.0 -> 0.26.0 on 2026-09-27 (feature release, 07-24).
 prometheus-client==0.26.0
-# Speaker identification (voice enrollment and identify endpoints)
-resemblyzer>=0.1.3
+# Speaker identification: no server-side encoder (Resemblyzer + torch retired 2026-10); the panel embeds with ResNet34 ONNX.
 # LiveKit WebRTC server-side agent (joins room, STT+LLM+TTS, publishes audio)
 # 1.1.20 on the box (2026-09-26). The floor is raised because the 0.x API is long
 # gone; not pinned exactly because pip also reports the leftover `livekit-agents`

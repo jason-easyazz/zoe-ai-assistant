@@ -38,7 +38,7 @@ DEVICE = {"source": "device", "panel_id": PANEL_ID, "user_id": "voice-daemon"}
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     vs.reset()
-    for key in ("ZOE_VOICE_SESSION", "ZOE_VOICE_SESSION_TTL_S", "ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER", "ZOE_SPEAKER_MODEL"):
+    for key in ("ZOE_VOICE_SESSION", "ZOE_VOICE_SESSION_TTL_S", "ZOE_SPEAKER_MODEL"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.82")
     yield
@@ -225,11 +225,10 @@ def test_model_gate(monkeypatch):
     monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
     assert vs.model_gate(r34_claim) == (True, "resnet34")
     assert vs.model_gate(legacy_claim) == (False, "claim_not_acting_model")     # a Resemblyzer score means nothing here
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resemblyzer")
-    assert vs.model_gate(legacy_claim) == (False, "model_below_minimum")         # the default minimum is ResNet34
-    monkeypatch.setenv("ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER", "1")
-    assert vs.model_gate(legacy_claim) == (True, "resemblyzer_allowed")          # the owner's explicit override
-    assert vs.model_gate(r34_claim)[0] is False                                   # ...never a mismatched claim
+    monkeypatch.setenv("ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER", "1")              # the retired override flag does nothing any more
+    assert vs.model_gate(legacy_claim) == (False, "claim_not_acting_model")
+    explicit = {"speaker": {"model_id": "resemblyzer", "member": "casey", "score": 0.99}}
+    assert vs.model_gate(explicit) == (False, "claim_not_acting_model")
 
 
 def test_model_gate_unmet_attributes_but_does_not_unlock(monkeypatch):
@@ -292,8 +291,7 @@ def test_the_locked_card_has_no_member_and_no_rows(monkeypatch):
     card = voice_cards.locked(PANEL_ID)
     assert card["private"] is False and card["items"] == [] and "member_id" not in card
     assert "Say it again" in card["body"]
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resemblyzer")          # control: no voice route -> PIN only
-    assert "Say it again" not in voice_cards.locked(PANEL_ID)["body"]
+    assert "Say it again" not in voice_cards.locked(PANEL_ID, step_up=True)["body"]      # control: a step-up card names the PIN instead
 
 
 def test_cards_go_to_the_panel_channel_only(monkeypatch):
@@ -396,8 +394,8 @@ async def test_inside_a_session_the_read_is_the_members_and_shows_its_rows(monke
 
 @pytest.mark.asyncio
 async def test_the_skybridge_challenge_is_skipped_only_inside_a_session(monkeypatch):
-    """Negative control of the test above: the same verified voice on a Resemblyzer server (gate unmet) is challenged."""
-    _on(monkeypatch, model="resemblyzer")
+    """Negative control of the test above: a claim in the retired Resemblyzer space (gate unmet) is challenged."""
+    _on(monkeypatch)
     run, rec = _wire(monkeypatch)
     resp = await run(_claim(model="resemblyzer"))
     assert rec["resolver_users"] == ["guest"] and len(rec["challenges"]) == 1
@@ -452,8 +450,8 @@ async def test_flag_off_is_todays_path_and_never_touches_the_session(monkeypatch
 
     for name in ("observe_turn", "model_gate", "step_up_reason", "publish"):
         monkeypatch.setattr(vs, name, boom)
-    resp = await run(_claim(model="resemblyzer"))
-    # An accepted (Resemblyzer) claim unlocks its own turn; since #2026 (voice identity freshness) a claim never writes the
+    resp = await run(_claim())
+    # An accepted claim unlocks its own turn; since #2026 (voice identity freshness) a claim never writes the
     # indefinite panel binding, flag on or off. The session machinery is never consulted (no open / close / step-up), but an
     # AUTHORISED read still shows its rows - "I want to see the results as well as hear them" is not a flag.
     assert rec["resolver_users"] == ["casey"] and not rec["challenges"]

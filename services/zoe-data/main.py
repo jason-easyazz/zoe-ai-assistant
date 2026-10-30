@@ -1135,6 +1135,12 @@ async def lifespan(app: FastAPI):
     except Exception as _env_exc:
         logger.warning("runtime_env bootstrap (non-fatal): %s", _env_exc)
 
+    # Fail loud on a retired ZOE_SPEAKER_MODEL (resemblyzer / dual / a typo): refuse to start rather than run a server that can
+    # recognise nobody. Deliberately outside any try/except (speaker_models.UnsupportedSpeakerModel carries the fix).
+    import speaker_models
+
+    logger.info("speaker model: %s", speaker_models.speaker_mode())
+
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
