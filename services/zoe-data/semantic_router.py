@@ -119,6 +119,11 @@ _MATRIX: Optional[np.ndarray] = None
 _LABELS: Optional[np.ndarray] = None
 _DOM_IDX: dict[str, np.ndarray] = {}
 _LOCK = threading.Lock()
+# ONE caller at a time inside the fastembed model. embed() is reached from several threads at once: the asyncio.to_thread
+# pool (route(): voice, chat, Skybridge) AND the restraint-head worker. fastembed's HF `tokenizers` Tokenizer is a Rust
+# object whose encode path is not safe to share across Python threads (2026-10-29: two Fatal-Python-error segfaults in
+# tokenize <- embed <- restraint_head._run_worker). One embed is a few ms, so serialising costs ~nothing.
+_EMBED_LOCK = threading.Lock()
 _MODEL_NAME = os.environ.get("ZOE_ROUTER_MODEL", "BAAI/bge-small-en-v1.5")
 
 # --- SetFit classifier head (labs/setfit-router PR #1296) -------------------
@@ -660,7 +665,8 @@ def embed(text: str) -> np.ndarray:
     hit = _EMBED_CACHE
     if hit is not None and hit[0] == id(_MODEL) and hit[1] == key:
         return hit[2].copy()
-    v = np.asarray(next(iter(_MODEL.embed([key]))), dtype=np.float32)
+    with _EMBED_LOCK:
+        v = np.asarray(next(iter(_MODEL.embed([key]))), dtype=np.float32)
     v /= (np.linalg.norm(v) + 1e-9)
     _EMBED_CACHE = (id(_MODEL), key, v.copy())
     return v

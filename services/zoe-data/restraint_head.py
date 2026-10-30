@@ -34,12 +34,14 @@ Stdlib + numpy. No import of ``semantic_router`` at module import time.
 """
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import logging
 import queue
 import sys
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -62,6 +64,8 @@ _QUEUE: "queue.Queue[Optional[str]]" = queue.Queue(maxsize=DEFER_MAX)
 _PENDING: "OrderedDict[str, None]" = OrderedDict()  # parked texts, oldest first; guarded by _CACHE_LOCK
 _PENDING_DROPPED = 0                               # how many parked texts the bound pushed out (a counter, for the log and the tests)
 _WORKER: Optional[threading.Thread] = None
+_STOPPING: "list[threading.Thread]" = []           # workers told to stop whose join has not (yet) succeeded
+_WORKER_STOP: Optional[threading.Event] = None    # the running worker's own stop event (``stop_worker`` sets it)
 _STATE: dict[str, Any] = {}                       # "head": (classes, W, b, thr, meta) | None (tried and absent)
 _CACHE: "OrderedDict[str, tuple[str, ...]]" = OrderedDict()
 _MISMATCH_LOGGED = False                           # the model-identity warning is logged once per process
@@ -306,15 +310,21 @@ def _embed_or_park(raw: str) -> None:
     lookup(raw, embed=True)
 
 
-def _run_worker() -> None:
-    while True:
+_POLL_S = 0.5                                      # how often an idle worker re-checks its own stop event
+
+
+def _run_worker(stop: threading.Event) -> None:
+    last_retry = time.monotonic()
+    while not stop.is_set():
         try:
-            text = _QUEUE.get(timeout=RETRY_S if _PENDING else None)
+            text = _QUEUE.get(timeout=min(_POLL_S, RETRY_S))
         except queue.Empty:
-            retry_pending()                        # nothing new for a while: has the model arrived for what is parked?
+            if _PENDING and time.monotonic() - last_retry >= RETRY_S:
+                last_retry = time.monotonic()
+                retry_pending()                    # nothing new for a while: has the model arrived for what is parked?
             continue
         try:
-            if text is not None:                   # None is only a wake-up (``reset``)
+            if text is not None and not stop.is_set():  # None is only a wake-up (``reset``)
                 _embed_or_park(text)
         except Exception as exc:  # noqa: BLE001 - the worker outlives any one text
             logger.debug("restraint head worker: %r", exc)
@@ -322,11 +332,35 @@ def _run_worker() -> None:
             _QUEUE.task_done()
 
 
+def stop_worker(timeout: float = 5.0) -> bool:
+    """Stop the background worker and wait for it (True when EVERY worker ever stopped has exited). Used at interpreter exit and by
+    the test teardown: a daemon thread still inside the native tokenizer / ONNX session while the interpreter finalizes, or while
+    the next test loads its own model, is how the 2026-10-29 segfaults happened. Each worker owns its stop event, which it polls
+    (no shared wake-up a replacement worker could steal), and is unregistered BEFORE the join so a concurrent ``defer`` starts a
+    fresh worker. A worker whose join times out stays in ``_STOPPING`` and is joined again by the next call."""
+    global _WORKER, _WORKER_STOP
+    with _LOCK:
+        if _WORKER is not None and _WORKER_STOP is not None:
+            _WORKER_STOP.set()
+            _STOPPING.append(_WORKER)
+        _WORKER, _WORKER_STOP = None, None
+        pending = list(_STOPPING)
+    deadline = time.monotonic() + timeout
+    for w in pending:
+        w.join(max(0.0, deadline - time.monotonic()))
+    with _LOCK:
+        _STOPPING[:] = [w for w in _STOPPING if w.is_alive()]
+        return not _STOPPING
+
+
+atexit.register(stop_worker, 2.0)
+
+
 def defer(text: Any) -> bool:
     """Queue ``text`` for the background worker, which embeds it off the event loop and fills the cache; True when queued.
     Constant time and non-blocking (a full queue drops the text, which a later stamp or the nightly pass re-derives). Starts the
     one daemon worker on first use. Never raises and never embeds on the calling thread - this is what ``stamp`` calls."""
-    global _WORKER
+    global _WORKER, _WORKER_STOP
     try:
         raw = str(text or "").strip()
         if not raw or _load() is None:
@@ -338,7 +372,8 @@ def defer(text: Any) -> bool:
             retry_pending()                        # a later stamp is the cheapest signal that the model may have arrived
         with _LOCK:
             if _WORKER is None or not _WORKER.is_alive():
-                _WORKER = threading.Thread(target=_run_worker, name="restraint-head", daemon=True)
+                _WORKER_STOP = threading.Event()
+                _WORKER = threading.Thread(target=_run_worker, args=(_WORKER_STOP,), name="restraint-head", daemon=True)
                 _WORKER.start()
         _QUEUE.put_nowait(raw)
         return True
