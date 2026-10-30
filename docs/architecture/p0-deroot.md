@@ -38,7 +38,7 @@ uid, so a compromised service or coding agent can neither become root nor read a
 | `zoe-data` (user) | 0.0.0.0:8000 | checkout (ro + `CAPABILITIES.md`, write tolerated to fail), `~/.zoe`, `~/.zoe-logs`, `~/.zoe-voice-samples`, `~/.mempalace`, `~/models`, `~/.worktrees`, `~/.ssh/zoe_pi_key` | `services/zoe-data/.env`, `~/.hermes/.env` | yes (2.3) | no | **yes**: chat, tools, web, Telegram, intents |
 | `flue-zoe-brain-2x` (user) | *:3579 | its lab dir, `data/zoe-brain.db` | its `.env` | no | no | **yes**: the brain lane |
 | `flue-zoe-telegram` (user) | *:3582 | its lab dir | bot token `.env` | no | no | **yes**: external messages |
-| `llama-server` (user) | 127.0.0.1:11434 | `~/models`, `~/llama.cpp-b11194` | none | no | `brain_cold_start.sh` drop_caches | prompts only |
+| `llama-server` (user) | 127.0.0.1:11434 | `~/models`, `~/llama.cpp-b11982` | none | no | `brain_cold_start.sh` drop_caches | prompts only |
 | `kokoro-tts` (user) | 127.0.0.1:10201 | checkout script, `~/.zoe/kokoro_cache`, venv | none | no | no | model text |
 | `functiongemma-router` (user) | 127.0.0.1:11436 | `~/models`, `~/llama.cpp` | none | no | no | utterances |
 | `github-runner` (user) | none | `~/actions-runner`, the live checkout, venvs, `~/.nvm` | runner token | compose | no | no (runs `main`) |
