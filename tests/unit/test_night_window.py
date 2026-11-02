@@ -784,6 +784,57 @@ def test_a_running_test_is_waited_for_then_the_window_goes_on_without_the_lane(t
     assert any("test lane held" in e["msg"] for e in w2.rec["events"])
 
 
+def test_a_lane_teardown_error_never_skips_the_brain_locks_release(tmp_path, monkeypatch):
+    """Cross-review (#2244): release_lock freed the test lane first; an error there skipped the brain lock's release."""
+    w, host, cfg = make(tmp_path)
+    w.take_lock()
+    w.hold_test_lane()
+    assert w.lock_fd is not None and w.test_lane_fd is not None
+    real, lane = nw.fcntl.flock, w.test_lane_fd
+
+    def flaky(fd, op):
+        if op == nw.fcntl.LOCK_UN and fd == lane:
+            raise OSError(5, "I/O error")
+        return real(fd, op)
+    monkeypatch.setattr(nw.fcntl, "flock", flaky)
+    w.release_lock()                                                             # must not raise
+    assert w.test_lane_fd is None and w.lock_fd is None                          # the brain lock went too
+
+
+def test_a_lane_that_cannot_be_locked_never_costs_the_night(tmp_path, monkeypatch):
+    w, host, cfg = make(tmp_path)
+
+    def enolck(fd, op):
+        raise OSError(37, "No locks available")
+    monkeypatch.setattr(nw.fcntl, "flock", enolck)
+    w.hold_test_lane()                                                           # an OSError other than BlockingIOError: logged, not raised
+    assert w.test_lane_fd is None and any("cannot be locked" in e["msg"] for e in w.rec["events"])
+
+
+def test_the_floor_grace_never_runs_past_the_restore_reserve(tmp_path):
+    w, host, _ = make(tmp_path)
+    w.cap_min = w.cfg.reserve_min + 0.05                                         # 3 s of usable time left
+    w.t0 = host.mono()
+    host.mem_available_mb = lambda _p: 1000.0
+    before = host.t
+    with pytest.raises(nw.Aborted):
+        w.floor_dip(1000.0)
+    assert host.t - before < 10.0                                               # not the full 120 s grace
+
+
+def test_a_retry_whose_room_is_spent_by_the_stop_and_compaction_is_not_started(tmp_path):
+    w, host, cfg = make(tmp_path, llm_dies_first=1)
+    real_sleep = host.sleep
+
+    def sleep(sec):
+        real_sleep(sec + (3000.0 if sec == 3.0 else 0.0))                          # the settle after the compaction eats the room
+    host.sleep = sleep
+    assert w.run() == nw.EXIT_ABORTED
+    assert len(twelve_b_starts(host)) == 1 and any("no room left for attempt 2" in e["msg"] for e in w.rec["events"])
+    assert json.loads(w.failures_path.read_text())["count"] == 1
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
 def test_the_hard_cap_keeps_a_late_job_from_starting_and_the_wake_still_happens(tmp_path):
     w, host, _ = make(tmp_path, job_s=52 * 60.0)
     w.run()

@@ -990,9 +990,9 @@ class NightWindow(bk.Window):
         self.event(f"{why}: " + self.who_holds_memory() + ("" if m < hard else f"; waiting up to {FLOOR_GRACE_S:.0f}s for it to recover before aborting"))
         t0 = self.host.mono()
         while m >= hard and m < floor:
-            if self.host.mono() - t0 >= FLOOR_GRACE_S or self.elapsed_min() >= self.cap_min:
+            if self.host.mono() - t0 >= FLOOR_GRACE_S or self.time_left_s() <= 5.0:
                 raise Aborted(f"{why} (still under it after {self.host.mono() - t0:.0f}s)")
-            self.host.sleep(5.0)
+            self.host.sleep(min(5.0, max(0.0, self.time_left_s())))
             m = self.mem()
         if m < hard:
             raise Aborted(f"MemAvailable {m:.0f} MB < {hard:.0f} MB (the hard floor, {FLOOR_HARD_FRACTION:.0%} of {floor:.0f})")
@@ -1306,22 +1306,31 @@ class NightWindow(bk.Window):
                 self.event("test lane held: no agent test run starts beside the 12B until the restore" if announced else "test lane taken for the window")
                 return
             except BlockingIOError:
-                if self.host.mono() >= deadline:
-                    os.close(fd)
-                    self.event(f"test lane {cfg.test_lane_path} still held after {cfg.test_lane_wait_min:.0f} min: a test run is sharing the box with the window (going on without the lane)")
-                    return
-                if not announced:
-                    self.event(f"waiting up to {cfg.test_lane_wait_min:.0f} min for a running test to leave the test lane (nothing is stopped yet)")
-                    announced = True
-                self.host.sleep(15.0)
+                if self.host.mono() < deadline:
+                    if not announced:
+                        self.event(f"waiting up to {cfg.test_lane_wait_min:.0f} min for a running test to leave the test lane (nothing is stopped yet)")
+                        announced = True
+                    self.host.sleep(15.0)
+                    continue
+                why = f"still held after {cfg.test_lane_wait_min:.0f} min: a test run is sharing the box with the window (going on without the lane)"
+            except OSError as exc:                       # ENOLCK, EINTR...: the lane is an optimisation, never a reason to lose the night
+                why = f"cannot be locked ({exc.__class__.__name__}); going on without the lane"
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            self.event(f"test lane {cfg.test_lane_path} {why}")
+            return
 
     def release_lock(self) -> None:
-        if self.test_lane_fd is not None:
-            try:
-                fcntl.flock(self.test_lane_fd, fcntl.LOCK_UN)
-                os.close(self.test_lane_fd)
-            finally:
-                self.test_lane_fd = None
+        """Free the test lane, then the brain lock. Each step is best-effort and independent: a lane teardown error must never skip the brain lock's release (or the restore after it)."""
+        fd, self.test_lane_fd = self.test_lane_fd, None
+        if fd is not None:
+            for fn in (lambda: fcntl.flock(fd, fcntl.LOCK_UN), lambda: os.close(fd)):
+                try:
+                    fn()
+                except OSError:
+                    pass
         super().release_lock()
 
     def pre_stop_gate(self, avail_now: float) -> None:
@@ -1617,6 +1626,11 @@ class NightWindow(bk.Window):
                 self.unload_llm()
                 compacted = self.compact_memory(f"retry {n} after a failed 12B start")
                 self.host.sleep(3.0)
+                left = self.time_left_s()                  # the unload + compaction spent part of the room checked above: check again before the start, not only before the stop
+                if left < LOAD_RETRY_MIN_LEFT_S:
+                    self.record_load(False, self.last_load_why)
+                    self.event(f"no room left for attempt {nxt} after the stop and compaction ({left:.0f}s left, a start needs {LOAD_RETRY_MIN_LEFT_S:.0f}s)")
+                    raise LoadFailed(f"the 12B did not load ({self.last_load_why}); no time left for attempt {nxt}")
                 self.rec["load_retry"] = {"first_failure": attempts[0], "compacted": compacted, "left_s": round(left), "attempts": nxt}
                 continue
             if n > 1:
