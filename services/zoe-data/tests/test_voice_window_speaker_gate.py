@@ -201,6 +201,7 @@ def test_the_voice_session_never_upgrades_a_non_matching_utterance_and_is_closed
 def test_window_speaker_frame_cases():
     f = shape.window_speaker_frame
     assert f({"window": "followup"}, "what time is it", False)["skipped"] == "not_addressed"
+    assert f({"window": "followup"}, "what time is it", False)["conversation_end"] is True   # the daemon stops listening
     assert f({"window": "followup"}, "what time is it", True) is None
     assert f({"window": "followup"}, "what time is it", None) is None
     assert f({}, "what time is it", False) is None              # a wake turn

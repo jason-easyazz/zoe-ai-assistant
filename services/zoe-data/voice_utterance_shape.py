@@ -408,7 +408,8 @@ def window_speaker_frame(payload: Mapping[str, Any] | None, transcript: str, ver
         return None
     if named_zoe or _ZOE_NAME.search(transcript or ""):
         return None
-    return {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch"}
+    return {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch",
+            "conversation_end": True}
 
 
 def gate_frame(payload: Mapping[str, Any] | None, transcript: str, *,
