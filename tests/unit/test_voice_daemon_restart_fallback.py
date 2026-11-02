@@ -212,3 +212,47 @@ def test_daemon_stays_busy_through_the_whole_restart_recovery(daemon, monkeypatc
     assert busy == [("say", True), ("sleep", True)]
     assert calls[1] is True
     assert not daemon._daemon_busy()           # cleared in the finally
+
+
+# ── the text turn (orb-tap pull -> /api/voice/command) and the announcement voice get the same discipline (2026-11-02) ──
+# Both used the generic retry loop: a 500 / 504 / the 60 s read timeout re-POSTed a turn that may already have executed a
+# write, and one slow turn could run three times and hold the panel for minutes.
+
+def _text_turn(daemon):
+    return daemon._do_single_turn(None, b"", prompt_on_empty=False, voice_claim=None, text="what's up")
+
+
+def test_text_turn_500_is_not_retried(daemon, spoken, monkeypatch):
+    srv = _Server([(500, {"detail": "boom"}), (200, {"ok": True})])
+    try:
+        monkeypatch.setattr(daemon, "ZOE_URL", srv.url)
+        assert _text_turn(daemon) is False
+        assert srv.hits == 1
+        assert spoken == [daemon._FALLBACK_UNREACHABLE]
+    finally:
+        srv.close()
+
+
+def test_text_turn_502_rides_the_restart_exactly_once(daemon, spoken, monkeypatch):
+    srv = _Server([(502, {}), (200, {"ok": True, "text": "what's up", "reply": "all quiet"})])
+    try:
+        monkeypatch.setattr(daemon, "ZOE_URL", srv.url)
+        attempts = []
+        real = daemon._api_post
+        monkeypatch.setattr(daemon, "_api_post", lambda *a, **k: attempts.append(a[0]) or real(*a, **k))
+        _text_turn(daemon)
+        assert attempts == ["/api/voice/command", "/api/voice/command"]
+        assert spoken == [daemon._FALLBACK_ONE_MOMENT]
+    finally:
+        srv.close()
+
+
+def test_announcement_speak_500_is_one_attempt(daemon, spoken, monkeypatch):
+    srv = _Server([(500, {"detail": "tts down"}), (200, {"audio_base64": "AAAA"})])
+    try:
+        monkeypatch.setattr(daemon, "ZOE_URL", srv.url)
+        monkeypatch.setattr(daemon, "VOICE_API_RETRY_BACKOFF_S", 0.0)
+        assert daemon._speak_announcement({"id": "a1", "text": "dinner is ready"}) is False
+        assert srv.hits == 1
+    finally:
+        srv.close()

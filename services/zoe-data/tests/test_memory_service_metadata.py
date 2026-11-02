@@ -503,6 +503,10 @@ def test_guest_memory_user_detection_blocks_unauthenticated_identities():
     assert is_guest_memory_user("guest") is True
     assert is_guest_memory_user("anonymous") is True
     assert is_guest_memory_user("voice-guest") is True
+    # the two the old private copy missed (2026-11-02): the device token and the per-session guest principal
+    assert is_guest_memory_user("voice-daemon") is True
+    assert is_guest_memory_user("guest-7f3a") is True
+    assert is_guest_memory_user(" GUEST ") is True
     assert is_guest_memory_user("jason") is False
 
 

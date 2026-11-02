@@ -4069,11 +4069,21 @@ async def voice_command(
         logger.debug("voice form routing failed (non-fatal): %s", _af_outer_exc)
 
     # ── Voice confirmation: check if we're waiting for yes/no ─────────────
+    # Who these words are attributed to, for the confirmation window: on a panel the server-verified speaker (a claim the
+    # gate accepted, or the PIN replay) - never the panel's recent-user fallback, which is what let anyone's "yes" run
+    # another member's pending write (2026-11-02); for a member's own session (desktop, Telegram) the session itself.
+    _confirm_speaker = identified_user_id if _panel_caller else effective_user
     pending = _PENDING_CONFIRMATIONS.get(panel_id)
     if pending:
         now = time.monotonic()
         if now > pending.get("expire_at", 0):
             del _PENDING_CONFIRMATIONS[panel_id]
+            pending = None
+        elif pending.get("speaker") != _confirm_speaker:
+            # Another voice, or an unverified one, inside the window: the waiting write belongs to whoever asked. These words
+            # neither run it nor drop it; they are a new request from the person who said them.
+            logger.info("voice/command pending confirmation held: speaker mismatch (panel=%s intent=%s)",
+                        panel_id[:40], pending.get("intent_name"))
             pending = None
         else:
             lc = text.lower().strip().rstrip(".!?")
@@ -4252,6 +4262,7 @@ async def voice_command(
                         "expire_at": time.monotonic() + _CONFIRM_TIMEOUT_S,
                         "session_id": session_id,
                         "user_id": effective_user,
+                        "speaker": _confirm_speaker,
                     }
                     from types import SimpleNamespace as _SnapNS
 
@@ -4884,6 +4895,7 @@ async def voice_command(
                 "expire_at": time.monotonic() + _CONFIRM_TIMEOUT_S,
                 "session_id": session_id,
                 "user_id": effective_user,
+                "speaker": _confirm_speaker,
             }
             try:
                 audio_resp = await synthesize({"text": confirm_phrase}, caller=caller)
@@ -7591,7 +7603,9 @@ async def get_livekit_token(request: Request, caller: dict = Depends(_require_li
 
 
 # ── Voice confirmation state ───────────────────────────────────────────────
-# Track pending confirmations per panel: panel_id → {intent_name, slots, expire_at, session_id}
+# Track pending confirmations per panel: panel_id → {intent_name, slots, expire_at, session_id, user_id, speaker}
+# ``speaker`` is the identity the asking turn was attributed to (see ``_confirm_speaker``); only a turn attributed to the same
+# speaker may answer it.
 _PENDING_CONFIRMATIONS: dict[str, dict] = {}
 _CONFIRM_TIMEOUT_S = 30  # seconds to wait for "yes/confirm" before expiring
 

@@ -1103,9 +1103,15 @@ def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
 
 
 def is_guest_memory_user(user_id: str | None) -> bool:
-    """Return True for unauthenticated identities that must not receive prompt memory."""
+    """Return True for unauthenticated identities that must not receive prompt memory.
 
-    return str(user_id or "").strip().lower() in {"", "guest", "anonymous", "voice-guest"}
+    ONE predicate (``user_filters.is_unidentified``): the sentinel set incl. ``voice-daemon`` and the per-session
+    ``guest-<id>`` principal zoe-auth mints. This copy knew neither (2026-11-02), so a device-token turn and a LAN guest
+    session were handed the household's prompt memory."""
+
+    from user_filters import is_unidentified
+
+    return is_unidentified(user_id)
 
 
 def _memory_status_visible(metadata: Mapping[str, Any]) -> bool:
