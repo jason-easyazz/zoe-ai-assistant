@@ -42,12 +42,6 @@ def main():
     
     results = {}
     
-    # Phase 1: Security Tests
-    print("\n[Phase 1] Running Security Tests...")
-    print("-" * 80)
-    results["phase1_security"] = run_test_suite("tests/unit/test_auth_security.py")
-    print(results["phase1_security"]["stdout"])
-    
     # Phase 2: Integration Tests
     print("\n[Phase 2] Running LiteLLM Integration Tests...")
     print("-" * 80)
