@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 799 prod flags; 209 read through `typed_env`.
+- 801 prod flags; 211 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 313 prod flags with no owner doc yet.
-- 2 registered flags with no reader in the scanned sources.
+- 1 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-799 flags; 749 not documented in `.env.example`.
+801 flags; 751 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -71,6 +71,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_AGENT_MAX_TOOL_ITERS` | int | `5` | - | - | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_AGENT_TOOL_TIMEOUT` | float | `10.0` | - | - | `'10.0'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_AGENT_VOICE_LLM_TIMEOUT` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_ALARMS` | bool | `False` | - | `docs/architecture/alarms.md` | `'off'` | yes | NO | `services/zoe-data/alarms.py` |
+| `ZOE_ALARM_MUSIC_PLAYER` | str | `'Zoe Panel'` | - | `docs/architecture/alarms.md` | `'Zoe Panel'` | yes | NO | `services/zoe-data/alarm_music.py` |
 | `ZOE_ALLOWED_WS_ORIGINS` | list | `()` | - | `docs/knowledge/incident-runbook.md` | `-` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_ANNOUNCE_POLL_ENABLED` | bool | `True` | - | `scripts/AGENTS.md` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_ANNOUNCE_POLL_S` | float | `5.0` | - | `docs/knowledge/mac-virtual-panel.md` | `'5.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -1170,4 +1172,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_ALARMS`, `ZOE_COMPOSE_VOICE_BUDGET_S`
+`ZOE_COMPOSE_VOICE_BUDGET_S`

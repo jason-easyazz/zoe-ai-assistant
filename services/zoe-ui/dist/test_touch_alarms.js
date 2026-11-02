@@ -89,7 +89,7 @@ function boot(opts) {
   // `new Date(ms)` is used for the ring clock; keep the real constructor but a fixed now() for skew maths
   ctx.Date = class extends Date { static now() { return now; } };
   vm.runInContext(SRC, ctx);
-  return { window, document, host, calls, shown, advance, store, snd, all, byId, stage };
+  return { window, document, host, calls, shown, advance, clock: () => now, store, snd, all, byId, stage };
 }
 const flush = () => new Promise((r) => setImmediate(r));
 const ring = (over) => Object.assign({ id: 'a1', label: 'Gym', time_hhmm: '07:00', sound_kind: 'tone', sound_id: 'sunrise', sound_name: 'Sunrise',
@@ -208,11 +208,11 @@ async function ringing(over, postFn) {
 
   // AN ALARM IS NEVER SILENT: music is trusted only while the server says it is playing
   async function musicRing(stateFn, over) {
-    const b = boot({ get: (u) => (u === '/api/alarms/ringing' ? { now: 1000 + (b0 ? 0 : 0), ringing: [ring(Object.assign({ sound_kind: 'music', sound_id: 'last', music_state: stateFn() }, over))] } : {}) });
+    let b = null;  // the fake server's clock IS the fake page clock (skew 0), so "10 s after the ring started" is real
+    b = boot({ get: (u) => (u === '/api/alarms/ringing' ? { now: b.clock() / 1000, ringing: [ring(Object.assign({ sound_kind: 'music', sound_id: 'last', music_state: stateFn() }, over))] } : {}) });
     b.window.ZoeAlarms.init(b.host); b.advance(300); await flush(); await flush();
     return b;
   }
-  const b0 = 0;
   { let state = 'playing'; const b = await musicRing(() => state);
     b.advance(20000); await flush(); await flush();
     ok(b.snd.starts.length === 0, 'music playing: no tone over it'); }
@@ -236,12 +236,13 @@ async function ringing(over, postFn) {
     const tabs = b.document.createElement('div'); const t1 = b.document.createElement('div'); const a1 = b.document.createElement('div');
     b.window.ZoeAlarms.attachTabs({ tabsEl: tabs, timersEl: t1, alarmsEl: a1 })('alarms'); await flush(); await flush();
     fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === '+ New alarm'), 'click'); await flush(); await flush();
+    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Sunrise'), 'click');
+    ok(b.snd.previews.includes('sunrise'), 'tone chip previews');
     fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Morning'), 'click');
     fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Save'), 'click'); await flush();
     const p = b.calls.find((c) => c[0] === 'POST' && c[1] === '/api/alarms');
     ok(p && p[2].sound_kind === 'music' && p[2].sound_id === 'playlist:Morning' && p[2].sound_name === 'Morning', 'music save body: ' + JSON.stringify(p && p[2]));
-    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Sunrise'), 'click');
-    ok(b.snd.previews.includes('sunrise'), 'tone chip previews'); }
+  }
 
   // the tone synthesiser: ramp, plan, start/stop, parity with the server's ids
   { const SND = fs.readFileSync(process.env.SND_SRC || path.join(__dirname, 'js/touch-alarm-sound.js'), 'utf8');
@@ -263,7 +264,7 @@ async function ringing(over, postFn) {
     tm.filter((t) => t.on).forEach((t) => t.fn());   // loop + ramp timers fire
     ok(made.osc.length === 2 * S.plan('bell').length, 'the phrase repeats');
     S.stop();
-    ok(made.osc.every((o) => o.stopped >= 1) && disc === 1 && tm.every((t) => !t.on), 'stop silences every note and clears the timers');
+    ok(made.osc.every((o) => o.stopped >= 2) && disc === 1 && tm.every((t) => !t.on), 'stop silences every note and clears the timers');
     const before = made.osc.length; S.start('sunrise', () => 0, 30); S.preview('chime'); ok(made.osc.length === before + S.plan('sunrise').length, 'a preview never overlaps a ring'); S.stop(); }
 
   // the estate wires it: script tag before the inline code, init with the host's api, tabs on the timer screen

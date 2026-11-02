@@ -1252,6 +1252,44 @@
         },
         "typed_env": false
       },
+      "ZOE_ALARMS": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/alarms.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/architecture/alarms.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_ALARM_MUSIC_PLAYER": {
+        "defaults": [
+          "'Zoe Panel'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/alarm_music.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "Zoe Panel",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/architecture/alarms.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_ALLOWED_WS_ORIGINS": {
         "defaults": [
           "-"
@@ -19537,7 +19575,6 @@
     }
   },
   "registry_unread": [
-    "ZOE_ALARMS",
     "ZOE_COMPOSE_VOICE_BUDGET_S"
   ]
 }

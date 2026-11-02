@@ -20,7 +20,7 @@
     var DAYS = [['M', 1], ['T', 2], ['W', 3], ['T', 4], ['F', 5], ['S', 6], ['S', 7]];
     var PRESETS = [['Once', 'once'], ['Every day', 'daily'], ['Weekdays', 'weekdays'], ['Weekends', 'weekends']];
     var host = null;
-    var st = { enabled: null, ring: null, skew: 0, pollT: null, holdT: null, musicT: null, toneOn: false, clockT: null, acks: {}, tones: {} };
+    var st = { enabled: null, ring: null, skew: 0, pollT: null, holdT: null, musicT: null, toneOn: false, clockT: null, acks: {}, inflight: {}, tones: {} };
 
     // ---- pure helpers (exported for the node harness) -------------------------------------------------------------------
     function to24h(h12, mi, mer) {
@@ -165,12 +165,18 @@
         sendAck(a.id, a.ring_started_at, kind);
     }
     function sendAck(id, started, kind) {
-        return host.apiJson('POST', '/api/alarms/' + encodeURIComponent(id) + '/' + kind).then(function () {
-            delete st.acks[id + ':' + started];
+        var key = id + ':' + started;
+        if (st.inflight[key]) return st.inflight[key];  // a poll that lands mid-request must not send the same answer twice
+        function settle() { delete st.inflight[key]; }
+        st.inflight[key] = host.apiJson('POST', '/api/alarms/' + encodeURIComponent(id) + '/' + kind).then(function () {
+            delete st.acks[key];
             saveAcks();
+            settle();
         }).catch(function (e) {
-            if (/http 409/.test(String(e && e.message))) { delete st.acks[id + ':' + started]; saveAcks(); }  // not ringing any more / no snoozes left
+            if (/http 409/.test(String(e && e.message))) { delete st.acks[key]; saveAcks(); }  // not ringing any more / no snoozes left
+            settle();
         });
+        return st.inflight[key];
     }
     function snooze() {
         var a = st.ring;
