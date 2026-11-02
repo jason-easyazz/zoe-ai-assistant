@@ -111,6 +111,27 @@ landing_others_busy(){
 #   3. always restart Kokoro and release the lane. <cmd> must close fd 8 for its children (8>&-).
 # (2026-10-29: Kokoro used to be stopped first, then the probe waited an hour for the lane - Zoe mute all morning.)
 # ZOE_TEST_LANE_LOCK / ZOE_LANDING_SETTLE_S are overridable for tests.
+# 2026-11-02: a probe silences Zoe for ~15-30 min, so it also waits for a QUIET HOUSEHOLD (landing_household_quiet) - the
+# owner-allowed daytime landings muted speech 214 min on 10-29 while people were talking to her.
+
+# landing_household_quiet: 0 when nobody has spoken to Zoe for ZOE_LANDING_QUIET_MIN minutes (default 20), read from zoe-data
+# /health `last_voice_turn_age_s` (null = no turn since zoe-data started = quiet). FAIL CLOSED: an unreadable or malformed
+# signal is "not quiet" - the landing re-queues with Kokoro untouched, it never guesses. ZOE_LANDING_HEALTH_URL overrides (tests).
+landing_household_quiet(){
+  local min=${ZOE_LANDING_QUIET_MIN:-20} body age
+  case "$min" in ''|*[!0-9]*) min=20;; esac
+  body=$(curl -fsS -m 5 "${ZOE_LANDING_HEALTH_URL:-http://127.0.0.1:${ZOE_PORT:-8000}/health}" 2>/dev/null) || { echo "household quiet: /health unreadable - not quiet" >&2; return 1; }
+  age=$(printf '%s' "$body" | jq -r 'if has("last_voice_turn_age_s") then (.last_voice_turn_age_s // "none") else "missing" end' 2>/dev/null) || age=missing
+  case "$age" in
+    none) return 0;;
+    missing|'') echo "household quiet: no last_voice_turn_age_s on /health - not quiet" >&2; return 1;;
+  esac
+  age=${age%%.*}
+  case "$age" in ''|*[!0-9]*) echo "household quiet: unreadable age - not quiet" >&2; return 1;; esac
+  [ "$age" -ge $(( min * 60 )) ] && return 0
+  echo "household quiet: last voice turn ${age}s ago (< ${min} min) - not silencing Zoe" >&2; return 1
+}
+
 landing_probe_window(){
   local wait_s=$1 pr=$2 head=$3 rc i; shift 3
   exec 8>"${ZOE_TEST_LANE_LOCK:-/tmp/zoe-test-lane.lock}"
@@ -118,6 +139,7 @@ landing_probe_window(){
   # the lane wait can eat the whole budget: re-validate (night gate + probe time left) BEFORE Kokoro is touched
   [ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)" = "$head" ] || { flock -u 8; exec 8>&-; return 9; }   # a push during the lock waits: do not silence Zoe for a stale head
   if declare -F landing_pre_stop >/dev/null && ! landing_pre_stop; then flock -u 8; exec 8>&-; return 9; fi
+  landing_household_quiet || { flock -u 8; exec 8>&-; return 9; }   # someone is talking to her: re-queue, Kokoro untouched
   systemctl --user stop kokoro-tts.service
   if [ "${ZOE_LANDING_SETTLE_S:-15}" != 0 ]; then
     for i in $(seq 1 30); do [ "$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)" -ge 1500 ] && break; sleep 2; done
