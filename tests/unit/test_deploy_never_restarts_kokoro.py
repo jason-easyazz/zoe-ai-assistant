@@ -51,6 +51,21 @@ def _assignments(text: str) -> dict[str, str]:
             for m in re.finditer(r"^\s*(?:export\s+)?([A-Za-z_]\w*)=(.*)$", text, re.M)}
 
 
+def _resolve(var: str, env: dict[str, str], _seen: frozenset = frozenset()) -> str | None:
+    """Assigned value of ``var`` with every $REF inside it expanded transitively; None if ``var``
+    (or any variable it references) is not assigned in the file."""
+    if var not in env:
+        return None
+    if var in _seen:
+        return env[var]
+    out = env[var]
+    for ref in re.findall(r"\$\{?(\w+)", env[var]):
+        sub = _resolve(ref, env, _seen | {var})
+        if sub is not None:
+            out += " " + sub
+    return out
+
+
 def kokoro_touches(text: str, extra_env: dict[str, str] | None = None) -> list[str]:
     """Commands that stop/restart/reload Kokoro - named, via a glob / --all, or via a variable
     whose assigned value names it or cannot be resolved from the same file."""
@@ -66,8 +81,9 @@ def kokoro_touches(text: str, extra_env: dict[str, str] | None = None) -> list[s
             elif re.search(r"(^|\s)(--all|'?\S*\*\S*'?)(\s|$)", args):
                 bad.append(cmd)  # a glob / --all can reach Kokoro without naming it
             for var in re.findall(r"\$\{?(\w+)", args):
-                if var not in env or re.search(r"kokoro", env[var], re.I):
-                    bad.append(cmd)  # unresolvable / kokoro-valued target
+                resolved = _resolve(var, env)
+                if resolved is None or re.search(r"kokoro", resolved, re.I):
+                    bad.append(cmd)  # unresolvable / kokoro-valued target (chains followed)
         if re.match(r"(sudo\s+)?(docker|podman)\b", cmd) and re.search(rf"\b{_DOCKER_MUTATING}\b", cmd) \
                 and re.search(r"kokoro", cmd, re.I):
             bad.append(cmd)
@@ -135,6 +151,9 @@ def test_zoe_data_and_kokoro_units_are_not_coupled():
     # Kokoro must not be tied to ANYTHING a deploy restarts (zoe-data, the flue units).
     for deployed in ("zoe-data", "flue-zoe"):
         assert coupling_directives(kok, deployed) == []
+    # ...and nothing a deploy restarts (zoe-data, both flue units) may stop/restart Kokoro with it.
+    for unit in ("zoe-data", "flue-zoe-brain-2x", "flue-zoe-telegram"):
+        assert coupling_directives(_unit_texts(unit), "kokoro") == [], unit
 
 
 # ── negative controls: prove the scanners actually catch the thing they pin ────────────────
@@ -149,6 +168,7 @@ def test_zoe_data_and_kokoro_units_are_not_coupled():
     "pkill -f kokoro_sidecar",
     'unit=kokoro-tts.service\nsystemctl --user restart "$unit"',
     'systemctl --user restart "$UNSET_TARGET"',
+    'TARGET=kokoro-tts.service\nSERVICE="$TARGET"\nsystemctl --user restart "$SERVICE"',
     "systemctl --user stop kokoro-tts && echo done",
     "docker compose restart kokoro",
 ])
@@ -176,4 +196,5 @@ def test_negative_control_coupling_scanner():
     assert coupling_directives("[Unit]\nBindsTo=kokoro-tts.service\n", "kokoro")
     for d in ("PropagatesStopTo", "StopPropagatedFrom", "PropagatesReloadTo", "ReloadPropagatedFrom"):
         assert coupling_directives(f"[Unit]\n{d}=kokoro-tts.service\n", "kokoro")
+    assert coupling_directives("[Unit]\nPropagatesStopTo=kokoro-tts.service\n", "kokoro")  # flue-unit shape
     assert not coupling_directives("[Unit]\nAfter=network.target llama-server.service\n", "kokoro")
