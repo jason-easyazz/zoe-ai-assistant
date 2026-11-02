@@ -38,7 +38,7 @@ def _block(score, speech_s=3.0, member=MEMBER, verified=None):
     return {"verified": verified, "member": member, "score": score, "model_id": RESNET, "speech_s": speech_s}
 
 
-def _run(monkeypatch, *, window="", speaker=None, text="tell me about the cardiologist"):
+def _run(monkeypatch, *, window="", speaker=None, text="tell me about the cardiologist", raw=None):
     import routers.voice_tts as vt
 
     real_claim = vt._accepted_voice_claim
@@ -50,6 +50,8 @@ def _run(monkeypatch, *, window="", speaker=None, text="tell me about the cardio
         return True
 
     async def stt(_path, **_kw):
+        # The real _transcribe_audio records the transcript as heard BEFORE the wake strip; ``raw`` stands in for that.
+        vt._stt_raw_var.set({"raw": raw} if raw is not None else {})
         return text
 
     monkeypatch.setattr(vt, "_voice_claim_consented", consented)
@@ -79,6 +81,20 @@ def test_window_bar_is_stricter_than_the_wake_bar_and_wake_is_unchanged():
     assert speaker_models.claim_threshold(RESNET, 3.0, "followup") > wake_long
     assert speaker_models.claim_threshold(RESNET, 3.0, "conversation") > wake_long
     assert speaker_models.claim_threshold(RESNET, 1.0, "followup") > speaker_models.claim_threshold(RESNET, 1.0)
+
+
+@pytest.mark.parametrize("env", ["ZOE_SPEAKER_RESNET34_THRESHOLD_LONG", "ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT"])
+def test_a_wake_bar_override_does_not_erase_the_stricter_window_bar(monkeypatch, env):
+    """Cross-review: an override of the wake bar was returned for EVERY tier, so the window bar collapsed to it (0.265 let a 0.30 pass)."""
+    speech_s = 3.0 if env.endswith("LONG") else 1.0
+    group = "long" if env.endswith("LONG") else "short"
+    monkeypatch.setenv(env, "0.265")
+    table = speaker_models.RESNET34_THRESHOLDS[speaker_models.window_tier()][group]
+    assert speaker_models.claim_threshold(RESNET, speech_s, "") == 0.265                # the wake bar IS the override
+    assert speaker_models.claim_threshold(RESNET, speech_s, "followup") == max(0.265, table) > 0.265
+    assert speaker_models.claim_threshold(RESNET, speech_s, "conversation") == max(0.265, table)
+    monkeypatch.setenv(env, "0.95")                                                      # a STRICTER wake bar still wins
+    assert speaker_models.claim_threshold(RESNET, speech_s, "followup") == 0.95
 
 
 def test_window_tier_env_can_loosen_to_the_wake_bar(monkeypatch):
@@ -129,6 +145,42 @@ def test_a_window_utterance_that_names_zoe_is_answered_as_a_guest_never_the_memb
     assert len(turns) == 1 and not _skipped(frames), (turns, frames)
     assert turns[0]["verdict"] is False and turns[0]["user_id"] != MEMBER, turns[0]
     assert turns[0]["allow_sensitive"] is False, "a non-matching voice must not read the member's sensitive rows"
+
+
+def test_a_stripped_call_by_name_is_still_a_call_by_name(monkeypatch):
+    """Cross-review: Moonshine's wake strip turns "Zoe, what time is it" into "what time is it", so the name check on the stripped text
+    dropped an explicit call. The RAW transcript carries the name."""
+    turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.30), text="tell me about the cardiologist", raw="Zoe, tell me about the cardiologist")
+    assert len(turns) == 1 and not _skipped(frames), (turns, frames)
+    assert turns[0]["verdict"] is False and turns[0]["user_id"] != MEMBER, turns[0]
+
+
+def test_negative_control_without_the_raw_name_the_stripped_call_is_dropped(monkeypatch):
+    turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.30), text="tell me about the cardiologist", raw="tell me about the cardiologist")
+    assert turns == [] and _skipped(frames)
+
+
+def test_a_skipped_window_turn_is_still_recorded_as_someone_in_the_room(monkeypatch):
+    """Cross-review: dropping the turn bypassed voice_command's crowd note, so another person speaking into a follow-up stayed invisible
+    to day_review_raise.others_present."""
+    import day_review_raise
+
+    notes = []
+    monkeypatch.setattr(day_review_raise, "note_voice_turn", lambda *a, **k: notes.append((a, k)))
+    turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.30))
+    assert turns == [] and _skipped(frames)                                   # still no brain, no memory
+    (a, k), = notes
+    assert a == ("", "hall-panel") and k == {"scope_user": None, "verdict": False, "claimed": None}
+
+
+def test_a_window_turn_that_is_not_skipped_makes_no_extra_crowd_note(monkeypatch):
+    import day_review_raise
+
+    notes = []
+    monkeypatch.setattr(day_review_raise, "note_voice_turn", lambda *a, **k: notes.append((a, k)))
+    turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.99))
+    assert len(turns) == 1 and not _skipped(frames)
+    assert all(a[0] != "" for a, _k in notes)                                  # voice_command's own note only (it has a session id)
 
 
 def test_the_voice_session_never_upgrades_a_non_matching_utterance_and_is_closed_by_it(monkeypatch):

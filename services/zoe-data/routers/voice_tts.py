@@ -2954,6 +2954,10 @@ def _open_moonshine_stream():
 async def _run_moonshine(wav_path: str) -> str:
     from moonshine_voice.utils import load_wav_file
 
+    # The turn's holder for the transcript BEFORE the wake word is stripped (see _stt_raw_var): the executor thread writes into the dict
+    # the calling task owns - a ContextVar set in the thread would not reach the task.
+    _raw_holder = _stt_raw_var.get()
+
     def _work() -> str:
         tr = _ensure_moonshine()
         audio, sr = load_wav_file(wav_path)
@@ -2979,6 +2983,8 @@ async def _run_moonshine(wav_path: str) -> str:
         # as its own leading line. Strip the wake word from those lines so the
         # leading "Hey Zoe" can't corrupt the command transcript (wake-word bleed).
         lines = [getattr(ln, "text", "") or "" for ln in getattr(out, "lines", [])]
+        if _raw_holder is not None:
+            _raw_holder["raw"] = " ".join(ln.strip() for ln in lines if ln.strip()) or str(getattr(out, "text", "") or "")
         if lines:
             text = _strip_wake_word(lines)
             if text:
@@ -3032,6 +3038,7 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
 
 
 async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str | None = None) -> str:
+    _stt_raw_var.set({})  # a fresh holder per transcription: never a previous turn's raw text
     # ``pre_text``: a transcript the under-speech STT stream already finished for THIS clip (voice_stt_stream; the caller
     # verified the sample counts match). Capture below still runs, so the corpus keeps growing exactly as before.
     if pre_text:
@@ -3055,6 +3062,9 @@ async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str |
 # module global) keeps this per-asyncio-task, so overlapping voice turns / an A/B
 # capture running beside a live turn can't clobber each other's value.
 _stt_backend_var: contextvars.ContextVar[str] = contextvars.ContextVar("stt_backend", default="")
+# The transcript as Moonshine heard it BEFORE the leading wake word was stripped (``{"raw": str}``, per task, filled by _run_moonshine). A
+# window turn that opens "Zoe, what time is it" reaches the gates as "what time is it"; this keeps the fact that Zoe was named.
+_stt_raw_var: contextvars.ContextVar = contextvars.ContextVar("stt_raw", default=None)
 
 
 async def _transcribe_audio_impl(wav_path: str) -> str:
@@ -6051,11 +6061,20 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             logger.warning("voice/turn_stream window speaker gate failed (dropping the window turn): %s", _win_exc)
             _win_verdict = False
         try:
-            _gate = _utterance_shape.window_speaker_frame(payload, transcript, _win_verdict)
+            _gate = _utterance_shape.window_speaker_frame(
+                payload, transcript, _win_verdict,
+                named_zoe=_utterance_shape.names_zoe(((_stt_raw_var.get() or {}).get("raw")) or ""))
         except Exception as _win_exc:
             logger.warning("voice/turn_stream window speaker frame failed (dropping the window turn): %s", _win_exc)
             _gate = {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch"}
         if _gate is not None:
+            # The rejected voice is still SOMEONE in the room: record it in the crowd log (no session, no brain, no memory write), so the
+            # day-review summary is not spoken aloud on the strength of a crowd that only ever spoke into skipped follow-ups.
+            try:
+                import day_review_raise as _dr_win
+                _dr_win.note_voice_turn("", panel_id, scope_user=None, verdict=False, claimed=None)
+            except Exception as _dr_exc:
+                logger.debug("window mismatch crowd note failed (non-fatal): %s", _dr_exc)
             # An unverified voice closes the panel's voice session, exactly as on the voice_command path (flag off: no-op).
             try:
                 import voice_session as _vs_win

@@ -386,19 +386,27 @@ def continuation_hold_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
-def window_speaker_frame(payload: Mapping[str, Any] | None, transcript: str, verdict: bool | None) -> dict | None:
+def names_zoe(text: str) -> bool:
+    """True when ``text`` says "Zoe" anywhere (a call by name)."""
+    return bool(_ZOE_NAME.search(text or ""))
+
+
+def window_speaker_frame(payload: Mapping[str, Any] | None, transcript: str, verdict: bool | None, *,
+                         named_zoe: bool = False) -> dict | None:
     """The ``skipped`` done frame for a no-wake-word window turn whose speaker gate RAN and did not confirm a member.
 
     ``verdict`` is the server's speaker verdict for the turn (``voice_tts._speaker_verdict``): False = the gate scored the
     clip and nobody (or not the claimed member, at the window bar) matched. Such an utterance is a television or another
     person, not the member: dropped with no reply, which also closes the panel's follow-up chain. It stays answerable when it
     names Zoe (a wake-word-shaped call is a guest turn, never the member's). ``None`` / True verdicts and every non-window
-    turn proceed untouched (gate off / shadow mode = today's behaviour).
+    turn proceed untouched (gate off / shadow mode = today's behaviour). ``named_zoe``: the RAW transcript (before the wake word was
+    stripped) named Zoe - Moonshine's wake strip turns "Zoe, what time is it" into "what time is it", so the stripped text alone
+    cannot tell a call by name from side speech.
     """
     p = payload or {}
     if verdict is not False or p.get("window") not in WINDOWS:
         return None
-    if _ZOE_NAME.search(transcript or ""):
+    if named_zoe or _ZOE_NAME.search(transcript or ""):
         return None
     return {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch"}
 

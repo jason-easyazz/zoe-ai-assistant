@@ -227,7 +227,9 @@ def claim_threshold(model_id: str, speech_s: Any, window: Any = "") -> Optional[
         group = length_group(speech_s)
         bar = resnet34_threshold(group)
         if window in WINDOW_NAMES:
-            bar = max(bar, resnet34_threshold(group, window_tier()))
+            # The window tier's TABLE value, not resnet34_threshold(group, tier): that returns the numeric override for every tier, so a
+            # configured wake bar (e.g. _LONG=0.265) would also stand in for the stricter window bar and erase it.
+            bar = max(bar, RESNET34_THRESHOLDS[window_tier()]["short" if group == "short" else "long"])
         return bar
     return None
 
