@@ -2,7 +2,7 @@
 type: research
 title: Completeness and issues (2026-11-02) - what is unfinished, what is half-built, what is breaking, and what stands between Zoe and a natural conversation
 date: 2026-11-02
-status: research-only, round 4. Lanes T (TV), U (unfinished inventory) and U2 (half-built surfaces) are in the bundle. Lanes V (code issues) and W (live issues) carry exposure detail and are held privately with the 2026-10-19 security review; their sanitised rankings are here. Findings handed to the "Zoe comprehensive review and modernization" session.
+status: research-only, round 4. Lanes T (TV), U (unfinished inventory) and U2 (half-built surfaces, static sweep with path:line evidence) are in the bundle. Lanes V (code issues) and W (live issues) carry exposure detail and are held privately with the 2026-10-19 security review; their sanitised rankings are here. Findings handed to the "Zoe comprehensive review and modernization" session.
 description: Owner ask - "another full analysis looking for issues on zoe or things not completed", then "get Zoe to Samantha level ... I want to be able to speak naturally to Zoe, and not feel like I'm talking to a half baked robot". Four lanes over origin/main 27d1b9d43 and the live box 10-26 to 11-02.
 evidence: completeness-and-issues-2026-11-02/ (lanes T, U, U2); ~/.zoe/security-review/2026-11-02/ (lanes V, W, 0600); the night-window journal; the request log (35,927 requests in the window); the open-problems ledger.
 ---
@@ -49,7 +49,7 @@ So: Zoe self-heals restarts, dreams nightly when the box lets her, and watches h
 
 ## 4. Half-built surfaces (lane U2, bundle)
 
-Cut first: OpenClaw and Hermes dead routes in `system.py`, `chat.py`, `mcp_server.py` and the UI pickers; the projects and collections stubs and their widgets; dead tables `trust_allowlist`, `trust_audit`, `engineering_tasks`; the two fake-success endpoints in `routers/stubs.py`; orphan routes with no UI. Finish: the calendars writer, the alarms chain, the Settings face-enrolment card, a voice intent for Bluetooth.
+Static sweep of origin/main: 159 of 492 routes have no caller anywhere (system.py 52 of 71); 51 UI URL literals hit no route (memories collections and tiles against GET-only stubs, the project widget against a "coming soon" stub, 14 dead URLs in touch settings, the chat OpenClaw skills panel); four tables with zero writers, three written and never read; five builder intents that map to retired OpenClaw text and are swallowed as success in `chat.py`; a `/platform` endpoint that reports a retired engine and a `/modules/enabled` that is a hard-coded all-true list. Cut first: OpenClaw and Hermes dead routes in `system.py`, `chat.py`, `mcp_server.py` and the UI pickers; the projects and collections stubs and their widgets; dead tables `trust_allowlist`, `trust_audit`, `engineering_tasks`; the two fake-success endpoints in `routers/stubs.py`; orphan routes with no UI. Finish: the calendars writer, the alarms chain, the Settings face-enrolment card, a voice intent for Bluetooth.
 
 ## 5. Code issues (lane V, 40 ranked, held privately)
 
