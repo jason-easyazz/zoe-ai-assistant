@@ -5941,6 +5941,15 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     t_upload = time.monotonic() - t_turn_start
     suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
 
+    # Stamp household activity ONCE, here, for every accepted turn: the canned fast paths below (the conversation opener / ender ack, the
+    # mishear clarification, a gate-dropped window turn) return before voice_command, which is the only other stamp. Harness / probe / CI
+    # traffic is filtered inside note_voice_activity by the server-bound traffic class.
+    try:
+        from voice_activity import note_voice_activity as _note_voice_activity
+        _note_voice_activity()
+    except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
+        pass
+
     # ── B1.1 speculation gate (ZOE_SPECULATIVE_TURN, default OFF) ──
     # The daemon fired this turn at its FIRST end-of-turn verdict and is still
     # listening; everything audible is held until its commit/resolve/cancel
