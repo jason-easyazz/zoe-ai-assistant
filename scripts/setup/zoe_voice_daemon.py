@@ -4576,6 +4576,24 @@ def _pull_request_due() -> bool:
     return True
 
 
+def _run_pull_turn(pa: "pyaudio.PyAudio") -> None:
+    """The orb-tap pull turn, guarded like a spoken one (cross-review): the turn-active flag is up BEFORE the request goes out, so a
+    polled announcement cannot start speaking over the pull's reply, and a barge monitor owns the mic while the reply plays, so
+    speech (or "stop") interrupts it. The wake cooldown is armed afterwards, never shortened."""
+    global _ignore_wake_until
+    _recording_active.set()
+    try:
+        _monitor = _BargeMonitor(pa)
+        _monitor.start()
+        try:
+            _do_single_turn(pa, b"", prompt_on_empty=False, text=PULL_PHRASE)
+        finally:
+            _monitor.stop()
+    finally:
+        _recording_active.clear()
+        _ignore_wake_until = max(_ignore_wake_until, time.monotonic() + POST_PLAY_COOLDOWN_S)
+
+
 def _peer_is_loopback(peer: "str | None") -> bool:
     """The TCP peer is this machine (127.0.0.0/8, ::1, or an IPv4-mapped loopback)."""
     import ipaddress
@@ -4974,7 +4992,7 @@ def main():
                 stream.stop_stream()
                 stream.close()
                 try:
-                    _do_single_turn(pa, b"", prompt_on_empty=False, text=PULL_PHRASE)
+                    _run_pull_turn(pa)
                 except Exception as exc:
                     log.error("Orb-tap pull turn error: %s", exc)
                 finally:

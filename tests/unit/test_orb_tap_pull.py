@@ -101,7 +101,53 @@ def test_a_throttled_pull_stays_queued_and_runs_when_due(daemon, monkeypatch):
 def test_the_main_loop_runs_the_pull_turn_when_due():
     src = _DAEMON.read_text()
     loop = src.split("if _pull_request_due():", 1)[1].split("continue", 1)[0]
-    assert "_do_single_turn(pa, b\"\", prompt_on_empty=False, text=PULL_PHRASE)" in loop
+    assert "_run_pull_turn(pa)" in loop
+
+
+def test_the_pull_turn_runs_guarded_and_under_a_barge_monitor(daemon, monkeypatch):
+    """Cross-review: the pull turn must (1) raise the turn-active flag BEFORE dispatch so announcements defer, (2) run the turn under a
+    barge monitor so speech interrupts the reply, and (3) arm the wake cooldown after, releasing the flag."""
+    seen = {}
+
+    class Mon:
+        def __init__(self, pa):
+            seen["order"] = ["init"]
+
+        def start(self):
+            seen["order"].append("start")
+
+        def stop(self):
+            seen["order"].append("stop")
+
+    def turn(pa, wav, **kw):
+        seen["order"].append("turn")
+        seen["active"] = daemon._recording_active.is_set()
+        seen["kw"] = kw
+        return True
+
+    monkeypatch.setattr(daemon, "_BargeMonitor", Mon)
+    monkeypatch.setattr(daemon, "_do_single_turn", turn)
+    monkeypatch.setattr(daemon, "_ignore_wake_until", 0.0)
+    daemon._recording_active.clear()
+    daemon._run_pull_turn(None)
+    assert seen["order"] == ["init", "start", "turn", "stop"]
+    assert seen["active"] is True and seen["kw"] == {"prompt_on_empty": False, "text": daemon.PULL_PHRASE}
+    assert not daemon._recording_active.is_set() and daemon._ignore_wake_until > 0.0
+
+
+def test_a_failing_pull_turn_still_stops_the_monitor_and_releases_the_flag(daemon, monkeypatch):
+    stopped = []
+
+    class Mon:
+        def __init__(self, pa): ...
+        def start(self): ...
+        def stop(self): stopped.append(True)
+
+    monkeypatch.setattr(daemon, "_BargeMonitor", Mon)
+    monkeypatch.setattr(daemon, "_do_single_turn", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        daemon._run_pull_turn(None)
+    assert stopped == [True] and not daemon._recording_active.is_set()
 
 
 def test_the_pull_phrase_is_a_pull_to_the_server():
