@@ -18,6 +18,7 @@ RINGING alarm, because a ringing alarm must always be stoppable by whoever is in
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import re
@@ -54,6 +55,20 @@ COLS = ("id", "user_id", "label", "time_hhmm", "repeat_rule", "once_date", "soun
 _SELECT = f"SELECT {', '.join(COLS)} FROM alarms"
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _DAYS = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
+
+
+# Listeners ``async (event, alarm)`` for what an alarm DID: rang | snoozed | dismissed | auto_stopped | missed | updated | deleted.
+# alarm_music registers one so the clock-radio music starts with a ring and always stops with it. A listener never breaks a transition.
+HOOKS: list = []
+HOOK_TIMEOUT_S = 5.0
+
+
+async def _emit(event: str, alarm: dict) -> None:
+    for hook in list(HOOKS):
+        try:
+            await asyncio.wait_for(hook(event, alarm), HOOK_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - includes a hook that hangs: the transition is already committed
+            logger.warning("alarm hook failed on %s (%s)", event, type(exc).__name__)
 
 
 class AlarmError(Exception):
@@ -352,6 +367,11 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
     stored_date, nxt = (alarm["once_date"], None)
     if on:
         stored_date, nxt = _schedule(hhmm, rule, once_date, now)
+    elif rule == "once" and "once_date" in ch:
+        try:  # a disabled one-off still keeps an explicitly supplied date (validated here; checked against the clock when turned on)
+            stored_date = date.fromisoformat(str(ch["once_date"])).isoformat()
+        except ValueError:
+            raise AlarmError("That is not a date I can use.") from None
     # The write is guarded by the version the edit was computed from (``updated_at``): a concurrent disable / dismiss / ring that
     # landed in between changes it, and this edit then refuses instead of writing back its stale copy of every column.
     async with _atomic(db):
@@ -365,6 +385,7 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
     if not won:
         raise AlarmError("That alarm just changed. Try again.", 409)
     await db.commit()
+    await _emit("updated", alarm)
     return await get_alarm(db, alarm["id"])  # type: ignore[return-value]
 
 
@@ -374,6 +395,8 @@ async def delete_alarm(db: Any, alarm_id: str) -> bool:
         if n:
             await db.execute("DELETE FROM alarm_events WHERE alarm_id = ?", (alarm_id,))
     await db.commit()
+    if n:
+        await _emit("deleted", {"id": alarm_id})
     return n > 0
 
 
@@ -402,6 +425,8 @@ async def forget_user(user_id: str) -> int:
         if any(m in str(exc) for m in ("does not exist", "no such table")) or ("not initialised" in str(exc) and not pool_ever_initialised()):
             return 0
         raise
+    for aid in ids:
+        await _emit("deleted", {"id": aid})  # music must not keep playing for an alarm that no longer exists
     return len(ids)
 
 
@@ -436,6 +461,7 @@ async def snooze(db: Any, alarm: dict, *, minutes: Optional[int] = None, now: Op
     await db.commit()
     if not won:  # the ring engine auto-stopped (or a dismiss landed) between the caller's read and this write
         raise AlarmError("That alarm is not ringing.", 409)
+    await _emit("snoozed", alarm)
     return await get_alarm(db, alarm["id"]) or alarm
 
 
@@ -448,6 +474,8 @@ async def dismiss(db: Any, alarm: dict, *, now: Optional[float] = None) -> dict:
         if won:
             await log_event(db, alarm["id"], "dismissed", "", now=now)
     await db.commit()
+    if won:
+        await _emit("dismissed", alarm)
     return await get_alarm(db, alarm["id"]) or alarm
 
 
@@ -511,6 +539,8 @@ async def tick(db: Any, now: Optional[float] = None) -> list[tuple[str, dict]]:
             out.append(("rang", {**a, "state": "ringing", "ring_started_at": now, "next_fire_at": nxt, "enabled": 1 if nxt else 0}))
     if out:
         await db.commit()
+        for event, alarm in out:
+            await _emit(event, alarm)
     return out
 
 

@@ -706,6 +706,46 @@ def test_voice_snooze_and_off_while_ringing(voice):
     assert "No alarm is ringing" in say("snooze")["spoken_summary"]
 
 
+def test_voice_snooze_keeps_its_target_and_refuses_exclusions(voice):
+    assert alarm_voice.parse("snooze my gym alarm", NIGHT).target_label == "gym"
+    assert alarm_voice.parse("snooze", NIGHT).target_label == ""
+    for t in ("snooze all alarms except gym", "snooze every other alarm", "snooze all alarms other than gym", "snooze all alarms but not gym"):
+        assert alarm_voice.parse(t, NIGHT) is None, t
+    say("set an alarm for 7 called gym")
+    say("set an alarm for 7 called yoga")
+    run(_tick(voice, SEVEN))
+    assert "couldn't find" in say("snooze my swim alarm")["spoken_summary"]
+    assert "Snoozed" in say("snooze my gym alarm")["spoken_summary"]
+
+    async def states():
+        db = await _open(voice)
+        try:
+            return {a["label"]: a["state"] for a in await alarms.list_alarms(db, alarms.Viewer(user_id=ANN, panel=False))}
+        finally:
+            await db.close()
+
+    st = run(states())
+    assert st["Gym"] == "snoozed" and st["Yoga"] == "ringing"
+
+
+def test_a_disabled_one_off_keeps_an_explicit_new_date(dbfile):
+    a = run(_mk(dbfile))
+
+    async def edit(ch):
+        db = await _open(dbfile)
+        try:
+            return await alarms.update_alarm(db, await alarms.get_alarm(db, a["id"]), ch, now=NIGHT)
+        finally:
+            await db.close()
+
+    off = run(edit({"enabled": False}))
+    assert not off["enabled"]
+    b = run(edit({"enabled": False, "once_date": "2026-12-25"}))
+    assert not b["enabled"] and b["once_date"] == "2026-12-25" and b["next_fire_at"] is None
+    with pytest.raises(alarms.AlarmError):
+        run(edit({"enabled": False, "once_date": "not-a-date"}))
+
+
 def test_voice_off_and_on_a_repeating_alarm(voice):
     say("set an alarm for 6:30 every day")
     assert "Turned off" in say("turn off my alarm")["spoken_summary"]
