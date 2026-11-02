@@ -190,3 +190,25 @@ def test_on_restart_hook_runs_before_one_moment(daemon, spoken, monkeypatch):
         assert order == []
     finally:
         srv.close()
+
+
+def test_daemon_stays_busy_through_the_whole_restart_recovery(daemon, monkeypatch):
+    """The announcement poller must not speak over "One moment." / backoff / retry."""
+    busy = []
+    monkeypatch.setattr(daemon, "_espeak_local", lambda text: busy.append(("say", daemon._daemon_busy())))
+    monkeypatch.setattr(daemon, "_ignore_wake_until", 0.0, raising=False)
+    monkeypatch.setattr(daemon.time, "sleep", lambda _s: busy.append(("sleep", daemon._daemon_busy())))
+    calls = []
+
+    def fake_post(path, payload, **kw):
+        calls.append(daemon._daemon_busy())
+        if len(calls) == 1:
+            return {"ok": False, "restartish": True, "error": "502"}
+        return {"ok": True}
+
+    monkeypatch.setattr(daemon, "_api_post", fake_post)
+    assert not daemon._daemon_busy()
+    daemon._post_turn_riding_restart({})
+    assert busy == [("say", True), ("sleep", True)]
+    assert calls[1] is True
+    assert not daemon._daemon_busy()           # cleared in the finally

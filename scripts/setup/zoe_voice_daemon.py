@@ -909,6 +909,9 @@ def _rn34_warmup() -> None:
 # ── Recording-active flag (B14) ──────────────────────────────────────────────
 # Set to True during the entire wake→record→STT cycle so ambient thread pauses.
 _recording_active = threading.Event()
+# Held for the whole restart-recovery path (local "one moment", backoff, retry) so the announcement poller
+# cannot speak over it even though _recording_active is cleared there.
+_restart_recovery_active = threading.Event()
 
 # ── Shared audio fan-out queues (A6) ─────────────────────────────────────────
 # Single PyAudio input stream; chunks distributed to consumers via queues.
@@ -3763,16 +3766,20 @@ def _post_turn_riding_restart(turn_payload: dict, on_restart=None) -> dict:
         return resp
     log.warning("voice/turn: zoe-data unreachable (%s) - local 'one moment', one retry in %.1fs",
                 resp.get("error"), VOICE_TURN_RESTART_RETRY_S)
-    _recording_active.clear()
-    if on_restart is not None:
-        # Let the caller silence/finish its "thinking" buffer phrase so the two never overlap.
-        try:
-            on_restart()
-        except Exception:
-            log.debug("on_restart hook failed", exc_info=True)
-    _espeak_local(_FALLBACK_ONE_MOMENT)
-    time.sleep(VOICE_TURN_RESTART_RETRY_S)
-    return _api_post("/api/voice/turn", turn_payload, restart_only=True)
+    _restart_recovery_active.set()
+    try:
+        _recording_active.clear()
+        if on_restart is not None:
+            # Let the caller silence/finish its "thinking" buffer phrase so the two never overlap.
+            try:
+                on_restart()
+            except Exception:
+                log.debug("on_restart hook failed", exc_info=True)
+        _espeak_local(_FALLBACK_ONE_MOMENT)
+        time.sleep(VOICE_TURN_RESTART_RETRY_S)
+        return _api_post("/api/voice/turn", turn_payload, restart_only=True)
+    finally:
+        _restart_recovery_active.clear()
 
 
 def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True,
@@ -4221,7 +4228,7 @@ def _daemon_busy() -> bool:
     """True while speaking an announce would overlap live voice activity:
     a wake→record→STT cycle, a reply's TTS playback, or the post-play cooldown
     (the tail of a turn, where follow-up windows may still open)."""
-    if _recording_active.is_set():
+    if _recording_active.is_set() or _restart_recovery_active.is_set():
         return True
     with _tts_process_lock:
         if _tts_process is not None and _tts_process.poll() is None:
