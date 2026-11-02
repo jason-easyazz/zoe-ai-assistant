@@ -35,16 +35,22 @@ _H = "|".join(_HOURS)
 _M = "|".join(sorted(_MINS, key=len, reverse=True))
 _WEEKDAY_NAMES = {"monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4, "friday": 5, "saturday": 6, "sunday": 7}
 
+_DAY_ALT = "|".join(_WEEKDAY_NAMES)
 _ALARM_WORD = re.compile(r"\balarms?\b|\bwake\s+(?:me|us)\b|\bsnooze\b|\bmore\s+minutes?\b")
 _LEAD = r"^\s*(?:(?:please|zoe|hey zoe|ok zoe|okay zoe|can you|could you|would you|will you|and)\s+)*"
 _WAKE = re.compile(r"\bwake\s+(?:me|us)(?:\s+up)?\b")
 _SNOOZE = re.compile(r"\bsnooze\b|^\s*(?:just\s+)?(\d{1,2}|" + "|".join(_HOURS) + r"|fifteen|twenty|thirty)\s+more\s+minutes?\s*$")
-_STOP = re.compile(r"\b(?:turn|switch|shut|stop|silence|dismiss|kill)(?:\s+(?:off|it))?\s+(?:the|my|this|that|our)?\s*alarm\b|"
+_STOP = re.compile(r"\b(?:(?:turn|switch|shut)\s+off|stop|silence|dismiss|kill)(?:\s+it)?\s+(?:the|my|this|that|our)?\s*alarm\b|"
                    r"\balarm\s+(?:off|stop)\b|\bstop\s+(?:the\s+)?alarm\b")
 _ON = re.compile(r"\b(?:turn|switch)\s+(?:on|back\s+on)\s+(?:the|my|our)?\s*(?:[\w:\s]*?)alarm\b|\b(?:turn|switch)\s+(?:the|my|our)\s+"
                  r"[\w:\s]*?alarm\s+(?:back\s+)?on\b|\bre-?enable\b.*\balarm\b")
-_OFF_WORD = re.compile(r"\b(?:turn|switch)\s+(?:off|the|my|our)\b[\w:\s]*?\balarm\b|\b(?:turn|switch)\s+off\b[\w:\s]*?\balarm\b|\bdisable\b"
+_OFF_WORD = re.compile(r"\b(?:turn|switch)\s+off\b[\w:\s]*?\balarm\b|\b(?:turn|switch)\s+(?:the|my|our)\b[\w:\s]*?\balarm\s+off\b|\bdisable\b"
                        r"[\w:\s]*?\balarm\b")
+_NOT_A_LABEL = frozenset({"my", "the", "all", "every", "other", "this", "that", "our", "next", "ringing", "current", "first", "last", "another",
+                          "alarm", "snoozed"})
+_SCOPE_QUALIFIER = re.compile(r"\b(?:other|others|except|but|besides|apart|rest|excluding|without|else)\b")
+_DATE_WORD = re.compile(r"\b(?:" + "|".join(_WEEKDAY_NAMES) + r"|january|february|march|april|june|july|august|september|october|november|december|"
+                        r"next\s+(?:week|month)|the\s+day\s+after|\d{1,2}(?:st|nd|rd|th))\b")
 _CANCEL = re.compile(r"\b(?:cancel|delete|remove|clear|get\s+rid\s+of)\b")
 _LIST = re.compile(r"\b(?:what|which|list|show|read|tell|when|do\s+i\s+have|how\s+many|any)\b")
 _SET = re.compile(r"\b(?:set|make|create|add|start|put|need|want|schedule|wake)\b")
@@ -76,8 +82,8 @@ def _spoken_times(text: str) -> str:
     t = re.sub(rf"\bquarter\s+past\s+({_H})\b", lambda m: f"{_HOURS[m.group(1)]}:15", t)
     t = re.sub(rf"\bquarter\s+(?:to|till)\s+({_H})\b", lambda m: f"{(_HOURS[m.group(1)] - 2) % 12 + 1}:45", t)
     t = re.sub(rf"\b({_H})\s+o'?\s?clock\b", lambda m: f"{_HOURS[m.group(1)]}:00", t)
-    t = re.sub(rf"\b({_H})\s+({_M})\b", lambda m: f"{_HOURS[m.group(1)]}:{_MINS[m.group(2)]:02d}", t)
-    t = re.sub(rf"\b({_H})\b(?=\s*(?:am|pm|a\.m\.|p\.m\.|in the|tomorrow|every|on\b|$))", lambda m: str(_HOURS[m.group(1)]), t)
+    t = re.sub(rf"\b({_H})\s+({_M})\b(?!\s+(?:{_H}|\d))", lambda m: f"{_HOURS[m.group(1)]}:{_MINS[m.group(2)]:02d}", t)
+    t = re.sub(rf"\b({_H})\b(?=\s*(?:am|pm|a\.m\.|p\.m\.|in the|tomorrow|every|on\b|with\b|using\b|playing\b|called\b|named\b|labell?ed\b|$))", lambda m: str(_HOURS[m.group(1)]), t)
     t = re.sub(r"\ba\.\s?m\.?", "am", t)
     return re.sub(r"\bp\.\s?m\.?", "pm", t)
 
@@ -145,6 +151,9 @@ def _repeat_of(text: str) -> str:
         return "weekends"
     days = sorted({n for w, n in _WEEKDAY_NAMES.items() if re.search(rf"\b(?:every|each|on)\s+(?:[a-z]+\s+(?:and\s+)?)*?{w}s?\b", text)
                    or re.search(rf"\bevery\s+{w}\b", text)})
+    for m in re.finditer(rf"\b({_DAY_ALT})s?\s*(?:through|thru|to|until|till|-)\s*({_DAY_ALT})s?\b", text):  # "tuesday through thursday": inclusive, wraps past sunday
+        a, b = _WEEKDAY_NAMES[m.group(1)], _WEEKDAY_NAMES[m.group(2)]
+        days = sorted(set(days) | {(a - 1 + i) % 7 + 1 for i in range((b - a) % 7 + 1)})
     if days and re.search(r"\b(?:every|each)\b", text):
         return "days:" + ",".join(str(d) for d in days)
     if re.search(r"\b(?:every\s*day|daily|each\s+day|every\s+morning|every\s+night)\b", text):
@@ -166,6 +175,14 @@ def _sound_of(text: str) -> tuple[str, str, str]:
     return "tone", "", ""
 
 
+def _target_cmd(action: str, t: str, now: float) -> AlarmCommand:
+    """off / on / cancel with the alarm it names: by its time ("my 7 am alarm") or by its label ("the gym alarm", "called gym")."""
+    tm = _find_time(_spoken_times(t))
+    lab = _LABEL.search(t) or re.search(r"\b(?:the|my)\s+([a-z0-9' ]{2,30}?)\s+alarm\b", t)
+    label = lab.group(1).strip() if lab and not tm and lab.group(1).strip() not in _NOT_A_LABEL else ""
+    return AlarmCommand(action, target_hhmm=resolve_clock(tm[0], tm[1], tm[2], prefer_morning=True, now=now)[0] if tm else "", target_label=label)
+
+
 def parse(text: str, now: Optional[float] = None) -> Optional[AlarmCommand]:
     now = time.time() if now is None else now
     raw = re.sub(r"[.!?,;:]+$", "", (text or "").lower().strip())
@@ -182,29 +199,32 @@ def parse(text: str, now: Optional[float] = None) -> Optional[AlarmCommand]:
         if mm:
             tok = mm.group(1)
             mins = int(tok) if tok.isdigit() else {**_HOURS, "fifteen": 15, "twenty": 20, "thirty": 30}[tok]
-        if command_shapes.asks_or_mentions(t.strip()):
+        if command_shapes.asks_or_mentions(t.strip(), destructive=True):
             return None
-        return AlarmCommand("snooze", snooze_minutes=mins)
+        if _SCOPE_QUALIFIER.search(t) or re.search(r"\bother\s+than\b|\bbut\s+not\b", t):
+            return None  # "snooze all alarms except gym": a scope this grammar cannot honour is never widened or inverted
+        lab = _LABEL.search(t) or re.search(r"\b(?:the|my)\s+([a-z0-9' ]{2,30}?)\s+alarm\b", t)
+        label = lab.group(1).strip() if lab and lab.group(1).strip() not in _NOT_A_LABEL else ""
+        return AlarmCommand("snooze", snooze_minutes=mins, target_label=label)
+    # A question or a negation about a CHANGE ("don't turn off the alarm", "can I turn off the alarm", "what if I cancel it") is never a
+    # write, and a list word ("what") does not turn it into one.
+    writes = bool(_STOP.search(t) or _ON.search(t) or _OFF_WORD.search(t) or _CANCEL.search(t))
+    if writes and command_shapes.asks_or_mentions(t.strip(), destructive=True):
+        return None
+    if writes and _SCOPE_QUALIFIER.search(t):
+        return None  # "turn off all alarms except gym" / "every other alarm": a scope this grammar cannot honour is never widened or inverted
     if command_shapes.asks_or_mentions(t.strip()) and not _LIST.search(t):
         return None
     if _STOP.search(t) and not _ON.search(t):
-        tm = _find_time(_spoken_times(t))
-        return AlarmCommand("off", target_hhmm=resolve_clock(tm[0], tm[1], tm[2], prefer_morning=True, now=now)[0] if tm else "")
+        return _target_cmd("off", t, now)
     if _ON.search(t):
-        tm = _find_time(_spoken_times(t))
-        return AlarmCommand("on", target_hhmm=resolve_clock(tm[0], tm[1], tm[2], prefer_morning=True, now=now)[0] if tm else "")
+        return _target_cmd("on", t, now)
     if _OFF_WORD.search(t):
-        tm = _find_time(_spoken_times(t))
-        return AlarmCommand("off", target_hhmm=resolve_clock(tm[0], tm[1], tm[2], prefer_morning=True, now=now)[0] if tm else "")
+        return _target_cmd("off", t, now)
     if _CANCEL.search(t):
-        if command_shapes.asks_or_mentions(t.strip(), destructive=True):
-            return None
-        tm = _find_time(_spoken_times(t))
-        lab = _LABEL.search(t) or re.search(r"\b(?:the|my)\s+([a-z0-9' ]{2,30}?)\s+alarm\b", t)
-        label = lab.group(1).strip() if lab and not tm and lab.group(1).strip() not in ("my", "the", "all", "every", "other") else ""
-        return AlarmCommand("cancel", all_alarms=bool(re.search(r"\b(?:all|every|each)\b", t)) and not tm and not label,
-                            target_hhmm=resolve_clock(tm[0], tm[1], tm[2], prefer_morning=True, now=now)[0] if tm else "",
-                            target_label=label)
+        cmd = _target_cmd("cancel", t, now)
+        return AlarmCommand("cancel", all_alarms=bool(re.search(r"\b(?:all|every|each)\b", t)) and not cmd.target_hhmm and not cmd.target_label,
+                            target_hhmm=cmd.target_hhmm, target_label=cmd.target_label)
     sp = _spoken_times(t)
     found = _find_time(sp)
     # A WRITE needs a command shape, not just a time and a cue word: "set (me) an alarm ...", "wake me ...", "I want/need an alarm at ...",
@@ -217,6 +237,8 @@ def parse(text: str, now: Optional[float] = None) -> Optional[AlarmCommand]:
         h, mi, mer = found
         wake = bool(_WAKE.search(t))
         tomorrow = bool(re.search(r"\btomorrow\b", t))
+        if _repeat_of(t) == "once" and _DATE_WORD.search(t):
+            return None  # "7 next Monday" / "on Friday" / "on the 5th": a date this grammar cannot honour is refused, not set for the next 7:00
         hhmm, fuzzy = resolve_clock(h, mi, mer, prefer_morning=wake or tomorrow, now=now)
         kind, sid, sname = _sound_of(sp)
         lab = _LABEL.search(t)
@@ -248,12 +270,13 @@ def _viewer(user_id: str) -> Optional[alarms.Viewer]:
     return alarms.Viewer(user_id="", panel=True) if panel_principal.in_panel_turn() else None
 
 
-def _which(rows: list[dict], cmd: AlarmCommand) -> list[dict]:
+def _which(rows: list[dict], cmd: AlarmCommand, v: Optional[alarms.Viewer] = None) -> list[dict]:
     out = rows
     if cmd.target_hhmm:
         out = [a for a in out if a["time_hhmm"] == cmd.target_hhmm]
     if cmd.target_label:
-        out = [a for a in out if cmd.target_label in a["label"].lower()]
+        # A label is private to its owner: the panel can match household labels only, so a spoken name is not a way to probe a member's.
+        out = [a for a in out if cmd.target_label in a["label"].lower() and (v is None or a["user_id"] in (alarms.HOUSEHOLD, v.user_id))]
     return out
 
 
@@ -303,16 +326,30 @@ async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
         return _result(cmd, f"You have {len(live)} alarms. The next is {alarms.when_phrase(nxt['next_fire_at'], now)}.")
     if cmd.action == "snooze":
         live = [a for a in await alarms.ringing(db) if alarms.can_silence(a, v)]
+        if cmd.target_label:
+            live = _which(live, cmd, v)
+            if not live:
+                return _result(cmd, "I couldn't find that alarm ringing.")
         if not live:
             return _result(cmd, "No alarm is ringing right now.")
-        done = [await alarms.snooze(db, a, minutes=cmd.snooze_minutes or None, now=now) for a in live if a["snooze_count"] < alarms.MAX_SNOOZES]
+        done = []
+        for a in live:
+            if a["snooze_count"] >= alarms.MAX_SNOOZES:
+                continue
+            try:
+                done.append(await alarms.snooze(db, a, minutes=cmd.snooze_minutes or None, now=now))
+            except alarms.AlarmError:
+                continue  # it stopped ringing between the read and the write: nothing to snooze for that one
+        if not done and live:
+            return _result(cmd, "No alarm is ringing right now.")
         if not done:
             return _result(cmd, "That alarm has been snoozed as much as it can be. Say turn off the alarm.", "Snoozed out")
         mins = round((done[0]["snooze_until"] - now) / 60)
         return _result(cmd, f"Snoozed for {mins} minutes.", "Snoozed")
     if cmd.action == "off":
-        live = [a for a in await alarms.ringing(db) if alarms.can_silence(a, v)]
-        if live and not cmd.target_hhmm and not cmd.target_label:
+        # Ending a ring (or a snooze) comes first and honours the named alarm: "turn off my 7 am alarm" while it rings dismisses THAT one.
+        live = _which([a for a in await alarms.active(db) if alarms.can_silence(a, v)], cmd, v)
+        if live:
             for a in live:
                 await alarms.dismiss(db, a, now=now)
             return _result(cmd, "Alarm off.", "Alarm off")
@@ -321,7 +358,7 @@ async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
         for a in editable:
             await alarms.delete_alarm(db, a["id"])
         return _result(cmd, f"Cancelled {len(editable)} alarm{'s' if len(editable) != 1 else ''}." if editable else "You have no alarms to cancel.")
-    hits = _which(editable, cmd)
+    hits = _which(editable, cmd, v)
     if cmd.action == "off":
         hits = [a for a in hits if a["enabled"]]
     elif cmd.action == "on":
