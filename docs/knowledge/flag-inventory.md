@@ -26,10 +26,10 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 799 prod flags; 209 read through `typed_env`.
+- 800 prod flags; 210 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 254 non-`ZOE_` env names read by prod code (table below).
+- 255 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 313 prod flags with no owner doc yet.
 - 1 registered flags with no reader in the scanned sources.
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-799 flags; 749 not documented in `.env.example`.
+800 flags; 750 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -71,6 +71,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_AGENT_MAX_TOOL_ITERS` | int | `5` | - | - | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_AGENT_TOOL_TIMEOUT` | float | `10.0` | - | - | `'10.0'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_AGENT_VOICE_LLM_TIMEOUT` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_ALARMS` | bool | `False` | - | `docs/architecture/alarms.md` | `'off'` | yes | NO | `services/zoe-data/alarms.py` |
 | `ZOE_ALLOWED_WS_ORIGINS` | list | `()` | - | `docs/knowledge/incident-runbook.md` | `-` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_ANNOUNCE_POLL_ENABLED` | bool | `True` | - | `scripts/AGENTS.md` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_ANNOUNCE_POLL_S` | float | `5.0` | - | `docs/knowledge/mac-virtual-panel.md` | `'5.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -909,7 +910,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-254 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+255 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -1146,6 +1147,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `VOICE_API_RETRY_BACKOFF_S` | `'0.35'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VOICE_IGNORE_TRANSCRIPTS` | `'yes,yeah,yep,yup,no,ok,okay,thank you,thanks,hi,hello,hmm,um'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VOICE_ROUTE_MODE` | `'direct'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `VOICE_TURN_RESTART_RETRY_S` | `'4.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKEWORD_DEBUG` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKEWORD_FRAMEWORK` | `''` | no | NO | `scripts/setup/mac_panel/mac_backend.py` |
 | `WAKEWORD_TEST_CLIP` | `''` | no | NO | `scripts/setup/mac_panel/preflight.py` |

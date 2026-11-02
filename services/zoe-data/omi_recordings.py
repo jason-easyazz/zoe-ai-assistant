@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 import live_voice_gate
+import voice_activity
 import user_erase_gate as erase_gate
 from typed_env import env_bool, env_int, env_str
 
@@ -189,17 +190,21 @@ def mem_available_mb() -> Optional[float]:
 
 
 def last_voice_age_s(now_mono: Optional[float] = None) -> Optional[float]:
-    """Seconds since the newest panel voice turn, or None when there has been none. Reads the voice router's session table WITHOUT
-    importing it."""
+    """Seconds since the newest voice turn, or None when there has been none. Newest of the explicit activity stamp and the
+    voice router's session table (read WITHOUT importing it)."""
+    t = time.monotonic() if now_mono is None else now_mono
+    ages: list[float] = []
+    stamped = voice_activity.last_activity_age_s(t)
+    if stamped is not None:
+        ages.append(stamped)
     mod = sys.modules.get("routers.voice_tts")
     sessions = getattr(mod, "_VOICE_SESSIONS", None) if mod else None
-    if not sessions:
-        return None
-    t = time.monotonic() if now_mono is None else now_mono
-    try:
-        return min(t - float(e.get("last_at", -1e9)) for e in list(sessions.values()))
-    except Exception:  # noqa: BLE001
-        return None
+    if sessions:
+        try:
+            ages.append(min(t - float(e.get("last_at", -1e9)) for e in list(sessions.values())))
+        except Exception:  # noqa: BLE001
+            pass
+    return min(ages) if ages else None
 
 
 def voice_busy(now_mono: Optional[float] = None) -> bool:

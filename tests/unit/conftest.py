@@ -132,6 +132,20 @@ def _verbatim_and_night_stores_in_process():
 
 
 @pytest.fixture(autouse=True)
+def _db_pool_never_initialised(monkeypatch):
+    """``db_pool.pool_ever_initialised()`` is process-global and sticky: a unit test that really builds a pool must not leave it True,
+    or every later forget test (the alarm / pendant erase fails CLOSED on a lost pool) reads as a fault. Each test starts as a process
+    with no database; one that wants the other state sets it (mirrors services/zoe-data/tests/conftest.py)."""
+    try:
+        import db_pool
+    except Exception:  # noqa: BLE001 - a slim lane without asyncpg has no pool to speak of
+        yield
+        return
+    monkeypatch.setattr(db_pool, "_ever_initialised", False, raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _harness_quiet_hours_not_wall_clock(monkeypatch):
     """Harness quiet hours (``scripts/maintenance/harness_quiet.py``, #2145) refuse the probe, the bar, the day-sim
     and the person bench 07:00-22:00 LOCAL, and ssh to the panel to yield to it. A unit test that drives one of
