@@ -416,6 +416,7 @@
     </style>
 </head>
 <body class="people-page">
+<script>function zoeEsc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}</script>
 
     <div class="page-wrap">
         <header class="page-header">
@@ -1010,7 +1011,7 @@
                 return `<div class="activity-item">
                     <div class="activity-dot"></div>
                     <div>
-                        <div class="activity-desc">${(a.description||'').replace(/</g,'&lt;')}</div>
+                        <div class="activity-desc">${zoeEsc(a.description)}</div>
                         <div class="activity-meta">${d}${a.source ? ' · ' + a.source : ''}</div>
                     </div>
                 </div>`;
@@ -1061,10 +1062,10 @@
                         const sym = TIER_SYMBOLS[r.circle] || '○';
                         const stubBadge = r.is_partial ? ' <small style="opacity:0.5">(stub)</small>' : '';
                         return `<span style="display:inline-flex;align-items:center;gap:6px;background:var(--card-soft);border:1px solid var(--border);border-radius:12px;padding:6px 12px;font-size:13px;cursor:pointer"
-                                    onclick="openDetail('${r.person_id}')">
+                                    onclick="openDetail('${zoeEsc(r.person_id)}')">
                                     <span style="color:var(--primary)">${sym}</span>
-                                    <b>${r.name.replace(/</g,'&lt;')}${stubBadge}</b>
-                                    <span style="color:var(--text-mute)">${r.label}</span>
+                                    <b>${zoeEsc(r.name)}${stubBadge}</b>
+                                    <span style="color:var(--text-mute)">${zoeEsc(r.label)}</span>
                                 </span>`;
                     }).join('')}
                     </div>
@@ -1078,7 +1079,7 @@
         }
 
         const howMet = p.how_we_met
-            ? `<div class="section-title">How We Met</div><p style="font-size:14px;color:var(--text)">${p.how_we_met.replace(/</g,'&lt;')}</p>` : '';
+            ? `<div class="section-title">How We Met</div><p style="font-size:14px;color:var(--text)">${zoeEsc(p.how_we_met)}</p>` : '';
 
         el.innerHTML = `
             ${(phone||email) ? `<div class="contact-actions">${phone}${email}</div>` : ''}
@@ -1090,7 +1091,7 @@
                 <span>Score: ${Math.round(hs*100)}%</span>
                 <span>${TIER_SYMBOLS[tier]||'○'} ${p._context||'personal'}</span>
             </div>${hBar}
-            ${p.notes ? `<div class="section-title">Notes</div><p style="font-size:14px;color:var(--text)">${p.notes.replace(/</g,'&lt;')}</p>` : ''}
+            ${p.notes ? `<div class="section-title">Notes</div><p style="font-size:14px;color:var(--text)">${zoeEsc(p.notes)}</p>` : ''}
         `;
     }
 
@@ -1119,7 +1120,7 @@
         sheet.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);backdrop-filter:blur(8px);z-index:9000;display:flex;align-items:flex-end;justify-content:center';
         sheet.innerHTML = `
             <div style="background:var(--card);width:100%;max-width:600px;border-radius:20px 20px 0 0;padding:20px;display:flex;flex-direction:column;gap:12px">
-                <div style="font-size:18px;font-weight:700">Add connection for ${name.replace(/</g,'&lt;')}</div>
+                <div style="font-size:18px;font-weight:700">Add connection for ${zoeEsc(name)}</div>
                 <div class="field"><div class="field-label">Their name</div>
                     <input id="relOtherName" class="field-input" placeholder="Name or search existing contact" />
                 </div>
@@ -1174,7 +1175,7 @@
             if (dates.length) {
                 html += '<div class="section-title">Important Dates</div>';
                 html += dates.map(d => `<div class="date-row">
-                    <span>${(d.label||'').replace(/</g,'&lt;')}</span>
+                    <span>${zoeEsc(d.label)}</span>
                     <span style="color:var(--text-mute)">${[d.month,d.day].filter(Boolean).join('/')}</span>
                 </div>`).join('');
             }
@@ -1183,7 +1184,7 @@
                 html += gifts.map(g => {
                     const chip = { idea:'chip-idea', purchased:'chip-purchased', given:'chip-given' }[g.status] || 'chip-idea';
                     return `<div class="gift-row">
-                        <span>${(g.description||'').replace(/</g,'&lt;')}</span>
+                        <span>${zoeEsc(g.description)}</span>
                         <span class="gift-chip ${chip}">${g.status||'idea'}</span>
                     </div>`;
                 }).join('');
@@ -1220,7 +1221,7 @@
                 return;
             }
             el.innerHTML = items.map(it => `<div class="bucket-row">
-                <span class="${it.done ? 'bucket-done' : ''}">${(it.description||'').replace(/</g,'&lt;')}</span>
+                <span class="${it.done ? 'bucket-done' : ''}">${zoeEsc(it.description)}</span>
                 ${!it.done ? `<button onclick="markBucketDone('${it.id}')" style="background:none;border:none;cursor:pointer;font-size:18px">✓</button>` : '<span style="opacity:0.4;font-size:12px">done</span>'}
             </div>`).join('');
         } catch(e) {
