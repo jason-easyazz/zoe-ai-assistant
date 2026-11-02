@@ -43,7 +43,6 @@ from routers.stubs import router as stubs_router
 from routers.push import router as push_router
 from routers.proactive import router as proactive_router
 from routers.system import (
-    start_openclaw_background_tasks,
     start_memory_digest_background,
     start_memory_consolidation_background,
     _agent_card_router,
@@ -59,7 +58,6 @@ logger = logging.getLogger(__name__)
 
 # Legacy variable kept for backward compatibility during transition
 _REQUEST_ID_CTX_VAR = None
-_openclaw_bg_task = None
 _digest_bg_task = None
 _consolidation_bg_task = None
 _runtime_health_task = None
@@ -1108,7 +1106,7 @@ async def _run_router_selftrain() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task, _loop_lag_task
+    global _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task, _loop_lag_task
 
     # First thing at startup: without this the root logger has no handler, so
     # every logger.info() in the service is discarded and WARNING+ falls through
@@ -1191,7 +1189,6 @@ async def lifespan(app: FastAPI):
         logger.warning("memory embedder warmup failed (non-fatal): %s", _exc)
     await _run_memory_capture_startup_probe()
     asyncio.create_task(_memory_capture_retry_task(), name="memory_capture_retry")
-    _openclaw_bg_task = start_openclaw_background_tasks()
     _digest_bg_task = start_memory_digest_background()
     _consolidation_bg_task = start_memory_consolidation_background()
     # Idle-triggered "live → idle → store" consolidation (self-gates on
@@ -2103,7 +2100,7 @@ async def lifespan(app: FastAPI):
         logger.warning("zoe-core worker shutdown timed out (non-fatal)")
     except Exception:
         logger.warning("zoe-core worker shutdown failed (non-fatal)", exc_info=True)
-    for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task,
+    for task in (_digest_bg_task, _zoe_update_bg_task,
                  _consolidation_bg_task, _runtime_health_task, _loop_lag_task):
         if task and not task.done():
             task.cancel()
