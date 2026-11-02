@@ -40,6 +40,7 @@ _POLL_S = 0.5
 _active = 0                 # brain turns in flight
 _last_activity = 0.0        # monotonic stamp of the last turn start / end (0 = never)
 _lock: Optional[asyncio.Lock] = None
+_keeper_activity = 0.0      # monotonic stamp of the last idle-time keeper warm (holds helpers off, NOT the conversation's timer)
 _waiters = 0                # background calls waiting on (or holding) the gate
 _flush = False              # a waiter hit max_defer: let the whole backlog through, back to back
 STATS = {"deferred": 0, "released_quiet": 0, "released_max": 0, "immediate": 0}
@@ -72,9 +73,10 @@ def max_defer_s() -> float:
 
 def reset() -> None:
     """Test hook."""
-    global _active, _last_activity, _lock, _waiters, _flush
+    global _active, _last_activity, _lock, _waiters, _flush, _keeper_activity
     _active = 0
     _last_activity = 0.0
+    _keeper_activity = 0.0
     _lock = None
     _waiters = 0
     _flush = False
@@ -82,18 +84,25 @@ def reset() -> None:
         STATS[k] = 0
 
 
-def turn_started() -> None:
-    """A brain turn is about to fill the slot. Always paired with ``turn_finished`` (try/finally)."""
+def turn_started(keeper: bool = False) -> None:
+    """A brain turn is about to fill the slot. Always paired with ``turn_finished`` (try/finally).
+
+    ``keeper=True`` (the idle-time prefix keeper's throwaway warm, no person speaking) is in flight like any turn but does
+    not stamp the conversation's quiet timer, so another member's wake is not told the slot is 'hot'."""
     global _active, _last_activity, _starts
     _active += 1
     _starts += 1
-    _last_activity = _clock()
+    if not keeper:
+        _last_activity = _clock()
 
 
-def turn_finished() -> None:
-    global _active, _last_activity
+def turn_finished(keeper: bool = False) -> None:
+    global _active, _last_activity, _keeper_activity
     _active = max(0, _active - 1)
-    _last_activity = _clock()
+    if keeper:
+        _keeper_activity = _clock()   # keep the post-turn helpers off the prefix just loaded, without 'hot' for wakes
+    else:
+        _last_activity = _clock()
 
 
 _starts = 0                 # monotonic count of turn_started() calls (never reset): "did a turn begin since X"
@@ -103,6 +112,11 @@ def starts() -> int:
     """How many brain turns have started in this process (monotonic). Compare two readings to learn whether any turn
     began in between, even one that has already finished."""
     return _starts
+
+
+def waiters() -> int:
+    """Background calls waiting on (or holding) the gate right now. A batch is still draining while this is > 0."""
+    return _waiters
 
 
 def active_turns() -> int:
@@ -117,6 +131,15 @@ def is_hot(now: Optional[float] = None) -> bool:
     if _last_activity <= 0.0:
         return False
     return ((now if now is not None else _clock()) - _last_activity) < quiet_s()
+
+
+def _helpers_wait(now: Optional[float] = None) -> bool:
+    """Background helpers hold off while the conversation is hot OR a keeper warm finished < ``quiet_s`` ago."""
+    if is_hot(now):
+        return True
+    if _keeper_activity <= 0.0:
+        return False
+    return ((now if now is not None else _clock()) - _keeper_activity) < quiet_s()
 
 
 @asynccontextmanager
@@ -140,7 +163,7 @@ async def background_slot(label: str = "") -> AsyncIterator[None]:
     try:
         async with _lock:
             while True:
-                if _flush or not is_hot():
+                if _flush or not _helpers_wait():
                     released = "released_quiet" if deferred else "immediate"
                     break
                 if _clock() - waited_since >= max_defer_s():

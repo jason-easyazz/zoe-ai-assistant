@@ -235,6 +235,20 @@ def get(panel_id: str, *, now: "float | None" = None) -> str:
         return ""
 
 
+def latest(*, now: "float | None" = None) -> str:
+    """The most recently noted likely speaker across every panel, or '' (none, or all older than the age cap). Same
+    cache-shaping-hint status as ``get``; used by the prefix keeper to choose whose envelope to keep resident."""
+    try:
+        _ensure_loaded()
+        t = time.time() if now is None else float(now)
+        with _lock:
+            ents = list(_mem.values())
+        live = [e for e in ents if 0 <= t - e[1] <= max_age_s() or 0 > t - e[1] >= -300]
+        return max(live, key=lambda e: e[1])[0] if live else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def forget_user(member_id: str, *, sync: bool = True) -> int:
     """Remove ``member_id`` from every panel's entry, in memory and in the file. Returns entries removed. Never raises."""
     try:
