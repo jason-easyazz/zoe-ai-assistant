@@ -12,7 +12,7 @@ set -euo pipefail
 
 LIVE="${ZOE_LIVE_TREE:-/home/zoe/assistant}"
 SERVICE="${ZOE_SERVICE:-zoe-data}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"   # :-$0: under `bash -c` (the tests source the prelude) BASH_SOURCE is empty and set -u aborts on newer bash
 
 require_clean_tree() {
     local phase="$1"
