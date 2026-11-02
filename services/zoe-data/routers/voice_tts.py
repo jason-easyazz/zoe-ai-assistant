@@ -3098,7 +3098,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
     Request: { \"audio_base64\": \"...\", \"panel_id\": \"...\" }
     """
     try:
-        from omi_recordings import note_voice_activity as _note_voice_activity
+        from voice_activity import note_voice_activity as _note_voice_activity
         _note_voice_activity()
     except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
         pass
@@ -3498,7 +3498,7 @@ async def voice_command(
     with the reply text and synthesised audio (base64) so the Pi can play it back.
     """
     try:
-        from omi_recordings import note_voice_activity as _note_voice_activity
+        from voice_activity import note_voice_activity as _note_voice_activity
         _note_voice_activity()
     except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
         pass

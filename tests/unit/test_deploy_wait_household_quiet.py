@@ -23,7 +23,7 @@ DEPLOY_YML = REPO / ".github" / "workflows" / "deploy.yml"
 DEPLOY_LIVE = REPO / "scripts" / "maintenance" / "deploy_live.sh"
 
 
-def _run(tmp_path, ages, *, env_extra=None, health_missing=False, garbage=False):
+def _run(tmp_path, ages, *, env_extra=None, health_missing=False, garbage=False, sleep_extra=""):
     """ages: the signal at poll 0, 1, ...(last repeats; each shim sleep advances one poll)."""
     health = tmp_path / "health.json"
     ctr = tmp_path / "ctr"
@@ -38,6 +38,7 @@ def _run(tmp_path, ages, *, env_extra=None, health_missing=False, garbage=False)
     (shim / "sleep").write_text(
         "#!/bin/bash\n"
         f"echo \"$1\" >> {sleeps}\n"
+        f"{sleep_extra}\n"
         f"[ -e {tmp_path}/noadvance ] && exit 0\n"
         f"python3 - <<'PY'\n"
         "import json\n"
@@ -61,6 +62,7 @@ def _run(tmp_path, ages, *, env_extra=None, health_missing=False, garbage=False)
         "ZOE_DEPLOY_HEALTH_URL": f"file://{health}",
         "ZOE_NIGHT_BUSY_SCRIPT": str(tmp_path / "no-such-night-busy.sh"),
         "ZOE_DEPLOY_QUIET_POLL_S": "30",
+        "ZOE_DEPLOY_PROBE_LOCKS": str(tmp_path / "no-such.lock"),  # never the real /tmp locks
     }
     env.update(env_extra or {})
     p = subprocess.run(["bash", str(SCRIPT)], env=env, cwd=REPO, capture_output=True, text=True, timeout=60)
@@ -260,3 +262,65 @@ def test_deploy_yml_step_sits_right_before_the_zoe_data_restart_and_uses_the_scr
 def test_deploy_live_calls_it_before_taking_the_deploy_lock():
     text = DEPLOY_LIVE.read_text()
     assert text.index("wait_household_quiet.sh") < text.index('exec 9>"$DEPLOY_LOCK"')
+
+
+# --- a voice replay probe in flight (flock files held) ---------------------------------------------------
+
+
+def _hold(path, release_flag):
+    """Hold an flock on ``path`` until ``release_flag`` disappears (what a probe / landing does)."""
+    import time
+    Path(release_flag).write_text("")
+    proc = subprocess.Popen(
+        ["flock", str(path), "bash", "-c", f'while [ -e {release_flag} ]; do /bin/sleep 0.05; done'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(100):  # wait until the lock is really held
+        if subprocess.run(["flock", "-n", str(path), "true"]).returncode != 0:
+            return proc
+        time.sleep(0.05)
+    proc.kill()
+    raise AssertionError("lock never became held")
+
+
+def test_held_probe_lock_is_waited_on_then_released(tmp_path):
+    lock = tmp_path / "harness.lock"
+    lock.write_text("")
+    flag = tmp_path / "hold"
+    holder = _hold(lock, flag)
+    try:
+        # the 2nd sleep ends the "probe": drop the flag and let the holder exit
+        extra = f'n=$(wc -l < {tmp_path}/sleeps); [ "$n" -ge 2 ] && rm -f {flag} && /bin/sleep 0.4; true'
+        p, n = _run(tmp_path, [4000], sleep_extra=extra, env_extra={"ZOE_DEPLOY_PROBE_LOCKS": str(lock)})
+    finally:
+        flag.unlink(missing_ok=True)
+        holder.wait(timeout=10)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert n == 2, p.stdout
+    assert f"voice replay probe in flight ({lock} is held)" in p.stdout
+    assert "a voice probe finished" in p.stdout and "quiet, deploying" in p.stdout
+
+
+def test_stuck_probe_lock_fails_open_with_a_log_line(tmp_path):
+    lock = tmp_path / "brain.lock"
+    lock.write_text("")
+    flag = tmp_path / "hold"
+    holder = _hold(lock, flag)
+    try:
+        p, n = _run(tmp_path, [4000], env_extra={"ZOE_DEPLOY_PROBE_LOCKS": f"{tmp_path}/absent.lock {lock}",
+                                                 "ZOE_DEPLOY_PROBE_WAIT_MAX_MIN": "2"})
+    finally:
+        flag.unlink(missing_ok=True)
+        holder.wait(timeout=10)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert n == 4, "2 min of 30 s polls"
+    assert "failing open, deploying anyway" in p.stdout
+
+
+def test_free_or_missing_probe_locks_do_not_wait_and_are_never_created(tmp_path):
+    free = tmp_path / "free.lock"
+    free.write_text("")
+    missing = tmp_path / "missing.lock"
+    p, n = _run(tmp_path, [4000], env_extra={"ZOE_DEPLOY_PROBE_LOCKS": f"{free} {missing}"})
+    assert p.returncode == 0 and n == 0, p.stdout
+    assert not missing.exists(), "the check must not create a lock file as a side effect"
+    assert "voice replay probe" not in p.stdout

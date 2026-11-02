@@ -389,11 +389,12 @@ def test_stt_disabled_uses_typed_env_per_call(monkeypatch, raw, expected):
 def test_voice_activity_stamp_counts_without_a_session_table_entry(monkeypatch):
     """LiveKit turns and explicit-session_id commands never touch _VOICE_SESSIONS; the stamp covers them."""
     import omi_recordings as omi
+    import voice_activity as va
 
-    monkeypatch.setattr(omi, "_LAST_VOICE_ACTIVITY_MONO", None)
+    monkeypatch.setattr(va, "_LAST_VOICE_ACTIVITY_MONO", None)
     monkeypatch.delitem(sys.modules, "routers.voice_tts", raising=False)
     assert omi.last_voice_age_s(1000.0) is None  # control: nothing recorded -> none
-    omi.note_voice_activity()
+    va.note_voice_activity()
     age = omi.last_voice_age_s()
     assert age is not None and 0.0 <= age < 5.0
     assert omi.voice_busy()
@@ -406,3 +407,18 @@ def test_every_voice_entry_point_stamps_activity():
     assert "note_voice_activity" in inspect.getsource(voice_tts.voice_command)
     assert "note_voice_activity" in inspect.getsource(voice_tts.voice_transcribe)
     assert inspect.getsource(voice_livekit).count("note_voice_activity") >= 3
+
+
+@pytest.mark.parametrize("cls,stamps", [("household", True), ("probe", False), ("harness", False), ("ci", False)])
+def test_only_household_traffic_stamps_voice_activity(monkeypatch, cls, stamps):
+    """A replay probe / harness / CI turn must not look like somebody talking (it would hold the deploy wait)."""
+    import traffic_class
+    import voice_activity as va
+
+    monkeypatch.setattr(va, "_LAST_VOICE_ACTIVITY_MONO", None)
+    token = traffic_class.bind(cls)
+    try:
+        va.note_voice_activity()
+    finally:
+        traffic_class.reset(token)
+    assert (va.last_activity_age_s() is not None) is stamps

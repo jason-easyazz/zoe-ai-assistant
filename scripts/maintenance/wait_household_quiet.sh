@@ -19,8 +19,12 @@
 #   * the ONE fail-closed case is the night window: while `scripts/landing/night_busy.sh deploy`
 #     says busy, never proceed (exit 1 after ZOE_DEPLOY_NIGHT_WAIT_MAX_MIN, default 90 - the
 #     window ends by ~03:30 at the latest). Nothing has been restarted, a re-run is safe.
+#   * a voice replay probe / landing in flight (ZOE_DEPLOY_PROBE_LOCKS, default the voice-harness and
+#     brain-window flock files, either currently HELD) -> wait too: restarting zoe-data mid-probe
+#     fails the probe. Never creates or holds a lock (an absent file is "not held"). Bounded by
+#     ZOE_DEPLOY_PROBE_WAIT_MAX_MIN (default 45, total across the run), then FAILS OPEN, logged.
 # Env: ZOE_DEPLOY_QUIET_WAIT=0 disables. ZOE_DEPLOY_QUIET_POLL_S (30). ZOE_PORT (8000).
-# Test hooks: ZOE_DEPLOY_HEALTH_URL (any curl URL, file:// ok), ZOE_NIGHT_BUSY_SCRIPT.
+# Test hooks: ZOE_DEPLOY_HEALTH_URL (any curl URL, file:// ok), ZOE_NIGHT_BUSY_SCRIPT, ZOE_DEPLOY_PROBE_LOCKS (space-separated lock paths).
 # Elapsed time is counted in poll intervals (not the clock) so a `sleep` shim makes the
 # bounds testable.
 set -uo pipefail
@@ -31,6 +35,8 @@ ENABLED="${ZOE_DEPLOY_QUIET_WAIT:-1}"
 QUIET_S=$(( $(num 10 "${ZOE_DEPLOY_QUIET_MIN:-10}") * 60 ))
 MAX_S=$(( $(num 60 "${ZOE_DEPLOY_QUIET_MAX_WAIT_MIN:-60}") * 60 ))
 NIGHT_MAX_S=$(( $(num 90 "${ZOE_DEPLOY_NIGHT_WAIT_MAX_MIN:-90}") * 60 ))
+PROBE_MAX_S=$(( $(num 45 "${ZOE_DEPLOY_PROBE_WAIT_MAX_MIN:-45}") * 60 ))
+PROBE_LOCKS="${ZOE_DEPLOY_PROBE_LOCKS:-/tmp/zoe-voice-harness.lock /tmp/zoe-brain-window.lock}"
 POLL_S="$(num 30 "${ZOE_DEPLOY_QUIET_POLL_S:-30}")"; [ "$POLL_S" -ge 1 ] || POLL_S=1
 UNREADABLE_S="$(num 60 "${ZOE_DEPLOY_QUIET_UNREADABLE_S:-60}")"
 URL="${ZOE_DEPLOY_HEALTH_URL:-http://127.0.0.1:${ZOE_PORT:-8000}/health}"
@@ -67,12 +73,45 @@ night_gate() {
     sleep "$POLL_S"; nw=$(( nw + POLL_S ))
   done
 }
+# --- a voice replay probe in flight: never restart zoe-data under it ----------------------
+# Prints the first HELD lock path. `flock -n` would CREATE a missing file, so only an existing,
+# readable file is tested; it is opened and released at once (never held).
+probe_held() {
+  local l
+  for l in $PROBE_LOCKS; do
+    [ -f "$l" ] && [ -r "$l" ] || continue
+    if ! flock -n "$l" true 2>/dev/null; then echo "$l"; return 0; fi
+  done
+  return 1
+}
+PROBE_WAITED_S=0
+PROBE_WAITED=0
+# Waits while a probe holds a lock, within the total PROBE_MAX_S budget (then fails open, logged).
+probe_gate() {
+  local held
+  PROBE_WAITED=0
+  while held="$(probe_held)"; do
+    if [ "$PROBE_WAITED_S" -ge "$PROBE_MAX_S" ]; then
+      log "WARNING: voice probe lock ${held} still held after $(( PROBE_MAX_S / 60 )) min of waiting; failing open, deploying anyway."
+      return 0
+    fi
+    log "voice replay probe in flight (${held} is held): not restarting zoe-data under it; waiting ${POLL_S}s (${PROBE_WAITED_S}s of ${PROBE_MAX_S}s)."
+    PROBE_WAITED=1
+    sleep "$POLL_S"; PROBE_WAITED_S=$(( PROBE_WAITED_S + POLL_S ))
+  done
+}
 # exit 0 when clear. If a night window had to be waited out, the household reading that led here is
 # stale (services were restored after it; a conversation may have started): return 1 so the caller
 # re-polls instead of exiting on the old verdict (review on #2234).
 proceed() {
   NIGHT_WAITED=0; night_gate
   if [ "$NIGHT_WAITED" = 1 ]; then log "waited out a night window: re-checking household activity."; return 1; fi
+  probe_gate
+  if [ "$PROBE_WAITED" = 1 ]; then
+    # the probe may have ended inside a night window or a conversation: re-check both from the top
+    log "a voice probe finished: re-checking night window and household activity."
+    return 1
+  fi
   exit 0
 }
 night_gate

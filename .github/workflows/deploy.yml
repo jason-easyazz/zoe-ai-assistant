@@ -512,7 +512,7 @@ jobs:
       # Docs-only deploys skip it; the night-window rules (night_busy.sh deploy) are the one
       # thing it never fails open on. Separate step so the restart step below stays untouched.
       - name: Wait for a quiet household (do not restart mid-conversation)
-        timeout-minutes: 160
+        timeout-minutes: 210
         run: |
           cd "${ZOE_CHECKOUT:-/home/zoe/assistant}"
           bash scripts/maintenance/wait_household_quiet.sh

@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 import live_voice_gate
+import voice_activity
 import user_erase_gate as erase_gate
 from typed_env import env_bool, env_int, env_str
 
@@ -188,23 +189,14 @@ def mem_available_mb() -> Optional[float]:
     return None
 
 
-_LAST_VOICE_ACTIVITY_MONO: Optional[float] = None
-
-
-def note_voice_activity() -> None:
-    """Stamp "a voice turn is happening now". Called by every voice entry point (panel command / transcribe, LiveKit brain
-    turns) independently of the session table, which an explicit ``session_id`` or a LiveKit turn never touches."""
-    global _LAST_VOICE_ACTIVITY_MONO
-    _LAST_VOICE_ACTIVITY_MONO = time.monotonic()
-
-
 def last_voice_age_s(now_mono: Optional[float] = None) -> Optional[float]:
     """Seconds since the newest voice turn, or None when there has been none. Newest of the explicit activity stamp and the
     voice router's session table (read WITHOUT importing it)."""
     t = time.monotonic() if now_mono is None else now_mono
     ages: list[float] = []
-    if _LAST_VOICE_ACTIVITY_MONO is not None:
-        ages.append(t - _LAST_VOICE_ACTIVITY_MONO)
+    stamped = voice_activity.last_activity_age_s(t)
+    if stamped is not None:
+        ages.append(stamped)
     mod = sys.modules.get("routers.voice_tts")
     sessions = getattr(mod, "_VOICE_SESSIONS", None) if mod else None
     if sessions:
