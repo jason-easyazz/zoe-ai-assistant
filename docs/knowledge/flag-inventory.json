@@ -18554,6 +18554,26 @@
       ],
       "typed_env": false
     },
+    "NIGHT_TEST_LANE_LOCK": {
+      "defaults": [
+        "'/tmp/zoe-test-lane.lock'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/night_window.py"
+      ],
+      "typed_env": false
+    },
+    "NIGHT_TEST_LANE_WAIT_MIN": {
+      "defaults": [
+        "'10'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/night_window.py"
+      ],
+      "typed_env": false
+    },
     "NIGHT_UBATCH": {
       "defaults": [
         "'128'"
