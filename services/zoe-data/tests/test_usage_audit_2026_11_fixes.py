@@ -112,3 +112,30 @@ def test_garbled_question_is_not_a_list_item():
     assert got is None or got.name != "list_add"
     bought = detect_intent("Get some milk")
     assert bought is not None and bought.name == "list_add"
+
+
+@pytest.mark.parametrize("phrase", [
+    "I already turned off the lies.",
+    "Don't turn off the watch.",
+    "He said to turn on the watch.",
+])
+def test_mishear_repair_never_turns_a_statement_or_negation_into_a_command(phrase):
+    intent = classify_skybridge_intent(phrase)
+    assert intent is None or intent.domain != "smart_home"
+
+
+@pytest.mark.parametrize("phrase", ["Can you turn on the watch", "Hey Zoe, turned off the lies", "Please switch on the lite"])
+def test_mishear_repair_still_covers_polite_affirmative_frames(phrase):
+    intent = classify_skybridge_intent(phrase)
+    assert intent is not None and intent.domain == "smart_home"
+
+
+def test_later_sentence_that_names_the_device_keeps_the_qualifier():
+    intent = classify_skybridge_intent("Turn on the light. The bedroom light.")
+    assert intent is not None and intent.action == "turn_on" and "bedroom" in (intent.query or "")
+
+
+def test_later_sentence_that_retracts_the_command_is_not_acted_on():
+    for phrase in ("Turn off the lights. Actually, don't.", "Turn on the light. Never mind."):
+        intent = classify_skybridge_intent(phrase)
+        assert intent is None or intent.domain != "smart_home" or intent.action not in ("turn_on", "turn_off")

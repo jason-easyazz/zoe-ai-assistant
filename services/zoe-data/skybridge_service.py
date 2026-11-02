@@ -2645,17 +2645,21 @@ def _original_parse_stands(intent: "SkybridgeIntent") -> bool:
 
 
 # Moonshine's usual mishearings of the device noun in a switch frame ("turn on the watch", "turned off the lies" - live
-# 2026-11-01, three tries before the light came on). Only the noun right after an explicit turn/switch + on/off is
-# repaired, so a sentence that merely contains the word is untouched.
+# 2026-11-01, three tries before the light came on). Only an AFFIRMATIVE command shape is repaired: the switch verb must open
+# the utterance / a sentence (after optional polite filler), so "I already turned off the lies" (a report) and "Don't turn
+# off the watch" (a negation) are untouched and never become a light command.
 _LIGHT_MISHEAR_RE = re.compile(
-    r"\b(?:turn|switch|flip)(?:ed|ped)?\s+(on|off)\s+(?:the\s+)?(watch|lite|lye|lies|lice)\b", re.IGNORECASE)
+    r"(?P<lead>(?:^\s*|[.!?]\s+)(?:(?:hey|ok|okay|zoe|please|kindly|just|go ahead and|can you|could you|would you|will you)[,\s]+)*)"
+    r"\b(?:turn|switch|flip)(?:ed|ped)?\s+(?P<onoff>on|off)\s+(?:the\s+)?(?P<noun>watch|lite|lye|lies|lice)\b", re.IGNORECASE)
+_RETRACTION_RE = re.compile(
+    r"\b(?:don'?t|do not|never\s*mind|nevermind|cancel|stop|wait|actually|no|not|undo|scratch that|forget (?:it|that))\b", re.IGNORECASE)
 _CONTROL_ACTIONS = frozenset({"turn_on", "turn_off", "set_brightness"})
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s*(?=[A-Za-z])")
 
 
 def _repair_light_mishear(value: str) -> str:
     def _fix(m: "re.Match[str]") -> str:
-        return f"turn {m.group(1)} the {'lights' if m.group(2).lower() in ('lies', 'lice') else 'light'}"
+        return f"{m.group('lead')}turn {m.group('onoff')} the {'lights' if m.group('noun').lower() in ('lies', 'lice') else 'light'}"
 
     return _LIGHT_MISHEAR_RE.sub(_fix, value)
 
@@ -2669,10 +2673,16 @@ def _classify_home(raw_message: str, text: str) -> "SkybridgeIntent | None":
     text = _repair_light_mishear(text)
     intent = _classify_home_parse(raw_message, text)
     if intent is not None and intent.action in _CONTROL_ACTIONS and re.search(r"[.!?]", intent.query or ""):
-        for sentence in _SENTENCE_SPLIT_RE.split(raw_message.strip()):
+        sentences = _SENTENCE_SPLIT_RE.split(raw_message.strip())
+        for i, sentence in enumerate(sentences):
             lead = f" {re.sub(r'[.!?,;:]+$', '', sentence.lower().strip())} "
             sub = _classify_home_parse(sentence, lead)
             if sub is not None and sub.action == intent.action and not re.search(r"[.!?]", sub.query or ""):
+                trailing = " ".join(sentences[i + 1:])
+                if _RETRACTION_RE.search(trailing):
+                    return None  # later speech retracts / qualifies the command: do not act on the first sentence
+                if _HOME_DEVICE_NOUN.search(trailing.lower()):
+                    return intent  # later speech names the device ("... The bedroom light."): keep the whole-utterance parse
                 return sub
     return intent
 
