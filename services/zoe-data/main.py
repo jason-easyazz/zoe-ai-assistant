@@ -1276,8 +1276,10 @@ async def lifespan(app: FastAPI):
         logger.warning("omi day review loop not started (non-fatal): %s", _omi_dr_exc)
 
     try:  # wake-up alarms (flag-dark ZOE_ALARMS=off|on): the ring engine; docs/architecture/alarms.md
+        import alarm_music as _alarm_music
         import alarms as _alarms
         if _alarms.enabled():
+            _alarm_music.register()  # clock-radio music starts/stops with a ring
             asyncio.create_task(_alarms.run_loop(), name="alarms_ring")
     except Exception as _alarms_exc:
         logger.warning("alarm ring loop not started (non-fatal): %s", _alarms_exc)
