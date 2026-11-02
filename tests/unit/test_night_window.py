@@ -2605,3 +2605,43 @@ def test_the_dreaming_runner_makes_an_empty_user_set_a_positive_signal_and_a_fai
     state.update(boom=False, ids=["a", "demo-x", "b"])
     assert len(asyncio.run(m.run_dreaming(object()))) == 2 and ran == [("a", True), ("b", False)]
     assert "users=2" in capsys.readouterr().out
+
+
+def test_clearance_is_rechecked_after_waiting_for_the_test_lane(tmp_path):
+    """Review (#2244): the lane wait runs after the clearance checks; something that started during it must send the window back through its waits."""
+    w, host, cfg = make(tmp_path)
+    held = os.open(cfg.test_lane_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    real_sleep, real_busy, st = host.sleep, w.busy_reason, {"n": 0, "released": False, "fired": False}
+
+    def sleep(sec):
+        st["n"] += 1
+        if st["n"] >= 2 and not st["released"]:
+            fcntl.flock(held, fcntl.LOCK_UN)
+            st["released"] = True
+        real_sleep(sec)
+    host.sleep = sleep
+
+    def busy_reason():
+        if st["released"] and w.test_lane_fd is not None and not st["fired"]:
+            st["fired"] = True                                     # a backup starts during the lane wait
+            return "zoe-backup.service is running"
+        return real_busy()
+    w.busy_reason = busy_reason
+    try:
+        assert w.run() == nw.EXIT_OK, w.outcome
+    finally:
+        os.close(held)
+    msgs = [e["msg"] for e in w.rec["events"]]
+    assert st["fired"] and any("while waiting for the test lane" in m for m in msgs)
+    assert msgs.index(next(m for m in msgs if "while waiting for the test lane" in m)) < msgs.index(next(m for m in msgs if m.startswith("preflight ok")))
+
+
+def test_last_resort_ngl_never_exceeds_the_configured_count(tmp_path):
+    w, host, cfg = make(tmp_path, argv=["--ngl", "8"])
+    w.parked_text = PARKED
+    try:
+        w.load_12b({"levers": {}}, ngl_drop=nw.LOAD_LAST_RESORT_NGL_DROP)
+    except Exception:
+        pass
+    assert w.rec["arith"]["ngl_used"] == 8

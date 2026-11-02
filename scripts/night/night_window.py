@@ -1192,8 +1192,17 @@ class NightWindow(bk.Window):
                         f"(zoe-data must be back by then); a window needs {need_min:.0f}. Nothing was stopped.")
         self.pre_stop_gate(m)
         if not self.dry:
-            waiting = self.take_lock_when_clear(waiting, need_min)
-            self.hold_test_lane()
+            while True:
+                waiting = self.take_lock_when_clear(waiting, need_min)
+                if not self.hold_test_lane():
+                    break
+                # The lane wait (up to ``test_lane_wait_min``) happened AFTER the clearance checks: a timer job, backup, lander or panel turn may have started meanwhile.
+                # Re-check; if busy, hand everything back and send the window through its waits again (nothing is stopped yet).
+                busy = self.busy_now() or self.busy_reason()
+                if not busy:
+                    break
+                self.release_lock()
+                self.event(f"{busy} (it started while waiting for the test lane): lock and lane handed back, waiting again; nothing was stopped")
             # THE WINDOW'S CLOCK STARTS HERE, when it is cleared to stop the stack. Waiting for a quiet box (a running timer job, the voice harness, a recent voice turn) has its own
             # timeouts (``busy_wait_max_min`` / ``quiet_wait_max_min``) and costs Zoe nothing: nothing is stopped yet. Before this line it counted against the cap: the 2026-10-10 09:40 window
             # waited 20 min for the harness lock, the cells then had 932 s of a 50-minute cap, and four cells were skipped for budget.
@@ -1287,16 +1296,17 @@ class NightWindow(bk.Window):
                 raise Refused(f"after waiting for {busy} it is {dt.datetime.fromtimestamp(self.host.now()):%H:%M} and {max(0.0, left):.0f} min remain before the {end_txt} end-by deadline; "
                               f"a window needs {need_min:.0f}. Nothing was stopped.")
 
-    def hold_test_lane(self) -> None:
-        """Take (and keep until ``release_lock``) the test-lane flock, waiting up to ``test_lane_wait_min`` for a running test to finish. Never raises: no lane is a warning, not a lost night."""
+    def hold_test_lane(self) -> bool:
+        """Take (and keep until ``release_lock``) the test-lane flock, waiting up to ``test_lane_wait_min`` for a running test to finish. Never raises: no lane is a warning, not a lost night.
+        Returns True when it had to WAIT (the caller's clearance checks are then stale and must be re-run), False when the lane was free at once or already held."""
         if self.test_lane_fd is not None:
-            return
+            return False
         cfg = self.cfg
         try:
             fd = os.open(cfg.test_lane_path, os.O_CREAT | os.O_RDWR, 0o666)
         except OSError as exc:
             self.event(f"test lane {cfg.test_lane_path}: cannot open ({exc.__class__.__name__}); going on without it")
-            return
+            return False
         deadline = self.host.mono() + cfg.test_lane_wait_min * 60.0
         announced = False
         while True:
@@ -1304,7 +1314,7 @@ class NightWindow(bk.Window):
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self.test_lane_fd = fd
                 self.event("test lane held: no agent test run starts beside the 12B until the restore" if announced else "test lane taken for the window")
-                return
+                return announced
             except BlockingIOError:
                 if self.host.mono() < deadline:
                     if not announced:
@@ -1320,7 +1330,7 @@ class NightWindow(bk.Window):
             except OSError:
                 pass
             self.event(f"test lane {cfg.test_lane_path} {why}")
-            return
+            return announced
 
     def release_lock(self) -> None:
         """Free the test lane, then the brain lock. Each step is best-effort and independent: a lane teardown error must never skip the brain lock's release (or the restore after it)."""
@@ -1641,7 +1651,7 @@ class NightWindow(bk.Window):
     def load_12b(self, pick: "dict[str, Any]", *, last_attempt: bool = True, health_timeout_s: float = 480.0, ngl_drop: int = 0) -> None:
         """Start the 12B and wait for /health. ``last_attempt`` False = a failure is raised but NOT recorded in ``load_failures.json`` (the caller retries and records the night once)."""
         cfg = self.cfg
-        spec_cfg = dataclasses.replace(cfg, ngl=max(LOAD_MIN_NGL, cfg.ngl - ngl_drop)) if (ngl_drop and cfg.ngl) else cfg
+        spec_cfg = dataclasses.replace(cfg, ngl=min(cfg.ngl, max(LOAD_MIN_NGL, cfg.ngl - ngl_drop))) if (ngl_drop and cfg.ngl) else cfg
         self.rec["arith"]["ngl_used"] = spec_cfg.ngl
         spec = llm_spec(self.parked_text, spec_cfg, pick["levers"])
         self.event("12B command (generated from the parked unit's ExecStart, which is read and never edited): " + shlex.join(spec["argv"]))
