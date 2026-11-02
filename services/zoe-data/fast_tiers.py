@@ -102,7 +102,7 @@ _INTENT_ROUTER_DOMAINS: dict[str, frozenset[str]] = {
     "time_query": frozenset({"time"}), "date_query": frozenset({"time"}),
     "weather": frozenset({"weather"}),
     "list_show": frozenset({"lists"}), "list_add": frozenset({"lists"}),
-    "list_remove": frozenset({"lists"}),
+    "list_remove": frozenset({"lists"}), "list_rename": frozenset({"lists"}),
     "calendar_show": frozenset({"calendar", "reminders"}),
     "calendar_create": frozenset({"calendar", "reminders"}),
     "reminder_list": frozenset({"reminders", "calendar"}),

@@ -26,10 +26,10 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 801 prod flags; 211 read through `typed_env`.
+- 803 prod flags; 213 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 254 non-`ZOE_` env names read by prod code (table below).
+- 255 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 313 prod flags with no owner doc yet.
 - 1 registered flags with no reader in the scanned sources.
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-801 flags; 751 not documented in `.env.example`.
+803 flags; 753 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -107,6 +107,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_FAILOVER` | bool | `False` | - | `docs/knowledge/state-of-zoe-review-2026-09-25.md` | `'0'` | no | yes | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER_COOLDOWN_S` | int | `45` | - | `services/zoe-data/AGENTS.md` | `'45'` | no | yes | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_KV_WARM_ON_WAKE` | bool | `True` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `'1'` | no | NO | `services/zoe-data/zoe_flue_client.py` |
+| `ZOE_BRAIN_PREFIX_KEEPER` | bool | `True` | - | `docs/knowledge/cold-wake-2026-11-02.md` | `True` | yes | NO | `services/zoe-data/brain_prefix_keeper.py` |
+| `ZOE_BRAIN_PREFIX_KEEPER_MIN_TOKENS` | int | `2000` | - | `docs/knowledge/cold-wake-2026-11-02.md` | `2000` | yes | NO | `services/zoe-data/brain_prefix_keeper.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | bool | `True` | - | - | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_BRAIN_SLOT_GUARD` | bool | `True` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `'on'` | no | NO | `services/zoe-data/brain_slot_guard.py` |
 | `ZOE_BRAIN_SLOT_MAX_DEFER_S` | str | `''` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
@@ -911,7 +913,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-254 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+255 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -1148,6 +1150,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `VOICE_API_RETRY_BACKOFF_S` | `'0.35'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VOICE_IGNORE_TRANSCRIPTS` | `'yes,yeah,yep,yup,no,ok,okay,thank you,thanks,hi,hello,hmm,um'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VOICE_ROUTE_MODE` | `'direct'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `VOICE_TURN_RESTART_RETRY_S` | `'4.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKEWORD_DEBUG` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKEWORD_FRAMEWORK` | `''` | no | NO | `scripts/setup/mac_panel/mac_backend.py` |
 | `WAKEWORD_TEST_CLIP` | `''` | no | NO | `scripts/setup/mac_panel/preflight.py` |

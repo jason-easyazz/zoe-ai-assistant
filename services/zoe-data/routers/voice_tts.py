@@ -3097,6 +3097,11 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
     Transcribe base64 WAV/PCM audio using Moonshine v2 on the Jetson (Pi voice daemon).
     Request: { \"audio_base64\": \"...\", \"panel_id\": \"...\" }
     """
+    try:
+        from voice_activity import note_voice_activity as _note_voice_activity
+        _note_voice_activity()
+    except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
+        pass
     b64 = str((payload or {}).get("audio_base64") or "").strip()
     panel_id = _lane_panel_id(payload, caller, "transcribe")
     if not b64:
@@ -3492,6 +3497,11 @@ async def voice_command(
     Zoe routes the text through the chat pipeline and returns a JSON response
     with the reply text and synthesised audio (base64) so the Pi can play it back.
     """
+    try:
+        from voice_activity import note_voice_activity as _note_voice_activity
+        _note_voice_activity()
+    except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
+        pass
     try:  # read FIRST, before any await: a revoke that completes during this turn must win over its speaker note
         import warm_speaker as _ws_mod
         _ws_forget_epoch = _ws_mod.forget_epoch()
@@ -5930,6 +5940,15 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
     t_upload = time.monotonic() - t_turn_start
     suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
+
+    # Stamp household activity ONCE, here, for every accepted turn: the canned fast paths below (the conversation opener / ender ack, the
+    # mishear clarification, a gate-dropped window turn) return before voice_command, which is the only other stamp. Harness / probe / CI
+    # traffic is filtered inside note_voice_activity by the server-bound traffic class.
+    try:
+        from voice_activity import note_voice_activity as _note_voice_activity
+        _note_voice_activity()
+    except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
+        pass
 
     # ── B1.1 speculation gate (ZOE_SPECULATIVE_TURN, default OFF) ──
     # The daemon fired this turn at its FIRST end-of-turn verdict and is still

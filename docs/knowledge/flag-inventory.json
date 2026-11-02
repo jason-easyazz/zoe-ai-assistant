@@ -1955,6 +1955,44 @@
         },
         "typed_env": false
       },
+      "ZOE_BRAIN_PREFIX_KEEPER": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_prefix_keeper.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/cold-wake-2026-11-02.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_BRAIN_PREFIX_KEEPER_MIN_TOKENS": {
+        "defaults": [
+          "2000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_prefix_keeper.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 2000,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/cold-wake-2026-11-02.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
       "ZOE_BRAIN_PREWARM_ON_WAKE": {
         "defaults": [
           "'1'",
@@ -19373,6 +19411,16 @@
     "VOICE_ROUTE_MODE": {
       "defaults": [
         "'direct'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/zoe_voice_daemon.py"
+      ],
+      "typed_env": false
+    },
+    "VOICE_TURN_RESTART_RETRY_S": {
+      "defaults": [
+        "'4.0'"
       ],
       "in_env_example": false,
       "readers": [

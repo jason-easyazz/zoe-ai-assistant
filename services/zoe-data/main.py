@@ -1305,6 +1305,16 @@ async def lifespan(app: FastAPI):
     except Exception as _wup_exc:
         logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
 
+    # Keep the household's brain prefix resident in the one llama slot between conversations (re-warms it after a helper
+    # batch / brain restart displaced it, so the next wake is a cache hit). ZOE_BRAIN_PREFIX_KEEPER (default on).
+    try:
+        import brain_prefix_keeper
+
+        if brain_prefix_keeper.enabled():
+            asyncio.create_task(brain_prefix_keeper.run_loop(), name="brain_prefix_keeper")
+    except Exception as _pk_exc:
+        logger.warning("Brain prefix keeper not started (non-fatal): %s", _pk_exc)
+
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
         # Schema guard: the claim/generation logic depends on migration 0012.
@@ -2453,6 +2463,16 @@ async def root_health():
             "detail": _pool_health_cache["detail"],
         },
     }
+    # Deploy quiet-wait signal (scripts/maintenance/wait_household_quiet.sh): seconds since the
+    # newest panel voice turn, null when none since this process started. A bare number, no
+    # household data; never allowed to fail /health.
+    try:
+        # Household-filtered stamp only: _VOICE_SESSIONS is refreshed by probe/harness panel commands too.
+        from voice_activity import last_activity_age_s
+        _age = last_activity_age_s()
+        body["last_voice_turn_age_s"] = None if _age is None else round(max(0.0, _age), 1)
+    except Exception:  # noqa: BLE001
+        body["last_voice_turn_age_s"] = None
     if not _pool_health_cache["healthy"]:
         return JSONResponse(body, status_code=503)
     return body
