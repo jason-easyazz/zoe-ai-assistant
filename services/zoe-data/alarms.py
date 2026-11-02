@@ -352,6 +352,11 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
     stored_date, nxt = (alarm["once_date"], None)
     if on:
         stored_date, nxt = _schedule(hhmm, rule, once_date, now)
+    elif rule == "once" and "once_date" in ch:
+        try:  # a disabled one-off still keeps an explicitly supplied date (validated here; checked against the clock when turned on)
+            stored_date = date.fromisoformat(str(ch["once_date"])).isoformat()
+        except ValueError:
+            raise AlarmError("That is not a date I can use.") from None
     # The write is guarded by the version the edit was computed from (``updated_at``): a concurrent disable / dismiss / ring that
     # landed in between changes it, and this edit then refuses instead of writing back its stale copy of every column.
     async with _atomic(db):
