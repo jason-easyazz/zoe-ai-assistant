@@ -123,7 +123,11 @@ def test_502_twice_says_one_moment_then_apology_after_exactly_one_retry(daemon, 
 
 def test_connect_refused_same_flow(daemon, spoken, monkeypatch):
     monkeypatch.setattr(daemon, "ZOE_URL", _refused_url())
+    attempts = []
+    real = daemon._api_post
+    monkeypatch.setattr(daemon, "_api_post", lambda *a, **k: attempts.append(a[0]) or real(*a, **k))
     assert _turn(daemon) is False
+    assert attempts == ["/api/voice/turn", "/api/voice/turn"]  # one attempt + exactly ONE retry
     assert spoken == [daemon._FALLBACK_ONE_MOMENT, daemon._FALLBACK_UNREACHABLE]
 
 
@@ -141,6 +145,18 @@ def test_200_is_unchanged_and_silent(daemon, spoken, monkeypatch):
 def test_500_with_body_is_not_retried(daemon, spoken, monkeypatch):
     """A 500 may have executed a write: no retry, no 'one moment' - straight to the apology."""
     srv = _Server([(500, {"detail": "boom"}), (200, {"ok": True})])
+    try:
+        monkeypatch.setattr(daemon, "ZOE_URL", srv.url)
+        assert _turn(daemon) is False
+        assert srv.hits == 1
+        assert spoken == [daemon._FALLBACK_UNREACHABLE]
+    finally:
+        srv.close()
+
+
+@pytest.mark.parametrize("status", [503, 504])
+def test_503_504_are_not_retried(daemon, spoken, monkeypatch, status):
+    srv = _Server([(status, {}), (200, {"ok": True})])
     try:
         monkeypatch.setattr(daemon, "ZOE_URL", srv.url)
         assert _turn(daemon) is False
