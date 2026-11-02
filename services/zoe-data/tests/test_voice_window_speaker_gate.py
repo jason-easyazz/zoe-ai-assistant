@@ -169,3 +169,25 @@ def test_negative_control_without_the_skip_the_unconfirmed_window_turn_runs_the_
     monkeypatch.setattr(shape, "window_speaker_frame", lambda *_a, **_k: None)
     turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.30))
     assert len(turns) == 1 and turns[0]["verdict"] is False and not _skipped(frames), (turns, frames)
+
+
+def test_an_error_while_judging_a_window_turn_fails_closed(monkeypatch):
+    """The claim backend blowing up must not let an unjudged window utterance run the brain."""
+    import routers.voice_tts as vt
+
+    real_app = base._app
+
+    def boom_app(mp, seen, **kw):
+        app = real_app(mp, seen, **kw)
+
+        async def boom(_p, _c):
+            raise RuntimeError("consent backend down")
+
+        mp.setattr(vt, "_accepted_voice_claim", boom)
+        return app
+
+    monkeypatch.setattr(base, "_app", boom_app)
+    # _run restores the real claim after _app, so patch the gate itself to raise instead
+    monkeypatch.setattr(vt, "_speaker_verdict", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")))
+    turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.9))
+    assert turns == [] and _skipped(frames), (turns, frames)

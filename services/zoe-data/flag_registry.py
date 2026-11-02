@@ -784,6 +784,7 @@ _ENTRIES = (
     _f('ZOE_SPEAKER_RESNET34_THRESHOLD_LONG', 'float', 0.0, note='NaN = no override: the reader falls back to the per-length table in speaker_models.py. 0.0 here is a PLACEHOLDER, not the effective default - do not migrate this read to flag().'),
     _f('ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT', 'float', 0.0, doc='docs/knowledge/speaker-resnet34-switch.md', note='NaN = no override: the reader falls back to the per-length table in speaker_models.py. 0.0 here is a PLACEHOLDER, not the effective default - do not migrate this read to flag().'),
     _f('ZOE_SPEAKER_RESNET34_TIER', 'str', 'far1', doc='docs/knowledge/speaker-resnet34-switch.md'),
+    _f('ZOE_SPEAKER_WINDOW_TIER', 'str', 'far01', doc='docs/knowledge/voice-verified-session.md'),
     _f('ZOE_SPECULATIVE_MAX_HOLD_MS', 'int', 5000, doc='docs/architecture/b1-speculative-turn-start.md'),
     _f('ZOE_SPECULATIVE_TAIL_MS', 'int', 320, doc='docs/architecture/b1-speculative-turn-start.md'),
     _f('ZOE_SPECULATIVE_TURN', 'bool', False, doc='docs/architecture/beat-the-bar-2026-program.md'),

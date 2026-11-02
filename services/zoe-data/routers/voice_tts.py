@@ -6038,26 +6038,35 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # listens a short extra window and re-sends ONE merged clip. ``skipped``: a follow-up
     # window utterance that names someone else (ZOE_FOLLOWUP_ADDRESSED, default off).
     # Never on a speculative turn (its own verdict protocol owns it). Fail-open.
-    try:
-        _gate = None
-        # A no-wake-word window turn must carry its OWN matching voice: one the speaker gate ran on and did not confirm is
-        # not for Zoe (a television, another person) - dropped here, before any brain / memory / identity work, which ends the
-        # panel's follow-up chain. Never a speculative turn; fail-open (None verdict = gate off = today's behaviour).
-        if _spec_gate is None and (payload or {}).get("window") in _utterance_shape.WINDOWS:
+    _gate = None
+    # A no-wake-word window turn must carry its OWN matching voice: one the speaker gate RAN on and did not confirm is
+    # not for Zoe (a television, another person) - dropped here, before any brain / memory / identity work, which ends the
+    # panel's follow-up chain. Never a speculative turn. A None verdict (gate off / shadow) is today's behaviour, but an
+    # ERROR while judging a window turn FAILS CLOSED (dropped): unknown is not the member.
+    if _spec_gate is None and (payload or {}).get("window") in _utterance_shape.WINDOWS:
+        try:
             _win_verdict = _speaker_verdict(
                 payload, caller, identified_by_claim=bool(await _accepted_voice_claim(payload, caller)))
+        except Exception as _win_exc:
+            logger.warning("voice/turn_stream window speaker gate failed (dropping the window turn): %s", _win_exc)
+            _win_verdict = False
+        try:
             _gate = _utterance_shape.window_speaker_frame(payload, transcript, _win_verdict)
-            if _gate is not None:
-                # An unverified voice closes the panel's voice session, exactly as on the voice_command path (flag off: no-op).
-                try:
-                    import voice_session as _vs_win
-                    _vs_dec = _vs_win.observe_turn(
-                        panel_id=panel_id, caller_source=(caller or {}).get("source"), verdict=False, claimed=None,
-                        pin_user=None, model_ok=False, model_reason="window_mismatch", text="")
-                    if _vs_dec is not None and _vs_dec.events:
-                        _spawn_bg(_vs_win.publish(list(_vs_dec.events)))
-                except Exception as _vs_exc:
-                    logger.debug("window mismatch session close failed (non-fatal): %s", _vs_exc)
+        except Exception as _win_exc:
+            logger.warning("voice/turn_stream window speaker frame failed (dropping the window turn): %s", _win_exc)
+            _gate = {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch"}
+        if _gate is not None:
+            # An unverified voice closes the panel's voice session, exactly as on the voice_command path (flag off: no-op).
+            try:
+                import voice_session as _vs_win
+                _vs_dec = _vs_win.observe_turn(
+                    panel_id=panel_id, caller_source=(caller or {}).get("source"), verdict=False, claimed=None,
+                    pin_user=None, model_ok=False, model_reason="window_mismatch", text="")
+                if _vs_dec is not None and _vs_dec.events:
+                    _spawn_bg(_vs_win.publish(list(_vs_dec.events)))
+            except Exception as _vs_exc:
+                logger.debug("window mismatch session close failed (non-fatal): %s", _vs_exc)
+    try:
         if _gate is None:
             _gate = _utterance_shape.gate_frame(payload, transcript, speculative=_spec_gate is not None)
     except Exception as _gate_exc:

@@ -14103,12 +14103,19 @@
         "defaults": [
           "'far01'"
         ],
-        "in_env_example": false,
+        "in_env_example": true,
         "readers": [
           "services/zoe-data/speaker_models.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "far01",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/voice-verified-session.md",
+          "type": "str"
+        },
         "typed_env": true
       },
       "ZOE_SPECULATIVE_MAX_HOLD_MS": {

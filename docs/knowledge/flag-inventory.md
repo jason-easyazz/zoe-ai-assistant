@@ -30,7 +30,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
-- 1 flags read but not registered (CI fails on any).
+- 0 flags read but not registered (CI fails on any).
 - 313 prod flags with no owner doc yet.
 - 1 registered flags with no reader in the scanned sources.
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-800 flags; 750 not documented in `.env.example`.
+800 flags; 749 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -732,7 +732,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_SPEAKER_RESNET34_THRESHOLD_LONG` | float | `0.0` | - | - | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT` | float | `0.0` | - | `docs/knowledge/speaker-resnet34-switch.md` | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_RESNET34_TIER` | str | `'far1'` | - | `docs/knowledge/speaker-resnet34-switch.md` | `'far1'` | yes | yes | `scripts/setup/zoe_speaker_resnet34.py`<br>`services/zoe-data/speaker_models.py` |
-| `ZOE_SPEAKER_WINDOW_TIER` | **UNREGISTERED** | - | - | - | `'far01'` | yes | NO | `services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_WINDOW_TIER` | str | `'far01'` | - | `docs/knowledge/voice-verified-session.md` | `'far01'` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPECULATIVE_MAX_HOLD_MS` | int | `5000` | - | `docs/architecture/b1-speculative-turn-start.md` | `5000` | yes | NO | `services/zoe-data/voice_speculation.py` |
 | `ZOE_SPECULATIVE_TAIL_MS` | int | `320` | - | `docs/architecture/b1-speculative-turn-start.md` | `320` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_SPECULATIVE_TURN` | bool | `False` | - | `docs/architecture/beat-the-bar-2026-program.md` | `'false'`, `False` | yes | NO | `scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/voice_speculation.py` |
