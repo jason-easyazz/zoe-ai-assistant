@@ -2303,8 +2303,8 @@ def _turn_with_monitor(pa: "pyaudio.PyAudio", wav: bytes, turn_fn, *, window: st
     # A hard-cap continuation is merged on BOTH turn functions (ZOE_VOICE_STREAM=0 must not recreate the split);
     # only the server-driven incomplete-frame retry below needs the streaming turn.
     wav = _gather_capped_continuation(pa, wav)
-    if streaming and window:
-        kw["window"] = window
+    if window:
+        kw["window"] = window   # BOTH turn functions: the blocking one is the stream's fallback and the ZOE_VOICE_STREAM=0 path
     held = False
     while True:
         _monitor = _BargeMonitor(pa)
@@ -3634,7 +3634,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         # Pass the claim we already scored: re-scoring here would append a
         # second shadow row + journal line for this one spoken turn.
         return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty,
-                               voice_claim=voice_claim)
+                               voice_claim=voice_claim, window=window)
 
     # The server answered WITHOUT running the brain (pre-brain utterance gate):
     #  * incomplete - the transcript ends mid-clause; _turn_with_monitor listens a
@@ -3706,7 +3706,8 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
 
 
 def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True,
-                    conversation: bool = False, voice_claim: object = _CLAIM_UNSET) -> bool:
+                    conversation: bool = False, voice_claim: object = _CLAIM_UNSET,
+                    window: str = "") -> bool:
     """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
 
     Returns True if audio was played (eligible for follow-up listening).
@@ -3717,6 +3718,10 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     metrics row (and journal line) for one spoken turn — inflating the counts
     and giving one utterance two seqs, which breaks the per-seq FA/FR labelling.
     The sentinel distinguishes "not scored yet" from a scored no-match (None).
+
+    `window` ("followup" / "conversation"; "" for a wake turn) is forwarded so the server applies the stricter no-wake-word speaker
+    bar and drops an unconfirmed voice here too: the stream path's fallback used to omit it, which let a background clip clear only the
+    wake bar.
     """
     import time as _time
     _t_pi_start = _time.monotonic()
@@ -3742,6 +3747,8 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     _speaker = _speaker_field(voice_claim)
     if _speaker is not None:
         turn_payload["speaker"] = _speaker
+    if window in ("followup", "conversation"):
+        turn_payload["window"] = window
 
     # Run the turn in a thread so we can play a buffer phrase ONLY when the
     # answer is actually slow. Fast/cached turns (~0.5s) return before the delay

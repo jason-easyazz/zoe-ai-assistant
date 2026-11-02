@@ -191,3 +191,31 @@ def test_the_scored_no_match_is_only_produced_by_a_non_shadow_scored_turn(daemon
     assert daemon._speaker_claim_for_turn(b"w") is None
     _gate(daemon, monkeypatch, enabled=False)
     assert daemon._speaker_claim_for_turn(b"w") is None
+
+
+# -- the window rides the blocking turn too (greptile P1, #2242) --------------------------------------------------------
+
+@pytest.mark.parametrize("window", ["followup", "conversation"])
+def test_the_blocking_turn_forwards_the_window(daemon, monkeypatch, window):
+    _gate(daemon, monkeypatch, source="local", result=("casey", 0.30))
+    assert _blocking_payload(daemon, monkeypatch, window=window)["window"] == window
+
+
+def test_a_wake_turn_or_a_bogus_window_sends_no_window_key(daemon, monkeypatch):
+    _gate(daemon, monkeypatch, source="local", result=("casey", 0.30))
+    assert "window" not in _blocking_payload(daemon, monkeypatch)
+    assert "window" not in _blocking_payload(daemon, monkeypatch, window="bogus")
+
+
+def test_the_stream_failure_fallback_keeps_the_window_and_the_claim(daemon, monkeypatch):
+    """The streaming request dying before a response falls back to the blocking turn: it must still say which window it was."""
+    _gate(daemon, monkeypatch, source="local", result=("casey", 0.30))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("no response")
+
+    monkeypatch.setattr(daemon.requests, "post", boom, raising=False)
+    got = {}
+    monkeypatch.setattr(daemon, "_do_single_turn", lambda *a, **k: got.update(k) or True)
+    daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", prompt_on_empty=False, window="followup")
+    assert got.get("window") == "followup" and got.get("voice_claim") == ("casey", 0.30), got

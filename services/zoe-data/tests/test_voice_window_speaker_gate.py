@@ -244,3 +244,65 @@ def test_an_error_while_judging_a_window_turn_fails_closed(monkeypatch):
     monkeypatch.setattr(vt, "_speaker_verdict", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")))
     turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.9))
     assert turns == [] and _skipped(frames), (turns, frames)
+
+
+# -- the blocking /turn (the stream's fallback) applies the same rule (greptile P1, #2242) -----------------------------
+
+def _run_turn(monkeypatch, *, window="", speaker=None, text="tell me about the cardiologist"):
+    import routers.voice_tts as vt
+
+    real_claim = vt._accepted_voice_claim
+    seen: list = []
+    app = base._app(monkeypatch, seen, claim_ok=True, filler=False)
+    monkeypatch.setattr(vt, "_accepted_voice_claim", real_claim)
+
+    async def consented(_uid, _model=None):
+        return True
+
+    async def stt(_path, **_kw):
+        vt._stt_raw_var.set({})
+        return text
+
+    monkeypatch.setattr(vt, "_voice_claim_consented", consented)
+    monkeypatch.setattr(vt, "_transcribe_audio", stt)
+    payload = {"audio_base64": base64.b64encode(b"\x00\x01" * 400).decode(), "panel_id": "hall-panel"}
+    if window:
+        payload["window"] = window
+    if speaker is not None:
+        payload["speaker"] = speaker
+    with TestClient(app) as client:
+        r = client.post("/api/voice/turn", json=payload)
+        assert r.status_code == 200, r.text
+        body = r.json()
+    return [x for x in seen if isinstance(x, dict)], body
+
+
+def test_blocking_turn_drops_a_low_scoring_window_clip(monkeypatch):
+    # 0.30 clears the wake bar for a 3 s clip but not the window bar: the television case, arriving via the fallback.
+    assert 0.30 >= speaker_models.claim_threshold(RESNET, 3.0)
+    turns, body = _run_turn(monkeypatch, window="followup", speaker=_block(0.30))
+    assert turns == [], "the brain ran for a window utterance that did not match the member"
+    assert body["skipped"] == "not_addressed" and body["text"] == "" and not body.get("audio_base64"), body
+
+
+def test_blocking_turn_with_a_matching_voice_or_a_wake_turn_is_unchanged(monkeypatch):
+    turns, body = _run_turn(monkeypatch, window="followup", speaker=_block(0.55))
+    assert len(turns) == 1 and turns[0]["user_id"] == MEMBER and "skipped" not in body, (turns, body)
+    turns, body = _run_turn(monkeypatch, window="", speaker=_block(0.30))
+    assert len(turns) == 1 and turns[0]["user_id"] == MEMBER and "skipped" not in body, (turns, body)
+
+
+def test_blocking_turn_window_error_fails_closed_and_naming_zoe_stays_answerable(monkeypatch):
+    import routers.voice_tts as vt
+
+    turns, body = _run_turn(monkeypatch, window="followup", speaker=_block(0.30), text="Zoe tell me about the cardiologist")
+    assert len(turns) == 1 and turns[0]["verdict"] is False and "skipped" not in body      # a guest turn, never the member
+    monkeypatch.setattr(vt, "_speaker_verdict", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")))
+    turns, body = _run_turn(monkeypatch, window="followup", speaker=_block(0.9))
+    assert turns == [] and body["skipped"] == "not_addressed", (turns, body)
+
+
+def test_negative_control_without_the_blocking_check_the_low_clip_runs_the_brain(monkeypatch):
+    monkeypatch.setattr(shape, "window_speaker_frame", lambda *_a, **_k: None)
+    turns, body = _run_turn(monkeypatch, window="followup", speaker=_block(0.30))
+    assert len(turns) == 1 and "skipped" not in body, (turns, body)
