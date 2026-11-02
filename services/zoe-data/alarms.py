@@ -397,6 +397,8 @@ async def forget_user(user_id: str) -> int:
         if any(m in str(exc) for m in ("does not exist", "no such table", "not initialised")):  # no table yet, or no pool at all (tests)
             return 0
         raise
+    for aid in ids:
+        await _emit("deleted", {"id": aid})  # music must not keep playing for an alarm that no longer exists
     return len(ids)
 
 
