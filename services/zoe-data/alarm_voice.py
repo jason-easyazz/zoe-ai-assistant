@@ -36,6 +36,7 @@ _M = "|".join(sorted(_MINS, key=len, reverse=True))
 _WEEKDAY_NAMES = {"monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4, "friday": 5, "saturday": 6, "sunday": 7}
 
 _ALARM_WORD = re.compile(r"\balarms?\b|\bwake\s+(?:me|us)\b|\bsnooze\b|\bmore\s+minutes?\b")
+_LEAD = r"^\s*(?:(?:please|zoe|hey zoe|ok zoe|okay zoe|can you|could you|would you|will you|and)\s+)*"
 _WAKE = re.compile(r"\bwake\s+(?:me|us)(?:\s+up)?\b")
 _SNOOZE = re.compile(r"\bsnooze\b|^\s*(?:just\s+)?(\d{1,2}|" + "|".join(_HOURS) + r"|fifteen|twenty|thirty)\s+more\s+minutes?\s*$")
 _STOP = re.compile(r"\b(?:turn|switch|shut|stop|silence|dismiss|kill)(?:\s+(?:off|it))?\s+(?:the|my|this|that|our)?\s*alarm\b|"
@@ -169,7 +170,8 @@ def parse(text: str, now: Optional[float] = None) -> Optional[AlarmCommand]:
     now = time.time() if now is None else now
     raw = re.sub(r"[.!?,;:]+$", "", (text or "").lower().strip())
     t = " " + raw + " "
-    if not _ALARM_WORD.search(t) or re.search(r"\b(?:timers?|smoke|fire|car|burglar|security|door)\s+alarm\b|\balarm\s+(?:clock\s+)?(?:system|panel)\b", t):
+    if not _ALARM_WORD.search(t) or re.search(r"\b(?:timers?|smoke|fire|car|burglar|security|door)\s+alarm\b|"
+                                              r"\balarm\s+(?:code|clock|sound|noise|tone|volume|system|panel|settings?|app)\b", t):
         return None
     if re.search(r"\btimers?\b", t):
         return None
@@ -205,7 +207,13 @@ def parse(text: str, now: Optional[float] = None) -> Optional[AlarmCommand]:
                             target_label=label)
     sp = _spoken_times(t)
     found = _find_time(sp)
-    if found and _SET.search(t) or (found and re.search(r"\balarm\b", t) and re.search(r"\bfor\b", t)):
+    # A WRITE needs a command shape, not just a time and a cue word: "set (me) an alarm ...", "wake me ...", "I want/need an alarm at ...",
+    # or a bare "alarm for 7". "I want to know if my alarm is set for 7" and "is my alarm set for 7" are not on the list.
+    imperative = re.match(_LEAD + r"(?:set|make|create|add|schedule|start)\s+(?:me\s+)?(?:(?:an?|my|the|another)\s+)?(?:[a-z]+\s+){0,2}?alarm\b", t)
+    wants = re.match(_LEAD + r"(?:i\s+)?(?:want|need|would\s+like|'d\s+like)\s+(?:an?|my)\s+alarm\s+(?:for|at)\b", t)
+    bare = re.match(_LEAD + r"(?:an?\s+)?alarm\s+(?:for|at)\s", t)
+    wakes = _WAKE.search(t) and re.match(_LEAD + r"(?:i\s+)?(?:want\s+(?:you\s+)?to\s+)?wake\b|\s*(?:i\s+)?(?:need|want)\s+(?:you\s+)?to\s+wake\b", t)
+    if found and (imperative or wants or bare or wakes):
         h, mi, mer = found
         wake = bool(_WAKE.search(t))
         tomorrow = bool(re.search(r"\btomorrow\b", t))
@@ -215,10 +223,9 @@ def parse(text: str, now: Optional[float] = None) -> Optional[AlarmCommand]:
         return AlarmCommand("set", time_hhmm=hhmm, repeat=_repeat_of(t), once_date=(datetime.fromtimestamp(now, alarms.zoe_timezone()).date()
                             + timedelta(days=1)) if tomorrow else None, label=(lab.group(1).strip().title() if lab else ""),
                             sound_kind=kind, sound_id=sid, sound_name=sname, fuzzy_time=fuzzy)
-    if _LIST.search(t) and re.search(r"\b(?:my|the|any|our|next|which|what)\s+(?:\w+\s+)?alarms?\b|\balarms\b", t) \
-            and not re.search(r"\balarm\s+(?:code|clock|sound|noise|tone|volume|system)\b", t):
+    if _LIST.search(t) and re.search(r"\b(?:my|the|any|our|next|which|what)\s+(?:\w+\s+)?alarms?\b|\balarms\b", t):
         return AlarmCommand("list")
-    if re.match(r"^\s*(?:(?:please|zoe|hey zoe|can you|could you|will you)\s+)*(?:set|make|create)\s+(?:an?|my)\s+alarm\b", t):
+    if imperative:
         return AlarmCommand("set")  # no time heard: the resolver asks for one
     return None
 

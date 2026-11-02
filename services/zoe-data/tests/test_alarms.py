@@ -2,7 +2,7 @@
 voice grammar and its Skybridge wiring. Flag-dark ``ZOE_ALARMS``. Synthetic ids only.
 
 Negative controls (run by hand when this was written; each turns the named test red):
-  * drop ``AND next_fire_at = ?`` from the idle->ringing UPDATE in ``alarms.tick`` -> test_two_engines_ring_an_occurrence_once;
+  * drop ``AND state = 'idle' AND next_fire_at = ?`` from the idle->ringing UPDATE in ``alarms.tick`` -> test_two_engines_ring_an_occurrence_once;
   * drop the ``MISSED_GRACE_S`` branch -> test_an_occurrence_missed_while_down_is_skipped_not_rung_late;
   * make ``can_silence`` mirror ``can_edit`` -> test_the_panel_can_silence_any_ringing_alarm_but_edit_only_household;
   * remove the ``_on`` router gate -> test_flag_off_is_404_everywhere;
@@ -504,7 +504,8 @@ def test_ring_snooze_and_dismiss_over_http(box):
     run(_tick(box["path"], SEVEN))  # the engine rings it
     as_panel(box)
     rg = c.get("/api/alarms/ringing").json()["ringing"]
-    assert len(rg) == 1 and rg[0]["id"] == aid and rg[0]["label"] == "Wake" and rg[0]["can_snooze"]  # unmasked: the room hears it
+    assert len(rg) == 1 and rg[0]["id"] == aid and rg[0]["can_snooze"] and rg[0]["sound_id"] == "sunrise"  # the tone it must play
+    assert rg[0]["label"] == "" and rg[0]["sound_name"] == ""  # a PERSONAL alarm's name is not shown on the wall
     r = c.post(f"/api/alarms/{aid}/snooze")
     assert r.status_code == 200 and r.json()["alarm"]["state"] == "snoozed"
     assert c.get("/api/alarms/ringing").json()["ringing"] == []
@@ -512,6 +513,46 @@ def test_ring_snooze_and_dismiss_over_http(box):
     run(_tick(box["path"], SEVEN + 7 * 60 + 1))
     assert c.post(f"/api/alarms/{aid}/dismiss").json()["alarm"]["state"] == "idle"
     assert c.get("/api/alarms/ringing").json()["ringing"] == []
+
+
+def test_the_panel_ring_screen_hides_a_personal_music_source_but_shows_a_household_label(box):
+    c = box["client"]
+    c.post("/api/alarms", json={"time": "07:00", "label": "Private", "sound_kind": "music", "sound_id": "playlist:Secret", "sound_name": "Secret"})
+    as_panel(box)
+    c.post("/api/alarms", json={"time": "07:00", "label": "School run"})
+    run(_tick(box["path"], SEVEN))
+    rg = {x["label"]: x for x in c.get("/api/alarms/ringing").json()["ringing"]}
+    assert set(rg) == {"", "School run"}
+    personal = rg[""]
+    assert personal["sound_kind"] == "music" and personal["sound_id"] == "" and personal["sound_name"] == ""
+    as_member(box, ANN)  # the owner sees everything about their own alarm
+    own = [x for x in c.get("/api/alarms/ringing").json()["ringing"] if x["label"] == "Private"]
+    assert own and own[0]["sound_id"] == "playlist:Secret"
+
+
+def test_flag_off_never_reaches_auth_or_the_database(dbfile, monkeypatch):
+    """The gate must run BEFORE the route's own dependencies (cross-review #2236): count them."""
+    monkeypatch.setenv("ZOE_ALARMS", "off")
+    from routers.alarms import router
+
+    hits = {"auth": 0, "db": 0}
+
+    def auth():
+        hits["auth"] += 1
+        return {"user_id": ANN, "role": "user"}
+
+    async def db_dep():
+        hits["db"] += 1
+        yield None
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[require_member_or_panel] = auth
+    app.dependency_overrides[get_db] = db_dep
+    c = TestClient(app)
+    assert [c.get("/api/alarms").status_code, c.get("/api/alarms/ringing").status_code,
+            c.post("/api/alarms", json={"time": "07:00"}).status_code] == [404, 404, 404]
+    assert hits == {"auth": 0, "db": 0}
 
 
 def test_a_member_does_not_hear_another_members_ring_in_their_feed(box):
@@ -537,6 +578,11 @@ def test_a_member_does_not_hear_another_members_ring_in_their_feed(box):
     ("set an alarm for 8 every monday and wednesday", "08:00", "days:1,3"),
     ("alarm for 5:45 every day", "05:45", "daily"),
     ("set an alarm for 730", "07:30", "once"),
+    ("I want an alarm at 7", "07:00", "once"),
+    ("alarm for 6:30", "06:30", "once"),
+    ("please set a weekday alarm for 6:30", "06:30", "weekdays"),
+    ("can you set my alarm for 7", "07:00", "once"),
+    ("I need you to wake me at 6", "06:00", "once"),
     ("set an alarm for 14:20", "14:20", "once"),
     ("set an alarm for noon", "12:00", "once"),
 ])
@@ -590,6 +636,8 @@ def test_voice_snooze_minutes_and_targets():
     "should I set an alarm for 7", "why did you cancel my alarm", "the smoke alarm is beeping", "set a timer for 5 minutes",
     "what's the alarm code", "set the alarm system", "I set an alarm yesterday", "play some music", "tell me a joke",
     "my alarm clock is broken", "don't cancel the alarm", "wake up", "can I cancel the alarm",
+    "I want to know if my alarm is set for 7", "I need an alarm code for 7", "set alarm volume to 7", "is my alarm set for 7",
+    "my alarm is set for 7", "I wonder if I should set an alarm for 7", "set the alarm sound to bell", "turn the alarm volume up",
 ])
 def test_voice_refuses_questions_and_other_alarms(text):
     cmd = alarm_voice.parse(text, NIGHT)

@@ -54,7 +54,8 @@ idle --(next_fire_at <= now)--> ringing --snooze--> snoozed --(snooze_until <= n
 ## API (`ZOE_ALARMS=on`, otherwise every route 404s before auth or DB)
 
 `GET /api/alarms`, `POST /api/alarms`, `PATCH /api/alarms/{id}`, `DELETE /api/alarms/{id}`, `GET /api/alarms/ringing` (the panel's
-poll: unmasked ring payload incl. sound, ramp, snooze, `stops_at`), `POST /api/alarms/{id}/snooze`, `POST /api/alarms/{id}/dismiss`.
+poll: ring payload incl. tone, ramp, snooze, `stops_at`; for a PERSONAL alarm the panel gets the label and music source blanked, so the ring
+screen shows just the time - the owner and household alarms show their label), `POST /api/alarms/{id}/snooze`, `POST /api/alarms/{id}/dismiss`.
 Auth: `require_member_or_panel`; ownership by `alarms.can_*` below. Errors are 400/404/403/409 with a speakable `detail`.
 
 ## Who sees and controls what (the household fridge rule vs personal)
@@ -75,7 +76,7 @@ asked to sign in. Recommendation (decision 3): keep it this way; personal-alarm 
   Weekdays / Weekends / Mon..Sun), a **sound picker** (tones with a preview tap; "Music" lists playlists/radio from Music Assistant),
   snooze length chips (5/9/10/15) and a Delete. No keyboard anywhere; a label is voice-set ("called gym") or phone-set.
 * **Ringing = full-screen animated alarm on the sleep clock page** (`show('sleep')`; the orb stays hidden): a big pulsing clock
-  with a soft expanding ring animation, the label, and "Tap anywhere to snooze 9 min". **Tap anywhere = snooze** (the whole screen
+  with a soft expanding ring animation, the label (household alarms only - a personal alarm shows just the time on the wall), and "Tap anywhere to snooze 9 min". **Tap anywhere = snooze** (the whole screen
   is the target; this is hit half-asleep). A separate **Turn off** control sits low-centre, large, away from where a thumb rests,
   and is **press-and-hold 1 s** (a fill ring shows progress; releasing early does nothing and never snoozes). If the panel was on
   another screen it first navigates to sleep. After 8 snoozes tap no longer snoozes and the hint says "Hold to turn off".

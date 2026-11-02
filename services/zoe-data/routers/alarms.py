@@ -5,7 +5,7 @@
   POST   /api/alarms              create (a member: personal; the panel: household)
   PATCH  /api/alarms/{id}         edit / enable / disable (reschedules, stops a ring in progress)
   DELETE /api/alarms/{id}
-  GET    /api/alarms/ringing      what is ringing now, for the panel's ring screen (unmasked: the room hears it anyway)
+  GET    /api/alarms/ringing      what is ringing now, for the panel's ring screen (a personal alarm's label and music source are blanked for the panel)
   POST   /api/alarms/{id}/snooze  ringing -> snoozed (tap anywhere on the ring screen)
   POST   /api/alarms/{id}/dismiss ringing|snoozed -> off for this occurrence (the deliberate Turn off control)
 
@@ -63,6 +63,15 @@ async def list_alarms(request: Request, user: dict = Depends(require_member_or_p
 async def ringing_now(request: Request, user: dict = Depends(require_member_or_panel), db=Depends(get_db)):
     v, now = viewer_of(user), time.time()
     live = [a for a in await alarms.ringing(db) if alarms.can_silence(a, v)]
+
+    def shown(a: dict) -> dict:
+        """The ring screen needs the time, snooze and which tone to play - not what a PERSONAL alarm is called or which music it wakes
+        to. The panel gets those blanked for a personal alarm (a music alarm names no source; the server plays it and reports its state)."""
+        if v.panel and a["user_id"] != alarms.HOUSEHOLD:
+            return {**a, "label": "", "sound_name": "", "sound_id": a["sound_id"] if a["sound_kind"] == "tone" else ""}
+        return a
+
+    live = [shown(a) for a in live]
     return {"now": now, "ringing": [{
         "id": a["id"], "label": a["label"], "time_hhmm": a["time_hhmm"], "sound_kind": a["sound_kind"], "sound_id": a["sound_id"],
         "sound_name": a["sound_name"], "ramp_seconds": a["ramp_seconds"], "snooze_minutes": a["snooze_minutes"],
