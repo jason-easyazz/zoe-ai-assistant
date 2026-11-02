@@ -166,7 +166,7 @@ Identity is exactly an unidentified panel turn's: a tap proves no voice, so ther
 panel's fresh PIN sign-in (the member the dot was drawn for); sensitive pending items are NOT spoken (`pull.pull`: held unless
 `speaker_verified is True`), they stay pending and Zoe says she has something private (the existing pull line; no new wording here). With `ZOE_VOICE_SESSION`
 on, the no-verdict turn closes any open voice session (`no_verdict`) - fail-closed; the member says "what's up" for the private items.
-A daemon that predates `/pull` 404s it: the page's busy cue simply times out (20 s). On the audio-only `ha_bridge` route `/pull` listens like `/activate`.
+A daemon that predates `/pull` 404s it: the page's busy cue simply times out (20 s). A pull inside MIN_WAKE_INTERVAL_S of the last wake stays queued, never dropped.
 
 ## Related
 

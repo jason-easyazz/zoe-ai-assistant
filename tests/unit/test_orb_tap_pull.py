@@ -79,10 +79,29 @@ def test_pull_has_the_same_kiosk_only_guard_as_activate(daemon):
     assert _post(daemon, "/pull", {"Host": "evil.example"})[0] == 403
 
 
-def test_pull_on_the_audio_only_bridge_route_listens_instead(daemon, monkeypatch):
+def test_pull_on_the_bridge_route_is_still_a_pull(daemon, monkeypatch):
     monkeypatch.setattr(daemon, "VOICE_ROUTE_MODE", "ha_bridge")
     _status, _body, activate, pull = _post(daemon, "/pull")
-    assert (activate, pull) == (True, False)
+    assert (activate, pull) == (False, True)
+
+
+def test_a_throttled_pull_stays_queued_and_runs_when_due(daemon, monkeypatch):
+    """Cross-review: a tap inside MIN_WAKE_INTERVAL_S of the last wake was cleared and dropped. It must wait, then run once."""
+    clock = [100.0]
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(daemon, "_last_wake_at", 99.0)
+    daemon._orb_pull_event.set()
+    assert daemon._pull_request_due() is False and daemon._orb_pull_event.is_set()
+    clock[0] = 99.0 + daemon.MIN_WAKE_INTERVAL_S + 0.1
+    assert daemon._pull_request_due() is True and not daemon._orb_pull_event.is_set()
+    assert daemon._pull_request_due() is False       # consumed once
+    assert daemon._last_wake_at == clock[0]
+
+
+def test_the_main_loop_runs_the_pull_turn_when_due():
+    src = _DAEMON.read_text()
+    loop = src.split("if _pull_request_due():", 1)[1].split("continue", 1)[0]
+    assert "_do_single_turn(pa, b\"\", prompt_on_empty=False, text=PULL_PHRASE)" in loop
 
 
 def test_the_pull_phrase_is_a_pull_to_the_server():

@@ -4562,6 +4562,20 @@ _orb_pull_event = threading.Event()
 PULL_PHRASE = "what's up"
 
 
+def _pull_request_due() -> bool:
+    """A queued /pull that may run now. A pull inside MIN_WAKE_INTERVAL_S of the last wake stays queued (it runs the moment
+    the interval passes) instead of being silently dropped; claiming it stamps the wake time like an orb-tap does."""
+    global _last_wake_at
+    if not _orb_pull_event.is_set():
+        return False
+    now = time.monotonic()
+    if (now - _last_wake_at) < MIN_WAKE_INTERVAL_S:
+        return False
+    _orb_pull_event.clear()
+    _last_wake_at = now
+    return True
+
+
 def _peer_is_loopback(peer: "str | None") -> bool:
     """The TCP peer is this machine (127.0.0.0/8, ::1, or an IPv4-mapped loopback)."""
     import ipaddress
@@ -4695,10 +4709,10 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            if self.path == "/pull" and VOICE_ROUTE_MODE != "ha_bridge":
+            if self.path == "/pull":
                 _orb_pull_event.set()
                 body = json.dumps({"ok": True, "triggered": "pull"}).encode()
-            else:  # /activate, or /pull on the audio-only bridge route (no text turn there): listen, as before
+            else:
                 _orb_activate_event.set()
                 body = json.dumps({"ok": True, "triggered": "wake"}).encode()
             self.send_response(200)
@@ -4955,22 +4969,18 @@ def main():
                         stream = pa.open(**stream_kw)
                     continue
 
-            if _orb_pull_event.is_set():
-                _orb_pull_event.clear()
-                now = time.monotonic()
-                if (now - _last_wake_at) >= MIN_WAKE_INTERVAL_S:
-                    _last_wake_at = now
-                    log.info("Orb-tap pull received - running a %r turn", PULL_PHRASE)
-                    stream.stop_stream()
-                    stream.close()
-                    try:
-                        _do_single_turn(pa, b"", prompt_on_empty=False, text=PULL_PHRASE)
-                    except Exception as exc:
-                        log.error("Orb-tap pull turn error: %s", exc)
-                    finally:
-                        time.sleep(0.3)
-                        stream = pa.open(**stream_kw)
-                    continue
+            if _pull_request_due():
+                log.info("Orb-tap pull received - running a %r turn", PULL_PHRASE)
+                stream.stop_stream()
+                stream.close()
+                try:
+                    _do_single_turn(pa, b"", prompt_on_empty=False, text=PULL_PHRASE)
+                except Exception as exc:
+                    log.error("Orb-tap pull turn error: %s", exc)
+                finally:
+                    time.sleep(0.3)
+                    stream = pa.open(**stream_kw)
+                continue
 
             audio_chunk = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             _PREROLL.append(audio_chunk)
