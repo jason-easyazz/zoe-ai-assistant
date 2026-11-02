@@ -26,41 +26,76 @@ DEPLOY_PATH = [
 ]
 SYSTEMD = REPO / "scripts" / "setup" / "systemd"
 
-_MUTATING = r"(?:restart|try-restart|reload-or-restart|reload|stop|start|kill|disable|mask|kill)"
+_MUTATING = r"(?:restart|try-restart|reload-or-restart|reload|try-reload-or-restart|stop|start|kill|disable|mask)"
+_DOCKER_MUTATING = r"(?:restart|stop|start|kill|rm|rename|pause|up|down|recreate|run|compose)"
+# systemd directives that make one unit's stop / restart / reload follow another's.
+_COUPLING = (r"PartOf|BindsTo|Requires|Requisite|Upholds|Conflicts|Wants|"
+             r"PropagatesStopTo|StopPropagatedFrom|PropagatesReloadTo|ReloadPropagatedFrom")
 
 
 def _commands(text: str) -> list[str]:
-    """Shell-ish logical lines: backslash continuations joined, comments dropped."""
+    """Shell-ish SIMPLE commands: continuations joined, comments dropped, split on && || ; |."""
     joined = re.sub(r"\\\n\s*", " ", text)
     out = []
     for line in joined.splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            out.append(line)
+        line = re.sub(r"(^|\s)#.*$", "", line).strip()
+        for seg in re.split(r"&&|\|\||;|\|", line):
+            seg = seg.strip()
+            if seg:
+                out.append(seg)
     return out
 
 
-def kokoro_touches(text: str) -> list[str]:
-    """Commands that stop/restart/reload Kokoro, or do so through a glob / --all / bare variable."""
+def _assignments(text: str) -> dict[str, str]:
+    return {m.group(1): m.group(2)
+            for m in re.finditer(r"^\s*(?:export\s+)?([A-Za-z_]\w*)=(.*)$", text, re.M)}
+
+
+def kokoro_touches(text: str, extra_env: dict[str, str] | None = None) -> list[str]:
+    """Commands that stop/restart/reload Kokoro - named, via a glob / --all, or via a variable
+    whose assigned value names it or cannot be resolved from the same file."""
+    env = {**_assignments(text), **(extra_env or {})}
     bad = []
     for cmd in _commands(text):
+        if re.match(r"(echo|printf|log|warn|die)\b", cmd):
+            continue  # diagnostic text, not an action
         if re.search(r"\bsystemctl\b", cmd) and re.search(rf"\b{_MUTATING}\b", cmd):
-            if re.search(r"kokoro", cmd, re.I):
+            args = cmd.split("systemctl", 1)[1]
+            if re.search(r"kokoro", args, re.I):
                 bad.append(cmd)
-            elif re.search(r"\s(--all|'?\*'?|\S*\*\S*)(\s|$)", cmd.split("systemctl", 1)[1]):
+            elif re.search(r"(^|\s)(--all|'?\S*\*\S*'?)(\s|$)", args):
                 bad.append(cmd)  # a glob / --all can reach Kokoro without naming it
-        if re.search(r"\b(docker|podman)\b", cmd) and re.search(r"kokoro", cmd, re.I):
+            for var in re.findall(r"\$\{?(\w+)", args):
+                if var not in env or re.search(r"kokoro", env[var], re.I):
+                    bad.append(cmd)  # unresolvable / kokoro-valued target
+        if re.match(r"(sudo\s+)?(docker|podman)\b", cmd) and re.search(rf"\b{_DOCKER_MUTATING}\b", cmd) \
+                and re.search(r"kokoro", cmd, re.I):
             bad.append(cmd)
-        if re.search(r"\b(pkill|killall|kill)\b", cmd) and re.search(r"kokoro", cmd, re.I):
+        if re.match(r"(sudo\s+)?(pkill|killall|kill)\b", cmd) and re.search(r"kokoro", cmd, re.I):
             bad.append(cmd)
     return bad
+
+
+_HELPER = re.compile(r"\b(?:bash|sh|python3?)\s+[\"']?([A-Za-z0-9_./-]*scripts/[A-Za-z0-9_./-]+\.(?:sh|py))")
+
+
+def invoked_helpers(text: str) -> list[Path]:
+    """Repo scripts the deploy files run directly (bash X / python3 X)."""
+    found = []
+    for cmd in _commands(text):
+        if re.match(r"(echo|printf|log|warn|die)\b", cmd):
+            continue
+        for m in _HELPER.finditer(cmd):
+            if (REPO / m.group(1)).is_file():
+                found.append(REPO / m.group(1))
+    return found
 
 
 def coupling_directives(unit_text: str, other: str) -> list[str]:
     """Lines in a unit file that make systemd restart/stop it together with ``other``."""
     hits = []
     for line in unit_text.splitlines():
-        m = re.match(r"\s*(PartOf|BindsTo|Requires|Requisite|Upholds|Conflicts|Wants)\s*=\s*(.*)", line)
+        m = re.match(rf"\s*({_COUPLING})\s*=\s*(.*)", line)
         if m and re.search(other, m.group(2), re.I):
             hits.append(line.strip())
     return hits
@@ -78,6 +113,13 @@ def _unit_texts(unit: str) -> str:
 def test_deploy_path_never_stops_restarts_or_reloads_kokoro(path):
     assert path.exists(), f"{path} moved - update this pin, do not delete it"
     assert kokoro_touches(path.read_text()) == []
+
+
+def test_helpers_the_deploy_path_runs_never_touch_kokoro_either():
+    helpers = {h for p in DEPLOY_PATH for h in invoked_helpers(p.read_text())}
+    assert helpers, "the helper discovery found nothing - it is vacuous"
+    for h in sorted(helpers):
+        assert kokoro_touches(h.read_text()) == [], h
 
 
 def test_deploy_path_actually_restarts_zoe_data_so_the_scan_is_not_vacuous():
@@ -105,6 +147,10 @@ def test_zoe_data_and_kokoro_units_are_not_coupled():
     "systemctl --user restart --all",
     "docker restart kokoro-tts",
     "pkill -f kokoro_sidecar",
+    'unit=kokoro-tts.service\nsystemctl --user restart "$unit"',
+    'systemctl --user restart "$UNSET_TARGET"',
+    "systemctl --user stop kokoro-tts && echo done",
+    "docker compose restart kokoro",
 ])
 def test_negative_control_scanner_catches_kokoro_touches(snippet):
     assert kokoro_touches(snippet)
@@ -115,6 +161,11 @@ def test_negative_control_scanner_catches_kokoro_touches(snippet):
     "systemctl --user is-active kokoro-tts.service",
     "# systemctl --user restart kokoro-tts.service",
     "curl -fsS http://127.0.0.1:10201/health",
+    "systemctl --user restart zoe-data.service && systemctl --user is-active kokoro-tts.service",
+    "docker logs kokoro-tts",
+    "docker inspect kokoro-tts",
+    "systemctl --user restart zoe-data.service # kokoro remains untouched",
+    'S="${ZOE_SERVICE:-zoe-data}"\nsystemctl --user restart "$S"',
 ])
 def test_negative_control_scanner_ignores_benign(snippet):
     assert kokoro_touches(snippet) == []
@@ -123,4 +174,6 @@ def test_negative_control_scanner_ignores_benign(snippet):
 def test_negative_control_coupling_scanner():
     assert coupling_directives("[Unit]\nPartOf=zoe-data.service\n", "zoe-data")
     assert coupling_directives("[Unit]\nBindsTo=kokoro-tts.service\n", "kokoro")
+    for d in ("PropagatesStopTo", "StopPropagatedFrom", "PropagatesReloadTo", "ReloadPropagatedFrom"):
+        assert coupling_directives(f"[Unit]\n{d}=kokoro-tts.service\n", "kokoro")
     assert not coupling_directives("[Unit]\nAfter=network.target llama-server.service\n", "kokoro")
