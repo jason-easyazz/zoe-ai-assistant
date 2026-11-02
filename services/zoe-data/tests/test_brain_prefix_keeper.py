@@ -43,8 +43,10 @@ def env(monkeypatch, tmp_path):
     async def _slot():
         return state["slot"]
 
-    async def _warm(member=""):
+    async def _warm(member="", *, yield_to_helpers=False):
         state["warm_calls"].append(member)
+        state.setdefault("yield_flags", []).append(yield_to_helpers)
+        state["during_warm"]() if state.get("during_warm") else None
         return state["warm_outcome"]
 
     import zoe_flue_client as zfc
@@ -131,8 +133,10 @@ def test_nobody_used_the_panel_recently_means_no_warm(env):
 
 def test_off_switch_and_non_flue_lane(env, monkeypatch):
     state, clk = env
+    assert _tick() == "settling"      # a settle in progress ...
     monkeypatch.setenv(k.ENV, "0")
     assert _tick() == "off"
+    assert k._state["displaced_since"] is None   # ... is forgotten when the flag goes off
     monkeypatch.setenv(k.ENV, "1")
     monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")
     assert _tick() == "lane_off"
@@ -179,9 +183,10 @@ def test_a_failed_warm_backs_off_and_a_skipped_one_costs_nothing(env):
     _settle(clk)
     assert _tick() == "warm:failed:timeout"
     clk.t += k.MIN_GAP_S + 1
-    assert _tick() == "settling" or _tick() == "backoff"
-    clk.t += k.SETTLE_S + 1
-    assert _tick() == "backoff"
+    assert _tick() == "backoff"       # the slot is still displaced, but the 300 s back-off after the failure holds
+    assert len(state["warm_calls"]) == 1
+    clk.t += k.FAIL_BACKOFF_S
+    assert _tick() == "warm:failed:timeout" and len(state["warm_calls"]) == 2   # control: back-off over -> tries again
     # skipped:* (the warm declined: inflight / hot) ran nothing - no budget, no backoff, retried on the next poll
     k.reset()
     state["warm_calls"].clear()
@@ -196,7 +201,7 @@ def test_a_broken_warm_cannot_take_the_loop_down(env, monkeypatch):
     state, clk = env
     import zoe_flue_client as zfc
 
-    async def _boom(member=""):
+    async def _boom(member="", *, yield_to_helpers=False):
         raise RuntimeError("sidecar exploded")
 
     monkeypatch.setattr(zfc, "warm_kv_prefix", _boom)
@@ -216,6 +221,59 @@ def test_window_lock_held_is_detected_and_released(tmp_path):
     finally:
         os.close(fd)
     assert k.window_lock_held(str(p)) is False      # and the check itself left nothing behind
+
+
+def test_a_shared_holder_counts_as_held_too(tmp_path):
+    """The A/B harnesses hold the brain-window lock SHARED (``flock -s``): the keeper must see them (an exclusive probe)."""
+    p = tmp_path / "s.lock"
+    p.write_text("")
+    fd = os.open(str(p), os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        assert k.window_lock_held(str(p)) is True
+    finally:
+        os.close(fd)
+    assert k.window_lock_held(str(p)) is False
+
+
+def test_the_window_lock_is_held_for_the_whole_warm_and_released_after(env, monkeypatch, tmp_path):
+    """A harness that starts (exclusive) while the warm is in flight must be refused/waited, not run under it."""
+    state, clk = env
+    p = tmp_path / "w.lock"
+    p.write_text("")
+    monkeypatch.setattr(k, "WINDOW_LOCK", str(p))
+    seen = []
+
+    def _during():
+        fd = os.open(str(p), os.O_RDWR)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                seen.append("exclusive-granted")
+            except BlockingIOError:
+                seen.append("exclusive-refused")
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)   # a shared A/B harness coexists
+                seen.append("shared-granted")
+            except BlockingIOError:
+                seen.append("shared-refused")
+        finally:
+            os.close(fd)
+
+    state["during_warm"] = _during
+    _settle(clk)
+    assert _tick() == "warm:warmed"
+    assert seen == ["exclusive-refused", "shared-granted"]
+    assert k.window_lock_held(str(p)) is False      # released once the warm returned
+    assert state["yield_flags"] == [True]           # the keeper always asks the warm to yield to a queued helper
+
+
+def test_the_keeper_warm_yields_to_a_helper_that_queued_meanwhile(env):
+    state, clk = env
+    state["warm_outcome"] = "skipped:busy"
+    _settle(clk)
+    assert _tick() == "warm:skipped:busy"
+    assert len(k._state["warms"]) == 0 and k._state["backoff_until"] == 0.0
 
 
 def test_window_lock_blocks_the_warm(env, monkeypatch, tmp_path):
@@ -275,6 +333,21 @@ def test_read_slot_parses_n_prompt_tokens_and_treats_a_fresh_slot_as_empty(monke
     assert asyncio.run(k.read_slot()) == {"tokens": 0, "processing": True}
 
 
+def test_read_slot_fails_closed_without_an_explicit_processing_flag(monkeypatch):
+    _fake_httpx(monkeypatch, _Resp(200, [{"id": 0, "n_prompt_tokens": 10}]))              # field missing
+    assert asyncio.run(k.read_slot()) is None
+    _fake_httpx(monkeypatch, _Resp(200, [{"id": 0, "is_processing": "no", "n_prompt_tokens": 10}]))   # not a bool
+    assert asyncio.run(k.read_slot()) is None
+    _fake_httpx(monkeypatch, _Resp(200, [{"id": 0, "is_processing": False}, {"id": 1}]))   # one slot says nothing
+    assert asyncio.run(k.read_slot()) is None
+
+
+def test_read_slot_with_several_slots_is_busy_if_any_is_and_resident_if_any_holds_the_prefix(monkeypatch):
+    _fake_httpx(monkeypatch, _Resp(200, [{"id": 0, "is_processing": False, "n_prompt_tokens": 3300},
+                                         {"id": 1, "is_processing": True, "n_prompt_tokens": 400}]))
+    assert asyncio.run(k.read_slot()) == {"tokens": 3300, "processing": True}
+
+
 @pytest.mark.parametrize("resp,exc", [
     (_Resp(503, []), None), (_Resp(200, {"not": "a list"}), None), (_Resp(200, []), None),
     (_Resp(200, ValueError("not json")), None), (None, OSError("refused")),
@@ -318,3 +391,61 @@ def test_main_starts_the_keeper_behind_its_flag():
 
     src = (pathlib.Path(__file__).resolve().parent.parent / "main.py").read_text()
     assert "brain_prefix_keeper.run_loop()" in src and "brain_prefix_keeper.enabled()" in src
+
+
+# ── warm_kv_prefix(yield_to_helpers=True): the keeper's warm never takes the slot from under a helper ──────────────────
+
+
+@pytest.fixture
+def warm_env(monkeypatch):
+    import zoe_flue_client as zfc
+
+    g.reset()
+    monkeypatch.setenv(g.ENV, "on")
+    monkeypatch.delenv("ZOE_BRAIN_KV_WARM_ON_WAKE", raising=False)
+    monkeypatch.setattr(zfc, "_kv_warm_inflight", False)
+    monkeypatch.setattr(zfc, "_kv_warm_session", {"id": "", "uses": 0, "seq": 0})
+    calls = {"turns": 0, "during_prep": None}
+
+    async def _outbound(member):
+        if calls["during_prep"]:
+            calls["during_prep"]()          # a helper queues while the preparation awaits storage
+        return "msg", "key"
+
+    async def _turn(session_id, state, message=""):
+        calls["turns"] += 1
+        state["settled"] = True
+        return "warmed", 13, 2657
+
+    monkeypatch.setattr(zfc, "_kv_warm_outbound", _outbound)
+    monkeypatch.setattr(zfc, "_kv_warm_turn", _turn)
+    yield zfc, calls
+    g.reset()
+
+
+def test_yield_to_helpers_declines_at_entry_when_a_helper_is_queued(warm_env, monkeypatch):
+    zfc, calls = warm_env
+    monkeypatch.setattr(g, "_waiters", 1)
+    assert asyncio.run(zfc.warm_kv_prefix("", yield_to_helpers=True)) == "skipped:busy"
+    assert calls["turns"] == 0
+
+
+def test_yield_to_helpers_declines_when_a_helper_queues_during_preparation(warm_env, monkeypatch):
+    zfc, calls = warm_env
+    calls["during_prep"] = lambda: monkeypatch.setattr(g, "_waiters", 1)
+    assert asyncio.run(zfc.warm_kv_prefix("", yield_to_helpers=True)) == "skipped:busy"
+    assert calls["turns"] == 0 and g.active_turns() == 0   # and it never took the slot
+
+
+def test_control_the_wake_warm_does_not_yield_to_helpers(warm_env, monkeypatch):
+    """The wake path keeps its old behaviour (a helper mid-run does not cancel the wake's warm)."""
+    zfc, calls = warm_env
+    monkeypatch.setattr(g, "_waiters", 1)
+    assert asyncio.run(zfc.warm_kv_prefix("")) == "warmed"
+    assert calls["turns"] == 1
+
+
+def test_control_with_no_helper_the_keeper_warm_runs(warm_env):
+    zfc, calls = warm_env
+    assert asyncio.run(zfc.warm_kv_prefix("", yield_to_helpers=True)) == "warmed"
+    assert calls["turns"] == 1

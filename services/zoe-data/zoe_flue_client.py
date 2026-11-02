@@ -2307,13 +2307,15 @@ async def _kv_warm_turn(session_id: str, state: dict, message: str = "") -> tupl
     return "no_terminal", -1, -1
 
 
-async def warm_kv_prefix(member: str = "") -> str:
+async def warm_kv_prefix(member: str = "", *, yield_to_helpers: bool = False) -> str:
     """Prime the brain's llama-server slot with the shared system+tools prefix (see the block above).
 
     Fire-and-forget for the wake handler. Returns an outcome label (``warmed`` / ``skipped:...`` / ``failed:...``)
     for logs and tests; NEVER raises, whatever the sidecar does. ``member`` (the panel's likely speaker, "" = none)
     makes the warm render that member's system prompt (see ``_kv_warm_outbound``); empty = explicit guest. It is
     a cache-shaping hint only: nothing is read back to the wake, written, or attributed to that member.
+    ``yield_to_helpers`` (the idle-time keeper only; the wake leaves it False) also declines when a background helper is
+    queued or running (``skipped:busy``), at entry and again just before the slot is taken.
     """
     global _kv_warm_inflight
     if not kv_warm_enabled():
@@ -2322,6 +2324,8 @@ async def warm_kv_prefix(member: str = "") -> str:
         return "skipped:inflight"
     if brain_slot_guard.is_hot():
         return "skipped:hot"   # a turn is running or ended < ZOE_BRAIN_SLOT_QUIET_S ago: the prefix is resident
+    if yield_to_helpers and brain_slot_guard.waiters() > 0:
+        return "skipped:busy"
     session_id = "-"
     t0 = asyncio.get_running_loop().time()
     outcome, prompt_n, cache_n = "failed:unknown", -1, -1
@@ -2342,6 +2346,10 @@ async def warm_kv_prefix(member: str = "") -> str:
         # Re-check just before taking the guard, so a warm never queues behind / replaces a live conversation.
         if brain_slot_guard.is_hot():
             return "skipped:hot", -1, -1
+        # The keeper's warm (yield_to_helpers) must not take the slot out from under a helper that queued or began while the
+        # preparation above awaited storage: that helper runs first and the keeper tries again on its next poll.
+        if yield_to_helpers and brain_slot_guard.waiters() > 0:
+            return "skipped:busy", -1, -1
         # Preparation that swallowed its cancellation and returned late must not go on to take the guard and submit.
         if asyncio.get_running_loop().time() - t0 >= _KV_WARM_MAX_S:
             return "failed:timeout", -1, -1

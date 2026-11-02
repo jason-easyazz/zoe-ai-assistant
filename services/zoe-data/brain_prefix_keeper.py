@@ -68,24 +68,35 @@ def reset() -> None:
     STATS.clear()
 
 
-def window_lock_held(path: Optional[str] = None) -> bool:
-    """True while another process holds the brain-window lock (a harness is using the brain). A missing/unreadable file is
-    'not held'. Takes a shared non-blocking lock for an instant and drops it."""
+def take_window_lock(path: Optional[str] = None) -> "Optional[int]":
+    """Claim the brain-window lock for the length of one warm. Probes with an exclusive non-blocking lock (it fails if
+    ANYONE holds the file: the A/B harnesses hold it shared, the bake-off and the night window exclusive), then downgrades
+    to a SHARED lock and returns the open fd. The caller keeps the fd for the whole warm - so a harness that takes the lock
+    exclusively waits (or refuses) instead of starting under the warm, and shared harnesses are unaffected - and closes it
+    to release. Returns None when someone holds the lock, -1 when there is no lock file / it cannot be used (nothing to
+    hold; not a reason to skip)."""
     try:
         fd = os.open(path or WINDOW_LOCK, os.O_RDONLY)
     except OSError:
-        return False
+        return -1
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-        except OSError:
-            return False
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        return False
-    finally:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        return fd
+    except BlockingIOError:
         os.close(fd)
+        return None
+    except OSError:
+        os.close(fd)
+        return -1
+
+
+def window_lock_held(path: Optional[str] = None) -> bool:
+    """True while another process holds the brain-window lock in any mode. Holds nothing afterwards."""
+    fd = take_window_lock(path)
+    if fd is not None and fd >= 0:
+        os.close(fd)
+    return fd is None
 
 
 async def read_slot() -> "Optional[dict]":
@@ -101,10 +112,15 @@ async def read_slot() -> "Optional[dict]":
         if resp.status_code != 200:
             return None
         data = resp.json()
-        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+        if not isinstance(data, list) or not data or not all(isinstance(x, dict) for x in data):
             return None
-        slot = data[0]
-        return {"tokens": int(slot.get("n_prompt_tokens") or 0), "processing": bool(slot.get("is_processing"))}
+        # Fail closed: every slot must say explicitly whether it is processing (a missing field is no answer, not 'idle').
+        if not all(isinstance(x.get("is_processing"), bool) for x in data):
+            return None
+        # Any busy slot means busy; the prefix is resident if ANY slot holds a conversation-sized prompt (a future two-slot
+        # layout keeps working). A slot that never ran a task has no ``n_prompt_tokens`` key: 0 tokens.
+        return {"tokens": max(int(x.get("n_prompt_tokens") or 0) for x in data),
+                "processing": any(x["is_processing"] for x in data)}
     except Exception:  # noqa: BLE001 - unreachable / mid-restart / not JSON: no decision
         return None
 
@@ -117,11 +133,13 @@ async def tick() -> str:
     """One decision. Returns a short label (tests and the loop's counters); warms at most once."""
     try:
         if not enabled():
+            _reset_debounce()
             return "off"
         import zoe_flue_client
         from brain_dispatch import use_flue_brain
 
         if not use_flue_brain() or not zoe_flue_client.kv_warm_enabled():
+            _reset_debounce()
             return "lane_off"
         import warm_speaker
 
@@ -132,50 +150,61 @@ async def tick() -> str:
         if brain_slot_guard.is_hot() or brain_slot_guard.waiters() > 0 or brain_slot_guard.active_turns() > 0:
             _reset_debounce()
             return "busy"
-        if await asyncio.to_thread(window_lock_held):
+        lock_fd = await asyncio.to_thread(take_window_lock)
+        if lock_fd is None:
             _reset_debounce()
             return "window_lock"
-        slot = await read_slot()
-        if slot is None:
-            _reset_debounce()
-            return "unreachable"
-        if slot["processing"]:
-            _reset_debounce()
-            return "processing"
-        if slot["tokens"] >= min_tokens():
-            _reset_debounce()
-            return "resident"
-        now = _clock()
-        if _state["displaced_since"] is None:
-            _state["displaced_since"] = now
-            return "settling"
-        if now - _state["displaced_since"] < SETTLE_S:
-            return "settling"
-        if now < _state["backoff_until"]:
-            return "backoff"
-        if _state["last_warm"] is not None and now - _state["last_warm"] < MIN_GAP_S:
-            return "rate_gap"
-        warms = _state["warms"]
-        while warms and now - warms[0] > 3600.0:
-            warms.popleft()
-        if len(warms) >= MAX_PER_HOUR:
-            return "rate_cap"
-        settled_s = now - _state["displaced_since"]
-        outcome = await zoe_flue_client.warm_kv_prefix(member)
-        if not outcome.startswith("skipped:"):   # a skip ran nothing, so it costs no budget and is retried next poll
-            _state["last_warm"] = now
-            warms.append(now)
-            if outcome == "warmed":
-                _reset_debounce()
-            else:
-                _state["backoff_until"] = _clock() + FAIL_BACKOFF_S
-        logger.info("PREFIX_KEEPER outcome=%s slot_tokens=%d displaced_s=%.0f", outcome, slot["tokens"], settled_s)
-        return f"warm:{outcome}"
+        try:
+            return await _decide_and_warm(member, zoe_flue_client)
+        finally:
+            if lock_fd >= 0:
+                os.close(lock_fd)   # released only after the warm has finished
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - a keeper must never take the loop down
         logger.warning("PREFIX_KEEPER tick failed (non-fatal): %s", type(exc).__name__)
         return "error"
+
+
+async def _decide_and_warm(member: str, zoe_flue_client) -> str:
+    """The rest of one tick, run with the window lock held (shared) so no harness can start under the warm."""
+    slot = await read_slot()
+    if slot is None:
+        _reset_debounce()
+        return "unreachable"
+    if slot["processing"]:
+        _reset_debounce()
+        return "processing"
+    if slot["tokens"] >= min_tokens():
+        _reset_debounce()
+        return "resident"
+    now = _clock()
+    if _state["displaced_since"] is None:
+        _state["displaced_since"] = now
+        return "settling"
+    if now - _state["displaced_since"] < SETTLE_S:
+        return "settling"
+    if now < _state["backoff_until"]:
+        return "backoff"
+    if _state["last_warm"] is not None and now - _state["last_warm"] < MIN_GAP_S:
+        return "rate_gap"
+    warms = _state["warms"]
+    while warms and now - warms[0] > 3600.0:
+        warms.popleft()
+    if len(warms) >= MAX_PER_HOUR:
+        return "rate_cap"
+    settled_s = now - _state["displaced_since"]
+    # yield_to_helpers: re-checks, inside the warm and just before it takes the slot, that no helper queued meanwhile.
+    outcome = await zoe_flue_client.warm_kv_prefix(member, yield_to_helpers=True)
+    if not outcome.startswith("skipped:"):   # a skip ran nothing, so it costs no budget and is retried next poll
+        _state["last_warm"] = now
+        warms.append(now)
+        if outcome == "warmed":
+            _reset_debounce()
+        else:
+            _state["backoff_until"] = _clock() + FAIL_BACKOFF_S
+    logger.info("PREFIX_KEEPER outcome=%s slot_tokens=%d displaced_s=%.0f", outcome, slot["tokens"], settled_s)
+    return f"warm:{outcome}"
 
 
 async def run_loop() -> None:
