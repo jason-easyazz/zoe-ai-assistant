@@ -1713,7 +1713,7 @@
   function loadHA(cb){
     if(_ha.loaded&&Date.now()-_haAt<HA_MEMO_MS){cb&&cb();return;}
     if(_haInflight){_haInflight.then(function(){cb&&cb();});return;}
-    _haInflight=_loadHA().then(function(){_haAt=Date.now();_haInflight=null;cb&&cb();},function(){_haInflight=null;});
+    _haInflight=_loadHA().then(function(){_haAt=Date.now();_haInflight=null;cb&&cb();},function(){_haInflight=null;cb&&cb();});
   }
   function _loadHA(){return apiGet('/api/ha/entities').then(function(s){
       var arr=Array.isArray(s)?s:((s&&s.entities)||(s&&s.states)||[]);

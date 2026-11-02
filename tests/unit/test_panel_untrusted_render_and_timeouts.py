@@ -35,9 +35,9 @@ RAW_PATTERNS = {
         "${(item.content || '').slice(0, 180)}", "${item.content || ''}", "${item.name || ''}", "'${item.id}'",
         "${notification.message}", "${item.preview.title}",
     ],
-    "touch/calendar.html": ["${task.text}", 'value="${reminder.message}"', 'value="${item.text}"'],
-    "touch/people.html": ["${r.label}</span>", "openDetail('${r.person_id}')", ".replace(/</g,'&lt;')}"],   # the half-escape (only <), never the helper
-    "touch/chat.html": ["${action.label}", "${JSON.stringify(action.data).replace(", "${JSON.stringify(data).replace(", 'Schedule "${data.title}"'],
+    "touch/calendar.html": ["${task.text}", 'value="${reminder.message}"', 'value="${item.text}"', "'${task.id}'"],
+    "touch/people.html": ["${r.label}</span>", "openDetail('${r.person_id}')", ".replace(/</g,'&lt;')}", "markBucketDone('${it.id}')"],   # the half-escape (only <), never the helper
+    "touch/chat.html": ["${action.label}", "'${cardId}'", "'${actionId}'", "${JSON.stringify(action.data).replace(", "${JSON.stringify(data).replace(", 'Schedule "${data.title}"'],
     "touch/settings.html": ['<option value="${u.user_id}">${u.username}'],
     "js/touch-ui-executor.js": ["${u}</li>", "${pkg.query || ''}", "${(r.name || '').toString()}", "${top.name || 'N/A'}</strong>"],
 }
@@ -55,7 +55,7 @@ def test_no_raw_render_site_remains(rel):
 def test_each_page_defines_and_uses_its_escape_helper():
     for rel, helper, floor in (
         ("touch/memories.html", "zoeEsc(", 15), ("touch/calendar.html", "zoeEsc(", 3), ("touch/people.html", "zoeEsc(", 10),
-        ("touch/chat.html", "escAttr(", 5), ("touch/settings.html", "escAttr(", 1), ("js/touch-ui-executor.js", "escHtml(", 9),
+        ("touch/chat.html", "escAttr(", 12), ("touch/settings.html", "escAttr(", 1), ("js/touch-ui-executor.js", "escHtml(", 9),
     ):
         text = _read(rel)
         assert f"function {helper[:-1]}" in text, rel
@@ -96,7 +96,7 @@ def test_estate_helpers_carry_a_deadline_and_loadha_releases_on_failure():
         assert "signal:reqSig(" in home[i : i + 400], fn
     assert "function reqSig(ms)" in home and "typeof AbortSignal!=='undefined'" in home
     # a rejected entity load used to leave _haInflight set forever, so the dock, rooms and sleep surfaces stopped refreshing
-    assert "_haInflight=null;cb&&cb();},function(){_haInflight=null;});" in home
+    assert "_haInflight=null;cb&&cb();},function(){_haInflight=null;cb&&cb();});" in home
 
 
 def sidecar_fetches_without_signal(text: str) -> int:

@@ -2542,10 +2542,10 @@
             
             container.innerHTML = filteredTasks.map(task => `
                 <div class="task-item ${task.category} ${selectedTasks.includes(task.id) ? 'selected' : ''}" 
-                     draggable="true" data-task-id="${task.id}">
+                     draggable="true" data-task-id="${zoeEsc(task.id)}">
                     <input type="checkbox" class="task-checkbox" 
                            ${selectedTasks.includes(task.id) ? 'checked' : ''}
-                           onclick="toggleTaskSelection('${task.id}', event)">
+                           onclick="toggleTaskSelection('${zoeEsc(task.id)}', event)">
                     <div class="task-text">${zoeEsc(task.text)}</div>
                         </div>
             `).join('') + (selectedList !== 'all' ? `
@@ -3837,7 +3837,7 @@
                 <div class="linked-task-item ${task.completed ? 'completed' : ''}">
                     <input type="checkbox" class="task-complete-checkbox" 
                            ${task.completed ? 'checked' : ''}
-                           onchange="toggleTaskCompletion(${event.id}, '${task.id}')">
+                           onchange="toggleTaskCompletion(${Number(event.id) || 0}, '${zoeEsc(task.id)}')">
                     ${zoeEsc(task.text)}
                 </div>
             `).join('');

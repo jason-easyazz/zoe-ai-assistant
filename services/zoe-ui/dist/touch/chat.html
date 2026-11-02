@@ -5250,7 +5250,7 @@
                         <div class="calendar-action-container" id="${actionId}_container">
                             <button 
                                 class="card-action-btn add-to-calendar" 
-                                onclick="toggleTimeSlotPicker('${actionId}', '${cardId}', ${escAttr(JSON.stringify(action.data))})"
+                                onclick="toggleTimeSlotPicker('${escAttr(actionId)}', '${escAttr(cardId)}', ${escAttr(JSON.stringify(action.data))})"
                             >
                                 ${escapeHtml(String(action.label ?? ''))} <span class="dropdown-arrow">▼</span>
                             </button>
@@ -5264,7 +5264,7 @@
                     return `
                         <button 
                             class="card-action-btn ${escAttr(action.type)}" 
-                            onclick="executeCardAction('${cardId}', '${escAttr(action.type)}', ${escAttr(JSON.stringify(action.data))}, event)"
+                            onclick="executeCardAction('${escAttr(cardId)}', '${escAttr(action.type)}', ${escAttr(JSON.stringify(action.data))}, event)"
                         >
                             ${escapeHtml(String(action.label ?? ''))}
                         </button>
@@ -5310,7 +5310,7 @@
                     
                     html += `
                         <div class="time-slot-option ${durationMatch ? 'recommended' : ''}" 
-                             onclick="selectTimeSlot('${actionId}', '${cardId}', ${index}, ${escAttr(JSON.stringify(data))})">
+                             onclick="selectTimeSlot('${escAttr(actionId)}', '${escAttr(cardId)}', ${index}, ${escAttr(JSON.stringify(data))})">
                             <input type="radio" name="${actionId}_slot" id="${slotId}" value="${index}">
                             <label for="${slotId}">
                                 <div class="slot-time">${slotLabel}</div>
@@ -5338,8 +5338,8 @@
                 <div class="time-slot-confirmation">
                     <p>Schedule "${escapeHtml(String(data.title ?? ''))}" for ${formatTimeSlot(slot)}?</p>
                     <div class="confirmation-actions">
-                        <button class="btn-cancel" onclick="toggleTimeSlotPicker('${actionId}', '${cardId}', ${escAttr(JSON.stringify(data))})">Cancel</button>
-                        <button class="btn-confirm" onclick="confirmSlotSelection('${actionId}', '${cardId}', ${slotIndex}, ${escAttr(JSON.stringify(data))})">Confirm</button>
+                        <button class="btn-cancel" onclick="toggleTimeSlotPicker('${escAttr(actionId)}', '${escAttr(cardId)}', ${escAttr(JSON.stringify(data))})">Cancel</button>
+                        <button class="btn-confirm" onclick="confirmSlotSelection('${escAttr(actionId)}', '${escAttr(cardId)}', ${slotIndex}, ${escAttr(JSON.stringify(data))})">Confirm</button>
                     </div>
                 </div>
             `;

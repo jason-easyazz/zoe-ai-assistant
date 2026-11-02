@@ -1012,7 +1012,7 @@
                     <div class="activity-dot"></div>
                     <div>
                         <div class="activity-desc">${zoeEsc(a.description)}</div>
-                        <div class="activity-meta">${d}${a.source ? ' · ' + a.source : ''}</div>
+                        <div class="activity-meta">${d}${a.source ? ' · ' + zoeEsc(a.source) : ''}</div>
                     </div>
                 </div>`;
             }).join('');
@@ -1185,7 +1185,7 @@
                     const chip = { idea:'chip-idea', purchased:'chip-purchased', given:'chip-given' }[g.status] || 'chip-idea';
                     return `<div class="gift-row">
                         <span>${zoeEsc(g.description)}</span>
-                        <span class="gift-chip ${chip}">${g.status||'idea'}</span>
+                        <span class="gift-chip ${chip}">${zoeEsc(g.status||'idea')}</span>
                     </div>`;
                 }).join('');
             }
@@ -1222,7 +1222,7 @@
             }
             el.innerHTML = items.map(it => `<div class="bucket-row">
                 <span class="${it.done ? 'bucket-done' : ''}">${zoeEsc(it.description)}</span>
-                ${!it.done ? `<button onclick="markBucketDone('${it.id}')" style="background:none;border:none;cursor:pointer;font-size:18px">✓</button>` : '<span style="opacity:0.4;font-size:12px">done</span>'}
+                ${!it.done ? `<button onclick="markBucketDone('${zoeEsc(it.id)}')" style="background:none;border:none;cursor:pointer;font-size:18px">✓</button>` : '<span style="opacity:0.4;font-size:12px">done</span>'}
             </div>`).join('');
         } catch(e) {
             el.innerHTML = '<p style="color:#FC8181;text-align:center;padding:20px">Failed to load</p>';
