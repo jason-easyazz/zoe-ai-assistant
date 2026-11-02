@@ -1323,11 +1323,19 @@ _CORRECT_STOP_LEADS = frozenset({
 })
 
 
+def _clean_rename_text(value: str) -> str:
+    """:func:`_clean_action_text` that keeps a leading possessive "my" (only the/a/an are dropped)."""
+    text = re.sub(r"\s+", " ", value or "").strip(" .")
+    return re.sub(r"^(?:the|a|an)\s+", "", text, flags=re.IGNORECASE).strip()
+
+
 def _rename_item_operands(old_raw: str, new_raw: str, *, list_named: bool) -> tuple[str, str] | None:
     from list_service import clean_item_text, is_plausible_item
 
-    old = clean_item_text(_clean_action_text(re.sub(r"^(?:the\s+)?item\s+", "", old_raw.strip(), flags=re.IGNORECASE)))
-    new = clean_item_text(_clean_action_text(new_raw))
+    # A possessive is part of the item's words ("my passport" is not "passport"): kept here, and the store tries the exact form first
+    # and only then the stripped one (``list_service.rename_item_on_list``).
+    old = clean_item_text(_clean_rename_text(re.sub(r"^(?:the\s+)?item\s+", "", old_raw.strip(), flags=re.IGNORECASE)))
+    new = clean_item_text(_clean_rename_text(new_raw))
     if not old or not new or not is_plausible_item(new) or not command_shapes.plain_list_item(old) \
             or not command_shapes.plain_list_item(new) or old.lower() in _POINTING_ITEMS:
         return None

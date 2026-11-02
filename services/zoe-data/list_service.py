@@ -770,6 +770,10 @@ async def rename_item_on_list(
         else:
             want = item_key(old_text)
             hits = [r for r in rows if want and item_key(str(r.get("text") or "")) == want]
+            if not hits and re.match(r"(?i)^my\s+\S", old_text.strip()):
+                # exact form ("my passport") first; only then the bare one - never the other way round
+                bare = item_key(re.sub(r"(?i)^my\s+", "", old_text.strip()))
+                hits = [r for r in rows if bare and item_key(str(r.get("text") or "")) == bare]
             # an OPEN copy beats a ticked-off one
             hits.sort(key=lambda r: 1 if r.get("completed") else 0)
             target = hits[0] if hits else None

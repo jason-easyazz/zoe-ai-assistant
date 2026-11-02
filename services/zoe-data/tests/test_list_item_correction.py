@@ -508,3 +508,19 @@ async def test_the_keyword_executor_resolves_a_named_list_exactly_and_refuses_wh
     assert _texts(db) == ["noodles", "milk"]
     reply = await intent_router.execute_intent(intent_router.Intent("list_rename", {**slots, "list_name": "shopping"}), "jo")
     assert reply.startswith("Changed milk to oat milk") and _texts(db) == ["noodles", "oat milk"]
+
+
+async def test_rename_prefers_the_exact_possessive_item_and_keeps_its_words():
+    db = _db()
+    db.items_by_list["fam"] += [{"id": "i3", "list_id": "fam", "text": "passport", "completed": False},
+                                {"id": "i4", "list_id": "fam", "text": "my passport", "completed": False}]
+    result = await resolve_skybridge_request("change my passport to my spare passport", "jo", db=db)
+    assert result["intent"]["status"] == "renamed"
+    assert _texts(db) == ["noodles", "milk", "passport", "my spare passport"]
+
+
+async def test_rename_falls_back_to_the_bare_item_when_no_possessive_row_exists():
+    db = _db()
+    result = await resolve_skybridge_request("change my milk to oat milk", "jo", db=db)
+    assert result["intent"]["status"] == "renamed"
+    assert _texts(db) == ["noodles", "oat milk"]
