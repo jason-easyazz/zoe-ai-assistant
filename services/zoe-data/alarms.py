@@ -18,6 +18,7 @@ RINGING alarm, because a ringing alarm must always be stoppable by whoever is in
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import time
@@ -215,6 +216,14 @@ def present(alarm: dict, v: Viewer, now: Optional[float] = None) -> dict:
 # ── storage ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
+def _atomic(db: Any):
+    """ONE transaction around a row change and its event record (asyncpg ``conn.transaction()``; ``AsyncpgCompat.commit`` is a no-op, so
+    without this a failed ``log_event`` leaves the change committed). A connection without transactions (the sqlite test double)
+    runs the statements as they come."""
+    tx = getattr(db, "transaction", None)
+    return tx() if callable(tx) else contextlib.nullcontext()
+
+
 def _row(r: Any) -> dict:
     return dict(zip(COLS, tuple(r)))
 
@@ -306,12 +315,13 @@ async def create_alarm(db: Any, owner: str, *, time_hhmm: Any, repeat: Any = "on
         if int((await cur.fetchone())[0]) >= MAX_ALARMS_PER_OWNER:
             raise AlarmError("That is the most alarms I can keep.", 409)
     aid = uuid.uuid4().hex[:12]
-    await db.execute(
-        "INSERT INTO alarms (id, user_id, label, time_hhmm, repeat_rule, once_date, sound_kind, sound_id, sound_name, snooze_minutes,"
-        " ramp_seconds, enabled, next_fire_at, state, snooze_count, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'idle', 0, ?, ?)",
-        (aid, owner, _clean_label(label), hhmm, rule, stored_date, kind, sid, sname, snooze, ramp, nxt, now, now))
-    await log_event(db, aid, "created", f"{hhmm} {rule}", now=now)
+    async with _atomic(db):
+        await db.execute(
+            "INSERT INTO alarms (id, user_id, label, time_hhmm, repeat_rule, once_date, sound_kind, sound_id, sound_name, snooze_minutes,"
+            " ramp_seconds, enabled, next_fire_at, state, snooze_count, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'idle', 0, ?, ?)",
+            (aid, owner, _clean_label(label), hhmm, rule, stored_date, kind, sid, sname, snooze, ramp, nxt, now, now))
+        await log_event(db, aid, "created", f"{hhmm} {rule}", now=now)
     await db.commit()
     return await get_alarm(db, aid)  # type: ignore[return-value]
 
@@ -337,23 +347,32 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
     ramp = _clamp(ch.get("ramp_seconds"), RAMP_RANGE, alarm["ramp_seconds"], "volume ramp")
     label = _clean_label(ch["label"]) if "label" in ch else alarm["label"]
     on = bool(ch["enabled"]) if "enabled" in ch else bool(alarm["enabled"])
+    if on and rule == "once" and once_date and "once_date" not in ch and next_occurrence(hhmm, rule, once_date, now) is None:
+        once_date = None  # a spent one-off turned back on rings at the NEXT such time, not on its (past) old date
     stored_date, nxt = (alarm["once_date"], None)
     if on:
         stored_date, nxt = _schedule(hhmm, rule, once_date, now)
-    await db.execute(
-        "UPDATE alarms SET label = ?, time_hhmm = ?, repeat_rule = ?, once_date = ?, sound_kind = ?, sound_id = ?, sound_name = ?,"
-        " snooze_minutes = ?, ramp_seconds = ?, enabled = ?, next_fire_at = ?, state = 'idle', ring_started_at = NULL,"
-        " snooze_until = NULL, snooze_count = 0, updated_at = ? WHERE id = ?",
-        (label, hhmm, rule, stored_date, kind, sid, sname, snooze, ramp, 1 if on else 0, nxt, now, alarm["id"]))
-    await log_event(db, alarm["id"], "updated", "on" if on else "off", now=now)
+    # The write is guarded by the version the edit was computed from (``updated_at``): a concurrent disable / dismiss / ring that
+    # landed in between changes it, and this edit then refuses instead of writing back its stale copy of every column.
+    async with _atomic(db):
+        won = await _rowcount(
+            db, "UPDATE alarms SET label = ?, time_hhmm = ?, repeat_rule = ?, once_date = ?, sound_kind = ?, sound_id = ?, sound_name = ?,"
+            " snooze_minutes = ?, ramp_seconds = ?, enabled = ?, next_fire_at = ?, state = 'idle', ring_started_at = NULL,"
+            " snooze_until = NULL, snooze_count = 0, updated_at = ? WHERE id = ? AND updated_at = ?",
+            (label, hhmm, rule, stored_date, kind, sid, sname, snooze, ramp, 1 if on else 0, nxt, now, alarm["id"], alarm["updated_at"]))
+        if won:
+            await log_event(db, alarm["id"], "updated", "on" if on else "off", now=now)
+    if not won:
+        raise AlarmError("That alarm just changed. Try again.", 409)
     await db.commit()
     return await get_alarm(db, alarm["id"])  # type: ignore[return-value]
 
 
 async def delete_alarm(db: Any, alarm_id: str) -> bool:
-    n = await _rowcount(db, "DELETE FROM alarms WHERE id = ?", (alarm_id,))
-    if n:
-        await db.execute("DELETE FROM alarm_events WHERE alarm_id = ?", (alarm_id,))
+    async with _atomic(db):
+        n = await _rowcount(db, "DELETE FROM alarms WHERE id = ?", (alarm_id,))
+        if n:
+            await db.execute("DELETE FROM alarm_events WHERE alarm_id = ?", (alarm_id,))
     await db.commit()
     return n > 0
 
@@ -376,7 +395,11 @@ async def forget_user(user_id: str) -> int:
             await db.execute("DELETE FROM alarms WHERE user_id = ?", (uid,))
             await db.commit()
     except Exception as exc:  # noqa: BLE001
-        if any(m in str(exc) for m in ("does not exist", "no such table", "not initialised")):  # no table yet, or no pool at all (tests)
+        from db_pool import pool_ever_initialised
+
+        # No table yet (migration not run) is nothing to erase. "Not initialised" is the same only for a process that never HAD a pool
+        # (tests); a pool that was built and is now gone means the erasure did not happen, so it raises for the caller to retry.
+        if any(m in str(exc) for m in ("does not exist", "no such table")) or ("not initialised" in str(exc) and not pool_ever_initialised()):
             return 0
         raise
     return len(ids)
@@ -390,6 +413,12 @@ async def ringing(db: Any) -> list[dict]:
         return [_row(r) for r in await cur.fetchall()]
 
 
+async def active(db: Any) -> list[dict]:
+    """Ringing OR snoozed: the occurrences a spoken "turn off" can end (a snoozed one-off is otherwise unreachable)."""
+    async with db.execute(f"{_SELECT} WHERE state IN ('ringing', 'snoozed') ORDER BY ring_started_at") as cur:
+        return [_row(r) for r in await cur.fetchall()]
+
+
 async def snooze(db: Any, alarm: dict, *, minutes: Optional[int] = None, now: Optional[float] = None) -> dict:
     """Ringing -> snoozed for the alarm's own snooze minutes. Refused when it is not ringing or the snooze budget is spent."""
     now = time.time() if now is None else now
@@ -399,21 +428,25 @@ async def snooze(db: Any, alarm: dict, *, minutes: Optional[int] = None, now: Op
         raise AlarmError("That alarm has been snoozed as much as it can be.", 409)
     mins = minutes if minutes and SNOOZE_RANGE[0] <= minutes <= SNOOZE_RANGE[1] else alarm["snooze_minutes"]
     until = now + mins * 60
-    won = await _rowcount(db, "UPDATE alarms SET state = 'snoozed', snooze_until = ?, snooze_count = snooze_count + 1, ring_started_at = NULL,"
-                               " updated_at = ? WHERE id = ? AND state = 'ringing'", (until, now, alarm["id"]))
-    if won:
-        await log_event(db, alarm["id"], "snoozed", f"{mins}m", now=now)
+    async with _atomic(db):
+        won = await _rowcount(db, "UPDATE alarms SET state = 'snoozed', snooze_until = ?, snooze_count = snooze_count + 1, ring_started_at = NULL,"
+                                   " updated_at = ? WHERE id = ? AND state = 'ringing'", (until, now, alarm["id"]))
+        if won:
+            await log_event(db, alarm["id"], "snoozed", f"{mins}m", now=now)
     await db.commit()
+    if not won:  # the ring engine auto-stopped (or a dismiss landed) between the caller's read and this write
+        raise AlarmError("That alarm is not ringing.", 409)
     return await get_alarm(db, alarm["id"]) or alarm
 
 
 async def dismiss(db: Any, alarm: dict, *, now: Optional[float] = None) -> dict:
     """Ringing or snoozed -> idle (the next occurrence stays scheduled; a one-off is already off). Idle alarms are left alone."""
     now = time.time() if now is None else now
-    won = await _rowcount(db, "UPDATE alarms SET state = 'idle', ring_started_at = NULL, snooze_until = NULL, snooze_count = 0,"
-                               " updated_at = ? WHERE id = ? AND state IN ('ringing', 'snoozed')", (now, alarm["id"]))
-    if won:
-        await log_event(db, alarm["id"], "dismissed", "", now=now)
+    async with _atomic(db):
+        won = await _rowcount(db, "UPDATE alarms SET state = 'idle', ring_started_at = NULL, snooze_until = NULL, snooze_count = 0,"
+                                   " updated_at = ? WHERE id = ? AND state IN ('ringing', 'snoozed')", (now, alarm["id"]))
+        if won:
+            await log_event(db, alarm["id"], "dismissed", "", now=now)
     await db.commit()
     return await get_alarm(db, alarm["id"]) or alarm
 
@@ -430,31 +463,51 @@ async def tick(db: Any, now: Optional[float] = None) -> list[tuple[str, dict]]:
             return [_row(r) for r in await cur.fetchall()]
 
     for a in await fetch("state = 'ringing' AND ring_started_at <= ?", (now - RING_MAX_S,)):
-        if await _rowcount(db, "UPDATE alarms SET state = 'idle', ring_started_at = NULL, snooze_count = 0, updated_at = ?"
-                                " WHERE id = ? AND state = 'ringing' AND ring_started_at = ?", (now, a["id"], a["ring_started_at"])):
-            await log_event(db, a["id"], "auto_stopped", f"no answer after {RING_MAX_S // 60} min", now=now)
+        async with _atomic(db):
+            won = await _rowcount(db, "UPDATE alarms SET state = 'idle', ring_started_at = NULL, snooze_count = 0, updated_at = ?"
+                                       " WHERE id = ? AND state = 'ringing' AND ring_started_at = ?", (now, a["id"], a["ring_started_at"]))
+            if won:
+                await log_event(db, a["id"], "auto_stopped", f"no answer after {RING_MAX_S // 60} min", now=now)
+        if won:
             out.append(("auto_stopped", a))
     for a in await fetch("state = 'snoozed' AND snooze_until <= ?", (now,)):
-        if await _rowcount(db, "UPDATE alarms SET state = 'ringing', ring_started_at = ?, snooze_until = NULL, updated_at = ?"
-                                " WHERE id = ? AND state = 'snoozed' AND snooze_until = ?", (now, now, a["id"], a["snooze_until"])):
-            await log_event(db, a["id"], "rang", "after snooze", now=now)
+        if a["snooze_until"] < now - MISSED_GRACE_S:  # the snooze ran out while zoe-data was down: skip it like any missed occurrence
+            async with _atomic(db):
+                won = await _rowcount(db, "UPDATE alarms SET state = 'idle', ring_started_at = NULL, snooze_until = NULL, snooze_count = 0,"
+                                           " updated_at = ? WHERE id = ? AND state = 'snoozed' AND snooze_until = ?",
+                                      (now, a["id"], a["snooze_until"]))
+                if won:
+                    await log_event(db, a["id"], "missed", f"snooze ended {int(now - a['snooze_until'])}s ago, zoe-data was not running", now=now)
+            if won:
+                out.append(("missed", a))
+            continue
+        async with _atomic(db):
+            won = await _rowcount(db, "UPDATE alarms SET state = 'ringing', ring_started_at = ?, snooze_until = NULL, updated_at = ?"
+                                       " WHERE id = ? AND state = 'snoozed' AND snooze_until = ?", (now, now, a["id"], a["snooze_until"]))
+            if won:
+                await log_event(db, a["id"], "rang", "after snooze", now=now)
+        if won:
             out.append(("rang", {**a, "state": "ringing", "ring_started_at": now}))
     for a in await fetch("enabled = 1 AND state = 'idle' AND next_fire_at <= ?", (now,)):
         due = a["next_fire_at"]
         if due < now - MISSED_GRACE_S:  # found late (zoe-data was down): skip this occurrence, schedule the next from NOW
             nxt = next_occurrence(a["time_hhmm"], a["repeat_rule"], a["once_date"], now)
-            won = await _rowcount(db, "UPDATE alarms SET next_fire_at = ?, enabled = ?, updated_at = ? WHERE id = ? AND state = 'idle'"
-                                       " AND next_fire_at = ?", (nxt, 1 if nxt else 0, now, a["id"], due))
+            async with _atomic(db):
+                won = await _rowcount(db, "UPDATE alarms SET next_fire_at = ?, enabled = ?, updated_at = ? WHERE id = ? AND state = 'idle'"
+                                           " AND next_fire_at = ?", (nxt, 1 if nxt else 0, now, a["id"], due))
+                if won:
+                    await log_event(db, a["id"], "missed", f"due {int(now - due)}s ago, zoe-data was not running", now=now)
             if won:
-                await log_event(db, a["id"], "missed", f"due {int(now - due)}s ago, zoe-data was not running", now=now)
                 out.append(("missed", a))
             continue
         nxt = next_occurrence(a["time_hhmm"], a["repeat_rule"], a["once_date"], due)  # after the occurrence that is ringing now
-        won = await _rowcount(db, "UPDATE alarms SET state = 'ringing', ring_started_at = ?, last_fired_at = ?, snooze_count = 0,"
-                                   " next_fire_at = ?, enabled = ?, updated_at = ? WHERE id = ? AND state = 'idle' AND next_fire_at = ?",
-                              (now, now, nxt, 1 if nxt else 0, now, a["id"], due))
+        async with _atomic(db):
+            won = await _rowcount(db, "UPDATE alarms SET state = 'ringing', ring_started_at = ?, last_fired_at = ?, snooze_count = 0,"
+                                       " next_fire_at = ?, enabled = ?, updated_at = ? WHERE id = ? AND state = 'idle' AND next_fire_at = ?",
+                                  (now, now, nxt, 1 if nxt else 0, now, a["id"], due))
+            if won:
+                await log_event(db, a["id"], "rang", "late" if now - due > 5 else "", now=now)
         if won:
-            await log_event(db, a["id"], "rang", "late" if now - due > 5 else "", now=now)
             out.append(("rang", {**a, "state": "ringing", "ring_started_at": now, "next_fire_at": nxt, "enabled": 1 if nxt else 0}))
     if out:
         await db.commit()
