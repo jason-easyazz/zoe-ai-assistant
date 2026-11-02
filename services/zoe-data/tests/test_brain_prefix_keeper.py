@@ -236,6 +236,23 @@ def test_a_shared_holder_counts_as_held_too(tmp_path):
     assert k.window_lock_held(str(p)) is False
 
 
+def test_a_keeper_warm_does_not_make_the_slot_hot_for_another_members_wake_but_holds_helpers_off(monkeypatch):
+    """Greptile #2245: the keeper warmed member A with nobody speaking; member B's wake must not read 'hot' afterwards."""
+    t = {"now": 1000.0}
+    monkeypatch.setattr(g, "_clock", lambda: t["now"])
+    g.reset()
+    g.turn_started(keeper=True)
+    assert g.is_hot() is True                    # in flight: a second wake in the ~5 s of the warm still sees it busy
+    g.turn_finished(keeper=True)
+    assert g.is_hot() is False                   # B's wake_warm would not be skipped:hot
+    assert g._helpers_wait() is True             # but post-turn helpers stay off the prefix just loaded
+    t["now"] += g.quiet_s() + 1
+    assert g._helpers_wait() is False
+    g.turn_started()                             # control: a real turn does make the slot hot
+    g.turn_finished()
+    assert g.is_hot() is True
+
+
 def test_the_window_lock_is_held_for_the_whole_warm_and_released_after(env, monkeypatch, tmp_path):
     """A harness that starts (exclusive) while the warm is in flight must be refused/waited, not run under it."""
     state, clk = env
@@ -253,7 +270,7 @@ def test_the_window_lock_is_held_for_the_whole_warm_and_released_after(env, monk
             except BlockingIOError:
                 seen.append("exclusive-refused")
             try:
-                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)   # a shared A/B harness coexists
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)   # a harness preflight probes SHARED: it must see the warm
                 seen.append("shared-granted")
             except BlockingIOError:
                 seen.append("shared-refused")
@@ -263,7 +280,7 @@ def test_the_window_lock_is_held_for_the_whole_warm_and_released_after(env, monk
     state["during_warm"] = _during
     _settle(clk)
     assert _tick() == "warm:warmed"
-    assert seen == ["exclusive-refused", "shared-granted"]
+    assert seen == ["exclusive-refused", "shared-refused"]
     assert k.window_lock_held(str(p)) is False      # released once the warm returned
     assert state["yield_flags"] == [True]           # the keeper always asks the warm to yield to a queued helper
 

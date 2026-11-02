@@ -2353,7 +2353,7 @@ async def warm_kv_prefix(member: str = "", *, yield_to_helpers: bool = False) ->
         # Preparation that swallowed its cancellation and returned late must not go on to take the guard and submit.
         if asyncio.get_running_loop().time() - t0 >= _KV_WARM_MAX_S:
             return "failed:timeout", -1, -1
-        brain_slot_guard.turn_started()
+        brain_slot_guard.turn_started(keeper=yield_to_helpers)
         acquired = True
         starts_after_mine = brain_slot_guard.starts()   # any later start is a REAL turn, even one already finished
         session_id = _kv_warm_session_id()
@@ -2407,7 +2407,7 @@ async def warm_kv_prefix(member: str = "", *, yield_to_helpers: bool = False) ->
                 abort = f"error:{type(err).__name__}"
         _kv_warm_inflight = False
         if acquired:
-            brain_slot_guard.turn_finished()
+            brain_slot_guard.turn_finished(keeper=yield_to_helpers)
         # A dedicated line, NOT FLUE_PROMPT_CACHE: the warm is cold by design, and mixing its rows into that log would
         # corrupt the live miss-rate (share of turns with first_cache_n=0) the prefix-cache doc tells operators to read.
         logger.info(

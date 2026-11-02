@@ -69,19 +69,17 @@ def reset() -> None:
 
 
 def take_window_lock(path: Optional[str] = None) -> "Optional[int]":
-    """Claim the brain-window lock for the length of one warm. Probes with an exclusive non-blocking lock (it fails if
-    ANYONE holds the file: the A/B harnesses hold it shared, the bake-off and the night window exclusive), then downgrades
-    to a SHARED lock and returns the open fd. The caller keeps the fd for the whole warm - so a harness that takes the lock
-    exclusively waits (or refuses) instead of starting under the warm, and shared harnesses are unaffected - and closes it
-    to release. Returns None when someone holds the lock, -1 when there is no lock file / it cannot be used (nothing to
-    hold; not a reason to skip)."""
+    """Claim the brain-window lock EXCLUSIVELY for the length of one warm (non-blocking). It fails if ANYONE holds the file
+    (the A/B harnesses hold it shared, the bake-off and the night window exclusive) and, while held, excludes shared
+    holders too: a harness preflight probes with a shared lock, so a shared hold here would let it start under the warm.
+    Returns the open fd (the caller closes it to release), None when someone holds the lock, -1 when there is no lock file
+    / it cannot be used (nothing to hold; not a reason to skip)."""
     try:
         fd = os.open(path or WINDOW_LOCK, os.O_RDONLY)
     except OSError:
         return -1
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fcntl.flock(fd, fcntl.LOCK_SH)
         return fd
     except BlockingIOError:
         os.close(fd)
@@ -167,7 +165,7 @@ async def tick() -> str:
 
 
 async def _decide_and_warm(member: str, zoe_flue_client) -> str:
-    """The rest of one tick, run with the window lock held (shared) so no harness can start under the warm."""
+    """The rest of one tick, run with the window lock held (exclusive) so no harness can start under the warm."""
     slot = await read_slot()
     if slot is None:
         _reset_debounce()
