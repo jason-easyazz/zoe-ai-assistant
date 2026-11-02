@@ -33,74 +33,74 @@ def _tz(monkeypatch):
 
 
 def test_owner_case_evening_yesterday_is_never_this_morning():
-    out = tu.humanize_when(_p(1, 20, 30), NOW)
+    out = tu.humanize_when(_p(1, 20, 30), now=NOW)
     assert out in ("yesterday evening", "last night")
     assert "this morning" not in out
 
 
 def test_late_night_yesterday_is_last_night():
-    assert tu.humanize_when(_p(1, 22, 0), NOW) == "last night"
+    assert tu.humanize_when(_p(1, 22, 0), now=NOW) == "last night"
 
 
 def test_small_hours_today_read_as_last_night_by_day():
-    assert tu.humanize_when(_p(2, 1, 30), NOW) == "last night"
+    assert tu.humanize_when(_p(2, 1, 30), now=NOW) == "last night"
 
 
 def test_utc_midnight_straddle():
     # 06:30 AWST on the 2nd is 22:30 UTC on the 1st: the UTC dates differ, the LOCAL day is the same.
     then = datetime(2026, 11, 1, 22, 30, tzinfo=timezone.utc)
-    assert tu.humanize_when(then, NOW) == "this morning"
+    assert tu.humanize_when(then, now=NOW) == "this morning"
     # 23:30 AWST on the 1st (15:30 UTC) is yesterday night, not today.
-    assert tu.humanize_when(datetime(2026, 11, 1, 15, 30, tzinfo=timezone.utc), NOW) == "last night"
+    assert tu.humanize_when(datetime(2026, 11, 1, 15, 30, tzinfo=timezone.utc), now=NOW) == "last night"
 
 
 def test_naive_timestamps_are_utc_not_local():
     # Naive "2026-11-01T12:30:00" is 20:30 AWST yesterday, not 12:30 local.
-    assert tu.humanize_when("2026-11-01T12:30:00", NOW) == "yesterday evening"
-    assert tu.humanize_when("2026-11-01T12:30:00Z", NOW) == "yesterday evening"
+    assert tu.humanize_when("2026-11-01T12:30:00", now=NOW) == "yesterday evening"
+    assert tu.humanize_when("2026-11-01T12:30:00Z", now=NOW) == "yesterday evening"
 
 
 def test_same_day_dayparts():
     now = _p(2, 21, 30)
-    assert tu.humanize_when(_p(2, 8, 0), now) == "this morning"
-    assert tu.humanize_when(_p(2, 13, 0), now) == "this afternoon"
-    assert tu.humanize_when(_p(2, 18, 0), now) == "this evening"
-    assert tu.humanize_when(_p(2, 21, 0), now) == "a little while ago"
-    assert tu.humanize_when(_p(2, 21, 29), now) == "just now"
+    assert tu.humanize_when(_p(2, 8, 0), now=now) == "this morning"
+    assert tu.humanize_when(_p(2, 13, 0), now=now) == "this afternoon"
+    assert tu.humanize_when(_p(2, 18, 0), now=now) == "this evening"
+    assert tu.humanize_when(_p(2, 21, 0), now=now) == "a little while ago"
+    assert tu.humanize_when(_p(2, 21, 29), now=now) == "just now"
 
 
 def test_yesterday_dayparts_and_weekdays():
-    assert tu.humanize_when(_p(1, 9, 0), NOW) == "yesterday morning"
-    assert tu.humanize_when(_p(1, 14, 0), NOW) == "yesterday afternoon"
-    assert tu.humanize_when(_p(1, 2, 0), NOW) == "yesterday"
-    assert tu.humanize_when(_p(30, 12, 0, month=10), NOW) == "on Friday"  # 3 days back
+    assert tu.humanize_when(_p(1, 9, 0), now=NOW) == "yesterday morning"
+    assert tu.humanize_when(_p(1, 14, 0), now=NOW) == "yesterday afternoon"
+    assert tu.humanize_when(_p(1, 2, 0), now=NOW) == "yesterday"
+    assert tu.humanize_when(_p(30, 12, 0, month=10), now=NOW) == "on Friday"  # 3 days back
 
 
 def test_a_week_ago_and_older():
-    assert tu.humanize_when(_p(26, 12, 0, month=10), NOW) == "last week"
-    assert tu.humanize_when(_p(19, 12, 0, month=10), NOW) == "two weeks ago"
-    assert tu.humanize_when(_p(12, 12, 0, month=10), NOW) == "three weeks ago"
-    assert tu.humanize_when(_p(4, 12, 0, month=10), NOW) == "on 4 October"
-    assert tu.humanize_when(datetime(2025, 10, 12, 12, tzinfo=PERTH), NOW) == "on 12 October 2025"
+    assert tu.humanize_when(_p(26, 12, 0, month=10), now=NOW) == "last week"
+    assert tu.humanize_when(_p(19, 12, 0, month=10), now=NOW) == "two weeks ago"
+    assert tu.humanize_when(_p(12, 12, 0, month=10), now=NOW) == "three weeks ago"
+    assert tu.humanize_when(_p(4, 12, 0, month=10), now=NOW) == "on 4 October"
+    assert tu.humanize_when(datetime(2025, 10, 12, 12, tzinfo=PERTH), now=NOW) == "on 12 October 2025"
 
 
 def test_future_dated_never_claims_the_past():
-    assert tu.humanize_when(NOW + timedelta(minutes=3), NOW) == "just now"  # skew
-    out = tu.humanize_when(NOW + timedelta(days=3), NOW)
+    assert tu.humanize_when(NOW + timedelta(minutes=3), now=NOW) == "just now"  # skew
+    out = tu.humanize_when(NOW + timedelta(days=3), now=NOW)
     assert out == "on 5 November"
     for bad in ("ago", "yesterday", "this morning", "last"):
         assert bad not in out
 
 
 def test_unparseable_is_empty():
-    assert tu.humanize_when("not a date", NOW) == ""
-    assert tu.humanize_when(None, NOW) == ""
+    assert tu.humanize_when("not a date", now=NOW) == ""
+    assert tu.humanize_when(None, now=NOW) == ""
 
 
 def test_dst_zone_boundary_and_perth_has_no_dst():
     now = datetime(2026, 10, 5, 8, 0, tzinfo=SYDNEY)  # just after DST began (4 Oct 2026)
-    assert tu.humanize_when(datetime(2026, 10, 4, 20, 30, tzinfo=SYDNEY), now, tz=SYDNEY) == "yesterday evening"
-    assert tu.humanize_when(datetime(2026, 10, 5, 6, 0, tzinfo=SYDNEY), now, tz=SYDNEY) == "this morning"
+    assert tu.humanize_when(datetime(2026, 10, 4, 20, 30, tzinfo=SYDNEY), now=now, tz=SYDNEY) == "yesterday evening"
+    assert tu.humanize_when(datetime(2026, 10, 5, 6, 0, tzinfo=SYDNEY), now=now, tz=SYDNEY) == "this morning"
     assert tu.clock_stamp(datetime(2026, 1, 15, 12, tzinfo=timezone.utc)).endswith("(UTC+8, Australia/Perth)")
     assert tu.clock_stamp(datetime(2026, 7, 15, 12, tzinfo=timezone.utc)).endswith("(UTC+8, Australia/Perth)")
 
@@ -109,9 +109,9 @@ def test_env_timezone_drives_the_boundary(monkeypatch):
     then = datetime(2026, 11, 1, 20, 30, tzinfo=timezone.utc)
     now = datetime(2026, 11, 2, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")  # 04:30 same day as 08:00 -> small hours
-    assert tu.humanize_when(then, now) == "last night"
+    assert tu.humanize_when(then, now=now) == "last night"
     monkeypatch.setenv("ZOE_TIMEZONE", "America/Los_Angeles")  # 13:30 vs 17:00, same local day
-    assert tu.humanize_when(then, now) == "this afternoon"
+    assert tu.humanize_when(then, now=now) == "this afternoon"
 
 
 def test_clock_stamp_and_now_line_exact_local():
@@ -124,7 +124,7 @@ def test_negative_control_utc_date_logic_would_get_it_wrong():
     """What UTC-date reasoning says for 06:30 AWST today: 'yesterday'. Local truth differs."""
     then = datetime(2026, 11, 1, 22, 30, tzinfo=timezone.utc)
     assert (NOW.astimezone(timezone.utc).date() - then.date()).days == 1
-    assert tu.humanize_when(then, NOW) == "this morning"
+    assert tu.humanize_when(then, now=NOW) == "this morning"
 
 
 # ── the paths that use it ────────────────────────────────────────────────────
@@ -204,10 +204,10 @@ def test_elapsed_time_is_real_across_a_dst_transition():
     then = datetime(2026, 10, 4, 1, 30, tzinfo=SYDNEY)
     now = datetime(2026, 10, 4, 3, 30, tzinfo=SYDNEY)
     assert (now.astimezone(timezone.utc) - then.astimezone(timezone.utc)).total_seconds() == 3600
-    assert tu.humanize_when(then, now, tz=SYDNEY) != "just now"
+    assert tu.humanize_when(then, now=now, tz=SYDNEY) != "just now"
     just = datetime(2026, 10, 4, 3, 1, tzinfo=SYDNEY)  # 01:59 -> 03:01 wall = 2 min real
-    assert tu.humanize_when(datetime(2026, 10, 4, 1, 59, tzinfo=SYDNEY), just, tz=SYDNEY) == "just now"
+    assert tu.humanize_when(datetime(2026, 10, 4, 1, 59, tzinfo=SYDNEY), now=just, tz=SYDNEY) == "just now"
 
 
 def test_far_future_names_the_year():
-    assert tu.humanize_when(_p(5, 12, 0, month=2).replace(year=2027), NOW) == "on 5 February 2027"
+    assert tu.humanize_when(_p(5, 12, 0, month=2).replace(year=2027), now=NOW) == "on 5 February 2027"
