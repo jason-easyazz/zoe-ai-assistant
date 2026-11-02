@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-30T00:00:00Z
+timestamp: 2026-11-02T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-30T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-30. The table body is deterministic (sorted, no
+Last generated: 2026-11-02. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -29,7 +29,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 799 prod flags; 209 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 252 non-`ZOE_` env names read by prod code (table below).
+- 253 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 313 prod flags with no owner doc yet.
 - 1 registered flags with no reader in the scanned sources.
@@ -909,7 +909,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-252 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+253 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -1144,6 +1144,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `VOICE_API_RETRY_BACKOFF_S` | `'0.35'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VOICE_IGNORE_TRANSCRIPTS` | `'yes,yeah,yep,yup,no,ok,okay,thank you,thanks,hi,hello,hmm,um'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `VOICE_ROUTE_MODE` | `'direct'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `VOICE_TURN_RESTART_RETRY_S` | `'4.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKEWORD_DEBUG` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKEWORD_FRAMEWORK` | `''` | no | NO | `scripts/setup/mac_panel/mac_backend.py` |
 | `WAKEWORD_TEST_CLIP` | `''` | no | NO | `scripts/setup/mac_panel/preflight.py` |

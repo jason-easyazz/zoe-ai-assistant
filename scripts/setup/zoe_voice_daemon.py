@@ -3754,7 +3754,7 @@ _FALLBACK_ONE_MOMENT = "One moment."
 _FALLBACK_UNREACHABLE = "Sorry, I can't reach my brain right now. Try again in a minute."
 
 
-def _post_turn_riding_restart(turn_payload: dict) -> dict:
+def _post_turn_riding_restart(turn_payload: dict, on_restart=None) -> dict:
     """POST /api/voice/turn; on a restart-shaped failure (502 / connect refused - the request
     provably did not run) say "One moment." locally and retry exactly once after a backoff.
     Everything else (500 with a body, 503/504, a dropped connection) is returned as is."""
@@ -3764,6 +3764,12 @@ def _post_turn_riding_restart(turn_payload: dict) -> dict:
     log.warning("voice/turn: zoe-data unreachable (%s) - local 'one moment', one retry in %.1fs",
                 resp.get("error"), VOICE_TURN_RESTART_RETRY_S)
     _recording_active.clear()
+    if on_restart is not None:
+        # Let the caller silence/finish its "thinking" buffer phrase so the two never overlap.
+        try:
+            on_restart()
+        except Exception:
+            log.debug("on_restart hook failed", exc_info=True)
     _espeak_local(_FALLBACK_ONE_MOMENT)
     time.sleep(VOICE_TURN_RESTART_RETRY_S)
     return _api_post("/api/voice/turn", turn_payload, restart_only=True)
@@ -3811,6 +3817,23 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     # answer is actually slow. Fast/cached turns (~0.5s) return before the delay
     # and play the answer directly — no filler, no added latency.
     _turn_result: dict = {}
+    _restart_seen = threading.Event()
+    _buf_lock = threading.Lock()
+    _buf_holder: dict = {}
+
+    def _on_restart():
+        # Restart handling owns the speaker: no new buffer phrase, and wait out one already playing.
+        with _buf_lock:
+            _restart_seen.set()
+            _bp = _buf_holder.get("proc")
+        if _bp is not None:
+            try:
+                _bp.wait(timeout=4)
+            except Exception:
+                try:
+                    _bp.terminate()
+                except Exception:
+                    pass
 
     def _run_turn():
         if VOICE_ROUTE_MODE == "ha_bridge":
@@ -3819,7 +3842,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
                 {"panel_id": PANEL_ID, "source": "satellite_pi", "audio_base64": audio_b64_wav},
             )
         else:
-            _turn_result["resp"] = _post_turn_riding_restart(turn_payload)
+            _turn_result["resp"] = _post_turn_riding_restart(turn_payload, _on_restart)
 
     _t_post_start = _time.monotonic()
     _turn_thread = threading.Thread(target=_run_turn, daemon=True)
@@ -3829,8 +3852,11 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     _buffer_proc = None
     if _turn_thread.is_alive():
         # Answer is taking a while → fill the gap with a "thinking" phrase.
-        _buffer_proc = _play_buffer_phrase()
+        with _buf_lock:
+            if not _restart_seen.is_set():
+                _buf_holder["proc"] = _play_buffer_phrase()
         _turn_thread.join()
+        _buffer_proc = _buf_holder.get("proc")
 
     resp = _turn_result.get("resp", {}) or {}
     ok = resp.get("ok", False)

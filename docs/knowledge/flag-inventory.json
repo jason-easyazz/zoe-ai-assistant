@@ -19322,6 +19322,16 @@
       ],
       "typed_env": false
     },
+    "VOICE_TURN_RESTART_RETRY_S": {
+      "defaults": [
+        "'4.0'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/zoe_voice_daemon.py"
+      ],
+      "typed_env": false
+    },
     "WAKEWORD_DEBUG": {
       "defaults": [
         "''"

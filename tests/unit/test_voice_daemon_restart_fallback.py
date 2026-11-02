@@ -172,3 +172,21 @@ def test_dropped_connection_mid_request_is_not_a_connect_failure(daemon):
     assert not daemon._is_connect_failure(requests.exceptions.ConnectionError("Connection aborted."))
     assert not daemon._is_connect_failure(requests.exceptions.ReadTimeout("Read timed out."))
     assert daemon._is_connect_failure(requests.exceptions.ConnectTimeout("t"))
+
+
+def test_on_restart_hook_runs_before_one_moment(daemon, spoken, monkeypatch):
+    """The buffer-phrase coordination hook fires before the local announcement, only on a restart."""
+    order = []
+    monkeypatch.setattr(daemon, "VOICE_TURN_RESTART_RETRY_S", 0.0)
+    monkeypatch.setattr(daemon, "_espeak_local", lambda t: order.append(("say", t)))
+    srv = _Server([(502, {}), (200, {"ok": True})])
+    try:
+        monkeypatch.setattr(daemon, "ZOE_URL", srv.url)
+        daemon._post_turn_riding_restart({}, lambda: order.append("hook"))
+        assert order == ["hook", ("say", daemon._FALLBACK_ONE_MOMENT)]
+        order.clear()
+        srv.script[:] = [(200, {"ok": True})]
+        daemon._post_turn_riding_restart({}, lambda: order.append("hook"))
+        assert order == []
+    finally:
+        srv.close()
