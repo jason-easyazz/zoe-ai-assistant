@@ -206,3 +206,11 @@ async def test_synthetic_allowlist_opts_a_lab_user_back_in(wired, monkeypatch):
                    valence="neg", intensity=0.9, age_h=26)])
     res = await _run(_FakeDB(users=["demo_alice", "guest"]))
     assert [r.user_id for r in res] == ["demo_alice"]
+
+
+async def test_followup_context_carries_household_local_mention_wording(wired):
+    """Owner report 2026-11-02: a worry from the day before was voiced as "this morning" because the composer got no time. The trigger now computes the wording in code."""
+    wired([_moment("m9", "Someone has been anxious about a thing", valence="neg", intensity=0.9, age_h=26)])
+    r = (await _run(_FakeDB(users=["u1"])))[0]
+    assert r.context["mentioned"] == "yesterday afternoon"
+    assert r.context["mentioned_at"].startswith("Sat 4 Jul 2026 12:00 (UTC+8")

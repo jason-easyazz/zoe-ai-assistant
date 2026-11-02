@@ -456,6 +456,25 @@ def _day_first_hint(message: str) -> str:
         return ""
 
 
+def _now_line_enabled() -> bool:
+    try:
+        from typed_env import env_bool
+
+        return env_bool("ZOE_NOW_LINE", True)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _now_line() -> str:
+    """``time_utils.now_line`` that can never fail the turn."""
+    try:
+        from time_utils import now_line
+
+        return now_line()
+    except Exception:  # noqa: BLE001 - a clock line is optional; the turn is not
+        return ""
+
+
 def _wrap_message_with_identity(message: str, user_id: str) -> str:
     """Prefix ``message`` with the acting-identity envelope, or return it unchanged.
 
@@ -2753,6 +2772,14 @@ async def _run_flue_brain_streaming_turn(
     date_hint = _day_first_hint(message)
     if date_hint:
         brain_message = f"{brain_message}\n{date_hint}"
+    # The brain is told the household-local clock only when this turn carries something it could
+    # date ("you told me yesterday", a recall packet's "(Sun 1 Nov, yesterday evening)", a day brief
+    # or a raise): without it a bare fact gets "this morning" invented. One line, tail of the
+    # message (no cache-prefix cost); kill switch ZOE_NOW_LINE=0.
+    if (recall_block or continuity_block or hop_block or day_block or raise_block) and _now_line_enabled():
+        _now = _now_line()
+        if _now:
+            brain_message = f"{brain_message}\n{_now}"
     if verify_block:  # the live check rides last: closest to the reply
         brain_message = f"{brain_message}\n{verify_block}"
     else:

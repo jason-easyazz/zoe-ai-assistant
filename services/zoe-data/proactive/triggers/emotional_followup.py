@@ -126,6 +126,9 @@ class EmotionalFollowUpTrigger(ProactiveTrigger):
             if moment is None:
                 continue
             mem_id, fact, meta = moment
+            from time_utils import clock_stamp, humanize_when
+
+            added = meta.get("added_at")
             results.append(
                 TriggerResult(
                     user_id=user_id,
@@ -138,6 +141,9 @@ class EmotionalFollowUpTrigger(ProactiveTrigger):
                         "valence": str(meta.get("candidate_valence") or ""),
                         "intensity": _intensity(meta),
                         "user_id": user_id,
+                        # Household-local wording computed in code, so the composer never guesses it.
+                        "mentioned": humanize_when(added, now),
+                        "mentioned_at": clock_stamp(added),
                     },
                 )
             )
