@@ -140,6 +140,21 @@ def test_raise_block_carries_the_clock_and_forbids_inventing_when():
     assert "It is now" not in ev.block  # a calendar event states its own time
 
 
+def test_the_core_lane_gets_the_same_clock_rule_as_flue():
+    """Cross-review: the core lane wrapped ``raised.body`` bare, so only Flue carried the clock / no-invented-when rule."""
+    import inspect
+
+    import zoe_core_client as core
+    from proactive import selector as sel
+
+    r = sel.Raise(user_id="u", session_id="s", candidate_id="c", kind="open_loop", shape="cue",
+                  text="a thing", hint="ask", token="t")
+    assert r.content.startswith(r.body) and "It is now " in r.content and r.content in r.block
+    msg = core._compose_message("hi", history=None, db_memory_context=None, portrait=None, voice_mode=False, raise_body=r.content)
+    assert "It is now " in msg and "never say when" in msg
+    assert "raise_body=raised.content" in inspect.getsource(core)  # the call site passes the rule-carrying text, not the bare body
+
+
 def test_composer_prompt_carries_the_clock(monkeypatch):
     from proactive import composer
 

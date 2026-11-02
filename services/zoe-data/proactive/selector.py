@@ -319,7 +319,13 @@ class Raise:
     def block(self) -> str:
         """The Flue seam's block, appended after the user's words."""
         head = RAISE_OPEN_GREETING if (self.shape == "greeting" and self.lifecycle) else RAISE_OPEN
-        return f"{head}\n{self.body}{self._when_rule()}\n{RAISE_CLOSE}"
+        return f"{head}\n{self.content}\n{RAISE_CLOSE}"
+
+    @property
+    def content(self) -> str:
+        """The raise text BOTH brain lanes inject (Flue wraps it in ``block``; the core lane in ``[RAISE]``): the body plus the
+        clock / no-invented-when rule, so neither lane gets the undated fact bare."""
+        return f"{self.body}{self._when_rule()}"
 
     def _when_rule(self) -> str:
         """A loop or moment has no stored mention time, so the brain is told the real clock and
