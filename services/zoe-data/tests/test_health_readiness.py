@@ -52,8 +52,42 @@ def test_health_stays_200_liveness_on_cold_box(monkeypatch):
             # uninitialised pool (cold box) fails OPEN — liveness stays 200
             "detail": payload["db_pool"]["detail"],
         },
+        "last_voice_turn_age_s": payload["last_voice_turn_age_s"],
     }
     assert payload["db_pool"]["healthy"] is True
+
+
+def test_health_exposes_last_voice_turn_age_for_the_deploy_quiet_wait(monkeypatch):
+    """scripts/maintenance/wait_household_quiet.sh reads this; null = no turn since start."""
+    import main
+    import voice_activity
+
+    monkeypatch.setitem(main._pool_health_cache, "checked_at", 0.0)
+    monkeypatch.setattr(voice_activity, "last_activity_age_s", lambda *a: 42.349)
+    assert asyncio.run(main.root_health())["last_voice_turn_age_s"] == 42.3
+    monkeypatch.setattr(voice_activity, "last_activity_age_s", lambda *a: None)
+    assert asyncio.run(main.root_health())["last_voice_turn_age_s"] is None
+
+    def boom(*a):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(voice_activity, "last_activity_age_s", boom)
+    body = asyncio.run(main.root_health())  # the signal must never fail /health
+    assert body["status"] == "ok" and body["last_voice_turn_age_s"] is None
+
+
+def test_health_voice_age_ignores_unfiltered_voice_sessions(monkeypatch):
+    """A probe/harness panel command refreshes _VOICE_SESSIONS without a traffic-class check; /health must not call it household activity."""
+    import types
+    import main
+    import voice_activity
+
+    monkeypatch.setitem(main._pool_health_cache, "checked_at", 0.0)
+    monkeypatch.setattr(voice_activity, "_LAST_VOICE_ACTIVITY_MONO", None)
+    import time
+    fake = types.SimpleNamespace(_VOICE_SESSIONS={"s": {"last_at": time.monotonic()}})
+    monkeypatch.setitem(sys.modules, "routers.voice_tts", fake)
+    assert asyncio.run(main.root_health())["last_voice_turn_age_s"] is None
 
 
 def test_readyz_reports_not_ready_then_ready(monkeypatch):
@@ -364,3 +398,41 @@ def test_stt_disabled_uses_typed_env_per_call(monkeypatch, raw, expected):
     assert main._stt_disabled() is expected
     monkeypatch.delenv("ZOE_STT_DISABLED")
     assert main._stt_disabled() is False
+
+
+def test_voice_activity_stamp_counts_without_a_session_table_entry(monkeypatch):
+    """LiveKit turns and explicit-session_id commands never touch _VOICE_SESSIONS; the stamp covers them."""
+    import omi_recordings as omi
+    import voice_activity as va
+
+    monkeypatch.setattr(va, "_LAST_VOICE_ACTIVITY_MONO", None)
+    monkeypatch.delitem(sys.modules, "routers.voice_tts", raising=False)
+    assert omi.last_voice_age_s(1000.0) is None  # control: nothing recorded -> none
+    va.note_voice_activity()
+    age = omi.last_voice_age_s()
+    assert age is not None and 0.0 <= age < 5.0
+    assert omi.voice_busy()
+
+
+def test_every_voice_entry_point_stamps_activity():
+    import inspect
+    from routers import voice_livekit, voice_tts
+
+    assert "note_voice_activity" in inspect.getsource(voice_tts.voice_command)
+    assert "note_voice_activity" in inspect.getsource(voice_tts.voice_transcribe)
+    assert inspect.getsource(voice_livekit).count("note_voice_activity") >= 3
+
+
+@pytest.mark.parametrize("cls,stamps", [("household", True), ("probe", False), ("harness", False), ("ci", False)])
+def test_only_household_traffic_stamps_voice_activity(monkeypatch, cls, stamps):
+    """A replay probe / harness / CI turn must not look like somebody talking (it would hold the deploy wait)."""
+    import traffic_class
+    import voice_activity as va
+
+    monkeypatch.setattr(va, "_LAST_VOICE_ACTIVITY_MONO", None)
+    token = traffic_class.bind(cls)
+    try:
+        va.note_voice_activity()
+    finally:
+        traffic_class.reset(token)
+    assert (va.last_activity_age_s() is not None) is stamps

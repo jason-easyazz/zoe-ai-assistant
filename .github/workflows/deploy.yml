@@ -506,6 +506,17 @@ jobs:
           docker compose -f docker-compose.modules.yml up -d --no-deps --wait --wait-timeout 180 ${TARGETS}
           rm -f "${PENDING_FILE}"
 
+      # QUIET-HOUSEHOLD WAIT (owner 2026-11-02, "she is there when spoken to"): do not restart
+      # zoe-data mid-conversation. Holds while a panel voice turn happened in the last 10 min
+      # (zoe-data /health `last_voice_turn_age_s`), up to 60 min, then FAILS OPEN and deploys.
+      # Docs-only deploys skip it; the night-window rules (night_busy.sh deploy) are the one
+      # thing it never fails open on. Separate step so the restart step below stays untouched.
+      - name: Wait for a quiet household (do not restart mid-conversation)
+        timeout-minutes: 210
+        run: |
+          cd "${ZOE_CHECKOUT:-/home/zoe/assistant}"
+          bash scripts/maintenance/wait_household_quiet.sh
+
       # zoe-data is a user service — no sudo needed.
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.
       - name: Restart zoe-data (user service)

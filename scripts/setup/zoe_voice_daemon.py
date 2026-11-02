@@ -731,6 +731,10 @@ _shutdown = threading.Event()
 # hiccups without masking persistent auth/configuration problems.
 VOICE_API_MAX_RETRIES = max(0, int(os.environ.get("VOICE_API_MAX_RETRIES", "2")))
 VOICE_API_RETRY_BACKOFF_S = max(0.0, float(os.environ.get("VOICE_API_RETRY_BACKOFF_S", "0.35")))
+# Blocking-turn restart ride-through: how long to wait before the ONE retry after a
+# restart-shaped failure (502 / connect refused). A zoe-data restart takes seconds, so the
+# generic 0.35 s backoff above never outlasts one.
+VOICE_TURN_RESTART_RETRY_S = max(0.0, float(os.environ.get("VOICE_TURN_RESTART_RETRY_S", "4.0")))
 # Monotonic time: ignore wake-word triggers until this (acoustic echo / TTS tail).
 _ignore_wake_until: float = 0.0
 _last_wake_at: float = 0.0
@@ -905,6 +909,9 @@ def _rn34_warmup() -> None:
 # ── Recording-active flag (B14) ──────────────────────────────────────────────
 # Set to True during the entire wake→record→STT cycle so ambient thread pauses.
 _recording_active = threading.Event()
+# Held for the whole restart-recovery path (local "one moment", backoff, retry) so the announcement poller
+# cannot speak over it even though _recording_active is cleared there.
+_restart_recovery_active = threading.Event()
 
 # ── Shared audio fan-out queues (A6) ─────────────────────────────────────────
 # Single PyAudio input stream; chunks distributed to consumers via queues.
@@ -1264,7 +1271,48 @@ def _close_quietly(response) -> None:
             pass
 
 
-def _api_post(path: str, data: dict, timeout: int = 60, retries: int | None = None) -> dict:
+def _is_connect_failure(exc: BaseException) -> bool:
+    """True only when the request provably never reached the server (refused / unreachable /
+    connect timeout). A dropped connection mid-request ("Connection aborted", a read timeout)
+    is NOT one: the server may have run the turn, and a retry could double-execute a write."""
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return True
+    if not isinstance(exc, requests.exceptions.ConnectionError):
+        return False
+    text = str(exc)
+    if "Connection aborted" in text or "Read timed out" in text:
+        return False
+    return ("Failed to establish a new connection" in text or "Connection refused" in text
+            or "NewConnectionError" in text)
+
+
+def _api_post(path: str, data: dict, timeout: int = 60, retries: int | None = None,
+              restart_only: bool = False) -> dict:
+    """POST to zoe-data; returns the JSON body or ``{"ok": False, "error": ...}``.
+
+    ``restart_only`` (the blocking turn, which can execute a write): do NOT run the generic
+    retry loop. Make one attempt and flag a restart-shaped failure (HTTP 502 or a connect
+    failure - the request never ran) as ``"restartish": True`` so the caller can ride out a
+    deploy restart. Any other failure, including a 500/503/504 or a dropped connection, is
+    final and never retried.
+    """
+    if restart_only:
+        try:
+            r = _zoe_http().post(f"{ZOE_URL}{path}", json=data, headers=_headers, timeout=timeout, verify=VERIFY_SSL)
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            log.error("API error %s: HTTP %s", path, status)
+            return {"ok": False, "error": f"HTTP {status}", "restartish": status == 502}
+        except requests.exceptions.SSLError:
+            raise
+        except requests.exceptions.RequestException as exc:
+            log.error("API error %s: %s", path, exc)
+            return {"ok": False, "error": str(exc), "restartish": _is_connect_failure(exc)}
+        except Exception as exc:
+            log.error("API error %s: %s", path, exc)
+            return {"ok": False, "error": str(exc)}
     url = f"{ZOE_URL}{path}"
     max_retries = VOICE_API_MAX_RETRIES if retries is None else max(0, int(retries))
     last_error = "unknown"
@@ -3705,6 +3753,35 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     return False
 
 
+_FALLBACK_ONE_MOMENT = "One moment."
+_FALLBACK_UNREACHABLE = "Sorry, I can't reach my brain right now. Try again in a minute."
+
+
+def _post_turn_riding_restart(turn_payload: dict, on_restart=None) -> dict:
+    """POST /api/voice/turn; on a restart-shaped failure (502 / connect refused - the request
+    provably did not run) say "One moment." locally and retry exactly once after a backoff.
+    Everything else (500 with a body, 503/504, a dropped connection) is returned as is."""
+    resp = _api_post("/api/voice/turn", turn_payload, restart_only=True)
+    if resp.get("ok", True) is not False or not resp.get("restartish"):
+        return resp
+    log.warning("voice/turn: zoe-data unreachable (%s) - local 'one moment', one retry in %.1fs",
+                resp.get("error"), VOICE_TURN_RESTART_RETRY_S)
+    _restart_recovery_active.set()
+    try:
+        _recording_active.clear()
+        if on_restart is not None:
+            # Let the caller silence/finish its "thinking" buffer phrase so the two never overlap.
+            try:
+                on_restart()
+            except Exception:
+                log.debug("on_restart hook failed", exc_info=True)
+        _espeak_local(_FALLBACK_ONE_MOMENT)
+        time.sleep(VOICE_TURN_RESTART_RETRY_S)
+        return _api_post("/api/voice/turn", turn_payload, restart_only=True)
+    finally:
+        _restart_recovery_active.clear()
+
+
 def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True,
                     conversation: bool = False, voice_claim: object = _CLAIM_UNSET,
                     window: str = "", text: "str | None" = None) -> bool:
@@ -3761,6 +3838,23 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     # answer is actually slow. Fast/cached turns (~0.5s) return before the delay
     # and play the answer directly — no filler, no added latency.
     _turn_result: dict = {}
+    _restart_seen = threading.Event()
+    _buf_lock = threading.Lock()
+    _buf_holder: dict = {}
+
+    def _on_restart():
+        # Restart handling owns the speaker: no new buffer phrase, and wait out one already playing.
+        with _buf_lock:
+            _restart_seen.set()
+            _bp = _buf_holder.get("proc")
+        if _bp is not None:
+            try:
+                _bp.wait(timeout=4)
+            except Exception:
+                try:
+                    _bp.terminate()
+                except Exception:
+                    pass
 
     def _run_turn():
         if text:
@@ -3771,7 +3865,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
                 {"panel_id": PANEL_ID, "source": "satellite_pi", "audio_base64": audio_b64_wav},
             )
         else:
-            _turn_result["resp"] = _api_post("/api/voice/turn", turn_payload)
+            _turn_result["resp"] = _post_turn_riding_restart(turn_payload, _on_restart)
 
     _t_post_start = _time.monotonic()
     _turn_thread = threading.Thread(target=_run_turn, daemon=True)
@@ -3781,8 +3875,11 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     _buffer_proc = None
     if _turn_thread.is_alive():
         # Answer is taking a while → fill the gap with a "thinking" phrase.
-        _buffer_proc = _play_buffer_phrase()
+        with _buf_lock:
+            if not _restart_seen.is_set():
+                _buf_holder["proc"] = _play_buffer_phrase()
         _turn_thread.join()
+        _buffer_proc = _buf_holder.get("proc")
 
     resp = _turn_result.get("resp", {}) or {}
     ok = resp.get("ok", False)
@@ -3812,7 +3909,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     if not ok and not resp.get("audio_base64"):
         log.warning("Jetson voice turn failed (%s) — playing local espeak fallback", resp.get("error", "unknown_error"))
         _recording_active.clear()
-        _espeak_local("Zoe is not available right now. Please check the connection.")
+        _espeak_local(_FALLBACK_UNREACHABLE)
         return False
 
     transcript = resp.get("text", "")
@@ -4152,7 +4249,7 @@ def _daemon_busy() -> bool:
     """True while speaking an announce would overlap live voice activity:
     a wake→record→STT cycle, a reply's TTS playback, or the post-play cooldown
     (the tail of a turn, where follow-up windows may still open)."""
-    if _recording_active.is_set():
+    if _recording_active.is_set() or _restart_recovery_active.is_set():
         return True
     with _tts_process_lock:
         if _tts_process is not None and _tts_process.poll() is None:
