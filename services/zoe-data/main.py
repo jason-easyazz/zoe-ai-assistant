@@ -2441,6 +2441,15 @@ async def root_health():
             "detail": _pool_health_cache["detail"],
         },
     }
+    # Deploy quiet-wait signal (scripts/maintenance/wait_household_quiet.sh): seconds since the
+    # newest panel voice turn, null when none since this process started. A bare number, no
+    # household data; never allowed to fail /health.
+    try:
+        from omi_recordings import last_voice_age_s
+        _age = last_voice_age_s()
+        body["last_voice_turn_age_s"] = None if _age is None else round(max(0.0, _age), 1)
+    except Exception:  # noqa: BLE001
+        body["last_voice_turn_age_s"] = None
     if not _pool_health_cache["healthy"]:
         return JSONResponse(body, status_code=503)
     return body

@@ -52,8 +52,28 @@ def test_health_stays_200_liveness_on_cold_box(monkeypatch):
             # uninitialised pool (cold box) fails OPEN — liveness stays 200
             "detail": payload["db_pool"]["detail"],
         },
+        "last_voice_turn_age_s": payload["last_voice_turn_age_s"],
     }
     assert payload["db_pool"]["healthy"] is True
+
+
+def test_health_exposes_last_voice_turn_age_for_the_deploy_quiet_wait(monkeypatch):
+    """scripts/maintenance/wait_household_quiet.sh reads this; null = no turn since start."""
+    import main
+    import omi_recordings
+
+    monkeypatch.setitem(main._pool_health_cache, "checked_at", 0.0)
+    monkeypatch.setattr(omi_recordings, "last_voice_age_s", lambda: 42.349)
+    assert asyncio.run(main.root_health())["last_voice_turn_age_s"] == 42.3
+    monkeypatch.setattr(omi_recordings, "last_voice_age_s", lambda: None)
+    assert asyncio.run(main.root_health())["last_voice_turn_age_s"] is None
+
+    def boom():
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(omi_recordings, "last_voice_age_s", boom)
+    body = asyncio.run(main.root_health())  # the signal must never fail /health
+    assert body["status"] == "ok" and body["last_voice_turn_age_s"] is None
 
 
 def test_readyz_reports_not_ready_then_ready(monkeypatch):

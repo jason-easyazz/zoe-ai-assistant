@@ -60,6 +60,11 @@ EOF
     exit 1
 fi
 
+# Hold for a quiet household BEFORE taking the deploy lock (a 60 min wait must not starve the CD
+# runner's pull step of it). Fails open after the max wait; ZOE_DEPLOY_QUIET_WAIT=0 skips it.
+# No DEPLOY_BASE_SHA here, so it never assumes a docs-only deploy. Own step, own script.
+bash "$SCRIPT_DIR/wait_household_quiet.sh" || exit 1
+
 # Serialize against the CONTINUOUS-DEPLOY runner. `.github/workflows/deploy.yml`
 # runs on every push to main and fetches main into refs/zoe-deploy/main + `git reset --hard`
 # onto it on THIS same shared .git/worktree. If a merge lands while this
