@@ -192,6 +192,43 @@ def test_night_window_rules_are_never_failed_open(tmp_path):
     assert p.returncode == 0 and "quiet, deploying" in p.stdout
 
 
+def test_night_window_opening_mid_wait_blocks_the_fail_open_exit(tmp_path):
+    # free on the first check, busy from then on; household always busy with a 1 min max wait:
+    # without the re-check before the fail-open exit this would restart inside the window.
+    cnt = tmp_path / "nb_count"
+    cnt.write_text("0")
+    nb = tmp_path / "night_busy.sh"
+    nb.write_text(f"#!/bin/bash\nn=$(cat {cnt}); echo $((n+1)) > {cnt}\n[ \"$n\" -ge 1 ] && exit 0 || exit 1\n")
+    p, n = _run(tmp_path, [5], env_extra={"ZOE_NIGHT_BUSY_SCRIPT": str(nb), "ZOE_DEPLOY_QUIET_MAX_WAIT_MIN": "1",
+                                          "ZOE_DEPLOY_NIGHT_WAIT_MAX_MIN": "1"})
+    assert p.returncode == 1, p.stdout
+    assert "failing open, deploying anyway" in p.stdout and "::error::night window rules" in p.stdout
+
+
+def test_docs_only_target_sha_is_honoured_for_the_post_merge_recheck(tmp_path):
+    repo, base = _repo_with_change(tmp_path, "docs/x.md")
+    head = _git(repo, "rev-parse", "HEAD")
+    (repo / "later.py").write_text("x")  # worktree HEAD moves on; the explicit target stays docs-only
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "later")
+    env_head = _run_in_repo(tmp_path, repo, base)
+    assert "household not quiet" in env_head.stdout  # HEAD includes code: waits
+    health = tmp_path / "h.json"
+    p = subprocess.run(["bash", str(SCRIPT)], cwd=repo, capture_output=True, text=True, timeout=60,
+                       env={"PATH": os.environ["PATH"], "HOME": str(tmp_path), "DEPLOY_BASE_SHA": base,
+                            "DEPLOY_TARGET_SHA": head, "ZOE_DEPLOY_HEALTH_URL": f"file://{health}",
+                            "ZOE_NIGHT_BUSY_SCRIPT": "/nonexistent"})
+    assert p.returncode == 0 and "docs-only deploy" in p.stdout
+
+
+def test_deploy_live_rechecks_after_the_merge_before_the_restart():
+    text = DEPLOY_LIVE.read_text()
+    merge = text.index('merge --ff-only "$target"')
+    recheck = text.index("wait_household_quiet.sh", merge)
+    assert recheck < text.index('systemctl --user restart "$SERVICE"', merge)
+    assert "DEPLOY_TARGET_SHA" in text[recheck - 300:recheck + 100]
+
+
 def test_deploy_yml_step_sits_right_before_the_zoe_data_restart_and_uses_the_script():
     steps = yaml.safe_load(DEPLOY_YML.read_text())["jobs"]["deploy"]["steps"]
     names = [s.get("name") for s in steps]

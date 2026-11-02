@@ -140,6 +140,13 @@ fi
 # the gate ran (a silent bypass of the very gate above). Greptile P1 on #1344.
 git -C "$LIVE" merge --ff-only "$target"
 
+# Short recheck right before the restart (review on #2234): the long wait above ran BEFORE the
+# lock, so a turn or a night window may have started since. Bounded small because the deploy
+# lock is held here (the CD runner's pull waits 300 s for it). Docs-only is detectable now.
+(cd "$LIVE" && DEPLOY_BASE_SHA="$prev" DEPLOY_TARGET_SHA="$target" \
+    ZOE_DEPLOY_QUIET_MAX_WAIT_MIN="${ZOE_DEPLOY_QUIET_RECHECK_MIN:-2}" \
+    bash "$SCRIPT_DIR/wait_household_quiet.sh") || exit 1
+
 echo "▶ restarting $SERVICE…"
 systemctl --user restart "$SERVICE"
 
