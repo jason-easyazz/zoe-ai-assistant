@@ -739,3 +739,56 @@ async def _count(path):
             return (await cur.fetchone())[0]
     finally:
         await db.close()
+
+
+# ── right to be forgotten ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def test_forget_user_erases_that_members_alarms_and_events_only(dbfile, monkeypatch):
+    import contextlib
+
+    import db_pool
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        db = await aiosqlite.connect(dbfile)
+        try:
+            yield db
+        finally:
+            await db.close()
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    mine = run(_mk(dbfile, owner=ANN, label="Take my medication"))
+    other = run(_mk(dbfile, owner=BOB, label="Bob's"))
+    house = run(_mk(dbfile, owner=alarms.HOUSEHOLD, label="School run"))
+    assert run(alarms.forget_user(ANN)) == 1
+    assert run(_get(dbfile, mine["id"])) is None and run(_events(dbfile, mine["id"])) == []
+    assert run(_get(dbfile, other["id"])) is not None and run(_get(dbfile, house["id"])) is not None
+    assert run(_events(dbfile, other["id"])) == ["created"]
+    assert run(alarms.forget_user(ANN)) == 0 and run(alarms.forget_user("")) == 0 and run(alarms.forget_user(alarms.HOUSEHOLD)) == 0
+
+
+def test_forget_user_is_fail_closed_but_a_missing_table_is_nothing_to_erase(tmp_path, monkeypatch):
+    import contextlib
+
+    import db_pool
+
+    @contextlib.asynccontextmanager
+    async def empty():
+        db = await aiosqlite.connect(str(tmp_path / "empty.db"))  # migration never ran
+        try:
+            yield db
+        finally:
+            await db.close()
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", empty)
+    assert run(alarms.forget_user(ANN)) == 0
+
+    @contextlib.asynccontextmanager
+    async def broken():
+        raise RuntimeError("store down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", broken)
+    with pytest.raises(RuntimeError):
+        run(alarms.forget_user(ANN))
