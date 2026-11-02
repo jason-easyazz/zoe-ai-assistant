@@ -301,7 +301,7 @@ def make(tmp_path, *, cfg_kw=None, argv=(), **host_kw):
               **(cfg_kw or {})}      # the optional entry points are absent unless a test brings its own (a plain skip, never a failed night)      # the real entry point lives on another branch: tests never depend on whether it is merged
     cfg = nw.NightCfg(lock_path=str(tmp_path / "brain.lock"), night_dir=tmp_path / "night", report_dir=tmp_path / "reports", buddyinfo=str(tmp_path / "buddyinfo"), meminfo=str(tmp_path / "meminfo"),
                       blackouts=((250, 292),), contig_min_blocks=64, health_wait_s=20.0, quiet_wait_max_min=2.0, quiet_poll_s=10.0, busy_wait_max_min=2.0, busy_poll_s=10.0,
-                      bakeoff_dir=tmp_path / "bakeoff", **cfg_kw)
+                      test_lane_path=str(tmp_path / "test-lane.lock"), test_lane_wait_min=1.0, bakeoff_dir=tmp_path / "bakeoff", **cfg_kw)
     cfg = nw.configure(args, cfg)
     cfg.bakeoff_dir = tmp_path / "bakeoff"
     host = FakeHost(tmp_path, **host_kw)
@@ -677,6 +677,113 @@ def test_a_job_that_pushes_memory_under_the_floor_is_killed_aborts_and_restores(
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
 
 
+def _dip_in_jobs(host, *, to_mib, until_s=None):
+    """While a job runs, MemAvailable reads ``to_mib`` (until ``until_s`` seconds after the job's first sample, or for good)."""
+    real, st = host.mem_available_mb, {"t0": None}
+
+    def mem(path):
+        m = real(path)
+        if getattr(host, "in_job", False):
+            st["t0"] = host.t if st["t0"] is None else st["t0"]
+            if until_s is None or host.t - st["t0"] < until_s:
+                return to_mib
+        return m
+    host.mem_available_mb = mem
+
+
+def test_a_transient_dip_under_the_floor_is_waited_out_not_aborted(tmp_path):
+    """2026-10-29 / 10-30: omi_day_review was killed at 1,156 and 1,193 MiB against a 1,200 floor and the night ended. A dip that recovers inside the grace carries on."""
+    w, host, _ = make(tmp_path)
+    _dip_in_jobs(host, to_mib=1000.0, until_s=30.0)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    msgs = [e["msg"] for e in w.rec["events"]]
+    assert any("floor: largest resident programs" in m and "waiting up to" in m for m in msgs) and any("back to" in m and "carrying on" in m for m in msgs)
+    assert not any(j["status"] == "killed" for j in w.jobs)
+
+
+def test_a_dip_that_does_not_recover_inside_the_grace_still_aborts_and_restores(tmp_path):
+    w, host, _ = make(tmp_path)
+    _dip_in_jobs(host, to_mib=1000.0)                                          # negative control: the same dip, never recovering
+    assert w.run() == nw.EXIT_ABORTED and "still under it" in w.outcome
+    assert any(j["status"] == "killed" for j in w.jobs)
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+def test_a_fall_under_the_hard_floor_aborts_at_once_without_waiting(tmp_path):
+    w, host, _ = make(tmp_path)
+    _dip_in_jobs(host, to_mib=nw.FLOOR_HARD_FRACTION * 1200.0 - 50.0)
+    assert w.run() == nw.EXIT_ABORTED and "hard floor" in w.outcome
+    assert not any("waiting up to" in e["msg"] for e in w.rec["events"] if "floor" in e["msg"] and "carrying" not in e["msg"])
+
+
+def _lane_probe(host, lane_path, seen):
+    """Record, at every job start, whether a second process could take the test lane (False = the window holds it)."""
+    real = host.run_watched
+
+    def run_watched(argv, timeout, env, tick, log_path, interval=5.0):
+        fd = os.open(lane_path, os.O_CREAT | os.O_RDWR, 0o666)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            seen.append(True)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except BlockingIOError:
+            seen.append(False)
+        finally:
+            os.close(fd)
+        return real(argv, timeout, env, tick, log_path, interval)
+    host.run_watched = run_watched
+
+
+def test_the_window_holds_the_test_lane_while_the_jobs_run_and_frees_it_at_the_end(tmp_path):
+    """Agents run tests under `flock -x /tmp/zoe-test-lane.lock`; nothing made the window hold it, so tests ran beside the 12B."""
+    w, host, cfg = make(tmp_path)
+    seen: "list[bool]" = []
+    _lane_probe(host, cfg.test_lane_path, seen)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert seen and not any(seen)                                              # no one else could take the lane during any job
+    fd = os.open(cfg.test_lane_path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)                         # and it is free again after the run
+    finally:
+        os.close(fd)
+
+
+def test_without_the_hold_the_lane_would_be_free_during_the_jobs_negative_control(tmp_path):
+    w, host, cfg = make(tmp_path)
+    seen: "list[bool]" = []
+    _lane_probe(host, str(tmp_path / "other.lock"), seen)                      # probing a lane the window does not hold: the probe itself can see "free"
+    assert w.run() == nw.EXIT_OK and seen and all(seen)
+
+
+def test_a_running_test_is_waited_for_then_the_window_goes_on_without_the_lane(tmp_path):
+    w, host, cfg = make(tmp_path)
+    held = os.open(cfg.test_lane_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    try:
+        assert w.run() == nw.EXIT_OK, w.outcome                                # a held lane never loses the night
+    finally:
+        os.close(held)
+    msgs = [e["msg"] for e in w.rec["events"]]
+    assert any("waiting up to" in m and "test lane" in m for m in msgs) and any("going on without the lane" in m for m in msgs)
+    # and it is released the moment the test leaves
+    w2, host2, cfg2 = make(tmp_path)
+    held2 = os.open(cfg2.test_lane_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.flock(held2, fcntl.LOCK_EX)
+    real_sleep, n = host2.sleep, {"n": 0}
+
+    def sleep(sec):
+        n["n"] += 1
+        if n["n"] >= 2:
+            fcntl.flock(held2, fcntl.LOCK_UN)
+        real_sleep(sec)
+    host2.sleep = sleep
+    try:
+        assert w2.run() == nw.EXIT_OK, w2.outcome
+    finally:
+        os.close(held2)
+    assert any("test lane held" in e["msg"] for e in w2.rec["events"])
+
+
 def test_the_hard_cap_keeps_a_late_job_from_starting_and_the_wake_still_happens(tmp_path):
     w, host, _ = make(tmp_path, job_s=52 * 60.0)
     w.run()
@@ -868,10 +975,10 @@ def test_a_failed_12b_start_gets_one_compact_and_restart_inside_the_cap_and_the_
 
 def test_two_failed_12b_starts_restore_run_no_12b_job_write_the_alarm_and_log_night_lost(tmp_path):
     logged = []
-    w, host, cfg = make(tmp_path, llm_dies_first=2)
+    w, host, cfg = make(tmp_path, llm_dies_first=3)
     w.log = logged.append
     assert w.run() == nw.EXIT_ABORTED and "did not load" in w.outcome
-    assert len(twelve_b_starts(host)) == 2                                                  # one retry, never a third start
+    assert len(twelve_b_starts(host)) == nw.LOAD_MAX_ATTEMPTS == 3                          # two retries, never a fourth start
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA] and not cfg.marker.exists()
     assert ran_on_the_12b(host) == []                                                       # nothing ran on the 12B (the 4B fallbacks after the wake are the old behaviour)
     alarm = (cfg.report_dir / "ALARM").read_text()
@@ -879,6 +986,21 @@ def test_two_failed_12b_starts_restore_run_no_12b_job_write_the_alarm_and_log_ni
     assert any(m.startswith("NIGHT LOST:") for m in logged) and w.rec["night_lost"]
     assert json.loads(w.failures_path.read_text())["count"] == 1                            # ONE failed window, not one per attempt
     assert host.idx("--user stop zoe-night-12b") < host.idx(f"--user start {nw.BRAIN}")
+
+
+def test_2026_11_02_a_second_failed_start_no_longer_loses_the_night_the_third_loads_with_fewer_gpu_layers(tmp_path):
+    """11-02: attempts 1 and 2 both died on cudaMalloc / NvMap error 12 and the night was lost (dreaming ran on the 4B). Attempt 3 now runs, with the GPU layer count dropped."""
+    w, host, cfg = make(tmp_path, llm_dies_first=2)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    starts = [host.joined()[i] for i in twelve_b_starts(host)]
+    assert len(starts) == 3
+    ngl = [re.search(r"--n-gpu-layers (\d+)", c).group(1) for c in starts]
+    assert ngl == ["34", "34", str(34 - nw.LOAD_LAST_RESORT_NGL_DROP)]                      # only the last resort sheds layers
+    assert host.count("compact_memory") >= 2 and w.load_ok and not w.night_lost and not (cfg.report_dir / "ALARM").exists()
+    assert w.rec["load_retry"]["loaded"] and w.rec["load_retry"]["attempts"] == 3 and w.rec["arith"]["ngl_used"] == 28
+    assert "zoe-nightly-dreaming.py" in ran_on_the_12b(host)
+    assert json.loads(w.failures_path.read_text())["count"] == 0
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
 
 
 def test_a_12b_that_loads_first_time_runs_no_extra_compaction_and_no_second_start(tmp_path):
@@ -892,7 +1014,7 @@ def test_a_12b_that_loads_first_time_runs_no_extra_compaction_and_no_second_star
 def test_no_second_attempt_when_the_cap_has_no_room_for_it_but_the_night_is_still_reported_lost(tmp_path):
     w, host, cfg = make(tmp_path, argv=["--cap-min", "15"], llm_dies_first=1)                # 15 min cap - 12 min restore reserve = 3 min: under the retry's 5.5 min
     assert w.run() == nw.EXIT_ABORTED and "did not load" in w.outcome
-    assert len(twelve_b_starts(host)) == 1 and any("no room for a second attempt" in e["msg"] for e in w.rec["events"])
+    assert len(twelve_b_starts(host)) == 1 and any("no room for attempt 2" in e["msg"] for e in w.rec["events"])
     assert "NIGHT LOST" in (cfg.report_dir / "ALARM").read_text() and json.loads(w.failures_path.read_text())["count"] == 1
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
 
