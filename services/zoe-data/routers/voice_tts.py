@@ -4073,13 +4073,18 @@ async def voice_command(
     # gate accepted, or the PIN replay) - never the panel's recent-user fallback, which is what let anyone's "yes" run
     # another member's pending write (2026-11-02); for a member's own session (desktop, Telegram) the session itself.
     _confirm_speaker = identified_user_id if _panel_caller else effective_user
+    from user_filters import is_unidentified as _user_filters_is_unidentified
     pending = _PENDING_CONFIRMATIONS.get(panel_id)
     if pending:
         now = time.monotonic()
         if now > pending.get("expire_at", 0):
             del _PENDING_CONFIRMATIONS[panel_id]
             pending = None
-        elif pending.get("speaker") != _confirm_speaker:
+        elif pending.get("speaker") != _confirm_speaker or (
+            pending.get("speaker") is None and not _user_filters_is_unidentified(pending.get("user_id"))
+        ):
+            # (second clause) an ask with NO verified speaker may only ever run as a guest: if attribution gave that entry
+            # a member's id, no unverified "yes" is allowed to spend it - identity, not the panel, confirms a member's write.
             # Another voice, or an unverified one, inside the window: the waiting write belongs to whoever asked. These words
             # neither run it nor drop it; they are a new request from the person who said them.
             logger.info("voice/command pending confirmation held: speaker mismatch (panel=%s intent=%s)",

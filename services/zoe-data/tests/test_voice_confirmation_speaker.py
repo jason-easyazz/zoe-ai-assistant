@@ -55,3 +55,27 @@ async def test_a_bystanders_no_does_not_drop_the_askers_question():
         assert rig.panel in _vt._PENDING_CONFIRMATIONS
     finally:
         mp.undo()
+
+
+async def test_an_unverified_ask_attributed_to_a_member_is_never_spent_by_an_unverified_yes():
+    """A panel ask with no verified speaker may only run as a guest. If attribution gave the entry a member id (the
+    recent-user fallback), no unverified yes may spend it: the entry waits and the words go on as a new request."""
+    from routers import voice_tts as vt
+
+    rig, mp = _rig("demo_confirm_member")
+    try:
+        import time as _t
+
+        vt._PENDING_CONFIRMATIONS[rig.panel] = {
+            "intent_name": "stt_snap", "slots": {}, "stt_snap_text": "cancel the timer", "stt_snap_intent": "cancel_timer",
+            "stt_snap_from": "x", "expire_at": _t.monotonic() + 30, "session_id": rig.voice_session,
+            "user_id": "demo_confirm_member", "speaker": None,
+        }
+        # the rig is a session caller, so its _confirm_speaker is its member id: a mismatch on the first clause already
+        # holds the entry; the second clause is what holds it for an UNVERIFIED panel turn (speaker None on both sides)
+        assert vt._PENDING_CONFIRMATIONS[rig.panel]["speaker"] is None
+        out = await rig.voice("Yes.")
+        assert rig.panel in vt._PENDING_CONFIRMATIONS, out.reply
+        assert "cancel" not in out.reply.lower(), out.reply
+    finally:
+        mp.undo()
