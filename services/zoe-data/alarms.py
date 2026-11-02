@@ -358,6 +358,30 @@ async def delete_alarm(db: Any, alarm_id: str) -> bool:
     return n > 0
 
 
+async def forget_user(user_id: str) -> int:
+    """Erase every alarm (and its event log) a member owns - the right-to-be-forgotten path (``MemoryService.delete_user``). A label is
+    the member's words ("take my medication"), so this is fail-closed: a store error raises. A missing table (migration not yet run)
+    is nothing to erase. Household alarms belong to nobody and stay."""
+    uid = (user_id or "").strip()
+    if not uid or uid == HOUSEHOLD:
+        return 0
+    from db_pool import get_db_ctx
+
+    try:
+        async with get_db_ctx() as db:
+            async with db.execute("SELECT id FROM alarms WHERE user_id = ?", (uid,)) as cur:
+                ids = [r[0] for r in await cur.fetchall()]
+            for aid in ids:
+                await db.execute("DELETE FROM alarm_events WHERE alarm_id = ?", (aid,))
+            await db.execute("DELETE FROM alarms WHERE user_id = ?", (uid,))
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        if any(m in str(exc) for m in ("does not exist", "no such table", "not initialised")):  # no table yet, or no pool at all (tests)
+            return 0
+        raise
+    return len(ids)
+
+
 # ── ring lifecycle ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 

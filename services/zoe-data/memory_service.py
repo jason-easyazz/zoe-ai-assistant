@@ -2095,6 +2095,11 @@ class MemoryService:
                 await omi_recordings.forget_user(user_id)
             except Exception as exc:  # noqa: BLE001
                 pendant_failure = exc
+            try:   # ... and their alarms (migration 0063): the labels are their words. Fail closed, like the night mind.
+                import alarms
+                await alarms.forget_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: alarm erasure failed ({type(exc).__name__})") from exc
             try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
                 import contacts_store
                 await contacts_store.forget_user(user_id)
