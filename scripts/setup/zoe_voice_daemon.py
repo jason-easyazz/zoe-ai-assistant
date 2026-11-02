@@ -3786,6 +3786,11 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
 
     resp = _turn_result.get("resp", {}) or {}
     ok = resp.get("ok", False)
+    # The conversation loop reads the end flag from _last_turn_flags, as the stream path's done frame sets it: a blocking reply
+    # (the stream's fallback) that dropped an unconfirmed voice carries it too, and must close the conversation the same way.
+    _last_turn_flags.pop("conversation_end", None)
+    if resp.get("conversation_end"):
+        _last_turn_flags["conversation_end"] = True
     _t_server = _time.monotonic() - _t_post_start
     _t_total = _time.monotonic() - _t_pi_start
     log.info(
