@@ -142,6 +142,8 @@ _ENTRIES = (
     _f('ZOE_BRAIN_PREWARM_ON_WAKE', 'bool', True),
     _f('ZOE_BRAIN_PROGRESSIVE_TOOLS', 'bool', True, doc='docs/architecture/zoe-flue-integration.md'),
     _f('ZOE_BRAIN_REPLY_RESERVE', 'str', '', doc='docs/architecture/zoe-flue-integration.md'),
+    _f('ZOE_BRAIN_PREFIX_KEEPER', 'bool', True, doc='docs/knowledge/cold-wake-2026-11-02.md'),
+    _f('ZOE_BRAIN_PREFIX_KEEPER_MIN_TOKENS', 'int', 2000, doc='docs/knowledge/cold-wake-2026-11-02.md'),
     _f('ZOE_BRAIN_SLOT_GUARD', 'bool', True, doc='docs/knowledge/brain-prefix-cache-2026-10-12.md'),
     _f('ZOE_BRAIN_SLOT_MAX_DEFER_S', 'str', '', doc='docs/knowledge/brain-prefix-cache-2026-10-12.md'),
     _f('ZOE_BRAIN_SLOT_QUIET_S', 'str', '', doc='docs/knowledge/brain-prefix-cache-2026-10-12.md'),

@@ -19537,6 +19537,8 @@
     }
   },
   "registry_unread": [
+    "ZOE_BRAIN_PREFIX_KEEPER",
+    "ZOE_BRAIN_PREFIX_KEEPER_MIN_TOKENS",
     "ZOE_COMPOSE_VOICE_BUDGET_S"
   ]
 }

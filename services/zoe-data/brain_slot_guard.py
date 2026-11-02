@@ -105,6 +105,11 @@ def starts() -> int:
     return _starts
 
 
+def waiters() -> int:
+    """Background calls waiting on (or holding) the gate right now. A batch is still draining while this is > 0."""
+    return _waiters
+
+
 def active_turns() -> int:
     """Brain turns currently in flight (a caller that holds one itself counts as one)."""
     return _active
