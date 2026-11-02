@@ -201,7 +201,11 @@ def parse(text: str, now: Optional[float] = None) -> Optional[AlarmCommand]:
             mins = int(tok) if tok.isdigit() else {**_HOURS, "fifteen": 15, "twenty": 20, "thirty": 30}[tok]
         if command_shapes.asks_or_mentions(t.strip(), destructive=True):
             return None
-        return AlarmCommand("snooze", snooze_minutes=mins)
+        if _SCOPE_QUALIFIER.search(t) or re.search(r"\bother\s+than\b|\bbut\s+not\b", t):
+            return None  # "snooze all alarms except gym": a scope this grammar cannot honour is never widened or inverted
+        lab = _LABEL.search(t) or re.search(r"\b(?:the|my)\s+([a-z0-9' ]{2,30}?)\s+alarm\b", t)
+        label = lab.group(1).strip() if lab and lab.group(1).strip() not in _NOT_A_LABEL else ""
+        return AlarmCommand("snooze", snooze_minutes=mins, target_label=label)
     # A question or a negation about a CHANGE ("don't turn off the alarm", "can I turn off the alarm", "what if I cancel it") is never a
     # write, and a list word ("what") does not turn it into one.
     writes = bool(_STOP.search(t) or _ON.search(t) or _OFF_WORD.search(t) or _CANCEL.search(t))
@@ -322,6 +326,10 @@ async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
         return _result(cmd, f"You have {len(live)} alarms. The next is {alarms.when_phrase(nxt['next_fire_at'], now)}.")
     if cmd.action == "snooze":
         live = [a for a in await alarms.ringing(db) if alarms.can_silence(a, v)]
+        if cmd.target_label:
+            live = _which(live, cmd, v)
+            if not live:
+                return _result(cmd, "I couldn't find that alarm ringing.")
         if not live:
             return _result(cmd, "No alarm is ringing right now.")
         done = []
