@@ -729,6 +729,8 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
         stage_started = time.monotonic()
         _health_update(last_stage="llm")
         try:
+            from omi_recordings import note_voice_activity as _nva
+            _nva()  # deploy quiet-wait signal: a LiveKit turn is a household conversation
             from brain_dispatch import brain_oneshot
             # P-F3: a hung brain must never wedge the pipeline — bound the call
             # and route a timeout through the same apology path as any LLM error.
@@ -802,6 +804,8 @@ async def _run_text_pipeline(local_participant, message: str, user_id: str, sess
     stage_started = time.monotonic()
     _health_update(last_stage="llm", last_error=None)
     try:
+        from omi_recordings import note_voice_activity as _nva
+        _nva()  # deploy quiet-wait signal: a LiveKit turn is a household conversation
         from brain_dispatch import brain_oneshot
         response = await brain_oneshot(message, session_id, user_id, voice_mode=True)
     except Exception as exc:
@@ -1705,6 +1709,8 @@ async def livekit_audio(
         return JSONResponse({"ok": True, "cancelled": True})
 
     try:
+        from omi_recordings import note_voice_activity as _nva
+        _nva()  # deploy quiet-wait signal: a LiveKit turn is a household conversation
         from brain_dispatch import brain_oneshot
         response_text = await brain_oneshot(transcript, sid, user_id, voice_mode=True)
     except Exception as exc:

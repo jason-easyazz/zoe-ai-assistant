@@ -3097,6 +3097,11 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
     Transcribe base64 WAV/PCM audio using Moonshine v2 on the Jetson (Pi voice daemon).
     Request: { \"audio_base64\": \"...\", \"panel_id\": \"...\" }
     """
+    try:
+        from omi_recordings import note_voice_activity as _note_voice_activity
+        _note_voice_activity()
+    except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
+        pass
     b64 = str((payload or {}).get("audio_base64") or "").strip()
     panel_id = _lane_panel_id(payload, caller, "transcribe")
     if not b64:
@@ -3492,6 +3497,11 @@ async def voice_command(
     Zoe routes the text through the chat pipeline and returns a JSON response
     with the reply text and synthesised audio (base64) so the Pi can play it back.
     """
+    try:
+        from omi_recordings import note_voice_activity as _note_voice_activity
+        _note_voice_activity()
+    except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
+        pass
     try:  # read FIRST, before any await: a revoke that completes during this turn must win over its speaker note
         import warm_speaker as _ws_mod
         _ws_forget_epoch = _ws_mod.forget_epoch()

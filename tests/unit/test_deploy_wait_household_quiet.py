@@ -99,7 +99,7 @@ def test_max_wait_fails_open_with_a_log_line(tmp_path):
 def test_signal_unreadable_fails_open_after_a_short_bound(tmp_path):
     p, n = _run(tmp_path, [5], health_missing=True)
     assert p.returncode == 0, p.stdout + p.stderr
-    assert n <= 2, "default unreadable tolerance is 60 s = 2 polls, not the 60 min max wait"
+    assert n == 2, "default unreadable tolerance is the FULL 60 s = 2 sleeps (not 1), not the 60 min max wait"
     assert "unreadable" in p.stdout and "failing open" in p.stdout
 
 
@@ -205,6 +205,19 @@ def test_night_window_opening_mid_wait_blocks_the_fail_open_exit(tmp_path):
     assert "failing open, deploying anyway" in p.stdout and "::error::night window rules" in p.stdout
 
 
+def test_household_is_rechecked_after_a_night_wait(tmp_path):
+    # quiet reading -> night gate busy ONCE (waits) -> a conversation started meanwhile (age 5):
+    # must NOT exit on the stale quiet verdict; waits for quiet again, then deploys.
+    cnt = tmp_path / "nb_count"
+    cnt.write_text("0")
+    nb = tmp_path / "night_busy.sh"
+    nb.write_text(f"#!/bin/bash\nn=$(cat {cnt}); echo $((n+1)) > {cnt}\n[ \"$n\" -eq 1 ] && exit 0 || exit 1\n")
+    p, n = _run(tmp_path, [4000, 5, 4000], env_extra={"ZOE_NIGHT_BUSY_SCRIPT": str(nb)})
+    assert p.returncode == 0, p.stdout
+    assert n == 2, "one night wait + one household wait (stale verdict would exit after 1)"
+    assert "re-checking household activity" in p.stdout and "household not quiet" in p.stdout
+
+
 def test_docs_only_target_sha_is_honoured_for_the_post_merge_recheck(tmp_path):
     repo, base = _repo_with_change(tmp_path, "docs/x.md")
     head = _git(repo, "rev-parse", "HEAD")
@@ -226,7 +239,11 @@ def test_deploy_live_rechecks_after_the_merge_before_the_restart():
     merge = text.index('merge --ff-only "$target"')
     recheck = text.index("wait_household_quiet.sh", merge)
     assert recheck < text.index('systemctl --user restart "$SERVICE"', merge)
-    assert "DEPLOY_TARGET_SHA" in text[recheck - 300:recheck + 100]
+    window = text[recheck - 600:recheck + 100]
+    # deploy_live restarts unconditionally: no docs-only skip here, and the night wait is bounded
+    # too (the deploy lock is held) - reviews on #2234.
+    assert "DEPLOY_BASE_SHA" not in window
+    assert "ZOE_DEPLOY_NIGHT_WAIT_MAX_MIN" in window
 
 
 def test_deploy_yml_step_sits_right_before_the_zoe_data_restart_and_uses_the_script():

@@ -384,3 +384,25 @@ def test_stt_disabled_uses_typed_env_per_call(monkeypatch, raw, expected):
     assert main._stt_disabled() is expected
     monkeypatch.delenv("ZOE_STT_DISABLED")
     assert main._stt_disabled() is False
+
+
+def test_voice_activity_stamp_counts_without_a_session_table_entry(monkeypatch):
+    """LiveKit turns and explicit-session_id commands never touch _VOICE_SESSIONS; the stamp covers them."""
+    import omi_recordings as omi
+
+    monkeypatch.setattr(omi, "_LAST_VOICE_ACTIVITY_MONO", None)
+    monkeypatch.delitem(sys.modules, "routers.voice_tts", raising=False)
+    assert omi.last_voice_age_s(1000.0) is None  # control: nothing recorded -> none
+    omi.note_voice_activity()
+    age = omi.last_voice_age_s()
+    assert age is not None and 0.0 <= age < 5.0
+    assert omi.voice_busy()
+
+
+def test_every_voice_entry_point_stamps_activity():
+    import inspect
+    from routers import voice_livekit, voice_tts
+
+    assert "note_voice_activity" in inspect.getsource(voice_tts.voice_command)
+    assert "note_voice_activity" in inspect.getsource(voice_tts.voice_transcribe)
+    assert inspect.getsource(voice_livekit).count("note_voice_activity") >= 3

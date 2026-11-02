@@ -54,6 +54,7 @@ fi
 # Re-checked by proceed() immediately before EVERY exit-0 below: the household wait can run an
 # hour, and a window that opens during it must still hold the restart (review on #2234).
 night_busy() { [ -f "$NIGHT_BUSY" ] && bash "$NIGHT_BUSY" deploy >/dev/null 2>&1; }
+NIGHT_WAITED=0
 night_gate() {
   local nw=0
   while night_busy; do
@@ -62,10 +63,18 @@ night_gate() {
       exit 1
     fi
     log "night window rules say a deploy must pause; waiting ${POLL_S}s ($(( nw / 60 )) min so far)."
+    NIGHT_WAITED=1
     sleep "$POLL_S"; nw=$(( nw + POLL_S ))
   done
 }
-proceed() { night_gate; exit 0; }
+# exit 0 when clear. If a night window had to be waited out, the household reading that led here is
+# stale (services were restored after it; a conversation may have started): return 1 so the caller
+# re-polls instead of exiting on the old verdict (review on #2234).
+proceed() {
+  NIGHT_WAITED=0; night_gate
+  if [ "$NIGHT_WAITED" = 1 ]; then log "waited out a night window: re-checking household activity."; return 1; fi
+  exit 0
+}
 night_gate
 
 # --- household quiet --------------------------------------------------------------------
@@ -90,28 +99,31 @@ else:
 waited=0
 unreadable=0
 while :; do
+  was_unreadable=0
   age="$(read_age)"
   case "$age" in
     unreadable)
-      unreadable=$(( unreadable + POLL_S ))
+      # elapsed unreadable time is credited AFTER the sleep below, so UNREADABLE_S is a real wait
       if [ "$unreadable" -ge "$UNREADABLE_S" ]; then
         log "WARNING: last-voice-turn signal unreadable for ${unreadable}s (${URL}); failing open, deploying."
-        proceed
+        proceed || { unreadable=0; waited=0; continue; }
       fi
+      was_unreadable=1
       log "signal unreadable (${unreadable}s of ${UNREADABLE_S}s tolerated)." ;;
     none)
-      log "no panel voice turn since zoe-data started: quiet, deploying."; proceed ;;
+      log "no panel voice turn since zoe-data started: quiet, deploying."; proceed || { unreadable=0; waited=0; continue; } ;;
     *)
       unreadable=0
       if awk -v a="$age" -v q="$QUIET_S" 'BEGIN{exit !(a+0 >= q+0)}'; then
         log "last panel voice turn ${age}s ago (>= $(( QUIET_S / 60 )) min): quiet, deploying (waited $(( waited / 60 )) min)."
-        proceed
+        proceed || { waited=0; continue; }
       fi
       log "last panel voice turn ${age}s ago (< $(( QUIET_S / 60 )) min): household not quiet; waiting ${POLL_S}s (${waited}s of ${MAX_S}s)." ;;
   esac
   if [ "$waited" -ge "$MAX_S" ]; then
     log "WARNING: household still not quiet after $(( MAX_S / 60 )) min (last signal: ${age}); failing open, deploying anyway."
-    proceed
+    proceed || { waited=0; continue; }
   fi
   sleep "$POLL_S"; waited=$(( waited + POLL_S ))
+  if [ "$was_unreadable" = 1 ]; then unreadable=$(( unreadable + POLL_S )); fi
 done

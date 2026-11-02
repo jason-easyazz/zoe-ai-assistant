@@ -188,18 +188,31 @@ def mem_available_mb() -> Optional[float]:
     return None
 
 
+_LAST_VOICE_ACTIVITY_MONO: Optional[float] = None
+
+
+def note_voice_activity() -> None:
+    """Stamp "a voice turn is happening now". Called by every voice entry point (panel command / transcribe, LiveKit brain
+    turns) independently of the session table, which an explicit ``session_id`` or a LiveKit turn never touches."""
+    global _LAST_VOICE_ACTIVITY_MONO
+    _LAST_VOICE_ACTIVITY_MONO = time.monotonic()
+
+
 def last_voice_age_s(now_mono: Optional[float] = None) -> Optional[float]:
-    """Seconds since the newest panel voice turn, or None when there has been none. Reads the voice router's session table WITHOUT
-    importing it."""
+    """Seconds since the newest voice turn, or None when there has been none. Newest of the explicit activity stamp and the
+    voice router's session table (read WITHOUT importing it)."""
+    t = time.monotonic() if now_mono is None else now_mono
+    ages: list[float] = []
+    if _LAST_VOICE_ACTIVITY_MONO is not None:
+        ages.append(t - _LAST_VOICE_ACTIVITY_MONO)
     mod = sys.modules.get("routers.voice_tts")
     sessions = getattr(mod, "_VOICE_SESSIONS", None) if mod else None
-    if not sessions:
-        return None
-    t = time.monotonic() if now_mono is None else now_mono
-    try:
-        return min(t - float(e.get("last_at", -1e9)) for e in list(sessions.values()))
-    except Exception:  # noqa: BLE001
-        return None
+    if sessions:
+        try:
+            ages.append(min(t - float(e.get("last_at", -1e9)) for e in list(sessions.values())))
+        except Exception:  # noqa: BLE001
+            pass
+    return min(ages) if ages else None
 
 
 def voice_busy(now_mono: Optional[float] = None) -> bool:
