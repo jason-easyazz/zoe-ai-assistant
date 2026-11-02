@@ -385,13 +385,26 @@
         }
     }
 
+    // One hung request must never wedge the executor: pollActions holds state.processing until its
+    // finally, so a fetch that never settled stopped every server UI action for good (2026-11-02).
+    function requestTimeout(ms) {
+        return (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') ? AbortSignal.timeout(ms) : undefined;
+    }
+    // Server strings rendered into innerHTML (the research overlay, HA entity names) are untrusted.
+    function escHtml(v) {
+        return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
     async function api(path, options) {
         const session = getDataApiSession();
         const headers = Object.assign({ 'Content-Type': 'application/json' }, options && options.headers ? options.headers : {});
         if (session && session.session_id) {
             headers['X-Session-ID'] = session.session_id;
         }
-        const res = await fetch(path, Object.assign({}, options || {}, { headers }));
+        const init = Object.assign({}, options || {}, { headers });
+        // self-contained on purpose: the touch harnesses extract api() by name into a sandbox without the helpers above
+        if (!init.signal && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') init.signal = AbortSignal.timeout(15000);
+        const res = await fetch(path, init);
         // Remember WHICH session this request carried: a late 401 must only retire that session,
         // never a newer one that a fresh sign-in stored while the request was in flight.
         try { res.zoeSentSessionId = (session && session.session_id) || null; } catch (_) { /* immutable response */ }
@@ -1771,6 +1784,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 headers,
                 body,
                 keepalive: true,
+                signal: requestTimeout(8000),
             });
         } catch (_) {
             // Non-fatal — action may stay queued but panel will auto-expire it server-side.
@@ -1881,13 +1895,14 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 color:#fff;border-radius:12px;padding:16px 12px;cursor:pointer;
                 font-size:14px;text-align:center;transition:all 0.2s;
             `;
-            btn.innerHTML = `<div style="font-size:24px;margin-bottom:6px">${ent.icon || (isOn ? '💡' : '⚫')}</div><div>${ent.name || ent.entity_id}</div>`;
+            btn.innerHTML = `<div style="font-size:24px;margin-bottom:6px">${escHtml(ent.icon || (isOn ? '💡' : '⚫'))}</div><div>${escHtml(ent.name || ent.entity_id)}</div>`;
             btn.onclick = async () => {
                 try {
                     await fetch('/api/ha/control', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ entity_id: ent.entity_id, action: 'toggle' }),
+                        signal: requestTimeout(8000),
                     });
                     btn.style.background = isOn ? 'rgba(255,255,255,0.07)' : 'rgba(103,126,234,0.3)';
                 } catch (_) { showToast('Control failed'); }
@@ -1957,6 +1972,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ entity_id: payload.entity_id, action }),
+                    signal: requestTimeout(8000),
                 }).catch(() => {});
                 controls.appendChild(btn);
             });
@@ -1994,19 +2010,19 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         }).join('');
         const rowHtml = rows.map((r) => `
             <tr>
-                <td style="padding:8px;">${r.rank ?? ''}</td>
-                <td style="padding:8px;">${(r.name || '').toString()}</td>
-                <td style="padding:8px;">${(r.value || '').toString()}</td>
-                <td style="padding:8px;">${(r.location || '').toString()}</td>
+                <td style="padding:8px;">${escHtml(r.rank ?? '')}</td>
+                <td style="padding:8px;">${escHtml(r.name)}</td>
+                <td style="padding:8px;">${escHtml(r.value)}</td>
+                <td style="padding:8px;">${escHtml(r.location)}</td>
             </tr>
         `).join('');
-        const sourceHtml = sources.slice(0, 6).map((u) => `<li style="margin:6px 0;word-break:break-all;">${u}</li>`).join('');
+        const sourceHtml = sources.slice(0, 6).map((u) => `<li style="margin:6px 0;word-break:break-all;">${escHtml(u)}</li>`).join('');
         overlay.innerHTML = `
             <div style="max-width:920px;margin:0 auto;">
                 <h2 style="font-size:30px;font-weight:400;margin:0 0 10px;">Research Results</h2>
-                <div style="font-size:17px;opacity:.9;margin-bottom:14px;">${pkg.query || ''}</div>
+                <div style="font-size:17px;opacity:.9;margin-bottom:14px;">${escHtml(pkg.query || '')}</div>
                 <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);border-radius:12px;padding:14px;margin-bottom:14px;">
-                    <div style="font-size:18px;">Top Pick: <strong>${top.name || 'N/A'}</strong> ${(top.value || '')}</div>
+                    <div style="font-size:18px;">Top Pick: <strong>${escHtml(top.name || 'N/A')}</strong> ${escHtml(top.value || '')}</div>
                 </div>
                 <table style="width:100%;border-collapse:collapse;background:rgba(255,255,255,0.05);border-radius:12px;overflow:hidden;">
                     <thead><tr><th style="text-align:left;padding:8px;">#</th><th style="text-align:left;padding:8px;">Option</th><th style="text-align:left;padding:8px;">Value</th><th style="text-align:left;padding:8px;">Location</th></tr></thead>

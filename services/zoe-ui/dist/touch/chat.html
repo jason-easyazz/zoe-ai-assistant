@@ -2396,6 +2396,10 @@
         function escapeHtml(text) {
             return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g, '<br>');
         }
+        // For attribute values (incl. the JSON handed to an onclick): quotes of BOTH kinds, so a title cannot break out of the attribute.
+        function escAttr(v) {
+            return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+        }
 
         function enhanceCodeBlocks(rootEl) {
             if (!rootEl || typeof rootEl.querySelectorAll !== 'function') return;
@@ -5246,9 +5250,9 @@
                         <div class="calendar-action-container" id="${actionId}_container">
                             <button 
                                 class="card-action-btn add-to-calendar" 
-                                onclick="toggleTimeSlotPicker('${actionId}', '${cardId}', ${JSON.stringify(action.data).replace(/"/g, '&quot;')})"
+                                onclick="toggleTimeSlotPicker('${escAttr(actionId)}', '${escAttr(cardId)}', ${escAttr(JSON.stringify(action.data))})"
                             >
-                                ${action.label} <span class="dropdown-arrow">▼</span>
+                                ${escapeHtml(String(action.label ?? ''))} <span class="dropdown-arrow">▼</span>
                             </button>
                             <div class="time-slot-picker" id="${actionId}_picker" style="display: none;">
                                 <!-- Time slots will be rendered here -->
@@ -5259,10 +5263,10 @@
                     // Regular action button
                     return `
                         <button 
-                            class="card-action-btn ${action.type}" 
-                            onclick="executeCardAction('${cardId}', '${action.type}', ${JSON.stringify(action.data).replace(/"/g, '&quot;')}, event)"
+                            class="card-action-btn ${escAttr(action.type)}" 
+                            onclick="executeCardAction('${escAttr(cardId)}', '${escAttr(action.type)}', ${escAttr(JSON.stringify(action.data))}, event)"
                         >
-                            ${action.label}
+                            ${escapeHtml(String(action.label ?? ''))}
                         </button>
                     `;
                 }
@@ -5306,7 +5310,7 @@
                     
                     html += `
                         <div class="time-slot-option ${durationMatch ? 'recommended' : ''}" 
-                             onclick="selectTimeSlot('${actionId}', '${cardId}', ${index}, ${JSON.stringify(data).replace(/"/g, '&quot;')})">
+                             onclick="selectTimeSlot('${escAttr(actionId)}', '${escAttr(cardId)}', ${index}, ${escAttr(JSON.stringify(data))})">
                             <input type="radio" name="${actionId}_slot" id="${slotId}" value="${index}">
                             <label for="${slotId}">
                                 <div class="slot-time">${slotLabel}</div>
@@ -5332,10 +5336,10 @@
             const picker = document.getElementById(`${actionId}_picker`);
             picker.innerHTML = `
                 <div class="time-slot-confirmation">
-                    <p>Schedule "${data.title}" for ${formatTimeSlot(slot)}?</p>
+                    <p>Schedule "${escapeHtml(String(data.title ?? ''))}" for ${formatTimeSlot(slot)}?</p>
                     <div class="confirmation-actions">
-                        <button class="btn-cancel" onclick="toggleTimeSlotPicker('${actionId}', '${cardId}', ${JSON.stringify(data).replace(/"/g, '&quot;')})">Cancel</button>
-                        <button class="btn-confirm" onclick="confirmSlotSelection('${actionId}', '${cardId}', ${slotIndex}, ${JSON.stringify(data).replace(/"/g, '&quot;')})">Confirm</button>
+                        <button class="btn-cancel" onclick="toggleTimeSlotPicker('${escAttr(actionId)}', '${escAttr(cardId)}', ${escAttr(JSON.stringify(data))})">Cancel</button>
+                        <button class="btn-confirm" onclick="confirmSlotSelection('${escAttr(actionId)}', '${escAttr(cardId)}', ${slotIndex}, ${escAttr(JSON.stringify(data))})">Confirm</button>
                     </div>
                 </div>
             `;

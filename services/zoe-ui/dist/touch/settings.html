@@ -5265,7 +5265,7 @@
             if (defEl) {
                 defEl.innerHTML = '<option value="">No default — show picker</option>' +
                     panelAllUsers.map(u =>
-                        `<option value="${u.user_id}">${u.username} (${u.role || 'user'})</option>`
+                        `<option value="${escAttr(u.user_id)}">${escapeHtml(String(u.username ?? ''))} (${escapeHtml(String(u.role || 'user'))})</option>`
                     ).join('');
             }
             // Build allowed-users checkbox grid.
@@ -5688,6 +5688,10 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+        // innerHTML serialisation leaves quotes alone: attribute values need this one.
+        function escAttr(v) {
+            return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
         }
 
         // Wrapper functions that safely retrieve user data from store

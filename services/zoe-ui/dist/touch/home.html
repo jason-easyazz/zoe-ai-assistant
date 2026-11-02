@@ -1706,7 +1706,7 @@
     }).catch(unknown);
   }
   var _ha={loaded:false,ok:false,lights:[],climate:null,scenes:[]};
-  function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body)});}
+  function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body),signal:reqSig(12000)});}
   // One in-flight entity load at a time, and a response younger than HA_MEMO_MS
   // is reused: the dock's refreshHA (30 s), the Rooms surface (30 s) and the Sleep
   // surface (30 s) all used to fetch /api/ha/entities independently.
@@ -1714,7 +1714,7 @@
   function loadHA(cb){
     if(_ha.loaded&&Date.now()-_haAt<HA_MEMO_MS){cb&&cb();return;}
     if(_haInflight){_haInflight.then(function(){cb&&cb();});return;}
-    _haInflight=_loadHA().then(function(){_haAt=Date.now();_haInflight=null;cb&&cb();});
+    _haInflight=_loadHA().then(function(){_haAt=Date.now();_haInflight=null;cb&&cb();},function(){_haInflight=null;cb&&cb();});
   }
   function _loadHA(){return apiGet('/api/ha/entities').then(function(s){
       var arr=Array.isArray(s)?s:((s&&s.entities)||(s&&s.states)||[]);
@@ -2009,7 +2009,9 @@
     if(status===401){try{localStorage.removeItem('zoe_session');}catch(e){}
       var now=Date.now();if(now-_guestRefillT>30000){_guestRefillT=now;convEnsureSession();}}
   }
-  function apiGet(url){return fetch(url,{headers:{'X-Session-ID':sid()},credentials:'include'}).then(function(r){
+  // every request helper carries a deadline; guarded because the touch harness (and an old WebView) has no AbortSignal
+  function reqSig(ms){return (typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function')?AbortSignal.timeout(ms):undefined;}
+  function apiGet(url){return fetch(url,{headers:{'X-Session-ID':sid()},credentials:'include',signal:reqSig(12000)}).then(function(r){
     // Server is authoritative on session validity: an expired/invalid session
     // 401/403s here — clear it and return to login (the presence guard alone
     // can't detect server-side expiry).
@@ -3396,7 +3398,7 @@
   function estConfirm(msg,onYes){estOpen('<h3>'+esc(msg)+'</h3><div class="btns"><button data-x="no">Cancel</button><button class="del" data-x="yes">Delete</button></div>');
     document.querySelector('#estModal').querySelector('[data-x="no"]').onclick=estClose;
     document.querySelector('#estModal').querySelector('[data-x="yes"]').onclick=function(){estClose();onYes();};}
-  function apiJson(method,url,body){return fetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined}).then(function(r){
+  function apiJson(method,url,body){return fetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined,signal:reqSig(12000)}).then(function(r){
     if(r.status===401||r.status===403){
       if(window.__kiosk){kioskAuthFail(r.status);}else{estateAuthFail(r.status);}
       throw new Error('auth');}
@@ -4905,7 +4907,7 @@
     function paint(on,review){orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
     function poll(){
       var s=sid();if(!s){paint(false,false);return;}
-      fetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include'})
+      fetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include',signal:reqSig(8000)})
         .then(function(r){return r.ok?r.json():null;})
         .then(function(d){paint(!!(d&&d.enabled&&d.count>0&&!d.quiet),!!(d&&d.review===true&&!d.quiet));})
         .catch(function(){});
