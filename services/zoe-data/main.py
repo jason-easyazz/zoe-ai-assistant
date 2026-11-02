@@ -1275,6 +1275,13 @@ async def lifespan(app: FastAPI):
     except Exception as _omi_dr_exc:
         logger.warning("omi day review loop not started (non-fatal): %s", _omi_dr_exc)
 
+    try:  # wake-up alarms (flag-dark ZOE_ALARMS=off|on): the ring engine; docs/architecture/alarms.md
+        import alarms as _alarms
+        if _alarms.enabled():
+            asyncio.create_task(_alarms.run_loop(), name="alarms_ring")
+    except Exception as _alarms_exc:
+        logger.warning("alarm ring loop not started (non-fatal): %s", _alarms_exc)
+
     # Runtime health probe — run once immediately, then refresh every 5 min
     await _probe_runtimes()
     _runtime_health_task = asyncio.create_task(_runtime_health_refresh_loop(), name="runtime_health_refresh")
@@ -2345,6 +2352,9 @@ app.include_router(change_notices_router)
 # Zoe's own iPhone app, M0 (phone_app, ZOE_PHONE_APP, default off = every route 404s): pairing by panel QR + push-token registry.
 from routers.phone_app import router as phone_app_router  # noqa: E402
 app.include_router(phone_app_router)
+# Wake-up alarms (alarms, ZOE_ALARMS, default off = every route 404s): docs/architecture/alarms.md.
+from routers.alarms import router as alarms_router  # noqa: E402
+app.include_router(alarms_router)
 
 try:
     from routers.voice_livekit import router as voice_livekit_router
@@ -2451,6 +2461,16 @@ async def root_health():
             "detail": _pool_health_cache["detail"],
         },
     }
+    # Deploy quiet-wait signal (scripts/maintenance/wait_household_quiet.sh): seconds since the
+    # newest panel voice turn, null when none since this process started. A bare number, no
+    # household data; never allowed to fail /health.
+    try:
+        # Household-filtered stamp only: _VOICE_SESSIONS is refreshed by probe/harness panel commands too.
+        from voice_activity import last_activity_age_s
+        _age = last_activity_age_s()
+        body["last_voice_turn_age_s"] = None if _age is None else round(max(0.0, _age), 1)
+    except Exception:  # noqa: BLE001
+        body["last_voice_turn_age_s"] = None
     if not _pool_health_cache["healthy"]:
         return JSONResponse(body, status_code=503)
     return body
