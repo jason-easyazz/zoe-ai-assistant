@@ -34,6 +34,7 @@ import argparse
 import contextlib
 import dataclasses
 import datetime as dt
+import fcntl
 import json
 import math
 import os
@@ -439,6 +440,11 @@ class NightCfg(bk.Cfg):
     cells_trace: bool = False
     busy_units: tuple = ("zoe-training.service", "zoe-backup.service", "zoe-backup-verify.service", "zoe-memory-export.service", "zoe-dreaming.service")
     busy_wait_max_min: float = 20.0
+    #: The repo-wide test lane (agents run pytest, builds and labs under ``flock -x /tmp/zoe-test-lane.lock``). The window HOLDS it from before the stops until the restore, so no
+    #: agent test run starts beside the 12B (2026-10-29..11-02: the box sat at 585-889 MiB MemAvailable before the stops, a floor breach killed a job twice). A test already
+    #: running is waited for up to ``test_lane_wait_min`` (nothing is stopped yet); past that the window goes on without the lane and says so.
+    test_lane_path: str = os.environ.get("NIGHT_TEST_LANE_LOCK", "/tmp/zoe-test-lane.lock")
+    test_lane_wait_min: float = float(os.environ.get("NIGHT_TEST_LANE_WAIT_MIN", "10"))
     busy_poll_s: float = 30.0
     jobs: tuple = ("digest", "dreaming", "night_mind", "struggle_proposals", "omi_day_review")
     night_mind_cmd: str = os.environ.get("NIGHT_MIND_CMD", "")
@@ -784,6 +790,15 @@ PLAN_DECODE_TPS, PLAN_PREFILL_TPS, PLAN_LOAD_S = 6.24, 158.7, 90.0
 #: seconds the cap must still have (``time_left_s``, which is already net of the restore reserve and bounded by ``--end-by``) for the ONE retry of a failed 12B start to be
 #: worth making: stop the failed server and compact (~2 min), load and probe again (``PLAN_LOAD_S``), and still leave the jobs' own minimum (``exec_job`` skips a job under 120 s).
 LOAD_RETRY_MIN_LEFT_S = PLAN_LOAD_S + 120.0 + 120.0
+#: 2026-11-02: attempt 2 failed too (the 4th night in 6 whose first start died on cudaMalloc / NvMap error 12 with 9 GB "available" but only ~4 GB in free blocks of 2 MB and up), and the
+#: night was lost. Three attempts, the last with fewer GPU layers.
+LOAD_MAX_ATTEMPTS = 3
+LOAD_LAST_RESORT_NGL_DROP = 6
+LOAD_MIN_NGL = 20
+#: A MemAvailable dip under the floor is not an abort at once (2026-10-29 / 10-30: omi_day_review was killed at 1,156 and 1,193 MiB against a 1,200 floor, 9 and 22 minutes into its run, and
+#: the rest of the night went with it). Between ``FLOOR_HARD_FRACTION`` x floor and the floor the window polls for ``FLOOR_GRACE_S`` for a recovery; under the hard fraction it aborts at once.
+FLOOR_GRACE_S = 120.0
+FLOOR_HARD_FRACTION = 0.6
 
 
 def speed_prompt() -> str:
@@ -904,6 +919,7 @@ class NightWindow(bk.Window):
 
     def __init__(self, cfg: NightCfg, host: bk.Host, log: "Callable[[str], None]", *, dry: bool = False, run_id: str = "", mode: str = "night"):
         super().__init__(cfg, host, log, dry=dry, run_id=run_id)
+        self.test_lane_fd: "Optional[int]" = None
         self.cfg: NightCfg = cfg
         self.mode = mode
         self.cap_min = cfg.cap_min
@@ -962,7 +978,39 @@ class NightWindow(bk.Window):
         if self.floor_armed:
             m = self.mem()
             if m < self.cfg.min_avail_mb:
-                raise Aborted(f"MemAvailable {m:.0f} MB < {self.cfg.min_avail_mb:.0f} MB floor")
+                self.floor_dip(m)
+
+    def floor_dip(self, m: float) -> None:
+        """MemAvailable is under the floor. Under ``FLOOR_HARD_FRACTION`` x floor: abort at once. Between that and the floor: poll for up to ``FLOOR_GRACE_S`` for a recovery (a
+        transient dip from an agent or a job's burst ended two nights' omi_day_review, 7 and 44 MiB under the line), bounded by the hard cap; abort when it does not come back.
+        Either way the largest resident programs are logged first, so the next abort names its cause."""
+        floor = self.cfg.min_avail_mb
+        hard = floor * FLOOR_HARD_FRACTION
+        why = f"MemAvailable {m:.0f} MB < {floor:.0f} MB floor"
+        self.event(f"{why}: " + self.who_holds_memory() + ("" if m < hard else f"; waiting up to {FLOOR_GRACE_S:.0f}s for it to recover before aborting"))
+        t0 = self.host.mono()
+        while m >= hard and m < floor:
+            if self.host.mono() - t0 >= FLOOR_GRACE_S or self.time_left_s() <= 5.0:
+                raise Aborted(f"{why} (still under it after {self.host.mono() - t0:.0f}s)")
+            self.host.sleep(min(5.0, max(0.0, self.time_left_s())))
+            m = self.mem()
+        if m < hard:
+            raise Aborted(f"MemAvailable {m:.0f} MB < {hard:.0f} MB (the hard floor, {FLOOR_HARD_FRACTION:.0%} of {floor:.0f})")
+        self.event(f"MemAvailable back to {m:.0f} MB after {self.host.mono() - t0:.0f}s: carrying on")
+
+    def who_holds_memory(self) -> str:
+        """The largest resident programs by name and MiB (never arguments) plus swap in use: the evidence a floor dip leaves behind."""
+        try:
+            _rest, top = self.other_consumers({}, self.mem())
+            swap = {}
+            for line in self.host.read(self.cfg.meminfo).splitlines():
+                k, _, v = line.partition(":")
+                if k in ("SwapTotal", "SwapFree") and v.split():
+                    swap[k] = int(v.split()[0]) / 1024.0
+            used = f"; swap in use {swap['SwapTotal'] - swap['SwapFree']:.0f} MiB" if len(swap) == 2 else ""
+            return "largest resident programs, name and MiB: " + ", ".join(top) + used
+        except Exception as exc:  # noqa: BLE001 - diagnostics must never turn a dip into a crash
+            return f"(holders unreadable: {type(exc).__name__})"
 
     def write_marker(self) -> None:
         """The restore-only safety net: written BEFORE each stop, so a window killed half way can still be undone (the shell wrapper reads it)."""
@@ -1144,7 +1192,17 @@ class NightWindow(bk.Window):
                         f"(zoe-data must be back by then); a window needs {need_min:.0f}. Nothing was stopped.")
         self.pre_stop_gate(m)
         if not self.dry:
-            waiting = self.take_lock_when_clear(waiting, need_min)
+            while True:
+                waiting = self.take_lock_when_clear(waiting, need_min)
+                if not self.hold_test_lane():
+                    break
+                # The lane wait (up to ``test_lane_wait_min``) happened AFTER the clearance checks: a timer job, backup, lander or panel turn may have started meanwhile.
+                # Re-check; if busy, hand everything back and send the window through its waits again (nothing is stopped yet).
+                busy = self.busy_now() or self.busy_reason()
+                if not busy:
+                    break
+                self.release_lock()
+                self.event(f"{busy} (it started while waiting for the test lane): lock and lane handed back, waiting again; nothing was stopped")
             # THE WINDOW'S CLOCK STARTS HERE, when it is cleared to stop the stack. Waiting for a quiet box (a running timer job, the voice harness, a recent voice turn) has its own
             # timeouts (``busy_wait_max_min`` / ``quiet_wait_max_min``) and costs Zoe nothing: nothing is stopped yet. Before this line it counted against the cap: the 2026-10-10 09:40 window
             # waited 20 min for the harness lock, the cells then had 932 s of a 50-minute cap, and four cells were skipped for budget.
@@ -1237,6 +1295,53 @@ class NightWindow(bk.Window):
                 end_txt = dt.datetime.fromtimestamp(self.end_by_deadline()).strftime("%H:%M")
                 raise Refused(f"after waiting for {busy} it is {dt.datetime.fromtimestamp(self.host.now()):%H:%M} and {max(0.0, left):.0f} min remain before the {end_txt} end-by deadline; "
                               f"a window needs {need_min:.0f}. Nothing was stopped.")
+
+    def hold_test_lane(self) -> bool:
+        """Take (and keep until ``release_lock``) the test-lane flock, waiting up to ``test_lane_wait_min`` for a running test to finish. Never raises: no lane is a warning, not a lost night.
+        Returns True when it had to WAIT (the caller's clearance checks are then stale and must be re-run), False when the lane was free at once or already held."""
+        if self.test_lane_fd is not None:
+            return False
+        cfg = self.cfg
+        try:
+            fd = os.open(cfg.test_lane_path, os.O_CREAT | os.O_RDWR, 0o666)
+        except OSError as exc:
+            self.event(f"test lane {cfg.test_lane_path}: cannot open ({exc.__class__.__name__}); going on without it")
+            return False
+        deadline = self.host.mono() + cfg.test_lane_wait_min * 60.0
+        announced = False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.test_lane_fd = fd
+                self.event("test lane held: no agent test run starts beside the 12B until the restore" if announced else "test lane taken for the window")
+                return announced
+            except BlockingIOError:
+                if self.host.mono() < deadline:
+                    if not announced:
+                        self.event(f"waiting up to {cfg.test_lane_wait_min:.0f} min for a running test to leave the test lane (nothing is stopped yet)")
+                        announced = True
+                    self.host.sleep(15.0)
+                    continue
+                why = f"still held after {cfg.test_lane_wait_min:.0f} min: a test run is sharing the box with the window (going on without the lane)"
+            except OSError as exc:                       # ENOLCK, EINTR...: the lane is an optimisation, never a reason to lose the night
+                why = f"cannot be locked ({exc.__class__.__name__}); going on without the lane"
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            self.event(f"test lane {cfg.test_lane_path} {why}")
+            return announced
+
+    def release_lock(self) -> None:
+        """Free the test lane, then the brain lock. Each step is best-effort and independent: a lane teardown error must never skip the brain lock's release (or the restore after it)."""
+        fd, self.test_lane_fd = self.test_lane_fd, None
+        if fd is not None:
+            for fn in (lambda: fcntl.flock(fd, fcntl.LOCK_UN), lambda: os.close(fd)):
+                try:
+                    fn()
+                except OSError:
+                    pass
+        super().release_lock()
 
     def pre_stop_gate(self, avail_now: float) -> None:
         """Refuse BEFORE anything is stopped when even the optimistic prediction (every stopped unit frees ALL its PSS) cannot hold the smallest lever set."""
@@ -1500,36 +1605,55 @@ class NightWindow(bk.Window):
             raise
 
     def _load_12b_one_retry(self, pick: "dict[str, Any]") -> None:
-        """The night's 12B start: ONE more attempt when the first dies on a load failure (cudaMalloc / NvMap), inside the cap and the end-by deadline. The up-to-6 compactions in
-        ``sleep_units`` run before the first start only; a fragmentation that is still there at the start (2026-10-11: MemFree 5.9 GB at the failure) ended the window and the night ran
-        nothing. Retry = stop the failed server, compact (sudo when available), start again, provided ``time_left_s`` still covers the load and the jobs' minimum
-        (``LOAD_RETRY_MIN_LEFT_S``). A night with no successful load is recorded once (``record_load`` counts it as ONE failed window, not two) and leaves ``night_lost`` for the morning ALARM."""
-        try:
-            self.load_12b(pick, last_attempt=False)
+        """The night's 12B start, up to ``LOAD_MAX_ATTEMPTS`` times: a cudaMalloc / NvMap OOM at the start (2026-10-11, and 4 of the 6 nights 2026-10-29..11-02, the last one twice in a row)
+        used to end the window after ONE retry and the night ran nothing. Each retry = stop the failed server, compact (sudo when available), start again, provided ``time_left_s``
+        still covers the load and the jobs' minimum (``LOAD_RETRY_MIN_LEFT_S``). The LAST attempt drops ``LOAD_LAST_RESORT_NGL_DROP`` layers off the GPU (a smaller device buffer
+        that can still be allocated on a fragmented box; slower decode, but a slow 12B beats a lost night). A night with no successful load is recorded once (``record_load``
+        counts it as ONE failed window, not one per attempt) and leaves ``night_lost`` for the morning ALARM."""
+        attempts: "list[str]" = []
+        for n in range(1, LOAD_MAX_ATTEMPTS + 1):
+            last = n == LOAD_MAX_ATTEMPTS
+            drop = LOAD_LAST_RESORT_NGL_DROP if last else 0
+            try:
+                if n == 1:
+                    self.load_12b(pick, last_attempt=False)
+                else:
+                    self.load_12b(pick, last_attempt=last, ngl_drop=drop, health_timeout_s=max(120.0, min(480.0, self.time_left_s() - 120.0)))
+            except LoadFailed:
+                attempts.append(self.last_load_why[:300])
+                left = self.time_left_s()
+                if last:
+                    self.rec["load_retry"] = {**self.rec.get("load_retry", {}), "failures": attempts}
+                    self.event(f"NIGHT LOST: the 12B did not load on any of {n} attempts ({self.last_load_why[:200]})")
+                    raise
+                if left < LOAD_RETRY_MIN_LEFT_S:
+                    self.record_load(False, self.last_load_why)
+                    self.event(f"12B start failed and there is no room for attempt {n + 1} ({left:.0f}s left before the restore reserve, a retry needs {LOAD_RETRY_MIN_LEFT_S:.0f}s)")
+                    raise
+                nxt = n + 1
+                self.event(f"12B start {n} failed ({self.last_load_why[:160]}): attempt {nxt} of {LOAD_MAX_ATTEMPTS} inside the cap ({left:.0f}s left) - stopping it, compacting, starting again"
+                           + (f" with {LOAD_LAST_RESORT_NGL_DROP} fewer GPU layers (last resort)" if nxt == LOAD_MAX_ATTEMPTS else ""))
+                self.unload_llm()
+                compacted = self.compact_memory(f"retry {n} after a failed 12B start")
+                self.host.sleep(3.0)
+                left = self.time_left_s()                  # the unload + compaction spent part of the room checked above: check again before the start, not only before the stop
+                if left < LOAD_RETRY_MIN_LEFT_S:
+                    self.record_load(False, self.last_load_why)
+                    self.event(f"no room left for attempt {nxt} after the stop and compaction ({left:.0f}s left, a start needs {LOAD_RETRY_MIN_LEFT_S:.0f}s)")
+                    raise LoadFailed(f"the 12B did not load ({self.last_load_why}); no time left for attempt {nxt}")
+                self.rec["load_retry"] = {"first_failure": attempts[0], "compacted": compacted, "left_s": round(left), "attempts": nxt}
+                continue
+            if n > 1:
+                self.rec["load_retry"]["loaded"] = True
+                self.event(f"12B loaded on attempt {n}" + (f" at ngl {self.rec['arith'].get('ngl_used')} (last resort)" if drop else ""))
             return
-        except LoadFailed as first:
-            left = self.time_left_s()
-            if left < LOAD_RETRY_MIN_LEFT_S:
-                self.record_load(False, self.last_load_why)
-                self.event(f"12B start failed and there is no room for a second attempt ({left:.0f}s left before the restore reserve, a retry needs {LOAD_RETRY_MIN_LEFT_S:.0f}s)")
-                raise
-            self.event(f"12B start failed ({self.last_load_why[:160]}): one more attempt inside the cap ({left:.0f}s left) - stopping it, compacting, starting again")
-        self.unload_llm()
-        compacted = self.compact_memory("retry after a failed 12B start")
-        self.host.sleep(3.0)
-        self.rec["load_retry"] = {"first_failure": self.last_load_why[:300], "compacted": compacted, "left_s": round(left)}
-        try:
-            self.load_12b(pick, health_timeout_s=max(120.0, min(480.0, self.time_left_s() - 120.0)))
-        except LoadFailed:                                     # load_12b recorded the failure (last attempt)
-            self.event(f"NIGHT LOST: the 12B did not load on either attempt ({self.last_load_why[:200]})")
-            raise
-        self.rec["load_retry"]["loaded"] = True
-        self.event("12B loaded on the second attempt")
 
-    def load_12b(self, pick: "dict[str, Any]", *, last_attempt: bool = True, health_timeout_s: float = 480.0) -> None:
+    def load_12b(self, pick: "dict[str, Any]", *, last_attempt: bool = True, health_timeout_s: float = 480.0, ngl_drop: int = 0) -> None:
         """Start the 12B and wait for /health. ``last_attempt`` False = a failure is raised but NOT recorded in ``load_failures.json`` (the caller retries and records the night once)."""
         cfg = self.cfg
-        spec = llm_spec(self.parked_text, cfg, pick["levers"])
+        spec_cfg = dataclasses.replace(cfg, ngl=min(cfg.ngl, max(LOAD_MIN_NGL, cfg.ngl - ngl_drop))) if (ngl_drop and cfg.ngl) else cfg
+        self.rec["arith"]["ngl_used"] = spec_cfg.ngl
+        spec = llm_spec(self.parked_text, spec_cfg, pick["levers"])
         self.event("12B command (generated from the parked unit's ExecStart, which is read and never edited): " + shlex.join(spec["argv"]))
         self.event("12B differs from the parked ExecStart in: " + "; ".join(spec["diff"]))
         self.event(f"12B environment: GGML_CUDA_ENABLE_UNIFIED_MEMORY={'1 (set: cudaMallocManaged)' if 'GGML_CUDA_ENABLE_UNIFIED_MEMORY' in spec['env'] else 'NOT set (plain cudaMalloc)'}; levers ngl={cfg.ngl or 'parked 99'}, batch={cfg.batch}/{cfg.ubatch}, fit_off={cfg.fit_off}, mlock={cfg.mlock}, binary={spec['argv'][0]}")
