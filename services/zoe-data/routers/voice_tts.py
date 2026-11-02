@@ -5870,6 +5870,9 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     # The daemon's per-turn speaker-gate block (memory provenance; see _speaker_verdict).
     if isinstance((payload or {}).get("speaker"), dict):
         command_payload["speaker"] = payload["speaker"]
+    # Which kind of no-wake-word window this turn came from: voice_command's claim gate applies the stricter window bar to it.
+    if (payload or {}).get("window") in ("followup", "conversation"):
+        command_payload["window"] = payload["window"]
 
     result = await voice_command(command_payload, caller=caller, stream=False, db=db)
     result["text"] = transcript
@@ -6036,7 +6039,27 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # window utterance that names someone else (ZOE_FOLLOWUP_ADDRESSED, default off).
     # Never on a speculative turn (its own verdict protocol owns it). Fail-open.
     try:
-        _gate = _utterance_shape.gate_frame(payload, transcript, speculative=_spec_gate is not None)
+        _gate = None
+        # A no-wake-word window turn must carry its OWN matching voice: one the speaker gate ran on and did not confirm is
+        # not for Zoe (a television, another person) - dropped here, before any brain / memory / identity work, which ends the
+        # panel's follow-up chain. Never a speculative turn; fail-open (None verdict = gate off = today's behaviour).
+        if _spec_gate is None and (payload or {}).get("window") in _utterance_shape.WINDOWS:
+            _win_verdict = _speaker_verdict(
+                payload, caller, identified_by_claim=bool(await _accepted_voice_claim(payload, caller)))
+            _gate = _utterance_shape.window_speaker_frame(payload, transcript, _win_verdict)
+            if _gate is not None:
+                # An unverified voice closes the panel's voice session, exactly as on the voice_command path (flag off: no-op).
+                try:
+                    import voice_session as _vs_win
+                    _vs_dec = _vs_win.observe_turn(
+                        panel_id=panel_id, caller_source=(caller or {}).get("source"), verdict=False, claimed=None,
+                        pin_user=None, model_ok=False, model_reason="window_mismatch", text="")
+                    if _vs_dec is not None and _vs_dec.events:
+                        _spawn_bg(_vs_win.publish(list(_vs_dec.events)))
+                except Exception as _vs_exc:
+                    logger.debug("window mismatch session close failed (non-fatal): %s", _vs_exc)
+        if _gate is None:
+            _gate = _utterance_shape.gate_frame(payload, transcript, speculative=_spec_gate is not None)
     except Exception as _gate_exc:
         logger.warning("voice/turn_stream utterance gate failed (non-fatal): %s", _gate_exc)
         _gate = None
@@ -6202,6 +6225,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # The daemon's per-turn speaker-gate block (memory provenance; see _speaker_verdict).
     if isinstance((payload or {}).get("speaker"), dict):
         command_payload["speaker"] = payload["speaker"]
+    # Which kind of no-wake-word window this turn came from: voice_command's claim gate applies the stricter window bar to it.
+    if (payload or {}).get("window") in ("followup", "conversation"):
+        command_payload["window"] = payload["window"]
 
     # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
     # (voice_command's stream generator records the downstream llm_first_token /
@@ -6979,7 +7005,9 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
         # threshold): never honoured, whatever its value. The flag is flipped on BOTH hosts (docs/knowledge/speaker-resnet34-switch.md).
         logger.info("voice claim rejected: model %r is not the acting model %r", model_id[:48], speaker_models.acting_model())
         return None
-    threshold = speaker_models.claim_threshold(model_id, speech_s)
+    # A no-wake-word window turn (follow-up / conversation) clears a STRICTER bar than a wake turn: nobody said the wake word, so
+    # whatever the room is playing (a television) is also a candidate speaker (2026-11-01).
+    threshold = speaker_models.claim_threshold(model_id, speech_s, str(payload.get("window") or ""))
     if threshold is not None and score >= threshold:
         return user
     logger.info(
