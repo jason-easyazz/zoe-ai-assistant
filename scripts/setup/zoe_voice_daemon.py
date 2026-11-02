@@ -4589,6 +4589,18 @@ def _run_pull_turn(pa: "pyaudio.PyAudio") -> None:
             _do_single_turn(pa, b"", prompt_on_empty=False, text=PULL_PHRASE)
         finally:
             _monitor.stop()
+        # Speech over the pull reply is a committed barge-in: its recording is the next turn, exactly as voice_command hands
+        # it on (seed -> _follow_up_source -> _turn_with_monitor). No seed (or the feature off) = back to wake mode.
+        seed_wav = _monitor.take_seed()
+        _turn_fn = _do_single_turn_stream if VOICE_STREAM_ENABLED else _do_single_turn
+        done = 0
+        while seed_wav is not None and done < max(1, FOLLOW_UP_MAX_TURNS):
+            follow_wav = _follow_up_source(pa, seed_wav)
+            seed_wav = None
+            if follow_wav is None:
+                break
+            _played, seed_wav = _turn_with_monitor(pa, follow_wav, _turn_fn, window="", prompt_on_empty=False)
+            done += 1
     finally:
         _recording_active.clear()
         _ignore_wake_until = max(_ignore_wake_until, time.monotonic() + POST_PLAY_COOLDOWN_S)

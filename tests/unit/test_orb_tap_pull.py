@@ -119,6 +119,9 @@ def test_the_pull_turn_runs_guarded_and_under_a_barge_monitor(daemon, monkeypatc
         def stop(self):
             seen["order"].append("stop")
 
+        def take_seed(self):
+            return None
+
     def turn(pa, wav, **kw):
         seen["order"].append("turn")
         seen["active"] = daemon._recording_active.is_set()
@@ -133,6 +136,38 @@ def test_the_pull_turn_runs_guarded_and_under_a_barge_monitor(daemon, monkeypatc
     assert seen["order"] == ["init", "start", "turn", "stop"]
     assert seen["active"] is True and seen["kw"] == {"prompt_on_empty": False, "text": daemon.PULL_PHRASE}
     assert not daemon._recording_active.is_set() and daemon._ignore_wake_until > 0.0
+
+
+def _seed_rig(daemon, monkeypatch, seed):
+    calls = {"src": [], "turns": []}
+
+    class Mon:
+        def __init__(self, pa): ...
+        def start(self): ...
+        def stop(self): ...
+        def take_seed(self): return seed
+
+    monkeypatch.setattr(daemon, "_BargeMonitor", Mon)
+    monkeypatch.setattr(daemon, "_do_single_turn", lambda *a, **k: True)
+    monkeypatch.setattr(daemon, "VOICE_STREAM_ENABLED", False)
+    monkeypatch.setattr(daemon, "_follow_up_source", lambda pa, s, **k: calls["src"].append(s) or s)
+    monkeypatch.setattr(daemon, "_turn_with_monitor",
+                        lambda pa, wav, fn, **k: calls["turns"].append((wav, k)) or (True, None))
+    return calls
+
+
+def test_interrupting_a_pull_makes_the_barge_seed_the_next_turn(daemon, monkeypatch):
+    """Cross-review: the seed was dropped. It now goes through _follow_up_source -> _turn_with_monitor like voice_command."""
+    calls = _seed_rig(daemon, monkeypatch, b"RIFFseed")
+    daemon._run_pull_turn(None)
+    assert calls["src"] == [b"RIFFseed"]
+    assert calls["turns"] == [(b"RIFFseed", {"window": "", "prompt_on_empty": False})]
+
+
+def test_a_pull_with_no_barge_returns_to_wake_mode(daemon, monkeypatch):
+    calls = _seed_rig(daemon, monkeypatch, None)
+    daemon._run_pull_turn(None)
+    assert calls == {"src": [], "turns": []}
 
 
 def test_a_failing_pull_turn_still_stops_the_monitor_and_releases_the_flag(daemon, monkeypatch):
