@@ -2839,11 +2839,16 @@ async def _execute_list_rename_direct(intent: Intent, user_id: str) -> Optional[
         user_id = panel_principal.HOUSEHOLD_VIEWER
     try:
         from database import get_db_ctx
-        from list_service import find_list_id, rename_item_on_list, rename_reply
+        from list_service import find_list_id, find_named_list_id, rename_item_on_list, rename_reply
 
-        friendly = "shopping list" if lt == "shopping" else f"{(slots.get('list_name') or lt).replace('_', ' ')} list"
+        named = str(slots.get("list_name") or "").strip()
+        friendly = "shopping list" if lt == "shopping" and not named else f"{(named or lt).replace('_', ' ')} list"
         async with get_db_ctx() as db:
-            list_id = await find_list_id(db, user_id=user_id, list_type=lt, name=ln)
+            # A list the user NAMED is that list or none (never the household list of the default type instead).
+            if named:
+                list_id = await find_named_list_id(db, user_id=user_id, name=named)
+            else:
+                list_id = await find_list_id(db, user_id=user_id, list_type=lt, name=ln)
             if list_id is None:
                 return f"I couldn't find your {friendly}, so nothing changed."
             result = await rename_item_on_list(db, user_id=user_id, list_id=list_id, old_text=old, new_text=new)

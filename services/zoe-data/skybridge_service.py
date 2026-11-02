@@ -1298,7 +1298,9 @@ _RENAME_RE = re.compile(
     re.IGNORECASE,
 )
 _SHOULD_BE_NOT_RE = re.compile(
-    rf"\b(?:it|that|this)\s+should\s+(?:be|say|read)\s+(?P<new>.+?)[,\s]+not\s+(?P<old>.+?)"
+    # ANCHORED at the start (after polite lead-ins): "are you sure that should be X, not Y" / "she said it should be X, not Y"
+    # are questions and reported speech, not commands.
+    rf"^\W*(?:(?:please|hey|zoe|no|nope|oops|sorry|actually|wait|and|but|so|well|ok|okay)\W+)*(?:it|that|this)\s+should\s+(?:be|say|read)\s+(?P<new>.+?)[,\s]+not\s+(?P<old>.+?)"
     rf"(?:\s+(?:on|in|from)\s+{_LIST_TARGET_RE})?\s*[.!?]*\s*$",
     re.IGNORECASE,
 )
@@ -1345,7 +1347,7 @@ def _list_rename_from_text(message: str) -> tuple[str, str, str, str] | None:
     head = _command_shaped(message, "change|rename|correct")
     match = _RENAME_RE.search(message[head.start():]) if head is not None else None
     if match is None:
-        match = _SHOULD_BE_NOT_RE.search(message)
+        match = _SHOULD_BE_NOT_RE.match(message)
     if match is None:
         return None
     groups = match.groupdict()
@@ -2141,8 +2143,8 @@ def _looks_like_list_name(message: str) -> bool:
 
 
 _READ_ACTIONS = frozenset({"show", "overview", "forecast", "current", "today"})
-_WRITE_ACTIONS = frozenset({"add_item", "remove_item", "complete_item", "edit_item", "create_list", "create_event",
-                            "update_time", "edit_event", "delete_event", "remember_fact", "create"})
+_WRITE_ACTIONS = frozenset({"add_item", "remove_item", "complete_item", "edit_item", "rename_item", "correct_last_item",
+                            "create_list", "create_event", "update_time", "edit_event", "delete_event", "remember_fact", "create"})
 # Domains holding the household's personal data: the only ones the unsure floor applies to (music / smart-home / timers
 # keep the garbled-STT recovery - their worst case is a wrong song, not a wrong record).
 _UNSURE_FLOOR_DOMAINS = frozenset({"calendar", "lists", "people"})
@@ -3594,7 +3596,7 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
     }
 
 
-async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
+async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any, *, ensure_defaults: bool = True) -> dict[str, Any]:
     if user_id in {"guest", "voice-guest"}:
         card = card_service.build_shopping_list_card(
             {
@@ -3612,7 +3614,8 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
             "cards": [card_service.convert_emit(card, target_major=1)],
         }
 
-    await _ensure_default_lists(user_id, db)
+    if ensure_defaults:      # a correction's reply re-reads only: it must never create the default lists as a side effect
+        await _ensure_default_lists(user_id, db)
     lists = await _fetch_list_catalog(user_id, db)
     list_ids = [list_row["id"] for list_row in lists]
     items_by_list: dict[Any, list[dict[str, Any]]] = {list_id: [] for list_id in list_ids}
@@ -4265,7 +4268,8 @@ async def _rename_and_answer(
     if status in {"renamed", "merged"}:
         await _maybe_commit(db)
         _audit_list_item("rename" if status == "renamed" else "rename_merge", user_id, list_id, str(result.get("item_id") or ""))
-    refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
+    refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name),
+                                     user_id, db, ensure_defaults=False)
     where = f"the {intent.list_name} list" if intent.list_name else f"the {list_type} list"
     spoken = rename_reply(result, where)
     refreshed["intent"] = {"domain": "lists", "action": "rename_item", "list_type": list_type, "status": status,
@@ -4314,9 +4318,9 @@ async def _resolve_list_correct_last(intent: SkybridgeIntent, user_id: str, db: 
     if recent is None:
         return _not_a_list_command()
     list_id, item_id = recent
-    rows = await db.fetch("SELECT id, text FROM list_items WHERE list_id = $1 AND deleted = 0", list_id)
+    rows = await db.fetch("SELECT id, text, completed FROM list_items WHERE list_id = $1 AND deleted = 0", list_id)
     current = next((dict(r) for r in rows if str(dict(r).get("id")) == item_id), None)
-    if current is None:
+    if current is None or current.get("completed"):
         return _not_a_list_command()     # ticked off / removed since: there is nothing "just added" to fix
     if intent.query == "guard" and not looks_like_correction_of(str(current.get("text") or ""), intent.item_text):
         return _not_a_list_command()     # a bare "no, <something else>" is not about the item

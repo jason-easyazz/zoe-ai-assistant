@@ -387,3 +387,124 @@ def test_resemblance_helper():
     assert list_service.looks_like_correction_of("noodels", "rice noodles")
     assert list_service.looks_like_correction_of("mlk", "milk")
     assert not list_service.looks_like_correction_of("milk", "bananas")
+
+
+# ── review round (Codex / Greptile on #2246) ────────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("phrase", [
+    "are you sure that should be oat milk, not milk",
+    "she said that should be oat milk, not milk",
+    "the recipe says it should be oat milk, not milk",
+])
+def test_a_should_be_clause_inside_a_question_or_statement_is_not_a_command(phrase):
+    intent = classify_skybridge_intent(phrase)
+    assert intent is None or intent.action != "rename_item", phrase
+
+
+@pytest.mark.parametrize("phrase", ["that should be oat milk, not milk", "no, it should be oat milk not milk",
+                                    "please, that should be oat milk, not milk"])
+def test_the_anchored_should_be_form_still_works(phrase):
+    intent = classify_skybridge_intent(phrase)
+    assert intent is not None and intent.action == "rename_item" and intent.target_text == "oat milk", phrase
+
+
+@pytest.mark.parametrize("action", ["rename_item", "correct_last_item"])
+def test_corrections_are_writes_for_the_unsure_confidence_floor(action):
+    from skybridge_service import SkybridgeIntent
+
+    intent = SkybridgeIntent(domain="lists", action=action, item_text="milk", target_text="oat milk")
+    assert skybridge_service._unsure_floor(intent, "change milk to oat milk") == 0.45
+    assert skybridge_service._unsure_floor(SkybridgeIntent(domain="lists", action="show"), "show my lists") is None   # control
+
+
+async def test_a_rename_whose_update_hits_no_row_is_not_claimed():
+    db = _db()
+    original = db.execute
+
+    async def lost_race(*args):
+        if "UPDATE list_items SET text" in str(args[0]):
+            return "UPDATE 0"                       # the item was deleted between the read and the write
+        return await original(*args)
+
+    db.execute = lost_race
+    result = await resolve_skybridge_request("change noodles to rice noodles", "jo", db=db)
+    assert result["intent"]["status"] == "not_found"
+    assert "Changed" not in result["spoken_summary"]
+    assert not write_receipts.has("jo", 0.0, "list")
+
+
+async def test_a_failed_correction_does_not_create_the_default_lists():
+    db = _db()
+    result = await resolve_skybridge_request("change bread to rye bread on the shopping list", "jo", db=db)
+    assert result["intent"]["status"] == "not_found"
+    assert not any("INSERT INTO lists" in str(c[0]) for c in db.executed)
+
+
+async def test_an_item_ticked_off_since_the_add_is_not_corrected_completed_row():
+    db = _db()
+    await _add(db)
+    for item in db.items_by_list["fam"]:
+        if item["text"] == "noodels":
+            item["completed"] = True
+    result = await resolve_skybridge_request("spell it rice noodles", "jo", db=db)
+    assert not result["handled"]
+    assert "noodels" in _texts(db)
+
+
+class _NamedListDb:
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def execute(self, sql, params=()):
+        name = params[0].lower()
+        owner = params[2]
+        hits = [r for r in self.rows if r["name"].lower() in (name, f"{name} list")
+                and (r["visibility"] == "family" or (owner and r["user_id"] == owner))]
+        db = self
+
+        class _Cur:
+            async def fetchone(self_inner):
+                return hits[0] if hits else None
+
+        return _Cur()
+
+
+async def test_find_named_list_id_is_that_list_or_none():
+    db = _NamedListDb([
+        {"id": "fam", "name": "Shopping", "user_id": "jo", "visibility": "family"},
+        {"id": "camp", "name": "Camping", "user_id": "jo", "visibility": "family"},
+        {"id": "mine", "name": "Gift ideas", "user_id": "jo", "visibility": "personal"},
+    ])
+    assert await list_service.find_named_list_id(db, user_id="jo", name="camping") == "camp"
+    assert await list_service.find_named_list_id(db, user_id="jo", name="gift ideas") == "mine"
+    assert await list_service.find_named_list_id(db, user_id="jo", name="chores") is None
+    assert await list_service.find_named_list_id(db, user_id="guest", name="gift ideas") is None    # a guest owns nothing
+
+
+async def test_the_keyword_executor_resolves_a_named_list_exactly_and_refuses_when_absent(monkeypatch):
+    import contextlib
+
+    import database
+
+    db = _db()
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    async def household(_db, *, user_id, list_type, name):
+        raise AssertionError("a NAMED list must never fall back to the household list of the default type")
+
+    async def named(_db, *, user_id, name):
+        return "fam" if name == "shopping" else None
+
+    monkeypatch.setattr(database, "get_db_ctx", ctx)
+    monkeypatch.setattr(list_service, "find_list_id", household)
+    monkeypatch.setattr(list_service, "find_named_list_id", named)
+    monkeypatch.setattr(intent_router, "_notify_lists_ui", lambda *a, **k: asyncio.sleep(0))
+    slots = {"item": "milk", "new_item": "oat milk", "list_type": "shopping", "list_name": "camping"}
+    reply = await intent_router.execute_intent(intent_router.Intent("list_rename", dict(slots)), "jo")
+    assert reply == "I couldn't find your camping list, so nothing changed."
+    assert _texts(db) == ["noodles", "milk"]
+    reply = await intent_router.execute_intent(intent_router.Intent("list_rename", {**slots, "list_name": "shopping"}), "jo")
+    assert reply.startswith("Changed milk to oat milk") and _texts(db) == ["noodles", "oat milk"]

@@ -424,6 +424,34 @@ async def find_household_list_id(db, *, list_type: str, name: str) -> Optional[s
     return picked["id"] if picked else None
 
 
+async def find_named_list_id(db, *, user_id: str, name: str) -> Optional[str]:
+    """The list the user NAMED ("my camping list"): a family-visible list or the user's own with exactly that name (or
+    ``<name> list``), case-insensitive; None when there is none. Never falls back to a different list. A guest identity owns
+    nothing, so it sees family lists only."""
+    owner = "" if panel_principal.is_guest_id(user_id) else user_id
+    cursor = await db.execute(
+        "SELECT id FROM lists WHERE deleted=0 AND (lower(name)=lower(?) OR lower(name)=lower(?) || ' list')"
+        " AND (visibility='family' OR (user_id=? AND ?<>'')) ORDER BY CASE WHEN user_id=? THEN 0 ELSE 1 END, updated_at DESC LIMIT 1",
+        (name.strip(), name.strip(), owner, owner, owner),
+    )
+    row = await cursor.fetchone()
+    return row["id"] if row else None
+
+
+def _rows_changed(res) -> Optional[int]:
+    """Rows a write touched, from either result shape (a cursor's ``rowcount`` or an asyncpg status tag "UPDATE 1"); None when
+    the shim reports neither (then the caller cannot tell and carries on as before)."""
+    count = getattr(res, "rowcount", None)
+    if isinstance(count, int) and count >= 0:
+        return count
+    if isinstance(res, str):
+        try:
+            return int(res.rsplit(None, 1)[-1])
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
 async def find_list_id(db, *, user_id: str, list_type: str, name: str) -> Optional[str]:
     """Resolve the list an add lands on: the household (family-visible) list of the TYPE first, whatever it is called; only when
     there is none, the user's own list of that exact name. A guest identity owns nothing: it resolves to the household list only.
@@ -752,15 +780,19 @@ async def rename_item_on_list(
         clash = next((r for r in rows if str(r["id"]) != str(target["id"]) and not r.get("completed")
                       and item_key(str(r.get("text") or "")) == item_key(new)), None)
         if clash is not None:
-            await db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2",
-                             str(target["id"]), list_id)
+            gone = await db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2 AND deleted = 0",
+                                    str(target["id"]), list_id)
+            if _rows_changed(gone) == 0:      # deleted under us (the REST delete takes no list lock): nothing was merged
+                return {**out, "status": "not_found"}
             out.update(status="merged", text=normalize_item_text(str(clash.get("text") or new)), item_id=str(clash["id"]), removed_id=str(target["id"]))
             pending.append((str(target["id"]), "rename_item:merged"))
         elif before == new:
             out["status"] = "unchanged"
         else:
-            await db.execute("UPDATE list_items SET text = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0",
-                             new, str(target["id"]), list_id)
+            done = await db.execute("UPDATE list_items SET text = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0",
+                                    new, str(target["id"]), list_id)
+            if _rows_changed(done) == 0:      # deleted under us (the REST delete takes no list lock): never claim a rename
+                return {**out, "status": "not_found"}
             out["status"] = "renamed"
             pending.append((str(target["id"]), "rename_item"))
     # Receipts land only once the write has committed (a rolled-back correction must not read as done).
