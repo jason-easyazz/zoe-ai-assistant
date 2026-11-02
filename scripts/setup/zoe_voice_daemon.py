@@ -3757,15 +3757,17 @@ _FALLBACK_ONE_MOMENT = "One moment."
 _FALLBACK_UNREACHABLE = "Sorry, I can't reach my brain right now. Try again in a minute."
 
 
-def _post_turn_riding_restart(turn_payload: dict, on_restart=None) -> dict:
-    """POST /api/voice/turn; on a restart-shaped failure (502 / connect refused - the request
-    provably did not run) say "One moment." locally and retry exactly once after a backoff.
-    Everything else (500 with a body, 503/504, a dropped connection) is returned as is."""
-    resp = _api_post("/api/voice/turn", turn_payload, restart_only=True)
+def _post_turn_riding_restart(turn_payload: dict, on_restart=None, path: str = "/api/voice/turn") -> dict:
+    """POST the blocking turn (``/api/voice/turn``, or ``/api/voice/command`` for a text turn); on a restart-shaped
+    failure (502 / connect refused - the request provably did not run) say "One moment." locally and retry exactly
+    once after a backoff. Everything else (500 with a body, 503/504, a dropped connection, the read timeout) is
+    returned as is: a turn can execute a write, and the generic retry loop used to run one slow turn up to three
+    times (2026-11-02)."""
+    resp = _api_post(path, turn_payload, restart_only=True)
     if resp.get("ok", True) is not False or not resp.get("restartish"):
         return resp
-    log.warning("voice/turn: zoe-data unreachable (%s) - local 'one moment', one retry in %.1fs",
-                resp.get("error"), VOICE_TURN_RESTART_RETRY_S)
+    log.warning("%s: zoe-data unreachable (%s) - local 'one moment', one retry in %.1fs",
+                path, resp.get("error"), VOICE_TURN_RESTART_RETRY_S)
     _restart_recovery_active.set()
     try:
         _recording_active.clear()
@@ -3777,7 +3779,7 @@ def _post_turn_riding_restart(turn_payload: dict, on_restart=None) -> dict:
                 log.debug("on_restart hook failed", exc_info=True)
         _espeak_local(_FALLBACK_ONE_MOMENT)
         time.sleep(VOICE_TURN_RESTART_RETRY_S)
-        return _api_post("/api/voice/turn", turn_payload, restart_only=True)
+        return _api_post(path, turn_payload, restart_only=True)
     finally:
         _restart_recovery_active.clear()
 
@@ -3858,7 +3860,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
 
     def _run_turn():
         if text:
-            _turn_result["resp"] = _api_post("/api/voice/command", turn_payload)
+            _turn_result["resp"] = _post_turn_riding_restart(turn_payload, _on_restart, path="/api/voice/command")
         elif VOICE_ROUTE_MODE == "ha_bridge":
             _turn_result["resp"] = _bridge_post(
                 "/voice/turn",
@@ -4284,7 +4286,8 @@ def _speak_announcement(ann: dict) -> bool:
     text = str(ann.get("text") or "").strip()
     if not text:
         return False
-    resp = _api_post("/api/voice/speak", {"text": text[:1200], "panel_id": PANEL_ID}, timeout=30)
+    # one attempt: a 500/504 or the read timeout is final - the generic retry re-ran a slow synthesis up to three times
+    resp = _api_post("/api/voice/speak", {"text": text[:1200], "panel_id": PANEL_ID}, timeout=30, retries=0)
     audio_b64 = resp.get("audio_base64")
     if not audio_b64:
         log.warning("announce %s: TTS fetch failed (%s)", ann.get("id", "?"), resp.get("error", "no audio"))
@@ -4499,7 +4502,7 @@ def _enroll_say(text: str) -> bool:
     settling, and never use a local espeak of our own."""
     audio, ctype = None, "audio/wav"
     for attempt in range(ENROLL_TTS_ATTEMPTS):
-        resp = _api_post("/api/voice/speak", {"text": text[:1200], "panel_id": PANEL_ID}, timeout=30)
+        resp = _api_post("/api/voice/speak", {"text": text[:1200], "panel_id": PANEL_ID}, timeout=30, retries=0)  # this loop IS the retry
         if resp.get("audio_base64"):
             audio, ctype = resp["audio_base64"], resp.get("content_type", "audio/wav")
             if resp.get("provider") != "espeak-ng":
