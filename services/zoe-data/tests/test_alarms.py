@@ -701,7 +701,7 @@ def test_voice_snooze_and_off_while_ringing(voice):
     run(_tick(voice, SEVEN))
     assert "Snoozed for 9 minutes" in say("snooze")["spoken_summary"]
     assert "Snoozed for 5 minutes" not in say("snooze the alarm")["spoken_summary"]  # already snoozed: nothing is ringing
-    run(_tick(voice, SEVEN + 9 * 60 + 1))
+    run(_tick(voice, __import__("time").time() + 9 * 60 + 1))  # resolve() snoozes on the real clock; the snooze ends 9 minutes after it
     assert "Alarm off" in say("turn off the alarm")["spoken_summary"]
     assert "No alarm is ringing" in say("snooze")["spoken_summary"]
 
@@ -792,3 +792,177 @@ def test_forget_user_is_fail_closed_but_a_missing_table_is_nothing_to_erase(tmp_
     monkeypatch.setattr(db_pool, "get_db_ctx", broken)
     with pytest.raises(RuntimeError):
         run(alarms.forget_user(ANN))
+
+
+# ── cross-review round: negations, named targets, ringing/snoozed offs, spent one-offs, stale edits, atomicity ────────────────────
+
+
+@pytest.mark.parametrize("text", [
+    "don't turn off the alarm", "can I turn off the alarm", "what if I turn off the alarm", "do not cancel my 7 am alarm",
+    "could I switch off the alarm", "never mind, don't snooze the alarm",
+])
+def test_voice_negations_and_permission_questions_are_never_writes(text):
+    cmd = alarm_voice.parse(text, NIGHT)
+    assert cmd is None or cmd.action == "list", (text, cmd)
+
+
+@pytest.mark.parametrize("text", ["cancel every other alarm", "cancel all my alarms except the gym one", "delete all alarms but the 7 am"])
+def test_voice_refuses_a_scope_it_cannot_honour(text):
+    assert alarm_voice.parse(text, NIGHT) is None
+
+
+def test_voice_keeps_the_named_alarm_on_off_and_on():
+    assert alarm_voice.parse("turn off the gym alarm", NIGHT).target_label == "gym"
+    assert alarm_voice.parse("turn my gym alarm back on", NIGHT).target_label == "gym"
+    assert alarm_voice.parse("turn off the alarm", NIGHT).target_label == ""
+    assert alarm_voice.parse("turn off the ringing alarm", NIGHT).target_label == ""  # a state word is not a name
+
+
+def test_a_named_off_never_touches_a_different_alarm(voice):
+    say("set an alarm for 7 called school")
+    say("set an alarm for 8 called gym")
+    assert "Turned off your 8:00 am Gym" in say("turn off the gym alarm")["spoken_summary"]
+    assert "couldn't find" in say("turn off the swim alarm")["spoken_summary"]  # no such label: the only enabled alarm is left alone
+    assert "one alarm" in say("what alarms do I have")["spoken_summary"]
+    assert "Gym" in say("turn my gym alarm back on")["spoken_summary"]
+    assert "2 alarms" in say("what alarms do I have")["spoken_summary"]
+
+
+async def _all(path):
+    db = await _open(path)
+    try:
+        return await alarms.list_alarms(db, alarms.Viewer(user_id="", panel=True))
+    finally:
+        await db.close()
+
+
+def test_a_targeted_off_ends_the_ring_of_that_alarm_only(voice):
+    say("set an alarm for 7")
+    say("set an alarm for 7:05")
+    run(_tick(voice, SEVEN + 6 * 60))  # both rang; the one-offs are already disabled by the ring
+    assert "Alarm off" in say("turn off my 7 am alarm")["spoken_summary"]
+    states = {a["time_hhmm"]: a["state"] for a in run(_all(voice))}
+    assert states == {"07:00": "idle", "07:05": "ringing"}
+
+
+def test_a_snoozed_one_off_can_be_turned_off_by_voice(voice):
+    say("set an alarm for 7")
+    run(_tick(voice, SEVEN))
+    say("snooze")
+    assert "Alarm off" in say("turn off my 7 am alarm")["spoken_summary"]
+    assert [a["state"] for a in run(_all(voice))] == ["idle"]
+
+
+def test_a_spent_one_off_can_be_turned_back_on(dbfile):
+    a = run(_mk(dbfile))
+    run(_tick(dbfile, SEVEN))  # rang: a one-off disables itself and keeps its (now past) date
+    spent = run(_get(dbfile, a["id"]))
+    assert not spent["enabled"]
+
+    async def back_on():
+        db = await _open(dbfile)
+        try:
+            return await alarms.update_alarm(db, spent, {"enabled": True}, now=SEVEN + 3600)
+        finally:
+            await db.close()
+
+    b = run(back_on())
+    assert b["enabled"] and b["next_fire_at"] == ts(2026, 11, 4, 7, 0) and b["once_date"] == "2026-11-04"
+
+
+def test_a_stale_edit_cannot_undo_a_disable(dbfile):
+    a = run(_mk(dbfile))
+
+    async def go():
+        db = await _open(dbfile)
+        try:
+            await alarms.update_alarm(db, a, {"enabled": False}, now=NIGHT + 5)  # request 1 disables it
+            with pytest.raises(alarms.AlarmError) as exc:
+                await alarms.update_alarm(db, a, {"label": "gym"}, now=NIGHT + 6)  # request 2 still holds the enabled copy
+            return exc.value.status
+        finally:
+            await db.close()
+
+    assert run(go()) == 409
+    now = run(_get(dbfile, a["id"]))
+    assert not now["enabled"] and now["label"] == ""
+
+
+class _Tx:
+    """An aiosqlite connection that also has asyncpg's ``transaction()`` (rollback on error), so atomicity is testable on sqlite."""
+
+    def __init__(self, db, fail_on=""):
+        self._db, self._fail = db, fail_on
+
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+    def execute(self, sql, *a):
+        if self._fail and self._fail in sql:
+            raise RuntimeError("event log write failed")
+        return self._db.execute(sql, *a)
+
+    def transaction(self):
+        import contextlib
+
+        @contextlib.asynccontextmanager
+        async def tx():
+            try:
+                yield
+            except BaseException:
+                await self._db.rollback()
+                raise
+
+        return tx()
+
+
+def test_a_failed_event_write_leaves_no_alarm_behind(dbfile):
+    async def go():
+        db = await _open(dbfile)
+        try:
+            with pytest.raises(RuntimeError):
+                await alarms.create_alarm(_Tx(db, fail_on="INSERT INTO alarm_events"), ANN, time_hhmm="07:00", now=NIGHT)
+            async with db.execute("SELECT COUNT(*) FROM alarms") as cur:
+                return (await cur.fetchone())[0]
+        finally:
+            await db.close()
+
+    assert run(go()) == 0
+
+
+def test_an_expired_snooze_found_late_is_missed_not_rung(dbfile):
+    a = run(_mk(dbfile))
+    run(_tick(dbfile, SEVEN))
+
+    async def snz():
+        db = await _open(dbfile)
+        try:
+            return await alarms.snooze(db, await alarms.get_alarm(db, a["id"]), now=SEVEN)
+        finally:
+            await db.close()
+
+    run(snz())
+    out = run(_tick(dbfile, SEVEN + 9 * 60 + alarms.MISSED_GRACE_S + 60))  # zoe-data was down past the snooze and the grace
+    assert [e for e, _ in out] == ["missed"]
+    row = run(_get(dbfile, a["id"]))
+    assert row["state"] == "idle" and row["snooze_until"] is None
+    assert "missed" in run(_events(dbfile, a["id"]))
+
+
+def test_a_spoken_hour_with_music_is_a_time():
+    cmd = alarm_voice.parse("wake me at seven with music", NIGHT)
+    assert cmd is not None and cmd.action == "set" and cmd.time_hhmm == "07:00" and cmd.sound_kind == "music"
+
+
+def test_forget_user_raises_when_the_pool_was_lost_and_skips_when_there_never_was_one(monkeypatch):
+    import db_pool
+
+    def no_pool():
+        raise RuntimeError("db_pool not initialised — call init_pool() first")
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", no_pool)
+    monkeypatch.setattr(db_pool, "pool_ever_initialised", lambda: False)
+    assert run(alarms.forget_user(ANN)) == 0  # a process that never had a database has nothing to erase
+    monkeypatch.setattr(db_pool, "pool_ever_initialised", lambda: True)
+    with pytest.raises(RuntimeError):
+        run(alarms.forget_user(ANN))  # the pool was built and is gone: the erasure did NOT happen
