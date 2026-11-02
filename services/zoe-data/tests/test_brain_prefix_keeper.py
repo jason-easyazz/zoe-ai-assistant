@@ -466,3 +466,23 @@ def test_control_with_no_helper_the_keeper_warm_runs(warm_env):
     zfc, calls = warm_env
     assert asyncio.run(zfc.warm_kv_prefix("", yield_to_helpers=True)) == "warmed"
     assert calls["turns"] == 1
+
+
+def test_a_missing_lock_file_is_created_and_held_and_an_unusable_path_skips_the_warm(env, monkeypatch, tmp_path):
+    """Codex #2245: after a reboot the file is absent; a harness would create+lock it under an unlocked warm."""
+    state, clk = env
+    p = tmp_path / "fresh.lock"
+    fd = k.take_window_lock(str(p))
+    assert fd is not None and p.exists()
+    try:
+        probe = os.open(str(p), os.O_RDONLY | os.O_CREAT, 0o666)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(probe, fcntl.LOCK_SH | fcntl.LOCK_NB)      # a harness preflight now sees the keeper
+        finally:
+            os.close(probe)
+    finally:
+        os.close(fd)
+    assert k.take_window_lock(str(tmp_path / "no-dir" / "x.lock")) is None      # cannot be established -> no lock
+    monkeypatch.setattr(k, "WINDOW_LOCK", str(tmp_path / "no-dir" / "x.lock"))
+    assert _tick() == "window_lock" and state["warm_calls"] == []

@@ -72,27 +72,25 @@ def take_window_lock(path: Optional[str] = None) -> "Optional[int]":
     """Claim the brain-window lock EXCLUSIVELY for the length of one warm (non-blocking). It fails if ANYONE holds the file
     (the A/B harnesses hold it shared, the bake-off and the night window exclusive) and, while held, excludes shared
     holders too: a harness preflight probes with a shared lock, so a shared hold here would let it start under the warm.
-    Returns the open fd (the caller closes it to release), None when someone holds the lock, -1 when there is no lock file
-    / it cannot be used (nothing to hold; not a reason to skip)."""
+    The file is created when missing (after a reboot), exactly as a harness preflight would create it, so a harness cannot start
+    under a warm that held nothing. Returns the open fd (the caller closes it to release), or None when someone holds the lock
+    or it cannot be established (the warm is skipped either way)."""
     try:
-        fd = os.open(path or WINDOW_LOCK, os.O_RDONLY)
+        fd = os.open(path or WINDOW_LOCK, os.O_RDONLY | os.O_CREAT, 0o666)
     except OSError:
-        return -1
+        return None
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return fd
-    except BlockingIOError:
+    except OSError:       # BlockingIOError (someone holds it) or any other failure to lock
         os.close(fd)
         return None
-    except OSError:
-        os.close(fd)
-        return -1
 
 
 def window_lock_held(path: Optional[str] = None) -> bool:
     """True while another process holds the brain-window lock in any mode. Holds nothing afterwards."""
     fd = take_window_lock(path)
-    if fd is not None and fd >= 0:
+    if fd is not None:
         os.close(fd)
     return fd is None
 
@@ -155,8 +153,7 @@ async def tick() -> str:
         try:
             return await _decide_and_warm(member, zoe_flue_client)
         finally:
-            if lock_fd >= 0:
-                os.close(lock_fd)   # released only after the warm has finished
+            os.close(lock_fd)   # released only after the warm has finished
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - a keeper must never take the loop down
