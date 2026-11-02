@@ -681,17 +681,18 @@ def looks_like_correction_of(old_text: str, new_text: str) -> bool:
         return False
     if a == b or a in b or b in a or set(a.split()) & set(b.split()):
         return True
-    if difflib.SequenceMatcher(None, a, b).ratio() >= 0.6:
+    if difflib.SequenceMatcher(None, a, b).ratio() >= 0.7:
         return True
     # a misspelt word inside a fuller name ("noodels" -> "rice noodles")
     return any(len(x) > 3 and len(y) > 3 and difflib.SequenceMatcher(None, x, y).ratio() >= 0.75
                for x in a.split() for y in b.split())
 
 
-async def _list_visible_to(db, list_id: str, user_id: str) -> Optional[bool]:
+async def _list_visible_to(db, list_id: str, user_id: str, *, lock: bool = False) -> Optional[bool]:
     """None = no such live list; True = the viewer may touch its ITEMS; False = a private list of someone else. A household
-    (family-visible) list is open to any identified viewer and to the panel guest; a personal list only to its owner."""
-    rows = await db.fetch("SELECT user_id, visibility FROM lists WHERE id = $1 AND deleted = 0", list_id)
+    (family-visible) list is open to any identified viewer and to the panel guest; a personal list only to its owner. ``lock``
+    share-locks the list row (inside a transaction) so a concurrent visibility change waits for the write."""
+    rows = await db.fetch("SELECT user_id, visibility FROM lists WHERE id = $1 AND deleted = 0" + (" FOR SHARE" if lock else ""), list_id)
     if not rows:
         return None
     row = dict(rows[0])
@@ -724,14 +725,16 @@ async def rename_item_on_list(
     out = {"status": "invalid", "list_id": list_id, "item_id": "", "old": old_text, "text": new}
     if not new or not (old_text or item_id) or not is_plausible_item(new):
         return out
-    visible = await _list_visible_to(db, list_id, user_id)
-    if visible is None:
-        return {**out, "status": "no_list"}
-    if not visible:
-        return {**out, "status": "forbidden"}
     pending: list[tuple] = []
     async with list_write_txn(db, list_id):
-        rows = [dict(r) for r in await db.fetch(
+        # Authorised INSIDE the lock + transaction, with the list row share-locked: a list turned private between a check and
+        # the write cannot be edited on stale visibility.
+        visible = await _list_visible_to(db, list_id, user_id, lock=callable(getattr(db, "transaction", None)))
+        if visible is None:
+            return {**out, "status": "no_list"}
+        if not visible:
+            return {**out, "status": "forbidden"}
+        rows =[dict(r) for r in await db.fetch(
             "SELECT id, text, completed FROM list_items WHERE list_id = $1 AND deleted = 0", list_id)]
         target = None
         if item_id:
@@ -766,7 +769,7 @@ async def rename_item_on_list(
             receipts.append((user_id, rid, why))
         else:
             write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", rid, why)
-    if out["status"] == "renamed":
+    if out["status"] in {"renamed", "merged"}:       # for a merge item_id is the surviving row
         note_recent_add(user_id, list_id, out["item_id"])      # "no, X" twice in a row keeps correcting the same row
     return out
 

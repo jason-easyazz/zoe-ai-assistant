@@ -256,6 +256,63 @@ async def test_a_bare_no_that_does_not_resemble_the_item_is_left_alone():
     assert "noodels" in _texts(db) and "bananas" not in _texts(db)
 
 
+@pytest.mark.parametrize("phrase", ["I meant tomorrow", "that should be better", "I meant to say hello", "make it say goodbye"])
+async def test_ordinary_speech_after_an_add_is_not_hijacked_into_a_rename(phrase):
+    db = _db()
+    await _add(db)
+    result = await resolve_skybridge_request(phrase, "jo", db=db)
+    assert not result["handled"], phrase
+    assert "noodels" in _texts(db) and len(_texts(db)) == 3
+
+
+async def test_spell_it_is_the_one_unguarded_form():
+    db = _db()
+    await _add(db, text="add oat drink to the shopping list")
+    result = await resolve_skybridge_request("spell it kefir", "jo", db=db)      # nothing like "oat drink", but unmistakable
+    assert result["intent"]["status"] == "renamed" and "kefir" in _texts(db)
+
+
+async def test_change_x_to_y_has_no_time_window():
+    """Only the 'just added' forms are windowed: a plain rename works on any item whenever it was added."""
+    db = _db()
+    list_service.clear_recent_adds()
+    result = await resolve_skybridge_request("change milk to oat milk", "jo", db=db)
+    assert result["intent"]["status"] == "renamed"
+
+
+async def test_a_second_correction_after_a_merge_follows_the_surviving_row():
+    db = _db()
+    db.items_by_list["fam"].append({"id": "i3", "list_id": "fam", "text": "oat milk", "completed": False})
+    await resolve_skybridge_request("change milk to oat milk", "jo", db=db)
+    assert list_service.recent_add("jo") == ("fam", "i3")
+
+
+async def test_visibility_is_decided_inside_the_transaction_with_the_row_locked():
+    seen = []
+
+    class TxDb(EditDb):
+        def transaction(self):
+            seen.append("txn")
+
+            class _T:
+                async def __aenter__(s):
+                    return None
+
+                async def __aexit__(s, *a):
+                    return False
+
+            return _T()
+
+        async def fetch(self, *args):
+            if "FROM lists" in str(args[0]):
+                seen.append(("lists", "FOR SHARE" in str(args[0]), seen.count("txn") > 0))
+            return await super().fetch(*args)
+
+    db = TxDb(lists=_db().lists, items_by_list=_db().items_by_list)
+    await list_service.rename_item_on_list(db, user_id="jo", list_id="fam", old_text="milk", new_text="oat milk")
+    assert ("lists", True, True) in seen          # the list row is read FOR SHARE, after the transaction began
+
+
 async def test_another_members_add_is_not_mine_to_correct():
     db = _db()
     await _add(db, who="jo")

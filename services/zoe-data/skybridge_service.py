@@ -1365,11 +1365,12 @@ def _list_correct_last_from_text(message: str) -> tuple[str, bool] | None:
     if not any_recent_add():
         return None
     msg = re.sub(r"\s+(?:please|zoe)\s*$", "", message.strip(), flags=re.IGNORECASE)
-    guarded = False
     match = _CORRECT_EXPLICIT_RE.match(msg)
+    # Only "spell it X" is unambiguous about a list; "I meant X" / "that should be X" are ordinary speech ("I meant tomorrow"),
+    # so they too must resemble the item just added.
+    guarded = match is None or re.match(r"^\W*spell\b", msg, re.IGNORECASE) is None
     if match is None:
         match = _CORRECT_NO_RE.match(msg)
-        guarded = True
     if match is None:
         return None
     new = clean_item_text(_clean_action_text(match.group("new")))
