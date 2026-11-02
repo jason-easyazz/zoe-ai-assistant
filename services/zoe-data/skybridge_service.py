@@ -2650,7 +2650,7 @@ def _original_parse_stands(intent: "SkybridgeIntent") -> bool:
 _LIGHT_MISHEAR_RE = re.compile(
     r"\b(?:turn|switch|flip)(?:ed|ped)?\s+(on|off)\s+(?:the\s+)?(watch|lite|lye|lies|lice)\b", re.IGNORECASE)
 _CONTROL_ACTIONS = frozenset({"turn_on", "turn_off", "set_brightness"})
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s*(?=[A-Za-z])")
 
 
 def _repair_light_mishear(value: str) -> str:

@@ -315,7 +315,7 @@ def is_plausible_item(item: str) -> bool:
         return False
     if text.lower() in _VAGUE_ITEMS:
         return False
-    if len(words) > 1 and words[-1].lower().strip(",;:.!?") in _QUESTION_TAIL_WORDS:
+    if words[-1].lower().strip(",;:.!?") in _QUESTION_TAIL_WORDS:
         return False
     lead = words[0].lower().strip(",;:")
     if lead in _POSSESSIVE_LEADS:

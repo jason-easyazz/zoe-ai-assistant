@@ -28,7 +28,7 @@ def _lists_db(*, populated: tuple[str, ...] = ("shopping",)):
                      "description": "", "visibility": "family"})
         items[f"{kind}-1"] = (
             [{"id": f"{kind}-i{n}", "list_id": f"{kind}-1", "text": word, "completed": False}
-             for n, word in enumerate(("apples", "rice", "tea"))]
+             for n, word in enumerate(("apples", "rice", "tea") if kind != "work" else ("stapler", "paper", "pens"))]
             if kind in populated else []
         )
     return FakeDb(lists=rows, items_by_list=items)
@@ -46,7 +46,7 @@ async def test_nameless_list_read_names_the_items(phrase):
 @pytest.mark.asyncio
 async def test_nameless_list_read_with_two_populated_lists_prefers_shopping():
     result = await resolve_skybridge_request("What's on the list?", "member-a", db=_lists_db(populated=("shopping", "work")))
-    assert "apples" in result["spoken_summary"]
+    assert "apples" in result["spoken_summary"] and "stapler" not in result["spoken_summary"]
 
 
 @pytest.mark.asyncio
@@ -66,6 +66,7 @@ def test_only_populated_list_helper():
 @pytest.mark.parametrize("phrase,action", [
     ("Turn on the light. Some unrelated sentence the room said. Another one here.", "turn_on"),
     ("Turn off the lights! The narrator kept talking about ships.", "turn_off"),
+    ("Turn on the light.Some unrelated sentence the room said.", "turn_on"),
 ])
 def test_home_command_ignores_sentences_spoken_after_it(phrase, action):
     intent = classify_skybridge_intent(phrase)
@@ -84,6 +85,8 @@ def test_home_runoff_negative_control(monkeypatch):
     ("Turn on the watch.", "turn_on", "light"),
     ("Turned off the lies.", "turn_off", "lights"),
     ("Switch on the lite", "turn_on", "light"),
+    ("Turn off the lice", "turn_off", "lights"),
+    ("Flip on the lye", "turn_on", "light"),
 ])
 def test_misheard_light_noun_in_a_switch_frame(phrase, action, noun):
     intent = classify_skybridge_intent(phrase)
@@ -103,6 +106,7 @@ def test_garbled_question_is_not_a_list_item():
 
     assert not is_plausible_item("all the what")
     assert not is_plausible_item("the which")
+    assert not is_plausible_item("what")
     assert is_plausible_item("whole wheat bread")      # negative control: ordinary items still pass
     got = detect_intent("Get all the what?")
     assert got is None or got.name != "list_add"
