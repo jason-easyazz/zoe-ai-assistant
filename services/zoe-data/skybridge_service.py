@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import alarm_voice
+import alarms
 import command_shapes
 import conversation_cues
 import panel_principal
@@ -60,6 +62,7 @@ class SkybridgeIntent:
     entity_id: str = ""  # exact HA entity a smart_home TILE tap targets (never fuzzy)
     entity_ids: tuple[str, ...] = ()  # exact HA entities a smart_home FOLLOW-UP ("turn it back on") targets: what the last command controlled
     radio_mode: bool = False  # music/play: "play <x> radio" → MA endless station
+    alarm: Any = None  # alarm/*: the parsed alarm_voice.AlarmCommand (docs/architecture/alarms.md)
 
 
 # ── Timers ───────────────────────────────────────────────────────────────────
@@ -1748,6 +1751,12 @@ def classify_skybridge_intent(
     if person_fact:
         name, fact, birthday = person_fact
         return SkybridgeIntent(domain="people", action="remember_fact", person_name=name, fact_text=fact, birthday=birthday)
+    # Alarms (flag-dark ZOE_ALARMS): "wake me at 7", "set an alarm for 6:30", "snooze". Before timers/calendar, which would
+    # otherwise read "set an alarm for 7" as an event; the grammar is narrow and refuses questions and other kinds of alarm.
+    if alarms.enabled():
+        alarm_cmd = alarm_voice.parse(raw_message)
+        if alarm_cmd is not None:
+            return SkybridgeIntent(domain="alarm", action=alarm_cmd.action, target_time=alarm_cmd.time_hhmm, alarm=alarm_cmd)
     # Timers claim the phrase early so "set a 5 minute timer" isn't misread as a
     # calendar event ("set ... at a time").
     if re.search(r"\btimers?\b|\bcountdowns?\b", text):
@@ -2303,6 +2312,9 @@ async def resolve_skybridge_request(
 
     if intent.domain == "clock":
         return _attach_skybridge_context(_resolve_clock(intent))
+
+    if intent.domain == "alarm":
+        return _attach_skybridge_context(await alarm_voice.resolve(intent.alarm, user_id))
 
     if intent.domain == "timer":
         return _attach_skybridge_context(_resolve_timer(intent, user_id))

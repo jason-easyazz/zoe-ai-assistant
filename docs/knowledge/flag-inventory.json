@@ -1252,6 +1252,25 @@
         },
         "typed_env": false
       },
+      "ZOE_ALARMS": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/alarms.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/architecture/alarms.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_ALLOWED_WS_ORIGINS": {
         "defaults": [
           "-"
