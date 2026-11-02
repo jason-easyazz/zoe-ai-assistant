@@ -3044,6 +3044,8 @@ async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str |
     if pre_text:
         _stt_backend_var.set("moonshine-stream:" + env_str("ZOE_MOONSHINE_ARCH", "v2"))
         text = pre_text
+        # The stream result arrives wake-stripped; carry the unstripped transcript so "Zoe, ..." still counts as naming Zoe.
+        _stt_raw_var.get()["raw"] = _stt_stream_raw_var.get() or pre_text
     else:
         text = await _transcribe_audio_impl(wav_path)
     # capture=False for instrument callers (replay- panel ids): the replay gate
@@ -3065,6 +3067,9 @@ _stt_backend_var: contextvars.ContextVar[str] = contextvars.ContextVar("stt_back
 # The transcript as Moonshine heard it BEFORE the leading wake word was stripped (``{"raw": str}``, per task, filled by _run_moonshine). A
 # window turn that opens "Zoe, what time is it" reaches the gates as "what time is it"; this keeps the fact that Zoe was named.
 _stt_raw_var: contextvars.ContextVar = contextvars.ContextVar("stt_raw", default=None)
+# The under-speech stream's transcript before the wake word was stripped, set by _take_stt_stream_text (an awaited coroutine,
+# so the set reaches its caller) and read by _transcribe_audio when it is handed that stream's text as ``pre_text``.
+_stt_stream_raw_var: contextvars.ContextVar = contextvars.ContextVar("stt_stream_raw", default="")
 
 
 async def _transcribe_audio_impl(wav_path: str) -> str:
@@ -6498,6 +6503,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
 
 async def _take_stt_stream_text(payload: dict, raw: bytes, suffix: str) -> str | None:
     """Finished under-speech transcript for this turn's clip, or None (-> batch STT). Never raises."""
+    _stt_stream_raw_var.set("")
     sid = (payload or {}).get("stt_stream_id")
     if not sid or not _stt_stream.stream_under_speech_enabled():
         return None
@@ -6527,6 +6533,8 @@ async def _take_stt_stream_text(payload: dict, raw: bytes, suffix: str) -> str |
                 text = _strip_wake_word(list(lines)) or None
                 if text is None:
                     reason = "empty"
+                else:
+                    _stt_stream_raw_var.set(" ".join(ln.strip() for ln in lines if ln and ln.strip()))
     except Exception as exc:
         reason = f"error:{exc.__class__.__name__}"
         text = None
