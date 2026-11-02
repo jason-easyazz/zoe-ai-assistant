@@ -573,7 +573,30 @@ async def test_remove_naming_no_list_still_uses_the_card_in_context():
     assert _live(db, "priv") == ["surprise gift"] and _live(db, "fam") == ["noodles", "milk"]
 
 
-def test_the_parsers_leave_list_type_empty_when_no_list_was_named():
-    assert classify_skybridge_intent("change milk to oat milk").list_type == ""
-    assert classify_skybridge_intent("change milk to oat milk on the shopping list").list_type == "shopping"
-    assert classify_skybridge_intent("take milk off the list").list_type == ""
+def test_list_type_defaults_to_shopping_but_says_whether_it_was_named():
+    for text, explicit in (("change milk to oat milk", False), ("change milk to oat milk on the shopping list", True),
+                           ("take milk off the list", False), ("take milk off the shopping list", True),
+                           ("tick off milk", False), ("tick off milk on the shopping list", True)):
+        i = classify_skybridge_intent(text)
+        assert (i.list_type, i.list_type_explicit) == ("shopping", explicit), text
+    named = classify_skybridge_intent("take milk off my chores list")
+    assert (named.list_type, named.list_name, named.list_type_explicit) == ("", "chores", False)
+
+
+# ── codex round 3 (#2246): a courtesy tail is not part of the item; a corrected possessive survives ───────────────────────
+
+@pytest.mark.parametrize("phrase", ["change milk to oat milk please", "change milk to oat milk, please",
+                                    "please change milk to oat milk, thanks", "change milk to oat milk on the shopping list please"])
+async def test_a_courtesy_tail_never_reaches_the_stored_item(phrase):
+    db = _db()
+    result = await resolve_skybridge_request(phrase, "jo", db=db)
+    assert _texts(db) == ["noodles", "oat milk"], phrase
+    assert result["spoken_summary"] == "Changed milk to oat milk on the shopping list."
+
+
+async def test_spell_it_keeps_a_possessive_and_does_not_merge_into_the_bare_row():
+    db = _db()
+    db.items_by_list["fam"].append({"id": "i3", "list_id": "fam", "text": "passport", "completed": False})
+    await _add(db, text="add my pasport to the shopping list")
+    await resolve_skybridge_request("spell it my passport", "jo", db=db)
+    assert _texts(db) == ["noodles", "milk", "passport", "my passport"]

@@ -42,6 +42,7 @@ class SkybridgeIntent:
     end_date: date | None = None
     query: str = ""
     list_type: str = ""
+    list_type_explicit: bool = False  # the user NAMED a list type (``list_type`` is otherwise the "shopping" default)
     context: str = ""
     circle: str = ""
     item_text: str = ""
@@ -1075,6 +1076,12 @@ def _list_target(match: "re.Match[str]") -> tuple[str, str]:
     return (_list_type_from_text(phrase) or ("shopping" if "grocery" in phrase else "")), ""
 
 
+def _effective_list_type(list_type: str, list_name: str) -> tuple[str, bool]:
+    """(effective type, explicit?) for a parsed list target: nothing named = the "shopping" default, but explicit=False so the
+    resolver can still prefer the card in context; a NAMED list ("my chores list") carries no type default."""
+    return (list_type or ("" if list_name else "shopping")), bool(list_type)
+
+
 def _list_remove_from_text(message: str) -> tuple[str, str, str] | None:
     """(item, list_type, list_name) for "take/remove/delete X off|from|out of <list>", and - ending the turn - for
     "delete X in <list>" / "remove X on <list>" (HA's phrasings; they used to be answered with a list READ). A question
@@ -1347,11 +1354,20 @@ def _rename_item_operands(old_raw: str, new_raw: str, *, list_named: bool) -> tu
     return old, new
 
 
+_TRAILING_POLITENESS_RE = re.compile(r"(?:[\s,;]+(?:please|zoe|thanks|thank\s+you|for\s+me|if\s+you\s+can))+\s*[.!?]*\s*$", re.IGNORECASE)
+
+
+def _strip_trailing_politeness(message: str) -> str:
+    """"change milk to oat milk, please" -> "change milk to oat milk": a courtesy tail is not part of the item."""
+    return _TRAILING_POLITENESS_RE.sub("", message.strip()) or message.strip()
+
+
 def _list_rename_from_text(message: str) -> tuple[str, str, str, str] | None:
     """(old, new, list_type, list_name) for "change|rename|correct X to Y [on the <list>]" and "that should be Y, not X". A
     question or statement ABOUT changing ("can I change milk to oat milk?", "what did I change") writes nothing."""
     if command_shapes.asks_or_mentions(message, destructive=True):
         return None
+    message = _strip_trailing_politeness(message)
     head = _command_shaped(message, "change|rename|correct")
     match = _RENAME_RE.search(message[head.start():]) if head is not None else None
     if match is None:
@@ -1374,7 +1390,7 @@ def _list_correct_last_from_text(message: str) -> tuple[str, bool] | None:
 
     if not any_recent_add():
         return None
-    msg = re.sub(r"\s+(?:please|zoe)\s*$", "", message.strip(), flags=re.IGNORECASE)
+    msg = _strip_trailing_politeness(message)
     match = _CORRECT_EXPLICIT_RE.match(msg)
     # Only "spell it X" is unambiguous about a list; "I meant X" / "that should be X" are ordinary speech ("I meant tomorrow"),
     # so they too must resemble the item just added.
@@ -1383,9 +1399,11 @@ def _list_correct_last_from_text(message: str) -> tuple[str, bool] | None:
         match = _CORRECT_NO_RE.match(msg)
     if match is None:
         return None
-    new = clean_item_text(_clean_action_text(match.group("new")))
+    new = clean_item_text(_clean_rename_text(match.group("new")))     # a possessive is part of the item ("my passport")
     words = new.lower().split()
-    if not new or len(words) > 4 or not is_plausible_item(new) or words[0].strip(",;:") in _CORRECT_STOP_LEADS \
+    # "my passport" is an item (the possessive is kept); a bare "my ..." lead is otherwise ordinary speech, so judge the word after it.
+    lead = words[1] if len(words) > 1 and words[0] == "my" else (words[0] if words else "")
+    if not new or len(words) > 4 or not is_plausible_item(new) or lead.strip(",;:") in _CORRECT_STOP_LEADS \
             or not command_shapes.plain_list_item(new):
         return None
     return new, guarded
@@ -1923,18 +1941,21 @@ def classify_skybridge_intent(
     list_complete = _list_complete_from_text(raw_message)
     if list_complete:
         item, list_type, completed, list_name = list_complete
+        list_type, explicit = _effective_list_type(list_type, list_name)
         return SkybridgeIntent(domain="lists", action="complete_item", item_text=item, list_type=list_type,
-                               completed=completed, list_name=list_name)
+                               list_type_explicit=explicit, completed=completed, list_name=list_name)
     list_remove = _list_remove_from_text(raw_message)
     if list_remove:
         item, list_type, list_name = list_remove
+        list_type, explicit = _effective_list_type(list_type, list_name)
         return SkybridgeIntent(domain="lists", action="remove_item", item_text=item, list_type=list_type,
-                               list_name=list_name)
+                               list_type_explicit=explicit, list_name=list_name)
     list_rename = _list_rename_from_text(raw_message)
     if list_rename:
         old_item, new_item, list_type, list_name = list_rename
+        list_type, explicit = _effective_list_type(list_type, list_name)
         return SkybridgeIntent(domain="lists", action="rename_item", item_text=old_item, target_text=new_item,
-                               list_type=list_type, list_name=list_name)
+                               list_type=list_type, list_type_explicit=explicit, list_name=list_name)
     list_correct = _list_correct_last_from_text(raw_message)
     if list_correct:
         new_item, guarded = list_correct
@@ -4177,10 +4198,11 @@ def _match_list_items_by_text(items: list[dict[str, Any]], wanted: str) -> list[
 async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> tuple[str, str] | None:
     """Locate an existing list (never create) for a removal, mirroring _find_or_create_list's lookups."""
     hinted_id, hinted_type = _context_list_hint(context)
-    list_type = intent.list_type or hinted_type or "shopping"
+    named_type = intent.list_type if intent.list_type_explicit else ""
+    list_type = named_type or hinted_type or "shopping"
     if hinted_id and not intent.list_name:
         # The card in context is the target only when the user did not name a list TYPE ("change milk to oat milk on the shopping
-        # list" with a personal list showing edits the shopping list); the parsers leave list_type empty when nothing was named.
+        # list" with a personal list showing edits the shopping list); ``list_type_explicit`` tells a named type from the default.
         rows = await db.fetch(
             """
             SELECT id, name, list_type
@@ -4194,7 +4216,7 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         )
         if rows:
             row = dict(rows[0])
-            if not intent.list_type or str(row.get("list_type") or "") == intent.list_type:
+            if not named_type or str(row.get("list_type") or "") == named_type:
                 return str(row["id"]), str(row.get("list_type") or list_type)
     if intent.list_name:
         # A list the user NAMED ("my chores list"): that list or none - never the default shopping list instead.
