@@ -126,6 +126,20 @@ class EmotionalFollowUpTrigger(ProactiveTrigger):
             if moment is None:
                 continue
             mem_id, fact, meta = moment
+            from time_utils import clock_stamp, humanize_when
+
+            # ``added_at`` is the row's SAVE time, which a review_memory edit resets (the edited row is a
+            # new row stamped now, with ``supersedes_id`` / ``reviewed_at``). So it only stands in for "when
+            # they said it" on an unedited row; on an edited one the mention fields are omitted rather than
+            # letting Zoe say "yesterday" about something re-saved today.
+            context_mention: dict[str, str] = {}
+            if not (meta.get("supersedes_id") or meta.get("reviewed_at") or meta.get("reviewed_by")):
+                added = meta.get("added_at")
+                context_mention = {
+                    # Household-local wording computed in code, so the composer never guesses it.
+                    "mentioned": humanize_when(added, now),
+                    "mentioned_at": clock_stamp(added),
+                }
             results.append(
                 TriggerResult(
                     user_id=user_id,
@@ -138,6 +152,7 @@ class EmotionalFollowUpTrigger(ProactiveTrigger):
                         "valence": str(meta.get("candidate_valence") or ""),
                         "intensity": _intensity(meta),
                         "user_id": user_id,
+                        **context_mention,
                     },
                 )
             )
