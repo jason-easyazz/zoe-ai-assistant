@@ -173,6 +173,19 @@ The panel keeps listening for a few seconds after a reply with no wake word (`wi
 - The step-up classification runs on the utterance before dispatch; a brain turn that decides on its own to call a
   sensitive tool is bounded by that tool's own checks, not by this tier.
 
+## 5. Orb tap with the dot = a "what's up" turn (2026-11-02)
+
+The orb's yellow dot (`GET /api/proactive/inbox`, the kiosk member's pending queue) means Zoe has something. Pressing the orb
+while the dot shows POSTs `http://localhost:7777/pull` (same loopback/Origin guard as `/activate`); the daemon runs ONE turn
+whose transcript is the fixed phrase `"what's up"` (`PULL_PHRASE`, a `proactive/pull.py` pull phrase) through `_do_single_turn(text=...)`:
+no recording, no STT, **no voice claim**, sent to `/api/voice/command` and played by the ordinary player. No dot = `/activate`, as before.
+
+Identity is exactly an unidentified panel turn's: a tap proves no voice, so there is no `speaker_verified` verdict. The pull runs as the
+panel's fresh PIN sign-in (the member the dot was drawn for); sensitive pending items are NOT spoken (`pull.pull`: held unless
+`speaker_verified is True`), they stay pending and Zoe says she has something private (the existing pull line; no new wording here). With `ZOE_VOICE_SESSION`
+on, the no-verdict turn closes any open voice session (`no_verdict`) - fail-closed; the member says "what's up" for the private items.
+A daemon that predates `/pull` 404s it: the page's busy cue simply times out (20 s). A pull inside MIN_WAKE_INTERVAL_S of the last wake stays queued, never dropped.
+
 ## Related
 
 - [Biometric retention policy](biometric-retention-policy.md) - what is stored (the session stores no biometric data).
