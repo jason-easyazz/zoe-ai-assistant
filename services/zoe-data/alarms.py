@@ -434,6 +434,8 @@ async def snooze(db: Any, alarm: dict, *, minutes: Optional[int] = None, now: Op
         if won:
             await log_event(db, alarm["id"], "snoozed", f"{mins}m", now=now)
     await db.commit()
+    if not won:  # the ring engine auto-stopped (or a dismiss landed) between the caller's read and this write
+        raise AlarmError("That alarm is not ringing.", 409)
     return await get_alarm(db, alarm["id"]) or alarm
 
 

@@ -966,3 +966,36 @@ def test_forget_user_raises_when_the_pool_was_lost_and_skips_when_there_never_wa
     monkeypatch.setattr(db_pool, "pool_ever_initialised", lambda: True)
     with pytest.raises(RuntimeError):
         run(alarms.forget_user(ANN))  # the pool was built and is gone: the erasure did NOT happen
+
+
+def test_snooze_that_loses_the_race_raises_instead_of_returning_a_stale_row(dbfile):
+    a = run(_mk(dbfile, repeat="daily"))
+    run(_tick(dbfile, SEVEN))
+
+    async def race():
+        db = await _open(dbfile)
+        try:
+            stale = await alarms.get_alarm(db, a["id"])  # read while ringing ...
+            await alarms.dismiss(db, stale, now=SEVEN + 1)  # ... the ring ends before the snooze lands
+            return await alarms.snooze(db, stale, now=SEVEN + 2)
+        finally:
+            await db.close()
+
+    with pytest.raises(alarms.AlarmError) as e:
+        run(race())
+    assert e.value.status == 409
+
+
+@pytest.mark.parametrize("text", [
+    "turn off all alarms except my gym alarm", "turn off every other alarm", "switch on all alarms but the gym one",
+    "cancel every other alarm", "wake me at seven thirty five", "wake me at seven fifty nine",
+    "wake me at 7 next monday", "set an alarm for 7 am on friday", "set an alarm for 7 on the 5th",
+])
+def test_voice_refuses_what_the_grammar_cannot_honour(text):
+    assert alarm_voice.parse(text, NIGHT) is None
+
+
+def test_voice_still_takes_plain_times_and_recurring_days():
+    assert alarm_voice.parse("wake me at seven thirty", NIGHT).time_hhmm == "07:30"
+    assert alarm_voice.parse("wake me at seven twenty five", NIGHT).time_hhmm == "07:25"
+    assert alarm_voice.parse("set an alarm for 7 every monday", NIGHT).repeat == "days:1"

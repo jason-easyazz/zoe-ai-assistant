@@ -48,6 +48,8 @@ _OFF_WORD = re.compile(r"\b(?:turn|switch)\s+(?:off|the|my|our)\b[\w:\s]*?\balar
 _NOT_A_LABEL = frozenset({"my", "the", "all", "every", "other", "this", "that", "our", "next", "ringing", "current", "first", "last", "another",
                           "alarm", "snoozed"})
 _SCOPE_QUALIFIER = re.compile(r"\b(?:other|others|except|but|besides|apart|rest|excluding|without|else)\b")
+_DATE_WORD = re.compile(r"\b(?:" + "|".join(_WEEKDAY_NAMES) + r"|january|february|march|april|june|july|august|september|october|november|december|"
+                        r"next\s+(?:week|month)|the\s+day\s+after|\d{1,2}(?:st|nd|rd|th))\b")
 _CANCEL = re.compile(r"\b(?:cancel|delete|remove|clear|get\s+rid\s+of)\b")
 _LIST = re.compile(r"\b(?:what|which|list|show|read|tell|when|do\s+i\s+have|how\s+many|any)\b")
 _SET = re.compile(r"\b(?:set|make|create|add|start|put|need|want|schedule|wake)\b")
@@ -79,7 +81,7 @@ def _spoken_times(text: str) -> str:
     t = re.sub(rf"\bquarter\s+past\s+({_H})\b", lambda m: f"{_HOURS[m.group(1)]}:15", t)
     t = re.sub(rf"\bquarter\s+(?:to|till)\s+({_H})\b", lambda m: f"{(_HOURS[m.group(1)] - 2) % 12 + 1}:45", t)
     t = re.sub(rf"\b({_H})\s+o'?\s?clock\b", lambda m: f"{_HOURS[m.group(1)]}:00", t)
-    t = re.sub(rf"\b({_H})\s+({_M})\b", lambda m: f"{_HOURS[m.group(1)]}:{_MINS[m.group(2)]:02d}", t)
+    t = re.sub(rf"\b({_H})\s+({_M})\b(?!\s+(?:{_H}|\d))", lambda m: f"{_HOURS[m.group(1)]}:{_MINS[m.group(2)]:02d}", t)
     t = re.sub(rf"\b({_H})\b(?=\s*(?:am|pm|a\.m\.|p\.m\.|in the|tomorrow|every|on\b|with\b|using\b|playing\b|called\b|named\b|labell?ed\b|$))", lambda m: str(_HOURS[m.group(1)]), t)
     t = re.sub(r"\ba\.\s?m\.?", "am", t)
     return re.sub(r"\bp\.\s?m\.?", "pm", t)
@@ -201,6 +203,8 @@ def parse(text: str, now: Optional[float] = None) -> Optional[AlarmCommand]:
     writes = bool(_STOP.search(t) or _ON.search(t) or _OFF_WORD.search(t) or _CANCEL.search(t))
     if writes and command_shapes.asks_or_mentions(t.strip(), destructive=True):
         return None
+    if writes and _SCOPE_QUALIFIER.search(t):
+        return None  # "turn off all alarms except gym" / "every other alarm": a scope this grammar cannot honour is never widened or inverted
     if command_shapes.asks_or_mentions(t.strip()) and not _LIST.search(t):
         return None
     if _STOP.search(t) and not _ON.search(t):
@@ -210,8 +214,6 @@ def parse(text: str, now: Optional[float] = None) -> Optional[AlarmCommand]:
     if _OFF_WORD.search(t):
         return _target_cmd("off", t, now)
     if _CANCEL.search(t):
-        if _SCOPE_QUALIFIER.search(t):
-            return None  # "cancel every other alarm" / "all but the gym one": a scope this grammar cannot honour is never widened
         cmd = _target_cmd("cancel", t, now)
         return AlarmCommand("cancel", all_alarms=bool(re.search(r"\b(?:all|every|each)\b", t)) and not cmd.target_hhmm and not cmd.target_label,
                             target_hhmm=cmd.target_hhmm, target_label=cmd.target_label)
@@ -227,6 +229,8 @@ def parse(text: str, now: Optional[float] = None) -> Optional[AlarmCommand]:
         h, mi, mer = found
         wake = bool(_WAKE.search(t))
         tomorrow = bool(re.search(r"\btomorrow\b", t))
+        if _repeat_of(t) == "once" and _DATE_WORD.search(t):
+            return None  # "7 next Monday" / "on Friday" / "on the 5th": a date this grammar cannot honour is refused, not set for the next 7:00
         hhmm, fuzzy = resolve_clock(h, mi, mer, prefer_morning=wake or tomorrow, now=now)
         kind, sid, sname = _sound_of(sp)
         lab = _LABEL.search(t)
@@ -316,7 +320,16 @@ async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
         live = [a for a in await alarms.ringing(db) if alarms.can_silence(a, v)]
         if not live:
             return _result(cmd, "No alarm is ringing right now.")
-        done = [await alarms.snooze(db, a, minutes=cmd.snooze_minutes or None, now=now) for a in live if a["snooze_count"] < alarms.MAX_SNOOZES]
+        done = []
+        for a in live:
+            if a["snooze_count"] >= alarms.MAX_SNOOZES:
+                continue
+            try:
+                done.append(await alarms.snooze(db, a, minutes=cmd.snooze_minutes or None, now=now))
+            except alarms.AlarmError:
+                continue  # it stopped ringing between the read and the write: nothing to snooze for that one
+        if not done and live:
+            return _result(cmd, "No alarm is ringing right now.")
         if not done:
             return _result(cmd, "That alarm has been snoozed as much as it can be. Say turn off the alarm.", "Snoozed out")
         mins = round((done[0]["snooze_until"] - now) / 60)
