@@ -74,6 +74,9 @@ MAX_ITEM_WORDS = 12
 # Nouns that name no item at all ("add things to the list") - never stored.
 _VAGUE_ITEMS = frozenset({"things", "thing", "stuff", "something", "it", "that", "them", "this", "these", "those", "one",
                           "anything", "everything", "some", "items", "item"})
+# An item can never END on one of these: "get all the what?" is a garbled question, not something to buy (live 2026-11-01: it
+# opened the add form and told the member to tap Done).
+_QUESTION_TAIL_WORDS = frozenset({"what", "where", "who", "whom", "whose", "which", "why", "how", "when"})
 
 
 # A period that ends an ABBREVIATION is part of the item, not a sentence break: "Dr. Pepper", "Mr. Clean", "U.S. stamps", "J. Crew".
@@ -311,6 +314,8 @@ def is_plausible_item(item: str) -> bool:
     if _real_breaks(text):                       # a full stop / ? / ! INSIDE the item: more than one sentence
         return False
     if text.lower() in _VAGUE_ITEMS:
+        return False
+    if len(words) > 1 and words[-1].lower().strip(",;:.!?") in _QUESTION_TAIL_WORDS:
         return False
     lead = words[0].lower().strip(",;:")
     if lead in _POSSESSIVE_LEADS:

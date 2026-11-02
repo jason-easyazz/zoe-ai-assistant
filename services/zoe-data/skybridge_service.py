@@ -2644,7 +2644,40 @@ def _original_parse_stands(intent: "SkybridgeIntent") -> bool:
     return q.split()[0] not in _FRAME_LEAD_WORDS and not any(q == t or q.endswith(" " + t) for t in _FRAME_TAILS)
 
 
+# Moonshine's usual mishearings of the device noun in a switch frame ("turn on the watch", "turned off the lies" - live
+# 2026-11-01, three tries before the light came on). Only the noun right after an explicit turn/switch + on/off is
+# repaired, so a sentence that merely contains the word is untouched.
+_LIGHT_MISHEAR_RE = re.compile(
+    r"\b(?:turn|switch|flip)(?:ed|ped)?\s+(on|off)\s+(?:the\s+)?(watch|lite|lye|lies|lice)\b", re.IGNORECASE)
+_CONTROL_ACTIONS = frozenset({"turn_on", "turn_off", "set_brightness"})
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _repair_light_mishear(value: str) -> str:
+    def _fix(m: "re.Match[str]") -> str:
+        return f"turn {m.group(1)} the {'lights' if m.group(2).lower() in ('lies', 'lice') else 'light'}"
+
+    return _LIGHT_MISHEAR_RE.sub(_fix, value)
+
+
 def _classify_home(raw_message: str, text: str) -> "SkybridgeIntent | None":
+    """The smart-home parse, with two live-failure repairs on top of ``_classify_home_parse``: the device noun after a
+    switch verb is repaired when Moonshine misheard it, and a control command that swallowed the sentences spoken AFTER it
+    ("Turn on the light. <other talk>": the device query ran to the end of the string and no device matched) is re-parsed
+    from the sentence that holds the command."""
+    raw_message = _repair_light_mishear(raw_message)
+    text = _repair_light_mishear(text)
+    intent = _classify_home_parse(raw_message, text)
+    if intent is not None and intent.action in _CONTROL_ACTIONS and re.search(r"[.!?]", intent.query or ""):
+        for sentence in _SENTENCE_SPLIT_RE.split(raw_message.strip()):
+            lead = f" {re.sub(r'[.!?,;:]+$', '', sentence.lower().strip())} "
+            sub = _classify_home_parse(sentence, lead)
+            if sub is not None and sub.action == intent.action and not re.search(r"[.!?]", sub.query or ""):
+                return sub
+    return intent
+
+
+def _classify_home_parse(raw_message: str, text: str) -> "SkybridgeIntent | None":
     """The smart-home parse: the original text first (so every command that already worked keeps its exact result), and the
     filler-stripped text only when the original parse failed or kept the polite frame in its device query."""
     original = _classify_smart_home(text)
@@ -3519,6 +3552,10 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
 
     list_type = intent.list_type
     selected = None if intent.action == "overview" else _select_list(lists, list_type, intent.list_name)
+    if selected is None and intent.action == "show" and not list_type and not intent.list_name:
+        # "what's on the list" / "what's on my list now" names no list: read the one that has anything on it (live 2026-10-31:
+        # three asks answered "Lists has 4 items." with the items never named).
+        selected = _only_populated_list(lists)
     contains_answer = ""
     if intent.action == "contains":
         contains_answer, found_in = _list_contains_answer(intent, lists, items_by_list)
@@ -3665,6 +3702,16 @@ async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
     for item in catalog:
         item.pop("n_items", None)  # a tiebreak for the dedupe above, not part of the list contract
     return catalog
+
+
+def _only_populated_list(lists: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The list a nameless "what's on the list" means: the single list that has items, else the shopping list when several
+    do (the household default), else None (the caller keeps the per-list counts)."""
+    populated = [lst for lst in lists if int(lst.get("item_count") or 0) > 0]
+    if len(populated) == 1:
+        return populated[0]
+    shopping = [lst for lst in populated if lst.get("list_type") == "shopping"]
+    return shopping[0] if len(shopping) == 1 else None
 
 
 def _select_list(lists: list[dict[str, Any]], list_type: str = "", list_name: str = "") -> dict[str, Any] | None:
