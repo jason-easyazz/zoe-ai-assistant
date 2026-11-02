@@ -140,6 +140,7 @@ This is **knowledge / records** (descriptive facts), not a DOX contract. See the
 - [Chroma HNSW corruption - crash-loop recovery](chroma-hnsw-corruption-recovery.md) - zoe-data SIGSEGV after a reboot: the two chroma 0.6.3 flaws, the resize_factor guard and the re-embed rebuild recipe.
 - [Music search finds nothing - provider reconnect](music-provider-reconnect.md) - degraded catalogue = Music Assistant's YouTube Music provider down; the QR reconnect and the in-place-save invariants.
 - [Omnigent handoff mechanics](omnigent-handoff-mechanics.md) - why REST alone cannot start a claude-sdk session, the working run -r kick recipe, container gotchas.
+- [Usage audit 2026-10-30 to 2026-11-02](usage-audit-2026-11-02.md) - what the household's panel turns actually met: per-class counts, failure patterns with evidence, fixes shipped, owner decisions.
 - [Documentation system audit 2026-10-29](doc-system-audit-2026-10-29.md) - measured health of the DOX chain, OKF bundles, generated docs and doc tooling, with the fixes and the owner-decision list.
 
 ## Bundles

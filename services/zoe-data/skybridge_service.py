@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import alarm_voice
+import alarms
 import command_shapes
 import conversation_cues
 import panel_principal
@@ -60,6 +62,7 @@ class SkybridgeIntent:
     entity_id: str = ""  # exact HA entity a smart_home TILE tap targets (never fuzzy)
     entity_ids: tuple[str, ...] = ()  # exact HA entities a smart_home FOLLOW-UP ("turn it back on") targets: what the last command controlled
     radio_mode: bool = False  # music/play: "play <x> radio" → MA endless station
+    alarm: Any = None  # alarm/*: the parsed alarm_voice.AlarmCommand (docs/architecture/alarms.md)
 
 
 # ── Timers ───────────────────────────────────────────────────────────────────
@@ -1748,6 +1751,12 @@ def classify_skybridge_intent(
     if person_fact:
         name, fact, birthday = person_fact
         return SkybridgeIntent(domain="people", action="remember_fact", person_name=name, fact_text=fact, birthday=birthday)
+    # Alarms (flag-dark ZOE_ALARMS): "wake me at 7", "set an alarm for 6:30", "snooze". Before timers/calendar, which would
+    # otherwise read "set an alarm for 7" as an event; the grammar is narrow and refuses questions and other kinds of alarm.
+    if alarms.enabled():
+        alarm_cmd = alarm_voice.parse(raw_message)
+        if alarm_cmd is not None:
+            return SkybridgeIntent(domain="alarm", action=alarm_cmd.action, target_time=alarm_cmd.time_hhmm, alarm=alarm_cmd)
     # Timers claim the phrase early so "set a 5 minute timer" isn't misread as a
     # calendar event ("set ... at a time").
     if re.search(r"\btimers?\b|\bcountdowns?\b", text):
@@ -2304,6 +2313,9 @@ async def resolve_skybridge_request(
     if intent.domain == "clock":
         return _attach_skybridge_context(_resolve_clock(intent))
 
+    if intent.domain == "alarm":
+        return _attach_skybridge_context(await alarm_voice.resolve(intent.alarm, user_id))
+
     if intent.domain == "timer":
         return _attach_skybridge_context(_resolve_timer(intent, user_id))
 
@@ -2644,7 +2656,50 @@ def _original_parse_stands(intent: "SkybridgeIntent") -> bool:
     return q.split()[0] not in _FRAME_LEAD_WORDS and not any(q == t or q.endswith(" " + t) for t in _FRAME_TAILS)
 
 
+# Moonshine's usual mishearings of the device noun in a switch frame ("turn on the watch", "turned off the lies" - live
+# 2026-11-01, three tries before the light came on). Only an AFFIRMATIVE command shape is repaired: the switch verb must open
+# the utterance / a sentence (after optional polite filler), so "I already turned off the lies" (a report) and "Don't turn
+# off the watch" (a negation) are untouched and never become a light command.
+_LIGHT_MISHEAR_RE = re.compile(
+    r"(?P<lead>(?:^\s*|[.!?]\s+)(?:(?:hey|ok|okay|zoe|please|kindly|just|go ahead and|can you|could you|would you|will you)[,\s]+)*)"
+    r"\b(?:turn|switch|flip)(?:ed|ped)?\s+(?P<onoff>on|off)\s+(?:the\s+)?(?P<noun>watch|lite|lye|lies|lice)\b", re.IGNORECASE)
+_RETRACTION_RE = re.compile(
+    r"\b(?:don'?t|do not|never\s*mind|nevermind|cancel|stop|wait|actually|no|not|undo|scratch that|forget (?:it|that))\b", re.IGNORECASE)
+_CONTROL_ACTIONS = frozenset({"turn_on", "turn_off", "set_brightness"})
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s*(?=[A-Za-z])")
+
+
+def _repair_light_mishear(value: str) -> str:
+    def _fix(m: "re.Match[str]") -> str:
+        return f"{m.group('lead')}turn {m.group('onoff')} the {'lights' if m.group('noun').lower() in ('lies', 'lice') else 'light'}"
+
+    return _LIGHT_MISHEAR_RE.sub(_fix, value)
+
+
 def _classify_home(raw_message: str, text: str) -> "SkybridgeIntent | None":
+    """The smart-home parse, with two live-failure repairs on top of ``_classify_home_parse``: the device noun after a
+    switch verb is repaired when Moonshine misheard it, and a control command that swallowed the sentences spoken AFTER it
+    ("Turn on the light. <other talk>": the device query ran to the end of the string and no device matched) is re-parsed
+    from the sentence that holds the command."""
+    raw_message = _repair_light_mishear(raw_message)
+    text = _repair_light_mishear(text)
+    intent = _classify_home_parse(raw_message, text)
+    if intent is not None and intent.action in _CONTROL_ACTIONS and re.search(r"[.!?]", intent.query or ""):
+        sentences = _SENTENCE_SPLIT_RE.split(raw_message.strip())
+        for i, sentence in enumerate(sentences):
+            lead = f" {re.sub(r'[.!?,;:]+$', '', sentence.lower().strip())} "
+            sub = _classify_home_parse(sentence, lead)
+            if sub is not None and sub.action == intent.action and not re.search(r"[.!?]", sub.query or ""):
+                trailing = " ".join(sentences[i + 1:])
+                if _RETRACTION_RE.search(trailing):
+                    return None  # later speech retracts / qualifies the command: do not act on the first sentence
+                if _HOME_DEVICE_NOUN.search(trailing.lower()):
+                    return intent  # later speech names the device ("... The bedroom light."): keep the whole-utterance parse
+                return sub
+    return intent
+
+
+def _classify_home_parse(raw_message: str, text: str) -> "SkybridgeIntent | None":
     """The smart-home parse: the original text first (so every command that already worked keeps its exact result), and the
     filler-stripped text only when the original parse failed or kept the polite frame in its device query."""
     original = _classify_smart_home(text)
@@ -3519,6 +3574,10 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
 
     list_type = intent.list_type
     selected = None if intent.action == "overview" else _select_list(lists, list_type, intent.list_name)
+    if selected is None and intent.action == "show" and not list_type and not intent.list_name:
+        # "what's on the list" / "what's on my list now" names no list: read the one that has anything on it (live 2026-10-31:
+        # three asks answered "Lists has 4 items." with the items never named).
+        selected = _only_populated_list(lists)
     contains_answer = ""
     if intent.action == "contains":
         contains_answer, found_in = _list_contains_answer(intent, lists, items_by_list)
@@ -3665,6 +3724,16 @@ async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
     for item in catalog:
         item.pop("n_items", None)  # a tiebreak for the dedupe above, not part of the list contract
     return catalog
+
+
+def _only_populated_list(lists: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The list a nameless "what's on the list" means: the single list that has items, else the shopping list when several
+    do (the household default), else None (the caller keeps the per-list counts)."""
+    populated = [lst for lst in lists if int(lst.get("item_count") or 0) > 0]
+    if len(populated) == 1:
+        return populated[0]
+    shopping = [lst for lst in populated if lst.get("list_type") == "shopping"]
+    return shopping[0] if len(shopping) == 1 else None
 
 
 def _select_list(lists: list[dict[str, Any]], list_type: str = "", list_name: str = "") -> dict[str, Any] | None:

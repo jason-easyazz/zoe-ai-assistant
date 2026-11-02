@@ -319,7 +319,29 @@ class Raise:
     def block(self) -> str:
         """The Flue seam's block, appended after the user's words."""
         head = RAISE_OPEN_GREETING if (self.shape == "greeting" and self.lifecycle) else RAISE_OPEN
-        return f"{head}\n{self.body}\n{RAISE_CLOSE}"
+        return f"{head}\n{self.content}\n{RAISE_CLOSE}"
+
+    @property
+    def content(self) -> str:
+        """The raise text BOTH brain lanes inject (Flue wraps it in ``block``; the core lane in ``[RAISE]``): the body plus the
+        clock / no-invented-when rule, so neither lane gets the undated fact bare."""
+        return f"{self.body}{self._when_rule()}"
+
+    def _when_rule(self) -> str:
+        """A loop or moment has no stored mention time, so the brain is told the real clock and
+        forbidden from inventing when they said it ("this morning" for something said yesterday)."""
+        if self.kind == "event":
+            return ""
+        try:
+            from time_utils import clock_stamp
+
+            now = clock_stamp()
+        except Exception:  # noqa: BLE001 - a clock line is optional; the raise is not
+            return ""
+        if not now:
+            return ""
+        return (f"\nIt is now {now}. You are not told when they said it: never say when "
+                '("this morning", "yesterday", "earlier"); just ask.')
 
 
 def ask_phrasing(hint: str, *, shape: str = "cue") -> str:
