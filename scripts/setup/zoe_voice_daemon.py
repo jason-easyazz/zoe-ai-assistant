@@ -625,7 +625,7 @@ def _make_platform_backend(name: str):
 
 PANEL_PLATFORM = _resolve_panel_platform(os.environ.get("PANEL_PLATFORM"), platform.system())
 _PLATFORM = _make_platform_backend(PANEL_PLATFORM)
-# The health server also serves POST /activate (it starts a recording) and POST /enroll/cancel. The Pi binds every
+# The health server also serves POST /activate (it starts a recording), POST /pull (the orb tap with the dot showing: a "what's up" turn, no recording) and POST /enroll/cancel. The Pi binds every
 # interface (GET /health is read from the Jetson), so those POSTs answer only a loopback peer with a loopback Host and the
 # Zoe page's Origin (_activate_request_allowed, 2026-10-18); the Mac backend also defaults to loopback, because a laptop
 # leaves the house.
@@ -3706,7 +3706,8 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
 
 
 def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True,
-                    conversation: bool = False, voice_claim: object = _CLAIM_UNSET) -> bool:
+                    conversation: bool = False, voice_claim: object = _CLAIM_UNSET,
+                    text: "str | None" = None) -> bool:
     """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
 
     Returns True if audio was played (eligible for follow-up listening).
@@ -3717,15 +3718,22 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     metrics row (and journal line) for one spoken turn — inflating the counts
     and giving one utterance two seqs, which breaks the per-seq FA/FR labelling.
     The sentinel distinguishes "not scored yet" from a scored no-match (None).
+
+    ``text`` runs the turn from a fixed transcript instead of a recording (the orb-tap pull,
+    ``POST /pull``): no audio, no claim and no STT - it goes to ``/api/voice/command`` and
+    the reply is played exactly as a spoken turn's is. No claim = no verdict, the same as any
+    unidentified turn, so a tap never proves a voice.
     """
     import time as _time
     _t_pi_start = _time.monotonic()
 
-    audio_b64_wav = base64.b64encode(wav).decode()
+    audio_b64_wav = "" if text else base64.b64encode(wav).decode()
     _t_encode = _time.monotonic() - _t_pi_start
 
     _t_vid_start = _time.monotonic()
-    if voice_claim is _CLAIM_UNSET:
+    if text:
+        voice_claim = None
+    elif voice_claim is _CLAIM_UNSET:
         voice_claim = None
         try:
             voice_claim = _speaker_claim_to_attach(wav)
@@ -3735,11 +3743,11 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
             pass
     _t_vid = _time.monotonic() - _t_vid_start
 
-    turn_payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
+    turn_payload: dict = {"text": text, "panel_id": PANEL_ID} if text else {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
     if voice_claim:
         # A claim + raw score; the server applies its own threshold.
         turn_payload["voice_user_id"], turn_payload["voice_score"] = voice_claim
-    _speaker = _speaker_field(voice_claim)
+    _speaker = None if text else _speaker_field(voice_claim)
     if _speaker is not None:
         turn_payload["speaker"] = _speaker
 
@@ -3749,7 +3757,9 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     _turn_result: dict = {}
 
     def _run_turn():
-        if VOICE_ROUTE_MODE == "ha_bridge":
+        if text:
+            _turn_result["resp"] = _api_post("/api/voice/command", turn_payload)
+        elif VOICE_ROUTE_MODE == "ha_bridge":
             _turn_result["resp"] = _bridge_post(
                 "/voice/turn",
                 {"panel_id": PANEL_ID, "source": "satellite_pi", "audio_base64": audio_b64_wav},
@@ -4546,6 +4556,10 @@ _daemon_started_at = time.time()
 
 # Shared Event that orb-tap /activate can set to trigger a wake sequence.
 _orb_activate_event = threading.Event()
+# Orb-tap /pull (the dot is showing): deliver what is pending, spoken, as a "what's up?" turn.
+_orb_pull_event = threading.Event()
+# The fixed transcript of that turn - a pull phrase of proactive/pull.py PULL_PHRASES (pinned by a test).
+PULL_PHRASE = "what's up"
 
 
 def _peer_is_loopback(peer: "str | None") -> bool:
@@ -4673,7 +4687,7 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Handle orb-tap activation from the touch UI (POST /activate)."""
-        if self.path == "/activate":
+        if self.path in ("/activate", "/pull"):
             if not _activate_request_allowed(self.headers.get("Host"), self.headers.get("Origin"), self.client_address[0]):
                 log.warning("%s refused: peer=%s host=%r origin=%r", self.path, self.client_address[0],
                             (self.headers.get("Host") or "")[:60], (self.headers.get("Origin") or "")[:80])
@@ -4681,8 +4695,12 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            _orb_activate_event.set()
-            body = json.dumps({"ok": True, "triggered": "wake"}).encode()
+            if self.path == "/pull" and VOICE_ROUTE_MODE != "ha_bridge":
+                _orb_pull_event.set()
+                body = json.dumps({"ok": True, "triggered": "pull"}).encode()
+            else:  # /activate, or /pull on the audio-only bridge route (no text turn there): listen, as before
+                _orb_activate_event.set()
+                body = json.dumps({"ok": True, "triggered": "wake"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -4932,6 +4950,23 @@ def main():
                         voice_command(pa, oww)
                     except Exception as exc:
                         log.error("Orb-tap command pipeline error: %s", exc)
+                    finally:
+                        time.sleep(0.3)
+                        stream = pa.open(**stream_kw)
+                    continue
+
+            if _orb_pull_event.is_set():
+                _orb_pull_event.clear()
+                now = time.monotonic()
+                if (now - _last_wake_at) >= MIN_WAKE_INTERVAL_S:
+                    _last_wake_at = now
+                    log.info("Orb-tap pull received - running a %r turn", PULL_PHRASE)
+                    stream.stop_stream()
+                    stream.close()
+                    try:
+                        _do_single_turn(pa, b"", prompt_on_empty=False, text=PULL_PHRASE)
+                    except Exception as exc:
+                        log.error("Orb-tap pull turn error: %s", exc)
                     finally:
                         time.sleep(0.3)
                         stream = pa.open(**stream_kw)
