@@ -4810,7 +4810,33 @@
       // fallback path too, or one unreachable daemon would wedge the orb.
       .then(function(){_orbBusy=false;});
   }
-  orb.addEventListener('click',function(){panelVoice('Listening — ask Zoe anything');});
+  // The dot is the "I have something" cue, so pressing the orb while it shows COLLECTS it: the daemon runs a
+  // "what's up?" turn (spoken, same pipeline + identity rules as saying it - a tap proves no voice, so private
+  // items stay pending). No dot = listen, as ever. Same no-cors + fallback pattern as /activate; a daemon that
+  // predates /pull answers 404 (still opaque here), so the busy state is only a timeout-bounded cue.
+  var _pullT=null;
+  function orbPull(){
+    if(_convLive||_orbBusy)return;
+    _orbBusy=true;
+    cmdbar.classList.remove('on');
+    orb.classList.add('busy');
+    if(_pullT)clearTimeout(_pullT);
+    _pullT=setTimeout(function(){_pullT=null;orb.classList.remove('busy');},20000);
+    fetch('http://localhost:7777/pull',{method:'POST',mode:'no-cors',signal:AbortSignal.timeout(800)})
+      .then(function(r){if(!r||(r.type!=='opaque'&&!r.ok))throw new Error('pull '+(r&&r.status));})
+      .catch(function(){
+        if(_pullT){clearTimeout(_pullT);_pullT=null;}
+        orb.classList.remove('busy');
+        if(window.__kiosk){toast('Voice isn’t available right now');return;}
+        cmdbar.classList.add('on');
+        setTimeout(function(){cmdin.focus();},50);
+      })
+      .then(function(){_orbBusy=false;});
+  }
+  orb.addEventListener('click',function(){
+    if(orb.classList.contains('has')&&!orb.classList.contains('busy')&&!orb.classList.contains('listening'))orbPull();
+    else panelVoice('Listening — ask Zoe anything');
+  });
   // pull, not push: the orb's quiet "I have something" dot. GET /api/proactive/inbox answers a COUNT and a
   // coarse class - never what is pending - and only for a signed-in member (guest, empty, quiet hours and the
   // flag off all read "no dot"). Asking ("what's up?") is how it clears; nothing here speaks or toasts.
