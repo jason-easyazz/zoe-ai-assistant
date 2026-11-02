@@ -1195,7 +1195,8 @@
 
 <!-- before the estate script: a ?domain=memories arrival calls into it during boot -->
 <script src="/js/touch-memories-space.js?v=mem-1"></script>
-<script src="/js/touch-alarms.js?v=al-1"></script>
+<script src="/js/touch-alarm-sound.js?v=as-1"></script>
+<script src="/js/touch-alarms.js?v=al-2"></script>
 <script>
 (function(){
   var stage=document.getElementById('stage');
@@ -4472,7 +4473,7 @@
   }
   _tAlarmRefresh();setInterval(_tAlarmRefresh,15000);setInterval(_tAlarmTick,1000);
   // Wake-up alarms: the ring screen polls the server (js/touch-alarms.js); a ring takes the sleep clock page.
-  if(window.ZoeAlarms)ZoeAlarms.init({apiGet:apiGet,apiJson:apiJson,show:show,cur:function(){return _cur;},beep:function(){_beep();}});
+  if(window.ZoeAlarms)ZoeAlarms.init({apiGet:apiGet,apiJson:apiJson,show:show,cur:function(){return _cur;},sound:window.ZoeAlarmSound});
 
   // ---- ask-Zoe command loop (orb tap → /api/skybridge/resolve → result) ----
   // Same resolver the voice pipeline uses, so typed and spoken commands behave

@@ -15,12 +15,12 @@
     'use strict';
     if (window.ZoeAlarms) return;
 
-    var POLL_MS = 2000, OFF_RECHECK_MS = 300000, HOLD_MS = 1000, ITEM_H = 64;
+    var POLL_MS = 2000, OFF_RECHECK_MS = 300000, HOLD_MS = 1000, ITEM_H = 64, MUSIC_DEADLINE_MS = 10000;
     var ACK_KEY = 'zoe_alarm_acks';
     var DAYS = [['M', 1], ['T', 2], ['W', 3], ['T', 4], ['F', 5], ['S', 6], ['S', 7]];
     var PRESETS = [['Once', 'once'], ['Every day', 'daily'], ['Weekdays', 'weekdays'], ['Weekends', 'weekends']];
     var host = null;
-    var st = { enabled: null, ring: null, skew: 0, pollT: null, holdT: null, beepT: null, clockT: null, acks: {}, tones: {} };
+    var st = { enabled: null, ring: null, skew: 0, pollT: null, holdT: null, musicT: null, toneOn: false, clockT: null, acks: {}, tones: {} };
 
     // ---- pure helpers (exported for the node harness) -------------------------------------------------------------------
     function to24h(h12, mi, mer) {
@@ -108,16 +108,38 @@
         paintRing();
         overlay().classList.add('on');
         if (!st.clockT) st.clockT = setInterval(tickClock, 1000);
-        if (!st.beepT && host.beep) { host.beep(a); st.beepT = setInterval(function () { host.beep(a); }, 2200); }
+        st.toneOn = false;
+        applySound();
+        // A music alarm gets MUSIC_DEADLINE_MS from the ring start to be playing; the check below fires when it is up.
+        if (a.sound_kind === 'music') {
+            var left = Math.max(0, a.ring_started_at * 1000 + MUSIC_DEADLINE_MS - nowMs());
+            st.musicT = setTimeout(applySound, left + 50);
+        }
+    }
+    // AN ALARM IS NEVER SILENT. A tone alarm plays its tone. A music alarm plays music (the server starts it on the panel's speaker and
+    // reports music_state) - but if music is not `playing` once the deadline has passed, or the server says `failed` (Music Assistant down,
+    // provider needs re-auth, no panel player, unknown playlist), the tone plays. Unknown state (zoe-data restarted mid-ring) counts as not playing.
+    function applySound() {
+        var a = st.ring, snd = host && host.sound;
+        if (!a || !snd) return;
+        var music = a.sound_kind === 'music';
+        var late = nowMs() >= a.ring_started_at * 1000 + MUSIC_DEADLINE_MS;
+        var wantTone = !music || a.music_state === 'failed' || (a.music_state !== 'playing' && late);
+        if (music && a.music_state === 'playing' && st.toneOn) { snd.stop(); st.toneOn = false; return; }  // music made it after all
+        if (wantTone && !st.toneOn) {
+            st.toneOn = true;
+            snd.start(music ? 'sunrise' : a.sound_id, function () { return nowMs() / 1000 - a.ring_started_at; }, a.ramp_seconds);
+        }
     }
     function stopRing() {
         st.ring = null;
         cancelHold();
         var ov = document.getElementById('alarmRing');
         if (ov) ov.classList.remove('on');
-        if (st.beepT) { clearInterval(st.beepT); st.beepT = null; }
+        if (st.musicT) { clearTimeout(st.musicT); st.musicT = null; }
         if (st.clockT) { clearInterval(st.clockT); st.clockT = null; }
-        if (host && host.stopSound) host.stopSound();
+        st.toneOn = false;
+        if (host && host.sound) host.sound.stop();
     }
     function startHold() {
         cancelHold();
@@ -169,7 +191,7 @@
             });
             if (live.length) {
                 if (!st.ring || st.ring.id !== live[0].id || st.ring.ring_started_at !== live[0].ring_started_at) startRing(live[0]);
-                else { st.ring = live[0]; paintRing(); }
+                else { st.ring = live[0]; paintRing(); applySound(); }
             } else if (st.ring) stopRing();  // answered elsewhere, auto-stopped, or edited off
             schedule(POLL_MS);
         }).catch(function (e) {
@@ -209,7 +231,9 @@
         var t = from24h(alarm ? alarm.time_hhmm : '07:00');
         var chips = chipsOf(alarm ? alarm.repeat_rule : 'once');
         var s = { h: t.h12, mi: t.mi, mer: t.mer, preset: chips.preset, days: chips.days.slice(),
-                  tone: alarm && alarm.sound_kind === 'tone' ? alarm.sound_id : 'sunrise', snooze: alarm ? alarm.snooze_minutes : 9 };
+                  kind: alarm ? alarm.sound_kind : 'tone', tone: alarm && alarm.sound_kind === 'tone' ? alarm.sound_id : 'sunrise',
+                  music: alarm && alarm.sound_kind === 'music' ? alarm.sound_id : '', musicName: alarm && alarm.sound_kind === 'music' ? alarm.sound_name : '',
+                  snooze: alarm ? alarm.snooze_minutes : 9 };
         var ed = el('div', 'aled');
         var box = el('div', 'aledbox');
         ed.appendChild(box);
@@ -246,10 +270,28 @@
         function drawSnd() {
             clear(snd);
             Object.keys(st.tones).forEach(function (id) {
-                snd.appendChild(chip(st.tones[id], s.tone === id, function () { s.tone = id; s.toneTouched = true; drawSnd(); if (host.preview) host.preview(id); }));
+                snd.appendChild(chip(st.tones[id], s.kind === 'tone' && s.tone === id, function () {
+                    s.kind = 'tone'; s.tone = id; drawSnd(); drawMus(); if (host.sound) host.sound.preview(id);
+                }));
             });
         }
         drawSnd();
+        // Clock radio: the last thing played, or a playlist from Music Assistant. If it cannot start within 10 s the alarm rings a tone instead.
+        var mus = section('Wake to music'), lists = [];
+        function drawMus() {
+            clear(mus);
+            var opts = [['Last played', 'last']].concat(lists.slice(0, 6).map(function (n) { return [n, 'playlist:' + n]; }));
+            opts.forEach(function (o) {
+                mus.appendChild(chip(o[0], s.kind === 'music' && s.music === o[1], function () {
+                    s.kind = 'music'; s.music = o[1]; s.musicName = o[0]; drawSnd(); drawMus();
+                }));
+            });
+        }
+        drawMus();
+        host.apiGet('/api/music/playlists').then(function (d) {
+            lists = ((d && d.playlists) || []).map(function (p) { return p && p.name; }).filter(Boolean);
+            drawMus();
+        }).catch(function () { /* no Music Assistant: Last played still works, and the tone is the safety net */ });
         var sz = section('Snooze');
         function drawSz() {
             clear(sz);
@@ -270,7 +312,8 @@
         }
         acts.appendChild(chip('Save', true, function () {
             var body = { time_hhmm: to24h(s.h, s.mi, s.mer), repeat: repeatOf(s.preset, s.days), snooze_minutes: s.snooze };
-            if (isNew || s.toneTouched || alarm.sound_kind === 'tone') { body.sound_kind = 'tone'; body.sound_id = s.tone; }  // a music alarm keeps its source unless a tone was picked
+            if (s.kind === 'music' && s.music) { body.sound_kind = 'music'; body.sound_id = s.music; body.sound_name = s.musicName; }
+            else { body.sound_kind = 'tone'; body.sound_id = s.tone; }
             var req = isNew ? host.apiJson('POST', '/api/alarms', body) : host.apiJson('PATCH', '/api/alarms/' + encodeURIComponent(alarm.id), body);
             req.then(function () { close(); done(); }).catch(function () { err.textContent = 'Couldn’t save that. Try again.'; });
         }, 'save'));

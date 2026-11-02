@@ -18,6 +18,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+import alarm_music
 import alarms
 from database import get_db
 from panel_principal import is_member, require_member_or_panel
@@ -67,7 +68,8 @@ async def ringing_now(request: Request, user: dict = Depends(require_member_or_p
         "id": a["id"], "label": a["label"], "time_hhmm": a["time_hhmm"], "sound_kind": a["sound_kind"], "sound_id": a["sound_id"],
         "sound_name": a["sound_name"], "ramp_seconds": a["ramp_seconds"], "snooze_minutes": a["snooze_minutes"],
         "snooze_count": a["snooze_count"], "can_snooze": a["snooze_count"] < alarms.MAX_SNOOZES,
-        "ring_started_at": a["ring_started_at"], "stops_at": (a["ring_started_at"] or now) + alarms.RING_MAX_S} for a in live]}
+        "ring_started_at": a["ring_started_at"], "stops_at": (a["ring_started_at"] or now) + alarms.RING_MAX_S,
+        "music_state": alarm_music.state_of(a["id"]) if a["sound_kind"] == "music" else ""} for a in live]}
 
 
 @router.post("")

@@ -55,6 +55,19 @@ _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _DAYS = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
 
 
+# Listeners ``async (event, alarm)`` for what an alarm DID: rang | snoozed | dismissed | auto_stopped | missed | updated | deleted.
+# alarm_music registers one so the clock-radio music starts with a ring and always stops with it. A listener never breaks a transition.
+HOOKS: list = []
+
+
+async def _emit(event: str, alarm: dict) -> None:
+    for hook in list(HOOKS):
+        try:
+            await hook(event, alarm)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("alarm hook failed on %s (%s)", event, type(exc).__name__)
+
+
 class AlarmError(Exception):
     """A refusal the caller can show: ``status`` is the HTTP code, ``reason`` is safe to speak or display."""
 
@@ -347,6 +360,7 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
         (label, hhmm, rule, stored_date, kind, sid, sname, snooze, ramp, 1 if on else 0, nxt, now, alarm["id"]))
     await log_event(db, alarm["id"], "updated", "on" if on else "off", now=now)
     await db.commit()
+    await _emit("updated", alarm)
     return await get_alarm(db, alarm["id"])  # type: ignore[return-value]
 
 
@@ -355,6 +369,8 @@ async def delete_alarm(db: Any, alarm_id: str) -> bool:
     if n:
         await db.execute("DELETE FROM alarm_events WHERE alarm_id = ?", (alarm_id,))
     await db.commit()
+    if n:
+        await _emit("deleted", {"id": alarm_id})
     return n > 0
 
 
@@ -380,6 +396,8 @@ async def snooze(db: Any, alarm: dict, *, minutes: Optional[int] = None, now: Op
     if won:
         await log_event(db, alarm["id"], "snoozed", f"{mins}m", now=now)
     await db.commit()
+    if won:
+        await _emit("snoozed", alarm)
     return await get_alarm(db, alarm["id"]) or alarm
 
 
@@ -391,6 +409,8 @@ async def dismiss(db: Any, alarm: dict, *, now: Optional[float] = None) -> dict:
     if won:
         await log_event(db, alarm["id"], "dismissed", "", now=now)
     await db.commit()
+    if won:
+        await _emit("dismissed", alarm)
     return await get_alarm(db, alarm["id"]) or alarm
 
 
@@ -434,6 +454,8 @@ async def tick(db: Any, now: Optional[float] = None) -> list[tuple[str, dict]]:
             out.append(("rang", {**a, "state": "ringing", "ring_started_at": now, "next_fire_at": nxt, "enabled": 1 if nxt else 0}))
     if out:
         await db.commit()
+        for event, alarm in out:
+            await _emit(event, alarm)
     return out
 
 
