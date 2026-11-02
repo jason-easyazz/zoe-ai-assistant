@@ -2954,6 +2954,10 @@ def _open_moonshine_stream():
 async def _run_moonshine(wav_path: str) -> str:
     from moonshine_voice.utils import load_wav_file
 
+    # The turn's holder for the transcript BEFORE the wake word is stripped (see _stt_raw_var): the executor thread writes into the dict
+    # the calling task owns - a ContextVar set in the thread would not reach the task.
+    _raw_holder = _stt_raw_var.get()
+
     def _work() -> str:
         tr = _ensure_moonshine()
         audio, sr = load_wav_file(wav_path)
@@ -2979,6 +2983,8 @@ async def _run_moonshine(wav_path: str) -> str:
         # as its own leading line. Strip the wake word from those lines so the
         # leading "Hey Zoe" can't corrupt the command transcript (wake-word bleed).
         lines = [getattr(ln, "text", "") or "" for ln in getattr(out, "lines", [])]
+        if _raw_holder is not None:
+            _raw_holder["raw"] = " ".join(ln.strip() for ln in lines if ln.strip()) or str(getattr(out, "text", "") or "")
         if lines:
             text = _strip_wake_word(lines)
             if text:
@@ -3032,11 +3038,14 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
 
 
 async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str | None = None) -> str:
+    _stt_raw_var.set({})  # a fresh holder per transcription: never a previous turn's raw text
     # ``pre_text``: a transcript the under-speech STT stream already finished for THIS clip (voice_stt_stream; the caller
     # verified the sample counts match). Capture below still runs, so the corpus keeps growing exactly as before.
     if pre_text:
         _stt_backend_var.set("moonshine-stream:" + env_str("ZOE_MOONSHINE_ARCH", "v2"))
         text = pre_text
+        # The stream result arrives wake-stripped; carry the unstripped transcript so "Zoe, ..." still counts as naming Zoe.
+        _stt_raw_var.get()["raw"] = _stt_stream_raw_var.get() or pre_text
     else:
         text = await _transcribe_audio_impl(wav_path)
     # capture=False for instrument callers (replay- panel ids): the replay gate
@@ -3055,6 +3064,12 @@ async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str |
 # module global) keeps this per-asyncio-task, so overlapping voice turns / an A/B
 # capture running beside a live turn can't clobber each other's value.
 _stt_backend_var: contextvars.ContextVar[str] = contextvars.ContextVar("stt_backend", default="")
+# The transcript as Moonshine heard it BEFORE the leading wake word was stripped (``{"raw": str}``, per task, filled by _run_moonshine). A
+# window turn that opens "Zoe, what time is it" reaches the gates as "what time is it"; this keeps the fact that Zoe was named.
+_stt_raw_var: contextvars.ContextVar = contextvars.ContextVar("stt_raw", default=None)
+# The under-speech stream's transcript before the wake word was stripped, set by _take_stt_stream_text (an awaited coroutine,
+# so the set reaches its caller) and read by _transcribe_audio when it is handed that stream's text as ``pre_text``.
+_stt_stream_raw_var: contextvars.ContextVar = contextvars.ContextVar("stt_stream_raw", default="")
 
 
 async def _transcribe_audio_impl(wav_path: str) -> str:
@@ -5764,6 +5779,50 @@ async def voice_command(
     }
 
 
+async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, panel_id: str, *, route: str) -> Optional[dict]:
+    """The ``skipped`` done frame for a no-wake-word window turn whose speaker gate RAN and did not confirm a member, else None.
+
+    ONE rule for both /turn and /turn_stream: the daemon's streaming request falls back to the blocking /turn when it dies before a
+    response, and a /turn that skipped this check let a background clip clear only the wake bar. Side effects of a drop (crowd note,
+    voice-session close) live here so the two paths cannot drift. An ERROR while judging a window turn FAILS CLOSED (dropped).
+    """
+    if (payload or {}).get("window") not in _utterance_shape.WINDOWS:
+        return None
+    _gate = None
+    try:
+        _win_verdict = _speaker_verdict(
+            payload, caller, identified_by_claim=bool(await _accepted_voice_claim(payload, caller)))
+    except Exception as _win_exc:
+        logger.warning("voice/%s window speaker gate failed (dropping the window turn): %s", route, _win_exc)
+        _win_verdict = False
+    try:
+        _gate = _utterance_shape.window_speaker_frame(
+            payload, transcript, _win_verdict,
+            named_zoe=_utterance_shape.names_zoe(((_stt_raw_var.get() or {}).get("raw")) or ""))
+    except Exception as _win_exc:
+        logger.warning("voice/%s window speaker frame failed (dropping the window turn): %s", route, _win_exc)
+        _gate = {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch"}
+    if _gate is not None:
+        # The rejected voice is still SOMEONE in the room: record it in the crowd log (no session, no brain, no memory write), so the
+        # day-review summary is not spoken aloud on the strength of a crowd that only ever spoke into skipped follow-ups.
+        try:
+            import day_review_raise as _dr_win
+            _dr_win.note_voice_turn("", panel_id, scope_user=None, verdict=False, claimed=None)
+        except Exception as _dr_exc:
+            logger.debug("window mismatch crowd note failed (non-fatal): %s", _dr_exc)
+        # An unverified voice closes the panel's voice session, exactly as on the voice_command path (flag off: no-op).
+        try:
+            import voice_session as _vs_win
+            _vs_dec = _vs_win.observe_turn(
+                panel_id=panel_id, caller_source=(caller or {}).get("source"), verdict=False, claimed=None,
+                pin_user=None, model_ok=False, model_reason="window_mismatch", text="")
+            if _vs_dec is not None and _vs_dec.events:
+                _spawn_bg(_vs_win.publish(list(_vs_dec.events)))
+        except Exception as _vs_exc:
+            logger.debug("window mismatch session close failed (non-fatal): %s", _vs_exc)
+    return _gate
+
+
 @router.post("/turn")
 async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth), db=Depends(get_db)):
     """Combined STT + LLM + TTS in a single HTTP call.
@@ -5858,6 +5917,12 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
 
     logger.info("voice/turn panel=%s STT=%.1fs transcript=%r", panel_id, t_stt, transcript[:80])
 
+    # The streaming request's blocking fallback carries ``window`` too: a no-wake-word turn whose voice the gate ran on and did
+    # not confirm is dropped here exactly as on /turn_stream (empty reply: the daemon returns to wake mode).
+    if await _window_speaker_drop(payload, caller, transcript, panel_id, route="turn") is not None:
+        return {"ok": True, "panel_id": panel_id, "text": "", "reply": "", "audio_base64": None,
+                "skipped": "not_addressed", "reason": "voice_mismatch", "conversation_end": True}
+
     # Broadcast transcript so UI shows what was heard.
     try:
         from push import broadcaster as _bc_t
@@ -5880,6 +5945,9 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     # The daemon's per-turn speaker-gate block (memory provenance; see _speaker_verdict).
     if isinstance((payload or {}).get("speaker"), dict):
         command_payload["speaker"] = payload["speaker"]
+    # Which kind of no-wake-word window this turn came from: voice_command's claim gate applies the stricter window bar to it.
+    if (payload or {}).get("window") in ("followup", "conversation"):
+        command_payload["window"] = payload["window"]
 
     result = await voice_command(command_payload, caller=caller, stream=False, db=db)
     result["text"] = transcript
@@ -6054,8 +6122,16 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # listens a short extra window and re-sends ONE merged clip. ``skipped``: a follow-up
     # window utterance that names someone else (ZOE_FOLLOWUP_ADDRESSED, default off).
     # Never on a speculative turn (its own verdict protocol owns it). Fail-open.
+    _gate = None
+    # A no-wake-word window turn must carry its OWN matching voice: one the speaker gate RAN on and did not confirm is
+    # not for Zoe (a television, another person) - dropped here, before any brain / memory / identity work, which ends the
+    # panel's follow-up chain. Never a speculative turn. A None verdict (gate off / shadow) is today's behaviour, but an
+    # ERROR while judging a window turn FAILS CLOSED (dropped): unknown is not the member.
+    if _spec_gate is None:
+        _gate = await _window_speaker_drop(payload, caller, transcript, panel_id, route="turn_stream")
     try:
-        _gate = _utterance_shape.gate_frame(payload, transcript, speculative=_spec_gate is not None)
+        if _gate is None:
+            _gate = _utterance_shape.gate_frame(payload, transcript, speculative=_spec_gate is not None)
     except Exception as _gate_exc:
         logger.warning("voice/turn_stream utterance gate failed (non-fatal): %s", _gate_exc)
         _gate = None
@@ -6221,6 +6297,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # The daemon's per-turn speaker-gate block (memory provenance; see _speaker_verdict).
     if isinstance((payload or {}).get("speaker"), dict):
         command_payload["speaker"] = payload["speaker"]
+    # Which kind of no-wake-word window this turn came from: voice_command's claim gate applies the stricter window bar to it.
+    if (payload or {}).get("window") in ("followup", "conversation"):
+        command_payload["window"] = payload["window"]
 
     # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
     # (voice_command's stream generator records the downstream llm_first_token /
@@ -6463,6 +6542,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
 
 async def _take_stt_stream_text(payload: dict, raw: bytes, suffix: str) -> str | None:
     """Finished under-speech transcript for this turn's clip, or None (-> batch STT). Never raises."""
+    _stt_stream_raw_var.set("")
     sid = (payload or {}).get("stt_stream_id")
     if not sid or not _stt_stream.stream_under_speech_enabled():
         return None
@@ -6492,6 +6572,8 @@ async def _take_stt_stream_text(payload: dict, raw: bytes, suffix: str) -> str |
                 text = _strip_wake_word(list(lines)) or None
                 if text is None:
                     reason = "empty"
+                else:
+                    _stt_stream_raw_var.set(" ".join(ln.strip() for ln in lines if ln and ln.strip()))
     except Exception as exc:
         reason = f"error:{exc.__class__.__name__}"
         text = None
@@ -6998,7 +7080,9 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
         # threshold): never honoured, whatever its value. The flag is flipped on BOTH hosts (docs/knowledge/speaker-resnet34-switch.md).
         logger.info("voice claim rejected: model %r is not the acting model %r", model_id[:48], speaker_models.acting_model())
         return None
-    threshold = speaker_models.claim_threshold(model_id, speech_s)
+    # A no-wake-word window turn (follow-up / conversation) clears a STRICTER bar than a wake turn: nobody said the wake word, so
+    # whatever the room is playing (a television) is also a candidate speaker (2026-11-01).
+    threshold = speaker_models.claim_threshold(model_id, speech_s, str(payload.get("window") or ""))
     if threshold is not None and score >= threshold:
         return user
     logger.info(

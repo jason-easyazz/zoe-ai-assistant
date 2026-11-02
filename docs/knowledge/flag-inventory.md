@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 802 prod flags; 212 read through `typed_env`.
+- 804 prod flags; 214 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 255 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-802 flags; 752 not documented in `.env.example`.
+804 flags; 753 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -72,6 +72,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_AGENT_TOOL_TIMEOUT` | float | `10.0` | - | - | `'10.0'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_AGENT_VOICE_LLM_TIMEOUT` | str | `''` | - | - | `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_ALARMS` | bool | `False` | - | `docs/architecture/alarms.md` | `'off'` | yes | NO | `services/zoe-data/alarms.py` |
+| `ZOE_ALARM_MUSIC_PLAYER` | str | `'Zoe Panel'` | - | `docs/architecture/alarms.md` | `'Zoe Panel'` | yes | NO | `services/zoe-data/alarm_music.py` |
 | `ZOE_ALLOWED_WS_ORIGINS` | list | `()` | - | `docs/knowledge/incident-runbook.md` | `-` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_ANNOUNCE_POLL_ENABLED` | bool | `True` | - | `scripts/AGENTS.md` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_ANNOUNCE_POLL_S` | float | `5.0` | - | `docs/knowledge/mac-virtual-panel.md` | `'5.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -735,6 +736,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_SPEAKER_RESNET34_THRESHOLD_LONG` | float | `0.0` | - | - | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT` | float | `0.0` | - | `docs/knowledge/speaker-resnet34-switch.md` | `dynamic` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_RESNET34_TIER` | str | `'far1'` | - | `docs/knowledge/speaker-resnet34-switch.md` | `'far1'` | yes | yes | `scripts/setup/zoe_speaker_resnet34.py`<br>`services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_WINDOW_TIER` | str | `'far01'` | - | `docs/knowledge/voice-verified-session.md` | `'far01'` | yes | yes | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPECULATIVE_MAX_HOLD_MS` | int | `5000` | - | `docs/architecture/b1-speculative-turn-start.md` | `5000` | yes | NO | `services/zoe-data/voice_speculation.py` |
 | `ZOE_SPECULATIVE_TAIL_MS` | int | `320` | - | `docs/architecture/b1-speculative-turn-start.md` | `320` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_SPECULATIVE_TURN` | bool | `False` | - | `docs/architecture/beat-the-bar-2026-program.md` | `'false'`, `False` | yes | NO | `scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/voice_speculation.py` |

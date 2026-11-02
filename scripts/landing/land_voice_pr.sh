@@ -94,7 +94,7 @@ run_probe(){ flock -w 120 /tmp/zoe-voice-harness.lock timeout -k 20 "$(landing_p
 # The probe always runs to completion (capped by `timeout`); a push mid-probe shows up as artifact revision != current head below -> exit 5, nothing armed.
 PROBE_T0=$(date +%s)
 landing_probe_window $(( $(left) - 900 > 60 ? $(left) - 900 : 60 )) "$PR" "$HEAD_SHA" run_probe; PROBE_RC=$?
-[ "$PROBE_RC" = 9 ] && { log "test lane busy (waited as long as the deadline allows) - Kokoro untouched - exit 9"; flock -u 9; exec 9>&-; exit 9; }
+[ "$PROBE_RC" = 9 ] && { log "test lane busy, household not quiet, or the pre-stop gate said no - Kokoro untouched - exit 9"; flock -u 9; exec 9>&-; exit 9; }
 systemctl --user start kokoro-tts.service
 flock -u 9; exec 9>&-    # 2026-10-27: the probe is over - release the brain lock NOW, not after the CI / merge wait below
 git -C "$LANDING_REPO" worktree remove --force "$PWT" >/dev/null 2>&1

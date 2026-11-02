@@ -207,10 +207,30 @@ def resnet34_threshold(group: str, tier: Optional[str] = None) -> float:
     return override if math.isfinite(override) else table[g]
 
 
-def claim_threshold(model_id: str, speech_s: Any) -> Optional[float]:
-    """The acceptance bar for a panel's claim made in ``model_id``'s space, or None when the model is unknown (reject)."""
+WINDOW_NAMES = ("followup", "conversation")   # the no-wake-word listening windows (mirrors voice_utterance_shape.WINDOWS)
+
+
+def window_tier() -> str:
+    """``ZOE_SPEAKER_WINDOW_TIER``: the tier a NO-WAKE-WORD window turn must clear: ``far01`` (default, FAR 0.1 %) | ``far1``
+    (the wake-turn bar, i.e. no extra strictness). A wake turn is somebody who walked up and said the wake word; an open follow-up
+    window hears whatever is in the room (a television), so it gets the stricter bar."""
+    raw = env_str("ZOE_SPEAKER_WINDOW_TIER", "far01").lower()
+    return raw if raw in RESNET34_THRESHOLDS else "far01"
+
+
+def claim_threshold(model_id: str, speech_s: Any, window: Any = "") -> Optional[float]:
+    """The acceptance bar for a panel's claim made in ``model_id``'s space, or None when the model is unknown (reject).
+
+    ``window`` ("followup" / "conversation") raises the bar to at least the window tier (``window_tier``); any other value
+    (a wake turn) is the unchanged bar."""
     if model_id == RESNET34_MODEL_ID:
-        return resnet34_threshold(length_group(speech_s))
+        group = length_group(speech_s)
+        bar = resnet34_threshold(group)
+        if window in WINDOW_NAMES:
+            # The window tier's TABLE value, not resnet34_threshold(group, tier): that returns the numeric override for every tier, so a
+            # configured wake bar (e.g. _LONG=0.265) would also stand in for the stricter window bar and erase it.
+            bar = max(bar, RESNET34_THRESHOLDS[window_tier()]["short" if group == "short" else "long"])
+        return bar
     return None
 
 

@@ -500,7 +500,7 @@ def test_continuation_off_never_asks_the_server_to_hold(daemon, monkeypatch):
     assert "can_continue" not in calls[0]
 
 
-def test_the_blocking_turn_gets_no_new_kwargs(daemon, monkeypatch):
+def test_the_blocking_turn_gets_only_the_window_and_none_of_the_streaming_kwargs(daemon, monkeypatch):
     seen = {}
 
     def _blocking(pa, wav, **kw):  # noqa: ARG001
@@ -510,7 +510,12 @@ def test_the_blocking_turn_gets_no_new_kwargs(daemon, monkeypatch):
     monkeypatch.setattr(daemon, "_do_single_turn", _blocking)
     daemon._turn_with_monitor(_FakePA(), b"W1", daemon._do_single_turn, window="followup",
                               prompt_on_empty=False)
-    assert seen == {"prompt_on_empty": False}
+    # `window` rides to the blocking turn (the stream's fallback / ZOE_VOICE_STREAM=0): without it the server cannot apply the
+    # stricter no-wake-word speaker bar. Nothing streaming-only (can_continue / continued) does.
+    assert seen == {"prompt_on_empty": False, "window": "followup"}
+    seen.clear()
+    daemon._turn_with_monitor(_FakePA(), b"W1", daemon._do_single_turn, prompt_on_empty=False)
+    assert seen == {"prompt_on_empty": False}                      # a wake turn carries no window
 
 
 def test_the_blocking_turn_also_merges_a_hard_cap_continuation(daemon, monkeypatch):

@@ -153,6 +153,47 @@ def test_pre_stop_failure_after_the_lane_wait_leaves_kokoro_untouched_and_frees_
     assert subprocess.run(["flock", "-n", str(lane), "true"]).returncode == 0, "the lane stayed locked"
 
 
+# ---- a probe never silences Zoe while the household is talking to her (2026-11-02) -------------------------------
+# Daytime landings muted speech for hours (214 min on 10-29) because nothing asked whether anyone was using her.
+
+@pytest.mark.parametrize("age,raw", [(60, None), (19 * 60, None), (None, "not json"), (None, '{"status": "ok"}'), ("x", None)])
+def test_a_recent_turn_or_an_unreadable_signal_leaves_kokoro_untouched(rig, age, raw):
+    prs(rig)
+    rig.set_health(age, raw=raw)
+    script, env, log, lane, probe_log = window(rig)
+    r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+    assert "rc=9" in r.stdout, r.stdout + r.stderr
+    assert not probe_log.exists() and (not log.exists() or log.read_text() == ""), "Kokoro was stopped while not quiet"
+    assert subprocess.run(["flock", "-n", str(lane), "true"]).returncode == 0, "the lane stayed locked"
+
+
+def test_an_unreachable_health_endpoint_is_not_quiet(rig):
+    prs(rig)
+    script, env, log, _, probe_log = window(rig)
+    env["ZOE_LANDING_HEALTH_URL"] = f"file://{rig.tmp}/no-such-health.json"
+    r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+    assert "rc=9" in r.stdout and not probe_log.exists() and (not log.exists() or log.read_text() == "")
+
+
+@pytest.mark.parametrize("age", [None, 20 * 60, 3 * 3600, 1500.7])
+def test_a_quiet_household_lets_the_probe_run(rig, age):
+    prs(rig)
+    rig.set_health(age)
+    script, env, log, _, probe_log = window(rig)
+    r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+    assert "rc=0" in r.stdout, r.stdout + r.stderr
+    assert probe_log.read_text().strip() == "PROBE"
+
+
+def test_the_quiet_window_is_configurable(rig):
+    prs(rig)
+    rig.set_health(6 * 60)
+    script, env, _, _, probe_log = window(rig)
+    env["ZOE_LANDING_QUIET_MIN"] = "5"
+    r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+    assert "rc=0" in r.stdout and probe_log.exists()
+
+
 def test_an_artifact_older_than_this_attempt_is_not_fresh(rig):
     art = rig.tmp / "a.json"
     art.write_text("{}")
