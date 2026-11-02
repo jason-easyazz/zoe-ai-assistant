@@ -1303,6 +1303,16 @@ async def lifespan(app: FastAPI):
     except Exception as _wup_exc:
         logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
 
+    # Keep the household's brain prefix resident in the one llama slot between conversations (re-warms it after a helper
+    # batch / brain restart displaced it, so the next wake is a cache hit). ZOE_BRAIN_PREFIX_KEEPER (default on).
+    try:
+        import brain_prefix_keeper
+
+        if brain_prefix_keeper.enabled():
+            asyncio.create_task(brain_prefix_keeper.run_loop(), name="brain_prefix_keeper")
+    except Exception as _pk_exc:
+        logger.warning("Brain prefix keeper not started (non-fatal): %s", _pk_exc)
+
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
         # Schema guard: the claim/generation logic depends on migration 0012.
