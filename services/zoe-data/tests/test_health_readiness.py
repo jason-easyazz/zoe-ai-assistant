@@ -60,20 +60,34 @@ def test_health_stays_200_liveness_on_cold_box(monkeypatch):
 def test_health_exposes_last_voice_turn_age_for_the_deploy_quiet_wait(monkeypatch):
     """scripts/maintenance/wait_household_quiet.sh reads this; null = no turn since start."""
     import main
-    import omi_recordings
+    import voice_activity
 
     monkeypatch.setitem(main._pool_health_cache, "checked_at", 0.0)
-    monkeypatch.setattr(omi_recordings, "last_voice_age_s", lambda: 42.349)
+    monkeypatch.setattr(voice_activity, "last_activity_age_s", lambda *a: 42.349)
     assert asyncio.run(main.root_health())["last_voice_turn_age_s"] == 42.3
-    monkeypatch.setattr(omi_recordings, "last_voice_age_s", lambda: None)
+    monkeypatch.setattr(voice_activity, "last_activity_age_s", lambda *a: None)
     assert asyncio.run(main.root_health())["last_voice_turn_age_s"] is None
 
-    def boom():
+    def boom(*a):
         raise RuntimeError("x")
 
-    monkeypatch.setattr(omi_recordings, "last_voice_age_s", boom)
+    monkeypatch.setattr(voice_activity, "last_activity_age_s", boom)
     body = asyncio.run(main.root_health())  # the signal must never fail /health
     assert body["status"] == "ok" and body["last_voice_turn_age_s"] is None
+
+
+def test_health_voice_age_ignores_unfiltered_voice_sessions(monkeypatch):
+    """A probe/harness panel command refreshes _VOICE_SESSIONS without a traffic-class check; /health must not call it household activity."""
+    import types
+    import main
+    import voice_activity
+
+    monkeypatch.setitem(main._pool_health_cache, "checked_at", 0.0)
+    monkeypatch.setattr(voice_activity, "_LAST_VOICE_ACTIVITY_MONO", None)
+    import time
+    fake = types.SimpleNamespace(_VOICE_SESSIONS={"s": {"last_at": time.monotonic()}})
+    monkeypatch.setitem(sys.modules, "routers.voice_tts", fake)
+    assert asyncio.run(main.root_health())["last_voice_turn_age_s"] is None
 
 
 def test_readyz_reports_not_ready_then_ready(monkeypatch):

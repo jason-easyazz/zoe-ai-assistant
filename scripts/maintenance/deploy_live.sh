@@ -141,12 +141,13 @@ fi
 git -C "$LIVE" merge --ff-only "$target"
 
 # Short recheck right before the restart (review on #2234): the long wait above ran BEFORE the
-# lock, so a turn or a night window may have started since. Both waits are bounded small because
+# lock, so a turn or a night window may have started since. All three waits (household, night, probe) are bounded small because
 # the deploy lock is held here (the CD runner's pull waits 300 s for it); a night window still
 # open after that exits non-zero - nothing restarted, re-run after the window. No docs-only base:
 # this script restarts unconditionally, so a docs-only diff must not skip the night check.
 (cd "$LIVE" && ZOE_DEPLOY_QUIET_MAX_WAIT_MIN="${ZOE_DEPLOY_QUIET_RECHECK_MIN:-2}" \
     ZOE_DEPLOY_NIGHT_WAIT_MAX_MIN="${ZOE_DEPLOY_QUIET_RECHECK_MIN:-2}" \
+    ZOE_DEPLOY_PROBE_WAIT_MAX_MIN="${ZOE_DEPLOY_QUIET_RECHECK_MIN:-2}" \
     bash "$SCRIPT_DIR/wait_household_quiet.sh") || exit 1
 
 echo "▶ restarting $SERVICE…"

@@ -246,6 +246,8 @@ def test_deploy_live_rechecks_after_the_merge_before_the_restart():
     # too (the deploy lock is held) - reviews on #2234.
     assert "DEPLOY_BASE_SHA" not in window
     assert "ZOE_DEPLOY_NIGHT_WAIT_MAX_MIN" in window
+    # ... and so is the probe-lock wait (default 45 min) - it would otherwise hold the deploy lock that long.
+    assert "ZOE_DEPLOY_PROBE_WAIT_MAX_MIN" in window
 
 
 def test_deploy_yml_step_sits_right_before_the_zoe_data_restart_and_uses_the_script():

@@ -2445,8 +2445,9 @@ async def root_health():
     # newest panel voice turn, null when none since this process started. A bare number, no
     # household data; never allowed to fail /health.
     try:
-        from omi_recordings import last_voice_age_s
-        _age = last_voice_age_s()
+        # Household-filtered stamp only: _VOICE_SESSIONS is refreshed by probe/harness panel commands too.
+        from voice_activity import last_activity_age_s
+        _age = last_activity_age_s()
         body["last_voice_turn_age_s"] = None if _age is None else round(max(0.0, _age), 1)
     except Exception:  # noqa: BLE001
         body["last_voice_turn_age_s"] = None
