@@ -72,13 +72,15 @@ function boot(opts) {
   let now = 1000000;
   function advance(ms) { const end = now + ms; for (;;) { timers.sort((a, b) => a.at - b.at); const n = timers[0];
     if (!n || n.at > end) break; now = n.at; if (n.every) n.at += n.every; else timers.splice(0, 1); n.fn(); } now = end; }
-  const calls = []; const shown = []; let beeps = 0; let stops = 0;
+  const calls = []; const shown = [];
+  const snd = { starts: [], stops: 0, previews: [], start(id, el, ramp) { snd.starts.push({ id, el, ramp }); return true; },
+    stop() { snd.stops += 1; }, preview(id) { snd.previews.push(id); } };
   const host = {
     apiGet: (url) => { calls.push(['GET', url]); const r = opts.get ? opts.get(url) : { ringing: [] };
       return r instanceof Error ? Promise.reject(r) : Promise.resolve(r); },
     apiJson: (m, url, b) => { calls.push([m, url, b]); const r = opts.post ? opts.post(m, url, b) : {};
       return r instanceof Error ? Promise.reject(r) : Promise.resolve(r); },
-    show: (id) => { shown.push(id); }, cur: () => 'home', beep: () => { beeps += 1; }, stopSound: () => { stops += 1; },
+    show: (id) => { shown.push(id); }, cur: () => 'home', sound: snd,
   };
   const store = {};
   const window = { localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; } } };
@@ -87,11 +89,11 @@ function boot(opts) {
   // `new Date(ms)` is used for the ring clock; keep the real constructor but a fixed now() for skew maths
   ctx.Date = class extends Date { static now() { return now; } };
   vm.runInContext(SRC, ctx);
-  return { window, document, host, calls, shown, advance, store, beeps: () => beeps, stops: () => stops, all, byId, stage };
+  return { window, document, host, calls, shown, advance, clock: () => now, store, snd, all, byId, stage };
 }
 const flush = () => new Promise((r) => setImmediate(r));
 const ring = (over) => Object.assign({ id: 'a1', label: 'Gym', time_hhmm: '07:00', sound_kind: 'tone', sound_id: 'sunrise', sound_name: 'Sunrise',
-  ramp_seconds: 30, snooze_minutes: 9, snooze_count: 0, can_snooze: true, ring_started_at: 100, stops_at: 700 }, over || {});
+  ramp_seconds: 30, snooze_minutes: 9, snooze_count: 0, can_snooze: true, ring_started_at: 1000, stops_at: 1600, music_state: '' }, over || {});
 const posts = (b, suffix) => b.calls.filter((c) => c[0] === 'POST' && c[1].endsWith(suffix));
 
 async function ringing(over, postFn) {
@@ -114,20 +116,21 @@ async function ringing(over, postFn) {
     ok(p.repeatOf('weekdays', []) === 'weekdays' && p.repeatOf('', [5, 1]) === 'days:1,5' && p.repeatOf('', []) === 'once' && p.repeatOf('', [1, 2, 3, 4, 5, 6, 7]) === 'daily', 'repeatOf');
     ok(JSON.stringify(p.chipsOf('days:1,3')) === '{"preset":"","days":[1,3]}' && p.chipsOf('daily').preset === 'daily', 'chipsOf'); }
 
-  // a ring takes the sleep page, shows the label and the snooze hint, and beeps
+  // a ring takes the sleep page, shows the label and the snooze hint, and plays its tone (ramped from the server's ring start)
   { const b = await ringing();
     const ov = b.byId().alarmRing;
     ok(ov && ov.classList.contains('on'), 'overlay shown');
     ok(b.shown.includes('sleep'), 'navigates to the sleep clock page');
     ok(ov.querySelector('.allabel').textContent === 'Gym', 'label via textContent');
     ok(ov.querySelector('.alhint').textContent === 'Tap anywhere to snooze 9 min', 'hint');
-    ok(b.beeps() >= 1, 'audible');
+    ok(b.snd.starts.length === 1 && b.snd.starts[0].id === 'sunrise' && b.snd.starts[0].ramp === 30, 'audible: the alarm\'s tone, with its ramp');
+    b.advance(5000); const el = b.snd.starts[0].el(); ok(el > 4 && el < 6, 'elapsed is measured from the server ring start: ' + el);
     // TAP ANYWHERE snoozes
     fire(ov.querySelector('.alclock'), 'click');
     await flush();
     ok(posts(b, '/api/alarms/a1/snooze').length === 1, 'tap on the clock snoozes');
-    ok(!ov.classList.contains('on') && b.stops() >= 1, 'silenced and hidden at once');
-    const n = b.beeps(); b.advance(5000); ok(b.beeps() === n, 'no beeps after snooze'); }
+    ok(!ov.classList.contains('on') && b.snd.stops >= 1, 'silenced and hidden at once');
+    const n = b.snd.starts.length; b.advance(5000); ok(b.snd.starts.length === n, 'no sound after snooze'); }
 
   // tapping the off button never snoozes and never turns off; early release does nothing
   { const b = await ringing();
@@ -201,7 +204,7 @@ async function ringing(over, postFn) {
     b.window.ZoeAlarms.init(b.host); b.advance(400); await flush(); await flush();
     ok(b.byId().alarmRing.classList.contains('on'), 'rings');
     listed = false; b.advance(2100); await flush(); await flush();
-    ok(!b.byId().alarmRing.classList.contains('on') && b.stops() >= 1, 'removed when the server no longer lists it'); }
+    ok(!b.byId().alarmRing.classList.contains('on') && b.snd.stops >= 1, 'removed when the server no longer lists it'); }
 
   // flag off: 404 hides the tabs and slows the poll
   { const b = boot({ get: () => new Error('http 404') });
@@ -231,9 +234,77 @@ async function ringing(over, postFn) {
     const p = b.calls.find((c) => c[0] === 'POST' && c[1] === '/api/alarms');
     ok(p && JSON.stringify(p[2]) === JSON.stringify({ time_hhmm: '07:00', repeat: 'weekdays', snooze_minutes: 15, sound_kind: 'tone', sound_id: 'bell' }), 'save body: ' + JSON.stringify(p && p[2])); }
 
+
+  // AN ALARM IS NEVER SILENT: music is trusted only while the server says it is playing
+  async function musicRing(stateFn, over) {
+    let b = null;  // the fake server's clock IS the fake page clock (skew 0), so "10 s after the ring started" is real
+    b = boot({ get: (u) => (u === '/api/alarms/ringing' ? { now: b.clock() / 1000, ringing: [ring(Object.assign({ sound_kind: 'music', sound_id: 'last', music_state: stateFn() }, over))] } : {}) });
+    b.window.ZoeAlarms.init(b.host); b.advance(300); await flush(); await flush();
+    return b;
+  }
+  { let state = 'playing'; const b = await musicRing(() => state);
+    b.advance(20000); await flush(); await flush();
+    ok(b.snd.starts.length === 0, 'music playing: no tone over it'); }
+  { const b = await musicRing(() => 'starting');
+    b.advance(8000); await flush(); await flush(); ok(b.snd.starts.length === 0, 'still waiting for music at 8 s');
+    b.advance(4000); await flush(); await flush();
+    ok(b.snd.starts.length === 1 && b.snd.starts[0].id === 'sunrise', 'music not playing by the 10 s deadline: the tone plays'); }
+  { const b = await musicRing(() => 'failed');
+    ok(b.snd.starts.length === 1 && b.snd.starts[0].id === 'sunrise', 'music failed: the tone plays at once'); }
+  { const b = await musicRing(() => '');
+    b.advance(12000); await flush(); await flush();
+    ok(b.snd.starts.length === 1, 'unknown music state (zoe-data restarted mid-ring): the tone plays after the deadline'); }
+  { let state = 'failed'; const b = await musicRing(() => state);
+    state = 'playing'; b.advance(2100); await flush(); await flush();
+    ok(b.snd.starts.length === 1 && b.snd.stops === 0, 'late music never silences the fallback tone (the server fails it past the deadline)'); }
+
+  // the editor offers music and saves it; tones stay available
+  { const b = boot({ get: (u) => (u === '/api/alarms' ? { alarms: [], tones: { sunrise: 'Sunrise' }, now: 1 }
+      : u === '/api/music/playlists' ? { playlists: [{ name: 'Morning' }, { name: 'Jazz' }] } : { now: 1, ringing: [] }) });
+    b.window.ZoeAlarms.init(b.host); b.advance(400); await flush(); await flush();
+    const tabs = b.document.createElement('div'); const t1 = b.document.createElement('div'); const a1 = b.document.createElement('div');
+    b.window.ZoeAlarms.attachTabs({ tabsEl: tabs, timersEl: t1, alarmsEl: a1 })('alarms'); await flush(); await flush();
+    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === '+ New alarm'), 'click'); await flush(); await flush();
+    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Sunrise'), 'click');
+    ok(b.snd.previews.includes('sunrise'), 'tone chip previews');
+    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Morning'), 'click');
+    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Save'), 'click'); await flush();
+    const p = b.calls.find((c) => c[0] === 'POST' && c[1] === '/api/alarms');
+    ok(p && p[2].sound_kind === 'music' && p[2].sound_id === 'playlist:Morning' && p[2].sound_name === 'Morning', 'music save body: ' + JSON.stringify(p && p[2]));
+  }
+
+  // the tone synthesiser: ramp, plan, start/stop, parity with the server's ids
+  { const SND = fs.readFileSync(process.env.SND_SRC || path.join(__dirname, 'js/touch-alarm-sound.js'), 'utf8');
+    const made = { osc: [], gains: [] }; let disc = 0; const tm = [];
+    class Ctx { constructor() { this.currentTime = 10; this.state = 'running'; this.destination = {}; }
+      createOscillator() { const o = { frequency: {}, connect() {}, start() {}, stopped: 0, stop() { o.stopped += 1; } }; made.osc.push(o); return o; }
+      createGain() { const g = { gain: { value: 1, setValueAtTime(v) { g.gain.last = v; }, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} },
+        connect() {}, disconnect() { disc += 1; } }; made.gains.push(g); return g; } }
+    const w = { AudioContext: Ctx };
+    const c2 = vm.createContext({ window: w, setInterval: (fn, ms) => { tm.push({ fn, ms, on: true }); return tm.length; }, clearInterval: (i) => { if (tm[i - 1]) tm[i - 1].on = false; }, Math });
+    vm.runInContext(SND, c2);
+    const S = w.ZoeAlarmSound;
+    ok(S.rampGain(0, 30) === 0.05 && S.rampGain(30, 30) === 1 && S.rampGain(99, 30) === 1 && S.rampGain(-5, 30) === 0.05 && S.rampGain(5, 0) === 1, 'ramp ends');
+    ok(Math.abs(S.rampGain(15, 30) - 0.525) < 1e-9, 'ramp midpoint');
+    ok(['sunrise', 'chime', 'bell', 'beep'].every((id) => S.TONES[id] && S.plan(id).length > 0 && S.plan(id).every((n) => n.freq > 0 && n.dur > 0 && n.gain > 0)), 'every tone has a plan');
+    ok(Object.keys(S.TONES).sort().join() === 'beep,bell,chime,sunrise', 'tone ids');
+    ok(S.start('bell', () => 15, 30) === true && made.osc.length === S.plan('bell').length, 'start schedules the first phrase');
+    ok(Math.abs(made.gains[0].gain.last - 0.525) < 1e-9, 'master gain follows the server clock (reload resumes mid-ramp)');
+    tm.filter((t) => t.on).forEach((t) => t.fn());   // loop + ramp timers fire
+    ok(made.osc.length === 2 * S.plan('bell').length, 'the phrase repeats');
+    S.stop();
+    ok(made.osc.every((o) => o.stopped >= 2) && disc === 1 && tm.every((t) => !t.on), 'stop silences every note and clears the timers');
+    // a suspended context (autoplay policy) is woken again by every ramp tick, and a rejected resume is not fatal
+    const sus = new Ctx(); sus.state = 'suspended'; let resumes = 0; sus.resume = () => { resumes += 1; return Promise.reject(new Error('blocked')); };
+    const tm2 = []; const w2 = { AudioContext: function () { return sus; } };
+    vm.runInContext(SND, vm.createContext({ window: w2, setInterval: (fn, ms) => { tm2.push({ fn, on: true }); return tm2.length; }, clearInterval: (i) => { if (tm2[i - 1]) tm2[i - 1].on = false; }, Math }));
+    ok(w2.ZoeAlarmSound.start('chime', () => 0, 30) === true && resumes >= 1, 'start wakes a suspended context');
+    tm2.filter((x) => x.on).forEach((x) => x.fn()); ok(resumes >= 2, 'the ramp timer keeps asking (a rejected resume is not fatal)'); w2.ZoeAlarmSound.stop();
+    const before = made.osc.length; S.start('sunrise', () => 0, 30); S.preview('chime'); ok(made.osc.length === before + S.plan('sunrise').length, 'a preview never overlaps a ring'); S.stop(); }
+
   // the estate wires it: script tag before the inline code, init with the host's api, tabs on the timer screen
-  ok(HOME.includes('<script src="/js/touch-alarms.js?v=al-1"></script>'), 'home.html loads the module');
-  ok(HOME.includes('ZoeAlarms.init({apiGet:apiGet,apiJson:apiJson,show:show') && HOME.includes('stopSound:function(){try{if(_tAlarm.ctx)'), 'home.html inits it with the estate api AND a real stopSound');
+  ok(HOME.includes('<script src="/js/touch-alarms.js?v=al-2"></script>') && HOME.includes('/js/touch-alarm-sound.js?v=as-1'), 'home.html loads the modules');
+  ok(HOME.includes('ZoeAlarms.init({apiGet:apiGet,apiJson:apiJson,show:show') && HOME.includes('sound:window.ZoeAlarmSound'), 'home.html inits it with the estate api and the tone synth');
   ok(HOME.includes('ZoeAlarms.attachTabs({tabsEl:document.getElementById(\'alTabs\')'), 'timer screen attaches the tabs');
   ok(HOME.indexOf('/js/touch-alarms.js') < HOME.indexOf('function wireTimer'), 'module loads before the wiring runs');
 

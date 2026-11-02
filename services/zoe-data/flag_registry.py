@@ -97,6 +97,7 @@ _ENTRIES = (
     _f('ZOE_AGENT_TOOL_TIMEOUT', 'float', 10.0),
     _f('ZOE_AGENT_VOICE_LLM_TIMEOUT', 'str', ''),
     _f('ZOE_ALARMS', 'bool', False, doc='docs/architecture/alarms.md'),
+    _f('ZOE_ALARM_MUSIC_PLAYER', 'str', 'Zoe Panel', doc='docs/architecture/alarms.md'),
     _f('ZOE_ALLOWED_WS_ORIGINS','list', (), doc='docs/knowledge/incident-runbook.md'),
     _f('ZOE_ANNOUNCE_POLL_ENABLED', 'bool', True, doc='scripts/AGENTS.md'),
     _f('ZOE_ANNOUNCE_POLL_S', 'float', 5.0, doc='docs/knowledge/mac-virtual-panel.md'),

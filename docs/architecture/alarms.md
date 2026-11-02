@@ -3,8 +3,9 @@
 Owner request 2026-11-02: "we have no alarms on zoe" - Timers/Alarms sections on the panel, a friendly snooze and off on the
 sleep clock (tap anywhere snoozes, one deliberate button turns it off), a settable tone, and old-school clock-radio music.
 
-Status: P1 backend (this PR, flag-dark `ZOE_ALARMS`), P2 panel and P3 sounds/clock radio follow. Code: `services/zoe-data/alarms.py`
-(model, schedule maths, ring engine), `alarm_voice.py` (grammar), `routers/alarms.py` (`/api/alarms`), alembic `0063_alarms`.
+Status: P1 backend, P2 panel and P3 sounds/clock radio, all flag-dark behind `ZOE_ALARMS`. Code: `services/zoe-data/alarms.py`
+(model, schedule maths, ring engine, hooks), `alarm_voice.py` (grammar), `routers/alarms.py` (`/api/alarms`), `alarm_music.py` (clock radio),
+alembic `0063_alarms`; panel: `services/zoe-ui/dist/js/touch-alarms.js` (tabs, editor, ring screen) and `touch-alarm-sound.js` (tones).
 
 ## Principles
 
@@ -108,7 +109,8 @@ applies; the write is held while a speculative voice turn is pending (not a spec
 
 ## Sounds and the clock radio (P3)
 
-Bundled tones are generated, licence-clean (synthesised sine/bell partials, no samples). The panel plays them locally with the
+Bundled tones are generated in the page, licence-clean (synthesised sine/square partials, no samples, nothing to download; ids in
+`alarms.TONES`, parity-tested). The panel plays them locally with the
 volume ramp (`ramp_seconds`, linear from ~5% to full). A music alarm asks Music Assistant to start the source on the panel's player
 ("Zoe Panel", AirPlay 2) at the alarm time, ramping volume; **if MA/provider has not reported playing within ~10 s the page starts
 the alarm's tone** (and the MA start is cancelled on dismiss so it cannot start under a silenced alarm). "An alarm is never silent"
@@ -116,9 +118,11 @@ is a test with a fake MA that never starts. Dismiss/Turn off also stops the musi
 
 ## Rollout
 
-`ZOE_ALARMS` default off. To turn on after P2/P3 have landed: add `ZOE_ALARMS=on` to the zoe-data environment (systemd drop-in)
-and restart zoe-data (poll `/health`); the ring loop starts at boot only when the flag is on. P1 alone is safe to leave on for
-API/voice testing but has no ring screen, so do not rely on it to wake anyone until P2 is live.
+`ZOE_ALARMS` default off. To turn on: add `ZOE_ALARMS=on` to the zoe-data environment (systemd drop-in) and restart zoe-data (poll
+`/health`); the ring loop and the music listener start at boot only when the flag is on, and the panel's Alarms tab appears by itself
+once `/api/alarms` stops answering 404 (reload the panel). `ZOE_ALARM_MUSIC_PLAYER` (default `Zoe Panel`) names the Music Assistant
+player a music alarm plays on. To try it: say "wake me at <a clock time a minute or two ahead>" (alarms are clock times, not
+countdowns), watch the sleep clock take the ring, tap anywhere to snooze, hold the button for a second to turn off.
 
 ## Open owner decisions (with recommendations)
 
