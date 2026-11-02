@@ -29,7 +29,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 804 prod flags; 214 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 255 non-`ZOE_` env names read by prod code (table below).
+- 252 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 313 prod flags with no owner doc yet.
 - 1 registered flags with no reader in the scanned sources.
@@ -914,7 +914,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-255 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+252 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -1009,7 +1009,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `HEALTH_PORT` | `'7777'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `HERMES_API_KEY` | `dynamic` | no | yes | `services/zoe-data/chat_hermes_stream.py`<br>`services/zoe-data/hermes_http.py` |
 | `HERMES_API_URL` | `'http://127.0.0.1:8642'` | no | NO | `services/zoe-data/chat_hermes_stream.py`<br>`services/zoe-data/routers/system.py` |
-| `HERMES_HOME` | `'~/.hermes'` | no | NO | `services/zoe-data/hermes_model_profiles.py`<br>`services/zoe-data/kanban_phase_budget.py` |
+| `HERMES_HOME` | `'~/.hermes'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `HERMES_KANBAN_DB` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
 | `HERMES_MODEL` | `'hermes-agent'` | no | NO | `services/zoe-data/chat_hermes_stream.py`<br>`services/zoe-data/routers/system.py` |
 | `HERMES_MULTICA_AGENT_ID` | `''` | no | NO | `services/zoe-data/multica_client.py` |
@@ -1084,9 +1084,6 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `OMNIGENT_OIDC_CLIENT_SECRET` | `''` | no | NO | `services/zoe-auth/oidc/startup.py` |
 | `OMNIGENT_SERVER` | `'http://127.0.0.1:6767'` | no | NO | `scripts/maintenance/reap_stale_omnigent_runners.py` |
 | `OPENCLAW_AGENT_TIMEOUT_S` | `'900'` | no | yes | `services/zoe-data/openclaw_ws.py`<br>`services/zoe-data/zoe_acp_client.py` |
-| `OPENCLAW_ALLOW_AUTO_UPDATE` | `''` | no | yes | `services/zoe-data/openclaw_maintenance.py` |
-| `OPENCLAW_BACKGROUND_VERSION_CHECK` | `'false'` | no | yes | `services/zoe-data/routers/system.py` |
-| `OPENCLAW_GATEWAY_HEALTH_URL` | `'http://127.0.0.1:18789/health'` | no | NO | `services/zoe-data/openclaw_maintenance.py` |
 | `OPENCLAW_GATEWAY_TOKEN` | `''` | no | yes | `services/zoe-data/openclaw_ws.py`<br>`services/zoe-data/zoe_acp_client.py` |
 | `OPENCLAW_UPGRADE_ENABLED` | `'true'` | no | yes | `services/zoe-data/routers/system.py` |
 | `OPENROUTER_API_KEY` | `-` | no | NO | `scripts/maintenance/zoe_cheap_pr_agent.py` |

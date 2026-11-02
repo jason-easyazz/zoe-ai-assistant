@@ -17907,7 +17907,6 @@
       ],
       "in_env_example": false,
       "readers": [
-        "services/zoe-data/hermes_model_profiles.py",
         "services/zoe-data/kanban_phase_budget.py"
       ],
       "typed_env": false
@@ -18737,36 +18736,6 @@
       "readers": [
         "services/zoe-data/openclaw_ws.py",
         "services/zoe-data/zoe_acp_client.py"
-      ],
-      "typed_env": false
-    },
-    "OPENCLAW_ALLOW_AUTO_UPDATE": {
-      "defaults": [
-        "''"
-      ],
-      "in_env_example": true,
-      "readers": [
-        "services/zoe-data/openclaw_maintenance.py"
-      ],
-      "typed_env": false
-    },
-    "OPENCLAW_BACKGROUND_VERSION_CHECK": {
-      "defaults": [
-        "'false'"
-      ],
-      "in_env_example": true,
-      "readers": [
-        "services/zoe-data/routers/system.py"
-      ],
-      "typed_env": false
-    },
-    "OPENCLAW_GATEWAY_HEALTH_URL": {
-      "defaults": [
-        "'http://127.0.0.1:18789/health'"
-      ],
-      "in_env_example": false,
-      "readers": [
-        "services/zoe-data/openclaw_maintenance.py"
       ],
       "typed_env": false
     },
