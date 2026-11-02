@@ -524,3 +524,56 @@ async def test_rename_falls_back_to_the_bare_item_when_no_possessive_row_exists(
     result = await resolve_skybridge_request("change my milk to oat milk", "jo", db=db)
     assert result["intent"]["status"] == "renamed"
     assert _texts(db) == ["noodles", "oat milk"]
+
+
+# ── an explicit list TYPE beats the card in context (codex P1, #2246) ───────────────────────────────────────────────────
+
+def _ctx(list_id: str, list_type: str) -> dict:
+    return {"intent": {"domain": "lists"}, "cards": [{"content": {"source": "list_show", "list_id": list_id, "list_type": list_type}}]}
+
+
+def _db_with_milk_on_both() -> EditDb:
+    db = _db()
+    db.items_by_list["priv"].append({"id": "p2", "list_id": "priv", "text": "milk", "completed": False})
+    return db
+
+
+def _live(db, list_id):
+    return [i["text"] for i in db.items_by_list[list_id] if not i.get("deleted")]
+
+
+async def test_naming_the_shopping_list_edits_it_even_with_a_personal_card_showing():
+    db = _db_with_milk_on_both()
+    result = await resolve_skybridge_request("change milk to oat milk on the shopping list", "jo", db=db, context=_ctx("priv", "personal"))
+    assert _texts(db, "fam") == ["noodles", "oat milk"], result["spoken_summary"]
+    assert _texts(db, "priv") == ["surprise gift", "milk"], "the list in context was edited although the user named the shopping list"
+
+
+async def test_naming_no_list_still_edits_the_list_in_context():
+    db = _db_with_milk_on_both()
+    await resolve_skybridge_request("change milk to oat milk", "jo", db=db, context=_ctx("priv", "personal"))
+    assert _texts(db, "priv") == ["surprise gift", "oat milk"] and _texts(db, "fam") == ["noodles", "milk"]
+
+
+async def test_naming_the_type_the_card_already_is_edits_that_card():
+    db = _db_with_milk_on_both()
+    await resolve_skybridge_request("change milk to oat milk on the shopping list", "jo", db=db, context=_ctx("fam", "shopping"))
+    assert _texts(db, "fam") == ["noodles", "oat milk"] and _texts(db, "priv") == ["surprise gift", "milk"]
+
+
+async def test_remove_path_has_the_same_rule():
+    db = _db_with_milk_on_both()
+    await resolve_skybridge_request("take milk off the shopping list", "jo", db=db, context=_ctx("priv", "personal"))
+    assert _live(db, "fam") == ["noodles"] and _live(db, "priv") == ["surprise gift", "milk"]
+
+
+async def test_remove_naming_no_list_still_uses_the_card_in_context():
+    db = _db_with_milk_on_both()
+    await resolve_skybridge_request("take milk off the list", "jo", db=db, context=_ctx("priv", "personal"))
+    assert _live(db, "priv") == ["surprise gift"] and _live(db, "fam") == ["noodles", "milk"]
+
+
+def test_the_parsers_leave_list_type_empty_when_no_list_was_named():
+    assert classify_skybridge_intent("change milk to oat milk").list_type == ""
+    assert classify_skybridge_intent("change milk to oat milk on the shopping list").list_type == "shopping"
+    assert classify_skybridge_intent("take milk off the list").list_type == ""

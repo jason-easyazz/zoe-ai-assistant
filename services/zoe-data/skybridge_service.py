@@ -1096,7 +1096,7 @@ def _list_remove_from_text(message: str) -> tuple[str, str, str] | None:
     if not item or item.lower() in _POINTING_ITEMS or not command_shapes.plain_list_item(item):
         return None
     list_type, list_name = _list_target(match)
-    return item, (list_type or ("" if list_name else "shopping")), list_name
+    return item, list_type, list_name   # "" = no list named (a card in context, else the default list, decides)
 
 
 # "is milk on the shopping list" / "do we have eggs on the list": a YES/NO question about one item, not a list read.
@@ -1156,7 +1156,7 @@ def _list_complete_from_text(message: str) -> tuple[str, str, bool, str] | None:
         if not item or item.lower() in _POINTING_ITEMS or not command_shapes.plain_list_item(item):
             return None
         list_type, list_name = _list_target(match)
-        return item, (list_type or ("" if list_name else "shopping")), completed, list_name
+        return item, list_type, completed, list_name
 
     # Restore / un-check FIRST so "uncheck X" is never read as "check X".
     match = re.search(r"\b(?:uncheck|un-?tick|unmark|undo|put back)\s+(?P<item>.+?)" + on_tail, message, re.IGNORECASE)
@@ -1363,7 +1363,7 @@ def _list_rename_from_text(message: str) -> tuple[str, str, str, str] | None:
     operands = _rename_item_operands(groups["old"], groups["new"], list_named=bool(list_type or list_name))
     if operands is None:
         return None
-    return operands[0], operands[1], (list_type or ("" if list_name else "shopping")), list_name
+    return operands[0], operands[1], list_type, list_name
 
 
 def _list_correct_last_from_text(message: str) -> tuple[str, bool] | None:
@@ -4122,6 +4122,8 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
     hinted_id, hinted_type = _context_list_hint(context)
     list_type = intent.list_type or hinted_type or "shopping"
     if hinted_id and not intent.list_name:
+        # The card in context is the target only when the user did not name a list TYPE ("change milk to oat milk on the shopping
+        # list" with a personal list showing edits the shopping list); the parsers leave list_type empty when nothing was named.
         rows = await db.fetch(
             """
             SELECT id, name, list_type
@@ -4135,7 +4137,8 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         )
         if rows:
             row = dict(rows[0])
-            return str(row["id"]), str(row.get("list_type") or list_type)
+            if not intent.list_type or str(row.get("list_type") or "") == intent.list_type:
+                return str(row["id"]), str(row.get("list_type") or list_type)
     if intent.list_name:
         # A list the user NAMED ("my chores list"): that list or none - never the default shopping list instead.
         rows = await db.fetch(
