@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 800 prod flags; 210 read through `typed_env`.
+- 799 prod flags; 209 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-800 flags; 750 not documented in `.env.example`.
+799 flags; 749 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -480,7 +480,6 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_NIGHT_MIND_PREFILL_TOK_S` | float | `650.0` | - | `docs/knowledge/night-mind.md` | `650.0` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_SCHEMA` | str | `''` | - | `docs/knowledge/night-mind.md` | `-` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_URL` | str | `''` | - | `docs/knowledge/night-mind.md` | `dynamic` | no | NO | `services/zoe-data/night_mind.py` |
-| `ZOE_NOW_LINE` | bool | `True` | - | `services/zoe-data/AGENTS.md` | `True` | yes | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_NVM_NODE_BIN` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/pi_intent_classifier.py` |
 | `ZOE_OFFBOX_CHECKOUT` | str | `''` | - | - | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_CONFIG_DIR` | str | `''` | - | - | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
