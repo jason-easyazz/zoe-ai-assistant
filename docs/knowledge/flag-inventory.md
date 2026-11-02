@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 799 prod flags; 209 read through `typed_env`.
+- 801 prod flags; 211 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 313 prod flags with no owner doc yet.
-- 3 registered flags with no reader in the scanned sources.
+- 1 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-799 flags; 749 not documented in `.env.example`.
+801 flags; 751 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -105,6 +105,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_FAILOVER` | bool | `False` | - | `docs/knowledge/state-of-zoe-review-2026-09-25.md` | `'0'` | no | yes | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER_COOLDOWN_S` | int | `45` | - | `services/zoe-data/AGENTS.md` | `'45'` | no | yes | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_KV_WARM_ON_WAKE` | bool | `True` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `'1'` | no | NO | `services/zoe-data/zoe_flue_client.py` |
+| `ZOE_BRAIN_PREFIX_KEEPER` | bool | `True` | - | `docs/knowledge/cold-wake-2026-11-02.md` | `True` | yes | NO | `services/zoe-data/brain_prefix_keeper.py` |
+| `ZOE_BRAIN_PREFIX_KEEPER_MIN_TOKENS` | int | `2000` | - | `docs/knowledge/cold-wake-2026-11-02.md` | `2000` | yes | NO | `services/zoe-data/brain_prefix_keeper.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | bool | `True` | - | - | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_BRAIN_SLOT_GUARD` | bool | `True` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `'on'` | no | NO | `services/zoe-data/brain_slot_guard.py` |
 | `ZOE_BRAIN_SLOT_MAX_DEFER_S` | str | `''` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
@@ -1170,4 +1172,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_BRAIN_PREFIX_KEEPER`, `ZOE_BRAIN_PREFIX_KEEPER_MIN_TOKENS`, `ZOE_COMPOSE_VOICE_BUDGET_S`
+`ZOE_COMPOSE_VOICE_BUDGET_S`
