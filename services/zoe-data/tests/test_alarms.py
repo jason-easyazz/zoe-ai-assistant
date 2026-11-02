@@ -999,3 +999,21 @@ def test_voice_still_takes_plain_times_and_recurring_days():
     assert alarm_voice.parse("wake me at seven thirty", NIGHT).time_hhmm == "07:30"
     assert alarm_voice.parse("wake me at seven twenty five", NIGHT).time_hhmm == "07:25"
     assert alarm_voice.parse("set an alarm for 7 every monday", NIGHT).repeat == "days:1"
+
+
+@pytest.mark.parametrize("text", ["turn my alarm up", "turn the alarm down", "turn the alarm up a bit", "switch my alarm louder"])
+def test_voice_volume_phrases_are_never_an_off(text):
+    assert alarm_voice.parse(text, NIGHT) is None, text
+
+
+def test_voice_off_still_needs_and_accepts_an_explicit_off_word():
+    assert alarm_voice.parse("turn the alarm off", NIGHT).action == "off"
+    assert alarm_voice.parse("switch my gym alarm off", NIGHT).target_label == "gym"
+    assert alarm_voice.parse("disable the alarm", NIGHT).action == "off"
+    assert alarm_voice.parse("stop the alarm", NIGHT).action == "off"
+
+
+def test_voice_weekday_ranges_expand_inclusively_and_wrap():
+    assert alarm_voice.parse("set an alarm for 7 every tuesday through thursday", NIGHT).repeat == "days:2,3,4"
+    assert alarm_voice.parse("set an alarm for 7 every friday to monday", NIGHT).repeat == "days:1,5,6,7"
+    assert alarm_voice.parse("set an alarm for 7 every monday and every saturday", NIGHT).repeat == "days:1,6"

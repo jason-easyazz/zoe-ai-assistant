@@ -35,15 +35,16 @@ _H = "|".join(_HOURS)
 _M = "|".join(sorted(_MINS, key=len, reverse=True))
 _WEEKDAY_NAMES = {"monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4, "friday": 5, "saturday": 6, "sunday": 7}
 
+_DAY_ALT = "|".join(_WEEKDAY_NAMES)
 _ALARM_WORD = re.compile(r"\balarms?\b|\bwake\s+(?:me|us)\b|\bsnooze\b|\bmore\s+minutes?\b")
 _LEAD = r"^\s*(?:(?:please|zoe|hey zoe|ok zoe|okay zoe|can you|could you|would you|will you|and)\s+)*"
 _WAKE = re.compile(r"\bwake\s+(?:me|us)(?:\s+up)?\b")
 _SNOOZE = re.compile(r"\bsnooze\b|^\s*(?:just\s+)?(\d{1,2}|" + "|".join(_HOURS) + r"|fifteen|twenty|thirty)\s+more\s+minutes?\s*$")
-_STOP = re.compile(r"\b(?:turn|switch|shut|stop|silence|dismiss|kill)(?:\s+(?:off|it))?\s+(?:the|my|this|that|our)?\s*alarm\b|"
+_STOP = re.compile(r"\b(?:(?:turn|switch|shut)\s+off|stop|silence|dismiss|kill)(?:\s+it)?\s+(?:the|my|this|that|our)?\s*alarm\b|"
                    r"\balarm\s+(?:off|stop)\b|\bstop\s+(?:the\s+)?alarm\b")
 _ON = re.compile(r"\b(?:turn|switch)\s+(?:on|back\s+on)\s+(?:the|my|our)?\s*(?:[\w:\s]*?)alarm\b|\b(?:turn|switch)\s+(?:the|my|our)\s+"
                  r"[\w:\s]*?alarm\s+(?:back\s+)?on\b|\bre-?enable\b.*\balarm\b")
-_OFF_WORD = re.compile(r"\b(?:turn|switch)\s+(?:off|the|my|our)\b[\w:\s]*?\balarm\b|\b(?:turn|switch)\s+off\b[\w:\s]*?\balarm\b|\bdisable\b"
+_OFF_WORD = re.compile(r"\b(?:turn|switch)\s+off\b[\w:\s]*?\balarm\b|\b(?:turn|switch)\s+(?:the|my|our)\b[\w:\s]*?\balarm\s+off\b|\bdisable\b"
                        r"[\w:\s]*?\balarm\b")
 _NOT_A_LABEL = frozenset({"my", "the", "all", "every", "other", "this", "that", "our", "next", "ringing", "current", "first", "last", "another",
                           "alarm", "snoozed"})
@@ -150,6 +151,9 @@ def _repeat_of(text: str) -> str:
         return "weekends"
     days = sorted({n for w, n in _WEEKDAY_NAMES.items() if re.search(rf"\b(?:every|each|on)\s+(?:[a-z]+\s+(?:and\s+)?)*?{w}s?\b", text)
                    or re.search(rf"\bevery\s+{w}\b", text)})
+    for m in re.finditer(rf"\b({_DAY_ALT})s?\s*(?:through|thru|to|until|till|-)\s*({_DAY_ALT})s?\b", text):  # "tuesday through thursday": inclusive, wraps past sunday
+        a, b = _WEEKDAY_NAMES[m.group(1)], _WEEKDAY_NAMES[m.group(2)]
+        days = sorted(set(days) | {(a - 1 + i) % 7 + 1 for i in range((b - a) % 7 + 1)})
     if days and re.search(r"\b(?:every|each)\b", text):
         return "days:" + ",".join(str(d) for d in days)
     if re.search(r"\b(?:every\s*day|daily|each\s+day|every\s+morning|every\s+night)\b", text):
