@@ -84,12 +84,14 @@ def humanize_when(then, now=None, tz: ZoneInfo | None = None) -> str:
     n = as_local(now, tz) if now is not None else datetime.now(tz)
     if t is None or n is None:
         return ""
-    delta = (n - t).total_seconds()
+    # Elapsed time from UTC instants: same-tzinfo subtraction is wall-clock and is an hour off across DST.
+    delta = (n.astimezone(timezone.utc) - t.astimezone(timezone.utc)).total_seconds()
     if delta < 0:
         if -delta <= _SKEW_S:
             return "just now"
         # Future-dated: never claim it was said in the past; give the plain date.
-        return f"on {t.day} {_MONTHS_FULL[t.month - 1]}"
+        year = f" {t.year}" if t.year != n.year else ""
+        return f"on {t.day} {_MONTHS_FULL[t.month - 1]}{year}"
     if delta < 180:
         return "just now"
     days = (n.date() - t.date()).days

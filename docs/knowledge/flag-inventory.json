@@ -9232,8 +9232,15 @@
         "readers": [
           "services/zoe-data/zoe_flue_client.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "bool"
+        },
         "typed_env": true
       },
       "ZOE_NVM_NODE_BIN": {

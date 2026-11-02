@@ -181,3 +181,18 @@ def test_recall_dates_already_use_local_calendar_days():
 
     epoch = _p(1, 20, 30).timestamp()  # 12:30 UTC on the 1st, yesterday locally
     assert rev.render_date(epoch, now=NOW.timestamp()) == "Sun 1 Nov, yesterday"
+
+
+def test_elapsed_time_is_real_across_a_dst_transition():
+    # Sydney springs forward 2026-10-04 02:00 -> 03:00. 01:30 and 03:30 wall-clock are 30 min apart,
+    # not 2 h: that is "a little while ago", not "this night".
+    then = datetime(2026, 10, 4, 1, 30, tzinfo=SYDNEY)
+    now = datetime(2026, 10, 4, 3, 30, tzinfo=SYDNEY)
+    assert (now.astimezone(timezone.utc) - then.astimezone(timezone.utc)).total_seconds() == 3600
+    assert tu.humanize_when(then, now, tz=SYDNEY) != "just now"
+    just = datetime(2026, 10, 4, 3, 1, tzinfo=SYDNEY)  # 01:59 -> 03:01 wall = 2 min real
+    assert tu.humanize_when(datetime(2026, 10, 4, 1, 59, tzinfo=SYDNEY), just, tz=SYDNEY) == "just now"
+
+
+def test_far_future_names_the_year():
+    assert tu.humanize_when(_p(5, 12, 0, month=2).replace(year=2027), NOW) == "on 5 February 2027"

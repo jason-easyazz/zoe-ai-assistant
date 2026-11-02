@@ -530,6 +530,7 @@ _ENTRIES = (
     _f('ZOE_NIGHT_MIND_PREFILL_TOK_S', 'float', 650.0, doc='docs/knowledge/night-mind.md'),
     _f('ZOE_NIGHT_MIND_SCHEMA', 'str', '', doc='docs/knowledge/night-mind.md'),
     _f('ZOE_NIGHT_MIND_URL', 'str', '', doc='docs/knowledge/night-mind.md'),
+    _f('ZOE_NOW_LINE', 'bool', True, doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_NVM_NODE_BIN', 'str', ''),
     _f('ZOE_OFFBOX_CHECKOUT', 'str', ''),
     _f('ZOE_OFFBOX_CONFIG_DIR', 'str', ''),
