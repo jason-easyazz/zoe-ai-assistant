@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+import zoneinfo
 
 import memory_service
 import proactive.triggers.emotional_followup as efu
@@ -208,9 +209,22 @@ async def test_synthetic_allowlist_opts_a_lab_user_back_in(wired, monkeypatch):
     assert [r.user_id for r in res] == ["demo_alice"]
 
 
-async def test_followup_context_carries_household_local_mention_wording(wired):
+async def test_followup_context_carries_household_local_mention_wording(wired, monkeypatch):
     """Owner report 2026-11-02: a worry from the day before was voiced as "this morning" because the composer got no time. The trigger now computes the wording in code."""
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")   # pin: the UTC+8 expectation must not depend on the host env
+    monkeypatch.setattr(efu, "_ZOE_TZ", zoneinfo.ZoneInfo("Australia/Perth"))
     wired([_moment("m9", "Someone has been anxious about a thing", valence="neg", intensity=0.9, age_h=26)])
     r = (await _run(_FakeDB(users=["u1"])))[0]
     assert r.context["mentioned"] == "yesterday afternoon"
     assert r.context["mentioned_at"].startswith("Sat 4 Jul 2026 12:00 (UTC+8")
+
+
+async def test_followup_omits_mention_fields_for_an_edited_row(wired):
+    """``added_at`` of an edited (review_memory) row is the re-save time, not when the worry was said: omit, never mislead."""
+    m = _moment("m10", "Someone has been anxious about a thing", valence="neg", intensity=0.9, age_h=26)
+    m.metadata["supersedes_id"] = "m0"
+    m.metadata["reviewed_at"] = m.metadata["added_at"]
+    wired([m])
+    r = (await _run(_FakeDB(users=["u1"])))[0]
+    assert "mentioned" not in r.context and "mentioned_at" not in r.context
+    assert r.context["fact"]
