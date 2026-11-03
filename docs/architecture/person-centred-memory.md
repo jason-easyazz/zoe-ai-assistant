@@ -1,6 +1,6 @@
 # Person-centred memory: contacts, profiles and the assistant that remembers people
 
-> Status: DESIGN (2026-11-02), no code. Owner ask: "memories and contacts - originally we pulled inspiration from a full
+> Status: DESIGN (2026-11-02); owner ACCEPTED all decisions D1-D12 on 2026-11-03 (section 6). Owner ask: "memories and contacts - originally we pulled inspiration from a full
 > open-source CRM for contacts, but I feel that has been lost. Memories are being created but not really assigned or
 > curated, set up properly, easy to read ... what do you know about me gives odd responses ... where do I go to see
 > everything about one contact ... birthday reminders, gift ideas ... think Samantha, think what an assistant would do."
@@ -271,20 +271,22 @@ right day, a wrong inferred fact is one-step correctable, a forgotten person nev
 
 ## 6. Owner decisions (each with a recommendation)
 
-| # | Decision | Recommendation |
-|---|---|---|
-| D1 | Inferred person facts: approve-before-write, or serve labelled "I think"? | **Approve-before-write** (your standing rule). Batch into one weekly card. User-stated facts write immediately. 22 approved rows today are `inferred`; leave them, label them, offer to confirm in bulk. |
-| D2 | Turn on birthday capture from conversation (`ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED`)? | **Yes**, after the phase-2 trigger fix, so a captured date has somewhere to go. |
-| D3 | Reminder lead times | 7 days + day-of; inner/family 14, 3 and day-of; per-person override by voice. |
-| D4 | Keep-in-touch cadence | **Opt-in only**, owner-set; no automatic cadence for anyone. |
-| D5 | Gift ideas | Only from stored, sourced likes and past-gift log; no web browsing or buying by default. |
-| D6 | Who hears what at the panel | Verified member: own contacts; guest/unverified: nothing; private classes counted not read; family-visible people: name, relationship and dates household-wide, facts personal-only. |
-| D7 | Children's profiles | Guardian-stated facts only, no inference, no health/mood facets, date reminders yes. |
-| D8 | Reuse Monica / Twenty code | **No** (AGPL-3.0, wrong stack). Shapes only. |
-| D9 | Retire the legacy `people.birthday / notes / preferences` columns | Yes: read-through one release, then drop (all 0 rows). |
-| D10 | Person page: new page or extend? | Extend `people.html` / `touch/people.html`. |
-| D11 | Name-only stubs (`person_pending`) | Ask ("is that the X you mentioned?") before promoting to a `people` row; never auto-create on a model's say-so. |
-| D12 | Phase order | 1 -> 2 -> 3 -> 4 -> 5; phase 6 follows the connectors work. If only one thing lands this week: phase 1 plus the birthday fix. |
+**ACCEPTED by the owner on 2026-11-03: every recommendation D1-D12 below, as written.**
+
+| # | Decision | Recommendation | Status |
+|---|---|---|---|
+| D1 | Inferred person facts: approve-before-write, or serve labelled "I think"? | **Approve-before-write** (your standing rule). Batch into one weekly card. User-stated facts write immediately. 22 approved rows today are `inferred`; leave them, label them, offer to confirm in bulk. | ACCEPTED 2026-11-03 |
+| D2 | Turn on birthday capture from conversation (`ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED`)? | **Yes**, after the phase-2 trigger fix, so a captured date has somewhere to go. | ACCEPTED 2026-11-03 |
+| D3 | Reminder lead times | 7 days + day-of; inner/family 14, 3 and day-of; per-person override by voice. | ACCEPTED 2026-11-03 |
+| D4 | Keep-in-touch cadence | **Opt-in only**, owner-set; no automatic cadence for anyone. | ACCEPTED 2026-11-03 |
+| D5 | Gift ideas | Only from stored, sourced likes and past-gift log; no web browsing or buying by default. | ACCEPTED 2026-11-03 |
+| D6 | Who hears what at the panel | Verified member: own contacts; guest/unverified: nothing; private classes counted not read; family-visible people: name, relationship and dates household-wide, facts personal-only. | ACCEPTED 2026-11-03 |
+| D7 | Children's profiles | Guardian-stated facts only, no inference, no health/mood facets, date reminders yes. | ACCEPTED 2026-11-03 |
+| D8 | Reuse Monica / Twenty code | **No** (AGPL-3.0, wrong stack). Shapes only. | ACCEPTED 2026-11-03 |
+| D9 | Retire the legacy `people.birthday / notes / preferences` columns | Yes: read-through one release, then drop (all 0 rows). | ACCEPTED 2026-11-03 |
+| D10 | Person page: new page or extend? | Extend `people.html` / `touch/people.html`. | ACCEPTED 2026-11-03 |
+| D11 | Name-only stubs (`person_pending`) | Ask ("is that the X you mentioned?") before promoting to a `people` row; never auto-create on a model's say-so. | ACCEPTED 2026-11-03 |
+| D12 | Phase order | 1 -> 2 -> 3 -> 4 -> 5; phase 6 follows the connectors work. If only one thing lands this week: phase 1 plus the birthday fix. | ACCEPTED 2026-11-03 |
 
 ## 7. References
 
