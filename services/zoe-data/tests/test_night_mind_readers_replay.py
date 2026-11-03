@@ -343,7 +343,7 @@ def test_R6_the_block_fits_its_budget_and_sits_after_the_stable_prefix(lab, monk
         assert block is not None, "the served packet must START with the unchanged prefix"
         assert block.startswith("\n## What I've noticed")
         assert got["packet"].startswith(off["packet"]) and base == off["packet"]
-        assert 1 <= got["night_notes"] <= nm.SHOW_LINES
+        assert 1 <= got["night_notes"] <= nm.SHOW_LINES <= 3                       # the documented 3-line limit, pinned independently of the constant
         assert nm.est_tokens(block) <= BLOCK_TOKEN_BUDGET, nm.est_tokens(block)
     assert route(ASK).get("night_notes")                                                 # the loop above was not vacuous
 
