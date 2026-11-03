@@ -174,7 +174,26 @@ could not be attested). There is NO Claude backend, and when
 every backend fails it exits **2** `cross-review unavailable` — never a skip, never a clean
 review. Phase timeouts are clamped to what remains of the caller's 2500 s
 (`CALLER_TIMEOUT_S`, mirrored from `pipeline_cross_review.py`). Offline tests with stubbed
-polly/codex/pi/gh: `tests/unit/test_cross_review_fallback.py`. The text below documents the
+polly/codex/pi/gh: `tests/unit/test_cross_review_fallback.py`.
+
+**A reviewer never runs in, and can never move, the live checkout** (incident 2026-11-02,
+ledger #2255: polly `git checkout FETCH_HEAD`'d an unmerged PR in the then-rw `/workspace`).
+Binding rules for this script and anything like it:
+- Every container reviewer's cwd is a per-review dir `~/.worktrees/review-<pr>-<pid>-XXXXXX`
+  (`CROSS_REVIEW_WORKTREE_ROOT`, refused if inside the live checkout); the PR head is a
+  DETACHED worktree at `<dir>/pr-head`, created on the HOST by
+  `fetch --no-write-fetch-head origin +refs/pull/<n>/head:refs/zoe-review/pr-<n>-<pid>` (its own
+  ref namespace, never `FETCH_HEAD`) and removed with its ref on exit; dead runs' dirs are swept
+  (marker file + dead pid only). Never `cd /workspace` / `-C /workspace` for a reviewer.
+- The PR head is a SUBDIR, not the cwd: the omnigent CLI puts its cwd on `sys.path` and codex
+  loads `AGENTS.md` from its cwd — PR content is data, never code or instructions.
+- Tripwire: live `HEAD` sha + symbolic ref recorded before the first backend, re-checked on
+  every exit; a change is `ALARM: LIVE CHECKOUT MODIFIED`, exit **3**, report withheld, and
+  NOTHING is auto-repaired. Only a same-branch fast-forward onto `refs/zoe-deploy/main` (the CD
+  deploy landing mid-review) is tolerated. Recovery runbook:
+  `docs/knowledge/omnigent-cross-review.md` → *Live checkout moved*.
+
+The text below documents the
 polly backend, `cross_review_polly.sh`, which kicks an Omnigent polly
 cross-review of a PR and prints the structured report. Its Claude auth is repaired by the
 owner runbook in `docs/knowledge/omnigent-cross-review.md` (out-of-repo env file read by
