@@ -163,7 +163,7 @@ TABLES: tuple[Store, ...] = (
     _t("ui_panel_sessions", METADATA, OUT_OF_SCOPE, "Which page a panel is on; ui_context can carry transient state, expires with the session."),
     _t("push_subscriptions", METADATA, OUT_OF_SCOPE, "A browser push endpoint and keys."),
     _t("auth_handoffs", METADATA, OUT_OF_SCOPE, "Short-lived hand-off tokens."),
-    _t("trust_audit", METADATA, OUT_OF_SCOPE, "Tool-call audit: tool name, allowed flag, reason."),
+    _t("trust_audit", METADATA, OUT_OF_SCOPE, "Never-built trust-gate audit log; never written, dropped by alembic 0065."),
     _t("agent_cost_events", METADATA, OUT_OF_SCOPE, "Token counts and cost per call."),
     _t("llm_call_log", METADATA, OUT_OF_SCOPE, "Latency and token counts per call."),
     _t("ui_actions", WORDS, GAP, "Action payloads (e.g. a typed list item) are kept; neither path reaches them."),
