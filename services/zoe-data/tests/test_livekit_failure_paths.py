@@ -9,7 +9,7 @@ injects fake modules into ``sys.modules`` and drives the real pipeline:
   and route through the existing ``llm_ok = False`` apology path (turn still
   completes, state still resets to COOLDOWN via ``_on_pipeline_done``);
 - an empty transcript must produce exactly one audible TTS message
-  ("Sorry, I didn't catch that.") before returning to ambient;
+  (a ``voice_phrases`` "reask" line) before returning to ambient;
 - if that feedback synth itself fails, behaviour degrades to today's silent
   return to ambient (never crashes the loop);
 - the happy path (working brain) is regression-locked unchanged.
@@ -25,8 +25,10 @@ import routers.voice_livekit as v
 
 pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
 
-_APOLOGY = "Sorry, I had trouble with that."
-_DIDNT_CATCH = "Sorry, I didn't catch that."
+# One voice for every tier: the lines come from voice_phrases.json, read here rather than re-typed.
+import voice_phrases as _vp  # noqa: E402
+_APOLOGY = _vp.say("turn_failed")
+_DIDNT_CATCH = _vp.say("reask", "sess-2:1")
 
 
 @pytest.fixture(autouse=True)
