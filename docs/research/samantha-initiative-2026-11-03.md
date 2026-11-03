@@ -215,15 +215,17 @@ A person who has lived with Zoe for years experiences continuity, timing, recogn
 
 **What to build first:** close the circuit between what Zoe knows and what she says (opportunity 1), make the turn feel judged rather than timed (2 and 3), and record outcomes so the loop can learn (4). Everything else in this record is sequenced behind those four because they produce the signal the rest needs.
 
-## 11. Owner decisions
+## 11. Owner decisions (DECIDED 2026-11-03, 22:40)
 
-1. `ZOE_NIGHT_MIND=serve` (readers on) after the replay gate.
-2. Make "no daytime 4B outside a person's turn" policy, and keep the harness off the household slot.
-3. Approve one owner lab hour for duck-decide-resume at the panel and a blind test of the tier phrase set.
-4. Approve the HA read token for presence and one mmWave sensor (A$5-40).
-5. Approve dev credits for the self-evolution Phase 1 improver (capped per night) once pass^k lands.
-6. Whether the "personal growth" layer (observing change in a person's inner state) is wanted at all; the lanes recommend not building it.
-7. The affective-memory tension: the 2026-10-05 decision (on for every member including children) vs the emotional-safety note §4 (nothing infers or keeps a child's emotional state). The record assumes the stricter note; confirm.
+The owner went with the recommendations on 1-6 and overruled 7.
+
+1. `ZOE_NIGHT_MIND=serve` after the replay gate. **Yes.**
+2. "No daytime 4B outside a person's turn" is policy; the harness stays off the household slot. **Yes.**
+3. One owner lab hour at the panel: duck-decide-resume live test + a blind test of the single tier phrase set. **Yes** (owner to pick the hour).
+4. A read-only Home Assistant token for presence now; one mmWave sensor when convenient; observed and inferred tables never merge. **Yes.**
+5. Capped dev credits for the first GEPA-style improver night, after pass^k and collateral-damage checks land on the bar. **Yes.**
+6. The "personal growth" layer (claims about change in a person's inner state): **not built for now**; chapters and the "us" line proceed.
+7. Affective memory for children: **the owner keeps it ON for every member** (`household` mode stays the default) and chose to test toward safety rather than switch it off: "we leave it on for everyone and we will have to test this; eventually we will get it to a point where it is safe for everyone." The emotional-safety note's section 4 is amended to record this; the lanes' stricter assumption no longer holds. Consequence for the work: the affect path for minors needs its own measured safety cells (false-positive rate on real speech, no retained row a guest can be linked to, one-step correction and forget) before any record about a child is served, and the drift and bench scorers must now include minor turns under a kid-safe rubric rather than skip them.
 
 ## 12. What this round could not do, and research continuity
 
