@@ -139,12 +139,15 @@ async def _call(said: str, facts: Sequence[str]) -> str:
     }
     import brain_slot_guard
 
-    # Post-turn pass on the brain's ONE slot: waits out a hot conversation (brain_slot_guard) so it cannot evict it.
-    async with brain_slot_guard.background_slot("structural_reader"):
+    async def _llm() -> str:
         async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
             resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
             resp.raise_for_status()
             return str(resp.json()["choices"][0]["message"]["content"] or "").strip()
+
+    # Post-turn pass on the brain's ONE slot: waits out a hot conversation and yields to a household turn that starts
+    # while it runs (brain_slot_guard.run_background) so it can neither evict nor delay the conversation.
+    return await brain_slot_guard.run_background("structural_reader", _llm)
 
 
 async def read_claims(said: str, facts: Sequence[str], *, lane: str = "turn_digest") -> list:

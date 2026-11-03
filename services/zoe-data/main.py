@@ -43,7 +43,6 @@ from routers.stubs import router as stubs_router
 from routers.push import router as push_router
 from routers.proactive import router as proactive_router
 from routers.system import (
-    start_openclaw_background_tasks,
     start_memory_digest_background,
     start_memory_consolidation_background,
     _agent_card_router,
@@ -59,7 +58,6 @@ logger = logging.getLogger(__name__)
 
 # Legacy variable kept for backward compatibility during transition
 _REQUEST_ID_CTX_VAR = None
-_openclaw_bg_task = None
 _digest_bg_task = None
 _consolidation_bg_task = None
 _runtime_health_task = None
@@ -1108,7 +1106,7 @@ async def _run_router_selftrain() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task, _loop_lag_task
+    global _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task, _loop_lag_task
 
     # First thing at startup: without this the root logger has no handler, so
     # every logger.info() in the service is discarded and WARNING+ falls through
@@ -1134,6 +1132,12 @@ async def lifespan(app: FastAPI):
             )
     except Exception as _env_exc:
         logger.warning("runtime_env bootstrap (non-fatal): %s", _env_exc)
+
+    # Fail loud on a retired ZOE_SPEAKER_MODEL (resemblyzer / dual / a typo): refuse to start rather than run a server that can
+    # recognise nobody. Deliberately outside any try/except (speaker_models.UnsupportedSpeakerModel carries the fix).
+    import speaker_models
+
+    logger.info("speaker model: %s", speaker_models.speaker_mode())
 
     logger.info("Initializing zoe-data database...")
     await init_db()
@@ -1185,7 +1189,6 @@ async def lifespan(app: FastAPI):
         logger.warning("memory embedder warmup failed (non-fatal): %s", _exc)
     await _run_memory_capture_startup_probe()
     asyncio.create_task(_memory_capture_retry_task(), name="memory_capture_retry")
-    _openclaw_bg_task = start_openclaw_background_tasks()
     _digest_bg_task = start_memory_digest_background()
     _consolidation_bg_task = start_memory_consolidation_background()
     # Idle-triggered "live → idle → store" consolidation (self-gates on
@@ -1269,6 +1272,15 @@ async def lifespan(app: FastAPI):
     except Exception as _omi_dr_exc:
         logger.warning("omi day review loop not started (non-fatal): %s", _omi_dr_exc)
 
+    try:  # wake-up alarms (flag-dark ZOE_ALARMS=off|on): the ring engine; docs/architecture/alarms.md
+        import alarm_music as _alarm_music
+        import alarms as _alarms
+        if _alarms.enabled():
+            _alarm_music.register()  # clock-radio music starts/stops with a ring
+            asyncio.create_task(_alarms.run_loop(), name="alarms_ring")
+    except Exception as _alarms_exc:
+        logger.warning("alarm ring loop not started (non-fatal): %s", _alarms_exc)
+
     # Runtime health probe — run once immediately, then refresh every 5 min
     await _probe_runtimes()
     _runtime_health_task = asyncio.create_task(_runtime_health_refresh_loop(), name="runtime_health_refresh")
@@ -1289,6 +1301,16 @@ async def lifespan(app: FastAPI):
         logger.info("Jetson Agent: Gemma KV cache warmup scheduled (fires in 8s)")
     except Exception as _wup_exc:
         logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
+
+    # Keep the household's brain prefix resident in the one llama slot between conversations (re-warms it after a helper
+    # batch / brain restart displaced it, so the next wake is a cache hit). ZOE_BRAIN_PREFIX_KEEPER (default on).
+    try:
+        import brain_prefix_keeper
+
+        if brain_prefix_keeper.enabled():
+            asyncio.create_task(brain_prefix_keeper.run_loop(), name="brain_prefix_keeper")
+    except Exception as _pk_exc:
+        logger.warning("Brain prefix keeper not started (non-fatal): %s", _pk_exc)
 
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
@@ -2078,7 +2100,7 @@ async def lifespan(app: FastAPI):
         logger.warning("zoe-core worker shutdown timed out (non-fatal)")
     except Exception:
         logger.warning("zoe-core worker shutdown failed (non-fatal)", exc_info=True)
-    for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task,
+    for task in (_digest_bg_task, _zoe_update_bg_task,
                  _consolidation_bg_task, _runtime_health_task, _loop_lag_task):
         if task and not task.done():
             task.cancel()
@@ -2329,6 +2351,9 @@ app.include_router(change_notices_router)
 # Zoe's own iPhone app, M0 (phone_app, ZOE_PHONE_APP, default off = every route 404s): pairing by panel QR + push-token registry.
 from routers.phone_app import router as phone_app_router  # noqa: E402
 app.include_router(phone_app_router)
+# Wake-up alarms (alarms, ZOE_ALARMS, default off = every route 404s): docs/architecture/alarms.md.
+from routers.alarms import router as alarms_router  # noqa: E402
+app.include_router(alarms_router)
 
 try:
     from routers.voice_livekit import router as voice_livekit_router
@@ -2435,6 +2460,16 @@ async def root_health():
             "detail": _pool_health_cache["detail"],
         },
     }
+    # Deploy quiet-wait signal (scripts/maintenance/wait_household_quiet.sh): seconds since the
+    # newest panel voice turn, null when none since this process started. A bare number, no
+    # household data; never allowed to fail /health.
+    try:
+        # Household-filtered stamp only: _VOICE_SESSIONS is refreshed by probe/harness panel commands too.
+        from voice_activity import last_activity_age_s
+        _age = last_activity_age_s()
+        body["last_voice_turn_age_s"] = None if _age is None else round(max(0.0, _age), 1)
+    except Exception:  # noqa: BLE001
+        body["last_voice_turn_age_s"] = None
     if not _pool_health_cache["healthy"]:
         return JSONResponse(body, status_code=503)
     return body

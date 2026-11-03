@@ -38,8 +38,8 @@ MEMBER = "member-sv-1"
 SENSITIVE = "The cardiologist appointment is on Friday."   # a health-class row the packet might carry
 SPEAKERS = {
     # (payload extras, claim accepted by the server?, expected verdict)
-    "verified_member": ({"voice_user_id": MEMBER, "voice_score": 0.91}, True, True),
-    "unverified_voice": ({"voice_user_id": MEMBER, "voice_score": 0.31}, False, False),
+    "verified_member": ({"voice_user_id": MEMBER, "voice_score": 0.91, "voice_model_id": "wespeaker_resnet34+i8qdq-u8s8+c1"}, True, True),
+    "unverified_voice": ({"voice_user_id": MEMBER, "voice_score": 0.10, "voice_model_id": "wespeaker_resnet34+i8qdq-u8s8+c1"}, False, False),
     "guest": ({"speaker": {"verified": False}}, False, False),
 }
 

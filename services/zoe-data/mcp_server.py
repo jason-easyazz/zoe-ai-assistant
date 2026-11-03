@@ -410,15 +410,6 @@ TOOLS = [
         },
     },
     {
-        "name": "zoe_sync_knowledge",
-        "description": (
-            "Regenerate ZOE_SELF.md and distribute to all agents (OpenClaw workspace, "
-            "Hermes SOUL.md, compact context file). Call this after adding new tools or "
-            "making architectural changes so all agents learn about them immediately."
-        ),
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
         "name": "a2a_delegate",
         "description": (
             "Delegate a task to a named peer agent via A2A federation. "
@@ -2069,14 +2060,6 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return result
         except Exception as exc:
             return {"error": f"Agent delegation failed: {exc}"}
-
-    elif name == "zoe_sync_knowledge":
-        try:
-            from agent_sync import run_agent_sync  # type: ignore[import]
-            result = await run_agent_sync()
-            return result
-        except Exception as exc:
-            return {"error": f"Agent sync failed: {exc}"}
 
     elif name == "greptile_pr_status":
         try:

@@ -202,12 +202,15 @@ def test_direct_url_compares_the_decoded_url_not_the_raw_string(monkeypatch) -> 
     assert _verdicts(f"pytest @ {manifest}\n") == {"pytest": "MISMATCH"}
 
 
-def test_py312_manifest_torch_line_is_a_checked_url_pin() -> None:
-    """Vacuity guard on the real manifest: the torch line must parse as a URL pin."""
+def test_py312_manifest_no_longer_carries_the_retired_speaker_stack() -> None:
+    """Resemblyzer, its torch wheel and its webrtcvad / librosa companions were retired with the server-side speaker encoder
+    (the live service runs ResNet34 ONNX, embedded on the panel). Vacuity guard: the manifest still parses and names the
+    packages that stay (scipy rides in with scikit-learn, kept for the joblib router-head fallback)."""
     text = (ROOT / "services" / "zoe-data" / "requirements-py312.txt").read_text(encoding="utf-8")
-    specs = {name: spec for name, spec, _ in drift.iter_requirements(text)}
-    assert specs["torch"].startswith("@ "), specs.get("torch")
-    assert drift.wheel_url_version(specs["torch"][1:].strip()) == "2.14.0+cpu"
+    specs = {name.lower(): spec for name, spec, _ in drift.iter_requirements(text)}
+    assert {"numpy", "onnxruntime", "scikit-learn", "scipy"} <= set(specs), sorted(specs)[:12]
+    for gone in ("torch", "resemblyzer", "webrtcvad-wheels", "webrtcvad", "librosa"):
+        assert gone not in specs, gone
 
 
 # ── extraneous distributions (installer-owned venvs) ───────────────────────

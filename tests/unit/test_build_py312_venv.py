@@ -58,8 +58,6 @@ def test_failed_damage_scan_aborts_the_build(tmp_path: Path) -> None:
     assert proc.returncode != 0, out
     assert "damage scan failed" in out
     assert "venv ready" not in out
-    # nothing after the failed scan ran: no phase-2 install reached uv
-    assert "--no-deps" not in (tmp_path / "uv-calls.log").read_text()
 
 
 def test_negative_control_clean_scan_completes(tmp_path: Path) -> None:
@@ -79,12 +77,9 @@ def test_damaged_names_are_reinstalled(tmp_path: Path) -> None:
     assert "--reinstall-package webrtcvad-wheels" in calls
 
 
-# --- --dry-run must resolve the phase-2 (--no-deps) pins too ----------------
-# The dry-run is what validate.yml's deps-resolvable job runs. It used to
-# resolve only the manifest, so an unavailable PHASE2_NO_DEPS pin passed CI and
-# failed first in the operator's real build (Codex, #1706). The fake uv below
-# fails `pip compile --no-deps` when its input names a pin listed in
-# FAKE_UV_UNRESOLVABLE — standing in for PyPI answering "no such version".
+# --- the retired Resemblyzer phase-2 install must stay gone ----------------------
+# The dry-run is what validate.yml's deps-resolvable job runs. Resemblyzer used to go in afterwards with --no-deps
+# (a "phase 2" the manifest never listed); it was retired with torch, and the build is one manifest install again.
 
 FAKE_UV = """#!/usr/bin/env bash
 echo "$*" >> "$FAKE_UV_LOG"
@@ -116,30 +111,13 @@ def _dry_run(tmp_path: Path, unresolvable: str = "") -> tuple[subprocess.Complet
     return proc, (log.read_text() if log.exists() else "")
 
 
-def _phase2_pins() -> list[str]:
-    import re
-    m = re.search(r"^PHASE2_NO_DEPS=\((.*)\)$", SCRIPT.read_text(), re.MULTILINE)
-    assert m, "PHASE2_NO_DEPS array not found in the script"
-    return re.findall(r'"([^"]+)"', m.group(1))
-
-
-def test_dry_run_fails_when_a_phase2_pin_does_not_resolve(tmp_path: Path) -> None:
-    pins = _phase2_pins()
-    assert pins, "vacuity guard: the script declares phase-2 pins"
-    proc, log = _dry_run(tmp_path, unresolvable=pins[0])
-    out = proc.stdout + proc.stderr
-    assert proc.returncode != 0, out
-    assert "phase 2" in out and "does NOT resolve" in out, out
-
-
-def test_negative_control_dry_run_resolves_the_real_phase2_pins(tmp_path: Path) -> None:
+def test_dry_run_resolves_only_the_manifest_and_no_phase2_remains(tmp_path: Path) -> None:
     proc, log = _dry_run(tmp_path)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    # the no-deps resolve actually ran, for the 3.12 aarch64 target, on the real pins
-    nodeps = [line for line in log.splitlines() if "--no-deps" in line and "compile" in line]
-    assert nodeps and "--python-version 3.12" in nodeps[0] and "aarch64" in nodeps[0], log
-    for pin in _phase2_pins():
-        assert pin in log.split("NO-DEPS INPUT:", 1)[1], log
+    assert "compile" in log and "--python-version 3.12" in log and "aarch64" in log, log   # the manifest resolve ran
+    assert "--no-deps" not in log and "phase 2" not in (proc.stdout + proc.stderr), log
+    text = SCRIPT.read_text()
+    assert "PHASE2_NO_DEPS" not in text and "resemblyzer" not in text.lower().replace("resemblyzer from before", "")
 
 
 # ── --refresh warms the semantic-router embedding cache (fastembed 0.8.1) ─────
@@ -233,7 +211,7 @@ def _refresh(tmp_path: Path, *, env_files: dict[str, str] | None = None,
 def test_refresh_warms_when_the_model_is_missing(tmp_path: Path) -> None:
     r, uv_calls, cache = _refresh(tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert uv_calls.count("pip install") >= 2, uv_calls  # both phases ran first
+    assert uv_calls.count("pip install") >= 1, uv_calls  # the manifest install ran first
     assert (cache / "PROBED").exists()  # asked fastembed's cache first...
     assert (cache / "LOADED").read_text() == "BAAI/bge-small-en-v1.5"  # ...then loaded it
     assert "warmed: dim=384" in r.stdout

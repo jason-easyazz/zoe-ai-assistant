@@ -5,9 +5,10 @@ matching (the panel cosine-matches locally against a synced profile cache and
 sends back only a claim):
 
 1. ``_accept_panel_voice_claim`` — the acceptance decision is SERVER-side:
-   a claim is honoured only when ``voice_score`` parses and meets
-   ``ZOE_SPEAKER_ID_THRESHOLD`` (read per call). A panel can never lower the
-   bar by sending a doctored payload shape.
+   a claim is honoured only when it names the acting model (ResNet34; the retired
+   Resemblyzer is never honoured), ``voice_score`` parses and meets that model's
+   length-group bar (``ZOE_SPEAKER_RESNET34_THRESHOLD_*``, read per call). A panel
+   can never lower the bar by sending a doctored payload shape.
 2. ``GET /api/voice/profiles/sync`` — hands out biometric embeddings, so it
    is device-token-only (a browser session gets 403) and returns ONLY
    consented rows (``consent_at IS NOT NULL``) plus the server threshold.
@@ -25,7 +26,10 @@ import contextlib
 import sys
 import types
 
+import numpy as np
 import pytest
+
+from speaker_models import RESNET34_MODEL_ID as R34
 
 pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
 
@@ -38,15 +42,30 @@ from routers.voice_tts import _accept_panel_voice_claim, voice_profiles_sync
 DEVICE_CALLER = {"source": "device", "panel_id": "zoe-touch-pi", "user_id": "voice-daemon", "via_relay": False, "via_tunnel": False}
 
 
-def test_claim_accepted_at_threshold(monkeypatch):
-    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.82")
-    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.82}, DEVICE_CALLER) == "jason"
-    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.99}, DEVICE_CALLER) == "jason"
+def _claim(score, user="jason", **extra):
+    """A panel claim in the acting model's space, on a clip longer than 2 s (the 0.265 bar)."""
+    return {"voice_user_id": user, "voice_score": score, "voice_model_id": R34, "voice_speech_s": 3.0, **extra}
 
 
-def test_claim_rejected_below_threshold(monkeypatch):
-    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.82")
-    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.8199}, DEVICE_CALLER) is None
+@pytest.fixture(autouse=True)
+def _default_resnet34_bars(monkeypatch):
+    for k in ("TIER", "THRESHOLD_SHORT", "THRESHOLD_LONG"):
+        monkeypatch.delenv("ZOE_SPEAKER_RESNET34_" + k, raising=False)
+    monkeypatch.delenv("ZOE_SPEAKER_MODEL", raising=False)
+
+
+def test_claim_accepted_at_threshold():
+    assert _accept_panel_voice_claim(_claim(0.265), DEVICE_CALLER) == "jason"
+    assert _accept_panel_voice_claim(_claim(0.99), DEVICE_CALLER) == "jason"
+
+
+def test_claim_rejected_below_threshold():
+    assert _accept_panel_voice_claim(_claim(0.2649), DEVICE_CALLER) is None
+
+
+def test_a_claim_naming_no_model_or_the_retired_one_is_never_honoured():
+    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.99}, DEVICE_CALLER) is None
+    assert _accept_panel_voice_claim(_claim(0.99, voice_model_id="resemblyzer"), DEVICE_CALLER) is None
 
 
 @pytest.mark.parametrize("caller", [
@@ -58,36 +77,37 @@ def test_claim_rejected_below_threshold(monkeypatch):
 def test_claim_rejected_for_non_device_callers(monkeypatch, caller):
     # Security invariant: only device-token callers may claim a speaker
     # identity — a browser session with a perfect score is still ignored.
-    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.0")
-    assert _accept_panel_voice_claim({"voice_user_id": "admin", "voice_score": 0.99}, caller) is None
+    monkeypatch.setenv("ZOE_SPEAKER_RESNET34_THRESHOLD_LONG", "0.0")
+    assert _accept_panel_voice_claim(_claim(0.99, user="admin"), caller) is None
+    assert _accept_panel_voice_claim(_claim(0.99, user="admin"), DEVICE_CALLER) == "admin"    # negative control: same payload, device token
 
 
 def test_claim_threshold_is_read_per_call(monkeypatch):
-    payload = {"voice_user_id": "jason", "voice_score": 0.85}
-    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.9")
+    payload = _claim(0.85)
+    monkeypatch.setenv("ZOE_SPEAKER_RESNET34_THRESHOLD_LONG", "0.9")
     assert _accept_panel_voice_claim(payload, DEVICE_CALLER) is None
-    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.8")
+    monkeypatch.setenv("ZOE_SPEAKER_RESNET34_THRESHOLD_LONG", "0.8")
     assert _accept_panel_voice_claim(payload, DEVICE_CALLER) == "jason"
 
 
 @pytest.mark.parametrize("payload", [
     None,
     {},
-    {"voice_user_id": "", "voice_score": 0.99},
-    {"voice_user_id": "jason"},                        # no score at all
-    {"voice_user_id": "jason", "voice_score": None},
-    {"voice_user_id": "jason", "voice_score": "high"},  # unparseable score
+    {"voice_user_id": "", "voice_score": 0.99, "voice_model_id": R34},
+    {"voice_user_id": "jason", "voice_model_id": R34},                        # no score at all
+    {"voice_user_id": "jason", "voice_score": None, "voice_model_id": R34},
+    {"voice_user_id": "jason", "voice_score": "high", "voice_model_id": R34},  # unparseable score
 ])
 def test_claim_ignored_without_valid_score(payload, monkeypatch):
-    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.0")
+    monkeypatch.setenv("ZOE_SPEAKER_RESNET34_THRESHOLD_LONG", "0.0")
     # Even a zero threshold must not accept a claim that carries no real score.
     assert _accept_panel_voice_claim(payload, DEVICE_CALLER) is None
 
 
 def test_unparseable_threshold_falls_back_to_default(monkeypatch):
-    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "not-a-float")
-    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.83}, DEVICE_CALLER) == "jason"
-    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.81}, DEVICE_CALLER) is None
+    monkeypatch.setenv("ZOE_SPEAKER_RESNET34_THRESHOLD_LONG", "not-a-float")      # an override that cannot parse never loosens the bar
+    assert _accept_panel_voice_claim(_claim(0.27), DEVICE_CALLER) == "jason"
+    assert _accept_panel_voice_claim(_claim(0.26), DEVICE_CALLER) is None
 
 
 # ── 1b. consent re-check on the claim path ─────────────────────────────────
@@ -215,11 +235,12 @@ async def test_sync_rejects_browser_sessions(monkeypatch):
 async def test_sync_returns_consented_profiles_and_threshold(monkeypatch):
     monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.87")
     db = _install_fake_db(monkeypatch, [
-        ("jason", "Jason", EMB_JASON, 3),
-        ("zoe-kid", "Kiddo", EMB_ZOE, None),
+        ("jason", "Jason", EMB_JASON, 3, R34),
+        ("zoe-kid", "Kiddo", EMB_ZOE, None, R34),
+        ("old-voice", "Old", EMB_ZOE, 3, "resemblyzer"),       # a retired-model row is never served
     ])
 
-    out = await voice_profiles_sync(caller=dict(DEVICE_CALLER))
+    out = await voice_profiles_sync(models=R34, caller=dict(DEVICE_CALLER))
 
     assert out["ok"] is True
     assert out["threshold"] == pytest.approx(0.87)
@@ -236,7 +257,7 @@ class _WriteDB(_FakeDB):
     """Execute double for the enroll path.
 
     ``existing_row`` selects the branch: None → INSERT (new profile);
-    a (id, embedding_blob, sample_count) tuple → the UPDATE/re-enroll path.
+    an (id,) tuple → the UPDATE/re-enroll path.
     """
 
     def __init__(self, existing_row=None):
@@ -274,12 +295,16 @@ def _wire_enroll(monkeypatch, db):
     mod = types.ModuleType("db_compat")
     mod.get_compat_db = fake_ctx
     monkeypatch.setitem(sys.modules, "db_compat", mod)
-    monkeypatch.setattr(voice_tts, "_compute_resemblyzer_embedding", lambda _p: EMB_JASON)
+
+
+EMB_R34 = (np.arange(256, dtype=np.float32) / np.linalg.norm(np.arange(256, dtype=np.float32))).tobytes()
 
 
 def _enroll_payload(consent):
     p = {
-        "audio_base64": base64.b64encode(b"RIFF-fake-wav").decode(),
+        "embedding_base64": base64.b64encode(EMB_R34).decode(),      # a finished panel-built profile
+        "model_id": R34,
+        "sample_count": 5,
         "user_id": "jason",
         "display_name": "Jason",
     }
@@ -303,7 +328,7 @@ async def test_enroll_insert_stamps_consent_only_when_given(monkeypatch, consent
     assert ("consent_at" in inserts[0]) is expect_stamp
 
 
-EXISTING = ("pid-old", EMB_JASON, 2)  # (id, embedding_blob, sample_count)
+EXISTING = ("pid-old",)  # (id,)
 
 
 @pytest.mark.asyncio

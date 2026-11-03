@@ -95,12 +95,13 @@ edge-tts==7.2.8
 # first load the venv fetches 0.1.3's own model bundle, `quantized_26_07_30`
 # (~/.cache/moonshine_voice/…/medium-streaming-en/) — the one the box already uses.
 moonshine-voice==0.1.3
+# transformers is imported by NO runtime code (voice_turn.py computes the Whisper log-mel in numpy); it stays pinned only
+# for tests/test_voice_turn_logmel_parity.py (bit-parity against WhisperFeatureExtractor) and is NOT loaded in the service.
 transformers==5.17.0
 fastembed==0.8.1
 # scikit-learn/joblib: NOT imported at runtime (router heads are numpy since
-# 2026-09-27, router_heads_numpy.py). Installed anyway as librosa requirements
-# (Resemblyzer block below); held at the training pins while the one-release
-# ZOE_ROUTER_HEADS_BACKEND=joblib fallback can still unpickle the .joblib heads.
+# 2026-09-27, router_heads_numpy.py). Kept (with scipy, below) because the one-release
+# ZOE_ROUTER_HEADS_BACKEND=joblib fallback still unpickles the .joblib heads; held at the training pins.
 scikit-learn==1.7.2
 joblib==1.5.3
 # APScheduler 3.11.3 since 2026-10-28 (NOT 4.x, which is alpha). The 3.10.4 hold was a DATA hazard:
@@ -130,24 +131,9 @@ prometheus-client==0.26.0
 # drift-optional: mcp_server.py imports it inside try/except for the status tool.
 psutil==7.2.2
 
-# ── Resemblyzer (speaker ID) — the ONE package that needs a two-phase install ─
-# Resemblyzer 0.1.4 declares `webrtcvad>=2.0.10`, `torch>=1.0.1`, `librosa`,
-# `numpy`, `scipy`, `typing`. Three of those are wrong for a 3.12 venv:
-#   * webrtcvad 2.0.10 is sdist-only AND its module does `import pkg_resources`
-#     at import time. setuptools 84 (what torch pulls) no longer ships
-#     pkg_resources, so the sdist builds with gcc and then FAILS TO IMPORT
-#     (measured). `webrtcvad-wheels` 2.0.14 is the maintained fork: same
-#     `_webrtcvad` extension, no pkg_resources, cp312 aarch64 wheel.
-#   * torch on PyPI for aarch64 became a 454 MB CUDA-13 bundle (+ nvidia-*-cu13,
-#     triton) from 2.9; the CPU build lives on the PyTorch CPU index. Pinned to
-#     the exact wheel so no index-precedence rule can swap it.
-#   * `typing` is the py2 backport; it must not be installed on 3.12.
-# So the build script installs this file, then `resemblyzer==0.1.4 --no-deps`.
-webrtcvad-wheels==2.0.14.post1
-torch @ https://download.pytorch.org/whl/cpu/torch-2.14.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl
-# librosa 1.0.0 (>=3.12 only, API removals) is what an uncapped resolve picks on
-# this interpreter; Resemblyzer was written against 0.x, so it is held.
-librosa==0.11.0
+# scipy: required by scikit-learn (kept for the joblib router-head fallback above); nothing imports it directly.
+# Resemblyzer, torch, librosa and webrtcvad-wheels were RETIRED here (2026-10): the server embeds no audio any more
+# (speaker ID is WeSpeaker ResNet34 ONNX on the panel), and torch was ~360 MB RSS when loaded. Kokoro keeps its own venv.
 scipy==1.17.1
 
 # ── WebRTC / LiveKit ──────────────────────────────────────────────────────
