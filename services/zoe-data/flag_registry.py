@@ -688,6 +688,8 @@ _ENTRIES = (
     _f('ZOE_READINESS_TIMEOUT_S', 'float', 4.0),
     _f('ZOE_RECALL_DURABLE_NO_DECAY', 'bool', True, doc='docs/knowledge/zoe-memory-bench.md'),
     _f('ZOE_RECALL_EVIDENCE', 'bool', False, doc='docs/knowledge/recall-gate.md'),
+    _f('ZOE_RECALL_EVERY_TURN', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/recall-every-turn.md', note='live: unset (code default in force)'),
+    _f('ZOE_RECALL_EVERY_TURN_HARNESS', 'bool', False, doc='docs/knowledge/recall-every-turn.md', note='measured bar runs only'),
     _f('ZOE_RECALL_GATE', 'str', 'shadow', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/recall-gate.md', note='live: unset (code default in force)'),
     _f('ZOE_RECALL_PRESENT_STATE_SHAPES', 'str', '', doc='docs/architecture/beat-the-bar-2026-program.md'),
     _f('ZOE_RELATIONSHIP_GRAPH_ENABLED', 'str', '', doc='docs/knowledge/relationship-memory-flag-enable.md'),
