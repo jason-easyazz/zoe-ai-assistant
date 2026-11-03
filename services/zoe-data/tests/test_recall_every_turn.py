@@ -92,10 +92,18 @@ def clean(monkeypatch):
     asyncio.run(rt.drain())
 
 
-def pick(message, rows, uid=UID, **kw):
+def pick(message, rows, uid=UID, voice=False, **kw):
+    """One turn against a WARM index (the index is built first whenever the turn is eligible; ``svc.reads`` then counts only
+    what the turn itself read)."""
     rt._reset_state()                     # a new world: no index from another one
     svc = FakeSvc(rows, **kw)
-    return asyncio.run(rt.select(uid, message, svc=svc)), svc
+
+    async def go():
+        if not rt.eligible(uid, message, voice):
+            await rt._build(uid.strip(), svc)
+        svc.reads = 0
+        return await rt.select(uid, message, voice=voice, svc=svc)
+    return asyncio.run(go()), svc
 
 
 def world():
@@ -127,7 +135,7 @@ def test_off_reads_nothing():
                                      "Good morning", "Play some music", "What's twelve times four?"])
 def test_the_gate_rejects_turns_the_rows_do_not_touch(message):
     sel, svc = pick(message, world())
-    assert svc.reads == 1 and sel.pool == 6           # the pool WAS read: the empty result is the gate's
+    assert sel.pool == 6 and sel.skipped == ""        # the member's pool WAS searched: the empty result is the gate's
     assert sel.ids == () and sel.block() == ""
 
 
@@ -181,6 +189,16 @@ def test_an_unverified_voice_is_a_guest():
         assert pick(ASK, world())[0].ids == ("m_walk_0001",)
     finally:
         restraint._VERDICT.reset(tok)
+
+
+def test_a_spoken_turn_needs_a_confirmed_speaker():
+    assert pick(ASK, world(), voice=True)[0].skipped == "unverified"          # no verdict is not a yes
+    tok = restraint._VERDICT.set(True)
+    try:
+        assert pick(ASK, world(), voice=True)[0].ids == ("m_walk_0001",)    # control: a confirmed voice
+    finally:
+        restraint._VERDICT.reset(tok)
+    assert pick(ASK, world(), voice=False)[0].ids == ("m_walk_0001",)       # a typed turn (signed-in session) carries no verdict
 
 
 def test_an_off_record_turn_gets_nothing(monkeypatch):
@@ -275,6 +293,8 @@ def test_a_tombstoned_name_never_enters(monkeypatch):
 
 def _same_store_turns(svc, *messages):
     async def go():
+        if UID not in rt._INDEX:
+            await rt._build(UID, svc)
         return [await rt.select(UID, m, svc=svc) for m in messages]
     return asyncio.run(go())
 
@@ -327,6 +347,8 @@ def test_a_new_row_appears_after_the_refresh(monkeypatch):
 def test_the_index_never_crosses_members():
     svc = FakeSvc(world() + [row("m_oth_0001", "User's ferret Pickles sleeps in the laundry.", uid=OTHER)])
     async def go():
+        await rt._build(UID, svc)
+        await rt._build(OTHER, svc)
         a = await rt.select(UID, "Did Pickles eat today?", svc=svc)
         b = await rt.select(OTHER, "Did Pickles eat today?", svc=svc)
         return a, b
@@ -374,11 +396,37 @@ def test_a_long_row_is_cut():
     assert sel.ids == ("m_long_0001",) and len(sel.texts[0]) <= rt.ROW_CHARS + 1
 
 
-def test_a_slow_pool_read_is_no_block(monkeypatch):
+def test_a_cold_index_is_never_waited_for(monkeypatch):
+    svc = FakeSvc(world(), delay=1.0)                                 # a whole-pool read that takes a second
+
+    async def go():
+        t0 = time.perf_counter()
+        sel = await rt.select(UID, ASK, svc=svc)
+        waited = time.perf_counter() - t0
+        await asyncio.gather(*list(rt._BUILDS.values()))              # the build carried on in the background
+        svc.delay = 0.0
+        return sel, waited, await rt.select(UID, ASK, svc=svc)
+    cold, waited, warm = asyncio.run(go())
+    assert cold.skipped == "warming" and cold.ids == () and waited < 0.1
+    assert warm.ids == ("m_walk_0001",)                               # the next turn has it
+
+
+def test_a_slow_recheck_is_no_block(monkeypatch):
     monkeypatch.setattr(rt, "POOL_TIMEOUT_S", 0.05)
-    t0 = time.perf_counter()
-    sel, _ = pick(ASK, world(), delay=1.0)
-    assert sel.skipped == "timeout" and time.perf_counter() - t0 < 0.5
+    svc = FakeSvc(world())
+
+    async def go():
+        await rt._build(UID, svc)
+        svc.delay = 1.0
+        t0 = time.perf_counter()
+        return await rt.select(UID, ASK, svc=svc), time.perf_counter() - t0
+    sel, waited = asyncio.run(go())
+    assert sel.ids == () and sel.skipped == "error" and waited < 0.5
+
+
+def test_a_row_over_the_budget_never_enters_not_even_first(monkeypatch):
+    monkeypatch.setattr(rt, "BUDGET_TOKENS", 10)
+    assert pick(ASK, world())[0].ids == ()
 
 
 def test_a_block_cannot_close_itself_early():
@@ -405,7 +453,9 @@ def test_shadow_injects_nothing_and_logs_ids_and_sizes_only(monkeypatch):
     lg.setLevel(logging.INFO)
     try:
         async def go():
-            out = await rt.block_for(UID, ASK, svc=FakeSvc(world()))
+            svc = FakeSvc(world())
+            await rt._build(UID, svc)
+            out = await rt.block_for(UID, ASK, svc=svc)
             await rt.drain()
             return out
         assert asyncio.run(go()) == ""
@@ -424,6 +474,7 @@ def test_shadow_injects_nothing_and_logs_ids_and_sizes_only(monkeypatch):
 @pytest.fixture
 def sent(monkeypatch):
     svc = FakeSvc(world())
+    asyncio.run(rt._build(UID, svc))                                  # a warm index, as after the wake prewarm
     import memory_service
 
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)

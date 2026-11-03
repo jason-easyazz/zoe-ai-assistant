@@ -2733,7 +2733,8 @@ async def _run_flue_brain_streaming_turn(
                                        ("continuity", continuity_block or continuity_turn), ("hop", hop_block),
                                        ("offer", offer_block), ("risk", risk_block), ("raise", raise_block),
                                        ("brief", kwargs.get("day_brief_block"))) if b)
-    every_turn_block = await recall_every_turn.block_for(uid, message, claimed_by=_claimed)
+    every_turn_block = await recall_every_turn.block_for(uid, message, claimed_by=_claimed,
+                                                         voice=bool(kwargs.get("voice_mode")))
     # Fast-path exchanges (reminder, "what do you know about me", ...) the brain never saw (flue_fastpath_context.py): without them a
     # follow-up like "thank you" / "no" reached the brain with nothing to follow. Context beside the other blocks, same session + member only.
     import flue_fastpath_context

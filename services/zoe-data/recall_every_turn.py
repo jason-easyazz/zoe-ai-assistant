@@ -4,8 +4,8 @@ Both recall injectors on the Flue lane are trigger-gated, and real household spe
 (docs/knowledge/recall-not-firing-2026-10-29.md). On a household turn NO other memory block claimed, this adds the member's own durable
 facts that the turn's words touch, as one small block after the user's words. Every rule is reused, none is decided here:
 
-* **Who**: household traffic (``traffic_class``), an identified member, a voice the speaker gate did not reject (an unverified voice
-  is a guest), not an off-record turn. Anything else: no read at all.
+* **Who**: household traffic (``traffic_class``), an identified member, on a spoken turn a speaker the gate CONFIRMED (no verdict is
+  not a yes; an unverified voice is a guest), not an off-record turn. Anything else: no read at all.
 * **Which rows**: ``load_durable_for_hop`` (the member's OWN approved durable rows, authority >= owner-derived: inferred never), minus
   every private class (``provenance_answers``) and off-the-wall restraint class (``panel_review_cards.OFF_THE_WALL``), every muted
   topic, every forgotten / tombstoned name (fails closed); a row about another person only when the owner's words pull it.
@@ -15,8 +15,8 @@ facts that the turn's words touch, as one small block after the user's words. Ev
 * **Cost**: the pool's features are cached per member (``_Index``); per turn = set intersections + one by-id RE-READ of the picks
   (``MemoryService.recheck_durable``), so a correction or a forget is honoured on the very next turn.
 
-Modes: ``off`` = nothing runs, today's bytes. ``shadow`` = measured in the background, nothing injected. ``on`` = injected (bounded
-by ``POOL_TIMEOUT_S``) where the hop block rides, behind the system prompt, tools and history: the prompt-cache prefix and the wake
+Modes: ``off`` = nothing runs, today's bytes. ``shadow`` = measured in the background, nothing injected. ``on`` = injected (a cold
+index is never waited for) where the hop block rides, behind the system prompt, tools and history: the prompt-cache prefix and the wake
 warm (``prefix_key``) are untouched; the ``[MEMORY CONTEXT`` delimiters let the sidecar elide it from older turns. In shadow and on,
 every eligible household brain turn writes one ``RECALL_EVERY_TURN`` coverage line (rows the words touch, which other block fired as
 ``claimed``, ``injected``) - ids, counts and sizes only, never text. Never raises: fail-closed to "no block".
@@ -41,7 +41,7 @@ MAX_ROWS = 3
 BUDGET_TOKENS = 90
 #: a row longer than this is cut at a word boundary
 ROW_CHARS = 160
-#: a cold index build / the by-id recheck: on the voice path the turn never waits longer than this for either
+#: the by-id recheck of the picks: on the voice path the turn never waits longer than this for it
 POOL_TIMEOUT_S = 0.25
 #: a longer message (a paste) is not scanned
 MAX_MESSAGE_CHARS = 512
@@ -100,8 +100,9 @@ def harness_admitted() -> bool:
     return env_bool("ZOE_RECALL_EVERY_TURN_HARNESS", False)
 
 
-def eligible(user_id: str, message: str) -> str:
-    """'' when this turn may carry the block, else the reason it may not. Pure but for the context variables it reads."""
+def eligible(user_id: str, message: str, voice: bool = False) -> str:
+    """'' when this turn may carry the block, else the reason it may not. ``voice``: a spoken turn, which needs the speaker gate's
+    CONFIRMED verdict (voice is a password: no verdict is not a yes). Pure but for the context variables it reads."""
     import traffic_class
 
     uid = (user_id or "").strip()
@@ -117,7 +118,8 @@ def eligible(user_id: str, message: str) -> str:
         return "not_household"
     import restraint
 
-    if restraint.current_verdict() is False:
+    verdict = restraint.current_verdict()
+    if verdict is False or (voice and verdict is not True):
         return "unverified"
     import memory_provenance
 
@@ -245,18 +247,13 @@ def prewarm(user_id: str) -> None:
 
 
 async def _index(uid: str, svc: Any) -> Optional[_Index]:
-    """The member's index: fresh -> as is; stale -> as is, with a background refresh; none -> wait for the build at most
-    ``POOL_TIMEOUT_S`` (the build carries on for the next turn). None = not ready."""
+    """The member's index: fresh -> as is; stale -> as is, with a background refresh; none -> None at once, with the build started
+    in the background (the turn never waits for a whole-pool read: that turn simply carries no block; the wake warm prewarms)."""
     ix = _INDEX.get(uid)
     if ix is not None and time.monotonic() - ix.built <= INDEX_TTL_S:
         return ix
-    task = _build_task(uid, svc)
-    if ix is not None:
-        return ix
-    try:
-        return await asyncio.wait_for(asyncio.shield(task), timeout=POOL_TIMEOUT_S)
-    except asyncio.TimeoutError:
-        return None
+    _build_task(uid, svc)
+    return ix
 
 
 def _ranked(ix: _Index, message: str) -> list:
@@ -279,10 +276,10 @@ def _ranked(ix: _Index, message: str) -> list:
     return [c for _o, c in out]
 
 
-async def select(user_id: str, message: str, *, svc: Any = None) -> Selection:
+async def select(user_id: str, message: str, *, voice: bool = False, svc: Any = None) -> Selection:
     """The rows this turn would carry. Never raises."""
     try:
-        why = eligible(user_id, message)
+        why = eligible(user_id, message, voice)
         if why:
             return Selection(skipped=why)
         uid = user_id.strip()
@@ -293,7 +290,7 @@ async def select(user_id: str, message: str, *, svc: Any = None) -> Selection:
         svc = svc or get_memory_service()
         ix = await _index(uid, svc)
         if ix is None:
-            return Selection(skipped="timeout")
+            return Selection(skipped="warming")
         picks = _ranked(ix, message)[: MAX_ROWS * 3]
         if not picks:
             return Selection(pool=len(ix.rows))
@@ -310,7 +307,7 @@ async def select(user_id: str, message: str, *, svc: Any = None) -> Selection:
                 continue
             shown = _cut(c.text)
             cost = recall_gate.est_tokens(shown)
-            if ids and tokens + cost > BUDGET_TOKENS:
+            if tokens + cost > BUDGET_TOKENS:
                 continue
             ids.append(c.id)
             texts.append(shown)
@@ -336,9 +333,9 @@ def _log(user_id: str, sel: Selection, m: str, ms: float, claimed: str = "", inj
                 claimed or "-", int(injected), sel.skipped or "-")
 
 
-async def _shadow(user_id: str, message: str, svc: Any, m: str = "shadow", claimed: str = "") -> None:
+async def _shadow(user_id: str, message: str, svc: Any, m: str = "shadow", claimed: str = "", voice: bool = False) -> None:
     t0 = time.perf_counter()
-    sel = await select(user_id, message, svc=svc)
+    sel = await select(user_id, message, voice=voice, svc=svc)
     _log(user_id, sel, m, (time.perf_counter() - t0) * 1000.0, claimed)
 
 
@@ -358,7 +355,7 @@ async def drain() -> None:
         await asyncio.gather(*list(_PENDING), return_exceptions=True)
 
 
-async def block_for(user_id: str, message: str, *, claimed_by: str = "", svc: Optional[Any] = None) -> str:
+async def block_for(user_id: str, message: str, *, claimed_by: str = "", voice: bool = False, svc: Optional[Any] = None) -> str:
     """The turn's block ('' when off, in shadow, ineligible, or nothing passed the gate). ``claimed_by``: the other memory blocks
     this turn already carries (comma list) - then nothing is injected (one memory block per turn) and the selection only MEASURES,
     in the background, so the coverage line covers every household turn. Never raises."""
@@ -367,10 +364,10 @@ async def block_for(user_id: str, message: str, *, claimed_by: str = "", svc: Op
         if m == "off":
             return ""
         if m == "shadow" or claimed_by:
-            _spawn(_shadow(user_id, message, svc, m, claimed_by))
+            _spawn(_shadow(user_id, message, svc, m, claimed_by, voice))
             return ""
         t0 = time.perf_counter()
-        sel = await select(user_id, message, svc=svc)
+        sel = await select(user_id, message, voice=voice, svc=svc)
         _log(user_id, sel, "on", (time.perf_counter() - t0) * 1000.0, injected=bool(sel.texts))
         if sel.texts:
             try:   # BM5: "why did you say that?" names the rows this reply stood on

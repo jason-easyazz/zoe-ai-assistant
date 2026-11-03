@@ -77,6 +77,7 @@ def _patch_world():
 
 
 async def _turns(svc, user, turns, rt, zc):
+    await rt._build(user, svc)                # warm, as after the wake prewarm (a cold turn carries nothing by design)
     out = []
     for msg, needle in turns:
         t0 = time.perf_counter()
