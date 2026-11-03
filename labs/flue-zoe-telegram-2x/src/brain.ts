@@ -136,10 +136,18 @@ export function sessionFor(chatId: number): string {
  * resolver. Returns the user_id string if the sender has linked their account,
  * or null if not linked (they must set their telegram_id in Zoe settings).
  */
+// Every call into zoe-data carries a deadline: a stalled zoe-data used to hang that chat's handler
+// forever (no signal on any fetch, 2026-11-02). The turn gets the long one; a slow brain turn is
+// tens of seconds, never minutes.
+const DATA_TIMEOUT_MS = 15_000;
+const TURN_TIMEOUT_MS = 180_000;
+const MEDIA_TIMEOUT_MS = 90_000;
+
 export async function resolveTelegramUser(telegramId: number): Promise<string | null> {
   const res = await fetch(`${DATA_URL}/api/system/resolve-telegram/${telegramId}`, {
     method: 'GET',
     headers: internalHeaders(),
+    signal: AbortSignal.timeout(DATA_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`resolve-telegram ${res.status} ${await res.text().catch(() => '')}`);
@@ -168,6 +176,7 @@ export async function consumeLinkToken(
       telegram_id: String(telegramId),
       telegram_username: telegramUsername ?? null,
     }),
+    signal: AbortSignal.timeout(DATA_TIMEOUT_MS),
   });
   if (res.status === 400) return null; // invalid / expired token
   if (!res.ok) throw new Error(`consume-link-token ${res.status} ${await res.text().catch(() => '')}`);
@@ -207,6 +216,7 @@ export async function registerBotUsername(username: string): Promise<void> {
       method: 'POST',
       headers: internalHeaders(),
       body: JSON.stringify({ username }),
+      signal: AbortSignal.timeout(DATA_TIMEOUT_MS),
     });
     if (!res.ok) console.warn(`register-bot ${res.status} ${await res.text().catch(() => '')}`);
   } catch (e) {
@@ -232,6 +242,7 @@ export async function askZoeAs(text: string, sessionId: string, userId: string):
     headers,
     // channel:'telegram' tags the turn so fast_tiers can apply the telegram profile.
     body: JSON.stringify({ message: text, session_id: sessionId, channel: 'telegram' }),
+    signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`brain ${res.status} ${await res.text().catch(() => '')}`);
   const data = (await res.json()) as { response?: string; error?: string };
@@ -255,6 +266,7 @@ export async function transcribeTelegramAudio(audio: Uint8Array): Promise<string
     method: 'POST',
     headers,
     body: audio,
+    signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS),
   });
   const data = (await res.json().catch(() => ({}))) as { ok?: boolean; text?: string; error?: string };
   if (!res.ok || !data.ok) throw new Error(`telegram transcribe ${res.status} ${data.error ?? ''}`.trim());
@@ -271,6 +283,7 @@ export async function synthesizeTelegramVoice(text: string): Promise<Uint8Array 
     method: 'POST',
     headers: internalHeaders(),
     body: JSON.stringify({ text }),
+    signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS),
   });
   if (!res.ok) {
     console.warn(`telegram synthesize ${res.status} — replying in text instead`);

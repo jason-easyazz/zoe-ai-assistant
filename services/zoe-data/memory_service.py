@@ -1103,9 +1103,15 @@ def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
 
 
 def is_guest_memory_user(user_id: str | None) -> bool:
-    """Return True for unauthenticated identities that must not receive prompt memory."""
+    """Return True for unauthenticated identities that must not receive prompt memory.
 
-    return str(user_id or "").strip().lower() in {"", "guest", "anonymous", "voice-guest"}
+    ONE predicate (``user_filters.is_unidentified``): the sentinel set incl. ``voice-daemon`` and the per-session
+    ``guest-<id>`` principal zoe-auth mints. This copy knew neither (2026-11-02), so a device-token turn and a LAN guest
+    session were handed the household's prompt memory."""
+
+    from user_filters import is_unidentified
+
+    return is_unidentified(user_id)
 
 
 def _memory_status_visible(metadata: Mapping[str, Any]) -> bool:
@@ -2095,6 +2101,11 @@ class MemoryService:
                 await omi_recordings.forget_user(user_id)
             except Exception as exc:  # noqa: BLE001
                 pendant_failure = exc
+            try:   # ... and their alarms (migration 0063): the labels are their words. Fail closed, like the night mind.
+                import alarms
+                await alarms.forget_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: alarm erasure failed ({type(exc).__name__})") from exc
             try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
                 import contacts_store
                 await contacts_store.forget_user(user_id)

@@ -12,7 +12,7 @@ set -euo pipefail
 
 LIVE="${ZOE_LIVE_TREE:-/home/zoe/assistant}"
 SERVICE="${ZOE_SERVICE:-zoe-data}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"   # :-$0: under `bash -c` (the tests source the prelude) BASH_SOURCE is empty and set -u aborts on newer bash
 
 require_clean_tree() {
     local phase="$1"
@@ -59,6 +59,11 @@ if [[ "$cur" != "main" ]]; then
 EOF
     exit 1
 fi
+
+# Hold for a quiet household BEFORE taking the deploy lock (a 60 min wait must not starve the CD
+# runner's pull step of it). Fails open after the max wait; ZOE_DEPLOY_QUIET_WAIT=0 skips it.
+# No DEPLOY_BASE_SHA here, so it never assumes a docs-only deploy. Own step, own script.
+bash "$SCRIPT_DIR/wait_household_quiet.sh" || exit 1
 
 # Serialize against the CONTINUOUS-DEPLOY runner. `.github/workflows/deploy.yml`
 # runs on every push to main and fetches main into refs/zoe-deploy/main + `git reset --hard`
@@ -134,6 +139,16 @@ fi
 # which runs a second fetch and could advance the tree to a commit pushed after
 # the gate ran (a silent bypass of the very gate above). Greptile P1 on #1344.
 git -C "$LIVE" merge --ff-only "$target"
+
+# Short recheck right before the restart (review on #2234): the long wait above ran BEFORE the
+# lock, so a turn or a night window may have started since. All three waits (household, night, probe) are bounded small because
+# the deploy lock is held here (the CD runner's pull waits 300 s for it); a night window still
+# open after that exits non-zero - nothing restarted, re-run after the window. No docs-only base:
+# this script restarts unconditionally, so a docs-only diff must not skip the night check.
+(cd "$LIVE" && ZOE_DEPLOY_QUIET_MAX_WAIT_MIN="${ZOE_DEPLOY_QUIET_RECHECK_MIN:-2}" \
+    ZOE_DEPLOY_NIGHT_WAIT_MAX_MIN="${ZOE_DEPLOY_QUIET_RECHECK_MIN:-2}" \
+    ZOE_DEPLOY_PROBE_WAIT_MAX_MIN="${ZOE_DEPLOY_QUIET_RECHECK_MIN:-2}" \
+    bash "$SCRIPT_DIR/wait_household_quiet.sh") || exit 1
 
 echo "▶ restarting $SERVICE…"
 systemctl --user restart "$SERVICE"

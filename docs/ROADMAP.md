@@ -48,8 +48,8 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
 
 ## Next (at most 10)
 
-1. **A3** give every dispatchable intent a direct handler, delete the `mcporter` fallback, set `ZOE_MCP_STRICT_USER_ID=true` (replay).
-2. **A4** retire `/ws/voice/` and the orphaned `touch/voice.html`, or route that lane through `voice_command`; extend the lane-parity rig to LiveKit and non-stream chat.
+1. ~~**A3** give every dispatchable intent a direct handler, delete the `mcporter` fallback, set `ZOE_MCP_STRICT_USER_ID=true` (replay).~~ ✅ merged #2127 (2026-10-19).
+2. ~~**A4** retire `/ws/voice/` and the orphaned `touch/voice.html`~~ ✅ merged #2127 (2026-10-19); remaining: extend the lane-parity rig to LiveKit and non-stream chat.
 3. **A9 + A10** Telegram token env name and a loopback notify route; LiveKit hygiene (pin the image, memory cap, per-session rooms). Both agent-started, not on `main` at the time of writing.
 4. **A11** server-side panel targeting: every voice UI event carries `panel_id`, `panelMatches` stops acting on unknown, a two-panel test (replay).
 5. **B1** brain lanes: `flue` as the in-code default pinned by `test_canonical_invariants`; promote `labs/flue-zoe-brain-2x` and the bot out of `labs/`; decide core (delete or parity-test). Owner decision, agent build.

@@ -566,3 +566,12 @@ def test_already_is_said_only_over_a_live_row(svc):
 
 async def _done(v):
     return v
+
+
+def test_guest_predicate_is_the_shared_one_case_and_device_token_included():
+    """ask_to_remember used its own copy of the guest set: case-sensitive and without ``voice-daemon`` (2026-11-02).
+    A device-token turn or an upper-cased sentinel could file a "remember that" as a memory of nobody."""
+    for uid in ("", None, "guest", "GUEST", " Guest ", "voice-guest", "voice-daemon", "anonymous", "guest-abc123", "Guest-ABC"):
+        assert atr._is_guest(uid) is True, uid
+    for uid in ("jason", "demo_user", "guestavo"):
+        assert atr._is_guest(uid) is False, uid

@@ -1024,6 +1024,7 @@
     <script src="/js/sw-registration.js" defer></script>
 </head>
 <body>
+<script>function zoeEsc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}</script>
     <div class="nav-bar">
         <div class="nav-left">
             <div class="mini-orb" onclick="toggleMobileMenu()"></div>
@@ -1616,49 +1617,49 @@
             if (isPhotoTile) {
                 // Photo-centric layout
                 contentHtml = `
-                    <div class="tile-header photo-header" onmousedown="startTileDrag(event, '${item.id}')">
-                        <input type="text" class="tile-title" placeholder="Add a title..." value="${item.name || ''}" 
-                               oninput="updateTileName('${item.id}', this.value)">
-                        <button class="tile-close" onclick="closeTile('${item.id}')">×</button>
+                    <div class="tile-header photo-header" onmousedown="startTileDrag(event, '${zoeEsc(item.id)}')">
+                        <input type="text" class="tile-title" placeholder="Add a title..." value="${zoeEsc(item.name)}" 
+                               oninput="updateTileName('${zoeEsc(item.id)}', this.value)">
+                        <button class="tile-close" onclick="closeTile('${zoeEsc(item.id)}')">×</button>
                     </div>
                     <div class="tile-content photo-content">
                         <div class="tile-photo-main">
-                            <img src="/${item.preview.image}" alt="Photo">
-                            <div class="tile-resize-handle" onmousedown="startImageResize(event, '${item.id}')">⇲</div>
+                            <img src="/${zoeEsc(item.preview.image)}" alt="Photo">
+                            <div class="tile-resize-handle" onmousedown="startImageResize(event, '${zoeEsc(item.id)}')">⇲</div>
                         </div>
                         <textarea class="tile-editor photo-notes" placeholder="Add notes (optional)..." 
-                                  oninput="updateTileContent('${item.id}', this.value)">${item.content || ''}</textarea>
+                                  oninput="updateTileContent('${zoeEsc(item.id)}', this.value)">${zoeEsc(item.content)}</textarea>
                     </div>
                     <div class="tile-toolbar">
-                        <button class="tile-tool-btn" onclick="editTile('${item.id}')">✏️ Edit</button>
-                        <button class="tile-tool-btn delete" onclick="deleteTile('${item.id}')">🗑️ Delete</button>
+                        <button class="tile-tool-btn" onclick="editTile('${zoeEsc(item.id)}')">✏️ Edit</button>
+                        <button class="tile-tool-btn delete" onclick="deleteTile('${zoeEsc(item.id)}')">🗑️ Delete</button>
                     </div>
                 `;
             } else {
                 // Standard text/link layout
                 const previewHtml = item.preview ? `
                     <div class="tile-preview">
-                        <div class="tile-preview-image">${item.preview.image}</div>
-                        <div class="tile-preview-title">${item.preview.title}</div>
-                        <div class="tile-preview-description">${item.preview.description}</div>
-                        <div class="tile-preview-url">${item.preview.url}</div>
+                        <div class="tile-preview-image">${zoeEsc(item.preview.image)}</div>
+                        <div class="tile-preview-title">${zoeEsc(item.preview.title)}</div>
+                        <div class="tile-preview-description">${zoeEsc(item.preview.description)}</div>
+                        <div class="tile-preview-url">${zoeEsc(item.preview.url)}</div>
                     </div>
                 ` : '';
                 
                 contentHtml = `
-                    <div class="tile-header" onmousedown="startTileDrag(event, '${item.id}')">
-                        <input type="text" class="tile-title" placeholder="Untitled" value="${item.name || ''}" 
-                               oninput="updateTileName('${item.id}', this.value)">
-                        <button class="tile-close" onclick="closeTile('${item.id}')">×</button>
+                    <div class="tile-header" onmousedown="startTileDrag(event, '${zoeEsc(item.id)}')">
+                        <input type="text" class="tile-title" placeholder="Untitled" value="${zoeEsc(item.name)}" 
+                               oninput="updateTileName('${zoeEsc(item.id)}', this.value)">
+                        <button class="tile-close" onclick="closeTile('${zoeEsc(item.id)}')">×</button>
                     </div>
                     <div class="tile-content">
                         <textarea class="tile-editor" placeholder="Type notes or paste a link..." 
-                                  oninput="updateTileContent('${item.id}', this.value)">${item.content || ''}</textarea>
+                                  oninput="updateTileContent('${zoeEsc(item.id)}', this.value)">${zoeEsc(item.content)}</textarea>
                         ${previewHtml}
                     </div>
                     <div class="tile-toolbar">
-                        <button class="tile-tool-btn" onclick="editTile('${item.id}')">✏️ Edit</button>
-                        <button class="tile-tool-btn delete" onclick="deleteTile('${item.id}')">🗑️ Delete</button>
+                        <button class="tile-tool-btn" onclick="editTile('${zoeEsc(item.id)}')">✏️ Edit</button>
+                        <button class="tile-tool-btn delete" onclick="deleteTile('${zoeEsc(item.id)}')">🗑️ Delete</button>
                     </div>
                 `;
             }
@@ -2101,11 +2102,11 @@
             filters.innerHTML = `<div class="filter-chip active">Review Queue (${reviewQueue.length})</div>`;
             list.innerHTML = reviewQueue.map(item => `
                 <div class="person-card">
-                    <div class="person-label">${item.memory_type || 'memory'} • confidence ${(Math.round((item.confidence || 0) * 100))}%</div>
-                    <div class="person-text">${(item.content || '').slice(0, 180)}</div>
+                    <div class="person-label">${zoeEsc(item.memory_type || 'memory')} • confidence ${(Math.round((item.confidence || 0) * 100))}%</div>
+                    <div class="person-text">${zoeEsc((item.content || '').slice(0, 180))}</div>
                     <div class="quick-actions" style="margin-top:10px">
-                        <div class="quick-action-btn" onclick="reviewMemory('${item.id}','approve')"><div class="quick-action-label">Approve</div></div>
-                        <div class="quick-action-btn" onclick="reviewMemory('${item.id}','reject')"><div class="quick-action-label">Reject</div></div>
+                        <div class="quick-action-btn" onclick="reviewMemory('${zoeEsc(item.id)}','approve')"><div class="quick-action-label">Approve</div></div>
+                        <div class="quick-action-btn" onclick="reviewMemory('${zoeEsc(item.id)}','reject')"><div class="quick-action-label">Reject</div></div>
                     </div>
                 </div>
             `).join('');
@@ -2152,8 +2153,8 @@
                 const list = document.getElementById('insightsList');
                 list.innerHTML = results.map(item => `
                     <div class="person-card">
-                        <div class="person-label">${item.source || 'local'} • score ${Number(item.score || 0).toFixed(2)}</div>
-                        <div class="person-text">${(item.content || '').slice(0, 180)}</div>
+                        <div class="person-label">${zoeEsc(item.source || 'local')} • score ${Number(item.score || 0).toFixed(2)}</div>
+                        <div class="person-text">${zoeEsc((item.content || '').slice(0, 180))}</div>
                     </div>
                 `).join('') || '<div class="person-card"><div class="person-text">No matches.</div></div>';
             } catch (error) {
@@ -2243,11 +2244,11 @@
             
             notificationsContent.innerHTML = notifications.map(notification => `
                 <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
-                     onclick="handleNotificationClick(${notification.id})">
-                    <div class="notification-title">${notification.message}</div>
+                     onclick="handleNotificationClick(${Number(notification.id) || 0})">
+                    <div class="notification-title">${zoeEsc(notification.message)}</div>
                     <div class="notification-meta">
                         <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
-                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${zoeEsc(notification.priority)}</span>` : ''}
                     </div>
                 </div>
             `).join('');

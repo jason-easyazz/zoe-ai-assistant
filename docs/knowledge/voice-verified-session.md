@@ -143,6 +143,24 @@ on open). Never audio, never a score.
 **Rollback:** unset `ZOE_VOICE_SESSION` (or `=0`) and restart zoe-data - every session check is skipped and the voice
 path is the legacy one; open sessions vanish with the process. The UI script is inert without frames.
 
+## 3b. Follow-up / conversation windows carry their own verdict (2026-11-02)
+
+The panel keeps listening for a few seconds after a reply with no wake word (`window=followup|conversation` on
+`/api/voice/turn_stream`). Identity was always per utterance (the session never lends its member to a clip), but on
+2026-11-01 a television in the room was answered as the member: the window clip cleared the same FAR-1 % bar as a wake turn
+(long clip 0.265), and a clip the gate did not confirm still ran the brain as a guest, so the chain of follow-up windows
+(`FOLLOW_UP_MAX_TURNS`, 999 on the panel) never ended while the television talked.
+
+- A window turn must clear the stricter `ZOE_SPEAKER_WINDOW_TIER` bar (default `far01`, FAR 0.1 %; `far1` restores the wake
+  bar). A wake turn is unchanged.
+- A window turn the speaker gate RAN on and did not confirm (rejected claim, or the daemon's `verified:false`) is dropped
+  with a `skipped: not_addressed` done frame before brain, memory or identity work
+  (`voice_utterance_shape.window_speaker_frame`). The daemon already treats `skipped` as "back to wake mode, no chime", so
+  the follow-up chain ends on the first non-member clip. The open voice session is closed by it, like any unverified voice.
+  Saying "Zoe ..." in the window keeps the turn answerable, as a guest (never the member).
+- No verdict at all (gate off / shadow) is unchanged. `voice_command` receives `window` so its claim gate applies the same bar.
+- Cost: a member's very short or soft follow-up that scores under the window bar is ignored; say the wake word again.
+
 ## 4. Limits (honest)
 
 - A page reload on the panel loses the badge and card until the next verified turn (nothing is stored in the browser
@@ -154,6 +172,19 @@ path is the legacy one; open sessions vanish with the process. The UI script is 
   pair only).
 - The step-up classification runs on the utterance before dispatch; a brain turn that decides on its own to call a
   sensitive tool is bounded by that tool's own checks, not by this tier.
+
+## 5. Orb tap with the dot = a "what's up" turn (2026-11-02)
+
+The orb's yellow dot (`GET /api/proactive/inbox`, the kiosk member's pending queue) means Zoe has something. Pressing the orb
+while the dot shows POSTs `http://localhost:7777/pull` (same loopback/Origin guard as `/activate`); the daemon runs ONE turn
+whose transcript is the fixed phrase `"what's up"` (`PULL_PHRASE`, a `proactive/pull.py` pull phrase) through `_do_single_turn(text=...)`:
+no recording, no STT, **no voice claim**, sent to `/api/voice/command` and played by the ordinary player. No dot = `/activate`, as before.
+
+Identity is exactly an unidentified panel turn's: a tap proves no voice, so there is no `speaker_verified` verdict. The pull runs as the
+panel's fresh PIN sign-in (the member the dot was drawn for); sensitive pending items are NOT spoken (`pull.pull`: held unless
+`speaker_verified is True`), they stay pending and Zoe says she has something private (the existing pull line; no new wording here). With `ZOE_VOICE_SESSION`
+on, the no-verdict turn closes any open voice session (`no_verdict`) - fail-closed; the member says "what's up" for the private items.
+A daemon that predates `/pull` 404s it: the page's busy cue simply times out (20 s). A pull inside MIN_WAKE_INTERVAL_S of the last wake stays queued, never dropped.
 
 ## Related
 

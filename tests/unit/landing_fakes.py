@@ -126,9 +126,14 @@ class Rig:
             p.chmod(0o755)
         self.set_state({"prs": {}, "threads": {}})
         self.tmp = tmp
+        self.health = tmp / "health.json"
+        self.set_health(None)  # a quiet household by default: tests never read the live box's /health
 
     def set_state(self, state: dict) -> None:
         self.state_file.write_text(json.dumps(state))
+
+    def set_health(self, last_voice_turn_age_s, *, raw: str | None = None) -> None:
+        self.health.write_text(raw if raw is not None else json.dumps({"last_voice_turn_age_s": last_voice_turn_age_s}))
 
     def env(self, **extra: str) -> dict:
         env = {
@@ -140,6 +145,7 @@ class Rig:
             "ZOE_LANDING_REPO": str(self.repo),
             "FAKE_GH_STATE": str(self.state_file),
             "FAKE_GH_LOG": str(self.gh_log),
+            "ZOE_LANDING_HEALTH_URL": f"file://{self.health}",
         }
         env.update(extra)
         return env

@@ -499,3 +499,33 @@ def delayed_command(text: str, *, strict: bool = False) -> bool:
     if _DELAY_STRICT_RE.search(t):
         return True
     return not strict and _TIME_CUE_RE.search(t) is not None
+
+
+# ── Named domains ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# The NOUN a request names is the strongest evidence of its domain. Live 2026-11-03: "Do I have anything on my calendar
+# today?" (heard as "... calendar to say?") - the router chose lists, vetoed the calendar read, and the lists expert read the
+# shopping list aloud. Keys are the router's class names. Nouns only: "list my reminders" uses "list" as a verb and "remind
+# me" names no reminder, so a bare verb never names a domain.
+_NAMED_DOMAIN_RES = {
+    "calendar": re.compile(r"\b(?:calendars?|diary|diaries|agenda)\b|\b(?:my|the|our)\s+schedule\b", re.IGNORECASE),
+    "lists": re.compile(
+        r"\b(?:shopping|grocery|to[- ]?do|todo|packing|task|bucket|work|personal|my|the|our|your|a|that|this)\s+lists?\b"
+        r"|\blists\b", re.IGNORECASE),
+    "reminders": re.compile(r"\breminders?\b", re.IGNORECASE),
+    "timers": re.compile(r"\btimers?\b", re.IGNORECASE),
+    "alarms": re.compile(r"\balarms?\b", re.IGNORECASE),
+}
+
+
+def named_domains(text: str) -> frozenset:
+    """The router domains whose NOUN the words name ("calendar", "shopping list", "reminders", "timer", "alarm"). Pure."""
+    return frozenset(d for d, rx in _NAMED_DOMAIN_RES.items() if rx.search(text or ""))
+
+
+def named_domain_overrides(text: str, own: frozenset, router_domain: str) -> bool:
+    """True when the words NAME a domain of ``own`` (an intent's compatible router classes) and nothing else, while the router
+    chose a DIFFERENT record domain (one with a noun of its own, none of which was said): the named noun outranks the router's
+    guess. Kept with the router: a chat verdict; memory / people (a statement ABOUT the calendar - "remember that my calendar is
+    busy on Fridays" - is a memory, whatever noun it mentions); words naming the router's domain or a third one too."""
+    named = named_domains(text)
+    return bool(named) and named <= own and router_domain not in own and router_domain in _NAMED_DOMAIN_RES

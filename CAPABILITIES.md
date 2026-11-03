@@ -84,7 +84,6 @@
 - `zoe_get_time`
 - `zoe_list_skills`
 - `zoe_self_capabilities`
-- `zoe_sync_knowledge`
 
 ## OpenClaw Skills
 - `.openclaw-install-backups`
