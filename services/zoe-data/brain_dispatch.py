@@ -8,11 +8,10 @@ its historical private names (``_use_flue_brain`` / ``_brain_streaming`` /
 ``_brain_oneshot``), so its call sites and the routing tests that patch those
 names on the chat module keep working unchanged.
 
-Cutover seam: ``ZOE_BRAIN_BACKEND='flue'`` (default ``'core'``) opts the brain
-lane into the Flue brain sidecar (``zoe_flue_client``) instead of zoe-core. This
-is ADDITIVE and default-OFF — with the env unset/``'core'`` dispatch is
-byte-identical to today, so the live voice path is unaffected. The flip is
-operator-gated on voice-corpus parity; reversible by env toggle (no migration).
+Lane seam: ``ZOE_BRAIN_BACKEND`` defaults to ``'flue'`` (the live brain since
+the 2026-08-09 cutover), so the Flue brain sidecar (``zoe_flue_client``) answers
+with the env unset. ``'core'`` (or any other value) selects zoe-core instead;
+that is the rollback, reversible by env toggle (no migration).
 
 Lane selection vs. failover
 ---------------------------
@@ -153,15 +152,13 @@ def use_core_brain() -> bool:
 
 
 def use_flue_brain() -> bool:
-    """True ONLY when ``ZOE_BRAIN_BACKEND == 'flue'`` (default ``'core'``).
+    """True when ``ZOE_BRAIN_BACKEND`` is ``'flue'`` (the default, as live).
 
-    The additive, default-OFF cutover seam to the Flue brain sidecar. With the
-    env unset or ``'core'`` this returns False and dispatch is byte-identical to
-    today (zoe-core, legacy on fallback). Read lazily so a .env value
-    bootstrapped after import is honored. The flip is operator-gated on
-    voice-corpus parity — do not change the default here.
+    Unset selects the Flue brain sidecar; ``'core'`` (or any other value) is
+    the rollback to zoe-core / legacy. Read lazily so a .env value
+    bootstrapped after import is honored.
     """
-    return (os.environ.get("ZOE_BRAIN_BACKEND", "core") or "").strip().lower() == "flue"
+    return (os.environ.get("ZOE_BRAIN_BACKEND", "flue") or "").strip().lower() == "flue"
 
 
 def failover_enabled() -> bool:

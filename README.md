@@ -99,7 +99,7 @@ legacy`. All three talk to the same Gemma 4 model on `llama-server`.
 - **`flue`** (selected with `ZOE_BRAIN_BACKEND=flue`) is the **live brain** on the
   reference deployment: the Flue 2.x sidecar on `:3579`, in place since
   2026-08-09. The earlier Flue 1.x sidecar was retired and removed.
-- **`core`** is the **code default** when `ZOE_BRAIN_BACKEND` is unset:
+- **`core`** is the rollback lane (`ZOE_BRAIN_BACKEND=core`; the code default is `flue`):
   `services/zoe-core`, the Pi agent. It is kept wired and tested but is the
   dormant lane on the reference deployment.
 - **`legacy`** (`zoe_agent.py`) is the last lane, used only when `flue` is not
@@ -314,15 +314,15 @@ enables the opt-in units (`flue-zoe-brain-2x`, `flue-executor`).
 ### Choosing the agent brain
 
 The installer gives you the model server, backend, voice and UI. It does not
-build an agent brain, and an unset `ZOE_BRAIN_BACKEND` selects the `core` lane
-(`services/zoe-core`). To run the brain the way the reference deployment does,
-build and enable the Flue 2.x sidecar, then select it:
+build an agent brain, and an unset `ZOE_BRAIN_BACKEND` selects the `flue` lane
+(the code default), so build and enable the Flue 2.x sidecar (set
+`ZOE_BRAIN_BACKEND=core` instead to run `services/zoe-core`):
 
 ```bash
 cd ~/assistant/labs/flue-zoe-brain-2x && npm ci && npm run build
 cp .env.example .env            # fill in the tokens it lists; see the lab README
 systemctl --user enable --now flue-zoe-brain-2x
-# in services/zoe-data/.env:  ZOE_BRAIN_BACKEND=flue
+# ZOE_BRAIN_BACKEND defaults to flue; no .env change needed
 systemctl --user restart zoe-data
 ```
 
