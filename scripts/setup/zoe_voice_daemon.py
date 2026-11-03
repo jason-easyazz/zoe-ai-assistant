@@ -49,6 +49,16 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def utterance_tag(text: object) -> str:
+    """``len=N utt=<12 hex>``: what voice.log carries INSTEAD of what someone said (2026-11-03).
+
+    voice.log lives on the panel's SD card with no forget path, so it gets the length and an equality key only. Same
+    digest as zoe-data's ``log_redaction.utterance_tag`` (sha256, first 12 hex), so a panel line joins to the box's line
+    for the same turn. Parsed by ``scripts/lib/panel_voice_log.py``."""
+    t = text if isinstance(text, str) else ("" if text is None else str(text))
+    return f"len={len(t)} utt={hashlib.sha256(t.encode('utf-8')).hexdigest()[:12]}"
+
+
 def _env(name: str, default: str, *legacy_names: str) -> str:
     """Read an environment value, accepting documented legacy aliases."""
     value = os.environ.get(name)
@@ -3639,7 +3649,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 # on the server, so this is the earliest the daemon can know.) A speculative stream keeps its own protocol.
                 if speculation is None and not played_any and transcript \
                         and _is_junk_transcript(transcript, answering=answering):
-                    log.info("Ignoring junk/hallucination transcript before playback: %r", transcript)
+                    log.info("Ignoring junk/hallucination transcript before playback: %s", utterance_tag(transcript))
                     break
                 continue
             if "chunk" in obj:
@@ -3745,14 +3755,14 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     if speculation is not None and speculation.ungated:
         return False
     if speculation is not None and speculation.cancelled:
-        log.info("speculation: cancelled turn_id=%s transcript=%r — caller runs the normal turn",
-                 speculation.turn_id, transcript[:80])
+        log.info("speculation: cancelled turn_id=%s %s — caller runs the normal turn",
+                 speculation.turn_id, utterance_tag(transcript))
         return False
     if transcript and _is_junk_transcript(transcript, answering=answering):
-        log.info("Ignoring junk/hallucination transcript: %r", transcript)
+        log.info("Ignoring junk/hallucination transcript: %s", utterance_tag(transcript))
         return False
     if played_any:
-        log.info("turn_stream TTFA=%.2fs transcript=%r", ttfa if ttfa is not None else -1.0, transcript[:80])
+        log.info("turn_stream TTFA=%.2fs %s", ttfa if ttfa is not None else -1.0, utterance_tag(transcript))
         return True
     # Stream produced no audio.
     if not transcript:
@@ -3943,9 +3953,9 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     if transcript:
         # The blocking turn's reply is already synthesised but NOT yet played: wake-time junk is dropped before playback.
         if _is_junk_transcript(transcript, answering=_answering_window(window)):
-            log.info("Ignoring junk/hallucination transcript: %r", transcript)
+            log.info("Ignoring junk/hallucination transcript: %s", utterance_tag(transcript))
             return False
-        log.info("Transcript: %r", transcript)
+        log.info("Transcript: %s", utterance_tag(transcript))
     elif not resp.get("audio_base64"):
         # Avoid robot fallback speech on no-transcript turns; use a short earcon
         # and return to wake mode instead.
