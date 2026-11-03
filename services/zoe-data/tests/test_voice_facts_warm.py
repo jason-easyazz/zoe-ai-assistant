@@ -51,6 +51,7 @@ def test_wake_prewarm_warms_facts_cache(monkeypatch):
         warmed["facts"] = user_id == "jason"
         return ("facts", None)
 
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     import zoe_core_client
     monkeypatch.setattr(zoe_core_client, "prewarm", _fake_prewarm)
     monkeypatch.setattr(v, "_voice_brain_memory", _fake_mem)
