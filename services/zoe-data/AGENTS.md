@@ -227,6 +227,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - Pi/Gemma intent governance is an ambiguous-miss fallback only; deterministic intents stay first, cloud providers are rejected when offline-only mode is active, and memory-write intents must not be created from ambiguous Pi classifications.
 - Build the minimal working feature, then run a cleanup pass moving reusable mechanics into service-layer helpers; domain policy stays in routes/actions/intents.
 - Use async/await for I/O; no blocking operations on the main thread.
+- `presence/ha_presence.py` — flag-dark `ZOE_HA_PRESENCE=off|shadow|on` OBSERVED presence: polls the HA bridge (`ZOE_HA_BRIDGE_URL`; the bridge's `HA_ACCESS_TOKEN` is the only HA credential, zoe-data adds none) every 60 s for `person`/`device_tracker` ONLY, keeps `state` only (never attributes), writes sha256-keyed `home/away/unknown` rows to `presence_observations` (debounced, capped with one `storm` row; failure writes nothing). Observed and inferred never merge: inferred presence gets its own table. `off` registers no job; `on` adds the member-only `GET /api/presence/observed`. Design: `docs/architecture/identity-presence-engine.md`.
 
 ## Verification
 

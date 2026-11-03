@@ -334,6 +334,7 @@ _ENTRIES = (
     _f('ZOE_HARNESS_QUIET_START', 'str', '07:00', doc='scripts/AGENTS.md'),
     _f('ZOE_HA_BRIDGE_URL', 'str', 'http://127.0.0.1:8007', doc='docs/knowledge/operator-skills/openclaw/ha-patterns/SKILL.md', note='live .env: http://127.0.0.1:8007', divergent_ok={'services/zoe-data/routers/stubs.py': 'settings display only: echoes the URL when one is configured, shows nothing otherwise'}),
     _f('ZOE_HA_CONTROL_SCOPE', 'str', 'panel', doc='services/zoe-data/AGENTS.md'),
+    _f('ZOE_HA_PRESENCE', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_HA_EXPORT_CMD', 'str', ''),
     _f('ZOE_HA_UI_GATE', 'bool', True, doc='services/zoe-data/routers/AGENTS.md'),
     _f('ZOE_HA_UI_SECRET', 'str', '', doc='services/zoe-data/routers/AGENTS.md'),

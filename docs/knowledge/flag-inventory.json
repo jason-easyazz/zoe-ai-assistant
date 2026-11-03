@@ -19631,6 +19631,7 @@
     }
   },
   "registry_unread": [
-    "ZOE_COMPOSE_VOICE_BUDGET_S"
+    "ZOE_COMPOSE_VOICE_BUDGET_S",
+    "ZOE_HA_PRESENCE"
   ]
 }
