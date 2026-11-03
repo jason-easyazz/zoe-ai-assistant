@@ -9165,7 +9165,8 @@
           "allowed": [
             "off",
             "shadow",
-            "enforce"
+            "enforce",
+            "serve"
           ],
           "default": "off",
           "divergent_ok": {},
@@ -12844,6 +12845,7 @@
           "allowed": [
             "off",
             "shadow",
+            "shadow2",
             "active"
           ],
           "default": "off",
