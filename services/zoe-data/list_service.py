@@ -74,6 +74,9 @@ MAX_ITEM_WORDS = 12
 # Nouns that name no item at all ("add things to the list") - never stored.
 _VAGUE_ITEMS = frozenset({"things", "thing", "stuff", "something", "it", "that", "them", "this", "these", "those", "one",
                           "anything", "everything", "some", "items", "item"})
+# An item can never END on one of these: "get all the what?" is a garbled question, not something to buy (live 2026-11-01: it
+# opened the add form and told the member to tap Done).
+_QUESTION_TAIL_WORDS = frozenset({"what", "where", "who", "whom", "whose", "which", "why", "how", "when"})
 
 
 # A period that ends an ABBREVIATION is part of the item, not a sentence break: "Dr. Pepper", "Mr. Clean", "U.S. stamps", "J. Crew".
@@ -312,6 +315,8 @@ def is_plausible_item(item: str) -> bool:
         return False
     if text.lower() in _VAGUE_ITEMS:
         return False
+    if words[-1].lower().strip(",;:.!?") in _QUESTION_TAIL_WORDS:
+        return False
     lead = words[0].lower().strip(",;:")
     if lead in _POSSESSIVE_LEADS:
         return len(words) > 1 and not _has_predicate(words[1:])
@@ -422,6 +427,34 @@ async def find_household_list_id(db, *, list_type: str, name: str) -> Optional[s
     cursor = await db.execute(household_lists_sql("?"), (list_type,))
     picked = pick_household_list(await cursor.fetchall(), name)
     return picked["id"] if picked else None
+
+
+async def find_named_list_id(db, *, user_id: str, name: str) -> Optional[str]:
+    """The list the user NAMED ("my camping list"): a family-visible list or the user's own with exactly that name (or
+    ``<name> list``), case-insensitive; None when there is none. Never falls back to a different list. A guest identity owns
+    nothing, so it sees family lists only."""
+    owner = "" if panel_principal.is_guest_id(user_id) else user_id
+    cursor = await db.execute(
+        "SELECT id FROM lists WHERE deleted=0 AND (lower(name)=lower(?) OR lower(name)=lower(?) || ' list')"
+        " AND (visibility='family' OR (user_id=? AND ?<>'')) ORDER BY CASE WHEN user_id=? THEN 0 ELSE 1 END, updated_at DESC LIMIT 1",
+        (name.strip(), name.strip(), owner, owner, owner),
+    )
+    row = await cursor.fetchone()
+    return row["id"] if row else None
+
+
+def _rows_changed(res) -> Optional[int]:
+    """Rows a write touched, from either result shape (a cursor's ``rowcount`` or an asyncpg status tag "UPDATE 1"); None when
+    the shim reports neither (then the caller cannot tell and carries on as before)."""
+    count = getattr(res, "rowcount", None)
+    if isinstance(count, int) and count >= 0:
+        return count
+    if isinstance(res, str):
+        try:
+            return int(res.rsplit(None, 1)[-1])
+        except (ValueError, IndexError):
+            return None
+    return None
 
 
 async def find_list_id(db, *, user_id: str, list_type: str, name: str) -> Optional[str]:
@@ -535,6 +568,8 @@ async def add_item_to_list(
                 receipts.append((user_id, rid, why))
             else:
                 write_receipts.record(user_id, "list", rid, why)
+                if why == "add_item_to_list":
+                    note_recent_add(user_id, list_id, rid)
         return outcome
 
     async def _write_new_list_and_item() -> dict:
@@ -578,6 +613,7 @@ async def add_item_to_list(
         receipts.append((user_id, outcome["item_id"], "add_item_to_list:new_list"))
     else:
         write_receipts.record(user_id, "list", outcome["item_id"], "add_item_to_list:new_list")
+        note_recent_add(user_id, outcome["list_id"], outcome["item_id"])
     return outcome
 
 
@@ -609,6 +645,190 @@ async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
             (already if out.get("already") else added).append(shown)
     for uid, rid, why in receipts:
         write_receipts.record(uid, "list", rid, why)
+    fresh = [o for o in outcomes if not o.get("deduped")]
+    if fresh:     # the last NEW row of this spoken add is what "no, X" / "spell it X" corrects
+        note_recent_add(kwargs.get("user_id"), fresh[-1]["list_id"], fresh[-1]["item_id"])
     last = outcomes[-1]
     return {**last, "item_id": ids[0] if ids else last["item_id"], "item_ids": ids, "added": added, "already": already,
             "outcomes": outcomes}
+
+
+# ── Correcting an item ("change noodles to rice noodles", "spell it X" right after an add) ───────────────────────────────
+
+#: How long after an add "no, X" / "I meant X" / "spell it X" still means "fix the item I just added".
+RECENT_ADD_WINDOW_S = 120.0
+_RECENT_ADDS: dict[str, tuple[str, str, float]] = {}      # who -> (list_id, item_id, monotonic at the add)
+_MAX_RECENT = 64
+
+
+def _recent_key(user_id: Optional[str]) -> str:
+    """Whose "just added" this is: the signed-in member, or ``panel`` for anyone unidentified at the panel (the household
+    viewer included) - the person who fumbled the add is the person who corrects it, and a kiosk guest has no other identity."""
+    u = (user_id or "").strip()
+    return panel_principal.PANEL_ACTOR if (panel_principal.is_guest_id(u) or u == panel_principal.HOUSEHOLD_VIEWER) else u
+
+
+def note_recent_add(user_id: Optional[str], list_id: str, item_id: str) -> None:
+    """Remember the item this user just ADDED (a new row, not an "already there"), for a short correction. Never raises."""
+    try:
+        import time
+
+        if len(_RECENT_ADDS) >= _MAX_RECENT:
+            oldest = min(_RECENT_ADDS, key=lambda k: _RECENT_ADDS[k][2])
+            _RECENT_ADDS.pop(oldest, None)
+        _RECENT_ADDS[_recent_key(user_id)] = (str(list_id), str(item_id), time.monotonic())
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def recent_add(user_id: Optional[str]) -> Optional[tuple[str, str]]:
+    """(list_id, item_id) of this user's add inside the correction window, else None."""
+    import time
+
+    hit = _RECENT_ADDS.get(_recent_key(user_id))
+    if hit is None or time.monotonic() - hit[2] > RECENT_ADD_WINDOW_S:
+        return None
+    return hit[0], hit[1]
+
+
+def any_recent_add() -> bool:
+    """True when ANYONE added an item inside the window - the cheap pre-check the (user-less) classifier uses before it will
+    read "no, X" / "I meant X" as a correction; the resolver re-checks for the actual speaker."""
+    import time
+
+    now = time.monotonic()
+    return any(now - v[2] <= RECENT_ADD_WINDOW_S for v in _RECENT_ADDS.values())
+
+
+def clear_recent_adds() -> None:
+    _RECENT_ADDS.clear()
+
+
+def looks_like_correction_of(old_text: str, new_text: str) -> bool:
+    """A bare "no, <new>" is a correction of the item just added only when it resembles it (a respelling, a fuller name):
+    the same words, one inside the other, or a close spelling. "no thanks" does not resemble "milk"."""
+    import difflib
+
+    a, b = item_key(old_text), item_key(new_text)
+    if not a or not b:
+        return False
+    if a == b or a in b or b in a or set(a.split()) & set(b.split()):
+        return True
+    if difflib.SequenceMatcher(None, a, b).ratio() >= 0.7:
+        return True
+    # a misspelt word inside a fuller name ("noodels" -> "rice noodles")
+    return any(len(x) > 3 and len(y) > 3 and difflib.SequenceMatcher(None, x, y).ratio() >= 0.75
+               for x in a.split() for y in b.split())
+
+
+async def _list_visible_to(db, list_id: str, user_id: str, *, lock: bool = False) -> Optional[bool]:
+    """None = no such live list; True = the viewer may touch its ITEMS; False = a private list of someone else. A household
+    (family-visible) list is open to any identified viewer and to the panel guest; a personal list only to its owner. ``lock``
+    share-locks the list row (inside a transaction) so a concurrent visibility change waits for the write."""
+    rows = await db.fetch("SELECT user_id, visibility FROM lists WHERE id = $1 AND deleted = 0" + (" FOR SHARE" if lock else ""), list_id)
+    if not rows:
+        return None
+    row = dict(rows[0])
+    if str(row.get("visibility") or "") == "family":
+        return True
+    return str(row.get("user_id") or "") == user_id and not panel_principal.is_guest_id(user_id)
+
+
+async def rename_item_on_list(
+    db,
+    *,
+    user_id: str,
+    list_id: str,
+    new_text: str,
+    old_text: str = "",
+    item_id: str = "",
+    receipts: Optional[list] = None,
+) -> dict:
+    """Change one item's text on a list - the shared correction write (skybridge + the keyword executor).
+
+    Names the item by ``item_id`` (the one just added) or by ``old_text`` (matched by :func:`item_key`: case-, plural- and
+    punctuation-insensitive; NO substring guess - a wrong guess is a wrong edit). Everything is decided and written inside the
+    same per-list advisory lock + transaction as an add, and the write receipt lands only after it commits. If the corrected
+    text is already open on the list, the old row is retired instead (no duplicate). Never creates a list.
+
+    Returns ``{"status", "list_id", "item_id", "old", "text"}`` where status is ``renamed`` | ``merged`` (new text already on
+    the list; old row removed) | ``unchanged`` | ``not_found`` | ``no_list`` | ``forbidden`` | ``invalid``.
+    """
+    new = normalize_item_text(new_text)
+    out = {"status": "invalid", "list_id": list_id, "item_id": "", "old": old_text, "text": new}
+    if not new or not (old_text or item_id) or not is_plausible_item(new):
+        return out
+    pending: list[tuple] = []
+    async with list_write_txn(db, list_id):
+        # Authorised INSIDE the lock + transaction, with the list row share-locked: a list turned private between a check and
+        # the write cannot be edited on stale visibility.
+        visible = await _list_visible_to(db, list_id, user_id, lock=callable(getattr(db, "transaction", None)))
+        if visible is None:
+            return {**out, "status": "no_list"}
+        if not visible:
+            return {**out, "status": "forbidden"}
+        rows =[dict(r) for r in await db.fetch(
+            "SELECT id, text, completed FROM list_items WHERE list_id = $1 AND deleted = 0", list_id)]
+        target = None
+        if item_id:
+            target = next((r for r in rows if str(r["id"]) == str(item_id)), None)
+        else:
+            want = item_key(old_text)
+            hits = [r for r in rows if want and item_key(str(r.get("text") or "")) == want]
+            if not hits and re.match(r"(?i)^my\s+\S", old_text.strip()):
+                # exact form ("my passport") first; only then the bare one - never the other way round
+                bare = item_key(re.sub(r"(?i)^my\s+", "", old_text.strip()))
+                hits = [r for r in rows if bare and item_key(str(r.get("text") or "")) == bare]
+            # an OPEN copy beats a ticked-off one
+            hits.sort(key=lambda r: 1 if r.get("completed") else 0)
+            target = hits[0] if hits else None
+        if target is None:
+            return {**out, "status": "not_found"}
+        before = normalize_item_text(str(target.get("text") or ""))
+        out.update(item_id=str(target["id"]), old=before)
+        clash = next((r for r in rows if str(r["id"]) != str(target["id"]) and not r.get("completed")
+                      and item_key(str(r.get("text") or "")) == item_key(new)), None)
+        if clash is not None:
+            gone = await db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2 AND deleted = 0",
+                                    str(target["id"]), list_id)
+            if _rows_changed(gone) == 0:      # deleted under us (the REST delete takes no list lock): nothing was merged
+                return {**out, "status": "not_found"}
+            out.update(status="merged", text=normalize_item_text(str(clash.get("text") or new)), item_id=str(clash["id"]), removed_id=str(target["id"]))
+            pending.append((str(target["id"]), "rename_item:merged"))
+        elif before == new:
+            out["status"] = "unchanged"
+        else:
+            done = await db.execute("UPDATE list_items SET text = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0",
+                                    new, str(target["id"]), list_id)
+            if _rows_changed(done) == 0:      # deleted under us (the REST delete takes no list lock): never claim a rename
+                return {**out, "status": "not_found"}
+            out["status"] = "renamed"
+            pending.append((str(target["id"]), "rename_item"))
+    # Receipts land only once the write has committed (a rolled-back correction must not read as done).
+    for rid, why in pending:
+        if receipts is not None:
+            receipts.append((user_id, rid, why))
+        else:
+            write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", rid, why)
+    if out["status"] in {"renamed", "merged"}:       # for a merge item_id is the surviving row
+        note_recent_add(user_id, list_id, out["item_id"])      # "no, X" twice in a row keeps correcting the same row
+    return out
+
+
+def rename_reply(result: dict, where: str) -> str:
+    """The spoken answer for a :func:`rename_item_on_list` result; only claims what the status proves."""
+    st = result.get("status")
+    old, new = result.get("old") or "", result.get("text") or ""
+    if st == "renamed":
+        return f"Changed {old} to {new} on {where}."
+    if st == "merged":
+        return f"{new} is already on {where}, so I took {old} off instead."
+    if st == "unchanged":
+        return f"It already says {new} on {where}. Nothing changed."
+    if st == "not_found":
+        return f"I couldn't find {old or 'that'} on {where}, so nothing changed."
+    if st == "no_list":
+        return "I couldn't find that list, so nothing changed."
+    if st == "forbidden":
+        return "That's a private list, so I can't change it from here."
+    return "I didn't catch what to change it to, so nothing changed."

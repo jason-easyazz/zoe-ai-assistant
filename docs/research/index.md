@@ -32,7 +32,11 @@ This index gives every record one status.
 | [MEMORY_HALLUCINATION_ANALYSIS.md](MEMORY_HALLUCINATION_ANALYSIS.md) | 2025-11-18 | absorbed 2026-10-18 | November 2025 memory-hallucination study; long superseded; retire by 2026-11-17 |
 | [README.md](README.md) | 2025-11-18 | absorbed 2026-10-18 | index of the November 2025 study only; replaced by this index; retire by 2026-11-17 |
 | [agent-sessions-off-box-2026-10-04.md](agent-sessions-off-box-2026-10-04.md) | 2026-10-04 | absorbed 2026-10-18 | engineering-off-box.md in knowledge; retire by 2026-11-17 |
-| [architecture-deep-dive-2026-10-18.md](architecture-deep-dive-2026-10-18.md) | 2026-10-18 | open | task list A-D still being worked; ROADMAP derives from it |
+| [architecture-deep-dive-2026-10-18.md](architecture-deep-dive-2026-10-18.md) | 2026-10-18 | absorbed 2026-11-02 | task list A-D still being worked; ROADMAP derives from it; retire by 2026-12-02 |
+| [architecture-deep-dive-2-2026-10-19.md](architecture-deep-dive-2-2026-10-19.md) | 2026-11-02 | absorbed 2026-11-02 | round 2 (security, traffic, panel, data, tests, iPhone app); task list in the ledger and the modernization queue; retire by 2026-12-02 |
+| [stack-currency-and-field-2026-10-27.md](stack-currency-and-field-2026-10-27.md) | 2026-11-02 | absorbed 2026-11-02 | every component vs latest + the four-tier upgrade plan; in the ledger and the queue; retire by 2026-12-02 |
+| [synthesis-deep-dive-2026-10-29.md](synthesis-deep-dive-2026-10-29.md) | 2026-11-02 | absorbed 2026-11-02 | the diagnosis and the thirty-day order; sections 2, 5, 7 are in the owner pack; retire by 2026-12-02 |
+| [completeness-and-issues-2026-11-02.md](completeness-and-issues-2026-11-02.md) | 2026-11-02 | open | round 4: unfinished inventory, half-built surfaces, code and live issues (sensitive lanes held privately), the TV panel, natural conversation |
 | [arousal-detection-licence-scope-2026-10-04.md](arousal-detection-licence-scope-2026-10-04.md) | 2026-10-04 | open | licence decision before any build |
 | [tone-of-voice-deep-dive-2026-10-26.md](tone-of-voice-deep-dive-2026-10-26.md) | 2026-10-26 | open | tone-of-voice options and phased plan; owner decisions pending |
 | [omi-data-to-teach-zoe-2026-10-26.md](omi-data-to-teach-zoe-2026-10-26.md) | 2026-10-26 | open | pendant data as a teacher: ranked use cases, night-window budget, AU recording law (WA worked example), phased plan; sister of the tone record; owner decisions pending |

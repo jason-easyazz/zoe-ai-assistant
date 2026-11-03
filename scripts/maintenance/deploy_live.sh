@@ -12,7 +12,7 @@ set -euo pipefail
 
 LIVE="${ZOE_LIVE_TREE:-/home/zoe/assistant}"
 SERVICE="${ZOE_SERVICE:-zoe-data}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"   # :-$0: under `bash -c` (the tests source the prelude) BASH_SOURCE is empty and set -u aborts on newer bash
 
 require_clean_tree() {
     local phase="$1"
@@ -60,9 +60,14 @@ EOF
     exit 1
 fi
 
+# Hold for a quiet household BEFORE taking the deploy lock (a 60 min wait must not starve the CD
+# runner's pull step of it). Fails open after the max wait; ZOE_DEPLOY_QUIET_WAIT=0 skips it.
+# No DEPLOY_BASE_SHA here, so it never assumes a docs-only deploy. Own step, own script.
+bash "$SCRIPT_DIR/wait_household_quiet.sh" || exit 1
+
 # Serialize against the CONTINUOUS-DEPLOY runner. `.github/workflows/deploy.yml`
-# runs on every push to main and does `git fetch origin main` + `git reset --hard
-# FETCH_HEAD` on THIS same shared .git/worktree. If a merge lands while this
+# runs on every push to main and fetches main into refs/zoe-deploy/main + `git reset --hard`
+# onto it on THIS same shared .git/worktree. If a merge lands while this
 # script runs, both paths advance main at once and lose the ref-lock race
 # ("cannot lock ref …") — the runner has 5 fetch retries, this manual path had
 # zero coordination and aborted mid-op. Hold a shared flock across the whole
@@ -105,8 +110,20 @@ prev="$(git -C "$LIVE" rev-parse HEAD)"
 # head of an up-to-date squash merge) — not merely fresh. Same binding as
 # deploy.yml, including the fallback to the stricter exact-commit binding when
 # the checker copy predates --expect-tree-of (never to an unbound check).
-git -C "$LIVE" fetch --quiet origin main
-target="$(git -C "$LIVE" rev-parse FETCH_HEAD)"
+# Explicit refspec into a ref only deploys use - NEVER FETCH_HEAD, a single file in the
+# shared .git that any other `git fetch` (the voice lander's PR-branch fetch) overwrites
+# (incident 2026-10-30: the CD runner deployed an unmerged branch commit that way).
+git -C "$LIVE" fetch --quiet --no-write-fetch-head origin "+refs/heads/main:refs/zoe-deploy/main"
+target="$(git -C "$LIVE" rev-parse --verify "refs/zoe-deploy/main^{commit}")"
+remote_main="$(git -C "$LIVE" ls-remote origin refs/heads/main | cut -f1)"
+if [[ -z "$remote_main" || "$target" != "$remote_main" ]]; then
+    echo "REFUSING TO DEPLOY: fetched target ${target:0:7} != the remote's main '${remote_main:0:7}'." >&2
+    exit 1
+fi
+if ! git -C "$LIVE" merge-base --is-ancestor "$prev" "$target"; then
+    echo "REFUSING TO DEPLOY: ${target:0:7} is not a descendant of the live HEAD ${prev:0:7}." >&2
+    exit 1
+fi
 bind_flag="--expect-tree-of"
 if ! grep -q -- '--expect-tree-of' "$SCRIPT_DIR/voice_gate_check.py"; then
     echo "⚠ voice_gate_check.py predates --expect-tree-of; binding to the exact commit instead." >&2
@@ -122,6 +139,16 @@ fi
 # which runs a second fetch and could advance the tree to a commit pushed after
 # the gate ran (a silent bypass of the very gate above). Greptile P1 on #1344.
 git -C "$LIVE" merge --ff-only "$target"
+
+# Short recheck right before the restart (review on #2234): the long wait above ran BEFORE the
+# lock, so a turn or a night window may have started since. All three waits (household, night, probe) are bounded small because
+# the deploy lock is held here (the CD runner's pull waits 300 s for it); a night window still
+# open after that exits non-zero - nothing restarted, re-run after the window. No docs-only base:
+# this script restarts unconditionally, so a docs-only diff must not skip the night check.
+(cd "$LIVE" && ZOE_DEPLOY_QUIET_MAX_WAIT_MIN="${ZOE_DEPLOY_QUIET_RECHECK_MIN:-2}" \
+    ZOE_DEPLOY_NIGHT_WAIT_MAX_MIN="${ZOE_DEPLOY_QUIET_RECHECK_MIN:-2}" \
+    ZOE_DEPLOY_PROBE_WAIT_MAX_MIN="${ZOE_DEPLOY_QUIET_RECHECK_MIN:-2}" \
+    bash "$SCRIPT_DIR/wait_household_quiet.sh") || exit 1
 
 echo "▶ restarting $SERVICE…"
 systemctl --user restart "$SERVICE"

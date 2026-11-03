@@ -154,6 +154,32 @@ def _db_pool_never_initialised(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _voice_activity_stamp_starts_empty(monkeypatch):
+    """``voice_activity``'s household stamp is process-global: any earlier test that drives a voice endpoint leaves a fresh stamp,
+    and ``omi_recordings.last_voice_age_s`` (min of the stamp and the session table) then reads "panel busy", so every pendant
+    transcription test later in the lane sat at ``pending`` (#2234 CI). Each test starts as a process with no voice turn yet."""
+    try:
+        import voice_activity
+    except Exception:  # noqa: BLE001
+        yield
+        return
+    monkeypatch.setattr(voice_activity, "_LAST_VOICE_ACTIVITY_MONO", None)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _restraint_head_worker_never_outlives_its_test():
+    """``restraint_head.defer`` starts a daemon worker that embeds through the (native) tokenizer + ONNX session. Left running it
+    races the NEXT test's model load / the interpreter's finalisation - the 2026-10-29 ``Fatal Python error: Segmentation fault`` in
+    ``tokenize <- restraint_head._run_worker`` ~95% through the ci_safe lane. Join it after every test that started one."""
+    yield
+    mod = sys.modules.get("restraint_head")
+    if mod is not None:
+        if not mod.stop_worker(30.0):
+            pytest.fail("restraint_head worker still running 30s after its test ended (stuck inside the embedder?)")
+
+
 @pytest.fixture
 def jason_signed_in_at_the_panel(monkeypatch):
     """OPT-IN (never autouse): "jason" holds a fresh PIN sign-in at whatever panel asks, so a DEVICE-token biometric enrolment

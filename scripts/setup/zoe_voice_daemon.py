@@ -625,7 +625,7 @@ def _make_platform_backend(name: str):
 
 PANEL_PLATFORM = _resolve_panel_platform(os.environ.get("PANEL_PLATFORM"), platform.system())
 _PLATFORM = _make_platform_backend(PANEL_PLATFORM)
-# The health server also serves POST /activate (it starts a recording) and POST /enroll/cancel. The Pi binds every
+# The health server also serves POST /activate (it starts a recording), POST /pull (the orb tap with the dot showing: a "what's up" turn, no recording) and POST /enroll/cancel. The Pi binds every
 # interface (GET /health is read from the Jetson), so those POSTs answer only a loopback peer with a loopback Host and the
 # Zoe page's Origin (_activate_request_allowed, 2026-10-18); the Mac backend also defaults to loopback, because a laptop
 # leaves the house.
@@ -731,6 +731,10 @@ _shutdown = threading.Event()
 # hiccups without masking persistent auth/configuration problems.
 VOICE_API_MAX_RETRIES = max(0, int(os.environ.get("VOICE_API_MAX_RETRIES", "2")))
 VOICE_API_RETRY_BACKOFF_S = max(0.0, float(os.environ.get("VOICE_API_RETRY_BACKOFF_S", "0.35")))
+# Blocking-turn restart ride-through: how long to wait before the ONE retry after a
+# restart-shaped failure (502 / connect refused). A zoe-data restart takes seconds, so the
+# generic 0.35 s backoff above never outlasts one.
+VOICE_TURN_RESTART_RETRY_S = max(0.0, float(os.environ.get("VOICE_TURN_RESTART_RETRY_S", "4.0")))
 # Monotonic time: ignore wake-word triggers until this (acoustic echo / TTS tail).
 _ignore_wake_until: float = 0.0
 _last_wake_at: float = 0.0
@@ -905,6 +909,9 @@ def _rn34_warmup() -> None:
 # ── Recording-active flag (B14) ──────────────────────────────────────────────
 # Set to True during the entire wake→record→STT cycle so ambient thread pauses.
 _recording_active = threading.Event()
+# Held for the whole restart-recovery path (local "one moment", backoff, retry) so the announcement poller
+# cannot speak over it even though _recording_active is cleared there.
+_restart_recovery_active = threading.Event()
 
 # ── Shared audio fan-out queues (A6) ─────────────────────────────────────────
 # Single PyAudio input stream; chunks distributed to consumers via queues.
@@ -1264,7 +1271,48 @@ def _close_quietly(response) -> None:
             pass
 
 
-def _api_post(path: str, data: dict, timeout: int = 60, retries: int | None = None) -> dict:
+def _is_connect_failure(exc: BaseException) -> bool:
+    """True only when the request provably never reached the server (refused / unreachable /
+    connect timeout). A dropped connection mid-request ("Connection aborted", a read timeout)
+    is NOT one: the server may have run the turn, and a retry could double-execute a write."""
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return True
+    if not isinstance(exc, requests.exceptions.ConnectionError):
+        return False
+    text = str(exc)
+    if "Connection aborted" in text or "Read timed out" in text:
+        return False
+    return ("Failed to establish a new connection" in text or "Connection refused" in text
+            or "NewConnectionError" in text)
+
+
+def _api_post(path: str, data: dict, timeout: int = 60, retries: int | None = None,
+              restart_only: bool = False) -> dict:
+    """POST to zoe-data; returns the JSON body or ``{"ok": False, "error": ...}``.
+
+    ``restart_only`` (the blocking turn, which can execute a write): do NOT run the generic
+    retry loop. Make one attempt and flag a restart-shaped failure (HTTP 502 or a connect
+    failure - the request never ran) as ``"restartish": True`` so the caller can ride out a
+    deploy restart. Any other failure, including a 500/503/504 or a dropped connection, is
+    final and never retried.
+    """
+    if restart_only:
+        try:
+            r = _zoe_http().post(f"{ZOE_URL}{path}", json=data, headers=_headers, timeout=timeout, verify=VERIFY_SSL)
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            log.error("API error %s: HTTP %s", path, status)
+            return {"ok": False, "error": f"HTTP {status}", "restartish": status == 502}
+        except requests.exceptions.SSLError:
+            raise
+        except requests.exceptions.RequestException as exc:
+            log.error("API error %s: %s", path, exc)
+            return {"ok": False, "error": str(exc), "restartish": _is_connect_failure(exc)}
+        except Exception as exc:
+            log.error("API error %s: %s", path, exc)
+            return {"ok": False, "error": str(exc)}
     url = f"{ZOE_URL}{path}"
     max_retries = VOICE_API_MAX_RETRIES if retries is None else max(0, int(retries))
     last_error = "unknown"
@@ -2303,8 +2351,8 @@ def _turn_with_monitor(pa: "pyaudio.PyAudio", wav: bytes, turn_fn, *, window: st
     # A hard-cap continuation is merged on BOTH turn functions (ZOE_VOICE_STREAM=0 must not recreate the split);
     # only the server-driven incomplete-frame retry below needs the streaming turn.
     wav = _gather_capped_continuation(pa, wav)
-    if streaming and window:
-        kw["window"] = window
+    if window:
+        kw["window"] = window   # BOTH turn functions: the blocking one is the stream's fallback and the ZOE_VOICE_STREAM=0 path
     held = False
     while True:
         _monitor = _BargeMonitor(pa)
@@ -2426,16 +2474,32 @@ def stt_on_jetson(wav_bytes: bytes) -> str:
     return str(resp.get("text", "")).strip()
 
 
-def _is_junk_transcript(text: str) -> bool:
-    """Filter STT garbage common on silence or speakerphone TTS bleed."""
+# The only VOICE_IGNORE_TRANSCRIPTS entries still treated as junk while Zoe is waiting for an answer: sounds, not words.
+_NON_WORD_FILLERS = frozenset({"hmm", "hm", "um", "uh", "er", "erm", "ah", "eh"})
+
+
+def _answering_window(window: str = "") -> bool:
+    """True when the user is replying to Zoe rather than waking her: a no-wake-word follow-up / conversation window, or
+    Zoe's last spoken reply was a question ("Hey Zoe, yes" after the window closed)."""
+    return window in ("followup", "conversation") or bool(_prev_reply_asked)
+
+
+def _is_junk_transcript(text: str, *, answering: bool = False) -> bool:
+    """Filter STT garbage common on silence or speakerphone TTS bleed.
+
+    ``VOICE_IGNORE_TRANSCRIPTS`` (yes/no/okay/thanks...) is WAKE-TIME noise only. When ``answering`` (see
+    ``_answering_window``) a short answer is the reply Zoe asked for - 2026-11-03: Zoe asked a question, the owner said
+    "Yes.", and this filter ended the follow-up chain. Only non-word fillers and the structural checks still apply then.
+    """
     s = text.strip().lower()
     if len(s) < 2:
         return True
-    if s in VOICE_IGNORE_TRANSCRIPTS:
-        return True
     # Strip trailing punctuation from short single-word hallucinations
     s2 = s.rstrip(".!?…")
-    if s2 in VOICE_IGNORE_TRANSCRIPTS:
+    if answering:
+        if s2 in VOICE_IGNORE_TRANSCRIPTS and s2 in _NON_WORD_FILLERS:
+            return True
+    elif s in VOICE_IGNORE_TRANSCRIPTS or s2 in VOICE_IGNORE_TRANSCRIPTS:
         return True
     # Repeated short tokens ("you you you", "okay okay ...") are common noise hallucinations.
     toks = [t for t in re.findall(r"[a-z']+", s2) if t]
@@ -3492,6 +3556,8 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     played_any = False
     expect_audio = False
     r = None
+    # Read BEFORE this turn overwrites _prev_reply_asked: is the user answering Zoe (short answers are real) or waking her?
+    answering = _answering_window(window)
 
     try:
         r = _zoe_http().post(url, json=payload, headers=_headers, timeout=60, stream=True, verify=VERIFY_SSL)
@@ -3568,6 +3634,13 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 break
             if "transcript" in obj and "chunk" not in obj:
                 transcript = obj.get("transcript", "") or transcript
+                # The server leads with the transcript, BEFORE any audio: wake-time junk is dropped HERE, so nothing is
+                # played. Closing the stream (below) makes the server cancel the brain task it started for it. (STT runs
+                # on the server, so this is the earliest the daemon can know.) A speculative stream keeps its own protocol.
+                if speculation is None and not played_any and transcript \
+                        and _is_junk_transcript(transcript, answering=answering):
+                    log.info("Ignoring junk/hallucination transcript before playback: %r", transcript)
+                    break
                 continue
             if "chunk" in obj:
                 expect_audio = True
@@ -3634,7 +3707,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         # Pass the claim we already scored: re-scoring here would append a
         # second shadow row + journal line for this one spoken turn.
         return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty,
-                               voice_claim=voice_claim)
+                               voice_claim=voice_claim, window=window)
 
     # The server answered WITHOUT running the brain (pre-brain utterance gate):
     #  * incomplete - the transcript ends mid-clause; _turn_with_monitor listens a
@@ -3675,7 +3748,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         log.info("speculation: cancelled turn_id=%s transcript=%r — caller runs the normal turn",
                  speculation.turn_id, transcript[:80])
         return False
-    if transcript and _is_junk_transcript(transcript):
+    if transcript and _is_junk_transcript(transcript, answering=answering):
         log.info("Ignoring junk/hallucination transcript: %r", transcript)
         return False
     if played_any:
@@ -3705,8 +3778,40 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     return False
 
 
+_FALLBACK_ONE_MOMENT = "One moment."
+_FALLBACK_UNREACHABLE = "Sorry, I can't reach my brain right now. Try again in a minute."
+
+
+def _post_turn_riding_restart(turn_payload: dict, on_restart=None, path: str = "/api/voice/turn") -> dict:
+    """POST the blocking turn (``/api/voice/turn``, or ``/api/voice/command`` for a text turn); on a restart-shaped
+    failure (502 / connect refused - the request provably did not run) say "One moment." locally and retry exactly
+    once after a backoff. Everything else (500 with a body, 503/504, a dropped connection, the read timeout) is
+    returned as is: a turn can execute a write, and the generic retry loop used to run one slow turn up to three
+    times (2026-11-02)."""
+    resp = _api_post(path, turn_payload, restart_only=True)
+    if resp.get("ok", True) is not False or not resp.get("restartish"):
+        return resp
+    log.warning("%s: zoe-data unreachable (%s) - local 'one moment', one retry in %.1fs",
+                path, resp.get("error"), VOICE_TURN_RESTART_RETRY_S)
+    _restart_recovery_active.set()
+    try:
+        _recording_active.clear()
+        if on_restart is not None:
+            # Let the caller silence/finish its "thinking" buffer phrase so the two never overlap.
+            try:
+                on_restart()
+            except Exception:
+                log.debug("on_restart hook failed", exc_info=True)
+        _espeak_local(_FALLBACK_ONE_MOMENT)
+        time.sleep(VOICE_TURN_RESTART_RETRY_S)
+        return _api_post(path, turn_payload, restart_only=True)
+    finally:
+        _restart_recovery_active.clear()
+
+
 def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True,
-                    conversation: bool = False, voice_claim: object = _CLAIM_UNSET) -> bool:
+                    conversation: bool = False, voice_claim: object = _CLAIM_UNSET,
+                    window: str = "", text: "str | None" = None) -> bool:
     """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
 
     Returns True if audio was played (eligible for follow-up listening).
@@ -3717,15 +3822,26 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     metrics row (and journal line) for one spoken turn — inflating the counts
     and giving one utterance two seqs, which breaks the per-seq FA/FR labelling.
     The sentinel distinguishes "not scored yet" from a scored no-match (None).
+
+    `window` ("followup" / "conversation"; "" for a wake turn) is forwarded so the server applies the stricter no-wake-word speaker
+    bar and drops an unconfirmed voice here too: the stream path's fallback used to omit it, which let a background clip clear only the
+    wake bar.
+
+    ``text`` runs the turn from a fixed transcript instead of a recording (the orb-tap pull,
+    ``POST /pull``): no audio, no claim and no STT - it goes to ``/api/voice/command`` and
+    the reply is played exactly as a spoken turn's is. No claim = no verdict, the same as any
+    unidentified turn, so a tap never proves a voice.
     """
     import time as _time
     _t_pi_start = _time.monotonic()
 
-    audio_b64_wav = base64.b64encode(wav).decode()
+    audio_b64_wav = "" if text else base64.b64encode(wav).decode()
     _t_encode = _time.monotonic() - _t_pi_start
 
     _t_vid_start = _time.monotonic()
-    if voice_claim is _CLAIM_UNSET:
+    if text:
+        voice_claim = None
+    elif voice_claim is _CLAIM_UNSET:
         voice_claim = None
         try:
             voice_claim = _speaker_claim_to_attach(wav)
@@ -3735,27 +3851,48 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
             pass
     _t_vid = _time.monotonic() - _t_vid_start
 
-    turn_payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
+    turn_payload: dict = {"text": text, "panel_id": PANEL_ID} if text else {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
     if voice_claim:
         # A claim + raw score; the server applies its own threshold.
         turn_payload["voice_user_id"], turn_payload["voice_score"] = voice_claim
-    _speaker = _speaker_field(voice_claim)
+    _speaker = None if text else _speaker_field(voice_claim)
     if _speaker is not None:
         turn_payload["speaker"] = _speaker
+    if window in ("followup", "conversation"):
+        turn_payload["window"] = window
 
     # Run the turn in a thread so we can play a buffer phrase ONLY when the
     # answer is actually slow. Fast/cached turns (~0.5s) return before the delay
     # and play the answer directly — no filler, no added latency.
     _turn_result: dict = {}
+    _restart_seen = threading.Event()
+    _buf_lock = threading.Lock()
+    _buf_holder: dict = {}
+
+    def _on_restart():
+        # Restart handling owns the speaker: no new buffer phrase, and wait out one already playing.
+        with _buf_lock:
+            _restart_seen.set()
+            _bp = _buf_holder.get("proc")
+        if _bp is not None:
+            try:
+                _bp.wait(timeout=4)
+            except Exception:
+                try:
+                    _bp.terminate()
+                except Exception:
+                    pass
 
     def _run_turn():
-        if VOICE_ROUTE_MODE == "ha_bridge":
+        if text:
+            _turn_result["resp"] = _post_turn_riding_restart(turn_payload, _on_restart, path="/api/voice/command")
+        elif VOICE_ROUTE_MODE == "ha_bridge":
             _turn_result["resp"] = _bridge_post(
                 "/voice/turn",
                 {"panel_id": PANEL_ID, "source": "satellite_pi", "audio_base64": audio_b64_wav},
             )
         else:
-            _turn_result["resp"] = _api_post("/api/voice/turn", turn_payload)
+            _turn_result["resp"] = _post_turn_riding_restart(turn_payload, _on_restart)
 
     _t_post_start = _time.monotonic()
     _turn_thread = threading.Thread(target=_run_turn, daemon=True)
@@ -3765,11 +3902,19 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     _buffer_proc = None
     if _turn_thread.is_alive():
         # Answer is taking a while → fill the gap with a "thinking" phrase.
-        _buffer_proc = _play_buffer_phrase()
+        with _buf_lock:
+            if not _restart_seen.is_set():
+                _buf_holder["proc"] = _play_buffer_phrase()
         _turn_thread.join()
+        _buffer_proc = _buf_holder.get("proc")
 
     resp = _turn_result.get("resp", {}) or {}
     ok = resp.get("ok", False)
+    # The conversation loop reads the end flag from _last_turn_flags, as the stream path's done frame sets it: a blocking reply
+    # (the stream's fallback) that dropped an unconfirmed voice carries it too, and must close the conversation the same way.
+    _last_turn_flags.pop("conversation_end", None)
+    if resp.get("conversation_end"):
+        _last_turn_flags["conversation_end"] = True
     _t_server = _time.monotonic() - _t_post_start
     _t_total = _time.monotonic() - _t_pi_start
     log.info(
@@ -3791,12 +3936,13 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     if not ok and not resp.get("audio_base64"):
         log.warning("Jetson voice turn failed (%s) — playing local espeak fallback", resp.get("error", "unknown_error"))
         _recording_active.clear()
-        _espeak_local("Zoe is not available right now. Please check the connection.")
+        _espeak_local(_FALLBACK_UNREACHABLE)
         return False
 
     transcript = resp.get("text", "")
     if transcript:
-        if _is_junk_transcript(transcript):
+        # The blocking turn's reply is already synthesised but NOT yet played: wake-time junk is dropped before playback.
+        if _is_junk_transcript(transcript, answering=_answering_window(window)):
             log.info("Ignoring junk/hallucination transcript: %r", transcript)
             return False
         log.info("Transcript: %r", transcript)
@@ -4131,7 +4277,7 @@ def _daemon_busy() -> bool:
     """True while speaking an announce would overlap live voice activity:
     a wake→record→STT cycle, a reply's TTS playback, or the post-play cooldown
     (the tail of a turn, where follow-up windows may still open)."""
-    if _recording_active.is_set():
+    if _recording_active.is_set() or _restart_recovery_active.is_set():
         return True
     with _tts_process_lock:
         if _tts_process is not None and _tts_process.poll() is None:
@@ -4166,7 +4312,8 @@ def _speak_announcement(ann: dict) -> bool:
     text = str(ann.get("text") or "").strip()
     if not text:
         return False
-    resp = _api_post("/api/voice/speak", {"text": text[:1200], "panel_id": PANEL_ID}, timeout=30)
+    # one attempt: a 500/504 or the read timeout is final - the generic retry re-ran a slow synthesis up to three times
+    resp = _api_post("/api/voice/speak", {"text": text[:1200], "panel_id": PANEL_ID}, timeout=30, retries=0)
     audio_b64 = resp.get("audio_base64")
     if not audio_b64:
         log.warning("announce %s: TTS fetch failed (%s)", ann.get("id", "?"), resp.get("error", "no audio"))
@@ -4381,7 +4528,7 @@ def _enroll_say(text: str) -> bool:
     settling, and never use a local espeak of our own."""
     audio, ctype = None, "audio/wav"
     for attempt in range(ENROLL_TTS_ATTEMPTS):
-        resp = _api_post("/api/voice/speak", {"text": text[:1200], "panel_id": PANEL_ID}, timeout=30)
+        resp = _api_post("/api/voice/speak", {"text": text[:1200], "panel_id": PANEL_ID}, timeout=30, retries=0)  # this loop IS the retry
         if resp.get("audio_base64"):
             audio, ctype = resp["audio_base64"], resp.get("content_type", "audio/wav")
             if resp.get("provider") != "espeak-ng":
@@ -4546,6 +4693,54 @@ _daemon_started_at = time.time()
 
 # Shared Event that orb-tap /activate can set to trigger a wake sequence.
 _orb_activate_event = threading.Event()
+# Orb-tap /pull (the dot is showing): deliver what is pending, spoken, as a "what's up?" turn.
+_orb_pull_event = threading.Event()
+# The fixed transcript of that turn - a pull phrase of proactive/pull.py PULL_PHRASES (pinned by a test).
+PULL_PHRASE = "what's up"
+
+
+def _pull_request_due() -> bool:
+    """A queued /pull that may run now. A pull inside MIN_WAKE_INTERVAL_S of the last wake stays queued (it runs the moment
+    the interval passes) instead of being silently dropped; claiming it stamps the wake time like an orb-tap does."""
+    global _last_wake_at
+    if not _orb_pull_event.is_set():
+        return False
+    now = time.monotonic()
+    if (now - _last_wake_at) < MIN_WAKE_INTERVAL_S:
+        return False
+    _orb_pull_event.clear()
+    _last_wake_at = now
+    return True
+
+
+def _run_pull_turn(pa: "pyaudio.PyAudio") -> None:
+    """The orb-tap pull turn, guarded like a spoken one (cross-review): the turn-active flag is up BEFORE the request goes out, so a
+    polled announcement cannot start speaking over the pull's reply, and a barge monitor owns the mic while the reply plays, so
+    speech (or "stop") interrupts it. The wake cooldown is armed afterwards, never shortened."""
+    global _ignore_wake_until
+    _recording_active.set()
+    try:
+        _monitor = _BargeMonitor(pa)
+        _monitor.start()
+        try:
+            _do_single_turn(pa, b"", prompt_on_empty=False, text=PULL_PHRASE)
+        finally:
+            _monitor.stop()
+        # Speech over the pull reply is a committed barge-in: its recording is the next turn, exactly as voice_command hands
+        # it on (seed -> _follow_up_source -> _turn_with_monitor). No seed (or the feature off) = back to wake mode.
+        seed_wav = _monitor.take_seed()
+        _turn_fn = _do_single_turn_stream if VOICE_STREAM_ENABLED else _do_single_turn
+        done = 0
+        while seed_wav is not None and done < max(1, FOLLOW_UP_MAX_TURNS):
+            follow_wav = _follow_up_source(pa, seed_wav)
+            seed_wav = None
+            if follow_wav is None:
+                break
+            _played, seed_wav = _turn_with_monitor(pa, follow_wav, _turn_fn, window="", prompt_on_empty=False)
+            done += 1
+    finally:
+        _recording_active.clear()
+        _ignore_wake_until = max(_ignore_wake_until, time.monotonic() + POST_PLAY_COOLDOWN_S)
 
 
 def _peer_is_loopback(peer: "str | None") -> bool:
@@ -4673,7 +4868,7 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Handle orb-tap activation from the touch UI (POST /activate)."""
-        if self.path == "/activate":
+        if self.path in ("/activate", "/pull"):
             if not _activate_request_allowed(self.headers.get("Host"), self.headers.get("Origin"), self.client_address[0]):
                 log.warning("%s refused: peer=%s host=%r origin=%r", self.path, self.client_address[0],
                             (self.headers.get("Host") or "")[:60], (self.headers.get("Origin") or "")[:80])
@@ -4681,8 +4876,12 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            _orb_activate_event.set()
-            body = json.dumps({"ok": True, "triggered": "wake"}).encode()
+            if self.path == "/pull":
+                _orb_pull_event.set()
+                body = json.dumps({"ok": True, "triggered": "pull"}).encode()
+            else:
+                _orb_activate_event.set()
+                body = json.dumps({"ok": True, "triggered": "wake"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -4936,6 +5135,19 @@ def main():
                         time.sleep(0.3)
                         stream = pa.open(**stream_kw)
                     continue
+
+            if _pull_request_due():
+                log.info("Orb-tap pull received - running a %r turn", PULL_PHRASE)
+                stream.stop_stream()
+                stream.close()
+                try:
+                    _run_pull_turn(pa)
+                except Exception as exc:
+                    log.error("Orb-tap pull turn error: %s", exc)
+                finally:
+                    time.sleep(0.3)
+                    stream = pa.open(**stream_kw)
+                continue
 
             audio_chunk = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             _PREROLL.append(audio_chunk)

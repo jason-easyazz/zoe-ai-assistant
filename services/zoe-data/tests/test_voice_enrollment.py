@@ -140,8 +140,9 @@ def sql(env, query, params=()):
 
 
 def enrol(env, uid, samples=3, consent=True):
-    sql(env, "INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, sample_count, consent_at) VALUES (?,?,?,?,?,?)",
-        (f"p-{uid}", uid, uid, b"\x00" * 1024, samples, "2026-09-01 00:00:00" if consent else None))
+    sql(env, "INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, sample_count, consent_at, model_id) VALUES (?,?,?,?,?,?,?)",
+        (f"p-{uid}", uid, uid, b"\x00" * 1024, samples, "2026-09-01 00:00:00" if consent else None,
+         "wespeaker_resnet34+i8qdq-u8s8+c1"))      # a ResNet34 profile: the only model the server acts on (a NULL model_id is the retired one)
 
 
 def queued(env, trigger=None):
@@ -442,10 +443,11 @@ def test_yes_starts_the_enrolment_on_the_panel(env, monkeypatch):
     reply = run(say("yes"))
     assert reply == "Okay, let's do it. Stay by the panel."
     cmd = json.loads(queued(env, "voice_enroll")[0][1])
-    assert cmd["kind"] == "voice_enroll" and cmd["user_id"] == ADULT and cmd["name"] == "Ann" and cmd["max_total_s"] == 90
+    assert cmd["kind"] == "voice_enroll" and cmd["user_id"] == ADULT and cmd["name"] == "Ann" and cmd["max_total_s"] == 120
+    assert cmd["clips"] == 5 and cmd["speaker_model"] == "resnet34"      # ResNet34 is the only model: 5 clips, 30 s more time
     script = cmd["script"]
     assert "voice signature, never the recordings" in script["intro"] and script["intro"].startswith("Hi Ann.")
-    assert "{n}" in script["prompt"] and "{phrase}" in script["prompt"] and len(script["phrases"]) == 3 and "stop" in script["cancel_words"]
+    assert "{n}" in script["prompt"] and "{phrase}" in script["prompt"] and len(script["phrases"]) == 5 and "stop" in script["cancel_words"]
     assert sql(env, "SELECT accepted_at FROM enrollment_offers WHERE user_id = ?", (ADULT,))[0][0]
     assert not ve.pending_for(ADULT)
 

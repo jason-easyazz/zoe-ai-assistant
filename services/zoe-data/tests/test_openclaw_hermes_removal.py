@@ -88,7 +88,6 @@ _ALLOWED = {
     "scripts/maintenance/zoe_ground_truth.sh": "inverse check: reports if a Hermes gateway is unexpectedly LISTENING on :8642 (ss, no connect)",
     "services/zoe-data/agents_registry.yml": "legacy peer-agent registry: /agent/registry lists base_url but never dials it (status comes from _RUNTIME_HEALTH, which no longer holds these agents); follow-up: drop the retired entries",
     "services/zoe-data/chat_hermes_stream.py": "REAL but dormant: HERMES_API_URL default for the retired Hermes stream; reached only via the __ESCALATE_HERMES__ signal, which cannot fire (zoe_agent._hermes_available() is False); follow-up: delete the module and its shim test",
-    "services/zoe-data/openclaw_maintenance.py": "REAL: fetch_gateway_status() GETs :18789/health and reports 'offline' (live, fails closed to offline; follow-up: remove with the /api/system openclaw update surface)",
     "services/zoe-data/routers/system.py": "REAL: _hermes_review_proposal() POSTs to :8642 on evolution-approve; it fails open on connection refused (live; removing it changes the approve flow, so it is left for its own PR)",
     "services/zoe-data/zoe_agent.py": "docstring/comment prose and a self-summary string (not a connection)",
     "services/zoe-data/tests/test_nginx_security_headers_helper.py": "nginx fixture text for the security-header helper",

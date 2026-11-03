@@ -231,7 +231,7 @@
     "ZOE_SPEAKER_MODEL": {
       "acknowledged": true,
       "effective": [
-        "'resemblyzer'",
+        "'resnet34'",
         "unset"
       ],
       "sites": {
@@ -242,10 +242,7 @@
           "''"
         ],
         "services/zoe-data/speaker_models.py": [
-          "'resemblyzer'"
-        ],
-        "services/zoe-data/voice_session.py": [
-          "'resemblyzer'"
+          "'resnet34'"
         ]
       }
     },
@@ -1255,6 +1252,44 @@
         },
         "typed_env": false
       },
+      "ZOE_ALARMS": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/alarms.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/architecture/alarms.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_ALARM_MUSIC_PLAYER": {
+        "defaults": [
+          "'Zoe Panel'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/alarm_music.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "Zoe Panel",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/architecture/alarms.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_ALLOWED_WS_ORIGINS": {
         "defaults": [
           "-"
@@ -1919,6 +1954,44 @@
           "type": "bool"
         },
         "typed_env": false
+      },
+      "ZOE_BRAIN_PREFIX_KEEPER": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_prefix_keeper.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/cold-wake-2026-11-02.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_BRAIN_PREFIX_KEEPER_MIN_TOKENS": {
+        "defaults": [
+          "2000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_prefix_keeper.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 2000,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/cold-wake-2026-11-02.md",
+          "type": "int"
+        },
+        "typed_env": true
       },
       "ZOE_BRAIN_PREWARM_ON_WAKE": {
         "defaults": [
@@ -14022,24 +14095,23 @@
       "ZOE_SPEAKER_MODEL": {
         "defaults": [
           "''",
-          "'resemblyzer'"
+          "'resnet34'"
         ],
         "in_env_example": true,
         "readers": [
           "scripts/setup/zoe_enroll_flow.py",
           "scripts/setup/zoe_voice_daemon.py",
-          "services/zoe-data/speaker_models.py",
-          "services/zoe-data/voice_session.py"
+          "services/zoe-data/speaker_models.py"
         ],
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "resemblyzer",
+          "default": "resnet34",
           "divergent_ok": {
             "scripts/setup/zoe_enroll_flow.py": "client-side: '' = let the server decide",
             "scripts/setup/zoe_voice_daemon.py": "client-side: '' = let the server decide"
           },
-          "note": "code default resemblyzer; live .env pins dual (kept: registry never changes live behaviour); live .env: dual",
+          "note": "ResNet34 is the only supported value (unset = resnet34); resemblyzer / dual raise at start-up (speaker_models.UnsupportedSpeakerModel)",
           "owner_doc": "docs/knowledge/speaker-resnet34-switch.md",
           "type": "str"
         },
@@ -14099,6 +14171,25 @@
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/speaker-resnet34-switch.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_WINDOW_TIER": {
+        "defaults": [
+          "'far01'"
+        ],
+        "in_env_example": true,
+        "readers": [
+          "services/zoe-data/speaker_models.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "far01",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/voice-verified-session.md",
           "type": "str"
         },
         "typed_env": true
@@ -16111,25 +16202,6 @@
         },
         "typed_env": true
       },
-      "ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER": {
-        "defaults": [
-          "False"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/voice_session.py"
-        ],
-        "registered": true,
-        "spec": {
-          "allowed": null,
-          "default": false,
-          "divergent_ok": {},
-          "note": "",
-          "owner_doc": "docs/knowledge/voice-verified-session.md",
-          "type": "bool"
-        },
-        "typed_env": true
-      },
       "ZOE_VOICE_SESSION_TTL_S": {
         "defaults": [
           "120"
@@ -17835,7 +17907,6 @@
       ],
       "in_env_example": false,
       "readers": [
-        "services/zoe-data/hermes_model_profiles.py",
         "services/zoe-data/kanban_phase_budget.py"
       ],
       "typed_env": false
@@ -18577,6 +18648,26 @@
       ],
       "typed_env": false
     },
+    "NIGHT_TEST_LANE_LOCK": {
+      "defaults": [
+        "'/tmp/zoe-test-lane.lock'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/night_window.py"
+      ],
+      "typed_env": false
+    },
+    "NIGHT_TEST_LANE_WAIT_MIN": {
+      "defaults": [
+        "'10'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/night_window.py"
+      ],
+      "typed_env": false
+    },
     "NIGHT_UBATCH": {
       "defaults": [
         "'128'"
@@ -18645,36 +18736,6 @@
       "readers": [
         "services/zoe-data/openclaw_ws.py",
         "services/zoe-data/zoe_acp_client.py"
-      ],
-      "typed_env": false
-    },
-    "OPENCLAW_ALLOW_AUTO_UPDATE": {
-      "defaults": [
-        "''"
-      ],
-      "in_env_example": true,
-      "readers": [
-        "services/zoe-data/openclaw_maintenance.py"
-      ],
-      "typed_env": false
-    },
-    "OPENCLAW_BACKGROUND_VERSION_CHECK": {
-      "defaults": [
-        "'false'"
-      ],
-      "in_env_example": true,
-      "readers": [
-        "services/zoe-data/routers/system.py"
-      ],
-      "typed_env": false
-    },
-    "OPENCLAW_GATEWAY_HEALTH_URL": {
-      "defaults": [
-        "'http://127.0.0.1:18789/health'"
-      ],
-      "in_env_example": false,
-      "readers": [
-        "services/zoe-data/openclaw_maintenance.py"
       ],
       "typed_env": false
     },
@@ -19338,6 +19399,16 @@
     "VOICE_ROUTE_MODE": {
       "defaults": [
         "'direct'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/zoe_voice_daemon.py"
+      ],
+      "typed_env": false
+    },
+    "VOICE_TURN_RESTART_RETRY_S": {
+      "defaults": [
+        "'4.0'"
       ],
       "in_env_example": false,
       "readers": [

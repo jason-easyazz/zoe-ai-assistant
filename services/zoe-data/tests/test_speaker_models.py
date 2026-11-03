@@ -77,6 +77,7 @@ def test_model_id_names_the_model_the_quantisation_and_the_centring_version():
     family, quant, centre = R34.split("+")
     assert (family, quant, centre) == ("wespeaker_resnet34", "i8qdq-u8s8", "c1")
     assert sm.LEGACY_MODEL_ID == "resemblyzer" and sm.is_known(R34) and not sm.is_known("wespeaker_resnet34+fp32+c1")
+    assert not sm.is_known(sm.LEGACY_MODEL_ID)                      # Resemblyzer is retired: a known model has an encoder
 
 
 def test_null_empty_and_garbage_are_the_legacy_model_and_two_ids_are_never_the_same_space():
@@ -87,23 +88,7 @@ def test_null_empty_and_garbage_are_the_legacy_model_and_two_ids_are_never_the_s
     assert not sm.same_space(R34, "wespeaker_resnet34+i8qdq-u8s8+c2")
 
 
-def test_mode_defaults_to_the_legacy_model_and_every_unknown_value_is_the_legacy_model(monkeypatch):
-    monkeypatch.delenv("ZOE_SPEAKER_MODEL", raising=False)
-    assert sm.speaker_mode() == "resemblyzer" and sm.acting_model() == sm.LEGACY_MODEL_ID
-    for raw, mode in (("", "resemblyzer"), ("RESNET34 ", "resnet34"), ("turbo", "resemblyzer"), ("1", "resemblyzer"),
-                      ("dual", "dual"), ("Dual", "dual")):
-        monkeypatch.setenv("ZOE_SPEAKER_MODEL", raw)
-        assert sm.speaker_mode() == mode, raw
-
-
-@pytest.mark.parametrize("mode, acting, enrols, visible, clips", [
-    ("resemblyzer", sm.LEGACY_MODEL_ID, (sm.LEGACY_MODEL_ID,), {sm.LEGACY_MODEL_ID}, 3),
-    ("dual", sm.LEGACY_MODEL_ID, (sm.LEGACY_MODEL_ID, R34), {sm.LEGACY_MODEL_ID, R34}, 5),
-    ("resnet34", R34, (R34,), {R34}, 5),
-])
-def test_what_each_mode_acts_on_enrols_serves_and_asks_for(mode, acting, enrols, visible, clips):
-    assert sm.acting_model(mode) == acting and sm.enrolled_models(mode) == enrols
-    assert set(sm.visible_models(mode)) == visible and sm.clips_needed(mode) == clips
+# (the supported / retired values of ZOE_SPEAKER_MODEL and what each helper returns: test_speaker_resemblyzer_retired.py)
 
 
 # -- thresholds by length group ---------------------------------------------------------------------------------------
@@ -132,11 +117,10 @@ def test_resnet34_thresholds_are_the_records_and_differ_by_group(monkeypatch):
 def test_a_score_between_the_two_thresholds_passes_short_and_fails_long_and_one_global_bar_cannot_do_both(monkeypatch):
     monkeypatch.delenv("ZOE_SPEAKER_RESNET34_TIER", raising=False)
     score = 0.25                                           # 0.233 <= 0.25 < 0.265
-    assert score >= sm.claim_threshold(R34, 1.5, 0.82)
-    assert score < sm.claim_threshold(R34, 3.0, 0.82)
-    # negative control: the legacy single global bar (0.82) rejects both, and a global 0.253 would flip one of them wrongly
-    assert score < sm.claim_threshold(sm.LEGACY_MODEL_ID, 1.5, 0.82) and score < sm.claim_threshold(sm.LEGACY_MODEL_ID, 3.0, 0.82)
-    assert sm.claim_threshold("not-a-model", 3.0, 0.82) is None
+    assert score >= sm.claim_threshold(R34, 1.5)
+    assert score < sm.claim_threshold(R34, 3.0)
+    # negative control: a single global bar (0.253) would flip one of the two wrongly; the retired model has no bar at all
+    assert sm.claim_threshold(sm.LEGACY_MODEL_ID, 1.5) is None and sm.claim_threshold("not-a-model", 3.0) is None
 
 
 # -- a claim is honoured only in the model the server acts on ----------------------------------------------------------
@@ -148,21 +132,18 @@ def claim(model=None, score=0.9, speech_s=3.0, member="jason"):
     return dict(voice_user_id=member, voice_score=score, speaker=block)
 
 
-@pytest.mark.parametrize("mode, payload, accepted", [
-    ("resemblyzer", claim(None, 0.9), True),                 # today's panel, today's gate
-    ("resemblyzer", claim(R34, 0.9), False),                 # a ResNet34 claim before the flip: refused whatever its score
-    ("dual", claim(None, 0.9), True),
-    ("dual", claim(R34, 0.9), False),                        # dual acts on Resemblyzer ONLY
-    ("resnet34", claim(R34, 0.30, 3.0), True),
-    ("resnet34", claim(R34, 0.25, 1.5), True),               # short clip: 0.233
-    ("resnet34", claim(R34, 0.25, 3.0), False),              # the same score on a longer clip: 0.265
-    ("resnet34", claim(None, 0.99), False),                  # a Resemblyzer claim after the flip: refused
-    ("resnet34", claim("wespeaker_resnet34+i8qdq-u8s8+c2", 0.9), False),     # unknown model
+@pytest.mark.parametrize("payload, accepted", [
+    (claim(None, 0.9), False),                               # a claim naming no model is the retired Resemblyzer one: refused whatever its score
+    (claim(R34, 0.30, 3.0), True),
+    (claim(R34, 0.25, 1.5), True),                           # short clip: 0.233
+    (claim(R34, 0.25, 3.0), False),                          # the same score on a longer clip: 0.265
+    (claim(None, 0.99), False),
+    (claim("resemblyzer", 0.99), False),
+    (claim("wespeaker_resnet34+i8qdq-u8s8+c2", 0.9), False),     # unknown model
 ])
-def test_claim_acceptance_matrix(monkeypatch, mode, payload, accepted):
+def test_claim_acceptance_matrix(monkeypatch, payload, accepted):
     from routers import voice_tts
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", mode)
-    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.82")
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
     monkeypatch.delenv("ZOE_SPEAKER_RESNET34_TIER", raising=False)
     assert (voice_tts._accept_panel_voice_claim(payload, DEVICE) == "jason") is accepted
 
@@ -187,9 +168,9 @@ async def test_claim_consent_is_per_model(world, monkeypatch):
 
 # -- the sync feed ----------------------------------------------------------------------------------------------------
 
-async def sync(monkeypatch, world, mode, models=None):
+async def sync(monkeypatch, world, models=None):
     from routers import voice_tts
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", mode)
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
     monkeypatch.delenv("ZOE_SPEAKER_ADAPT", raising=False)
     with compat_db(monkeypatch, world.db):
         return await voice_tts.voice_profiles_sync(models=models, caller=DEVICE)
@@ -201,29 +182,19 @@ def two_models(world):
     return world
 
 
-@pytest.mark.parametrize("mode, asked, served", [
-    ("resemblyzer", None, {sm.LEGACY_MODEL_ID}),
-    ("resemblyzer", R34, set()),                              # flag at its default: a panel that asks for ResNet34 gets nothing
-    ("dual", None, {sm.LEGACY_MODEL_ID}),                     # an older panel (no ?models=) is never handed a ResNet34 vector
-    ("dual", sm.LEGACY_MODEL_ID + "," + R34, {sm.LEGACY_MODEL_ID, R34}),
-    ("dual", R34, {R34}),
-    ("resnet34", sm.LEGACY_MODEL_ID + "," + R34, {R34}),
-    ("resnet34", None, set()),                                # resnet34 mode, panel names nothing: legacy-only panel gets no ResNet34 vector
+@pytest.mark.parametrize("asked, served", [
+    (None, set()),                                            # a panel that names nothing is a legacy one: no vector from a space it does not know
+    (R34, {R34}),
+    (sm.LEGACY_MODEL_ID + "," + R34, {R34}),                  # the retired model is never served, even when asked for
+    (sm.LEGACY_MODEL_ID, set()),
 ])
 @pytest.mark.asyncio
-async def test_sync_serves_each_panel_only_the_models_it_asked_for_and_the_mode_exposes(monkeypatch, two_models, mode, asked, served):
-    out = await sync(monkeypatch, two_models, mode, asked)
+async def test_sync_serves_each_panel_only_the_models_it_asked_for_and_the_server_exposes(monkeypatch, two_models, asked, served):
+    out = await sync(monkeypatch, two_models, asked)
     assert set(p["model_id"] for p in out["profiles"]) == served
-    assert set(out["models"]) == served and out["mode"] == mode
+    assert set(out["models"]) == served and out["mode"] == "resnet34"
     if R34 in served:
         assert out["models"][R34]["thresholds"]["short"] == 0.233 and out["models"][R34]["dim"] == 256
-
-
-@pytest.mark.asyncio
-async def test_sync_in_the_default_mode_is_unchanged_for_legacy_rows(monkeypatch, world):
-    out = await sync(monkeypatch, world, "resemblyzer", None)
-    assert [p["user_id"] for p in out["profiles"]] == ["jason"]
-    assert out["profiles"][0]["model_id"] == sm.LEGACY_MODEL_ID and out["threshold"] == pytest.approx(0.82)
 
 
 # -- identify never crosses models ------------------------------------------------------------------------------------
@@ -232,33 +203,20 @@ async def test_sync_in_the_default_mode_is_unchanged_for_legacy_rows(monkeypatch
 async def test_identify_compares_only_profiles_of_the_queried_model(monkeypatch, world):
     from routers import voice_tts
     vec = at_cos(0.95)
-    add_r34(world, "ada", vec)                                  # a ResNet34 profile that is IDENTICAL to what Jason's legacy row holds
+    add_r34(world, "ada", vec)                                  # a ResNet34 profile that is IDENTICAL to what Jason's retired row holds
     world.db.conn.execute("UPDATE speaker_profiles SET embedding_blob = ? WHERE user_id = 'jason'",
                           (np.asarray(vec, dtype=np.float32).tobytes(),))
     world.db.conn.commit()
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "dual")
-    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.5")
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
     with compat_db(monkeypatch, world.db):
-        legacy = await voice_tts.voice_identify(dict(embedding_base64=_b64(vec)), caller=DEVICE)
         r34 = await voice_tts.voice_identify(dict(embedding_base64=_b64(vec), model_id=R34, speech_s=3.0), caller=DEVICE)
-    assert legacy["identified"] and legacy["user_id"] == "jason"           # not 'ada', whose ResNet34 row is the same vector
-    assert r34["identified"] and r34["user_id"] == "ada" and r34["model_id"] == R34
-    # negative control: remove the legacy row and the legacy query finds NOBODY instead of falling through to the ResNet34 row
-    world.db.conn.execute("DELETE FROM speaker_profiles WHERE model_id IS NULL")
+    assert r34["identified"] and r34["user_id"] == "ada" and r34["model_id"] == R34      # not 'jason', whose retired row is the same vector
+    # negative control: remove the ResNet34 row and the same query finds NOBODY instead of falling through to the retired row
+    world.db.conn.execute("DELETE FROM speaker_profiles WHERE model_id = ?", (R34,))
     world.db.conn.commit()
     with compat_db(monkeypatch, world.db):
-        again = await voice_tts.voice_identify(dict(embedding_base64=_b64(vec)), caller=DEVICE)
+        again = await voice_tts.voice_identify(dict(embedding_base64=_b64(vec), model_id=R34, speech_s=3.0), caller=DEVICE)
     assert again["identified"] is False and again["reason"] == "no_profiles"
-
-
-@pytest.mark.asyncio
-async def test_identify_in_the_default_mode_refuses_a_resnet34_query(monkeypatch, world):
-    from routers import voice_tts
-    add_r34(world, "jason", at_cos(0.9))
-    monkeypatch.delenv("ZOE_SPEAKER_MODEL", raising=False)
-    with compat_db(monkeypatch, world.db):
-        out = await voice_tts.voice_identify(dict(embedding_base64=_b64(at_cos(0.9)), model_id=R34), caller=DEVICE)
-    assert out["identified"] is False and out["reason"] == "model_not_served"
 
 
 # -- the finished-profile enrolment -----------------------------------------------------------------------------------
@@ -328,7 +286,7 @@ async def test_the_server_never_embeds_audio_for_resnet34(monkeypatch, world):
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as e:
         await enrol(monkeypatch, world, dict(audio_base64=base64.b64encode(b"RIFF....").decode(), model_id=R34))
-    assert e.value.status_code == 400 and "panel" in e.value.detail
+    assert e.value.status_code == 409 and "panel" in e.value.detail
 
 
 # -- #2002 adaptation, per model --------------------------------------------------------------------------------------
@@ -401,12 +359,9 @@ async def test_adaptation_touches_only_the_acting_models_row(monkeypatch, world)
     by_model = dict((x[1], x) for x in rows(world))
     assert by_model[R34][4] is not None and by_model[R34][5] == 1       # ResNet34 row adapted ...
     assert by_model[sm.LEGACY_MODEL_ID][4] is None                      # ... the Resemblyzer row untouched
-    # a Resemblyzer-space offer in resnet34 mode is refused (and so is a ResNet34 one while dual acts on Resemblyzer)
+    # a Resemblyzer-space offer (no model_id = the retired model) is refused as an unknown model
     out = await spk.process_adaptation(world.db, panel_id="panel1", payload=dict((k, v) for k, v in offer.items() if k != "model_id"), now=NOW + timedelta(hours=2), mode="on")
-    assert out["reason"] == "not_acting_model"
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "dual")
-    out = await spk.process_adaptation(world.db, panel_id="panel1", payload=offer, now=NOW + timedelta(hours=3), mode="on")
-    assert out["reason"] == "not_acting_model"
+    assert out["reason"] == "unknown_model"
     out = await spk.process_adaptation(world.db, panel_id="panel1", payload=dict(offer, model_id="nope"), now=NOW, mode="on")
     assert out["reason"] == "unknown_model"
 
@@ -439,21 +394,14 @@ async def test_the_adapted_overlay_is_keyed_by_user_and_model(monkeypatch, world
 # -- who counts as enrolled, and what is asked of them -----------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_enrolled_means_every_model_the_mode_needs(monkeypatch, world):
+async def test_enrolled_means_a_consented_profile_in_the_acting_model(monkeypatch, world):
     import enrollment_state as es
-    monkeypatch.delenv("ZOE_SPEAKER_MODEL", raising=False)
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
     st = await es.get_state("jason", db=world.db)
-    assert st.voice_enrolled is True and st.voice_upgrade is False         # default mode: exactly today
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "dual")
-    st = await es.get_state("jason", db=world.db)
-    assert st.voice_enrolled is False and st.voice_upgrade is True         # only the old profile: Zoe offers the re-enrolment
+    assert st.voice_enrolled is False and st.voice_upgrade is False        # only the retired profile: Zoe offers the re-enrolment
     add_r34(world, "jason", at_cos(0.9))
     st = await es.get_state("jason", db=world.db)
-    assert st.voice_enrolled is True and st.voice_upgrade is False         # both models enrolled
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
-    world.db.conn.execute("DELETE FROM speaker_profiles WHERE model_id IS NULL")
-    world.db.conn.commit()
-    assert (await es.get_state("jason", db=world.db)).voice_enrolled is True
+    assert st.voice_enrolled is True and st.voice_upgrade is False
     world.db.conn.execute("UPDATE speaker_profiles SET consent_at = NULL")  # unconsented does not count
     world.db.conn.commit()
     st = await es.get_state("jason", db=world.db)
@@ -569,34 +517,6 @@ def test_the_deploy_script_ships_the_embedder_and_its_artifacts():
 
 
 @pytest.mark.asyncio
-async def test_enrolment_state_counts_only_the_acting_models_profile_in_every_mode(monkeypatch, world):
-    """Codex P2 on #2024: after a rollback to the default mode, a member who only has a ResNet34 row must NOT be reported enrolled
-    (that would suppress the re-enrolment the acting model needs), and Zoe must not say she knows a voice she cannot recognise."""
-    import enrollment_state as es
-    world.db.conn.execute("DELETE FROM speaker_profiles")
-    world.db.conn.commit()
-    add_r34(world, "jason", at_cos(0.9))
-    for mode in ("resemblyzer", "resnet34"):
-        monkeypatch.setenv("ZOE_SPEAKER_MODEL", mode)
-        st = await es.get_state("jason", db=world.db)
-        want = mode == "resnet34"
-        assert (st.voice_enrolled, st.voice_upgrade) == (want, False), mode
-    # negative control: the acting (legacy) row present -> enrolled in the default mode, and in dual she knows the voice (upgrade)
-    world.add_profile("jason", ANCHOR)
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resemblyzer")
-    assert (await es.get_state("jason", db=world.db)).voice_enrolled is True
-    world.db.conn.execute("DELETE FROM speaker_profiles WHERE model_id = ?", (R34,))
-    world.db.conn.commit()
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "dual")
-    st = await es.get_state("jason", db=world.db)
-    assert (st.voice_enrolled, st.voice_upgrade) == (False, True)
-    # resnet34 mode with only the legacy row: she can NOT recognise him, so it is not an 'upgrade' she can vouch for
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
-    st = await es.get_state("jason", db=world.db)
-    assert (st.voice_enrolled, st.voice_upgrade) == (False, False)
-
-
-@pytest.mark.asyncio
 async def test_a_finished_profile_must_name_its_model_it_is_never_assumed_legacy(monkeypatch, world):
     """Codex P2 on #2024: an embedding upload without a valid string model_id is refused (4xx), never stored as Resemblyzer."""
     from fastapi import HTTPException
@@ -608,31 +528,24 @@ async def test_a_finished_profile_must_name_its_model_it_is_never_assumed_legacy
             await enrol(monkeypatch, world, body)
         assert 400 <= e.value.status_code < 500, bad
     assert len(rows(world)) == 1                                               # only the fixture's legacy row
-    out = await enrol(monkeypatch, world, dict(embedding_base64=vec, model_id="resemblyzer"))      # negative control: named -> stored
+    out = await enrol(monkeypatch, world, dict(embedding_base64=vec, model_id=R34))      # negative control: named -> stored
     assert out["ok"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode, refused", [("resnet34", True), ("dual", False), ("resemblyzer", False)])
-async def test_browser_audio_enrolment_is_refused_only_when_resnet34_acts(monkeypatch, world, mode, refused):
-    """Codex P2 on #2024: the settings page uploads audio with no model_id. In resnet34 mode that would store a Resemblyzer
-    profile nobody uses and report success - refuse it and point at the panel. dual / default keep the old behaviour."""
+async def test_browser_audio_enrolment_is_refused_and_points_at_the_panel(monkeypatch, world):
+    """The settings page uploads audio with no model_id. The server has no audio encoder (Resemblyzer was retired): refuse and
+    point at the panel, store nothing."""
     from fastapi import HTTPException
-    from routers import voice_tts
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", mode)
-    monkeypatch.setattr(voice_tts, "_compute_resemblyzer_embedding", lambda path: np.asarray(at_cos(0.7), dtype=np.float32).tobytes())
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
     world.db.conn.execute("DELETE FROM speaker_profiles")
     world.db.conn.commit()
     body = dict(audio_base64=base64.b64encode(b"RIFF....WAVE").decode())
     browser = dict(source="session", user_id="jason", role="admin")
-    if refused:
-        with pytest.raises(HTTPException) as e:
-            await enrol(monkeypatch, world, body, caller=browser)
-        assert e.value.status_code == 409 and "learn my voice" in e.value.detail and "nothing was stored" in e.value.detail
-        assert rows(world) == []
-    else:                                                                       # negative control: the same upload is stored
-        out = await enrol(monkeypatch, world, body, caller=browser)
-        assert out["ok"] and [r[1] for r in rows(world)] == [sm.LEGACY_MODEL_ID]
+    with pytest.raises(HTTPException) as e:
+        await enrol(monkeypatch, world, body, caller=browser)
+    assert e.value.status_code == 409 and "learn my voice" in e.value.detail and "nothing was stored" in e.value.detail
+    assert rows(world) == []
 
 
 @pytest.mark.asyncio
@@ -661,10 +574,9 @@ def test_model_id_field_absent_is_legacy_and_malformed_is_none():
 def test_an_explicitly_malformed_claim_model_is_refused_not_read_as_legacy(monkeypatch, payload):
     from routers import voice_tts
     monkeypatch.delenv("ZOE_SPEAKER_MODEL", raising=False)
-    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.82")
     assert voice_tts._accept_panel_voice_claim(payload, DEVICE) is None
-    # negative control: the same claim with the field ABSENT is today's legacy claim, accepted
-    clean = dict(voice_user_id="jason", voice_score=0.95, speaker=dict(verified=None, member="jason", score=0.95))
+    # negative control: the same claim naming the acting model is accepted
+    clean = dict(voice_user_id="jason", voice_score=0.95, speaker=dict(verified=None, member="jason", score=0.95, model_id=R34))
     assert voice_tts._accept_panel_voice_claim(clean, DEVICE) == "jason"
 
 
@@ -679,7 +591,8 @@ async def test_identify_refuses_an_explicitly_malformed_model_id(monkeypatch, wo
             with pytest.raises(HTTPException) as e:
                 await voice_tts.voice_identify(dict(embedding_base64=_b64(ANCHOR), model_id=bad), caller=DEVICE)
             assert e.value.status_code == 400, bad
-        ok = await voice_tts.voice_identify(dict(embedding_base64=_b64(ANCHOR)), caller=DEVICE)    # negative control: absent
+        add_r34(world, "jason", ANCHOR)
+        ok = await voice_tts.voice_identify(dict(embedding_base64=_b64(ANCHOR), model_id=R34), caller=DEVICE)    # negative control: named
     assert ok["identified"] and ok["user_id"] == "jason"
 
 
@@ -688,7 +601,7 @@ async def test_adaptation_refuses_a_malformed_model_id(world):
     offer = dict(voice_user_id="jason", embedding_base64=_b64(at_cos(0.90)), voice_score=0.90, speech_s=3.0, model_id="")
     out = await spk.process_adaptation(world.db, panel_id="panel1", payload=offer, now=NOW, mode="shadow")
     assert out["reason"] == "unknown_model"
-    offer.pop("model_id")                                                      # negative control: absent = legacy, evaluated
+    offer["model_id"] = R34                                                    # negative control: a named, acting model is evaluated
     out = await spk.process_adaptation(world.db, panel_id="panel1", payload=offer, now=NOW, mode="shadow")
     assert out["reason"] != "unknown_model"
 
@@ -696,19 +609,14 @@ async def test_adaptation_refuses_a_malformed_model_id(world):
 # -- the settings list names each model's profile and orders them (Codex P2 on #2024) ------------------------------------
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode, first, labels", [
-    ("dual", sm.LEGACY_MODEL_ID, ["current", "new model, testing"]),
-    ("resnet34", R34, ["current", "not in use"]),
-    ("resemblyzer", sm.LEGACY_MODEL_ID, ["current", "not in use"]),
-])
-async def test_profile_list_labels_each_model_and_puts_the_acting_one_first(monkeypatch, world, mode, first, labels):
+async def test_profile_list_labels_each_model_and_puts_the_acting_one_first(monkeypatch, world):
     from routers import voice_tts
     add_r34(world, "jason", at_cos(0.9))
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", mode)
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
     with compat_db(monkeypatch, world.db):
         out = await voice_tts.voice_profiles(caller=dict(source="session", user_id="jason", role="admin"))
     mine = [p for p in out["profiles"] if p["user_id"] == "jason"]
-    assert [p["model_id"] for p in mine][0] == first and [p["model_label"] for p in mine] == labels
+    assert [p["model_id"] for p in mine][0] == R34 and [p["model_label"] for p in mine] == ["current", "not in use"]
     assert [p["acting"] for p in mine] == [True, False]
 
 
@@ -722,7 +630,7 @@ def test_the_settings_page_shows_the_model_and_the_delete_names_it():
 # -- "do you know my voice?" follows the acting model + consent (Codex P2 on #2024) ---------------------------------------
 
 @pytest.mark.asyncio
-async def test_self_model_knows_a_voice_only_if_the_acting_model_does_rollback_case(monkeypatch, world):
+async def test_self_model_knows_a_voice_only_if_the_acting_model_does(monkeypatch, world):
     import self_model
 
     async def count(sql, params=(), ttl=60.0):
@@ -731,13 +639,10 @@ async def test_self_model_knows_a_voice_only_if_the_acting_model_does_rollback_c
         return world.db.conn.execute(sql, params).fetchone()[0]
 
     monkeypatch.setattr(self_model, "_count", count)
-    world.db.conn.execute("DELETE FROM speaker_profiles")
-    world.db.conn.commit()
-    add_r34(world, "jason", at_cos(0.9))                                    # enrolled under resnet34, then rolled back
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resemblyzer")
-    assert (await self_model._enrolment("jason"))[0] is False             # the acting model cannot recognise him
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
+    assert (await self_model._enrolment("jason"))[0] is False             # only the retired pre-0051 row: the acting model cannot recognise him
     assert await count(*self_model._acting_voices_query()) == 0
-    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")                    # negative control: the model that has his profile acts
+    add_r34(world, "jason", at_cos(0.9))                                    # negative control: the model that acts has his profile
     assert (await self_model._enrolment("jason"))[0] is True
     assert await count(*self_model._acting_voices_query()) == 1
     world.db.conn.execute("UPDATE speaker_profiles SET consent_at = NULL")  # unconsented never counts

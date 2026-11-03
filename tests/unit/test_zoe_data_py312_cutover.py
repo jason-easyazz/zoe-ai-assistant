@@ -11,7 +11,7 @@ What is pinned here, and why each is a behaviour rather than a string:
   "what will the service exec?" from systemd, and fails closed on anything it
   cannot prove is a Python.
 * **The deploy deps step** is EXECUTED here, from `deploy.yml` itself, against a
-  stub systemd/uv/pip3: service on a venv → both install phases go into that venv
+  stub systemd/uv/pip3: service on a venv → the manifest goes into that venv
   (offline first); service on the system interpreter → the old `pip3 --user`
   list; unresolvable → the step fails before installing anything. The venv's
   mere EXISTENCE never selects it — it is built before the drop-in lands and
@@ -278,7 +278,6 @@ def test_deploy_refreshes_the_venv_when_the_service_runs_it(tmp_path, real_venv)
     vpy = f"{real_venv}/bin/python"
     assert calls == [
         f"uv pip install --offline --python {vpy} -r {REQ_312}",
-        f"uv pip install --offline --python {vpy} --no-deps resemblyzer==0.1.4",
     ], calls
     assert f"ZOE_DATA_PYTHON={py}\n" in gh_env
 
@@ -290,8 +289,6 @@ def test_deploy_falls_back_online_when_the_offline_pass_cannot_satisfy(tmp_path,
     assert calls == [
         f"uv pip install --offline --python {vpy} -r {REQ_312}",
         f"uv pip install --python {vpy} -r {REQ_312}",
-        f"uv pip install --offline --python {vpy} --no-deps resemblyzer==0.1.4",
-        f"uv pip install --python {vpy} --no-deps resemblyzer==0.1.4",
     ], calls
 
 

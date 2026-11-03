@@ -468,3 +468,21 @@ def test_negative_control_the_timeout_check_goes_red_on_a_hardcoded_wait():
     good = "await asyncio.to_thread(sess.finish, n, ss.finish_timeout_s())"
     assert _uses_production_finish_timeout(good)
     assert not _uses_production_finish_timeout(good.replace("ss.finish_timeout_s()", "30.0"))
+
+
+def test_stream_text_keeps_the_unstripped_transcript_so_naming_zoe_still_counts():
+    """Codex #2242: the stream text arrives wake-stripped; the raw holder must still show that Zoe was named."""
+    import voice_utterance_shape as shape
+
+    sess, _ = open_session("e" * 16, FakeStream("Zoe, what time is it?"))
+    sess.feed(0, pcm(2000))
+
+    async def go():
+        text = await vt._take_stt_stream_text({"stt_stream_id": "e" * 16, "stt_stream_samples": 2000}, wav(2000), ".wav")
+        await vt._transcribe_audio("unused.wav", capture=False, pre_text=text)
+        return text, (vt._stt_raw_var.get() or {}).get("raw", "")
+
+    text, raw = asyncio.run(go())
+    assert not text.lower().startswith("zoe")
+    assert shape.names_zoe(raw) is True
+    assert shape.names_zoe(text) is False   # control: the stripped text alone loses the fact

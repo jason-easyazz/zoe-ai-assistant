@@ -102,7 +102,7 @@ _INTENT_ROUTER_DOMAINS: dict[str, frozenset[str]] = {
     "time_query": frozenset({"time"}), "date_query": frozenset({"time"}),
     "weather": frozenset({"weather"}),
     "list_show": frozenset({"lists"}), "list_add": frozenset({"lists"}),
-    "list_remove": frozenset({"lists"}),
+    "list_remove": frozenset({"lists"}), "list_rename": frozenset({"lists"}),
     "calendar_show": frozenset({"calendar", "reminders"}),
     "calendar_create": frozenset({"calendar", "reminders"}),
     "reminder_list": frozenset({"reminders", "calendar"}),
@@ -185,7 +185,7 @@ def intent_gate_enabled() -> bool:
     return raw not in ("0", "false", "off", "no")
 
 
-def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str, str]:
+def intent_gate_decision(intent_name: str, verdict: Optional[dict], text: str = "") -> tuple[str, str]:
     """Pure rule: may a deterministic keyword intent answer, given the head's
     stage-1 verdict (router_two_stage.head_verdict shape)? → (decision, reason).
 
@@ -193,6 +193,10 @@ def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str
              / router_unsure (only `below_gate`: stage 1 under the 0.5 gate on
              a real domain has no opinion — garbled STT recovery)
              / router_agrees (head domain is one of the intent's classes)
+             / named_domain (`text` NAMES only this intent's domain — "my
+             calendar", "the shopping list" — and the head is confident in
+             another non-chat domain: the noun outranks the guess;
+             command_shapes.named_domain_overrides)
       veto   router_chat (chat_top, or the ZOE_ROUTER_HEAD_MIN_CONF `low_conf`
              floor — a deliberate send-to-the-brain verdict)
              / router_disagrees (the head is confident in another domain)
@@ -237,6 +241,10 @@ def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str
         return "veto", "router_chat"
     if verdict.get("domain") in classes:
         return "allow", "router_agrees"
+    import command_shapes
+
+    if command_shapes.named_domain_overrides(text, classes, str(verdict.get("domain") or "chat")):
+        return "allow", "named_domain"
     return "veto", "router_disagrees"
 
 
@@ -266,7 +274,7 @@ def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
         import semantic_router as _sr
 
         verdict = _sr.head_verdict(text)
-        decision, reason = intent_gate_decision(intent_name, verdict)
+        decision, reason = intent_gate_decision(intent_name, verdict, text)
         v = verdict or {}
         conf = v.get("head_conf")
         logger.info(

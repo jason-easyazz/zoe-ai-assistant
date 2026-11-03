@@ -8,6 +8,8 @@ timestamp: 2026-09-26T00:00:00Z
 
 # zoe-data Python 3.12 venv migration (B0.7)
 
+> **Update 2026-10-29 - Resemblyzer, torch, librosa and webrtcvad-wheels are RETIRED from the zoe-data manifest** (the server embeds no audio; ResNet34 ONNX runs on the panel). The two-phase install, the `webrtcvad` blocker and the torch CPU-wheel pin described below are history; `build_py312_venv.sh` is a single manifest install again. A venv built before this change keeps the packages until an operator rebuild (deploy's `--refresh` is additive) - `--check` reports them EXTRANEOUS.
+
 Program item **B0.7** in [beat-the-bar-2026-program.md](../architecture/beat-the-bar-2026-program.md).
 Motivation: [state-of-zoe-review-2026-09-25.md](state-of-zoe-review-2026-09-25.md) — system
 Python 3.10.12 is EOL 2026-10-31, and three pins are already stuck on it (`onnxruntime` 1.23.2 is

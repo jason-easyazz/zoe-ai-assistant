@@ -22,7 +22,9 @@ _MAX_TOKENS = 80
 _SYSTEM = (
     "You are Zoe, a friendly assistant. "
     "Write a single short push-notification message (≤25 words) for the user. "
-    "Be warm, clear, and specific. No markdown, no quotes."
+    "Be warm, clear, and specific. No markdown, no quotes. "
+    "Only state when something was said if the context gives an exact 'mentioned' wording; "
+    "otherwise do not say when (never 'this morning', 'yesterday', 'earlier today' on your own)."
 )
 
 
@@ -31,7 +33,13 @@ async def compose_message(trigger_type: str, context: dict, fallback: str) -> st
     Given a trigger_type and a context dict, ask the LLM for a short message.
     Returns fallback on failure or if the LLM is unavailable.
     """
-    prompt_content = f"Trigger: {trigger_type}\nContext: {context}\nWrite the push notification message."
+    try:
+        from time_utils import clock_stamp
+
+        now = f"Now (household local time): {clock_stamp()}\n"
+    except Exception:  # noqa: BLE001 - the clock is garnish; the message is not
+        now = ""
+    prompt_content = f"{now}Trigger: {trigger_type}\nContext: {context}\nWrite the push notification message."
     payload = {
         "model": "local",
         "messages": [
