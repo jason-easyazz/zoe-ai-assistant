@@ -283,9 +283,6 @@
         "services/zoe-data/proactive/triggers/evolution_weekly_digest.py": [
           "'Australia/Perth'"
         ],
-        "services/zoe-data/proactive/triggers/people_birthday.py": [
-          "'Australia/Perth'"
-        ],
         "services/zoe-data/proactive/triggers/people_health.py": [
           "'Australia/Perth'"
         ],
@@ -14999,7 +14996,6 @@
           "services/zoe-data/proactive/triggers/emotional_followup.py",
           "services/zoe-data/proactive/triggers/evening_windown.py",
           "services/zoe-data/proactive/triggers/evolution_weekly_digest.py",
-          "services/zoe-data/proactive/triggers/people_birthday.py",
           "services/zoe-data/proactive/triggers/people_health.py",
           "services/zoe-data/proactive/triggers/reminder_scan.py",
           "services/zoe-data/routers/weather.py",
@@ -16882,7 +16878,6 @@
     "services/zoe-data/proactive/triggers/emotional_followup.py": 2,
     "services/zoe-data/proactive/triggers/evening_windown.py": 1,
     "services/zoe-data/proactive/triggers/evolution_weekly_digest.py": 1,
-    "services/zoe-data/proactive/triggers/people_birthday.py": 1,
     "services/zoe-data/proactive/triggers/people_health.py": 1,
     "services/zoe-data/proactive/triggers/reminder_scan.py": 2,
     "services/zoe-data/proactive/triggers/reminders.py": 1,
@@ -19631,6 +19626,7 @@
     }
   },
   "registry_unread": [
-    "ZOE_COMPOSE_VOICE_BUDGET_S"
+    "ZOE_COMPOSE_VOICE_BUDGET_S",
+    "ZOE_PERSON_PROFILE_ANSWERS"
   ]
 }

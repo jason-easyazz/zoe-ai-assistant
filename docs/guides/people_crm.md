@@ -103,9 +103,11 @@ Fires for Inner Circle / friends where:
 Message: *"You haven't spoken to Sarah in 3 weeks."*
 
 ### `PeopleBirthdayTrigger` (8am)
-Fires for contacts whose birthday is **1–7 days away** (not day-of, for lead time).
+Fires once per person per day on the lead days: **7 days before and on the day** (inner / family circle: 14, 3 and the
+day; a per-date `reminder_days_before` other than 7 overrides). Reads `person_important_dates` and the legacy
+`people.birthday` column. Detail: `docs/knowledge/contacts-people-memory.md` (person profiles and the birthday fix).
 
-Message: *"Sarah's birthday is in 5 days."*
+Message: *"Sarah's birthday is in 7 days."* / *"It's Sarah's birthday today."*
 
 ---
 

@@ -614,6 +614,7 @@ _ENTRIES = (
     _f('ZOE_PERSON_LLM_CONFIDENCE_MIN', 'float', 0.4, doc='docs/knowledge/contacts-people-memory.md'),
     _f('ZOE_PERSON_LLM_PREFILTER', 'str', '', doc='docs/research/brain-extraction-stack-best-practice-2026-10-05.md'),
     _f('ZOE_PERSON_MERGE_ENABLED', 'str', '', doc='docs/knowledge/relationship-memory-flag-enable.md'),
+    _f('ZOE_PERSON_PROFILE_ANSWERS', 'bool', False, doc='docs/knowledge/contacts-people-memory.md'),
     _f('ZOE_PERSON_RECALL_FLOOR', 'str', '', doc='docs/knowledge/samantha-bar.md'),
     _f('ZOE_PERSON_SUGGEST_ENABLED', 'str', '', doc='docs/knowledge/relationship-memory-flag-enable.md'),
     _f('ZOE_PGU_SID', 'str', ''),
