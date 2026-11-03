@@ -12,8 +12,10 @@ def test_use_core_brain_flag(monkeypatch):
     monkeypatch.delenv("ZOE_USE_CORE_BRAIN", raising=False)
     assert bd.use_core_brain() is True  # default ON (cutover)
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     assert bd.use_core_brain() is False
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "true")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     assert bd.use_core_brain() is True
 
 
@@ -26,6 +28,7 @@ async def test_oneshot_routes_to_core_by_default(monkeypatch):
 
     monkeypatch.setattr(zoe_core_client, "run_zoe_core", fake_core)
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "true")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     assert await bd.brain_oneshot("hi", "s", "jason") == "core:hi:jason"
 
 
@@ -38,6 +41,7 @@ async def test_oneshot_routes_to_legacy_when_off(monkeypatch):
 
     monkeypatch.setattr(zoe_agent, "run_zoe_agent", fake_legacy)
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     assert await bd.brain_oneshot("hi", "s", "jason") == "legacy:hi"
 
 
@@ -51,6 +55,7 @@ async def test_streaming_routes_to_core_by_default(monkeypatch):
 
     monkeypatch.setattr(zoe_core_client, "run_zoe_core_streaming", fake_stream)
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "true")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     chunks = [c async for c in bd.brain_streaming("hi", "s", "jason")]
     assert chunks == ["a", "b"]
 
@@ -64,5 +69,6 @@ async def test_streaming_routes_to_legacy_when_off(monkeypatch):
 
     monkeypatch.setattr(zoe_agent, "run_zoe_agent_streaming", fake_legacy_stream)
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     chunks = [c async for c in bd.brain_streaming("hi", "s", "jason")]
     assert chunks == ["legacy:hi"]

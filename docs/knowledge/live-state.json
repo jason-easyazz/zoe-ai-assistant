@@ -294,7 +294,7 @@
   },
   "ZOE_BRAIN_BACKEND": {
    "defaults": [
-    "core"
+    "flue"
    ],
    "kind": "str",
    "readers": 1

@@ -312,10 +312,10 @@ async def test_brain_probe_confirms_only_a_reported_tool(monkeypatch, reply, exp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", [None, "core", "", "FLUE-ish"])
+@pytest.mark.parametrize("backend", ["core", "", "FLUE-ish"])
 async def test_no_claim_unless_the_flue_lane_is_the_selected_brain(monkeypatch, backend):
     """Codex #1702: a healthy sidecar that registered web_search is NOT enough —
-    with ZOE_BRAIN_BACKEND on `core` (the default, or a rollback) the brain that
+    with ZOE_BRAIN_BACKEND on `core` (the rollback lane) the brain that
     answers cannot call it, so no claim and no probe."""
     monkeypatch.setenv(FLAG, "1")
     monkeypatch.setenv("ZOE_BRAIN_BACKEND", backend) if backend is not None else monkeypatch.delenv("ZOE_BRAIN_BACKEND", raising=False)
