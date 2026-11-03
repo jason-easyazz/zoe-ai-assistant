@@ -130,6 +130,17 @@ ZOE_NIGHT_MIND=serve
 
 Before it: `routers/memories.py` is voice path and this changes what it injects, so run the voice replay gate with the flag set (`scripts/maintenance/voice_regression_probe.py` under `flock /tmp/zoe-voice-harness.lock`, `docs/knowledge/voice-pipeline.md`; said-vs-did and per-stage speed must not regress). Rollback: delete the line and restart. Read after a day: `BRIEF_FIRST_TURN ... night=N` in `~/.zoe-logs/zoe-data.app.log`.
 
+### Flipping to serve: the replay gate and the first morning (owner decision 2026-11-03)
+
+The writer is live and measured; the READERS are exercised by `services/zoe-data/tests/test_night_mind_readers_replay.py` (cells R1-R8: serve serves what another process wrote with zero model calls; a held or replaced quote is never served; a forgotten entity is not served after the tombstone or `erase_entity`, and the erase fails closed; a guest or unverified speaker gets an empty packet from the real route; the block is <= 3 lines and <= 200 tokens and sits after the unchanged packet prefix; `off` and `shadow` are byte-identical to today and touch neither store nor model; a planted fault - a reader that ignores the forget shield - turns the R4 probe red).
+
+1. When the household is quiet (not 07:00-22:00 while the panel is in use, not in the night window - `night_busy.sh test`): `flock -x /tmp/zoe-test-lane.lock timeout 900 python3 -m pytest -q -p no:cacheprovider services/zoe-data/tests/test_night_mind_readers_replay.py services/zoe-data/tests/test_night_mind.py` (no `-n`, one lane). Green = every cell passes, including R8 (a green R8 means the forget probe can go red).
+2. `routers/memories.py` is voice path: also run the voice replay gate with the flag set (previous section), under the brain lock.
+3. Green on both = flip (owner step, `ZOE_NIGHT_MIND=serve` in `services/zoe-data/.env`, restart, poll `/health`).
+4. First morning, from `~/.zoe-logs/zoe-data.app.log` (counts only): the served count (`night_notes` on the packet / `BRIEF_FIRST_TURN ... night=N`), the held count in the latest `NIGHT_MIND` run line (held rows are never served), and one forget probe: ask Zoe to forget a name that has an observation, then ask about that name - nothing from it may be served. Any served line naming a forgotten name, or any `NIGHT_MIND` pass line from zoe-data itself (serve never runs the pass), is a rollback: delete the line, restart.
+
+Known gap, not hidden: `_shielded` swallows an exception from the durable forget-ledger lookup and treats it as "not forgotten" (the in-memory tombstone still applies), so a ledger outage fails open on the serve-time re-check. `erase_entity` is the fail-closed half (it raises); the erase is what makes a forget durable.
+
 ## What landed and what is deferred
 
 Landed: the four stages, the store + migration, the digest hook, the readers (packet block, brief item with `source_ref`, mood-turn check-in), forget / delete / opt-out integration, the standalone CLI, Z0n + the fake brain, K1-K12 with negative controls, Z0's `protocol_brain` baseline, the window driver + flag-dark phase, the day-sim `night_mind` intent / `night=` field / S9c, tests in both lanes.
