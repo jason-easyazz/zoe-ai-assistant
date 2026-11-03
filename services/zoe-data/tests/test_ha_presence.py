@@ -190,3 +190,93 @@ def test_route_member_only_and_flag_gated(dbfile, monkeypatch):
     for bad in ({"user_id": "guest", "role": "guest"}, {"user_id": "p", "role": "member", "panel_id": "x"},
                 {"user_id": "d", "role": "member", "device_token_role": "panel"}):
         assert _client(dbfile, bad).get("/api/presence/observed").status_code == 403
+
+
+# ── the bridge contract (services/homeassistant-mcp-bridge/main.py GET /entities), the restart baseline, retention ──────────
+
+BRIDGE = ROOT.parent / "homeassistant-mcp-bridge"
+
+
+def _bridge(monkeypatch, states):
+    monkeypatch.syspath_prepend(str(BRIDGE))
+    spec = importlib.util.spec_from_file_location("ha_bridge_main_for_presence", BRIDGE / "main.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    class FakeHA:
+        async def get_states(self):
+            if isinstance(states, Exception):
+                raise states
+            return states
+
+    monkeypatch.setattr(mod, "ha_bridge", FakeHA())
+    return mod
+
+
+def _via_bridge(mod):
+    async def fetch(domain):
+        return hp.entities_of(await mod.get_entities(domain=domain, state=None))
+    return fetch
+
+
+def test_the_real_bridge_body_is_read_and_attributes_never_reach_a_row(dbfile, monkeypatch):
+    mod = _bridge(monkeypatch, [
+        {"entity_id": "person.alex", "state": "home", "attributes": {"latitude": -31.9, "address": "1 Demo St"}},
+        {"entity_id": "device_tracker.phone", "state": "not_home", "attributes": {"gps_accuracy": 5}},
+        {"entity_id": "light.kitchen", "state": "on"},
+    ])
+
+    async def go():
+        async with aiosqlite.connect(dbfile) as db:
+            return await hp.poll_once(db, fetch=_via_bridge(mod), now=1.0)
+
+    assert asyncio.run(go()) == 2
+    blob = " ".join(str(c) for r in asyncio.run(_rows(dbfile)) for c in r)
+    assert "Demo St" not in blob and "-31.9" not in blob and "alex" not in blob
+
+
+def test_a_bridge_error_body_is_a_failure_not_an_empty_house(dbfile, monkeypatch):
+    from fastapi import HTTPException
+
+    asyncio.run(_run(dbfile, [{"entity_id": "person.a", "state": "home"}], 1.0))
+    baseline = dict(hp._last_state)
+    mod = _bridge(monkeypatch, HTTPException(status_code=502, detail="HA unreachable"))
+    body = asyncio.run(mod.get_entities(domain="person", state=None))
+    assert body["entities"] == [] and body.get("error")                       # the bridge really answers 200 + an error body
+    with pytest.raises(RuntimeError):
+        hp.entities_of(body)
+
+    async def go():
+        async with aiosqlite.connect(dbfile) as db:
+            return await hp.poll_once(db, fetch=_via_bridge(mod), now=2.0)
+
+    assert asyncio.run(go()) == 0
+    assert hp._last_state == baseline                                         # the debounce baseline survives the outage
+    assert len(asyncio.run(_rows(dbfile))) == 1
+
+
+def test_restart_baseline_is_capped_and_tracked_keys_follow_ha(dbfile):
+    payload = [{"entity_id": f"device_tracker.d{i}", "state": "home"} for i in range(hp.MAX_ROWS_PER_MIN * 2)]
+    asyncio.run(_run(dbfile, payload, 100.0))                                 # a fresh process: the baseline is capped per minute
+    asyncio.run(_run(dbfile, payload, 170.0))                                 # next minute: the rest
+    assert len(hp._last_state) == len(payload)
+    assert sum(1 for r in asyncio.run(_rows(dbfile)) if r[0] != hp.STORM_KEY) == len(payload)
+    asyncio.run(_run(dbfile, payload[:3], 240.0))                             # HA dropped most entities: the in-memory state follows
+    assert len(hp._last_state) == 3
+
+
+def test_rows_past_retention_are_pruned(dbfile):
+    from datetime import datetime, timedelta, timezone
+
+    old = datetime.now(timezone.utc) - timedelta(seconds=hp.RETENTION_S + 60)
+
+    async def seed():
+        async with aiosqlite.connect(dbfile) as db:
+            await db.execute("INSERT INTO presence_observations (observed_at, source, entity_key, state, ttl_s) VALUES (?, ?, ?, ?, ?)",
+                             (old, hp.SOURCE, "k-old", "home", hp.TTL_S))
+            await db.commit()
+
+    asyncio.run(seed())
+    asyncio.run(_run(dbfile, [{"entity_id": "person.a", "state": "home"}], 1.0))
+    keys = [r[0] for r in asyncio.run(_rows(dbfile))]
+    assert "k-old" not in keys and len(keys) == 1

@@ -8,14 +8,20 @@ credential, zoe-data adds none) once a minute and writes one OBSERVED row per ch
 * the entity id is stored as ``sha256(entity_id)``; the state is ``home`` / ``away`` / ``unknown`` only.
 * observed and inferred never merge: this module writes observed rows and nothing else; nothing here reaches a user.
 * per-entity debounce (a flip is written at most once per ``DEBOUNCE_S``), a hard cap of ``MAX_ROWS_PER_MIN`` rows a minute with
-  ONE ``storm`` row above it, and any bridge/DB failure means "write nothing this poll".
+  ONE ``storm`` row above it, and any bridge/DB failure means "write nothing this poll". The bridge answers an HA failure with HTTP
+  200 + ``{"entities": [], "error": ...}``; that is a failure here, never "nobody is anywhere".
+* the debounce state is in memory: after a restart every entity is written once again (the baseline), at most ``MAX_ROWS_PER_MIN``
+  a minute, and the tracked keys are pruned to the entities the last good poll saw (bounded by HA's own entity count).
+* retention: rows older than ``RETENTION_S`` are deleted (checked at most every ``PRUNE_EVERY_S``). The key is an UNSALTED hash of
+  the entity id, so it is a pseudonym (guessable from the HA entity name), not anonymous - the bounded retention is what keeps this
+  household metadata from accumulating (``docs/knowledge/forget-reach.md``, "Stores outside the per-member inventory").
 """
 from __future__ import annotations
 
 import hashlib
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -29,12 +35,14 @@ DEBOUNCE_S = 120.0
 MAX_ROWS_PER_MIN = 20
 TTL_S = 180
 STORM_KEY = "storm"
+RETENTION_S = 14 * 86400
+PRUNE_EVERY_S = 3600.0
 
 Fetch = Callable[[str], Awaitable[list]]
 
 _last_state: dict[str, str] = {}   # entity_key -> last WRITTEN state
 _last_write: dict[str, float] = {}  # entity_key -> monotonic time of that write
-_window: dict[str, float] = {"start": 0.0, "rows": 0.0, "storm": 0.0}
+_window: dict[str, float] = {"start": 0.0, "rows": 0.0, "storm": 0.0, "pruned": float("-inf")}
 
 
 def mode() -> str:
@@ -59,19 +67,37 @@ def map_state(raw: Any) -> str:
 def reset_state() -> None:
     _last_state.clear()
     _last_write.clear()
-    _window.update(start=0.0, rows=0.0, storm=0.0)
+    _window.update(start=0.0, rows=0.0, storm=0.0, pruned=float("-inf"))
 
 
 async def _bridge_fetch(domain: str) -> list:
     import httpx
     import os
 
-    base = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
+    base = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007").rstrip("/")
     async with httpx.AsyncClient(timeout=BRIDGE_TIMEOUT_S) as client:
         r = await client.get(f"{base}/entities", params={"domain": domain})
         r.raise_for_status()
         data = r.json()
-    return data.get("entities", []) if isinstance(data, dict) else list(data)
+    return entities_of(data)
+
+
+def entities_of(data: Any) -> list:
+    """The bridge's ``GET /entities`` body (``services/homeassistant-mcp-bridge/main.py``): ``{"entities": [...], "count": n}``, or on an
+    HA failure STILL HTTP 200 with ``{"entities": [], "error": ..., "status": n}``. An error body raises - an HA outage is "write nothing",
+    never an empty house."""
+    if not isinstance(data, dict):
+        raise ValueError("bridge body is not an object")
+    if data.get("error") or "entities" not in data:
+        raise RuntimeError(f"bridge reported an error (status {data.get('status')})")
+    ents = data["entities"]
+    if not isinstance(ents, list):
+        raise ValueError("bridge entities is not a list")
+    return ents
+
+
+async def _prune(db: Any, now_utc: datetime) -> None:
+    await db.execute("DELETE FROM presence_observations WHERE observed_at < ?", (now_utc - timedelta(seconds=RETENTION_S),))
 
 
 async def _insert(db: Any, key: str, state: str, now_utc: datetime) -> None:
@@ -99,6 +125,9 @@ async def poll_once(db: Any = None, *, fetch: Optional[Fetch] = None, now: Optio
         logger.info("ha_presence: poll skipped (%s)", type(exc).__name__)
         return 0
     logger.debug("ha_presence: poll saw %d entities", len(seen))
+    for gone in [k for k in _last_state if k not in seen]:   # bound the debounce state to what HA has now
+        _last_state.pop(gone, None)
+        _last_write.pop(gone, None)
 
     if mono - _window["start"] >= 60.0:
         _window.update(start=mono, rows=0.0, storm=0.0)
@@ -115,25 +144,32 @@ async def poll_once(db: Any = None, *, fetch: Optional[Fetch] = None, now: Optio
         pending.append((key, state))
     if storm and not _window["storm"]:
         pending.append((STORM_KEY, "unknown"))
-    if not pending:
+    prune = mono - _window["pruned"] >= PRUNE_EVERY_S
+    if not pending and not prune:
         return 0
 
     now_utc = datetime.now(timezone.utc)
+
+    async def _write(conn: Any) -> None:
+        for key, state in pending:
+            await _insert(conn, key, state, now_utc)
+        if prune:
+            await _prune(conn, now_utc)
+        await conn.commit()
+
     try:
         if db is None:
             from db_pool import get_db_ctx
 
             async with get_db_ctx() as owned:
-                for key, state in pending:
-                    await _insert(owned, key, state, now_utc)
-                await owned.commit()
+                await _write(owned)
         else:
-            for key, state in pending:
-                await _insert(db, key, state, now_utc)
-            await db.commit()
+            await _write(db)
     except Exception as exc:  # noqa: BLE001
         logger.warning("ha_presence: write failed (%s); nothing recorded", type(exc).__name__)
         return 0
+    if prune:
+        _window["pruned"] = mono
     for key, state in pending:
         if key == STORM_KEY:
             _window["storm"] = 1.0

@@ -105,6 +105,9 @@
         "services/zoe-data/mcp_server.py": [
           "'http://127.0.0.1:8007'"
         ],
+        "services/zoe-data/presence/ha_presence.py": [
+          "'http://127.0.0.1:8007'"
+        ],
         "services/zoe-data/routers/ha_control.py": [
           "'http://127.0.0.1:8007'"
         ],
@@ -5399,6 +5402,7 @@
         "readers": [
           "services/zoe-data/intent_router.py",
           "services/zoe-data/mcp_server.py",
+          "services/zoe-data/presence/ha_presence.py",
           "services/zoe-data/routers/ha_control.py",
           "services/zoe-data/routers/stubs.py",
           "services/zoe-data/routers/system.py",
@@ -5457,6 +5461,29 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_HA_PRESENCE": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/presence/ha_presence.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_HA_UI_GATE": {
         "defaults": [
@@ -16874,6 +16901,7 @@
     "services/zoe-data/pi_intent_classifier.py": 1,
     "services/zoe-data/pipeline_cross_review.py": 1,
     "services/zoe-data/pipeline_store.py": 5,
+    "services/zoe-data/presence/ha_presence.py": 1,
     "services/zoe-data/proactive/arrival.py": 3,
     "services/zoe-data/proactive/engine.py": 7,
     "services/zoe-data/proactive/ledger.py": 1,
@@ -19631,7 +19659,6 @@
     }
   },
   "registry_unread": [
-    "ZOE_COMPOSE_VOICE_BUDGET_S",
-    "ZOE_HA_PRESENCE"
+    "ZOE_COMPOSE_VOICE_BUDGET_S"
   ]
 }
