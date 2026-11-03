@@ -74,7 +74,7 @@ def raw_log_calls(source: str) -> list[tuple[int, str]]:
         recv = node.func.value
         if not (isinstance(recv, ast.Name) and recv.id in {"logger", "log", "_log", "LOG"}):
             continue
-        for arg in node.args[1:]:
+        for arg in node.args:   # the message too: an f-string or "..." % text embeds the words before logging sees them
             hits += [(node.lineno, n) for n in _raw_names(arg)]
     return hits
 
@@ -94,8 +94,10 @@ logger.info("ack: %r", (text or "")[:40])
 log.info("turn_stream TTFA=%.2fs transcript=%r", ttfa, transcript[:80])
 logger.info("ok %s", _utt_tag(text))
 logger.debug("debug may carry %r", text)
+logger.info(f"Transcript: {transcript}")
+logger.warning("heard %s" % text)
 '''
-    assert [v for _, v in raw_log_calls(pre)] == ["text", "transcript", "text", "text", "transcript"]
+    assert [v for _, v in raw_log_calls(pre)] == ["text", "transcript", "text", "text", "transcript", "transcript", "text"]
 
 
 def test_tag_has_no_words_and_joins_the_shadow_log():
@@ -137,6 +139,25 @@ def test_panel_voice_log_reads_both_line_forms():
     old = "2026-10-16 21:00:12,000 [voice-daemon] INFO turn_stream TTFA=0.59s transcript='what time is it'"
     got = [e.data["transcript"] for e in pvl.events([new, old]) if e.kind == "turn"]
     assert got == [tag, "what time is it"]
+
+
+def test_long_speech_tool_tells_a_hash_only_capture_from_a_missing_one(tmp_path, monkeypatch):
+    pytest.importorskip("numpy")
+    spec = importlib.util.spec_from_file_location("mlsc", REPO / "scripts" / "perf" / "measure_long_speech_capture.py")
+    ml = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(ml)
+    except ImportError as exc:   # the perf tool's heavier imports are optional on a slim lane
+        pytest.skip(f"perf tool not importable here: {exc}")
+    (tmp_path / "zoe-data.app.log").write_text(
+        "x STT_CAPTURE file=/s/120000_001.wav moonshine " + log_redaction.utterance_tag("lights off") + "\n"
+        "x STT_CAPTURE file=/s/110000_002.wav moonshine='turn it up'\n")
+    monkeypatch.setattr(ml, "LOG_DIR", tmp_path)
+    assert ml.logged_transcript("120000_001") == ml.HASH_ONLY
+    assert ml.logged_transcript("110000_002") == "turn it up"
+    assert ml.logged_transcript("999999_999") is None
+    assert "hash-only" in ml.classify(ml.HASH_ONLY)["transcript"]
+    assert ml.classify(None)["transcript"] == "not found in ~/.zoe-logs"
 
 
 def test_struggle_replay_reads_both_line_forms():

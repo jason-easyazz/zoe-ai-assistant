@@ -87,16 +87,28 @@ def read_wav(path: Path, rate: int) -> np.ndarray:
         return np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
 
 
+#: logged_transcript's answer for a clip captured after 2026-11-03: the capture line exists, the words were never logged.
+HASH_ONLY = "\x00hash-only"
+
+
 def logged_transcript(stem: str) -> str | None:
-    """The Moonshine transcript the server logged when it captured this clip (local only)."""
-    # The server writes the transcript with %r: single quotes normally, double quotes when it holds an apostrophe.
+    """The Moonshine transcript the server logged when it captured this clip (local only).
+
+    None = no capture line for the clip; ``HASH_ONLY`` = a capture line in the 2026-11-03+ form (``moonshine len=N
+    utt=<hash>``), which records the clip but never the words."""
+    # The server wrote the transcript with %r: single quotes normally, double quotes when it holds an apostrophe.
     rx = re.compile(r'STT_CAPTURE file=\S*/' + re.escape(stem)
                     + r'\.wav moonshine=(\'(?:[^\'\\]|\\.)*\'|"(?:[^"\\]|\\.)*")(?:\s|$)')
+    rx_hashed = re.compile(r'STT_CAPTURE file=\S*/' + re.escape(stem) + r'\.wav moonshine len=\d+ utt=[0-9a-f]+(?:\s|$)')
+    hashed = False
     if not LOG_DIR.is_dir():
         return None
     for log in sorted(LOG_DIR.glob("*.log")):
         try:
             for line in log.read_text(errors="replace").splitlines():
+                if rx_hashed.search(line):
+                    hashed = True
+                    continue
                 m = rx.search(line)
                 if m:
                     try:
@@ -105,14 +117,15 @@ def logged_transcript(stem: str) -> str | None:
                         return m.group(1)[1:-1]
         except OSError:
             continue
-    return None
+    return HASH_ONLY if hashed else None
 
 
 def classify(text: str | None) -> dict:
     """Server-side verdicts on a transcript. Booleans and the last word only."""
     if not text:
-        # since 2026-11-03 STT_CAPTURE logs ``len=N utt=<hash>`` only, so only clips captured before then classify
-        return {"transcript": "not found in ~/.zoe-logs (hash-only since 2026-11-03)"}
+        return {"transcript": "not found in ~/.zoe-logs"}
+    if text == HASH_ONLY:
+        return {"transcript": "captured; words not logged (hash-only since 2026-11-03)"}
     sys.path.insert(0, str(REPO / "services" / "zoe-data"))
     import voice_utterance_shape as us
     words = re.findall(r"[^\W_]+(?:['’][^\W_]+)*", text)
