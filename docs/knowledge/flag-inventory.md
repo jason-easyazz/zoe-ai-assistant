@@ -475,7 +475,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MUSIC_SETUP_SECRET` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_MUSIC_SETUP_TTL_S` | int | `900` | - | `docs/research/zoe-abilities-connectors-2026-10.md` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_NIGHT_BUSY` | str | `'~/.zoe/agent-tools/night_busy.sh'` | - | - | `'~/.zoe/agent-tools/night_busy.sh'` | no | NO | `scripts/maintenance/harness_quiet.py` |
-| `ZOE_NIGHT_MIND` | str | `'off'` | `off`, `shadow`, `enforce` | `docs/knowledge/night-mind.md` | `''`, `-` | no | NO | `scripts/maintenance/zoe-night-mind.py`<br>`scripts/perf/zmb/arms/z0.py`<br>`services/zoe-data/night_mind.py` |
+| `ZOE_NIGHT_MIND` | str | `'off'` | `off`, `shadow`, `enforce`, `serve` | `docs/knowledge/night-mind.md` | `''`, `-` | no | NO | `scripts/maintenance/zoe-night-mind.py`<br>`scripts/perf/zmb/arms/z0.py`<br>`services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_CHUNK_TOKENS` | int | `0` | - | - | `0` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_CTX_TOKENS` | int | `0` | - | - | `0` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_DECODE_TOK_S` | float | `8.0` | - | `docs/knowledge/night-mind.md` | `8.0` | no | NO | `services/zoe-data/night_mind.py` |
@@ -665,7 +665,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_ROUTER_BASE_HF` | str | `'/home/zoe/models/lab/functiongemma-270m-it-hf'` | - | - | `'/home/zoe/models/lab/functiongemma-270m-it-hf'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_ENABLED` | bool | `True` | - | - | `'1'`, `dynamic` | no | NO | `scripts/perf/measure_first_sound.py`<br>`services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_EVENT_TIME_PRECEDENCE` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `-` | no | NO | `services/zoe-data/semantic_router.py` |
-| `ZOE_ROUTER_HEAD` | str | `'off'` | `off`, `shadow`, `active` | `docs/knowledge/two-stage-router-rollout.md` | `'off'` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_HEAD` | str | `'off'` | `off`, `shadow`, `shadow2`, `active` | `docs/knowledge/two-stage-router-rollout.md` | `'off'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEADS_BACKEND` | str | `'numpy'` | - | `docs/knowledge/numpy2-jetson-migration.md` | `'numpy'` | no | NO | `services/zoe-data/router_heads_numpy.py` |
 | `ZOE_ROUTER_HEAD_LOG` | str | `''` | - | `docs/research/failure-fed-proposals-2026-10-04.md` | `dynamic` | no | NO | `scripts/maintenance/router_struggle_retrain.py`<br>`services/zoe-data/local_text_logs.py` |
 | `ZOE_ROUTER_HEAD_MIN_CONF` | float | `0.7` | - | `docs/knowledge/two-stage-router-rollout.md` | `'0.70'` | no | NO | `services/zoe-data/router_two_stage.py` |
