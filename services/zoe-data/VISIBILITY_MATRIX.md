@@ -15,8 +15,6 @@ Multi-user data access rules. All routers enforce these via the SQL fragment:
 | **notes**         | `personal`         | Creator only                            | Creator only  | Hard delete                            |
 | **journal_entries** | `personal`       | Creator only                            | Creator only  | Hard delete                            |
 | **transactions**  | `family`           | All family members                      | All family    | Soft-delete                            |
-| **trust_allowlist** | N/A              | Admin only                              | Admin only    | Hard delete                            |
-| **trust_audit**   | N/A                | Admin only                              | System only   | Never delete                           |
 | **users**         | N/A                | Self (own profile), admin (all)         | Self, admin   | Admin only                             |
 
 ## Rules
