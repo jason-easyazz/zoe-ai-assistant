@@ -11,6 +11,7 @@ Installed by ``logging_setup.configure_logging`` (the first thing the lifespan r
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 
@@ -57,3 +58,15 @@ def install() -> None:
         logger = logging.getLogger(name)
         if _FILTER not in logger.filters:
             logger.addFilter(_FILTER)
+
+
+def utterance_tag(text: object) -> str:
+    """``len=N utt=<12 hex>`` for a household utterance: what a log line carries INSTEAD of the words (2026-11-03).
+
+    The service log is outside the forget cascade and rotates by size, so it must never hold what someone said. The tag keeps
+    what a post-mortem needs - the length and an equality key - and nothing readable. ``utt`` is the same digest the router
+    shadow log keys its records by (``semantic_router``: sha256 of the text, first 12 hex), so a log line still joins to its
+    shadow record, and two turns with the same words still compare equal. Pinned by ``tests/test_transcript_log_privacy.py``.
+    """
+    t = text if isinstance(text, str) else ("" if text is None else str(text))
+    return f"len={len(t)} utt={hashlib.sha256(t.encode('utf-8')).hexdigest()[:12]}"
