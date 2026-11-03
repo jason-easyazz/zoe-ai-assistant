@@ -106,12 +106,15 @@ async def judge(fact: str, said: str, *, url: Optional[str] = None, model: Optio
     }
     import brain_slot_guard
 
-    # Post-turn pass on the brain's ONE slot: waits out a hot conversation (brain_slot_guard) so it cannot evict it.
-    async with brain_slot_guard.background_slot("structural_verifier"):
+    async def _llm() -> str:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{url}/v1/chat/completions", json=payload)
             resp.raise_for_status()
-            text = str(resp.json()["choices"][0]["message"]["content"] or "").strip().lower()
+            return str(resp.json()["choices"][0]["message"]["content"] or "").strip().lower()
+
+    # Post-turn pass on the brain's ONE slot: waits out a hot conversation and yields to a household turn that starts
+    # while it runs (brain_slot_guard.run_background) so it can neither evict nor delay the conversation.
+    text = await brain_slot_guard.run_background("structural_verifier", _llm)
     return text if text in ("yes", "no") else None
 
 

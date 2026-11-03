@@ -2474,16 +2474,32 @@ def stt_on_jetson(wav_bytes: bytes) -> str:
     return str(resp.get("text", "")).strip()
 
 
-def _is_junk_transcript(text: str) -> bool:
-    """Filter STT garbage common on silence or speakerphone TTS bleed."""
+# The only VOICE_IGNORE_TRANSCRIPTS entries still treated as junk while Zoe is waiting for an answer: sounds, not words.
+_NON_WORD_FILLERS = frozenset({"hmm", "hm", "um", "uh", "er", "erm", "ah", "eh"})
+
+
+def _answering_window(window: str = "") -> bool:
+    """True when the user is replying to Zoe rather than waking her: a no-wake-word follow-up / conversation window, or
+    Zoe's last spoken reply was a question ("Hey Zoe, yes" after the window closed)."""
+    return window in ("followup", "conversation") or bool(_prev_reply_asked)
+
+
+def _is_junk_transcript(text: str, *, answering: bool = False) -> bool:
+    """Filter STT garbage common on silence or speakerphone TTS bleed.
+
+    ``VOICE_IGNORE_TRANSCRIPTS`` (yes/no/okay/thanks...) is WAKE-TIME noise only. When ``answering`` (see
+    ``_answering_window``) a short answer is the reply Zoe asked for - 2026-11-03: Zoe asked a question, the owner said
+    "Yes.", and this filter ended the follow-up chain. Only non-word fillers and the structural checks still apply then.
+    """
     s = text.strip().lower()
     if len(s) < 2:
         return True
-    if s in VOICE_IGNORE_TRANSCRIPTS:
-        return True
     # Strip trailing punctuation from short single-word hallucinations
     s2 = s.rstrip(".!?…")
-    if s2 in VOICE_IGNORE_TRANSCRIPTS:
+    if answering:
+        if s2 in VOICE_IGNORE_TRANSCRIPTS and s2 in _NON_WORD_FILLERS:
+            return True
+    elif s in VOICE_IGNORE_TRANSCRIPTS or s2 in VOICE_IGNORE_TRANSCRIPTS:
         return True
     # Repeated short tokens ("you you you", "okay okay ...") are common noise hallucinations.
     toks = [t for t in re.findall(r"[a-z']+", s2) if t]
@@ -3540,6 +3556,8 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     played_any = False
     expect_audio = False
     r = None
+    # Read BEFORE this turn overwrites _prev_reply_asked: is the user answering Zoe (short answers are real) or waking her?
+    answering = _answering_window(window)
 
     try:
         r = _zoe_http().post(url, json=payload, headers=_headers, timeout=60, stream=True, verify=VERIFY_SSL)
@@ -3616,6 +3634,13 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 break
             if "transcript" in obj and "chunk" not in obj:
                 transcript = obj.get("transcript", "") or transcript
+                # The server leads with the transcript, BEFORE any audio: wake-time junk is dropped HERE, so nothing is
+                # played. Closing the stream (below) makes the server cancel the brain task it started for it. (STT runs
+                # on the server, so this is the earliest the daemon can know.) A speculative stream keeps its own protocol.
+                if speculation is None and not played_any and transcript \
+                        and _is_junk_transcript(transcript, answering=answering):
+                    log.info("Ignoring junk/hallucination transcript before playback: %r", transcript)
+                    break
                 continue
             if "chunk" in obj:
                 expect_audio = True
@@ -3723,7 +3748,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         log.info("speculation: cancelled turn_id=%s transcript=%r — caller runs the normal turn",
                  speculation.turn_id, transcript[:80])
         return False
-    if transcript and _is_junk_transcript(transcript):
+    if transcript and _is_junk_transcript(transcript, answering=answering):
         log.info("Ignoring junk/hallucination transcript: %r", transcript)
         return False
     if played_any:
@@ -3916,7 +3941,8 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
 
     transcript = resp.get("text", "")
     if transcript:
-        if _is_junk_transcript(transcript):
+        # The blocking turn's reply is already synthesised but NOT yet played: wake-time junk is dropped before playback.
+        if _is_junk_transcript(transcript, answering=_answering_window(window)):
             log.info("Ignoring junk/hallucination transcript: %r", transcript)
             return False
         log.info("Transcript: %r", transcript)

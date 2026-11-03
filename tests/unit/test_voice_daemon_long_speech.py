@@ -574,7 +574,7 @@ def _wire(daemon, monkeypatch, lines):
     monkeypatch.setattr(daemon.requests, "post", _post, raising=False)
     monkeypatch.setattr(daemon, "_speaker_claim_to_attach", lambda _w: None)
     monkeypatch.setattr(daemon, "_feed_pcm_chunk", lambda aplay, b: played.append(b) or None)
-    monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t: False)
+    monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t, **_k: False)
     monkeypatch.setattr(daemon, "play_follow_up_beep", lambda: pytest.fail("chime on a silent frame"))
     monkeypatch.setattr(daemon, "_do_single_turn", lambda *a, **k: pytest.fail("blocking re-POST"))
     monkeypatch.setattr(daemon, "_prev_reply_asked", False)
