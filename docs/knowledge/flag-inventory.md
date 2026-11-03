@@ -27,7 +27,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 ## Summary
 
 - 805 prod flags; 215 read through `typed_env`.
-- 762 legacy direct read sites in prod code across 228 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
+- 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).

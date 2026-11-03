@@ -16901,7 +16901,6 @@
     "services/zoe-data/pi_intent_classifier.py": 1,
     "services/zoe-data/pipeline_cross_review.py": 1,
     "services/zoe-data/pipeline_store.py": 5,
-    "services/zoe-data/presence/ha_presence.py": 1,
     "services/zoe-data/proactive/arrival.py": 3,
     "services/zoe-data/proactive/engine.py": 7,
     "services/zoe-data/proactive/ledger.py": 1,

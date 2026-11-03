@@ -72,9 +72,9 @@ def reset_state() -> None:
 
 async def _bridge_fetch(domain: str) -> list:
     import httpx
-    import os
+    from typed_env import env_str
 
-    base = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007").rstrip("/")
+    base = env_str("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007").rstrip("/")
     async with httpx.AsyncClient(timeout=BRIDGE_TIMEOUT_S) as client:
         r = await client.get(f"{base}/entities", params={"domain": domain})
         r.raise_for_status()
