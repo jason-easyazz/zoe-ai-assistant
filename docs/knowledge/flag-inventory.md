@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-03T00:00:00Z
+timestamp: 2026-11-04T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-03T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-03. The table body is deterministic (sorted, no
+Last generated: 2026-11-04. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -103,7 +103,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BLUETOOTH_SETTINGS` | bool | `False` | - | `docs/knowledge/bluetooth-settings.md` | `False` | yes | NO | `services/zoe-data/bluetooth_broker.py` |
 | `ZOE_BOARD_POLL_S` | int | `60` | - | - | `'60'` | no | NO | `services/zoe-data/multica_board_runner.py` |
 | `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED` | bool | `False` | - | `docs/guides/MULTICA_HERMES_PR_LOOP.md` | `'false'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
-| `ZOE_BRAIN_BACKEND` | str | `'core'` | - | `docs/knowledge/memory-pressure-profile.md` | `'core'` | no | yes | `services/zoe-data/brain_dispatch.py` |
+| `ZOE_BRAIN_BACKEND` | str | `'flue'` | - | `docs/knowledge/memory-pressure-profile.md` | `'flue'` | no | yes | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER` | bool | `False` | - | `docs/knowledge/state-of-zoe-review-2026-09-25.md` | `'0'` | no | yes | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER_COOLDOWN_S` | int | `45` | - | `services/zoe-data/AGENTS.md` | `'45'` | no | yes | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_KV_WARM_ON_WAKE` | bool | `True` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `'1'` | no | NO | `services/zoe-data/zoe_flue_client.py` |

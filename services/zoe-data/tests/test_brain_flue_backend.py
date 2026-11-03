@@ -1,8 +1,8 @@
-"""ZOE_BRAIN_BACKEND cutover seam — additive, default-OFF.
+"""ZOE_BRAIN_BACKEND lane seam — default is flue; 'core' is the rollback.
 
 Proves:
-(a) default (env unset / 'core') → dispatch uses the EXISTING core client,
-    byte-identical to today; the flue client is never touched.
+(a) env unset selects flue; ZOE_BRAIN_BACKEND='core' → dispatch uses the core
+    client and the flue client is never touched.
 (b) ZOE_BRAIN_BACKEND='flue' → dispatch selects the flue client, which hits the
     sidecar with the right URL + bearer + body, and yields the core stream shape.
 """
@@ -25,11 +25,11 @@ def _wire1_doubles(monkeypatch):
 
 # ── (a) default → existing core path, flue untouched ──────────────────────────
 
-def test_use_flue_brain_default_off(monkeypatch):
+def test_use_flue_brain_default_is_flue(monkeypatch):
     import brain_dispatch as bd
 
     monkeypatch.delenv("ZOE_BRAIN_BACKEND", raising=False)
-    assert bd.use_flue_brain() is False  # default OFF
+    assert bd.use_flue_brain() is True  # default = the live lane
     monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")
     assert bd.use_flue_brain() is False
     monkeypatch.setenv("ZOE_BRAIN_BACKEND", "flue")
@@ -47,7 +47,7 @@ async def test_oneshot_default_uses_core_not_flue(monkeypatch):
     import zoe_core_client
     import zoe_flue_client
 
-    monkeypatch.delenv("ZOE_BRAIN_BACKEND", raising=False)  # default
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "true")
 
     async def fake_core(msg, sid, uid="", **kw):
@@ -67,7 +67,7 @@ async def test_streaming_default_uses_core_not_flue(monkeypatch):
     import zoe_core_client
     import zoe_flue_client
 
-    monkeypatch.delenv("ZOE_BRAIN_BACKEND", raising=False)  # default
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "true")
 
     async def fake_core_stream(msg, sid, uid="", **kw):
@@ -245,7 +245,7 @@ async def test_chat_router_helper_selects_flue(monkeypatch):
     monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")
     assert chat._use_flue_brain() is False
     monkeypatch.delenv("ZOE_BRAIN_BACKEND", raising=False)
-    assert chat._use_flue_brain() is False
+    assert chat._use_flue_brain() is True  # unset = the default flue lane
 
 
 def test_identity_envelope_strips_embedded_newlines():

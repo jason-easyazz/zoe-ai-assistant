@@ -177,8 +177,8 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   abort-on-cancel and first-chunk/stall deadlines (`src/turn-guard.ts`); Flue aborts
   whole INSTANCES, so never abort without the guard's latest-submission check.
   `Zoe.durability` is bounded (2 attempts / 120 s) (`test/abort_guard.test.ts`).
-  Reached from prod via the `ZOE_BRAIN_BACKEND=flue` seam — shipped default-OFF
-  (`core`) but production-reachable and **live on this deployment**; supervised
+  Reached from prod via the `ZOE_BRAIN_BACKEND=flue` seam — the code default (rollback: `core`)
+  and **live on this deployment**; supervised
   via the opt-in unit template `scripts/setup/systemd/flue-zoe-brain-2x.service`
   on **`:3579`** (see Forbidden above). Its memory caps (`MemorySwapMax=0` /
   `MemoryLow=512M` / `MemoryMax=2G`) are pinned by

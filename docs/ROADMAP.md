@@ -26,6 +26,8 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
 
 ## Now (this week, at most 5)
 
+**Samantha direction (2026-11-03):** the plan of record is [docs/research/samantha-initiative-2026-11-03.md](research/samantha-initiative-2026-11-03.md). Its first four opportunities are: push memory into every household turn (recall gate enforce, now card, history 8 rows); judged end of turn + duck-decide-resume live; one voice for every tier; night-mind readers to `serve` + the outcome edge. Owner decisions in its section 11.
+
 1. ~~**Close the unauthenticated surface the deep dive found (A2).**~~ ✅ landed: music writes (#2108) and reads (#2121) need a member or the panel, `GET /api/settings` is an allowlist,
    the Multica webhook secret is checked first, and `services/zoe-data/tests/test_mutating_routes_declare_auth.py` fails a mutating route with no auth dependency. Identity half: #2089, #2097, #2099.
 2. ~~**Stop blocking the event loop in the turn path (A1).**~~ ✅ landed #2117: `semantic_router.route` runs off the loop (`tests/test_router_off_loop.py`), and
