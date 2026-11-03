@@ -156,16 +156,30 @@ landing_disarm_unless_merged(){
   [ "$(gh pr view "$1" --json state --jq .state 2>/dev/null)" = MERGED ] || gh pr merge "$1" --disable-auto >/dev/null 2>&1
 }
 
-# landing_wait_merged <pr> <armed-head> [tries]: poll state AND head after arming. 0 = MERGED; 5 = the head moved off <armed-head>
-# (auto-merge disabled immediately); 1 = not merged in the wait or the night deadline came (auto-merge disabled). If the caller defines
-# `left` (seconds to the night deadline) the wait stops 120 s short of it.
+# landing_wait_merged <pr> <armed-head> [tries] [cap-tries]: poll state AND head after arming. 0 = MERGED; 5 = the head moved off
+# <armed-head> (auto-merge disabled immediately); 1 = not merged (auto-merge disabled): a required check FAILED/cancelled, mergeState
+# DIRTY/BEHIND, the night deadline came, or the wait ran out. The wait is <tries> steps (default 180 x 10 s = 30 min) but is EXTENDED, up
+# to <cap-tries> steps (default 450 = 75 min), while the head is unchanged and a required check is still pending: the box's own runner
+# can take >30 min on `validate` under load, and giving up there threw away a whole probe (2026-11-03/04: #2253 #2270 #2269). If the
+# caller defines `left` (seconds to the night deadline) the wait stops 120 s short of it, extension or not.
 landing_wait_merged(){
-  local pr=$1 head=$2 tries=${3:-180} i v
-  for ((i=0; i<tries; i++)); do
-    v=$(gh pr view "$pr" --json state,headRefOid --jq '"\(.state) \(.headRefOid)"' 2>/dev/null); set -- $v
+  local pr=$1 head=$2 tries=${3:-180} cap=${4:-${ZOE_LANDING_WAIT_CAP_TRIES:-450}} i=0 limit v ms chk
+  limit=$tries
+  while :; do
+    v=$(gh pr view "$pr" --json state,headRefOid,mergeStateStatus --jq '"\(.state) \(.headRefOid) \(.mergeStateStatus)"' 2>/dev/null); set -- $v
     [ "${1:-}" = MERGED ] && return 0
     if [ -n "${2:-}" ] && [ "$2" != "$head" ]; then gh pr merge "$pr" --disable-auto >/dev/null 2>&1; return 5; fi
+    ms=${3:-}
+    case "$ms" in DIRTY|BEHIND) break;; esac
     if declare -F left >/dev/null && [ "$(left)" -le 120 ]; then break; fi
+    chk=$(gh pr checks "$pr" --required 2>/dev/null | awk -F'\t' '{s=tolower($2); if (s=="fail"||s=="cancel") f=1; else if (s=="pending") p=1} END{print f?"fail":(p?"pending":"ok")}')
+    [ "$chk" = fail ] && break
+    i=$((i+1))
+    if [ "$i" -ge "$limit" ]; then
+      # base wait spent: only a still-pending required check on the unchanged head earns more time, up to the hard cap
+      if [ "$chk" = pending ] && [ "$limit" -lt "$cap" ]; then limit=$cap; fi
+      [ "$i" -ge "$limit" ] && break
+    fi
     sleep "${ZOE_LANDING_WAIT_STEP_S:-10}"
   done
   gh pr merge "$pr" --disable-auto >/dev/null 2>&1; return 1

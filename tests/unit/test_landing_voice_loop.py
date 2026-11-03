@@ -325,3 +325,62 @@ def test_the_exit_trap_disarms_an_unmerged_pr_and_the_lander_installs_it(rig):
     assert len(disarms(rig)) == 1
     code = "\n".join(ln for ln in (LANDING / "land_voice_pr.sh").read_text().splitlines() if not ln.lstrip().startswith("#"))
     assert "landing_disarm_unless_merged" in code and "landing_wait_merged" in code and "arm kept" not in code
+
+
+# ---- a probed head whose required check is still running keeps waiting (2026-11-04) --------------------------------------
+
+def pr_views(rig):
+    return [c for c in rig.gh_calls() if c.startswith("pr view 7")]
+
+
+def test_a_pending_required_check_on_the_same_head_waits_past_the_base_wait(rig):
+    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required={"validate": "pending", "secret-scan": "pass"})
+    r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
+    assert "rc=1" in r.stdout and len(disarms(rig)) == 1
+    assert len(pr_views(rig)) == 12                      # extended from 3 to the hard cap of 12, then disarmed
+
+
+def test_the_base_wait_alone_gives_up_when_nothing_is_pending(rig):
+    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required={"validate": "pass"})
+    r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
+    assert "rc=1" in r.stdout and len(disarms(rig)) == 1
+    assert len(pr_views(rig)) == 3
+
+
+def test_a_pending_check_that_finishes_and_merges_lands(rig):
+    # the fake serves a fixed state, so `sleep` is shadowed by a function that flips the PR to MERGED on its 5th call
+    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required={"validate": "pending"})
+    flip = rig.tmp / "flip.py"
+    flip.write_text(f'import json\nf="{rig.state_file}"\nd=json.load(open(f))\nd["prs"]["7"]["state"]="MERGED"\njson.dump(d,open(f,"w"))\n')
+    body = f'n=0; sleep(){{ n=$((n+1)); [ $n -eq 5 ] && python3 "{flip}"; return 0; }}; landing_wait_merged 7 {HEAD} 3 12; echo rc=$?'
+    r = run_lib(rig, body)
+    assert "rc=0" in r.stdout and disarms(rig) == []
+    assert len(pr_views(rig)) == 6                       # well past the 3-step base wait
+
+
+def test_a_failed_required_check_disarms_at_once(rig):
+    prs(rig, headRefOid=HEAD, armed=True, required={"validate": "fail", "secret-scan": "pending"})
+    r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
+    assert "rc=1" in r.stdout and len(disarms(rig)) == 1
+    assert len(pr_views(rig)) == 1
+
+
+def test_a_head_change_while_checks_are_pending_disarms_at_once(rig):
+    prs(rig, headRefOid="f" * 40, armed=True, required={"validate": "pending"})
+    r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
+    assert "rc=5" in r.stdout and len(disarms(rig)) == 1
+
+
+@pytest.mark.parametrize("ms", ["DIRTY", "BEHIND"])
+def test_a_dirty_or_behind_pr_disarms_at_once_even_with_a_pending_check(rig, ms):
+    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus=ms, required={"validate": "pending"})
+    r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
+    assert "rc=1" in r.stdout and len(disarms(rig)) == 1
+    assert len(pr_views(rig)) == 1
+
+
+def test_the_night_deadline_stops_the_extended_wait(rig):
+    prs(rig, headRefOid=HEAD, armed=True, required={"validate": "pending"})
+    r = run_lib(rig, f"left(){{ echo 100; }}; landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
+    assert "rc=1" in r.stdout and len(disarms(rig)) == 1
+    assert len(pr_views(rig)) == 1
