@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 806 prod flags; 216 read through `typed_env`.
+- 807 prod flags; 217 read through `typed_env`.
 - 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-806 flags; 755 not documented in `.env.example`.
+807 flags; 756 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -283,9 +283,10 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_HARNESS_PANEL_WAIT_S` | float | `2700.0` | - | `docs/knowledge/voice-pipeline.md` | `'2700'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_HARNESS_QUIET_END` | str | `'22:00'` | - | - | `'22:00'` | no | NO | `scripts/maintenance/harness_quiet.py` |
 | `ZOE_HARNESS_QUIET_START` | str | `'07:00'` | - | `scripts/AGENTS.md` | `'07:00'` | no | NO | `scripts/maintenance/harness_quiet.py` |
-| `ZOE_HA_BRIDGE_URL` | str | `'http://127.0.0.1:8007'` | - | `docs/knowledge/operator-skills/openclaw/ha-patterns/SKILL.md` | `''`, `'http://127.0.0.1:8007'` | yes | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/system_stats.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_HA_BRIDGE_URL` | str | `'http://127.0.0.1:8007'` | - | `docs/knowledge/operator-skills/openclaw/ha-patterns/SKILL.md` | `''`, `'http://127.0.0.1:8007'` | yes | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/presence/ha_presence.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/system_stats.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_HA_CONTROL_SCOPE` | str | `'panel'` | - | `services/zoe-data/AGENTS.md` | `'panel'` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_HA_EXPORT_CMD` | str | `''` | - | - | `(required)`, `-` | no | NO | `scripts/maintenance/zoe_host_snapshot.py` |
+| `ZOE_HA_PRESENCE` | str | `'off'` | `off`, `shadow`, `on` | `services/zoe-data/AGENTS.md` | `'off'` | yes | NO | `services/zoe-data/presence/ha_presence.py` |
 | `ZOE_HA_UI_GATE` | bool | `True` | - | `services/zoe-data/routers/AGENTS.md` | `True` | yes | NO | `services/zoe-data/routers/ha_ui.py` |
 | `ZOE_HA_UI_SECRET` | str | `''` | - | `services/zoe-data/routers/AGENTS.md` | `-` | yes | NO | `services/zoe-data/routers/ha_ui.py` |
 | `ZOE_HA_UI_TTL_S` | int | `28800` | - | `services/zoe-data/routers/AGENTS.md` | `28800` | yes | NO | `services/zoe-data/routers/ha_ui.py` |
