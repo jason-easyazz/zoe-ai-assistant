@@ -163,8 +163,7 @@ landing_disarm_unless_merged(){
 # can take >30 min on `validate` under load, and giving up there threw away a whole probe (2026-11-03/04: #2253 #2270 #2269). If the
 # caller defines `left` (seconds to the night deadline) the wait stops 120 s short of it, extension or not.
 landing_wait_merged(){
-  local pr=$1 head=$2 tries=${3:-180} cap=${4:-${ZOE_LANDING_WAIT_CAP_TRIES:-450}} i=0 limit v ms chk
-  limit=$tries
+  local pr=$1 head=$2 tries=${3:-180} cap=${4:-${ZOE_LANDING_WAIT_CAP_TRIES:-450}} i=0 v ms chk
   while :; do
     v=$(gh pr view "$pr" --json state,headRefOid,mergeStateStatus --jq '"\(.state) \(.headRefOid) \(.mergeStateStatus)"' 2>/dev/null); set -- $v
     [ "${1:-}" = MERGED ] && return 0
@@ -175,10 +174,10 @@ landing_wait_merged(){
     chk=$(gh pr checks "$pr" --required 2>/dev/null | awk -F'\t' '{s=tolower($2); if (s=="fail"||s=="cancel") f=1; else if (s=="pending") p=1} END{print f?"fail":(p?"pending":"ok")}')
     [ "$chk" = fail ] && break
     i=$((i+1))
-    if [ "$i" -ge "$limit" ]; then
-      # base wait spent: only a still-pending required check on the unchanged head earns more time, up to the hard cap
-      if [ "$chk" = pending ] && [ "$limit" -lt "$cap" ]; then limit=$cap; fi
-      [ "$i" -ge "$limit" ] && break
+    [ "$i" -ge "$cap" ] && break                       # the hard cap bounds the base wait too
+    if [ "$i" -ge "$tries" ]; then
+      # base wait spent: extension is re-earned on EVERY poll - a required check still pending AND the head positively read as unchanged
+      [ "$chk" = pending ] && [ "${2:-}" = "$head" ] || break
     fi
     sleep "${ZOE_LANDING_WAIT_STEP_S:-10}"
   done

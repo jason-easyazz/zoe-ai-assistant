@@ -384,3 +384,37 @@ def test_the_night_deadline_stops_the_extended_wait(rig):
     r = run_lib(rig, f"left(){{ echo 100; }}; landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
     assert "rc=1" in r.stdout and len(disarms(rig)) == 1
     assert len(pr_views(rig)) == 1
+
+
+def test_the_extension_stops_when_nothing_is_pending_any_more(rig):
+    # pending through the base wait, then all-pass but unmerged: must not ride on to the cap
+    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required={"validate": "pending"})
+    flip = rig.tmp / "pass.py"
+    flip.write_text(f'import json\nf="{rig.state_file}"\nd=json.load(open(f))\nd["prs"]["7"]["required"]={{"validate":"pass"}}\njson.dump(d,open(f,"w"))\n')
+    body = f'n=0; sleep(){{ n=$((n+1)); [ $n -eq 4 ] && python3 "{flip}"; return 0; }}; landing_wait_merged 7 {HEAD} 3 12; echo rc=$?'
+    r = run_lib(rig, body)
+    assert "rc=1" in r.stdout and len(disarms(rig)) == 1
+    assert len(pr_views(rig)) == 5                       # 3 base + 1 extended (pending) + 1 poll that saw pass
+
+
+def test_an_unreadable_head_never_earns_the_extension(rig):
+    st = prs(rig, headRefOid=HEAD, armed=True, required={"validate": "pending"})
+    st["pr_view_fails"] = True
+    rig.set_state(st)
+    r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
+    assert "rc=1" in r.stdout and len(disarms(rig)) == 1
+    assert len(pr_views(rig)) == 3
+
+
+def test_a_cap_below_the_base_wait_bounds_the_base_wait_too(rig):
+    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required={"validate": "pending"})
+    r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 10 4; echo rc=$?")
+    assert "rc=1" in r.stdout and len(pr_views(rig)) == 4
+
+
+def test_the_night_deadline_arriving_mid_extension_stops_it(rig):
+    prs(rig, headRefOid=HEAD, armed=True, required={"validate": "pending"})
+    body = f'n=0; sleep(){{ n=$((n+1)); return 0; }}; left(){{ [ $n -ge 5 ] && echo 100 || echo 9999; }}; landing_wait_merged 7 {HEAD} 3 12; echo rc=$?'
+    r = run_lib(rig, body)
+    assert "rc=1" in r.stdout and len(disarms(rig)) == 1
+    assert len(pr_views(rig)) == 6                       # stopped at the first poll after 5 sleeps, well short of the 12 cap
