@@ -1,4 +1,4 @@
-"""0064 - drop ``trust_allowlist`` and ``trust_audit`` (the never-built trust gate).
+"""0065 - drop ``trust_allowlist`` and ``trust_audit`` (the never-built trust gate).
 
 Both were created by 0001 for a tool-call trust gate that was never implemented: no code in
 services/, scripts/, tools/ or labs/ has ever read or written either table (verified 2026-11-03;
@@ -11,8 +11,8 @@ the 0001 shape (no data to restore: the tables were always empty).
 
 from alembic import op
 
-revision = "0064"
-down_revision = "0063"
+revision = "0065"
+down_revision = "0064"
 branch_labels = None
 depends_on = None
 
