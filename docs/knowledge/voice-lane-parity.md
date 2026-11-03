@@ -67,6 +67,24 @@ in front of the shared core.
 * `routers/voice_tts.py`: `_pending_decision` (a yes is a short yes), `_contains_decision_keyword` (multi-word keywords never matched),
   contacts READS through the shared executor for an identified speaker.
 
+## The extra lanes: non-stream chat and LiveKit (A4, 2026-10-19)
+
+`--all-lanes` also drives `chat_ns` (the NON-stream `routers.chat.chat`, `POST /api/chat/?stream=false` - the Telegram bot's call)
+and `livekit` (`routers.voice_livekit._run_pipeline`, the estate Ask card's room agent, with STT returning the utterance). Both run
+the REAL `brain_oneshot` down to the same stubbed transport. Their columns are REPORTED; the parity verdict stays chat vs voice.
+
+Measured on the A4 branch (rig, live flag mirror):
+
+| lane | cells passing | why |
+|---|---|---|
+| chat (stream) | 12 / 12 | - |
+| voice (`voice_command`) | 14 / 14 | - |
+| chat_ns (Telegram) | 12 / 12 | `chat()` still re-implements the generator block by block, but every cell agrees; `tests/test_voice_lane_parity.py::test_non_stream_chat_matches_the_stream` pins it per cell until the two are collapsed |
+| livekit (Ask card) | 2 / 12 | brain-first by design: `fast_tiers` runs only under `ZOE_LIVEKIT_FAST_TIERS` (off live), so correction, contacts, feedback, provenance, forget and identity all go to the model; only `exact_words` and `ack_after_offer` (brain cells) pass. With the flag ON it measures 5 / 12 (correction, provenance and forget join; feedback, contacts and identity still go to the model, because the lane keeps no transcript of its own and `fast_tiers` answers less on `channel=livekit`) |
+
+The `/ws/voice/` lane the rig never covered is retired (A4): the phone/desktop page now posts each turn to `/api/voice/turn`, i.e.
+`voice_command`, the `voice` column.
+
 ## What the rig cannot see
 
 The model (a stub: the brain's own use of tools, its wording and its latency are not measured here), the real Postgres (a fake that

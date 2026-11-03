@@ -708,8 +708,9 @@ def test_health_is_degraded_when_the_acting_resnet34_embedder_is_not_ready(daemo
     monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resnet34")
     monkeypatch.setattr(daemon, "_rn34_embedder", emb)
     assert daemon._health_payload()["status"] == "ok"
-    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resemblyzer")                # default: the body it always had
-    assert set(daemon._health_payload()) == set(("status", "service", "panel_id", "uptime_s", "wake_phrase"))
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resemblyzer")                # default: no speaker-model keys
+    assert set(daemon._health_payload()) == set(("status", "service", "panel_id", "uptime_s", "wake_phrase", "build",
+                                                 "build_deployed_at", "code_sha256", "wake_model_sha256"))
 
 
 def test_health_state_waits_for_ready_in_resnet34_mode_and_gives_up_bounded():

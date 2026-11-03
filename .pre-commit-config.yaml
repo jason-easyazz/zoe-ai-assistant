@@ -53,4 +53,4 @@ repos:
         entry: bash -c 'python3 tools/audit/flag_inventory.py >/dev/null && python3 tools/audit/live_state.py >/dev/null && if git diff --quiet -I "Last generated:" -I "^timestamp:" -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json docs/knowledge/live-state.json; then git checkout -q -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json docs/knowledge/live-state.json; else git add -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json docs/knowledge/live-state.json; fi'
         language: system
         pass_filenames: false
-        files: '(\.(py|env|ya?ml)$|\.env\.example$)'
+        files: '(\.(py|ts|tsx|mjs|cjs|js|env|ya?ml)$|\.env\.example$)'

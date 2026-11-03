@@ -1,8 +1,8 @@
 """ZOE_SKYBRIDGE_ONLY gates the legacy voice domain-navigation helpers.
 
 When the flag is set, voice must not navigate the touch panel to per-domain
-legacy pages (`/touch/weather.html`, `/touch/calendar.html`, `/touch/dashboard.html`,
-`/touch/voice.html`) — the panel stays on Skybridge. The Skybridge-first path
+legacy pages (`/touch/weather.html`, `/touch/calendar.html`, `/touch/dashboard.html`)
+— the panel stays on Skybridge. (The "let's talk" jump to the retired `/touch/voice.html` is gone, A4 2026-10-19.) The Skybridge-first path
 (`_broadcast_skybridge_ui`) is unaffected and still renders real cards.
 """
 import sys
@@ -41,7 +41,6 @@ def test_skybridge_only_unset_is_false(monkeypatch):
         ("_broadcast_weather_ui", ("zoe-touch-pi", "x")),
         ("_broadcast_calendar_ui", ("zoe-touch-pi", "x")),
         ("_broadcast_reminder_ui", ("zoe-touch-pi", "x")),
-        ("_broadcast_lets_talk_ui", ("zoe-touch-pi",)),
     ],
 )
 async def test_legacy_helpers_noop_when_flag_on(monkeypatch, helper, args):
@@ -52,9 +51,8 @@ async def test_legacy_helpers_noop_when_flag_on(monkeypatch, helper, args):
         raise AssertionError(f"{helper} enqueued a UI action despite ZOE_SKYBRIDGE_ONLY")
 
     monkeypatch.setattr("ui_orchestrator.enqueue_ui_action", _boom, raising=False)
-    # _broadcast_lets_talk_ui broadcasts BEFORE the enqueue step, so a broken
-    # guard there would fire the broadcast and slip past the enqueue boom. Mock
-    # the broadcaster too so every helper's early-return is genuinely covered.
+    # Mock the broadcaster too so a helper that broadcasts before it enqueues is
+    # genuinely covered by its early return.
     monkeypatch.setattr("push.broadcaster.broadcast", _boom, raising=False)
     # Returns cleanly (no enqueue, no broadcast, no navigation) — stays on Skybridge.
     await getattr(vt, helper)(*args)

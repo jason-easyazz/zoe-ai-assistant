@@ -98,4 +98,4 @@ def test_runwrite_keeps_the_replay_gate_ahead_of_the_dispatch_and_unconditional_
     assert body.index(gate) < body.index("dispatchIntent(intent"), "the replay gate must come BEFORE the dispatch"
     # the read flag may relax only the two gates that exist to stop a WRITE; it must never appear on the replay gate's line
     uses = [ln.strip() for ln in body.splitlines() if "isRead" in ln and not ln.strip().startswith("//")]
-    assert uses == ["isRead = false,", "if (!isRead && !allowWrites()) {", "if (!isRead && isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem);"], uses
+    assert uses == ["isRead = false,", "if (!isRead && !allowWrites()) {", "if (!isRead && isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem, turnUntrustedSource(signal));"], uses

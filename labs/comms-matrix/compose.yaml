@@ -1,0 +1,128 @@
+# Comms Matrix lab (deep dive 2026-10-18 section 8, gates 1 and 2): one homeserver at a time (profile `tuwunel` or `synapse`),
+# a TLS front that answers as the server name `hs.lab`, LiveKit and lk-jwt-service (the MatrixRTC focus), and the LiveKit CLI
+# for a synthetic two-party audio call. Hermetic: the network is `internal` (no route out), every container is memory-capped,
+# and the homeservers get 2 CPUs to look like a small droplet (their caches scale with the core count).
+#
+# Started and torn down by run_lab.py, which renders ${RUN} (a 0700 temp dir holding configs, throwaway secrets, the
+# self-signed TLS pair and the data dirs). Do not `compose up` by hand.
+name: zoe-matrix-lab
+
+x-labels: &labels
+  zoe.matrix-lab: "1"
+
+networks:
+  lab:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.78.0.0/24
+
+services:
+  front:
+    image: ${NGINX_IMAGE}
+    container_name: mxlab-front
+    labels: *labels
+    networks:
+      lab:
+        ipv4_address: 10.78.0.10
+        aliases: [hs.lab]
+    volumes:
+      - ${RUN}/front/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${RUN}/front/tls:/etc/nginx/tls:ro
+    mem_limit: 64m
+
+  tuwunel:
+    profiles: [tuwunel]
+    image: ${TUWUNEL_IMAGE}
+    container_name: mxlab-hs
+    labels: *labels
+    user: "${LAB_UID}:${LAB_GID}"
+    networks:
+      lab: {ipv4_address: 10.78.0.20}
+    environment:
+      TUWUNEL_CONFIG: /etc/tuwunel/tuwunel.toml
+    volumes:
+      - ${RUN}/tuwunel/tuwunel.toml:/etc/tuwunel/tuwunel.toml:ro
+      - ${RUN}/tuwunel/data:/var/lib/tuwunel
+    mem_limit: 768m
+    memswap_limit: 768m
+    cpus: 2
+
+  pg:
+    profiles: [synapse]
+    image: ${PG_IMAGE}
+    container_name: mxlab-pg
+    labels: *labels
+    networks:
+      lab: {ipv4_address: 10.78.0.21}
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: synapse
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 1
+
+  synapse:
+    profiles: [synapse]
+    image: ${SYNAPSE_IMAGE}
+    container_name: mxlab-hs
+    labels: *labels
+    depends_on: [pg]
+    networks:
+      lab: {ipv4_address: 10.78.0.20}
+    environment:
+      SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+      UID: "${LAB_UID}"
+      GID: "${LAB_GID}"
+    volumes:
+      - ${RUN}/synapse:/data
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    cpus: 2
+
+  livekit:
+    image: ${LIVEKIT_IMAGE}
+    container_name: mxlab-livekit
+    labels: *labels
+    networks:
+      lab: {ipv4_address: 10.78.0.30}
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      LIVEKIT_KEYS: "${LK_KEY}: ${LK_SECRET}"
+    volumes:
+      - ${RUN}/livekit/livekit.yaml:/etc/livekit.yaml:ro
+    mem_limit: 256m
+    memswap_limit: 256m
+
+  lkjwt:
+    image: ${LKJWT_IMAGE}
+    container_name: mxlab-lkjwt
+    labels: *labels
+    networks:
+      lab: {ipv4_address: 10.78.0.31}
+    environment:
+      LIVEKIT_URL: ws://10.78.0.30:7880
+      LIVEKIT_KEY: ${LK_KEY}
+      LIVEKIT_SECRET: ${LK_SECRET}
+      LIVEKIT_JWT_BIND: ":8080"
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: hs.lab
+      LIVEKIT_INSECURE_SKIP_VERIFY_TLS: YES_I_KNOW_WHAT_I_AM_DOING
+    mem_limit: 64m
+    memswap_limit: 64m
+
+  cli:
+    profiles: [cli]
+    image: ${LKCLI_IMAGE}
+    container_name: mxlab-cli
+    labels: *labels
+    networks:
+      lab: {ipv4_address: 10.78.0.40}
+    environment:
+      LIVEKIT_URL: ws://10.78.0.30:7880
+      LIVEKIT_API_KEY: ${LK_KEY}
+      LIVEKIT_API_SECRET: ${LK_SECRET}
+    mem_limit: 256m
+    memswap_limit: 256m

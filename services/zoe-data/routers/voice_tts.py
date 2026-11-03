@@ -32,9 +32,11 @@ import voice_first_sound as _first_sound
 import voice_speculation as _speculation
 import voice_stt_stream as _stt_stream
 import voice_utterance_shape as _utterance_shape
+from moonshine_vad_state import reset_silero_state, transcriber_lib
 import speaker_adaptation
 import speaker_models
-from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
+import traffic_class
+from voice_speaker_id import _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
 # tests/replay_samples.py, scripts/perf/measure_tts.py) keep working unchanged.
@@ -46,7 +48,9 @@ from tts_waterfall import (
     _synthesize_espeak,
     _synthesize_kokoro_sidecar,
     _synthesize_local_service,
+    TTS_MODE_KOKORO,
     edge_tts_available,
+    tts_mode,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,6 +139,83 @@ def _spawn_bg(coro) -> None:
         return
     _BG_TASKS.add(t)
     t.add_done_callback(_BG_TASKS.discard)
+
+def _stream_in_turn_context(agen):
+    """``agen`` (a voice turn's lazy stream body) driven in a COPY of the CURRENT context, wherever it is iterated.
+
+    ``voice_command`` binds per-turn ContextVars before its chat tier returns the lazy StreamingResponse - the speaker
+    gate's verdict (``restraint.bind_verdict``: the restraint rule, the spoken-mute refusal, the risk-cue silence), the
+    arrival row (``_USER_TURN_SAVED``), a speculative turn's gate. The brain runs INSIDE the body, and on
+    ``/voice/turn_stream`` the body is pulled by the OUTER request task (and a ``_first_task`` copy of it for the filler
+    race), not by the ``sub_task`` that ran ``voice_command`` - so none of those bindings were visible to the brain
+    (2026-10-19: every panel stream turn read ``restraint.current_verdict() is None``, an unconfirmed voice read as a typed
+    turn). Call it where the body is CREATED, inside ``voice_command``: the copy is taken there."""
+    return _drive_in_context(agen, contextvars.copy_context())
+
+
+async def _drive_in_context(agen, ctx: contextvars.Context):
+    """Yield ``agen``'s items one at a time, every step of ``agen`` running in ONE task whose context is a copy of ``ctx``
+    (Python 3.10 has no ``create_task(context=)``). Lockstep, no read-ahead: a step starts only when the consumer asks for
+    the next item, so a filler / speculation race sees the same timing as pulling ``agen`` directly. Consumer cancelled
+    mid-step -> that step is cancelled; consumer closed between steps -> ``agen.aclose()`` runs (its ``finally`` sees
+    GeneratorExit at its ``yield``, as before); an exception from ``agen`` (a CancelledError included) re-raises here."""
+    want: asyncio.Queue = asyncio.Queue()
+    got: asyncio.Queue = asyncio.Queue()
+    busy = False
+
+    async def _pump() -> None:
+        nonlocal busy
+        while True:
+            try:
+                more = await want.get()
+            except asyncio.CancelledError:
+                # cancelled between steps (a consumer cancel that raced the step's end): the body still gets its close
+                await agen.aclose()
+                raise
+            if not more:
+                await agen.aclose()
+                return
+            busy = True
+            try:
+                item = await agen.__anext__()
+            except StopAsyncIteration:
+                got.put_nowait((False, None))
+                return
+            except BaseException as exc:  # noqa: BLE001 - forwarded to the consumer, re-raised there
+                got.put_nowait((False, exc))
+                if isinstance(exc, Exception):
+                    return
+                raise
+            finally:
+                busy = False
+            got.put_nowait((True, item))
+
+    pump = ctx.run(asyncio.get_running_loop().create_task, _pump())
+    _BG_TASKS.add(pump)   # a strong reference: a cancelled consumer does not wait for the body's finally (below)
+    pump.add_done_callback(_BG_TASKS.discard)
+    try:
+        while True:
+            want.put_nowait(True)
+            ok, val = await got.get()
+            if not ok:
+                if val is not None:
+                    raise val
+                return
+            yield val
+    finally:
+        if not pump.done():
+            if busy:
+                pump.cancel()
+                want.put_nowait(False)   # a body that swallows the cancel and yields again is still closed, not left waiting
+            else:
+                want.put_nowait(False)
+                try:
+                    await pump
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - a failing finally of the body must not mask the close
+                    logger.warning("voice stream body close failed: %s", exc)
+
 
 # ── Voice session continuity ───────────────────────────────────────────────
 # Persist one session_id per panel so follow-up voice commands have context.
@@ -836,8 +917,10 @@ async def _require_voice_auth(
 ) -> dict:
     """Allow voice endpoints if caller has a valid device token OR is authenticated."""
     if device:
-        # A provisioned device token IS the panel: a guest voice turn may use the household list (a fridge list).
-        panel_principal.mark_panel_turn()
+        # A provisioned device token IS the panel: a guest voice turn may use the household list (a fridge list). Over the
+        # Cloudflare tunnel it is NOT (owner decision 2026-10-19; escape hatch ZOE_PANEL_TOKEN_VIA_CF=panel).
+        if panel_principal.device_token_is_panel(request):
+            panel_principal.mark_panel_turn()
         # Home control (2026-10-18): judged on the validated TOKEN (the panel), so a zoe-auth outage cannot lock the lights.
         await panel_principal.record_turn_home_control(
             request, {"user_id": "guest", "role": "guest", "panel_id": device.get("panel_id")})
@@ -847,12 +930,26 @@ async def _require_voice_auth(
             "user_id": device.get("user_id", "voice-daemon"),
             "raw_token": device.get("raw_token", ""),
             "via_relay": _request_via_relay(request),
+            # Crossed the Cloudflare tunnel: the token came from the internet, not from the panel on the LAN. The biometric
+            # feeds and enrolment refuse it (biometric_scope, 2026-10-19).
+            "via_tunnel": _request_via_tunnel(request),
         }
     if user.get("role") not in (None, "guest"):
         await panel_principal.record_turn_home_control(request, user)
         return {"source": "session", "user_id": user.get("user_id"), "role": user.get("role"),
                 "via_relay": _request_via_relay(request)}
     raise HTTPException(status_code=401, detail="Voice endpoints require authentication or a device token")
+
+
+def _request_via_tunnel(request: Request) -> bool:
+    """True when the request carries a Cloudflare edge header (``panel_kiosk_credential.via_public_tunnel``). Fails closed."""
+    try:
+        import panel_kiosk_credential
+
+        return bool(panel_kiosk_credential.via_public_tunnel(request))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("voice auth: tunnel check failed (%s) - treating the request as tunnelled", type(exc).__name__)
+        return True
 
 
 def _request_via_relay(request: Request) -> bool:
@@ -1153,64 +1250,6 @@ def _voice_tool_name_from_sentinel(delta: str) -> "Optional[str]":
         return None
     name = tc.get("name")
     return str(name) if name else None
-
-
-def _voice_activity_frame(delta: str, tool_names: "Optional[dict]" = None) -> "Optional[dict]":
-    """Convert a brain ``__TOOL__:`` sentinel into a lightweight activity frame.
-
-    The touch panel's live-activity strip shows "what Zoe is DOING" during brain
-    turns from these frames: ``{"type": "activity", "phase": "start"|"result",
-    "tool": "<name>"}``. Only the tool NAME and PHASE cross the wire — args and
-    result payloads stay server-side (they can carry user data and the strip
-    doesn't need them). ``tool_names`` is an optional caller-owned id→name map
-    (one per turn) so the result phase — which often omits the name (see
-    zoe_core_client._tool_result_sentinel) — resolves to the tool that started.
-    Returns None for args phases, ``__THINKING__:`` markers, and malformed
-    sentinels: a bad frame must never break the voice turn.
-    """
-    if not delta.startswith("__TOOL__:"):
-        return None
-    try:
-        import json as _json
-        tc = _json.loads(delta[len("__TOOL__:"):])
-    except Exception:
-        return None
-    if not isinstance(tc, dict):
-        return None
-    phase = tc.get("phase")
-    if phase not in ("start", "result"):
-        return None
-    tc_id = str(tc.get("id") or "")
-    name = str(tc.get("name") or "")
-    if tool_names is not None and tc_id:
-        if phase == "start" and name:
-            tool_names[tc_id] = name
-        elif not name:
-            name = str(tool_names.get(tc_id) or "")
-    if phase == "start" and not name:
-        return None
-    return {"type": "activity", "phase": phase, "tool": name}
-
-
-async def _forward_voice_activity(delta: str, send_json, tool_names: dict) -> bool:
-    """Consume a brain sentinel delta on the ``/ws/voice/`` panel lane.
-
-    Returns True when ``delta`` is a sentinel (``__TOOL__:`` / ``__THINKING__:``)
-    — the caller must then skip it entirely (never buffer it toward TTS, where
-    Kokoro would read raw JSON aloud). Tool start/result sentinels are
-    additionally forwarded to the panel as lightweight ``activity`` frames via
-    ``send_json`` (the websocket's send_json). Forwarding is best-effort: a
-    send failure never breaks the spoken turn.
-    """
-    if not delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
-        return False
-    frame = _voice_activity_frame(delta, tool_names)
-    if frame is not None:
-        try:
-            await send_json(frame)
-        except Exception as exc:  # noqa: BLE001 - activity is cosmetic, speech is not
-            logger.debug("voice activity frame send failed (non-fatal): %s", exc)
-    return True
 
 
 def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
@@ -1605,71 +1644,6 @@ async def _broadcast_skybridge_ui(
             "voice skybridge ui_actions enqueue failed for panel=%s — skybridge card/navigate dropped (non-fatal): %s",
             panel_id, exc,
         )
-
-
-async def _broadcast_lets_talk_ui(panel_id: str, turn_key: Optional[str] = None) -> None:
-    """Navigate the touch panel browser to voice conversation mode.
-
-    Navigation target is /touch/voice.html (no ?conv=1) so the executor's
-    same-URL check always fires when already on the voice page, preventing
-    re-navigation loops when the queued action isn't acked in time.
-
-    The auto-start listening signal is sent as a separate transient push event
-    (voice:start_conversation) which the voice page handles directly — it is
-    never enqueued in the DB, so it cannot create a replay loop.
-    """
-    if _skybridge_only():
-        return
-    delivery_key = turn_key or str(time.monotonic_ns())
-    # Navigation: no ?conv=1 so the action is skipped when panel is already on voice page.
-    nav_action = {
-        "id": f"voice_letstalk_nav_{panel_id}_{delivery_key}",
-        "action_type": "panel_navigate",
-        "payload": {
-            "url": "/touch/voice.html",
-            "label": "Opening voice",
-            "panel_id": panel_id,
-        },
-    }
-    try:
-        from push import broadcaster
-        # Broadcast nav action (handled by touch-ui-executor).
-        await broadcaster.broadcast(_panel_channel(panel_id), "ui_action", {"action": nav_action})
-        # Also broadcast a transient start-conversation signal — NOT enqueued in DB.
-        # The voice page handles this to begin auto-listening after a short delay.
-        await broadcaster.broadcast(_panel_channel(panel_id), "voice:start_conversation", {
-            "panel_id": panel_id,
-            "delay_ms": 2500,   # wait for TTS echo to settle before opening mic
-        })
-    except Exception as exc:
-        logger.debug("voice lets_talk ui broadcast failed (non-fatal): %s", exc)
-    try:
-        from database import get_db as _get_db
-        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
-        async for _db in _get_db():
-            _panel_user_id = "family-admin"
-            try:
-                _cur = await _db.execute(
-                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
-                    (panel_id,),
-                )
-                _row = await _cur.fetchone()
-                if _row and _row["user_id"]:
-                    _panel_user_id = str(_row["user_id"])
-            except Exception:
-                pass
-            await _enqueue_ui_action(
-                _db,
-                user_id=_panel_user_id,
-                panel_id=panel_id,
-                action_type="panel_navigate",
-                payload=nav_action["payload"],
-                requested_by="voice",
-                idempotency_key=f"voice_letstalk_nav_{panel_id}_{delivery_key}",
-            )
-            break
-    except Exception as exc:
-        logger.debug("voice lets_talk ui enqueue failed (non-fatal): %s", exc)
 
 
 def _parse_voice_form_field(text: str, panel_type: str) -> dict:
@@ -2435,7 +2409,7 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
 
     # Pre-process: strip markdown and normalise units so TTS sounds natural.
     text = _clean_for_speech(_voice_preprocess(str(text).strip()))[:1200]
-    mode = os.getenv("ZOE_TTS_MODE", "hybrid").lower()
+    mode = tts_mode()
     profile = str((payload or {}).get("profile") or os.getenv("ZOE_VOICE_PROFILE", "zoe_au_natural_v1"))
     prof = VOICE_PROFILES.get(profile, VOICE_PROFILES["zoe_au_natural_v1"])
     edge_voice = str((payload or {}).get("edge_voice") or os.getenv("ZOE_EDGE_TTS_VOICE", prof["edge_voice"]))
@@ -2448,7 +2422,12 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
     content_type = "audio/wav"
     provider = "none"
 
-    # ── TTS waterfall: Kokoro sidecar → local sidecar → Edge TTS → espeak-ng ──
+    # ── TTS: Kokoro sidecar ONLY by default (ZOE_TTS_MODE=kokoro) ──
+    # Owner decision 2026-10-21: Kokoro is Zoe's only voice. No fallback voice,
+    # and reply text never leaves the box (Edge TTS sends it to Microsoft). If
+    # Kokoro fails, the request 503s below. The legacy waterfall (Kokoro → local
+    # sidecar → Edge TTS → espeak-ng) runs only when another mode is set
+    # explicitly (hybrid/local/cloud/edge/offline).
     # Kokoro sidecar — GPU-accelerated natural af_sky voice (~150ms warm on Jetson).
     if mode != "cloud":
         audio_bytes = await _synthesize_kokoro_sidecar(text)
@@ -2473,7 +2452,7 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
         except Exception:
             audio_bytes = None
 
-    if audio_bytes is None and mode != "cloud":
+    if audio_bytes is None and mode not in {"cloud", TTS_MODE_KOKORO}:
         try:
             audio_bytes = await _synthesize_espeak(text, speed=speed, pitch=pitch, volume=volume)
             provider = "espeak-ng"
@@ -2571,7 +2550,7 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
 
     text = _voice_preprocess(raw_text)[:_STREAM_TEXT_MAX]
 
-    mode = os.getenv("ZOE_TTS_MODE", "hybrid").lower()
+    mode = tts_mode()
     profile = str((payload or {}).get("profile") or os.getenv("ZOE_VOICE_PROFILE", "zoe_au_natural_v1"))
     prof = VOICE_PROFILES.get(profile, VOICE_PROFILES["zoe_au_natural_v1"])
     edge_voice = str((payload or {}).get("edge_voice") or os.getenv("ZOE_EDGE_TTS_VOICE", prof["edge_voice"]))
@@ -2588,7 +2567,8 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
             provider = "none"
             error_msg: Optional[str] = None
 
-            # Waterfall: Kokoro sidecar → local sidecar → Edge TTS → espeak
+            # Kokoro ONLY by default (see /synthesize). The waterfall
+            # (Kokoro → local sidecar → Edge TTS → espeak) needs an explicit mode.
             if mode != "cloud":
                 audio_bytes = await _synthesize_kokoro_sidecar(sentence)
                 if audio_bytes:
@@ -2608,7 +2588,7 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
                     error_msg = str(exc)
                     audio_bytes = None
 
-            if audio_bytes is None and mode != "cloud":
+            if audio_bytes is None and mode not in {"cloud", TTS_MODE_KOKORO}:
                 try:
                     audio_bytes = await _synthesize_espeak(sentence, prof["espeak_speed"], prof["espeak_pitch"], prof["espeak_volume"])
                     if audio_bytes:
@@ -2731,6 +2711,8 @@ def _log_voice_stt_sample(
             # Actual backend that produced this transcript (was hardcoded base.en).
             "model": _stt_backend_var.get() or env_str("ZOE_STT_BACKEND", "moonshine"),
             "moonshine_arch": moonshine_arch(),
+            # P-2: household | harness | probe | ci, server-derived (traffic_class.py) - NOT the body panel_id
+            "traffic_class": traffic_class.current(),
         }
         if error:
             record["error"] = error[:500]
@@ -2922,8 +2904,59 @@ def _prepare_audio_for_moonshine(audio, sample_rate: int):
     return resampled.tolist(), _MOONSHINE_SAMPLE_RATE
 
 
+def _moonshine_empty_reason(lines: list, audio, sample_rate: int) -> str:
+    """Why Moonshine produced nothing, as ``reason=... key=value`` for the log.
+
+    ``no_segments``: the C-side VAD found no speech (zero lines) - the signature
+    of the fast (~0.1 s) empty. Moonshine's batch path shares ONE process-global
+    Silero VAD, so a borderline clip used to segment differently by history (proven;
+    cleared per call by ``moonshine_vad_state`` - see docs/knowledge/voice-pipeline.md). ``blank_lines``: lines
+    came back but all blank (the decoder ran). ``audio_active_s`` (seconds above a
+    low amplitude floor) separates "silence" from "speech the VAD missed". Numbers
+    only - never the audio or any text."""
+    try:
+        import numpy as np
+
+        a = np.abs(np.asarray(audio, dtype=np.float32).reshape(-1))
+        rate = sample_rate if isinstance(sample_rate, int) and sample_rate > 0 else _MOONSHINE_SAMPLE_RATE
+        dur = a.size / rate
+        active = float((a > 0.02).sum()) / rate
+        peak = float(a.max()) if a.size else 0.0
+    except Exception:
+        dur = active = peak = -1.0
+    try:
+        n_lines = len(lines)
+    except Exception:
+        n_lines = -1
+    reason = "no_segments" if n_lines == 0 else "blank_lines"
+    return f"reason={reason} lines={n_lines} audio_s={dur:.2f} active_s={active:.2f} peak={peak:.3f}"
+
+
+def _open_moonshine_stream():
+    """A started under-speech STT stream whose VAD begins from a clean Silero state (same reset as the batch path).
+
+    The reset takes the infer lock but only briefly (``acquire(timeout=0.25)``): behind a long batch/other-stream
+    inference it is skipped (best effort - the stream then just starts from the carried state, as before) rather than
+    stalling the first chunk of the turn."""
+    tr = _ensure_moonshine()
+    st = tr.create_stream()  # constructs the global Silero on first use, so reset after it
+    if env_bool("ZOE_MOONSHINE_VAD_RESET", default=True) and _moonshine_infer_lock.acquire(timeout=0.25):
+        try:
+            reset_silero_state(transcriber_lib(tr), path="stream")
+            st.start()  # same lock hold: no batch call can re-dirty the Silero between the reset and the start
+        finally:
+            _moonshine_infer_lock.release()
+        return st
+    st.start()
+    return st
+
+
 async def _run_moonshine(wav_path: str) -> str:
     from moonshine_voice.utils import load_wav_file
+
+    # The turn's holder for the transcript BEFORE the wake word is stripped (see _stt_raw_var): the executor thread writes into the dict
+    # the calling task owns - a ContextVar set in the thread would not reach the task.
+    _raw_holder = _stt_raw_var.get()
 
     def _work() -> str:
         tr = _ensure_moonshine()
@@ -2937,13 +2970,21 @@ async def _run_moonshine(wav_path: str) -> str:
             # call. Treat the clip as unusable -> empty transcript (the caller's
             # empty_transcript handling re-prompts).
             logger.warning("Moonshine: unusable sample rate %r for %s — skipping clip", sr, wav_path)
+            logger.info("STT_EMPTY reason=bad_sample_rate")
             return ""
         with _stt_stream.infer_guard(_moonshine_infer_lock):
+            if env_bool("ZOE_MOONSHINE_VAD_RESET", default=True):
+                # Moonshine's batch VAD is ONE process-global Silero whose recurrent state is never cleared, so a
+                # clip's segmentation (hence transcript, or an empty one) depended on the audio heard before it.
+                # Zero it so every clip is segmented exactly as in a fresh process. See moonshine_vad_state.py.
+                reset_silero_state(transcriber_lib(tr), path="batch")
             out = tr.transcribe_without_streaming(audio, sr)
         # Moonshine segments speech into lines and emits the wake phrase ("Hey Zoe.")
         # as its own leading line. Strip the wake word from those lines so the
         # leading "Hey Zoe" can't corrupt the command transcript (wake-word bleed).
         lines = [getattr(ln, "text", "") or "" for ln in getattr(out, "lines", [])]
+        if _raw_holder is not None:
+            _raw_holder["raw"] = " ".join(ln.strip() for ln in lines if ln.strip()) or str(getattr(out, "text", "") or "")
         if lines:
             text = _strip_wake_word(lines)
             if text:
@@ -2952,6 +2993,7 @@ async def _run_moonshine(wav_path: str) -> str:
         flat = getattr(out, "text", None)
         if isinstance(flat, str) and flat.strip():
             return _strip_wake_word([flat])
+        logger.info("STT_EMPTY %s", _moonshine_empty_reason(lines, audio, sr))
         return ""
 
     return await asyncio.get_running_loop().run_in_executor(None, _work)
@@ -2996,11 +3038,14 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
 
 
 async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str | None = None) -> str:
+    _stt_raw_var.set({})  # a fresh holder per transcription: never a previous turn's raw text
     # ``pre_text``: a transcript the under-speech STT stream already finished for THIS clip (voice_stt_stream; the caller
     # verified the sample counts match). Capture below still runs, so the corpus keeps growing exactly as before.
     if pre_text:
         _stt_backend_var.set("moonshine-stream:" + env_str("ZOE_MOONSHINE_ARCH", "v2"))
         text = pre_text
+        # The stream result arrives wake-stripped; carry the unstripped transcript so "Zoe, ..." still counts as naming Zoe.
+        _stt_raw_var.get()["raw"] = _stt_stream_raw_var.get() or pre_text
     else:
         text = await _transcribe_audio_impl(wav_path)
     # capture=False for instrument callers (replay- panel ids): the replay gate
@@ -3019,6 +3064,12 @@ async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str |
 # module global) keeps this per-asyncio-task, so overlapping voice turns / an A/B
 # capture running beside a live turn can't clobber each other's value.
 _stt_backend_var: contextvars.ContextVar[str] = contextvars.ContextVar("stt_backend", default="")
+# The transcript as Moonshine heard it BEFORE the leading wake word was stripped (``{"raw": str}``, per task, filled by _run_moonshine). A
+# window turn that opens "Zoe, what time is it" reaches the gates as "what time is it"; this keeps the fact that Zoe was named.
+_stt_raw_var: contextvars.ContextVar = contextvars.ContextVar("stt_raw", default=None)
+# The under-speech stream's transcript before the wake word was stripped, set by _take_stt_stream_text (an awaited coroutine,
+# so the set reaches its caller) and read by _transcribe_audio when it is handed that stream's text as ``pre_text``.
+_stt_stream_raw_var: contextvars.ContextVar = contextvars.ContextVar("stt_stream_raw", default="")
 
 
 async def _transcribe_audio_impl(wav_path: str) -> str:
@@ -3061,6 +3112,11 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
     Transcribe base64 WAV/PCM audio using Moonshine v2 on the Jetson (Pi voice daemon).
     Request: { \"audio_base64\": \"...\", \"panel_id\": \"...\" }
     """
+    try:
+        from voice_activity import note_voice_activity as _note_voice_activity
+        _note_voice_activity()
+    except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
+        pass
     b64 = str((payload or {}).get("audio_base64") or "").strip()
     panel_id = _lane_panel_id(payload, caller, "transcribe")
     if not b64:
@@ -3251,6 +3307,25 @@ _USER_TURN_SAVED: "contextvars.ContextVar[Optional[_ArrivalRow]]" = contextvars.
 _ARRIVAL_SETTLE_TIMEOUT_S = 10.0
 
 
+async def _session_last_reply(session_id: str) -> Optional[str]:
+    """Zoe's newest saved reply in THIS voice session, or None when there is none / it cannot be read (fail closed)."""
+    if not session_id:
+        return None
+    try:
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as db:
+            cur = await db.execute(
+                "SELECT content FROM chat_messages WHERE session_id = ? AND role = 'assistant' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (session_id,),
+            )
+            row = await cur.fetchone()
+        return (str(row[0]) or None) if row is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _schedule_voice_chat_save(
     session_id: str, user_text: str, reply: str, user_id: str,
     speaker_verified: Optional[bool] = None,
@@ -3437,6 +3512,16 @@ async def voice_command(
     Zoe routes the text through the chat pipeline and returns a JSON response
     with the reply text and synthesised audio (base64) so the Pi can play it back.
     """
+    try:
+        from voice_activity import note_voice_activity as _note_voice_activity
+        _note_voice_activity()
+    except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
+        pass
+    try:  # read FIRST, before any await: a revoke that completes during this turn must win over its speaker note
+        import warm_speaker as _ws_mod
+        _ws_forget_epoch = _ws_mod.forget_epoch()
+    except Exception:  # noqa: BLE001 - the memo is a cache hint; no epoch = the old unconditional note
+        _ws_forget_epoch = None
     text = str((payload or {}).get("text", "")).strip()
     # SERVER-DECIDED identity (2026-10-18): the panel is the token's own (``_lane_panel_id``); ``identified_user_id`` counts only
     # on the internal PIN replay (``panel_auth.submit_pin``, source ``pin_resume``). Over HTTP it is a raw payload field: ignored.
@@ -3506,6 +3591,14 @@ async def voice_command(
             _router_decision = _rr
             logger.warning("ROUTER_SHADOW text=%r -> routed=%s (best=%s %.2f) %.1fms scores=%s",
                            text[:70], _rr["routed"], _rr["domain"], _rr["score"], _rr["ms"], _rr["scores"])
+            # A bare "what else?" names no topic: it follows the panel's previous turn, never a random fast domain.
+            import turn_continuation as _turn_cont
+
+            _router_decision = _turn_cont.follow(
+                str((payload or {}).get("session_id") or panel_id or ""), text, _rr)
+            if (_router_decision or {}).get("continuation"):
+                logger.warning("ROUTER_CONTINUATION text=%r follows %s (router said %s)", text[:40],
+                               _router_decision["routed"], _router_decision.get("continuation_of"))
     except Exception as _rexc:
         logger.debug("semantic router shadow failed: %s", _rexc)
 
@@ -3704,6 +3797,14 @@ async def voice_command(
         identified_user_id, _bound_user, _panel_recent_user,
         _scope_identity_user, _has_scope_identity,
     )
+    _note_voice_speaker(panel_id, _scope_identity_user, epoch=_ws_forget_epoch)
+    # The day review's raise / pull (day_review_raise, ZOE_DAY_REVIEW_RAISE, default OFF = returns at once): who THIS turn
+    # identified and who else this panel heard, keyed by session for the brain lane's first-turn brief - the streaming brain
+    # runs outside this task, so a ContextVar would not reach it. In-memory only; never raises.
+    import day_review_raise as _day_review_raise
+
+    _day_review_raise.note_voice_turn(session_id, panel_id, scope_user=_scope_identity_user, verdict=_speaker_verified,
+                                      claimed=identified_user_id if _by_claim else None)
 
     if _vs_decision is not None and _vs_decision.lock:
         # "lock" / "sign me out": the session is already closed (published above); say so and stop - nothing to store.
@@ -3968,11 +4069,26 @@ async def voice_command(
         logger.debug("voice form routing failed (non-fatal): %s", _af_outer_exc)
 
     # ── Voice confirmation: check if we're waiting for yes/no ─────────────
+    # Who these words are attributed to, for the confirmation window: on a panel the server-verified speaker (a claim the
+    # gate accepted, or the PIN replay) - never the panel's recent-user fallback, which is what let anyone's "yes" run
+    # another member's pending write (2026-11-02); for a member's own session (desktop, Telegram) the session itself.
+    _confirm_speaker = identified_user_id if _panel_caller else effective_user
+    from user_filters import is_unidentified as _user_filters_is_unidentified
     pending = _PENDING_CONFIRMATIONS.get(panel_id)
     if pending:
         now = time.monotonic()
         if now > pending.get("expire_at", 0):
             del _PENDING_CONFIRMATIONS[panel_id]
+            pending = None
+        elif pending.get("speaker") != _confirm_speaker or (
+            pending.get("speaker") is None and not _user_filters_is_unidentified(pending.get("user_id"))
+        ):
+            # (second clause) an ask with NO verified speaker may only ever run as a guest: if attribution gave that entry
+            # a member's id, no unverified "yes" is allowed to spend it - identity, not the panel, confirms a member's write.
+            # Another voice, or an unverified one, inside the window: the waiting write belongs to whoever asked. These words
+            # neither run it nor drop it; they are a new request from the person who said them.
+            logger.info("voice/command pending confirmation held: speaker mismatch (panel=%s intent=%s)",
+                        panel_id[:40], pending.get("intent_name"))
             pending = None
         else:
             lc = text.lower().strip().rstrip(".!?")
@@ -4151,6 +4267,7 @@ async def voice_command(
                         "expire_at": time.monotonic() + _CONFIRM_TIMEOUT_S,
                         "session_id": session_id,
                         "user_id": effective_user,
+                        "speaker": _confirm_speaker,
                     }
                     from types import SimpleNamespace as _SnapNS
 
@@ -4783,6 +4900,7 @@ async def voice_command(
                 "expire_at": time.monotonic() + _CONFIRM_TIMEOUT_S,
                 "session_id": session_id,
                 "user_id": effective_user,
+                "speaker": _confirm_speaker,
             }
             try:
                 audio_resp = await synthesize({"text": confirm_phrase}, caller=caller)
@@ -4822,13 +4940,36 @@ async def voice_command(
     try:
         from intent_router import detect_intent as _detect_pub, execute_intent as _exec_pub
         _pub_intent = _detect_pub(text, log_miss=False)
-        if _pub_intent and _pub_intent.name in _PUBLIC_VOICE_INTENTS:
+        # A bare "thank you" / "cheers" / "ok" is a social micro-reply: no data, no policy question, no brain round-trip (live
+        # 2026-10-23: "Thank you" was classified `acknowledgement` here and still went to the brain, which answered "I'm Zoe.").
+        # It is not in the capability matrix, so it skips the matrix lookup. An "ok" that ACCEPTS Zoe's last offer is not a bare
+        # acknowledgement: it falls through to the brain, which has the conversation (the same rule the chat lane applies).
+        _pub_social_ack = bool(_pub_intent and _pub_intent.name == "acknowledgement")
+        if _pub_social_ack:
+            try:
+                from intent_router import ack_answers_offer as _ack_answers_offer
+                _ack_prev = None
+                if (_pub_intent.slots or {}).get("kind") == "ack":
+                    # THIS voice session's last reply (never the member's latest across sessions); unknown (a guest's turns
+                    # are not saved, or no reply yet) means the brain decides - it has the conversation.
+                    _ack_prev = await _session_last_reply(session_id)
+                if (_ack_prev is None and (_pub_intent.slots or {}).get("kind") == "ack") or await _ack_answers_offer(
+                        _pub_intent, effective_user, previous=_ack_prev):
+                    _pub_social_ack = False
+                    _pub_intent = None
+            except Exception:
+                _pub_social_ack = False
+                _pub_intent = None
+        if _pub_intent and (_pub_social_ack or _pub_intent.name in _PUBLIC_VOICE_INTENTS):
             # Detached-task safety (see identity block above): run the auth check on a
             # dedicated connection, never the released request `db`. Fail closed.
             try:
-                from db_pool import get_db_ctx as _get_db_ctx
-                async with _get_db_ctx() as _authconn:
-                    _pub_allowed = await _can_use_voice_intent(_authconn, _voice_policy_user, _pub_intent.name)
+                if _pub_social_ack:
+                    _pub_allowed = True
+                else:
+                    from db_pool import get_db_ctx as _get_db_ctx
+                    async with _get_db_ctx() as _authconn:
+                        _pub_allowed = await _can_use_voice_intent(_authconn, _voice_policy_user, _pub_intent.name)
             except Exception:
                 # Dedicated conn unavailable: on the awaited path the request db is valid;
                 # on the detached path it fails → fail closed (deny).
@@ -4860,8 +5001,6 @@ async def voice_command(
                     await _broadcast_weather_ui(panel_id, _pub_reply, turn_key=_turn_key)
                 if _pub_intent.name in {"calendar_show", "daily_briefing"}:
                     await _broadcast_calendar_ui(panel_id, _pub_reply, turn_key=_turn_key)
-                if _pub_intent.name == "lets_talk":
-                    await _broadcast_lets_talk_ui(panel_id, turn_key=_turn_key)
                 try:
                     from voice_metrics import voice_stage_seconds, voice_turn_count, voice_intent_hit_count
                     voice_stage_seconds.labels(stage="llm_first_token").observe(0.0)
@@ -5295,12 +5434,11 @@ async def voice_command(
                         if delta.startswith(_VOICE_ESCALATION_MARKERS):
                             try:
                                 is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
-                                # See the non-stream path: Hermes is retired, so
-                                # every escalation goes to the background runner.
-                                logger.info("voice/command stream escalation -> background (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
-                                from background_runner import enqueue_background_task
-                                _spawn_bg(enqueue_background_task(esc_prompt, effective_user, session_id))
-                                delta = "I'll work on that in the background and let you know when it's done."
+                                # Hermes is retired and the background executor is gone (it launched an
+                                # agent with auto-approve as the zoe user - deep dive S0-7): an escalation
+                                # is refused out loud, never queued.
+                                logger.info("voice/command stream escalation refused - no executor (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
+                                delta = "I can't run that kind of task any more, so I haven't started it."
                             except Exception as esc_exc:
                                 logger.warning("voice/command stream escalation failed: %s", esc_exc)
                                 delta = "I couldn't complete that advanced request right now. Please try again."
@@ -5388,8 +5526,9 @@ async def voice_command(
                         _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id, speaker_verified=_speaker_verified,
                                                            interrupted=not _screen_finished))
 
+            # The body runs in THIS turn's context wherever it is pulled (/turn_stream pulls it from another task).
             return StreamingResponse(
-                _generate_voice_stream(),
+                _stream_in_turn_context(_generate_voice_stream()),
                 media_type="application/x-zoe-audio-stream",
                 headers={"Cache-Control": "no-cache"},
             )
@@ -5424,15 +5563,11 @@ async def voice_command(
                 if delta.startswith(_VOICE_ESCALATION_MARKERS):
                     try:
                         is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
-                        # Hermes is retired, so there is no foreground escalation
-                        # engine — every escalation now goes to the background
-                        # runner, which is the path that still has one. Verified
-                        # never-fired before removal (operator-confirmed; zero
-                        # 'escalation ->' hits in the logs).
-                        logger.info("voice/command escalation -> background (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
-                        from background_runner import enqueue_background_task
-                        _spawn_bg(enqueue_background_task(esc_prompt, effective_user, session_id))
-                        delta = "I'll work on that in the background and let you know when it's done."
+                        # Hermes is retired and the background executor is gone (it launched an agent
+                        # with auto-approve as the zoe user - deep dive S0-7): an escalation is refused
+                        # out loud, never queued.
+                        logger.info("voice/command escalation refused - no executor (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
+                        delta = "I can't run that kind of task any more, so I haven't started it."
                     except Exception as esc_exc:
                         logger.warning("voice/command escalation failed: %s", esc_exc)
                         delta = "I couldn't complete that advanced request right now. Please try again."
@@ -5661,6 +5796,50 @@ async def voice_command(
     }
 
 
+async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, panel_id: str, *, route: str) -> Optional[dict]:
+    """The ``skipped`` done frame for a no-wake-word window turn whose speaker gate RAN and did not confirm a member, else None.
+
+    ONE rule for both /turn and /turn_stream: the daemon's streaming request falls back to the blocking /turn when it dies before a
+    response, and a /turn that skipped this check let a background clip clear only the wake bar. Side effects of a drop (crowd note,
+    voice-session close) live here so the two paths cannot drift. An ERROR while judging a window turn FAILS CLOSED (dropped).
+    """
+    if (payload or {}).get("window") not in _utterance_shape.WINDOWS:
+        return None
+    _gate = None
+    try:
+        _win_verdict = _speaker_verdict(
+            payload, caller, identified_by_claim=bool(await _accepted_voice_claim(payload, caller)))
+    except Exception as _win_exc:
+        logger.warning("voice/%s window speaker gate failed (dropping the window turn): %s", route, _win_exc)
+        _win_verdict = False
+    try:
+        _gate = _utterance_shape.window_speaker_frame(
+            payload, transcript, _win_verdict,
+            named_zoe=_utterance_shape.names_zoe(((_stt_raw_var.get() or {}).get("raw")) or ""))
+    except Exception as _win_exc:
+        logger.warning("voice/%s window speaker frame failed (dropping the window turn): %s", route, _win_exc)
+        _gate = {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch"}
+    if _gate is not None:
+        # The rejected voice is still SOMEONE in the room: record it in the crowd log (no session, no brain, no memory write), so the
+        # day-review summary is not spoken aloud on the strength of a crowd that only ever spoke into skipped follow-ups.
+        try:
+            import day_review_raise as _dr_win
+            _dr_win.note_voice_turn("", panel_id, scope_user=None, verdict=False, claimed=None)
+        except Exception as _dr_exc:
+            logger.debug("window mismatch crowd note failed (non-fatal): %s", _dr_exc)
+        # An unverified voice closes the panel's voice session, exactly as on the voice_command path (flag off: no-op).
+        try:
+            import voice_session as _vs_win
+            _vs_dec = _vs_win.observe_turn(
+                panel_id=panel_id, caller_source=(caller or {}).get("source"), verdict=False, claimed=None,
+                pin_user=None, model_ok=False, model_reason="window_mismatch", text="")
+            if _vs_dec is not None and _vs_dec.events:
+                _spawn_bg(_vs_win.publish(list(_vs_dec.events)))
+        except Exception as _vs_exc:
+            logger.debug("window mismatch session close failed (non-fatal): %s", _vs_exc)
+    return _gate
+
+
 @router.post("/turn")
 async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth), db=Depends(get_db)):
     """Combined STT + LLM + TTS in a single HTTP call.
@@ -5755,6 +5934,12 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
 
     logger.info("voice/turn panel=%s STT=%.1fs transcript=%r", panel_id, t_stt, transcript[:80])
 
+    # The streaming request's blocking fallback carries ``window`` too: a no-wake-word turn whose voice the gate ran on and did
+    # not confirm is dropped here exactly as on /turn_stream (empty reply: the daemon returns to wake mode).
+    if await _window_speaker_drop(payload, caller, transcript, panel_id, route="turn") is not None:
+        return {"ok": True, "panel_id": panel_id, "text": "", "reply": "", "audio_base64": None,
+                "skipped": "not_addressed", "reason": "voice_mismatch", "conversation_end": True}
+
     # Broadcast transcript so UI shows what was heard.
     try:
         from push import broadcaster as _bc_t
@@ -5777,6 +5962,9 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     # The daemon's per-turn speaker-gate block (memory provenance; see _speaker_verdict).
     if isinstance((payload or {}).get("speaker"), dict):
         command_payload["speaker"] = payload["speaker"]
+    # Which kind of no-wake-word window this turn came from: voice_command's claim gate applies the stricter window bar to it.
+    if (payload or {}).get("window") in ("followup", "conversation"):
+        command_payload["window"] = payload["window"]
 
     result = await voice_command(command_payload, caller=caller, stream=False, db=db)
     result["text"] = transcript
@@ -5837,6 +6025,15 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
     t_upload = time.monotonic() - t_turn_start
     suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
+
+    # Stamp household activity ONCE, here, for every accepted turn: the canned fast paths below (the conversation opener / ender ack, the
+    # mishear clarification, a gate-dropped window turn) return before voice_command, which is the only other stamp. Harness / probe / CI
+    # traffic is filtered inside note_voice_activity by the server-bound traffic class.
+    try:
+        from voice_activity import note_voice_activity as _note_voice_activity
+        _note_voice_activity()
+    except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
+        pass
 
     # ── B1.1 speculation gate (ZOE_SPECULATIVE_TURN, default OFF) ──
     # The daemon fired this turn at its FIRST end-of-turn verdict and is still
@@ -5942,8 +6139,16 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # listens a short extra window and re-sends ONE merged clip. ``skipped``: a follow-up
     # window utterance that names someone else (ZOE_FOLLOWUP_ADDRESSED, default off).
     # Never on a speculative turn (its own verdict protocol owns it). Fail-open.
+    _gate = None
+    # A no-wake-word window turn must carry its OWN matching voice: one the speaker gate RAN on and did not confirm is
+    # not for Zoe (a television, another person) - dropped here, before any brain / memory / identity work, which ends the
+    # panel's follow-up chain. Never a speculative turn. A None verdict (gate off / shadow) is today's behaviour, but an
+    # ERROR while judging a window turn FAILS CLOSED (dropped): unknown is not the member.
+    if _spec_gate is None:
+        _gate = await _window_speaker_drop(payload, caller, transcript, panel_id, route="turn_stream")
     try:
-        _gate = _utterance_shape.gate_frame(payload, transcript, speculative=_spec_gate is not None)
+        if _gate is None:
+            _gate = _utterance_shape.gate_frame(payload, transcript, speculative=_spec_gate is not None)
     except Exception as _gate_exc:
         logger.warning("voice/turn_stream utterance gate failed (non-fatal): %s", _gate_exc)
         _gate = None
@@ -6109,6 +6314,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # The daemon's per-turn speaker-gate block (memory provenance; see _speaker_verdict).
     if isinstance((payload or {}).get("speaker"), dict):
         command_payload["speaker"] = payload["speaker"]
+    # Which kind of no-wake-word window this turn came from: voice_command's claim gate applies the stricter window bar to it.
+    if (payload or {}).get("window") in ("followup", "conversation"):
+        command_payload["window"] = payload["window"]
 
     # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
     # (voice_command's stream generator records the downstream llm_first_token /
@@ -6321,8 +6529,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
                 except Exception:
                     _wav = None
                 if not _wav:
-                    # Sidecar down — use the full synth fallback chain (local
-                    # -> edge-tts -> espeak) so the panel is never left silent.
+                    # Sidecar down — retry via synthesize(), which honours
+                    # ZOE_TTS_MODE: Kokoro-only by default (503 -> chunk skipped);
+                    # the legacy fallback chain runs only when explicitly set.
                     try:
                         _resp = await synthesize({"text": _sentence}, caller=caller)
                         _wav = _resp.body
@@ -6350,6 +6559,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
 
 async def _take_stt_stream_text(payload: dict, raw: bytes, suffix: str) -> str | None:
     """Finished under-speech transcript for this turn's clip, or None (-> batch STT). Never raises."""
+    _stt_stream_raw_var.set("")
     sid = (payload or {}).get("stt_stream_id")
     if not sid or not _stt_stream.stream_under_speech_enabled():
         return None
@@ -6379,6 +6589,8 @@ async def _take_stt_stream_text(payload: dict, raw: bytes, suffix: str) -> str |
                 text = _strip_wake_word(list(lines)) or None
                 if text is None:
                     reason = "empty"
+                else:
+                    _stt_stream_raw_var.set(" ".join(ln.strip() for ln in lines if ln and ln.strip()))
     except Exception as exc:
         reason = f"error:{exc.__class__.__name__}"
         text = None
@@ -6407,14 +6619,8 @@ async def voice_stt_stream_chunk(payload: dict, caller: dict = Depends(_require_
     if not pcm:
         raise HTTPException(status_code=400, detail="empty chunk")
 
-    def _make():
-        tr = _ensure_moonshine()
-        st = tr.create_stream()
-        st.start()
-        return st
-
     sess = await asyncio.get_running_loop().run_in_executor(
-        None, _stt_stream.get_or_open, sid, seq, _make, _moonshine_infer_lock)
+        None, _stt_stream.get_or_open, sid, seq, _open_moonshine_stream, _moonshine_infer_lock)
     if sess is None:
         raise HTTPException(status_code=429, detail="stt stream refused (unknown stream or too many sessions)")
     return {"ok": sess.feed(seq, pcm), "samples": sess.samples_fed}
@@ -6471,8 +6677,29 @@ async def voice_turn_stream_speculation(payload: dict, caller: dict = Depends(_r
     return {"ok": True, "turn_id": turn_id, "action": action, "verdict": gate.verdict()}
 
 
+# The member this panel's last turn was server-verified as (a voice match OR a signed-in/PIN session: the turn's scope
+# identity) is a GUESS of who speaks next, used ONLY to choose which member's system prompt the wake KV warm renders (a
+# cache-shaping hint) - never as an identity, never to read or write anything for that member. It lives in ``warm_speaker``
+# (persisted across restarts, 12 h age cap, removed by forget): a process-only memo left the first wake after every deploy
+# on the guest envelope and the member's first turn re-prefilled ~1k tokens (2026-10-28).
+
+
+def _note_voice_speaker(panel_id: str, member: Optional[str], epoch: Optional[int] = None) -> None:
+    """Remember ``member`` as ``panel_id``'s likely next speaker (a real, server-verified member only). ``epoch`` is
+    ``warm_speaker.forget_epoch()`` read at the START of the turn: a forget during the turn makes this a no-op."""
+    real = _real_user_or_none(member)
+    if not panel_id or not real:
+        return
+    import warm_speaker
+
+    warm_speaker.note(panel_id, real, epoch=epoch)
+
+
 def _brain_prewarm_on_wake_enabled() -> bool:
     return env_bool("ZOE_BRAIN_PREWARM_ON_WAKE", default=True)
+
+
+_WARM_MEMO_READ_TIMEOUT_S = 0.2   # how long a wake's KV warm waits for the persisted likely-speaker memo
 
 
 async def _prewarm_brain_for_panel(panel_id: str) -> None:
@@ -6483,9 +6710,10 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
     half (below); it is never a precondition for the warm itself:
 
     * The brain's cacheable prefix (system prompt + tool block) is the same bytes for
-      every user and session - the member's words, memory and persona ride the user
-      message behind it - so ``zoe_flue_client.warm_kv_prefix`` loads it into llama-server's
-      one slot with an explicit-guest throwaway turn. This is what hides the ~2.7k-token cold
+      every user and session up to the member's manner block and user-model card, which the sidecar
+      appends to the system prompt ahead of the tool block - so ``zoe_flue_client.warm_kv_prefix`` loads it into llama-server's
+      one slot with a throwaway turn (as the panel's likely speaker when known, else an explicit guest;
+      the member's manner block + card sit ahead of the tool block, so a guest warm cannot serve a member). This is what hides the ~2.7k-token cold
       prefill (TTFT ~4.8 s cold vs ~1.1-1.7 s warm). Live lane only.
     * The core (Pi) worker is keyed on (user, session): warmed for the member of a FRESH
       panel session, else for ``guest`` - the same key the turn's ``effective_user`` gets
@@ -6504,12 +6732,43 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         _t0 = time.monotonic()
         # Started FIRST: it needs neither a session nor an identity, so nothing below (a session lookup, the
         # identity read) can lose the wake its warm. Never raises; detached from this coroutine's own failures.
+        # The KV warm renders the system prompt of the panel's LIKELY speaker (the member this panel last
+        # verified by voice, persisted memo; else a bound/fresh-PIN member; else guest), because the member's
+        # manner block + user-model card sit ahead of the tool block and a guest warm cannot be resumed past
+        # them (see zoe_flue_client._kv_warm_outbound). A wrong guess costs nothing over the old guest warm.
+        member = _real_user_or_none(
+            (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
+        ) or ""
+        import warm_speaker
+
+        # Bounded like the fresh-PIN lookup below: the first wake after a restart reads the memo file, and a slow disk
+        # must not eat the time the user is speaking. Past 0.2 s the warm starts with the fallback (member / guest);
+        # the detached read is left to finish (its exception consumed) and the memo is warm for the next wake.
+        _mk = asyncio.ensure_future(asyncio.to_thread(warm_speaker.get, panel_id))
+        _mk.add_done_callback(lambda t: t.cancelled() or t.exception())   # never an unretrieved exception
+        try:
+            _mdone, _ = await asyncio.wait({_mk}, timeout=_WARM_MEMO_READ_TIMEOUT_S)
+            likely = ((_mk.result() or "") if _mdone and not _mk.cancelled() and _mk.exception() is None else "") or member
+        except Exception:  # noqa: BLE001 - the member / guest warm is the fallback
+            likely = member
+        if not likely:
+            # After a restart / eviction the memo is empty: ask for a fresh-PIN member, but only briefly so the
+            # warm is never held up (the lookup is re-awaited below for the worker + facts, unbounded as before).
+            # asyncio.wait, not wait_for: wait_for awaits the cancelled coroutine's unwind, so it is not a hard bound.
+            # The 0.4 s bounds when the WARM STARTS; the detached lookup is left to finish (its exception is consumed).
+            _lk = asyncio.ensure_future(_resolve_fresh_panel_member(panel_id))
+            _lk.add_done_callback(lambda t: t.cancelled() or t.exception())   # never an unretrieved exception
+            try:
+                _done, _ = await asyncio.wait({_lk}, timeout=0.4)
+                likely = (_lk.result() or "") if _done and not _lk.cancelled() and _lk.exception() is None else ""
+            except Exception:  # noqa: BLE001 - guest warm is the fallback
+                likely = ""
         kv_task = None
         if flue_lane:
             import zoe_flue_client
-            kv_task = asyncio.ensure_future(zoe_flue_client.warm_kv_prefix())
+            kv_task = asyncio.ensure_future(zoe_flue_client.warm_kv_prefix(likely))
         session_id = _get_or_create_voice_session(panel_id)
-        member = _real_user_or_none(
+        member = member or _real_user_or_none(
             (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
         ) or ""
         if not member:
@@ -6736,7 +6995,8 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
 
 
 def _speaker_id_threshold() -> float:
-    """Resemblyzer cosine acceptance threshold, read per call so .env flips apply."""
+    """Legacy flat cosine threshold the sync feed still advertises, read per call so .env flips apply (the ResNet34 bar is
+    per length group: ``speaker_models.claim_threshold``)."""
     try:
         return float(os.environ.get("ZOE_SPEAKER_ID_THRESHOLD", "0.82"))
     except ValueError:
@@ -6821,10 +7081,11 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     user, raw_score = _claim_fields(payload)
     if not user:
         return None
-    if (caller or {}).get("via_relay"):
+    if (caller or {}).get("via_relay") or (caller or {}).get("via_tunnel"):
         # The score was computed on the panel, so the server's gate here trusts the device for it. On the LAN that device
-        # is the panel on the wall; over the relay it may be a stolen one anywhere (2026-10-18): no claim, a PIN instead.
-        logger.info("voice claim rejected: the request came through the relay (a member needs a fresh PIN session there)")
+        # is the panel on the wall; over the relay (2026-10-18) or the Cloudflare tunnel (2026-10-19: a copied token from
+        # the internet, which the panel never uses) it may be anywhere: no claim, a PIN instead.
+        logger.info("voice claim rejected: the request came through the relay or the tunnel (a member needs a fresh PIN session)")
         return None
     try:
         score = float(raw_score)
@@ -6836,7 +7097,9 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
         # threshold): never honoured, whatever its value. The flag is flipped on BOTH hosts (docs/knowledge/speaker-resnet34-switch.md).
         logger.info("voice claim rejected: model %r is not the acting model %r", model_id[:48], speaker_models.acting_model())
         return None
-    threshold = speaker_models.claim_threshold(model_id, speech_s, _speaker_id_threshold())
+    # A no-wake-word window turn (follow-up / conversation) clears a STRICTER bar than a wake turn: nobody said the wake word, so
+    # whatever the room is playing (a television) is also a candidate speaker (2026-11-01).
+    threshold = speaker_models.claim_threshold(model_id, speech_s, str(payload.get("window") or ""))
     if threshold is not None and score >= threshold:
         return user
     logger.info(
@@ -6883,16 +7146,6 @@ async def _accepted_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     return None
 
 
-def _speaker_engine_unavailable_detail() -> str:
-    """The 503 body when no voice embedding could be computed: WHY (the exception type and message ``voice_speaker_id`` recorded and
-    logged at WARNING), and where the fix is. It used to say "resemblyzer not available" for a broken linker path and a missing
-    package alike."""
-    import voice_speaker_id
-
-    why = voice_speaker_id.last_failure() or "the speaker engine is not installed"
-    return f"Voice signature engine unavailable: {why}. See docs/knowledge/python-312-venv-migration.md (LD_LIBRARY_PATH)."
-
-
 @router.post("/enroll")
 async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """Enroll a speaker voice profile. ONE ``speaker_profiles`` row per (member, ``model_id``); profiles of different
@@ -6900,12 +7153,10 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
 
     Two request shapes:
 
-    * ``audio_base64`` (+ ``user_id``, ``display_name``, ``panel_id``, ``consent``) - a WAV the SERVER embeds with
-      Resemblyzer (the legacy path, the only model the server computes). The embedding is averaged into the member's
-      existing Resemblyzer profile, as it always was.
-    * ``embedding_base64`` + ``model_id`` (+ ``sample_count``) - a finished 256-float PROFILE built ON THE PANEL (device
-      token only: for ResNet34 the audio never leaves the panel). It REPLACES the member's profile of that model - a fresh
-      5-clip enrolment is not blended with an old session - and drops that row's adapted profile.
+    ``embedding_base64`` + ``model_id`` (+ ``user_id``, ``display_name``, ``panel_id``, ``consent``, ``sample_count``) - a
+    finished 256-float PROFILE built ON THE PANEL (device token only: the audio never leaves the panel). It REPLACES the
+    member's profile of that model - a fresh 5-clip enrolment is not blended with an old session - and drops that row's
+    adapted profile. The server no longer embeds uploaded audio (Resemblyzer was retired): ``audio_base64`` is refused.
     """
     from database import get_db
     import uuid as _uuid
@@ -6919,17 +7170,20 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
         raise HTTPException(status_code=403, detail="voice enrolment is not available through the relay")
     b64 = str(payload.get("audio_base64", "")).strip()
     emb_b64 = str(payload.get("embedding_base64", "")).strip()
+    if b64:
+        # The server has no audio encoder (Resemblyzer was retired): a profile from uploaded audio would be stored yet never
+        # recognise anyone. Refuse before anything else, and say where to go.
+        raise HTTPException(status_code=409, detail="Voice profiles are now built at the panel: say \"Zoe, learn my voice\" "
+                                                    "to the panel (nothing was stored).")
     model_id = speaker_models.model_id_field(payload, "model_id")
     if model_id is None:
         raise HTTPException(status_code=400, detail="model_id must be a non-empty string")
     if not speaker_models.is_known(model_id):
         raise HTTPException(status_code=400, detail="unknown model_id")
-    # A session caller may only enrol ITSELF (admins excepted). Taking the
-    # payload's user_id verbatim let any household member enrol their own voice
-    # under someone else's id — identity takeover, not just a bad row. A device
-    # token still enrols on behalf of the person at the panel; when it names
-    # nobody the pre-existing caller fallback stands.
-    _target = resolve_enroll_target(payload.get("user_id"), caller)
+    # A session caller may only enrol ITSELF (admins excepted). A device token only the member the SERVER verified at its
+    # panel - the enrolment grant Zoe minted when she queued the command, or a fresh PIN sign-in (2026-10-19) - never the
+    # payload's user_id: a voiceprint is a password, and a copied panel token used to enrol any voice onto any member.
+    _target = await resolve_enroll_target(payload.get("user_id"), caller, kind="voice")
     user_id = str(_target or caller.get("user_id", "unknown"))
     display_name = str(payload.get("display_name", user_id)).strip() or user_id
     panel_id = "" if not (payload.get("panel_id") or caller.get("panel_id")) else _lane_panel_id(payload, caller, "enroll")
@@ -6941,93 +7195,47 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     _consent_raw = payload.get("consent")
     consent: Optional[bool] = None if _consent_raw is None else bool(_consent_raw)
 
-    finished_profile = None      # the panel-built profile (float32 bytes) when this is the embedding shape
-    clips = 0                    # the audio path keeps the column default (0), exactly as before models existed
-    if emb_b64:
-        if caller.get("source") != "device":
-            raise HTTPException(status_code=403, detail="a finished voice profile may only be uploaded by a panel (device token)")
-        # A finished profile says which space it lives in; it is never assumed to be the legacy model.
-        _raw_model = payload.get("model_id")
-        if not isinstance(_raw_model, str) or not _raw_model.strip():
-            raise HTTPException(status_code=400, detail="model_id is required with embedding_base64")
-        try:
-            vec = speaker_models.validate_embedding(base64.b64decode(emb_b64, validate=True), model_id)
-        except Exception:
-            vec = None
-        if vec is None:
-            raise HTTPException(status_code=400, detail="invalid embedding for this model")
-        finished_profile = vec.astype("float32").tobytes()
-        try:
-            clips = max(1, min(int(payload.get("sample_count") or 1), 16))
-        except (TypeError, ValueError):
-            clips = 1
-        embedding_bytes = finished_profile
-    else:
-        if speaker_models.acting_model() != speaker_models.LEGACY_MODEL_ID:
-            # ZOE_SPEAKER_MODEL=resnet34: a Resemblyzer profile from uploaded audio would be stored and reported as success yet
-            # never recognise anyone (the acting model is ResNet34, built only on the panel). Refuse, and say where to go.
-            raise HTTPException(status_code=409, detail="Voice profiles are now built at the panel: say \"Zoe, learn my voice\" "
-                                                        "to the panel (nothing was stored).")
-        if not b64:
-            raise HTTPException(status_code=400, detail="audio_base64 or embedding_base64 is required")
-        if model_id != speaker_models.LEGACY_MODEL_ID:
-            raise HTTPException(status_code=400, detail="the server embeds audio with resemblyzer only; this model's profile is built on the panel")
-        try:
-            raw = base64.b64decode(b64, validate=True)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(raw)
-            wav_path = tmp.name
-
-        try:
-            # Off the event loop: the first call loads resemblyzer/torch (~6 s) and
-            # every call is CPU-bound — inline, it stalled every live voice turn.
-            embedding_bytes = await asyncio.to_thread(_compute_resemblyzer_embedding, wav_path)
-        finally:
-            try:
-                os.unlink(wav_path)
-            except OSError:
-                pass
-
-        if embedding_bytes is None:
-            raise HTTPException(status_code=503, detail=_speaker_engine_unavailable_detail())
+    if not emb_b64:
+        raise HTTPException(status_code=400, detail="embedding_base64 is required")
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="a finished voice profile may only be uploaded by a panel (device token)")
+    # A finished profile says which space it lives in; it is never assumed.
+    _raw_model = payload.get("model_id")
+    if not isinstance(_raw_model, str) or not _raw_model.strip():
+        raise HTTPException(status_code=400, detail="model_id is required with embedding_base64")
+    try:
+        vec = speaker_models.validate_embedding(base64.b64decode(emb_b64, validate=True), model_id)
+    except Exception:
+        vec = None
+    if vec is None:
+        raise HTTPException(status_code=400, detail="invalid embedding for this model")
+    finished_profile = vec.astype("float32").tobytes()
+    try:
+        clips = max(1, min(int(payload.get("sample_count") or 1), 16))
+    except (TypeError, ValueError):
+        clips = 1
+    embedding_bytes = finished_profile
 
     profile_id = str(_uuid.uuid4())
     try:
         async with _get_compat_db() as db:
             # Check if the user already has a profile OF THIS MODEL — update it, never touch another model's row.
             async with db.execute(
-                "SELECT id, embedding_blob, sample_count FROM speaker_profiles WHERE user_id=? AND "
+                "SELECT id FROM speaker_profiles WHERE user_id=? AND "
                 + speaker_models.MODEL_SQL + " = ?",
                 (user_id, model_id)
             ) as cur:
                 existing = await cur.fetchone()
             if existing:
-                import numpy as np
-                old_id, old_blob, old_count = existing
-                if finished_profile is not None:
-                    # A finished panel-built profile REPLACES the old one. Its adapted profile started from the old anchor,
-                    # so it goes too (the sample_count may be unchanged, which alone would not invalidate it).
-                    await db.execute(
-                        """UPDATE speaker_profiles SET embedding_blob=?, sample_count=?, display_name=?,
-                           enrolled_at=CURRENT_TIMESTAMP, adapted_blob=NULL, adapted_from_count=NULL, adapt_count=0,
-                           adapted_at=NULL WHERE id=?""",
-                        (finished_profile, clips, display_name, old_id),
-                    )
-                else:
-                    old_emb = np.frombuffer(old_blob, dtype=np.float32)
-                    new_emb = np.frombuffer(embedding_bytes, dtype=np.float32)
-                    # Weighted average of embeddings.
-                    n = old_count or 1
-                    averaged = (old_emb * n + new_emb) / (n + 1)
-                    averaged_norm = averaged / (np.linalg.norm(averaged) + 1e-9)
-                    await db.execute(
-                        """UPDATE speaker_profiles SET embedding_blob=?, sample_count=sample_count+1,
-                           display_name=? WHERE id=?""",
-                        (averaged_norm.astype(np.float32).tobytes(), display_name, old_id),
-                    )
+                old_id = existing[0]
+                # A finished panel-built profile REPLACES the old one. Its adapted profile started from the old anchor,
+                # so it goes too (the sample_count may be unchanged, which alone would not invalidate it).
+                await db.execute(
+                    """UPDATE speaker_profiles SET embedding_blob=?, sample_count=?, display_name=?,
+                       enrolled_at=CURRENT_TIMESTAMP, adapted_blob=NULL, adapted_from_count=NULL, adapt_count=0,
+                       adapted_at=NULL WHERE id=?""",
+                    (finished_profile, clips, display_name, old_id),
+                )
                 if consent is True:
                     await db.execute(
                         "UPDATE speaker_profiles SET consent_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -7064,10 +7272,7 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
         import voice_session as _vs_revoke
 
         await _vs_revoke.revoke_member(user_id, "consent_revoked")
-    out = dict(ok=True, profile_id=profile_id, user_id=user_id, display_name=display_name)
-    if model_id != speaker_models.LEGACY_MODEL_ID:
-        out["model_id"] = model_id      # the legacy response shape is a pinned contract; only a new model adds a field
-    return out
+    return dict(ok=True, profile_id=profile_id, user_id=user_id, display_name=display_name, model_id=model_id)
 
 
 @router.post("/identify")
@@ -7076,10 +7281,9 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
 
     Accepts two request formats:
     - { "embedding_base64": "...", "panel_id": "..." }  — pre-computed float32 embedding bytes
-      (sent by zoe_voice_daemon.py which computes the embedding locally on Pi/Jetson). ``model_id`` names the embedding
-      space it was computed in (default resemblyzer) and ``speech_s`` its clip length; ONLY profiles of that same model
-      are compared, and the threshold is that model's (``speaker_models.claim_threshold``).
-    - { "audio_base64": "...", "panel_id": "..." }  — raw WAV bytes; server computes the (Resemblyzer) embedding
+      (sent by zoe_voice_daemon.py which computes the embedding locally on the panel). ``model_id`` names the embedding
+      space it was computed in and ``speech_s`` its clip length; ONLY profiles of that same model are compared, and the
+      threshold is that model's (``speaker_models.claim_threshold``). The server embeds no audio (Resemblyzer was retired).
     Returns best-match profile with confidence score.
     """
     from db_compat import get_compat_db as _get_compat_db
@@ -7091,41 +7295,13 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
     if not speaker_models.is_known(model_id):
         raise HTTPException(status_code=400, detail="unknown model_id")
 
-    # Fast path: pre-computed embedding from the voice daemon
     emb_b64 = str(payload.get("embedding_base64", "")).strip()
-    if emb_b64:
-        try:
-            query_emb = base64.b64decode(emb_b64, validate=True)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="invalid base64 embedding") from exc
-    else:
-        # Fallback: raw WAV bytes — compute embedding server-side
-        b64 = str(payload.get("audio_base64", "")).strip()
-        if not b64:
-            raise HTTPException(status_code=400, detail="embedding_base64 or audio_base64 is required")
-        if model_id != speaker_models.LEGACY_MODEL_ID:
-            raise HTTPException(status_code=400, detail="the server embeds audio with resemblyzer only")
-
-        try:
-            raw = base64.b64decode(b64, validate=True)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(raw)
-            wav_path = tmp.name
-
-        try:
-            # Off the event loop (see voice_enroll).
-            query_emb = await asyncio.to_thread(_compute_resemblyzer_embedding, wav_path)
-        finally:
-            try:
-                os.unlink(wav_path)
-            except OSError:
-                pass
-
-        if query_emb is None:
-            raise HTTPException(status_code=503, detail=_speaker_engine_unavailable_detail())
+    if not emb_b64:
+        raise HTTPException(status_code=400, detail="embedding_base64 is required (the server no longer embeds audio)")
+    try:
+        query_emb = base64.b64decode(emb_b64, validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid base64 embedding") from exc
 
     if model_id not in speaker_models.visible_models():
         return dict(ok=True, identified=False, reason="model_not_served")
@@ -7160,8 +7336,7 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
             best_user_id = uid
             best_name = dname
 
-    # Resemblyzer cosine similarity > 0.82 is typically a match; ResNet34 has its own length-group thresholds.
-    threshold = speaker_models.claim_threshold(model_id, payload.get("speech_s"), _speaker_id_threshold())
+    threshold = speaker_models.claim_threshold(model_id, payload.get("speech_s"))
     if threshold is not None and best_score >= threshold:
         return dict(ok=True, identified=True, profile_id=best_id, user_id=best_user_id, display_name=best_name,
                     confidence=round(best_score, 4), model_id=model_id)
@@ -7169,8 +7344,8 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
 
 
 def _parse_models_param(models: Optional[str]) -> frozenset:
-    """The model ids a panel says it can match (``?models=a,b``). A panel that says nothing is a legacy one and gets the
-    Resemblyzer profiles only - it must never be handed a vector from a space it does not know about."""
+    """The model ids a panel says it can match (``?models=a,b``). A panel that says nothing is a legacy one (Resemblyzer, retired)
+    and so is served nothing - it must never be handed a vector from a space it does not know about."""
     wanted = frozenset(m.strip() for m in (models or "").split(",") if m.strip())
     return wanted or frozenset([speaker_models.LEGACY_MODEL_ID])
 
@@ -7190,6 +7365,11 @@ async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depen
     """
     if caller.get("source") != "device":
         raise HTTPException(status_code=403, detail="device token required")
+    # A copied panel token must not export every member's voiceprint from the internet (2026-10-19). Over the relay the
+    # panel's own claims are refused anyway, so the feed would serve nothing it could use.
+    from biometric_scope import require_local_panel
+
+    require_local_panel(caller, "the voice profile feed")
     from db_compat import get_compat_db as _get_compat_db
 
     try:
@@ -7256,14 +7436,13 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
         async with _get_compat_db() as db:
             async with db.execute(sql, params) as cur:
                 rows = await cur.fetchall()
-        mode = speaker_models.speaker_mode()
         profiles = []
         for r in rows:
             mid = speaker_models.row_model_id(r, 6)
             profiles.append(dict(id=r[0], user_id=r[1], display_name=r[2], sample_count=r[3] or 1, panel_id=r[4],
                                  consented=r[5] is not None, model_id=mid,
-                                 acting=mid == speaker_models.acting_model(mode),
-                                 model_label=speaker_models.model_label(mid, mode)))
+                                 acting=mid == speaker_models.acting_model(),
+                                 model_label=speaker_models.model_label(mid)))
         # deterministic: per member, the profile that recognises them first, then the others by model id
         profiles.sort(key=lambda p: (str(p["display_name"] or ""), str(p["user_id"] or ""), 0 if p["acting"] else 1,
                                      p["model_id"]))
@@ -7429,7 +7608,9 @@ async def get_livekit_token(request: Request, caller: dict = Depends(_require_li
 
 
 # ── Voice confirmation state ───────────────────────────────────────────────
-# Track pending confirmations per panel: panel_id → {intent_name, slots, expire_at, session_id}
+# Track pending confirmations per panel: panel_id → {intent_name, slots, expire_at, session_id, user_id, speaker}
+# ``speaker`` is the identity the asking turn was attributed to (see ``_confirm_speaker``); only a turn attributed to the same
+# speaker may answer it.
 _PENDING_CONFIRMATIONS: dict[str, dict] = {}
 _CONFIRM_TIMEOUT_S = 30  # seconds to wait for "yes/confirm" before expiring
 

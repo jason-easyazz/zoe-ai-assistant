@@ -15,6 +15,12 @@ COUNTS and text-free shapes only (never a household word; the router-example tex
   * ``POST /api/system/struggles/proposals/{id}/reject`` ``{reason}`` suppressed for 30 days
   Accepting APPLIES NOTHING: it records the decision and the follow-up for Phase 3 / the operator.
 
+FAILED TURNS (failure capture, ``turn_outcomes``; ``ZOE_STRUGGLE_OUTCOMES``) - approve-before-train: the caller's OWN failed turns of the
+week with the proposed correct route; only a turn the caller confirms can become a router training example:
+  * ``GET  /api/system/struggles/turns?days=7``                     the caller's own failed turns (their own words) + how many wait
+  * ``POST /api/system/struggles/turns/{id}/confirm`` ``{label?}``   confirm the proposed route, or give the right one (a fast domain or chat)
+  * ``POST /api/system/struggles/turns/{id}/reject``                 not a routing failure / not to be learned from
+
 A panel device token authenticates a panel, not a person, so it is refused even when bound to an admin. Registered
 unconditionally (read-only); with ``ZOE_STRUGGLE_DETECT=off`` it reports what is stored and ``mode: off``.
 """
@@ -120,3 +126,41 @@ async def accept_proposal(proposal_id: str, body: Decision = Body(default_factor
 @router.post("/proposals/{proposal_id}/reject")
 async def reject_proposal(proposal_id: str, body: Decision = Body(default_factory=Decision), user: dict = Depends(_require_human_admin)):
     return await _decide(proposal_id, "reject", body, user)
+
+
+# ── failure capture: the owner's label review ────────────────────────────────
+
+class TurnLabel(BaseModel):
+    # a ROUTE name from a fixed vocabulary (checked again in turn_outcomes.decide), never free text
+    label: Optional[Literal["weather", "time", "timers", "lists", "calendar", "smart_home", "music", "reminders", "chat"]] = None
+
+
+@router.get("/turns")
+async def failed_turns(days: float = Query(7.0, gt=0, le=90), user: dict = Depends(_require_human_admin)):
+    import turn_outcomes
+
+    try:
+        return await turn_outcomes.review(str(user.get("user_id") or ""), days=days)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"failed-turn store unavailable ({type(exc).__name__})") from exc
+
+
+async def _label(row_id: str, action: str, label: Optional[str], user: dict) -> dict:
+    import turn_outcomes
+
+    try:
+        return await turn_outcomes.decide(row_id, str(user.get("user_id") or ""), action, label)
+    except turn_outcomes.ReviewError as exc:
+        raise HTTPException(status_code=404 if "no such" in str(exc) else 409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"failed-turn store unavailable ({type(exc).__name__})") from exc
+
+
+@router.post("/turns/{row_id}/confirm")
+async def confirm_turn(row_id: str, body: TurnLabel = Body(default_factory=TurnLabel), user: dict = Depends(_require_human_admin)):
+    return await _label(row_id, "confirm", body.label, user)
+
+
+@router.post("/turns/{row_id}/reject")
+async def reject_turn(row_id: str, user: dict = Depends(_require_human_admin)):
+    return await _label(row_id, "reject", None, user)

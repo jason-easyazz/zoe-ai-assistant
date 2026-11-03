@@ -582,8 +582,8 @@ async def test_the_voice_lane_persists_the_speaker_rejection_with_the_row(monkey
     assert await chat_mod._save_chat_message("s1", "user", "I told Dana the gate is blue", user_id=USER, speaker_verified=True)
     assert await chat_mod._save_chat_message("s1", "user", "I told Dana the gate is red", user_id=USER)
     metas = [json.loads(p[4]) for p in seen]
-    assert metas[0] == {"user_id": USER, "speaker_verified": False}
-    assert metas[1] == {"user_id": USER} and metas[2] == {"user_id": USER}     # only a rejection is recorded
+    assert metas[0] == {"user_id": USER, "speaker_verified": False, "traffic_class": "household"}
+    assert metas[1] == {"user_id": USER, "traffic_class": "household"} == metas[2]     # only a rejection is recorded
 
 
 @pytest.mark.asyncio

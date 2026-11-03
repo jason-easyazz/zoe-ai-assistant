@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Restore lists and list items for real users only"""
+import os
 import sqlite3
 
 BACKUP_DB = "/home/zoe/assistant/backups/pre_lists_enhancement_20251122_183136/zoe.db"
@@ -7,7 +8,10 @@ CURRENT_DB = "/app/data/zoe.db"
 
 def main():
     # Real users to restore (skip test data)
-    REAL_USERS = ['jason', 'andrew', 'teneeka', 'asya']
+    # The household's user ids are never committed (public repo): pass them in, comma-separated.
+    REAL_USERS = [u.strip() for u in os.environ.get("ZOE_RESTORE_USER_IDS", "").split(",") if u.strip()]
+    if not REAL_USERS:
+        raise SystemExit("set ZOE_RESTORE_USER_IDS=<id>,<id>,... (the real user ids to restore)")
     
     print("📖 Reading lists from backup...")
     backup_conn = sqlite3.connect(BACKUP_DB)

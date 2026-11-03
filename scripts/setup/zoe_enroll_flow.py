@@ -20,6 +20,13 @@ voice signature, never images or recordings) and requires --user; every
 enroll call sends consent=true because the person is actively performing
 the enrollment.
 
+Identity (2026-10-19): SIGN IN WITH YOUR PIN AT THE PANEL FIRST. The server
+never takes --user on the device token's word: it enrols only the member with
+a fresh PIN sign-in at this panel (or the member of Zoe's own "learn my voice"
+command) and answers 403 for anyone else - a voiceprint is a password, and a
+copied panel token must not enrol a stranger onto a member. --user must name
+that signed-in member.
+
 Privacy: frames and recordings are process-local temp files, deleted after
 embedding/upload. Only embeddings (face) and enrollment WAVs (voice — the
 server derives the embedding and discards audio) leave the device, over the

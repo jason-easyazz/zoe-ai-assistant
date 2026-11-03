@@ -23,13 +23,12 @@ TimeoutStartSec=1800
 WorkingDirectory=%h/assistant
 # DB + service env so the replay harness (full STT→brain pipeline) can reach Postgres etc.
 EnvironmentFile=-%h/assistant/services/zoe-data/.env
-EnvironmentFile=-%h/.hermes/.env
 Environment=HOME=%h
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # STT via the LIVE service's warm Moonshine instead of loading a second copy
 # in-process: measured peak drops 1500MB -> 445MB (2026-07-27), which is the
 # difference between a gate that skipped for days and one that fits the box.
-# Needs ZOE_DEVICE_TOKEN (provisioned in ~/.hermes/.env, loaded above). Flip
+# Needs ZOE_DEVICE_TOKEN (lives in services/zoe-data/.env, loaded above). Flip
 # back to inprocess only if the live service itself is what you are testing.
 Environment=ZOE_VOICE_REPLAY_STT=remote
 # Remote STT targets the LOCAL service by number. The .env above sets

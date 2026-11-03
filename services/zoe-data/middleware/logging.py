@@ -131,6 +131,7 @@ DEFAULT_QUIET_POLL_PATHS: tuple[str, ...] = (
     "/api/music/now-playing",
     "/api/panels/*/config",
     "/api/proactive/inbox",
+    "/api/system/stats",            # the desktop dashboard's System card, every 30 s
 )
 DEFAULT_QUIET_POLL_SLOW_MS = 1000
 
@@ -226,6 +227,19 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             "authenticated": request.headers.get("authorization", "").startswith("Bearer "),
         }
         
+        # Traffic class (P-2): household | harness | probe | ci, from what the SERVER can verify in the
+        # headers (internal token + the acting user it authorises, the device token's panel) - never a
+        # client claim alone (traffic_class.py). Bound BEFORE call_next so the route, its background tasks
+        # and every log line it writes inherit it; the route tightens it once the principal is known.
+        try:
+            import traffic_class as _tc
+
+            _tc_cls = _tc.classify_headers(request.headers)
+            _tc_token = _tc.bind(_tc_cls)
+        except Exception:  # noqa: BLE001 - instrumentation must never fail a request
+            _tc, _tc_cls, _tc_token = None, "household", None
+        metadata["traffic_class"] = _tc_cls
+
         # Set request metadata context
         token = _request_metadata_ctx.set(metadata)
         
@@ -258,6 +272,8 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             return response
         finally:
             _request_metadata_ctx.reset(token)
+            if _tc is not None and _tc_token is not None:
+                _tc.reset(_tc_token)
 
 
 def get_request_metadata() -> Dict[str, Any]:

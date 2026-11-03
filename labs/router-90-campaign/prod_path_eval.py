@@ -188,6 +188,10 @@ def main() -> int:
     ap.add_argument("--out", default=str(HERE / "results" / "prod-path.json"))
     ap.add_argument("--no-assert", action="store_true",
                     help="report only; exit 0 even if gates fail")
+    ap.add_argument("--corpus", default=str(CORPUS),
+                    help="cases jsonl (default: the frozen 81-case corpus). The "
+                         "struggle-fed retrain scores its held-out failures "
+                         "through the same production path with this")
     args = ap.parse_args()
 
     avail = mem_available_mb()
@@ -198,7 +202,7 @@ def main() -> int:
 
     # import before spawning anything so an import failure leaks no server
     route_fn = load_router(stub=args.stub)
-    cases = [json.loads(l) for l in CORPUS.open()]
+    cases = [json.loads(l) for l in Path(args.corpus).open() if l.strip()]
 
     proc = None
     try:

@@ -203,8 +203,34 @@ async def test_transaction_list_clamps_limit(raw_limit, expected):
 # MCP actor authorization — tools/call must trust transport/session context,
 # not caller-supplied _user_id/user_id arguments.
 # --------------------------------------------------------------------------
+def test_strict_user_id_is_the_default():
+    """A3 (2026-10-19): a tools/call that names no user is refused unless the env says exactly ``false``."""
+    assert mcp_server._mcp_strict_user_id(None) is True
+    assert mcp_server._mcp_strict_user_id("true") is True
+    assert mcp_server._mcp_strict_user_id("") is True
+    assert mcp_server._mcp_strict_user_id("flase") is True
+    assert mcp_server._mcp_strict_user_id(" False ") is False
+
+
 @pytest.mark.asyncio
-async def test_stdio_no_context_still_falls_back_to_family_admin_for_local_calls():
+async def test_stdio_no_context_is_refused_when_strict(monkeypatch):
+    monkeypatch.setattr(mcp_server, "_MCP_STRICT_USER_ID", True)
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    with pytest.raises(mcp_server._MissingUserId):
+        await mcp_server._execute_tool(
+            db=db,
+            name="dashboard_get_layout",
+            args={},
+            actor_context={},
+        )
+
+    assert not any("FROM dashboard_layouts" in sql for sql, _ in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_stdio_no_context_falls_back_to_family_admin_only_when_loosened(monkeypatch):
+    monkeypatch.setattr(mcp_server, "_MCP_STRICT_USER_ID", False)
     db = _RoutingDb({"dashboard_layouts": []})
 
     await mcp_server._execute_tool(
@@ -220,7 +246,8 @@ async def test_stdio_no_context_still_falls_back_to_family_admin_for_local_calls
 
 
 @pytest.mark.asyncio
-async def test_stdio_no_context_fallback_family_admin_can_target_other_users():
+async def test_stdio_no_context_fallback_family_admin_can_target_other_users(monkeypatch):
+    monkeypatch.setattr(mcp_server, "_MCP_STRICT_USER_ID", False)
     db = _RoutingDb({"dashboard_layouts": []})
 
     await mcp_server._execute_tool(
@@ -693,9 +720,22 @@ async def test_dashboard_save_layout_serializes_with_add_widget_on_layout_lock()
 
     assert save_result == {"status": "ok"}
     assert add_result == {"status": "ok", "added": ["events"]}
-    assert {widget["id"] for widget in db.layout} == {"tasks", "events"}
+    assert {(widget.get("type") or widget.get("id")) for widget in db.layout} == {"tasks", "events"}
     assert db.max_active_transactions == 1
     assert sum("FOR UPDATE" in sql for sql, _params in db.calls) >= 2
+
+
+@pytest.mark.asyncio
+async def test_dashboard_add_widget_does_not_duplicate_a_card_saved_as_an_instance():
+    db = _DashboardLayoutDb(layout=[{"uid": "w1", "type": "weather", "x": 0, "y": 0, "w": 4, "h": 3}])
+
+    result = await mcp_server._execute_tool(
+        db=db, name="dashboard_add_widget", args={"_user_id": "u1", "widgets": ["weather", "events"]}
+    )
+
+    assert result == {"status": "ok", "added": ["events"]}
+    assert [w["type"] for w in db.layout] == ["weather", "events"]
+    assert db.layout[1]["uid"] and "id" not in db.layout[1], "new cards are instances"
 
 
 @pytest.mark.asyncio
@@ -1012,3 +1052,34 @@ async def test_journal_queries_run_against_text_created_at_on_postgres():
         assert streak["current_streak"] == 2
     finally:
         await conn.close()
+
+
+# --------------------------------------------------------------------------
+# A3 (2026-10-19): intent_router's in-process tool path against the REAL handle_tool (cross-review, slice 1): the
+# router's own tests use a stand-in module, so this pins the real return shape (a JSON string) and that the acting user
+# - not family-admin - is the actor the tool's SQL runs as.
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_intent_router_in_process_tools_run_the_real_handle_tool_as_the_acting_user(monkeypatch):
+    import intent_router
+
+    db = _RoutingDb({
+        "SELECT role FROM users": [{"role": "member"}],
+        "FROM transactions": [{"type": "expense", "total": 12.5}],
+    })
+
+    @asynccontextmanager
+    async def fake_db_ctx():
+        yield db
+
+    monkeypatch.setattr(mcp_server, "_pg_get_db", fake_db_ctx)
+    monkeypatch.setattr(mcp_server, "_MCP_STRICT_USER_ID", True)
+
+    prompts = await intent_router.execute_intent(intent_router.Intent("journal_prompt", {}), "member-a3")
+    assert prompts and prompts.startswith("Here are some journaling prompts")
+
+    summary = await intent_router.execute_intent(
+        intent_router.Intent("transaction_summary", {"period": "week"}), "member-a3")
+    assert summary and "Total spent: $12.50" in summary
+    sql, params = next(call for call in db.calls if "FROM transactions" in call[0])
+    assert params[0] == "member-a3" and "family-admin" not in params

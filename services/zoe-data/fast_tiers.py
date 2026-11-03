@@ -102,7 +102,7 @@ _INTENT_ROUTER_DOMAINS: dict[str, frozenset[str]] = {
     "time_query": frozenset({"time"}), "date_query": frozenset({"time"}),
     "weather": frozenset({"weather"}),
     "list_show": frozenset({"lists"}), "list_add": frozenset({"lists"}),
-    "list_remove": frozenset({"lists"}),
+    "list_remove": frozenset({"lists"}), "list_rename": frozenset({"lists"}),
     "calendar_show": frozenset({"calendar", "reminders"}),
     "calendar_create": frozenset({"calendar", "reminders"}),
     "reminder_list": frozenset({"reminders", "calendar"}),
@@ -185,7 +185,7 @@ def intent_gate_enabled() -> bool:
     return raw not in ("0", "false", "off", "no")
 
 
-def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str, str]:
+def intent_gate_decision(intent_name: str, verdict: Optional[dict], text: str = "") -> tuple[str, str]:
     """Pure rule: may a deterministic keyword intent answer, given the head's
     stage-1 verdict (router_two_stage.head_verdict shape)? → (decision, reason).
 
@@ -193,6 +193,10 @@ def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str
              / router_unsure (only `below_gate`: stage 1 under the 0.5 gate on
              a real domain has no opinion — garbled STT recovery)
              / router_agrees (head domain is one of the intent's classes)
+             / named_domain (`text` NAMES only this intent's domain — "my
+             calendar", "the shopping list" — and the head is confident in
+             another non-chat domain: the noun outranks the guess;
+             command_shapes.named_domain_overrides)
       veto   router_chat (chat_top, or the ZOE_ROUTER_HEAD_MIN_CONF `low_conf`
              floor — a deliberate send-to-the-brain verdict)
              / router_disagrees (the head is confident in another domain)
@@ -237,6 +241,10 @@ def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str
         return "veto", "router_chat"
     if verdict.get("domain") in classes:
         return "allow", "router_agrees"
+    import command_shapes
+
+    if command_shapes.named_domain_overrides(text, classes, str(verdict.get("domain") or "chat")):
+        return "allow", "named_domain"
     return "veto", "router_disagrees"
 
 
@@ -266,7 +274,7 @@ def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
         import semantic_router as _sr
 
         verdict = _sr.head_verdict(text)
-        decision, reason = intent_gate_decision(intent_name, verdict)
+        decision, reason = intent_gate_decision(intent_name, verdict, text)
         v = verdict or {}
         conf = v.get("head_conf")
         logger.info(
@@ -465,6 +473,13 @@ async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional
                              speaker_verified=(extra_ctx or {}).get("speaker_verified"), commit=not dry)
         if res is None:
             return None
+        # The pendant day review (day_review_raise, ZOE_DAY_REVIEW_RAISE, default OFF = ""): one counts-only sentence when it is
+        # waiting, for the identified member only and never in a crowded room. Read-only.
+        import day_review_raise as _drr
+
+        _extra = await _drr.pull_addendum(user_id, lane, extra_ctx, dry=dry)
+        if _extra:
+            res.reply = _extra if res.reply == _pl.EMPTY_REPLY else f"{res.reply} {_extra}"
         return _xd.DispatchResult(domain="proactive", reply=res.reply, intent="pull",
                                   ui=res.ui, tier="pull", meta={"delivered": res.delivered})
     except Exception as exc:  # never let the tier break a turn
@@ -722,6 +737,16 @@ async def _provenance_tier(text: str, user_id: str, session_id: str, kwargs: dic
             return None
         _mp.note_user_turn(uid, text, session_id)
         _mp.claim_turn(uid, text)
+        # memories by voice (ZOE_MEMORIES_VOICE, default OFF = returns before any work): on a panel, "what do you know about me?"
+        # answers for the TURN's member (voice session / fresh PIN) with a private card; "forget that I ..." and the tapped-row
+        # correction go through the existing audited forget / correction paths. Inside this tier so the turn is numbered first.
+        import memories_voice as _mv
+
+        answered = await _mv.tier(text, uid, session_id, channel=kwargs.get("channel"), extra_ctx=kwargs.get("extra_ctx"),
+                                  allow_writes=kwargs.get("allow_writes") is not False)
+        if answered is not None:
+            _mp.note_direct_reply(uid, "memories", session_id, domain="memory")
+            return answered
         import provenance_answers as _pa
 
         reply = await _pa.handle(
@@ -811,6 +836,18 @@ def _calc_tier(text: str, user_id: str, session_id: str):
 
 @_functools.wraps(_resolve_core)
 async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
+    res = await _resolve_tiers(text, user_id, session_id, **kwargs)
+    if res is not None:
+        try:  # failure capture (ZOE_STRUGGLE_OUTCOMES, default off): WHICH tier answered - one deque append, never raises
+            import struggle_detector as _sd
+
+            _sd.note_handler(session_id, user_id, "tier", f"{getattr(res, 'tier', '') or 'tier1.5'}/{getattr(res, 'intent', '') or '-'}")
+        except Exception:  # noqa: BLE001
+            pass
+    return res
+
+
+async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
     # (distress, provenance, feedback, self-model) are part of the conversation half, so they must not run - or count the turn - twice.
     if kwargs.get("phase") != "domain":
@@ -856,6 +893,40 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
 
             answered = await _ss.tier(text, user_id, session_id, channel=kwargs.get("channel"),
                                       extra_ctx=kwargs.get("extra_ctx"))
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
+        # the day review as a conversation (ZOE_DAY_REVIEW_RAISE + ZOE_OMI_DAY_REVIEW=on, default OFF = returns before any work):
+        # "what did you find in my day?" / "anything from today?" - a counts-only summary + the private card for the identified
+        # member, the phone in a crowded room; a "not now" right after a raise is recorded and passes on. Read-only.
+        try:
+            import day_review_raise as _drr
+
+            answered = await _drr.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                       extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
+        # panel review cards (ZOE_PANEL_REVIEW_CARDS, default OFF = returns before any work): "what's on my plate?", "I've done the
+        # plumber one", "review my day" - the member's own open loops / day review, read back + a private card on THIS panel only.
+        try:
+            import panel_review_cards as _prc
+
+            answered = await _prc.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                       extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
+        # intercom (ZOE_INTERCOM, default OFF = returns before any work): "tell the kitchen dinner's ready", "announce: ...", "call the
+        # kitchen" - a member's words spoken on another panel, under the owner's call rules (guests never, quiet hours, adults drop in).
+        try:
+            import intercom as _ic
+
+            answered = await _ic.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                      extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
         except Exception:  # noqa: BLE001 - the tier never breaks a turn
             answered = None
         if answered is not None:

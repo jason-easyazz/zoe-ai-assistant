@@ -97,7 +97,7 @@ def env(monkeypatch, tmp_path):
     _apply(engine, *MIGRATIONS)
     db = _Sqlite(path)
     for ddl in (
-        "CREATE TABLE open_loops (id INTEGER PRIMARY KEY, user_id TEXT, loop_text TEXT, "
+        "CREATE TABLE open_loops (id INTEGER PRIMARY KEY, user_id TEXT, loop_text TEXT, context TEXT, "
         "follow_up_hint TEXT, emotional_weight INTEGER, created_at TEXT, follow_up_after TEXT, "
         "resolved BOOLEAN DEFAULT FALSE, resolved_at TEXT)",
         "CREATE TABLE events (id TEXT, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, "

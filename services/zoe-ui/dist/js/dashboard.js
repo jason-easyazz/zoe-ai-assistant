@@ -33,6 +33,19 @@ const TOUCH_WIDGET_DEFAULTS = {
     'music-library': { defaultW: 8, defaultH: 5, minW: 6, minH: 4 }
 };
 
+// Widget types whose markup calls back through a per-TYPE global (zoe-orb's
+// window.zoeWidgets.get(type) in inline onclick handlers; journal's bare
+// `journalWidget` global, which init() points at the newest card), so a board
+// may hold only one card of each. Everything else is one object per card
+// (uid-keyed, reached via .widget.widgetInstance).
+const SINGLETON_WIDGET_TYPES = new Set(['zoe-orb', 'journal']);
+
+// _fetchServerLayout() could not read the member's saved layout (HTTP error or
+// network failure). Distinct from null ("nothing saved yet"): a failure must
+// never be treated as permission to overwrite the server copy.
+const SERVER_LAYOUT_UNREADABLE = Symbol('server-layout-unreadable');
+const SERVER_SAVE_RETRY_MS = 5000;   // a failed layout PUT is retried until the server acknowledges it
+
 /**
  * Get widget configuration from manifest
  * Falls back to defaults if manifest not loaded
@@ -87,11 +100,47 @@ function applyTouchWidgetDefaults(widgetId, config) {
     };
 }
 
+// A card's instance key. crypto first (no Math.random on the dashboard: the
+// widget harness forbids it under js/widgets/, and ids do not need it).
+let _widgetUidCounter = 0;
+function newWidgetUid() {
+    try {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            return window.crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+        }
+        if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+            const a = new Uint32Array(2);
+            window.crypto.getRandomValues(a);
+            return a[0].toString(16) + a[1].toString(16);
+        }
+    } catch (_) { /* fall through */ }
+    _widgetUidCounter += 1;
+    return 'w' + Date.now().toString(36) + _widgetUidCounter;
+}
+
+// Same rule as the server (routers/dashboard.py _UID_RE): a uid lands in an
+// attribute, so anything else from storage is replaced, never interpolated.
+function isWidgetUid(v) {
+    return typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+}
+
 class Dashboard {
     constructor() {
         this.grid = null;
         this.isEditMode = false;
         this.storageKey = 'zoe_desktop_widgets';
+        this.cardOptions = new Map();   // uid -> options a card was created with
+        if (typeof WidgetManager !== 'undefined' && typeof WidgetManager.useInstances === 'function') {
+            WidgetManager.useInstances();
+        }
+        this.serverSync = !(document.body && document.body.classList.contains('touch-dashboard'));
+        this._serverSaveTimer = null;
+        // The desktop board is not editable until the first server read has settled (a read
+        // that failed counts: it blocks saving separately). An edit made while the GET is
+        // pending would be saved as the whole board and then PUT over the member's real cards.
+        this._layoutReady = !this.serverSync;
+        // uid -> signature of the cards the server last acknowledged (in memory only).
+        this._baseCards = new Map();
     }
     
     init() {
@@ -148,6 +197,11 @@ class Dashboard {
             removable: '.trash-zone',  // Can drag to trash
             removeTimeout: 100
         }, gridElement);
+
+        // A card dragged to the trash (or removed any other way) stops its timers.
+        this.grid.on('removed', (event, items) => {
+            (items || []).forEach(node => node && node.el && this._releaseGridItem(node.el));
+        });
         
         // Save layout on any change
         this.grid.on('change', () => {
@@ -203,10 +257,17 @@ class Dashboard {
         console.log(`✅ Gridstack initialized with native drag & resize (${isMobile ? 'Mobile compact' : 'Desktop free-form'})`);
         
         // Load saved layout
-        this.loadLayout();
+        this.loadLayout().catch((e) => {
+            console.error('Dashboard layout failed to load:', e);
+            // Nothing was read reliably: show the default but never write it up.
+            this._serverSaveBlocked = true;
+            this._layoutReady = true;
+            this.createDefaultLayout();
+        });
     }
     
     toggleEditMode() {
+        if (!this._layoutReady && !this.isEditMode) return;   // still loading the saved board
         this.isEditMode = !this.isEditMode;
         document.body.classList.toggle('edit-mode', this.isEditMode);
         window.dispatchEvent(new CustomEvent('dashboard-edit-mode-changed', {
@@ -254,95 +315,126 @@ class Dashboard {
         }
     }
     
-    addWidget(type, options = {}) {
-        console.log('🎯 Dashboard.addWidget called with type:', type, 'options:', options);
-        
+    // ── Cards are widget INSTANCES (Wave 4b, 2026-10-19) ──────────────────────
+    // Every card gets its own widget object (WidgetManager.createInstance) and a
+    // uid that lives on the element and in the saved layout ({uid, type, x, y, w,
+    // h, options?}). Before, every card of a type init()ed the ONE registered
+    // module, so a second weather card stole the first one's element and timer,
+    // and a layout of two same-type cards could not be told apart on restore.
+    _mountCard(type, geometry = {}, options = null, uid = null) {
         if (!this.grid) {
             console.error('❌ Grid not initialized');
             return null;
         }
-        
-        console.log('✅ Grid exists');
-        
-        if (!WidgetManager) {
-            console.error('❌ WidgetManager not found');
+        // own property only: a stored type such as 'constructor' must not resolve to Object's
+        if (typeof WidgetManager === 'undefined' || typeof type !== 'string'
+            || !Object.prototype.hasOwnProperty.call(WidgetManager.modules, type)) {
+            console.warn('Widget type not found:', type);
             return null;
         }
-        
-        console.log('✅ WidgetManager exists, modules:', Object.keys(WidgetManager.modules));
-        
-        if (!WidgetManager.modules[type]) {
-            console.error('❌ Widget type not found:', type);
-            console.log('Available types:', Object.keys(WidgetManager.modules));
+        // A singleton-dispatched type (inline handlers resolve it by TYPE, see
+        // SINGLETON_WIDGET_TYPES) cannot have two cards: the second would take over
+        // the first card's clicks, and removing one would unregister the other.
+        if (SINGLETON_WIDGET_TYPES.has(type) && this._hasCardOfType(type)) {
+            console.warn('Only one ' + type + ' card is allowed on the board');
             return null;
         }
-        
-        console.log('✅ Widget type found:', type);
-        
+        const instance = (typeof WidgetManager.createInstance === 'function')
+            ? WidgetManager.createInstance(type)
+            : WidgetManager.modules[type];
+        if (!instance) return null;
+
         const config = applyTouchWidgetDefaults(type, getWidgetConfig(type));
-        
-        const module = WidgetManager.modules[type];
-        
-        // Determine size class based on grid width
-        let sizeClass = 'size-medium'; // Default
-        if (config.defaultW <= 3) {
-            sizeClass = 'size-small';
-        } else if (config.defaultW >= 7) {
-            sizeClass = 'size-large';
-        }
-        
+        const w = Number.isInteger(geometry.w) ? geometry.w : config.defaultW;
+        const h = Number.isInteger(geometry.h) ? geometry.h : config.defaultH;
+        let sizeClass = 'size-medium';
+        if (w <= 3) sizeClass = 'size-small';
+        else if (w >= 7) sizeClass = 'size-large';
+
+        const cardUid = isWidgetUid(uid) ? uid : newWidgetUid();
         const widgetHTML = `
-            <div class="widget ${sizeClass}" data-widget-type="${type}">
-                ${module.getTemplate()}
+            <div class="widget ${sizeClass}" data-widget-type="${type}" data-widget-uid="${cardUid}">
+                ${instance.getTemplate()}
             </div>
         `;
-        
-        // Add widget with size constraints (Gridstack native feature!)
-        const widgetOptions = {
-            w: config.defaultW,
-            h: config.defaultH,
-            minW: config.minW,
-            maxW: config.maxW,
-            minH: config.minH,
-            maxH: config.maxH,
+        const opts = {
+            w, h,
+            minW: config.minW, maxW: config.maxW,
+            minH: config.minH, maxH: config.maxH,
             content: widgetHTML,
-            autoPosition: true
+            id: cardUid
         };
-        
-        const gridItem = this.grid.addWidget(widgetOptions);
-        
-        // Add remove button to the grid item
+        if (Number.isInteger(geometry.x) && Number.isInteger(geometry.y)) {
+            opts.x = geometry.x;
+            opts.y = geometry.y;
+        } else {
+            opts.autoPosition = true;
+        }
+
+        const gridItem = this.grid.addWidget(opts);
         this.addRemoveButton(gridItem);
-        
-        // Initialize widget module with options
+
         const widget = gridItem.querySelector('.widget');
         if (widget) {
-            module.init(widget, options);
+            if (typeof WidgetManager.trackInstance === 'function') {
+                WidgetManager.trackInstance(cardUid, instance);
+            }
+            if (options && typeof options === 'object' && Object.keys(options).length) {
+                this.cardOptions.set(cardUid, options);
+            }
+            instance.init(widget, options || {});
             this.updateListColumns(widget);
         }
-        
-        console.log(`✅ Added ${type}: ${config.defaultW}×${config.defaultH} (constraints: ${config.minW}-${config.maxW} × ${config.minH}-${config.maxH})`);
-        
-        this.saveLayout();
         return gridItem;
     }
-    
+
+    _hasCardOfType(type) {
+        if (!this.grid || !this.grid.engine) return false;
+        return this.grid.engine.nodes.some((node) => {
+            const widget = node.el && node.el.querySelector ? node.el.querySelector('.widget') : null;
+            return !!widget && widget.getAttribute('data-widget-type') === type;
+        });
+    }
+
+    _releaseGridItem(gridItem) {
+        const widget = gridItem && gridItem.querySelector ? gridItem.querySelector('.widget') : null;
+        const uid = widget ? widget.getAttribute('data-widget-uid') : null;
+        if (!uid) return;
+        this.cardOptions.delete(uid);
+        if (typeof WidgetManager !== 'undefined' && typeof WidgetManager.releaseInstance === 'function') {
+            WidgetManager.releaseInstance(uid);
+        }
+    }
+
+    addWidget(type, options = {}) {
+        if (!this._layoutReady) return null;   // the saved board is still loading
+        const gridItem = this._mountCard(type, {}, options);
+        if (gridItem) {
+            console.log(`✅ Added ${type}`);
+            this.saveLayout();
+        }
+        return gridItem;
+    }
+
     addRemoveButton(gridItem) {
         // Don't add if already exists
         if (gridItem.querySelector('.widget-remove-btn')) return;
-        
+
         const removeBtn = document.createElement('button');
         removeBtn.className = 'widget-remove-btn';
         removeBtn.innerHTML = '×';
         removeBtn.title = 'Remove Widget';
+        removeBtn.setAttribute('aria-label', 'Remove widget');
         removeBtn.onclick = (e) => {
             e.stopPropagation();
+            if (!this._layoutReady) return;
             if (confirm('Remove this widget?')) {
+                this._releaseGridItem(gridItem);
                 this.grid.removeWidget(gridItem);
                 this.saveLayout();
             }
         };
-        
+
         gridItem.appendChild(removeBtn);
 
         this.addGearButton(gridItem);
@@ -368,8 +460,10 @@ class Dashboard {
     }
     
     removeWidget(widget) {
+        if (!this._layoutReady) return;
         const gridItem = widget.closest('.grid-stack-item');
         if (gridItem && this.grid) {
+            this._releaseGridItem(gridItem);
             this.grid.removeWidget(gridItem);
             this.saveLayout();
             console.log('🗑️ Widget removed');
@@ -399,100 +493,313 @@ class Dashboard {
         }
     }
     
+    currentLayout() {
+        const layout = [];
+        if (!this.grid) return layout;
+        this.grid.engine.nodes.forEach((node) => {
+            const widget = node.el && node.el.querySelector('.widget');
+            if (!widget) return;
+            const uid = widget.getAttribute('data-widget-uid');
+            const entry = {
+                uid,
+                type: widget.getAttribute('data-widget-type'),
+                x: node.x,
+                y: node.y,
+                w: node.w,
+                h: node.h
+            };
+            const options = this.cardOptions.get(uid);
+            if (options) entry.options = options;
+            layout.push(entry);
+        });
+        return layout;
+    }
+
     saveLayout() {
         if (!this.grid) return;
-        
-        const layout = [];
-        this.grid.engine.nodes.forEach((node, index) => {
-            const widget = node.el.querySelector('.widget');
-            if (widget) {
-                layout.push({
-                    type: widget.getAttribute('data-widget-type'),
-                    x: node.x,
-                    y: node.y,
-                    w: node.w,
-                    h: node.h,
-                    order: index
-                });
-            }
-        });
-        
-        localStorage.setItem(this.storageKey, JSON.stringify(layout));
+        // Before the first server read settles the grid is not the member's board.
+        if (!this._layoutReady) return;
+        const layout = this.currentLayout();
+        const key = this._layoutKey();
+        try {
+            if (key) localStorage.setItem(key, JSON.stringify(layout));
+        } catch (_) { /* private mode / quota: the server copy still saves */ }
         console.log('💾 Layout saved:', layout.length, 'widgets');
-        
-        // TODO: Save to backend API
+        // Not on the server until a PUT is acknowledged: remember that across reloads, so a
+        // failed save or a page left inside the debounce is recovered, not overwritten by the
+        // older server copy.
+        if (this.serverSync && !this._serverSaveBlocked) this._setUnsynced(true);
+        this._queueServerSave(layout);
     }
-    
-    loadLayout() {
-        const saved = localStorage.getItem(this.storageKey);
-        
-        if (saved) {
-            try {
-                const layout = JSON.parse(saved);
-                if (layout && layout.length > 0) {
-                    this.loadFromData(layout);
+
+    // The desktop board follows the member to any browser: GET/PUT
+    // /api/dashboard/layout/ (instances, see routers/dashboard.py). The touch
+    // board keeps its browser-local layout - a kiosk is a guest.
+    _queueServerSave(layout) {
+        if (!this.serverSync) return;
+        // The saved layout could not be read this session, so we do not know what
+        // is on the server: a PUT of the fallback board would overwrite it.
+        if (this._serverSaveBlocked) return;
+        this._pendingServerLayout = layout;
+        clearTimeout(this._serverSaveTimer);
+        this._serverSaveTimer = setTimeout(() => this._flushServerSave(), 600);
+    }
+
+    // At most one PUT in flight: an older request can otherwise land last and
+    // overwrite a newer layout. A change that arrives meanwhile waits, and only
+    // the latest layout is sent once the in-flight PUT settles.
+    async _flushServerSave() {
+        if (this._serverSaveInFlight || this._serverSaveBlocked) return;
+        const layout = this._pendingServerLayout;
+        if (!layout) return;
+        this._pendingServerLayout = null;
+        this._serverSaveInFlight = true;
+        let retryLater = false;
+        try {
+            const r = await fetch('/api/dashboard/layout/', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ layout, base_version: this._serverVersion || 'none' })
+            });
+            if (r.ok) {
+                let body = null;
+                try { body = await r.json(); } catch (_) { /* the save still landed */ }
+                this._serverVersion = (body && body.version) || null;
+                this._setSynced(layout.map(c => c.uid), layout);
+                if (!this._pendingServerLayout) this._setUnsynced(false);
+            } else if (r.status === 409) {
+                // Chat changed the saved layout since this board read it. Keep this board's
+                // edits and bring in the cards it has not seen, then save again.
+                let conflict = null;
+                try { conflict = (await r.json()).detail; } catch (_) { /* fall through to retry */ }
+                if (conflict && Array.isArray(conflict.layout)) {
+                    this._mergeServerLayout(conflict.layout);
+                    this._serverVersion = conflict.version || null;
+                    this._pendingServerLayout = this.currentLayout();
                 } else {
-                    this.createDefaultLayout();
+                    retryLater = true;
+                    if (!this._pendingServerLayout) this._pendingServerLayout = layout;
                 }
-            } catch (e) {
-                console.error('Failed to load layout:', e);
-                this.createDefaultLayout();
+            } else {
+                console.warn('Dashboard layout not saved to the server: HTTP ' + r.status);
+                retryLater = true;
+                if (!this._pendingServerLayout) this._pendingServerLayout = layout;
             }
-        } else {
-            this.createDefaultLayout();
+        } catch (e) {
+            console.warn('Dashboard layout not saved to the server:', e);
+            retryLater = true;
+            if (!this._pendingServerLayout) this._pendingServerLayout = layout;
+        } finally {
+            this._serverSaveInFlight = false;
+            if (retryLater) {
+                clearTimeout(this._serverSaveTimer);
+                this._serverSaveTimer = setTimeout(() => this._flushServerSave(), SERVER_SAVE_RETRY_MS);
+            } else if (this._pendingServerLayout) {
+                this._flushServerSave();
+            }
         }
     }
-    
-    loadFromData(layout) {
-        console.log('📋 Loading layout:', layout.length, 'widgets');
-        
-        this.grid.removeAll();
-        
-        layout.forEach(item => {
-            const config = applyTouchWidgetDefaults(item.type, getWidgetConfig(item.type));
-            const module = WidgetManager.modules[item.type];
-            
-            if (!module) {
-                console.warn('Widget type not found:', item.type);
+
+    // Cards on the server that this board never saw (added by chat) join the board.
+    // A card already on the board is never mounted twice (a lost PUT response retried
+    // into a 409 carries the board's own new card back).
+    _adoptServerCards(serverLayout) {
+        const known = this._syncedUids || new Set();
+        const mounted = this._mountedUids();
+        serverLayout.forEach(card => {
+            if (!card || known.has(card.uid) || mounted.has(card.uid)) return;
+            const w = this._mountCard(card.type, card, card.options || null, card.uid);
+            if (w) known.add(card.uid);
+        });
+        this._syncedUids = known;
+    }
+
+    // Three-way merge of a 409: base (last acknowledged) vs this board vs the server.
+    // A card the server dropped since base was deleted elsewhere: it leaves this board
+    // too unless it was edited here. Cards added on either side are kept; cards removed
+    // here stay removed (they are simply not on the board).
+    _mergeServerLayout(serverLayout) {
+        const onServer = new Set(serverLayout.filter(c => c && c.uid).map(c => c.uid));
+        const local = new Map(this.currentLayout().map(c => [c.uid, c]));
+        this._baseCards.forEach((sig, uid) => {
+            if (onServer.has(uid)) return;
+            const mine = local.get(uid);
+            if (!mine || this._cardSig(mine) !== sig) return;   // gone here / edited here
+            this._removeCardByUid(uid);
+            if (this._syncedUids) this._syncedUids.delete(uid);
+        });
+        this._adoptServerCards(serverLayout);
+        this._baseCards = new Map(serverLayout.filter(c => c && c.uid).map(c => [c.uid, this._cardSig(c)]));
+    }
+
+    _cardSig(card) {
+        return JSON.stringify([card.type, card.x, card.y, card.w, card.h, card.options || null]);
+    }
+
+    _removeCardByUid(uid) {
+        if (!this.grid) return;
+        const nodes = Array.from(this.grid.engine.nodes);
+        for (const node of nodes) {
+            const widget = node.el && node.el.querySelector('.widget');
+            if (widget && widget.getAttribute('data-widget-uid') === uid) {
+                this._releaseGridItem(node.el);
+                this.grid.removeWidget(node.el);
                 return;
             }
-            
-            // Determine size class based on widget width
-            let sizeClass = 'size-medium'; // Default
-            if (item.w <= 3) {
-                sizeClass = 'size-small';
-            } else if (item.w >= 7) {
-                sizeClass = 'size-large';
-            }
-            
-            const widgetHTML = `
-                <div class="widget ${sizeClass}" data-widget-type="${item.type}">
-                    ${module.getTemplate()}
-                </div>
-            `;
-            
-            const gridItem = this.grid.addWidget({
-                x: item.x,
-                y: item.y,
-                w: item.w,
-                h: item.h,
-                minW: config.minW,
-                maxW: config.maxW,
-                minH: config.minH,
-                maxH: config.maxH,
-                content: widgetHTML
-            });
-            
-            // Add remove button
-            this.addRemoveButton(gridItem);
-            
-            const widget = gridItem.querySelector('.widget');
-            if (widget) {
-                module.init(widget);
-                this.updateListColumns(widget);
+        }
+    }
+
+    _mountedUids() {
+        const out = new Set();
+        if (!this.grid) return out;
+        this.grid.engine.nodes.forEach((node) => {
+            const widget = node.el && node.el.querySelector('.widget');
+            const uid = widget && widget.getAttribute('data-widget-uid');
+            if (uid) out.add(uid);
+        });
+        return out;
+    }
+
+    // The signed-in member. A browser is shared: the unsaved copy and its marker belong to
+    // one member and are never read or sent for another.
+    _memberId() {
+        try {
+            const session = window.zoeAuth && window.zoeAuth.getCurrentSession();
+            const id = session && ((session.user_info && session.user_info.user_id) || session.user_id);
+            return (typeof id === 'string' && id && id !== 'guest') ? id : null;
+        } catch (_) { return null; }
+    }
+
+    // Where this browser keeps the layout copy. The synced (desktop) board is keyed by
+    // member; without a known member there is no copy at all. The unkeyed key from before
+    // is never read for it. The touch board is a guest kiosk and keeps the plain key.
+    _layoutKey() {
+        if (!this.serverSync) return this.storageKey;
+        const id = this._memberId();
+        return id ? this.storageKey + ':' + id : null;
+    }
+
+    _setUnsynced(flag) {
+        const key = this._layoutKey();
+        if (!key) return;
+        try {
+            if (flag) localStorage.setItem(key + '_unsynced', '1');
+            else localStorage.removeItem(key + '_unsynced');
+        } catch (_) { /* no storage: nothing to remember */ }
+    }
+
+    _isUnsynced() {
+        const key = this._layoutKey();
+        if (!key) return false;
+        try { return localStorage.getItem(key + '_unsynced') === '1'; } catch (_) { return false; }
+    }
+
+    // The cards the server last acknowledged, kept beside the local copy so a recovery after a
+    // reload can tell "removed here" from "added on the server meanwhile".
+    _setSynced(uids, cards) {
+        this._syncedUids = new Set(uids);
+        this._baseCards = new Map((cards || []).filter(c => c && c.uid).map(c => [c.uid, this._cardSig(c)]));
+        const key = this._layoutKey();
+        if (!key || !this.serverSync) return;
+        try { localStorage.setItem(key + '_base', JSON.stringify(Array.from(this._syncedUids))); } catch (_) { /* no storage */ }
+    }
+
+    _readSynced() {
+        const key = this._layoutKey();
+        if (!key) return null;
+        try {
+            const v = JSON.parse(localStorage.getItem(key + '_base') || 'null');
+            return Array.isArray(v) ? new Set(v) : null;
+        } catch (_) { return null; }
+    }
+
+    async _fetchServerLayout() {
+        if (!this.serverSync) return null;
+        try {
+            const r = await fetch('/api/dashboard/layout/', { credentials: 'same-origin' });
+            if (!r.ok) return SERVER_LAYOUT_UNREADABLE;
+            const data = await r.json();
+            // null = nothing saved yet (fall back to this browser / the default);
+            // [] = the member removed every card, which must stay empty - not be
+            // resurrected from localStorage or the default and saved back.
+            this._serverVersion = (data && data.version) || null;
+            return (data && Array.isArray(data.layout)) ? data.layout : null;
+        } catch (_) {
+            return SERVER_LAYOUT_UNREADABLE;
+        }
+    }
+
+    _readLocalLayout(allowEmpty = false) {
+        const key = this._layoutKey();
+        if (!key) return null;
+        try {
+            const layout = JSON.parse(localStorage.getItem(key) || 'null');
+            return (Array.isArray(layout) && (layout.length || allowEmpty)) ? layout : null;
+        } catch (e) {
+            console.error('Failed to read the saved layout:', e);
+            return null;
+        }
+    }
+
+    async loadLayout() {
+        let fromServer = await this._fetchServerLayout();
+        this._layoutReady = true;   // the first read has settled (answer or definite failure)
+        if (fromServer === SERVER_LAYOUT_UNREADABLE) {
+            // Show this browser's copy (or the default) but never write it up: the
+            // member's real layout is still on the server, we just could not read it.
+            this._serverSaveBlocked = true;
+            fromServer = undefined;
+        }
+        // This browser holds edits the server never acknowledged (a failed PUT, or the page
+        // was left inside the debounce): they are newer than the server copy, so recover and
+        // re-save them (the version check still merges anything chat added meanwhile).
+        const unsynced = (this.serverSync && !this._serverSaveBlocked && this._isUnsynced())
+            ? this._readLocalLayout(true) : null;
+        const layout = unsynced || (Array.isArray(fromServer) ? fromServer : this._readLocalLayout());
+        if (!layout) {
+            this.createDefaultLayout();
+            return;
+        }
+        this.loadFromData(layout);
+        if (unsynced) {
+            // The server version just read is about to be acknowledged, so cards added there
+            // since this browser last synced (chat, another browser) join the board first -
+            // otherwise the replay would delete them with no 409 to warn.
+            this._syncedUids = this._readSynced() || new Set();
+            if (Array.isArray(fromServer)) this._adoptServerCards(fromServer);
+            this.saveLayout();
+            return;
+        }
+        if (this._serverSaveBlocked) this._syncedUids = new Set();   // nothing was read: keep the stored baseline
+        else this._setSynced(Array.isArray(fromServer) ? fromServer.map(c => c.uid) : [], Array.isArray(fromServer) ? fromServer : []);
+        // A board saved only in this browser (before Wave 4b) moves to the server
+        // once, with uids minted for its cards.
+        if (fromServer === null && this.serverSync && !this._serverSaveBlocked) this.saveLayout();
+    }
+
+    loadFromData(layout) {
+        console.log('📋 Loading layout:', layout.length, 'widgets');
+
+        if (typeof WidgetManager !== 'undefined' && typeof WidgetManager.releaseAll === 'function') {
+            WidgetManager.releaseAll();
+        }
+        this.cardOptions.clear();
+        this.grid.removeAll();
+
+        const seen = new Set();
+        layout.forEach(item => {
+            if (!item || typeof item !== 'object') return;
+            const type = item.type || item.id;   // legacy entries named the type `id`
+            // Two cards must never share a uid (a hand-edited or legacy layout).
+            const uid = (isWidgetUid(item.uid) && !seen.has(item.uid)) ? item.uid : null;
+            const gridItem = this._mountCard(type, item, item.options || null, uid);
+            if (gridItem) {
+                const w = gridItem.querySelector('.widget');
+                if (w) seen.add(w.getAttribute('data-widget-uid'));
             }
         });
-        
+
         console.log('✅ Layout loaded');
     }
     

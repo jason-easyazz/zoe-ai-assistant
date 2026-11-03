@@ -19,7 +19,11 @@ fi
 
 # Copy env file if it doesn't exist
 if [[ ! -f "$SYSTEM_ENV" ]]; then
-    cp "$ENV_EXAMPLE" "$SYSTEM_ENV"
+    # The example is the PANEL's configuration as code (its active lines are the live Pi's tuned values:
+    # pulse audio, the ResNet34 speaker model, /home/pi paths). A fresh host starts from the CODE defaults:
+    # every active line is commented out except the three every host must set, and the tuned values stay
+    # visible as comments to opt into one by one.
+    sed -E -e 's/^([A-Z][A-Z0-9_]*=)/#\1/' -e 's/^#((DEVICE_TOKEN|ZOE_URL|PANEL_ID)=)/\1/' "$ENV_EXAMPLE" > "$SYSTEM_ENV"
     chmod 640 "$SYSTEM_ENV"
     echo "Created $SYSTEM_ENV — please edit it and add your DEVICE_TOKEN before enabling the service."
     echo "  nano $SYSTEM_ENV"

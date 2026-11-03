@@ -180,7 +180,7 @@ def _is_person_knowledge_memory(ref, user_id: str) -> bool:
     family-SHARED rows owned by OTHER users (``visibility == "family"``), so
     broadening to ``fact`` / ``relationship`` could otherwise leak another
     household member's known people as this user's contact candidates (e.g.
-    "Bob is Andrew's colleague" surfacing under Jason). Only the caller's own
+    "Bob is Alex's colleague" surfacing under Jason). Only the caller's own
     person-knowledge feeds backfill:
 
     * a row whose metadata ``user_id`` names a DIFFERENT user → rejected;

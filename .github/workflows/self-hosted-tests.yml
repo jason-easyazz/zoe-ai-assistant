@@ -9,9 +9,26 @@ name: Self-Hosted Tests
 # post-merge deploy/live-stack activity for memory.
 #
 # It does NOT gate or roll back deploys — deploy.yml owns deploy and runs
-# independently. Every pytest step here is `continue-on-error: true`, so a red
-# suite surfaces in the run summary without failing the workflow or blocking
-# anything downstream.
+# independently, and this job is NOT a required status check, so a red night can
+# never freeze `main`.
+#
+# A RED NIGHT MEANS RED (2026-10-19, architecture deep dive 2 lane K, T-1). Every
+# pytest step here used to be `continue-on-error: true`, so the run concluded
+# `success` whatever its suites did — and for at least 14 nights it did nothing:
+# `tests/integration tests/e2e` and the `tests/unit` catch-all died in COLLECTION
+# (zero tests ran), and the full zoe-data suite carried 16-19 failures, among them
+# both XSS guards and the auth-no-demo-bypass harness, which fail CLOSED when `node`
+# is absent (the runner service has no nvm on PATH). The fail-closed tests were
+# defeated by a fail-open workflow. Now:
+#   * no pytest step is `continue-on-error`; each runs even if a sibling failed
+#     (`!cancelled()`), and the job is red if any of them is;
+#   * every suite goes through scripts/maintenance/pytest_junit_guard.py, which
+#     FAILS a run with a collection error or fewer executed tests than a floor
+#     (zero-collected, or everything skipped, can no longer read green);
+#   * node is put on PATH explicitly, and the job fails loudly if it is missing;
+#   * a test that cannot pass on this box is fixed or carries a dated, ledgered
+#     skip (docs/knowledge/open-problems.md, "Test instruments honesty").
+# tests/unit/test_self_hosted_tests_workflow.py pins all of it.
 
 on:
   schedule:
@@ -47,10 +64,11 @@ jobs:
     # Same self-hosted Jetson runner as deploy.yml.
     runs-on: self-hosted
     # Hard cap so a hung/stalled test can never hold the shared Jetson runner (and
-    # queue deploys behind it) for the 6h GitHub default. `continue-on-error` only
-    # fires when a step EXITS; it does nothing for a process that stalls — this
-    # timeout is what bounds that case.
-    timeout-minutes: 20
+    # queue deploys behind it) for the 6h GitHub default; a step that STALLS never
+    # exits, so only this timeout bounds that case. 45 min: the three suites now
+    # all actually run (the full zoe-data suite alone is ~10 min, tests/unit and
+    # the integration lane were previously dead in collection and cost ~0).
+    timeout-minutes: 45
 
     env:
       # Mirror the PYTHONPATH the validate.yml / repo pytest.ini use so local
@@ -92,7 +110,72 @@ jobs:
           exit 1
 
       - name: Checkout
+        id: checkout
         uses: actions/checkout@v7
+
+      # The JS harness tests (XSS guards, sign-in security, estate resilience, ...) run
+      # `node` and FAIL CLOSED under CI when it is missing, on purpose: a skip would let a
+      # guard quietly stop guarding. The runner service is a systemd --user unit whose PATH
+      # has no nvm (its `.path`/`.env` name a version dir that is not on the service's
+      # actual PATH), so `node` was absent in every nightly: 18 zoe-data harness failures
+      # and 3 tests/unit collection errors (the workflow tests raise at import). Same fix
+      # as deploy.yml's flue rebuild: put nvm's ACTIVE-version bin (the `current` symlink,
+      # which survives node upgrades — a pinned vX.Y.Z dir does not) on PATH. $GITHUB_PATH
+      # carries it to every later step. Fail HERE, loudly, if it still is not there.
+      - name: Put node on PATH (the JS harnesses fail closed without it)
+        id: node
+        run: |
+          NODE_BIN="${HOME}/.nvm/current/bin"
+          if [ ! -x "${NODE_BIN}/node" ]; then
+            echo "::error::node is not at ${NODE_BIN}/node — the ~20 JS harness tests (both XSS guards, sign-in security, estate resilience) cannot run and will fail closed. Operator: re-point ~/.nvm/current at an installed node (nvm alias default / ln -sfn)."
+            exit 1
+          fi
+          echo "${NODE_BIN}" >> "$GITHUB_PATH"
+          "${NODE_BIN}/node" --version
+
+      # WHICH PYTHON THE SUITES RUN ON (2026-10-19, found while fixing T-1). Since the B0.7
+      # cutover the zoe-data SERVICE runs the 3.12 venv, and B0.8 moved the palace to
+      # chromadb 1.5.x — which is installed THERE and nowhere else. The system python3 this
+      # workflow used to call is the rollback interpreter: it no longer has chromadb at all
+      # (every MemPalace test skips or fails on import), and its last known chromadb was the
+      # pre-cutover 0.6.3, against which test_memory_physical_erase failed — a "failure" that
+      # was an artifact of testing an environment nothing runs. Measured on this box: the same
+      # 77 memory / voice-lane-parity tests that failed under system python all PASS in the
+      # service venv. So resolve the interpreter exactly as the drift check and the voice gate
+      # do (scripts/deploy/zoe_data_python.sh: systemd is the authority) and fall back to
+      # system python3 only when the unit has not left it (a rollback).
+      # The venv deliberately has no pytest (a runtime venv must stay minimal and
+      # `requirements --check` fails on extras), so pytest comes from an OVERLAY directory put
+      # first on PYTHONPATH — the recipe in docs/knowledge/python-312-venv-migration.md §5.
+      - name: Test interpreter — the zoe-data service's python plus a pytest overlay
+        id: interp
+        # Not gated on the node step: a missing node must not also hide which interpreter ran.
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        run: |
+          cd "${{ github.workspace }}"
+          OVERLAY="${HOME}/.cache/zoe/py312-pytest-overlay"
+          if VENV="$(bash scripts/deploy/zoe_data_python.sh --venv-dir)" && [ -n "${VENV}" ]; then
+            PY="${VENV}/bin/python"
+            if ! PYTHONPATH="${OVERLAY}" "${PY}" -c "import pytest, pytest_asyncio" 2>/dev/null; then
+              UV="${HOME}/.local/bin/uv"
+              if [ ! -x "${UV}" ]; then
+                echo "::error::the service venv has no pytest and ${UV} is missing, so the overlay cannot be built — the nightly cannot run on the interpreter production uses."
+                exit 1
+              fi
+              mkdir -p "${OVERLAY}"
+              "${UV}" pip install --quiet --python "${PY}" --target "${OVERLAY}" "pytest==8.3.5" "pytest-asyncio==1.3.0"
+            fi
+            PYTHONPATH="${OVERLAY}" "${PY}" -c "import pytest, pytest_asyncio; print('pytest', pytest.__version__)"
+            TEST_PY="${PY}"
+            echo "ZOE_TEST_PYTHON=${PY}" >> "$GITHUB_ENV"
+            echo "ZOE_TEST_OVERLAY=${OVERLAY}:" >> "$GITHUB_ENV"
+          else
+            echo "::warning::zoe-data is not on a venv (rollback to system python3): the suites run on python3, which has no chromadb — MemPalace tests will skip."
+            TEST_PY=python3
+            echo "ZOE_TEST_PYTHON=python3" >> "$GITHUB_ENV"
+            echo "ZOE_TEST_OVERLAY=" >> "$GITHUB_ENV"
+          fi
+          "${TEST_PY}" --version
 
       # The self-hosted runner is NOT a fresh box: it's the Jetson that already
       # runs the live stack, so the Jetson-specific Python deps (torch, onnx,
@@ -125,7 +208,12 @@ jobs:
       # requirements.txt before it or after a rollback. Checking the 3.10
       # site-packages once the service has left it would report drift in an
       # environment nothing loads.
+      # The ONE remaining continue-on-error in this file, and it is not a test: it is a
+      # version-drift REPORT that a legitimately-ahead box would otherwise turn red. It is
+      # surfaced in the run summary below. tests/unit/test_self_hosted_tests_workflow.py
+      # pins that nothing else gets the flag.
       - name: Dependency drift — declared vs installed (reporting-only)
+        id: drift
         continue-on-error: true
         run: |
           cd "${{ github.workspace }}"
@@ -141,12 +229,14 @@ jobs:
       # red suite is visible in the summary without failing the workflow or
       # touching deploy. Uses the repo pytest.ini (asyncio_mode=auto) and the
       # PYTHONPATH set at job level.
-      - name: Integration + e2e tests (reporting-only)
+      - name: Integration + e2e tests
         id: host_suites
-        continue-on-error: true
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           cd "${{ github.workspace }}"
-          python3 -m pytest tests/integration tests/e2e -q
+          PYTHONPATH="${ZOE_TEST_OVERLAY}${PYTHONPATH}" python3 scripts/maintenance/pytest_junit_guard.py \
+            --label integration-e2e --min-tests 55 --max-skipped 25 -- \
+            "${ZOE_TEST_PYTHON:?the interp step did not set ZOE_TEST_PYTHON}" -m pytest tests/integration tests/e2e -q --continue-on-collection-errors
 
       # These suites exercise the LIVE service (POST /api/chat/ etc.) and leave
       # real rows behind — 'Dentist Appointment' calendar spam on the panel
@@ -170,55 +260,61 @@ jobs:
       # on the slim GitHub runner, so a NEW services/zoe-data/tests/*.py that is
       # NOT (yet) marked ci_safe would otherwise run NOWHERE. The Jetson HAS
       # MemPalace + the live services, so it can run the whole directory. Picks up
-      # every new test with ZERO enumeration. Reporting-only (continue-on-error),
-      # so a red/host-flaky test surfaces in the summary without gating anything.
+      # every new test with ZERO enumeration. A red test fails THIS job (not deploys,
+      # not merges — the job is not a required check); a test that cannot pass on this
+      # box is fixed or carries a dated, ledgered skip, never a swallowed exit code.
       # samantha_live self-skips (collects 0) unless ZOE_LIVE_TESTS=1 — see
       # services/zoe-data/tests/samantha_live/AGENTS.md — so it needs no --ignore.
-      - name: Full zoe-data suite (reporting-only, catch-all)
+      - name: Full zoe-data suite (catch-all)
         id: zoe_data_full
-        continue-on-error: true
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           cd "${{ github.workspace }}"
-          python3 -m pytest services/zoe-data/tests -q
+          PYTHONPATH="${ZOE_TEST_OVERLAY}${PYTHONPATH}" python3 scripts/maintenance/pytest_junit_guard.py \
+            --label zoe-data-full --min-tests 18000 --max-skipped 100 -- \
+            "${ZOE_TEST_PYTHON:?the interp step did not set ZOE_TEST_PYTHON}" -m pytest services/zoe-data/tests -q --continue-on-collection-errors
 
       # Same catch-all for the repo-root tests/unit directory: validate.yml runs
       # only its `-m ci_safe` subset on the slim GitHub runner, so an UNMARKED
       # tests/unit file (live-service smokes, Jetson-dep tests, new files nobody
-      # marked yet) would otherwise run NOWHERE. Zero enumeration, reporting-only.
-      - name: Full tests/unit suite (reporting-only, catch-all)
+      # marked yet) would otherwise run NOWHERE. Zero enumeration; red fails the job.
+      - name: Full tests/unit suite (catch-all)
         id: unit_full
-        continue-on-error: true
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           cd "${{ github.workspace }}"
-          python3 -m pytest tests/unit -q
+          PYTHONPATH="${ZOE_TEST_OVERLAY}${PYTHONPATH}" python3 scripts/maintenance/pytest_junit_guard.py \
+            --label unit-full --min-tests 4300 --max-skipped 150 -- \
+            "${ZOE_TEST_PYTHON:?the interp step did not set ZOE_TEST_PYTHON}" -m pytest tests/unit -q --continue-on-collection-errors
 
       # Live Samantha memory proofs. Self-skips (collects 0 items) unless
       # ZOE_LIVE_TESTS=1 AND live Gemma is reachable — see
       # services/zoe-data/tests/samantha_live/AGENTS.md. Only armed on manual
       # dispatch with the run_live_memory input, since it writes to the live
-      # memory store (demo users only) and needs the model server up. Still
-      # reporting-only.
-      - name: Samantha live memory suite (opt-in, reporting-only)
+      # memory store (demo users only) and needs the model server up. Collecting 0
+      # (pytest exit 5, e.g. Gemma unreachable) is a RED result here on purpose: the
+      # operator asked for live proofs and none ran.
+      - name: Samantha live memory suite (opt-in)
         id: live_suite
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_memory }}
-        continue-on-error: true
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' && github.event_name == 'workflow_dispatch' && inputs.run_live_memory }}
         env:
           ZOE_LIVE_TESTS: "1"
         run: |
           cd "${{ github.workspace }}"
-          python3 -m pytest services/zoe-data/tests/samantha_live -q
+          PYTHONPATH="${ZOE_TEST_OVERLAY}${PYTHONPATH}" "${ZOE_TEST_PYTHON}" -m pytest services/zoe-data/tests/samantha_live -q
 
-      # Make the reporting nature explicit in the run summary: surface whether
-      # the host suites passed without ever failing the job.
+      # Outcomes in the run summary. These are REAL conclusions now (no step above is
+      # continue-on-error except the dependency-drift report, which is not a test).
       - name: Report result
         if: ${{ always() }}
         run: |
+          echo "Dependency drift (non-test report) outcome: ${{ steps.drift.outcome }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Integration + e2e outcome: ${{ steps.host_suites.outcome }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Full zoe-data suite (catch-all) outcome: ${{ steps.zoe_data_full.outcome }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Full tests/unit suite (catch-all) outcome: ${{ steps.unit_full.outcome }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Samantha live memory outcome: ${{ steps.live_suite.outcome || 'not run' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "This workflow is reporting-only and does not gate or roll back deploys." >> "$GITHUB_STEP_SUMMARY"
+          echo "A red suite fails this job. The job is not a required check: it does not gate merges or roll back deploys." >> "$GITHUB_STEP_SUMMARY"
 
       # SKIP-STREAK GUARD — the failure mode this lane had was SILENCE: the
       # headroom gate failed every run, pytest never executed, and the red runs

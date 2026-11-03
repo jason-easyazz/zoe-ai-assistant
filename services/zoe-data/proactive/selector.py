@@ -197,7 +197,8 @@ async def _gather(db, user_id: str, now: datetime) -> tuple[list, list, list]:
 
     async with db.execute(
         "SELECT id, loop_text, follow_up_hint, emotional_weight, created_at, follow_up_after "
-        "FROM open_loops WHERE user_id = ? AND resolved IS NOT TRUE", (user_id,),
+        # a pendant follow-up (owner decision D5) is an open loop with no alarm: never raised (omi_review_apply.QUIET_LOOP_PREFIX)
+        "FROM open_loops WHERE user_id = ? AND resolved IS NOT TRUE AND COALESCE(context, '') NOT LIKE 'pendant:%'", (user_id,),
     ) as cur:
         loops = [{"id": r[0], "text": r[1], "hint": r[2], "weight": r[3], "created": r[4],
                   "due": r[5]} for r in await cur.fetchall()]
@@ -318,7 +319,29 @@ class Raise:
     def block(self) -> str:
         """The Flue seam's block, appended after the user's words."""
         head = RAISE_OPEN_GREETING if (self.shape == "greeting" and self.lifecycle) else RAISE_OPEN
-        return f"{head}\n{self.body}\n{RAISE_CLOSE}"
+        return f"{head}\n{self.content}\n{RAISE_CLOSE}"
+
+    @property
+    def content(self) -> str:
+        """The raise text BOTH brain lanes inject (Flue wraps it in ``block``; the core lane in ``[RAISE]``): the body plus the
+        clock / no-invented-when rule, so neither lane gets the undated fact bare."""
+        return f"{self.body}{self._when_rule()}"
+
+    def _when_rule(self) -> str:
+        """A loop or moment has no stored mention time, so the brain is told the real clock and
+        forbidden from inventing when they said it ("this morning" for something said yesterday)."""
+        if self.kind == "event":
+            return ""
+        try:
+            from time_utils import clock_stamp
+
+            now = clock_stamp()
+        except Exception:  # noqa: BLE001 - a clock line is optional; the raise is not
+            return ""
+        if not now:
+            return ""
+        return (f"\nIt is now {now}. You are not told when they said it: never say when "
+                '("this morning", "yesterday", "earlier"); just ask.')
 
 
 def ask_phrasing(hint: str, *, shape: str = "cue") -> str:

@@ -21,7 +21,7 @@ async def _props(text):
 
 @pytest.mark.parametrize("text,name,rel", [
     ("my brother Daniel just got a new job", "Daniel", "brother"),
-    ("My niece Teneeka is coming to visit", "Teneeka", "niece"),
+    ("My niece Morgan is coming to visit", "Morgan", "niece"),
     ("i had lunch with my friend Sarah today", "Sarah", "friend"),
     ("Daniel, my brother, called earlier", "Daniel", "brother"),
     ("my colleague Priya Sharma is helping", "Priya Sharma", "colleague"),

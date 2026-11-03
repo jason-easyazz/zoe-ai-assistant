@@ -39,9 +39,11 @@ async def _check(s: config.Settings) -> dict:
     up = HttpUploader(s.zoe_url, s.device_token, verify_ssl=s.verify_ssl)
     reachable = await up.reachable()
     try:
-        async with ble_link.connect(s.address, lecc=s.lecc, lecc_prefix=s.lecc_prefix, addr_type=s.addr_type, attempts=5) as link:
+        async with ble_link.connect(s.address, lecc=s.lecc, lecc_prefix=s.lecc_prefix, addr_type=s.addr_type, attempts=5,
+                                    require_bond=s.requires_bond(s.address), adapter=s.bluez_adapter) as link:
             report = await device_check(link, spool_stats=spool.stats() if spool else None, zoe_reachable=reachable,
                                         legacy_files=s.legacy_files, assume_codec=s.assume_codec)
+            report["require_bond"] = s.requires_bond(s.address)    # true = this link was checked bonded AND encrypted
     except ble_link.ConnectError as exc:
         return {"found": False, "address_configured": True, "zoe_reachable": reachable, "error": str(exc),
                 "hint": "pendant not reachable: powered on? in range (adverts at -90 dBm are marginal)? connected to a phone? "
@@ -65,7 +67,8 @@ def main(argv: list[str] | None = None) -> int:
                           "pendants": [device_hash(a) for a in s.addresses], "zoe_url": s.zoe_url,
                           "token_set": bool(s.device_token), "state_dir": str(s.state_dir),
                           "lecc": s.lecc, "legacy_files": s.legacy_files, "set_device_time": s.set_device_time,
-                          "assume_codec": s.assume_codec, "spool": spool.stats() if spool else None}, indent=2))
+                          "assume_codec": s.assume_codec, "spool": spool.stats() if spool else None,
+                          "require_bond": [device_hash(a) for a in s.addresses if s.requires_bond(a)]}, indent=2))
         return 0
     if args.command == "check":
         s = _settings_or_exit()

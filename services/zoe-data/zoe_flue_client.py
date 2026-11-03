@@ -96,8 +96,10 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, AsyncIterator, Optional
 from urllib.parse import quote
+import traffic_class
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +254,25 @@ _WIRE_2 = 2
 _NDJSON_CONTENT_TYPE = "application/x-ndjson"
 _TOOL_SENTINEL_PREFIX = "__TOOL__:"
 _THINKING_SENTINEL_PREFIX = "__THINKING__:"
+_TOOL_START_MARK = '"phase": "start"'
+
+
+def _note_tool_sentinel(session_id: str, chunk: str) -> None:
+    """Failure capture (``ZOE_STRUGGLE_OUTCOMES``, default off): the tool NAME of a ``__TOOL__`` phase=start sentinel goes to the struggle
+    detector's per-turn record. Only a start sentinel is parsed (a substring test first, so an args / result / thinking chunk costs one
+    ``in``); never raises, never changes what is yielded."""
+    try:
+        if not chunk.startswith(_TOOL_SENTINEL_PREFIX) or _TOOL_START_MARK not in chunk[:200]:
+            return
+        import struggle_detector
+
+        if not struggle_detector.outcomes_on():
+            return
+        name = json.loads(chunk[len(_TOOL_SENTINEL_PREFIX):]).get("name")
+        if isinstance(name, str) and name:
+            struggle_detector.note_tool(session_id, name)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _wire_version() -> int:
@@ -1604,14 +1625,174 @@ def _log_prompt_cache(session_id: str, terminal: dict) -> None:
         if not pairs:
             return
         first_prompt, first_cache = pairs[0]
+        traffic = traffic_class.current()   # a non-household line gets the formatter's ` traffic=` suffix
         logger.info(
             "FLUE_PROMPT_CACHE session=%s rounds=%d first_prompt_n=%d first_cache_n=%d "
             "total_prompt_n=%d per_round=%s",
             session_id, len(pairs), first_prompt, first_cache,
             sum(p for p, _ in pairs), ",".join(f"{p}/{c}" for p, c in pairs),
         )
+        _panel_kv_alarm(session_id, first_prompt, first_cache, traffic)
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn
         pass
+
+
+# ── P-3: the panel-only first_prompt_n alarm (deep dive 2, 2026-10-19) ─────────────────────────────────
+# 29 of 100 household panel brain turns re-prefilled more than 500 tokens (18 of them warm, back-to-back);
+# that is the household's brain-TTFT p90 (5.9 s). The slot trace (llama-server journal joined to these rows,
+# docs/knowledge/panel-kv-residency-2026-10-19.md) put another CONVERSATION between two warm panel turns in
+# only 2 of the 18 (both partial); 9 followed post-turn helper calls and 7 had nothing between (deep prompt
+# divergence). This line makes every miss visible as it happens, labelled warm/first, with what used the
+# single slot since the session's previous panel turn as far as zoe-data can see: its NON-household brain
+# turns and its brain_slot_guard background calls (in-process replay probes talk to the sidecar directly and
+# are NOT counted). Household + ``voice-panel-`` sessions only; ``ZOE_PANEL_KV_MISS_TOKENS`` (default 500;
+# 0 = off) is the threshold. Never raises.
+_PANEL_KV_WARM_S = 300.0
+_PANEL_KV_MAX_SESSIONS = 256
+_panel_kv_prev: "dict[str, tuple[float, int, int]]" = {}
+
+
+def _panel_kv_threshold() -> int:
+    try:
+        return max(0, int(os.environ.get("ZOE_PANEL_KV_MISS_TOKENS", "500")))
+    except (TypeError, ValueError):
+        return 500
+
+
+def _non_household_turns() -> int:
+    return sum(n for c, n in traffic_class.brain_turn_counts().items() if c != traffic_class.HOUSEHOLD)
+
+
+def _background_calls() -> int:
+    try:
+        st = brain_slot_guard.STATS
+        return int(st.get("immediate", 0)) + int(st.get("released_quiet", 0)) + int(st.get("released_max", 0))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _panel_kv_alarm(session_id: str, first_prompt: int, first_cache: int, traffic: str,
+                    *, now: "float | None" = None) -> "str | None":
+    """Log ``PANEL_KV_MISS`` for a household panel turn that re-prefilled > the threshold. Returns the kind
+    logged (``warm`` / ``first``) or None. Bookkeeping (the session's previous turn) runs for every
+    household panel turn, miss or not."""
+    try:
+        sid = str(session_id or "")
+        if traffic != "household" or not sid.startswith("voice-panel-"):
+            return None
+        t = time.monotonic() if now is None else float(now)
+        others, background = _non_household_turns(), _background_calls()
+        prev = _panel_kv_prev.pop(sid, None)
+        _panel_kv_prev[sid] = (t, others, background)
+        while len(_panel_kv_prev) > _PANEL_KV_MAX_SESSIONS:
+            _panel_kv_prev.pop(next(iter(_panel_kv_prev)))
+        threshold = _panel_kv_threshold()
+        if threshold <= 0 or int(first_prompt) <= threshold:
+            return None
+        since = (t - prev[0]) if prev else None
+        kind = "warm" if since is not None and since < _PANEL_KV_WARM_S else "first"
+        logger.warning(
+            "PANEL_KV_MISS session=%s kind=%s first_prompt_n=%d first_cache_n=%d since_prev_s=%s "
+            "non_household_turns_between=%s background_calls_between=%s threshold=%d",
+            sid, kind, int(first_prompt), int(first_cache),
+            f"{since:.0f}" if since is not None else "-",
+            (others - prev[1]) if prev else "-", (background - prev[2]) if prev else "-", threshold,
+        )
+        try:
+            from voice_metrics import panel_kv_miss_count
+
+            panel_kv_miss_count.labels(kind=kind).inc()
+        except Exception:  # noqa: BLE001
+            pass
+        if kind == "first":   # a cold first reply is the regression we locked down: tell the owner (1/day)
+            try:
+                import kv_miss_alert
+
+                kv_miss_alert.note_first_miss(first_prompt, first_cache)
+            except Exception:  # noqa: BLE001
+                pass
+        return kind
+    except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+        return None
+
+
+class _ToolTally:
+    """Names-only record of the brain's own tool calls in ONE turn, fed from the
+    ``__TOOL__:`` sentinels already on the NDJSON stream. Exists because a tool
+    call was invisible in zoe-data's logs, so "no memory sources" could not be
+    told from "the model never called recall_memory". Keeps tool NAMES, the
+    ``recall_memory`` outcome class and a wall-clock total - never arguments,
+    result text or user content. ``feed`` never raises and does no I/O."""
+
+    _MAX_TOOLS = 24
+    # The sidecar's COMPLETE canned replies (labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts recallMemory). Matched
+    # against the WHOLE result, never as a substring: a real packet may contain these phrases.
+    _EMPTY_REPLIES = frozenset({"i don't have anything stored about that yet."})
+    _ERROR_REPLIES = frozenset({
+        "i couldn't reach my memory right now.",
+        "i'm not sure whose memories i'd be recalling, so i can't do that safely right now.",
+    })
+
+    def __init__(self) -> None:
+        self._t0 = time.monotonic()
+        self._names: list[str] = []
+        self._by_id: dict[str, str] = {}
+        self._recall_ids: set[str] = set()
+        self._recall_result: Optional[str] = None  # packet | empty | error | unknown
+        self._logged = False
+
+    def feed(self, sentinel: str) -> None:
+        try:
+            if not isinstance(sentinel, str) or not sentinel.startswith(_TOOL_SENTINEL_PREFIX):
+                return
+            ev = json.loads(sentinel[len(_TOOL_SENTINEL_PREFIX):])
+            if not isinstance(ev, dict):
+                return
+            phase, tc_id = ev.get("phase"), str(ev.get("id") or "")
+            if phase in ("start", "args"):
+                name = re.sub(r"[^A-Za-z0-9_.-]", "", str(ev.get("name") or ""))[:40]
+                if not name or (tc_id and tc_id in self._by_id):
+                    return
+                if tc_id:
+                    self._by_id[tc_id] = name
+                if len(self._names) < self._MAX_TOOLS:
+                    self._names.append(name)
+                if name == "recall_memory":
+                    if tc_id:
+                        self._recall_ids.add(tc_id)
+                    if self._recall_result is None:
+                        self._recall_result = "unknown"
+            elif phase == "result" and tc_id in self._recall_ids:
+                res = ev.get("result")
+                if not isinstance(res, str):
+                    return
+                low = res.strip().lower()
+                if not low or low in self._EMPTY_REPLIES:
+                    self._recall_result = "empty"
+                elif low in self._ERROR_REPLIES:
+                    self._recall_result = "error"
+                else:
+                    self._recall_result = "packet"
+        except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+            pass
+
+    def log(self, session_id: str) -> None:
+        """One ``FLUE_TOOLS`` line, at most once per turn (idempotent). Never raises."""
+        try:
+            if self._logged:
+                return
+            self._logged = True
+            if self._recall_result is None:
+                recall = "called:no"
+            else:
+                recall = f"called:yes result:{self._recall_result}"
+            logger.info(
+                "FLUE_TOOLS session=%s tools=[%s] recall_memory=%s ms=%d",
+                session_id, ",".join(self._names), recall,
+                int((time.monotonic() - self._t0) * 1000),
+            )
+        except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+            pass
 
 
 def _log_context_budget(session_id: str, terminal: dict) -> None:
@@ -1626,6 +1807,9 @@ def _log_context_budget(session_id: str, terminal: dict) -> None:
             keys = ("system", "tools", "history", "tail", "stale", "elided")
             logger.info("FLUE_CONTEXT_BUDGET session=%s " + " ".join(f"{k}=%d" for k in keys),
                         session_id, *(int(b.get(k) or 0) for k in keys))
+            u = _SESSION_UID.get(session_id)
+            if u and u in _LAST_TURN and _LAST_TURN[u].get("session") == session_id:
+                _LAST_TURN[u]["system"] = int(b.get("system") or 0)
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn
         pass
 
@@ -1723,6 +1907,7 @@ async def _run_turn_aggregated_wire2(
     # the sidecar has taken ownership of the turn.
     admitted = False
     stream_died = False
+    tally = _ToolTally()
     try:
         async with httpx.AsyncClient(timeout=_timeout_s()) as client:
             async with client.stream(
@@ -1779,6 +1964,8 @@ async def _run_turn_aggregated_wire2(
                         # Activity sentinels are not reply text — dropped here
                         # exactly as the wire-1 whole-result path never sees them.
                         if chunk.startswith((_TOOL_SENTINEL_PREFIX, _THINKING_SENTINEL_PREFIX)):
+                            _note_tool_sentinel(session_id, chunk)
+                            tally.feed(chunk)
                             continue
                         parts.append(chunk)
                         continue
@@ -1786,9 +1973,11 @@ async def _run_turn_aggregated_wire2(
                         if chunk.get("done"):
                             done_seen = True
                             _log_prompt_cache(session_id, chunk)
+                            tally.log(session_id)
                             break
                         if "error" in chunk:
                             error_terminal = str(chunk["error"])[:200]
+                            tally.log(session_id)
                             break
     except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
         # No re-POST on either branch: a 2.x turn is fire-and-forget, so the
@@ -1808,6 +1997,8 @@ async def _run_turn_aggregated_wire2(
         # Partial text survives — the turn ran and is reported below as a failed
         # (truncated) turn rather than a clean success.
         stream_died = True
+    finally:
+        tally.log(session_id)  # idempotent: one line per turn on EVERY exit (EOF, error, cancel)
 
     text = "".join(parts)
     # A success is ONLY a {"done": true} terminal. An {"error": ...} terminal or
@@ -1870,6 +2061,12 @@ async def _run_turn_aggregated_wire2(
 # to a real guest turn's. No persona, no memory/recall block, no session of a real conversation is touched.
 # The model re-prefills the shared prefix into the slot and answers one word; the command's turn then finds it resident.
 #
+# UPDATE 2026-10-27: "byte-identical for every user" holds only up to the member's manner block + user-model card, which the
+# sidecar appends to the system prompt AHEAD of the tool block. A guest warm therefore left ~520 tokens after the divergence
+# point, beyond llama-server's 512-position SWA resume window, and the member's first turn re-prefilled everything
+# (first_cache_n=0). The warm now takes the panel's likely speaker (``warm_kv_prefix(member)``, see ``_kv_warm_outbound``);
+# guest remains the fallback. docs/knowledge/brain-prefix-cache-2026-10-12.md, addendum.
+#
 # Bounded and polite: skipped while a brain turn is in flight or the conversation is still hot (the prefix is
 # resident), one warm at a time, a hard wall-clock cap after which the sidecar turn is ABORTED (a cancelled reader alone
 # would leave it running in the one llama slot, ahead of the command), never raises, and it brackets itself with
@@ -1898,6 +2095,150 @@ def _kv_warm_message() -> str:
     return f"{_IDENTITY_ENVELOPE_PREFIX}{_KV_WARM_IDENTITY}\n{_KV_WARM_MESSAGE}"
 
 
+_ENVELOPE_LINE_RE = re.compile(r"^ zoe-(uid|manner|persona):([^\n]*)\n")
+
+
+def prefix_key(message: str, requested_card_version: str = "") -> str:
+    """Short hash of the envelope lines of an outbound message that change the sidecar's SYSTEM-PROMPT bytes: the
+    acting member (which selects the user-model card) plus the manner and persona blocks. Two requests with the
+    same key were BUILT from the same zoe-data inputs; they are not proof that the sidecar rendered equal system
+    prompts (it may hold an older card: see the KNOWN LIMIT above ``_LAST_TURN``). A different key means the
+    prompts diverge where those blocks are placed. Computed from the WIRE message, so the
+    warm and the turn are keyed by what they actually send. Pure; never raises."""
+    import hashlib
+
+    seen: dict = {}
+    rest = message or ""
+    for _ in range(12):   # bounded: replay/spec/persona/manner/uid lines only ever lead the message
+        m = re.match(r"^ zoe-[a-z][a-z-]*:[^\n]*\n", rest)
+        if not m:
+            break
+        line = m.group(0)
+        k = _ENVELOPE_LINE_RE.match(line)
+        if k:
+            seen[k.group(1)] = k.group(2)
+        rest = rest[len(line):]
+    h = hashlib.sha256()
+    h.update((requested_card_version or "").encode("utf-8", "replace"))   # zoe-data's card version; NOT proof of what the sidecar rendered
+    h.update(b"\x00")
+    for name in ("uid", "manner", "persona"):
+        h.update((seen.get(name) or ("guest" if name == "uid" else "")).encode("utf-8", "replace"))
+        h.update(b"\x00")
+    return h.hexdigest()[:10]
+
+
+def _log_prefix_key(kind: str, session_id: str, message: str, requested_card_version: str = "") -> str:
+    """One ``FLUE_PREFIX_KEY`` line per turn, so a ``PANEL_KV_MISS`` explains itself: compare the ``key`` of the
+    last ``FLUE_KV_WARM`` line with the turn's. ``slot=auto``: the brain runs ``--parallel 1`` and no request pins
+    ``id_slot``, so every request lands in the one slot (a slot mismatch cannot be the cause). Never raises."""
+    key = "-"
+    try:
+        key = prefix_key(message, requested_card_version)
+        logger.info("FLUE_PREFIX_KEY kind=%s session=%s key=%s requested_card=%s slot=auto",
+                    kind, session_id, key, requested_card_version or "-")
+    except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+        pass
+    return key
+
+
+# KNOWN LIMIT: "the card was rendered" is inferred (no remembered turn / system size missing or different / zoe-data's
+# requested card version moved), because the sidecar response does not expose the card version it rendered. A stale card of
+# exactly the same size, with an unchanged zoe-data version, is indistinguishable; the cost is one cache miss, as before.
+# What each member's LAST real turn actually sent ahead of their words: the manner and persona envelope lines
+# (the manner block is chosen by the language of the utterance, so only a real turn knows it) and the sidecar's
+# system-prompt token estimate for that turn. The wake warm replays exactly these lines. Bounded.
+_LAST_TURN: "dict[str, dict]" = {}
+_SESSION_UID: "dict[str, str]" = {}
+_LAST_TURN_MAX = 64
+
+
+def _leading_envelope_lines(message: str) -> "dict[str, str]":
+    """The raw manner / persona envelope lines at the head of an outbound message ('' when absent)."""
+    out = {"manner": "", "persona": ""}
+    rest = message or ""
+    for _ in range(12):
+        m = re.match(r"^ zoe-([a-z][a-z-]*):[^\n]*\n", rest)
+        if not m:
+            break
+        if m.group(1) in out:
+            out[m.group(1)] = m.group(0)
+        rest = rest[len(m.group(0)):]
+    return out
+
+
+# The user-model card version zoe-data last REQUESTED for a member, as looked up by the wake warm (the only caller of
+# ``_card_version``). The real turn reads this dict and NEVER awaits a card lookup: that is a DB read (and possibly a card
+# rebuild) on the critical path of every reply, for a diagnostic. It is zoe-data's version, not the sidecar's rendered one
+# (the sidecar response does not expose it), so every log field carrying it is named ``requested_card``.
+_CARD_SEEN: "dict[str, str]" = {}
+
+
+async def _card_version(uid: str) -> str:
+    """Version (content hash) of the user-model card zoe-data serves for ``uid``; '' = none. Never raises.
+    WARM-ONLY: awaits storage. Records the answer in ``_CARD_SEEN``."""
+    v = ""
+    try:
+        import user_portrait
+
+        v = str((await user_portrait.load_user_model_block(uid)).get("version") or "")
+    except Exception:  # noqa: BLE001
+        v = ""
+    _remember(_CARD_SEEN, uid, v, _LAST_TURN_MAX)
+    return v
+
+
+def _remember(d: dict, k: str, v: Any, cap: int) -> None:
+    d.pop(k, None)
+    d[k] = v
+    while len(d) > cap:
+        d.pop(next(iter(d)))
+
+
+def _note_turn_envelope(uid: str, session_id: str, outbound_message: str) -> None:
+    """After a real turn's envelope is built: remember its manner/persona lines for the wake warm, and log the key."""
+    try:
+        u = (uid or "").strip()
+        card = _CARD_SEEN.get(u, "")   # in memory only: the turn path awaits no card lookup
+        _log_prefix_key("turn", session_id, outbound_message, card)
+        if not u or u.lower() in ("guest", "voice-guest"):
+            return
+        lines = _leading_envelope_lines(outbound_message)
+        prev = _LAST_TURN.get(u) or {}
+        # "session" ties the later system-size write to THIS turn: a late terminal from an older, overlapping session of the
+        # same member must not overwrite the size of the newer turn the warm compares against.
+        _remember(_LAST_TURN, u, {**lines, "system": 0, "card": card, "session": session_id}, _LAST_TURN_MAX)
+        _remember(_SESSION_UID, session_id, u, 256)
+    except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+        pass
+
+
+async def _kv_warm_outbound(member: str) -> "tuple[str, str]":
+    """(wire message, prefix key) for the warm turn.
+
+    No ``member`` -> the explicit guest envelope, exactly as before. A ``member`` (the panel's likely speaker) ->
+    the SAME envelope lines that member's last real turn carried (identity -> the user-model card; the manner line,
+    which is language-dependent, and the persona line), because the sidecar appends those to the system prompt AHEAD
+    of the tool block: a guest warm leaves ~500 tokens (tool block + message) after the point where the member's
+    prompt diverges, more than llama-server's 512-position SWA window can resume from, so the member's first turn
+    re-prefilled all of it (``first_cache_n=0``, 2026-10-27). With no remembered turn the blocks are computed for the
+    warm instruction (English). The replay marker makes the warm's tool calls report-but-not-commit, so a warm run as
+    a member that is not actually present can write nothing."""
+    uid = (member or "").strip().replace("\n", "").replace("\r", "")
+    if not uid or uid.lower() in ("guest", "voice-guest"):
+        msg = _kv_warm_message()
+        return msg, prefix_key(msg)
+    memo = _LAST_TURN.get(uid)
+    if memo:
+        manner_line, persona_line = memo.get("manner", ""), memo.get("persona", "")
+    else:
+        manner_line = _wrap_message_with_manner("", await _manner_context_block(uid, _KV_WARM_MESSAGE))
+        persona_line = _wrap_message_with_persona("", await _persona_context_block(uid))
+    msg = _wrap_message_with_identity(_KV_WARM_MESSAGE, uid)
+    msg = persona_line + manner_line + msg
+    msg = _wrap_message_with_replay(msg, True)
+    return msg, prefix_key(msg, await _card_version(uid))
+
+
 def _kv_warm_session_id() -> str:
     """The warm session for THIS warm: reused for `_KV_WARM_SESSION_TURNS` warms, then a fresh one."""
     import uuid
@@ -1915,7 +2256,7 @@ def _kv_warm_rotate() -> None:
     _kv_warm_session["uses"] = _KV_WARM_SESSION_TURNS   # next warm mints a new session
 
 
-async def _kv_warm_turn(session_id: str, state: dict) -> tuple[str, int, int]:
+async def _kv_warm_turn(session_id: str, state: dict, message: str = "") -> tuple[str, int, int]:
     """Run the throwaway warm turn; returns (outcome, first_prompt_n, first_cache_n) (-1 = not reported).
 
     ``state["submission"]`` is set as soon as the sidecar admits the turn, so a caller that cancels this
@@ -1931,7 +2272,7 @@ async def _kv_warm_turn(session_id: str, state: dict) -> tuple[str, int, int]:
     async with httpx.AsyncClient(timeout=_KV_WARM_MAX_S) as client:
         async with client.stream(
             "POST", _endpoint(session_id, stream=True),
-            content=_request_payload(_kv_warm_message()), headers=headers,
+            content=_request_payload(message or _kv_warm_message()), headers=headers,
         ) as resp:
             if resp.status_code >= 300:
                 return f"http_{resp.status_code}", -1, -1
@@ -1950,6 +2291,10 @@ async def _kv_warm_turn(session_id: str, state: dict) -> tuple[str, int, int]:
                     continue
                 if chunk.get("done"):
                     state["settled"] = True
+                    try:
+                        state["system"] = int((chunk.get("context_budget") or {}).get("system") or 0)
+                    except (TypeError, ValueError, AttributeError):
+                        state["system"] = 0
                     rounds = chunk.get("prompt_cache")
                     first = rounds[0] if isinstance(rounds, list) and rounds and isinstance(rounds[0], dict) else {}
                     try:
@@ -1962,11 +2307,15 @@ async def _kv_warm_turn(session_id: str, state: dict) -> tuple[str, int, int]:
     return "no_terminal", -1, -1
 
 
-async def warm_kv_prefix() -> str:
+async def warm_kv_prefix(member: str = "", *, yield_to_helpers: bool = False) -> str:
     """Prime the brain's llama-server slot with the shared system+tools prefix (see the block above).
 
     Fire-and-forget for the wake handler. Returns an outcome label (``warmed`` / ``skipped:...`` / ``failed:...``)
-    for logs and tests; NEVER raises, whatever the sidecar does. Runs as an explicit guest, never as a member.
+    for logs and tests; NEVER raises, whatever the sidecar does. ``member`` (the panel's likely speaker, "" = none)
+    makes the warm render that member's system prompt (see ``_kv_warm_outbound``); empty = explicit guest. It is
+    a cache-shaping hint only: nothing is read back to the wake, written, or attributed to that member.
+    ``yield_to_helpers`` (the idle-time keeper only; the wake leaves it False) also declines when a background helper is
+    queued or running (``skipped:busy``), at entry and again just before the slot is taken.
     """
     global _kv_warm_inflight
     if not kv_warm_enabled():
@@ -1975,17 +2324,67 @@ async def warm_kv_prefix() -> str:
         return "skipped:inflight"
     if brain_slot_guard.is_hot():
         return "skipped:hot"   # a turn is running or ended < ZOE_BRAIN_SLOT_QUIET_S ago: the prefix is resident
+    if yield_to_helpers and brain_slot_guard.waiters() > 0:
+        return "skipped:busy"
     session_id = "-"
     t0 = asyncio.get_running_loop().time()
     outcome, prompt_n, cache_n = "failed:unknown", -1, -1
+    warm_key = "-"
+    requested_card = "-"
     acquired = False
     state: dict = {"submission": "", "settled": False}
+    uid = (member or "").strip()
+    is_member = bool(uid) and uid.lower() not in ("guest", "voice-guest")
+
+    async def _warm_all() -> "tuple[str, int, int]":
+        # ALL preparation (the card lookup included) runs inside the warm's own wall-clock cap and BEFORE the slot
+        # guard is taken, so a slow store neither outlives the cap nor holds off the post-turn helpers.
+        nonlocal acquired, session_id, warm_key, requested_card
+        warm_msg, warm_key = await _kv_warm_outbound(member)
+        requested_card = _CARD_SEEN.get(uid, "-") or "-"
+        # The preparation above awaited storage: a real turn may have started meanwhile (the entry check is stale).
+        # Re-check just before taking the guard, so a warm never queues behind / replaces a live conversation.
+        if brain_slot_guard.is_hot():
+            return "skipped:hot", -1, -1
+        # The keeper's warm (yield_to_helpers) must not take the slot out from under a helper that queued or began while the
+        # preparation above awaited storage: that helper runs first and the keeper tries again on its next poll.
+        if yield_to_helpers and brain_slot_guard.waiters() > 0:
+            return "skipped:busy", -1, -1
+        # Preparation that swallowed its cancellation and returned late must not go on to take the guard and submit.
+        if asyncio.get_running_loop().time() - t0 >= _KV_WARM_MAX_S:
+            return "failed:timeout", -1, -1
+        brain_slot_guard.turn_started(keeper=yield_to_helpers)
+        acquired = True
+        starts_after_mine = brain_slot_guard.starts()   # any later start is a REAL turn, even one already finished
+        session_id = _kv_warm_session_id()
+        res = await _kv_warm_turn(session_id, state, warm_msg)
+        # The sidecar serves the member's user-model card from a cache that this very request may have just started
+        # refreshing (cold or past its TTL), so the warm may have rendered a different system prompt than the next
+        # turn will. Repeat ONCE (after a short beat for the refresh to land) unless the card is confirmed rendered:
+        # no remembered turn to compare with, a system size missing or different, or a card version that moved.
+        if res[0] == "warmed" and is_member:
+            memo = _LAST_TURN.get(uid) or {}
+            want, got = int(memo.get("system") or 0), int(state.get("system") or 0)
+            moved = bool(memo) and (_CARD_SEEN.get(uid, "") != memo.get("card", ""))
+            unverified = (not memo) or (not want) or (not got) or want != got
+            if unverified or moved:
+                state.update(settled=False, submission="")
+                await asyncio.sleep(0.25)
+                # Nothing is prepared (and no storage is awaited) while the guard is held: the repeat re-sends the
+                # SAME envelope lines (the card version only enters the key), and is skipped if a real turn began.
+                if brain_slot_guard.starts() != starts_after_mine or brain_slot_guard.active_turns() > 1:
+                    logger.info("FLUE_KV_WARM_REPEAT session=%s skipped=real_turn_started", session_id)
+                    return res
+                requested_card = _CARD_SEEN.get(uid, "-") or "-"
+                warm_key = prefix_key(warm_msg, _CARD_SEEN.get(uid, ""))
+                res = await _kv_warm_turn(session_id, state, warm_msg)
+                logger.info("FLUE_KV_WARM_REPEAT session=%s system_want=%d system_got=%d memo=%d",
+                            session_id, want, got, int(bool(memo)))
+        return res
+
     try:
         _kv_warm_inflight = True
-        brain_slot_guard.turn_started()
-        acquired = True
-        session_id = _kv_warm_session_id()
-        outcome, prompt_n, cache_n = await asyncio.wait_for(_kv_warm_turn(session_id, state), timeout=_KV_WARM_MAX_S)
+        outcome, prompt_n, cache_n = await asyncio.wait_for(_warm_all(), timeout=_KV_WARM_MAX_S)
     except asyncio.TimeoutError:
         outcome = "failed:timeout"
     except asyncio.CancelledError:
@@ -2008,12 +2407,13 @@ async def warm_kv_prefix() -> str:
                 abort = f"error:{type(err).__name__}"
         _kv_warm_inflight = False
         if acquired:
-            brain_slot_guard.turn_finished()
+            brain_slot_guard.turn_finished(keeper=yield_to_helpers)
         # A dedicated line, NOT FLUE_PROMPT_CACHE: the warm is cold by design, and mixing its rows into that log would
         # corrupt the live miss-rate (share of turns with first_cache_n=0) the prefix-cache doc tells operators to read.
         logger.info(
-            "FLUE_KV_WARM session=%s outcome=%s first_prompt_n=%d first_cache_n=%d ms=%d abort=%s",
-            session_id, outcome, prompt_n, cache_n, round((asyncio.get_running_loop().time() - t0) * 1000), abort,
+            "FLUE_KV_WARM session=%s outcome=%s first_prompt_n=%d first_cache_n=%d ms=%d abort=%s key=%s requested_card=%s",
+            session_id, outcome, prompt_n, cache_n, round((asyncio.get_running_loop().time() - t0) * 1000), abort, warm_key,
+            requested_card,
         )
     return outcome
 
@@ -2099,9 +2499,12 @@ async def run_flue_brain_streaming(
     # sink when the named-person floor fired for a person no row relates to the user; every
     # other turn passes through untouched.
     role_guard: dict[str, Any] = {}
+    # Set by the inner turn when it answered in code without ever reaching the sidecar (verify-on-challenge): that exchange is NOT in the
+    # sidecar's history, so it must not be marked brain-owned (flue_fastpath_context).
+    code_reply: dict[str, bool] = {}
     turn = _run_flue_brain_streaming_turn(
         message, session_id, user_id, day_brief_block=brief.block if brief else "",
-        raise_block=raised.block if raised else "", _role_guard=role_guard, **kwargs,
+        raise_block=raised.block if raised else "", _role_guard=role_guard, _code_reply=code_reply, **kwargs,
     )
     import role_guess_guard
 
@@ -2112,7 +2515,9 @@ async def run_flue_brain_streaming(
         # straight through; closing this wrapper closes the inner turn.
         import narration_filter
 
-        turn = narration_filter.filter_stream(turn)
+        # An announcement that ENDS a turn with no tool call is an unkept promise and is replaced - only where the lane
+        # streams tool sentinels (Seam-A streaming); elsewhere their absence proves nothing.
+        turn = narration_filter.filter_stream(turn, tools_visible=_stream_enabled())
     # A reply that opens "It sounds like ..." / "That sounds like ..." (the 4B's one empathy move) loses that sentence when something of
     # substance follows it (mirror_guard, ZOE_MIRROR_GUARD=off|shadow|on, default shadow = byte-identical + a label-only log line).
     # off: nothing wraps the stream. After the narration strip (so it sees the real first sentence), before clean_goodbye.
@@ -2151,6 +2556,13 @@ async def run_flue_brain_streaming(
         # Settled HERE, not after the loop: a consumer that disconnects or barges
         # in after the first text exits through this finally (GeneratorExit or a
         # CancelledError), and the brief it heard must still take the claim.
+        if emitted and not code_reply:   # the sidecar has this turn in its history; a failed / refused one stays a fast-path row to resend
+            try:
+                import flue_fastpath_context
+
+                flue_fastpath_context.note_brain_turn(session_id, _spoken)
+            except Exception:  # noqa: BLE001
+                pass
         if brief is not None:
             await brief_first_turn.settle(brief, produced=emitted)
         if raised is not None:
@@ -2243,6 +2655,8 @@ async def _run_flue_brain_streaming_turn(
     verify_plan = await _verify_plan(message, uid, session_id, bool(kwargs.get("voice_mode")))
     if verify_plan is not None and verify_plan.reply:
         _record_outcome(outcome_sink, FLUE_OUTCOME_SEAM_REPLY, f"verify_on_challenge:{verify_plan.status}")
+        if isinstance(kwargs.get("_code_reply"), dict):
+            kwargs["_code_reply"]["code"] = True    # answered here, the sidecar never saw this turn
         yield verify_plan.reply
         return
     verify_block = verify_plan.block if verify_plan is not None else ""
@@ -2301,6 +2715,11 @@ async def _run_flue_brain_streaming_turn(
     if not (recall_block or verify_block or continuity_block or continuity_turn or hop_block or offer_block
             or kwargs.get("raise_block") or kwargs.get("day_brief_block")):
         risk_block = await _risk_cue_block(message, uid, session_id)
+    # Fast-path exchanges (reminder, "what do you know about me", ...) the brain never saw (flue_fastpath_context.py): without them a
+    # follow-up like "thank you" / "no" reached the brain with nothing to follow. Context beside the other blocks, same session + member only.
+    import flue_fastpath_context
+
+    fastpath_block = await flue_fastpath_context.block_for(uid, session_id, message)
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
     # order is fixed: identity → recall → offer → the user's words. "" when the flag is
@@ -2317,7 +2736,7 @@ async def _run_flue_brain_streaming_turn(
     except Exception:  # noqa: BLE001
         pass
     # ZOE_PERSONALISATION_HOP_PLACEMENT=preamble: the hop block rides BEFORE the user's words, behind the other blocks
-    _blocks = "\n".join(b for b in (identity_block, recall_block, offer_block,
+    _blocks = "\n".join(b for b in (identity_block, fastpath_block, recall_block, offer_block,
                                     hop_block if hop_placement == "preamble" else "") if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
     # the start of the outbound message and forge the trusted marker. Only reachable
@@ -2359,6 +2778,7 @@ async def _run_flue_brain_streaming_turn(
     # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the
     # replay line and the identity line. "" (the default) = unchanged bytes.
     outbound_message = _wrap_message_with_persona(outbound_message, await _persona_context_block(uid))
+    _note_turn_envelope(uid, session_id, outbound_message)
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.
     outbound_message = _wrap_message_with_replay(
@@ -2400,6 +2820,7 @@ async def _run_flue_brain_streaming_turn(
         submission_id = ""
         terminal_seen = False
         emitted_chars = emitted_deltas = 0
+        tally = _ToolTally()
         try:
             import httpx
 
@@ -2452,6 +2873,9 @@ async def _run_flue_brain_streaming_turn(
                                     if not chunk.startswith((_TOOL_SENTINEL_PREFIX, _THINKING_SENTINEL_PREFIX)):
                                         emitted_chars += len(chunk)
                                         emitted_deltas += 1
+                                    else:
+                                        _note_tool_sentinel(session_id, chunk)
+                                        tally.feed(chunk)
                                     yield chunk
                                 continue
                             if isinstance(chunk, dict):
@@ -2460,8 +2884,10 @@ async def _run_flue_brain_streaming_turn(
                                     finished = True
                                     done_ok = True
                                     _log_prompt_cache(session_id, chunk)
+                                    tally.log(session_id)
                                     break
                                 if "error" in chunk:
+                                    tally.log(session_id)
                                     logger.warning("flue stream reported error: %s", str(chunk["error"])[:200])
                                     finished = True  # sidecar owned + reported the failure
                                     stream_error = str(chunk["error"])[:160]
@@ -2569,6 +2995,8 @@ async def _run_flue_brain_streaming_turn(
                 yield _FALLBACK_TEXT
                 return
             logger.warning("flue stream request failed pre-admission (%s) — falling back to wait=result", exc)
+        finally:
+            tally.log(session_id)  # idempotent: one line per turn on EVERY exit (EOF, error, cancel)
 
     # WIRE-1 ONLY BELOW. Both wire-2 routes into this block return above; this
     # guard makes that structural fact checkable rather than merely argued, so a

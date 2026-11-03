@@ -39,9 +39,20 @@ def memory_quality_snapshot() -> dict:
 
 
 async def run_dreaming(db) -> list:
-    from memory_digest import run_dreaming_for_all
+    """The dreaming cycle for every chat-turn owner minus synthetic ids - with the user lookup done HERE, so an empty set is a POSITIVE signal.
 
-    return await run_dreaming_for_all(db=db)
+    ``memory_digest.run_dreaming_for_all`` swallows a failed lookup (logs ``could not list users`` and returns ``[]``), which the CLI printed as "0 users processed", the same as a
+    household with nobody to dream for. Here a failed lookup RAISES (``main`` prints ``Dreaming cycle failed`` and exits 1) and a successful one prints
+    ``DREAMING_USERS lookup=ok users=N``, which the night window requires before it will call a zero-user night idle. Same set and same per-user cycle as the service's function."""
+    import memory_digest as md
+
+    user_ids = await md._list_user_ids(md._message_owner_users_sql(today_only=False), db=db)
+    user_ids = md.drop_synthetic_users(user_ids, pass_name="dreaming", log=md.logger)
+    print(f"DREAMING_USERS lookup=ok users={len(user_ids)}")
+    results = []
+    for idx, uid in enumerate(user_ids):
+        results.append(await md.run_dreaming_cycle(uid, db=db, run_agent_sync_phase=(idx == 0)))
+    return results
 
 
 async def run_music_digest(db) -> list:

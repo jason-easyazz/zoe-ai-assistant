@@ -74,3 +74,24 @@ __all__ = [
     "voice_identity_source_count",
     "voice_failure_reason_count",
 ]
+
+
+# Traffic class (P-2, ``traffic_class.py``): one count per brain turn (the BRAIN_LANE line), so a dashboard
+# can separate the household from the harness that was 97% of the brain's turns (2026-10-19).
+brain_turn_count = Counter(
+    "zoe_brain_turn_count",
+    "Brain turns by traffic class (household | harness | probe | ci) and the lane that served them.",
+    ["traffic_class", "lane"],
+    registry=REGISTRY,
+)
+
+# P-3: a PANEL brain turn of the household that re-prefilled more than ZOE_PANEL_KV_MISS_TOKENS (default 500)
+# prompt tokens: its KV left the single llama slot. ``kind`` = warm (the session's previous panel turn was
+# under 5 min ago - the miss the harness causes) | first (the session's first turn, expected cold).
+panel_kv_miss_count = Counter(
+    "zoe_panel_kv_miss_count",
+    "Household panel brain turns whose first model call re-prefilled more than the alarm threshold.",
+    ["kind"],
+    registry=REGISTRY,
+)
+

@@ -24,7 +24,7 @@ USAGE (on the live box):
   python3 scripts/perf/measure_tts_cadence.py --wire 1 --wire 2   # compare both wires
   python3 scripts/perf/measure_tts_cadence.py --wire 1 --update-baseline   # re-record the band
 
-Token: read from ZOE_BRAIN_TOKEN or ~/.hermes/.env / services/zoe-data/.env.
+Token: read from ZOE_BRAIN_TOKEN or services/zoe-data/.env (~/.hermes/.env is retired; still tried last).
 NOT a merge gate — no automated check verifies rhythm; this is an operator/diagnostic
 instrument whose verdict is advisory and whose real corroboration is the ear.
 """

@@ -102,11 +102,6 @@ def _install(monkeypatch, db):
     monkeypatch.setattr("database.get_db_ctx", ctx)
     monkeypatch.setattr("intent_router._notify_ui_channel", noop)
 
-    async def no_mcporter(_cmd):
-        raise AssertionError("the direct path must not fall back to mcporter")
-
-    monkeypatch.setattr("intent_router._run_mcporter", no_mcporter)
-
 
 @pytest.fixture(autouse=True)
 def _flags_off(monkeypatch):

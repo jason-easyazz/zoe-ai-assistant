@@ -1,5 +1,10 @@
 """Lane-parity rig: the SAME utterance through the REAL chat path and the REAL voice path, in one process.
 
+Four lanes (A4, 2026-10-19 added the last two): ``chat`` (``chat_stream_generator``, the typed stream), ``voice`` (``voice_command``,
+the panel daemon's spoken lane and the phone page's push-to-talk), ``chat_ns`` (the NON-stream ``routers.chat.chat``, which the
+Telegram bot uses) and ``livekit`` (``routers.voice_livekit._run_pipeline``, the Ask card's conversation lane, fed a transcript
+where Moonshine would have produced one). The last two run the REAL ``brain_oneshot`` down to the same stubbed transport.
+
 Not a test module (no ``test_`` prefix) - ``tests/test_voice_lane_parity.py`` and ``scripts/perf/lane_parity.py`` drive it.
 
 What is real: ``routers.chat.chat_stream_generator`` (the typed lane) and ``routers.voice_tts.voice_command`` (the spoken lane, called
@@ -248,6 +253,8 @@ class Rig:
         self.user = user
         self.db = FakeDB()
         self.chat_session = "parity-chat"
+        self.chat_ns_session = "parity-chat-ns"
+        self.livekit_session = "parity-livekit"
         self.voice_session = "parity-voice"
         self.panel = "parity-panel"
         self.brain_calls: list = []
@@ -370,6 +377,8 @@ class Rig:
             rig.brain_calls.append({"message": a[0] if a else "", "oneshot": True})
             return BRAIN_SENTINEL
 
+        # the oneshot lanes (chat_ns, livekit) put the REAL one back: it drains the same counted seam + stubbed transport
+        self._real_oneshot = brain_dispatch.brain_oneshot
         monkeypatch.setattr(brain_dispatch, "brain_oneshot", one_shot)
         monkeypatch.setattr(chat_mod, "_brain_oneshot", one_shot)
 
@@ -466,6 +475,65 @@ class Rig:
         else:
             stage = "chat:intent"
         return self._outcome("chat", text, reply, stage=stage, before_brain=before, before_seam=before_seam)
+
+    def _real_oneshot_lane(self) -> None:
+        import brain_dispatch
+        from routers import chat as chat_mod
+
+        self._mp.setattr(brain_dispatch, "brain_oneshot", self._real_oneshot)
+        self._mp.setattr(chat_mod, "_brain_oneshot", self._real_oneshot)
+
+    def _tier_stage(self, reply: str, lane: str) -> str:
+        t = self._last_tier
+        if t is not None and getattr(t, "reply", "") and reply == str(t.reply).strip():
+            return f"tier:{getattr(t, 'tier', '') or 'tier1.5'}:{getattr(t, 'intent', '')}"
+        return f"{lane}:other"
+
+    async def chat_ns(self, text: str) -> Outcome:
+        """The NON-stream ``routers.chat.chat`` (``POST /api/chat/?stream=false``, the Telegram bot's call)."""
+        from starlette.requests import Request
+        from routers import chat as chat_mod
+
+        self._real_oneshot_lane()
+        self._last_tier = None
+        before, before_seam = len(self.brain_calls), self.seam_calls
+        raw = json.dumps({"message": text, "session_id": self.chat_ns_session}).encode()
+
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+
+        req = Request({"type": "http", "method": "POST", "path": "/api/chat/", "root_path": "", "scheme": "http",
+                       "query_string": b"stream=false", "headers": [(b"content-type", b"application/json")],
+                       "client": ("192.0.2.10", 50000), "server": ("testserver", 80)}, receive)
+        user = {"user_id": self.user, "role": "user", "username": self.user}
+        res = await chat_mod.chat(req, user=user, stream=False)
+        reply = str((res or {}).get("response") or "").replace(BRAIN_SENTINEL, "").strip()
+        return self._outcome("chat_ns", text, reply, stage=self._tier_stage(reply, "chat_ns"), before_brain=before,
+                             before_seam=before_seam)
+
+    async def livekit(self, text: str) -> Outcome:
+        """``voice_livekit._run_pipeline`` (the Ask card's room agent) for one utterance, with STT stubbed to return ``text``."""
+        from routers import voice_livekit as vl
+        from routers import voice_tts as vt
+
+        self._real_oneshot_lane()
+        self._last_tier = None
+        before, before_seam = len(self.brain_calls), self.seam_calls
+        sent: list = []
+
+        class _Participant:
+            async def publish_data(self, data, reliable=True):
+                sent.append(json.loads(data.decode()))
+
+        async def stt(_path, *a, **k):
+            return text
+
+        self._mp.setattr(vt, "_transcribe_audio", stt)
+        await vl._run_pipeline(_Participant(), [b"\x00\x00" * 160], self.user, self.livekit_session)
+        said = [m.get("text", "") for m in sent if m.get("type") == "transcript" and m.get("role") == "zoe"]
+        reply = (said[-1] if said else "").replace(BRAIN_SENTINEL, "").strip()
+        return self._outcome("livekit", text, reply, stage=self._tier_stage(reply, "livekit"), before_brain=before,
+                             before_seam=before_seam)
 
     async def voice(self, text: str) -> Outcome:
         from routers import voice_tts as vt

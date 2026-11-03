@@ -1239,7 +1239,7 @@ async def run_zoe_core_streaming(
             message, history=history, db_memory_context=db_memory_context,
             portrait=portrait, voice_mode=voice_mode, memory_packet=packet,
             day_brief=brief.body if brief else None,
-            raise_body=raised.body if raised else None,
+            raise_body=raised.content if raised else None,
         )
     # Bound concurrent brain turns (see _MAX_CONCURRENCY), but only for the
     # duration of actual generation — NOT for however long the consumer takes to

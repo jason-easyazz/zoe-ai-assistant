@@ -85,12 +85,28 @@ def _under_tempdir(path: str) -> bool:
     return path == tmp or path.startswith(tmp + os.sep)
 
 
+#: Marker a harness scratch stack writes into its OWN palace dir (scripts/perf/harness_scratch.py). It only counts when the dir
+#: also lives under the harness-scratch root, so dropping the file next to the real palace (or anywhere else) proves nothing.
+SCRATCH_SENTINEL = ".zoe-harness-scratch"
+
+
+def _scratch_root() -> str:
+    return _real(os.path.join(_real_home(), ".cache", "zoe", "harness-scratch"))
+
+
+def is_declared_scratch(path: str) -> bool:
+    """True for a dir that carries :data:`SCRATCH_SENTINEL` AND sits strictly under ~/.cache/zoe/harness-scratch."""
+    r = _real(path)
+    root = _scratch_root()
+    return r.startswith(root + os.sep) and os.path.isfile(os.path.join(r, SCRATCH_SENTINEL))
+
+
 def _import_time_live_dirs() -> frozenset[str]:
     dirs = {_real(os.path.join(_real_home(), ".mempalace"))}
     env = os.environ.get("MEMPALACE_DATA_DIR")
     if env:
         r = _real(env)
-        if not _under_tempdir(r):          # conftest pins are always throwaway dirs under the temp dir
+        if not _under_tempdir(r) and not is_declared_scratch(r):   # conftest pins / declared harness scratch palaces are throwaway
             dirs.add(r)
     return frozenset(dirs)
 

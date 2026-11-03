@@ -23,11 +23,15 @@ scripts/maintenance/router_shadow_report.py.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
+import contextvars
 import threading
 import time
+import traffic_class
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -115,6 +119,11 @@ _MATRIX: Optional[np.ndarray] = None
 _LABELS: Optional[np.ndarray] = None
 _DOM_IDX: dict[str, np.ndarray] = {}
 _LOCK = threading.Lock()
+# ONE caller at a time inside the fastembed model. embed() is reached from several threads at once: the asyncio.to_thread
+# pool (route(): voice, chat, Skybridge) AND the restraint-head worker. fastembed's HF `tokenizers` Tokenizer is a Rust
+# object whose encode path is not safe to share across Python threads (2026-10-29: two Fatal-Python-error segfaults in
+# tokenize <- embed <- restraint_head._run_worker). One embed is a few ms, so serialising costs ~nothing.
+_EMBED_LOCK = threading.Lock()
 _MODEL_NAME = os.environ.get("ZOE_ROUTER_MODEL", "BAAI/bge-small-en-v1.5")
 
 # --- SetFit classifier head (labs/setfit-router PR #1296) -------------------
@@ -130,11 +139,14 @@ _HEAD_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
                  "models", "router_head_logreg.joblib"),
 )
-_HEAD_LOG_PATH = os.environ.get(
-    "ZOE_ROUTER_HEAD_LOG",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                 "data", "router_head_shadow.jsonl"),
-)
+def _resolve_head_log_path() -> str:
+    """The shadow-log path, resolved by `local_text_logs` - the SAME resolver the retention sweep and the forget erasers use, so a
+    `~`-based or relative ZOE_ROUTER_HEAD_LOG is written exactly where they look (architecture deep dive A6)."""
+    import local_text_logs
+    return str(local_text_logs.log_path(local_text_logs.ROUTER_SHADOW))
+
+
+_HEAD_LOG_PATH = _resolve_head_log_path()
 
 # ── Shadow-log rotation ─────────────────────────────────────────────────────
 # The shadow log is append-only on EVERY routed turn, so left alone it grows
@@ -185,13 +197,94 @@ def _rotate_shadow_log(path: str) -> None:
     os.replace(path, f"{path}.1")
 
 
-def _append_shadow_line(path: str, line: str) -> None:
-    """Rotate-if-needed then append one JSON line, under the shadow write lock."""
-    with _shadow_write_lock:
+#: Longest a live turn waits for the in-process append lock (a sibling shadow2 append is microseconds; retention holds it for the whole pass).
+_SHADOW_APPEND_WAIT_S = 0.02
+#: Observations skipped because retention (or a sibling append) owned the file. A skipped shadow line costs nothing; a stalled voice turn does.
+shadow_append_skipped = 0
+
+
+@contextlib.contextmanager
+def _shadow_file_lock(path: str):
+    """Cross-process exclusive lock (``<log>.lock``) around rotate + append, so the out-of-process retention rewrite
+    (`local_text_logs`, the hourly job, the owner script) can hold the whole multi-segment pass without a rotation or an append
+    interleaving. Taken AFTER `_shadow_write_lock` here and in `local_text_logs.locked` (same order, no deadlock). NEVER WAITS: the
+    append runs inside `route()` on a live voice turn, and retention holds this lock across its entire rewrite, so it takes
+    ``LOCK_NB`` and yields ``False`` when retention owns the file (the caller skips the observation). A lock file that cannot be
+    opened never breaks a turn, but the append is SKIPPED (yields ``False``): writing unlocked could land beside an erase and
+    restore forgotten words."""
+    try:
+        fh = open(f"{path}.lock", "a")
+    except OSError:
+        yield False
+        return
+    try:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
+def _append_shadow_line(path: str, line: str, epoch: Optional[int] = None) -> bool:
+    """Rotate-if-needed then append one JSON line, under the shadow write lock (in-process) and the file lock (cross-process).
+    Never waits on retention: returns ``False`` (and counts the skip) when either lock is held, ``True`` once the line is written.
+    ``epoch``: the ``local_text_logs.erase_epoch()`` captured BEFORE the observation was computed; if an erase ran since, the line
+    may carry forgotten words and is dropped (checked inside the lock, so an erase cannot finish between check and write)."""
+    global shadow_append_skipped
+    if not _shadow_write_lock.acquire(timeout=_SHADOW_APPEND_WAIT_S):
+        shadow_append_skipped += 1
+        shadow_logger.debug("shadow append skipped: write lock busy (retention pass)")
+        return False
+    try:
+        try:
+            import local_text_logs
+        except Exception:  # noqa: BLE001 - unreadable guard: fall back to the epoch-less behaviour
+            local_text_logs = None
+        if local_text_logs is not None:
+            if local_text_logs.erase_in_progress():
+                shadow_logger.debug("shadow append dropped: an erase is in progress")
+                return False
+            if epoch is not None and local_text_logs.erase_epoch() != epoch:
+                shadow_logger.debug("shadow append dropped: an erase ran while it was computing")
+                return False
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        _rotate_shadow_log(path)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
+        with _shadow_file_lock(path) as got:
+            if not got:
+                shadow_append_skipped += 1
+                shadow_logger.debug("shadow append skipped: retention owns %s", path)
+                return False
+            _rotate_shadow_log(path)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+            return True
+    finally:
+        _shadow_write_lock.release()
+
+
+SHADOW_TRAFFIC_CHOICES = ("all", "household", "harness", "probe", "ci", "untagged")
+
+
+def filter_shadow_traffic(recs: list[dict], want: str = "all") -> list[dict]:
+    """Shadow-log records of ONE traffic class (P-2, ``traffic_class.py``; the ``traffic`` field). ``untagged``
+    = records written before the field existed (2026-10-19 - then mostly the harness); ``all`` = no filter."""
+    if want == "all":
+        return list(recs)
+    return [r for r in recs if (r.get("traffic") or "untagged") == want]
+
+
+def shadow_traffic_breakdown(recs: list[dict]) -> str:
+    """``traffic: household=N harness=N ...`` for a report header."""
+    counts: dict[str, int] = {}
+    for r in recs:
+        k = r.get("traffic") or "untagged"
+        counts[k] = counts.get(k, 0) + 1
+    return "traffic: " + " ".join(f"{k}={counts[k]}" for k in sorted(counts)) if counts else "traffic: (none)"
 
 
 def shadow_log_segments(path: str | None = None) -> list[str]:
@@ -252,9 +345,48 @@ def shadow_text_enabled() -> bool:
     to a file on this box, is mined by a local script, and is labelled by the
     local Gemma brain. It never leaves the box. Leave it off unless the household
     has agreed to a self-training round; the hash is kept either way.
+
+    A ROUND, NOT A STANDING SETTING (deep dive 2, T-4, 2026-10-19): the flag had
+    been left on and 10,560 shadow rows held raw household words. The opt-in now
+    needs ``ZOE_ROUTER_SHADOW_TEXT_UNTIL=YYYY-MM-DD`` (local date, inclusive, at
+    most ``SHADOW_TEXT_MAX_DAYS`` ahead): without it, past it, malformed or too far
+    out, NO text is written (a warning is logged once), so a forgotten flag lapses
+    instead of collecting forever. Rows already written are redacted by the forget
+    / retention work (#2110), not here.
     """
-    return ((os.environ.get("ZOE_ROUTER_SHADOW_TEXT", "") or "")
-            .strip().lower() in ("1", "true", "yes", "on"))
+    return shadow_text_window()[0]
+
+
+SHADOW_TEXT_MAX_DAYS = 30
+_SHADOW_TEXT_WARNED: set[str] = set()
+
+
+def shadow_text_window(today=None) -> tuple[bool, str]:
+    """(enabled, why) for raw-text capture; ``today`` (a date) is injectable for tests."""
+    import datetime as _dt
+
+    if ((os.environ.get("ZOE_ROUTER_SHADOW_TEXT", "") or "").strip().lower()
+            not in ("1", "true", "yes", "on")):
+        return False, "off"
+    raw = (os.environ.get("ZOE_ROUTER_SHADOW_TEXT_UNTIL", "") or "").strip()
+    day = today or _dt.date.today()
+    why = ""
+    try:
+        until = _dt.date.fromisoformat(raw) if raw else None
+    except ValueError:
+        until, why = None, f"ZOE_ROUTER_SHADOW_TEXT_UNTIL={raw!r} is not YYYY-MM-DD"
+    if until is None:
+        why = why or "ZOE_ROUTER_SHADOW_TEXT=1 without ZOE_ROUTER_SHADOW_TEXT_UNTIL (a round needs an end date)"
+    elif until < day:
+        why = f"the raw-text round ended {until.isoformat()}"
+    elif (until - day).days > SHADOW_TEXT_MAX_DAYS:
+        why = f"ZOE_ROUTER_SHADOW_TEXT_UNTIL is more than {SHADOW_TEXT_MAX_DAYS} days out"
+    if why:
+        if why not in _SHADOW_TEXT_WARNED:
+            _SHADOW_TEXT_WARNED.add(why)
+            logger.warning("router shadow log: raw text NOT recorded - %s", why)
+        return False, why
+    return True, f"raw-text round open until {until.isoformat()}"
 
 
 def _with_text(rec: dict, text: str) -> dict:
@@ -360,7 +492,7 @@ def warm() -> bool:
         return False
 
 
-def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
+def _head_shadow(text: str, v: np.ndarray, routed: str, epoch: Optional[int] = None) -> None:
     """SHADOW-ONLY head comparison. Never influences routing, never raises.
 
     Logs a structured line keyed by an utterance HASH (no raw text at INFO —
@@ -391,12 +523,14 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
             "actual_routed": routed,
             "agree": head_routed == routed,
             "head_ms": round((time.perf_counter() - t0) * 1000, 3),
+            "traffic": traffic_class.current(),
         }
         shadow_logger.info("router_head_shadow %s", json.dumps(rec, sort_keys=True))
         try:
             _append_shadow_line(
                 _HEAD_LOG_PATH,
                 json.dumps(_with_text(rec, text), sort_keys=True),
+                epoch,
             )
         except OSError as exc:
             shadow_logger.debug("shadow log append failed: %s", exc)
@@ -404,7 +538,7 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
         logger.warning("router head shadow failed (non-fatal): %s", exc)
 
 
-def _log_two_stage(rec: dict) -> None:
+def _log_two_stage(rec: dict, epoch: Optional[int] = None) -> None:
     """Append a structured two-stage line to the shadow log.
 
     The INFO log line is ALWAYS hash-only (privacy: journald never sees the
@@ -414,7 +548,7 @@ def _log_two_stage(rec: dict) -> None:
     try:
         line_rec = {k: v for k, v in rec.items() if k != "utt_text"}
         shadow_logger.info("router_two_stage %s", json.dumps(line_rec, sort_keys=True))
-        _append_shadow_line(_HEAD_LOG_PATH, json.dumps(rec, sort_keys=True))
+        _append_shadow_line(_HEAD_LOG_PATH, json.dumps(rec, sort_keys=True), epoch)
     except Exception as exc:
         shadow_logger.debug("two_stage log append failed: %s", exc)
 
@@ -442,27 +576,48 @@ def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
         "two_stage_tool": d.get("tool"),
         "two_stage_domain": d.get("domain"),
         "shortlist": d.get("shortlist"),
+        # The head's OWN top-1, kept on gated rows too: there two_stage_domain is "chat"
+        # by construction, so without it the 0.70 confidence gate cannot be re-measured
+        # (deep dive 2, T-4).
+        "head_top": d.get("head_top"),
         "head_conf": d.get("head_conf"),
         "gated": d.get("gated"),
         "reason": d.get("reason"),
         "failed": decision is None,
         "two_stage_ms": d.get("ms"),
         "actual_routed": actual_routed,
+        "traffic": traffic_class.current(),   # P-2: reports filter on it
     }, text)
 
 
-def _two_stage_shadow2(text: str, v: np.ndarray, routed: str) -> None:
+def _erase_epoch_now() -> Optional[int]:
+    """``local_text_logs.erase_epoch()`` or None when it cannot be read (then the append is not epoch-guarded - the erase's own
+    file pass under the append lock is still the primary guarantee)."""
+    try:
+        import local_text_logs
+
+        return local_text_logs.erase_epoch()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _two_stage_shadow2(text: str, v: np.ndarray, routed: str, epoch: Optional[int] = None) -> None:
     """shadow2: compute+log the full two-stage decision OFF the turn's
     critical path (the sidecar call is ~400 ms — never block a live turn)."""
+    if epoch is None:
+        epoch = _erase_epoch_now()      # BEFORE compute: an erase finishing mid-compute drops the append
+
     def _run():
         try:
             import router_two_stage
 
             decision = router_two_stage.decide(text, v)
-            _log_two_stage(_two_stage_rec(text, decision, "shadow2", routed))
+            _log_two_stage(_two_stage_rec(text, decision, "shadow2", routed), epoch)
         except Exception as exc:  # shadow must never break anything
             logger.warning("two_stage shadow2 failed (non-fatal): %s", exc)
-    threading.Thread(target=_run, name="router-shadow2", daemon=True).start()
+    # copy_context: the thread must see the turn's traffic class (a bare Thread starts from an empty context)
+    threading.Thread(target=contextvars.copy_context().run, args=(_run,), name="router-shadow2",
+                     daemon=True).start()
 
 
 def _two_stage_active(text: str, v: np.ndarray) -> Optional[dict]:
@@ -510,7 +665,8 @@ def embed(text: str) -> np.ndarray:
     hit = _EMBED_CACHE
     if hit is not None and hit[0] == id(_MODEL) and hit[1] == key:
         return hit[2].copy()
-    v = np.asarray(next(iter(_MODEL.embed([key]))), dtype=np.float32)
+    with _EMBED_LOCK:
+        v = np.asarray(next(iter(_MODEL.embed([key]))), dtype=np.float32)
     v /= (np.linalg.norm(v) + 1e-9)
     _EMBED_CACHE = (id(_MODEL), key, v.copy())
     return v
@@ -700,6 +856,7 @@ def route(text: str) -> dict:
     'chat' (Tier-2). 'chat' domain itself always routes to chat.
     """
     _ensure_loaded()
+    epoch = _erase_epoch_now()      # BEFORE any compute: an erase finishing mid-turn drops this turn's text-bearing appends
     t0 = time.perf_counter()
     v = embed(text)
     sims = _MATRIX @ v
@@ -708,7 +865,7 @@ def route(text: str) -> dict:
     score = scores[domain]
     thr = threshold()
     routed = domain if (score >= thr and domain != "chat") else "chat"
-    _head_shadow(text, v, routed)
+    _head_shadow(text, v, routed, epoch)
     out = {
         "domain": domain,
         "score": round(score, 3),
@@ -718,7 +875,7 @@ def route(text: str) -> dict:
     }
     hm = head_mode()
     if hm == "shadow2":
-        _two_stage_shadow2(text, v, routed)
+        _two_stage_shadow2(text, v, routed, epoch)
     elif hm == "active":
         decision = _two_stage_active(text, v)
         if decision is not None:
@@ -740,7 +897,7 @@ def route(text: str) -> dict:
             # log it as the independent baseline (out["routed"] is now the
             # two-stage's own output, so it cannot serve as ground truth).
             _log_two_stage(_two_stage_rec(text, decision, "active",
-                                          out["routed"], similarity_routed=routed))
+                                          out["routed"], similarity_routed=routed), epoch)
         # decision None → similarity behavior unchanged (brain-safe)
     if "two_stage" not in out:
         _apply_question_precedence(text, out, scores)

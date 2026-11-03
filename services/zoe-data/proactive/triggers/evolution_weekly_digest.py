@@ -66,23 +66,26 @@ class EvolutionWeeklyDigestTrigger(ProactiveTrigger):
             from db_pool import get_db_ctx  # type: ignore[import]
             cutoff_7d = time.time() - 7 * 86400
             async with get_db_ctx() as pg_db:
+                # the single queue (migration 0062): "pending" = open and undecided, "validated" = kept. The struggle
+                # proposals are decided on their own admin page, so this legacy digest leaves them out.
                 rows = await pg_db.fetch(
-                    "SELECT status, COUNT(*) as cnt FROM evolution_proposals GROUP BY status"
+                    "SELECT status, decision, COUNT(*) as cnt FROM evolution_proposals "
+                    "WHERE source <> 'struggle' GROUP BY status, decision"
                 )
                 for row in rows:
-                    if row["status"] == "pending":
-                        pending_count = row["cnt"]
-                    elif row["status"] == "validated":
+                    if row["status"] in ("proposed", "probed") and not row["decision"]:
+                        pending_count += row["cnt"]
+                    elif row["status"] == "kept" and not validated_count:
                         week_rows = await pg_db.fetch(
                             """SELECT COUNT(*) as cnt FROM evolution_proposals
-                               WHERE status='validated' AND deployed_at >= $1""",
+                               WHERE status='kept' AND deployed_at >= $1 AND source <> 'struggle'""",
                             cutoff_7d,
                         )
                         validated_count = week_rows[0]["cnt"] if week_rows else 0
 
                 top = await pg_db.fetch(
                     """SELECT id, title, type FROM evolution_proposals
-                       WHERE status='pending'
+                       WHERE status IN ('proposed', 'probed') AND decision = '' AND source <> 'struggle'
                        ORDER BY proposed_at DESC LIMIT 3"""
                 )
         except Exception as exc:

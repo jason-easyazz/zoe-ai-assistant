@@ -81,11 +81,7 @@ async def test_daily_briefing_preserves_partial_results_when_one_call_fails(monk
 
 
 @pytest.mark.asyncio
-async def test_daily_briefing_does_not_use_mcporter(monkeypatch):
-    async def fail_mcporter(_cmd):
-        raise AssertionError("daily briefing should use direct in-process fulfillment")
-
-    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
+async def test_daily_briefing_uses_in_process_fulfillment(monkeypatch):
     monkeypatch.setattr("intent_router._daily_briefing_weather", lambda user_id: asyncio.sleep(0, result=None))
     monkeypatch.setattr("intent_router._daily_briefing_calendar", lambda user_id: asyncio.sleep(0, result={"events": []}))
     monkeypatch.setattr("intent_router._daily_briefing_reminders", lambda user_id: asyncio.sleep(0, result={"reminders": []}))
@@ -93,6 +89,7 @@ async def test_daily_briefing_does_not_use_mcporter(monkeypatch):
     result = await _execute_daily_briefing("family-admin")
 
     assert result == "Here\'s your day:\n\nNo events on the calendar today."
+
 
 @pytest.mark.asyncio
 async def test_daily_briefing_natural_phrases_are_deterministic():

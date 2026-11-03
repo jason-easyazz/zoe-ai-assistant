@@ -27,6 +27,7 @@ import digest_pack
 import httpx
 import memory_authority
 import own_words
+import trait_challenge
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from typed_env import env_float
@@ -918,6 +919,12 @@ async def run_turn_digest(
         result["skipped_reason"] = "forgotten_entity"
         return result
 
+    # The person doubts a trait Zoe holds about them ("I'm not sure I'm a man of faith"): stop serving the row and
+    # queue it for review (trait_challenge). Runs before the extractor, which only ever reads what a person IS.
+    _challenged = await trait_challenge.apply_challenge(user_id, user_message, speaker_verified=speaker_verified)
+    if _challenged:
+        result["trait_challenged"] = len(_challenged)
+
     try:
         from memory_service import get_memory_service, MemoryServiceError  # type: ignore[import]
         svc = get_memory_service()
@@ -943,12 +950,15 @@ async def run_turn_digest(
 
         try:
             _t_llm = time.monotonic()
-            # Post-turn pass on the brain's ONE slot: waits out a hot conversation (brain_slot_guard) so it cannot evict it.
-            async with brain_slot_guard.background_slot("turn_digest"):
+            async def _llm() -> str:
                 async with httpx.AsyncClient(timeout=_llm_timeout(20.0 if _max_tokens == 256 else _CLAIM_TIMEOUT_S)) as client:
                     resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
                     resp.raise_for_status()
-                    raw = resp.json()["choices"][0]["message"]["content"].strip()
+                    return resp.json()["choices"][0]["message"]["content"].strip()
+
+            # Post-turn pass on the brain's ONE slot: waits out a hot conversation and yields to a household turn that starts
+            # while it runs (brain_slot_guard.run_background) so it can neither evict nor delay the conversation.
+            raw = await brain_slot_guard.run_background("turn_digest", _llm)
             if _max_tokens != 256:
                 # the claim row costs output tokens on the brain's one slot: log the call so the delta is measurable
                 logger.info("STRUCTURAL_EXTRACT lane=%s ms=%d max_tokens=%d", source, int((time.monotonic() - _t_llm) * 1000), _max_tokens)
@@ -1508,9 +1518,10 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
         # ── Night mind (ZOE_NIGHT_MIND, default OFF) ─────────────────────────
         # The chunked, cited reflection over the WHOLE day's own-words turns (the extractors above cut the transcript at 3,000 characters).
         # After the facts, so its stale-quote test sees tonight's changes. A failure is its own nested result, never the digest's ``error``.
+        # ``serve`` (zoe-data while the 12B night window is the writer) never runs it here: one writer per night.
         try:
             import night_mind
-            if night_mind.mode() != "off":
+            if night_mind.runs_pass():
                 result["night_mind"] = await night_mind.run_for_user(user_id, chat_text, svc)
         except Exception as exc:  # noqa: BLE001
             result["night_mind"] = {"status": "error", "error": type(exc).__name__}
@@ -1679,7 +1690,7 @@ def _turn_limit() -> int:
         return _CHUNKED_TURN_LIMIT
     try:
         import night_mind
-        return _CHUNKED_TURN_LIMIT if night_mind.mode() != "off" else _LEGACY_TURN_LIMIT
+        return _CHUNKED_TURN_LIMIT if night_mind.runs_pass() else _LEGACY_TURN_LIMIT
     except Exception:  # noqa: BLE001
         return _LEGACY_TURN_LIMIT
 
@@ -2711,6 +2722,9 @@ async def _deep_sleep_pass(user_id: str) -> dict:
             score = _promotion_score(meta)
             uqc = int(meta.get("unique_query_count", 0) or 0)
             added_at = meta.get("added_at") or ""
+
+            if meta.get("challenged_by_turn"):
+                continue    # the owner doubted this: held for a person to decide, never auto-approved or auto-archived
 
             if score >= 0.8 and uqc >= 3:
                 meta["status"] = "approved"

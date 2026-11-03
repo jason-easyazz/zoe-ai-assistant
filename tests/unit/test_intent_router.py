@@ -533,3 +533,13 @@ def test_people_search_empty_query_lists_user_contacts_not_mcporter(ir, monkeypa
     sql, params = db.calls[-1]
     assert "user_id = ?" in sql and "parity-gate-user" in params
     assert "ILIKE" not in sql  # no name filter on the list-all path
+
+
+def test_self_url_is_read_per_call_stripped_with_the_default_for_blank(ir, monkeypatch):
+    """Codex P2 on #2165: ZOE_SELF_URL goes through typed_env.env_str. Negative control: os.environ.get -> the blank/space cases go red."""
+    monkeypatch.setenv("ZOE_SELF_URL", "  http://127.0.0.1:41002/ ")
+    assert ir._self_url() == "http://127.0.0.1:41002"
+    monkeypatch.setenv("ZOE_SELF_URL", "   ")
+    assert ir._self_url() == "http://localhost:8000"
+    monkeypatch.delenv("ZOE_SELF_URL")
+    assert ir._self_url() == "http://localhost:8000"

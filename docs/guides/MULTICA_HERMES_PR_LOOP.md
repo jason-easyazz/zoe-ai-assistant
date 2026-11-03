@@ -28,7 +28,7 @@ implement task. Keep the two in sync.
 - `HERMES_MULTICA_AGENT_ID` set to the Hermes agent ID in Multica (or rely on [`agents_registry.yml`](../../services/zoe-data/agents_registry.yml))
 - `HERMES_API_KEY` or `API_SERVER_KEY` matching the Hermes gateway (`runtime_env.bootstrap_runtime_env()` loads service `.env`)
 - Hermes running on `HERMES_API_URL` or `http://127.0.0.1:8642`
-- Run `python3 scripts/maintenance/sync_hermes_env_from_zoe.py` once so `~/.hermes/.env` includes `MULTICA_*` for Hermes MCP subprocesses
+- (Retired 2026-10-18: `sync_hermes_env_from_zoe.py` and `~/.hermes/.env` are gone with Hermes; `MULTICA_*` live in `services/zoe-data/.env`.)
 - GitHub auth available to Hermes through `gh` or `GITHUB_TOKEN`
 - Greptile auth through `GREPTILE_API_KEY` or `~/.config/zoe/greptile.env`
 
@@ -181,7 +181,7 @@ write an explicit packet.
 After deploying this PR on the Zoe host:
 
 1. `systemctl --user daemon-reload && systemctl --user restart zoe-data.service`
-2. `python3 scripts/maintenance/sync_hermes_env_from_zoe.py`
+2. (retired: the Hermes env sync script was removed with `~/.hermes/.env`, 2026-10-18)
 3. `python3 scripts/maintenance/setup_multica_webhooks.py --probe`
 4. Reassign open issues to Hermes:
 

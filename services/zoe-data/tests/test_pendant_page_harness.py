@@ -55,6 +55,14 @@ def test_pendant_page_harness_passes():
     ("root.fetch('/api/omi/segments/' + encodeURIComponent(segmentId) + '/clip'",
      "root.fetch('/api/omi/recordings/' + encodeURIComponent(segmentId) + '/clip'"),        # plays the wrong thing
     ("const unmark = () => (seg.not_person ?", "const unmark = () => (false ?"),            # a mistaken TV mark cannot be undone
+    # Review your day
+    ("else await api('POST', path + '/approve', body);", "else await api('POST', path + '/dismiss', body);"),  # Approve skips
+    ("msg = 'This contradicts what you approved before: \"' + conflict.existing + '\"';",
+     "msg = 'This contradicts something you approved before.';"),                         # the conflict hides what it contradicts
+    ("if (editable.length) add('Edit'", "add('Edit'"),                                     # Edit offered where the server forbids it
+    ("if (sp === 'you') return 'Me';", "if (sp === 'you') return 'Someone';"),            # WHO said it is wrong
+    ("if (!host) return;\n        clear(host);", "if (!host) return;"),                     # a refused member keeps stale actions
+    ("const vid = v.id;", "const vid = v.id; root.location.hash = 'voice=' + vid;"),        # an id in the URL
 ])
 def test_negative_controls_turn_the_harness_red(tmp_path, old, new):
     src = MODULE.read_text(encoding="utf-8")
@@ -83,6 +91,26 @@ def test_every_api_literal_on_the_page_is_a_served_omi_route(monkeypatch):
             path += "X" + tail
         assert any(m == method and p.match(path) for m, p in pats), f"{method} {path} is not served by the Omi routers"
     assert any(m == "GET" and p.match("/api/omi/segments/X/clip") for m, p in pats)
+
+
+def test_review_your_day_calls_only_the_day_review_routes(monkeypatch):
+    """"Review your day" uses the SAME routes as every other day-review client (no phone-only endpoint): the base, and each
+    ``path + '/<action>'`` the module posts, must be served by ``routers/omi_day_review``."""
+    from fastapi import FastAPI
+    from routers import omi_day_review as dr_router
+
+    monkeypatch.setenv("ZOE_OMI_DAY_REVIEW", "shadow")
+    app = FastAPI()
+    assert dr_router.register(app) is True
+    routes = {(m.upper(), p) for p, ops in app.openapi()["paths"].items() for m in ops}
+    src = MODULE.read_text(encoding="utf-8")
+    (base,) = re.findall(r"const REVIEW_BASE = '([^']+)';", src)
+    assert ("GET", base) in routes
+    assert "api('GET', REVIEW_BASE + '?status=pending&limit=100')" in src
+    actions = set(re.findall(r"api\('POST', path \+ '/([a-z-]+)'", src))
+    assert actions == {"approve", "dismiss"}, actions
+    for a in actions:
+        assert ("POST", base + "/{cid}/" + a) in routes, a
 
 
 def test_page_is_gated_linked_and_not_precached():

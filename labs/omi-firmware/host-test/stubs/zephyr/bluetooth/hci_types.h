@@ -1,0 +1,4 @@
+#ifndef STUB_ZEPHYR_BT_HCI_TYPES_H
+#define STUB_ZEPHYR_BT_HCI_TYPES_H
+#define BT_HCI_ERR_AUTH_FAIL 0x05
+#endif

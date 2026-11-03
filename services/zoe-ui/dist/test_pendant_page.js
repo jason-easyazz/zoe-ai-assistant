@@ -51,6 +51,7 @@ class Node {
     set innerHTML(v) { throw new Error('innerHTML assigned: ' + String(v).slice(0, 60)); }
     get innerHTML() { throw new Error('innerHTML read'); }
     async click() { for (const fn of this.listeners.click || []) await fn({ target: this }); }
+    focus() { Node.focused = this; }
     fire(type) { for (const fn of this.listeners[type] || []) fn({ target: this }); }
     all(pred, out = []) { if (pred(this)) out.push(this); this.children.forEach(c => c.all(pred, out)); return out; }
     visible() { let n = this; while (n) { if (n.hidden) return false; n = n.parentNode; } return true; }
@@ -58,7 +59,8 @@ class Node {
 
 function makeDoc() {
     const ids = {};
-    for (const id of ['pendantStatus', 'pendantUnknown', 'pendantRecordings', 'pendantKnown', 'pendantToast']) {
+    for (const id of ['pendantStatus', 'pendantReview', 'pendantUnknownHead', 'pendantUnknown', 'pendantRecordings', 'pendantKnown',
+        'pendantToast']) {
         ids[id] = new Node('div');
     }
     return { ids, createElement: (t) => new Node(t), getElementById: (id) => ids[id] || null };
@@ -90,6 +92,46 @@ function fixtures() {
         ] },
         '/api/omi/recordings/rec-old': { id: 'rec-old', status: 'done', transcript: 'synthetic joined transcript', has_audio: false,
             segments: [] },
+        [REVIEW_URL]: reviewFixture(),
+    };
+}
+
+/* the day review (routers/omi_day_review.py GET /candidates, annotated): synthetic people, invented lines */
+const REVIEW_URL = '/api/omi/day-review/candidates?status=pending&limit=100';
+const RAW_IDS = ['c-pf/1', 'c-rel-1', 'c-fu-1', 'c-of-1', 'c-cal-1', 'c-rel-2', 'seg-q1', 'seg-q2', 'p-alex', 'p-robin', 'rec-new', 'cl/1', 's-9'];
+function cand(id, kind, payload, ev, extra) {
+    return Object.assign({ id, kind, payload, day_local: '2026-10-18', status: 'pending', speaker: ev.speaker || 'not_sure',
+        confidence: 0.7, provenance: 'pendant', write_error: null, recording_ids: ['rec-new'],
+        evidence: [Object.assign({ line: 'r1.1', recording_id: 'rec-new', at: '09:14', clock: 'device', tz: 'Australia/Perth' }, ev)],
+        editable: [] }, extra || {});
+}
+function reviewFixture() {
+    return {
+        candidates: [
+            cand('c-pf/1', 'person_fact', { person_id: 'p-alex', name: 'Alex Example', fact: 'works at the synthetic library',
+                stated_by: 'stated_by_subject', segment_ids: ['seg-q1'] },
+            { quote: 'I work at the synthetic library', segment_id: 'seg-q1', speaker: 'someone_else', person_id: 'p-alex',
+                offset_ms: 151000, audio_kept: true }, { editable: ['fact'] }),
+            cand('c-rel-1', 'person_relation', { person_id: 'p-robin', name: 'Robin Sample', relation: 'cousin',
+                stated_by: 'stated_by_subject', segment_ids: ['seg-q2'] },
+            { quote: 'I\'m your cousin', segment_id: 'seg-q2', speaker: 'someone_else', person_id: 'p-robin', offset_ms: 4000,
+                audio_kept: false }),
+            cand('c-fu-1', 'follow_up', { title: 'call the synthetic plumber' },
+                { quote: 'I need to call the synthetic plumber', speaker: 'you' }, { editable: ['title'] }),
+            cand('c-of-1', 'owner_fact', { fact: 'I live in Example City' }, { quote: 'I live in Example City', speaker: 'you' },
+                { editable: ['fact'], write_error: 'held_conflict',
+                  conflict: { existing: 'I live in Synthetic Town', options: ['keep_existing', 'edit'] } }),
+            cand('c-cal-1', 'calendar_event', { title: 'dentist', date: '2026-10-20', time: '09:30' },
+                { quote: HOSTILE, speaker: 'someone_else' }, { editable: ['title', 'date', 'time'], write_error: 'needs_date' }),
+            cand('c-rel-2', 'person_relation', { person_id: 'p-robin', name: 'Robin Sample', relation: 'brother', stated_by: 'owner_stated' },
+                { quote: 'my brother Robin', speaker: 'you' },
+                { write_error: 'held_conflict', conflict: { existing: 'friend', options: ['keep_existing'] } }),
+            cand('c-old', 'person_fact', { name: 'Alex Example', fact: 'already decided' }, { quote: 'x', speaker: 'you' },
+                { status: 'approved' }),
+        ],
+        pending: { person_fact: 1, person_relation: 2, follow_up: 1, owner_fact: 1, calendar_event: 1 },
+        voices_to_name: [{ id: 'cl/1', name: 'Voice 3', segments: 4, recordings: 2, days: 1, last_heard_at: '2026-10-18T10:00:00Z',
+            sample: { segment_id: 's-9', recording_id: 'rec-new', text: 'hello from a synthetic voice', has_audio: true } }],
     };
 }
 
@@ -97,10 +139,18 @@ function makeEnv(opts = {}) {
     const doc = makeDoc();
     const calls = [];
     const fx = fixtures();
+    if (opts.review) fx[REVIEW_URL] = opts.review;
     const fetch = async (url, o = {}) => {
         const method = (o.method || 'GET').toUpperCase();
         calls.push({ method, url, body: o.body === undefined ? undefined : JSON.parse(o.body) });
         if (opts.status) return { ok: false, status: opts.status, json: async () => ({ detail: 'nope' }) };
+        if (opts.reviewStatus && url.indexOf('/api/omi/day-review/') === 0) {
+            return { ok: false, status: opts.reviewStatus, json: async () => ({ detail: 'sign in as a household member' }) };
+        }
+        if (method !== 'GET' && opts.post && opts.post[url]) {
+            const [status, detail] = opts.post[url];
+            return { ok: false, status, json: async () => ({ detail }) };
+        }
         if (method === 'GET' && /\/clip$/.test(url)) {
             if (opts.clipStatus) return { ok: false, status: opts.clipStatus, json: async () => ({ detail: 'gone' }) };
             return { ok: true, status: 200, blob: async () => ({ type: 'audio/wav' }), json: async () => { throw new Error('binary'); } };
@@ -120,11 +170,14 @@ function makeEnv(opts = {}) {
     };
     Audio.prototype.pause = function () {};
     const URL = { createObjectURL: (b) => 'blob:' + b.type, revokeObjectURL: () => {} };
-    const win = { fetch, setTimeout: () => 0, Date, encodeURIComponent, JSON, Promise, String, Math, isNaN, isFinite, console, Audio, URL };
+    const location = { href: 'https://zoe.example/pendant.html', hash: '', search: '', pathname: '/pendant.html' };
+    const win = { fetch, setTimeout: () => 0, Date, encodeURIComponent, JSON, Promise, String, Math, isNaN, isFinite, console, Audio, URL,
+        location };
+    if (opts.coarse) win.matchMedia = (q) => ({ matches: q === '(pointer: coarse)' });
     win.window = win;
     const ctx = vm.createContext(win);
     vm.runInContext(fs.readFileSync(SRC, 'utf8'), ctx, { filename: 'pendant-page.js' });
-    return { doc, calls, Z: win.ZoePendant, win, played };
+    return { doc, calls, Z: win.ZoePendant, win, played, opts, location };
 }
 
 const byText = (root, text) => root.all(n => n.tagName === 'BUTTON' && n._text === text && n.visible());
@@ -348,6 +401,191 @@ async function check(label, fn) {
         assert(/if \(window\.ZoePendant && !window\.__zoeAuthRedirecting\) window\.ZoePendant\.init\(document\)/.test(html),
             'init must not run while the desktop gate is redirecting to sign-in');
         assert(!/innerHTML/.test(src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')), 'no innerHTML in the module');
+    });
+
+    /* ── Review your day ───────────────────────────────────── */
+    const rv = (e) => e.doc.ids.pendantReview;
+    const items = (e) => rv(e).all(n => n.tagName === 'ARTICLE');
+    const itemWith = (e, text) => items(e).find(n => n.children[1] && n.children[1]._text.indexOf(text) !== -1);
+    const settle = () => new Promise(r => setImmediate(r));
+
+    await check('review: pending items grouped (people, relationships, follow-ups, other), decided ones left out', async () => {
+        const e = makeEnv();
+        await e.Z.init(e.doc);
+        const heads = rv(e).all(n => n.tagName === 'H3').map(n => n._text);
+        assert.deepStrictEqual(heads, ['About your people (1)', 'Relationships (2)', 'Follow-ups and open loops (1)',
+            'Other things Zoe noticed (2)', 'New voices to name'], heads.join(' | '));
+        assert.strictEqual(items(e).length, 6, 'the approved candidate is not offered again');
+        assert(!rv(e).textContent.includes('already decided'));
+        assert(rv(e).textContent.includes('6 things to review'), rv(e).textContent);
+    });
+
+    await check('review: each item shows the proposal, WHO said it, the exact quote, when and which recording', async () => {
+        const e = makeEnv();
+        await e.Z.init(e.doc);
+        const pf = itemWith(e, 'Alex Example: works at the synthetic library');
+        assert(pf, 'person fact rendered');
+        const t = pf.textContent;
+        assert(t.includes('"I work at the synthetic library"') && t.includes('Alex Example') && t.includes('recording from 09:14')
+            && t.includes('2:31 in'), t);
+        assert.strictEqual(pf.all(n => n.className === 'rv-who')[0]._text, 'Alex Example', 'the tagged person said it');
+        const fu = itemWith(e, 'call the synthetic plumber');
+        assert.strictEqual(fu.all(n => n.className === 'rv-who')[0]._text, 'Me');
+        const cal = itemWith(e, 'dentist');
+        assert.strictEqual(cal.all(n => n.className === 'rv-who')[0]._text, 'Someone');
+        assert(cal.textContent.includes(HOSTILE) && !e.win.__pwned, 'a hostile quote is TEXT');
+        assert(cal.textContent.includes('Last time it did not save: Add a date first'), cal.textContent);
+        assert.strictEqual(itemWith(e, 'Robin Sample is your cousin').all(n => n.className === 'rv-who')[0]._text, 'Robin Sample');
+    });
+
+    await check('review: Play only where the line\'s audio is kept, and it fetches THAT line\'s clip', async () => {
+        const e = makeEnv();
+        await e.Z.init(e.doc);
+        assert.strictEqual(byText(itemWith(e, 'Robin Sample is your cousin'), '▶ Play the line').length, 0, 'audio not kept');
+        assert.strictEqual(byText(itemWith(e, 'call the synthetic plumber'), '▶ Play the line').length, 0, 'no diarised line');
+        e.calls.length = 0;
+        await byText(itemWith(e, 'Alex Example: works'), '▶ Play the line')[0].click();
+        assert.deepStrictEqual(e.calls.map(c => c.method + ' ' + c.url), ['GET /api/omi/segments/seg-q1/clip']);
+        assert.deepStrictEqual(e.played.slice(1), ['blob:audio/wav']);
+    });
+
+    await check('review: Approve posts approve for THAT candidate (id encoded, no fields) and the card goes', async () => {
+        const e = makeEnv();
+        await e.Z.init(e.doc);
+        e.calls.length = 0;
+        await byText(itemWith(e, 'Alex Example: works'), 'Approve')[0].click();
+        assert.deepStrictEqual(posts(e.calls), [{ method: 'POST', url: '/api/omi/day-review/candidates/c-pf%2F1/approve',
+            body: { via: 'desktop' } }]);
+        assert(!itemWith(e, 'Alex Example: works'), 'the decided card is removed');
+        assert(!rv(e).all(n => n.tagName === 'H3').some(n => n._text.indexOf('About your people') === 0), 'its empty group goes too');
+        assert(rv(e).textContent.includes('5 things to review'));
+        assert(/Kept/.test(e.doc.ids.pendantToast.textContent));
+    });
+
+    await check('review: on a phone the approval says via phone', async () => {
+        const e = makeEnv({ coarse: true });
+        await e.Z.init(e.doc);
+        e.calls.length = 0;
+        await byText(itemWith(e, 'call the synthetic plumber'), 'Approve')[0].click();
+        assert.deepStrictEqual(posts(e.calls)[0], { method: 'POST', url: '/api/omi/day-review/candidates/c-fu-1/approve', body: { via: 'phone' } });
+    });
+
+    await check('review: Skip dismisses THAT candidate and nothing else', async () => {
+        const e = makeEnv();
+        await e.Z.init(e.doc);
+        e.calls.length = 0;
+        await byText(itemWith(e, 'Robin Sample is your cousin'), 'Skip')[0].click();
+        assert.deepStrictEqual(posts(e.calls), [{ method: 'POST', url: '/api/omi/day-review/candidates/c-rel-1/dismiss', body: undefined }]);
+    });
+
+    await check('review: Edit only where the server allows it; a relationship has no Edit', async () => {
+        const e = makeEnv();
+        await e.Z.init(e.doc);
+        assert.strictEqual(byText(itemWith(e, 'Robin Sample is your cousin'), 'Edit').length, 0);
+        assert.strictEqual(byText(itemWith(e, 'Alex Example: works'), 'Edit').length, 1);
+        const cal = itemWith(e, 'dentist');
+        await byText(cal, 'Edit')[0].click();
+        const inputs = cal.all(n => n.tagName === 'INPUT');
+        assert.deepStrictEqual(inputs.map(n => n.getAttribute('name') + '=' + n.getAttribute('type')), ['title=text', 'date=date', 'time=time']);
+        const labels = cal.all(n => n.tagName === 'LABEL');
+        assert(labels.every((l, i) => l.getAttribute('for') === inputs[i].getAttribute('id')), 'every field is labelled');
+    });
+
+    await check('review: an edit sends only the changed field; a 422 keeps what was typed and says why', async () => {
+        const url = '/api/omi/day-review/candidates/c-pf%2F1/approve';
+        const e = makeEnv({ post: { [url]: [422, 'edit_unsupported'] } });
+        await e.Z.init(e.doc);
+        const pf = itemWith(e, 'Alex Example: works');
+        await byText(pf, 'Edit')[0].click();
+        const input = pf.all(n => n.tagName === 'INPUT')[0];
+        assert.strictEqual(input.value, 'works at the synthetic library');
+        input.value = 'owns the synthetic library';
+        e.calls.length = 0;
+        await byText(pf, 'Save and keep')[0].click();
+        assert.deepStrictEqual(posts(e.calls), [{ method: 'POST', url, body: { fields: { fact: 'owns the synthetic library' }, via: 'desktop' } }]);
+        assert(/only keep what the quote supports/.test(e.doc.ids.pendantToast.textContent), e.doc.ids.pendantToast.textContent);
+        assert(itemWith(e, 'Alex Example: works'), 'the card stays');
+        assert(input.visible() && input.value === 'owns the synthetic library', 'the typed edit is kept');
+        assert.strictEqual(byText(pf, 'Approve').length, 0, 'still in edit mode, not the plain actions');
+    });
+
+    await check('review: a held conflict shows what it contradicts and ONLY the server\'s options', async () => {
+        const e = makeEnv();
+        await e.Z.init(e.doc);
+        const of = itemWith(e, 'I live in Example City');
+        assert(of.textContent.includes('This contradicts what you approved before: "I live in Synthetic Town"'), of.textContent);
+        const btns = of.all(n => n.tagName === 'BUTTON' && n.visible()).map(n => n._text);
+        assert.deepStrictEqual(btns, ['Keep what I had', 'Change this one']);
+        e.calls.length = 0;
+        await byText(of, 'Keep what I had')[0].click();
+        assert.deepStrictEqual(posts(e.calls), [{ method: 'POST', url: '/api/omi/day-review/candidates/c-of-1/dismiss', body: undefined }]);
+        const rel = itemWith(e, 'Robin Sample is your brother');
+        assert(rel.textContent.includes('You already have Robin Sample as "friend". This says "brother".'), rel.textContent);
+        assert.deepStrictEqual(rel.all(n => n.tagName === 'BUTTON' && n.visible()).map(n => n._text), ['Keep what I had']);
+    });
+
+    await check('review: an approval the server holds (409 held_conflict) re-reads the review instead of claiming success', async () => {
+        const url = '/api/omi/day-review/candidates/c-fu-1/approve';
+        const e = makeEnv({ post: { [url]: [409, 'held_conflict'] } });
+        await e.Z.init(e.doc);
+        e.calls.length = 0;
+        await byText(itemWith(e, 'call the synthetic plumber'), 'Approve')[0].click();
+        assert.deepStrictEqual(e.calls.map(c => c.method + ' ' + c.url), ['POST ' + url, 'GET ' + REVIEW_URL]);
+        assert(/contradicts something you approved/.test(e.doc.ids.pendantToast.textContent));
+        assert(!/Kept/.test(e.doc.ids.pendantToast.textContent));
+    });
+
+    await check('review: voices to name (at most 3) jump to the existing Voices-to-name card, by focus not by URL', async () => {
+        const fx = reviewFixture();
+        fx.voices_to_name = [0, 1, 2, 3].map(i => Object.assign({}, fx.voices_to_name[0], { id: i ? 'cl/x' + i : 'cl/1', name: 'Voice ' + (i + 3) }));
+        const e2 = makeEnv({ review: fx });
+        await e2.Z.init(e2.doc);
+        const block = rv(e2).all(n => n.className === 'card rv-voices')[0];
+        assert.strictEqual(byText(block, 'Name this voice').length, 3, 'a few at a time');
+        e2.calls.length = 0;
+        await byText(block, 'Name this voice')[0].click();
+        assert.strictEqual(posts(e2.calls).length, 0, 'naming happens in the existing flow, nothing is sent from here');
+        const target = e2.doc.ids.pendantUnknown.children[0];
+        assert.strictEqual(Node.focused, target.children[0], 'focus moves to that voice\'s card heading');
+        assert(target.textContent.includes('Voice 3'));
+        assert.strictEqual(e2.location.hash, '', 'no id in the URL');
+    });
+
+    await check('review: a member who is not the owner (403) gets a plain note and NO actions, even after a good render', async () => {
+        const e = makeEnv();
+        await e.Z.init(e.doc);
+        assert(byText(rv(e), 'Approve').length > 0);
+        e.opts.reviewStatus = 403;
+        await e.Z.refresh();
+        assert.strictEqual(rv(e).all(n => n.tagName === 'BUTTON').length, 0, 'no buttons for a refused member');
+        assert(rv(e).textContent.includes('Only you can review your own day'), rv(e).textContent);
+        const off = makeEnv({ reviewStatus: 404 });
+        await off.Z.init(off.doc);
+        assert(rv(off).textContent.includes('switched off') && rv(off).all(n => n.tagName === 'BUTTON').length === 0);
+        const nobody = makeEnv({ status: 403 });
+        await nobody.Z.init(nobody.doc);
+        assert.strictEqual(rv(nobody).children.length, 0);
+        assert(!nobody.calls.some(c => c.url.indexOf('/api/omi/day-review/') === 0 && c.method !== 'GET'));
+    });
+
+    await check('review: no raw ids or tokens in any URL, and no ids in the page text or attributes', async () => {
+        const e = makeEnv();
+        await e.Z.init(e.doc);
+        for (const b of rv(e).all(n => n.tagName === 'BUTTON' && n.visible() && /Play|Name this voice/.test(n._text))) await b.click();
+        await byText(itemWith(e, 'call the synthetic plumber'), 'Approve')[0].click();
+        await settle();
+        for (const c of e.calls) {
+            assert(!/session|token|sid=|auth/i.test(c.url), 'credential-like URL: ' + c.url);
+            const q = c.url.split('?')[1];
+            assert(q === undefined || q === 'limit=40' || q === 'status=pending&limit=100', 'unexpected query: ' + c.url);
+        }
+        assert.strictEqual(e.location.hash, '');
+        assert.strictEqual(e.location.href, 'https://zoe.example/pendant.html');
+        const dump = (n) => n._text + ' ' + Object.values(n.attrs).join(' ') + ' ' + n.className + ' ' + n.children.map(dump).join(' ');
+        const shown = dump(rv(e));
+        for (const id of RAW_IDS) assert(!shown.includes(id), 'raw id in the review DOM: ' + id);
+        const src = fs.readFileSync(SRC, 'utf8');
+        assert(!/location\.(hash|href|search)\s*=|history\.(push|replace)State/.test(src), 'the module never writes the URL');
     });
 
     if (failures.length) {

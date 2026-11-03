@@ -67,10 +67,9 @@ from semantic_router import shadow_log_segments  # noqa: E402
 # ── Paths ───────────────────────────────────────────────────────────────────
 # Same env var the router writes through, so a miner run in a worktree can point
 # at the LIVE checkout's shadow log (the log is runtime data, never committed).
-SHADOW_LOG = os.environ.get(
-    "ZOE_ROUTER_HEAD_LOG",
-    os.path.join(REPO, "services", "zoe-data", "data", "router_head_shadow.jsonl"),
-)
+import local_text_logs  # noqa: E402 - the one path resolver writer, erasers and readers share
+
+SHADOW_LOG = str(local_text_logs.log_path(local_text_logs.ROUTER_SHADOW))
 HOLDOUT_CORPUS = os.path.join(REPO, "labs", "needle-benchmark", "corpus.jsonl")
 TOOLS_JSON = os.path.join(REPO, "labs", "functiongemma-finetune", "zoe_tools.json")
 TRAIN_DIR = os.path.join(REPO, "labs", "functiongemma-finetune", "data")

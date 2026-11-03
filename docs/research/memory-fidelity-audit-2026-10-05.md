@@ -77,6 +77,10 @@ counts only. `[unverified]` marks anything not read at source.
 
 ## 1. Write-path map
 
+> **Update 2026-10-18:** the 31 write paths below are the 2026-10-05 hand count and are stale. The map is now
+> generated from code and guarded by a test: [`docs/knowledge/memory-writer-map.md`](../knowledge/memory-writer-map.md)
+> (73 write sites in 28 modules at landing; `tests/unit/test_memory_writer_map.py` fails on a new writer module without a note).
+
 Legend. **Inputs** says whose words the writer reads. **Overwrites** is the strongest thing it may do to
 an *existing* row. **Told** is whether the user hears about it. **Hist** is whether the old row survives.
 "Audit" is the `mempalace_audit` collection (`memory_service.py:2539`), one row per
@@ -171,7 +175,7 @@ Observations that are not in the table:
   digest / voice regex): written, never readable.
 * Three of the five accounts have no memory at all: the palace has rows for `jason`, `family-admin` (a
   legacy / startup-probe id, `main.py:808`, not an account), `guest` and one stray `u`. The other three
-  accounts (`andrew`, `asya`, `teneeka`) have **no rows**, and Postgres shows only `jason` with chat turns in
+  member accounts have **no rows**, and Postgres shows only `jason` with chat turns in
   the last 60 days (226 user turns). The memory system has been exercised by one person.
 
 ## 2. Authority analysis

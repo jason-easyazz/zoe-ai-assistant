@@ -77,7 +77,11 @@ class ZoeOrbWidget extends WidgetModule {
         this._getOrbWidgetKey = _orbWidgetKey;
         this._sessionId = localStorage.getItem(_orbWidgetKey());
         if (!this._sessionId) {
-            this._sessionId = 'orb-widget-' + Math.random().toString(36).slice(2, 10);
+            // crypto, not Math.random: the dashboard harness forbids Math.random in widgets.
+            const rnd = (window.crypto && typeof window.crypto.randomUUID === 'function')
+                ? window.crypto.randomUUID().replace(/-/g, '').slice(0, 8)
+                : Date.now().toString(36);
+            this._sessionId = 'orb-widget-' + rnd;
             localStorage.setItem(_orbWidgetKey(), this._sessionId);
         }
         // Clear this widget's session on logout.

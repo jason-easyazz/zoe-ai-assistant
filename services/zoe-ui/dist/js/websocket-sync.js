@@ -233,6 +233,11 @@ window.ZoeWebSockets = {
             'bucket': 'bucket'
         };
         const widgetName = widgetNames[listType] || listType;
+        // updateType refreshes EVERY card of the type (two shopping cards are two
+        // instances since Wave 4b); a page without it keeps the single module.
+        if (typeof WidgetManager !== 'undefined' && typeof WidgetManager.updateType === 'function') {
+            if (WidgetManager.updateType(widgetName)) return;
+        }
         const widget = (typeof WidgetManager !== 'undefined' && WidgetManager.modules)
             ? WidgetManager.modules[widgetName] : null;
         if (widget && typeof widget.update === 'function') {
@@ -243,6 +248,9 @@ window.ZoeWebSockets = {
     },
 
     _refreshWidget(name) {
+        if (typeof WidgetManager !== 'undefined' && typeof WidgetManager.updateType === 'function') {
+            if (WidgetManager.updateType(name)) return;
+        }
         if (typeof WidgetManager !== 'undefined' && WidgetManager.modules) {
             const widget = WidgetManager.modules[name];
             if (widget && typeof widget.update === 'function') {

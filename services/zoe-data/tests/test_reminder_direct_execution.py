@@ -74,18 +74,14 @@ async def test_create_reminder_record_preserves_policy_write_notification_and_br
 
 
 @pytest.mark.asyncio
-async def test_execute_reminder_create_uses_direct_path_before_mcporter(monkeypatch):
+async def test_execute_reminder_create_uses_direct_path(monkeypatch):
     calls = []
 
     async def fake_direct(intent, user_id):
         calls.append((intent.name, dict(intent.slots), user_id))
         return "Reminder set: check the oven."
 
-    async def fail_mcporter(_cmd):
-        raise AssertionError("reminder direct path should avoid mcporter")
-
     monkeypatch.setattr("intent_router._execute_reminder_create_direct", fake_direct)
-    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
 
     result = await execute_intent(
         Intent("reminder_create", {"title": "check the oven", "date": "2099-06-15", "time": "23:00"}),
@@ -108,36 +104,30 @@ async def test_load_direct_execution_user_defaults_null_role_to_user():
 
 
 @pytest.mark.asyncio
-async def test_execute_reminder_create_falls_back_to_mcporter_when_direct_unavailable(monkeypatch):
+async def test_execute_reminder_create_has_no_fallback_writer_when_direct_declines(monkeypatch):
+    """A3 (2026-10-19): a declining direct executor is the answer. The mcporter fallback that used to run here wrote the
+    reminder as family-admin; now nothing else is tried and no tool is called."""
+    import mcp_server
+
     calls = []
 
     async def fake_direct(intent, user_id):
         calls.append(("direct", intent.name, user_id))
         return None
 
-    def fake_build_command(intent, user_id):
-        calls.append(("build", intent.name, user_id))
-        return "mcporter-safe call zoe-data.reminder_create"
-
-    async def fake_mcporter(cmd):
-        calls.append(("mcporter", cmd))
-        return '{"id": "rem-9", "status": "created"}'
+    async def no_tool(*_a, **_k):
+        raise AssertionError("no tool may run after the direct executor declined")
 
     monkeypatch.setattr("intent_router._execute_reminder_create_direct", fake_direct)
-    monkeypatch.setattr("intent_router._build_command", fake_build_command)
-    monkeypatch.setattr("intent_router._run_mcporter", fake_mcporter)
+    monkeypatch.setattr(mcp_server, "handle_tool", no_tool)
 
     result = await execute_intent(
         Intent("reminder_create", {"title": "check the oven", "date": "2099-06-15", "time": "23:00"}),
         "family-admin",
     )
 
-    assert result == "Reminder set: check the oven for 2099-06-15 at 23:00."
-    assert calls == [
-        ("direct", "reminder_create", "family-admin"),
-        ("build", "reminder_create", "family-admin"),
-        ("mcporter", "mcporter-safe call zoe-data.reminder_create"),
-    ]
+    assert result is None
+    assert calls == [("direct", "reminder_create", "family-admin")]
 
 
 class _ListCursor:
@@ -168,11 +158,7 @@ async def test_execute_reminder_list_empty_returns_no_reminders_message(monkeypa
     """Empty reminders must produce the 'No reminders set.' message (ok:true at
     the intent-dispatch endpoint), not None (which maps to ok:false)."""
 
-    async def fail_mcporter(_cmd):
-        raise AssertionError("reminder_list direct path should avoid mcporter")
-
     monkeypatch.setattr("database.get_db_ctx", _fake_reminder_db_ctx([]))
-    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
 
     result = await execute_intent(Intent("reminder_list", {}), "family-admin")
 
@@ -188,11 +174,7 @@ async def test_execute_reminder_list_nonempty_formats_reminders(monkeypatch):
          "due_time": None, "priority": "normal", "category": "general"},
     ]
 
-    async def fail_mcporter(_cmd):
-        raise AssertionError("reminder_list direct path should avoid mcporter")
-
     monkeypatch.setattr("database.get_db_ctx", _fake_reminder_db_ctx(rows))
-    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
 
     result = await execute_intent(Intent("reminder_list", {}), "family-admin")
 
@@ -205,7 +187,7 @@ async def test_execute_reminder_list_nonempty_formats_reminders(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_execute_reminder_list_real_failure_still_returns_none(monkeypatch):
-    """DB down AND mcporter down is a real failure: execute_intent returns None,
+    """DB down is a real failure: execute_intent returns None,
     which the intent-dispatch endpoint maps to ok:false."""
     import contextlib
 
@@ -214,11 +196,7 @@ async def test_execute_reminder_list_real_failure_still_returns_none(monkeypatch
         raise RuntimeError("db unavailable")
         yield  # pragma: no cover
 
-    async def fake_mcporter(_cmd):
-        return None
-
     monkeypatch.setattr("database.get_db_ctx", broken_ctx)
-    monkeypatch.setattr("intent_router._run_mcporter", fake_mcporter)
 
     result = await execute_intent(Intent("reminder_list", {}), "family-admin")
 
@@ -226,39 +204,15 @@ async def test_execute_reminder_list_real_failure_still_returns_none(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_execute_reminder_list_falls_back_to_mcporter_when_direct_unavailable(monkeypatch):
-    import contextlib
-
-    @contextlib.asynccontextmanager
-    async def broken_ctx():
-        raise RuntimeError("db unavailable")
-        yield  # pragma: no cover
-
-    async def fake_mcporter(_cmd):
-        return '{"reminders": [{"title": "check the oven", "due_date": "2099-06-15"}]}'
-
-    monkeypatch.setattr("database.get_db_ctx", broken_ctx)
-    monkeypatch.setattr("intent_router._run_mcporter", fake_mcporter)
-
-    result = await execute_intent(Intent("reminder_list", {}), "family-admin")
-
-    assert result == "Your reminders:\n  - check the oven (due: 2099-06-15)"
-
-
-@pytest.mark.asyncio
-async def test_execute_reminder_create_policy_denial_does_not_fall_back_to_mcporter(monkeypatch):
+async def test_execute_reminder_create_policy_denial_propagates(monkeypatch):
     async def fake_direct(_intent, _user_id):
         raise HTTPException(status_code=403, detail="Authentication required for this action.")
 
-    async def fail_mcporter(_cmd):
-        raise AssertionError("policy denial must not fall back to mcporter")
-
     monkeypatch.setattr("intent_router._execute_reminder_create_direct", fake_direct)
-    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
 
     # A signed-in caller: guests are short-circuited by the chat sign-in gate
     # before reaching the direct executor (2026-07-13) — this test is about a
-    # POLICY denial from the executor itself never falling through to mcporter.
+    # POLICY denial from the executor itself propagating, never swallowed.
     with pytest.raises(HTTPException) as exc_info:
         await execute_intent(Intent("reminder_create", {"title": "check the oven"}), "jason")
 

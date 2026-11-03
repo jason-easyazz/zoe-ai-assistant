@@ -80,6 +80,7 @@ def _isolate_logging(monkeypatch):
         "/api/ha/entities",
         "/api/music/now-playing",
         "/api/panels/zoe-touch-pi/config",
+        "/api/system/stats",
         "/health",
     ],
 )

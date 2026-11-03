@@ -1,6 +1,6 @@
 """Voice-path identity + home control at every turn entry point (security fix 2026-10-18). Each case carries a negative control.
 
-1. Every turn entry (chat, /ws/voice/, the voice lanes, LiveKit, the brain's intent dispatch) records may_control_home; every
+1. Every turn entry (chat, the voice lanes, LiveKit, the brain's intent dispatch) records may_control_home; every
    Home Assistant executor refuses politely when it is False. 2. The relay blocker (#2095): the server decides a voice lane's
    panel and member, never the payload. (The daemon's /activate lives in tests/unit/test_voice_daemon_platform.py.)
 The identity block, _lane_panel_id, _require_voice_auth, panel_principal and the entry points are REAL; data is invented.
@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 import auth
 import panel_principal
 import smart_home_service
+import speaker_models
 import routers.voice_tts as voice_tts
 from test_ha_control_auth import GUEST_SID, MEMBER_SID, PANEL_IP, PANEL_TOKEN, PHONE_IP, PROXY, RegistryDb
 from test_voice_identity_freshness import IDLE_WINDOW_S, _PanelStore, _ts, _wire
@@ -267,52 +268,6 @@ def test_other_chat_still_works_for_an_anonymous_caller(registry, monkeypatch):
     assert json.loads(r.text.split("data: ", 1)[1]) == {"reply": "echo what time is it", "verdict": False}
 
 
-@pytest.fixture
-def ws_app(monkeypatch, bridge):
-    sys.modules.pop("main", None)
-    import main
-
-    async def _cards(text, user_id, context=None):
-        out = await smart_home_service.resolve_smart_home(_light_off())
-        return {**out, "handled": True, "skybridge_context": {}}
-
-    monkeypatch.setattr(main, "_resolve_voice_cards", _cards)
-    return main
-
-
-def _ws_turn(main, peer, session_id=""):
-    client = TestClient(main.app, client=(peer, 50000))
-    with client.websocket_connect(f"/ws/voice/?session_id={session_id}") as ws:
-        assert ws.receive_json() == {"type": "state", "state": "ambient"}
-        ws.send_text(json.dumps({"type": "text", "message": "turn off the kitchen light"}))
-        said = None
-        for _ in range(10):
-            msg = ws.receive_json()
-            if msg.get("type") == "transcript" and msg.get("role") == "assistant":
-                said = msg["text"]
-            if msg.get("type") == "done":
-                return said
-    raise AssertionError("no done frame")
-
-
-def test_anonymous_voice_websocket_cannot_drive_the_house(registry, ws_app, bridge):
-    assert _ws_turn(ws_app, PHONE_IP) == REFUSAL
-    assert bridge == []
-
-
-def test_the_kiosk_and_members_drive_the_house_over_the_voice_websocket(registry, ws_app, bridge, monkeypatch):
-    registry.con.execute("UPDATE panels SET ip_address = ?", (PHONE_IP,))   # this peer IS the registered panel now
-    assert _ws_turn(ws_app, PHONE_IP) != REFUSAL and bridge
-    registry.con.execute("UPDATE panels SET ip_address = '192.0.2.99'")
-    bridge.clear()
-
-    async def _member(session_id):
-        return "casey" if session_id == "sid-casey" else "voice-guest"
-
-    monkeypatch.setattr(ws_app, "_resolve_ws_user", _member)
-    assert _ws_turn(ws_app, PHONE_IP, session_id="sid-casey") != REFUSAL and bridge
-
-
 def _dispatch(monkeypatch, user_id):
     from routers.system import router as system_router
 
@@ -512,7 +467,7 @@ async def test_a_fresh_member_turn_upgrades_a_refused_caller_verdict(monkeypatch
 # ── 4. over the relay: no panel-computed claim, no enrolment, no adaptation ──────────────────────────────────────────────
 
 def _claim(member="alice", score=0.99):
-    return {"voice_user_id": member, "voice_score": score}
+    return {"voice_user_id": member, "voice_score": score, "voice_model_id": speaker_models.RESNET34_MODEL_ID}
 
 
 def test_a_claim_is_honoured_on_the_lan_and_refused_over_the_relay():

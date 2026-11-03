@@ -55,6 +55,17 @@ replies, local only), `samantha_person_trend.jsonl`. Exit: 0 ran | 1 a gating ha
 is expected to be red: it is the number the program moves) | 2 refused / error / teardown unproven /
 instrument proof failed | 3 lock held.
 
+**A recorded baseline (T-4, 2026-10-19; `scripts/perf/bench_baseline.py`, shared with the bar and the
+day-sim).** Until now the bench had no baseline FILE, so nothing could regress. `--record-baseline` saves the
+`none` arm's cell table (+ half verdicts, `prereg_sha256`, `judge_prompt_sha256`, `judge_samples`, `seeds`,
+`p12_sessions`, `n_cap`, commit) to `~/.cache/zoe/samantha_person_baseline.json`, only from a FULL run (no
+`--only` / `--n-cap`), `status: ok`, instrument proof green, no errored or unexercised half, on a CLEAN
+verified tree (refused before the run otherwise). `--compare-baseline` refuses when any of those settings
+differ or the baseline lacks a cell the run scores; then a cell that was PASS and is not PASS now (FAIL,
+INCONCLUSIVE, SKIP, ERROR) is a regression: `status: regression`, exit 1. A cell that was never PASS (a
+`TARGET`, `REPORT` or a red cell) cannot regress, so the bar's honest number stays the cell table. Recorded
+with the other benches by `scripts/maintenance/record_bench_baselines.sh` in an allowed window.
+
 ## How a result reads
 
 * **Halves.** A cell (`P5a`) is its halves (`P5a.i`, `.ii`, `.iii`): one scored claim each, with a

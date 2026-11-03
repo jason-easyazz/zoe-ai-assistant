@@ -201,8 +201,8 @@ def script_for(lang: str, name: str, clips: int = 3) -> dict:
     """The enrolment script the daemon speaks, in the member's language: every sentence, the phrases to say, the words that cancel.
     ``{name}`` is filled here; ``{n}`` and ``{phrase}`` are the daemon's.
 
-    ``clips`` is how many phrases are asked for: 3 (the legacy script, byte for byte) or - when ``ZOE_SPEAKER_MODEL`` enrols
-    ResNet34 - 5: the lexicon's ``phrases`` plus its ``phrases_extra``, with the spoken intro switched to ``intro_many``."""
+    ``clips`` is how many phrases are asked for: 3 (the legacy script, byte for byte) or - for ResNet34, the only model
+    now - 5: the lexicon's ``phrases`` plus its ``phrases_extra``, with the spoken intro switched to ``intro_many``."""
     lx = lex(lang) or lex("en")
     out = dict((k, (v.replace("{name}", name or "") if isinstance(v, str) else v)) for k, v in (lx.get("script") or dict()).items())
     phrases = list(lx.get("phrases") or [])
@@ -233,17 +233,21 @@ async def start_enrollment(user_id: str, panel_id: str, lang: str) -> bool:
                 logger.info("voice_enrollment: no enrol command - %r holds no live device token", "panel")
                 return False
             command = dict(name=name, lang=lang, max_total_s=ENROLL_MAX_S)
-            if speaker_models.speaker_mode() == "resemblyzer":
-                command["script"] = script_for(lang, name)
-            else:
-                # ResNet34 is enrolled: ask for its clip count and name the mode, so the panel builds the right profile(s).
-                # The daemon trusts its own ZOE_SPEAKER_MODEL for WHICH models; the server's word is the clip count and the words.
-                clips = speaker_models.clips_needed()
-                command.update(script=script_for(lang, name, clips), clips=clips, speaker_model=speaker_models.speaker_mode(),
-                               max_total_s=ENROLL_MAX_S + 30)
+            # Ask for ResNet34's clip count and name the mode, so the panel builds the right profile.
+            # The daemon trusts its own ZOE_SPEAKER_MODEL for WHICH model; the server's word is the clip count and the words.
+            clips = speaker_models.clips_needed()
+            command.update(script=script_for(lang, name, clips), clips=clips, speaker_model=speaker_models.speaker_mode(),
+                           max_total_s=ENROLL_MAX_S + 30)
             await voice_announce.enqueue_command(
                 db, user_id=user_id, panel_id=panel_id or None, trigger_type="voice_enroll", command=command,
             )
+        # The server-side half of the command: ONLY this member may be enrolled at THIS panel for the command's life (queue
+        # TTL + the run + slack). ``/api/voice/enroll`` checks it instead of trusting the daemon's payload (2026-10-19).
+        import biometric_scope
+
+        biometric_scope.grant_enrolment(
+            panel_id, user_id, kind="voice",
+            ttl_s=voice_announce.COMMAND_TTL_S + float(command.get("max_total_s") or ENROLL_MAX_S) + 60.0)
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("voice_enrollment: could not queue the enrol command: %s", type(exc).__name__)

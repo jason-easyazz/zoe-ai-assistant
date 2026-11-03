@@ -261,9 +261,7 @@ Group all Zoe shortcuts in a folder:
 
 ## 📚 Related Documentation
 
-- [PWA Installation Guide](./PWA-INSTALLATION.md)
-- [Voice Commands Guide](./VOICE-COMMANDS.md)
-- [URL Parameters Reference](./URL-PARAMETERS.md)
+- [PWA Installation Testing](./PWA-INSTALLATION-TESTING.md)
 
 ---
 

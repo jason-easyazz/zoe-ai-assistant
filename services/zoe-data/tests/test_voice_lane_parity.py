@@ -75,7 +75,7 @@ async def test_instrument_goes_red_if_the_router_gate_treats_a_recall_verdict_as
 async def test_instrument_goes_red_when_the_offer_check_is_off(monkeypatch):
     """"sounds good" after Zoe's offer: with the offer check disabled the typed lane answers the canned "Okay." and the offer is
     never delivered. (The panel's spoken lane never ran the canned reply for it - it goes to the brain either way - so the red
-    side is the typed lane; the voice WebSocket's instant path shares the same check, tests/test_conversation_turn_quality.py.)"""
+    side is the typed lane.)"""
     import intent_router
 
     async def never(intent, user_id, previous=None):
@@ -104,10 +104,45 @@ async def test_instrument_goes_red_if_the_voice_lane_skips_the_conversation_tier
     assert all(r.chat_ok for r in results), [(r.cid, r.chat_detail) for r in results]
 
 
+# ── the extra lanes (A4, 2026-10-19): non-stream chat (Telegram) and LiveKit (the Ask card) ────────────────────────────────────
+@pytest.mark.parametrize("cell", [c for c in CELLS if not c.voice_only], ids=[c.cid for c in CELLS if not c.voice_only])
+async def test_non_stream_chat_matches_the_stream(cell):
+    """``routers.chat.chat(stream=False)`` re-implements ``chat_stream_generator`` block by block; until it is collapsed onto the
+    generator, every cell that passes on the stream must pass on it too."""
+    [r] = await lpc.run_cells(MonkeyPatch, only={cell.cid}, extra_lanes=("chat_ns",))
+    ok, detail = r.extra["chat_ns"]
+    assert ok == r.chat_ok, f"chat_ns {ok} vs chat {r.chat_ok} on {cell.cid}: {detail} | {r.chat_detail}"
+
+
+async def test_the_livekit_lane_is_measured_and_its_fast_tier_is_visible(monkeypatch):
+    """LiveKit is brain-first by design (``ZOE_LIVEKIT_FAST_TIERS`` off live): a lookup cell FAILS there and a brain cell passes.
+    Control: with the opt-in fast tier ON, a fast-tier answer reaches the lane - the rig sees the lane's one switch. (The answer is
+    stubbed so the control does not depend on the memory store; measured live-mirror numbers are in voice-lane-parity.md.)"""
+    import types
+
+    import fast_tiers
+
+    real = fast_tiers.resolve
+
+    async def stub(text, user_id, session_id, **kw):
+        if kw.get("channel") == "livekit" and "my name" in text.lower():
+            return types.SimpleNamespace(reply=f"Your name is {lpc.ACCOUNT_NAME}.", tier="identity", intent="identity_name",
+                                         domain="identity")
+        return await real(text, user_id, session_id, **kw)
+
+    monkeypatch.setattr(fast_tiers, "resolve", stub)
+    off = {r.cid: r.extra["livekit"][0] for r in await lpc.run_cells(MonkeyPatch, only={"identity_name", "exact_words"},
+                                                                     extra_lanes=("livekit",))}
+    assert off == {"identity_name": False, "exact_words": True}, off
+    [on] = await lpc.run_cells(MonkeyPatch, only={"identity_name"}, extra_lanes=("livekit",), flags={"ZOE_LIVEKIT_FAST_TIERS": "1"})
+    assert on.extra["livekit"][0] is True, on.extra["livekit"][1]
+
+
 def test_the_table_renders():
-    results = [lpc.CellResult("a", "t", True, True, "", ""), lpc.CellResult("b", "t", None, False, "", "", voice_only=True)]
+    results = [lpc.CellResult("a", "t", True, True, "", "", extra={"livekit": (False, "")}),
+               lpc.CellResult("b", "t", None, False, "", "", voice_only=True, extra={"livekit": (None, "")})]
     out = lpc.render(results)
-    assert "parity 1/2" in out and "n/a" in out
+    assert "parity 1/2" in out and "n/a" in out and "livekit: 0/1 cells" in out
 
 
 # ── review round 1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────

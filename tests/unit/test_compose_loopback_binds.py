@@ -67,12 +67,6 @@ LAN_LEDGER: dict[tuple[str, str, str], str] = {
     ("docker-compose.yml", "keeper", "8787"): (
         "keeper calendar sync (opt-in profile) — not reviewed"
     ),
-    ("docker-compose.modules.yml", "multica-web", "3000"): (
-        "Multica board UI at http://zoe.local:3000 (FRONTEND_ORIGIN)"
-    ),
-    ("docker-compose.modules.yml", "multica-backend", "8080"): (
-        "Multica API for the board UI / CLI on the LAN — not reviewed"
-    ),
 }
 
 
@@ -261,3 +255,32 @@ def test_every_compose_service_has_bounded_json_file_logs():
             assert 2 <= files <= 10, f"{where}: max-file {files} (rotation needs >= 2 files)"
             seen += 1
     assert seen >= 13, f"only {seen} services checked -- a compose file stopped being read"
+
+
+def test_multica_is_loopback_only_and_closed_to_signup():
+    """The board's API (8080) and UI (3000) must not be published to the LAN.
+
+    Anyone on the home network could reach both ports, sign up (ALLOW_SIGNUP) and use the
+    development verification code. The LAN route is nginx, which uses the zoe-network
+    service names; host processes use 127.0.0.1.
+    """
+    svcs = _load("docker-compose.modules.yml")["services"]
+    for name, port in (("multica-backend", "8080"), ("multica-web", "3000")):
+        entries = [_parse_port(e) for e in svcs[name].get("ports") or []]
+        assert entries, f"{name} no longer publishes {port}: host consumers (zoe-data, executor) lose it"
+        for host_ip, published, target in entries:
+            assert target == port and published == port
+            assert host_ip == "127.0.0.1", f"{name} must publish on 127.0.0.1 only, got {host_ip!r}"
+        assert ("docker-compose.modules.yml", name, port) not in LAN_LEDGER
+    env = svcs["multica-backend"]["environment"]
+    # YAML quoting matters: an unquoted false would arrive as the bool False and be
+    # stringified by compose as "false" too, but the string is what upstream parses.
+    assert str(env.get("ALLOW_SIGNUP")).lower() == "false", "ALLOW_SIGNUP must be false"
+
+
+def test_multica_dev_code_comes_from_the_environment_never_a_literal():
+    """The dev verification code is the board's login while there is no email backend, so
+    it must be set from the root .env (a long random owner-chosen value), not committed."""
+    env = _load("docker-compose.modules.yml")["services"]["multica-backend"]["environment"]
+    assert env.get("MULTICA_DEV_VERIFICATION_CODE") == "${MULTICA_DEV_CODE}"
+

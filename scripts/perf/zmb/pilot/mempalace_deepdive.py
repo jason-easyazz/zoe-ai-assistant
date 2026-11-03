@@ -664,7 +664,7 @@ def cmd_protocol(args) -> dict:
     src = (Path(importlib.util.find_spec("mempalace").origin).parent / "mcp_server" / "tools_read.py").read_text()
     m = re.search(r'PALACE_PROTOCOL = """(.*?)"""', src, re.S)
     proto = m.group(1)
-    zoe = (REPO / "labs" / "flue-zoe-brain-2x" / "src" / "agents" / "zoe.ts").read_text()
+    zoe = (REPO / "labs" / "flue-zoe-brain-2x" / "src" / "doctrines.ts").read_text()
     soul = (REPO / "labs" / "flue-zoe-brain-2x" / "src" / "soul.ts").read_text()
     blocks = re.findall(r"export const (\w*DOCTRINE) = \[(.*?)\]\.join", zoe, re.S)
     sizes = {name: len(body) for name, body in blocks}

@@ -140,8 +140,9 @@ def sql(env, query, params=()):
 
 
 def enrol(env, uid, samples=3, consent=True):
-    sql(env, "INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, sample_count, consent_at) VALUES (?,?,?,?,?,?)",
-        (f"p-{uid}", uid, uid, b"\x00" * 1024, samples, "2026-09-01 00:00:00" if consent else None))
+    sql(env, "INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, sample_count, consent_at, model_id) VALUES (?,?,?,?,?,?,?)",
+        (f"p-{uid}", uid, uid, b"\x00" * 1024, samples, "2026-09-01 00:00:00" if consent else None,
+         "wespeaker_resnet34+i8qdq-u8s8+c1"))      # a ResNet34 profile: the only model the server acts on (a NULL model_id is the retired one)
 
 
 def queued(env, trigger=None):
@@ -442,10 +443,11 @@ def test_yes_starts_the_enrolment_on_the_panel(env, monkeypatch):
     reply = run(say("yes"))
     assert reply == "Okay, let's do it. Stay by the panel."
     cmd = json.loads(queued(env, "voice_enroll")[0][1])
-    assert cmd["kind"] == "voice_enroll" and cmd["user_id"] == ADULT and cmd["name"] == "Ann" and cmd["max_total_s"] == 90
+    assert cmd["kind"] == "voice_enroll" and cmd["user_id"] == ADULT and cmd["name"] == "Ann" and cmd["max_total_s"] == 120
+    assert cmd["clips"] == 5 and cmd["speaker_model"] == "resnet34"      # ResNet34 is the only model: 5 clips, 30 s more time
     script = cmd["script"]
     assert "voice signature, never the recordings" in script["intro"] and script["intro"].startswith("Hi Ann.")
-    assert "{n}" in script["prompt"] and "{phrase}" in script["prompt"] and len(script["phrases"]) == 3 and "stop" in script["cancel_words"]
+    assert "{n}" in script["prompt"] and "{phrase}" in script["prompt"] and len(script["phrases"]) == 5 and "stop" in script["cancel_words"]
     assert sql(env, "SELECT accepted_at FROM enrollment_offers WHERE user_id = ?", (ADULT,))[0][0]
     assert not ve.pending_for(ADULT)
 
@@ -705,14 +707,75 @@ def test_an_admin_sees_the_household_without_synthetic_ids(client, env):
 
 
 def test_a_device_token_owns_nothing_but_may_report_a_result(client, env):
-    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi", "via_relay": False, "via_tunnel": False}
     assert client.get("/api/enrollment/state").status_code == 403
     assert client.get("/api/enrollment/household").status_code == 403
+    _grant()
     assert client.post("/api/enrollment/result", json={"status": "done", "user_id": ADULT, "samples": 3}).json() == {"ok": True}
     assert not run(es.get_state(ADULT)).declined_now(NOW)                       # only "cancelled" changes anything
+    _grant()
     assert client.post("/api/enrollment/result", json={"status": "cancelled", "user_id": ADULT, "reason": "said_stop"}).status_code == 200
     assert run(es.get_state(ADULT)).declined_now(NOW)                           # the person said stop: no re-offer tomorrow
     assert client.post("/api/enrollment/result", json={"status": "weird", "user_id": ADULT}).status_code == 400
+
+
+def _grant(member=ADULT, panel="zoe-touch-pi"):
+    import biometric_scope
+
+    biometric_scope.grant_enrolment(panel, member, ttl_s=300)
+
+
+@pytest.mark.parametrize("remote", [{"via_tunnel": True}, {"via_relay": True}], ids=["cloudflare", "relay"])
+def test_a_result_from_off_the_lan_is_refused_and_leaves_the_grant_alone(client, env, remote):
+    """Off the LAN a copied token must not close the panel's live grant or record a "no" for the granted member."""
+    import biometric_scope
+
+    biometric_scope.reset_enrolment_grants()
+    _grant()
+    client.who["caller"] = dict({"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi",
+                                 "via_relay": False, "via_tunnel": False}, **remote)
+    stop = {"status": "cancelled", "user_id": ADULT, "reason": "said_stop"}
+    assert client.post("/api/enrollment/result", json=stop).status_code == 403
+    assert not run(es.get_state(ADULT)).declined_now(NOW)
+    assert biometric_scope.granted_member("zoe-touch-pi") == ADULT              # the real run's grant survives
+    biometric_scope.reset_enrolment_grants()
+
+
+def test_a_result_without_a_grant_records_nothing_and_each_result_closes_the_grant(client, env):
+    """2026-10-19: a copied panel token cannot put a member into the 60-day quiet period. Only the member Zoe granted at
+    THAT panel can be recorded as having said stop, and the run's result closes the grant (a second report is ignored)."""
+    import biometric_scope
+
+    biometric_scope.reset_enrolment_grants()
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi", "via_relay": False, "via_tunnel": False}
+    stop = {"status": "cancelled", "user_id": ADULT, "reason": "said_stop"}
+    assert client.post("/api/enrollment/result", json=stop).status_code == 200
+    assert not run(es.get_state(ADULT)).declined_now(NOW)                       # no grant: nothing recorded
+    _grant(panel="zoe-touch-hall")                                              # a grant at ANOTHER panel does not count
+    assert client.post("/api/enrollment/result", json=stop).status_code == 200
+    assert not run(es.get_state(ADULT)).declined_now(NOW)
+    _grant(member="someone-else")                                               # nor a grant for another member
+    assert client.post("/api/enrollment/result", json=stop).status_code == 200
+    assert not run(es.get_state(ADULT)).declined_now(NOW)
+    assert biometric_scope.granted_member("zoe-touch-pi") is None               # ...and that report closed the grant
+    _grant()
+    assert client.post("/api/enrollment/result", json=stop).status_code == 200
+    assert run(es.get_state(ADULT)).declined_now(NOW)                           # positive control: the granted member's stop
+    assert biometric_scope.granted_member("zoe-touch-pi") is None
+
+
+def test_start_enrollment_grants_only_that_member_at_that_panel(env, monkeypatch):
+    """The enrol command's server-side half: queuing it for ADULT at zoe-touch-pi opens a grant for exactly that pair."""
+    import biometric_scope
+
+    biometric_scope.reset_enrolment_grants()
+    on(monkeypatch)
+    assert run(ve.start_enrollment(ADULT, "zoe-touch-pi", "en")) is True
+    assert biometric_scope.granted_member("zoe-touch-pi") == ADULT
+    assert biometric_scope.granted_member("zoe-touch-hall") is None
+    assert biometric_scope.granted_member("zoe-touch-pi", "face") is None      # a voice command never grants a face
+    assert run(ve.start_enrollment(ADULT, "zoe-touch-old", "en")) is False      # nothing queued -> no grant
+    assert biometric_scope.granted_member("zoe-touch-old") is None
 
 
 def test_a_session_cannot_post_a_result(client):
@@ -869,9 +932,10 @@ def test_release_never_undoes_a_later_claim(env):
 
 
 def test_only_the_person_stopping_it_is_a_decline_a_daemon_shutdown_is_not(client, env):
-    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi", "via_relay": False, "via_tunnel": False}
 
     def post(**kw):
+        _grant()                                                                   # every run is its own granted command
         return client.post("/api/enrollment/result", json={"status": "cancelled", "user_id": ADULT, **kw})
 
     for kw in ({"reason": "shutdown"}, {"reason": "stopped"}, {}, {"reason": "crashed"}):
@@ -884,7 +948,7 @@ def test_only_the_person_stopping_it_is_a_decline_a_daemon_shutdown_is_not(clien
 
 
 def test_a_non_cancel_status_with_a_stop_reason_is_not_a_decline(client, env):
-    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi", "via_relay": False, "via_tunnel": False}
     client.post("/api/enrollment/result", json={"status": "failed", "user_id": ADULT, "reason": "said_stop"})
     assert not run(es.get_state(ADULT)).declined_now(NOW)
 

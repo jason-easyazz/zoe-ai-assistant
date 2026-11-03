@@ -528,15 +528,6 @@ async def test_the_lane_that_does_not_persist_its_turns_hands_in_its_own_last_re
     assert await intent_router.ack_answers_offer(intent_router.Intent("time_query", {}), "u", previous=OFFERS[0]) is False
 
 
-def test_the_voice_websocket_instant_path_asks_the_same_question():
-    """main.py is not importable on the slim lane: pin the wiring in the source (the behaviour is ``ack_answers_offer`` above)."""
-    import pathlib
-
-    src = (pathlib.Path(intent_router.__file__).parent / "main.py").read_text(encoding="utf-8")
-    assert "ack_answers_offer as _fp_ack_offer" in src and "previous=_ws_last_reply" in src
-    assert src.count("_ws_last_reply = ") >= 3          # initial, instant reply, brain reply
-
-
 # ── 7. "turn it back on again" after "turn the light off" ──────────────────────────────────────────────────────────────────────
 # Live 2026-10-12: intent_miss, then a brain reply about "getting back to chatting". The last on/off command's target rides in the
 # panel's Skybridge context (and the keyword lane's ConversationContext) for ~60 s; a bare pronoun command resolves to it.
@@ -670,7 +661,7 @@ async def test_the_followup_switches_the_device_the_resolver_selected_not_a_re_m
     assert first["skybridge_context"][sky._SMART_HOME_TARGET_KEY]["entity_ids"] == ["light.bedroom_lamp"]
     room["eids"] = set()                                             # the room context is gone (or another panel): words alone are ambiguous
     asked = await sky.resolve_skybridge_request("turn the light on", "guest")
-    assert "Which one?" in asked["spoken_summary"] and switched == [("light.bedroom_lamp", False)]
+    assert "Which one" in asked["spoken_summary"] and switched == [("light.bedroom_lamp", False)]
     second = await sky.resolve_skybridge_request("turn it back on", "guest", context=first["skybridge_context"])
     assert second["handled"] and switched[-1] == ("light.bedroom_lamp", True), switched
 
@@ -679,7 +670,7 @@ async def test_a_command_that_switched_nothing_leaves_no_target(monkeypatch):
     room = {"eids": set()}
     switched = _wire_home(monkeypatch, room)
     ambiguous = await sky.resolve_skybridge_request("turn the light off", "guest")      # two lights, no room: a question, nothing switched
-    assert "Which one?" in ambiguous["spoken_summary"] and switched == []
+    assert "Which one" in ambiguous["spoken_summary"] and switched == []
     assert sky._SMART_HOME_TARGET_KEY not in ambiguous["skybridge_context"]
 
 
@@ -807,16 +798,3 @@ def test_voice_command_marks_the_arrival_row_only_from_a_confirmed_insert_and_re
     assert "_USER_TURN_SAVED.set(None)" in src and "_USER_TURN_SAVED.set(_arrival)" in src
     assert src.index("_USER_TURN_SAVED.set(None)") < src.index("_USER_TURN_SAVED.set(_arrival)")
     assert "_arrival.saved = bool(await _svc_user_turn(" in src and "_arrival.settled.set()" in src
-
-
-# ── 5b. the voice WebSocket's "last reply" follows EVERY spoken reply ────────────────────────────────────────────────────────
-def test_the_voice_websocket_updates_its_last_reply_on_every_reply_path():
-    """Codex #2001 P2 (the behaviour test is tests/test_voice_ws_last_reply.py, which needs the full app): the handled-Skybridge reply
-    and the conversation-opener ack both ``continue``d without touching it, so "sounds good" after a card turn accepted a stale offer."""
-    import pathlib
-
-    src = (pathlib.Path(intent_router.__file__).parent / "main.py").read_text(encoding="utf-8")
-    body = src[src.index("async def websocket_voice"):]
-    assert body.count("_ws_last_reply = ") >= 6                  # init, opener, skybridge, brain reset, instant reply, brain reply
-    skybridge = body[body.index("if skybridge_result.get(\"handled\")"):body.index("skybridge_context = {}")]
-    assert "_ws_last_reply = spoken_summary" in skybridge and skybridge.index("_ws_last_reply") < skybridge.index("continue")

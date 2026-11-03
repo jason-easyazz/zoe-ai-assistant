@@ -63,6 +63,30 @@ _SKIP_PREFIXES = (
 )
 
 
+# Head nouns that are unambiguously an occupation. Deliberately NOT generic nouns
+# (man, woman, person, fan, owl, believer, ...): "I am a man of faith" is not a job.
+_OCCUPATIONS = (
+    r"nurse|doctor|physician|surgeon|dentist|teacher|lecturer|professor|tutor|carpenter|plumber|electrician|"
+    r"builder|mechanic|welder|painter|plasterer|bricklayer|engineer|developer|programmer|designer|architect|"
+    r"accountant|bookkeeper|lawyer|solicitor|barrister|paralegal|chef|cook|baker|barista|bartender|waiter|waitress|"
+    r"farmer|gardener|fisherman|driver|pilot|paramedic|firefighter|police\s+officer|soldier|pharmacist|"
+    r"physiotherapist|psychologist|therapist|vet|veterinarian|scientist|researcher|journalist|writer|photographer|"
+    r"musician|electrician|cleaner|cashier|receptionist|secretary|manager|consultant|analyst|sales\s*(?:man|woman|person)|"
+    r"retail\s+worker|student|labourer|laborer|florist|hairdresser|barber|tailor|butcher|pastor|priest|minister"
+)
+
+# Gerunds that ARE an occupation activity ("my job is teaching"). Emotion / evaluation gerunds
+# ("making me miserable", "killing me") are deliberately absent.
+_WORK_GERUNDS = (
+    r"teaching|nursing|driving|plumbing|carpentry|building|cooking|baking|farming|gardening|painting|welding|"
+    r"cleaning|accounting|bookkeeping|programming|coding|designing|engineering|writing|photography|"
+    r"selling|serving|tutoring|lecturing|banking|fishing|mechanics|electrical\s+work|"
+    r"(?:software\s+)?development|looking\s+after\s+\w+|caring\s+for\s+\w+"
+)
+# Bounded contextual tail after a recognised occupation ("a nurse at the hospital"); never captured.
+_JOB_SUFFIX = r"(?:\s+(?:at|in|for|with|working|based)\b(?:\s+[\w'-]+){0,6})?"
+_JOB_END = r"(?:\s*[.,;!?]|$)"
+
 _TEMPLATE_PATTERNS: list[tuple[str, str, float]] = [
     # Explicit memory commands
     (r"(?:please\s+)?remember\s+(?:that\s+|this\s+)?(.{5,280})", "User asked me to remember: {0}", 0.95),
@@ -85,8 +109,15 @@ _TEMPLATE_PATTERNS: list[tuple[str, str, float]] = [
     (r"(?:people\s+)?call\s+me\s+([A-Za-z][A-Za-z' -]{1,40})", "User goes by {0}", 0.88),
     (r"i(?:'m|\s+am)\s+(\d{1,3})\s+years?\s+old", "User is {0} years old", 0.88),
 
-    # Profession / identity
-    (r"i(?:'m|\s+am)\s+a(?:n)?\s+([\w][\w\s]{3,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.75),
+    # Profession: an OCCUPATIONAL FRAME or a known occupation. A bare "I am a <noun phrase>"
+    # is identity/belief/self-description ("a man of faith", "a night owl"), never a job.
+    (r"i\s+work\s+as\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.8),
+    (r"i(?:'m|\s+am)\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)\s+by\s+(?:trade|profession|occupation)\b", "User's job/role: {0}", 0.8),
+    (r"i(?:'m|\s+am)\s+employed\s+as\s+(?:a(?:n)?\s+)?([\w][\w\s-]{2,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.8),
+    (r"my\s+(?:job|occupation|profession|trade)\s+is\s+(?:a(?:n)?\s+)?((?:[a-z]+\s+){0,2}(?:" + _OCCUPATIONS + r")\b"
+     r"|(?:" + _WORK_GERUNDS + r")\b(?!\s+(?:me|us|him|her|them)\b)(?:\s+(?!(?:at|in|for|with|working|based)\b)[\w'-]+){0,3})"
+     + _JOB_SUFFIX + _JOB_END, "User's job/role: {0}", 0.8),
+    (r"i(?:'m|\s+am)\s+a(?:n)?\s+((?:[a-z]+\s+){0,2}(?:" + _OCCUPATIONS + r")\b)" + _JOB_SUFFIX + _JOB_END, "User's job/role: {0}", 0.75),
 
     # Pets — "my dog's name is X" / "my dog is named X" / "my dog is called X"
     (
@@ -676,12 +707,47 @@ _AUX_BEFORE_SUBJECT_RE = re.compile(
     r"\b(?:do|does|did|can|could|would|will|should|am|are|is|where|what|which|who|how)\s*$", re.IGNORECASE)
 
 
+_QUESTION_WORD_BEFORE_RE = re.compile(
+    r"\b(?:what|which|who|how|guess|know|tell|wonder|wondering|ask|asked|whether|if)\b", re.IGNORECASE)
+
+
+def _possessive_job_asked(text: str, m: "re.Match[str]") -> bool:
+    """True when "my job is ..." sits inside a QUESTION or an embedded one ("Can you guess what my job is based on my hobbies?",
+    "Do you know what my occupation is these days?"): the sentence ends in "?", or a wh-word / guess / know / tell comes first."""
+    start = 0
+    for sm in re.finditer(r"[.!?\n]\s*", text[: m.start()]):
+        start = sm.end()
+    if _QUESTION_WORD_BEFORE_RE.search(text[start:m.start()]):
+        return True
+    return _sentence_ends_in_question(text, m)
+
+
+def _sentence_ends_in_question(text: str, m: "re.Match[str]") -> bool:
+    """True when the sentence holding the match ends in "?" (the match's own consumed terminator, or the sentence's real one)."""
+    last = m.group(0)[-1:]
+    if last in ".!?":
+        # the match already consumed its own sentence terminator: that, not the NEXT sentence's, says statement vs question
+        return last == "?"
+    # a "," / ";" (or end of text) was consumed: the sentence runs on to its real terminator
+    end = re.search(r"[.!?\n]", text[m.end():])
+    sentence_end = m.end() + end.start() if end else len(text)
+    return text[sentence_end:sentence_end + 1] == "?"
+
+
 def _asked_not_said(text: str, m: "re.Match[str]", template: str) -> bool:
     """True when the "I <verb> ..." a template matched sits inside a QUESTION ("Which city do I live in these days?", "Do I like
     pizza?"): the auxiliary / wh-word comes straight before the "I", so the sentence asks and states nothing about the speaker.
     The explicit teach templates have their own guard (``_remember_is_a_question``)."""
     if template.startswith(("User asked me to remember", "Important note")):
         return False
+    if template == "User's job/role: {0}":
+        if re.match(r"my\s+(?:job|occupation|profession|trade)\b", m.group(0), re.IGNORECASE):
+            # "my job is ..." also asks when an embedding word comes first ("Can you guess what my job is?")
+            return _possessive_job_asked(text, m)
+        # "I work as / I'm a <occupation> ...": only a sentence that ENDS in "?" asks ("Do you think I work as a nurse?");
+        # a reporting lead-in ("As you know, I am a nurse.", "I wanted to tell you I'm a carpenter.") still states it
+        if _sentence_ends_in_question(text, m):
+            return True
     if not re.match(r"i(?:\s|'m\b)", m.group(0), re.IGNORECASE):
         return False          # "you can call me Mika": the auxiliary belongs to a different subject than the template's
     start = 0

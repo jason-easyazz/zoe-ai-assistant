@@ -1,13 +1,15 @@
 ---
 type: audit
 title: Agent setup + tool adoption audit (Omnigent / Claude Code / Codex / Cursor)
-status: draft
+status: superseded
 date: 2026-06-24
 author: agent-setup-audit
 scope: read-only audit — recommendations only, no config changed in this PR
 ---
 
 # Agent setup + tool adoption audit
+
+> **SUPERSEDED (2026-10-29).** This 2026-06-24 snapshot describes a state that no longer exists: `CLAUDE.md` and a committed `.mcp.json` exist (Serena is one shared URL, codebase-memory goes through the capped wrapper), graphify is retired, and `.codex/config.toml` is wired. Kept as the record of how the wiring was found; for current wiring read the root `AGENTS.md` and [doc-system-audit-2026-10-29](knowledge/doc-system-audit-2026-10-29.md).
 
 Jason drives Zoe development remotely through **Omnigent + Claude Code + Codex** and
 reports that the repo's rules and code-intel tools keep getting *skipped*. The tools

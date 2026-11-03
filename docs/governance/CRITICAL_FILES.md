@@ -143,7 +143,6 @@ are deliberately EXCLUDED from the never-delete list above:
 
 ```
 ├── openclaw_ws.py               # OpenClaw CLI client — deletion target
-├── openclaw_maintenance.py      # OpenClaw version/upgrade helpers — deletion target
 ```
 
 They are removable **only** via the gated retirement PRs in

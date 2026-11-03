@@ -145,3 +145,56 @@ def test_context_detection(monkeypatch):
     assert g.non_service_context() == ""
     monkeypatch.setenv("ZOE_HARNESS", "1")
     assert g.non_service_context() == "harness"
+
+
+def _fake_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".cache" / "zoe" / "harness-scratch").mkdir(parents=True)
+    monkeypatch.setattr(g, "_real_home", lambda: str(home))
+    return home
+
+
+def test_declared_scratch_palace_is_not_live_but_everything_else_still_is(tmp_path, monkeypatch):
+    """The harness-scratch palace (outside the temp dir) carries a sentinel and is throwaway; the guard is not weakened
+    for the real store. Negative control: drop the is_declared_scratch() clause -> the first assertion goes red."""
+    home = _fake_home(tmp_path, monkeypatch)
+    root = home / ".cache" / "zoe" / "harness-scratch"
+    scratch = root / "tag" / "palace"
+    scratch.mkdir(parents=True)
+    bare = root / "tag2" / "palace"
+    bare.mkdir(parents=True)
+    (scratch / g.SCRATCH_SENTINEL).write_text("x")
+    monkeypatch.setattr(g, "_under_tempdir", lambda p: False)   # force the "outside the temp dir" case
+    monkeypatch.setenv("MEMPALACE_DATA_DIR", str(scratch))
+    assert os.path.realpath(scratch) not in g._import_time_live_dirs()
+    # no sentinel -> live
+    monkeypatch.setenv("MEMPALACE_DATA_DIR", str(bare))
+    assert os.path.realpath(bare) in g._import_time_live_dirs()
+    # sentinel but OUTSIDE the scratch root -> live
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / g.SCRATCH_SENTINEL).write_text("x")
+    monkeypatch.setenv("MEMPALACE_DATA_DIR", str(outside))
+    assert os.path.realpath(outside) in g._import_time_live_dirs()
+    # the real ~/.mempalace stays live even if someone drops the sentinel into it
+    real = home / ".mempalace"
+    real.mkdir()
+    (real / g.SCRATCH_SENTINEL).write_text("x")
+    monkeypatch.setenv("MEMPALACE_DATA_DIR", str(real))
+    assert os.path.realpath(real) in g._import_time_live_dirs()
+
+
+def test_scratch_palace_collection_is_not_guarded(tmp_path, monkeypatch):
+    """A harness process on a declared scratch palace gets the raw collection; on a live dir it gets the proxy."""
+    home = _fake_home(tmp_path, monkeypatch)
+    scratch = home / ".cache" / "zoe" / "harness-scratch" / "t" / "palace"
+    scratch.mkdir(parents=True)
+    (scratch / g.SCRATCH_SENTINEL).write_text("x")
+    monkeypatch.setattr(g, "_under_tempdir", lambda p: False)
+    monkeypatch.setenv("MEMPALACE_DATA_DIR", str(scratch))
+    monkeypatch.setattr(g, "_LIVE_DIRS_AT_IMPORT", g._import_time_live_dirs())
+    monkeypatch.setattr(g, "non_service_context", lambda: "harness")
+    col = object()
+    assert g.guard_collection(col, str(scratch)) is col
+    live_dir = str(home / ".mempalace")
+    assert isinstance(g.guard_collection(col, live_dir), g.GuardedCollection)

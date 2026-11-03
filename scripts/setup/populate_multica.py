@@ -1064,8 +1064,8 @@ def step_j_create_issues(
 
     # ── Query evolution proposals from zoe DB ──────────────────────────────
     sql = (
-        "SELECT id, type, title, description, evidence, status "
-        "FROM evolution_proposals "
+        "SELECT id, type, title, description, evidence, status, decision "
+        "FROM evolution_proposals WHERE source <> 'struggle' "
         "ORDER BY proposed_at DESC;"
     )
     ok, output = _db_exec_zoe(sql)
@@ -1081,7 +1081,8 @@ def step_j_create_issues(
         ptype = row.get("type", "intent_pattern")
         desc = row.get("description", "") or ""
         evidence = row.get("evidence", "") or ""
-        db_status = row.get("status", "pending")
+        db_status = row.get("status", "proposed")          # the queue words since migration 0062
+        db_decision = row.get("decision", "") or ""
 
         full_title = title
         full_desc = f"{desc}\n\n**Evidence:** {evidence}" if evidence else desc
@@ -1098,11 +1099,11 @@ def step_j_create_issues(
             assignee_id = self_imp_agent_id
             lids = [l for l in [evolution_label_id, label_ids.get(domain_label)] if l]
 
-            if db_status == "approved":
+            if db_status in ("proposed", "probed") and db_decision == "approved":
                 status = "in_progress"
-            elif db_status in ("validated", "deployed"):
+            elif db_status in ("kept", "applied", "canary"):
                 status = "done"
-            elif db_status == "failed":
+            elif db_status == "reverted":
                 status = "cancelled"
             else:
                 status = "backlog"

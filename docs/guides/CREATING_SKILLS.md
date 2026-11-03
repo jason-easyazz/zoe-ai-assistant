@@ -1,5 +1,7 @@
 # Creating Skills
 
+> **Status 2026-10-18 (B3 - OpenClaw/Hermes removal): the skill-discovery path this document describes no longer exists.** `openclaw_manager.py` and `routers/openclaw.py` (the `/api/openclaw/*` skills API) were deleted and `~/.openclaw/workspace/skills/` / `~/.hermes/skills/` are gone, so `list_openclaw_skills` and `list_openclaw_plugins` now always return an empty list. No skill loader exists. Everything below is kept only as a record of what was true before; do not build on it.
+
 > **Read this first.** This document describes what the code actually does today.
 > An earlier version of this guide documented a skills loader, a
 > `POST /api/skills/reload` endpoint, an `api_only` / `allowed_endpoints`

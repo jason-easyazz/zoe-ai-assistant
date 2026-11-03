@@ -1,7 +1,6 @@
 import asyncio
 import os
 import time
-import uuid as _uuid_mod
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,9 +9,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import httpx
 from database import init_db
 from gemma_endpoint import gemma_base
-from typed_env import env_float, env_int, env_list, env_str
+from typed_env import env_bool, env_float, env_int, env_list, env_str
 from push import broadcaster
 from auth import require_internal_token
+import relay_ingress
 from routers import (
     calendar_router,
     lists_router,
@@ -43,14 +43,11 @@ from routers.stubs import router as stubs_router
 from routers.push import router as push_router
 from routers.proactive import router as proactive_router
 from routers.system import (
-    start_openclaw_background_tasks,
     start_memory_digest_background,
     start_memory_consolidation_background,
     _agent_card_router,
 )
 from system_updates import start_zoe_update_background_tasks
-from routers.openclaw import router as openclaw_router
-from voice_presence import is_wake_payload, is_wake_text, wake_ack_events
 import logging
 from middleware.logging import setup_json_logging
 from log_throttle import log_throttled
@@ -61,7 +58,6 @@ logger = logging.getLogger(__name__)
 
 # Legacy variable kept for backward compatibility during transition
 _REQUEST_ID_CTX_VAR = None
-_openclaw_bg_task = None
 _digest_bg_task = None
 _consolidation_bg_task = None
 _runtime_health_task = None
@@ -74,8 +70,6 @@ _memory_capture_health: dict[str, str] = {"status": "unknown", "detail": "startu
 # routers.system can read it for agent card tier status.
 _RUNTIME_HEALTH: dict[str, bool] = {
     "local_llm": False,
-    "hermes": False,
-    "openclaw": False,
 }
 # Timestamp of the last probe (ISO string); exposed via GET /api/agent/runtimes
 _RUNTIME_LAST_PROBED: str = ""
@@ -147,7 +141,15 @@ async def _check_brain_ready(timeout_s: float = 2.0) -> dict:
         return detail
 
 
+def _stt_disabled() -> bool:
+    """``ZOE_STT_DISABLED=1``: the isolated text-harness instance never transcribes (no model, no download), so it neither warms
+    Moonshine nor waits on it for readiness. Never set on the live service."""
+    return env_bool("ZOE_STT_DISABLED", default=False)
+
+
 async def _check_stt_ready() -> dict:
+    if _stt_disabled():
+        return {"ok": True, "engine": "moonshine", "disabled": True, "loaded": False}
     try:
         from routers import voice_tts
 
@@ -171,11 +173,13 @@ async def _check_stt_ready() -> dict:
 async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
     from routers import voice_tts
 
-    mode = env_str("ZOE_TTS_MODE", "hybrid").lower()
+    mode = voice_tts.tts_mode()
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     detail: dict = {
         "ok": False,
-        "engine": "kokoro-waterfall",
+        # Default mode is Kokoro-only (owner decision 2026-10-21): no fallback
+        # voice, so readiness is exactly "is the Kokoro sidecar up".
+        "engine": "kokoro" if mode == voice_tts.TTS_MODE_KOKORO else "kokoro-waterfall",
         "mode": mode,
         "sidecar_url": sidecar_url,
     }
@@ -209,6 +213,9 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
         detail["error"] = f"http_{response.status_code}"
     except Exception as exc:
         detail["error"] = exc.__class__.__name__
+    if mode == voice_tts.TTS_MODE_KOKORO:
+        # No fallback voice in kokoro-only mode: Kokoro down = TTS not ready.
+        return detail
     detail["espeak_available"] = bool(voice_tts._has_espeak_ng())
     if mode in {"hybrid", "local", "offline"} and detail["espeak_available"]:
         detail["ok"] = True
@@ -878,17 +885,10 @@ async def _probe_runtimes() -> None:
             return False
 
     _RUNTIME_HEALTH["local_llm"] = await _check_port(11434)
-    _RUNTIME_HEALTH["hermes"] = await _check_port(8642)
-    _RUNTIME_HEALTH["openclaw"] = await _check_port(18789)
     global _RUNTIME_LAST_PROBED
     from datetime import datetime, timezone
     _RUNTIME_LAST_PROBED = datetime.now(timezone.utc).isoformat()
-    logger.info(
-        "Runtime health probe: local_llm=%s hermes=%s openclaw=%s",
-        _RUNTIME_HEALTH["local_llm"],
-        _RUNTIME_HEALTH["hermes"],
-        _RUNTIME_HEALTH["openclaw"],
-    )
+    logger.info("Runtime health probe: local_llm=%s", _RUNTIME_HEALTH["local_llm"])
 
 
 async def _runtime_health_refresh_loop() -> None:
@@ -1106,7 +1106,7 @@ async def _run_router_selftrain() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task, _loop_lag_task
+    global _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task, _loop_lag_task
 
     # First thing at startup: without this the root logger has no handler, so
     # every logger.info() in the service is discarded and WARNING+ falls through
@@ -1132,6 +1132,12 @@ async def lifespan(app: FastAPI):
             )
     except Exception as _env_exc:
         logger.warning("runtime_env bootstrap (non-fatal): %s", _env_exc)
+
+    # Fail loud on a retired ZOE_SPEAKER_MODEL (resemblyzer / dual / a typo): refuse to start rather than run a server that can
+    # recognise nobody. Deliberately outside any try/except (speaker_models.UnsupportedSpeakerModel carries the fix).
+    import speaker_models
+
+    logger.info("speaker model: %s", speaker_models.speaker_mode())
 
     logger.info("Initializing zoe-data database...")
     await init_db()
@@ -1183,7 +1189,6 @@ async def lifespan(app: FastAPI):
         logger.warning("memory embedder warmup failed (non-fatal): %s", _exc)
     await _run_memory_capture_startup_probe()
     asyncio.create_task(_memory_capture_retry_task(), name="memory_capture_retry")
-    _openclaw_bg_task = start_openclaw_background_tasks()
     _digest_bg_task = start_memory_digest_background()
     _consolidation_bg_task = start_memory_consolidation_background()
     # Idle-triggered "live → idle → store" consolidation (self-gates on
@@ -1215,9 +1220,12 @@ async def lifespan(app: FastAPI):
         logger.warning("event-loop lag monitor unavailable (non-fatal): %s", _lag_exc)
 
     try:
-        from routers.voice_tts import warm_moonshine
-        asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
-        logger.info("Voice STT warmup scheduled (Moonshine — the only STT engine)")
+        if _stt_disabled():
+            logger.info("Voice STT warmup skipped (ZOE_STT_DISABLED=1: isolated text-harness instance)")
+        else:
+            from routers.voice_tts import warm_moonshine
+            asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
+            logger.info("Voice STT warmup scheduled (Moonshine — the only STT engine)")
         try:
             import semantic_router as _sr
             if _sr.is_enabled():
@@ -1251,12 +1259,27 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_change_notices.run_loop(), name="change_notices")
     except Exception as _cn_exc:
         logger.warning("change notices loop not started (non-fatal): %s", _cn_exc)
+    try:  # the owner's once-a-day Telegram digest of pending day-review candidates (flag-dark ZOE_OMI_REVIEW_TELEGRAM)
+        import omi_review_digest as _omi_rd
+        if _omi_rd.enabled():
+            asyncio.create_task(_omi_rd.run_loop(), name="omi_review_digest")
+    except Exception as _omi_rd_exc:
+        logger.warning("omi review digest loop not started (non-fatal): %s", _omi_rd_exc)
     try:  # the pendant day review's DAYTIME fallback lane (flag-dark ZOE_OMI_DAY_REVIEW; the night window is the primary lane)
         import omi_day_review as _omi_dr
         if _omi_dr.enabled() and _omi_dr.lane() != "night":
             asyncio.create_task(_omi_dr.run_loop(), name="omi_day_review")
     except Exception as _omi_dr_exc:
         logger.warning("omi day review loop not started (non-fatal): %s", _omi_dr_exc)
+
+    try:  # wake-up alarms (flag-dark ZOE_ALARMS=off|on): the ring engine; docs/architecture/alarms.md
+        import alarm_music as _alarm_music
+        import alarms as _alarms
+        if _alarms.enabled():
+            _alarm_music.register()  # clock-radio music starts/stops with a ring
+            asyncio.create_task(_alarms.run_loop(), name="alarms_ring")
+    except Exception as _alarms_exc:
+        logger.warning("alarm ring loop not started (non-fatal): %s", _alarms_exc)
 
     # Runtime health probe — run once immediately, then refresh every 5 min
     await _probe_runtimes()
@@ -1269,18 +1292,25 @@ async def lifespan(app: FastAPI):
         logger.info("Background task watchdog started")
     except Exception as _wd_exc:
         logger.warning("Task watchdog not started (non-fatal): %s", _wd_exc)
-    # Zoe Agent: warm Gemma's KV cache in background so first real query is fast
-    # Check env directly to avoid circular import from routers.chat
-    _pi_mode = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
-    _jetson_mode = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
-    if _pi_mode or _jetson_mode:
-        try:
-            from zoe_agent import warmup_kv_cache
-            asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
-            tier = "Jetson" if _jetson_mode else "Pi"
-            logger.info("%s Agent: Gemma KV cache warmup scheduled (fires in 8s)", tier)
-        except Exception as _wup_exc:
-            logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
+    # Zoe Agent: warm Gemma's KV cache in background so first real query is fast.
+    # Unconditional: the HERMES_FAST_PATH / JETSON_AGENT_MODE gates were pinned to
+    # the Zoe-Agent side on the only host that exists (B3, 2026-10-18).
+    try:
+        from zoe_agent import warmup_kv_cache
+        asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
+        logger.info("Jetson Agent: Gemma KV cache warmup scheduled (fires in 8s)")
+    except Exception as _wup_exc:
+        logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
+
+    # Keep the household's brain prefix resident in the one llama slot between conversations (re-warms it after a helper
+    # batch / brain restart displaced it, so the next wake is a cache hit). ZOE_BRAIN_PREFIX_KEEPER (default on).
+    try:
+        import brain_prefix_keeper
+
+        if brain_prefix_keeper.enabled():
+            asyncio.create_task(brain_prefix_keeper.run_loop(), name="brain_prefix_keeper")
+    except Exception as _pk_exc:
+        logger.warning("Brain prefix keeper not started (non-fatal): %s", _pk_exc)
 
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
@@ -1300,14 +1330,12 @@ async def lifespan(app: FastAPI):
         from proactive.triggers.reminder_scan import ReminderScanTrigger
         from proactive.triggers.morning_checkin import MorningCheckInTrigger
         from proactive.triggers.evening_windown import EveningWindDownTrigger
-        from proactive.triggers.openclaw_trigger import OpenClawTrigger
         from proactive.triggers.people_health import PeopleHealthTrigger
         from proactive.triggers.people_birthday import PeopleBirthdayTrigger
         from proactive.triggers.emotional_followup import EmotionalFollowUpTrigger
         register_trigger(ReminderScanTrigger())
         register_trigger(MorningCheckInTrigger())
         register_trigger(EveningWindDownTrigger())
-        register_trigger(OpenClawTrigger())
         register_trigger(PeopleHealthTrigger())
         register_trigger(PeopleBirthdayTrigger())
         # Samantha proactivity: gentle follow-up on captured worries. Registered
@@ -1321,7 +1349,7 @@ async def lifespan(app: FastAPI):
         except ImportError:
             logger.info(
                 "Proactive engine started (ReminderScanTrigger, MorningCheckInTrigger,"
-                " EveningWindDownTrigger, OpenClawTrigger registered)"
+                " EveningWindDownTrigger registered)"
             )
         start_proactive_engine()
         # Reconcile after the scheduler is live: re-register any unfired reminder
@@ -2036,6 +2064,12 @@ async def lifespan(app: FastAPI):
     except Exception as _lk_exc:
         logger.warning("LiveKit setup (non-fatal): %s", _lk_exc)
 
+    try:  # one-time timer snapshot read, off the event loop, before the first request is served
+        import skybridge_service as _sky_timers
+        await _sky_timers.preload_timers()
+    except Exception as _tm_exc:  # noqa: BLE001
+        logger.warning("timer store preload (non-fatal): %s", _tm_exc)
+
     yield
     # Reap run_to_completion children BEFORE interpreter teardown:
     # ThreadPoolExecutor's exit hook joins workers ahead of ordinary atexit
@@ -2066,7 +2100,7 @@ async def lifespan(app: FastAPI):
         logger.warning("zoe-core worker shutdown timed out (non-fatal)")
     except Exception:
         logger.warning("zoe-core worker shutdown failed (non-fatal)", exc_info=True)
-    for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task,
+    for task in (_digest_bg_task, _zoe_update_bg_task,
                  _consolidation_bg_task, _runtime_health_task, _loop_lag_task):
         if task and not task.done():
             task.cancel()
@@ -2165,7 +2199,10 @@ def _allowed_browser_origins() -> frozenset[str]:
     here cannot leave the HTTP and WebSocket policies inconsistent.
     """
     extra = env_list("ZOE_ALLOWED_WS_ORIGINS")
-    return frozenset(ALLOWED_ORIGINS) | _SELF_LAN_ORIGINS | frozenset(extra)
+    # The relay origin (https://<hid>.zoe.internal, from ZOE_RELAY_HOSTNAME) joins ONLY while ZOE_RELAY_INGRESS is on: the kiosk
+    # opened over the relay presents it, and without it the push socket refuses the kiosk (the 2026-07-03 incident class).
+    relay_origin = relay_ingress.origin()
+    return frozenset(ALLOWED_ORIGINS) | _SELF_LAN_ORIGINS | frozenset(extra) | (frozenset({relay_origin}) if relay_origin else frozenset())
 
 
 def _ws_origin_allowed(websocket: WebSocket) -> bool:
@@ -2221,6 +2258,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Relay ingress gate (flag-dark, ZOE_RELAY_INGRESS - a no-op while it is off). Added LAST so it is the OUTERMOST middleware: a
+# relayed request without a bound client certificate AND a matching device credential is refused before CORS or any route runs.
+app.add_middleware(relay_ingress.RelayIngressMiddleware)
+
 app.include_router(calendar_router)
 app.include_router(lists_router)
 app.include_router(people_router)
@@ -2235,7 +2276,6 @@ app.include_router(_agent_card_router)
 app.include_router(notifications_router)
 app.include_router(chat_router)
 app.include_router(ui_router)
-app.include_router(openclaw_router)
 app.include_router(voice_tts_router)
 from routers.voice_settings import router as voice_settings_router  # noqa: E402
 from routers.face_id import router as face_id_router  # noqa: E402
@@ -2258,6 +2298,10 @@ app.include_router(panel_provision_router)
 # Flag-dark (ZOE_PANEL_KIOSK_CREDENTIAL); both routes 404 while it is off.
 from routers.panel_kiosk import router as panel_kiosk_router
 app.include_router(panel_kiosk_router)
+# Relay client-certificate binding (panel-anywhere R1): /api/panels/PANEL/client-certs. 404 while ZOE_RELAY_INGRESS is off.
+from routers.panel_relay import gate_router as panel_relay_gate_router, router as panel_relay_router
+app.include_router(panel_relay_router)
+app.include_router(panel_relay_gate_router)
 # Registered AFTER panel_provision on purpose: that router's more specific
 # /api/panels/provision/{code} must win over /api/panels/{device_id}/config
 # (FastAPI matches routes in registration order).
@@ -2265,12 +2309,17 @@ from routers.panel_config import router as panel_config_router
 app.include_router(panel_config_router)
 from routers.rooms import router as rooms_router
 app.include_router(rooms_router)
+# GET /api/system/stats - the desktop dashboard's System card (member-only, read-only).
+from routers.system_stats import router as system_stats_router
+app.include_router(system_stats_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
 from routers.music_setup import router as music_setup_router
 app.include_router(music_setup_router)
 from routers.multica_ui import router as multica_ui_router
 app.include_router(multica_ui_router)
+from routers.music_ma_ui import router as music_ma_ui_router
+app.include_router(music_ma_ui_router)
 from routers.handoff import router as handoff_router
 app.include_router(handoff_router)
 from routers.smart_home_setup import router as smart_home_setup_router
@@ -2287,6 +2336,8 @@ app.include_router(geo_router)
 
 from routers.ha_control import router as ha_control_router
 app.include_router(ha_control_router)
+from routers.ha_ui import router as ha_ui_router
+app.include_router(ha_ui_router)
 
 from routers.auth import router as auth_router
 app.include_router(auth_router)
@@ -2298,6 +2349,13 @@ app.include_router(struggles_router)
 # Change notices (change_notices, ZOE_CHANGE_NOTICES): the owner's preferences, status and kill switch; admin persons only.
 from routers.change_notices import router as change_notices_router  # noqa: E402
 app.include_router(change_notices_router)
+
+# Zoe's own iPhone app, M0 (phone_app, ZOE_PHONE_APP, default off = every route 404s): pairing by panel QR + push-token registry.
+from routers.phone_app import router as phone_app_router  # noqa: E402
+app.include_router(phone_app_router)
+# Wake-up alarms (alarms, ZOE_ALARMS, default off = every route 404s): docs/architecture/alarms.md.
+from routers.alarms import router as alarms_router  # noqa: E402
+app.include_router(alarms_router)
 
 try:
     from routers.voice_livekit import router as voice_livekit_router
@@ -2323,6 +2381,14 @@ from routers import omi_recordings as _omi_router  # noqa: E402
 _omi_router.register(app)
 from routers import omi_day_review as _omi_dr_router  # noqa: E402
 _omi_dr_router.register(app)
+# Panel review cards (flag-dark): taps on the "on your plate" / day review cards a voice turn pushes to its panel. Mounted ONLY when
+# ZOE_PANEL_REVIEW_CARDS is on - flag off = 404. The voice side is a fast tier (panel_review_cards.tier).
+from routers import panel_review_cards as _panel_cards_router  # noqa: E402
+_panel_cards_router.register(app)
+# Memories card (flag-dark): taps on the "what I know about you" card a voice turn pushes to its panel (That's wrong / Forget /
+# Where's this from). Mounted ONLY when ZOE_MEMORIES_VOICE is on - flag off = 404. The voice side is memories_voice.tier.
+from routers import memories_card as _memories_card_router  # noqa: E402
+_memories_card_router.register(app)
 
 # Contact cards (flag-dark): the member's own multi-value contact fields with provenance, vCard export/import and the merge-review
 # queue (migration 0053, contacts_store.py). Mounted ONLY when ZOE_CONTACTS_API is on — flag off = 404. No sync engine.
@@ -2396,6 +2462,16 @@ async def root_health():
             "detail": _pool_health_cache["detail"],
         },
     }
+    # Deploy quiet-wait signal (scripts/maintenance/wait_household_quiet.sh): seconds since the
+    # newest panel voice turn, null when none since this process started. A bare number, no
+    # household data; never allowed to fail /health.
+    try:
+        # Household-filtered stamp only: _VOICE_SESSIONS is refreshed by probe/harness panel commands too.
+        from voice_activity import last_activity_age_s
+        _age = last_activity_age_s()
+        body["last_voice_turn_age_s"] = None if _age is None else round(max(0.0, _age), 1)
+    except Exception:  # noqa: BLE001
+        body["last_voice_turn_age_s"] = None
     if not _pool_health_cache["healthy"]:
         return JSONResponse(body, status_code=503)
     return body
@@ -2466,7 +2542,63 @@ def _is_ws_guest(user: dict) -> bool:
     return str(user.get("user_id") or "") == GUEST_USER_ID or str(user.get("role") or "").lower() == "guest"
 
 
-async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> str | None:
+def _push_channel_is_panel(channel: str) -> bool:
+    """``panel_<id>`` and ``push.NO_PANEL_CHANNEL`` (``panel:none``): channels only a panel's own socket joins."""
+    return str(channel or "").strip().lower().startswith(("panel_", "panel:"))
+
+
+def _device_token_may_join(device_info: dict, panel_id: str) -> bool:
+    """A device token joins only ITS OWN panel's channel (``ZOE_PANEL_PUSH_PROOF``: enforce refuses another
+    panel's, shadow admits and logs, off skips). A token row without a panel id names no panel: refused too."""
+    import panel_principal
+
+    token_panel = str((device_info or {}).get("panel_id") or "").strip()
+    if token_panel and token_panel == str(panel_id or "").strip():
+        return True
+    mode = panel_principal.panel_push_mode()
+    if mode == "off":
+        return True
+    log_throttled(
+        logger, logging.WARNING, f"panel-push-token:{token_panel}:{panel_id}",
+        "panel push: %s panel %s's device token joining panel %s",
+        "WOULD REFUSE (shadow)" if mode == "shadow" else "refused", token_panel[:64], str(panel_id)[:64],
+    )
+    return mode == "shadow"
+
+
+async def _panel_push_proven(websocket, panel_id: str) -> bool:
+    """A socket WITHOUT a member session may join ``panel_<panel_id>`` only when it proves it IS that
+    panel (``panel_principal.request_is_this_panel``: the kiosk credential naming it, or its registered
+    address via nginx's X-Real-IP). The device-token path is checked in ``websocket_push`` itself.
+
+    ``ZOE_PANEL_PUSH_PROOF`` (per call): ``enforce`` (default) refuses, ``shadow`` admits and logs
+    "would refuse", ``off`` skips the check. No socket (a direct call) cannot prove anything: refused
+    under enforce. Never raises."""
+    import panel_principal
+
+    mode = panel_principal.panel_push_mode()
+    if mode == "off":
+        return True
+    try:
+        proven = websocket is not None and await panel_principal.request_is_this_panel(websocket, panel_id)
+    except Exception:  # noqa: BLE001 - fail closed
+        proven = False
+    if proven:
+        return True
+    try:
+        peer = panel_principal.trusted_client_ip(websocket) if websocket is not None else ""
+    except Exception:  # noqa: BLE001
+        peer = ""
+    log_throttled(
+        logger, logging.WARNING, f"panel-push-proof:{panel_id}:{peer}",
+        "panel push: %s a subscriber for panel %s from %s without the panel's credential (no member session, "
+        "no device token, kiosk credential or registered address)",
+        "WOULD REFUSE (shadow)" if mode == "shadow" else "refused", str(panel_id)[:64], str(peer)[:64],
+    )
+    return mode == "shadow"
+
+
+async def _resolve_subscribable_panel(panel_id: str, session_id: str | None, websocket=None) -> str | None:
     """Resolve the *canonical* panel channel a browser push socket may subscribe to.
 
     Returns the panel_id whose ``panel_{id}`` channel the socket should join, or
@@ -2501,12 +2633,14 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
       * a VALID guest session (role/user_id ``guest``) uses its bound row when it has one,
         else the SAME registered-panel guest policy (``panels.allow_guest``) -- no wider
         than a session-less socket, so the member->guest reclaim window cannot deafen it.
+      * a socket with NO member session (none, invalid, or a guest) must ALSO prove it is the
+        panel it joins (``_panel_push_proven``; ``websocket`` is the handshake it is judged by).
     A user can never reach a panel their session/account isn't bound to (every
     query filters on ``user_id``).
     """
     user = await _resolve_ws_session(session_id)
     if user is None:
-        if panel_id and await _panel_allows_guest_push(panel_id):
+        if panel_id and await _panel_allows_guest_push(panel_id) and await _panel_push_proven(websocket, panel_id):
             return panel_id
         return None
     user_id = str(user.get("user_id") or "")
@@ -2514,6 +2648,9 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     if not user_id:
         return None
     if _is_ws_guest(user):
+        # A guest session is not evidence of anything (POST /api/auth/guest mints one for any
+        # caller), so every panel channel a guest reaches - its bound row or the guest policy -
+        # also needs the panel's own proof (_panel_push_proven, 2026-10-19).
         # A VALID guest session (a kiosk that recovered from an expired PIN session mints one).
         # Its own ui_panel_sessions row does not exist yet while the panel is still owned by the
         # member it replaced (routers/ui_actions._authorize_panel refuses the guest's bind with
@@ -2528,8 +2665,8 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
             return None
         resolved = await _resolve_bound_panel(user_id, session_id, panel_id)
         if resolved:
-            return resolved
-        if await _panel_allows_guest_push(panel_id):
+            return resolved if await _panel_push_proven(websocket, resolved) else None
+        if await _panel_allows_guest_push(panel_id) and await _panel_push_proven(websocket, panel_id):
             return panel_id
         return None
     if role in {"admin", "agent"}:
@@ -2700,11 +2837,20 @@ async def websocket_push(
         # socket joins the channel pushes are actually sent to even when the client
         # connected under a different alias id.
         subscribe_panel_id = panel_id
+        if device_info and not _device_token_may_join(device_info, panel_id):
+            await websocket.close(1008, "Device token is for another panel")
+            return
         if not device_info:
-            subscribe_panel_id = await _resolve_subscribable_panel(panel_id, session_id)
+            subscribe_panel_id = await _resolve_subscribable_panel(panel_id, session_id, websocket)
             if not subscribe_panel_id:
                 await websocket.close(1008, "Invalid device token")
                 return
+        # RELAYED socket: it may only join the channel of the panel its certificate + credential were proven to be (a stolen panel
+        # must not listen in on the household's other panels). `subscribe_panel_id` is the RESOLVED id (an alias maps to its
+        # registered panel first), so an alias of its own panel still works.
+        if not relay_ingress.panel_subscription_allowed(subscribe_panel_id):
+            await websocket.close(1008, "Panel not bound to this certificate")
+            return
         # Panel token or bound browser session verified; subscribe to panel push.
         await broadcaster.connect_panel(websocket, subscribe_panel_id)
         # Clean up under the RESOLVED id we actually subscribed to — not the
@@ -2734,6 +2880,20 @@ async def websocket_push(
         if not _ws_role_signed_in(user):
             await websocket.close(1008, "Insufficient privileges")
             return
+        # A panel's channel is joined through ?panel_id= (the panel's own proof, above), never
+        # by NAME: ?channel=panel_<id> let any signed-in socket read another panel's per-turn
+        # cards and counted as a live panel subscriber. Admin/agent keep it (as with panel_id).
+        if _push_channel_is_panel(channel) and not _ws_may_subscribe_for_anyone(user):
+            import panel_principal
+
+            if panel_principal.panel_push_mode() == "enforce":
+                await websocket.close(1008, "Panel channels need the panel")
+                return
+            if panel_principal.panel_push_mode() == "shadow":
+                log_throttled(
+                    logger, logging.WARNING, f"panel-push-by-name:{channel}",
+                    "panel push: WOULD REFUSE (shadow) a member socket joining %s by name", str(channel)[:64],
+                )
         # Auth OK – connect to requested channel
         await broadcaster.connect(
             websocket, channel, user_id=str(user.get("user_id") or "")
@@ -2925,442 +3085,18 @@ async def _resolve_ws_session(session_id: str | None) -> dict | None:
     from fastapi import HTTPException
 
     try:
-        return await _validate_with_auth_service(session_id)
+        user = await _validate_with_auth_service(session_id)
     except HTTPException:
         return None
-
-
-async def _resolve_ws_user(session_id: str) -> str:
-    """Resolve a browser session_id to a user_id via zoe-auth HTTP.
-
-    Calls the same /api/auth/user endpoint that get_current_user uses in auth.py.
-    Falls back to 'voice-guest' on any auth failure or timeout.
-    """
-    if not session_id:
-        return "voice-guest"
-    try:
-        import httpx
-        auth_url = os.getenv("ZOE_AUTH_URL", "http://localhost:8002").rstrip("/")
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get(
-                f"{auth_url}/api/auth/user",
-                headers={"X-Session-ID": session_id},
-            )
-        if r.status_code == 200:
-            data = r.json()
-            uid = data.get("user_id") or data.get("id") or ""
-            return uid or "voice-guest"
-    except Exception:
-        pass
-    return "voice-guest"
-
-
-_VOICE_COMPOSE_BUDGET_S = float(os.environ.get("ZOE_COMPOSE_VOICE_BUDGET_S", "8"))
-
-
-async def _voice_compose_cards_frame(message_text: str, reply_text: str, user_id: str):
-    """Flag-gated generative UI for the PANEL: after the brain's spoken reply has
-    fully streamed (audio frames already sent; playback is client-side), compose
-    a card and return the ws `cards` frame for it — or None (flag off / empty
-    reply / failure / budget exceeded). Never raises; never delays speech."""
-    try:
-        from ui_compose import compose_card, compose_enabled
-
-        if not compose_enabled() or not (reply_text or "").strip():
+    if user is not None and relay_ingress.current_panel() is not None:
+        # RELAYED socket: a bare session id is not enough for a member (the kiosk's browser keeps one in storage). The member
+        # needs a fresh sign-in at the panel the socket was proven to be; a guest session passes unchanged (panel-guest policy),
+        # and an auth-outage principal is refused (never downgraded to a guest over the relay).
+        if user.get("auth_degraded") or user.get("__zoe_degraded__"):
             return None
-        composed = await asyncio.wait_for(
-            compose_card(message_text, reply_text, user_id=user_id),
-            timeout=_VOICE_COMPOSE_BUDGET_S,
-        )
-        if not composed:
+        if _ws_role_signed_in(user) and not await relay_ingress.member_allowed_here(str(user.get("user_id") or "")):
             return None
-        return {
-            "type": "cards",
-            "result": {
-                "handled": True,
-                "intent": {"domain": "compose", "action": "composed"},
-                "cards": [composed],
-                "spoken_summary": "",
-                "actions": [],
-            },
-        }
-    except asyncio.TimeoutError:
-        logger.info("voice compose skipped: exceeded budget %.1fs", _VOICE_COMPOSE_BUDGET_S)
-        return None
-    except Exception as exc:  # noqa: BLE001 — additive, never break the turn
-        logger.debug("voice compose failed (non-fatal): %s", exc)
-        return None
-
-
-async def _resolve_voice_cards(message_text: str, user_id: str, context: dict | None = None) -> dict:
-    """Resolve voice text to real Skybridge data cards when a supported domain exists."""
-    try:
-        from skybridge_service import ROUTE_ON_DEMAND, resolve_skybridge_request
-
-        # A conversational voice turn: the router veto applies. This lane does not
-        # run the router itself, so Skybridge runs it on demand — only when it
-        # has classified something (SKYBRIDGE_GATE, ZOE_SKYBRIDGE_ROUTER_VETO).
-        return await resolve_skybridge_request(
-            message_text, user_id, context=context, router_decision=ROUTE_ON_DEMAND
-        )
-    except Exception as exc:
-        logger.warning("Voice WS Skybridge resolve failed: %s", exc)
-        return {"handled": False, "cards": [], "spoken_summary": ""}
-
-
-# Read-only intents the voice WS may answer instantly (no writes → cannot
-# double-execute a skybridge-card action). Kept narrow on purpose.
-_VOICE_INSTANT_INTENTS = frozenset({
-    "calculate", "time_query", "date_query", "greeting", "acknowledgement", "status_check",
-})
-
-
-@app.websocket("/ws/voice/")
-async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
-    """Local voice session WebSocket for voice.html.
-
-    Accepts text and binary (audio) messages:
-    - Text JSON {"type": "text", "message": "..."} → routed through zoe_agent
-    - Text JSON {"type": "cancel"} → sets cancel flag for in-flight pipeline
-    - Binary → transcribed via Moonshine then routed as text
-    Emits {"type": "state"}, {"type": "transcript"}, {"type": "audio"}, {"type": "done"},
-    plus {"type": "activity", "phase": "start"|"result", "tool": "<name>"} frames
-    during brain tool turns (name+phase only — args/results never cross the wire)
-    so the touch panel's live-activity strip can show what Zoe is doing.
-    """
-    # CSWSH guard. NOTE: guest authentication for this endpoint is intentionally
-    # OUT OF SCOPE here (a separate threat-model decision about LAN-kiosk guest
-    # voice); this only closes the cross-web-origin vector. The native kiosk
-    # sends no Origin header and is unaffected.
-    if not await _enforce_ws_origin(websocket):
-        return
-    await websocket.accept()
-    ws_session_id = session_id or f"ws-voice-{_uuid_mod.uuid4().hex[:8]}"
-    user_id = await _resolve_ws_user(session_id)
-    # Home control (2026-10-18): any LAN client reaches this socket; driving the house needs a member or the panel.
-    import panel_principal as _pp_ws
-
-    await _pp_ws.record_turn_home_control(
-        websocket,
-        {"user_id": user_id, "role": "guest" if _pp_ws.is_guest_id(user_id) else "member"},
-    )
-
-    await websocket.send_json({"type": "state", "state": "ambient"})
-
-    # Mutable cancel flag — text handler sets it; streaming pipeline checks it
-    # between sentence boundaries. True mid-stream cancel requires task refactor (future).
-    _ws_cancelled: list[bool] = [False]
-    skybridge_context: dict = {}
-    # Zoe's last spoken reply on THIS socket: the WS does not persist its turns, so the "did she just make an offer?" check
-    # for a bare "sounds good" reads this copy instead of the stored transcript.
-    _ws_last_reply = ""
-
-    try:
-        while True:
-            message_text: str | None = None
-            try:
-                raw = await websocket.receive()
-            except WebSocketDisconnect:
-                break
-
-            if raw.get("type") == "websocket.disconnect":
-                break
-
-            if raw.get("bytes"):
-                # Binary audio chunk: detect format from magic bytes, write temp file, transcribe.
-                # Browser MediaRecorder always sends WebM/opus (magic: \x1a\x45\xdf\xa3).
-                # Preserve the real container suffix; WebM/opus must not be mislabeled as WAV.
-                audio_bytes: bytes = raw["bytes"]
-                await websocket.send_json({"type": "state", "state": "thinking"})
-                try:
-                    import tempfile, os as _os
-                    from routers.voice_tts import _transcribe_audio
-                    _magic = audio_bytes[:4] if len(audio_bytes) >= 4 else b""
-                    _suffix = ".wav" if _magic == b"RIFF" else ".webm"
-                    with tempfile.NamedTemporaryFile(suffix=_suffix, delete=False) as tf:
-                        tf.write(audio_bytes)
-                        tmp_path = tf.name
-                    try:
-                        message_text = await _transcribe_audio(tmp_path)
-                    finally:
-                        try:
-                            _os.unlink(tmp_path)
-                        except OSError:
-                            pass
-                    if message_text:
-                        await websocket.send_json({"type": "transcript", "role": "user", "text": message_text})
-                except Exception as _exc:
-                    logger.warning("Voice WS audio transcription failed: %s", _exc)
-                    await websocket.send_json({"type": "state", "state": "ambient"})
-                    continue
-
-            elif raw.get("text"):
-                text_data: str = raw["text"]
-                if text_data == "ping":
-                    await websocket.send_json({"type": "pong"})
-                    continue
-                msg = None
-                try:
-                    msg = __import__("json").loads(text_data)
-                except ValueError:
-                    msg = None
-                if isinstance(msg, dict):
-                    if is_wake_payload(msg):
-                        for event in wake_ack_events():
-                            await websocket.send_json(event)
-                        continue
-                    if msg.get("type") == "text":
-                        message_text = msg.get("message", "").strip()
-                    elif msg.get("type") == "cancel":
-                        _ws_cancelled[0] = True
-                        continue
-                else:
-                    if is_wake_text(text_data):
-                        for event in wake_ack_events():
-                            await websocket.send_json(event)
-                        continue
-
-            if not message_text:
-                continue
-
-            # ── "Let's talk" conversation-session opener (flag-gated) ──────────
-            # Mirrors the wake-ack early-return above: a session opener is
-            # acknowledged instantly with a warm line and NEVER enters the
-            # skybridge/intent/brain lanes. On a hit the LiveKit room is warmed
-            # fire-and-forget and the final "done" event carries
-            # conversation_mode=true so the panel can switch to the continuous
-            # LiveKit mode. DEFAULT OFF via ZOE_CONVERSATION_OPENER_ENABLED
-            # (checked per call inside maybe_conversation_opener).
-            _co_ack = None
-            try:
-                from conversation_opener import maybe_conversation_opener
-                _co_ack = maybe_conversation_opener(message_text)
-            except Exception as _co_exc:
-                logger.debug("conversation opener fast-path skipped: %s", _co_exc)
-                _co_ack = None
-            if _co_ack:
-                import base64 as _b64co
-                _ws_last_reply = str(_co_ack.get("phrase") or "")
-                await websocket.send_json({"type": "state", "state": "responding"})
-                await websocket.send_json(
-                    {"type": "transcript", "role": "zoe", "text": _co_ack["phrase"]}
-                )
-                try:
-                    from routers.voice_tts import _synthesize_kokoro_sidecar as _co_tts
-                    _co_wav = await _co_tts(_co_ack["phrase"])
-                    if _co_wav:
-                        await websocket.send_json({
-                            "type": "audio",
-                            "audio_base64": _b64co.b64encode(_co_wav).decode("ascii"),
-                            "content_type": "audio/wav",
-                        })
-                except Exception as _co_tts_exc:
-                    logger.debug(
-                        "conversation opener TTS failed (text already sent): %s",
-                        _co_tts_exc,
-                    )
-                await websocket.send_json({"type": "state", "state": "ambient"})
-                await websocket.send_json({"type": "done", "conversation_mode": True})
-                continue
-
-            # Reset cancel flag at the start of each new pipeline
-            _ws_cancelled[0] = False
-
-            await websocket.send_json({"type": "state", "state": "thinking"})
-            skybridge_result = await _resolve_voice_cards(message_text, user_id, context=skybridge_context)
-            if skybridge_result.get("handled"):
-                skybridge_context = skybridge_result.get("skybridge_context") or skybridge_context
-                await websocket.send_json({"type": "cards", "result": skybridge_result})
-                await websocket.send_json({"type": "skybridge_context", "context": skybridge_context})
-                spoken_summary = str(skybridge_result.get("spoken_summary") or "").strip()
-                # a handled card turn IS Zoe's latest reply: a "sounds good" after it must not accept an older offer
-                _ws_last_reply = spoken_summary
-                if spoken_summary:
-                    await websocket.send_json({"type": "transcript", "role": "assistant", "text": spoken_summary})
-                await websocket.send_json({"type": "state", "state": "ambient"})
-                await websocket.send_json({"type": "done"})
-                continue
-            skybridge_context = {}
-
-            # ── Instant intent fast-path ────────────────────────────────────────
-            # Side-effect-free commands the card path doesn't cover (calc, clock,
-            # greeting, acknowledgement, presence check) — answer + speak without
-            # waking the ~2-4s brain. Restricted to READ-ONLY intents so it can
-            # never double-execute a write the skybridge path already handled.
-            #
-            # Detect+execute is wrapped so a FAILURE THERE (before any send) falls
-            # through to the brain. But once we have a reply and start sending, we
-            # are committed: TTS is best-effort and we never fall through (avoids a
-            # duplicate transcript if the brain path also ran).
-            _fp_reply = None
-            try:
-                from intent_router import (
-                    ack_answers_offer as _fp_ack_offer,
-                    detect_intent as _fp_detect,
-                    execute_intent as _fp_exec,
-                )
-                _fp_intent = _fp_detect(message_text, log_miss=False, user_id=user_id)
-                # "sounds good" right after Zoe's OFFER accepts it: the canned "Okay." would swallow the offer, so the
-                # turn goes on to the brain, which has the conversation.
-                if (_fp_intent is not None and _fp_intent.name in _VOICE_INSTANT_INTENTS
-                        and not await _fp_ack_offer(_fp_intent, user_id, previous=_ws_last_reply)):
-                    _fp_reply = await _fp_exec(_fp_intent, user_id=user_id)
-            except Exception as _fp_exc:
-                logger.debug("voice instant fast-path detect/execute skipped: %s", _fp_exc)
-                _fp_reply = None
-            if _fp_reply:
-                _ws_last_reply = _fp_reply
-                import base64 as _b64fp
-                await websocket.send_json({"type": "state", "state": "responding"})
-                await websocket.send_json({"type": "transcript", "role": "zoe", "text": _fp_reply})
-                try:
-                    from routers.voice_tts import _synthesize_kokoro_sidecar as _fp_tts
-                    _fp_wav = await _fp_tts(_fp_reply)
-                    if _fp_wav:
-                        await websocket.send_json({
-                            "type": "audio",
-                            "audio_base64": _b64fp.b64encode(_fp_wav).decode("ascii"),
-                            "content_type": "audio/wav",
-                        })
-                except Exception as _fp_tts_exc:
-                    logger.debug("voice fast-path TTS failed (text already sent): %s", _fp_tts_exc)
-                await websocket.send_json({"type": "state", "state": "ambient"})
-                await websocket.send_json({"type": "done"})
-                continue
-
-            # ── Streaming LLM + per-sentence TTS ────────────────────────────────
-            # Track LLM output and TTS output separately so fallback only re-runs
-            # what actually failed (avoids double-transcript if LLM works but TTS is down).
-            _ws_last_reply = ""   # an aborted / failed brain turn leaves no stale offer behind
-            _stream_llm_reply = ""   # filled once LLM streaming completes
-            _stream_tts_ok = False   # True if at least one audio chunk was sent
-            try:
-                import base64 as _b64
-                from brain_dispatch import brain_streaming  # zoe-core by default
-                from routers.voice_tts import (  # type: ignore
-                    _extract_complete_sentences,
-                    _forward_voice_activity,
-                    _synthesize_kokoro_sidecar,
-                )
-
-                token_buf = ""
-                full_reply: list[str] = []
-                tts_started = False
-                # id→name map for this turn so a result sentinel (which often
-                # omits the tool name) closes under the tool that started.
-                _activity_tools: dict = {}
-
-                async for delta in brain_streaming(
-                    message_text, ws_session_id, user_id=user_id, voice_mode=True
-                ):
-                    if _ws_cancelled[0]:
-                        break
-                    # Brain "what I'm doing" sentinels (__TOOL__/__THINKING__) ride
-                    # alongside the spoken stream — never buffer them toward TTS.
-                    # Tool start/result phases are forwarded to the panel as
-                    # {"type":"activity","phase":...,"tool":...} frames (name+phase
-                    # only; args/results never cross the wire) so the touch panel's
-                    # live-activity strip can show what Zoe is doing mid-turn.
-                    if await _forward_voice_activity(delta, websocket.send_json, _activity_tools):
-                        continue
-                    token_buf += delta
-                    sentences, token_buf = _extract_complete_sentences(token_buf)
-                    for sentence in sentences:
-                        if _ws_cancelled[0]:
-                            break
-                        full_reply.append(sentence)
-                        if not tts_started:
-                            await websocket.send_json({"type": "state", "state": "responding"})
-                            tts_started = True
-                        wav = await _synthesize_kokoro_sidecar(sentence)
-                        if wav:
-                            _stream_tts_ok = True
-                            await websocket.send_json({
-                                "type": "audio",
-                                "audio_base64": _b64.b64encode(wav).decode("ascii"),
-                                "content_type": "audio/wav",
-                            })
-
-                # Flush any remaining text that didn't end with punctuation
-                if not _ws_cancelled[0] and token_buf.strip():
-                    full_reply.append(token_buf.strip())
-                    if not tts_started:
-                        await websocket.send_json({"type": "state", "state": "responding"})
-                    wav = await _synthesize_kokoro_sidecar(token_buf.strip())
-                    if wav:
-                        _stream_tts_ok = True
-                        await websocket.send_json({
-                            "type": "audio",
-                            "audio_base64": _b64.b64encode(wav).decode("ascii"),
-                            "content_type": "audio/wav",
-                        })
-
-                _stream_llm_reply = " ".join(p.strip() for p in full_reply if p.strip())
-                if _stream_llm_reply:
-                    await websocket.send_json({"type": "transcript", "role": "zoe", "text": _stream_llm_reply})
-
-            except Exception as _stream_exc:
-                logger.error("Voice WS streaming error: %s", _stream_exc, exc_info=True)
-
-            if not _ws_cancelled[0]:
-                if not _stream_llm_reply:
-                    # LLM streaming failed entirely → full single-shot fallback
-                    try:
-                        import base64 as _b64
-                        from brain_dispatch import brain_oneshot  # zoe-core by default
-                        from routers.voice_tts import synthesize as _synth  # type: ignore
-                        _fallback_response = await brain_oneshot(
-                            message_text, ws_session_id, user_id, voice_mode=True
-                        )
-                        await websocket.send_json({"type": "state", "state": "responding"})
-                        await websocket.send_json({"type": "transcript", "role": "zoe", "text": _fallback_response})
-                        try:
-                            _tts_resp = await _synth({"text": _fallback_response}, caller={"source": "ws", "user_id": user_id})
-                            await websocket.send_json({
-                                "type": "audio",
-                                "audio_base64": _b64.b64encode(_tts_resp.body).decode("ascii"),
-                                "content_type": _tts_resp.media_type,
-                                "text": _fallback_response,
-                            })
-                        except Exception as _tts_exc:
-                            logger.warning("Voice WS TTS fallback failed: %s", _tts_exc)
-                            await websocket.send_json({"type": "text", "content": _fallback_response})
-                        _stream_llm_reply = _fallback_response  # one reply var for the compose hook
-                    except Exception as _fallback_exc:
-                        logger.error("Voice WS fallback error: %s", _fallback_exc)
-
-                elif not _stream_tts_ok:
-                    # LLM worked but Kokoro TTS was down → try synthesize (has Edge TTS fallback)
-                    try:
-                        import base64 as _b64
-                        from routers.voice_tts import synthesize as _synth  # type: ignore
-                        _tts_resp = await _synth({"text": _stream_llm_reply}, caller={"source": "ws", "user_id": user_id})
-                        await websocket.send_json({
-                            "type": "audio",
-                            "audio_base64": _b64.b64encode(_tts_resp.body).decode("ascii"),
-                            "content_type": _tts_resp.media_type,
-                        })
-                    except Exception as _tts_exc:
-                        logger.warning("Voice WS TTS synthesize fallback failed: %s", _tts_exc)
-
-            _ws_last_reply = _stream_llm_reply or ""
-
-            # ── Generative UI on the panel (flag-gated): all audio frames are
-            # already sent (playback is client-side), so composing here cannot
-            # delay speech. The panel renders via the deployed `compose` entry.
-            if not _ws_cancelled[0] and _stream_llm_reply:
-                _cframe = await _voice_compose_cards_frame(message_text, _stream_llm_reply, user_id)
-                # Re-check cancel AFTER the compose window (a cancel can arrive
-                # during the up-to-8s compose await; the card must not land on a
-                # turn the user already cancelled).
-                if _cframe and not _ws_cancelled[0]:
-                    await websocket.send_json(_cframe)
-
-            await websocket.send_json({"type": "done"})
-            await websocket.send_json({"type": "state", "state": "ambient"})
-
-    except Exception as _exc:
-        logger.warning("Voice WS closed: %s", _exc)
+    return user
 
 
 if __name__ == "__main__":

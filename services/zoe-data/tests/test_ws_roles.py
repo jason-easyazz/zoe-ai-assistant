@@ -49,13 +49,13 @@ def test_guest_or_identity_less_is_refused(user):
 
 @pytest.mark.parametrize("role", ["user", "family_member", "child", "member", "teenager"])
 def test_non_admin_roles_are_scoped_to_their_own_channel(role):
-    assert main._ws_channel_forbidden({"user_id": "asya", "role": role}, "asya") is False
-    assert main._ws_channel_forbidden({"user_id": "asya", "role": role}, "jason") is True
+    assert main._ws_channel_forbidden({"user_id": "casey", "role": role}, "casey") is False
+    assert main._ws_channel_forbidden({"user_id": "casey", "role": role}, "jason") is True
 
 
 @pytest.mark.parametrize("role", ["admin", "family-admin", "agent"])
 def test_admin_alias_and_agent_may_subscribe_for_anyone(role):
-    assert main._ws_channel_forbidden({"user_id": "jason", "role": role}, "asya") is False
+    assert main._ws_channel_forbidden({"user_id": "jason", "role": role}, "casey") is False
 
 
 def test_no_handler_inlines_a_role_tuple():
@@ -87,8 +87,8 @@ def _resolver(monkeypatch, user):
 
 
 def test_default_user_role_opens_its_own_lists_socket(client, monkeypatch):
-    _resolver(monkeypatch, {"user_id": "asya", "role": "user"})
-    with client.websocket_connect("/api/lists/ws/asya?session_id=s", headers=ORIGIN) as ws:
+    _resolver(monkeypatch, {"user_id": "casey", "role": "user"})
+    with client.websocket_connect("/api/lists/ws/casey?session_id=s", headers=ORIGIN) as ws:
         hello = ws.receive_json()
         assert hello["type"] == "connected" and hello["channel"] == "lists"
         ws.send_text("ping")
@@ -96,7 +96,7 @@ def test_default_user_role_opens_its_own_lists_socket(client, monkeypatch):
 
 
 def test_default_user_role_cannot_open_someone_elses_channel(client, monkeypatch):
-    _resolver(monkeypatch, {"user_id": "asya", "role": "user"})
+    _resolver(monkeypatch, {"user_id": "casey", "role": "user"})
     with pytest.raises(WebSocketDisconnect) as exc:
         with client.websocket_connect("/api/lists/ws/jason?session_id=s", headers=ORIGIN):
             pass
@@ -113,7 +113,7 @@ def test_guest_session_is_refused(client, monkeypatch):
 
 def test_admin_may_subscribe_on_behalf_of_another_user(client, monkeypatch):
     _resolver(monkeypatch, {"user_id": "jason", "role": "admin"})
-    with client.websocket_connect("/api/lists/ws/asya?session_id=s", headers=ORIGIN) as ws:
+    with client.websocket_connect("/api/lists/ws/casey?session_id=s", headers=ORIGIN) as ws:
         assert ws.receive_json()["type"] == "connected"
 
 
@@ -127,7 +127,7 @@ def test_custom_role_opens_its_own_socket_and_family_admin_alias_may_subscribe_f
 
 
 def test_default_user_role_cannot_open_someone_elses_journal(client, monkeypatch):
-    _resolver(monkeypatch, {"user_id": "asya", "role": "user"})
+    _resolver(monkeypatch, {"user_id": "casey", "role": "user"})
     with pytest.raises(WebSocketDisconnect) as exc:
         with client.websocket_connect("/api/journal/ws/jason?session_id=s", headers=ORIGIN):
             pass
@@ -135,7 +135,7 @@ def test_default_user_role_cannot_open_someone_elses_journal(client, monkeypatch
 
 
 def test_default_user_role_opens_the_push_socket(client, monkeypatch):
-    _resolver(monkeypatch, {"user_id": "asya", "role": "user"})
+    _resolver(monkeypatch, {"user_id": "casey", "role": "user"})
     with client.websocket_connect("/ws/push?channel=all&session_id=s", headers=ORIGIN) as ws:
         assert ws.receive_json()["type"] == "connected"
 
@@ -144,12 +144,12 @@ def test_default_user_role_opens_the_push_socket(client, monkeypatch):
 
 def test_delegated_socket_is_registered_under_the_requested_user(client, monkeypatch):
     # The broadcaster filters scoped deliveries by the user_id a socket was REGISTERED
-    # under; an admin subscribed to /api/lists/ws/asya must therefore register as asya.
+    # under; an admin subscribed to /api/lists/ws/casey must therefore register as casey.
     _resolver(monkeypatch, {"user_id": "jason", "role": "family-admin"})
-    with client.websocket_connect("/api/lists/ws/asya?session_id=s", headers=ORIGIN) as ws:
+    with client.websocket_connect("/api/lists/ws/casey?session_id=s", headers=ORIGIN) as ws:
         assert ws.receive_json()["type"] == "connected"
         owners = set(main.broadcaster._ws_users.values())
-        assert "asya" in owners and "jason" not in owners
+        assert "casey" in owners and "jason" not in owners
 
 
 @pytest.mark.anyio
@@ -163,9 +163,9 @@ async def test_scoped_broadcast_reaches_the_channel_owner_only():
 
     bc = PushBroadcaster()
     delegated, other = _WS(), _WS()
-    await bc.connect(delegated, "lists", user_id="asya")   # an admin registered under asya
+    await bc.connect(delegated, "lists", user_id="casey")   # an admin registered under casey
     await bc.connect(other, "lists", user_id="jason")
-    delivered = await bc.broadcast("lists", "list_updated", {"id": 1}, user_id="asya")
+    delivered = await bc.broadcast("lists", "list_updated", {"id": 1}, user_id="casey")
     assert delivered == 1
     assert [m["type"] for m in delegated.sent] == ["connected", "list_updated"]
     assert [m["type"] for m in other.sent] == ["connected"]

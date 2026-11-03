@@ -557,11 +557,12 @@ def test_detect_intent_miss_produces_pi_evidence_when_enabled(tmp_path, monkeypa
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("ZOE_PI_INTENT_MISS_EVIDENCE_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_MISS_EVIDENCE_PATH", str(evidence_path))
+    legacy_path = home / "training" / "data" / "intent-misses.jsonl"
+    monkeypatch.setenv("ZOE_INTENT_MISS_LOG", str(legacy_path))     # the conftest pins this log off the household's; point it at the fake home
 
     intent = detect_intent("email jason@example.com if rain later", log_miss=True, user_id="jason")
 
     assert intent is None
-    legacy_path = home / "training" / "data" / "intent-misses.jsonl"
     assert legacy_path.exists()
     assert evidence_path.exists()
     saved = json.loads(evidence_path.read_text(encoding="utf-8"))

@@ -80,6 +80,15 @@ with the mandatory gate never running — a gate that can silently not-run is no
   real-model check — [voice-pipeline.md](voice-pipeline.md) → *The VAD stage*). **Non-voice diffs are a no-op pass**, so
   ordinary deploys are frictionless. The check only *reads* the artifact; it never runs the ~2.3 GB
   Kokoro harness on the runner.
+- **Deploy never reads `FETCH_HEAD` (since 2026-10-30).** Incident: deploy run 40924021148 (01:43 AWST)
+  ran `git fetch origin main` then `git rev-parse FETCH_HEAD` on the box's shared `.git`; `FETCH_HEAD` is
+  ONE file, and the voice lander's `git fetch origin fix/retire-resemblyzer` rewrote it in between, so
+  the deploy targeted an UNMERGED branch commit (`fa8952ef9`) instead of `main`. The voice gate refused
+  it (fail-closed), but a non-voice branch would have been reset onto the live checkout and restarted.
+  Now `deploy.yml` (and `deploy_live.sh`) fetch `+refs/heads/main:refs/zoe-deploy/main` with
+  `--no-write-fetch-head`, require that ref to equal `git ls-remote origin refs/heads/main` (retrying
+  if main advanced mid-fetch), and refuse any target that is not a descendant of the live HEAD
+  (`merge-base --is-ancestor`). Pinned by `tests/unit/test_deploy_never_reads_fetch_head.py`.
 - **The artifact is BOUND to the deployed tree (`--expect-tree-of`, since 2026-09-28).** Incident:
   #1745 (chromadb 1.5.9 pins in `requirements-py312.txt`) was expected to be refused until a replay
   for that commit existed, and was not — the gate checked only freshness + status, and a replay from
@@ -117,6 +126,7 @@ with the mandatory gate never running — a gate that can silently not-run is no
   immediately before `systemctl --user restart`, so a window that opens mid-deploy is not restarted beside either
   (it deliberately does NOT take `/tmp/zoe-brain-window.lock`, which benches and landings hold for hours; the
   remaining race is the instant between that check and the restart). Pinned by `tests/unit/test_deploy_night_window_wait.py`.
+- **A deploy waits for a quiet household.** The step before "Restart zoe-data" runs `scripts/maintenance/wait_household_quiet.sh`: it holds while zoe-data `/health` reports a panel voice turn in the last 10 min (`last_voice_turn_age_s`), up to 60 min, then deploys anyway with a log line (fail open; an unreadable signal fails open after 60 s; docs-only deploys skip it). Night-window rules (`night_busy.sh deploy`) are never failed open. Knobs: `ZOE_DEPLOY_QUIET_*` (see the script header). Pinned by `tests/unit/test_deploy_wait_household_quiet.py`. It also holds (bounded, then fails open, logged) while a voice replay probe holds `/tmp/zoe-voice-harness.lock` or `/tmp/zoe-brain-window.lock` (`ZOE_DEPLOY_PROBE_LOCKS`, `ZOE_DEPLOY_PROBE_WAIT_MAX_MIN`, default 45) so a restart never lands mid-probe.
 - **Not every gated file is equally evidenced, and the LiveKit lane is the weak one.** The replay
   corpus is replayed over `POST /api/voice/transcribe` (the HTTP lane) and **never traverses**
   `livekit_aiortc.py` / `routers/voice_livekit.py` / `services/livekit/config.yaml`. For a diff
@@ -217,16 +227,36 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
 
 ### Landings and the night window (rationale; the rule is binding in scripts/AGENTS.md)
 
-The rule itself lives in [scripts/AGENTS.md](../../scripts/AGENTS.md) ("Brain-window quiet hours"): between
-01:50 and 04:55 no landing or harness starts, holds `/tmp/zoe-brain-window.lock`, or stays alive as a process
-(including `land_voice_pr.sh`). This section keeps the why.
+The rule itself lives in [scripts/AGENTS.md](../../scripts/AGENTS.md) ("Brain-window quiet hours"), and is a
+**measured pause**, not a fixed blackout (owner decision 2026-10-19, replacing the 01:50-04:55 span of 2026-10-13):
 
-The 12B night window (`scripts/night/night_window.py`, timer 02:50 +0-2 min, over by 03:55; see
-[night-window.md](night-window.md)) takes the **brain** for about an hour. On 2026-10-13 a lander that was
-sleeping (waiting, but still a live `land_voice_pr.sh` process) at 02:50 made the window wait and then refuse,
-and the 12B night was lost. The span is wider than the window itself: 01:50 gives a lander time to drain before
-the earliest manual start (01:30 is allowed) and the timer; 04:55 is past the voice-gate blackout (04:10-04:52)
-the window already refuses to overlap.
+- voice landings and harnesses (including `land_voice_pr.sh`) do not START from 01:55 until tonight's window has
+  finished (fallback: paused until 03:30 if the window never ran), nor in 04:00-04:55 (the nightly 04:30 voice
+  regression owns the single voice-gate artifact slot);
+- deploys (merges that trigger `deploy.yml`) pause from 02:45 until the window has finished (same 03:30 fallback);
+- agent test runs pause while the night window or `zoe-backup.service` is active;
+- any work at all pauses while `zoe-night-window.service` is active;
+- unchanged: nothing may hold `/tmp/zoe-brain-window.lock` or be a live lander past the window's 20-min busy grace
+  (gone by 03:10). Since 2026-10-27 the lander enforces this itself against `night_busy.sh deadline` (the next 02:40):
+  gate first, every wait deadline-bounded, no probe start with under 25 min left, lock held only for the probe, post-probe
+  CI wait bounded. The window waits for a held lock instead of refusing, and retries at 03:05 / 03:15 (see
+  [night-window.md](night-window.md) section 16).
+
+The operator-local gate that landers consult is `~/.zoe/agent-tools/night_busy.sh voice|deploy|test` (exit 0 =
+pause, 1 = may run). This section keeps the why.
+
+**The measurement.** `zoe-night-window.service` was observed 2026-10-12 to 2026-10-18: it started at 02:50 (plus up
+to 2 min timer jitter) and finished between 02:52 and 03:10 every night - roughly 15 minutes, not the "about an
+hour, over by 03:55" the 2026-10-13 span was sized for. The owner asked "doesn't the night brain only take like 15
+minutes", and the answer was yes, so the pause now tracks the window (`ExecMainExitTimestamp` after 02:45 means
+tonight's has finished) with a 03:30 fallback instead of idling the box for 3 h 5 min.
+
+The 12B night window (`scripts/night/night_window.py`, timer 02:50 +0-2 min; see [night-window.md](night-window.md))
+takes the **brain**. On 2026-10-13 a lander that was sleeping (waiting, but still a live `land_voice_pr.sh`
+process) at 02:50 made the window wait and then refuse, and the 12B night was lost. That incident is why a voice
+lander must not start from 01:55 (a lander holds the brain-window lock for up to ~45 min) and why a deploy, whose
+`zoe-data` restart collides with the window's stops, pauses from 02:45. The 04:00-04:55 voice pause is the
+nightly voice regression, not the window.
 
 What the window does about it (read-only facts, pinned by `tests/unit/test_night_window_landing_contract.py`):
 

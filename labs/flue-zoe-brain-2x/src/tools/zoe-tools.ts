@@ -91,6 +91,7 @@ import * as v from 'valibot';
 // .ts extension so the offline strip-types tests (node --experimental-strip-types)
 // can resolve it too; tsconfig has allowImportingTsExtensions and the flue build
 // bundles .ts specifiers fine.
+import { harnessForTurn } from '../harness.ts';
 import { currentUserId } from '../request-identity.ts';
 import { describeNow } from '../local-time.ts';
 import { isReplayTurn } from '../replay-mode.ts';
@@ -100,6 +101,7 @@ import {
   isTurnUntrusted,
   markTurnUntrusted,
   neutraliseUntrustedText,
+  turnUntrustedSource,
   untrustedSearchRefusal,
   untrustedWriteRefusal,
 } from '../untrusted-content.ts';
@@ -269,7 +271,7 @@ async function runWrite(
   // W15 PER-SOURCE TOOL TIER — untrusted web content was returned into this turn,
   // so nothing may change state until the turn ends (src/untrusted-content.ts).
   // Ahead of replay isolation: a tainted turn must refuse, not fake a success.
-  if (!isRead && isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem);
+  if (!isRead && isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem, turnUntrustedSource(signal));
   // REPLAY ISOLATION — this turn came from the replay gate, so report the write as
   // done and commit nothing. Checked AFTER the ALLOW_WRITES gate on purpose: a lab
   // build with writes off keeps its loud "WRITE DISABLED" honesty, and this branch
@@ -350,13 +352,17 @@ const recallMemory = defineTool({
       const url = new URL('/api/memories/for-prompt', zoeDataUrl());
       url.searchParams.set('user_id', userId);
       const query = String(data?.query ?? '').trim();
-      if (query) url.searchParams.set('message', query.slice(0, 500));
+      // The packet size and query ceiling are the harness overlay's recall shape (src/harness.ts
+      // recall-shape.json; compiled-in 24 / 500, byte-identical with ZOE_BRAIN_HARNESS_DIR unset),
+      // from the harness THIS TURN runs under (bound to its signal), never one reloaded mid-turn.
+      const shape = harnessForTurn(signal).recallShape;
+      if (query) url.searchParams.set('message', query.slice(0, shape.queryMaxChars));
       // Widen the packet for EXPLICIT recall. The endpoint defaults to 12 facts,
       // which the per-turn ambient injection wants small — but when the user
       // directly asks ("tell me about my family"), 12 slots get crowded by
       // duplicate identity facts and drop whole family members. This tool only
       // fires on recall-ish turns, so the extra facts cost nothing per-turn.
-      url.searchParams.set('limit', '24');
+      url.searchParams.set('limit', String(shape.limit));
       const res = await fetch(url, {
         headers: internalHeaders(),
         signal: fetchSignal(signal),
@@ -543,7 +549,7 @@ const setTimer = defineTool({
     }
     // W15 tier: set_timer does not route through runWrite, so it carries the
     // untrusted-content gate inline too (see runWrite).
-    if (isTurnUntrusted(signal)) return untrustedWriteRefusal(`a ${minutes} minute timer${named}`);
+    if (isTurnUntrusted(signal)) return untrustedWriteRefusal(`a ${minutes} minute timer${named}`, turnUntrustedSource(signal));
     // REPLAY ISOLATION — set_timer is the ONE write that does not route through
     // runWrite (it has its own inline gate above), so it needs the check here too;
     // without it, timer_create would still dispatch on every replay turn.
@@ -1212,7 +1218,7 @@ const webSearch = defineTool({
     if (!query) return 'I need something to search for.';
     // W15 tier (Codex #1702): a search sends text OFF the box, so a turn that
     // already holds untrusted web content may not search again — no HTTP call.
-    if (isTurnUntrusted(signal)) return untrustedSearchRefusal();
+    if (isTurnUntrusted(signal)) return untrustedSearchRefusal(turnUntrustedSource(signal));
     try {
       const res = await fetch(new URL('/api/system/web-search', zoeDataUrl()), {
         method: 'POST',

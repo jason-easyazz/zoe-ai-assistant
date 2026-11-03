@@ -1,6 +1,6 @@
 ---
 type: architecture-plan
-status: proposed (audit + verification + function-first rework complete; waves not started)
+status: in progress (security + hygiene waves landed 2026-10-04..09; phase 1 of just-needs-to-work 2026-10-19; Wave 4 chat, 4b dashboard, 5 PIM depth, 6 admin + music and RC2-RC4 not started)
 owner: jason
 date: 2026-07-20
 ---
@@ -40,6 +40,128 @@ calendar.html, notes, lists, jukebox, setup-*), a **broken-but-alive tier** (24 
 isn't in git), and a **verified-dead tier** (~30k+ lines). 61 of 329 client-called endpoints
 are MISSING or MOVED — the honest measure of the rot. Direction: **desktop is Zoe's library and
 workbench — see everything, load anything** (see Direction); the estate panel stays the ambient face.
+
+## Phase 1 audit (2026-10-19) — what is broken today, what is fixed, what is next
+
+Owner directive (July, still open): **the desktop UI "just needs to work".** Since this plan was
+written, the security + hygiene waves landed (#1845 #1847 #1857 #1834 #1919 #1921 #1922 #1940: the
+members-only gate, one push socket, vendored libraries, desktop-to-touch links severed, dead tier
+removed, the route audit, click-handler and inline-parse pins). Phase 1 re-audited the result.
+
+**Method (reproducible, no real credentials).** A headless Chromium on the Pi (CDP over an ssh
+tunnel, the recipe in `scripts/maintenance/estate_browser_verify.py`) loaded every desktop page
+twice: (1) **logged out against the real origin** — every data page must land once on
+`/index.html`; (2) **with a fake member session against an empty-shape API mock** serving the
+worktree copy of `dist/`, where any `/api/*` path absent from the LIVE zoe-data + zoe-auth OpenAPI
+answers 404 and is recorded as a retired-endpoint call. Plus `scripts/maintenance/ui_api_route_audit.py`
+(static: every `/api` literal against the live route table) and a static dead-link pass over every
+`navigateToPage` / `href` / `location` / `window.open` target. Screenshots stay outside the repo.
+
+**Found broken (2026-10-19), fixed in this PR** (pinned by `dist/test_desktop_ui_phase1.js`):
+
+| # | Broken | Fix |
+|---|---|---|
+| 1 | `dist/developer/` — a "Zoe Developer" dashboard of hard-coded numbers ("12/12 containers", "All Systems Go", zoe-ollama/whisper/n8n), three JS parse errors, served **without the sign-in gate**, linked from the More menu on 10 pages | Retired: files, nginx `location /developer/`, every desktop More-menu item |
+| 2 | Settings: **OpenClaw / ChatGPT** and **AI Models (Hermes profiles)** drove two runtimes retired 2026-10-18 (placebo prefs, `/api/system/openclaw*`, `/api/system/hermes/model-profiles*`, `chatgpt-auth-status`) | Both sections removed; the backend routes are now UI-free for the B3 deletion (#2113 follow-up) |
+| 3 | Settings, Touch Panels, "enter a code" opened **`/touch/pair.html`** in a new tab (desktop to touch) | Settings pairs in place: lookup, name, `POST /api/panels/provision/{code}/confirm` with the member session, list refreshed. `test_desktop_no_touch_links.js` now counts `window.open` as a route |
+| 4 | Chat **Hermes / OpenClaw** agent pills forced a turn into a runtime that no longer exists | Pills removed; `selectAgent()` maps any agent to Zoe |
+| 5 | Calendar threw **`TypeError: Cannot set properties of null`** on every load — a legacy inline notifications block wrote into markup the shared `js/notifications-panel.js` had replaced | Legacy block removed; the bell opens the shared panel (proven in the browser) |
+| 6 | Journal probed **`/api/journeys`** (no route: 404 on every load) and flashed two fake entries ("Summit Views", "Sunday Reading") with **hot-linked Unsplash photos** (a third-party request per page view) | Probe and fake markup removed; the `test_ui_no_external_assets_scan.py` allowlist is now empty |
+| 7 | A stray empty file `dist/nice` (a mis-aimed `nice -n 10`, shipped in #2027) | Removed; the harness rejects extensionless files in the `dist/` root |
+
+Load-clean after the fixes: no page error on any desktop page with a member session; every data
+page redirects once when logged out; no desktop page calls a path the live API does not serve.
+
+**Checked and not broken:** every other nav target exists; no desktop page links into `/touch/`
+except the chat compose-card assets (a dependency, item 5 below); `jukebox`, `setup-*`, `offline`,
+`index`, `404` render clean; the 3 remaining DEAD paths in the route audit are touch-only
+(`js/touch-review-cards.js` calling `/api/panel/cards/*`, flag-dark, #2144 in flight).
+
+### The prioritised remaining list (later waves)
+
+1. **Wave 4b — the dashboard, the landing page (owner decision). REAL DATA DONE (2026-10-19,
+   branch `fix/desktop-dashboard-real-data`, on top of phase 1).** Fixed: `system.js` (was
+   `Math.random()` CPU / memory / disk / uptime) reads the new member-only `GET /api/system/stats`
+   (psutil + database / brain / voice / Home Assistant health; `/api/system/status` had no resource
+   numbers and a 5 s probe of the retired OpenClaw gateway); `home.js` (was four hard-coded rooms)
+   shows this house's rooms + switchable devices from `/api/rooms` + `/api/ha/entities`; weather
+   shows a loading state instead of placeholder temperatures (and no longer sends `user_id`, prompts
+   for a location the server ignores, or refetches the forecast on every resize); cards follow the
+   `--clr-*` tokens in dark mode; tasks / events titles are escaped. **The duplicate-widget flaw is
+   fixed at all three layers:** one widget object per card (`WidgetManager.createInstance`, tracked
+   by uid); the server keeps two same-type cards (`PUT /layout/` stores `{uid, type, x, y, w, h,
+   options?}`, `POST /widgets/` stays chat's ensure-present-by-type); and the desktop board now
+   persists to `/api/dashboard/layout/` (its first caller). Pinned by
+   `dist/test_dashboard_real_data.js`, `test_system_stats.py`, `test_dashboard_router.py`.
+   **Still open from Wave 4b below:** the lists.html dead-code strip, `LayoutProtection` on the
+   dashboard, static registration, migrating lists onto the stack and deleting the superseded
+   lineage (≥3 PRs); and two pre-existing layout flaws seen in the browser: the weather forecast
+   chips overlap the condition text at the default 4x3 size, and the per-card gear button shows
+   outside edit mode.
+2. **The Zoe page (new; replaces the desktop `updates.html`).** Design: `docs/architecture/self-evolution-nightly-loop.md`
+   sections 12-13 (branch `claude/zoe-deep-dive-2-2026-10-19`, not yet on main). Backend that exists:
+   `GET /api/system/updates`, `/updates/history`, `POST /updates/install/{component}`, the change
+   notices feed (#2114). Missing: `scripts/perf/zoe_score.py` (section 12), the release bundle and
+   caretaker, the progress stream (rides `/ws/push`). Build order: score + "what changed" first
+   (Phase 2 of the loop), the update card with the first signed release. Wireframe, owner face (the
+   household face hides block 4 and every version, sha, PR number and axis name):
+
+   ```
+   +- Zoe -------------------------------------------------------------+
+   |  ZOE IS AT 83                       ._.-'-.-'''-.  (last 30 days)  |
+   |  Better at calendar this week. Slower in the evenings.            |
+   |  [ show the axes > ]  memory 88  voice 79  speed 71  identity ... |
+   |                       floors OK; unmeasured lines grey (scored 0) |
+   +-------------------------------------------------------------------+
+   |  UPDATES                                                          |
+   |  * An update is ready                               [ Update now ]|
+   |    Reminders can now be set for other people.                     |
+   |    Music reconnects by itself when YouTube signs you out.         |
+   |  while updating:                                                  |
+   |    downloading [x]  signature [x]  backing up [.]  applying [ ]   |
+   |    checking Zoe is well [ ]  done [ ]                             |
+   |    (a failed step rolls back: "That update did not take, so I     |
+   |     went back to the version from yesterday")                     |
+   +-------------------------------------------------------------------+
+   |  WHAT CHANGED                                                     |
+   |  Updated last night: invites show who is coming.         [ undo ] |
+   |  Zoe got better at telling dates apart (tried Tue, kept Fri)[undo]|
+   +-------------------------------------------------------------------+
+   |  > DETAILS (owner)  release notes + PRs, bundle hashes, component |
+   |    versions (brain, Flue, MA, HA, Kokoro, panel daemon), axes     |
+   |    moved, canary countdowns, ledger, live flags                   |
+   +-------------------------------------------------------------------+
+   ```
+   Rules carried from section 13: no question is ever asked on the page; it never asks a model to
+   describe a change; until the first signed release the update card shows the deploy history of the
+   dev box.
+3. **Wave 6 — `music.html` to capability parity** with the estate (transport / scrub / volume /
+   favourite / speaker + search + the queue editor, polling `/api/music/*`, never the raw MA socket);
+   spec in Wave 6 below. #2124 (in flight) touches `music.html`: start after it lands.
+4. **B3 follow-up — the rest of OpenClaw / Hermes in the desktop UI**, with the backend in the same
+   change: the chat `openclaw_manager` / `skills_manager` / `plugin_installer` renderers and their
+   `/api/openclaw/*` calls (~350 lines), `forceOpenClawMode` / `force_openclaw`, the `openclaw` /
+   `hermes` phase labels; `installOpenClawUpdate` in `js/notifications-panel.js`
+   (`/api/system/updates/install/openclaw`); the "OpenClaw-learned facts" copy in memories. After #2113.
+5. **Desktop-to-touch asset dependency:** chat loads `/touch/css/cards/compose.css` and
+   `/touch/js/zoe-compose.js`. Move both to shared `js/` + `css/` when the Ask-card work (compose in
+   the estate) lands, so neither surface owns files of the other.
+6. **RC2-RC4 (root causes below):** 37 `user_id=` interpolations remain in desktop pages and scripts;
+   `routers/stubs.py` still fakes `/api/collections` / `/api/projects` / `/api/user/layout` (the
+   memories collections canvas draws over it); no `models.py` model sets `extra=`.
+7. **Dead duplicate code:** legacy inline notification blocks remain in chat / journal / memories /
+   dashboard / notes / updates (harmless now, `openNotificationsSafe` prefers the shared panel, but
+   each redefines `openNotifications`); the dormant journey helpers in `js/journal-api.js`;
+   `clear-cache.html` / `clear-cache-v2.html` / `clear-session.html` into one page.
+8. **Polish found on the way:** `people.html` raises an onboarding modal on every fresh browser;
+   `setup-music.html` frames MA with `allow-scripts allow-same-origin` (the sandbox is void); the
+   Warning / Offline status pill differs per page; `config/nginx/nginx-auth.conf` is an unused stale
+   copy still carrying `/developer/`; six legacy `touch/*.html` pages (unreachable, retirement is an
+   owner call) still link the retired developer page.
+9. **Wave 0 smoke harness:** promote the phase-1 crawl (logged out on the real origin + member
+   session on the API mock + retired-endpoint detection against the live OpenAPI) into
+   `scripts/maintenance/desktop_browser_verify.py` as a no-credential mode, so the gate no longer
+   needs a member PIN.
 
 ## FUNCTION FIRST — Jason's reframe (2026-07-20)
 
@@ -218,7 +340,7 @@ skip-list, `sw.js` cache routes, `voice_tts.py:526-530` supersede/cancel list.
 | `games.html` + `touch/games.html` | **retire** | Chain dead-ends in a 26-line placeholder |
 | `cooking.html` (desktop) | **retire the 11-line stub only** | Meta-refresh. Its touch target `touch/cooking.html` **stays** |
 | `smart-home.html` (desktop) | **retire the stub AND its target** | Meta-refresh to `/touch/smart-home.html`, which now RETIRES (row above) — the stub cannot outlive it. Goes in the same PR as the target, with all referrers (Wave 3 step 3) |
-| `week_planner_widget.html`, `dist/developer/`, `dist/_preview/*` | **retire / see Wave 4** | Orphan mock; 4,406-line dead prototype. `_preview` is NOT dead — see Wave 4 |
+| `week_planner_widget.html`, `dist/developer/`, `dist/_preview/*` | **retire / see Wave 4** | Orphan mock; 4,406-line dead prototype (`developer/` RETIRED 2026-10-19, phase 1; `week_planner_widget.html` gone in Wave 3). `_preview` is NOT dead — see Wave 4 |
 | Legacy touch pages (11) | **retire** | `touch/{dashboard,lists,calendar,notes,people,timers,weather,memories,journal,chat,games}.html` — no live inbound path |
 | Widget stack (`widget-system.js`, `widget-base.js`, `dashboard.js`, `lists-dashboard.js`, `js/widgets/**`) | **retire after the Wave 4b rebuild** | Serves desktop dashboard + lists only once the touch copies go |
 | `lib/gridstack`, `dashboard-protection.js` | **KEEP** | Drag-and-drop is retained (Jason, 2026-07-20), so the grid engine stays and the corrupt-layout guard matters more, not less |
@@ -534,7 +656,7 @@ collections/tiles canvas, `/api/music/similar`.
    entry at all (`chat.py:1358` is an intent *display name*, not a route), and `sw.js` does not
    precache the page. That absence is the evidence for the RETIRE verdict: the estate already owns
    this surface.
-4. `dist/developer/` (4,406 lines) + both nginx `/developer/` blocks (separate nginx-only PR).
+4. ~~`dist/developer/` (4,406 lines) + the nginx `/developer/` block~~ — DONE 2026-10-19 (phase 1), with the More-menu items on 10 desktop pages.
 5. Orphan js/css set — **split into a CSS PR and a JS PR** (~25 files together).
 6. Music-era zombies: `mini-player.js` + 6 tags; the dead music widget stack + `MCPMusicStateManager`
    alias from both dashboards.

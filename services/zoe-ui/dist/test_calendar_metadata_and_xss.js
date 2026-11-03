@@ -529,7 +529,7 @@ check('bindDataHandlers exists and every renderer calls it', () => {
     const renderers = [
         'renderTasks', 'renderLinkedTasks', 'showAttendeeSuggestions',
         'renderAttendeesList', 'renderRemindersList', 'renderPrepItemsList',
-        'displayNotifications', 'openReminderPanel'
+        'openReminderPanel'
     ];
     const missing = renderers.filter(
         n => !/bindDataHandlers\(/.test(stripComments(extractFunction(script, n))));
@@ -588,11 +588,14 @@ check('the empty-list render path binds its handlers too', () => {
         'the empty-list branch must bind it as well as render it');
 });
 
-check('the notifications list escapes the notification message', () => {
-    // Not in the original defect list, found while sweeping the file.
-    const body = stripComments(extractFunction(script, 'displayNotifications'));
-    assert.ok(/escapeHtml\(notification\.message\)/.test(body),
-        'notification.message is user content going into innerHTML');
+check('calendar renders no notifications list of its own (the shared panel owns it)', () => {
+    // The legacy inline displayNotifications() wrote into #notificationsContent, markup
+    // js/notifications-panel.js had already replaced, and threw a TypeError on every load.
+    // Removed 2026-10-19; the shared panel escapes its own items.
+    assert.ok(!/function\s+displayNotifications\s*\(/.test(script),
+        'calendar.html must not reintroduce its own notifications renderer');
+    assert.ok(script.includes('/js/notifications-panel.js') || html.includes('/js/notifications-panel.js'),
+        'calendar.html must load the shared notifications panel');
 });
 
 check('no unescaped user-content interpolation remains in the render templates', () => {

@@ -751,13 +751,18 @@ async def music_dont_stop(payload: dict) -> dict[str, Any]:
 # ── The phone jukebox (music_jukebox.py) ──────────────────────────────────────
 
 @router.post("/jukebox/start")
-async def jukebox_start(payload: dict, user: dict = Depends(require_member_or_panel)) -> dict[str, Any]:
+async def jukebox_start(payload: dict, request: Request,
+                        user: dict = Depends(require_member_or_panel)) -> dict[str, Any]:
     """Panel: mint a jukebox token bound to this panel + a single-use QR handle for it.
-    body: {panel_id}; a device token's own panel wins over the body."""
+    body: {panel_id}; a device token's own panel wins over the body. LAN only: a request that came over the tunnel mints nothing
+    (the QR must never name a public origin)."""
+    import auth_handoff
     import music_jukebox
     import panel_principal
     import setup_qr
 
+    if auth_handoff.lan_base_url(request) is None:
+        raise HTTPException(status_code=403, detail="the jukebox code is only shown on the home network")
     panel_id = str((user or {}).get("panel_id") or (payload or {}).get("panel_id") or "").strip()
     if not panel_id or not await panel_principal._with_registry(
             None, panel_principal._kiosk_panel_allows_guest, panel_id):
@@ -778,6 +783,9 @@ async def jukebox_qr(handle: str, request: Request) -> Response:
     held = setup_qr.redeem("jukebox", handle)
     if held is None or not music_jukebox.panel_of(held["token"]):
         return Response(status_code=404)
-    url = f"{auth_handoff.phone_base_url(request)}/jukebox.html#t={held['token']}"
+    base = auth_handoff.lan_base_url(request)  # never the configured public URL or a tunnel origin: this QR carries a capability
+    if base is None:
+        return Response(status_code=404)
+    url = f"{base}/jukebox.html#t={held['token']}"
     return Response(content=setup_qr.render_svg(url), media_type="image/svg+xml",
                     headers={"Cache-Control": "no-store"})

@@ -1,0 +1,36 @@
+# Struggle-fed router RETRAIN-AND-ADOPT loop (Phase 3 of the self-correction loop) - one weekly pass.
+# Contract: docs/architecture/struggle-detector.md -> Phase 3. TEMPLATE ONLY: installing it is an owner step, and it does
+# nothing until ZOE_ROUTER_STRUGGLE_FEED is shadow|on in services/zoe-data/.env (default off = a no-op line in the log).
+#
+# The script refuses on its own when: the night window unit is running; the run (estimated from the last MEASURED run) would
+# overlap 02:45-03:15 or 04:00-04:55; a voice turn happened in the last 30 min; there are fewer than 10 held-out labelled
+# failures; or training would leave MemAvailable under 700 MB with the voice stack up (ZOE_ROUTER_RETRAIN_STOP_BRAIN=1 allows
+# stopping the brain for the training window only - never during the night window, never with the panel in use - and the
+# script always restarts it). In shadow it never swaps the router.
+#
+# Install (owner): cp scripts/setup/systemd/zoe-router-retrain.{service,timer} ~/.config/systemd/user/
+#                  systemctl --user daemon-reload && systemctl --user enable --now zoe-router-retrain.timer
+[Unit]
+Description=Zoe struggle-fed router retrain (shadow unless ZOE_ROUTER_STRUGGLE_FEED=on)
+After=zoe-data.service functiongemma-router.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/assistant
+EnvironmentFile=%h/assistant/services/zoe-data/.env
+# The driver runs on the zoe-data interpreter (asyncpg, the seam, the eval harness); the TRAINER runs on
+# ZOE_ROUTER_TRAIN_PYTHON (default /usr/bin/python3: the py312 venv has no peft / datasets).
+ExecStart=%h/.zoe/venvs/zoe-data-py312/bin/python %h/assistant/scripts/maintenance/router_struggle_retrain.py
+# After ANY end (success, failure, timeout): restart a brain this loop stopped (never one it did not) and undo an
+# interrupted deploy. Idempotent: "nothing to undo" when nothing was in flight.
+ExecStopPost=%h/.zoe/venvs/zoe-data-py312/bin/python %h/assistant/scripts/maintenance/router_struggle_retrain.py --recover
+# Generous: oracle labelling + a CPU continuation run + export + four scratch evals + the voice replay. The script's own
+# window check keeps a run clear of the night window; this is the backstop.
+TimeoutStartSec=4h
+KillSignal=SIGTERM
+TimeoutStopSec=120
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=append:%h/.zoe-logs/router-retrain.log
+StandardError=append:%h/.zoe-logs/router-retrain.log

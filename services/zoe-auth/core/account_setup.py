@@ -3,7 +3,7 @@ First-password setup tokens.
 
 ``/api/auth/password/setup`` lets an account whose ``password_hash`` is NULL or
 ``SETUP_REQUIRED`` choose its first password. Without a gate, anyone who knows a
-pre-provisioned username (the household seed creates ``jason``/``andrew``/… as
+pre-provisioned username (the household seed creates ``jason``/``alex``/… as
 ``SETUP_REQUIRED``) could race the real person and claim the account by setting a
 password first. This module supplies the proof-of-authorization the endpoint now
 requires.

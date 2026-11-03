@@ -87,13 +87,16 @@ async def _complete(prompt: str) -> str | None:
         "temperature": 0.1,
         "stream": False,
     }
+    async def _llm() -> str:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            resp = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+
     try:
-        # Post-turn pass on the brain's ONE slot: waits out a hot conversation (brain_slot_guard) so it cannot evict it.
-        async with brain_slot_guard.background_slot("latent_intent_detector"):
-            async with httpx.AsyncClient(timeout=25.0) as client:
-                resp = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"].strip()
+        # Post-turn pass on the brain's ONE slot: waits out a hot conversation and yields to a household turn that starts
+        # while it runs (brain_slot_guard.run_background) so it can neither evict nor delay the conversation.
+        return await brain_slot_guard.run_background("latent_intent_detector", _llm)
     except Exception as exc:
         logger.debug("latent_intent_detector: LLM failed: %s", exc)
         return None
@@ -242,7 +245,7 @@ async def detect(
 
 # ── Deterministic propose-on-mention ────────────────────────────────────────
 # The LLM detector is inconsistent on a 4B model — it fired for "my niece
-# Teneeka" but missed "my brother Daniel" / casual mentions in E2E testing. A
+# Morgan" but missed "my brother Daniel" / casual mentions in E2E testing. A
 # regex over the common "my <rel> <Name>" / "<Name>, my <rel>" forms gives a
 # RELIABLE proposal for the everyday case (research: pair a passive extractor
 # with the agent path). Names are capitalised; relationships lower-case.

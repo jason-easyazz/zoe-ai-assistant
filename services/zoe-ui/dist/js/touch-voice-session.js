@@ -93,6 +93,10 @@
         if (d.subtitle) cardEl.appendChild(el('div', 'zvs-s', d.subtitle));
         if (!d.private) {
             cardEl.appendChild(el('div', 'zvs-b', d.body || ''));
+        } else if (d.card_token && window.ZoeReviewCards) {
+            // A review card (open loops, the day review): rows with Done / Remind / Keep / "That's me" buttons, drawn by
+            // js/touch-review-cards.js inside THIS card, so it lives and dies with the session exactly like every other row.
+            window.ZoeReviewCards.render(cardEl, d);
         } else {
             var items = Array.isArray(d.items) ? d.items : [];
             if (!items.length && d.empty) cardEl.appendChild(el('div', 'zvs-b', d.empty));

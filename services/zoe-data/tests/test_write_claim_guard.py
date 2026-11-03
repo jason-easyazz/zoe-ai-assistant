@@ -413,6 +413,9 @@ class _FakeDB:
             async def fetchone(self_inner):
                 return None
 
+            async def fetchall(self_inner):
+                return []
+
         return _Cur()
 
 

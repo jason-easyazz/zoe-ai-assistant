@@ -156,14 +156,30 @@ This table matches `services/zoe-data/biometric_scope.py` exactly.
 | **Owner** (signed-in member) | their own rows only (filtered in SQL) | their own rows | themselves |
 | **Admin** (`admin` / `family-admin`) | household-wide | any row | on another member's behalf |
 | **Other household member** | cannot see others' rows | **403** — and nothing is deleted | cannot enrol under another's id |
-| **Device token** (panel) | **403** | **403** | on behalf of the person at the panel |
+| **Device token** (panel) | **403** | **403** | only a member the server verified at the token's panel (see below); **403** otherwise, and always 403 over Cloudflare or the relay |
 | **Guest / unauthenticated** | 401 | 401 | 401 |
 
 Notes:
 
 - A device token is a *shared panel credential*, not a person. It owns nothing, so
   it can neither enumerate nor delete profiles. Its legitimate access is the
-  embedding feed `/profiles/sync`, which is device-token-only.
+  embedding feed `/profiles/sync`, which is device-token-only and served only to
+  a token presented on the home LAN (refused over the Cloudflare tunnel and the
+  relay, 2026-10-19), so a token copied off the Pi cannot export the household's
+  voiceprints and faceprints from the internet.
+- **A device token never chooses whose biometric it writes** (2026-10-19; voice is a
+  password once `ZOE_VOICE_SESSION` is on). The payload's `user_id` is checked, never
+  trusted: the enrolment writes either the member of Zoe's own enrolment GRANT (minted
+  when she queues the `voice_enroll` command for a member she verified, voice only,
+  closed by the run's `/api/enrollment/result`) or the member with a FRESH PIN sign-in
+  at the token's own panel. Nobody verified, or the payload names someone else: 403,
+  nothing written. The guided `scripts/setup/zoe_enroll_flow.py` (face or voice) therefore
+  needs the member to sign in with their PIN at the panel first. A grant is in-process
+  state, so a zoe-data restart mid-run refuses the upload (fail closed). Residual,
+  stated: a copied token ON THE HOME LAN can still race an upload inside a live window
+  (a member's fresh PIN sign-in at that panel, or Zoe's few-minute enrolment grant);
+  closing it needs a per-command nonce the daemon echoes (a voice-path daemon change).
+  The enrolment result is LAN-only too.
 - Admin power is **explicit and fail-closed** (`auth.is_admin_role`), never implied
   by reaching the endpoint. It honours the `family-admin` alias; anything else —
   including a non-string role — is not an admin.

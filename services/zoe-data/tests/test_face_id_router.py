@@ -32,7 +32,7 @@ pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m
 import routers.face_id as face_id
 
 
-DEVICE = {"source": "device", "panel_id": "zoe-touch-pi", "user_id": "voice-daemon"}
+DEVICE = {"source": "device", "panel_id": "zoe-touch-pi", "user_id": "voice-daemon", "via_relay": False, "via_tunnel": False}
 SESSION = {"source": "session", "user_id": "jason", "role": "admin"}
 EMB_512 = b"\x01\x02\x03\x04" * 512  # 512 floats * 4 bytes
 
@@ -125,21 +125,23 @@ async def test_everything_503s_when_disabled(monkeypatch, call):
 
 # ── 2. enroll validation ───────────────────────────────────────────────────
 
-@pytest.mark.parametrize("bad,status_detail", [
-    (_payload(consent=False), "consent"),
-    (_payload(user_id="voice-daemon"), "user_id"),
-    (_payload(user_id="guest"), "user_id"),
-    (_payload(model_name=""), "model_name"),
-    (_payload(dim="huge"), "dim"),
-    (_payload(dim=100), "dim"),
-    (_payload(embedding_base64=""), "embedding_base64"),
-    (_payload(embedding_base64="!!not-base64!!"), "base64"),
-    (_payload(embedding_base64=_b64(b"\x00" * 12)), "length"),  # 12 bytes != 512*4
+@pytest.mark.parametrize("bad,status_detail,caller", [
+    (_payload(consent=False), "consent", DEVICE),
+    # The sentinel ids reach the "real user_id" check only from an ADMIN session (a device token naming anyone but the
+    # member signed in at its panel is refused earlier, 403 - test_biometric_ownership_scope.py).
+    (_payload(user_id="voice-daemon"), "user_id", SESSION),
+    (_payload(user_id="guest"), "user_id", SESSION),
+    (_payload(model_name=""), "model_name", DEVICE),
+    (_payload(dim="huge"), "dim", DEVICE),
+    (_payload(dim=100), "dim", DEVICE),
+    (_payload(embedding_base64=""), "embedding_base64", DEVICE),
+    (_payload(embedding_base64="!!not-base64!!"), "base64", DEVICE),
+    (_payload(embedding_base64=_b64(b"\x00" * 12)), "length", DEVICE),  # 12 bytes != 512*4
 ])
-async def test_enroll_rejects_bad_payloads(monkeypatch, enabled, bad, status_detail):
+async def test_enroll_rejects_bad_payloads(monkeypatch, enabled, bad, status_detail, caller):
     _install_fake_db(monkeypatch)
     with pytest.raises(HTTPException) as exc:
-        await face_id.face_enroll(bad, caller=dict(DEVICE))
+        await face_id.face_enroll(bad, caller=dict(caller))
     assert exc.value.status_code == 400
     assert status_detail in str(exc.value.detail)
 
@@ -193,3 +195,9 @@ async def test_profiles_list_never_exposes_embeddings(monkeypatch, enabled):
 async def test_threshold_default_survives_bad_env(monkeypatch):
     monkeypatch.setenv("ZOE_FACE_ID_THRESHOLD", "nope")
     assert face_id._face_id_threshold() == pytest.approx(0.45)
+
+
+@pytest.fixture(autouse=True)
+def _member_signed_in_at_the_panel(jason_signed_in_at_the_panel):
+    """A device-token enrolment writes ONLY a member the server verified at the panel (biometric_scope, 2026-10-19); these tests
+    are about the payload, so "jason" is PIN-signed-in. The identity rule itself: test_biometric_ownership_scope.py."""

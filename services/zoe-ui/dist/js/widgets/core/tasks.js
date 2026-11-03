@@ -101,7 +101,7 @@ class TasksWidget extends WidgetModule {
         if (tasks === null) {
             if (count) count.textContent = '–';
             if (content) {
-                content.innerHTML = '<div style="text-align: center; color: #666; font-style: italic;">Couldn\'t load your tasks</div>';
+                content.innerHTML = '<div class="zw-state zw-error" role="status">Couldn\'t load your tasks</div>';
             }
             return;
         }
@@ -119,15 +119,15 @@ class TasksWidget extends WidgetModule {
 
         if (content) {
             if (pendingTasks.length === 0) {
-                content.innerHTML = '<div style="text-align: center; color: #666; font-style: italic;">All tasks completed! 🎉</div>';
+                content.innerHTML = '<div class="zw-state zw-empty" role="status">All tasks completed! 🎉</div>';
                 return;
             }
             
             content.innerHTML = pendingTasks.slice(0, 5).map(task => `
-                <div class="task-item ${task.category || 'personal'}" style="padding: 12px; border-radius: 8px; margin-bottom: 8px; cursor: grab; transition: all 0.3s; display: flex; align-items: center; gap: 10px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);">
-                    <input type="checkbox" class="task-checkbox" data-task-id="${task.id}" data-list-id="${task.list_id}" data-list-type="${task.list_type}" style="width: 18px; height: 18px; cursor: pointer;">
-                    <div class="task-text" style="flex: 1; font-size: 14px; font-weight: 500;">${task.title || task.name || 'Untitled Task'}</div>
-                    <div style="font-size: 12px; color: ${this.getPriorityColor(task.priority)}; font-weight: 600;">${task.priority || 'Medium'}</div>
+                <div class="task-item ${_zwTaskEsc(task.category || 'personal')}" style="padding: 12px; border-radius: 8px; margin-bottom: 8px; cursor: grab; transition: all 0.3s; display: flex; align-items: center; gap: 10px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);">
+                    <input type="checkbox" class="task-checkbox" data-task-id="${_zwTaskEsc(task.id)}" data-list-id="${_zwTaskEsc(task.list_id)}" data-list-type="${_zwTaskEsc(task.list_type)}" style="width: 18px; height: 18px; cursor: pointer;">
+                    <div class="task-text" style="flex: 1; font-size: 14px; font-weight: 500;">${_zwTaskEsc(task.title || task.name || 'Untitled Task')}</div>
+                    <div style="font-size: 12px; color: ${this.getPriorityColor(task.priority)}; font-weight: 600;">${_zwTaskEsc(task.priority || 'Medium')}</div>
                 </div>
             `).join('');
 
@@ -182,6 +182,14 @@ class TasksWidget extends WidgetModule {
             default: return '#666';
         }
     }
+}
+
+// Escape a server string before it goes into innerHTML (event/task titles are
+// household-written text, including text that came in by voice or Telegram).
+function _zwTaskEsc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Expose to global scope for WidgetManager

@@ -80,6 +80,10 @@
      server sends only a count). Hidden while the orb is busy/listening; the voice states win. */
   #orb.has::after{content:"";position:absolute;top:1px;right:1px;width:14px;height:14px;border-radius:50%;background:#ffd27a;border:2px solid rgba(10,12,28,.6);box-shadow:0 0 9px rgba(255,210,122,.8);pointer-events:none}
   #orb.busy.has::after,#orb.listening.has::after,#orb.hide.has::after{display:none}
+  /* the pendant day review is waiting (ZOE_DAY_REVIEW_RAISE): a thin, still ring - no count, no words, no sound, no motion.
+     Asking ("what did you find in my day?") or the card is how it clears. Hidden while the orb is busy/listening/hidden. */
+  #orb.review::before{content:"";position:absolute;inset:-7px;border-radius:50%;border:2px solid rgba(150,232,214,.55);pointer-events:none}
+  #orb.busy.review::before,#orb.listening.review::before,#orb.hide.review::before{display:none}
   /* ask-Zoe command bar (orb tap) */
   #cmdbar{position:absolute;left:50%;bottom:126px;transform:translateX(-50%) translateY(12px);width:620px;display:none;z-index:55;opacity:0;transition:.25s}
   #cmdbar.on{display:flex;opacity:1;transform:translateX(-50%)}
@@ -753,6 +757,61 @@
   .tfull .tctrls button{width:66px;height:66px;border-radius:50%;border:0;cursor:pointer;font-size:24px;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center}
   .tfull .tctrls .stop{background:var(--cat-health);color:#2a0910}
   /* timer-finish alarm overlay (panel-wide) */
+  /* ALARMS (js/touch-alarms.js): the Timers|Alarms tabs, the list + editor, and the ring screen on the sleep clock */
+  .altabs,.alfull,.aled,.alring{--alr:#ffbf5e}
+  .altabs[hidden],.alfull[hidden],.tfull[hidden]{display:none!important}
+  .altabs{position:absolute;top:38px;right:122px;height:48px;display:flex;gap:8px;z-index:30}
+  .altab{font-size:22px;font-weight:500;color:rgba(255,255,255,.5);padding:0 24px;min-height:48px;border-radius:999px;border:0;background:none;cursor:pointer}
+  .altab.on{background:rgba(255,255,255,.12);color:#fff;font-weight:600}
+  .alfull{position:absolute;left:60px;right:60px;top:110px;bottom:60px;display:flex;flex-direction:column;gap:18px}
+  .alhead{display:flex;align-items:center;justify-content:space-between;gap:20px}
+  .alhelp{font-size:20px;color:var(--ink-soft)}
+  .allist{display:flex;flex-direction:column;gap:12px;overflow:auto}
+  .alempty{font-size:24px;color:var(--ink-faint);text-align:center;margin-top:60px}
+  .alrowitem{display:flex;align-items:center;gap:26px;padding:16px 28px;border-radius:24px;background:rgba(255,255,255,.06);border:1px solid var(--line);cursor:pointer;min-height:84px}
+  .alrowitem.off{opacity:.55}
+  .altime{font-size:54px;font-weight:300;font-variant-numeric:tabular-nums;min-width:200px}
+  .altime .alm{font-size:24px;margin-left:8px;color:var(--ink-soft)}
+  .alinfo{flex:1}
+  .alname{font-size:26px;font-weight:600}
+  .alsub{font-size:19px;color:var(--ink-soft);margin-top:4px}
+  .alsw{width:92px;height:52px;border-radius:999px;border:0;background:rgba(255,255,255,.18);position:relative;cursor:pointer;flex:none}
+  .alsw.on{background:var(--alr)}
+  .alknob{position:absolute;top:5px;left:5px;width:42px;height:42px;border-radius:50%;background:#fff;transition:.2s}
+  .alsw.on .alknob{left:45px}
+  .alchip{font-size:22px;min-height:56px;padding:0 26px;border-radius:999px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#fff;cursor:pointer}
+  .alchip.on{background:var(--alr);color:#2a1d06;border-color:transparent;font-weight:600}
+  .alchip.day{min-width:56px;padding:0}
+  .alchip.danger{color:var(--cat-health)}
+  .aled{position:absolute;inset:0;z-index:40;background:rgba(5,8,18,.94);display:flex;align-items:center;justify-content:center}
+  .aledbox{display:flex;gap:40px;align-items:center}
+  .alwheels{display:flex;align-items:center;gap:6px}
+  .alwheel{width:110px;height:192px;overflow-y:auto;scroll-snap-type:y mandatory;scrollbar-width:none;border-radius:20px;background:rgba(255,255,255,.05)}
+  .alwheel::-webkit-scrollbar{display:none}
+  .alpad{height:64px}
+  .alitem{height:64px;display:grid;place-items:center;font-size:40px;font-weight:300;color:var(--ink-faint);scroll-snap-align:center;cursor:pointer}
+  .alitem.sel{color:#fff;font-weight:600}
+  .alcolon{font-size:44px;font-weight:300}
+  .alside{display:flex;flex-direction:column;gap:18px;max-width:560px}
+  .alk{font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:8px}
+  .alchips{display:flex;flex-wrap:wrap;gap:10px}
+  .aldays{display:flex;gap:8px;width:100%}
+  .alacts{display:flex;gap:12px;margin-top:6px}
+  .alerr{font-size:18px;color:var(--cat-health);min-height:24px}
+  .alring{position:absolute;inset:0;z-index:95;display:none;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(120% 90% at 50% 46%,#1a1230,#05030c 75%);cursor:pointer;overflow:hidden}
+  .alring.on{display:flex}
+  .alclock{font-size:260px;font-weight:200;line-height:1;letter-spacing:-.04em;font-variant-numeric:tabular-nums;color:#fff;animation:alshake 1.2s ease-in-out infinite;z-index:1}
+  .allabel{font-size:44px;font-weight:600;color:var(--alr);min-height:56px;margin-top:6px;z-index:1}
+  .alhint{font-size:28px;color:var(--ink-soft);margin-top:14px;z-index:1}
+  .alpulse{position:absolute;left:50%;top:44%;width:300px;height:300px;margin:-150px 0 0 -150px;border-radius:50%;border:3px solid rgba(255,191,94,.55);animation:alripple 3s ease-out infinite;pointer-events:none}
+  .alpulse.p1{animation-delay:1s}.alpulse.p2{animation-delay:2s}
+  @keyframes alripple{0%{transform:scale(.6);opacity:.9}100%{transform:scale(4.2);opacity:0}}
+  @keyframes alshake{0%,100%{transform:translateX(0)}8%{transform:translateX(-7px)}16%{transform:translateX(7px)}24%{transform:translateX(-5px)}32%{transform:translateX(0)}}
+  .aloff{position:absolute;bottom:46px;left:50%;transform:translateX(-50%);width:420px;height:92px;border-radius:999px;border:2px solid rgba(255,255,255,.35);background:rgba(255,255,255,.08);color:#fff;font-size:28px;font-weight:600;overflow:hidden;cursor:pointer;touch-action:none;z-index:2}
+  .aloff.only{border-color:var(--alr)}
+  .aloff .alfill{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(255,191,94,.55);transition:width linear 0ms}
+  .aloff.holding .alfill{width:100%}
+  .aloff .altxt{position:relative}
   #tmrAlarm{position:absolute;inset:0;z-index:85;display:none;align-items:center;justify-content:center;background:rgba(7,10,22,.72);backdrop-filter:blur(16px)}
   #tmrAlarm.on{display:flex;animation:tapulse 1.1s ease-in-out infinite}
   #tmrAlarm .tab{text-align:center}
@@ -1136,6 +1195,8 @@
 
 <!-- before the estate script: a ?domain=memories arrival calls into it during boot -->
 <script src="/js/touch-memories-space.js?v=mem-1"></script>
+<script src="/js/touch-alarm-sound.js?v=as-1"></script>
+<script src="/js/touch-alarms.js?v=al-2"></script>
 <script>
 (function(){
   var stage=document.getElementById('stage');
@@ -1231,7 +1292,7 @@
         +'<div class="brf"><div class="mqtabs"><button class="on" data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button><button data-qt="sources">Sources</button></div>'
         +'<div id="mQList" class="mqlist"></div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
-      html:'<div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
+      html:'<div class="chttl">Timers</div><div class="altabs" id="alTabs" hidden></div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div><div class="alfull" id="alFull" hidden></div>'},
     list:{home:true, bg:GROUND, canvas:false,
       html:'<div class="lhdr"><div class="lcount" id="lstCount"></div><div class="ltabs" id="lstTabs"></div></div><div class="lstf2"><div class="lcols" id="lstItems"></div></div>'},
     calendar:{home:true, bg:GROUND, canvas:false,
@@ -1645,7 +1706,7 @@
     }).catch(unknown);
   }
   var _ha={loaded:false,ok:false,lights:[],climate:null,scenes:[]};
-  function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body)});}
+  function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body),signal:reqSig(12000)});}
   // One in-flight entity load at a time, and a response younger than HA_MEMO_MS
   // is reused: the dock's refreshHA (30 s), the Rooms surface (30 s) and the Sleep
   // surface (30 s) all used to fetch /api/ha/entities independently.
@@ -1653,7 +1714,7 @@
   function loadHA(cb){
     if(_ha.loaded&&Date.now()-_haAt<HA_MEMO_MS){cb&&cb();return;}
     if(_haInflight){_haInflight.then(function(){cb&&cb();});return;}
-    _haInflight=_loadHA().then(function(){_haAt=Date.now();_haInflight=null;cb&&cb();});
+    _haInflight=_loadHA().then(function(){_haAt=Date.now();_haInflight=null;cb&&cb();},function(){_haInflight=null;cb&&cb();});
   }
   function _loadHA(){return apiGet('/api/ha/entities').then(function(s){
       var arr=Array.isArray(s)?s:((s&&s.entities)||(s&&s.states)||[]);
@@ -1948,7 +2009,9 @@
     if(status===401){try{localStorage.removeItem('zoe_session');}catch(e){}
       var now=Date.now();if(now-_guestRefillT>30000){_guestRefillT=now;convEnsureSession();}}
   }
-  function apiGet(url){return fetch(url,{headers:{'X-Session-ID':sid()},credentials:'include'}).then(function(r){
+  // every request helper carries a deadline; guarded because the touch harness (and an old WebView) has no AbortSignal
+  function reqSig(ms){return (typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function')?AbortSignal.timeout(ms):undefined;}
+  function apiGet(url){return fetch(url,{headers:{'X-Session-ID':sid()},credentials:'include',signal:reqSig(12000)}).then(function(r){
     // Server is authoritative on session validity: an expired/invalid session
     // 401/403s here — clear it and return to login (the presence guard alone
     // can't detect server-side expiry).
@@ -2961,7 +3024,7 @@
     // The flow is rebuilt with the card, so its state can't survive a show().
     cfApplyScale();cfClear();wireCF();wireSeek();wireVol();wireVolPop();wireKeep();
     _toolsClear();var _mf0=document.querySelector('.mfull');if(_mf0)_mf0.classList.remove('tools');
-    loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
+    loadMusic();_wxTick=setInterval(function(){if(_cur==='music'){loadMusic();jukeboxQR();}},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');if(!a)return;
       musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
@@ -2999,14 +3062,23 @@
       }).catch(function(){mi.favorite=wasOn;cfPaintFav();toast('Couldn’t favourite');});};
     // Jukebox QR: phones scan it to search + queue music (jukebox.html). It carries a
     // short-lived play/queue-only token bound to this panel, so it is a server SVG by
-    // single-use handle (POST /api/music/jukebox/start), re-minted once it expires.
-    var qr=document.getElementById('mQRCode');
-    if(qr&&!(+qr.dataset.exp>Date.now())){qr.dataset.exp=String(Date.now()+60000);
+    // single-use handle (POST /api/music/jukebox/start). jukeboxQR() re-mints it before the
+    // token expires; wireMusic() calls it once and the 5 s music poll keeps calling it, so a
+    // music screen that stays up for hours never shows an expired code.
+    function jukeboxQR(){
+      var qr=document.getElementById('mQRCode');
+      if(!qr)return;
+      if(+qr.dataset.tok<Date.now())qr.innerHTML='';                    // never leave an expired code on screen, even mid-retry
+      if(+qr.dataset.exp>Date.now())return;
+      qr.dataset.exp=String(Date.now()+60000);                          // retry a failed mint after a minute
       apiJson('POST','/api/music/jukebox/start',{panel_id:_panelDevId()}).then(function(r){
         if(!r||!r.qr_path)return;
-        qr.dataset.exp=String(Date.now()+Math.max(60,(r.expires_in||0)-300)*1000);
+        var ttl=r.expires_in||0;
+        qr.dataset.exp=String(Date.now()+Math.max(60,ttl-300)*1000);   // re-mint 5 min before it expires
+        qr.dataset.tok=String(Date.now()+ttl*1000);
         var im=document.createElement('img');im.alt='Jukebox code';im.width=74;im.height=74;im.src=r.qr_path;
         qr.innerHTML='';qr.appendChild(im);}).catch(function(){});}
+    jukeboxQR();
     // Speaker picker: list Music Assistant players, tap to move playback there.
     var spk=document.getElementById('mSpk');
     if(spk)spk.onclick=function(){
@@ -3326,7 +3398,7 @@
   function estConfirm(msg,onYes){estOpen('<h3>'+esc(msg)+'</h3><div class="btns"><button data-x="no">Cancel</button><button class="del" data-x="yes">Delete</button></div>');
     document.querySelector('#estModal').querySelector('[data-x="no"]').onclick=estClose;
     document.querySelector('#estModal').querySelector('[data-x="yes"]').onclick=function(){estClose();onYes();};}
-  function apiJson(method,url,body){return fetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined}).then(function(r){
+  function apiJson(method,url,body){return fetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined,signal:reqSig(12000)}).then(function(r){
     if(r.status===401||r.status===403){
       if(window.__kiosk){kioskAuthFail(r.status);}else{estateAuthFail(r.status);}
       throw new Error('auth');}
@@ -3401,6 +3473,8 @@
   function fmtT(s){s=Math.max(0,Math.round(s));var m=Math.floor(s/60);return m+':'+two(s%60);}
   function timerRemain(t){if(t.expires_at_ms!=null)return (t.expires_at_ms-Date.now())/1000;if(t.ends_at)return (new Date(t.ends_at).getTime()-Date.now())/1000;if(t.remaining_seconds!=null)return t.remaining_seconds;return t.duration_seconds||0;}
   function wireTimer(){
+    // Timers | Alarms tabs (js/touch-alarms.js): the strip appears only when the server has alarms (ZOE_ALARMS).
+    if(window.ZoeAlarms)ZoeAlarms.attachTabs({tabsEl:document.getElementById('alTabs'),timersEl:document.querySelector('.tfull'),alarmsEl:document.getElementById('alFull')});
     function paint(){timersGet().then(function(d){if(_cur!=='timer')return;
       var ts=(d.timers||[]).filter(function(t){return timerRemain(t)>0;}).sort(function(a,b){return timerRemain(a)-timerRemain(b);});
       var rings=document.getElementById('tmRings'),more=document.getElementById('tmMore');
@@ -4350,26 +4424,35 @@
   // future) are pruned so they never alarm.
   var _tAlarm={known:{},fired:{},chime:null};
   function _tAlarmRefresh(){timersGet().then(function(d){
-    var seen={},now=Date.now();
+    var seen={},now=Date.now(),acks=_acksGet();
     ((d&&d.timers)||[]).forEach(function(t){var id=String(t.timer_id||t.id||''),exp=+t.expires_at_ms||0;if(!id||!exp)return;seen[id]=1;
+      if(acks[id]){_ackSend(id);return;}  // dismissed but the cancel never landed: retry it, never ring it again
       if(!_tAlarm.fired[id])_tAlarm.known[id]={exp:exp,label:t.label||t.title||'Timer'};});
+    Object.keys(acks).forEach(function(id){if(!seen[id]){delete acks[id];}});_acksSet(acks);  // server forgot it: nothing to retry
     Object.keys(_tAlarm.known).forEach(function(id){if(!seen[id]&&_tAlarm.known[id].exp>now+1500)delete _tAlarm.known[id];});
     // Bound `fired` on a long-lived kiosk: drop ids fired >6h ago (their timers
     // are long gone, so they can never re-appear and re-fire).
     Object.keys(_tAlarm.fired).forEach(function(id){if(_tAlarm.fired[id]<now-21600000)delete _tAlarm.fired[id];});
   }).catch(function(){});}
-  function _tAlarmTick(){var now=Date.now(),due=[];
+  function _tAlarmTick(){var now=Date.now(),due=[],ids=[];
     Object.keys(_tAlarm.known).forEach(function(id){var t=_tAlarm.known[id];
-      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];due.push(t.label);}});
+      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];due.push(t.label);ids.push(id);}});
     // Batch same-tick expiries into ONE alarm ("Pasta / Eggs") so a second
     // timer finishing doesn't overwrite the first's label + speech.
-    if(due.length)timerAlarm(due.join(' / '));}
+    if(due.length)timerAlarm(due.join(' / '),ids);}
   function _beep(){try{if(!_tAlarm.ctx)_tAlarm.ctx=new (window.AudioContext||window.webkitAudioContext)();var c=_tAlarm.ctx;
     if(c.state==='suspended')c.resume();
     function ping(t0){var o=c.createOscillator(),g=c.createGain();o.type='sine';o.frequency.value=880;o.connect(g);g.connect(c.destination);
       g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(.45,t0+.02);g.gain.linearRampToValueAtTime(0,t0+.4);o.start(t0);o.stop(t0+.42);}
     var t=c.currentTime;ping(t);ping(t+.55);ping(t+1.1);}catch(e){}}
-  function timerAlarm(label){
+  var _ACK_KEY='zoe_timer_acks';
+  function _acksGet(){try{return JSON.parse(localStorage.getItem(_ACK_KEY)||'{}')||{};}catch(e){return {};}}
+  function _acksSet(o){try{localStorage.setItem(_ACK_KEY,JSON.stringify(o));}catch(e){}}
+  function _ackSend(id){return apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id}).then(function(){var a=_acksGet();delete a[id];_acksSet(a);}).catch(function(){});}
+  function timerAlarm(label,ids){
+    // Cumulative: a second timer ending before Dismiss must not drop the first one's id, or the first stays
+    // "ringing" on the server and re-rings after the next voice-turn reload inside the grace window.
+    _tAlarm.pending=_tAlarm.pending||{};(ids||[]).forEach(function(id){_tAlarm.pending[id]=1;});
     var ov=document.getElementById('tmrAlarm');
     if(!ov){ov=document.createElement('div');ov.id='tmrAlarm';(document.getElementById('stage')||document.body).appendChild(ov);}
     ov.innerHTML='<div class="tab"><div class="tak">⏱ Timer done</div><div class="tal">'+esc(label||'Timer')+'</div><button class="tad" id="tmrAlarmX">Dismiss</button></div>';
@@ -4379,10 +4462,20 @@
     // isn't in view — browser TTS fallback; a Kokoro-voiced server announce is
     // the nicer follow-up but this needs no backend.
     try{if(window.speechSynthesis){var u=new SpeechSynthesisUtterance((label||'Timer')+' timer is done');u.rate=.96;speechSynthesis.cancel();speechSynthesis.speak(u);}}catch(e){}
-    document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');if(_tAlarm.chime){clearInterval(_tAlarm.chime);_tAlarm.chime=null;}
+    // Dismiss = the ACK: the server keeps a finished timer listed ("ringing") until it is cancelled or a grace
+    // window passes, because every voice turn reloads this page (panel_navigate) and a page that was reloaded
+    // - or first polled - after the end must still ring it. Cancelling the id is what stops a reload re-ringing it.
+    document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');
+      var acked=Object.keys(_tAlarm.pending||{});_tAlarm.pending={};
+      // Persist the ack BEFORE sending it and drop it only once the server confirms: a failed cancel (restart, network)
+      // is retried by every poll, and survives a page reload, so a dismissed alarm never sounds again inside the grace.
+      var a=_acksGet();acked.forEach(function(id){a[id]=1;});_acksSet(a);
+      acked.forEach(_ackSend);_tmMemo.p=null;if(_tAlarm.chime){clearInterval(_tAlarm.chime);_tAlarm.chime=null;}
       if(_cur==='timer'&&typeof wireTimer==='function'){}};
   }
   _tAlarmRefresh();setInterval(_tAlarmRefresh,15000);setInterval(_tAlarmTick,1000);
+  // Wake-up alarms: the ring screen polls the server (js/touch-alarms.js); a ring takes the sleep clock page.
+  if(window.ZoeAlarms)ZoeAlarms.init({apiGet:apiGet,apiJson:apiJson,show:show,cur:function(){return _cur;},sound:window.ZoeAlarmSound});
 
   // ---- ask-Zoe command loop (orb tap → /api/skybridge/resolve → result) ----
   // Same resolver the voice pipeline uses, so typed and spoken commands behave
@@ -4780,17 +4873,43 @@
       // fallback path too, or one unreachable daemon would wedge the orb.
       .then(function(){_orbBusy=false;});
   }
-  orb.addEventListener('click',function(){panelVoice('Listening — ask Zoe anything');});
+  // The dot is the "I have something" cue, so pressing the orb while it shows COLLECTS it: the daemon runs a
+  // "what's up?" turn (spoken, same pipeline + identity rules as saying it - a tap proves no voice, so private
+  // items stay pending). No dot = listen, as ever. Same no-cors + fallback pattern as /activate; a daemon that
+  // predates /pull answers 404 (still opaque here), so the busy state is only a timeout-bounded cue.
+  var _pullT=null;
+  function orbPull(){
+    if(_convLive||_orbBusy)return;
+    _orbBusy=true;
+    cmdbar.classList.remove('on');
+    orb.classList.add('busy');
+    if(_pullT)clearTimeout(_pullT);
+    _pullT=setTimeout(function(){_pullT=null;orb.classList.remove('busy');},20000);
+    fetch('http://localhost:7777/pull',{method:'POST',mode:'no-cors',signal:AbortSignal.timeout(800)})
+      .then(function(r){if(!r||(r.type!=='opaque'&&!r.ok))throw new Error('pull '+(r&&r.status));})
+      .catch(function(){
+        if(_pullT){clearTimeout(_pullT);_pullT=null;}
+        orb.classList.remove('busy');
+        if(window.__kiosk){toast('Voice isn’t available right now');return;}
+        cmdbar.classList.add('on');
+        setTimeout(function(){cmdin.focus();},50);
+      })
+      .then(function(){_orbBusy=false;});
+  }
+  orb.addEventListener('click',function(){
+    if(orb.classList.contains('has')&&!orb.classList.contains('busy')&&!orb.classList.contains('listening'))orbPull();
+    else panelVoice('Listening — ask Zoe anything');
+  });
   // pull, not push: the orb's quiet "I have something" dot. GET /api/proactive/inbox answers a COUNT and a
   // coarse class - never what is pending - and only for a signed-in member (guest, empty, quiet hours and the
   // flag off all read "no dot"). Asking ("what's up?") is how it clears; nothing here speaks or toasts.
   (function(){
-    function paint(on){orb.classList.toggle('has',!!on);}
+    function paint(on,review){orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
     function poll(){
-      var s=sid();if(!s){paint(false);return;}
-      fetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include'})
+      var s=sid();if(!s){paint(false,false);return;}
+      fetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include',signal:reqSig(8000)})
         .then(function(r){return r.ok?r.json():null;})
-        .then(function(d){paint(!!(d&&d.enabled&&d.count>0&&!d.quiet));})
+        .then(function(d){paint(!!(d&&d.enabled&&d.count>0&&!d.quiet),!!(d&&d.review===true&&!d.quiet));})
         .catch(function(){});
     }
     poll();setInterval(poll,60000);
@@ -4965,7 +5084,8 @@
 })();
 </script>
 <script src="/js/touch-event-detail.js?v=ed-1"></script>
-<script src="/js/touch-voice-session.js?v=vs-1"></script>
+<script src="/js/touch-voice-session.js?v=vs-2"></script>
+<script src="/js/touch-review-cards.js?v=rc-2"></script>
 <script src="/js/touch-voice-enroll.js?v=ve-1"></script>
 <script src="/js/touch-ui-executor.js?v=estate-11-panel-target"></script>
 </body>

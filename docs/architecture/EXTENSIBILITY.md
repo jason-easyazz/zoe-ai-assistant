@@ -1,5 +1,7 @@
 # Extensibility Architecture
 
+> **Status 2026-10-18 (B3 - OpenClaw/Hermes removal): the skill-discovery path this document describes no longer exists.** `openclaw_manager.py` and `routers/openclaw.py` (the `/api/openclaw/*` skills API) were deleted and `~/.openclaw/workspace/skills/` / `~/.hermes/skills/` are gone, so `list_openclaw_skills` and `list_openclaw_plugins` now always return an empty list. No skill loader exists. Everything below is kept only as a record of what was true before; do not build on it.
+
 > **Corrected.** An earlier version of this document described a skills
 > enforcement layer (`api_only` rejection at load time, an `allowed_endpoints`
 > executor whitelist, `skills.lock` integrity checking, a `~/.zoe/skills/` →

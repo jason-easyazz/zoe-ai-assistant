@@ -7,7 +7,7 @@ These are evaluation tracks, not production dependencies.
 
 - Native Zoe evidence gates come first. Spikes should prove whether an outside
   pattern helps Zoe; they should not replace Zoe's orchestrator.
-- Tools before tokens: every packet must record Graphify/opensrc/Greptile/
+- Tools before tokens: every packet must record codebase-memory/Serena/opensrc/Greptile/
   validators used before any paid model escalation.
 - Overnight mode can be slow. Prefer free/local reliability over latency for
   self-evolution tasks.

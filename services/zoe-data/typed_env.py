@@ -113,3 +113,36 @@ def env_list(key: str, default: tuple[str, ...] = (), sep: str = ",") -> tuple[s
     if raw is None or not raw.strip():
         return default
     return tuple(item.strip() for item in raw.split(sep) if item.strip())
+
+
+def flag(name: str):
+    """Read a REGISTERED flag: type, default and allowed values come from ``flag_registry`` (declared once).
+
+    ``flag("ZOE_X")`` replaces ``env_bool("ZOE_X", False)`` / ``os.environ.get("ZOE_X", "off")`` and leaves
+    nothing to hard-code at the call site, so two readers cannot disagree on the default. Same rules as the
+    typed accessors above: read at CALL time, canonical bool table, unparseable → the declared default plus one
+    journal warning. A mode flag (``allowed`` values) is matched case-insensitively and an unlisted value falls
+    back to the declared default (never a silent flip). Blank/whitespace is the default for str/int/float/list
+    (as ``env_str``) but **False for a bool flag** (``KEY=`` is the explicit "off" state, as ``env_bool``).
+    An unregistered name raises ``KeyError``: declare it with
+    ``python3 tools/audit/flag_inventory.py --sync-registry``.
+    """
+    from flag_registry import spec as _spec  # lazy: keeps this module import-light
+
+    s = _spec(name)
+    if s.type == "bool":
+        return env_bool(name, bool(s.default))
+    if s.type == "int":
+        return env_int(name, int(s.default))
+    if s.type == "float":
+        return env_float(name, float(s.default))
+    if s.type == "list":
+        return env_list(name, tuple(s.default or ()))
+    value = env_str(name, str(s.default))
+    if s.allowed:
+        v = value.lower()
+        if v in s.allowed:
+            return v
+        _warn_once(name, value, "one of " + "|".join(s.allowed), s.default)
+        return s.default
+    return value

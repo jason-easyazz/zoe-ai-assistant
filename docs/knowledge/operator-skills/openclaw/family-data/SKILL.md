@@ -77,7 +77,7 @@ mcporter-safe call zoe-data.people_search query="Sarah"
 
 Create a person with details:
 ```
-mcporter-safe call zoe-data.people_create name="Rod" relationship="friend" birthday="1985-01-05" phone="0412345678" notes="Met at footy"
+mcporter-safe call zoe-data.people_create name="Alex Example" relationship="friend" birthday="1990-01-01" phone="0400 000 000" notes="Invented example"
 ```
 
 ### Reminders
@@ -128,7 +128,7 @@ mcporter-safe call zoe-data.calendar_delete_event event_id="abc123"
 
 Update a person:
 ```
-mcporter-safe call zoe-data.people_update person_id="abc123" birthday="1985-04-17" phone="0412345678"
+mcporter-safe call zoe-data.people_update person_id="abc123" birthday="1990-01-01" phone="0400 000 000"
 ```
 
 Delete a person:

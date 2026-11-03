@@ -61,6 +61,15 @@ from service_dir import (  # noqa: E402 — sibling-import convention, scripts/ 
 from service_python import ENV_VAR as PYTHON_ENV, resolve_service_python  # noqa: E402
 
 
+def _sig(labels: dict | None) -> str | None:
+    """Stable hash of a route-label dict (key order independent); None when the replay
+    predates per-row labels."""
+    if not isinstance(labels, dict):
+        return None
+    canon = json.dumps({k: labels.get(k) for k in sorted(labels)}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(canon.encode()).hexdigest()[:10]
+
+
 def _median(values: list[float]) -> dict:
     if not values:
         return {}
@@ -192,6 +201,7 @@ def _run_and_report(cmd: list[str], service_dir: str, replay_json: str, args) ->
     # Per-turn e2e = stt + resolve + brain (= time-to-spoken-ready text).
     e2e_rows = []
     for r in rows:
+        route_labels = r.get("route") if isinstance(r.get("route"), dict) else None
         stt = r.get("stt_ms") or 0
         resolve = r.get("resolve_ms") or 0
         brain = r.get("brain_ms") or 0
@@ -208,6 +218,11 @@ def _run_and_report(cmd: list[str], service_dir: str, replay_json: str, args) ->
             "via_brain": r.get("outcome") == "brain",
             "route_hash": hashlib.sha1(str(r.get("outcome") or "").encode()).hexdigest()[:8],
             "heard_hash": hashlib.sha1(" ".join(re.sub(r"[^\w\s']", " ", (r.get("transcript") or "").lower()).split()).encode()).hexdigest()[:8],
+            # T-3: WHAT the turn did, as code labels (lane, fast tier:domain:intent, router domain +
+            # tool, Tier-0 intent; replay_samples._route_labels hashes anything that is not a plain
+            # identifier). The probe compares them per pinned clip; `route_sig` is their hash.
+            "route": route_labels,
+            "route_sig": _sig(route_labels),
         })
 
     agg = {
@@ -237,6 +252,8 @@ def _run_and_report(cmd: list[str], service_dir: str, replay_json: str, args) ->
               "brain turns were scored WITHOUT recall; this run is not evidence.")
     report = {
         "kind": "voice_e2e",
+        # A self-test's injected fault (replay_samples ZOE_REPLAY_FAULT): never evidence.
+        "fault": data.get("fault"),
         "memory_recall": recall,
         "memory_recall_detail": data.get("memory_recall_detail"),
         "memory_load_failures": data.get("memory_load_failures"),

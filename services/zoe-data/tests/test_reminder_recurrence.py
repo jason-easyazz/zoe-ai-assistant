@@ -481,11 +481,7 @@ async def test_recurring_reminder_never_falls_back_to_a_one_off_writer(monkeypat
     async def direct_unavailable(_intent, _uid):
         return None
 
-    async def no_mcporter(*_a, **_k):
-        raise AssertionError("the MCP writer has no recurrence — it must not be used")
-
     monkeypatch.setattr(intent_router, "_execute_reminder_create_direct", direct_unavailable)
-    monkeypatch.setattr(intent_router, "_run_mcporter", no_mcporter)
     slots = {"title": "take my pills", "time": "07:00", "recurrence": "FREQ=DAILY"}
     reply = await intent_router.execute_intent(intent_router.Intent("reminder_create", slots), "jason")
     assert reply and "haven't" in reply

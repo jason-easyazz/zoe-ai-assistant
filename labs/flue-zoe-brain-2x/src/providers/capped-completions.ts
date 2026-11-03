@@ -112,6 +112,8 @@ import {
 } from '../context-window.ts';
 import { elideStaleBlocks, elideStaleBlocksEnabled } from '../context-blocks.ts';
 import { cachedUserModelSuffix, turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
+import { markTurnUntrusted, untrustedSourceInMessages } from '../untrusted-content.ts';
+import { activeHarness, harnessForTurn, harnessManner, harnessRenderedInto, stripRenderMark, withToolGuidance, withTurnInstructions, type Harness } from '../harness.ts';
 
 /** Provider id the sidecar registers; the agent binds to `zoe/local`. */
 export const ZOE_PROVIDER_ID = 'zoe';
@@ -218,7 +220,12 @@ export function applyCap(context: Context): Context {
  * windowing had quietly broken that. Passing the full basis restores it AND
  * makes the tool block a stable prompt prefix.
  */
-export function applyPolicies(context: Context, userModelSuffix = ''): Context {
+export function applyPolicies(context: Context, userModelSuffix = '', turnHarness?: Harness): Context {
+  // The harness overlay (src/harness.ts, flag-dark ZOE_BRAIN_HARNESS_DIR): the TURN's harness (bound
+  // on its first round, so a mid-turn reload never moves a later round), or the active one. With the
+  // flag unset it is the compiled-in harness and every application below is identity.
+  const harness = turnHarness ?? activeHarness();
+  context = withTurnInstructions(stripRenderMark(context), harness);
   // Strip the control envelopes BEFORE any other policy so the model — and every
   // downstream transform — only ever sees the human-authored message text. The
   // replay marker rides AHEAD of the identity line on the wire (both parsers are
@@ -232,7 +239,8 @@ export function applyPolicies(context: Context, userModelSuffix = ''): Context {
   const persona = forwardedPersonaFromMessages(unwrapped);
   // The manner block (src/manner.ts) rides between the persona and identity lines; same read-then-strip.
   const afterPersona = stripPersonaEnvelope(unwrapped);
-  const manner = forwardedMannerFromMessages(afterPersona);
+  // An overlay manner.md replaces only the English block zoe-data already chose to send.
+  const manner = harnessManner(forwardedMannerFromMessages(afterPersona), harness);
   const clean = { ...context, messages: stripIdentityEnvelope(stripMannerEnvelope(afterPersona)) };
   // ZOE_BRAIN_ELIDE_STALE_BLOCKS (src/context-blocks.ts): older user messages lose
   // their injected blocks before windowing. Disclosure below still reads `clean`,
@@ -244,7 +252,9 @@ export function applyPolicies(context: Context, userModelSuffix = ''): Context {
   // The persona swap and the manner block happen BEFORE windowing too, so the history budget is charged for them.
   // The manner block goes ahead of the user-model card: the bytes up to the card are the same for every member.
   const prepared = withUserModelBlock(withMannerBlock(withPersonaBlock(sent, persona), manner), userModelSuffix);
-  const safe = stripCodingBuiltins(prepared);
+  // Overlay tool guidance replaces DESCRIPTIONS only (never schemas, groups or permissions), before
+  // disclosure and windowing so the budget is charged for the text actually sent.
+  const safe = withToolGuidance(stripCodingBuiltins(prepared), harness);
   const disclosed = progressiveToolsEnabled()
     ? discloseTools(safe, clean.messages)
     : safe;
@@ -275,7 +285,9 @@ export interface PromptSections {
 export function promptSections(context: Context): PromptSections {
   const unwrapped = stripReplayEnvelope(stripSpeculativeEnvelope(context.messages));
   const uid = forwardedIdentityFromMessages(stripMannerEnvelope(stripPersonaEnvelope(unwrapped))) || (process.env.ZOE_BRAIN_USER_ID ?? '');
-  const sent = applyPolicies(context, cachedUserModelSuffix(uid.trim()));
+  // Bound to the harness the prompt was RENDERED from (the render marker), as the provider does: a SIGHUP between render and
+  // turn_request must not mix the newly active manner / tool guidance into this turn's accounting.
+  const sent = applyPolicies(context, cachedUserModelSuffix(uid.trim()), harnessRenderedInto(context.systemPrompt) ?? undefined);
   const tokens = (ms: Message[]) => ms.reduce((n, m) => n + estimateMessageTokens(m), 0);
   let last = sent.messages.length;
   while (last > 0 && sent.messages[last - 1].role !== 'user') last -= 1;
@@ -319,6 +331,12 @@ export function bindIdentityForRound(context: Context, signal?: AbortSignal): vo
   const specStripped = stripSpeculativeEnvelope(context.messages);
   bindTurnReplayMode(signal, forwardedReplayFromMessages(specStripped));
   bindTurnUserId(signal, forwardedIdentityFromMessages(stripMannerEnvelope(stripPersonaEnvelope(stripReplayEnvelope(specStripped)))));
+  // Quoted third-party text (a forwarded Telegram message, a pendant transcript) fenced
+  // by its producer taints the turn from its FIRST round, before any tool can run:
+  // writes and web_search refuse exactly as after a web result (src/untrusted-content.ts).
+  // Only this turn's (the newest) user message is read; a forged fence only restricts.
+  const quoted = untrustedSourceInMessages(specStripped);
+  if (quoted) markTurnUntrusted(signal, quoted);
 }
 
 const DEFAULT_TEMPERATURE = 0.5;
@@ -363,7 +381,7 @@ function cappedStream(
   bindIdentityForRound(context, options?.signal);
   return streamOpenAICompletions(
     model as Model<'openai-completions'>,
-    applyPolicies(context, turnUserModelSuffix(options?.signal)),
+    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt)),
     withBrainTemperature(options),
   );
 }
@@ -376,7 +394,7 @@ function cappedStreamSimple(
   bindIdentityForRound(context, options?.signal);
   return streamSimpleOpenAICompletions(
     model as Model<'openai-completions'>,
-    applyPolicies(context, turnUserModelSuffix(options?.signal)),
+    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt)),
     withBrainTemperature(options),
   );
 }

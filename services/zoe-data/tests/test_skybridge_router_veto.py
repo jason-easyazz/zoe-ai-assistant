@@ -312,21 +312,6 @@ async def test_ungated_callers_are_unchanged(resolved, caplog):
     assert "SKYBRIDGE_GATE" not in caplog.text
 
 
-async def test_route_on_demand_runs_the_router_only_for_a_claimed_turn(resolved, monkeypatch):
-    seen: list[str] = []
-
-    def fake_route(text):
-        seen.append(text)
-        return _two_stage("chat")
-
-    monkeypatch.setitem(sys.modules, "semantic_router",
-                        types.SimpleNamespace(is_enabled=lambda: True, route=fake_route))
-    unclaimed = await sky.resolve_skybridge_request(LIVE_UTTERANCE, "jason", router_decision=sky.ROUTE_ON_DEMAND)
-    assert unclaimed["handled"] is False and seen == []
-    vetoed = await sky.resolve_skybridge_request("show my family", "jason", router_decision=sky.ROUTE_ON_DEMAND)
-    assert vetoed.get("vetoed") is True and seen == ["show my family"]
-
-
 # ── 3b. the new-list naming prompt: only a NAME answers it (Greptile, #1757) ──
 
 NAMING_CTX = {"intent": {"domain": "lists", "action": "create_list", "list_type": "personal"}, "cards": []}
@@ -563,3 +548,28 @@ async def test_voice_identity_ask_under_a_write_verdict_still_goes_on_to_the_bra
     with pytest.raises(_PastSkybridge):
         await _say("what's my name")
     assert resolved == []
+
+
+# ── 6. the named noun outranks a router that chose ANOTHER domain (live 2026-11-03) ──
+# "Do I have anything on my calendar to say?" (garbled "... today?"): router lists @ 0.70 vetoed the calendar read and the
+# lists expert read the shopping list aloud. Negative control: deleting the `named_domain` branch in skybridge_router_gate
+# turns both tests red (veto, the turn continues past Skybridge).
+
+CALENDAR_ASK = "Do I have anything on my calendar to say?"
+
+
+async def test_resolve_named_calendar_under_a_lists_verdict_reads_the_calendar(resolved, caplog):
+    caplog.set_level(logging.INFO, logger="skybridge_service")
+    result = await sky.resolve_skybridge_request(CALENDAR_ASK, "member-1", router_decision=_two_stage("lists", conf=0.702))
+    assert result["handled"] is True and resolved == [("calendar", "show")]
+    assert "skybridge=calendar action=show decision=allow reason=named_domain" in caplog.text
+
+
+async def test_voice_named_calendar_under_a_lists_verdict_is_answered_by_skybridge(monkeypatch, resolved, caplog):
+    _wire_voice(monkeypatch, _two_stage("lists", conf=0.702))
+    caplog.set_level(logging.INFO, logger="skybridge_service")
+    # Skybridge OWNS the turn (a guest speaker gets the calendar's sign-in challenge): it never continues past Skybridge to
+    # the intent / expert lanes, where the lists expert read the shopping list.
+    await _say(CALENDAR_ASK)
+    assert "skybridge=calendar action=show decision=allow reason=named_domain" in caplog.text
+    assert ("lists", "show") not in resolved

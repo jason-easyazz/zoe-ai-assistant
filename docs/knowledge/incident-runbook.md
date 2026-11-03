@@ -668,7 +668,7 @@ Two neighbours from the same day:
 2. Mint: `POST /api/panels/{panel}/token` with header `X-Session-ID: <admin session>`; note the
    new token and its id. Never write a placeholder into any env file.
 3. Install it in BOTH places: on the Pi, `/home/pi/.zoe-voice/.env.voice` `DEVICE_TOKEN` (the
-   daemon); on the Zoe box, `/home/zoe/.hermes/.env` `ZOE_DEVICE_TOKEN` (the replay/latency probe).
+   daemon); on the Zoe box, `services/zoe-data/.env` `ZOE_DEVICE_TOKEN` (`~/.hermes/.env` is retired; see open-problems "hermes .env retirement") (the replay/latency probe).
 4. `systemctl --user restart zoe-voice`; the journal must show `Speaker profiles synced` and no
    `API auth failure … (401)` line.
 5. Only THEN revoke the old id: `DELETE /api/panels/{panel}/token/{old_token_id}` (admin).
@@ -839,8 +839,8 @@ python3 scripts/maintenance/unit_drift_check.py --strict   # also fail on untrac
 
 `MISSING`/`DIFFERS` = merged template not applied (act). `LIVE_ONLY` = an untracked host edit
 (track it as a drop-in or leave it). Run it after every merge touching `scripts/setup/systemd/`.
-Known harmless residue: kokoro `PYTHONPATH`/`ZOE_KOKORO_BACKEND`, serena `MemorySwapMax=0`
-(stricter than the template); **to confirm**: live zoe-data omits the repo-root `.env` its
+Known harmless residue: kokoro `PYTHONPATH`/`ZOE_KOKORO_BACKEND` (serena's `MemorySwapMax=0` is now the tracked
+`no-swap.conf`; full 2026-10-25 classification: [unit-drift-2026-10-25.md](unit-drift-2026-10-25.md)); **to confirm**: live zoe-data omits the repo-root `.env` its
 template lists first.
 
 ### Operator steps (applying is NOT done by the PR)

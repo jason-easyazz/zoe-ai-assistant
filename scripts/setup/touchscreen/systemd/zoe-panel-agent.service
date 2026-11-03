@@ -1,0 +1,25 @@
+# Zoe panel agent (screen dim / wake / brightness) - a PANEL-PI user unit, never the Jetson.
+# Source: scripts/setup/touchscreen/zoe-panel-agent.py, installed to ~/.zoe-panel-agent/zoe-panel-agent.py.
+# Byte-for-byte the unit that ran on the panel before the source entered the repo (2026-10-19), plus the comments.
+# Access policy (who may call :8765) lives in the script; AGENT_GUARD=off is the rollback, AGENT_ALLOWED_PEERS narrows it.
+# Install / update (operator, on the Pi):
+#   install -m 0755 zoe-panel-agent.py ~/.zoe-panel-agent/zoe-panel-agent.py
+#   systemctl --user restart zoe-panel-agent   # restores full brightness on stop, then resumes the schedule
+[Unit]
+Description=Zoe Panel Agent (dim + HTTP control)
+After=default.target
+
+[Service]
+Type=simple
+Environment=ZOE_API=https://192.168.1.218
+Environment=LOG_LEVEL=INFO
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+ExecStart=%h/.zoe-panel-agent/zoe-panel-agent.py
+# Safety: restore full brightness if we crash/stop.
+ExecStopPost=/bin/sh -c 'for b in /sys/class/backlight/*/max_brightness; do max=$(cat "$b"); echo "$max" | tee "${b%/max_brightness}/brightness" >/dev/null 2>&1 || true; done'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

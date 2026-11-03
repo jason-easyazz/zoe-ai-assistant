@@ -27,25 +27,39 @@
 # cap, APScheduler 3.10.4 pickled-pytz jobstore, chromadb 0.6.3 palace format,
 # aiortc/av moving together) are not repeated; they still apply.
 # ═══════════════════════════════════════════════════════════════════════════
-fastapi==0.143.0
-# 0.53.0 since 2026-09-27 (voice path, replay-gated). From 0.50 `--ws auto`
+# 0.162.0 since 2026-10-29 (owner waived the 14-day age rule for the dev phase, 2026-10-17). 0.144-0.162
+# breaking list checked against Zoe's usage (form/file/query-default/JSON-null semantics, **extra on
+# Query/Body, root_path/openapi_prefix): Zoe has one `Form("")` + `File(...)` route (voice_livekit
+# /livekit-audio), no param models, no root_path/openapi_prefix/**extra - see the PR body.
+# Starlette is pinned EXPLICITLY below: FastAPI only floors it (>=0.46), so it used to float.
+fastapi==0.162.0
+# 1.10.0 since 2026-10-29 (1.8.0 on 2026-10-28). 1.8+ needs Python >=3.11,
+# so this is a 3.12-lane-only pin (the 3.10 rollback env cannot take it).
+starlette==1.10.0
+# 0.54.0 since 2026-10-28 (0.53.0 since 2026-09-27; voice path, replay-gated). 0.53->0.54 touches ONLY the
+# opt-in zttp HTTP/2 implementation (early hints + trailers) and typing; the HTTP/1.1 and WebSocket
+# code paths Zoe serves are byte-identical (diffed against the 0.53.0 sdist). From 0.50 `--ws auto`
 # resolves to uvicorn.protocols.websockets.websockets_sansio_impl — the SAME
 # `websockets` library (16.1.1 below; `wsproto` is NOT installed) driven through
 # its sans-I/O protocol instead of the deprecated legacy asyncio server. `--ws
 # websockets` restores the legacy impl with no code change (rollback lever). Why
 # it moved, and the real-socket A/B that proved it: see requirements.txt (whose
 # 3.10 rollback lane deliberately stays on 0.49.0 — STEP_UP_DIVERGENCE).
-uvicorn[standard]==0.53.0
+uvicorn[standard]==0.54.0
 pydantic==2.14.1
 aiosqlite==0.22.1
 asyncpg==0.32.0
-alembic==1.20.0
+alembic==1.20.1
 psycopg2-binary==2.9.13
 python-multipart==0.0.32
 httpx==0.28.1
 aiohttp==3.14.5
-# 16.1.1 has a cp312 wheel; 17.x (>=3.11 only) is a separate replay-gated step.
-websockets==16.1.1
+# 17.2 since 2026-10-28 (25 days old; 17.3 is 8 days old and held). 17.x needs Python >=3.11, so this
+# is a 3.12-lane-only pin. Zoe's own usage is the top-level asyncio client only (`websockets.connect`
+# with open_timeout=/max_size= in music_oauth.py and livekit_aiortc.py), unchanged in 17; uvicorn's
+# default sans-I/O server (`websockets.server.ServerProtocol`, frames, http11) is unchanged too.
+# See docs/knowledge/python-312-venv-migration.md for the evidence and the rollback.
+websockets==17.2
 PyJWT==2.15.1
 # 1.0.0 since 2026-09-27: emitted SSE is byte-identical to 0.1.19 (see requirements.txt).
 ag-ui-protocol==1.0.0
@@ -81,19 +95,34 @@ edge-tts==7.2.8
 # first load the venv fetches 0.1.3's own model bundle, `quantized_26_07_30`
 # (~/.cache/moonshine_voice/…/medium-streaming-en/) — the one the box already uses.
 moonshine-voice==0.1.3
+# transformers is imported by NO runtime code (voice_turn.py computes the Whisper log-mel in numpy); it stays pinned only
+# for tests/test_voice_turn_logmel_parity.py (bit-parity against WhisperFeatureExtractor) and is NOT loaded in the service.
 transformers==5.17.0
 fastembed==0.8.1
 # scikit-learn/joblib: NOT imported at runtime (router heads are numpy since
-# 2026-09-27, router_heads_numpy.py). Installed anyway as librosa requirements
-# (Resemblyzer block below); held at the training pins while the one-release
-# ZOE_ROUTER_HEADS_BACKEND=joblib fallback can still unpickle the .joblib heads.
+# 2026-09-27, router_heads_numpy.py). Kept (with scipy, below) because the one-release
+# ZOE_ROUTER_HEADS_BACKEND=joblib fallback still unpickles the .joblib heads; held at the training pins.
 scikit-learn==1.7.2
 joblib==1.5.3
-APScheduler==3.10.4
-tzlocal==2.1
-SQLAlchemy==2.0.54
+# APScheduler 3.11.3 since 2026-10-28 (NOT 4.x, which is alpha). The 3.10.4 hold was a DATA hazard:
+# the Postgres SQLAlchemyJobStore PICKLES each job's trigger with a **pytz** tzinfo, 3.11 drops pytz
+# from its dependencies, and an unpicklable row is DELETED on read ("Unable to restore job --
+# removing it"). Measured 2026-10-28 on a sqlite store written by 3.10.4: with pytz absent,
+# 4 of 5 jobs were erased on first read by 3.11.3; with pytz installed all 5 restored (the pytz
+# tzinfo is converted to ZoneInfo) and a 3.10.4 read of the re-saved store still worked. So `pytz`
+# is now an EXPLICIT pin here -- never drop it while any persisted job might still hold a pytz
+# trigger. 3.11 also requires tzlocal>=3 (was 2.1; Zoe does not import tzlocal itself).
+# pytz is held at 2026.3, NOT newer: 3.11.3's util.astimezone() reads `obj._offset` for a pytz tz
+# with no zone name (pytz.FixedOffset), and pytz 2026.4/2026.5 renamed that field to `_utcoffset`
+# (AttributeError, measured; fixed upstream after 3.11.3, unreleased). Named zones (UTC,
+# Australia/Perth -- all Zoe registers) work on every version; 2026.3 also keeps a pickled
+# fixed-offset trigger restorable. Raise it only with an APScheduler release carrying the fix.
+APScheduler==3.11.3
+tzlocal==5.4.5
+pytz==2026.3
+SQLAlchemy==2.0.55
 pywebpush==2.5.0
-py-vapid==1.9.4
+py-vapid==1.9.6
 # DIRECT, UNGUARDED module-level imports (memory_metrics.py, voice_metrics.py,
 # guest_policy.py) that no manifest declared — found by an AST scan of every
 # third-party import in zoe-data against this venv (the only way to find what a
@@ -102,39 +131,25 @@ prometheus-client==0.26.0
 # drift-optional: mcp_server.py imports it inside try/except for the status tool.
 psutil==7.2.2
 
-# ── Resemblyzer (speaker ID) — the ONE package that needs a two-phase install ─
-# Resemblyzer 0.1.4 declares `webrtcvad>=2.0.10`, `torch>=1.0.1`, `librosa`,
-# `numpy`, `scipy`, `typing`. Three of those are wrong for a 3.12 venv:
-#   * webrtcvad 2.0.10 is sdist-only AND its module does `import pkg_resources`
-#     at import time. setuptools 84 (what torch pulls) no longer ships
-#     pkg_resources, so the sdist builds with gcc and then FAILS TO IMPORT
-#     (measured). `webrtcvad-wheels` 2.0.14 is the maintained fork: same
-#     `_webrtcvad` extension, no pkg_resources, cp312 aarch64 wheel.
-#   * torch on PyPI for aarch64 became a 454 MB CUDA-13 bundle (+ nvidia-*-cu13,
-#     triton) from 2.9; the CPU build lives on the PyTorch CPU index. Pinned to
-#     the exact wheel so no index-precedence rule can swap it.
-#   * `typing` is the py2 backport; it must not be installed on 3.12.
-# So the build script installs this file, then `resemblyzer==0.1.4 --no-deps`.
-webrtcvad-wheels==2.0.14.post1
-torch @ https://download.pytorch.org/whl/cpu/torch-2.14.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl
-# librosa 1.0.0 (>=3.12 only, API removals) is what an uncapped resolve picks on
-# this interpreter; Resemblyzer was written against 0.x, so it is held.
-librosa==0.11.0
+# scipy: required by scikit-learn (kept for the joblib router-head fallback above); nothing imports it directly.
+# Resemblyzer, torch, librosa and webrtcvad-wheels were RETIRED here (2026-10): the server embeds no audio any more
+# (speaker ID is WeSpeaker ResNet34 ONNX on the panel), and torch was ~360 MB RSS when loaded. Kokoro keeps its own venv.
 scipy==1.17.1
 
 # ── WebRTC / LiveKit ──────────────────────────────────────────────────────
-livekit==1.1.20
+livekit==1.1.21
 # `livekit_aiortc.py` does `from livekit.protocol import rtc` — a SEPARATE
 # distribution (`livekit-protocol`) that `livekit` does not depend on; it only
 # ever arrived via the unused livekit-agents. CI already installs it by hand
 # (validate.yml). 1.1.27 since 2026-09-27 (needs protobuf>=5; box has 7.x).
 livekit-protocol==1.1.27
-# aiortc 1.15.0 caps av<18, so av 18 (>=3.11) is BLOCKED by aiortc, not by Python.
+# aiortc 1.15.0 (latest release) declares av>=14,<18, so av 18/19 is BLOCKED by aiortc, not by Python
+# (re-checked 2026-10-29 against the 1.15.0 pyproject; Dependabot #2214 av 19.0.2 would break resolution).
 aiortc==1.15.0
 av==17.1.0
 
 # ── A2A federation + skill discovery + web search ─────────────────────────
-ddgs==9.16.0
+ddgs==9.16.1
 cloakbrowser==0.3.32
 PyYAML==6.0.3
 segno==1.6.6

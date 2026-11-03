@@ -574,6 +574,8 @@ class Item:
     inferred: bool = False
     classes: frozenset = frozenset()
     mtype: str = ""             # the row's memory_type (a derived person-projection row is "person")
+    origin: str = ""            # the writer that stored it (``origin``, else ``source``): "omi_review" = approved from the day review
+    cls: str = ""               # the authority class (``memory_authority.row_class``): user_stated / user_confirmed / ...
 
 
 @dataclass
@@ -629,7 +631,9 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
             continue
         if own_words.is_pasted_row(meta) or own_words.instruction_shaped(text) or auth.is_unverified(meta):
             continue
+        cls = ""
         try:
+            cls = auth.row_class(meta, text)
             inferred = auth.row_rank(meta, text) < auth.USER_RANK
             # A row the writer could not tie to anything the owner said ("unanchored", class below the
             # derived-from-the-owner's-words rank) is a guess about them: it is not said back as something they told Zoe
@@ -644,7 +648,7 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
         classes = sensitive_classes(text, meta)
         primary = next((c for c in _CLASS_ORDER if c in classes), "")
         it = Item(ref.id, text, _row_epoch(meta), group_of(text, meta), primary, inferred, classes,
-                  str(meta.get("memory_type") or "").lower())
+                  str(meta.get("memory_type") or "").lower(), str(meta.get("origin") or meta.get("source") or ""), cls)
         known.total += 1
         if it.sensitive:
             known.private.setdefault(it.sensitive, []).append(it)
@@ -698,6 +702,7 @@ class PersonEntry:
     epoch: Optional[float] = None
     facts: list = field(default_factory=list)       # [(text, tokens)], natural-language first, newest first
     derived: list = field(default_factory=list)     # the same facts as the projection rows wrote them
+    inferred: set = field(default_factory=set)      # fact keys (the tokens in ``facts``) only an inferred row supports
 
     def label(self) -> str:
         return _person_label(self.name, self.rel) if self.name else (self.rel or "someone")
@@ -1232,8 +1237,12 @@ def fix_text(old: str, value: str) -> str:
 
 
 async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "mp.Explained", *, svc: Any = None,
-              speaker_verified: Optional[bool] = None, now: Optional[float] = None) -> str:
-    """"that's wrong, it's X": correct the row the previous answer named, through the correction path. NEVER raises."""
+              speaker_verified: Optional[bool] = None, now: Optional[float] = None, strict_twins: bool = False) -> str:
+    """"that's wrong, it's X": correct the row the previous answer named, through the correction path. NEVER raises.
+
+    ``strict_twins`` (the panel's tapped correction): a twin that cannot be retired is NOT acknowledged - the reply is
+    ``STORE_DOWN_REPLY`` (the caller keeps the tap armed) and the same correction said again finishes the remaining twins
+    (``memory_space.correct_row``'s superseded-retry rule), so a stale approved twin cannot silently keep the old value."""
     import correction_apply
 
     if speaker_verified is False:
@@ -1248,6 +1257,12 @@ async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "m
         return FIX_OFF_REPLY
     try:
         svc = svc or _svc_default()
+        if strict_twins:
+            await _speculation_barrier()          # the retry mutates too: nothing is written before the turn commits
+            done = await _finish_superseded(user_id, session_id, utterance, value, exp.row_id, svc=svc)
+            if done:
+                mp.clear_explained(user_id)
+                return done
         ev = await evidence_for_row(user_id, exp.row_id, svc=svc)
         if ev.refusal:
             return FIX_GONE_REPLY if ev.refusal == FORGOTTEN_REPLY else ev.refusal
@@ -1256,17 +1271,22 @@ async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "m
             mp.mark_explained(user_id, exp.row_id, text=exp.text, quote=exp.quote, awaiting_fix=True, now=now)
             return FIX_NEEDS_SENTENCE
         old_ref = await asyncio.wait_for(svc.get(exp.row_id), READ_BUDGET_S)
-        twins = await twins_of(user_id, old_ref, svc=svc) if old_ref is not None else []
+        twins = await twins_of(user_id, old_ref, svc=svc, strict=strict_twins) if old_ref is not None else []
         await _speculation_barrier()
         res = await correction_apply.apply_row_correction(user_id, exp.row_id, new, utterance=utterance, session_id=session_id,
                                                           svc=svc)
         if res is None:
             return FIX_GONE_REPLY
-        for tw in twins:   # the twin rows one utterance left behind still hold the old value
-            try:
-                await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction")
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("provenance_answers: twin retire skipped (%s)", type(exc).__name__)
+        if strict_twins:
+            import memory_space
+
+            await memory_space.retire_twins(user_id, twins, svc)    # raises when one stays: caught below -> STORE_DOWN_REPLY
+        else:
+            for tw in twins:   # the twin rows one utterance left behind still hold the old value
+                try:
+                    await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction")
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("provenance_answers: twin retire skipped (%s)", type(exc).__name__)
         mp.clear_explained(user_id)
         return res.reply
     except Exception as exc:  # noqa: BLE001
@@ -1274,14 +1294,31 @@ async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "m
         return STORE_DOWN_REPLY
 
 
+async def _finish_superseded(user_id: str, session_id: str, utterance: str, value: str, row_id: str, *, svc: Any) -> str:
+    """The same tapped correction said AGAIN after its twin retire failed: the row is already superseded and its successor holds
+    the new words - ``memory_space.correct_row`` retires the twins that remain. "" when the row is not in that state."""
+    import memory_space
+
+    ref = await asyncio.wait_for(svc.get(row_id), READ_BUDGET_S)
+    if ref is None or str((ref.metadata or {}).get("status") or "").lower() != "superseded":
+        return ""
+    new = fix_text(ref.text or "", value)
+    if not new:
+        return ""
+    if await memory_space.correct_row(user_id, row_id, new, utterance=utterance, session_id=session_id, svc=svc) != "corrected":
+        return ""
+    return f"Fixed: {new}."
+
+
 _TWIN_WINDOW_S = 300.0
 _TWIN_OVERLAP = 0.5
 
 
-async def twins_of(user_id: str, ref: Any, *, svc: Any = None) -> list:
+async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = False) -> list:
     """The other approved rows ONE utterance left behind (the extractor's twin and the digest's): same owner, same evidence
     excerpt or turn id, or captured within five minutes of it with most of the same content words - so "forget it" does not leave
-    the fact standing in a sibling. Never raises."""
+    the fact standing in a sibling. Never raises - unless ``strict`` (a write that must not go ahead blind: forget / correct), which
+    lets a failed lookup propagate so the caller can stop BEFORE the write instead of leaving a twin behind an empty list."""
     try:
         svc = svc or _svc_default()
         meta = ref.metadata or {}
@@ -1310,10 +1347,19 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None) -> list:
             # WHOLLY inside the other's - "my son Rowan is allergic to peanuts" and "my daughter Wren is allergic to peanuts" share
             # the predicate, not the fact (ask_to_remember.siblings_of's rule)
             need = _TWIN_OVERLAP if same_turn else 1.0
-            if words and rw and len(words & rw) / min(len(words), len(rw)) >= need:
-                out.append(r)
+            if not (words and rw and len(words & rw) / min(len(words), len(rw)) >= need):
+                continue
+            # a twin restates the SAME fact. Each side's words the other lacks: when both hold a word the speaker actually SAID
+            # (it is in the utterance), they name two different things from one breath ("my bike ... my tools in the shed"), not
+            # two wordings of one claim; a word only the extractor chose ("arrives" for "flying in") is wording and stays a twin
+            said = mp.content_words(excerpt) | mp.content_words(r_ex)
+            if said and (words - rw) & said and (rw - words) & said:
+                continue
+            out.append(r)
         return out
     except Exception as exc:  # noqa: BLE001
+        if strict:
+            raise
         logger.debug("provenance_answers: twin lookup skipped (%s)", type(exc).__name__)
         return []
 

@@ -62,6 +62,7 @@ class Settings:
     ota_pin_file: Optional[Path]
     radio_lock: Path
     omi_sync_dir: Path
+    bond_enabled: bool = False       # PANEL_BT_BOND_ENABLED: the owner-run secure pairing (omi_bond) - default OFF
 
     @property
     def known_path(self) -> Path:
@@ -84,6 +85,7 @@ def load(env: dict | None = None) -> Settings:
     return Settings(
         enabled=_truthy(get("PANEL_BT_ENABLED", "0")),
         ota_enabled=_truthy(get("PANEL_BT_OTA_ENABLED", "0")),
+        bond_enabled=_truthy(get("PANEL_BT_BOND_ENABLED", "0")),
         zoe_url=get("ZOE_URL", "https://zoe.local").strip(),
         device_token=get("DEVICE_TOKEN").strip(),
         verify_ssl=_truthy(get("VERIFY_SSL", "1")),

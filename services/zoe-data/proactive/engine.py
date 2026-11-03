@@ -2,7 +2,7 @@
 Proactive Engine — coordinates all trigger tiers.
 
 Tier 1: APScheduler fires _fire_reminder() directly (via scheduler.py).
-Tier 2: Slow async loop polls OpenClawTrigger subclasses every interval.
+Tier 2: Slow async loop polls the registered triggers every interval.
 
 Public API:
     start_proactive_engine()   — call from main.py lifespan

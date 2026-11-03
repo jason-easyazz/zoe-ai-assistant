@@ -89,8 +89,9 @@ else
 fi
 
 check_json_health "zoe-data" "http://127.0.0.1:8000/health"
-check_json_health "Hermes" "http://127.0.0.1:8642/health"
-check_json_health "OpenClaw" "http://127.0.0.1:18789/health"
+# The brain is the Flue 2.x sidecar (the canonical spine). Hermes (:8642) and OpenClaw
+# (:18789) are retired and no longer probed - probing them made this gate fail forever.
+check_json_health "Flue brain" "http://127.0.0.1:3579/health"
 
 check_tts_not_degraded
 

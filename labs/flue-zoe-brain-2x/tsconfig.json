@@ -20,5 +20,5 @@
   // permanently red on pre-existing looseness that has nothing to do with the 2.x
   // port — a gate nobody can get green stops being read. The new test files were
   // written to typecheck cleanly regardless.
-  "include": ["src/**/*.ts", "vite.config.ts", "flue.config.ts"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "vite.config.ts", "flue.config.ts"]
 }

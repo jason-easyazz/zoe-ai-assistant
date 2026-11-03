@@ -301,7 +301,7 @@ def make(tmp_path, *, cfg_kw=None, argv=(), **host_kw):
               **(cfg_kw or {})}      # the optional entry points are absent unless a test brings its own (a plain skip, never a failed night)      # the real entry point lives on another branch: tests never depend on whether it is merged
     cfg = nw.NightCfg(lock_path=str(tmp_path / "brain.lock"), night_dir=tmp_path / "night", report_dir=tmp_path / "reports", buddyinfo=str(tmp_path / "buddyinfo"), meminfo=str(tmp_path / "meminfo"),
                       blackouts=((250, 292),), contig_min_blocks=64, health_wait_s=20.0, quiet_wait_max_min=2.0, quiet_poll_s=10.0, busy_wait_max_min=2.0, busy_poll_s=10.0,
-                      bakeoff_dir=tmp_path / "bakeoff", **cfg_kw)
+                      test_lane_path=str(tmp_path / "test-lane.lock"), test_lane_wait_min=1.0, bakeoff_dir=tmp_path / "bakeoff", **cfg_kw)
     cfg = nw.configure(args, cfg)
     cfg.bakeoff_dir = tmp_path / "bakeoff"
     host = FakeHost(tmp_path, **host_kw)
@@ -465,7 +465,7 @@ def test_a_wait_that_runs_past_end_by_refuses_before_anything_stops_instead_of_g
     cfg.busy_wait_max_min = 60.0
     _waits_then_clears(host, 45)
     assert w.run() == nw.EXIT_REFUSED and "03:00 end-by deadline" in w.outcome and "Nothing was stopped" in w.outcome
-    assert stopped_nothing(host) and host.t >= at(3, 5) and not cfg.marker.exists()
+    assert stopped_nothing(host) and host.t <= at(3, 0) - 35 * 60 + 1 and not cfg.marker.exists()      # refused as soon as no window fits (waits are capped by end-by), not after waiting past it
 
 
 def test_a_short_wait_that_still_leaves_room_gets_a_cap_that_ends_at_or_before_the_original_deadline(tmp_path):
@@ -677,6 +677,164 @@ def test_a_job_that_pushes_memory_under_the_floor_is_killed_aborts_and_restores(
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
 
 
+def _dip_in_jobs(host, *, to_mib, until_s=None):
+    """While a job runs, MemAvailable reads ``to_mib`` (until ``until_s`` seconds after the job's first sample, or for good)."""
+    real, st = host.mem_available_mb, {"t0": None}
+
+    def mem(path):
+        m = real(path)
+        if getattr(host, "in_job", False):
+            st["t0"] = host.t if st["t0"] is None else st["t0"]
+            if until_s is None or host.t - st["t0"] < until_s:
+                return to_mib
+        return m
+    host.mem_available_mb = mem
+
+
+def test_a_transient_dip_under_the_floor_is_waited_out_not_aborted(tmp_path):
+    """2026-10-29 / 10-30: omi_day_review was killed at 1,156 and 1,193 MiB against a 1,200 floor and the night ended. A dip that recovers inside the grace carries on."""
+    w, host, _ = make(tmp_path)
+    _dip_in_jobs(host, to_mib=1000.0, until_s=30.0)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    msgs = [e["msg"] for e in w.rec["events"]]
+    assert any("floor: largest resident programs" in m and "waiting up to" in m for m in msgs) and any("back to" in m and "carrying on" in m for m in msgs)
+    assert not any(j["status"] == "killed" for j in w.jobs)
+
+
+def test_a_dip_that_does_not_recover_inside_the_grace_still_aborts_and_restores(tmp_path):
+    w, host, _ = make(tmp_path)
+    _dip_in_jobs(host, to_mib=1000.0)                                          # negative control: the same dip, never recovering
+    assert w.run() == nw.EXIT_ABORTED and "still under it" in w.outcome
+    assert any(j["status"] == "killed" for j in w.jobs)
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+def test_a_fall_under_the_hard_floor_aborts_at_once_without_waiting(tmp_path):
+    w, host, _ = make(tmp_path)
+    _dip_in_jobs(host, to_mib=nw.FLOOR_HARD_FRACTION * 1200.0 - 50.0)
+    assert w.run() == nw.EXIT_ABORTED and "hard floor" in w.outcome
+    assert not any("waiting up to" in e["msg"] for e in w.rec["events"] if "floor" in e["msg"] and "carrying" not in e["msg"])
+
+
+def _lane_probe(host, lane_path, seen):
+    """Record, at every job start, whether a second process could take the test lane (False = the window holds it)."""
+    real = host.run_watched
+
+    def run_watched(argv, timeout, env, tick, log_path, interval=5.0):
+        fd = os.open(lane_path, os.O_CREAT | os.O_RDWR, 0o666)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            seen.append(True)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except BlockingIOError:
+            seen.append(False)
+        finally:
+            os.close(fd)
+        return real(argv, timeout, env, tick, log_path, interval)
+    host.run_watched = run_watched
+
+
+def test_the_window_holds_the_test_lane_while_the_jobs_run_and_frees_it_at_the_end(tmp_path):
+    """Agents run tests under `flock -x /tmp/zoe-test-lane.lock`; nothing made the window hold it, so tests ran beside the 12B."""
+    w, host, cfg = make(tmp_path)
+    seen: "list[bool]" = []
+    _lane_probe(host, cfg.test_lane_path, seen)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert seen and not any(seen)                                              # no one else could take the lane during any job
+    fd = os.open(cfg.test_lane_path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)                         # and it is free again after the run
+    finally:
+        os.close(fd)
+
+
+def test_without_the_hold_the_lane_would_be_free_during_the_jobs_negative_control(tmp_path):
+    w, host, cfg = make(tmp_path)
+    seen: "list[bool]" = []
+    _lane_probe(host, str(tmp_path / "other.lock"), seen)                      # probing a lane the window does not hold: the probe itself can see "free"
+    assert w.run() == nw.EXIT_OK and seen and all(seen)
+
+
+def test_a_running_test_is_waited_for_then_the_window_goes_on_without_the_lane(tmp_path):
+    w, host, cfg = make(tmp_path)
+    held = os.open(cfg.test_lane_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    try:
+        assert w.run() == nw.EXIT_OK, w.outcome                                # a held lane never loses the night
+    finally:
+        os.close(held)
+    msgs = [e["msg"] for e in w.rec["events"]]
+    assert any("waiting up to" in m and "test lane" in m for m in msgs) and any("going on without the lane" in m for m in msgs)
+    # and it is released the moment the test leaves
+    w2, host2, cfg2 = make(tmp_path)
+    held2 = os.open(cfg2.test_lane_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.flock(held2, fcntl.LOCK_EX)
+    real_sleep, n = host2.sleep, {"n": 0}
+
+    def sleep(sec):
+        n["n"] += 1
+        if n["n"] >= 2:
+            fcntl.flock(held2, fcntl.LOCK_UN)
+        real_sleep(sec)
+    host2.sleep = sleep
+    try:
+        assert w2.run() == nw.EXIT_OK, w2.outcome
+    finally:
+        os.close(held2)
+    assert any("test lane held" in e["msg"] for e in w2.rec["events"])
+
+
+def test_a_lane_teardown_error_never_skips_the_brain_locks_release(tmp_path, monkeypatch):
+    """Cross-review (#2244): release_lock freed the test lane first; an error there skipped the brain lock's release."""
+    w, host, cfg = make(tmp_path)
+    w.take_lock()
+    w.hold_test_lane()
+    assert w.lock_fd is not None and w.test_lane_fd is not None
+    real, lane = nw.fcntl.flock, w.test_lane_fd
+
+    def flaky(fd, op):
+        if op == nw.fcntl.LOCK_UN and fd == lane:
+            raise OSError(5, "I/O error")
+        return real(fd, op)
+    monkeypatch.setattr(nw.fcntl, "flock", flaky)
+    w.release_lock()                                                             # must not raise
+    assert w.test_lane_fd is None and w.lock_fd is None                          # the brain lock went too
+
+
+def test_a_lane_that_cannot_be_locked_never_costs_the_night(tmp_path, monkeypatch):
+    w, host, cfg = make(tmp_path)
+
+    def enolck(fd, op):
+        raise OSError(37, "No locks available")
+    monkeypatch.setattr(nw.fcntl, "flock", enolck)
+    w.hold_test_lane()                                                           # an OSError other than BlockingIOError: logged, not raised
+    assert w.test_lane_fd is None and any("cannot be locked" in e["msg"] for e in w.rec["events"])
+
+
+def test_the_floor_grace_never_runs_past_the_restore_reserve(tmp_path):
+    w, host, _ = make(tmp_path)
+    w.cap_min = w.cfg.reserve_min + 0.05                                         # 3 s of usable time left
+    w.t0 = host.mono()
+    host.mem_available_mb = lambda _p: 1000.0
+    before = host.t
+    with pytest.raises(nw.Aborted):
+        w.floor_dip(1000.0)
+    assert host.t - before < 10.0                                               # not the full 120 s grace
+
+
+def test_a_retry_whose_room_is_spent_by_the_stop_and_compaction_is_not_started(tmp_path):
+    w, host, cfg = make(tmp_path, llm_dies_first=1)
+    real_sleep = host.sleep
+
+    def sleep(sec):
+        real_sleep(sec + (3000.0 if sec == 3.0 else 0.0))                          # the settle after the compaction eats the room
+    host.sleep = sleep
+    assert w.run() == nw.EXIT_ABORTED
+    assert len(twelve_b_starts(host)) == 1 and any("no room left for attempt 2" in e["msg"] for e in w.rec["events"])
+    assert json.loads(w.failures_path.read_text())["count"] == 1
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
 def test_the_hard_cap_keeps_a_late_job_from_starting_and_the_wake_still_happens(tmp_path):
     w, host, _ = make(tmp_path, job_s=52 * 60.0)
     w.run()
@@ -868,10 +1026,10 @@ def test_a_failed_12b_start_gets_one_compact_and_restart_inside_the_cap_and_the_
 
 def test_two_failed_12b_starts_restore_run_no_12b_job_write_the_alarm_and_log_night_lost(tmp_path):
     logged = []
-    w, host, cfg = make(tmp_path, llm_dies_first=2)
+    w, host, cfg = make(tmp_path, llm_dies_first=3)
     w.log = logged.append
     assert w.run() == nw.EXIT_ABORTED and "did not load" in w.outcome
-    assert len(twelve_b_starts(host)) == 2                                                  # one retry, never a third start
+    assert len(twelve_b_starts(host)) == nw.LOAD_MAX_ATTEMPTS == 3                          # two retries, never a fourth start
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA] and not cfg.marker.exists()
     assert ran_on_the_12b(host) == []                                                       # nothing ran on the 12B (the 4B fallbacks after the wake are the old behaviour)
     alarm = (cfg.report_dir / "ALARM").read_text()
@@ -879,6 +1037,21 @@ def test_two_failed_12b_starts_restore_run_no_12b_job_write_the_alarm_and_log_ni
     assert any(m.startswith("NIGHT LOST:") for m in logged) and w.rec["night_lost"]
     assert json.loads(w.failures_path.read_text())["count"] == 1                            # ONE failed window, not one per attempt
     assert host.idx("--user stop zoe-night-12b") < host.idx(f"--user start {nw.BRAIN}")
+
+
+def test_2026_11_02_a_second_failed_start_no_longer_loses_the_night_the_third_loads_with_fewer_gpu_layers(tmp_path):
+    """11-02: attempts 1 and 2 both died on cudaMalloc / NvMap error 12 and the night was lost (dreaming ran on the 4B). Attempt 3 now runs, with the GPU layer count dropped."""
+    w, host, cfg = make(tmp_path, llm_dies_first=2)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    starts = [host.joined()[i] for i in twelve_b_starts(host)]
+    assert len(starts) == 3
+    ngl = [re.search(r"--n-gpu-layers (\d+)", c).group(1) for c in starts]
+    assert ngl == ["34", "34", str(34 - nw.LOAD_LAST_RESORT_NGL_DROP)]                      # only the last resort sheds layers
+    assert host.count("compact_memory") >= 2 and w.load_ok and not w.night_lost and not (cfg.report_dir / "ALARM").exists()
+    assert w.rec["load_retry"]["loaded"] and w.rec["load_retry"]["attempts"] == 3 and w.rec["arith"]["ngl_used"] == 28
+    assert "zoe-nightly-dreaming.py" in ran_on_the_12b(host)
+    assert json.loads(w.failures_path.read_text())["count"] == 0
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
 
 
 def test_a_12b_that_loads_first_time_runs_no_extra_compaction_and_no_second_start(tmp_path):
@@ -892,7 +1065,7 @@ def test_a_12b_that_loads_first_time_runs_no_extra_compaction_and_no_second_star
 def test_no_second_attempt_when_the_cap_has_no_room_for_it_but_the_night_is_still_reported_lost(tmp_path):
     w, host, cfg = make(tmp_path, argv=["--cap-min", "15"], llm_dies_first=1)                # 15 min cap - 12 min restore reserve = 3 min: under the retry's 5.5 min
     assert w.run() == nw.EXIT_ABORTED and "did not load" in w.outcome
-    assert len(twelve_b_starts(host)) == 1 and any("no room for a second attempt" in e["msg"] for e in w.rec["events"])
+    assert len(twelve_b_starts(host)) == 1 and any("no room for attempt 2" in e["msg"] for e in w.rec["events"])
     assert "NIGHT LOST" in (cfg.report_dir / "ALARM").read_text() and json.loads(w.failures_path.read_text())["count"] == 1
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
 
@@ -1051,6 +1224,22 @@ def test_the_day_review_runs_last_on_the_12b_and_running_out_of_time_never_fails
     assert w2.run() == nw.EXIT_OK and any(j["name"] == "omi_day_review" and j["status"] == "timeout" for j in w2.jobs)      # best-effort
     w3, host3, _ = make(tmp_path, cfg_kw={"omi_day_review_script": script}, job_rc={"zoe-omi-day-review.py": 1})
     assert w3.run() == nw.EXIT_JOBS_FAILED                                                    # a real failure is still loud
+
+
+def test_the_day_review_is_handed_the_time_the_window_leaves_it_as_its_budget(tmp_path):
+    """Owner decision 2026-10-18 (the 12B overnight): the day review plans inside its own kill time. exec_job appends --budget-s = the clipped
+    timeout less BUDGET_MARGIN_S, so a day that would not finish is not started (the CLI's ``no_time``) instead of being killed half way."""
+    script = tmp_path / "zoe-omi-day-review.py"
+    script.write_text("# stand-in")
+    spec = next(j for j in nw.build_jobs(nw.NightCfg(), 8192, 6.2, 150.0) if j.name == "omi_day_review")
+    assert spec.budget_flag == "--budget-s" and "--budget-s" not in spec.argv and spec.timeout_s == 2400.0
+    w, host, _ = make(tmp_path, cfg_kw={"omi_day_review_script": script})
+    assert w.run() == nw.EXIT_OK, w.outcome
+    odr = next(j for j in host.jobs_run if j["name"] == "zoe-omi-day-review.py")
+    budget = float(odr["argv"][odr["argv"].index("--budget-s") + 1])
+    assert budget == pytest.approx(max(30.0, odr["timeout"] - nw.BUDGET_MARGIN_S), abs=1.0) and budget < odr["timeout"]
+    others = [j for j in host.jobs_run if j["name"] != "zoe-omi-day-review.py"]
+    assert others and not any("--budget-s" in j["argv"] for j in others)                     # control: only the budgeted job gets one
 
 
 def test_the_struggle_proposals_job_runs_after_the_night_mind_before_the_day_review_and_never_fails_the_night_for_time(tmp_path):
@@ -1985,18 +2174,13 @@ def test_cells_corpus_and_trace_are_refused_outside_cells_only(tmp_path):
             nw.configure(ap.parse_args(["--trial", *flag]))
 
 
-# ── a quiet night is a noop (no 12B load); --mode is explicit; a slow night raises the morning alarm ──────────────────────────────────
+# ── every night runs the 12B (owner 2026-10-18: no quiet-night skip); --mode is explicit; a slow night raises the morning alarm ───────
 
 LAST_NIGHT = "2026-10-08T02:50:00"          # the naive local stamp the reports carry in ``started``
 
 
-def dt_utc(naive_local: str) -> str:
-    import datetime as dt
-    return dt.datetime.fromisoformat(naive_local).astimezone(dt.timezone.utc).isoformat(timespec="seconds")
-
-
 def seed_report(cfg, name, *, started=LAST_NIGHT, outcome="ok", exit=0, mode="night", decode=None, run_id=None):
-    """A night report as ``write_report`` leaves it (only the fields the precheck and the alert read)."""
+    """A night report as ``write_report`` leaves it (only the fields the decode alert reads)."""
     cfg.report_dir.mkdir(parents=True, exist_ok=True)
     rec = {"run_id": run_id or name, "mode": mode, "outcome": outcome, "exit": exit, "started": started, "jobs": []}
     if decode is not None:
@@ -2004,96 +2188,27 @@ def seed_report(cfg, name, *, started=LAST_NIGHT, outcome="ok", exit=0, mode="ni
     (cfg.report_dir / f"{name}.json").write_text(json.dumps(rec))
 
 
-def answer_precheck(host, out="", rc=0):
-    """Make the stand-in precheck answer ``out`` / ``rc`` (everything else still goes to the double); returns the argv of every precheck call."""
-    calls: "list[list[str]]" = []
-    orig = host.run
-
-    def run(argv, *a, **k):
-        res = orig(argv, *a, **k)
-        if any("night_precheck.py" in x for x in argv):
-            calls.append(list(argv))
-            return bk.Result(rc, out)
-        return res
-    host.run = run
-    return calls
+def test_a_night_with_nothing_new_still_loads_the_12b_and_runs_every_job(tmp_path):
+    """Owner decision 2026-10-18: the 12B runs EVERY night. The quiet-night skip (#2107) is retired, not defaulted off: no precheck is asked, nothing
+    can turn a real night into a noop, and an earlier night's report changes nothing about tonight."""
+    w, host, cfg = make(tmp_path)
+    seed_report(cfg, "2026-10-08")                                          # what the old watermark read: a night that did its work
+    assert w.run() == nw.EXIT_OK and w.outcome == "ok"
+    assert any(c.startswith("systemd-run") for c in host.joined())           # the 12B loaded
+    assert any(j["name"] == "night_digest.py" for j in host.jobs_run) and any(j["name"] == "zoe-nightly-dreaming.py" for j in host.jobs_run)
+    assert not any("night_precheck" in c for c in host.joined()) and "noop" not in w.rec and "precheck" not in w.rec
 
 
-def precheck_line(turns, omi=None, struggle=0):
-    return "NIGHT_PRECHECK " + json.dumps({"members_with_new_turns": turns, "omi_members": omi, "struggle_pending": struggle, "since": "x"}) + "\n"
-
-
-def quiet_window(tmp_path, *, out=None, rc=0, argv=(), prior=True):
-    script = tmp_path / "night_precheck.py"
-    script.write_text("# stand-in")
-    w, host, cfg = make(tmp_path, argv=argv, cfg_kw={"precheck_script": script})
-    if prior:
-        seed_report(cfg, "2026-10-08")
-    calls = answer_precheck(host, precheck_line(0, 0) if out is None else out, rc)
-    return w, host, cfg, calls
-
-
-def slept_or_loaded(host):
-    return [c for c in host.joined() if c.startswith("systemd-run") or " --user stop " in c or " --user start " in c]
-
-
-def test_a_quiet_night_is_a_noop_that_stops_nothing_and_loads_no_12b(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path)
-    assert w.run() == nw.EXIT_OK
-    assert w.outcome == "noop" and "no member has new turns" in w.rec["noop"]
-    assert slept_or_loaded(host) == [] and w.lock_fd is None                # Zoe never went to sleep: no stop, no start, no 12B; and the brain-window lock is not left held
-    assert not any(j["name"] in ("night_digest.py", "zoe-night-mind.py") for j in host.jobs_run)      # the 12B jobs did not run
-    saved = json.loads(next(p for p in w.report_paths if p.suffix == ".json").read_text())
-    assert saved["outcome"] == "noop" and saved["exit"] == 0 and saved["mode"] == "night"
-    assert calls[0][calls[0].index("--since") + 1] == dt_utc(LAST_NIGHT) and "--omi" in calls[0]        # measured against the last window's start; the pendant check rides along
-
-
-def test_a_noop_night_still_runs_dreaming_on_the_live_4b_like_a_refused_night(tmp_path):
-    w, host, cfg, _ = quiet_window(tmp_path)
-    assert w.run() == nw.EXIT_OK
-    assert [(j["name"], j["backend"]) for j in w.jobs] == [("dreaming", "4B")]            # the non-LLM maintenance in dreaming is not lost on a quiet night
-    assert slept_or_loaded(host) == []
-
-
-def contended_quiet_window(tmp_path, *, clears_after=None):
-    """A quiet night whose box is busy (the training cycle holds its lock). ``clears_after`` = polls before it frees up (None = never)."""
-    w, host, cfg, calls = quiet_window(tmp_path)
-    host.busy.add("zoe-training.service")
-    polls = {"n": 0}
-    real_sleep = host.sleep
-
-    def sleep(s):
-        polls["n"] += 1
-        if clears_after is not None and polls["n"] >= clears_after:
-            host.busy.discard("zoe-training.service")
-        real_sleep(s)
-    host.sleep = sleep
-    return w, host, cfg, polls
-
-
-def test_a_contended_quiet_night_waits_for_a_clear_box_then_still_runs_dreaming_on_the_4b(tmp_path):
-    """Follow-up (#2107): a quiet night whose box was busy at the one moment it asked silently lost the night's dreaming (the timer that used to
-    run it is disabled). It now waits, bounded, and runs the fallback once the box is clear."""
-    w, host, cfg, polls = contended_quiet_window(tmp_path, clears_after=2)
-    assert w.run() == nw.EXIT_OK and w.outcome == "noop"
-    assert [(j["name"], j["backend"]) for j in w.jobs] == [("dreaming", "4B")] and polls["n"] >= 2
-    assert "noop_fallback_skipped" not in w.rec and slept_or_loaded(host) == [] and w.lock_fd is None
-
-
-def test_a_contended_quiet_night_that_never_clears_logs_the_skip_explicitly_and_gives_up_in_bounded_time(tmp_path):
-    w, host, cfg, polls = contended_quiet_window(tmp_path, clears_after=None)
-    t0 = host.t
-    assert w.run() == nw.EXIT_OK and w.outcome == "noop"
-    assert w.jobs == [] and slept_or_loaded(host) == []
-    assert "zoe-training.service is running" in w.rec["noop_fallback_skipped"]
-    assert any(n.startswith("no 4B fallback jobs: zoe-training.service") for n in w.rec["notes"])
-    assert (host.t - t0) <= cfg.busy_wait_max_min * 60.0 + 5 * cfg.busy_poll_s, "bounded by the busy wait, never an open-ended hold"
-    saved = json.loads(next(p for p in w.report_paths if p.suffix == ".json").read_text())
-    assert saved["noop_fallback_skipped"] == w.rec["noop_fallback_skipped"] and saved["exit"] == 0
+def test_the_quiet_skip_is_removed_not_hidden(tmp_path):
+    """Retire by removing: the opt-out flag, the config field and the precheck script are gone, so no unit or operator can bring the skip back by accident."""
+    with pytest.raises(SystemExit):
+        nw.build_parser().parse_args(["--no-quiet-skip"])
+    assert not hasattr(nw.NightCfg(), "skip_when_quiet") and not hasattr(nw, "Noop")
+    assert not (REPO / "scripts" / "night" / "jobs" / "night_precheck.py").exists()
 
 
 def test_a_refused_night_still_gives_up_on_a_busy_box_at_once(tmp_path):
-    """Control arm: only a QUIET night waits. A refused one (already a degraded night) keeps the old immediate answer."""
+    """A refused night (already a degraded night) keeps its immediate answer: the 4B fallback runs only on a clear box."""
     w, host, cfg = make(tmp_path)
     w.cfg.max_load_failures = 0
     host.busy.add("zoe-training.service")
@@ -2101,89 +2216,6 @@ def test_a_refused_night_still_gives_up_on_a_busy_box_at_once(tmp_path):
     real_sleep = host.sleep
     host.sleep = lambda s: (polls.__setitem__("n", polls["n"] + 1), real_sleep(s))[1]
     assert w.run() == nw.EXIT_REFUSED and w.jobs == [] and polls["n"] == 0
-    assert w.rec.get("noop_fallback_skipped") is None
-
-
-def test_any_member_with_a_new_turn_runs_the_window_as_before(tmp_path):
-    w, host, cfg, _ = quiet_window(tmp_path, out=precheck_line(1, 0))
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok"
-    assert any(c.startswith("systemd-run") for c in host.joined()) and any(j["name"] == "night_digest.py" for j in host.jobs_run)
-
-
-def test_a_waiting_pendant_day_alone_runs_the_window(tmp_path):
-    w, host, cfg, _ = quiet_window(tmp_path, out=precheck_line(0, 1))
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and any(c.startswith("systemd-run") for c in host.joined())
-
-
-def test_pending_proposal_maintenance_alone_runs_the_window(tmp_path):
-    """Follow-up (#2109): a quiet night skipped the struggle-proposal pass, so a proposal whose evidence had aged out (or one made from a
-    guest's struggles, which the member-turn check cannot see) waited for the next non-quiet night."""
-    w, host, cfg, calls = quiet_window(tmp_path, out=precheck_line(0, 0, 2))
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and any(c.startswith("systemd-run") for c in host.joined())
-    assert "--struggle" in calls[0] and w.rec["precheck"]["struggle_pending"] == 2
-    # control arm: nothing pending anywhere is still a quiet night
-    (tmp_path / "b").mkdir()
-    w2, host2, cfg2, calls2 = quiet_window(tmp_path / "b", out=precheck_line(0, 0, 0))
-    assert w2.run() == nw.EXIT_OK and w2.outcome == "noop" and "no proposal needs tending" in w2.rec["noop"]
-
-
-def test_the_proposal_check_is_only_asked_when_the_proposal_pass_is_a_job_and_must_be_answered(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, out=precheck_line(0, 0, None), argv=["--jobs", "digest,dreaming,night_mind,omi_day_review"])
-    assert w.run() == nw.EXIT_OK and w.outcome == "noop" and "--struggle" not in calls[0]
-    (tmp_path / "b").mkdir()
-    w2, host2, cfg2, calls2 = quiet_window(tmp_path / "b", out=precheck_line(0, 0, None))          # asked, not answered: fails OPEN
-    assert w2.run() == nw.EXIT_OK and w2.outcome == "ok" and any("no usable answer" in n for n in w2.rec["notes"])
-
-
-def test_the_pendant_check_is_only_asked_when_the_day_review_is_a_job(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, out=precheck_line(0, None), argv=["--jobs", "digest,dreaming,night_mind"])
-    assert w.run() == nw.EXIT_OK and w.outcome == "noop" and "--omi" not in calls[0]
-
-
-@pytest.mark.parametrize("out,rc", [("", 0), ("garbage\n", 0), (precheck_line(0, 0), 1), ("NIGHT_PRECHECK {not json}\n", 0), ('NIGHT_PRECHECK {"omi_members": 0}\n', 0),
-                                    (precheck_line(0, None), 0)], ids=["silent", "garbage", "nonzero exit", "bad json", "no count", "omi asked but unanswered"])
-def test_a_precheck_that_cannot_answer_fails_open_and_runs_the_window(tmp_path, out, rc):
-    w, host, cfg, calls = quiet_window(tmp_path, out=out, rc=rc)
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok", w.outcome
-    assert calls and any(c.startswith("systemd-run") for c in host.joined())
-    assert any("no usable answer" in n for n in w.rec["notes"])
-
-
-def test_no_earlier_night_means_no_baseline_and_the_window_runs(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, prior=False)
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and calls == []
-
-
-def test_the_operator_can_switch_the_skip_off(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, argv=["--no-quiet-skip"])
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok" and calls == []
-
-
-def test_a_missing_precheck_script_is_not_a_quiet_night(tmp_path):
-    w, host, cfg = make(tmp_path, cfg_kw={"precheck_script": tmp_path / "absent.py"})
-    seed_report(cfg, "2026-10-08")
-    assert w.run() == nw.EXIT_OK and w.outcome == "ok"
-
-
-def test_only_a_night_that_did_its_work_moves_the_watermark(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, prior=False)
-    seed_report(cfg, "2026-10-05", started="2026-10-05T02:50:00")                                          # did its work
-    seed_report(cfg, "2026-10-06", started="2026-10-06T02:50:00", outcome="refused: RAM", exit=2)          # processed nothing
-    seed_report(cfg, "2026-10-07", started="2026-10-07T02:50:00", exit=5)                                  # a job did not finish anywhere
-    seed_report(cfg, "2026-10-08-trial", started="2026-10-08T09:00:00", mode="trial")                      # a measurement, not a night
-    assert w.run() == nw.EXIT_OK and w.outcome == "noop"
-    assert calls[0][calls[0].index("--since") + 1] == dt_utc("2026-10-05T02:50:00")                        # the turns the refused and failed nights skipped still count as new
-    seed_report(cfg, "2026-10-09", started="2026-10-09T02:50:00", outcome="noop")                          # a noop IS a night that did its work
-    assert w.last_processed_start().isoformat() == "2026-10-09T02:50:00"
-
-
-def test_the_dry_run_says_it_would_be_a_noop_and_still_prints_the_plan(tmp_path):
-    w, host, cfg, calls = quiet_window(tmp_path, argv=["--dry-run"])
-    lines: "list[str]" = []
-    w.log = lines.append
-    w.run()
-    assert any("would be a NOOP" in ln for ln in lines) and any("levers" in ln for ln in lines)
-    assert slept_or_loaded(host) == []
 
 
 def test_the_night_mind_mode_is_passed_explicitly_and_defaults_to_what_the_night_has_always_run(tmp_path):
@@ -2238,3 +2270,378 @@ def test_the_decode_baseline_ignores_trials_and_a_failing_alert_never_fails_the_
         raise OSError("disk gone")
     w.decode_history = boom                                         # a failing alert logs the failure; the night still reports its own outcome
     assert w.run() == nw.EXIT_OK and w.outcome == "ok" and not (cfg.report_dir / "ALARM").exists()
+
+
+# ── 2026-10-27: the refused night (a lander), the silent no-op, the retry slots ──────────────────
+
+def _hold_lock(cfg):
+    fd = os.open(cfg.lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fd
+
+
+def test_a_brain_lock_held_for_a_minute_is_waited_out_not_refused(tmp_path):
+    """2026-10-26: a lander held the box at 02:51 and the window refused with nothing stopped - the whole night lost. Nothing is stopped yet, so waiting is free."""
+    w, host, cfg = make(tmp_path)
+    box = {"fd": _hold_lock(cfg)}
+    real_sleep = host.sleep
+
+    def sleep(sec):
+        real_sleep(sec)
+        if box["fd"] is not None and host.t - at(2, 50) >= 60:
+            os.close(box["fd"])
+            box["fd"] = None                                  # the lander finishes and drops the lock a minute in
+    host.sleep = sleep
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert any("is held" in e["msg"] and e["msg"].startswith("waiting") for e in w.rec["events"])
+    assert host.idx("systemd-run") >= 0 and w.rec["waited_before_open_min"] >= 1.0       # the 12B ran, and the wait did not eat the window's own cap
+
+
+def test_a_lock_held_past_the_busy_wait_still_refuses_and_stops_nothing(tmp_path):
+    w, host, cfg = make(tmp_path)
+    fd = _hold_lock(cfg)
+    try:
+        assert w.run() == nw.EXIT_REFUSED
+    finally:
+        os.close(fd)
+    assert "is held" in w.outcome and stopped_nothing(host) and host.t - at(2, 50) >= 120      # it waited busy_wait_max_min (2 min in tests) first
+
+
+def test_a_lander_that_starts_in_the_gap_before_the_lock_is_waited_out_not_fatal(tmp_path):
+    """The exact 2026-10-26 shape: the quiet check passed, then the queue spawned land_voice_pr.sh, and the re-check AFTER taking the lock refused the whole night."""
+    w, host, cfg = make(tmp_path)
+    real, calls = w.busy_reason, {"n": 0}
+
+    def busy_reason():
+        calls["n"] += 1
+        return "a voice-PR landing is running" if calls["n"] == 2 else real()          # call 1: the quiet wait; call 2: the re-check under the lock
+    w.busy_reason = busy_reason
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert any("lock handed back, waiting again (cycle 1)" in e["msg"] for e in w.rec["events"])
+    assert host.idx("systemd-run") >= 0 and w.lock_fd is None
+
+
+def test_a_lander_that_never_goes_away_is_waited_on_until_the_end_by_cutoff_then_refused_with_the_lock_released(tmp_path):
+    w, host, cfg = make(tmp_path)
+    w.busy_reason = lambda: "a voice-PR landing is running" if w.lock_fd is not None else ""      # only ever visible under the lock
+    assert w.run() == nw.EXIT_REFUSED
+    assert "Nothing was stopped" in w.outcome and stopped_nothing(host) and w.lock_fd is None
+    assert host.t >= at(3, 55) - 35 * 60 - 60, "it must keep waiting until a window no longer fits (no fixed attempt count ends the night early)"
+    assert host.t <= at(3, 55) - 35 * 60 + 1
+    assert sum(1 for e in w.rec["events"] if "lock handed back" in e["msg"]) > 6
+
+
+# the silent no-op: exit 0, zero generated tokens, no sign the job had nothing to do ----------------
+
+DIGEST_IDLE = 'NIGHT_JOB digest {"attempted": 0, "effect_count": 0, "errors": 0, "input_seen": false, "skipped": 0, "users": 0, "verdict": "idle"} model=127.0.0.1:11500\n'
+DIGEST_SKIPPED = 'NIGHT_JOB digest {"attempted": 0, "errors": 0, "input_seen": true, "skipped": 1, "users": 1, "verdict": "all_skipped_insufficient_activity"} model=127.0.0.1:11500\n'
+DIGEST_BROKEN = 'NIGHT_JOB digest {"attempted": 1, "errors": 0, "input_seen": true, "skipped": 0, "users": 1, "verdict": "attempted_no_facts"} model=127.0.0.1:11500\n'
+MIND_QUIET = ("night_mind: users kept=2 skipped_synthetic=12\n" + json.dumps({"status": "ok", "members": [
+    {"user_id": "a", "status": "skipped", "skipped_reason": "quiet_day", "calls": 0}, {"user_id": "b", "status": "skipped", "skipped_reason": "quiet_day", "calls": 0}]}) + "\n")
+MIND_QUIET_BUT_ERROR = json.dumps({"status": "error", "members": [{"user_id": "a", "status": "skipped", "skipped_reason": "quiet_day"}]}) + "\n"     # members look quiet, the run itself failed
+MIND_LOAD_ERROR = json.dumps({"status": "load_error", "members": [{"user_id": "a", "status": "load_error"}, {"user_id": "b", "status": "skipped", "skipped_reason": "quiet_day"}]}) + "\n"
+OMI_FLAG_OFF = 'NIGHT_JOB omi_day_review status=flag_off days=0 calls=0 stored=0 no_time=0\n'          # ZOE_OMI_DAY_REVIEW off: the default
+OMI_LANE_DAY = 'NIGHT_JOB omi_day_review status=lane_day_only days=0 calls=0 stored=0 no_time=0\n'
+OMI_NO_TIME = 'NIGHT_JOB omi_day_review status=ok days=2 calls=0 stored=0 no_time=2\n'              # every pending day exceeded the budget: planned deferral
+OMI_NO_TIME_BUT_CALLS = 'NIGHT_JOB omi_day_review status=ok days=2 calls=3 stored=1 no_time=1\n'    # real work happened: not an idle verdict
+OMI_FILTERED = 'NIGHT_JOB omi_day_review status=ok days=2 calls=0 stored=0 no_time=0 skipped=2\n'                  # input entirely filtered out: no model call was due
+OMI_MIXED_DEFERRED_FILTERED = 'NIGHT_JOB omi_day_review status=ok days=3 calls=0 stored=0 no_time=1 skipped=2\n'
+OMI_ERROR_DAY = 'NIGHT_JOB omi_day_review status=ok days=2 calls=0 stored=0 no_time=0 skipped=1\n'                  # one day is neither deferred nor skipped (it errored): not idle
+DREAM_NO_USERS = "=== Dreaming memory cycle ===\nDREAMING_USERS lookup=ok users=0\nDreaming cycle complete: 0 users processed\n"
+DREAM_LOOKUP_SWALLOWED = "=== Dreaming memory cycle ===\nDreaming cycle complete: 0 users processed\n"      # what the service function's swallowed lookup failure printed: NO lookup=ok line
+DREAM_NO_USERS_BUT_FAILED = "Dreaming cycle failed: boom\nDreaming cycle complete: 0 users processed\n"
+MIND_OFF = json.dumps({"status": "ok", "members": [{"user_id": "a", "status": "off", "mode": "off"}]}) + "\n"
+OMI_NONE = 'INFO user_filters: omi_day_review: users kept=0\nNIGHT_JOB omi_day_review status=nothing_to_do days=0 calls=0 stored=0 no_time=0\n'
+DREAM_QUIET = "OPEN_LOOPS user=a extracted=0 status=no_messages\nOPEN_LOOPS user=b extracted=0 status=no_messages\nDreaming cycle complete: 2 users processed\n"
+DREAM_FAILED_QUIETLY = "OPEN_LOOPS user=a extracted=0 status=llm_failed\nDreaming cycle complete: 1 users processed\n"
+
+
+@pytest.mark.parametrize("name,text,expect", [
+    ("digest", DIGEST_IDLE, True), ("digest", DIGEST_SKIPPED, True), ("digest", DIGEST_BROKEN, False), ("digest", "", False),
+    ("night_mind", MIND_QUIET, True), ("night_mind", MIND_LOAD_ERROR, False), ("night_mind", MIND_QUIET_BUT_ERROR, False), ("night_mind", "night_mind: users kept=2\n", False),
+    ("omi_day_review", OMI_NONE, True), ("omi_day_review", "INFO nothing here\n", False),
+    ("omi_day_review", OMI_FLAG_OFF, True), ("omi_day_review", OMI_LANE_DAY, True), ("omi_day_review", "NIGHT_JOB omi_day_review status=llm_unreachable days=1\n", False),
+    ("night_mind", MIND_OFF, True), ("omi_day_review", OMI_FILTERED, True), ("omi_day_review", OMI_MIXED_DEFERRED_FILTERED, True), ("omi_day_review", OMI_ERROR_DAY, False),
+    ("dreaming", DREAM_NO_USERS, True), ("dreaming", DREAM_NO_USERS_BUT_FAILED, False), ("dreaming", DREAM_LOOKUP_SWALLOWED, False), ("dreaming", DREAM_QUIET + "Dreaming cycle failed: boom\n", False), ("dreaming", "Dreaming cycle complete: 3 users processed\n", False), ("omi_day_review", OMI_NO_TIME, True), ("omi_day_review", OMI_NO_TIME_BUT_CALLS, False),
+    ("dreaming", DREAM_QUIET, True), ("dreaming", DREAM_FAILED_QUIETLY, False), ("dreaming", "Dreaming cycle complete: 1 users processed\n", False),
+    ("struggle_proposals", DIGEST_IDLE, False)])
+def test_job_idle_evidence_needs_the_jobs_own_word_that_it_had_nothing_to_do(name, text, expect):
+    assert bool(nw.job_idle_evidence(name, text)) is expect
+
+
+def _zero_token_night(tmp_path, logs):
+    """A night whose jobs exit 0 and generate NOTHING (the 12B's token counter does not move), writing the given log per job script."""
+    script = tmp_path / "zoe-night-mind.py"
+    script.write_text("# stand-in")
+    omi = tmp_path / "zoe-omi-day-review.py"
+    omi.write_text("# stand-in")
+    w, host, cfg = make(tmp_path, cfg_kw={"night_mind_script": script, "omi_day_review_script": omi}, argv=["--jobs", "digest,dreaming,night_mind,omi_day_review"])
+    real = host.run_watched
+
+    def rw(argv, timeout, env, tick, log_path, interval=5.0):
+        res = real(argv, timeout, env, tick, log_path, interval)
+        name = os.path.basename(argv[1]) if len(argv) > 1 else ""
+        if name in logs:
+            log_path.write_text(logs[name])
+            host.tokens -= 1000                                           # the double adds 1000 tokens per job; take them back: the model generated nothing
+        return res
+    host.run_watched = rw
+    return w, host
+
+
+def test_jobs_that_report_no_input_are_idle_and_the_night_is_ok(tmp_path):
+    w, _ = _zero_token_night(tmp_path, {"night_digest.py": DIGEST_IDLE, "zoe-nightly-dreaming.py": DREAM_QUIET, "zoe-night-mind.py": MIND_QUIET, "zoe-omi-day-review.py": OMI_NONE})
+    assert w.run() == nw.EXIT_OK, w.outcome
+    twelve = {j["name"]: j["status"] for j in w.jobs if j["backend"] == "12B"}
+    assert twelve == {"digest": "idle", "dreaming": "idle", "night_mind": "idle", "omi_day_review": "idle"}
+    assert any("no input:" in n for j in w.jobs for n in j["notes"]) and "digest:idle@12B" in nw.summary_line({**w.rec, "outcome": "ok", "exit": 0, "jobs": w.jobs})
+
+
+def test_a_zero_token_job_that_does_not_say_it_was_idle_is_degraded_and_fails_the_night(tmp_path):
+    """The instrument that was missing: 'ok, 5 s, 0 tokens' for a job that did nothing must not read as ok."""
+    w, _ = _zero_token_night(tmp_path, {"night_digest.py": DIGEST_IDLE, "zoe-nightly-dreaming.py": "all done\n", "zoe-night-mind.py": MIND_QUIET, "zoe-omi-day-review.py": OMI_NONE})
+    assert w.run() == nw.EXIT_JOBS_FAILED, w.outcome
+    dream = next(j for j in w.jobs if j["name"] == "dreaming" and j["backend"] == "12B")
+    assert dream["status"] == "degraded" and any("SILENT NO-OP" in n for n in dream["notes"])
+    assert {j["name"] for j in w.jobs if j["status"] == "idle"} >= {"digest", "night_mind", "omi_day_review"}      # the honest idle ones stay idle
+
+
+def test_a_job_that_generated_tokens_stays_ok_whatever_its_log_says(tmp_path):
+    w, host, cfg = make(tmp_path)
+    assert w.run() == nw.EXIT_OK
+    twelve = {j["name"]: j["status"] for j in w.jobs if j["backend"] == "12B"}
+    assert {"digest", "dreaming"} <= set(twelve) and set(twelve.values()) <= {"ok", "skipped"}
+    assert nw.night_ran_today(cfg.report_dir, "2026-10-09") == "2026-10-09.json"        # the REAL report name write_report produces is what --skip-if-done searches
+
+
+# the retry slots ---------------------------------------------------------------------------------
+
+def _report(d, name, **kw):
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.json").write_text(json.dumps({"mode": "night", "exit": 0, "outcome": "ok", "jobs": [{"backend": "12B"}], **kw}))
+
+
+def test_a_retry_only_makes_up_for_a_refused_night(tmp_path):
+    import datetime as _dt
+    d = tmp_path / "r"
+    first, retry = _dt.datetime(2026, 10, 27, 2, 50), _dt.datetime(2026, 10, 27, 3, 5)
+    assert nw.retry_decision(d, first)[0] is True                                          # the 02:50 slot ALWAYS starts (no report exists yet)
+    assert nw.retry_decision(d, retry)[0] is False                                         # a retry slot with no report at all: no positive refusal evidence, so no second window
+    d.mkdir()
+    (d / "2026-10-27.json").write_text("{not json")
+    assert nw.retry_decision(d, retry)[0] is False                                         # an unreadable report is not evidence either
+    _report(d, "2026-10-27", exit=nw.EXIT_REFUSED, outcome="refused: a voice-PR landing is running", jobs=[], stack_stopped=False)
+    assert nw.retry_decision(d, retry)[0] is True                                          # the 2026-10-26 case: refused, nothing stopped -> retry
+    _report(d, "2026-10-27-0305", exit=nw.EXIT_OK)
+    assert nw.night_ran_today(d, "2026-10-27") == "2026-10-27-0305.json" and nw.retry_decision(d, _dt.datetime(2026, 10, 27, 3, 15))[0] is False     # a real night ran
+    assert nw.night_ran_today(d, "2026-10-28") == ""                                       # another day's report never counts
+    for code in (nw.EXIT_JOBS_FAILED, nw.EXIT_ABORTED, nw.EXIT_RESTORE_FAILED):
+        _report(d, f"2026-11-0{code}", exit=code, outcome="x")
+        assert nw.night_ran_today(d, f"2026-11-0{code}"), f"exit {code}: the window ran, a blind second sleep would not fix it"
+    _report(d, "2026-10-29-trial", mode="trial")
+    assert nw.night_ran_today(d, "2026-10-29") == "" and nw.retry_decision(d, _dt.datetime(2026, 10, 29, 3, 5))[0] is False      # a trial is not the night
+
+
+def test_skip_if_done_exits_ok_before_touching_the_box(tmp_path, monkeypatch):
+    cfg = nw.NightCfg(report_dir=tmp_path / "reports", night_dir=tmp_path / "night")
+
+    def no_host(_log):
+        raise AssertionError("the host was built")
+    monkeypatch.setattr(nw, "retry_decision", lambda d, now: (False, "already ran"))
+    assert nw.main(["--skip-if-done"], host_factory=no_host, cfg=cfg) == nw.EXIT_OK        # skipped before anything is read or started
+    monkeypatch.setattr(nw, "retry_decision", lambda d, now: (True, "first slot"))
+    with pytest.raises(AssertionError):                                                    # a go decision proceeds to build the host
+        nw.main(["--skip-if-done"], host_factory=no_host, cfg=cfg)
+
+
+def delay_of(body):
+    return int(re.search(r"RandomizedDelaySec=(\d+)", body).group(1)) / 60.0
+
+
+def test_the_timer_retries_after_the_first_attempt_inside_the_window_that_can_still_fit():
+    body = _unit_body("zoe-night-window.timer")
+    slots = sorted(int(h) * 60 + int(m) for h, m in re.findall(r"OnCalendar=\*-\*-\* (\d+):(\d+)", body))
+    assert slots == [2 * 60 + 50, 3 * 60 + 5, 3 * 60 + 15], "02:50 plus the 03:05 and 03:15 retries"
+    assert slots[0] == 2 * 60 + 50 and len(slots) >= 3, "the 02:50 start plus at least two retries"
+    cfg, delay = nw.NightCfg(), delay_of(body)
+    assert cfg.end_by - (slots[0] + delay) >= 35 + cfg.reserve_min, "the first start keeps the full usable window (35 min + the restore reserve)"
+    for slot in slots:
+        assert cfg.end_by - (slot + delay) >= 35, f"{slot // 60:02d}:{slot % 60:02d} + jitter leaves under the 35 min a window needs before end-by (the preflight would refuse it)"
+        assert cfg.night_hours[0] <= slot <= cfg.night_hours[1]
+    assert slots[-1] > 3 * 60                                                              # a retry actually lands after the old 03:00 horizon
+    assert "--skip-if-done" in _exec_start_args(), "every timer slot runs the service: only --skip-if-done keeps a retry off a night that already ran"
+
+
+def test_repeated_rewaits_are_capped_by_the_absolute_end_by_and_refuse_before_it(tmp_path):
+    """Every re-wait used to get its own full timeout, so repeated re-waits could run past end-by. Now each is capped at the time left minus the 35 min a window needs."""
+    w, host, cfg = make(tmp_path, start=at(3, 12))                  # 43 min before 03:55: 8 min of room
+    state = {"released": None, "n": 0}
+    real_release = w.release_lock
+
+    def release():
+        if w.lock_fd is not None:
+            state["released"], state["n"] = host.t, state["n"] + 1
+        real_release()
+    w.release_lock = release
+
+    def busy_reason():                                               # a lander under the lock, and for 15 more minutes after each hand-back (longer than the 8 min of room)
+        if w.lock_fd is not None or (state["released"] is not None and host.t - state["released"] < 900):
+            return "a voice-PR landing is running"
+        return ""
+    w.busy_reason = busy_reason
+    cfg.quiet_wait_max_min = cfg.busy_wait_max_min = 20.0            # the production per-wait bound: far more than the room
+    assert w.run() == nw.EXIT_REFUSED
+    assert stopped_nothing(host) and w.lock_fd is None
+    assert host.t <= at(3, 55) - 35 * 60 + 1, "the process must give up while a 35 min window still fit before end-by, not after cycling past it"
+    assert state["n"] >= 1
+
+
+def test_a_covered_silent_no_op_is_still_reported_as_degraded(tmp_path):
+    """A 4B fallback that finishes the job keeps the unit green (like every covered failure) but the silent no-op stays visible in jobs, log and report notes."""
+    w, host, cfg = make(tmp_path, argv=["--jobs", "dreaming"])
+    real = host.run_watched
+
+    def rw(argv, timeout, env, tick, log_path, interval=5.0):
+        res = real(argv, timeout, env, tick, log_path, interval)
+        if "11500" in (env or {}).get("GEMMA_SERVER_URL", "") and os.path.basename(argv[1]) == "zoe-nightly-dreaming.py":
+            log_path.write_text("all done\n")
+            host.tokens -= 1000                                        # the 12B generated nothing and said nothing; the 4B fallback below does real work
+        return res
+    host.run_watched = rw
+    assert w.run() == nw.EXIT_OK, w.outcome
+    twelve = next(j for j in w.jobs if j["name"] == "dreaming" and j["backend"] == "12B")
+    assert twelve["status"] == "degraded" and any("SILENT NO-OP" in n for n in twelve["notes"])
+    assert next(j for j in w.jobs if j["name"] == "dreaming" and j["backend"] == "4B")["status"] == "ok"
+    assert any("covered by the 4B fallback" in n for n in w.rec["notes"]) and any("still reported degraded" in e["msg"] for e in w.rec["events"])
+    assert "dreaming:degraded@12B" in nw.summary_line({**w.rec, "outcome": "ok", "exit": 0, "jobs": w.jobs})
+
+
+def test_a_lander_that_grabs_the_lock_between_the_lock_wait_and_taking_it_is_waited_for_too(tmp_path):
+    """The window's own take_lock used to raise at once if another process won the lock in the gap after wait_for_lock saw it free."""
+    w, host, cfg = make(tmp_path)
+    box = {"fd": None, "n": 0}
+    real_take, real_sleep = w.take_lock, host.sleep
+
+    def take():
+        box["n"] += 1
+        if box["n"] == 1:
+            box["fd"] = _hold_lock(cfg)                    # the lander wins the race
+        real_take()
+    w.take_lock = take
+
+    def sleep(sec):
+        real_sleep(sec)
+        if box["fd"] is not None and host.t - at(2, 50) >= 60:
+            os.close(box["fd"])
+            box["fd"] = None
+    host.sleep = sleep
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert any("was taken by another process" in e["msg"] for e in w.rec["events"]) and host.idx("systemd-run") >= 0
+
+
+def test_a_late_lander_is_waited_on_past_the_per_wait_bound_when_the_end_by_leaves_room(tmp_path):
+    """Re-waits are bounded ONLY by end-by minus the window: 25 min of lander with 30 min of room must not be cut at the first waits' bound (2 min in these tests, 20/30 in production)."""
+    w, host, cfg = make(tmp_path)
+    state = {"released": None}
+    real_release = w.release_lock
+
+    def release():
+        if w.lock_fd is not None and state["released"] is None:
+            state["released"] = host.t
+        real_release()
+    w.release_lock = release
+    w.busy_reason = lambda: "a voice-PR landing is running" if (w.lock_fd is not None and state["released"] is None) or (state["released"] is not None and host.t - state["released"] < 25 * 60) else ""
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert host.t - state["released"] >= 25 * 60 and host.idx("systemd-run") >= 0
+
+
+def test_a_refusal_after_the_household_stack_was_stopped_is_not_retry_eligible(tmp_path):
+    """choose() refuses AFTER the stops when the 12B cannot fit: exit 2, but Zoe was already put to sleep once - the 03:05 / 03:15 slots must not do it again."""
+    import datetime as _dt
+    w, host, cfg = make(tmp_path, freed=0.5)
+    assert w.run() == nw.EXIT_REFUSED and "no lever set fits" in w.outcome
+    rep = json.loads(next(cfg.report_dir.glob("*.json")).read_text())
+    assert rep["stack_stopped"] is True and "fallback_4b_ran" in rep
+    assert nw.retry_decision(cfg.report_dir, _dt.datetime(2026, 10, 9, 3, 5))[0] is False
+    assert nw.retry_decision(cfg.report_dir, _dt.datetime(2026, 10, 9, 3, 5))[1].startswith("tonight's window already ran")
+    w2, host2, cfg2 = make(tmp_path / "b")                                                      # control: a refusal with nothing stopped IS eligible
+    (tmp_path / "b").mkdir(exist_ok=True)
+    fd = _hold_lock(cfg2)
+    try:
+        assert w2.run() == nw.EXIT_REFUSED
+    finally:
+        os.close(fd)
+    rep2 = json.loads(next(cfg2.report_dir.glob("*.json")).read_text())
+    assert rep2["stack_stopped"] is False
+    assert nw.retry_decision(cfg2.report_dir, _dt.datetime(2026, 10, 9, 3, 5))[0] is True
+    _report(cfg2.report_dir, "2026-10-09-old", exit=nw.EXIT_REFUSED, jobs=[])                    # an old-format refusal (no stack_stopped key) cannot say: treated as ran
+    assert nw.night_report_state(cfg2.report_dir, "2026-10-09")[0] == "ran"
+
+
+def test_the_dreaming_runner_makes_an_empty_user_set_a_positive_signal_and_a_failed_lookup_loud(monkeypatch, capsys):
+    import asyncio
+    import types
+    m = _load(REPO / "scripts/maintenance/zoe-nightly-dreaming.py", "zoe_nightly_dreaming_lookup")
+    ran = []
+
+    async def cycle(uid, db=None, run_agent_sync_phase=False):
+        ran.append((uid, run_agent_sync_phase))
+        return {"user_id": uid}
+    state = {"ids": [], "boom": False}
+
+    async def list_ids(sql, params=(), *, db=None):
+        if state["boom"]:
+            raise RuntimeError("db gone")
+        return list(state["ids"])
+    fake = types.SimpleNamespace(_list_user_ids=list_ids, _message_owner_users_sql=lambda **k: "SELECT 1", drop_synthetic_users=lambda ids, **k: [i for i in ids if not i.startswith("demo-")],
+                                 logger=None, run_dreaming_cycle=cycle)
+    monkeypatch.setitem(sys.modules, "memory_digest", fake)
+    assert asyncio.run(m.run_dreaming(object())) == []                                    # a REAL empty set: positive line, idle-eligible
+    out = capsys.readouterr().out
+    assert "DREAMING_USERS lookup=ok users=0" in out and nw.job_idle_evidence("dreaming", out + "Dreaming cycle complete: 0 users processed\n")
+    state["boom"] = True
+    with pytest.raises(RuntimeError):                                                     # a FAILED lookup raises (main prints "Dreaming cycle failed", exit 1) - never an empty list
+        asyncio.run(m.run_dreaming(object()))
+    state.update(boom=False, ids=["a", "demo-x", "b"])
+    assert len(asyncio.run(m.run_dreaming(object()))) == 2 and ran == [("a", True), ("b", False)]
+    assert "users=2" in capsys.readouterr().out
+
+
+def test_clearance_is_rechecked_after_waiting_for_the_test_lane(tmp_path):
+    """Review (#2244): the lane wait runs after the clearance checks; something that started during it must send the window back through its waits."""
+    w, host, cfg = make(tmp_path)
+    held = os.open(cfg.test_lane_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    real_sleep, real_busy, st = host.sleep, w.busy_reason, {"n": 0, "released": False, "fired": False}
+
+    def sleep(sec):
+        st["n"] += 1
+        if st["n"] >= 2 and not st["released"]:
+            fcntl.flock(held, fcntl.LOCK_UN)
+            st["released"] = True
+        real_sleep(sec)
+    host.sleep = sleep
+
+    def busy_reason():
+        if st["released"] and w.test_lane_fd is not None and not st["fired"]:
+            st["fired"] = True                                     # a backup starts during the lane wait
+            return "zoe-backup.service is running"
+        return real_busy()
+    w.busy_reason = busy_reason
+    try:
+        assert w.run() == nw.EXIT_OK, w.outcome
+    finally:
+        os.close(held)
+    msgs = [e["msg"] for e in w.rec["events"]]
+    assert st["fired"] and any("while waiting for the test lane" in m for m in msgs)
+    assert msgs.index(next(m for m in msgs if "while waiting for the test lane" in m)) < msgs.index(next(m for m in msgs if m.startswith("preflight ok")))
+
+
+def test_last_resort_ngl_never_exceeds_the_configured_count(tmp_path):
+    w, host, cfg = make(tmp_path, argv=["--ngl", "8"])
+    w.parked_text = PARKED
+    try:
+        w.load_12b({"levers": {}}, ngl_drop=nw.LOAD_LAST_RESORT_NGL_DROP)
+    except Exception:
+        pass
+    assert w.rec["arith"]["ngl_used"] == 8

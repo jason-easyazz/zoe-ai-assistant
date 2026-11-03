@@ -173,17 +173,31 @@ jobs:
           # concurrent `git fetch` can lose the ref-lock race on refs/remotes/origin/main
           # ("cannot lock ref ... is at X but expected Y") and fail the whole deploy.
           # A few retries make the deploy robust to that transient collision.
+          #
+          # NEVER READ FETCH_HEAD (incident 2026-10-30 01:43, run 40924021148): it is
+          # ONE file in this shared .git, and the voice lander's `git fetch origin
+          # <pr-branch>` overwrote it between this fetch and the rev-parse, so the
+          # deploy targeted an UNMERGED PR branch commit instead of main. The fetch
+          # below writes an explicit refspec into a ref ONLY this step uses, and the
+          # result is VERIFIED against the remote's main as GitHub reports it.
+          deploy_ref="refs/zoe-deploy/main"
           for attempt in 1 2 3 4 5; do
             if GIT_CONFIG_COUNT=1 \
                GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
                GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_HEADER}" \
-                 git fetch origin main; then
+                 git fetch --no-write-fetch-head origin "+refs/heads/main:${deploy_ref}" \
+               && remote_main="$(GIT_CONFIG_COUNT=1 \
+                    GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+                    GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_HEADER}" \
+                    git ls-remote origin refs/heads/main | cut -f1)" \
+               && [ -n "$remote_main" ] \
+               && [ "$(git rev-parse "${deploy_ref}")" = "$remote_main" ]; then
               break
             fi
             if [ "$attempt" = 5 ]; then
-              echo "git fetch failed after 5 attempts"; exit 1
+              echo "::error::git fetch of main failed or did not match the remote's main after 5 attempts"; exit 1
             fi
-            echo "git fetch attempt ${attempt} failed (likely a concurrent ref-lock); retrying in 5s..."
+            echo "git fetch/verify attempt ${attempt} failed (concurrent ref-lock, or main advanced mid-fetch); retrying in 5s..."
             sleep 5
           done
           unset AUTH_HEADER GITHUB_TOKEN
@@ -216,7 +230,15 @@ jobs:
           # (--expect-revision, which every copy since #1594 supports) — never to
           # an unbound check.
           prev="$(git rev-parse HEAD)" || exit 1
-          target="$(git rev-parse FETCH_HEAD)" || exit 1
+          # Resolved from the deploy-only ref (see the fetch above), never FETCH_HEAD,
+          # and refused unless it is a fast-forward of what is live: a commit on an
+          # unmerged branch is not a descendant of live main in any normal case, and a
+          # rewound/foreign ref must never be reset onto the live checkout.
+          target="$(git rev-parse --verify "refs/zoe-deploy/main^{commit}")" || exit 1
+          if ! git merge-base --is-ancestor "$prev" "$target"; then
+            echo "::error::REFUSING TO DEPLOY: target ${target:0:7} is not a descendant of the live HEAD ${prev:0:7} (not a fast-forward of main). Live tree stays at ${prev}."
+            exit 1
+          fi
           bind_flag="--expect-tree-of"
           if ! grep -q -- '--expect-tree-of' scripts/maintenance/voice_gate_check.py; then
             echo "::warning::live voice_gate_check.py predates --expect-tree-of; binding to the exact commit (--expect-revision) for this run."
@@ -248,7 +270,7 @@ jobs:
             echo "docs/knowledge/merge-and-deploy.md \"The CD path enforces the voice replay-gate\"."
             exit 1
           fi
-          # Reset to EXACTLY the gate-checked SHA — not FETCH_HEAD, which a
+          # Reset to EXACTLY the gate-checked SHA — not a re-read ref, which a
           # concurrent fetch on this shared .git could have advanced to a commit
           # pushed after the gate ran (a silent bypass of the gate above).
           git reset --hard "$target"
@@ -415,7 +437,7 @@ jobs:
           # old inode, so `docker exec zoe-ui nginx -t` would test the OLD config).
           # Same digest as docker-compose.yml's image (pinned by tests/unit/test_nginx_delivery_layer.py):
           # the parser that pre-flights must be the parser that serves.
-          NGINX_IMAGE="nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f"
+          NGINX_IMAGE="nginx@sha256:1ef7ca94d7879df82421428ce13bd1eaa412404953859cf7a5b6512c25e67a60"
           docker run --rm --add-host zoe-auth:127.0.0.1 --add-host host.docker.internal:127.0.0.1 \
             -v "$PWD/services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
             -v "$PWD/services/zoe-ui/nginx.d:/etc/nginx/zoe:ro" \
@@ -433,6 +455,67 @@ jobs:
           docker logs --tail=40 zoe-ui
           echo "::error::zoe-ui unhealthy after nginx restart."
           exit 1
+
+      - name: Recreate module containers (if docker-compose.modules.yml changed)
+        run: |
+          cd /home/zoe/assistant
+          # `docker compose up -d` only recreates a container whose config hash changed, so a
+          # merged edit to docker-compose.modules.yml (loopback binds, mounts, image pins) sat
+          # unapplied until someone recreated by hand. Skip when the file is untouched since
+          # the LAST SUCCESSFUL deploy (DEPLOY_BASE_SHA, not the pre-pull OLD_SHA: a deploy that
+          # failed after the reset and is re-run would otherwise see "unchanged" and never
+          # reconcile). An unknown base falls through (fail closed); `up -d` is a per-container
+          # no-op when nothing changed, so that stays safe.
+          # Profile-gated services (profiles: [multica]) are NOT enumerated on purpose: applying
+          # the merged Multica config is an owner step (it needs MULTICA_DEV_CODE set first,
+          # owner-steps-2026-10-28-security.md step 2); include them with `--profile "*"` once done.
+          if [ -n "${DEPLOY_BASE_SHA:-}" ] \
+             && git diff --quiet "${DEPLOY_BASE_SHA}" HEAD -- docker-compose.modules.yml; then
+            echo "docker-compose.modules.yml unchanged since the last deploy (${DEPLOY_BASE_SHA}) — module containers left alone."
+            exit 0
+          fi
+          # Validate the NEW file before touching anything, so a bad edit fails here and not
+          # halfway through a recreate.
+          docker compose -f docker-compose.modules.yml config -q
+          # Only services that are running NOW: this file also holds optional modules
+          # (e.g. music-assistant) that are stopped on purpose; a bare `up -d` would start
+          # them. --no-deps: never cascade into the base stack.
+          RUNNING="$(docker compose -f docker-compose.modules.yml ps --services --status running)"
+          # A recreate that failed (module exited / restarting) left its name in PENDING: keep it a target on the re-run even though
+          # it is no longer "running", or the retry would succeed with the module still down. Cleared only after a healthy --wait.
+          PENDING_FILE="${ZOE_DEPLOY_STATE_DIR:-$HOME/.zoe/deploy}/module-recreate-pending"
+          PENDING="$(cat "${PENDING_FILE}" 2>/dev/null || true)"
+          TARGETS=""
+          for svc in $(docker compose -f docker-compose.modules.yml config --services); do
+            if printf '%s\n' "${RUNNING}" "${PENDING}" | grep -qxF "${svc}"; then
+              TARGETS="${TARGETS} ${svc}"
+            fi
+          done
+          if [ -z "${TARGETS}" ]; then
+            echo "no running module containers to recreate."
+            exit 0
+          fi
+          echo "recreating changed module containers:${TARGETS}"
+          # --wait: do not report success until each recreated module is running and healthy (its healthcheck,
+          # or plain running when it has none); a module that dies during startup fails the deploy here, before
+          # last-deployed-sha advances, instead of passing silently. PENDING_FILE survives that failure.
+          mkdir -p "$(dirname "${PENDING_FILE}")"
+          # shellcheck disable=SC2086
+          printf '%s\n' ${TARGETS} > "${PENDING_FILE}"
+          # shellcheck disable=SC2086
+          docker compose -f docker-compose.modules.yml up -d --no-deps --wait --wait-timeout 180 ${TARGETS}
+          rm -f "${PENDING_FILE}"
+
+      # QUIET-HOUSEHOLD WAIT (owner 2026-11-02, "she is there when spoken to"): do not restart
+      # zoe-data mid-conversation. Holds while a panel voice turn happened in the last 10 min
+      # (zoe-data /health `last_voice_turn_age_s`), up to 60 min, then FAILS OPEN and deploys.
+      # Docs-only deploys skip it; the night-window rules (night_busy.sh deploy) are the one
+      # thing it never fails open on. Separate step so the restart step below stays untouched.
+      - name: Wait for a quiet household (do not restart mid-conversation)
+        timeout-minutes: 210
+        run: |
+          cd "${ZOE_CHECKOUT:-/home/zoe/assistant}"
+          bash scripts/maintenance/wait_household_quiet.sh
 
       # zoe-data is a user service — no sudo needed.
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.

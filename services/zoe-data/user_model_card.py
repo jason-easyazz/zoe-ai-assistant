@@ -198,6 +198,27 @@ def _eligible(meta: dict[str, Any]) -> bool:
             and not meta.get("candidate_affect"))   # feelings age by the hour: continuity owns them
 
 
+# Special-category traits (religion, politics, sexuality, ethnicity). One passing remark must not become
+# a flat identity claim in the block that frames EVERY turn: unless the person confirmed the row, the card
+# says so. concept_tags is the memory gate's tag list (comma-separated).
+SENSITIVE_TRAIT_TAGS = frozenset({"religion", "politics", "political", "sexuality", "ethnicity"})
+UNCONFIRMED = "(unconfirmed)"
+
+
+def is_tentative(meta: dict[str, Any], text: str = "") -> bool:
+    """True when the card must not state this row as settled fact: a row whose STAMPED provenance is
+    inferred (a model's reading, never the person's words), or a special-category trait the person has
+    not confirmed. A legacy row with no stamped provenance is left as it was (no guessing)."""
+    import memory_authority as auth  # type: ignore[import]
+
+    stamped = str(meta.get("authority_class") or meta.get("authority") or "")
+    if stamped and auth.row_authority(meta, text) == auth.INFERRED:
+        return True
+    tags = {t.strip().lower() for t in str(meta.get("concept_tags") or "").split(",")}
+    return bool(tags & SENSITIVE_TRAIT_TAGS) and auth.row_class(meta, text) not in (
+        auth.USER_CONFIRMED, auth.OPERATOR)
+
+
 def style_line(portrait: str | None) -> str:
     """The narrative portrait's first 'how they communicate' sentence, or ''."""
     from memory_service import scrub_pii  # type: ignore[import]
@@ -245,6 +266,8 @@ def build_card(name: str, rows: Iterable[Any], portrait: str | None = None,
             text = re.sub(r"^prefers\s+", "", text)  # "Prefers: prefers short answers"
         if cat.dated and added is not None:
             text = f"{text} (noted {added.day} {added:%b})"
+        if is_tentative(meta, ref.text or ""):
+            text = f"{text} {UNCONFIRMED}"
         seen.append(words)
         per_source[source] = per_source.get(source, 0) + 1
         by_cat[cat.key].append([cat.key, text, ref.id])

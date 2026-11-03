@@ -204,6 +204,12 @@ def test_shadow_report_aggregates(tmp_path):
 # --------------------------------------------------------------------------- #
 # ZOE_ROUTER_SHADOW_TEXT — opt-in raw-text capture (default OFF)               #
 # --------------------------------------------------------------------------- #
+def _open_round(monkeypatch, days: int = 7) -> None:
+    """A raw-text round needs an end date (T-4): open one ``days`` from the same today the code reads."""
+    import datetime as _dt
+    monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT_UNTIL", (_dt.date.today() + _dt.timedelta(days=days)).isoformat())
+
+
 def test_shadow_text_default_off(monkeypatch):
     monkeypatch.delenv("ZOE_ROUTER_SHADOW_TEXT", raising=False)
     assert semantic_router.shadow_text_enabled() is False
@@ -215,6 +221,7 @@ def test_shadow_text_default_off(monkeypatch):
 ])
 def test_shadow_text_flag_parsing(monkeypatch, val, want):
     monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", val)
+    _open_round(monkeypatch)
     assert semantic_router.shadow_text_enabled() is want
 
 
@@ -239,6 +246,7 @@ def test_shadow_log_captures_raw_text_when_opted_in(monkeypatch, tmp_path):
     _fake_router(monkeypatch)
     log = tmp_path / "shadow.jsonl"
     monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", "1")
+    _open_round(monkeypatch)
     monkeypatch.setenv("ZOE_ROUTER_HEAD", "shadow")
     monkeypatch.setattr(semantic_router, "_HEAD_LOG_PATH", str(log))
     _set_head(monkeypatch, _FakeHead([0.9, 0.05, 0.05]))
@@ -257,6 +265,7 @@ def test_two_stage_rec_text_is_opt_in(monkeypatch):
     assert "utt_text" not in off
 
     monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", "1")
+    _open_round(monkeypatch)
     on = semantic_router._two_stage_rec("hello", {"tool": "get_time"}, "active", "time")
     assert on["utt_text"] == "hello"
     assert on["utt"] == off["utt"]        # same hash, extra field
@@ -265,6 +274,7 @@ def test_two_stage_rec_text_is_opt_in(monkeypatch):
 def test_two_stage_info_line_never_carries_raw_text(monkeypatch, tmp_path, caplog):
     """Opting in adds text to the FILE only — journald/log shipping stays hash-only."""
     monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", "1")
+    _open_round(monkeypatch)
     log = tmp_path / "shadow.jsonl"
     monkeypatch.setattr(semantic_router, "_HEAD_LOG_PATH", str(log))
 
@@ -294,3 +304,55 @@ def test_two_stage_rec_logs_the_similarity_baseline(monkeypatch):
         "put dinner in the diary", {"tool": "add_reminder", "domain": "reminders"},
         "shadow2", "calendar")
     assert s2["similarity_routed"] == "calendar" == s2["actual_routed"]
+
+
+# --------------------------------------------------------------------------- #
+# T-4 (deep dive 2): raw text is a bounded ROUND, and gated rows keep head_top  #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("until_days,raw,why", [
+    (None, None, "without ZOE_ROUTER_SHADOW_TEXT_UNTIL"),
+    (-1, None, "ended"),
+    (31, None, "more than 30 days"),
+    (None, "next tuesday", "is not YYYY-MM-DD"),
+])
+def test_shadow_text_needs_an_open_bounded_round(monkeypatch, until_days, raw, why):
+    """The flag alone no longer writes words: the live box had it on for months (10,560 rows)."""
+    import datetime as _dt
+    today = _dt.date(2026, 10, 19)
+    monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", "1")
+    if raw is not None:
+        monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT_UNTIL", raw)
+    elif until_days is not None:
+        monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT_UNTIL", (today + _dt.timedelta(days=until_days)).isoformat())
+    else:
+        monkeypatch.delenv("ZOE_ROUTER_SHADOW_TEXT_UNTIL", raising=False)
+    on, reason = semantic_router.shadow_text_window(today)
+    assert on is False and why in reason
+
+
+def test_shadow_text_round_inclusive_of_its_end_date(monkeypatch):
+    import datetime as _dt
+    today = _dt.date(2026, 10, 19)
+    monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", "1")
+    monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT_UNTIL", "2026-10-19")
+    assert semantic_router.shadow_text_window(today)[0] is True
+    assert semantic_router.shadow_text_window(_dt.date(2026, 10, 20))[0] is False
+
+
+def test_lapsed_round_writes_no_text_to_the_file(monkeypatch, tmp_path):
+    """Negative control for the default: =1 with no end date is what the live box had."""
+    monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", "1")
+    monkeypatch.delenv("ZOE_ROUTER_SHADOW_TEXT_UNTIL", raising=False)
+    rec = semantic_router._two_stage_rec("secret words", {"tool": "get_time"}, "active", "time")
+    assert "utt_text" not in rec and "secret words" not in json.dumps(rec)
+
+
+def test_gated_two_stage_row_keeps_the_heads_own_top():
+    """A gated decision routes to chat by construction; the row must still say what the head
+    picked, or the confidence gate can never be re-measured from the log."""
+    gated = {"tool": None, "domain": "chat", "shortlist": ["lists", "reminders", "calendar"],
+             "head_top": "lists", "head_conf": 0.61, "gated": True, "reason": "low_conf", "ms": 1.0}
+    rec = semantic_router._two_stage_rec("x", gated, "active", "chat")
+    assert rec["two_stage_domain"] == "chat" and rec["head_top"] == "lists" and rec["gated"] is True
+    failed = semantic_router._two_stage_rec("x", None, "active", "chat")
+    assert failed["head_top"] is None and failed["failed"] is True

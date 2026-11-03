@@ -745,7 +745,7 @@ class Window:
             if self.host.mono() >= deadline:
                 raise Refused(f"still not quiet after {self.cfg.quiet_wait_max_min:.0f} min: {why}")
             self.log(f"waiting: {why}")
-            self.host.sleep(self.cfg.quiet_poll_s)
+            self.host.sleep(max(0.0, min(self.cfg.quiet_poll_s, deadline - self.host.mono())))     # never sleep past the (possibly end-by-capped) deadline
 
     def blackout_conflict(self) -> str:
         """The maintenance window this run (now .. now + cap) would overlap, or ''. Refused, not waited out: the owner picks the time."""

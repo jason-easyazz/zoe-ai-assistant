@@ -6,6 +6,17 @@
 
 const WidgetManager = {
     modules: {},
+    // Widget INSTANCES, one per card on the board (Wave 4b, 2026-10-19). `modules`
+    // holds ONE object per type, and the dashboard used to init() that same object
+    // for every card of the type - two weather cards shared one `this.element` and
+    // one update timer, so the second clobbered the first. The dashboard now asks
+    // createInstance() for a fresh object per card and tracks it here by its uid.
+    // Pages that still use `modules` directly (lists) are unchanged.
+    instances: new Map(),
+    // Sticky once a page mounts cards as instances (the dashboard). It must not be
+    // inferred from instances.size: after the last card is removed the map is
+    // empty, and a refresh would then fall back to the never-init()ed templates.
+    instanceMode: false,
     manifest: null,
     manifestLoaded: false,
     
@@ -35,6 +46,79 @@ const WidgetManager = {
     register(module) {
         this.modules[module.type] = module;
         console.log(`✓ Registered widget: ${module.type}`);
+    },
+
+    /**
+     * A NEW widget object of this type - never the shared `modules[type]`.
+     * Falls back to the registered object only for a module that is not a class
+     * instance (a plain object cannot be constructed again).
+     */
+    createInstance(type) {
+        if (!Object.prototype.hasOwnProperty.call(this.modules, type)) return null;
+        const proto = this.modules[type];
+        if (!proto) return null;
+        const Ctor = proto.constructor;
+        if (typeof Ctor === 'function' && Ctor !== Object) {
+            try { return new Ctor(); } catch (e) {
+                console.error('Could not create a ' + type + ' widget:', e);
+                return null;
+            }
+        }
+        return proto;
+    },
+
+    /** Called by a page that mounts one instance per card (js/dashboard.js). */
+    useInstances() {
+        this.instanceMode = true;
+    },
+
+    trackInstance(uid, instance) {
+        this.instanceMode = true;
+        if (uid && instance) this.instances.set(uid, instance);
+    },
+
+    /** Stop a card's timers/listeners and forget it. */
+    releaseInstance(uid) {
+        const inst = this.instances.get(uid);
+        if (!inst) return;
+        this.instances.delete(uid);
+        if (typeof inst.destroy === 'function') {
+            try { inst.destroy(); } catch (e) { console.warn('widget destroy failed:', e); }
+        }
+    },
+
+    releaseAll() {
+        Array.from(this.instances.keys()).forEach(uid => this.releaseInstance(uid));
+    },
+
+    /**
+     * Every live object of this type. On a page that tracks instances (the
+     * dashboard) that is its cards of the type - possibly none; the registered
+     * module there is a never-init()ed template. Elsewhere it is the module.
+     */
+    liveOfType(type) {
+        if (this.instanceMode) {
+            const out = [];
+            this.instances.forEach(inst => { if (inst && inst.type === type) out.push(inst); });
+            return out;
+        }
+        return this.modules[type] ? [this.modules[type]] : [];
+    },
+
+    /**
+     * Refresh every live card of a type. Returns true when the refresh is handled
+     * (always, on a page that tracks instances - a type with no card has nothing
+     * to refresh), so a caller never falls back to the template module.
+     */
+    updateType(type) {
+        let handled = this.instanceMode;
+        this.liveOfType(type).forEach(inst => {
+            if (inst && typeof inst.update === 'function') {
+                handled = true;
+                try { inst.update(); } catch (e) { console.error('Failed to update ' + type + ':', e); }
+            }
+        });
+        return handled;
     },
     
     /**
@@ -109,9 +193,13 @@ const WidgetManager = {
     },
     
     updateAll() {
-        // Update all registered widget modules that have an update method
+        // Update every live card. With tracked instances (the dashboard) those are
+        // the cards; the registered `modules` are never init()ed there, so updating
+        // them would fetch into a null element. Pages without instances keep the
+        // old behaviour.
         console.log('🔄 Updating all widgets...');
-        Object.values(this.modules).forEach(module => {
+        const live = this.instanceMode ? Array.from(this.instances.values()) : Object.values(this.modules);
+        live.forEach(module => {
             if (module && typeof module.update === 'function') {
                 try {
                     module.update();

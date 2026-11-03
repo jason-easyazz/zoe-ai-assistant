@@ -40,20 +40,18 @@ async def test_worktree_command_runs_off_the_event_loop(monkeypatch, tmp_path):
     assert seen["thread"] != loop_thread
 
 
-async def test_run_kanban_cli_plumbing(monkeypatch):
-    """_run still returns stdout and passes board args through the new runner.
-
-    Pins the CLI backend explicitly: this test exercises the `hermes kanban`
-    CLI plumbing, and it used to get there via the default. The default is now
-    `executor`, which dispatches to Multica's Postgres instead — so without the
-    pin this reaches for a `multica` database that does not exist in CI.
-    """
+async def test_hermes_cli_backend_is_gone_and_never_shells_a_cli(monkeypatch):
+    """ZOE_KANBAN_BACKEND=hermes used to shell `hermes kanban ...`. Hermes is retired and nothing may
+    exec it: any backend but `executor` now raises KanbanCLIError without spawning anything."""
     monkeypatch.setenv("ZOE_KANBAN_BACKEND", "hermes")
-    monkeypatch.setattr(ka, "hermes_bin", lambda: "echo")
-    monkeypatch.setattr(ka, "_board", lambda: "board-x")
-    adapter = ka.KanbanAdapter()
-    out = await adapter._run(["list"])
-    assert out == "kanban --board board-x list"
+
+    def _boom(*a, **k):
+        raise AssertionError("a CLI was spawned for the removed hermes backend")
+
+    monkeypatch.setattr(ka, "_spawn_cli", _boom)
+    assert not hasattr(ka, "hermes_bin")
+    with pytest.raises(ka.KanbanCLIError, match="not supported"):
+        await ka.KanbanAdapter()._run(["list"])
 
 
 async def test_worktree_command_timeout_raises_kanban_error(tmp_path):

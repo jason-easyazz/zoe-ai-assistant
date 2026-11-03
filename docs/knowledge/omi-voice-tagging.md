@@ -110,7 +110,9 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
   - Erasing a member removes every voice row.
   - A name forget redacts the turn text too.
 - **Expiry.** The sweep runs whether or not learning is on. Held embeddings and unknown voices expire after 14 days.
-  Unconfirmed voices expire after 30 days, and confirmed ones after 365 idle days. Soft-deleted people are purged.
+  Learned voices are KEPT UNTIL FORGOTTEN (owner decision D15, 2026-10-19). There is no 30 / 365-day expiry unless one is
+  explicitly configured. A print learned before D15 keeps its old date, but the sweep ignores it while no expiry is configured.
+  Forgetting still erases. Soft-deleted people are purged.
 - **Children.** A child's pendant is not tagged. A member who is not positively an adult never holds a bystander voice. A tagged
   person who may be a child is a label only.
 - **Backups.** The nightly backup carries no row data of the four biometric tables.
@@ -126,7 +128,7 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
 | `ZOE_OMI_VOICE_CLUSTER_MIN` | 0.45 | across-recording unknown-voice cut |
 | `ZOE_OMI_SUGGEST_MIN` / `_MARGIN` | 0.45 / 0.10 | suggestion bar and runner-up margin |
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | 14 | life of a held bystander embedding and an unknown voice |
-| `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` | 30 / 365 | learned-voice expiry |
+| `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` | 0 / 0 | learned-voice expiry; 0 = kept until forgotten (D15), a positive value is an explicit bounded expiry |
 | `ZOE_OMI_TAG_MODEL_DIR` | `~/.cache/zoe-speaker-resnet34` | where `fetch_speaker_models.sh build` wrote the INT8 file |
 | `ZOE_OMI_KEEP_AUDIO_FOR_TAGGING` | off | hold a split recording's WAV while a line still needs a name, so the Pendant page can play a clip; released when nothing needs a name, never past `ZOE_OMI_AUDIO_RETENTION_DAYS` (7) |
 
@@ -148,8 +150,61 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
 - The TTS-playback log behind `zoe_spoken_spans`.
 - Household-member detection for D12.
 - The panel "Who is this?" (touch).
-- Facts ABOUT a tagged person from what they said: the day review reads a tagged line as `someone_else` and does not carry the
-  person, so no `person_memory` candidate is proposed yet (memories-space section 2.4, "Populating a contact").
+- A Pendant-page card for the day review (approve / skip). The API carries everything it needs (below); no UI reads it yet.
+
+## Facts about tagged people (built 2026-10-19, behind `ZOE_OMI_DAY_REVIEW`)
+
+Owner want: once a voice is named, Zoe builds a profile of that person from the conversations. Code: `omi_day_review.py`
+(`people_index`, `segment_map`, `verify_person_fact`, `facts_conflict`), `omi_review_apply.py` (`write_person_fact`,
+`write_person_relation`, `unwrite`). Pinned by `services/zoe-data/tests/test_omi_person_facts.py` (negative controls in its
+docstring).
+
+- **The tag reaches the review.** A CONFIRMED tag (never a suggestion) on a turn carries the member's own person into the day
+  review. The line is shown to the model as `[r1.2 09:14 Sam] text`. A tag that points at anyone but one of the member's own
+  live people carries nobody.
+- **Two kinds of candidate, each with provenance.** Each one records the recording, the segment ids, who said it, the person id
+  and the exact quote.
+  - `person_fact`, `stated_by_subject`: the tagged person says it about themself, in the first person ("I work at the library").
+    What they say about someone else is hearsay and is dropped.
+  - `person_fact`, `owner_stated`: the member says it, on a line known to be theirs (their own "That was me" label, or
+    `ZOE_OMI_SPEAKER_TAG=on`), and names one of their people.
+  - `person_relation`: the person's relationship to the member. It comes from "I'm your cousin" on the person's tagged line, or
+    from "my sister, Lee" on the member's line about a known person.
+- **What is never proposed.**
+  - Anything from an unlabelled line (D4: an untagged day's prompt is unchanged and yields no person facts).
+  - The `restraint` classes plus a person-specific list (D11): intimate life, beliefs and politics, legal, status papers,
+    health and money words.
+  - Anything about a possible child: no fact, and no relationship (a child relationship such as "my son" counts too). The
+    check runs again at approval.
+  - A fact whose words are not in the quote. An owner's edit at approval is held to the same rule (`edit_unsupported`, 422),
+    because the row keeps the original quote and speaker as its provenance.
+  - A passing remark ("today").
+  - An identity claim or an address.
+- **The day-review card** (`GET /api/omi/day-review/candidates`) lists these candidates like any other. It also carries
+  `voices_to_name`: up to 3 of the member's unknown voices, each with one sample line, named through the voice tag route.
+- **Approval writes; nothing else does.**
+  - A fact goes into the OWNER's memory as "<Name>: <fact>": `entity_type='person'`, `entity_id` = the people row, class
+    `user_confirmed`, personal, `turn_ref = omi_segment:<id>`, metadata `stated_by` plus the candidate, day, recording and
+    segment ids.
+  - It is ADD only. A contradiction with any approved row about that person is `held_conflict` and is never written beside it.
+    "Any row" means one the subject said, one the owner said, or one the owner said in chat. So a `stated_by_subject` fact and an
+    `owner_stated` one never overwrite each other. The same fact already there is linked (`known:memory:<id>`).
+  - A relationship fills an EMPTY `people.relationship`, and only on a personal row. A different one already set is
+    `held_conflict`. A family-visible row is refused (`shared_person`). A relationship candidate cannot be edited: dismiss it
+    and set the relationship on the person instead.
+- **Forget.** These all erase the memory row (`MemoryService.erase_rows`) and clear the relationship, then delete the candidate:
+  - "forget <name>": the cascade's `omi_day_review` step, by name and by the person ids it resolved;
+  - deleting the recording the fact came from;
+  - a forget that lands while an approval is writing (the approval answers 410);
+  - a crash between the write and `written_ref`. The memory row carries the candidate id, and a relationship's intent is
+    recorded on the candidate before the update. A forget follows either one, and a retried approval reuses the row rather
+    than linking it as `known:`.
+- **Limits.**
+  - The owner's later direct statement in chat (`user_stated`, through `person_extractor`) may still supersede a pendant fact,
+    with history. That is the trust order: the owner's own words win.
+  - The conflict rule is narrow and deterministic: opposite polarity, or a different value of a single-valued predicate (works,
+    lives, from ...). "Is a nurse" against "is a teacher" is not caught.
+  - Owner-stated facts need lines known to be the owner's. In shadow mode that means the owner's own line labels.
 
 ## The Pendant page (built 2026-10-18)
 
@@ -157,3 +212,22 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
 Name them / TV-radio-Zoe-media, Play), recordings opening to their lines (Me / Not me / Who? / TV, suggestion Yes / No) and
 the learned voices (Forget). Recordings transcribed before `ZOE_OMI_SPEAKER_TAG` was on have no turns and no audio: they show
 their joined transcript and cannot be tagged. Play needs `ZOE_OMI_KEEP_AUDIO_FOR_TAGGING=1` (or `keep_audio`).
+
+### Review your day (on the phone, 2026-10-19)
+
+The Pendant page's first section is the phone's way to approve what the day review proposed. It needs
+`ZOE_OMI_DAY_REVIEW` (`shadow` or `on`); off, it says "switched off" and shows nothing to act on.
+
+- **What the owner sees.** Pending items grouped: about your people, relationships, follow-ups and open loops, other. Each one
+  has the proposed item ("Sam Okoro: works at the library"), who said the line (Me, the person the owner tagged, or Someone),
+  the exact quote, the day, the recording's start time and how far in, and "▶ Play the line" while that recording's audio is
+  still held (at most 8 s, the owner-only clip route).
+- **What the owner taps.** Approve, Skip, and Edit where the server allows it (`editable`; a relationship has none). An edit
+  sends only the changed fields. The server re-checks it against the quote, and a refusal keeps what was typed and says why.
+- **A held conflict** shows what it contradicts ("This contradicts what you approved before: ..."; for a relationship, "You
+  already have Sam as 'friend'"). The buttons are the server's options: Keep what I had (skip this one), Change this one, and
+  Try again when the clashing row is no longer there. Approval never replaces what the owner already has.
+- **New voices to name** (up to 3) sit under the items. "Name this voice" moves focus to that voice's card in "Voices to name"
+  on the same page.
+- **Same routes everywhere.** The page calls only `GET /api/omi/day-review/candidates` and `POST .../{id}/approve|dismiss`;
+  the extras it needs (`editable`, `audio_kept`, `offset_ms`, `conflict`) are read-only annotations on that GET.

@@ -55,6 +55,13 @@ case "$cmd" in
     printf 'CFG_OK %s\n' "${FAKE_SPEAKER_CFG:-}" ;;
   *is-active*)
     [ "${FAKE_ACTIVE:-1}" = 1 ] || exit 1 ;;
+  *BUILD.json.tmp*)
+    printf '%s' "$cmd" | grep -o '{[^}]*}' > "$REC/build.json" ;;
+  *HEALTH_OK*)
+    [ "${FAKE_HEALTH:-1}" = 1 ] || exit 1
+    sha="$(sed -n 's/.*"sha": "\([^"]*\)".*/\1/p' "$REC/build.json" 2>/dev/null)"
+    [ "${FAKE_BUILD_BAD:-0}" = 1 ] && sha="0000000000000000000000000000000000000000"
+    printf 'HEALTH_OK {"status": "ok", "build": "%s", "code_sha256": "x"}\n' "$sha" ;;
   *curl*)
     [ "${FAKE_HEALTH:-1}" = 1 ] || exit 1 ;;
 esac
@@ -225,6 +232,27 @@ def test_verify_fails_when_health_does_not_answer(harness):
     r = harness(FAKE_HEALTH=0)
     assert r.returncode == 4, r.stdout + r.stderr
     assert "/health" in r.stderr and "ROLLBACK" in r.stderr
+
+
+def test_build_json_is_written_before_the_restart_and_health_must_report_it(harness):
+    # V-3 (deep dive 2): /health names the build that runs. BUILD.json lands on the Pi BEFORE the
+    # restart (the daemon reads it at start) and the verify step requires /health to report it.
+    r = harness()
+    assert r.returncode == 0, r.stdout + r.stderr
+    log = _ssh_log(harness.rec)
+    assert log.index("BUILD.json.tmp") < log.index("systemctl --user restart zoe-voice") < log.index("HEALTH_OK")
+    import json as _json
+    build = _json.loads((harness.rec / "build.json").read_text())
+    head = subprocess.run(["git", "-C", str(SETUP), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    assert build["sha"].split("-dirty")[0] == head and build["deployed_at"].endswith("Z")
+    assert f"/health reports build {build['sha']}" in r.stdout
+
+
+def test_verify_fails_when_health_reports_another_build(harness):
+    r = harness(FAKE_BUILD_BAD=1)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "the daemon that answered is not the one just shipped" in r.stderr
+    assert "BUILD.json" in r.stderr and "ROLLBACK" in r.stderr   # the rollback also drops the stale build name
 
 
 def test_dry_run_touches_nothing(harness):

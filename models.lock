@@ -1,0 +1,152 @@
+{
+  "schema": 1,
+  "measured": "2026-10-19",
+  "about": "The model FILES Zoe runs on, pinned by sha256 (deep dive 2, V-3 and S0-8). Weights are not in git (size, licence, or custom-trained); this lock is how a restore or a rebuilt box proves it has the same files. Paths are relative to the home of the host's service user (jetson: zoe, panel: pi). Verify read-only with scripts/maintenance/models_lock_verify.py. Not pinned here on purpose: the router's stage-2 GGUF (~/models/functiongemma-router), which the ZOE_ROUTER_SELFTRAIN ratchet replaces by design (docs/CANONICAL.md, checkpoint_pinned: no).",
+  "models": [
+    {
+      "role": "panel wake word (hey_zoe)",
+      "host": "panel",
+      "path": ".zoe-voice/hey_zoe.onnx",
+      "sha256": "6475cc161b0b1d9bea1a83ad7856a4a93b5cea309e7c631d2cbef147c8f00d2f",
+      "bytes": 415224,
+      "in_git": false,
+      "provenance": "custom openWakeWord ONNX classifier, file dated 2026-04-19; training recipe, data and licence are undocumented, so the file is backed up rather than committed",
+      "backup": "jetson ~/.zoe/backups/panel/hey_zoe.onnx (mode 600); off-box in the artefacts tier (scripts/maintenance/zoe_offbox.py artefact_paths)"
+    },
+    {
+      "role": "panel wake features (openWakeWord embedding)",
+      "host": "panel",
+      "path": ".zoe-voice/venv/lib/python3.11/site-packages/openwakeword/resources/models/embedding_model.onnx",
+      "sha256": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",
+      "bytes": 1326578,
+      "in_git": false,
+      "provenance": "openwakeword 0.6.0 bundled resource (Apache-2.0); hey_zoe.onnx scores on these features"
+    },
+    {
+      "role": "panel wake features (openWakeWord melspectrogram)",
+      "host": "panel",
+      "path": ".zoe-voice/venv/lib/python3.11/site-packages/openwakeword/resources/models/melspectrogram.onnx",
+      "sha256": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
+      "bytes": 1087958,
+      "in_git": false,
+      "provenance": "openwakeword 0.6.0 bundled resource (Apache-2.0)"
+    },
+    {
+      "role": "panel VAD (Silero, endpointing / barge-in / follow-up)",
+      "host": "panel",
+      "path": ".cache/torch/hub/snakers4_silero-vad_master/src/silero_vad/data/silero_vad.jit",
+      "sha256": "e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720",
+      "bytes": 2272526,
+      "in_git": false,
+      "provenance": "silero-vad 6.2.1 via torch.hub snakers4/silero-vad master, cached (force_reload=False) (MIT)"
+    },
+    {
+      "role": "panel speaker model (WeSpeaker ResNet34 INT8)",
+      "host": "panel",
+      "path": ".zoe-voice/models/wespeaker_resnet34_i8qdq_u8s8.onnx",
+      "sha256": "d1f65aa0e09ba00793df05ecdb21df7c5fc1336e219e029d399b2f5aa71eae32",
+      "bytes": 6766432,
+      "in_git": false,
+      "provenance": "built by scripts/setup/fetch_speaker_models.sh; the daemon refuses any other file (pin: scripts/setup/zoe_speaker_resnet34_artifacts.json)"
+    },
+    {
+      "role": "brain (Gemma 4 E4B QAT)",
+      "host": "jetson",
+      "path": "models/gemma4-e4b-qat/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+      "sha256": "df0fd4ee07072c607c29a0a1cb4f98918426cca12f45a2776bdd6ee6d09a4de3",
+      "bytes": 4215695776,
+      "in_git": false,
+      "provenance": "unsloth/gemma-4-E4B-it-qat-GGUF (Gemma terms); the canonical brain rock, docs/CANONICAL.md"
+    },
+    {
+      "role": "brain MTP drafter",
+      "host": "jetson",
+      "path": "models/gemma4-e4b-qat/mtp-gemma-4-E4B-it.gguf",
+      "sha256": "423074e537504b4f9ec5eafed5c639fac82c96631626efccacdd3c4039b20605",
+      "bytes": 59678016,
+      "in_git": false,
+      "provenance": "the MTP drafter served with --model-draft (Gemma terms)"
+    },
+    {
+      "role": "STT (Moonshine v2 Medium streaming) adapter",
+      "host": "jetson",
+      "path": ".cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized_26_07_30/adapter.ort",
+      "sha256": "3f2a287def57cc094367a0eec3c4f5fc36a32ec420e86764b696920991b20281",
+      "bytes": 3651296,
+      "in_git": false,
+      "provenance": "moonshine_voice get_model_for_language('en', MEDIUM_STREAMING) download (ZOE_MOONSHINE_ARCH=MEDIUM_STREAMING)"
+    },
+    {
+      "role": "STT (Moonshine v2 Medium streaming) cross_kv",
+      "host": "jetson",
+      "path": ".cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized_26_07_30/cross_kv.ort",
+      "sha256": "642f6e21cd305be79342207c6f9e6b681d469d55bc48c72b27b84846fb71fd1e",
+      "bytes": 11643776,
+      "in_git": false,
+      "provenance": "as adapter.ort"
+    },
+    {
+      "role": "STT (Moonshine v2 Medium streaming) decoder_kv",
+      "host": "jetson",
+      "path": ".cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized_26_07_30/decoder_kv.ort",
+      "sha256": "193bb366492b74fc4ad338c6778e8d8eb916aaa11b5aa264f9057f4db7759486",
+      "bytes": 146972408,
+      "in_git": false,
+      "provenance": "as adapter.ort"
+    },
+    {
+      "role": "STT (Moonshine v2 Medium streaming) encoder",
+      "host": "jetson",
+      "path": ".cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized_26_07_30/encoder.ort",
+      "sha256": "12915e76ebac7dd287c5ea63965d06103a53ba1ce242a4a34f318f3958c60c37",
+      "bytes": 94705376,
+      "in_git": false,
+      "provenance": "as adapter.ort"
+    },
+    {
+      "role": "STT (Moonshine v2 Medium streaming) frontend",
+      "host": "jetson",
+      "path": ".cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized_26_07_30/frontend.ort",
+      "sha256": "100a4cbc1e96f4f5586330ff60d5f6240813dbb399a0b9c6a187a9491ab716cc",
+      "bytes": 47467576,
+      "in_git": false,
+      "provenance": "as adapter.ort"
+    },
+    {
+      "role": "TTS (Kokoro-82M weights)",
+      "host": "jetson",
+      "path": ".cache/huggingface/hub/models--hexgrad--Kokoro-82M/snapshots/f3ff3571791e39611d31c381e3a41a3af07b4987/kokoro-v1_0.pth",
+      "sha256": "496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4",
+      "bytes": 327212226,
+      "in_git": false,
+      "provenance": "hexgrad/Kokoro-82M @ f3ff3571 (Apache-2.0), loaded by scripts/setup/kokoro_sidecar.py"
+    },
+    {
+      "role": "TTS (Kokoro-82M config)",
+      "host": "jetson",
+      "path": ".cache/huggingface/hub/models--hexgrad--Kokoro-82M/snapshots/f3ff3571791e39611d31c381e3a41a3af07b4987/config.json",
+      "sha256": "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f",
+      "bytes": 2351,
+      "in_git": false,
+      "provenance": "as kokoro-v1_0.pth"
+    },
+    {
+      "role": "TTS voice (af_sky, KOKORO_VOICE)",
+      "host": "jetson",
+      "path": ".cache/huggingface/hub/models--hexgrad--Kokoro-82M/snapshots/f3ff3571791e39611d31c381e3a41a3af07b4987/voices/af_sky.pt",
+      "sha256": "c799548aed06e0cb0d655a85a01b48e7f10484d71663f9a3045a5b9362e8512c",
+      "bytes": 523351,
+      "in_git": false,
+      "provenance": "as kokoro-v1_0.pth"
+    },
+    {
+      "role": "server VAD (Silero ONNX, services/zoe-data/voice_vad.py)",
+      "host": "jetson",
+      "path": "models/silero_vad.onnx",
+      "sha256": "597d30b3ec076608d059477bb14cfeffdf951bf5cae370d38f65d33bbfe82004",
+      "bytes": 2327524,
+      "in_git": false,
+      "provenance": "silero-vad v6.0 ONNX (MIT); the live file per voice_vad.py"
+    }
+  ]
+}

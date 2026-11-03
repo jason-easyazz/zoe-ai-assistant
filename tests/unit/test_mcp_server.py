@@ -152,3 +152,16 @@ def test_tool_metadata_matches_dispatch_name():
     schema = list_add["inputSchema"]
     assert schema["required"] == ["list_type", "text"]
     assert "text" in schema["properties"]
+
+
+def test_the_broadcast_url_reads_zoe_self_url_per_call_stripped():
+    """Codex P2 on #2165. Negative control: the import-time ``os.environ.get`` constant -> red (the late-set value is ignored)."""
+    code = ("import os, mcp_server as m\n"
+            "os.environ['ZOE_SELF_URL'] = '  http://127.0.0.1:41002/ '\n"
+            "a = m._broadcast_url()\n"
+            "os.environ['ZOE_SELF_URL'] = '   '\n"
+            "print(a, m._broadcast_url())\n")
+    env = {**os.environ, "PYTHONPATH": str(ZOE_DATA) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    env.pop("ZOE_SELF_URL", None)
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=str(PROJECT_ROOT), timeout=60)
+    assert out.stdout.split()[-2:] == ["http://127.0.0.1:41002/api/internal/broadcast", "http://127.0.0.1:8000/api/internal/broadcast"], out.stderr[-500:]

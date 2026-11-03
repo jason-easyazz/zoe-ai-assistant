@@ -500,7 +500,7 @@ def test_continuation_off_never_asks_the_server_to_hold(daemon, monkeypatch):
     assert "can_continue" not in calls[0]
 
 
-def test_the_blocking_turn_gets_no_new_kwargs(daemon, monkeypatch):
+def test_the_blocking_turn_gets_only_the_window_and_none_of_the_streaming_kwargs(daemon, monkeypatch):
     seen = {}
 
     def _blocking(pa, wav, **kw):  # noqa: ARG001
@@ -510,7 +510,12 @@ def test_the_blocking_turn_gets_no_new_kwargs(daemon, monkeypatch):
     monkeypatch.setattr(daemon, "_do_single_turn", _blocking)
     daemon._turn_with_monitor(_FakePA(), b"W1", daemon._do_single_turn, window="followup",
                               prompt_on_empty=False)
-    assert seen == {"prompt_on_empty": False}
+    # `window` rides to the blocking turn (the stream's fallback / ZOE_VOICE_STREAM=0): without it the server cannot apply the
+    # stricter no-wake-word speaker bar. Nothing streaming-only (can_continue / continued) does.
+    assert seen == {"prompt_on_empty": False, "window": "followup"}
+    seen.clear()
+    daemon._turn_with_monitor(_FakePA(), b"W1", daemon._do_single_turn, prompt_on_empty=False)
+    assert seen == {"prompt_on_empty": False}                      # a wake turn carries no window
 
 
 def test_the_blocking_turn_also_merges_a_hard_cap_continuation(daemon, monkeypatch):
@@ -569,7 +574,7 @@ def _wire(daemon, monkeypatch, lines):
     monkeypatch.setattr(daemon.requests, "post", _post, raising=False)
     monkeypatch.setattr(daemon, "_speaker_claim_to_attach", lambda _w: None)
     monkeypatch.setattr(daemon, "_feed_pcm_chunk", lambda aplay, b: played.append(b) or None)
-    monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t: False)
+    monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t, **_k: False)
     monkeypatch.setattr(daemon, "play_follow_up_beep", lambda: pytest.fail("chime on a silent frame"))
     monkeypatch.setattr(daemon, "_do_single_turn", lambda *a, **k: pytest.fail("blocking re-POST"))
     monkeypatch.setattr(daemon, "_prev_reply_asked", False)

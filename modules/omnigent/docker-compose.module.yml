@@ -89,12 +89,18 @@ services:
       # state, the uv tool install and the entrypoint's ~/.omnigent config seed to the
       # wrong place. Every mount below targets /root, so pin HOME to it explicitly.
       - HOME=/root
-      # Runner working directory = the mounted Zoe repo, so agents build Zoe. The host
-      # creates git worktrees under it (the repo at ../../ is bind-mounted to /workspace).
+      # Default session workspace (entrypoint.sh redirects home-defaulted sessions here) =
+      # the READ-ONLY live checkout: sessions get the repo's context (CLAUDE.md, AGENTS.md,
+      # the /workspace/.mcp.json shadow) but cannot write it. Deliberately NOT moved to a
+      # writable scratch dir: that would drop the repo context for every session, and
+      # omnigent 0.7.0 tolerates a read-only workspace (its only own write there, the
+      # untracked-cache lock + `git config core.untrackedCache`, is documented upstream
+      # as best-effort, "read-only .git ... ignored" — runtime/filesystem_registry.py).
+      # Anything that BUILDS works in a worktree under the ZOE_WORKTREE_ROOT mount.
       - OMNIGENT_RUNNER_WORKSPACE=/workspace
       # Since the container runs as uid 1000 the bind-mounted repo is no longer "dubious
       # ownership" — uid matches. Kept as a belt-and-braces guard for the worktrees the
-      # host creates under /workspace and for anyone running the image without `user:`.
+      # host creates under ~/.worktrees and for anyone running the image without `user:`.
       - GIT_CONFIG_COUNT=1
       - GIT_CONFIG_KEY_0=safe.directory
       - GIT_CONFIG_VALUE_0=*
@@ -178,8 +184,18 @@ services:
     extra_hosts:
       - "zoe.local:host-gateway"
     volumes:
-      # The agents' workspace IS the Zoe repo, so they can build Zoe.
-      - ../../:/workspace
+      # The LIVE PRODUCTION CHECKOUT, mounted READ-ONLY (incident 2026-11-02 22:55, ledger
+      # #2255). It was rw, and a cross-review ran `cd /workspace && git fetch origin
+      # pull/2253/head; git checkout FETCH_HEAD` in here: live HEAD detached onto an
+      # unmerged PR, every deploy after it refused (not a fast-forward), and zoe-data's
+      # night restart loaded the draft into production. Agents READ the repo here (and
+      # Serena/codebase-memory/Claude Code's --project /workspace context need it); nobody
+      # in this container builds in it. Work happens in worktrees under the
+      # ZOE_WORKTREE_ROOT mount below (rw). Fully :ro, .git included — no rw sub-mount
+      # may ever be nested under /workspace. Contract + evidence:
+      # docs/knowledge/omnigent-cross-review.md -> "The live checkout is read-only".
+      # Pinned by tests/unit/modules/test_omnigent_live_checkout_readonly.py.
+      - ../../:/workspace:ro
       # Executor task worktrees, mounted at the SAME path as on the host so the
       # work_dir a queue task names (prepared by worktree_bootstrap under
       # ~/.worktrees/<task_id>) resolves in-container and the agent works on
@@ -206,9 +222,28 @@ services:
       # A worktree's .git FILE is an absolute pointer
       # (gitdir: /home/zoe/assistant/.git/worktrees/<id>), so the main repo
       # must also resolve at its HOST path or the mounted worktrees are not
-      # usable as git checkouts. Same bind source as /workspace; rw because
-      # worktree git operations write .git/worktrees/<id> and .git/objects.
-      - ../../:/home/zoe/assistant
+      # usable as git checkouts. Same bind source as /workspace and, like it,
+      # READ-ONLY: the working tree and the .git ROOT (HEAD, index, FETCH_HEAD,
+      # ORIG_HEAD, config, packed-refs) cannot be written from this container, so
+      # nothing here can move the live HEAD, rewrite the live index, overwrite the
+      # shared FETCH_HEAD or plant a local credential.helper in .git/config again.
+      - ../../:/home/zoe/assistant:ro
+      # ...and ONLY the four .git subtrees that linked-worktree work genuinely writes
+      # are re-mounted rw on top: commits (objects), branches + remote-tracking refs
+      # (refs), reflogs (logs) and each worktree's private HEAD/index/FETCH_HEAD
+      # (worktrees/<id>). Measured with a permission-equivalent layout: commit, fetch,
+      # merge, new branch, push and `git worktree add` all succeed in a worktree, while
+      # checkout / update-ref HEAD / reset / fetch in the live checkout all fail before
+      # touching HEAD. Costs, accepted: `push -u` cannot record upstream config (the push
+      # itself succeeds) and deleting a PACKED ref fails (agents must not delete branches
+      # anyway). The four sources must EXIST before `up` (docker would otherwise create
+      # them root-owned): see the bring-up in README.md. Residual: refs/ is rw, so a
+      # hostile agent could still `update-ref refs/heads/main`; cross_review.sh detects a
+      # moved live HEAD after every review (exit 3) — a tripwire, not a wall.
+      - ../../.git/objects:/home/zoe/assistant/.git/objects
+      - ../../.git/refs:/home/zoe/assistant/.git/refs
+      - ../../.git/logs:/home/zoe/assistant/.git/logs
+      - ../../.git/worktrees:/home/zoe/assistant/.git/worktrees
       # Activate the container-relative MCP config: Claude Code (--project /workspace)
       # auto-loads /workspace/.mcp.json. The committed repo-root .mcp.json uses the HOST
       # path (--project /home/zoe/assistant), which is NOT where the repo is mounted here,

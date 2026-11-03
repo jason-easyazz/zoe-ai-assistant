@@ -258,8 +258,7 @@ def chat_lane(real_head, monkeypatch):
 
     monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", _noop)
     monkeypatch.setattr(chat_router, "_save_chat_message", _noop)
-    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False, raising=False)
-    monkeypatch.setattr(chat_router, "_ALL_TOOLS_ENABLED", True, raising=False)
+    monkeypatch.setattr(chat_router, "_INTENT_FAST_PATH_ENABLED", True, raising=False)
     monkeypatch.setattr(chat_router, "classify_query", lambda m: "chat")
     monkeypatch.setattr(chat_router, "_run_chat_pi_hybrid_lane", _not_accepted)
     monkeypatch.setattr(fast_tiers, "resolve", _no_fast_path)

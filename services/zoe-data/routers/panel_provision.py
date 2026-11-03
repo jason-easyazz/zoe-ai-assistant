@@ -205,6 +205,8 @@ async def _expire_uncollected_token(db, code: str, token: str) -> bool:
         from routers.panel_auth import _token_cache
         if token_hash in _token_cache:
             _token_cache[token_hash] = {**_token_cache[token_hash], "revoked": 1}
+        import relay_ingress
+        relay_ingress.invalidate_cache()  # an open relayed socket re-proves before its next send
     except Exception:
         pass
     logger.warning("provision_poll: code=%s token not collected in time — revoked", code)

@@ -37,15 +37,21 @@ order, and stops at the first cross-vendor report:
    session, kicks it (docker-exec — REST cannot start claude-sdk sessions), polls to
    completion, prints the report. The brief goes INLINE via `-p`; staging it as a session
    comment fails silently.
-2. **codex, directly** — `docker exec -i zoe-omnigent codex exec -s read-only -C /workspace -`
-   with the same contract and review prompt on stdin (codex and pi exist ONLY inside the
+2. **codex, directly** — `docker exec -i -w <review-dir> zoe-omnigent codex exec -s read-only -C <review-dir> -`
+   (never the live checkout — see *The live checkout is read-only* below) with the same contract and review prompt on stdin (codex and pi exist ONLY inside the
    container on this host; auth is the `omnigent-codex` volume). Used when polly/Omnigent
    cannot produce a report: runner start failure, Claude OAuth refresh contention, auth
    error, timeout, or a report that is not provably cross-vendor. No `--model`: the
    ChatGPT-account Codex rejects invented ids (`gpt-5-codex`, `gpt-5.1-codex` -> HTTP 400;
    polly's brief now says to omit `args.model` for the codex worker too).
 3. **pi, one lean pass** — only when codex is unavailable (quota, auth, crash, timeout):
-   `pi --provider openrouter --model z-ai/glm-5.2 --no-tools --no-session`, diff on stdin.
+   `pi --provider openrouter --model openai/gpt-6.1-sol --no-tools --no-session`, diff on stdin.
+   The model was chosen by the 2026-10-19 bake-off against 12 Codex-confirmed blocking bugs
+   ([reviewer-bakeoff-2026-10-19.md](reviewer-bakeoff-2026-10-19.md)): 31/40 vs 9/40 for the old
+   `z-ai/glm-5.2` default. `CROSS_REVIEW_PI_MODEL` must be ONE concrete non-Anthropic model id;
+   a router or alias slug (`openrouter/*`, `*/auto`, `typesafe/jev-router`, `nvidia/switchyard`,
+   `~*-latest`, `@preset/*`) is refused, because the `REVIEWER-VENDOR:` line could then not
+   name the model that actually answered (`openrouter/auto-beta` served Claude Sonnet).
 
 If all three fail it exits **2** with `ALARM: cross-review unavailable` and each backend's
 reason on stderr — a caller can never mistake that for a clean review. There is deliberately
@@ -62,7 +68,8 @@ with under 120 s left is skipped, not started. Tests (stubbed polly/codex/pi/gh)
 
 **The pi cap is deterministic, not a budget it can exhaust.** An Omnigent-dispatched pi
 worker hit its $1.50 cap on a 3366-line diff and returned nothing. The direct pass is one
-tool-less completion (`--no-tools`), the diff is capped at 200 KB (~50k tokens, cents), and
+tool-less completion (`--no-tools`), the diff is capped at 600 KB (~150k tokens, the codex cap;
+about US$0.15-0.35 a pass), and
 the run is bounded by a timeout. pi has no summary-on-budget-exhaustion flag, so instead
 the prompt demands findings in priority order, a truncated diff is labelled
 `PARTIAL COVERAGE`, and a timed-out run keeps what it streamed, labelled `PARTIAL`.
@@ -273,16 +280,90 @@ is a manual purchase, and no env var or setting provides a fallback. So the desi
 The API key belongs to the dev-tooling container only. Zoe runtime and household data
 (zoe-data, the voice path, memory) never see it.
 
-## Known limitation — reviewer-only is enforced by PROMPT, not permissions
+## The live checkout is read-only (incident 2026-11-02, ledger #2255)
 
-The brief forbids pushes/comments/merges, but the claude-sdk harness runs with
-skipped permission prompts in a container whose `/workspace` is the writable
-live checkout with authenticated GitHub credentials (Codex P1, #1578). A
-prompt-injected or misbehaving reviewer COULD mutate state. Accepted for now as
-an operator-trust tradeoff; hardening path when it matters: a read-only
-workspace mount + an unauthenticated `gh` for review sessions. Until then,
-treat cross-review output on UNTRUSTED diffs with the same suspicion as any
-agent given write access.
+**What happened.** 22:55 AWST, `cross_review.sh 2253`: polly ran
+`cd /workspace && git fetch -q origin pull/2253/head; git checkout -q FETCH_HEAD`
+inside zoe-omnigent. `/workspace` was a READ-WRITE bind of `/home/zoe/assistant`, the
+live production checkout. Live HEAD detached onto the unmerged PR, every deploy after it
+refused (not a fast-forward), and zoe-data's night restart loaded the draft into
+production. This section used to be "Known limitation — reviewer-only is enforced by
+PROMPT, not permissions" and named exactly this hardening as deferred.
+
+**What wrote `/workspace` before the fix (evidence, 2026-11-03):**
+
+| writer | what | needs it? |
+|---|---|---|
+| polly / pi / codex sessions (cwd `/workspace`) | scratch at the repo root: `.polly/`, `.polly-work/pr*.diff`, `.pr2239_scoped.diff`, `polly-verify-t1/`, `.pi/` (touched 22:56 that night) — and the incident's checkout | no: untracked cruft in production |
+| omnigent 0.7.0 itself | `.git/omnigent-untracked-cache.lock` + `git config core.untrackedCache true` (`runtime/filesystem_registry.py`) | no: upstream documents it as best-effort, "read-only .git … ignored" |
+| executor-lane agents in `~/.worktrees/<task>` | commits/fetch/push of a LINKED worktree write `.git/{objects,refs,logs,worktrees/<id>}` of the live repo | **yes** |
+| `omnigent_issue_executor` brief (flag `ZOE_USE_OMNIGENT_EXECUTOR`, off) / Flue lab fallback | `git -C /workspace fetch`, worktree under `/workspace/.claude/worktrees/` | rewritten to `~/.worktrees` (below) |
+| omnigent as root (pre-2026-07-26) | `credential.helper` in `.git/config`, root-owned refs | history; uid fixed, and `.git/config` is now unwritable too |
+
+No per-conversation dirs (omnigent's `runner_workspace/<conversation_id>` for spec-local
+Python tools) exist in the live tree, so that path is not in use.
+
+**The mount contract** (`modules/omnigent/docker-compose.module.yml`, pinned by
+`tests/unit/modules/test_omnigent_live_checkout_readonly.py` with mutated-compose
+negative controls):
+
+- `../../:/workspace:ro` — fully read-only, `.git` included; nothing rw may be nested under it.
+- `../../:/home/zoe/assistant:ro` — read-only, so the `.git` ROOT (`HEAD`, `index`,
+  `FETCH_HEAD`, `ORIG_HEAD`, `config`, `packed-refs`) is unwritable…
+- …except exactly `.git/objects`, `.git/refs`, `.git/logs`, `.git/worktrees`, re-mounted rw at
+  the same path: what a linked worktree's commit/fetch/push/merge/`worktree add` writes.
+  Measured with a permission-equivalent layout: all of those succeed in a worktree, while
+  `checkout`, `update-ref HEAD`, `reset` and `fetch` in the live checkout fail before HEAD
+  moves. (Live tree ro with a whole rw `.git` is NOT enough: `git checkout` then reports
+  "unable to unlink" for every file, exits 0, and moves HEAD anyway.)
+- `${ZOE_WORKTREE_ROOT:-/home/zoe/.worktrees}` stays rw at the same path — where all work
+  happens. `OMNIGENT_RUNNER_WORKSPACE` stays `/workspace` (read-only): sessions keep the repo
+  context (CLAUDE.md, AGENTS.md, the `.mcp.json` shadow) without write access. Moving it to a
+  writable scratch dir was rejected: it drops that context for every session.
+- Accepted costs: `git push -u` cannot record upstream config (the push succeeds); deleting a
+  PACKED ref fails (agents must not delete branches anyway); auto-gc in the container is a no-op.
+- Residual: `refs/` is rw, so a hostile agent could still `update-ref refs/heads/main`. The
+  `cross_review.sh` tripwire below detects it for reviews; it is a tripwire, not a wall.
+
+**Reviewers** get their own dir: `cross_review.sh` creates
+`~/.worktrees/review-<pr>-<pid>-XXXXXX/` on the HOST (the container sees it at the same path)
+with the PR head DETACHED at `pr-head/` (`fetch --no-write-fetch-head` into
+`refs/zoe-review/…`, never `FETCH_HEAD`), uses the dir as the cwd of polly's kick, codex
+(`-C`) and pi (`-w`), and removes dir, worktree and ref on exit. The PR head is a subdir,
+not the cwd, because the omnigent CLI puts its cwd on `sys.path` and codex loads
+`AGENTS.md` from its cwd — PR content is untrusted data. Both briefs say: never
+checkout/switch/reset/fetch/commit or write in `/workspace` or `/home/zoe/assistant`.
+
+**Tripwire.** `cross_review.sh` records the live `HEAD` sha + symbolic ref before the first
+backend and re-checks on every exit. Moved → `ALARM: LIVE CHECKOUT MODIFIED`, exit **3**, the
+report is withheld, and nothing is repaired automatically (an automatic reset could clobber a
+deploy mid-flight). The one tolerated change is the CD deploy fast-forwarding the same branch
+onto `refs/zoe-deploy/main` mid-review.
+
+### Live checkout moved — recovery (owner)
+
+1. Stop reviews: nothing should call `cross_review.sh` until this is understood.
+2. Look, do not touch yet: `git -C /home/zoe/assistant status -sb`,
+   `git -C /home/zoe/assistant symbolic-ref -q HEAD || echo DETACHED`,
+   `git -C /home/zoe/assistant log -1 --oneline`.
+3. Confirm the mounts are read-only:
+   `docker inspect zoe-omnigent --format '{{json .Mounts}}'` — `/workspace` and
+   `/home/zoe/assistant` must show `"RW":false`; only the four `.git/*` subtrees and
+   `~/.worktrees` may be `"RW":true`. If not, the container predates this contract: recreate
+   it (`modules/omnigent/README.md` → bring-up).
+4. Restore under the deploy lock, to the commit the deploy pipeline last vetted:
+   `flock /tmp/zoe-deploy.lock git -C /home/zoe/assistant checkout -q -f -B main refs/zoe-deploy/main`
+   (re-attaches `main` at that commit and resets tracked files; untracked files are left).
+   Then re-run the failed deploy.
+5. If zoe-data restarted while HEAD was wrong, it is serving that code: restart it after
+   step 4 and poll `/health`.
+
+### Still prompt-enforced
+
+The brief forbids pushes/comments/merges and the container still holds authenticated `gh`
+credentials (Codex P1, #1578). A prompt-injected reviewer could still push a branch or
+comment; it can no longer touch the live checkout. Further hardening when it matters: an
+unauthenticated `gh` for review sessions.
 
 ## Leaked per-session runners — the memory failure, and the escape hatch
 
@@ -334,9 +415,16 @@ had survived the author's own negative control, later independently confirmed
 by Codex. Model A/B on ground-truth diffs (same brief, three OpenRouter
 models): GLM-5.2 best (4 real + 1 novel catch, correct severities);
 MiniMax M3 sharpest single catch but failed report discipline (unusable for
-automation); DeepSeek V4-Pro disciplined but caught least. Pi's default is
-`z-ai/glm-5.2` (rollback: `config.yaml.bak-minimax` in the zoe-omnigent
-container). Raw scorecard: session records, 2026-07-27.
+automation); DeepSeek V4-Pro disciplined but caught least. The Omnigent pi
+worker's default is `z-ai/glm-5.2` (rollback: `config.yaml.bak-minimax` in the
+zoe-omnigent container). Raw scorecard: session records, 2026-07-27.
+
+**Superseded for `cross_review.sh`'s direct pi pass (2026-10-19):** on three real
+security PRs with 12 Codex-confirmed blocking bugs, GLM-5.2 found 9/40 bug-instances
+over 10 runs and called #2152 CLEAN twice; `openai/gpt-6.1-sol` found 31/40 at about
+twice the cost and with no failed run. The direct pass now defaults to it; the
+Omnigent worker config above is unchanged. Record:
+[reviewer-bakeoff-2026-10-19.md](reviewer-bakeoff-2026-10-19.md).
 
 No single model caught everything — the union of two vendors covered all known
 defects. That is the argument for cross-vendor review in one sentence.

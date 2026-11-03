@@ -1,0 +1,17 @@
+# Weekly struggle-fed router retrain. TEMPLATE ONLY - enabling it is an owner step (see the .service header).
+# Saturday 00:30 local, the slot the existing router self-train loop was designed for: the box is quiet and the run must end
+# before the 12B night window (02:45). The script estimates the run from the last MEASURED run and refuses if it would not
+# end by then; if the first measured run is longer than ~2 h 10 min, move this to after the voice regression instead
+# (e.g. Sun 05:15 - clear of 04:00-04:55; the off-box backup at 05:10 is network-bound) and record the measurement in
+# docs/architecture/struggle-detector.md -> Phase 3.
+[Unit]
+Description=Weekly struggle-fed router retrain, Saturday 00:30 local
+
+[Timer]
+OnCalendar=Sat *-*-* 00:30:00
+RandomizedDelaySec=300
+Persistent=false
+Unit=zoe-router-retrain.service
+
+[Install]
+WantedBy=timers.target

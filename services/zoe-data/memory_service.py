@@ -1103,9 +1103,15 @@ def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
 
 
 def is_guest_memory_user(user_id: str | None) -> bool:
-    """Return True for unauthenticated identities that must not receive prompt memory."""
+    """Return True for unauthenticated identities that must not receive prompt memory.
 
-    return str(user_id or "").strip().lower() in {"", "guest", "anonymous", "voice-guest"}
+    ONE predicate (``user_filters.is_unidentified``): the sentinel set incl. ``voice-daemon`` and the per-session
+    ``guest-<id>`` principal zoe-auth mints. This copy knew neither (2026-11-02), so a device-token turn and a LAN guest
+    session were handed the household's prompt memory."""
+
+    from user_filters import is_unidentified
+
+    return is_unidentified(user_id)
 
 
 def _memory_status_visible(metadata: Mapping[str, Any]) -> bool:
@@ -2025,6 +2031,13 @@ class MemoryService:
                 await struggle_detector.delete_user(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: struggle-row erasure failed ({type(exc).__name__})") from exc
+            # ... and the local utterance-text logs (router shadow log, intent misses). They carry no user id, so the TEXT layer of
+            # every record goes household-wide; hash-only rows hold no words and stay. Same rule: fail closed.
+            try:
+                import local_text_logs
+                await asyncio.to_thread(local_text_logs.erase_all_text)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: local text-log erasure failed ({type(exc).__name__})") from exc
             # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
             # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
             try:
@@ -2032,6 +2045,12 @@ class MemoryService:
                 await restraint.erase_user(user_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
+            # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
+            try:
+                import warm_speaker
+                await asyncio.to_thread(warm_speaker.forget_user, user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
             needles: list[str] = []
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
@@ -2082,6 +2101,11 @@ class MemoryService:
                 await omi_recordings.forget_user(user_id)
             except Exception as exc:  # noqa: BLE001
                 pendant_failure = exc
+            try:   # ... and their alarms (migration 0063): the labels are their words. Fail closed, like the night mind.
+                import alarms
+                await alarms.forget_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: alarm erasure failed ({type(exc).__name__})") from exc
             try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
                 import contacts_store
                 await contacts_store.forget_user(user_id)
@@ -2283,6 +2307,17 @@ class MemoryService:
             self._bump(GUEST_DROP, actor)
             logger.info("GUEST_MEMORY_DISCARD writer=%s op=edit", actor)
             return None
+        if decision == "edit" and edits:
+            # defence in depth: an edit WRITES a new row, and words said off the record are never stored (ingest has the same wall)
+            try:
+                import memory_provenance as _mp
+
+                if _mp.enabled() and (_mp.parse_off_record(edits) is not None or _mp.is_off_record(user_id, edits)):
+                    self._bump("off_record", actor)
+                    logger.info("OFF_RECORD user=%s blocked=edit source=%s", user_id, actor)
+                    return None
+            except Exception:  # noqa: BLE001
+                pass
         if (
             decision == "edit"
             and actor in MEMORY_OPT_OUT_SOURCES
@@ -2365,6 +2400,7 @@ class MemoryService:
                 new_meta["status"] = new_status
                 new_meta["reviewed_by"] = actor
                 new_meta["reviewed_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+                new_meta.pop("challenged_by_turn", None)   # a person decided: the hold is over
                 if decision == "archive":
                     # invalidate, never delete: the row is kept, with the instant it stopped being believed
                     new_meta.update(_temporal.archive_fields(
@@ -2995,6 +3031,43 @@ class MemoryService:
             return True
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_service: archive_duplicate failed (%s)", type(exc).__name__)
+            return False
+
+    async def flag_challenged(self, mem_id: str, *, user_id: str, utterance: str,
+                              actor: str = "trait_challenge") -> bool:
+        """The owner HEDGED or DENIED what this approved row says about them ("I'm not sure I'm a
+        man of faith"): park it as ``pending`` so it is no longer served as fact, and leave it in
+        the review queue. Never a deletion and never a rewrite - the person did not say the
+        opposite, only that the claim is not settled - so the row keeps its text and provenance and
+        an approve restores it. Only the row's own user may do this; any other row is refused.
+        Never raises; returns whether it flagged."""
+        try:
+            if not user_id:
+                return False
+            uid = user_id
+            lock = self._user_locks.setdefault(uid, asyncio.Lock())
+            async with lock:
+                # re-read INSIDE the lock: an edit or erase that held it must not be undone by a stale copy
+                cur = await self.get(mem_id)
+                if cur is None:
+                    return False
+                if (cur.metadata.get("user_id") or cur.metadata.get("wing")) != uid \
+                        or str(cur.metadata.get("status")) != "approved":
+                    return False
+                md = dict(cur.metadata)
+                md.update(status="pending", reviewed_by=actor,
+                          reviewed_at=datetime.datetime.utcnow().isoformat() + "Z",
+                          review_note=("owner hedged or denied this: " + " ".join(utterance.split())[:200])[:1024],
+                          challenged_by_turn=" ".join(utterance.split())[:300])
+                await self._run_sync(self._write_row, mem_id, cur.text, md)
+                await self._append_audit(
+                    mem_id=mem_id, user_id=uid, actor=actor, action="flag_challenged",
+                    before={"status": "approved"}, after={"status": "pending"},
+                    reason="owner hedged or denied the claim")
+            _invalidate_agent_user_facts_cache(uid)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_service: flag_challenged failed (%s)", type(exc).__name__)
             return False
 
     async def _existing_candidate(

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from intent_router import Intent, detect_intent, execute_intent
+from intent_router import ACK_REPLIES, THANKS_REPLIES, Intent, detect_intent, execute_intent
 
 pytestmark = pytest.mark.ci_safe
 
@@ -78,8 +78,8 @@ def test_real_requests_not_short_circuited(text):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("intent,expect_in", [
-    (Intent("acknowledgement", {"kind": "thanks"}), {"You're welcome!", "Anytime.", "Happy to help.", "No worries."}),
-    (Intent("acknowledgement", {"kind": "ack"}), {"Got it.", "Sure thing.", "Okay.", "No problem."}),
+    (Intent("acknowledgement", {"kind": "thanks"}), set(THANKS_REPLIES)),
+    (Intent("acknowledgement", {"kind": "ack"}), set(ACK_REPLIES)),
     (Intent("status_check", {}), {"I'm here.", "Still here.", "Listening.", "Ready when you are."}),
 ])
 async def test_canned_replies(intent, expect_in):

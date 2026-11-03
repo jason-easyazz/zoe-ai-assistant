@@ -79,8 +79,9 @@ def test_flag_defaults_and_all_recorders_use_endpointer():
         body = _recorder_body(pattern)
         assert "endpointer.push(data, len(frames))" in body, pattern
         assert "RECORD_SILENCE_AMPLITUDE" not in body, f"inline amplitude counting in {pattern}"
-    # The follow-up and the barge-in seed start from confirmed speech: fast tail.
-    assert _SRC.count("_Endpointer(spoke=True)") == 2
+    # The follow-up and the barge-in seed start from confirmed speech: fast tail. Both
+    # CONTINUE the audio their listener was scoring, so they hand over its VAD stream.
+    assert _SRC.count("_Endpointer(spoke=True, vad=vad)") == 2
 
 
 def _make_endpointer(vad_enabled, vad_probs=None, spoke=False, tail_ms=0):
@@ -98,6 +99,7 @@ def _make_endpointer(vad_enabled, vad_probs=None, spoke=False, tail_ms=0):
         "SAMPLE_RATE": 16000,
         "CHUNK_SIZE": 1280,
         "_get_silero_vad": lambda: (object(), None),
+        "_new_vad_stream": lambda: object(),
         "_vad_prob": lambda model, chunk: next(probs),
         # Deep-quiet fast tail (2026-07-27): default 0 = disabled, so every
         # pre-existing case in this file exercises the flag-off path unchanged.
@@ -170,6 +172,7 @@ def test_vad_mode_falls_back_to_amplitude_without_silero():
         "SAMPLE_RATE": 16000,
         "CHUNK_SIZE": 1280,
         "_get_silero_vad": lambda: (None, None),  # model unavailable
+        "_new_vad_stream": lambda: None,
         "_vad_prob": lambda model, chunk: 0.0,
         "ZOE_VAD_CLEAN_TAIL_MS": 0,
         "ZOE_VAD_CLEAN_MIN_SPEECH_MS": 480,
@@ -210,6 +213,7 @@ def _barge_globals(active_playback):
         "_barge_in_requested": threading.Event(), "_shutdown": threading.Event(),
         "_tts_process": None, "_tts_started_at": None, "_tts_process_lock": threading.Lock(),
         "_get_silero_vad": lambda: (object(), None),
+        "_new_vad_stream": lambda: types.SimpleNamespace(reset=lambda: None),
         # The scripted probability rides in the chunk's first sample.
         "_vad_prob": lambda model, arr: arr[0] / 10000.0,
     }

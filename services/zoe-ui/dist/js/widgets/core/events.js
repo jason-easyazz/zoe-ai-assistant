@@ -129,10 +129,10 @@ class EventsWidget extends WidgetModule {
                 const isToday = event.date === todayLocal;
                 const dateLabel = isToday ? '' : `<div style="font-size: 11px; font-weight: 500; color: ${textSecondary}; margin-bottom: 2px;">${this.formatDate(event.date)}</div>`;
                 return `
-                <div class="calendar-event-item ${event.category || 'personal'}" style="padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.3s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.10); border: 1px solid ${cardBorder}; background: ${cardBg}; border-left: 4px solid; width: 100%; box-sizing: border-box; margin-bottom: 8px; color: ${textPrimary};">
+                <div class="calendar-event-item ${_zwEsc(event.category || 'personal')}" style="padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.3s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.10); border: 1px solid ${cardBorder}; background: ${cardBg}; border-left: 4px solid; width: 100%; box-sizing: border-box; margin-bottom: 8px; color: ${textPrimary};">
                     ${dateLabel}
                     <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px; color: ${textSecondary};">${this.formatTime(event.start_time || event.time)}</div>
-                    <div style="font-size: 14px; font-weight: 500; color: ${textPrimary};">${event.title}</div>
+                    <div style="font-size: 14px; font-weight: 500; color: ${textPrimary};">${_zwEsc(event.title)}</div>
                 </div>`;
             }).join('');
 
@@ -154,6 +154,14 @@ class EventsWidget extends WidgetModule {
         const ampm = hours >= 12 ? 'PM' : 'AM';
         return `${hour12}:${minutes} ${ampm}`;
     }
+}
+
+// Escape a server string before it goes into innerHTML (event/task titles are
+// household-written text, including text that came in by voice or Telegram).
+function _zwEsc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Expose to global scope for WidgetManager

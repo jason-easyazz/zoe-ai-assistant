@@ -120,7 +120,8 @@
     "warmup_models.py",
     "home-profile.json",
     "VERSION",
-    "CAPABILITIES.md"
+    "CAPABILITIES.md",
+    "models.lock"
   ],
   "safe_to_delete_patterns": [
     "**/*.pyc",

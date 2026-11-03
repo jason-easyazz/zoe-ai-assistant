@@ -5,7 +5,8 @@ import json
 
 BASE_URL = "http://localhost:8000"
 
-def test_chat(user_id, message, expected_in_response=None):
+# Renamed from test_chat 2026-10-19: a hand-run probe helper, not a pytest test (it errored on a missing fixture every night).
+def probe_chat(user_id, message, expected_in_response=None):
     """Test a chat message"""
     print(f"\n{'='*80}")
     print(f"USER ({user_id}): {message}")
@@ -49,28 +50,28 @@ def main():
     
     # Test 1: Introduction with self-facts
     print("\n📋 TEST 1: User introduces themselves")
-    if test_chat("test_user_1", "Hi, my name is Alice and my favorite food is pizza"):
+    if probe_chat("test_user_1", "Hi, my name is Alice and my favorite food is pizza"):
         tests_passed += 1
     else:
         tests_failed += 1
     
     # Test 2: Greeting (should use name)
     print("\n📋 TEST 2: Greeting with name recall")
-    if test_chat("test_user_1", "Hello!", expected_in_response="Alice"):
+    if probe_chat("test_user_1", "Hello!", expected_in_response="Alice"):
         tests_passed += 1
     else:
         tests_failed += 1
     
     # Test 3: Calendar event
     print("\n📋 TEST 3: Add calendar event")
-    if test_chat("test_user_1", "I have a dentist appointment tomorrow at 3pm"):
+    if probe_chat("test_user_1", "I have a dentist appointment tomorrow at 3pm"):
         tests_passed += 1
     else:
         tests_failed += 1
     
     # Test 4: Shopping list
     print("\n📋 TEST 4: Add to shopping list")
-    if test_chat("test_user_1", "Add milk and bread to my shopping list"):
+    if probe_chat("test_user_1", "Add milk and bread to my shopping list"):
         tests_passed += 1
     else:
         tests_failed += 1

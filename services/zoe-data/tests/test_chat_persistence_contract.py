@@ -55,7 +55,7 @@ async def test_save_chat_message_updates_weak_session_title(monkeypatch):
     assert "INSERT INTO chat_messages" in insert[0]
     # (id, session_id, role, content, metadata) — metadata NULL when no user given
     assert insert[1][1:4] == ("session-1", "user", "plan the lake trip")
-    assert insert[1][4] is None
+    assert __import__("json").loads(insert[1][4]) == {"traffic_class": "household"}   # no user: only the traffic class
 
     title_updates = [params for sql, params in db.executed if "title = ?" in sql]
     assert title_updates
@@ -86,4 +86,4 @@ async def test_save_chat_message_stamps_user_id_metadata(monkeypatch):
 
     insert = db.executed[0]
     assert "INSERT INTO chat_messages" in insert[0]
-    assert _json.loads(insert[1][4]) == {"user_id": "jason"}
+    assert _json.loads(insert[1][4]) == {"user_id": "jason", "traffic_class": "household"}

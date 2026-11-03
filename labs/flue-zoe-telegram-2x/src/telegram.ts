@@ -19,6 +19,10 @@
 import { defineTool } from '@flue/runtime';
 import { Bot } from 'grammy';
 import * as v from 'valibot';
+import { installConsoleRedaction } from './redact.ts';
+
+// Before the bot (and its token) exists: nothing this process prints may carry the token (src/redact.ts).
+installConsoleRedaction();
 
 export function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -57,6 +61,38 @@ export const bot = new Bot(requiredEnv('TELEGRAM_BOT_TOKEN'), {
  * checked Telegram's declared duration/size, and `maxBytes` bounds the Buffer
  * well under the unit's MemoryMax.
  */
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+
+/** Read a response body in chunks and stop at `maxBytes`: a chunked download (no content-length) used to be
+ *  buffered whole before the cap was checked. */
+async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> {
+  if (!res.body) {
+    const whole = new Uint8Array(await res.arrayBuffer());
+    if (whole.byteLength > maxBytes) throw new Error(`file too large (${whole.byteLength} > ${maxBytes} bytes)`);
+    return whole;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`file too large (>${maxBytes} bytes)`);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
 export async function downloadTelegramFile(fileId: string, maxBytes: number): Promise<Uint8Array> {
   const file = await bot.api.getFile(fileId);
   if (!file.file_path) throw new Error('getFile returned no file_path');
@@ -65,7 +101,9 @@ export async function downloadTelegramFile(fileId: string, maxBytes: number): Pr
   }
   let res: Response;
   try {
-    res = await fetch(`${TELEGRAM_API_ROOT}/file/bot${bot.token}/${file.file_path}`);
+    res = await fetch(`${TELEGRAM_API_ROOT}/file/bot${bot.token}/${file.file_path}`, {
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
   } catch (err) {
     // A transport error's message may quote the URL (and so the token): rethrow by name only.
     throw new Error(`file download failed: ${(err as Error)?.name ?? 'error'}`);
@@ -73,9 +111,7 @@ export async function downloadTelegramFile(fileId: string, maxBytes: number): Pr
   if (!res.ok) throw new Error(`file download HTTP ${res.status}`);
   const declared = Number(res.headers.get('content-length') ?? '0');
   if (declared > maxBytes) throw new Error(`file too large (${declared} > ${maxBytes} bytes)`);
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  if (bytes.byteLength > maxBytes) throw new Error(`file too large (${bytes.byteLength} > ${maxBytes} bytes)`);
-  return bytes;
+  return readCapped(res, maxBytes);
 }
 
 // No static allow-list: identity is the gate. A sender only reaches Zoe's brain

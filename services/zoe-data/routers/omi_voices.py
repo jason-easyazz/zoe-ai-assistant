@@ -16,6 +16,8 @@ query filters on THAT member: there is no admin override and no way to name anot
   POST   /api/omi/voices/unknown/{cluster_id}/me     "that voice is me" (the pendant can hear the wearer as someone else): every
                                                     line becomes ``owner_label='you'``, the voice and its held embeddings go
   GET    /api/omi/voices/people                      my OWN people (id, name) for the "Who is this?" picker
+  GET    /api/omi/segments/search                    ``?q=words&person_id=`` what was said in MY recordings (owner OD5):
+                                                    words only (text, time, label, my confirmed person), never audio
   GET    /api/omi/segments/{segment_id}/clip         a few seconds (<= 8 s) of one of my lines as audio/wav, while its recording's
                                                     WAV is still held (``ZOE_OMI_KEEP_AUDIO_FOR_TAGGING`` / ``keep_audio``); 404 otherwise
 
@@ -33,7 +35,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -114,6 +116,13 @@ async def voice_is_me(cluster_id: str, user: dict = Depends(_require_owner)):
 @router.get("/voices/people")
 async def my_people(user: dict = Depends(_require_owner)):
     return {"people": await _call(voices.own_people, user["user_id"])}
+
+
+@router.get("/segments/search")
+async def search_said(q: str = Query("", max_length=200), person_id: Optional[str] = Query(None, max_length=64),
+                      limit: int = Query(voices.SEARCH_MAX, ge=1, le=voices.SEARCH_MAX), user: dict = Depends(_require_owner)):
+    """OD5: what was said in MY recordings - words only, never audio; optionally only the lines I tagged as one of my people."""
+    return {"lines": await _call(voices.search_said, user["user_id"], q, person_id=person_id or None, limit=limit)}
 
 
 @router.get("/segments/{segment_id}/clip")

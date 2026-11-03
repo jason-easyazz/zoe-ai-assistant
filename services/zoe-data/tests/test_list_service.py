@@ -17,6 +17,8 @@ pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m
 
 from list_service import (
     add_item_to_list,
+    add_items_to_list,
+    item_key,
     create_item_record,
     create_list_record,
     default_visibility,
@@ -50,11 +52,15 @@ class _FakeDB:
         self.committed = []
         self.selects = []
         self.txn_entered = 0
+        self.locks = []
         self._txn_buffer = None
 
     async def execute(self, sql, params=()):
         if self.fail_on and self.fail_on in sql:
             raise RuntimeError("induced write failure")
+        if "pg_advisory_xact_lock" in sql:
+            self.locks.append(tuple(params))
+            return _FakeCursor([])
         if sql.lstrip().upper().startswith("SELECT"):
             self.selects.append((sql, tuple(params)))
             rows = self.select_results.pop(0) if self.select_results else []
@@ -69,13 +75,18 @@ class _FakeDB:
         class _Txn:
             async def __aenter__(self):
                 db.txn_entered += 1
-                db._txn_buffer = []
+                db._depth = getattr(db, "_depth", 0) + 1
+                if db._txn_buffer is None:
+                    db._txn_buffer = []
                 return self
 
             async def __aexit__(self, exc_type, exc, tb):
-                buf, db._txn_buffer = db._txn_buffer, None
-                if exc_type is None:
-                    db.committed.extend(buf)
+                # nested transactions are savepoints: only the outermost exit commits (an exception anywhere unwinds to it)
+                db._depth -= 1
+                if db._depth == 0:
+                    buf, db._txn_buffer = db._txn_buffer, None
+                    if exc_type is None:
+                        db.committed.extend(buf)
                 return False
 
         return _Txn()
@@ -226,7 +237,9 @@ async def test_dedup_window_zero_skips_the_probe():
         dedup_window_s=0,
     )
     assert outcome["deduped"] is False
-    assert len(db.selects) == 1  # resolve only — no duplicate probe
+    # resolve + the open-items probe; NO replay-window probe
+    assert len(db.selects) == 2
+    assert not any('created_at::timestamptz' in q for q, _ in db.selects)
     assert len(_writes(db, "list_items")) == 1
 
 
@@ -284,3 +297,68 @@ async def test_shim_without_transaction_support_still_writes():
     assert outcome["created_list"] is True
     assert len(_writes(db, "lists")) == 1
     assert len(_writes(db, "list_items")) == 1
+
+
+@pytest.mark.asyncio
+async def test_existing_list_add_holds_the_per_list_advisory_lock_inside_a_transaction():
+    """Overlapping adds serialise on the check-then-insert: the lock is taken inside a txn, before the open-items read."""
+    db = _FakeDB(select_results=[[{"id": "L1"}], []])
+    await add_item_to_list(db, user_id="u1", list_type="shopping", list_name="Shopping", text="milk", new_list_visibility="family")
+    assert db.txn_entered == 1
+    assert db.locks == [("list_add|L1",)]
+
+
+@pytest.mark.asyncio
+async def test_multi_item_add_is_all_or_nothing_and_records_no_receipts_on_failure(monkeypatch):
+    import list_service
+
+    recorded = []
+    monkeypatch.setattr(list_service.write_receipts, "record", lambda *a, **k: recorded.append(a))
+    db = _FakeDB(select_results=[[{"id": "L1"}], [], [{"id": "L1"}], []])
+    orig = db.execute
+    state = {"n": 0}
+
+    async def flaky(sql, params=()):
+        if "INSERT INTO list_items" in sql:
+            state["n"] += 1
+            if state["n"] == 2:
+                raise RuntimeError("induced write failure")
+        return await orig(sql, params)
+
+    db.execute = flaky
+    with pytest.raises(RuntimeError):
+        await add_items_to_list(db, text="eggs and milk", user_id="u1", list_type="shopping", list_name="Shopping",
+                                new_list_visibility="family")
+    assert _writes(db, "list_items") == []
+    assert recorded == []
+
+
+@pytest.mark.asyncio
+async def test_multi_item_add_records_receipts_only_after_commit(monkeypatch):
+    import list_service
+
+    recorded = []
+    monkeypatch.setattr(list_service.write_receipts, "record", lambda *a, **k: recorded.append(a))
+    db = _FakeDB(select_results=[[{"id": "L1"}], [], [{"id": "L1"}], []])
+    out = await add_items_to_list(db, text="eggs and milk", user_id="u1", list_type="shopping", list_name="Shopping",
+                                  new_list_visibility="family")
+    assert len(out["added"]) == 2 and len(recorded) == 2
+    assert len(_writes(db, "list_items")) == 2
+
+
+@pytest.mark.parametrize("a,b", [("cookies", "cookie"), ("brownies", "brownie"), ("berries", "berry"), ("tomatoes", "tomato"),
+                                 ("smoothies", "smoothie")])
+def test_item_key_plural_matches_singular_both_directions(a, b):
+    assert item_key(a) == item_key(b)
+    assert item_key(f"chocolate {a}") == item_key(f"Chocolate {b}")
+
+
+def test_turn_continuation_ttl_uses_typed_env_and_clamps(monkeypatch):
+    import conversation_cues
+
+    monkeypatch.setenv("ZOE_TURN_CONTINUATION_TTL_S", "banana")
+    assert conversation_cues.turn_continuation_ttl_s() == 60.0
+    monkeypatch.setenv("ZOE_TURN_CONTINUATION_TTL_S", "-5")
+    assert conversation_cues.turn_continuation_ttl_s() == 0.0
+    monkeypatch.setenv("ZOE_TURN_CONTINUATION_TTL_S", "12")
+    assert conversation_cues.turn_continuation_ttl_s() == 12.0

@@ -31,6 +31,7 @@ import { createAgentRouter } from '@flue/runtime/routing';
 import { Hono } from 'hono';
 import { Zoe } from './agents/zoe.ts';
 import { requireBrainToken } from './auth.ts';
+import { activeHarness, harnessHealth, initHarness } from './harness.ts';
 import { installEarlyTextTap } from './early-text.ts';
 import { createZoeProvider } from './providers/capped-completions.ts';
 import { seamAStreamingMiddleware } from './streaming.ts';
@@ -55,6 +56,11 @@ export function createApp(): Hono {
   // imposes the per-turn tool-iteration ceiling and progressive tool disclosure.
   setProvider(createZoeProvider());
 
+  // The harness overlay (src/harness.ts, flag-dark ZOE_BRAIN_HARNESS_DIR): load and log it once at
+  // startup, and with the flag set install the SIGHUP hot-reload handler. Flag unset: nothing is
+  // read, logged or installed (the compiled-in harness, byte for byte).
+  initHarness();
+
   // Early text: an execution interceptor that publishes the provider's text
   // deltas as the model yields them, ahead of @flue/runtime's 1 s batched store
   // flush (src/early-text.ts). Idempotent; a pure pass-through until a
@@ -68,13 +74,18 @@ export function createApp(): Hono {
   // operator and systemd can tell a wedged process from a mis-tokened one.
   // B10.1: `optional_tools` = the flag-gated tools this process registers, so
   // zoe-data confirms before advertising one. Omitted when none (body unchanged).
+  // `harness` = the overlay in force (status, every loaded file's sha256), present ONLY when
+  // ZOE_BRAIN_HARNESS_DIR is set (body unchanged otherwise); scripts/harness-overlay.ts polls it to
+  // confirm a switch or revert took effect.
   app.get('/health', (c) => {
     const optional = optionalZoeTools().map((t) => t.name);
+    const harness = activeHarness();
     return c.json({
       ok: true,
       service: 'flue-zoe-brain',
       at: new Date().toISOString(),
       ...(optional.length ? { optional_tools: optional } : {}),
+      ...(harness.enabled ? { harness: harnessHealth(harness) } : {}),
     });
   });
 

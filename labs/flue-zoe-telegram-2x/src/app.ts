@@ -51,6 +51,7 @@ import {
 import { handleIncoming, handleNew, handleStart } from './handler.ts';
 import { handleNotify, isLoopbackAddress } from './notify.ts';
 import { bot, downloadTelegramFile } from './telegram.ts';
+import { describeError } from './redact.ts';
 import {
   MAX_NOTE_BYTES,
   handleTalk,
@@ -132,14 +133,20 @@ export function registerTelegramHandlers(): void {
     if (telegramId === undefined) return; // no verified sender id → nothing to resolve
 
     try {
-      await handleIncoming(telegramId, ctx.chat.id, ctx.message.text, {
-        resolve: resolveTelegramUser,
-        ask: askZoeAs,
-        session: sessionFor,
-        reply: (text) => ctx.reply(text),
-      });
+      await handleIncoming(
+        telegramId,
+        ctx.chat.id,
+        ctx.message.text,
+        {
+          resolve: resolveTelegramUser,
+          ask: askZoeAs,
+          session: sessionFor,
+          reply: (text) => ctx.reply(text),
+        },
+        { forwarded: ctx.message.forward_origin !== undefined },
+      );
     } catch (err) {
-      console.error('Zoe brain/reply error:', err);
+      console.error(`Zoe brain/reply error: ${describeError(err)}`);
     }
   });
 
@@ -179,7 +186,7 @@ export function registerTelegramHandlers(): void {
           opts,
         );
       } catch (err) {
-        console.error('Zoe voice-note error:', err);
+        console.error(`Zoe voice-note error: ${describeError(err)}`);
       }
     });
   }
@@ -232,7 +239,7 @@ export function startTelegramPolling(health: PollHealth = pollHealth): Promise<v
               'Not retrying.',
           );
         } else {
-          console.error('Telegram poll error:', err);
+          console.error(`Telegram poll error: ${describeError(err)}`);
         }
       })
   );

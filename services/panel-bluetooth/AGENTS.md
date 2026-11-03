@@ -14,6 +14,7 @@ One small service per panel Pi that does what the household asks in Settings > B
 - `panel_bt/known.py` — the Pi-local known-devices file (the ONLY place an address is persisted; 0600).
 - `panel_bt/zoe_link.py` — the only network path (poll/report, stdlib urllib).
 - `panel_bt/drivers/` — `base.py` (interface + standard DIS/Battery reads), `generic.py`, `omi.py` (info, sync status, update check), `omi_release.py` (the pinned release: load, download-verify, MCUboot image checks), `omi_dfu.py` (the gates + the staged procedure, SMP behind an injected `SmpSession`), `__init__.py` (`DriverRegistry`).
+- `panel_bt/bond.py` — THE ONE place on the Pi that creates a Bluetooth bond: `omi_bond`, an Omi pendant on Zoe phase-2 firmware (`labs/omi-firmware`), owner-run. Refuses a pendant whose DIS version is not Zoe's (4 parts); makes the adapter pairable ONLY for the pairing (`PairableTimeout` 60 written AND read back - else never `Pairable` - then `Pairable` true, false again in `finally`); pairs with no agent (LE SC Just Works, initiator); success = BlueZ `Paired` AND `Bonded` read true AND the link `ENCRYPT`ed; `replace` removes THIS pendant's old BlueZ entry only, and stops unless that is confirmed (the call succeeds or the device was unknown, AND `Paired` no longer reads true). Pinned by `tests/unit/test_omi_bond.py`.
 - `panel_bt/smp_session.py` — the real smpclient 7.3.0 session (UNVERIFIED on hardware beyond the read-only info stage; lazy import).
 - `panel_bt/data/omi_firmware.json` — THE pinned official release (URL, size, SHA-256, images). Changing it is a reviewed change.
 - `requirements.txt` — `bleak==3.0.2`, `smpclient==7.3.0`, installed into the agent's OWN venv (omi-sync stays on bleak 0.22.3).
@@ -22,14 +23,14 @@ One small service per panel Pi that does what the household asks in Settings > B
 
 - **No inbound socket, ever.** Auth is the panel's device token on outbound calls. A device's BLE address never leaves the Pi: everything sent speaks `device_id`. The Omi driver's "Assigned to" control (which household member a pendant's recordings sync to) is a zoe-data/UI concern (`/api/omi/devices`): this agent knows nothing about owners and sends no user id.
 - **One radio.** Every scan / open link / update holds `RadioLock`; omi-sync yields to it. A link is a lease (`PANEL_BT_LEASE_S`, hard cap `PANEL_BT_MAX_HOLD_S`). One live link at a time. One task at a time (`status` and `update_cancel` are always answered).
-- **No pairing, no agent, no bond.** Devices are connected as omi-sync connects the pendant. A device that needs a bond is a deliberate, reviewed addition, not something a driver may do quietly.
+- **No pairing, no agent, no bond - with one reviewed exception.** Devices are connected as omi-sync connects the pendant. The exception is `omi_bond` (`bond.py`): an Omi pendant on phase-2 firmware, flag `PANEL_BT_BOND_ENABLED` (default OFF), an explicit `confirm` AND `ack_wipe` (the pendant crypto-wipes its stored audio on every new bond), a refusal while omi-sync still holds unsynced records unless `force`, the radio lock, and the pendant's own button window (two double-taps). After it, the pendant's storage, audio and SMP need that bond, so `omi-sync` (`OMI_SYNC_REQUIRE_BOND`) and this agent's firmware update ride it. Any other device that needs a bond is a new reviewed addition, never a driver doing it quietly.
 - **Updates: every gate blocks, nothing retries.** The Omi update proceeds only through `omi_dfu.run_omi_update`: all gates, a verified pinned package, both secondary hashes checked before marking, exactly two pending before the reset, the first doubt stops it, a failure starts a persisted cool-down. The bootloader is overwrite-only: there is NO revert, so the UI must keep saying so.
-- Flag-dark: `PANEL_BT_ENABLED` unset/0 → `python -m panel_bt run` exits 0 without importing bleak. `PANEL_BT_OTA_ENABLED` (default OFF) separately gates firmware updates.
+- Flag-dark: `PANEL_BT_ENABLED` unset/0 → `python -m panel_bt run` exits 0 without importing bleak. `PANEL_BT_OTA_ENABLED` (default OFF) separately gates firmware updates; `PANEL_BT_BOND_ENABLED` (default OFF) gates `omi_bond`.
 
 ## Forbidden
 
 - Never open a listening socket (no aiohttp server, `http.server`, `bind`/`listen`) — pinned by a static test.
-- Never pair / unpair / trust / register a BlueZ agent, and never call `write_gatt_char` directly (SMP goes through smpclient inside `smp_session.py` only) — pinned.
+- Never pair, remove a device, or touch the adapter's `Pairable` anywhere but `bond.py`; never unpair / trust / register a BlueZ agent anywhere (bond.py included); never call `write_gatt_char` directly (SMP goes through smpclient inside `smp_session.py` only) — pinned.
 - Never send an erase-settings request, a storage-service command (`30295781`), `CMD_RING_CLEAR` or the legacy `DELETE_FILE`. Never touch Omi's cloud (`api.omi.me`), and never fetch firmware from anywhere but the pinned URL, nor use it unless it hashes to the pinned SHA-256.
 - Never import `omi_sync`, `zoe-data` modules, `labs/` or the voice daemon; no audio/PulseAudio/ALSA code (it must never touch zoe-voice).
 - Never log or send a device address, the device token, or free text from a device beyond bounded name/model fields.
@@ -43,7 +44,7 @@ One small service per panel Pi that does what the household asks in Settings > B
 
 ## Verification
 
-- `pytest tests/unit/test_panel_bluetooth_agent.py tests/unit/test_panel_bluetooth_update.py tests/unit/test_omi_sync_radio_lock.py -q` (all `ci_safe`; no hardware, no network, no bleak/smpclient).
+- `pytest tests/unit/test_panel_bluetooth_agent.py tests/unit/test_panel_bluetooth_update.py tests/unit/test_omi_sync_radio_lock.py tests/unit/test_omi_bond.py -q` (all `ci_safe`; no hardware, no network, no bleak/smpclient).
 - zoe-data side: `pytest services/zoe-data/tests/test_bluetooth_settings.py -q`; UI: `node services/zoe-ui/dist/test_bluetooth_settings.js`.
 - On the Pi, read-only: `python -m panel_bt status`; `python -m panel_bt scan` (ids only).
 

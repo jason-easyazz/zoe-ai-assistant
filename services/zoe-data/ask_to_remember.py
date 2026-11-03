@@ -71,8 +71,6 @@ RECALL_ITEM_CHARS = 160
 SIBLING_WINDOW_S = 180
 SIBLING_MIN_OVERLAP = 0.5
 
-_GUEST_IDS = frozenset({"", "guest", "anonymous", "voice-guest"})
-
 
 def enabled() -> bool:
     """``ZOE_ASK_TO_REMEMBER`` - default ON, per-call read. ``0|false|no|off`` (or set-but-empty) switches the tier off."""
@@ -252,8 +250,12 @@ async def _speculation_barrier() -> None:
 
 
 def _is_guest(user_id: Optional[str]) -> bool:
-    u = (user_id or "").strip()
-    return u in _GUEST_IDS or u.startswith("guest-")
+    """ONE predicate (``user_filters.is_unidentified``): the sentinel set incl. ``voice-daemon`` and the ``guest-<id>``
+    principal, case and whitespace ignored. This file's own copy was case-sensitive and did not know ``voice-daemon``
+    (2026-11-02), so a device-token turn could file a "remember that" as a memory of nobody."""
+    from user_filters import is_unidentified
+
+    return is_unidentified(user_id)
 
 
 async def remember(clause: str, user_id: str, *, utterance: str = "", session_id: str = "",

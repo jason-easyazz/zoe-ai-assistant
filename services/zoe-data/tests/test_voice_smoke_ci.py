@@ -60,7 +60,9 @@ def _patch_all_tts_providers(monkeypatch, order, *, succeed="espeak"):
             return CANNED if name == succeed else None
         return _fake
 
-    # Names mirror the live waterfall in synthesize() (Kokoro-first since PR #872):
+    # Names mirror the legacy waterfall in synthesize() (Kokoro-first since PR #872),
+    # reached only under an explicit ZOE_TTS_MODE=hybrid; the default is Kokoro-only
+    # (test_tts_kokoro_only.py):
     #   Kokoro sidecar (GPU) -> local override -> Edge (cloud) -> espeak
     monkeypatch.setattr(vt, "_synthesize_local_service", recorder("local_service"))
     monkeypatch.setattr(vt, "_synthesize_kokoro_sidecar", recorder("kokoro_sidecar"))

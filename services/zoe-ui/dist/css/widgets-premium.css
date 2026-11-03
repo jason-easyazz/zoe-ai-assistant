@@ -743,3 +743,56 @@
     .weather-forecast-compact { gap: clamp(0.3rem, 1cqw, 0.8rem) !important; }
     .forecast-compact { aspect-ratio: auto; padding: clamp(0.4rem, 2cqh, 1rem) clamp(0.3rem, 1.5cqw, 0.9rem) !important; }
 }
+
+/* ── Card states + the System / Home cards (Wave 4b, 2026-10-19) ────────────
+   Every colour is a design token with a light fallback: the page's --clr-*
+   tokens, which css/dark-mode-shared.css swaps under html.dark-mode, so these
+   follow the theme on every page that loads this file. */
+.zw-state { padding: 16px 8px; text-align: center; font-size: 13px; color: var(--clr-text-2, #666); }
+.zw-state.zw-error { color: var(--clr-error, #b91c1c); }
+.zw-loading::before {
+    content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 8px;
+    border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+    vertical-align: -1px; animation: zw-spin 0.8s linear infinite;
+}
+@keyframes zw-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .zw-loading::before { animation: none; } }
+.zw-note {
+    font-size: 12px; color: var(--clr-text-2, #666); padding: 6px 8px; margin-bottom: 8px;
+    border-radius: 8px; background: var(--clr-warning-bg, rgba(245, 158, 11, 0.1));
+}
+.zw-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.zw-stat {
+    min-width: 0; padding: 10px; border-radius: 10px; text-align: left;
+    background: var(--clr-surface-2, #f8f9fb); border: 1px solid var(--clr-border, rgba(0, 0, 0, 0.08));
+}
+.zw-stat-value { font-size: 18px; font-weight: 600; color: var(--clr-text, #333); font-variant-numeric: tabular-nums; }
+.zw-stat-label { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--clr-text-2, #666); }
+.zw-stat-detail { margin-top: 2px; font-size: 11px; color: var(--clr-text-3, #999); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zw-bar { display: block; height: 4px; margin-top: 6px; border-radius: 2px; overflow: hidden; background: var(--clr-border, rgba(0, 0, 0, 0.08)); }
+.zw-bar > span { display: block; height: 100%; background: var(--clr-primary, #7B61FF); }
+.zw-services { list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; }
+.zw-svc { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--clr-text, #333); }
+.zw-svc-state { margin-left: auto; font-size: 12px; color: var(--clr-text-2, #666); }
+.zw-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--clr-success, #10b981); }
+.zw-svc--degraded .zw-dot { background: var(--clr-warning, #f59e0b); }
+.zw-svc--down .zw-dot { background: var(--clr-error, #ef4444); }
+.zw-rooms { list-style: none; margin: 0; padding: 0; }
+.zw-room {
+    display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; font-size: 13px;
+    color: var(--clr-text, #333); border-bottom: 1px solid var(--clr-border, rgba(0, 0, 0, 0.08));
+}
+.zw-room-meta { flex: none; font-size: 12px; color: var(--clr-text-2, #666); }
+.zw-devices { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
+.zw-device {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 44px;
+    padding: 8px 10px; border-radius: 10px; text-align: left; font: inherit; cursor: pointer;
+    color: var(--clr-text, #333); background: var(--clr-surface-2, #f8f9fb);
+    border: 1px solid var(--clr-border, rgba(0, 0, 0, 0.08));
+}
+.zw-device.is-on { color: #fff; background: var(--clr-primary, #7B61FF); border-color: transparent; }
+.zw-device:focus-visible { outline: 2px solid var(--clr-primary, #7B61FF); outline-offset: 2px; }
+.zw-device:disabled { opacity: 0.6; cursor: progress; }
+.zw-device-name { max-width: 100%; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zw-device-state { font-size: 11px; opacity: 0.85; }
+.weather-forecast-compact .forecast-state { grid-column: 1 / -1; padding: 8px 0; text-align: center; font-size: 12px; opacity: 0.85; }

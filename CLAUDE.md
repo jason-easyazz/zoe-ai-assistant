@@ -6,7 +6,7 @@ only auto-reads `CLAUDE.md`, not `AGENTS.md`).
 **Read first:** `docs/VISION.md` — Zoe's north star, direction & core principles.
 
 The full rules hub — codebase navigation, opensrc, the Greptile PR loop,
-Hermes-first delegation, and the Child DOX Index — lives in `AGENTS.md`:
+the engineering-agent routing, and the Child DOX Index — lives in `AGENTS.md`:
 
 @AGENTS.md
 

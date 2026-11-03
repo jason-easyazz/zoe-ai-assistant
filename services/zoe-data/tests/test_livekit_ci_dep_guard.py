@@ -137,6 +137,6 @@ def test_livekit_fidelity_deps_are_installed_in_ci():
         f"{_FIDELITY_SUITE.name} will importorskip and the required `validate` gate "
         f"stops verifying the LiveKit _AudioStream padding fix — a SKIP reads green. "
         f"Fix: restore the `pip install av aiortc livekit-protocol` step in "
-        f".github/workflows/validate.yml's unit-test job (all three resolve to "
+        f".github/workflows/validate.yml's `Install lane deps` step (all three resolve to "
         f"manylinux x86_64 wheels for cp310; no source build)."
     )

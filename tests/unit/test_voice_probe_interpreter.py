@@ -190,7 +190,8 @@ def _drive_main(tmp_path, monkeypatch, recall, *extra):
     corpus.mkdir()
     for i in range(4):
         (corpus / f"{i:06d}_000.wav").write_bytes(b"RIFF" + bytes(i))
-    rows = [dict(file=p.name, stt_ms=100) for p in sorted(corpus.glob("*.wav"))]
+    rows = [dict(file=p.name, stt_ms=100, verdict="OK", route_hash="r0", heard_hash="h0", via_brain=True)
+            for p in sorted(corpus.glob("*.wav"))]
     ran = dict(_report(recall), rows=rows)
     monkeypatch.setattr(vrp, "run_measure", lambda *a, **k: ran)
     baseline = tmp_path / "baseline.json"

@@ -1,6 +1,20 @@
-"""Dashboard widget layout management API."""
+"""Dashboard widget layout management API.
+
+Layout entries are widget INSTANCES, not widget types (Wave 4b, 2026-10-19): each entry is
+``{uid, type, x, y, w, h, options?}``. ``uid`` is unique per card, so a board can hold two weather
+cards; ``type`` names the widget. A legacy entry ``{id, ...}`` (``id`` was the type) is read as
+``type=id`` with a uid minted on read, so nothing stored before this change is lost.
+
+``PUT /layout/`` (the desktop dashboard's save) is the authoritative instance list and keeps
+duplicates. ``POST /widgets/`` (chat's "add weather to my dashboard") stays an ENSURE-PRESENT
+command: it adds a type the board does not have yet and never stacks a second copy.
+``DELETE /widgets/{key}`` removes the card whose uid is ``key``, else every card of type ``key``.
+"""
+import hashlib
 import json
 import logging
+import re
+import uuid
 from fastapi import APIRouter, Request, Depends, HTTPException
 from auth import get_current_user
 from database import get_db
@@ -9,6 +23,10 @@ from db_pool import get_db_ctx
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 MAX_WIDGET_IDS_PER_REQUEST = 200
+MAX_LAYOUT_ENTRIES = 60
+MAX_OPTIONS_BYTES = 1024
+_TYPE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+_UID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 AVAILABLE_WIDGETS = [
     {"id": "weather", "name": "Weather", "icon": "🌤️", "category": "info", "default_size": {"w": 2, "h": 2}},
@@ -61,6 +79,89 @@ def _decode_layout(value):
     return value or []
 
 
+def _new_uid() -> str:
+    return uuid.uuid4().hex[:16]
+
+
+def _entry_type(entry) -> str | None:
+    if not isinstance(entry, dict):
+        return None
+    t = entry.get("type") or entry.get("id")
+    return t if isinstance(t, str) else None
+
+
+def _derived_uid(index: int, wtype: str, taken: set) -> str:
+    """A uid for a stored entry that has none, derived from its position + type so GET and
+    DELETE (which each normalize the same stored row) agree on it. A random one would differ per call."""
+    salt = 0
+    while True:
+        uid = hashlib.sha1(f"{index}:{wtype}:{salt}".encode()).hexdigest()[:16]
+        if uid not in taken:
+            return uid
+        salt += 1
+
+
+def _layout_version(entries: list[dict]) -> str:
+    """Content version of a normalized layout, for the PUT's optimistic-concurrency check."""
+    return hashlib.sha1(json.dumps(entries, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _normalize_entries(entries) -> list[dict]:
+    """Stored entries as instances: every one carries ``uid`` + ``type`` (legacy ``{id}`` too)."""
+    out = []
+    seen = set()
+    for index, entry in enumerate(entries or []):
+        wtype = _entry_type(entry)
+        if not wtype:
+            continue
+        item = dict(entry)
+        item["type"] = wtype
+        item.pop("id", None)
+        uid = item.get("uid")
+        if not isinstance(uid, str) or not _UID_RE.match(uid) or uid in seen:
+            uid = _derived_uid(index, wtype, seen)
+        item["uid"] = uid
+        seen.add(uid)
+        out.append(item)
+    return out
+
+
+def _validated_layout(body: dict) -> list[dict]:
+    """The PUT body's layout as clean instance entries, or 400. Never silently drops a card."""
+    layout = body.get("layout", [])
+    if not isinstance(layout, list):
+        raise HTTPException(status_code=400, detail="layout must be a list")
+    if len(layout) > MAX_LAYOUT_ENTRIES:
+        raise HTTPException(status_code=400, detail=f"layout must hold at most {MAX_LAYOUT_ENTRIES} widgets")
+    clean = []
+    seen = set()
+    for i, entry in enumerate(layout):
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=400, detail=f"layout[{i}] must be an object")
+        wtype = entry.get("type")
+        if not isinstance(wtype, str) or not _TYPE_RE.match(wtype):
+            raise HTTPException(status_code=400, detail=f"layout[{i}].type is not a widget type")
+        uid = entry.get("uid")
+        if not isinstance(uid, str) or not _UID_RE.match(uid):
+            raise HTTPException(status_code=400, detail=f"layout[{i}].uid is required (1-64 of A-Z a-z 0-9 _ -)")
+        if uid in seen:
+            raise HTTPException(status_code=400, detail=f"layout[{i}].uid repeats another card's uid")
+        seen.add(uid)
+        item = {"uid": uid, "type": wtype}
+        for key in ("x", "y", "w", "h"):
+            val = entry.get(key)
+            if not isinstance(val, int) or isinstance(val, bool) or not 0 <= val <= 1000:
+                raise HTTPException(status_code=400, detail=f"layout[{i}].{key} must be an integer 0-1000")
+            item[key] = val
+        options = entry.get("options")
+        if options is not None:
+            if not isinstance(options, dict) or len(json.dumps(options)) > MAX_OPTIONS_BYTES:
+                raise HTTPException(status_code=400, detail=f"layout[{i}].options must be an object under {MAX_OPTIONS_BYTES} bytes")
+            item["options"] = options
+        clean.append(item)
+    return clean
+
+
 def _requested_widget_ids(body: dict) -> list[str]:
     widget_ids = body.get("widgets", [])
     if not isinstance(widget_ids, list):
@@ -89,19 +190,36 @@ async def get_layout(user: dict = Depends(get_current_user)):
     async with get_db_ctx() as db:
         row = await _fetchone_layout_row(db, user_id)
         if row:
-            return {"layout": json.loads(row["layout"]), "updated_at": row["updated_at"]}
-        return {"layout": None, "updated_at": None}
+            entries = _normalize_entries(_decode_layout(row["layout"]))
+            return {"layout": entries, "updated_at": row["updated_at"], "version": _layout_version(entries)}
+        return {"layout": None, "updated_at": None, "version": None}
 
 
 @router.put("/layout/")
 async def save_layout(request: Request, user: dict = Depends(get_current_user)):
     body = await request.json()
     user_id = user["user_id"]
-    layout = json.dumps(body.get("layout", []))
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    clean = _validated_layout(body)
+    layout = json.dumps(clean)
+    base_version = body.get("base_version")
+    if base_version is not None and not isinstance(base_version, str):
+        raise HTTPException(status_code=400, detail="base_version must be a string")
     async for db in get_db():
         async with db.transaction():
             await _ensure_layout_row(db, user_id)
-            await _fetchone_layout_for_update(db, user_id)
+            row = await _fetchone_layout_for_update(db, user_id)
+            # The board only reads the layout when it loads, but chat can change it through
+            # POST/DELETE /widgets/. A save made on a stale copy would erase those edits, so a
+            # client that sends the version it read gets a 409 + the current layout to reconcile.
+            if base_version is not None and row is not None:
+                current = _normalize_entries(_decode_layout(row["layout"]))
+                if current and _layout_version(current) != base_version:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"error": "layout_changed", "layout": current, "version": _layout_version(current)},
+                    )
             await db.execute(
                 "UPDATE dashboard_layouts "
                 "SET layout = $1::jsonb, updated_at = CURRENT_TIMESTAMP "
@@ -109,7 +227,7 @@ async def save_layout(request: Request, user: dict = Depends(get_current_user)):
                 layout,
                 user_id,
             )
-    return {"status": "ok"}
+    return {"status": "ok", "version": _layout_version(clean)}
 
 
 @router.post("/widgets/")
@@ -125,8 +243,8 @@ async def add_widgets(request: Request, user: dict = Depends(get_current_user)):
         async with db.transaction():
             await _ensure_layout_row(db, user_id)
             row = await _fetchone_layout_for_update(db, user_id)
-            current = _decode_layout(row["layout"]) if row else []
-            existing_ids = {w.get("id") for w in current if isinstance(w, dict)}
+            current = _normalize_entries(_decode_layout(row["layout"]) if row else [])
+            existing_ids = {w["type"] for w in current}
 
             widget_lookup = {w["id"]: w for w in AVAILABLE_WIDGETS}
             added = []
@@ -138,7 +256,8 @@ async def add_widgets(request: Request, user: dict = Depends(get_current_user)):
                 meta = widget_lookup[wid]
                 current.append(
                     {
-                        "id": wid,
+                        "uid": _new_uid(),
+                        "type": wid,
                         "x": 0,
                         "y": max_y,
                         "w": meta["default_size"]["w"],
@@ -168,8 +287,11 @@ async def remove_widget(widget_id: str, user: dict = Depends(get_current_user)):
             row = await _fetchone_layout_for_update(db, user_id)
             if not row:
                 return {"status": "error", "message": "No layout found"}
-            current = _decode_layout(row["layout"])
-            updated = [w for w in current if w.get("id") != widget_id]
+            current = _normalize_entries(_decode_layout(row["layout"]))
+            if any(w["uid"] == widget_id for w in current):
+                updated = [w for w in current if w["uid"] != widget_id]
+            else:
+                updated = [w for w in current if w["type"] != widget_id]
             await db.execute(
                 "UPDATE dashboard_layouts "
                 "SET layout = $1::jsonb, updated_at = CURRENT_TIMESTAMP "

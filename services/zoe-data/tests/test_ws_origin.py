@@ -9,8 +9,8 @@ shared allowlist:
 
 The guard logic lives in main._ws_origin_allowed / _enforce_ws_origin and is the
 single check shared by all endpoints, so the helper tests cover the policy for
-every endpoint; the TestClient tests prove the wiring end-to-end on both an
-unauthenticated endpoint (/ws/voice/) and an authenticated one (/api/lists/ws).
+every endpoint; the TestClient tests prove the wiring end-to-end on an
+authenticated one (/api/lists/ws), including the no-Origin native-client case.
 """
 import json
 import os
@@ -153,26 +153,6 @@ def client():
     return TestClient(main.app)
 
 
-def test_voice_ws_rejects_foreign_origin(client):
-    # /ws/voice/ is unauthenticated; the origin guard is its only handshake gate.
-    with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/ws/voice/", headers={"origin": "https://evil.example"}):
-            pass
-
-
-def test_voice_ws_accepts_allowed_origin(client):
-    with client.websocket_connect("/ws/voice/", headers={"origin": "https://zoe.local"}) as ws:
-        msg = ws.receive_json()
-        assert msg == {"type": "state", "state": "ambient"}
-
-
-def test_voice_ws_accepts_missing_origin(client):
-    # Native kiosk/voice client sends no Origin — must still connect.
-    with client.websocket_connect("/ws/voice/") as ws:
-        msg = ws.receive_json()
-        assert msg == {"type": "state", "state": "ambient"}
-
-
 def test_authenticated_ws_rejects_foreign_origin_before_auth(client, monkeypatch):
     # Origin guard runs BEFORE session resolution: a foreign origin is rejected
     # even with a (mocked) valid session, and the resolver is never consulted.
@@ -213,3 +193,16 @@ def test_authenticated_ws_accepts_allowed_origin(client, monkeypatch):
         assert ws.receive_json() == {"type": "connected", "channel": "lists", "sequence": 0}
         ws.send_text("ping")
         assert ws.receive_json() == {"type": "pong"}
+
+
+def test_authenticated_ws_accepts_missing_origin(client, monkeypatch):
+    # A native client sends no Origin header: the guard lets it through to the session check.
+    async def _fake_resolve(session_id):
+        return {"user_id": "u1", "role": "member"}
+
+    monkeypatch.setattr(main, "_resolve_ws_session", _fake_resolve)
+    from push import broadcaster as _bc
+
+    monkeypatch.setattr(_bc, "_sequence", 0)
+    with client.websocket_connect("/api/lists/ws", headers={"X-Session-ID": "sess-1"}) as ws:
+        assert ws.receive_json() == {"type": "connected", "channel": "lists", "sequence": 0}

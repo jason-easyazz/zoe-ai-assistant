@@ -595,7 +595,6 @@ const NAV = [
   ]},
   { group: 'Integrations', items: [
     { id: 'telegram',   icon: '✈️', label: 'Telegram' },
-    { id: 'openclaw',   icon: '🧠', label: 'OpenClaw / ChatGPT' },
     { id: 'music',      icon: '🎵', label: 'Music' },
     { id: 'touch-panels', icon: '📺', label: 'Touch Panels' },
   ]},
@@ -605,7 +604,6 @@ const NAV = [
   { group: 'Admin', admin: true, items: [
     { id: 'users',      icon: '👥', label: 'Users' },
     { id: 'system',     icon: '⚙️', label: 'System' },
-    { id: 'ai-models',  icon: '🧭', label: 'AI Models' },
     // Feature-flagged (ZOE_BLUETOOTH_SETTINGS): shown only when GET /api/bluetooth/config answers 200 for this admin (404 = flag off).
     { id: 'bluetooth',  icon: '🔵', label: 'Bluetooth devices', feature: 'bluetooth' },
   ]},
@@ -876,24 +874,6 @@ function buildSections() {
     </div>
   </div>
 
-  <!-- OpenClaw -->
-  <div class="section" id="sec-openclaw">
-    <div class="section-title">OpenClaw / ChatGPT</div>
-    <div class="section-desc">Preferences for the OpenClaw agent and ChatGPT integration.</div>
-    <div class="card">
-      <div class="row">
-        <div class="row-info">
-          <div class="row-label">ChatGPT auth status</div>
-          <div class="row-sub" id="chatgpt-status">Checking…</div>
-        </div>
-      </div>
-    </div>
-    <div class="card" id="openclaw-prefs-card">
-      <div class="empty"><span class="spinner"></span></div>
-    </div>
-    <button class="btn btn-primary" onclick="saveOpenclawPrefs()">Save Preferences</button>
-  </div>
-
   <!-- Admin: Users -->
   <div class="section" id="sec-users">
     <div class="section-title">User Management</div>
@@ -926,17 +906,6 @@ function buildSections() {
     <div class="section-title">System Information</div>
     <div class="section-desc">Platform status and health.</div>
     <div class="card" id="system-info-card"><div class="empty"><span class="spinner"></span></div></div>
-  </div>
-
-  <!-- Admin: AI Models -->
-  <div class="section" id="sec-ai-models">
-    <div class="section-title">AI Models</div>
-    <div class="section-desc">Admin: host-scoped Hermes model profile routing. API keys are never edited here.</div>
-    <div class="card" id="ai-models-card"><div class="empty"><span class="spinner"></span></div></div>
-    <div class="card">
-      <div class="card-header">Pending diff</div>
-      <pre id="ai-models-diff" style="white-space:pre-wrap;overflow:auto;max-height:320px;padding:14px 18px;margin:0;color:var(--text2);font-size:12px;"></pre>
-    </div>
   </div>
 
   <!-- Music -->
@@ -1004,6 +973,16 @@ function buildSections() {
           <button class="btn btn-primary" onclick="confirmPanelCode()">Confirm</button>
         </div>
         <div id="panel-code-msg" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
+        <!-- Desktop pairs the panel right here (desktop never opens a /touch/ page). -->
+        <div id="panel-pair-form" style="display:none;margin-top:10px;gap:8px;flex-direction:column">
+          <input type="text" id="panel-pair-name" placeholder="Panel name, e.g. Living Room" maxlength="40" oninput="panelPairSlug()"
+            style="padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text)">
+          <input type="text" id="panel-pair-location" placeholder="Location (optional)" maxlength="60"
+            style="padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text)">
+          <input type="text" id="panel-pair-id" placeholder="living-room-panel" maxlength="40"
+            style="padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-family:monospace">
+          <button class="btn btn-primary" id="panel-pair-btn" onclick="pairPanelHere()">Pair this panel</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1072,10 +1051,8 @@ const sectionLoaders = {
   voice:          loadVoiceProfiles,
   push:           loadPush,
   proactive:      loadReminders,
-  openclaw:       loadOpenClaw,
   users:          loadUsers,
   system:         loadSystemInfo,
-  'ai-models':    loadHermesModelProfiles,
   theme:          loadTheme,
   music:          loadMusicStatus,
   evolution:      loadEvolutionProposals,
@@ -1750,72 +1727,6 @@ async function cancelReminder(id) {
   }
 }
 
-/* ── OpenClaw ─────────────────────────────────────────────── */
-let openclawPrefs = {};
-async function loadOpenClaw() {
-  // ChatGPT auth status
-  try {
-    const s = await apiCall('GET', '/api/voice/chatgpt-auth-status');
-    document.getElementById('chatgpt-status').textContent = s.status || JSON.stringify(s);
-  } catch {
-    document.getElementById('chatgpt-status').textContent = 'Unknown';
-  }
-
-  // OpenClaw preferences
-  const card = document.getElementById('openclaw-prefs-card');
-  try {
-    openclawPrefs = await apiCall('GET', '/api/system/openclaw/preferences');
-    card.innerHTML = `
-      <div class="row">
-        <div class="row-info">
-          <div class="row-label">Enable OpenClaw agent</div>
-          <div class="row-sub">Route complex requests through the OpenClaw planner</div>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" id="oc-enabled" ${openclawPrefs.enabled ? 'checked' : ''}>
-          <div class="toggle-track"></div>
-        </label>
-      </div>
-      <div class="row">
-        <div class="row-info">
-          <div class="row-label">Auto-approve safe tools</div>
-          <div class="row-sub">Skip confirmation for low-risk actions</div>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" id="oc-autoapprove" ${openclawPrefs.auto_approve_safe ? 'checked' : ''}>
-          <div class="toggle-track"></div>
-        </label>
-      </div>
-      <div class="field">
-        <label>Max agent steps per turn</label>
-        <input type="number" id="oc-max-steps" min="1" max="50" value="${openclawPrefs.max_steps ?? 10}">
-      </div>
-      <div class="field">
-        <label>Default model</label>
-        <input type="text" id="oc-model" value="${openclawPrefs.model || ''}">
-        <div class="field-hint">Leave blank to use system default</div>
-      </div>
-    `;
-  } catch {
-    card.innerHTML = '<div class="empty">OpenClaw preferences not available</div>';
-  }
-}
-
-async function saveOpenclawPrefs() {
-  try {
-    const prefs = {
-      enabled: document.getElementById('oc-enabled')?.checked ?? openclawPrefs.enabled,
-      auto_approve_safe: document.getElementById('oc-autoapprove')?.checked ?? openclawPrefs.auto_approve_safe,
-      max_steps: parseInt(document.getElementById('oc-max-steps')?.value ?? 10),
-      model: document.getElementById('oc-model')?.value || null,
-    };
-    await apiCall('PUT', '/api/system/openclaw/preferences', prefs);
-    toast('Preferences saved', 'success');
-  } catch (e) {
-    toast(e.message, 'error');
-  }
-}
-
 /* ── Admin: Users ─────────────────────────────────────────── */
 async function loadUsers() {
   const tbody = document.getElementById('users-tbody');
@@ -1946,139 +1857,6 @@ async function loadSystemInfo() {
       </div>`).join('');
   } catch (e) {
     card.innerHTML = `<div class="empty">Failed to load: ${e.message}</div>`;
-  }
-}
-
-/* ── Admin: AI Models ─────────────────────────────────────── */
-let hermesProfiles = [];
-
-function parseFallbacks(value) {
-  return (value || '').split('\n').map(line => line.trim()).filter(Boolean).map(line => {
-    const idx = line.indexOf(':');
-    if (idx <= 0) throw new Error('Fallbacks must use provider:model, one per line');
-    return { provider: line.slice(0, idx).trim(), model: line.slice(idx + 1).trim() };
-  });
-}
-
-function collectHermesProfiles() {
-  return hermesProfiles.map(p => ({
-    name: p.name,
-    provider: document.getElementById(`hm-provider-${p.name}`)?.value.trim() || '',
-    model: document.getElementById(`hm-model-${p.name}`)?.value.trim() || '',
-    context_length: p.context_length || undefined,
-    fallbacks: parseFallbacks(document.getElementById(`hm-fallbacks-${p.name}`)?.value || ''),
-  }));
-}
-
-function renderHermesProfiles(data) {
-  hermesProfiles = data.profiles || [];
-  const card = document.getElementById('ai-models-card');
-  if (!hermesProfiles.length) {
-    card.innerHTML = '<div class="empty">No Hermes profiles found</div>';
-    return;
-  }
-  const running = data.running_workers || 0;
-  card.innerHTML = `
-    <div class="row">
-      <div class="row-info">
-        <div class="row-label">Hermes profile state</div>
-        <div class="row-sub">${running} Kanban worker(s) running. Use Apply After Drain unless urgent.</div>
-      </div>
-    </div>
-    ${hermesProfiles.map(p => `
-      <div class="card-header">${escHtml(p.name)}</div>
-      <div class="field">
-        <label>Provider</label>
-        <input id="hm-provider-${p.name}" value="${escHtml(p.provider)}" placeholder="openrouter">
-      </div>
-      <div class="field">
-        <label>Model</label>
-        <input id="hm-model-${p.name}" value="${escHtml(p.model)}" placeholder="provider/model">
-      </div>
-      <div class="field">
-        <label>Fallbacks (provider:model, one per line)</label>
-        <textarea id="hm-fallbacks-${p.name}" rows="4">${escHtml((p.fallbacks || []).map(f => `${f.provider}:${f.model}`).join('\n'))}</textarea>
-        <div class="field-hint">Allowed providers: openai-codex, openrouter, local. API keys are not accepted here.</div>
-      </div>
-    `).join('')}
-    <div style="padding:14px 18px;display:flex;gap:10px;flex-wrap:wrap;">
-      <button class="btn btn-ghost" onclick="validateHermesProfiles()">Validate</button>
-      <button class="btn btn-primary" onclick="saveHermesProfileDraft()">Save Draft</button>
-      <button class="btn btn-primary" onclick="applyHermesProfiles(false)">Apply After Drain</button>
-      <button class="btn btn-danger" onclick="applyHermesProfiles(true)">Apply + Restart After Drain</button>
-      <button class="btn btn-ghost" onclick="rollbackHermesProfiles()">Roll Back Latest</button>
-    </div>
-  `;
-}
-
-async function loadHermesModelProfiles() {
-  const card = document.getElementById('ai-models-card');
-  const diffEl = document.getElementById('ai-models-diff');
-  if (diffEl) diffEl.textContent = '';
-  try {
-    const data = await apiCall('GET', '/api/system/hermes/model-profiles');
-    renderHermesProfiles(data);
-  } catch (e) {
-    card.innerHTML = `<div class="empty">Failed to load Hermes profiles: ${escHtml(e.message)}</div>`;
-  }
-}
-
-async function validateHermesProfiles() {
-  try {
-    const profiles = collectHermesProfiles();
-    const confirm_paid_auto = profiles.some(p => [p.model, ...p.fallbacks.map(f => f.model)].includes('openrouter/auto'));
-    const data = await apiCall('POST', '/api/system/hermes/model-profiles/validate', { profiles, confirm_paid_auto });
-    document.getElementById('ai-models-diff').textContent = Object.values(data.diffs || {}).join('\n');
-    toast('Hermes profiles validated', 'success');
-  } catch (e) {
-    toast(e.message, 'error');
-  }
-}
-
-async function saveHermesProfileDraft() {
-  try {
-    const profiles = collectHermesProfiles();
-    const confirm_paid_auto = profiles.some(p => [p.model, ...p.fallbacks.map(f => f.model)].includes('openrouter/auto'));
-    const data = await apiCall('PUT', '/api/system/hermes/model-profiles/draft', { profiles, confirm_paid_auto });
-    document.getElementById('ai-models-diff').textContent = Object.values(data.diffs || {}).join('\n');
-    toast('Draft saved', 'success');
-  } catch (e) {
-    toast(e.message, 'error');
-  }
-}
-
-async function applyHermesProfiles(forceRestart) {
-  try {
-    const profiles = collectHermesProfiles();
-    const paidAuto = profiles.some(p => [p.model, ...p.fallbacks.map(f => f.model)].includes('openrouter/auto'));
-    if (paidAuto && !confirm('OpenRouter Auto can spend real money. Continue?')) return;
-    const restart = !!forceRestart;
-    if (restart && !confirm('Restart Hermes after applying profiles? This will fail if Kanban workers are still running.')) return;
-    const data = await apiCall('POST', '/api/system/hermes/model-profiles/apply', {
-      profiles,
-      confirm_paid_auto: paidAuto,
-      restart,
-      force_restart: false,
-    });
-    if (data.restart && data.restart.returncode !== 0) {
-      toast('Profiles applied, but Hermes restart failed: ' + (data.restart.stderr || 'unknown error'), 'error');
-    } else {
-      toast(restart ? 'Hermes profiles applied and restart requested' : 'Hermes profiles applied', 'success');
-    }
-    loadHermesModelProfiles();
-  } catch (e) {
-    toast(e.message, 'error');
-  }
-}
-
-async function rollbackHermesProfiles() {
-  if (!confirm('Roll back to latest Hermes profile backup?')) return;
-  try {
-    await apiCall('POST', '/api/system/hermes/model-profiles/rollback', {});
-    toast('Rollback complete', 'success');
-    loadHermesModelProfiles();
-  } catch (e) {
-    toast(e.message, 'error');
   }
 }
 
@@ -2289,15 +2067,52 @@ async function confirmPanelCode() {
   const input = document.getElementById('panel-code-input');
   const msgEl = document.getElementById('panel-code-msg');
   const code = (input.value || '').trim().toUpperCase();
+  // Every lookup starts clean: a stale code from an earlier lookup must never be the one paired.
+  _panelPairCode = '';
+  document.getElementById('panel-pair-form').style.display = 'none';
   if (code.length !== 6) { msgEl.textContent = 'Enter a 6-character code'; return; }
   msgEl.textContent = 'Looking up…';
   try {
     const pub = await apiCall('GET', `/api/panels/provision/${encodeURIComponent(code)}/public`);
     if (pub.status === 'expired') { msgEl.textContent = '⚠️ Code has expired — the panel will generate a new one.'; return; }
     if (pub.status === 'confirmed') { msgEl.textContent = '✅ Already confirmed!'; return; }
-    window.open(`/touch/pair.html?code=${encodeURIComponent(code)}`, '_blank');
-    msgEl.textContent = '✅ Pairing page opened — confirm in the new tab.';
+    _panelPairCode = code;
+    document.getElementById('panel-pair-form').style.display = 'flex';
+    msgEl.textContent = 'Code found. Name the panel, then pair it.';
+    document.getElementById('panel-pair-name').focus();
   } catch (e) { msgEl.textContent = '❌ ' + e.message; }
+}
+
+// The same confirm the phone's QR page makes (POST /api/panels/provision/{code}/confirm,
+// member session required), done in place: desktop is desktop, touch is touch.
+let _panelPairCode = '';
+function panelPairSlug() {
+  const slug = document.getElementById('panel-pair-name').value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  document.getElementById('panel-pair-id').value = slug ? slug + '-panel' : '';
+}
+async function pairPanelHere() {
+  const msgEl = document.getElementById('panel-code-msg');
+  const name = document.getElementById('panel-pair-name').value.trim();
+  const where = document.getElementById('panel-pair-location').value.trim();
+  const panelId = document.getElementById('panel-pair-id').value.trim();
+  if (!_panelPairCode) { msgEl.textContent = 'Enter the code first'; return; }
+  if (!name) { msgEl.textContent = 'Give the panel a name'; return; }
+  if (!panelId) { msgEl.textContent = 'Panel ID is required'; return; }
+  const btn = document.getElementById('panel-pair-btn');
+  btn.disabled = true;
+  msgEl.textContent = 'Pairing…';
+  try {
+    const data = await apiCall('POST', `/api/panels/provision/${encodeURIComponent(_panelPairCode)}/confirm`,
+      { name, location: where, panel_id: panelId });
+    msgEl.textContent = '✅ ' + ((data && data.message) || (name + ' is paired and will come online shortly.'));
+    document.getElementById('panel-pair-form').style.display = 'none';
+    _panelPairCode = '';
+    if (typeof loadTouchPanels === 'function') loadTouchPanels();
+  } catch (e) {
+    msgEl.textContent = '❌ ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 /* ── Modal helpers ────────────────────────────────────────── */

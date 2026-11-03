@@ -34,6 +34,41 @@ def _load():
 
 sp = _load()
 bank = sp.bank
+
+
+def _ddl_columns(ddl: str) -> set:
+    """Column names of a CREATE TABLE body (constraint clauses such as FOREIGN KEY skipped)."""
+    import re
+    body = ddl[ddl.index("(") + 1: ddl.rindex(")")]
+    names = set()
+    for part in re.split(r",(?![^()]*\))", body):
+        word = part.strip().split()[0] if part.strip() else ""
+        if word and word.upper() not in {"FOREIGN", "PRIMARY", "UNIQUE", "CONSTRAINT", "CHECK"}:
+            names.add(word)
+    return names
+
+
+def _real_open_loops_columns() -> set:
+    import re
+    src = (REPO / "services" / "zoe-data" / "alembic" / "versions" / "0001_initial_schema.py").read_text()
+    m = re.search(r"CREATE TABLE IF NOT EXISTS open_loops \((.*?)\n\)", src, re.S)
+    assert m, "open_loops not found in alembic 0001"
+    return _ddl_columns("open_loops (" + m.group(1) + ")")
+
+
+def test_the_mute_probe_open_loops_matches_the_real_schema():
+    """The mute probe's hand-built open_loops must carry exactly the real table's columns (alembic 0001). #2129 made
+    the selector filter on ``context``; the probe's copy lacked it and every mute probe died 'no such column'."""
+    real = _real_open_loops_columns()
+    assert "context" in real and len(real) >= 8          # the instrument really parsed the migration
+    assert _ddl_columns(sp.MUTE_PROBE_OPEN_LOOPS_DDL) == real
+
+
+def test_the_open_loops_schema_check_catches_a_dropped_column():
+    """NEGATIVE CONTROL: the pre-fix DDL (no ``context``) must fail the comparison."""
+    stale = sp.MUTE_PROBE_OPEN_LOOPS_DDL.replace(" context TEXT,", "")
+    assert stale != sp.MUTE_PROBE_OPEN_LOOPS_DDL
+    assert _ddl_columns(stale) != _real_open_loops_columns()
 sb = sp.sb
 W = sp.World()
 

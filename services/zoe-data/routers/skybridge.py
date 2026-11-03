@@ -10,7 +10,7 @@ import panel_kiosk_credential
 import panel_principal
 from auth import get_current_user
 from database import get_db
-from skybridge_service import active_timers_for, cancel_timer_by_id, classify_skybridge_intent, resolve_skybridge_request
+from skybridge_service import active_timers_for, all_active_timers, cancel_any_timer, cancel_timer_by_id, classify_skybridge_intent, resolve_skybridge_request
 
 
 logger = logging.getLogger(__name__)
@@ -158,14 +158,24 @@ def _home_control_refused(action: str, context: dict | None) -> dict:
 
 
 @router.get("/timers")
-async def list_skybridge_timers(user: dict = Depends(get_current_user)):
-    """Active timers for this user — lets the panel resume countdowns after a reload."""
+async def list_skybridge_timers(request: Request, user: dict = Depends(get_current_user)):
+    """Active timers for this caller - lets the panel resume countdowns and ring them.
+
+    A signed-in member sees their own. THE PANEL (a guest-class principal that is demonstrably the kiosk) sees every
+    running timer in the house: a voice timer is stored under the member whose voice set it, but the wall panel polls as
+    a guest, so an owner-keyed lookup returned [] and the timer never rang (2026-10-29 live bug, #2089 made the panel a
+    guest). Same registered-panel test as home control; anyone else gets only their own bucket."""
+    if await panel_principal.is_panel_guest(request, user, mode="registered"):
+        return {"timers": all_active_timers()}
     return {"timers": active_timers_for(user.get("user_id", "voice-guest"))}
 
 
 @router.post("/timers/cancel")
-async def cancel_skybridge_timer(payload: dict, user: dict = Depends(get_current_user)):
-    """Cancel one timer by id (the panel's per-card tap-cancel)."""
+async def cancel_skybridge_timer(request: Request, payload: dict, user: dict = Depends(get_current_user)):
+    """Cancel one timer by id (the panel's per-card tap-cancel; the panel may cancel any timer it can see)."""
     timer_id = str((payload or {}).get("timer_id") or "").strip()
-    cancelled = cancel_timer_by_id(user.get("user_id", "voice-guest"), timer_id)
+    if await panel_principal.is_panel_guest(request, user, mode="registered"):
+        cancelled = cancel_any_timer(timer_id)
+    else:
+        cancelled = cancel_timer_by_id(user.get("user_id", "voice-guest"), timer_id)
     return {"ok": bool(cancelled), "timer_id": timer_id}

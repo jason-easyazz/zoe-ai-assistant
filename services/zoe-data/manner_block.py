@@ -123,13 +123,19 @@ async def _account_is_adult(user_id: str, db=None) -> bool:
 
 async def eligible(user_id: str, db=None) -> bool:
     """May this member's turn carry the block? Adults only; guests, unknown accounts and every lookup failure say no."""
+    return await is_adult(user_id, db=db)
+
+
+async def is_adult(user_id: str, db=None) -> bool:
+    """Is this member positively an adult? The ONE answer (the manner block and the intercom's adults-only drop-in both read it):
+    guests, unknown accounts, child roles / minor modes and every lookup failure (including the time budget) say no. No flag."""
     uid = (user_id or "").strip()
     if not uid or is_guest(uid):
         return False
     try:
         return bool(await asyncio.wait_for(_account_is_adult(uid, db=db), timeout=LOOKUP_BUDGET_S))
     except Exception:  # noqa: BLE001 - includes the timeout: not knowing a member is an adult means no block
-        logger.warning("MANNER_BLOCK lookup failed for %s; no block", uid, exc_info=True)
+        logger.warning("adult lookup failed for %s; treated as not an adult", uid, exc_info=True)
         return False
 
 

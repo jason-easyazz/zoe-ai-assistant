@@ -73,7 +73,7 @@ class _CacheWithSession(_NoCache):
         super().__init__(); self.writes = []
     def get_cached_session(self, session_id):
         import types
-        return types.SimpleNamespace(user_id="asya", session_id=session_id, permissions=[], expires_at=None)
+        return types.SimpleNamespace(user_id="casey", session_id=session_id, permissions=[], expires_at=None)
     def cache_session(self, *a): self.writes.append(a)
 
 
@@ -107,9 +107,9 @@ def test_cached_session_is_honoured_only_when_offline_is_on(monkeypatch):
 def test_successful_login_is_not_cached_when_offline_is_off(monkeypatch):
     mgr, cache = _manager_with(monkeypatch, None)
     async def _ok(username, passcode, device_info):
-        return qa.QuickAuthResult(success=True, user_id="asya", session_id="s-ok", permissions=[])
+        return qa.QuickAuthResult(success=True, user_id="casey", session_id="s-ok", permissions=[])
     monkeypatch.setattr(mgr, "_authenticate_with_server", _ok)
-    result = asyncio.run(mgr.authenticate_passcode("asya", "1234"))
+    result = asyncio.run(mgr.authenticate_passcode("casey", "1234"))
     assert result.success is True and cache.writes == []
 
 

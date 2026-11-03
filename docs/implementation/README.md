@@ -19,7 +19,6 @@ This directory contains all tracking documentation, decision logs, and templates
 
 ### Core Documents
 
-- **[memory_hallucination_plan.md](memory_hallucination_plan.md)** - The complete implementation plan (attached as memory-enhancement.plan.md)
 - **[PROGRESS.md](PROGRESS.md)** - Daily tracking checklist for all phases
 - **[metrics_tracking.md](metrics_tracking.md)** - Metrics recording for baseline and validation gates
 - **[decision_log.md](decision_log.md)** - Record of all major decisions and gate outcomes

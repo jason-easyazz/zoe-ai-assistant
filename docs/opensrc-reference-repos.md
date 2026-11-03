@@ -43,7 +43,6 @@ clone guesses for them; read the local source on this machine.
 | Skybridge (voice/touch action-loop) | Internal | `services/zoe-data/skybridge_service.py`, `services/zoe-data/routers/skybridge.py`, `services/zoe-ui/dist/touch/js/skybridge*.js`; docs in `docs/architecture/skybridge-*.md` | present (local) |
 | Pi agent (Zoe's brain / reasoning core) | Internal | `services/zoe-core/` (Pi on local Gemma 4; see `services/zoe-core/README.md`) | present (local) |
 | hermes agent (PR-processing pipeline) | Internal | `~/.hermes/` (runtime: `~/.hermes/bin`, `~/.hermes/hermes-agent`); service wiring in `services/zoe-data/hermes_http.py`, `services/zoe-data/hermes_model_profiles.py` | present (local) |
-| openclaw (local Gemma agent runner) | Internal | `~/.openclaw/` (runtime config) + binary `~/.local/bin/openclaw`; service wiring in `services/zoe-data/openclaw_manager.py`, `openclaw_ws.py`, `routers/openclaw.py` | present (local) |
 
 > The `github.com/openclaw/openclaw`, `github.com/NousResearch/hermes-agent`, and
 > `github.com/multica-ai/multica` entries already in the opensrc cache are upstream

@@ -1,11 +1,14 @@
-# Nightly ON-BOX backup: Postgres dumps (biometric table data excluded) + the MemPalace tarball, to ~/.zoe-backups.
-# Tracked 2026-10-18 (architecture deep dive B9); the live unit ran the MemPalace step from an untracked
-# ~/scripts/maintenance copy, now scripts/maintenance/mempalace-nightly-backup.sh. Retention <= 35 days
-# (docs/knowledge/forget-reach.md). The off-box copy is zoe-offbox-backup.service, which ships these dumps.
+# Nightly ON-BOX backup to ~/.zoe-backups: Postgres dumps (biometric table data excluded) each with its manifest,
+# the MemPalace tarball, and (deep dive 2 S0-8) the HOST archive - Home Assistant config (its root-owned .storage via
+# the zoe-ha-config-export helper, once the owner installs it), services/zoe-data/data, systemd units + drop-ins,
+# ~/bin, the crontab, the panel's config + wake model, the models lock. Tracked 2026-10-18 (architecture deep dive
+# B9); the live unit ran the MemPalace step from an untracked ~/scripts/maintenance copy, now
+# scripts/maintenance/mempalace-nightly-backup.sh. Retention <= 35 days (docs/knowledge/forget-reach.md). The
+# off-box copy is zoe-offbox-backup.service, which ships these dumps; the weekly restore drill is zoe-backup-verify.
 #
 # Install: cp scripts/setup/systemd/zoe-backup.{service,timer} ~/.config/systemd/user/ && systemctl --user daemon-reload
 [Unit]
-Description=Zoe nightly backup (Postgres dumps + MemPalace tarball, on-box)
+Description=Zoe nightly backup (Postgres dumps + MemPalace tarball + host archive, on-box)
 Wants=network-online.target
 
 [Service]
@@ -13,6 +16,8 @@ Type=oneshot
 # Postgres first: it is the source of truth, and a MemPalace tar hiccup must never skip it (09-21, 09-25, 09-26).
 ExecStart=%h/assistant/scripts/maintenance/postgres-nightly-backup.sh
 ExecStart=%h/assistant/scripts/maintenance/mempalace-nightly-backup.sh
+# Last, so a host-source problem fails the unit (visible) without skipping the two data stores before it.
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/zoe_host_snapshot.py
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

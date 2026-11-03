@@ -110,6 +110,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_dir import resolve_service_dir  # noqa: E402
 import self_model_cells  # noqa: E402  (S28-S31: the self-awareness cells, judged against the generated self-model)
 import promise_cells  # noqa: E402  (S32-S33: the persisted provenance ledger and the commitment tracker; in-process cells)
+import bench_baseline  # noqa: E402  (T-4: complete, clean, commit-bound baselines; refuse a comparison with missing cells)
 
 HARNESS_VERSION = "0.1"
 DATA_BASE = os.environ.get("ZOE_DATA_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -1262,8 +1263,14 @@ def compare_baseline(current: dict[str, str], baseline: dict[str, Any] | None) -
         notes.append("judge rubric changed since the baseline — judged verdicts are not comparable")
     if base and "PASS" not in base.values():
         notes.append("baseline holds no PASS verdict — nothing can regress against it")
+    if base and new:
+        # T-4: a scored cell the baseline does not hold is UNMEASURED, and unmeasured is
+        # never green (the live baseline held S1-S8, so 15 cells could not regress).
+        notes.append(f"baseline lacks {', '.join(new)} — those cells cannot be judged; "
+                     "re-record a full baseline")
     return {"has_baseline": bool(base), "regressions": regressions,
-            "improvements": improvements, "new": new, "red": bool(regressions), "notes": notes}
+            "improvements": improvements, "new": new,
+            "red": bool(regressions) or bool(base and new), "notes": notes}
 
 
 def restrict_baseline(baseline: dict[str, Any] | None, selected: "frozenset[str] | None") -> dict[str, Any] | None:
@@ -1278,7 +1285,8 @@ def restrict_baseline(baseline: dict[str, Any] | None, selected: "frozenset[str]
 def make_baseline(results: list[dict], revision: dict | None, samples: int) -> dict[str, Any]:
     return {"harness_version": HARNESS_VERSION,
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-            "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
+            "revision": revision, "commit": (revision or {}).get("commit"),
+            "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
             "samples": samples, "scenarios": verdict_map(results)}
 
 
@@ -1302,6 +1310,75 @@ def in_nightly_window(now: dt.datetime, guard_min: int = NIGHTLY_GUARD_MIN) -> b
     minute = now.hour * 60 + now.minute
     start, end = sh * 60 + sm - guard_min, eh * 60 + em
     return start <= minute < end
+
+
+def harness_quiet_refusal(name: str | None = None) -> str | None:
+    """Harness quiet hours (P-2, ``scripts/maintenance/harness_quiet.py``): the reason this harness may NOT
+    start now (waking hours, or the panel used in the last 10 min), else None. One rule for every harness
+    built on this module (the bar, day-sim, person bench, user-model A/B, recall-evidence probe)."""
+    # load by FILE PATH, never via sys.path: scripts/maintenance holds names that shadow service modules
+    # (pi_runtime_probe.py exists in both), and this runs inside processes that import service code
+    import importlib.util
+
+    harness_quiet = sys.modules.get("harness_quiet")
+    if harness_quiet is None:
+        spec = importlib.util.spec_from_file_location(
+            "harness_quiet", Path(__file__).resolve().parents[1] / "maintenance" / "harness_quiet.py")
+        harness_quiet = importlib.util.module_from_spec(spec)
+        sys.modules["harness_quiet"] = harness_quiet
+        spec.loader.exec_module(harness_quiet)
+
+    verdict = harness_quiet.check(name or Path(sys.argv[0]).stem or "harness")
+    print(verdict.reason, flush=True)
+    return None if verdict.allowed else verdict.reason
+
+
+def _harness_scratch():
+    """``scripts/perf/harness_scratch.py`` (P-2: the throwaway Zoe), loaded once by file path like ``harness_quiet``."""
+    import importlib.util
+
+    mod = sys.modules.get("harness_scratch")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("harness_scratch", Path(__file__).resolve().parent / "harness_scratch.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["harness_scratch"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def scratch_stack_for(service_dir: Path, name: str, ctx: dict, log) -> tuple[Any, str | None]:
+    """P-2: a live run writes ONLY to its own throwaway Zoe - a scratch Postgres (the live image, its own network, migrated to
+    head) and a harness zoe-data + Flue pair on it (``harness_scratch.py``) - never to the live database. The quiet-hours guard is
+    asked FIRST, so nothing starts in waking hours. On success ``DATA_BASE`` points at the scratch zoe-data and the stack is in
+    ``ctx`` for ``close_scratch``. Returns (stack, None) or (None, the refusal)."""
+    if in_nightly_window(dt.datetime.now()):                  # every refusal BEFORE anything starts (Postgres, zoe-data, a brain warm-up)
+        return None, "inside (or within 30 min of) the 01:45-03:15 nightly window"
+    quiet = harness_quiet_refusal(name)
+    if quiet:
+        return None, quiet
+    busy, detail = deploy_in_progress()
+    if busy is None or busy:
+        return None, f"deploy check: {detail}"
+    hs = _harness_scratch()
+    tag = re.sub(r"[^a-z0-9-]", "-", f"{name[:18]}-{os.getpid()}".lower())
+    stack = hs.ScratchStack(service_dir, serve=True, tag=tag, log=log)
+    ctx["stack"] = stack
+    try:
+        stack.__enter__()
+        hs.assert_not_live(stack.dsn, env_file_value(service_dir, "POSTGRES_URL"))
+    except hs.Refused as exc:
+        return None, f"scratch stack: {exc}"
+    global DATA_BASE
+    DATA_BASE = stack.base_url
+    log(f"scratch stack up ({stack.tag}): {json.dumps(stack.public().get('ram'))}")
+    return stack, None
+
+
+def close_scratch(ctx: dict) -> None:
+    """Tear the run's scratch stack down (every exit path: the harness main wrappers call this in ``finally``)."""
+    stack = ctx.pop("stack", None)
+    if stack is not None:
+        stack.__exit__(None, None, None)
 
 
 def mem_available_mb() -> int:
@@ -1335,6 +1412,13 @@ def deploy_in_progress(runner: Callable[..., Any] = subprocess.run) -> tuple[boo
     return bool(found), f"{len(found)} deploy.yml run(s) queued/in progress"
 
 
+def code_checkout_dir() -> Path:
+    """The zoe-data tree the scratch stack actually SERVES (harness_scratch runs THIS checkout's code). Revision metadata, the
+    clean-baseline gate and the fallback markers come from here; ``service_dir`` stays the source of live settings only (in a linked
+    worktree without its own .env it resolves to the main checkout, which is not what is being measured)."""
+    return Path(__file__).resolve().parents[2] / "services" / "zoe-data"
+
+
 def service_revision(service_dir: Path | None) -> dict[str, Any] | None:
     """Commit of the checkout the live service runs from — same shape and the
     same fail-closed dirty rule as voice_regression_probe.service_revision."""
@@ -1353,10 +1437,93 @@ def service_revision(service_dir: Path | None) -> dict[str, Any] | None:
     if not commit:
         return None
     status = _git("status", "--porcelain")
-    clean_verified = status is not None
+    tracked = _git("status", "--porcelain", "--untracked-files=no")
+    clean_verified = status is not None and tracked is not None
+    # ``dirty`` stays the strict, fail-closed bit (any porcelain line, untracked included) so older
+    # readers keep their meaning. ``tracked_dirty`` is the one that matters for attribution: the code
+    # under test equals ``commit`` iff no TRACKED file differs. Untracked files (the live checkout always
+    # carries some) are counted, not ignored, and ``diff_sha256`` pins the exact tracked change when
+    # there is one, so even an unbound run says WHAT it ran.
+    tracked_dirty = True if tracked is None else bool(tracked)
+    diff_sha = None
+    if tracked_dirty and tracked is not None:
+        diff = _git("diff", "HEAD", "--binary")
+        diff_sha = hashlib.sha256(diff.encode("utf-8", "replace")).hexdigest()[:16] if diff is not None else None
     return {"commit": commit, "tree": _git("rev-parse", "HEAD^{tree}"),
             "dirty": True if not clean_verified else bool(status),
+            "tracked_dirty": tracked_dirty,
+            "untracked_files": None if status is None else sum(1 for ln in status.splitlines() if ln.startswith("??")),
+            "diff_sha256": diff_sha,
             "clean_verified": clean_verified, "service_dir": str(service_dir)}
+
+
+def harness_revision() -> dict[str, Any] | None:
+    """Revision of the checkout THIS harness runs from (same shape as ``service_revision``)."""
+    return service_revision(Path(__file__).resolve().parents[2])
+
+
+def evidence_binding(revision: dict[str, Any] | None, harness: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Can this run's result be attributed to a commit? (the evidence-binding rule the voice gate already has)
+
+    A score is evidence for a commit only if (1) the live service's TRACKED files equal that commit, (2) the
+    harness that asked the questions is a checkout with no tracked modifications, and (3) harness tree ==
+    service tree, i.e. the scripts that ran are the code under test. Anything else is ``bound: false`` with a
+    reason: the run still happens (a developer wants to see the scores) but it is NEVER recorded in the trend
+    and NEVER becomes a baseline. Run it from a clean checkout of the deployed commit:
+    ``scripts/maintenance/samantha_weekly.sh``.
+    """
+    rev, har = revision or {}, harness or {}
+    reason = ""
+    if not rev.get("commit") or not rev.get("tree"):
+        reason = "the live service's commit is unknown"
+    elif not rev.get("clean_verified"):
+        reason = "git status failed on the service checkout: cleanliness unverified (fail closed)"
+    elif rev.get("tracked_dirty"):
+        reason = f"the service checkout has tracked modifications (diff {rev.get('diff_sha256') or '?'})"
+    elif not har.get("commit") or not har.get("tree"):
+        reason = "the harness is not running from a git checkout"
+    elif not har.get("clean_verified"):
+        reason = "git status failed on the harness checkout: cleanliness unverified (fail closed)"
+    elif har.get("tracked_dirty"):
+        reason = f"the harness checkout has tracked modifications (diff {har.get('diff_sha256') or '?'})"
+    elif har["tree"] != rev["tree"]:
+        reason = "harness tree != service tree: the scripts that ran are not the code under test"
+    return {"bound": not reason, "reason": reason or None,
+            "commit": rev.get("commit"), "tree": rev.get("tree"),
+            "harness_commit": har.get("commit"), "harness_tree": har.get("tree"),
+            "tracked_dirty": rev.get("tracked_dirty"), "untracked_files": rev.get("untracked_files"),
+            "diff_sha256": rev.get("diff_sha256")}
+
+
+def prompt_size_summary(live: Any) -> dict[str, Any] | None:
+    """The prompt-size column: the recall packet the brain would get, as the run measured it (chars).
+
+    Every ``Live.packet`` read records its length. ~4 chars per token is the repo's usual estimate, so the
+    token figure is an estimate; the CHARS are exact and comparable run to run. None when no packet was read.
+    """
+    sizes = sorted(getattr(live, "packet_chars", []) or [])
+    if not sizes:
+        return None
+    p95 = sizes[min(len(sizes) - 1, -(-95 * len(sizes) // 100) - 1)]   # nearest-rank: ceil(0.95 n) - 1
+    return {"packets": len(sizes), "chars_mean": round(sum(sizes) / len(sizes)), "chars_p95": p95,
+            "chars_max": sizes[-1], "est_tokens_p95": -(-p95 // 4)}
+
+
+def record_trend(path: Path, line: dict[str, Any], binding: dict[str, Any], prompt: dict[str, Any] | None) -> Path:
+    """Append one trend line. BOUND evidence goes to ``path``; unbound evidence goes to a sibling
+    ``<name>.unbound.jsonl`` so the trend only ever holds scores attributable to a commit."""
+    line = {**line, "bound": binding["bound"], "tree": binding.get("tree"),
+            "tracked_dirty": binding.get("tracked_dirty"), "diff_sha256": binding.get("diff_sha256"),
+            "unbound_reason": binding.get("reason")}
+    # the columns are ALWAYS present: null = no packet was read (never a zero, which would read as "measured: empty")
+    prompt = prompt or {}
+    line.update({"prompt_packets": prompt.get("packets"), "prompt_chars_mean": prompt.get("chars_mean"),
+                 "prompt_chars_p95": prompt.get("chars_p95"), "prompt_chars_max": prompt.get("chars_max")})
+    target = path if binding["bound"] else path.with_name(path.stem + ".unbound" + path.suffix)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line, sort_keys=True) + "\n")
+    return target
 
 
 def env_file_value(service_dir: Path, key: str) -> str:
@@ -1414,11 +1581,16 @@ class Live:
         self.token, self.admin, self.dsn, self.keep = token, admin_session, dsn, keep_replies
         self.nonce = secrets.token_hex(3)
         self.sessions: dict[str, list[str]] = {}
+        self.packet_chars: list[int] = []   # the prompt-size column: len() of every recall packet read
 
     # HTTP ------------------------------------------------------------------
     def _req(self, method: str, url: str, headers: dict, body: dict | None = None,
              timeout: float = 60) -> tuple[int, Any]:
         data = json.dumps(body).encode() if body is not None else None
+        if "X-Internal-Token" in headers:
+            # P-2 traffic class: the server honours this only next to the internal token, and only to name a
+            # NON-household class (the demo_* id already forces "harness"; this covers token-only calls).
+            headers = {"X-Zoe-Traffic-Class": "harness", **headers}
         req = urllib.request.Request(url, data=data, method=method,
                                      headers={"Content-Type": "application/json", **headers})
         try:
@@ -1467,7 +1639,9 @@ class Live:
                                {"X-Internal-Token": self.token})
         if code != 200:
             return None
-        return str((body or {}).get("packet") or "")
+        packet = str((body or {}).get("packet") or "")
+        self.packet_chars.append(len(packet))
+        return packet
 
     def capture_status(self, user: str) -> dict[str, Any] | None:
         """Per-user post-turn capture counters (/capture-status, internal). None
@@ -2346,17 +2520,17 @@ def write_json(path: Path, payload: Any) -> None:
     tmp.replace(path)
 
 
-def append_trend(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def append_trend(path: Path, payload: dict[str, Any]) -> Path:
     rev = payload.get("revision") or {}
     line = {"ts": payload["finished_at"], "status": payload["status"],
             "commit": rev.get("commit"), "dirty": rev.get("dirty"),
+            "partial": bool(payload.get("partial")),
             "verdicts": verdict_map(payload.get("scenarios", [])),
             "regressions": (payload.get("compare") or {}).get("regressions", []),
             "teardown_proven": (payload.get("teardown") or {}).get("proven"),
             "duration_s": payload.get("duration_s")}
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(line, sort_keys=True) + "\n")
+    binding = payload.get("evidence") or evidence_binding(rev, None)
+    return record_trend(path, line, binding, payload.get("prompt_size"))
 
 
 def _acquire_lock():
@@ -2431,6 +2605,14 @@ def _pending_teardown(live: Live, path: Path, log) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ctx: dict = {}
+    try:
+        return _main(argv, ctx)
+    finally:
+        close_scratch(ctx)
+
+
+def _main(argv: list[str] | None, ctx: dict) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print the plan; no network, no writes")
@@ -2459,6 +2641,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--teardown-only", action="store_true",
                     help="only clean up a previous run's pending teardown")
     ap.add_argument("--service-dir", default=None)
+    ap.add_argument("--require-bound", action="store_true",
+                    help="refuse to run unless the result can be attributed to a commit (clean tracked service "
+                         "checkout, clean harness checkout, same tree) - the weekly clean-checkout run passes this")
     ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     ap.add_argument("--trend", type=Path, default=DEFAULT_TREND)
     ap.add_argument("--results", type=Path, default=DEFAULT_RESULTS)
@@ -2492,8 +2677,11 @@ def main(argv: list[str] | None = None) -> int:
 
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = resolve_service_dir(args.service_dir)
-    revision = service_revision(service_dir)
-    load_source_fallback_markers(service_dir)  # the checkout's own "brain did not answer" texts
+    revision = service_revision(code_checkout_dir())  # the checkout actually served, not the settings dir
+    binding = evidence_binding(revision, harness_revision())
+    if args.require_bound and not binding["bound"]:
+        return _refuse(args, f"--require-bound: unbound evidence - {binding['reason']}", revision)
+    load_source_fallback_markers(code_checkout_dir())  # the checkout's own "brain did not answer" texts
     lock_fd = _acquire_lock()  # noqa: F841 — held for the process lifetime
     try:
         cur = os.nice(0)
@@ -2502,10 +2690,9 @@ def main(argv: list[str] | None = None) -> int:
     except OSError:
         pass
 
-    token = env_file_value(service_dir, "ZOE_INTERNAL_TOKEN")
-    dsn = env_file_value(service_dir, "POSTGRES_URL")
-    admin = os.environ.get("ZOE_BAR_ADMIN_SESSION", "").strip()
-    live = Live(token, admin, dsn, args.keep_replies)
+    # P-2: the live token and DSN are never read here - the run gets a scratch stack below, after the gates
+    token = dsn = ""
+    live = None
 
     # Gates -----------------------------------------------------------------
     baseline, baseline_problem = load_baseline(args.baseline)
@@ -2514,6 +2701,22 @@ def main(argv: list[str] | None = None) -> int:
                        revision)
     if baseline_problem and args.baseline.exists():
         log(f"baseline ignored ({baseline_problem})")
+    if args.compare_baseline:
+        # T-4: refuse BEFORE the run when the baseline lacks a cell this run will score
+        # (each such cell would be "new", i.e. unmeasured, and could never regress).
+        wanted = selected if selected is not None else frozenset(SCENARIO_IDS)
+        lacking = bench_baseline.missing_cells(baseline, wanted, key="scenarios")
+        if lacking:
+            return _refuse(args, f"the baseline lacks {len(lacking)} of the {len(wanted)} scenario(s) this run "
+                                 f"scores ({', '.join(lacking)}): they cannot regress against it, so the "
+                                 "comparison would be partly vacuous — re-record a FULL baseline on a clean tree "
+                                 "(--record-baseline --samples 3)", revision)
+    if args.record_baseline:
+        # ...and a dirty / unverifiable tree can never become the bar: refuse before spending a run.
+        why = bench_baseline.record_problem(revision, status="ok", partial=False,
+                                            verdicts={s: "PASS" for s in SCENARIO_IDS}, cells=SCENARIO_IDS)
+        if why:
+            return _refuse(args, f"--record-baseline: {why}", revision)
     if args.compare_baseline:
         # A majority-of-3 bar compared against a single stochastic answer is not a
         # comparison: inherit the baseline's count, refuse an explicit mismatch.
@@ -2529,9 +2732,17 @@ def main(argv: list[str] | None = None) -> int:
         args.samples = 1
     if in_nightly_window(dt.datetime.now()):
         return _refuse(args, "inside (or within 30 min of) the 01:45-03:15 nightly window", revision)
+    quiet = harness_quiet_refusal("samantha_bar")
+    if quiet:
+        return _refuse(args, quiet, revision)
     busy, detail = deploy_in_progress()
     if busy is None or busy:
         return _refuse(args, f"deploy check: {detail}", revision)
+    stack, refusal = scratch_stack_for(service_dir, "samantha_bar", ctx, log)
+    if refusal:
+        return _refuse(args, refusal, revision)
+    token, dsn = stack.token, stack.dsn          # the live admin session means nothing to the scratch instance: token teardown
+    live = Live(stack.token, "", stack.dsn, args.keep_replies)
     if not token or not dsn:
         return _refuse(args, "ZOE_INTERNAL_TOKEN / POSTGRES_URL not resolvable from the service .env",
                        revision)
@@ -2599,24 +2810,43 @@ def main(argv: list[str] | None = None) -> int:
                          or {r["id"] for r in results} != set(expected_ids)) \
         else ("regression" if (args.compare_baseline and cmp["red"])
               else ("partial" if partial else "ok"))
+    record_why = bench_baseline.record_problem(revision, status=status, partial=partial,
+                                               verdicts=verdict_map(results), cells=SCENARIO_IDS)
+    errored = sorted(r["id"] for r in results if r["verdict"] == "ERROR")
+    if not record_why and errored:
+        # an ERROR is the instrument failing (judge unavailable, recall packet unread), not a result: recorded as the
+        # bar it would leave that scenario with no regression protection (only a baseline PASS can regress)
+        record_why = (f"{len(errored)} scenario(s) ERRORED ({', '.join(errored)}): an errored scenario is the "
+                      "instrument, not a result")
+    if not record_why and not binding["bound"]:
+        record_why = f"the evidence is unbound ({binding['reason']}): only a result attributable to a commit can be the bar"
+    if args.record_baseline and record_why and status != "error":
+        # asked to record a bar and REFUSED: that is a failed run (exit 2, status error), never a quiet success that leaves the
+        # baseline missing or stale for record_bench_baselines.sh to report as done
+        status = "error"
     payload = {"harness_version": HARNESS_VERSION, "status": status, "run_error": run_error,
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
                "backdate": not args.no_backdate, "partial": partial,
                "selected": sorted(expected_ids) if partial else None,
-               "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
+               "revision": revision, "evidence": binding, "prompt_size": prompt_size_summary(live),
+               "judge_prompt_sha256": JUDGE_PROMPT_SHA256, "scratch": stack.public(),
                "scenarios": results, "compare": cmp, "teardown": td,
                "baseline_ref": {"path": str(args.baseline),
                                 "created_at": (baseline or {}).get("created_at"),
                                 "commit": ((baseline or {}).get("revision") or {}).get("commit")}}
     write_json(args.results, payload)
-    append_trend(args.trend, payload)
-    if args.record_baseline and status == "ok" and not partial:  # a partial run NEVER records
+    trend_file = append_trend(args.trend, payload)
+    if not binding["bound"]:
+        log(f"EVIDENCE UNBOUND: {binding['reason']} - logged to {trend_file.name}, NOT the trend; "
+            "run scripts/maintenance/samantha_weekly.sh (a clean checkout of the deployed commit) for a result that counts")
+    if args.record_baseline and not record_why:  # a partial / errored / dirty / incomplete / unbound run NEVER records
         write_json(args.baseline, make_baseline(results, revision, args.samples))
-        log(f"baseline recorded: {args.baseline}")
+        log(f"baseline recorded: {args.baseline} (commit {(revision or {}).get('commit', '?')[:10]}, "
+            f"{len(results)} scenarios)")
     elif args.record_baseline:
-        log("baseline NOT recorded: the run errored or its teardown is unproven")
+        log(f"baseline NOT recorded: {record_why}")  # status is already "error" -> exit 2
 
     for r in results:
         exp = f"  (expected {r['expected']}: a target)" if r.get("expected") else ""

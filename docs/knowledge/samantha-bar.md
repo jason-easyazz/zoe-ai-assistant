@@ -62,6 +62,25 @@ omit `--samples` to inherit it; an explicit different count is refused. `--no-ba
 refused in both baseline modes — S2/S4/S7 are multi-day scenarios, and a same-day run can
 neither set nor clear the bar; the results file records `backdate`.
 
+**Complete, clean, commit-bound baselines (T-4, deep dive 2, 2026-10-19; `scripts/perf/bench_baseline.py`,
+shared with the day-sim and the person bench).** The 2026-09-30 baseline held S1-S8 only, and a scenario
+missing from the baseline was vacuously "not regressed", so 21 of the 29 scored cells could never go red.
+Now: `--compare-baseline` REFUSES before the run when the baseline lacks any scenario the run scores (each
+would be unmeasured), and `compare_baseline` itself counts a scored cell the baseline lacks as red;
+`--record-baseline` refuses before the run on a DIRTY or unverifiable service tree (untracked files count,
+same rule as the voice probe's `--expect-revision`) and records only a full, `ok` run with every scenario,
+writing the top-level `commit` beside `revision`. Recording therefore needs the live checkout clean
+(`git status --porcelain` empty). Run it, with the day-sim, the person bench and the voice self-test, in one
+allowed window: `bash scripts/maintenance/record_bench_baselines.sh` (start 22:00-01:05 or 05:00-06:45; the script itself
+refuses a start inside the 01:50-04:55 brain window or with under 45 min before 01:50, and `ZOE_HARNESS_FORCE` does not bypass that).
+
+**Day-sim baselines.** `samantha_day_sim.py --record-baseline` / `--compare-baseline` (`--baseline`, default
+one file per mode: `samantha_day_sim_baseline.json`, `…_baseline_allowlisted.json`). The baseline holds every
+ask's verdict (`cells`), the mode, `samples`, `criteria_sha256` and the commit; a record needs a full, `ok`,
+clean run with no `ERROR` ask. Compare refuses another mode, another sample count, changed criteria or a
+missing ask; then only an ask that PASSED in the baseline can regress (exit 1, `status: regression`), and the
+asks that were not PASS (the default mode's brief + card SKIPs) are listed as `uncovered`.
+
 Exit codes: 0 = ran with no regression; 1 = regression; 2 = refused, error, or teardown not
 proven; 3 = harness lock held. Without `ZOE_PERF=1` it prints a skip notice, exits 0 and
 writes nothing. This follows the `scripts/perf/` convention.
@@ -76,6 +95,38 @@ It waits (up to 20 minutes) for `/readyz` to report `ready` with `memory_capture
 covers a store cutover. It also waits (up to 15 minutes) for MemAvailable ≥ 1.2 GB. It
 takes the shared `/tmp/zoe-voice-harness.lock`, because it uses the brain slot, and it
 raises its niceness to at least 5.
+
+## Evidence binding, the weekly clean-checkout run and the prompt-size column (deep dive B8, 2026-10-18)
+
+Until 2026-10-18 every full run in the trend was `dirty: true` (the harness read the live checkout, which always carries
+untracked files), so no score was attributable to a commit - the defect the voice gate fixed with `--expect-revision`.
+Now the three harnesses (bar, day-sim, person bench; the shared code is in `samantha_bar.py`) decide, per run, whether the
+result is **bound to a commit** (`evidence_binding`):
+
+- the live service's TRACKED files equal its commit (`tracked_dirty` false; `dirty` stays the old strict bit and still counts
+  untracked files; `untracked_files` and, for a tracked change, `diff_sha256` are recorded so an unbound run still says what it ran);
+- the harness itself runs from a checkout with no tracked modifications (`harness_revision`);
+- harness tree == service tree (the scripts that asked the questions are the code under test).
+
+A **bound** run lands in `*_trend.jsonl` with `bound: true` and the `tree`. An **unbound** run still executes (a developer wants
+the scores) and writes its `*_last.json` (with `evidence.reason`), but its trend line goes to a sibling `*_trend.unbound.jsonl`,
+it can never record a baseline, and the run says so out loud. `--require-bound` (all three) refuses before spending the run.
+The existing trend (67 bar lines, last full run 2026-10-09, all dirty) is left as history; read `bound` to tell new from old.
+
+**Weekly, from a clean checkout:** `scripts/maintenance/samantha_weekly.sh` clones (`git clone --shared`, nothing written to the
+live checkout) the commit the live service is on, runs the bar then the day-sim from that clone with `--require-bound
+--service-dir <live>/services/zoe-data` (the live Flue build is linked into the clone) under `/tmp/zoe-voice-harness.lock`, and writes `~/.cache/zoe/samantha_weekly_last.json`. It refuses to start
+inside 01:50-04:55 local (exit 4), and bounds each step's lock wait and run time to end 5 min before the window next opens. Template units, NOT installed (operator opt-in): `scripts/setup/systemd/zoe-samantha-weekly.{service,timer}`
+(Sunday 05:30, after the 12B night window and the 04:30 voice probe; `Persistent=false`). `--with-person` adds the person bench,
+`--record-baseline` records the bar (bound runs only), `--dry-run` prints the plan.
+
+**Prompt-size column:** every recall packet a run reads (`Live.packet`, the packet the brain would get) is measured; the result carries
+`prompt_size` (`packets`, `chars_mean`, `chars_p95`, `chars_max`, `est_tokens_p95` at ~4 chars/token) and each trend line carries
+`prompt_packets`, `prompt_chars_mean`, `prompt_chars_p95`, `prompt_chars_max`. The chars are exact and comparable run to run; a
+rising p95 with flat scores is prompt bloat the pass/fail verdicts cannot see.
+
+Tests: `tests/unit/test_samantha_bar.py` (binding on a real temp git repo: untracked-only is bound, a tracked edit is not; an unbound run
+leaves the trend and the baseline untouched; `--require-bound` refuses; the prompt-size summary).
 
 ## Scenarios
 
