@@ -1017,7 +1017,11 @@ produces a "Job failed" that looks like a hard failure while the service is actu
 
 ## Brain build + flags — B0.4: llama.cpp b11194, FlashAttention on, q8_0 K+V (2026-09-27)
 
-The tracked template `scripts/setup/systemd/llama-server.service` targets **llama.cpp b11194**
+> **Build moved 2026-10-30 to b11982** (`~/llama.cpp-b11982/build-jetson`, commit `8a199ad31`; same flags, same cmake set;
+> +6% prompt processing, otherwise equal - [A/B](llama-cpp-bump-b11982-ab.md), [switch runbook](llama-cpp-b11982-switch-runbook.md)).
+> The recipe below is the b11194 record; for b11982 substitute the tag. b11194 stays on disk for rollback.
+
+The tracked template `scripts/setup/systemd/llama-server.service` targeted **llama.cpp b11194** at B0.4
 (`~/llama.cpp-b11194/build-jetson`, commit `9f70b2cec`; built `GGML_CUDA=ON`,
 `CMAKE_CUDA_ARCHITECTURES=87`, `GGML_CUDA_FA=ON`, `GGML_CUDA_GRAPHS=ON`, `GGML_NATIVE=ON`,
 Release) with `--flash-attn on --cache-type-k q8_0 --cache-type-v q8_0` beside the MTP drafter.
