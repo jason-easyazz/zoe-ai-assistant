@@ -1881,7 +1881,7 @@
       },
       "ZOE_BRAIN_BACKEND": {
         "defaults": [
-          "'core'"
+          "'flue'"
         ],
         "in_env_example": true,
         "readers": [
@@ -1890,7 +1890,7 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "core",
+          "default": "flue",
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/memory-pressure-profile.md",
@@ -12268,6 +12268,48 @@
           "type": "bool"
         },
         "typed_env": false
+      },
+      "ZOE_RECALL_EVERY_TURN": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/recall_every_turn.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "live: unset (code default in force)",
+          "owner_doc": "docs/knowledge/recall-every-turn.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_RECALL_EVERY_TURN_HARNESS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/recall_every_turn.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "measured bar runs only",
+          "owner_doc": "docs/knowledge/recall-every-turn.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_RECALL_EVIDENCE": {
         "defaults": [

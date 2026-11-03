@@ -212,7 +212,8 @@ OTHER: tuple[Store, ...] = (
           markers=("engineering_pipeline_runs.jsonl", "pipeline_runs.jsonl")),
     Store("sqlite_dev_db", "file", METADATA, OUT_OF_SCOPE, "database.py's zoe.db is the legacy SQLite fallback for dev; production is Postgres.",
           markers=("zoe.db",)),
-    Store("app_logs", "file", WORDS, GAP, "~/.zoe-logs/zoe-data.*: the service log. Message text is logged at INFO in a few places (e.g. intent_miss: <text>); "
+    Store("app_logs", "file", WORDS, GAP, "~/.zoe-logs/zoe-data.*: the service log. Utterances are logged as len + hash only since 2026-11-03 (intent_miss: len=N utt=<hash>); "
+          "lines written before then hold text until the size rotation drops them; "
           "rotated by size (50 MB x4), not by age, outside the cascade.", markers=("intent_miss:",)),
     Store("backup_postgres", "backup", WORDS, GAP, "Nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within "
           "BACKUP_MAX_AGE_DAYS (35) - WHILE the nightly job succeeds: it prunes by count after a new dump, so a job that keeps failing "

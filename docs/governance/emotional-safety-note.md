@@ -85,6 +85,18 @@ The rules, each of which is a test:
 
 ## 4. Children (kid mode)
 
+> **Owner decision 2026-11-03 (supersedes the retention rules below while it stands):** affective memory stays **on for every
+> household member, including children** (`ZOE_AFFECT_CONSENT_GATE` default `household`, as decided 2026-10-05). The owner's
+> words: "we leave it on for everyone and we will have to test this; eventually we will get it to a point where it is safe for
+> everyone." What this changes: a child's affect may be inferred and retained under the same authority rules as an adult's
+> (user-stated > confirmed > inferred; forgotten means forever; one-step correction). What it does not change: no romantic or
+> companion mode for a minor, no teasing, crisis language redirects to a trusted adult, guests still get nothing. What it adds:
+> before any retained affect about a child is *served*, the path needs measured kid-safe cells - false-positive rate of inferred
+> affect on real (not acted) speech, proof that no retained row is linkable to a guest, correction and forget in one step - and the
+> drift and bench scorers include minor turns under a kid-safe rubric instead of skipping them. The paragraphs below record the
+> stricter design the owner may return to; they are not the live rule today.
+
+
 Kid mode is **not built in the first PR** — the mode value exists and its rules are enforced, but
 nothing assigns it automatically (plan W5.4 waits on enrolment). Its rules are fixed now so that
 building the feature cannot erode them:
