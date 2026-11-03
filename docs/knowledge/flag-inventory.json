@@ -105,6 +105,9 @@
         "services/zoe-data/mcp_server.py": [
           "'http://127.0.0.1:8007'"
         ],
+        "services/zoe-data/presence/ha_presence.py": [
+          "'http://127.0.0.1:8007'"
+        ],
         "services/zoe-data/routers/ha_control.py": [
           "'http://127.0.0.1:8007'"
         ],
@@ -5399,6 +5402,7 @@
         "readers": [
           "services/zoe-data/intent_router.py",
           "services/zoe-data/mcp_server.py",
+          "services/zoe-data/presence/ha_presence.py",
           "services/zoe-data/routers/ha_control.py",
           "services/zoe-data/routers/stubs.py",
           "services/zoe-data/routers/system.py",
@@ -5457,6 +5461,29 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_HA_PRESENCE": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/presence/ha_presence.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_HA_UI_GATE": {
         "defaults": [
@@ -9175,7 +9202,8 @@
           "allowed": [
             "off",
             "shadow",
-            "enforce"
+            "enforce",
+            "serve"
           ],
           "default": "off",
           "divergent_ok": {},
@@ -12854,6 +12882,7 @@
           "allowed": [
             "off",
             "shadow",
+            "shadow2",
             "active"
           ],
           "default": "off",
