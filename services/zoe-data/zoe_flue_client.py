@@ -2515,7 +2515,9 @@ async def run_flue_brain_streaming(
         # straight through; closing this wrapper closes the inner turn.
         import narration_filter
 
-        turn = narration_filter.filter_stream(turn)
+        # An announcement that ENDS a turn with no tool call is an unkept promise and is replaced - only where the lane
+        # streams tool sentinels (Seam-A streaming); elsewhere their absence proves nothing.
+        turn = narration_filter.filter_stream(turn, tools_visible=_stream_enabled())
     # A reply that opens "It sounds like ..." / "That sounds like ..." (the 4B's one empathy move) loses that sentence when something of
     # substance follows it (mirror_guard, ZOE_MIRROR_GUARD=off|shadow|on, default shadow = byte-identical + a label-only log line).
     # off: nothing wraps the stream. After the narration strip (so it sees the real first sentence), before clean_goodbye.
