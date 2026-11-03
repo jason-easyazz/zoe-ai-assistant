@@ -28,6 +28,7 @@ import command_shapes
 import contacts_conversation as _cc
 import panel_principal
 import traffic_class
+from log_redaction import utterance_tag as _utt_tag
 from list_service import HouseholdListUnavailable
 from time_utils import today_for_zoe_tz
 from typed_env import env_str
@@ -1729,7 +1730,7 @@ def detect_intent(
                 return hit
 
     if log_miss:
-        logger.info("intent_miss: %s", text)
+        logger.info("intent_miss: %s", _utt_tag(text))
         try:
             # Write to intent-misses file for weekly self-review (PII stripped)
             import re as _re, json as _json, pathlib as _pathlib
@@ -2331,7 +2332,7 @@ async def detect_and_extract_intent(
     if intent is not None and await ack_answers_offer(intent, user_id):
         # "Sounds good" to "...how about the history of coffee?" ACCEPTS the offer: the canned "Okay." would swallow it and the
         # offer would never be delivered. No intent -> both lanes fall through to the brain, which has the conversation.
-        logger.info("ack_after_offer: acknowledgement %r answers Zoe's last offer -> brain", (text or "")[:40])
+        logger.info("ack_after_offer: acknowledgement %s answers Zoe's last offer -> brain", _utt_tag(text or ""))
         return None
     if intent is None:
         routed_intent, pi_classified = await _try_pi_governor()

@@ -111,7 +111,8 @@ def logged_transcript(stem: str) -> str | None:
 def classify(text: str | None) -> dict:
     """Server-side verdicts on a transcript. Booleans and the last word only."""
     if not text:
-        return {"transcript": "not found in ~/.zoe-logs"}
+        # since 2026-11-03 STT_CAPTURE logs ``len=N utt=<hash>`` only, so only clips captured before then classify
+        return {"transcript": "not found in ~/.zoe-logs (hash-only since 2026-11-03)"}
     sys.path.insert(0, str(REPO / "services" / "zoe-data"))
     import voice_utterance_shape as us
     words = re.findall(r"[^\W_]+(?:['’][^\W_]+)*", text)
