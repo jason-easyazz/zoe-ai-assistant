@@ -15,6 +15,8 @@ import asyncio
 import importlib.util
 import re
 import sys
+import time as _real_time
+import types
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -69,6 +71,23 @@ def _tz(monkeypatch):
     monkeypatch.delenv("ZOE_TIMEZONE", raising=False)
 
 
+# The HTTP and voice paths take "now" from ``time.time()``. Left on the real clock, every test that creates "an alarm for 7"
+# that way and then ticks at the fixed ``SEVEN`` was a time bomb: once the real clock passed 2026-11-03 07:00 Perth, "7:00"
+# meant TOMORROW and ``tick(SEVEN)`` rang nothing. So those modules read a test clock instead: it starts at ``NIGHT`` and
+# ``_tick`` moves it to the instant the engine ran, the way the wall clock and the engine move together in production.
+_CLOCK = {"now": NIGHT}
+
+
+@pytest.fixture(autouse=True)
+def _wall_clock(monkeypatch):
+    import routers.alarms as alarms_router
+
+    _CLOCK["now"] = NIGHT
+    fake = types.SimpleNamespace(time=lambda: _CLOCK["now"], monotonic=_real_time.monotonic, sleep=_real_time.sleep)
+    for mod in (alarms, alarm_voice, alarms_router):
+        monkeypatch.setattr(mod, "time", fake)
+
+
 @pytest.fixture
 def dbfile(tmp_path):
     p = str(tmp_path / "z.db")
@@ -94,6 +113,7 @@ async def _mk(path, owner=ANN, now=NIGHT, **kw):
 
 
 async def _tick(path, now):
+    _CLOCK["now"] = now
     db = await _open(path)
     try:
         return await alarms.tick(db, now)
@@ -701,7 +721,7 @@ def test_voice_snooze_and_off_while_ringing(voice):
     run(_tick(voice, SEVEN))
     assert "Snoozed for 9 minutes" in say("snooze")["spoken_summary"]
     assert "Snoozed for 5 minutes" not in say("snooze the alarm")["spoken_summary"]  # already snoozed: nothing is ringing
-    run(_tick(voice, __import__("time").time() + 9 * 60 + 1))  # resolve() snoozes on the real clock; the snooze ends 9 minutes after it
+    run(_tick(voice, _CLOCK["now"] + 9 * 60 + 1))  # resolve() snoozes on the wall clock; the snooze ends 9 minutes after it
     assert "Alarm off" in say("turn off the alarm")["spoken_summary"]
     assert "No alarm is ringing" in say("snooze")["spoken_summary"]
 
