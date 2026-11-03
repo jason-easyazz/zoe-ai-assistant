@@ -96,15 +96,24 @@ stopped. Use the recipe in [merge-and-deploy.md](merge-and-deploy.md) ("Unwedge"
 W=~/.worktrees/voice-gate-llama-b11982
 git -C /home/zoe/assistant worktree add --detach "$W" origin/main      # or the PR head sha before merge
 cp -n /home/zoe/assistant/services/zoe-data/.env "$W"/services/zoe-data/.env && chmod 600 "$W"/services/zoe-data/.env
-ZPY=$(bash "$W"/scripts/deploy/zoe_data_python.sh)                      # the zoe-data service interpreter
+# The probe environment EXACTLY as scripts/landing/land_voice_pr.sh builds it (values never printed). Without it the
+# probe errors at once (no device token) or, 07:00-22:00, harness_quiet refuses it (exit 3, no artifact).
+while IFS= read -r line; do case "$line" in ''|'#'*) continue;; esac; export "$line"; done < ~/.hermes/.env
+export ZOE_VOICE_REPLAY_STT=remote ZOE_REPLAY_BASE_URL=http://127.0.0.1:8000 ZOE_HARNESS_LANDING=1; unset ZOE_BASE_URL
+# export ZOE_HARNESS_FORCE=1   # ONLY with the owner's OK for a daytime run (it skips the quiet-hours + panel-yield guards)
 systemctl --user stop kokoro-tts
-flock /tmp/zoe-voice-harness.lock "$ZPY" "$W"/scripts/maintenance/voice_regression_probe.py \
-  --samples 20 --service-dir "$W"/services/zoe-data                     # NO --update-baseline
+cd /home/zoe/assistant
+flock /tmp/zoe-voice-harness.lock /usr/bin/python3 -u "$W"/scripts/maintenance/voice_regression_probe.py \
+  --samples 20 --stt remote --service-dir "$W"/services/zoe-data </dev/null   # NO --update-baseline
 systemctl --user start kokoro-tts
 curl -s http://localhost:10201/health      # pipeline_loaded true AND device cuda (else Zoe is mute / on CPU)
 exec 9>&-                                  # release the brain-window lock
 git -C /home/zoe/assistant worktree remove --force "$W"
 ```
+
+Do NOT start Kokoro by hand while a brain restart (or rollback) is in flight: it takes the ~2 GB the brain needs to load
+(2026-11-03, brain down 6 min). A SPEED-only fail with all clips OK must be A/B'd against the old build under the same
+conditions before rolling back: on a memory-starved box STT (no llama.cpp involved) slows too and both builds fail.
 
 Pass bar (from the A/B): said-vs-did 18/18 held, 0 failed; COLD first turn still a prefix-cache hit; per-stage medians no worse
 than baseline. If the probe fails the said-vs-did bar, ROLLBACK.
