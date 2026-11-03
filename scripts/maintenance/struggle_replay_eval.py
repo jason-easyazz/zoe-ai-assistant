@@ -41,8 +41,10 @@ sys.path.insert(0, str(REPO / "services" / "zoe-data"))
 import struggle_signals as sig  # noqa: E402
 
 _TS = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d{4}) ")
-_TURN = re.compile(r"voice/turn_stream panel=(\S+) STT=([\d.]+)s transcript=(.*)$")
-_ROUTE = re.compile(r"ROUTER_SHADOW text=.* -> routed=(\S+) \(best=(\S+) ([\d.]+)\).*?scores=(\{.*\})?")
+# Since 2026-11-03 the line carries ``len=N utt=<hash>`` instead of the words (log_redaction.utterance_tag); the older
+# ``transcript=<repr>`` form still parses. A hashed turn keeps exact-repeat signals (RE_ASK) but not similarity ones.
+_TURN = re.compile(r"voice/turn_stream panel=(\S+) STT=([\d.]+)s (?:transcript=(.*)|(len=\d+ utt=[0-9a-f]+))$")
+_ROUTE = re.compile(r"ROUTER_SHADOW (?:text=.*|len=\d+ utt=[0-9a-f]+) -> routed=(\S+) \(best=(\S+) ([\d.]+)\).*?scores=(\{.*\})?")
 _TWO = re.compile(r"router_two_stage (\{.*\})")
 _TWO_FAIL = re.compile(r"two_stage decide failed")
 _CMD = re.compile(r"voice/command panel=(\S+) session=(\S+) user=(\S+) ")
@@ -89,7 +91,7 @@ def parse(paths: list[Path], since: datetime) -> list[sig.Turn]:
                         last = None
                         continue
                     t = sig.Turn(ts=ts, channel="voice", user_id="guest", is_guest=True, conv_key=f"voice:{panel}",
-                                 panel_id=panel, text=_lit(mt.group(3)), stt_ms=int(float(mt.group(2)) * 1000))
+                                 panel_id=panel, text=_lit(mt.group(3)) if mt.group(3) is not None else mt.group(4), stt_ms=int(float(mt.group(2)) * 1000))
                     turns.append(t)
                     open_by_panel[panel] = t
                     last = t

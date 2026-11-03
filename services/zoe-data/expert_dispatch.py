@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import voice_phrases
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -677,9 +678,8 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         if correctionish:
             # A correction the extractor resolved — never echo the raw
             # negation ("I'll remember No Caitlin is…") back as a teach.
-            return "Got it — I've updated that."
-        echo = _echo_fact(text)
-        return f"Got it — I'll remember {echo}." if echo else "Got it — I'll remember that."
+            return voice_phrases.say("memory_updated")
+        return _saved_reply(text)
     if correctionish:
         # Correction shape but the correction path produced nothing: NEVER
         # fall through to the verbatim ingest of the RAW text (QA F8). The
@@ -733,8 +733,7 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         # write must never be answered with "Got it — I'll remember…" (and
         # deferring to the brain risks the same false confirmation). Be honest.
         logger.warning("store_fact ingest failed (%s) → honest no-save reply", exc)
-        return ("Hmm — I couldn't save that just now. "
-                "Mind telling me again in a moment?")
+        return voice_phrases.say("memory_save_failed")
     if outcome == "dropped":
         # The store refused the write (e.g. PII scrub). Nothing landed —
         # don't claim it did, and don't invite a retry that would re-reject.
@@ -755,8 +754,13 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         _tomb_clear(user_id, text)
     except Exception:
         pass
+    return _saved_reply(text)
+
+
+def _saved_reply(text: str) -> str:
+    """The teach confirmation (voice_phrases.json): echoes what landed so the person can correct it."""
     echo = _echo_fact(text)
-    return f"Got it — I'll remember {echo}." if echo else "Got it — I'll remember that."
+    return voice_phrases.say("memory_saved", fact=echo) if echo else voice_phrases.say("memory_saved_plain")
 
 
 async def _run_expert(domain: str, text: str, user_id: str, session_id: str) -> Optional[str]:
