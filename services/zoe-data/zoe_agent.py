@@ -3548,60 +3548,7 @@ async def _chat_capability_shortcut(message: str, user_id: str) -> str | None:
     return response
 
 
-# ── LLM call / KV warmup ─────────────────────────────────────────────────────
-
-async def warmup_kv_cache() -> None:
-    """Pre-process the system prompt so the KV cache is hot before the first user query.
-
-    Without this, the first real query pays the full prefill cost (~500ms for the
-    system prompt). After warmup, the prompt tokens are cached and subsequent queries
-    only pay for their unique user message tokens (~1s vs ~2s for uncached first query).
-
-    Called from the zoe-data startup lifespan event.
-    """
-    await asyncio.sleep(8)  # Give Gemma time to finish loading the 3.5GB model (~6s)
-    # Use the stable system prompt (no datetime/user) so the KV cache prefix is
-    # byte-identical to what real chat turns will see. This is the key fix —
-    # previously the warmup used _ZOE_SOUL (with dynamic datetime) which invalidated
-    # the cache on every real turn.
-    for attempt in range(3):
-        try:
-            await _llm_call(
-                [
-                    {"role": "system", "content": _ZOE_SOUL_STATIC},
-                    {"role": "user", "content": "ready"},
-                ],
-                max_tokens=3,
-                temperature=0.0,
-                use_tools=False,
-            )
-            logger.info(
-                "zoe_agent: ✅ Gemma KV cache warmed (attempt %d) — first query will be fast",
-                attempt + 1,
-            )
-            break
-        except Exception as exc:
-            logger.warning("zoe_agent: KV warmup attempt %d failed: %s — retrying in 5s", attempt + 1, exc)
-            await asyncio.sleep(5)
-    else:
-        logger.warning("zoe_agent: KV warmup failed after 3 attempts (non-fatal — first query will be slower)")
-        return
-
-    # Warm the voice-mode prompt separately so voice commands are fast too
-    try:
-        await _llm_call(
-            [
-                {"role": "system", "content": _ZOE_SOUL_VOICE},
-                {"role": "user", "content": "hi"},
-            ],
-            max_tokens=3,
-            temperature=0.0,
-            use_tools=False,
-        )
-        logger.info("zoe_agent: ✅ Gemma KV cache warmed (voice mode)")
-    except Exception as exc:
-        logger.debug("zoe_agent: voice KV warmup failed (non-fatal): %s", exc)
-
+# ── LLM call ──────────────────────────────────────────────────────────────
 
 def _strip_thinking(text: str) -> str:
     """Remove Gemma 4 interleaved thinking tokens, keeping only the response."""

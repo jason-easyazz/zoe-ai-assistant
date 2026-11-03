@@ -11,7 +11,7 @@ unknown line is ignored, so a new daemon message never breaks a parse. A turn is
       -> ``Recorded command|follow-up: duration=X.XXs``      (X = the clip's length, pre-roll included)
       -> speaker lines (``Speaker claim: u (s)``, ``Speaker ID (dual, ResNet34): u score=s accept=b ...``,
          ``Speaker ID (shadow): u (s)``)
-      -> outcome (``turn_stream TTFA=... transcript='...'`` | ``Empty transcript with no audio`` | ``Command too short``
+      -> outcome (``turn_stream TTFA=... len=N utt=<hash>`` (older logs: ``transcript='...'``) | ``Empty transcript with no audio`` | ``Command too short``
          | ``Ignoring junk`` | ``turn_stream: not addressed`` | ``turn_stream: held``)
 
 Transcripts are household data: callers that write files keep them OUTSIDE the repo (``~/.zoe/voice-gate/``).
@@ -37,7 +37,8 @@ _RECORDED = re.compile(r"Recorded (command|follow-up): duration=([0-9.]+)s")
 _CLAIM = re.compile(r"Speaker claim: (\S+) \((-?[0-9.]+)\)")
 _DUAL = re.compile(r"Speaker ID \(dual, ResNet34\): (\S+) score=(-?[0-9.]+|None) accept=(\w+) source=(\w+)")
 _SHADOW = re.compile(r"Speaker ID \(shadow\): (\S+) \((-?[0-9.]+)\)")
-_TURN = re.compile(r"turn_stream TTFA=(-?[0-9.]+)s transcript=(.*)$")
+# ``len=N utt=<hash>`` since 2026-11-03 (the daemon no longer logs the words); ``transcript=<repr>`` is the older form.
+_TURN = re.compile(r"turn_stream TTFA=(-?[0-9.]+)s (?:transcript=(.*)|(len=\d+ utt=[0-9a-f]+))$")
 _TRANSCRIPT_OLD = re.compile(r"^Transcript: (.*)$")
 
 
@@ -107,7 +108,7 @@ def events(lines: Iterable[str]) -> list:
         elif (s := _SHADOW.search(msg)):
             out.append(Event(ts, "shadow", dict(user=s.group(1), score=float(s.group(2)))))
         elif (t := _TURN.search(msg)):
-            out.append(Event(ts, "turn", dict(transcript=_unquote(t.group(2)))))
+            out.append(Event(ts, "turn", dict(transcript=_unquote(t.group(2)) if t.group(2) is not None else t.group(3))))
         elif (o := _TRANSCRIPT_OLD.match(msg)):
             out.append(Event(ts, "turn", dict(transcript=_unquote(o.group(1)))))
         elif msg.startswith("Empty transcript with no audio") or msg.startswith("Empty follow-up transcript"):

@@ -1,0 +1,67 @@
+{
+  "_doc": "ONE voice for every tier (docs/research/samantha-initiative-2026-11-03.md, lanes E E4 / F E2): the fixed lines the fast tiers, the brain fallbacks, the error paths and the empty-transcript path speak, drafted once in the brain's manner. Loaded by voice_phrases.py; a variant is picked by hashing the turn key (never random), so a replay hears the same words. Rules (lexicons_data/en.json manner.block + the soul): short, contractions, no exclamation marks, at most one question, never 'I'm sorry, I didn't catch that', never 'Please try again'. 'sentinel': true = exactly one variant, because other code compares the text by equality (brain_dispatch, clean_goodbye, tests/replay_samples.py ERROR verdict, scripts/perf/samantha_bar.py, struggle_signals ERROR); 'brain_fallback': true = the text means the brain did not answer. '{name}' fields are filled by the caller and are part of the phrase's correctness (they name what happened). 'mirrors' = a copy that must stay byte-equal and lives where this file cannot be read (the Pi panel daemon); tests pin it.",
+  "phrases": {
+    "reask": {
+      "_why": "empty transcript on a channel that answers it (LiveKit): a short human re-ask, never a template",
+      "variants": ["Sorry, I missed that.", "Sorry, say that again?", "I didn't quite get that. One more time?"]
+    },
+    "brain_empty": {
+      "_why": "typed chat: the brain returned no text; nothing was heard wrong, so it is not a re-ask",
+      "variants": ["Sorry, I lost my train of thought there. Can you send that again?", "Hmm, I blanked on that one. Can you send it again?"]
+    },
+    "brain_unreachable": {
+      "_why": "zoe_flue_client._FALLBACK_TEXT: the brain lane failed (transport, non-2xx, empty)",
+      "sentinel": true, "brain_fallback": true,
+      "variants": ["Sorry, I had trouble reaching my brain just now. Can you try that again?"]
+    },
+    "turn_failed": {
+      "_why": "routers/voice_tts._FALLBACK_PHRASE and the LiveKit/chat error lines: the turn itself broke",
+      "sentinel": true, "brain_fallback": true,
+      "variants": ["Sorry, something went wrong there. Can you try that again?"]
+    },
+    "action_failed": {
+      "_why": "a confirmed or escalated action raised; nothing is claimed done",
+      "variants": ["Sorry, that didn't work. Can you try it again?", "Hmm, that didn't go through. Want to try it again?"]
+    },
+    "done": {
+      "_why": "a confirmed write ran and its handler returned no text of its own",
+      "variants": ["Done.", "All done.", "That's done."]
+    },
+    "ack": {
+      "_why": "a pending-form field edit with no field-specific reply",
+      "variants": ["Got it.", "Okay, got it."]
+    },
+    "memory_saved": {
+      "_why": "expert_dispatch teach fast path: names exactly what landed so the person can correct it",
+      "sentinel": true,
+      "variants": ["Got it — I'll remember {fact}."]
+    },
+    "memory_saved_plain": {
+      "_why": "expert_dispatch teach fast path when the fact cannot be echoed",
+      "sentinel": true,
+      "variants": ["Got it — I'll remember that."]
+    },
+    "memory_updated": {
+      "_why": "expert_dispatch: a correction the extractor resolved (never echoes the raw negation)",
+      "sentinel": true,
+      "variants": ["Got it — I've updated that."]
+    },
+    "memory_save_failed": {
+      "_why": "expert_dispatch: the store raised; must say nothing was saved",
+      "sentinel": true,
+      "variants": ["Hmm — I couldn't save that just now. Mind telling me again in a moment?"]
+    },
+    "hold_on": {
+      "_why": "panel daemon, zoe-data restarting: spoken locally before the one retry",
+      "sentinel": true,
+      "mirrors": ["scripts/setup/zoe_voice_daemon.py:_FALLBACK_ONE_MOMENT"],
+      "variants": ["One moment."]
+    },
+    "service_unreachable": {
+      "_why": "panel daemon, zoe-data still down after the retry",
+      "sentinel": true, "brain_fallback": true,
+      "mirrors": ["scripts/setup/zoe_voice_daemon.py:_FALLBACK_UNREACHABLE"],
+      "variants": ["Sorry, I can't reach my brain right now. Try again in a minute."]
+    }
+  }
+}
