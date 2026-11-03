@@ -16,4 +16,4 @@ Record: [../samantha-initiative-2026-11-03.md](../samantha-initiative-2026-11-03
 - [lane-G-embodiment-distributed.md](lane-G-embodiment-distributed.md) - environmental awareness, the home world model, device roles, the Phase-9 questions; experiments E1-E8
 - [citation-check-2026-11-03.md](citation-check-2026-11-03.md) - every external URL and licence claim verified or marked; corrections applied in place
 
-Every claim in the lanes carries [Proven] / [Experimental] / [Speculative] and, in lane A, [verified code] / [verified live] / [from record] / [contradicted]. No lane read third-party source code; verdicts rest on papers, READMEs and search summaries and say so.
+Every claim in the lanes carries [Proven] / [Experimental] / [Speculative] and, in lane A, [code] / [live] / [record] / [contradicted]. No lane read third-party source code; verdicts rest on papers, READMEs and search summaries and say so.

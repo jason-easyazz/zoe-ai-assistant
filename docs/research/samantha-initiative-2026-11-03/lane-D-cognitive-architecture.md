@@ -228,17 +228,17 @@ With one active member the 12B fits; with four active members and Omi days it do
 
 ### 4.1 The example (synthetic member names, real mechanics)
 
-Tuesday 19:40, at the panel. Member "Robin" (verified voice) says: "I've got the dentist Thursday at ten, I'm honestly dreading it."
+Tuesday 19:40, at the panel. Member "M-1" (a FICTIONAL example, not a household member) (verified voice) says: "I've got the dentist Thursday at ten, I'm honestly dreading it."
 
 | Stage | What happens | Component | Today (live state) | With the integrated loop |
 |---|---|---|---|---|
-| **Perception** | Moonshine transcript; voice verdict says Robin; turn row written | STT, identity, `chat_messages` | Live | Plus a journal row `(turn, Robin, panel)` |
+| **Perception** | Moonshine transcript; voice verdict says M-1; turn row written | STT, identity, `chat_messages` | Live | Plus a journal row `(turn, M-1, panel)` |
 | **Attention (in turn)** | The router sends it to the brain (no tool); the brain answers kindly | router, packet, 4B | Live | Unchanged: no extra latency in the turn |
 | **Memory (after turn)** | Turn digest extracts an open loop "dentist Thu 10:00" with emotional weight; night mind (02:50) makes a moment `{kind: plan, feeling: dread, later: due}` and a thread | digest, `open_loops` (`ZOE_LOOP_LIFECYCLE=1`), night mind | Loop: live. Thread: written by the night window, **not served** (readers off) | Thread served (owner flag) |
 | **Reasoning (night)** | DECIDE: the thread is `raise`-eligible Thursday; the "leave" deny-list is checked in code (whether a dental visit counts as a health condition is the policy's call, never the model's); selector ranks it: importance 0.8 x recency x relevance 1.0 (due within 24 h) | night mind DECIDE, selector | Selector live; ranks loops nightly | Same, plus ACT-R activation (mentioned twice = higher) |
 | **Planning** | Two touch-points: Thursday morning before 10:00 (a good-luck), Thursday evening (how did it go) | commitment manager | Not modelled: one candidate, one raise | Lifecycle `due -> raised -> follow-up -> resolved` with two scheduled re-scores |
-| **Engagement** | Thursday 08:10 Robin's first panel session of the day -> re-score -> orb shows "something"; Robin says "morning, what's up?" -> pull delivers "Dentist at ten today - hope it's quick." If Robin instead just asks the weather, the greeting-turn RAISE may carry it inline, once | presence re-score, `pull.py`, selector RAISE | Orb and pull live; re-score only nightly, so a candidate computed at 03:00 is used | Re-score at first presence; one surface only, never spoken unprompted |
-| **Outcome** | Robin: "thanks, yeah" (welcome) or "not now" (back-off), and Thursday evening "it was fine actually" | delivery ledger, welcome tap | Ledger records class-level welcome; **nothing marks the loop resolved from Robin's words** unless the digest happens to | Outcome edge: the night mind's `finishes` reading resolves the thread; the welcome / ignore is stored on the thread and feeds its own back-off |
+| **Engagement** | Thursday 08:10 M-1's first panel session of the day -> re-score -> orb shows "something"; M-1 says "morning, what's up?" -> pull delivers "Dentist at ten today - hope it's quick." If M-1 instead just asks the weather, the greeting-turn RAISE may carry it inline, once | presence re-score, `pull.py`, selector RAISE | Orb and pull live; re-score only nightly, so a candidate computed at 03:00 is used | Re-score at first presence; one surface only, never spoken unprompted |
+| **Outcome** | M-1: "thanks, yeah" (welcome) or "not now" (back-off), and Thursday evening "it was fine actually" | delivery ledger, welcome tap | Ledger records class-level welcome; **nothing marks the loop resolved from M-1's words** unless the digest happens to | Outcome edge: the night mind's `finishes` reading resolves the thread; the welcome / ignore is stored on the thread and feeds its own back-off |
 | **Memory (closing)** | The loop is resolved; the feeling is not carried forward as a "dentist fear" fact (inference never supersedes, and affect policy decides what persists) | authority wall, affect policy | Live floors | Unchanged floors |
 
 What is new in the right-hand column is small: serving the thread (a flag), one re-score at presence (code), a two-touch lifecycle (code), and writing the outcome back to the item (code). **No new model, no new process, no daytime 4B call beyond the one the person's own turn already pays for.**
@@ -278,7 +278,7 @@ Thursday 23:10, the back door contact reports open for 20 minutes; nobody is at 
 
 - A cognitive-architecture reading says: perception -> salience (security, high) -> reasoning -> engagement (speak). That is exactly the wrong design for Zoe. Quiet hours forbid speech, nobody asked, and Home Assistant already has the right tool for this: an automation with a notification, owned by the household, deterministic, and testable.
 - The correct integrated behaviour is smaller: if E2's journal shows the event, the *next morning's pull* may carry "the back door was open for twenty minutes last night" as a `notify` item, only if a household member set that preference. No model is needed at any step.
-- The lesson for the whole lane: **when an action is time-critical and rule-shaped, it belongs to an automation, not to cognition.** Cognition is for the things a rule cannot see: that Robin dreaded Thursday, that a plan quietly stopped being mentioned, that a request failed three times in a week.
+- The lesson for the whole lane: **when an action is time-critical and rule-shaped, it belongs to an automation, not to cognition.** Cognition is for the things a rule cannot see: that M-1 dreaded Thursday, that a plan quietly stopped being mentioned, that a request failed three times in a week.
 
 ### 4.5 What the reactive design already does well, and must keep
 
@@ -293,7 +293,7 @@ The integrated loop is additive and revertible: turn its flag off and Zoe is tod
 
 The same loop, applied to Zoe herself rather than to the household's plans.
 
-1. **Perception.** Monday 18:02 Robin: "play the rain sounds in the kitchen". The router routes to music; Music Assistant's provider is down; Zoe says "I can't do that right now." 18:02:20 Robin repeats it; same reply. Robin gives up.
+1. **Perception.** Monday 18:02 M-1: "play the rain sounds in the kitchen". The router routes to music; Music Assistant's provider is down; Zoe says "I can't do that right now." 18:02:20 M-1 repeats it; same reply. M-1 gives up.
 2. **Attention (code).** The struggle detector records CANT_DO on the first turn and RE_ASK + CANT_DO on the pair (shadow today); harness panels are excluded.
 3. **Memory.** `struggle_events` rows with the domain, path and evidence ids.
 4. **Reasoning (night).** Code clusters the week: 6 CANT_DO on `music` across 3 days, all while the provider health read was failing. The 12B (or 4B) only rewords the count into a problem statement.
