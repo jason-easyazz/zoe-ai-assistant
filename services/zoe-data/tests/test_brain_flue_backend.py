@@ -1,8 +1,8 @@
-"""ZOE_BRAIN_BACKEND cutover seam — additive, default-OFF.
+"""ZOE_BRAIN_BACKEND lane seam — default is flue; 'core' is the rollback.
 
 Proves:
-(a) default (env unset / 'core') → dispatch uses the EXISTING core client,
-    byte-identical to today; the flue client is never touched.
+(a) env unset selects flue; ZOE_BRAIN_BACKEND='core' → dispatch uses the core
+    client and the flue client is never touched.
 (b) ZOE_BRAIN_BACKEND='flue' → dispatch selects the flue client, which hits the
     sidecar with the right URL + bearer + body, and yields the core stream shape.
 """

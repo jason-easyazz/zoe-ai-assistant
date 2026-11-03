@@ -1,6 +1,7 @@
 """Single source of truth for which brain answers a turn.
 
-zoe-core (Pi on local Gemma) by default; the legacy ``zoe_agent`` brain only when
+The Flue sidecar by default (``ZOE_BRAIN_BACKEND`` unset == ``flue``); zoe-core (Pi on local
+Gemma) when ``ZOE_BRAIN_BACKEND=core``; the legacy ``zoe_agent`` brain only when
 ``ZOE_USE_CORE_BRAIN`` is explicitly off (the validation-window fallback). Every
 entry point — text chat AND all the voice paths — routes through here so the
 cutover flag controls them consistently. ``routers/chat.py`` imports these under
