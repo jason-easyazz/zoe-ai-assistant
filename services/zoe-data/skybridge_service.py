@@ -50,6 +50,7 @@ class SkybridgeIntent:
     item_text: str = ""
     list_name: str = ""
     target_time: str = ""
+    end_time: str = ""  # calendar/create_event: the END of a spoken range ("from 9am to 6pm"), HH:MM; "" = no end said
     all_day: bool = False
     title: str = ""
     target_text: str = ""
@@ -1575,10 +1576,149 @@ def _resolve_daypart_time(raw_time: str, parsed: str, text: str) -> tuple[str, i
     return (f"{hour:02d}:{minute:02d}", 0) if hour < 12 else None
 
 
+# ── Time RANGES: "add work to my calendar from 9am to 6pm" (live 2026-11-03: booked ALL-DAY and read back "Added work to your
+# calendar today." - the timed parser needs "at|for <time>", so the no-time fallback took the title and dropped the range).
+# A range atom also accepts a bare hour ("9 to 5", "from nine till six"): the PAIR is the evidence a single bare "at 9" lacks.
+_RANGE_ATOM = (
+    r"(?:\d{1,2}(?::\d{2})?(?:\s*(?:a\.?m\.?|p\.?m\.?|o'?\s?clock))?"
+    rf"|(?:{_HOUR_WORD_RE})(?:\s+(?:thirty|fifteen|forty[- ]?five))?(?:\s*(?:o'?\s?clock|a\.?m\.?|p\.?m\.?))?"
+    r"|noon|midday)"
+)
+_RANGE_RE = (
+    rf"(?:\b(?P<lead>from|between)\s+)?(?<![\w:])(?P<t1>{_RANGE_ATOM})(?![\w:])\s*"
+    rf"(?P<sep>-|–|—|\bto\b|\btill\b|\btil\b|\buntil\b|\bthrough\b|\band\b)\s*(?P<t2>{_RANGE_ATOM})(?![\w:])"
+)
+_CALENDAR_DEST_RE = r"(?:to|on|in|into)\s+(?:my\s+|the\s+)?(?:calendar|schedule|diary|agenda)"
+RANGE_END_BEFORE_START = "range_end_before_start"
+
+
+def _range_atom(raw: str) -> tuple[int, int, str] | None:
+    """(hour, minute, meridiem) for one range end: meridiem "am" / "pm" / "noon" / "" (not said; o'clock says nothing about it)."""
+    s = re.sub(r"\s+", " ", (raw or "").strip().lower().replace(".", ""))
+    if s in ("noon", "midday"):
+        return 12, 0, "noon"
+    mer = ""
+    m = re.search(r"\s?(am|pm)$", s)
+    if m:
+        mer, s = m.group(1), s[:m.start()].strip()
+    s = re.sub(r"\s?o'? ?clock$", "", s).strip()
+    m = re.match(rf"^(?P<h>{_HOUR_WORD_RE})(?: (?P<mw>thirty|fifteen|forty[- ]?five))?$", s)
+    if m:
+        hour = _HOUR_WORDS[m.group("h")]
+        minute = {"thirty": 30, "fifteen": 15}.get(m.group("mw") or "", 45 if m.group("mw") else 0)
+    else:
+        m = re.match(r"^(\d{1,2})(?::(\d{2}))?$", s)
+        if not m:
+            return None
+        hour, minute = int(m.group(1)), int(m.group(2) or 0)
+    if hour > 23 or minute > 59 or (mer and not 1 <= hour <= 12):
+        return None
+    return hour, minute, mer
+
+
+def _range_explicit(hour: int, mer: str) -> int | None:
+    """The 24-hour hour when the words fix it (am/pm, noon, or a 24-hour clock), else None."""
+    if mer == "noon":
+        return 12
+    if mer == "pm":
+        return hour % 12 + 12
+    if mer == "am":
+        return hour % 12
+    return hour if hour == 0 or hour > 12 else None
+
+
+def _resolve_time_range(raw1: str, raw2: str, text: str) -> tuple[str, str] | str | None:
+    """("HH:MM", "HH:MM") for a spoken range, RANGE_END_BEFORE_START when the words put the end at or before the start, None when
+    an end cannot be read. A side without am/pm takes the reading that fits the other: "9am to 6" ends at 18:00, "9 to 6pm" starts
+    at 09:00. Neither said: a day-part word decides the start ("from 7 to 9 tonight"), else the way appointments go (7-11
+    morning, 12 noon, 1-6 afternoon), and the end is the first reading after it ("9 to 5" is 09:00-17:00)."""
+    a, b = _range_atom(raw1), _range_atom(raw2)
+    if a is None or b is None:
+        return None
+    (h1, m1, mer1), (h2, m2, mer2) = a, b
+    s, e = _range_explicit(h1, mer1), _range_explicit(h2, mer2)
+    if s is None and e is not None:
+        fits = [c for c in (h1 % 12, h1 % 12 + 12) if c * 60 + m1 < e * 60 + m2]
+        if not fits:
+            return RANGE_END_BEFORE_START
+        s = max(fits)
+    elif s is None:
+        night, evening, morning = bool(_NIGHT_RE.search(text)), bool(_EVENING_RE.search(text)), bool(_MORNING_RE.search(text))
+        if sum((night, evening, morning)) > 1:
+            return None
+        if night or evening:
+            s = h1 % 12 + 12
+        elif morning:
+            s = h1 % 12
+        else:
+            s = h1 if 7 <= h1 <= 12 else h1 % 12 + 12
+    if e is None:
+        later = [c for c in (h2 % 12, h2 % 12 + 12) if c * 60 + m2 > s * 60 + m1 and c < 24]
+        if not later:
+            return RANGE_END_BEFORE_START
+        e = min(later)
+    if e * 60 + m2 <= s * 60 + m1:
+        return RANGE_END_BEFORE_START
+    return f"{s:02d}:{m1:02d}", f"{e:02d}:{m2:02d}"
+
+
+def _calendar_range_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str, str] | None:
+    """"add/schedule/book X (to my calendar) from <t1> to <t2>" (also "9 to 5", "9am-6pm", "between 9 and 5", "from 9 till 6")
+    -> (title, start, end), with end RANGE_END_BEFORE_START when the range runs backwards. None claims nothing."""
+    text = _strip_trailing_politeness(re.sub(r"\s+", " ", message or "").strip().rstrip(".!?"))
+    if _context_domain(context) != "calendar" and not re.search(
+            r"\b(calendar|schedule|diary|agenda|event|appointment|meeting)\b", text, re.IGNORECASE):
+        return None
+    head = _command_shaped(text, _CREATE_VERBS)
+    if head is None or _NOT_A_CALENDAR_EVENT_RE.search(text):
+        return None
+    match = re.search(rf"\b(?:{_CREATE_VERBS})\s+(?P<title>.+?)\s+{_RANGE_RE}(?P<tail>.*)$", text[head.start():], re.IGNORECASE)
+    if not match:
+        return None
+    if match.group("sep").lower() == "and" and (match.group("lead") or "").lower() != "between":
+        return None                                        # "and" joins a range only after "between"
+    tail = re.sub(rf"^\W*{_CALENDAR_DEST_RE}\b", "", match.group("tail") or "", flags=re.IGNORECASE)
+    tail = re.sub(rf"\s*\b{_CALENDAR_DEST_RE}\b", "", _DAY_PHRASE_RE.sub("", tail), flags=re.IGNORECASE)
+    if re.search(r"\d", tail):
+        return None                                        # a date / time we would not read: not ours to drop
+    # the date is read by the caller from the same words; it is not part of the title ("work on 14 November")
+    raw_title = re.sub(rf"\s*\b(?:on\s+)?(?:the\s+)?\d{{1,2}}(?:st|nd|rd|th)?(?:\s+of)?\s+(?:{MONTH_PATTERN})\b(?:\s+\d{{4}})?",
+                       "", match.group("title"), flags=re.IGNORECASE)
+    title = _event_title(raw_title, tail)
+    resolved = _resolve_time_range(match.group("t1"), match.group("t2"), text)
+    if not title or resolved is None:
+        return None
+    if resolved == RANGE_END_BEFORE_START:
+        return title, "", RANGE_END_BEFORE_START
+    return title, resolved[0], resolved[1]
+
+
+# A clock time in words the all-day fallback did not read: "at half past nine", "from 9 to 5", "9am", "noon", "six o'clock".
+_CLOCK_LOOKING_RE = re.compile(
+    rf"\b\d{{1,2}}:\d{{2}}\b|\b\d{{1,2}}\s*(?:a\.?m\b\.?|p\.?m\b\.?)|\bo'?\s?clock\b|\b(?:noon|midday|midnight)\b"
+    rf"|\b(?:half|quarter)\s+(?:past|to)\b|\b(?:at|from|between|until|till|til)\s+(?:\d|(?:{_HOUR_WORD_RE})\b)"
+    rf"|\b\d{{1,2}}\s*(?:-|–|to|till|until)\s*\d{{1,2}}\b"
+    rf"|\b(?:morning|afternoon|evening)\b",
+    re.IGNORECASE,
+)
+_DATE_LOOKING_RE = re.compile(rf"\b\d{{1,2}}(?:st|nd|rd|th)?\b|\b(?:{MONTH_PATTERN})\b", re.IGNORECASE)
+
+
+def _unread_when(title: str, remainder: str) -> bool:
+    """True when the words carry a time (or a date) the all-day fallback would silently drop. Booking "work" all day and saying
+    "Added work to your calendar today." to "add work to my calendar from 9am to 6pm" is a wrong record read back as a success;
+    the turn goes on to the brain instead, which can ask."""
+    if _CLOCK_LOOKING_RE.search(title) or _CLOCK_LOOKING_RE.search(remainder):
+        return True
+    rest = _DAY_PHRASE_RE.sub(" ", remainder)
+    return bool(_DATE_LOOKING_RE.search(rest)) and _calendar_date_from_text(f" {remainder.lower().strip()} ", _today()) is None
+
+
 def _calendar_create_notime_from_text(message: str, context: dict[str, Any] | None) -> str | None:
     """A calendar add with NO time → an all-day event. Extract the title WITHOUT the
     trailing "to my/the calendar" so "add work to my calendar" is "work", not the
-    whole phrase (the bug Jason hit). Requires a calendar cue to avoid hijacking."""
+    whole phrase. Requires a calendar cue to avoid hijacking. Claims NOTHING when the
+    words carry a time or date it did not read (``_unread_when``)."""
     if _context_domain(context) != "calendar" and not re.search(r"\bcalendar\b", message, re.IGNORECASE):
         return None
     match = re.search(
@@ -1597,6 +1737,8 @@ def _calendar_create_notime_from_text(message: str, context: dict[str, Any] | No
     title = _clean_action_text(match.group("title"))
     # belt-and-suspenders: strip any leftover "to/on my calendar" tail
     title = re.sub(r"\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?calendar\s*$", "", title, flags=re.IGNORECASE).strip()
+    if _unread_when(title, message[match.end():]):
+        return None
     return title or None
 
 
@@ -1996,6 +2138,17 @@ def classify_skybridge_intent(
     calendar_edit = _calendar_edit_from_text(raw_message, context)
     if calendar_edit:
         return SkybridgeIntent(domain="calendar", action="edit_event", target_text=calendar_edit)
+    calendar_range = _calendar_range_from_text(raw_message, context)
+    if calendar_range:
+        title, target_time, end_time = calendar_range
+        parsed_range = _calendar_date_from_text(text, _today())
+        start = parsed_range[1] if parsed_range else _context_calendar_date(context)
+        if end_time == RANGE_END_BEFORE_START:
+            # Read the words, but they run backwards ("from 6pm to 9am"): ask, never book a guess.
+            return SkybridgeIntent(domain="calendar", action="create_event", title=title, query=RANGE_END_BEFORE_START,
+                                   range_label=start.isoformat(), start_date=start, end_date=start)
+        return SkybridgeIntent(domain="calendar", action="create_event", title=title, target_time=target_time,
+                               end_time=end_time, range_label=start.isoformat(), start_date=start, end_date=start)
     calendar_create = _calendar_create_from_text(raw_message, context)
     if calendar_create:
         title, target_time, day_offset = calendar_create
@@ -2231,6 +2384,10 @@ def _head_names_calendar(decision: dict[str, Any]) -> bool:
     return str(decision.get("head_top") or "") == "calendar" or "calendar" in {str(c) for c in shortlist}
 
 
+# semantic_router's question-shape re-points (EVIDENCE_REASON / EVENT_TIME_REASON / OWN_FACT_REASON): never overridden by a noun.
+_QUESTION_PRECEDENCE_REASONS = frozenset({"evidence_question", "event_time_question", "own_fact_question"})
+
+
 def skybridge_router_gate(
     message: str,
     intent: SkybridgeIntent,
@@ -2279,6 +2436,16 @@ def skybridge_router_gate(
         return "allow", "no_router_class", router_domain, conf
     if agrees:
         return "allow", "router_agrees", router_domain, conf
+    if (
+        not decision.get("gated")
+        and str(decision.get("reason") or "") not in _QUESTION_PRECEDENCE_REASONS
+        and command_shapes.named_domain_overrides(message, _ROUTER_AGREEING_DOMAINS[intent.domain], router_domain)
+    ):
+        # The words NAME this intent's domain and no other ("do I have anything on my CALENDAR today", live 2026-11-03: the
+        # router said lists @ 0.70, the veto sent the turn on and the lists expert read the shopping list aloud). A confident
+        # OTHER domain does not outrank the noun the user said. A chat verdict still vetoes (below), and so does a question-
+        # shape re-point (evidence / event-time / own-fact: the question is about memory, whatever noun it mentions).
+        return "allow", "named_domain", router_domain, conf
     if (
         router_domain == "chat"
         and decision.get("gated")
@@ -3282,6 +3449,16 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
             "actions": [],
         }
     start = intent.start_date or _today()
+    if intent.query == RANGE_END_BEFORE_START:
+        # "from 6pm to 9am": the end is before the start. Nothing is written; Zoe says so and asks.
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": f"That time for {intent.title} ends before it starts, so I haven't added it. What times should I use?",
+            "cards": [_status_card("Not added", "The end time was before the start time. Nothing was changed.",
+                                   status="Not added")],
+            "actions": [],
+        }
     event_id = str(uuid.uuid4())
     await db.execute(
         """
@@ -3297,7 +3474,7 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
         start.isoformat(),
         None if intent.all_day else intent.target_time,
         start.isoformat(),
-        None,
+        None if intent.all_day else (intent.end_time or None),
         None,
         "general",
         None,
@@ -3314,6 +3491,8 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
     when = _spoken_when(start)
     refreshed["spoken_summary"] = (
         f"Added {intent.title} to your calendar {when}." if intent.all_day
+        else f"Added {intent.title} to your calendar {when} from {_spoken_clock(intent.target_time)} to "
+             f"{_spoken_clock(intent.end_time)}." if intent.end_time
         else f"Added {intent.title} {when} at {_spoken_clock(intent.target_time)}."
     )
     refreshed["actions"] = [{"type": "created", "domain": "calendar", "id": event_id}]
