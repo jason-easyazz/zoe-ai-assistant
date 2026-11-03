@@ -607,3 +607,29 @@ async def test_the_table_holds_no_text_after_a_full_forget(svc, monkeypatch, no_
         assert await mf.matches(USER, "Dana Whitfield rang") and await mf.matches(USER, "Dana rang")
     finally:
         await db.close()
+
+
+# ── strict lookups (the serve paths): an outage raises, it never reads as "not forgotten" ──
+
+class _DownBackend(mf.MemoryBackend):
+    async def active_hashes(self, user_id, now_iso):
+        raise RuntimeError("ledger down")
+
+
+@pytest.mark.asyncio
+async def test_strict_lookup_raises_on_an_outage_and_the_lenient_one_keeps_its_contract(ledger_env):
+    mf.set_backend(_DownBackend())
+    assert await mf.matches(USER, f"{FRIEND} rang") is False                 # lenient (write guards): last known set, here empty
+    with pytest.raises(mf.LedgerUnavailable):                                  # strict, during the back-off the failure armed
+        await mf.matches(USER, f"{FRIEND} rang", strict=True)
+    mf.set_backend(_DownBackend())                                             # fresh state: the first strict read itself fails
+    with pytest.raises(mf.LedgerUnavailable):
+        await mf.active_hashes(USER, strict=True)
+
+
+@pytest.mark.asyncio
+async def test_strict_lookup_answers_from_a_healthy_ledger(ledger_env):
+    assert await mf.add(USER, FRIEND)
+    mf.reset_state()                                                           # no overlay: the durable read decides
+    assert await mf.matches(USER, f"{FRIEND} rang", strict=True) is True
+    assert await mf.matches(USER, "nobody rang", strict=True) is False

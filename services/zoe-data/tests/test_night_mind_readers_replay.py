@@ -8,7 +8,9 @@ brain - plumbing, never what a 4B does). Synthetic names only, no network, no li
 
 Cells: R1 serve serves and never calls a model | R2 a held (hedged) quote is never served | R3 a replaced (history) quote is never served | R4 a forgotten
 entity is not served (tombstone and erase) | R5 a guest / unverified speaker gets nothing | R6 the block fits its budget and sits AFTER the stable prefix |
-R7 off and shadow are byte-identical to today, touching nothing | R8 planted fault: a reader that ignores the forget shield turns R4's probe red.
+R7 off and shadow are byte-identical to today, touching nothing | R8 planted fault: a reader that ignores the forget shield turns R4's probe red |
+R4c a durable forget-ledger OUTAGE fails closed (nothing served, a nameless WARNING) | R4d a durable ledger hit withholds the entity | R8b planted fault: the
+pre-fix fail-open ledger check turns R4c's probe red.
 
 Operator replay: ``flock -x /tmp/zoe-test-lane.lock python3 -m pytest -q -p no:cacheprovider services/zoe-data/tests/test_night_mind_readers_replay.py``
 """
@@ -234,6 +236,78 @@ def test_R8_PLANTED_FAULT_a_reader_that_ignores_the_forget_shield_is_caught_by_t
 
     monkeypatch.setattr(nm, "_shielded", no_shield)                                      # the planted fault
     assert _forget_probe(monkeypatch, lab, via="tombstone") is True                      # R4's probe sees the leak: its first assertion would go red
+
+
+# ── R4c / R4d / R8b: the durable ledger at serve time - a hit withholds, an outage FAILS CLOSED ──────────────────────────
+
+class _DownLedger:
+    """The durable forget ledger during an outage: every call raises (the planted ledger failure)."""
+
+    async def active_hashes(self, user_id, now_iso):
+        raise RuntimeError("ledger down")
+
+    async def upsert(self, *a, **kw):
+        raise RuntimeError("ledger down")
+
+    async def users(self):
+        raise RuntimeError("ledger down")
+
+    async def delete(self, user_id, key_hashes):
+        raise RuntimeError("ledger down")
+
+
+@pytest.fixture
+def ledger(monkeypatch):
+    import memory_forgotten
+
+    monkeypatch.setenv("ZOE_FORGET_LEDGER_SALT", "unit-test-forget-ledger-secret-0123456789")
+    memory_forgotten.set_backend(memory_forgotten.MemoryBackend())
+    yield memory_forgotten
+    memory_forgotten.set_backend(None)
+
+
+def _ledger_probe(monkeypatch, mf, backend):
+    """Seed, flip to serve, prove SUB is served while the ledger answers (empty), then swap in ``backend`` and return what is served."""
+    write_night()
+    become_reader(monkeypatch)
+    assert SUB in run(nm.prompt_block(UID, ASK, now=NOW)).lower()                        # control: a healthy, empty ledger serves (else vacuous)
+    mf.set_backend(backend)                                                              # also drops the in-process cache + overlay: the read decides
+    nm.invalidate()
+    return run(nm.prompt_block(UID, ASK, now=NOW)).lower(), run(nm.morning_items(UID, now=NOW))
+
+
+def test_R4c_a_forget_ledger_outage_fails_closed_nothing_is_served(lab, monkeypatch, ledger, caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="night_mind"):
+        block, items = _ledger_probe(monkeypatch, ledger, _DownLedger())
+    assert SUB not in block and all(SUB not in i["text"].lower() for i in items)
+    assert block == "" and items == []                                                  # the ledger cannot vouch for ANY quote: serve nothing
+    warned = [r for r in caplog.records if "forget ledger check failed" in r.getMessage()]
+    assert warned and all(SUB not in r.getMessage().lower() for r in warned)             # logged, and the log names no one
+
+
+def test_R4d_a_durable_ledger_hit_withholds_the_entity(lab, monkeypatch, ledger):
+    hit = ledger.MemoryBackend()
+    ledger.set_backend(hit)
+    assert run(ledger.add(UID, SUB)) and hit.rows                                        # the hash is durable
+    ledger.set_backend(ledger.MemoryBackend())                                           # back to an empty ledger for the probe's control
+    block, items = _ledger_probe(monkeypatch, ledger, hit)
+    assert SUB not in block and all(SUB not in i["text"].lower() for i in items)
+
+
+def test_R8b_PLANTED_FAULT_a_fail_open_ledger_check_is_caught_by_the_R4c_probe(lab, monkeypatch, ledger):
+    import memory_forgotten
+
+    async def fail_open(user_id, text):                                                  # the pre-fix shield: a lookup error read as "not forgotten"
+        try:
+            return bool(await memory_forgotten.matches(user_id, text, strict=True))
+        except Exception:  # noqa: BLE001
+            return False
+
+    monkeypatch.setattr(nm, "_shielded", fail_open)
+    block, _items = _ledger_probe(monkeypatch, ledger, _DownLedger())
+    assert SUB in block                                                                  # R4c's probe sees the leak: its first assertion would go red
 
 
 # ── R5 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────

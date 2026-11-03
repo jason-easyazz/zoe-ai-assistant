@@ -1763,20 +1763,26 @@ def _reset_state() -> None:
 
 
 async def _shielded(user_id: str, text: str) -> bool:
-    """Does the text name an entity the owner asked Zoe to forget (the 300 s tombstone or the durable ledger)? Checked on every serve."""
+    """Does the text name an entity the owner asked Zoe to forget (the 300 s tombstone or the durable ledger)? Checked on every serve.
+
+    FAILS CLOSED (forgotten means forever): if either check cannot answer - the tombstone lookup raises, or the durable ledger
+    cannot be read and has no fresh cached copy (``strict``) - the text counts as shielded and is not served. The warning names
+    the failure type only, never the text or an entity."""
     try:
         from memory_tombstones import matching_tombstone
 
         if matching_tombstone(user_id, text):
             return True
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("night_mind: forget tombstone check failed (%s) - withholding the observation", type(exc).__name__)
+        return True
     try:
         import memory_forgotten
 
-        return bool(await memory_forgotten.matches(user_id, text))
-    except Exception:  # noqa: BLE001
-        return False
+        return bool(await memory_forgotten.matches(user_id, text, strict=True))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("night_mind: forget ledger check failed (%s) - withholding the observation", type(exc).__name__)
+        return True
 
 
 def _only_significant(threads: "Sequence[dict]", obs: "Sequence[dict]") -> "tuple[list[dict], list[dict]]":
