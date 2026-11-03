@@ -100,6 +100,7 @@ import time
 from typing import Any, AsyncIterator, Optional
 from urllib.parse import quote
 import traffic_class
+import voice_phrases
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,8 @@ _DEFAULT_TIMEOUT_S = 180.0
 # Graceful, user-facing fallback emitted whenever a flue turn cannot produce a
 # usable reply — transport/parse error OR an HTTP 200 with empty text. Shared so
 # both failure surfaces render identically instead of one blanking the turn.
-_FALLBACK_TEXT = "Sorry, I had trouble reaching my brain just now. Could you try again?"
+# The words live in voice_phrases.json ("brain_unreachable", a one-variant sentinel: callers compare it by equality).
+_FALLBACK_TEXT = voice_phrases.say("brain_unreachable")
 
 
 # ── Turn-outcome reporting (opt-in, labels only) ─────────────────────────────

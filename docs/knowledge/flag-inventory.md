@@ -103,7 +103,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BLUETOOTH_SETTINGS` | bool | `False` | - | `docs/knowledge/bluetooth-settings.md` | `False` | yes | NO | `services/zoe-data/bluetooth_broker.py` |
 | `ZOE_BOARD_POLL_S` | int | `60` | - | - | `'60'` | no | NO | `services/zoe-data/multica_board_runner.py` |
 | `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED` | bool | `False` | - | `docs/guides/MULTICA_HERMES_PR_LOOP.md` | `'false'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
-| `ZOE_BRAIN_BACKEND` | str | `'core'` | - | `docs/knowledge/memory-pressure-profile.md` | `'core'` | no | yes | `services/zoe-data/brain_dispatch.py` |
+| `ZOE_BRAIN_BACKEND` | str | `'flue'` | - | `docs/knowledge/memory-pressure-profile.md` | `'flue'` | no | yes | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER` | bool | `False` | - | `docs/knowledge/state-of-zoe-review-2026-09-25.md` | `'0'` | no | yes | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER_COOLDOWN_S` | int | `45` | - | `services/zoe-data/AGENTS.md` | `'45'` | no | yes | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_KV_WARM_ON_WAKE` | bool | `True` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `'1'` | no | NO | `services/zoe-data/zoe_flue_client.py` |

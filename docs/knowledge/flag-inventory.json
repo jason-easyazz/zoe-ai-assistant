@@ -1881,7 +1881,7 @@
       },
       "ZOE_BRAIN_BACKEND": {
         "defaults": [
-          "'core'"
+          "'flue'"
         ],
         "in_env_example": true,
         "readers": [
@@ -1890,7 +1890,7 @@
         "registered": true,
         "spec": {
           "allowed": null,
-          "default": "core",
+          "default": "flue",
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/memory-pressure-profile.md",
