@@ -509,23 +509,19 @@ const showList = defineTool({
  * set_timer — start a countdown timer for N minutes. WRITE → timer_create
  * {minutes,label}. Gated behind ZOE_BRAIN_ALLOW_WRITES (dry-run by default).
  *
- * FAILS CLOSED — never claims a timer started off this path. zoe-data's
- * timer_create intent (intent_router.py) returns a CANNED "Starting a N minute
- * timer" line WHETHER OR NOT a countdown was actually scheduled: on the touch
- * panel Skybridge owns the real timer/alarm and is consulted BEFORE that
- * fast-path, so the /api/system/intent-dispatch route this tool uses NEVER
- * schedules a countdown or fires an alarm. The dispatch response
- * ({intent, ok, result}) therefore carries no proof a real timer exists — ok:true
- * only means "result is not None" (i.e. the canned line). There is no response
- * this path can return that genuinely confirms a scheduled timer, so reporting
- * success would tell the user a timer started when none will fire. We require an
- * explicit positive confirmation that is NOT the canned line (same fail-closed
- * discipline the shopping-list / dispatch path uses); since the backend can only
- * ever return that canned line, set_timer stays effectively always-uncertain.
+ * FAILS CLOSED — never claims a timer started without proof. zoe-data's
+ * timer_create intent (intent_router.py) now registers a REAL Skybridge timer
+ * (skybridge_service.create_timer_direct) and answers with its confirmation
+ * ("Your eggs timer is set for 3 minutes."), which this tool passes through.
+ * Only when that registration RAISES does timer_create fall back to the
+ * spoken-only "Starting a N minute timer" line, with no countdown behind it;
+ * that line is the one this tool refuses to repeat (same fail-closed discipline
+ * the shopping-list / dispatch path uses). (Corrected 2026-11-03: the earlier
+ * note said the dispatch route could never schedule a timer.)
  */
-// The canned, NON-confirming line zoe-data's timer_create always returns
-// ("Starting a 10 minute timer", "Starting a 3 minute timer for the eggs").
-// Seeing it is proof of NOTHING — explicitly treated as a non-confirmation.
+// The spoken-only, NON-confirming line timer_create returns when the real
+// timer could NOT be registered ("Starting a 10 minute timer", "Starting a 3
+// minute timer for the eggs"). Seeing it is proof of NOTHING.
 const CANNED_TIMER_RE = /^\s*starting a\b.*\btimer\b/i;
 
 const setTimer = defineTool({
@@ -554,20 +550,15 @@ const setTimer = defineTool({
     // runWrite (it has its own inline gate above), so it needs the check here too;
     // without it, timer_create would still dispatch on every replay turn.
     //
-    // Return the non-confirming line directly. That is BYTE-IDENTICAL to what this
-    // tool returns today on the live lane: the backend's timer_create can only ever
-    // answer with the canned "Starting a … timer" string, which CANNED_TIMER_RE
-    // rejects, so `confirmed` is always false and this line is always the result.
-    // Skipping the dispatch therefore changes nothing the scorer can observe.
+    // Return the non-confirming line directly: a replay turn must never register
+    // a real timer, so it gets the same honest refusal a failed registration gets.
     if (isReplayTurn(signal)) {
       return "I can't reliably start a real timer right now, so I won't say I did. " +
         'Set it on the kitchen panel, or ask me for a reminder instead.';
     }
     const out = await dispatchIntent('timer_create', { minutes, label }, 'timer', signal);
     // A genuine confirmation requires ok===true AND a non-empty result that is NOT
-    // the canned "Starting a … timer" line. The backend cannot currently produce
-    // such a result, so this is effectively always-uncertain — by design, never a
-    // fabricated "timer started".
+    // the spoken-only "Starting a … timer" fallback — never a fabricated "timer started".
     const confirmed = out.ok && out.text.length > 0 && !CANNED_TIMER_RE.test(out.text);
     if (!confirmed) {
       return "I can't reliably start a real timer right now, so I won't say I did. " +

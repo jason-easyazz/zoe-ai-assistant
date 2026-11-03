@@ -26,6 +26,8 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
 
 ## Now (this week, at most 5)
 
+**Samantha direction (2026-11-03):** the plan of record is [docs/research/samantha-initiative-2026-11-03.md](research/samantha-initiative-2026-11-03.md). Its first four opportunities are: push memory into every household turn (recall gate enforce, now card, history 8 rows); judged end of turn + duck-decide-resume live; one voice for every tier; night-mind readers to `serve` + the outcome edge. Owner decisions in its section 11.
+
 1. **Close the unauthenticated surface the deep dive found (A2).** Router-level auth on `routers/music.py` (panel or member, so the panel music bar keeps working with its device
    token); an allowlist for `GET /api/settings`; the Multica webhook secret checked before its UPDATE; delete the two fake-success endpoints; a CI test that every mutating route
    declares an auth dependency from an allowlist. Owner: agent. Acceptance: that test, plus the panel music bar still works. The identity half already landed

@@ -28,6 +28,7 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
 import panel_principal
 import untrusted_content
+import voice_phrases
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
 from browser_broker import create_default_browser_broker
 from conversation_context import ConversationContext as _CC
@@ -2627,7 +2628,7 @@ async def chat_stream_generator(
         yield emit(
             RunErrorEvent(
                 type=EventType.RUN_ERROR,
-                message="Something went wrong. Please try again.",
+                message=voice_phrases.say("turn_failed"),
                 code="internal_error",
             )
         )
@@ -3042,7 +3043,7 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
             # a retry string into _build_research_package.
             if task_class != "research" and not (response_text or "").strip():
                 logger.warning("chat non-stream: empty brain response, using fallback (session=%s)", session_id)
-                response_text = "Sorry, I didn't catch that — could you say it again?"
+                response_text = voice_phrases.say("brain_empty", session_id)
             clean_text, actions = _extract_ui_actions(response_text)
             resp = {"response": clean_text, "session_id": session_id}
             ui_commands = [a for a in actions if "command" in a]

@@ -124,21 +124,23 @@ DEFAULT_PENDING = CACHE / "samantha_bar_pending_teardown.json"
 MIN_MEM_MB = 1229  # 1.2 GB
 NIGHTLY_WINDOW = ((1, 45), (3, 15))  # local time; nightly jobs own the box
 NIGHTLY_GUARD_MIN = 30  # a run takes ~15-30 min: do not start this close to it
-# Canned "the brain did not answer" texts. The live ones are pinned to their
-# source constants by tests/unit/test_samantha_bar.py AND re-read from the
-# service checkout at run time (load_source_fallback_markers), so a rewording in
+# Canned "the brain did not answer" texts. The live ones are pinned to the
+# phrase file by tests/unit/test_samantha_bar.py AND re-read from the service
+# checkout at run time (load_source_fallback_markers), so a rewording in
 # zoe-data cannot turn an outage into an ordinary reply.
 BRAIN_FALLBACK_MARKERS = (
-    "trouble reaching my brain",          # zoe_flue_client._FALLBACK_TEXT (chat + voice)
+    "trouble reaching my brain",          # voice_phrases "brain_unreachable" (zoe_flue_client._FALLBACK_TEXT)
     "having trouble reaching",
-    "something went wrong. please try again",  # routers/voice_tts._FALLBACK_PHRASE
+    "can't reach my brain",               # voice_phrases "service_unreachable" (the Pi daemon's mirror)
+    "something went wrong there. can you try that again",  # voice_phrases "turn_failed" (voice_tts._FALLBACK_PHRASE)
+    "something went wrong. please try again",  # the pre-2026-11-03 wording, for older logs
     "i had trouble with that",            # routers/voice_livekit canned replies
     "trouble processing that",
     "couldn't reach",
 )
-# (relative file, constant name) pairs read from the live service checkout.
-SOURCE_FALLBACK_CONSTANTS = (("zoe_flue_client.py", "_FALLBACK_TEXT"),
-                             ("routers/voice_tts.py", "_FALLBACK_PHRASE"))
+# The service's one phrase set (relative to the checkout): every entry flagged
+# ``brain_fallback`` is a line that means the brain did not answer.
+SOURCE_PHRASE_FILE = "voice_phrases.json"
 _SOURCE_FALLBACK_MARKERS: list[str] = []
 
 DEMO_USER_RE = re.compile(r"^demo_bar_[0-9a-f]{8}$")
@@ -597,20 +599,19 @@ def contains_any(text: str, needles: Iterable[str]) -> bool:
 
 
 def source_fallback_markers(service_dir: Path | None) -> list[str]:
-    """The fallback texts as the SERVICE CHECKOUT defines them (see
-    SOURCE_FALLBACK_CONSTANTS): a plain regex read of ``NAME = "..."`` — no
-    import of zoe-data. Missing file/constant → that entry is skipped."""
+    """The fallback texts as the SERVICE CHECKOUT defines them: the
+    ``brain_fallback`` entries of SOURCE_PHRASE_FILE, read as JSON — no import
+    of zoe-data. A missing or unreadable file arms nothing."""
     found: list[str] = []
     if not service_dir:
         return found
-    for rel, name in SOURCE_FALLBACK_CONSTANTS:
-        try:
-            src = (Path(service_dir) / rel).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        m = re.search(rf'^\s*{re.escape(name)}\s*=\s*"([^"\n]+)"', src, re.M)
-        if m and m.group(1).strip():
-            found.append(m.group(1).strip().lower())
+    try:
+        phrases = json.loads((Path(service_dir) / SOURCE_PHRASE_FILE).read_text(encoding="utf-8"))["phrases"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return found
+    for entry in phrases.values():
+        if isinstance(entry, dict) and entry.get("brain_fallback"):
+            found.extend(str(v).strip().lower() for v in entry.get("variants") or () if str(v).strip())
     return found
 
 
