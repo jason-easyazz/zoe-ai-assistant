@@ -899,6 +899,7 @@ async def test_voice_command_stream_emits_processing_ack_before_slow_response(mo
     # Pipeline behaviour is brain-agnostic; pin the legacy brain so the dispatch
     # routes to the mocked zoe_agent (default is now zoe-core).
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     monkeypatch.setitem(sys.modules, "zoe_agent", types.SimpleNamespace(run_zoe_agent_streaming=run_zoe_agent_streaming))
     monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
 

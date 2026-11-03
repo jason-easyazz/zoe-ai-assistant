@@ -358,3 +358,15 @@ def test_router_flag_keeps_its_four_stage_rollout():
     src = _data_src("semantic_router.py") + _data_src("router_two_stage.py")
     for rung in ("shadow2", "active"):
         assert rung in src, f"ZOE_ROUTER_HEAD rung '{rung}' vanished from the router modules"
+
+
+def test_brain_backend_code_default_is_the_live_flue_lane(monkeypatch):
+    """A fresh box must select the lane the household runs: with ZOE_BRAIN_BACKEND
+    unset the brain is Flue, not zoe-core (a default that differs from live is a trap)."""
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    import brain_dispatch
+
+    monkeypatch.delenv("ZOE_BRAIN_BACKEND", raising=False)
+    assert brain_dispatch.use_flue_brain() is True

@@ -393,6 +393,7 @@ async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch)
     # time, so pin the env too. The _USE_ZOE_CORE/_USE_LOCAL_BRAIN patches above
     # are still required: they gate lane ENTRY inside chat.py.
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     monkeypatch.setattr(zoe_agent, "run_zoe_agent_streaming", fake_zoe_stream)
     monkeypatch.setattr(chat_router, "_iter_hermes_stream_events", fake_hermes_events)
     monkeypatch.setattr(chat_router, "_record_run_state", fake_record_run_state)
