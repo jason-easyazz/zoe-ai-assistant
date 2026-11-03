@@ -75,7 +75,7 @@ async def _db():
     await db.execute("INSERT INTO person_gift_ideas VALUES ('g1','p-ana',?,'a pottery class','idea','manual','2026-01-01')", (U,))
     await db.execute("INSERT INTO person_gift_ideas VALUES ('g2','p-kit',?,'a drone','idea','llm','2026-01-01')", (U,))
     await db.execute("INSERT INTO person_gift_ideas VALUES ('g3','p-kit',?,'a chess set','idea','manual','2026-01-01')", (U,))
-    await db.execute("INSERT INTO person_relationships VALUES ('e1',?,'p-ana','p-bo','friend','friend',NULL)", (U,))
+    await db.execute("INSERT INTO person_relationships VALUES ('e1',?,'p-ana','p-bo','brother','sister',NULL)", (U,))
     await db.commit()
     return db
 
@@ -129,6 +129,13 @@ def test_profile_lines_carry_authority_and_pending_is_never_served():
     assert sum(1 for ln in prof.lines if ln.text == "Ana loves wild swimming") == 1
 
 
+def test_row_without_a_status_is_not_served():
+    """Fails closed: a row with no status is not provably approved."""
+    r = row(9, "Ana collects stamps")
+    r.metadata.pop("status")
+    assert compose("p-ana", rows=[r]).lines == []
+
+
 def test_negative_control_pending_guard_bites():
     """Break the guard (a pending row stamped approved by a buggy reader) -> it IS served: the guard, not luck, kept it out."""
     rows = [row(6, "Ana is moving to the coast", status="approved")]
@@ -148,7 +155,7 @@ def test_facets_and_chips_in_chat_card():
     assert "Life now:" in out and "Likes:" in out
     assert "(you said)" in out and "(you confirmed)" in out and "(I think)" in out
     assert "Coming up: birthday 19 March (in 14 days)" in out
-    assert "Gift ideas: a pottery class" in out and "People: Bo Kestrel (friend)" in out
+    assert "Gift ideas: a pottery class" in out and "People: Bo Kestrel (brother)" in out      # rel_a_to_b is what b is to a
 
 
 def test_voice_answer_is_ordered_and_short():
@@ -270,6 +277,9 @@ def test_walls_guest_unverified_other_member(wired):
     assert ask("what do you know about Ana?", wired, user="guest") == pa.GUEST_ABOUT_OTHER_REPLY
     assert ask("tell me about Ana", wired, user="guest") is None
     assert ask("what do you know about Ana?", wired, channel="voice", speaker_verified=False) == pa.UNVERIFIED_SPEAKER_REPLY
+    # no contact oracle for an unverified voice: a contact and a stranger get the same reply
+    assert ask("what do you know about Zebedee?", wired, channel="voice", speaker_verified=False) == pa.UNVERIFIED_SPEAKER_REPLY
+    assert ask("tell me about Ana", wired, channel="voice", speaker_verified=False) is None
     assert ask("what do you know about Rue?", wired) == pa.OTHER_MEMBER_REPLY
     # another member's contact is not the asker's: nothing is read from it
     assert ask("what do you know about Rue Vance?", wired) == pa.OTHER_MEMBER_REPLY

@@ -69,10 +69,11 @@ def test_day_of_fires():
     assert [r.message for r in out] == ["It's Ana Test's birthday today."]
 
 
-def test_negative_control_old_window_excluded_day_of():
-    """The pre-fix rule (1 <= days <= 7) says nothing on the day: the fix is what makes it fire."""
-    assert not (1 <= 0 <= 7)
-    assert 0 in pb.lead_days("friends")
+def test_negative_control_old_window_excluded_day_of(monkeypatch):
+    """Put back the pre-fix window (1-7 days, no day-of): the same day-of birthday says nothing."""
+    monkeypatch.setattr(pb, "lead_days", lambda *_a, **_k: tuple(range(1, 8)))
+    p, d = dated("p1", "Ana Test", 0)
+    assert check([p], [d], at(TODAY)) == []
 
 
 @pytest.mark.parametrize("offset,fires", [(7, True), (6, False), (3, False), (1, False), (14, False)])

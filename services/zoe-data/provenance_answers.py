@@ -1527,14 +1527,18 @@ _TELL_ABOUT_RE = re.compile(
 
 
 async def person_answer(name: str, user_id: str, *, channel: Optional[str] = None, speaker_verified: Optional[bool] = None,
-                        svc: Any = None) -> Optional[str]:
+                        svc: Any = None, refuse_unverified: bool = True) -> Optional[str]:
     """The profile answer for one of the asker's OWN contacts, or None (flag off, nobody by that name: the brain answers as
-    before). Exact / whole-token names only, never a prefix guess; two people by that name -> one question. NEVER raises."""
+    before). Exact / whole-token names only, never a prefix guess; two people by that name -> one question. A speaker the voice
+    gate rejected is answered BEFORE the roster is read (refused for the explicit "what do you know about X", left to the brain
+    for "tell me about X"), so the reply never says whether a name is a contact. NEVER raises."""
     try:
         import person_profile as pp
 
         if not pp.enabled():
             return None
+        if speaker_verified is False:
+            return UNVERIFIED_SPEAKER_REPLY if refuse_unverified else None
         from db_pool import get_db_ctx  # type: ignore[import]
         import people_graph as pg
 
@@ -1542,8 +1546,6 @@ async def person_answer(name: str, user_id: str, *, channel: Optional[str] = Non
             res = await pg.resolve_person(db, user_id, name, allow_prefix=False)
             if res.status == "none":
                 return None
-            if speaker_verified is False:
-                return UNVERIFIED_SPEAKER_REPLY
             if res.ambiguous:
                 return pp.ambiguous_reply([m.name for m in res.matches])
             try:
@@ -1611,7 +1613,7 @@ async def handle(text: str, user_id: str, session_id: str = "", *, channel: Opti
             # "tell me about <name>": answered only for one of the asker's own contacts (else the brain, as before)
             if m and not guest:
                 return await person_answer(m.group("name").strip(), uid, channel=channel, speaker_verified=speaker_verified,
-                                           svc=svc)
+                                           svc=svc, refuse_unverified=False)
             return None
         if guest:
             return GUEST_ABOUT_OTHER_REPLY if ask.kind == "know_other" else GUEST_REPLY

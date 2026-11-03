@@ -181,7 +181,7 @@ def _line(ref: Any, user_id: str, child: bool) -> tuple:
     text = re.sub(r"\s+", " ", str(getattr(ref, "text", "") or "")).strip()
     if not text or not pa._owns(meta, user_id) or re.match(r"^person in contacts\b", text, re.IGNORECASE):
         return "skip", None
-    if str(meta.get("memory_type") or "") == "state_change" or str(meta.get("status") or "approved") != "approved":
+    if str(meta.get("memory_type") or "") == "state_change" or str(meta.get("status") or "") != "approved":
         return "skip", None
     if own_words.is_pasted_row(meta) or own_words.instruction_shaped(text) or auth.is_unverified(meta):
         return "skip", None
@@ -249,7 +249,8 @@ async def compose(db, user_id: str, person_id: str, *, svc: Any = None, today: O
                 "JOIN people pa ON pa.id = r.person_a_id JOIN people pb ON pb.id = r.person_b_id "
                 "WHERE r.user_id = ? AND (r.person_a_id = ? OR r.person_b_id = ?) AND r.valid_to IS NULL "
                 "AND COALESCE(pa.deleted, 0) = 0 AND COALESCE(pb.deleted, 0) = 0", (user_id, pid, pid)):
-        other, role = (other_b, b_to_a) if str(a) == pid else (other_a, a_to_b)
+        # rel_a_to_b is what b is to a (role_triples, contacts_store): the OTHER person's role to this one
+        other, role = (other_b, a_to_b) if str(a) == pid else (other_a, b_to_a)
         if other and not await _forgotten(user_id, str(other)):
             prof.relations.append((str(other), str(role or "")))
 
