@@ -463,86 +463,6 @@
             overflow-y: auto;
         }
         
-        .openclaw-toggle-btn {
-            width: 36px;
-            height: 36px;
-            border: none;
-            border-radius: 50%;
-            background: transparent;
-            color: var(--clr-text-3);
-            font-size: 16px;
-            cursor: pointer;
-            flex-shrink: 0;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .openclaw-toggle-btn:hover { background: rgba(123,97,255,0.08); color: var(--clr-primary); }
-
-        .openclaw-toggle-btn.active {
-            color: var(--clr-primary);
-            background: rgba(123,97,255,0.12);
-            box-shadow: 0 0 0 2px rgba(123,97,255,0.2);
-        }
-
-        /* ── Agent selector pill row ── */
-        .agent-selector {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 14px 2px;
-        }
-        .agent-pill {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            padding: 4px 12px;
-            border: 1.5px solid rgba(123,97,255,0.2);
-            border-radius: 20px;
-            background: transparent;
-            color: var(--clr-text-3);
-            font-size: 12px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.18s ease;
-            white-space: nowrap;
-            letter-spacing: 0.01em;
-        }
-        .agent-pill:hover {
-            border-color: rgba(123,97,255,0.45);
-            color: var(--clr-primary);
-            background: rgba(123,97,255,0.06);
-        }
-        .agent-pill.active {
-            border-color: var(--clr-primary);
-            color: var(--clr-primary);
-            background: rgba(123,97,255,0.12);
-            box-shadow: 0 0 0 2px rgba(123,97,255,0.15);
-        }
-        .agent-pill-dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: currentColor;
-            opacity: 0.5;
-            flex-shrink: 0;
-        }
-        .agent-pill.active .agent-pill-dot { opacity: 1; }
-        .agent-selector-label {
-            font-size: 11px;
-            color: var(--clr-text-3);
-            opacity: 0.6;
-            margin-right: 2px;
-            user-select: none;
-        }
-        @media (max-width: 480px) {
-            .agent-selector { padding: 4px 10px 0; gap: 5px; }
-            .agent-pill { padding: 3px 9px; font-size: 11px; }
-            .agent-selector-label { display: none; }
-        }
-
         .send-btn {
             width: 48px;
             height: 48px;
@@ -2446,8 +2366,6 @@
             
             <!-- Input Area -->
             <div class="input-area">
-                <!-- Hidden checkbox preserved for legacy JS compatibility -->
-                <input type="checkbox" id="forceOpenClawToggle" style="display:none">
                 <div class="input-wrapper">
                     <textarea
                         class="input-field"
@@ -3242,7 +3160,6 @@
         let currentSessionId = null;
         let messageCount = 0;
         let streamAbortController = null;
-        let forceOpenClawMode = false;   // legacy compat — driven by selectedAgent now
         let selectedAgent = 'auto';     // 'auto' | 'hermes' | 'openclaw'
         let lastSubmittedUserMessage = '';
 
@@ -3724,7 +3641,6 @@
             // either can only fail, so every agent request is Zoe's own lane.
             agent = 'auto';
             selectedAgent = agent;
-            forceOpenClawMode = (agent === 'openclaw'); // legacy compat
             // Update pill active states
             ['auto', 'hermes', 'openclaw'].forEach(a => {
                 const el = document.getElementById('agentPill' + a.charAt(0).toUpperCase() + a.slice(1));
@@ -3738,20 +3654,11 @@
             }
         }
 
-        // Legacy toggle kept for external callers (e.g. tryPromptWithOpenClaw)
-        function toggleOpenClawMode() { selectAgent(selectedAgent === 'openclaw' ? 'auto' : 'openclaw'); }
-
-        function tryPromptWithOpenClaw(text) {
-            selectAgent('openclaw');
-            tryPrompt(text);
-        }
-
         // Message Handling
         async function sendMessage() {
             const input = document.getElementById('chatInput');
             const message = input.value.trim();
             if (!message || isStreaming) return;
-            forceOpenClawMode = (selectedAgent === 'openclaw'); // keep legacy in sync
 
             if (message.toLowerCase() === '/pending approvals') {
                 input.value = '';
@@ -3958,8 +3865,6 @@
                     body: JSON.stringify({
                         message: message,
                         user_id: userId,
-                        force_openclaw: forceOpenClawMode,
-                        force_agent: selectedAgent,
                         context: { 
                             mode: 'main_chat',
                             channel: 'web',
@@ -6104,7 +6009,7 @@
                     { dot: 'tasks',  label: pending    ? `${pending} task${pending > 1 ? 's' : ''} pending`       : 'All tasks done',     meta: 'Tasks',    prompt: 'Show my pending tasks and help me prioritise' }
                 ];
                 tilesEl.innerHTML = tiles.map(t => `
-                    <div class="context-tile" onclick="tryPromptWithOpenClaw(${JSON.stringify(t.prompt)})">
+                    <div class="context-tile" onclick="tryPrompt(${JSON.stringify(t.prompt)})">
                         <span class="context-tile-dot ${escapeHtml(t.dot)}"></span>
                         <span class="context-tile-label">${escapeHtml(t.label)}</span>
                         <span class="context-tile-meta">${escapeHtml(t.meta)}</span>

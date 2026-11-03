@@ -4,13 +4,9 @@ Chat proxy router: bridges the Zoe UI (REST+SSE) to the active agent backend.
 Tiered architecture (Jetson + Pi):
 - Tier 0: Intent router — regex-matched commands (lists, calendar, HA control)
   handled directly in <5ms without any LLM.
-- Tier 1: Zoe Agent — Gemma 4 E4B-QAT with MemPalace memory, HA control,
-  bash tools, and Hermes escalation. True SSE streaming, first token fast.
-  Always active (the HERMES_FAST_PATH / JETSON_AGENT_MODE gates were removed in B3).
-  Jetson: GPU, 40+ TPS, port 11434.
-- Tier 2: Hermes — reasoning/review/development repair plus browser work through Zoe CloakBrowser tools.
-  Activated via escalation from Tier 1.
-  Also used as direct path when Zoe Agent is bypassed.
+- Tier 1: the local brain (brain_dispatch: Flue / zoe-core / legacy zoe_agent) on
+  Gemma 4 E4B-QAT with memory, HA control and tools. True SSE streaming.
+  Always active; the OpenClaw / Hermes lanes are retired and removed.
 """
 import asyncio
 import concurrent.futures
@@ -341,11 +337,8 @@ async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
         })
     except Exception as exc:
         logger.warning("_broadcast_intent_nav failed (non-fatal): %s", exc)
-from openclaw_ws import openclaw_cli, chat_inject, discover_openclaw_capabilities, _zoe_context_prefix
-from zoe_acp_client import openclaw_acp_stream as _acp_stream
 from zoe_agent import (
     _mempalace_load_user_facts, _mempalace_add, _fire_memory_capture,
-    _build_memory_context,
 )
 # Brain-lane selection has ONE source of truth (brain_dispatch.py) — every voice
 # path already routes through it. Aliased so every internal call site and every
@@ -360,7 +353,6 @@ from auth import get_current_user, resolve_acting_user
 from database import get_db
 from db_pool import get_db_ctx
 from ui_orchestrator import enqueue_ui_action
-from zoe_ui_components import auto_extract_components
 from research_evidence import (
     build_package,
     classify_query,
@@ -373,7 +365,7 @@ from risk_policy import is_whatsapp_connect_request
 from chat_session_title import derive_session_title, title_is_weak
 from session_continuity import mint as mint_session_id, resolve_session_id
 import traffic_class
-from ag_ui_stream import AgRunRecorder, iter_openclaw_text_chunks, iter_text_message_chunks, new_run_ids
+from ag_ui_stream import AgRunRecorder, iter_text_message_chunks, new_run_ids
 from ag_ui.core import (
     CustomEvent,
     EventType,
@@ -411,19 +403,6 @@ from chat_stream_protocol import (
     _stream_openclaw_assistant_ag,
 )
 
-# W4-C3: Hermes provider mechanics moved verbatim to chat_hermes_stream.py.
-# These re-exports are PERMANENT API — tests and callers import/monkeypatch these
-# names on routers.chat (the voice_tts re-export contract, applied to chat).
-# The _HERMES_* / _ZOE_SOUL_HERMES constants are deliberately NOT re-exported.
-from chat_hermes_stream import (
-    _build_hermes_payload,
-    _hermes_progress_message,
-    _hermes_progress_events,
-    _hermes_request_headers,
-    _iter_hermes_stream_events,
-    _hermes_completion,
-)
-
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -449,21 +428,9 @@ def _shows_form(intent_name: str, slots: dict) -> bool:
     return intent_name in _FORM_INTENTS
 
 
-# Intents that deliberately do not have a direct `execute_intent` handler
-# because they're designed to be expanded via openclaw_user_message() and
-# routed to OpenClaw.  For these, a None result from execute_intent is not a
-# failure — it's a delegation.  Tagging them here keeps the UI from showing a
-# red "tool failed" tile.
-_OPENCLAW_DELEGATION_INTENTS: frozenset[str] = frozenset({
-    "build_widget",
-    "build_page",
-    "extend_capability",
-    "self_improve",  # reviews intent-miss log and proposes new patterns
-})
-
 # Long-running intents that should route through the Multica board when available.
-# These get an AG-UI approval card before being queued; openclaw_user_message() is
-# NOT called for these — the raw user message is used as the board issue description.
+# These get an AG-UI approval card before being queued; the raw user message is used
+# as the board issue description.
 _MULTICA_BOARD_INTENTS: frozenset[str] = frozenset({
     "build_widget",
     "build_page",
@@ -544,12 +511,16 @@ _FORM_BLURB: dict[str, str] = {
     "reminder_create": "Here's your reminder — check the details and set it.",
     "timer_create":    "",   # timer tile speaks for itself
 }
+# Hand-off sentinels the legacy zoe_agent brain can still emit (its escalate_to_*
+# tools are never offered live, but stay defined). OpenClaw / Hermes are removed, so a
+# sentinel is answered honestly in place, never streamed raw or handed anywhere.
+_ESCALATION_MARKERS = ("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")
+_NO_HANDOFF_REPLY = "I can't hand that off to another agent, so I haven't started it."
 _MEMORY_AUTO_INGEST = os.environ.get("MEMORY_AUTO_INGEST", "false").lower() == "true"
 # B3 (2026-10-18): the HERMES_FAST_PATH / JETSON_AGENT_MODE env gates are gone. On
 # the only host that exists (the Jetson) they resolved to Zoe-Agent mode, so the
-# constant is pinned there; the OpenClaw/Hermes-first lane they selected against
-# has no live service behind it. Kept as a module constant (not env) so tests can
-# still steer the lane.
+# constant is pinned there; the OpenClaw/Hermes lanes they selected against are
+# deleted, so the local brain is the only lane.
 _USE_ZOE_AGENT = True
 
 # Production cutover: the brain is now zoe-core (Pi full-agent on local Gemma).
@@ -560,8 +531,8 @@ _USE_ZOE_AGENT = True
 # as a constant), but it now shares use_core_brain()'s parse so the lane gate and
 # the dispatch functions can never disagree on what the env means.
 _USE_ZOE_CORE = use_core_brain()
-# "Use a local brain" = either the new zoe-core (Pi) or the legacy zoe_agent.
-# When set, the local brain takes the slot that would otherwise fall to OpenClaw.
+# "Use a local brain" = either the new zoe-core (Pi) or the legacy zoe_agent. Always
+# True: there is no other lane (OpenClaw / Hermes were removed).
 _USE_LOCAL_BRAIN = _USE_ZOE_AGENT or _USE_ZOE_CORE
 # The zoe-core Pi brain pulls memory itself every turn via the memory.ts extension
 # (/api/memories/for-prompt), so also passing db_memory_context into the brain
@@ -692,14 +663,6 @@ async def _run_chat_pi_hybrid_lane(
                 ))
             except Exception as exc:
                 logger.debug("Pi hybrid action form broadcast skipped: %s", exc)
-        if not action_form:
-            asyncio.ensure_future(chat_inject_background(
-                message_for_processing,
-                response_text,
-                intent_name,
-                user_id,
-                session_id,
-            ))
             asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
         if response_text:
             await _save_chat_message(session_id, "assistant", response_text, user_id=user_id)
@@ -1290,52 +1253,6 @@ INTENT_LABELS = {
 }
 
 
-async def run_openclaw_agent(
-    message: str,
-    session_id: str,
-    user_id: str = "guest",  # fail-open to least-privilege, not admin (#1021/#1032 posture)
-    *,
-    user_role: str | None = None,
-    username: str | None = None,
-    memories: str | None = None,
-    allow_openclaw: bool = False,
-) -> str:
-    """Legacy entry point retained for callers; routes to Hermes by default.
-
-    OpenClaw remains available, but callers must opt in explicitly. This keeps
-    old call sites from silently bypassing Hermes after future edits.
-    """
-    if allow_openclaw:
-        return await openclaw_cli(
-            message,
-            session_id,
-            user_id,
-            user_role=user_role,
-            username=username,
-            memories=memories,
-        )
-    return await _hermes_completion(
-        message,
-        session_id,
-        user_id,
-        username=username or "",
-        portrait="",
-        facts=memories or "",
-    )
-
-
-async def chat_inject_background(user_message: str, assistant_response: str, intent_name: str, user_id: str = "guest", session_id: str = "web"):
-    """Optionally mirror an intent summary into OpenClaw for legacy debugging."""
-    if os.environ.get("ZOE_MIRROR_INTENTS_TO_OPENCLAW", "false").lower() != "true":
-        return
-    try:
-        summary = f"[Intent: {intent_name}] User: {user_message} | Result: {assistant_response}"
-        await chat_inject(summary, user_id, session_id)
-        logger.info(f"chat.inject sent for intent {intent_name}")
-    except Exception as e:
-        logger.warning(f"chat.inject background failed (non-fatal): {e}")
-
-
 _APPROVE_RE = re.compile(r"^/approve\s+([a-zA-Z0-9_-]{8,})\s*(.*)$")
 
 def _research_followup_prompt(missing: list[str]) -> str:
@@ -1444,21 +1361,6 @@ def _extract_approval_token(message: str):
     return token, rest or message
 
 
-async def _create_pending_approval(user_id: str, session_id: str, message: str, risk_level: str, reason: str, normalized_action: str) -> str:
-    approval_id = uuid.uuid4().hex[:16]
-    # get_db_ctx, not `async for db in get_db()`: exiting the generator
-    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
-    async with get_db_ctx() as db:
-        await db.execute(
-            """INSERT INTO openclaw_approvals
-               (id, session_id, user_id, request_text, normalized_action, risk_level, status, reason)
-               VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
-            (approval_id, session_id, user_id, message, normalized_action, risk_level, reason),
-        )
-        await db.commit()
-    return approval_id
-
-
 async def _resolve_approval(user_id: str, approval_id: str) -> dict | None:
     # get_db_ctx, not `async for db in get_db()`: exiting the generator
     # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
@@ -1514,14 +1416,10 @@ async def chat_stream_generator(
     session_id: str,
     user: dict,
     *,
-    force_openclaw: bool = False,
-    force_agent: str = "auto",
     req_panel_id: str | None = None,
     channel: str = "chat",
 ):
     user_id = user["user_id"]
-    user_role = user.get("role")
-    username = user.get("username")
     await _ensure_user_and_chat_session(session_id, user_id)
     # Persist user turn immediately — enables history for Zoe Agent on the NEXT request
     await _save_chat_message(session_id, "user", message, user_id=user_id)
@@ -1537,7 +1435,7 @@ async def chat_stream_generator(
     def _claim_mid() -> str | None:
         return _mid_box.pop() if _mid_box else None
 
-    run_mode = "hermes" if force_agent == "hermes" else "chat"
+    run_mode = "chat"
     # P3-A: accumulate brain tokens at generator scope so the error path can
     # recover the partial the user already saw. `persisted_assistant` guards
     # against double-saving once the normal-path save has been scheduled.
@@ -1555,9 +1453,7 @@ async def chat_stream_generator(
                 value={
                     "runId": run_id,
                     "sessionId": session_id,
-                    "mode": "hermes" if force_agent == "hermes" else "chat",
-                    "forceOpenClaw": force_openclaw,
-                    "forceAgent": force_agent,
+                    "mode": run_mode,
                 },
             )
         )
@@ -1589,76 +1485,6 @@ async def chat_stream_generator(
                     value={"level": "info", "message": "Approval accepted. Executing requested action."},
                 )
             )
-
-        if force_agent == "hermes":
-            _h_portrait, _h_facts, _h_semantic = await asyncio.gather(
-                _safe_load_portrait(user_id),
-                _mempalace_load_user_facts(user_id),
-                _build_memory_context(message_for_processing, user_id=user_id),
-            )
-            _h_combined_facts = "\n\n".join(filter(None, [_h_facts, _h_semantic]))
-            yield emit(
-                StateSnapshotEvent(
-                    type=EventType.STATE_SNAPSHOT,
-                    snapshot={
-                        "status": "generating",
-                        "phase": "hermes",
-                        "model": "Hermes Agent",
-                        "detail": "Thinking…",
-                    },
-                )
-            )
-            yield emit(
-                TextMessageStartEvent(
-                    type=EventType.TEXT_MESSAGE_START,
-                    message_id=assistant_message_id,
-                    role="assistant",
-                )
-            )
-            response_text = ""
-            async for hermes_event in _iter_hermes_stream_events(
-                message_for_processing,
-                session_id,
-                user_id,
-                username=username or "",
-                portrait=_h_portrait,
-                facts=_h_combined_facts,
-            ):
-                if hermes_event.get("kind") == "progress":
-                    for progress_event in _hermes_progress_events(
-                        hermes_event.get("event", "hermes.progress"),
-                        hermes_event.get("payload", {}),
-                    ):
-                        yield emit(progress_event)
-                    continue
-                token = hermes_event.get("text", "")
-                response_text += token
-                yield emit(
-                    TextMessageChunkEvent(
-                        type=EventType.TEXT_MESSAGE_CHUNK,
-                        message_id=assistant_message_id,
-                        role="assistant",
-                        delta=token,
-                    )
-                )
-            yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
-            if response_text.strip():
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id, message_id=_claim_mid()))
-                if user_id != "guest":
-                    asyncio.ensure_future(
-                        _persist_memory_candidates(user_id, session_id, message_for_processing, response_text)
-                    )
-            yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
-            await _record_run_state(
-                run_id,
-                session_id,
-                user_id,
-                mode="hermes",
-                status="completed",
-                request_text=message,
-                response_text=response_text,
-            )
-            return
 
         lc = message_for_processing.lower().strip()
         task_class = classify_query(message_for_processing)
@@ -1701,8 +1527,8 @@ async def chat_stream_generator(
             try:
                 caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
             except Exception:
-                caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
-            capabilities_text = f"Hermes/Zoe capabilities:\n\n{caps_text}"
+                caps_text = "Zoe's tools include calendar, lists, reminders, notes, memory, music and smart home."
+            capabilities_text = f"Zoe capabilities:\n\n{caps_text}"
             yield emit(
                 TextMessageStartEvent(
                     type=EventType.TEXT_MESSAGE_START,
@@ -1732,7 +1558,7 @@ async def chat_stream_generator(
                 "2) Credential/session validation\n"
                 "3) QR/session handshake\n"
                 "4) Webhook and test message validation\n"
-                "I will now run this through Hermes with guarded confirmations."
+                "I'll ask before any write or sign-in step."
             )
             yield emit(TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
             async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, flow_text):
@@ -1744,13 +1570,9 @@ async def chat_stream_generator(
                 "and remediation steps. Use guarded execution and ask for confirmation before any write/auth step."
             )
 
-        use_intent_fast_path = (not force_openclaw) and _INTENT_FAST_PATH_ENABLED
+        use_intent_fast_path = _INTENT_FAST_PATH_ENABLED
         if task_class == "research":
             # Research requests must flow through the evidence path, not terse intent handlers.
-            use_intent_fast_path = False
-        if message_for_processing.startswith("/openclaw "):
-            message_for_processing = message_for_processing[len("/openclaw ") :].strip()
-            force_openclaw = True
             use_intent_fast_path = False
         if untrusted_content.untrusted_source_in(message_for_processing):
             # Someone else's words, fenced by the producer (a forwarded Telegram message): never run a command written
@@ -1789,7 +1611,6 @@ async def chat_stream_generator(
                 _fp_comp = (getattr(_fp_res, "ui", None) or {}).get("zoe_component")
                 if _fp_comp:
                     yield emit(CustomEvent(name="zoe.component", value=_fp_comp))
-                asyncio.ensure_future(chat_inject_background(message_for_processing, _fp_reply, f"fast:{_fp_res.domain}", user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, _fp_reply))
                 asyncio.ensure_future(_save_chat_message(session_id, "assistant", _fp_reply, user_id=user_id, message_id=_claim_mid()))
                 yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
@@ -2027,18 +1848,12 @@ async def chat_stream_generator(
                         message_id=assistant_message_id,
                     )
                 )
-                asyncio.ensure_future(chat_inject_background(message_for_processing, result, intent.name, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
                 asyncio.ensure_future(_save_chat_message(session_id, "assistant", result, user_id=user_id, message_id=_claim_mid()))
             else:
-                if intent.name in _OPENCLAW_DELEGATION_INTENTS:
-                    logger.info("Intent %s delegating to Hermes/Multica", intent.name)
-                    logger.info("intent_outcome=matched_delegated intent=%s", intent.name)
-                    _tc_status = {"status": "delegated_to_hermes", "tool": tool_name}
-                else:
-                    logger.warning("Intent %s execution failed, falling back to LLM", intent.name)
-                    logger.info("intent_outcome=matched_exec_failed intent=%s fallback=%s", intent.name, "zoe_agent" if _USE_ZOE_AGENT else "hermes")
-                    _tc_status = {"status": "failed", "tool": tool_name}
+                logger.warning("Intent %s execution failed, falling back to LLM", intent.name)
+                logger.info("intent_outcome=matched_exec_failed intent=%s fallback=zoe_agent", intent.name)
+                _tc_status = {"status": "failed", "tool": tool_name}
                 yield emit(
                     ToolCallResultEvent(
                         type=EventType.TOOL_CALL_RESULT,
@@ -2049,75 +1864,26 @@ async def chat_stream_generator(
                     )
                 )
                 yield emit(StepFinishedEvent(type=EventType.STEP_FINISHED, step_name=label))
-                # Delegation intents go through Hermes/Multica by default.
-                # OpenClaw is only used for explicit /openclaw or force_agent=openclaw requests.
-                _force_openclaw_here = force_openclaw
-                if _USE_LOCAL_BRAIN and not _force_openclaw_here:
-                    yield emit(
-                        StateSnapshotEvent(
-                            type=EventType.STATE_SNAPSHOT,
-                            snapshot={
-                                "status": "generating",
-                                "phase": "zoe_agent",
-                                "model": "Zoe",
-                                "detail": "Thinking…",
-                            },
-                        )
+                yield emit(
+                    StateSnapshotEvent(
+                        type=EventType.STATE_SNAPSHOT,
+                        snapshot={
+                            "status": "generating",
+                            "phase": "zoe_agent",
+                            "model": "Zoe",
+                            "detail": "Thinking…",
+                        },
                     )
-                    task = asyncio.create_task(
-                        _brain_oneshot(message_for_processing, session_id, user_id)
-                    )
-                    try:
-                        async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Zoe"):
-                            yield hb
-                        response_text = await task
-                    finally:
-                        await _cancel_if_pending(task)
-                else:
-                    yield emit(
-                        StateSnapshotEvent(
-                            type=EventType.STATE_SNAPSHOT,
-                            snapshot={
-                                "status": "generating",
-                                "phase": "openclaw",
-                                "model": "Zoe (OpenClaw explicit fallback)",
-                                "detail": "Handing off to OpenClaw because it was explicitly requested…",
-                            },
-                        )
-                    )
-                    oc_message = openclaw_user_message(intent, message_for_processing)
-                    yield emit(
-                        CustomEvent(
-                            name="zoe.run_log",
-                            value={
-                                "level": "info",
-                                "message": "Starting OpenClaw explicit fallback (browser and tools can take 30s to several minutes).",
-                            },
-                        )
-                    )
-                    _oc_portrait, _oc_intent_fallback_mem, _oc_semantic = await asyncio.gather(
-                        _safe_load_portrait(user_id),
-                        _mempalace_load_user_facts(user_id),
-                        _build_memory_context(message_for_processing, user_id=user_id),
-                    )
-                    _oc_full_mem = "\n\n".join(filter(None, [_oc_portrait, _oc_intent_fallback_mem, _oc_semantic]))
-                    task = asyncio.create_task(
-                        run_openclaw_agent(
-                            oc_message,
-                            session_id,
-                            user_id,
-                            user_role=user_role,
-                            username=username,
-                            memories=_oc_full_mem or None,
-                            allow_openclaw=True,
-                        )
-                    )
-                    try:
-                        async for hb in _iter_openclaw_heartbeats(emit, task):
-                            yield hb
-                        response_text = await task
-                    finally:
-                        await _cancel_if_pending(task)
+                )
+                task = asyncio.create_task(
+                    _brain_oneshot(message_for_processing, session_id, user_id)
+                )
+                try:
+                    async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Zoe"):
+                        yield hb
+                    response_text = await task
+                finally:
+                    await _cancel_if_pending(task)
                 _, actions = _extract_ui_actions(response_text)
                 if actions:
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
@@ -2160,7 +1926,6 @@ async def chat_stream_generator(
                     ),
                 )
                 full_response = ""
-                escalate_signal: str | None = None
                 # Load recent conversation history so Zoe Agent has context for follow-ups ("yes", etc.)
                 prior_history: list[dict] = []
                 try:
@@ -2211,8 +1976,19 @@ async def chat_stream_generator(
                     db_memory_context=(pi_db_memory or None) if _CHAT_INJECT_DB_MEMORY else None,
                     portrait=pi_portrait or None,
                 ):
-                    if chunk.startswith("__ESCALATE__:") or chunk.startswith("__ESCALATE_BG__:") or chunk.startswith("__ESCALATE_HERMES__:"):
-                        escalate_signal = chunk
+                    if chunk.startswith(_ESCALATION_MARKERS):
+                        # Nothing to escalate to (OpenClaw / Hermes are gone): say so
+                        # in this message instead of streaming the raw sentinel.
+                        full_response += _NO_HANDOFF_REPLY
+                        yield recorder.emit(
+                            enc,
+                            TextMessageChunkEvent(
+                                type=EventType.TEXT_MESSAGE_CHUNK,
+                                message_id=assistant_message_id,
+                                role="assistant",
+                                delta=_NO_HANDOFF_REPLY,
+                            ),
+                        )
                         break
                     if chunk.startswith("__SEARCH_START__:"):
                         # Web search is about to execute — immediately stream a status line
@@ -2321,14 +2097,13 @@ async def chat_stream_generator(
                             delta=chunk,
                         ),
                     )
-                message_open = True
                 # ── Generative UI (PR-B, flag-gated): if the brain answered with
                 # text only (no domain card was emitted this turn) compose a card
                 # from the answer via the catalog grammar. Runs AFTER the full text
                 # has streamed (never delays tokens) and is bounded by a hard
                 # stream budget so a slow/down model server can never hold
                 # RUN_FINISHED hostage; any failure = simply no card.
-                if not escalate_signal and full_response.strip():
+                if full_response.strip():
                     _compose_ev = await maybe_compose_event(
                         message_for_processing,
                         full_response,
@@ -2337,171 +2112,14 @@ async def chat_stream_generator(
                     )
                     if _compose_ev is not None:
                         yield emit(_compose_ev)
-                if escalate_signal:
-                    is_background = escalate_signal.startswith("__ESCALATE_BG__:")
-                    is_hermes = escalate_signal.startswith("__ESCALATE_HERMES__:")
-                    # Operator policy: Hermes owns all foreground escalation. OpenClaw
-                    # signals are treated as Hermes tasks unless explicitly re-enabled elsewhere.
-                    if not is_background and not force_openclaw:
-                        is_hermes = True
-                    _, escalate_body = escalate_signal.split(":", 1)
-                    reason, _, oc_task = escalate_body.partition("|")
-                    oc_task_text = oc_task or message_for_processing
-
-                    if is_hermes:
-                        # Escalate to Hermes inside the existing AG-UI run/message.
-                        logger.info("chat: Zoe Agent escalating to Hermes — reason=%s", reason.strip())
-                        yield emit(
-                            StateSnapshotEvent(
-                                type=EventType.STATE_SNAPSHOT,
-                                snapshot={
-                                    "status": "generating",
-                                    "phase": "hermes",
-                                    "model": "Hermes Agent",
-                                    "detail": f"Escalated: {reason.strip()}",
-                                },
-                            )
-                        )
-                        yield emit(
-                            CustomEvent(
-                                name="zoe.run_log",
-                                value={"level": "info", "message": f"Escalating to Hermes: {reason.strip()}"},
-                            )
-                        )
-                        response_text = full_response
-                        async for hermes_event in _iter_hermes_stream_events(
-                            oc_task_text,
-                            session_id,
-                            user_id,
-                            username=user.get("username", ""),
-                            portrait=pi_portrait or "",
-                            facts=pi_db_memory or "",
-                        ):
-                            if hermes_event.get("kind") == "progress":
-                                for progress_event in _hermes_progress_events(
-                                    hermes_event.get("event", "hermes.progress"),
-                                    hermes_event.get("payload", {}),
-                                ):
-                                    yield emit(progress_event)
-                                continue
-                            token = hermes_event.get("text", "")
-                            response_text += token
-                            yield recorder.emit(
-                                enc,
-                                TextMessageChunkEvent(
-                                    type=EventType.TEXT_MESSAGE_CHUNK,
-                                    message_id=assistant_message_id,
-                                    role="assistant",
-                                    delta=token,
-                                ),
-                            )
-                    elif is_background:
-                        # Background execution is gone (it launched an agent with auto-approve as the zoe
-                        # user - deep dive S0-7). Say so; never queue, never run anything.
-                        logger.info("chat: background escalation refused - no background executor (reason=%s)", reason.strip())
-                        ack_text = "I can't run background tasks any more, so I haven't started that."
-                        yield emit(TextMessageChunkEvent(
-                            type=EventType.TEXT_MESSAGE_CHUNK,
-                            message_id=assistant_message_id,
-                            role="assistant",
-                            delta=ack_text,
-                        ))
-                        response_text = ack_text
-                    else:
-                        # Explicit OpenClaw request — stream via ACP channel.
-                        logger.info("chat: Zoe Agent escalating to explicit OpenClaw fallback (ACP) — reason=%s", reason.strip())
-                        yield recorder.emit(
-                            enc,
-                            TextMessageEndEvent(
-                                type=EventType.TEXT_MESSAGE_END,
-                                message_id=assistant_message_id,
-                            ),
-                        )
-                        message_open = False
-                        # Bridging message so the user isn't left staring at silence while
-                        # OpenClaw spins up (typically 3-10s before first token).
-                        _bridge_id = str(uuid.uuid4())
-                        yield emit(TextMessageStartEvent(
-                            type=EventType.TEXT_MESSAGE_START,
-                            message_id=_bridge_id,
-                            role="assistant",
-                        ))
-                        yield emit(TextMessageChunkEvent(
-                            type=EventType.TEXT_MESSAGE_CHUNK,
-                            message_id=_bridge_id,
-                            role="assistant",
-                            delta="On it — let me work through this properly for you.",
-                        ))
-                        yield emit(TextMessageEndEvent(
-                            type=EventType.TEXT_MESSAGE_END,
-                            message_id=_bridge_id,
-                        ))
-                        yield emit(
-                            StateSnapshotEvent(
-                                type=EventType.STATE_SNAPSHOT,
-                                snapshot={
-                                    "status": "generating",
-                                    "phase": "openclaw",
-                                    "model": "Zoe (OpenClaw explicit fallback)",
-                                    "detail": f"Explicit fallback: {reason.strip()}",
-                                },
-                            )
-                        )
-                        # Start a new streaming message block for the OpenClaw response
-                        oc_msg_id = str(uuid.uuid4())
-                        yield emit(TextMessageStartEvent(
-                            type=EventType.TEXT_MESSAGE_START,
-                            message_id=oc_msg_id,
-                            role="assistant",
-                        ))
-                        gateway_session_key = f"agent:main:zoe_{user_id}_{session_id}"
-                        # Prepend user context + portrait + approved memory facts so OpenClaw
-                        # has the same deep context it would get via openclaw_cli.
-                        _oc_memories = "\n\n".join(filter(None, [pi_portrait or None, pi_db_memory or None]))
-                        oc_prefixed = _zoe_context_prefix(
-                            user_id,
-                            user_role=user_role,
-                            username=username,
-                            memories=_oc_memories or None,
-                        ) + oc_task_text
-                        oc_full = ""
-                        async for oc_chunk in _acp_stream(oc_prefixed, gateway_session_key):
-                            oc_full += oc_chunk
-                            yield recorder.emit(
-                                enc,
-                                TextMessageChunkEvent(
-                                    type=EventType.TEXT_MESSAGE_CHUNK,
-                                    message_id=oc_msg_id,
-                                    role="assistant",
-                                    delta=oc_chunk,
-                                ),
-                            )
-                        yield emit(TextMessageEndEvent(
-                            type=EventType.TEXT_MESSAGE_END,
-                            message_id=oc_msg_id,
-                        ))
-                        response_text = oc_full
-                        _, actions = _extract_ui_actions(response_text)
-                        if actions:
-                            asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
-                        else:
-                            # Auto-extract rich components from plain text
-                            try:
-                                extracted = auto_extract_components(response_text)
-                                for _comp in extracted:
-                                    yield emit(CustomEvent(name="zoe.ui_component", value=_comp))
-                            except Exception as _aex:
-                                logger.debug("auto_extract_components (escalation) failed: %s", _aex)
-                else:
-                    response_text = full_response
-                if message_open:
-                    yield recorder.emit(
-                        enc,
-                        TextMessageEndEvent(
-                            type=EventType.TEXT_MESSAGE_END,
-                            message_id=assistant_message_id,
-                        ),
-                    )
+                response_text = full_response
+                yield recorder.emit(
+                    enc,
+                    TextMessageEndEvent(
+                        type=EventType.TEXT_MESSAGE_END,
+                        message_id=assistant_message_id,
+                    ),
+                )
                 # Save cards show prior-turn suggestions; current-turn detection runs
                 # in the background via _persist_memory_candidates (one-turn lag).
                 try:
@@ -2525,65 +2143,9 @@ async def chat_stream_generator(
                     if not persisted_assistant:
                         raise RuntimeError("assistant reply save failed")
 
-            else:
-                # Explicit OpenClaw fallback path.
-                yield emit(
-                    StateSnapshotEvent(
-                        type=EventType.STATE_SNAPSHOT,
-                        snapshot={
-                            "status": "generating",
-                            "phase": "openclaw",
-                            "model": "Zoe (OpenClaw explicit fallback)",
-                            "detail": "Starting OpenClaw because it was explicitly requested…",
-                        },
-                    )
-                )
-                oc_message = openclaw_user_message(intent, message_for_processing)
-                yield emit(
-                    CustomEvent(
-                        name="zoe.run_log",
-                        value={
-                            "level": "info",
-                            "message": "Starting OpenClaw explicit fallback (browser and tools can take 30s to several minutes).",
-                        },
-                    )
-                )
-                _oc2_portrait, oc_db_memory, _oc2_semantic = await asyncio.gather(
-                    _safe_load_portrait(user_id),
-                    _mempalace_load_user_facts(user_id),
-                    _build_memory_context(message_for_processing, user_id=user_id),
-                )
-                _oc2_full_mem = "\n\n".join(filter(None, [_oc2_portrait, oc_db_memory, _oc2_semantic]))
-                task = asyncio.create_task(
-                    run_openclaw_agent(
-                        oc_message,
-                        session_id,
-                        user_id,
-                        user_role=user_role,
-                        username=username,
-                        memories=_oc2_full_mem or None,
-                        allow_openclaw=True,
-                    )
-                )
-                try:
-                    async for hb in _iter_openclaw_heartbeats(emit, task):
-                        yield hb
-                    response_text = await task
-                finally:
-                    await _cancel_if_pending(task)
-                _, actions = _extract_ui_actions(response_text)
-                if actions:
-                    asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
-                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
-                if response_text:
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id, message_id=_claim_mid()))
-                async for line in _stream_openclaw_assistant_ag(
-                    enc, recorder, assistant_message_id, response_text
-                ):
-                    yield line
 
         if task_class == "research":
-            backend = "openclawLocal" if force_openclaw or not _USE_ZOE_AGENT else "zoeAgent"
+            backend = "zoeAgent"
             pkg = await _build_research_package(
                 query=message_for_processing,
                 response_text=response_text,
@@ -2730,9 +2292,6 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
     body = await request.json()
     message = body.get("message", "")
     user_id = user["user_id"]
-    force_agent: str = body.get("force_agent", "auto")  # 'auto' | 'hermes' | legacy 'openclaw'
-    # OpenClaw remains available, but only for explicit manual requests.
-    force_openclaw = bool(body.get("force_openclaw", False)) or (force_agent == "openclaw")
     req_panel_id: str | None = body.get("panel_id") or None
     # Optional per-channel tag (Phase 1: additive) — see _resolve_channel.
     req_channel: str = _resolve_channel(body)
@@ -2766,8 +2325,6 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                 message,
                 session_id,
                 user,
-                force_openclaw=force_openclaw,
-                force_agent=force_agent,
                 req_panel_id=req_panel_id,
                 channel=req_channel,
             ),
@@ -2837,18 +2394,14 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                 try:
                     caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
                 except Exception:
-                    caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
-                capabilities_text = "Hermes/Zoe capabilities:\n\n" + caps_text
+                    caps_text = "Zoe's tools include calendar, lists, reminders, notes, memory, music and smart home."
+                capabilities_text = "Zoe capabilities:\n\n" + caps_text
                 await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id)
                 return {"response": capabilities_text, "session_id": session_id}
 
-            use_intent_fast_path = (not force_openclaw) and _INTENT_FAST_PATH_ENABLED
+            use_intent_fast_path = _INTENT_FAST_PATH_ENABLED
             if task_class == "research":
                 # Keep research prompts on the evidence-producing flow.
-                use_intent_fast_path = False
-            if message_for_processing.startswith("/openclaw "):
-                message_for_processing = message_for_processing[len("/openclaw ") :].strip()
-                force_openclaw = True
                 use_intent_fast_path = False
             if untrusted_content.untrusted_source_in(message_for_processing):
                 use_intent_fast_path = False  # fenced third-party text: the brain only (see the stream path)
@@ -2875,12 +2428,6 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                     _fp_res = None
                 if _fp_res is not None and getattr(_fp_res, "reply", ""):
                     _fp_reply = _fp_res.reply
-                    asyncio.ensure_future(
-                        chat_inject_background(
-                            message_for_processing, _fp_reply,
-                            f"fast:{_fp_res.domain}", user_id, session_id,
-                        )
-                    )
                     asyncio.ensure_future(
                         _persist_memory_candidates(
                             user_id, session_id, message_for_processing, _fp_reply
@@ -2944,9 +2491,6 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                     asyncio.ensure_future(_broadcast_intent_nav(intent, panel_id=req_panel_id))
                 result = await execute_intent(intent, user_id)
                 if result:
-                    asyncio.ensure_future(
-                        chat_inject_background(message_for_processing, result, intent.name, user_id, session_id)
-                    )
                     asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
                     await _save_chat_message(session_id, "assistant", result, user_id=user_id)
                     return {"response": result, "session_id": session_id}
@@ -2959,74 +2503,21 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
 
             response_text = ""
             try:
-                # Portrait is cheap and the local brain takes it directly, so load it
-                # eagerly. Facts + semantic recall (ns_full_mem) are ONLY consumed by the
-                # Hermes/OpenClaw escalation branches and the non-local-brain path — the
-                # local Pi brain gets its memory from the memory.ts extension's
-                # /api/memories/for-prompt packet (db_memory_context=None below). So
-                # compute them LAZILY to avoid a redundant facts-load + semantic search
-                # on every non-escalating turn (the recall double-load this PR removes).
+                # The local brain takes the portrait directly; it pulls facts + recall itself
+                # through the memory.ts extension's /api/memories/for-prompt packet.
                 ns_portrait = await _safe_load_portrait(user_id)
-                _ns_full_mem_cache: "str | None" = None
-
-                async def _ns_full_mem() -> str:
-                    nonlocal _ns_full_mem_cache
-                    if _ns_full_mem_cache is None:
-                        _dbm, _sem = await asyncio.gather(
-                            _mempalace_load_user_facts(user_id),
-                            _build_memory_context(message_for_processing, user_id=user_id),
-                        )
-                        _ns_full_mem_cache = "\n\n".join(filter(None, [ns_portrait, _dbm, _sem]))
-                    return _ns_full_mem_cache
-
-                if _USE_LOCAL_BRAIN:
-                    # Use original (pre-suffix) message for agent so fast-path checks work
-                    _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
-                    expanded_msg = openclaw_user_message(intent, _agent_msg) if intent else _agent_msg
-                    response_text = await _brain_oneshot(
-                        expanded_msg, session_id, user_id,
-                        portrait=ns_portrait,
-                        db_memory_context=None,
-                        max_tokens_override=voice_max_tokens,
-                        voice_mode=is_voice_mode,
-                    )
-                    # If Zoe Agent signals escalation, route accordingly
-                    if response_text.startswith("__ESCALATE_HERMES__:"):
-                        _, escalate_body = response_text.split(":", 1)
-                        _, _, hermes_task = escalate_body.partition("|")
-                        try:
-                            response_text = await _hermes_completion(
-                                hermes_task or message_for_processing,
-                                session_id,
-                                user_id,
-                                username=user.get("username") or "",
-                                portrait=ns_portrait,
-                                facts=await _ns_full_mem() or "",
-                            )
-                        except Exception as _he:
-                            logger.warning("Hermes non-stream escalation failed: %s", _he)
-                            response_text = "I couldn't reach Hermes right now. Please try again."
-                    elif response_text.startswith("__ESCALATE__:"):
-                        _, escalate_body = response_text.split(":", 1)
-                        _, _, oc_task = escalate_body.partition("|")
-                        response_text = await _hermes_completion(
-                            oc_task or message_for_processing,
-                            session_id,
-                            user_id,
-                            username=user.get("username") or "",
-                            portrait=ns_portrait,
-                            facts=await _ns_full_mem() or "",
-                        )
-                else:
-                    oc_message = openclaw_user_message(intent, message_for_processing)
-                    response_text = await _hermes_completion(
-                        oc_message,
-                        session_id,
-                        user_id,
-                        username=user.get("username") or "",
-                        portrait=ns_portrait,
-                        facts=await _ns_full_mem() or "",
-                    )
+                # Use original (pre-suffix) message for agent so fast-path checks work
+                _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
+                expanded_msg = openclaw_user_message(intent, _agent_msg) if intent else _agent_msg
+                response_text = await _brain_oneshot(
+                    expanded_msg, session_id, user_id,
+                    portrait=ns_portrait,
+                    db_memory_context=None,
+                    max_tokens_override=voice_max_tokens,
+                    voice_mode=is_voice_mode,
+                )
+                if response_text.startswith(_ESCALATION_MARKERS):
+                    response_text = _NO_HANDOFF_REPLY  # nothing to escalate to (see the stream path)
             except Exception as exc:
                 if task_class != "research":
                     raise
@@ -3055,7 +2546,7 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                 pkg = await _build_research_package(
                     query=message_for_processing,
                     response_text=response_text,
-                    backend="openclawLocal" if force_openclaw or not _USE_ZOE_AGENT else "zoeAgent",
+                    backend="zoeAgent",
                     user_id=user_id,
                     session_id=session_id,
                 )
@@ -3210,42 +2701,7 @@ async def chat_capabilities(user: dict = Depends(get_current_user)):
         caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()
     except Exception:
         caps_text = ""
-    return {"ok": True, "agent": "hermes", "capabilities_markdown": caps_text}
-
-
-@router.post("/whatsapp/connect")
-async def whatsapp_connect(request: Request, user: dict = Depends(get_current_user)):
-    user_id = user["user_id"]
-    body = await request.json()
-    session_id = await resolve_session_id(body, user_id)
-    approved = bool(body.get("approved", False))
-    if not approved:
-        approval_id = await _create_pending_approval(
-            user_id=user_id,
-            session_id=session_id,
-            message="Connect to WhatsApp",
-            risk_level="high",
-            reason="External account linking requires confirmation",
-            normalized_action="connect to whatsapp",
-        )
-        return {
-            "status": "approval_required",
-            "approval_id": approval_id,
-            "prompt": f"/approve {approval_id}",
-        }
-    guidance = (
-        "Connect WhatsApp integration for user with full guided flow: "
-        "preflight checks, credential/session validation, qr/session setup, "
-        "webhook test message validation, and remediation on failures."
-    )
-    response_text = await run_openclaw_agent(
-        guidance,
-        session_id,
-        user_id,
-        user_role=user.get("role"),
-        username=user.get("username"),
-    )
-    return {"status": "ok", "response": response_text}
+    return {"ok": True, "agent": "zoe", "capabilities_markdown": caps_text}
 
 
 @router.get("/approvals/pending")

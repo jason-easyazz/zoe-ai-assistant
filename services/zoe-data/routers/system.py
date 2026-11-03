@@ -21,7 +21,6 @@ from auth import (
     require_internal_token,
 )
 from database import get_db
-from hermes_http import hermes_auth_headers
 from research_evidence import (
     WEB_LOOKUP_ERROR,
     WEB_SEARCH_TOOL_DEADLINE_S,
@@ -1650,49 +1649,6 @@ async def get_evolution_proposals(
     }
 
 
-async def _hermes_review_proposal(proposal: dict) -> tuple[bool, str]:
-    """Ask Hermes to review an evolution proposal before implementation is queued.
-
-    Returns (approved: bool, feedback: str).
-    Fails open — caller must catch all exceptions and proceed if Hermes is unavailable.
-    """
-    hermes_url = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642")
-    hermes_model = os.environ.get("HERMES_MODEL", "hermes-agent")
-    prompt = (
-        "Review this Zoe evolution proposal for implementation readiness.\n"
-        "Reply with APPROVED on the first line if safe to proceed, or REJECT if not.\n"
-        "If you have concerns, include a CONCERNS: section with concise actionable feedback.\n\n"
-        f"Title: {proposal.get('title', '')}\n\n"
-        f"Description: {proposal.get('description', '')}\n\n"
-        f"Evidence: {proposal.get('evidence', '')}"
-    )
-    headers = {"Content-Type": "application/json", **hermes_auth_headers()}
-    async with httpx.AsyncClient(timeout=90) as client:
-        async with client.stream(
-            "POST",
-            f"{hermes_url}/v1/chat/completions",
-            json={
-                "model": hermes_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": True,
-            },
-            headers=headers,
-        ) as resp:
-            resp.raise_for_status()
-            content = ""
-            async for line in resp.aiter_lines():
-                if line.startswith("data: ") and "[DONE]" not in line:
-                    try:
-                        chunk = json.loads(line[6:])
-                        content += chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                    except Exception:
-                        pass
-    feedback = content.strip()
-    upper = feedback.upper()
-    approved = "APPROVED" in upper and "REJECT" not in upper and "CONCERNS:" not in upper
-    return approved, feedback
-
-
 @_agent_card_router.post("/evolution/proposals/{proposal_id}/action")
 async def evolution_proposal_action(
     proposal_id: str,
@@ -1708,10 +1664,10 @@ async def evolution_proposal_action(
     unauthenticated default identity) could persist status='approved'.
 
     On approve (conditional, decided by may_auto_execute):
-      * review-only proposals — sync/update a Multica DISPLAY issue and run the
-        Hermes proposal pre-review; nothing is executed.
+      * review-only proposals — sync/update a Multica DISPLAY issue; nothing is
+        executed.
       * admin-approved EXECUTABLE proposals (autonomy contract allows it) — skip
-        the display sync and Hermes pre-review entirely and bridge the proposal
+        the display sync entirely and bridge the proposal
         to the board runner's lane (todo issue -> Omnigent -> gated PR -> merge).
         Re-approval NEVER re-enqueues: any prior board issue (even a failed one)
         is returned as-is unless the body carries an explicit `retry: true`, and
@@ -1850,47 +1806,6 @@ async def evolution_proposal_action(
                         await _eq.decide(db, proposal_id, "approved", actor=_actor)
                 except _eq.Conflict as exc:
                     raise HTTPException(status_code=409, detail=str(exc)) from exc
-            # Hermes PROPOSAL pre-review gate — REVIEW-ONLY proposals only.
-            # An auto-executing proposal is skipped here: it is already authorized
-            # (admin + execution gate) and the CODE it produces is reviewed
-            # downstream by the board lane (focused tests + review gate + greploop
-            # before merge). Running this gate for auto-exec proposals is both
-            # redundant AND unsafe — on a re-approve it could revert the proposal
-            # to 'pending' and return early while an already-live board issue keeps
-            # running (proposal says human-review-needed, board says implementing).
-            # Fails open — if Hermes is unavailable we proceed normally.
-            if not _allowed:
-                try:
-                    _h_approved, _h_feedback = await _hermes_review_proposal(proposal)
-                    if not _h_approved and re.search(r"CONCERNS:|REJECT", _h_feedback, re.IGNORECASE):
-                        logger.info(
-                            "evolution_approve: Hermes flagged concerns for proposal %s", proposal_id
-                        )
-                        if multica_issue_id:
-                            try:
-                                from multica_client import get_multica_client  # type: ignore[import]
-                                _mc = get_multica_client()
-                                if _mc.is_configured():
-                                    async with httpx.AsyncClient(timeout=30) as _hc:
-                                        _cur_desc = proposal.get("description", "")
-                                        await _hc.put(
-                                            f"{_mc._base}/api/issues/{multica_issue_id}",
-                                            json={"description": f"{_cur_desc}\n\nHermes review:\n{_h_feedback}"},
-                                            headers=_mc._headers(),
-                                        )
-                            except Exception as _exc:
-                                logger.warning(
-                                    "evolution_approve: could not append Hermes feedback to Multica issue: %s", _exc
-                                )
-                        await _eq.decide(db, proposal_id, "", actor="hermes:review", note="review concerns")
-                        return {"ok": True, "action": "hermes_review_required", "feedback": _h_feedback}
-                    logger.info("evolution_approve: Hermes cleared proposal %s", proposal_id)
-                except Exception as exc:
-                    logger.warning(
-                        "evolution_approve: Hermes review failed — proceeding without review for proposal %s: %s",
-                        proposal_id, exc,
-                    )
-
             # Land the approved proposal on the board runner's PROVEN lane.
             # The old executor_registry.dispatch_issue path went to the Kanban
             # PHASE pipeline whose consumer (Hermes / the Flue live-runner) is
@@ -2162,8 +2077,6 @@ async def post_install_component(
             detail=f"Component '{component}' is not installable. "
                    f"Installable: {', '.join(installable_components())}",
         )
-    if component == "openclaw" and os.environ.get("OPENCLAW_UPGRADE_ENABLED", "true").lower() != "true":
-        raise HTTPException(status_code=403, detail="OpenClaw upgrades are disabled on this server")
     if not body.get("confirm"):
         raise HTTPException(status_code=400, detail='Set {"confirm": true} to run the install')
     try:
@@ -2632,13 +2545,6 @@ async def web_search(body: _WebSearchBody, _: None = Depends(require_intent_disp
     return web_search_tool_payload(outcome)
 
 
-# Synchronous delegation targets the zoe-core brain may invoke in-turn. Hermes
-# only: it owns web browsing / Telegram / the harness, and returns a completion
-# we can fold into the chat answer. OpenClaw stays explicit-opt-in (see the
-# async A2A /api/agent/delegate endpoint), so it is intentionally NOT here.
-_SYNC_DELEGATE_TARGETS = frozenset({"hermes"})
-
-
 class _DelegateSyncBody(BaseModel):
     user_id: str
     task: str
@@ -2647,44 +2553,18 @@ class _DelegateSyncBody(BaseModel):
 
 @router.post("/delegate-sync")
 async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_intent_dispatch_auth)):
-    """Synchronously delegate one task to a peer agent and return its completion.
+    """Synchronous peer-agent delegation for the zoe-core brain: NOT AVAILABLE.
 
-    Internal/service endpoint — how the zoe-core Pi brain delegates work it can't
-    do natively yet (web research, complex tasks) to Hermes and folds the answer
-    into its turn, the synchronous parity of the legacy __ESCALATE_HERMES__ path.
-    Fails closed on unknown user or non-allowlisted target.
+    Its only target was Hermes, which is retired and removed, so there is no peer to
+    hand a task to. The route stays (zoe-core's ``abilities/delegate.ts`` still calls
+    it) and answers 503 honestly after validating the request, instead of a 502 from
+    a dead gateway. Same internal gate as intent-dispatch (body ``user_id``).
     """
-    user_id = (body.user_id or "").strip()
-    task = (body.task or "").strip()
-    target = (body.target or "hermes").strip().lower()
-    if not user_id:
+    if not (body.user_id or "").strip():
         raise HTTPException(status_code=400, detail="user_id required")
-    if not task:
+    if not (body.task or "").strip():
         raise HTTPException(status_code=400, detail="task required")
-    if target not in _SYNC_DELEGATE_TARGETS:
-        raise HTTPException(status_code=400, detail=f"target not sync-delegatable: {target}")
-    try:
-        # Lazy import: routers.chat owns the Hermes client; importing at module
-        # load would be circular (chat imports system-side helpers too).
-        from routers.chat import _hermes_completion, _mempalace_load_user_facts, _safe_load_portrait
-
-        # Attach the same user context the legacy __ESCALATE_HERMES__ path sent,
-        # so delegated answers stay personalized (preferences + memory), not generic.
-        portrait, facts = await asyncio.gather(
-            _safe_load_portrait(user_id),
-            _mempalace_load_user_facts(user_id),
-        )
-        result = await _hermes_completion(
-            task,
-            session_id=f"delegate-{user_id}",
-            user_id=user_id,
-            portrait=portrait or "",
-            facts=facts or "",
-        )
-    except Exception as exc:
-        logger.warning("delegate-sync failed target=%s: %s", target, exc)
-        raise HTTPException(status_code=502, detail="delegation failed") from exc
-    return {"target": target, "ok": bool(result), "result": result or ""}
+    raise HTTPException(status_code=503, detail="delegation is not available: no peer agent is configured")
 
 
 # ─── Telegram account linking (resolve a verified telegram_id → Zoe user) ─────

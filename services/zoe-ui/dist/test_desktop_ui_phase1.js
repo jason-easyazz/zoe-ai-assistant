@@ -136,11 +136,16 @@ function chatAgents() {
   // 6. Chat cannot force a turn into a retired runtime.
   const chat = read('chat.html');
   for (const id of ['agentPillHermes', 'agentPillOpenclaw']) assert(!chat.includes('id=' + JSON.stringify(id)), 'chat.html still renders ' + id);
-  const pre = 'let selectedAgent = ' + JSON.stringify('auto') + '; let forceOpenClawMode = false;\n';
-  const post = '\n; selectAgent(' + JSON.stringify('hermes') + '); const a = selectedAgent; selectAgent(' + JSON.stringify('openclaw') + '); ({ a, b: selectedAgent, f: forceOpenClawMode })';
+  const pre = 'let selectedAgent = ' + JSON.stringify('auto') + ';\n';
+  const post = '\n; selectAgent(' + JSON.stringify('hermes') + '); const a = selectedAgent; selectAgent(' + JSON.stringify('openclaw') + '); ({ a, b: selectedAgent })';
   const sel = vm.runInNewContext(pre + extractFunction(chat, 'selectAgent') + post, { document: { getElementById: () => null } });
-  assert.deepStrictEqual({ a: sel.a, b: sel.b, f: sel.f }, { a: 'auto', b: 'auto', f: false });
-  ok('chat shows no Hermes/OpenClaw pill and selectAgent() maps any agent to Zoe (force_agent stays auto)');
+  assert.deepStrictEqual({ a: sel.a, b: sel.b }, { a: 'auto', b: 'auto' });
+  // ...and the request body carries no lane override at all (the server dropped force_openclaw / force_agent).
+  for (const page of ['chat.html', 'touch/chat.html']) {
+    const src = read(page);
+    for (const dead of ['force_openclaw', 'force_agent', 'forceOpenClawMode', 'tryPromptWithOpenClaw']) assert(!src.includes(dead), page + ' still carries ' + dead);
+  }
+  ok('chat shows no Hermes/OpenClaw pill, selectAgent() maps any agent to Zoe, and no page sends a lane override');
 }
 
 function calendarAndJournal() {

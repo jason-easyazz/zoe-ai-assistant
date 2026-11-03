@@ -26,12 +26,12 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 804 prod flags; 214 read through `typed_env`.
-- 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
+- 802 prod flags; 214 read through `typed_env`.
+- 759 legacy direct read sites in prod code across 226 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 252 non-`ZOE_` env names read by prod code (table below).
+- 245 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
-- 313 prod flags with no owner doc yet.
+- 311 prod flags with no owner doc yet.
 - 1 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
@@ -58,13 +58,12 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-804 flags; 753 not documented in `.env.example`.
+802 flags; 751 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
 | `ZOE_A2A_CLIENT_TIMEOUT_S` | int | `30` | - | - | `'30'` | no | NO | `services/zoe-data/a2a_client.py` |
 | `ZOE_A2A_TOKEN` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `''` | no | NO | `services/zoe-data/auth.py` |
-| `ZOE_ACP_DELIVERY_MODE` | str | `'live'` | - | - | `'live'` | no | NO | `services/zoe-data/zoe_acp_client.py` |
 | `ZOE_ADHOC_BACKUP_DIR` | str | `''` | - | `services/zoe-data/AGENTS.md` | `-`, `dynamic` | no | NO | `scripts/maintenance/rotate_service_logs.py`<br>`services/zoe-data/local_text_logs.py` |
 | `ZOE_AFFECT_CONSENT_GATE` | str | `''` | - | `docs/knowledge/memory-authority.md` | `-` | no | NO | `services/zoe-data/memory_authority.py` |
 | `ZOE_AGENT_LLM_TIMEOUT` | float | `120.0` | - | - | `'120.0'`, `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |
@@ -436,7 +435,6 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MERGE_QUEUE_LABEL` | str | `'auto-merge'` | - | - | `'auto-merge'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MERGE_QUEUE_MAX_CANDIDATES` | int | `50` | - | - | `'50'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MIRROR_GUARD` | str | `'shadow'` | `off`, `shadow`, `on` | `docs/knowledge/converse-not-mirror.md` | `-` | yes | NO | `services/zoe-data/mirror_guard.py` |
-| `ZOE_MIRROR_INTENTS_TO_OPENCLAW` | bool | `False` | - | - | `'false'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_MISHEAR_CLARIFY` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/voice-pipeline.md` | `'off'` | yes | NO | `services/zoe-data/mishear_clarify.py` |
 | `ZOE_MODELS_LOCK` | str | `''` | - | `docs/knowledge/offbox-backup.md` | `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_MOONSHINE_ARCH` | str | `'MEDIUM_STREAMING'` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'MEDIUM_STREAMING'`, `'v2'` | yes | yes | `scripts/perf/measure_moonshine_vad_threshold.py`<br>`scripts/perf/measure_stt_under_speech.py`<br>`services/zoe-data/routers/voice_tts.py` |
@@ -914,7 +912,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-252 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+245 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -927,7 +925,6 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `AMBIENT_SILENCE_PAD_MS` | `'800'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `AMBIENT_VAD_THRESHOLD` | `'0.4'` | no | yes | `scripts/setup/zoe_voice_daemon.py` |
 | `ANONYMIZED_TELEMETRY` | `dynamic` | no | NO | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/maintenance/palace_drill_check.py` |
-| `API_SERVER_KEY` | `-` | no | NO | `services/zoe-data/chat_hermes_stream.py`<br>`services/zoe-data/hermes_http.py` |
 | `AUDIO_DEVICE` | `'default'` | no | NO | `scripts/setup/mac_panel/preflight.py` |
 | `AUDIO_OUTPUT_DEVICE` | `'default'`, `dynamic` | no | NO | `scripts/setup/mac_panel/preflight.py`<br>`scripts/setup/zoe_voice_daemon.py` |
 | `BACKLIGHT_DEVICE` | `(required)` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
@@ -1007,11 +1004,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `HA_OIDC_CLIENT_SECRET` | `''` | no | yes | `services/zoe-auth/oidc/startup.py` |
 | `HEALTH_BIND` | `dynamic` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `HEALTH_PORT` | `'7777'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
-| `HERMES_API_KEY` | `dynamic` | no | yes | `services/zoe-data/chat_hermes_stream.py`<br>`services/zoe-data/hermes_http.py` |
-| `HERMES_API_URL` | `'http://127.0.0.1:8642'` | no | NO | `services/zoe-data/chat_hermes_stream.py`<br>`services/zoe-data/routers/system.py` |
 | `HERMES_HOME` | `'~/.hermes'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `HERMES_KANBAN_DB` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
-| `HERMES_MODEL` | `'hermes-agent'` | no | NO | `services/zoe-data/chat_hermes_stream.py`<br>`services/zoe-data/routers/system.py` |
 | `HERMES_MULTICA_AGENT_ID` | `''` | no | NO | `services/zoe-data/multica_client.py` |
 | `HF_HUB_OFFLINE` | `dynamic` | no | NO | `scripts/perf/zmb/embed_shim.py`<br>`scripts/perf/zmb/lab_driver.py`<br>`scripts/perf/zmb/pilot/embed_quality_probe.py` |
 | `HOME` | `''`, `'/'`, `'/home/zoe'`, `'~'`, `dynamic` | no | NO | `scripts/maintenance/cleanup_dead_units.py`<br>`scripts/maintenance/fix_secret_perms.py`<br>`scripts/maintenance/migrate_hermes_env.py`<br>`scripts/maintenance/reap_env_copies.py`<br>`scripts/maintenance/zoe_health.py`<br>`scripts/maintenance/zoe_offbox.py`<br>`scripts/night/night_window.py`<br>`scripts/perf/manner_block_ab.py`<br>`scripts/perf/zmb/arms/mpa_palace.py`<br>`scripts/perf/zmb/bakeoff.py`<br>`scripts/perf/zmb/bakeoff_measure.py`<br>`scripts/perf/zmb/embed_shim.py` |
@@ -1083,9 +1077,6 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `OMNIGENT_OIDC_CLIENT_ID` | `'omnigent'` | no | NO | `services/zoe-auth/oidc/startup.py` |
 | `OMNIGENT_OIDC_CLIENT_SECRET` | `''` | no | NO | `services/zoe-auth/oidc/startup.py` |
 | `OMNIGENT_SERVER` | `'http://127.0.0.1:6767'` | no | NO | `scripts/maintenance/reap_stale_omnigent_runners.py` |
-| `OPENCLAW_AGENT_TIMEOUT_S` | `'900'` | no | yes | `services/zoe-data/openclaw_ws.py`<br>`services/zoe-data/zoe_acp_client.py` |
-| `OPENCLAW_GATEWAY_TOKEN` | `''` | no | yes | `services/zoe-data/openclaw_ws.py`<br>`services/zoe-data/zoe_acp_client.py` |
-| `OPENCLAW_UPGRADE_ENABLED` | `'true'` | no | yes | `services/zoe-data/routers/system.py` |
 | `OPENROUTER_API_KEY` | `-` | no | NO | `scripts/maintenance/zoe_cheap_pr_agent.py` |
 | `OPENWEATHERMAP_API_KEY` | `''` | no | yes | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
 | `ORT_DISABLE_GPU` | `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |

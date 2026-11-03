@@ -1,4 +1,4 @@
-"""Tests for /api/system/delegate-sync (Phase 2.5 — zoe-core brain delegation)."""
+"""Tests for /api/system/delegate-sync: validated, then an honest 503 (Hermes is retired)."""
 from __future__ import annotations
 
 import pytest
@@ -47,83 +47,25 @@ def test_requires_task(monkeypatch):
     assert "task" in resp.json()["detail"]
 
 
-def test_rejects_non_sync_target(monkeypatch):
-    """OpenClaw is explicit-opt-in via the async A2A path, not sync-delegatable."""
+@pytest.mark.parametrize("target", ["hermes", "openclaw", None])
+def test_valid_request_is_answered_503_not_available(monkeypatch, target):
+    """Hermes (the only target) is retired: a valid request gets an honest 503, never a
+    fake completion, and nothing is dialled (the Hermes client module is gone)."""
     monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    body = {"user_id": "jason", "task": "weather in Perth"}
+    if target:
+        body["target"] = target
     resp = TestClient(_app()).post(
-        "/api/system/delegate-sync",
-        json={"user_id": "jason", "task": "do it", "target": "openclaw"},
-        headers={"X-Internal-Token": "tok"},
+        "/api/system/delegate-sync", json=body, headers={"X-Internal-Token": "tok"}
     )
-    assert resp.status_code == 400
-    assert "not sync-delegatable" in resp.json()["detail"]
+    assert resp.status_code == 503
+    assert "not available" in resp.json()["detail"]
 
 
-def test_happy_path_calls_hermes(monkeypatch):
-    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
-    captured = {}
-
-    async def fake_hermes(message, session_id, user_id, **kwargs):
-        captured.update(message=message, session_id=session_id, user_id=user_id)
-        return "Hermes says: sunny with a high of 24."
+def test_the_hermes_client_is_gone():
+    import importlib.util
 
     import routers.chat as chat
-    async def _empty(*a, **k):
-        return ""
-    monkeypatch.setattr(chat, "_safe_load_portrait", _empty)
-    monkeypatch.setattr(chat, "_mempalace_load_user_facts", _empty)
-    monkeypatch.setattr(chat, "_hermes_completion", fake_hermes)
 
-    resp = TestClient(_app()).post(
-        "/api/system/delegate-sync",
-        json={"user_id": "jason", "task": "what's the weather?", "target": "hermes"},
-        headers={"X-Internal-Token": "tok"},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["target"] == "hermes"
-    assert body["ok"] is True
-    assert body["result"] == "Hermes says: sunny with a high of 24."
-    assert captured["message"] == "what's the weather?"
-    assert captured["user_id"] == "jason"
-
-
-def test_target_defaults_to_hermes(monkeypatch):
-    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
-
-    async def fake_hermes(message, session_id, user_id, **kwargs):
-        return "ok"
-
-    import routers.chat as chat
-    async def _empty(*a, **k):
-        return ""
-    monkeypatch.setattr(chat, "_safe_load_portrait", _empty)
-    monkeypatch.setattr(chat, "_mempalace_load_user_facts", _empty)
-    monkeypatch.setattr(chat, "_hermes_completion", fake_hermes)
-    resp = TestClient(_app()).post(
-        "/api/system/delegate-sync",
-        json={"user_id": "jason", "task": "anything"},  # no target -> hermes
-        headers={"X-Internal-Token": "tok"},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["target"] == "hermes"
-
-
-def test_hermes_failure_surfaces_502(monkeypatch):
-    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
-
-    async def boom(*args, **kwargs):
-        raise RuntimeError("hermes down")
-
-    import routers.chat as chat
-    async def _empty(*a, **k):
-        return ""
-    monkeypatch.setattr(chat, "_safe_load_portrait", _empty)
-    monkeypatch.setattr(chat, "_mempalace_load_user_facts", _empty)
-    monkeypatch.setattr(chat, "_hermes_completion", boom)
-    resp = TestClient(_app()).post(
-        "/api/system/delegate-sync",
-        json={"user_id": "jason", "task": "x"},
-        headers={"X-Internal-Token": "tok"},
-    )
-    assert resp.status_code == 502
+    assert importlib.util.find_spec("chat_hermes_stream") is None
+    assert not hasattr(chat, "_hermes_completion")

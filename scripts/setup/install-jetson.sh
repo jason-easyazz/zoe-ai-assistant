@@ -137,7 +137,6 @@ else
   env_set "$ROOT_ENV" POSTGRES_PASSWORD "$db_pass"
   env_set "$ROOT_ENV" POSTGRES_URL "$pg_url"
   env_set "$ROOT_ENV" POSTGRES_APSCHEDULER_URL "$aps_url"
-  env_set "$ROOT_ENV" OPENCLAW_GATEWAY_TOKEN "$(gen_secret 24)"
   env_set "$ROOT_ENV" KEEPER_AUTH_TOKEN "$(gen_secret 24)"
   env_set "$ROOT_ENV" ZOE_INTERNAL_TOKEN "$(gen_secret 32)"
   ok "generated root .env with fresh DB password + service tokens"
