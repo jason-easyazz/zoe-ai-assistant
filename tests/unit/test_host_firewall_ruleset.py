@@ -81,6 +81,8 @@ def test_loopback_and_bridges_are_accepted_before_any_drop(chain):
     if chain == "input":
         assert 'iif "lo" accept' in accepts
     assert all(r.endswith("drop") for r in rules[first_drop:])
+    # every drop goes through a reviewed set: a literal `tcp dport 443 drop` would dodge the set checks above
+    assert all(re.fullmatch(r"(tcp|udp) dport @closed_\w+ drop", r) for r in rules[first_drop:]), rules[first_drop:]
 
 
 def test_own_table_only_and_loadable_on_this_kernel():
