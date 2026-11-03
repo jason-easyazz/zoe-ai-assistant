@@ -1780,11 +1780,23 @@ class MemoryService:
             logger.warning("memory_service: load_durable_for_hop failed user=%s: %s", user_id, exc)
             return []
 
-    def _durable_rows_sync(self, user_id: str) -> list[MemoryRef]:
+    async def recheck_durable(self, user_id: str, ids: list[str]) -> list[MemoryRef]:
+        """The subset of ``ids`` that are, read FRESH by id now, still this owner's durable rows by exactly the rules of
+        ``load_durable_for_hop`` (``recall_every_turn`` selects from a cached index and re-verifies its few picks here, so a
+        row superseded, retired or deleted since the index was built never enters). A failed read RAISES: the caller fails
+        closed."""
+        if is_guest_memory_user(user_id) or not ids:
+            return []
+        self._require(user_id, "user_id is required")
+        return await self._run_sync(self._durable_rows_sync, user_id, [str(i) for i in ids])
+
+    def _durable_rows_sync(self, user_id: str, ids: Optional[list[str]] = None) -> list[MemoryRef]:
         now = datetime.datetime.now(datetime.timezone.utc)
         uid = str(user_id).strip().lower()
         out: list[MemoryRef] = []
-        for ref in self._visible_rows(user_id, now):
+        rows = (self._visible_rows(user_id, now) if ids is None else
+                self._filter_visible(self._collection().get(ids=ids, include=["documents", "metadatas"]), user_id, now))
+        for ref in rows:
             md = ref.metadata or {}
             if str(md.get("status") or "approved").strip().lower() != "approved":
                 continue

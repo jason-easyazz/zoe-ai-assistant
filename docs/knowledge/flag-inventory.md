@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 802 prod flags; 214 read through `typed_env`.
+- 805 prod flags; 217 read through `typed_env`.
 - 759 legacy direct read sites in prod code across 226 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-802 flags; 751 not documented in `.env.example`.
+805 flags; 754 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -282,9 +282,10 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_HARNESS_PANEL_WAIT_S` | float | `2700.0` | - | `docs/knowledge/voice-pipeline.md` | `'2700'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_HARNESS_QUIET_END` | str | `'22:00'` | - | - | `'22:00'` | no | NO | `scripts/maintenance/harness_quiet.py` |
 | `ZOE_HARNESS_QUIET_START` | str | `'07:00'` | - | `scripts/AGENTS.md` | `'07:00'` | no | NO | `scripts/maintenance/harness_quiet.py` |
-| `ZOE_HA_BRIDGE_URL` | str | `'http://127.0.0.1:8007'` | - | `docs/knowledge/operator-skills/openclaw/ha-patterns/SKILL.md` | `''`, `'http://127.0.0.1:8007'` | yes | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/system_stats.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_HA_BRIDGE_URL` | str | `'http://127.0.0.1:8007'` | - | `docs/knowledge/operator-skills/openclaw/ha-patterns/SKILL.md` | `''`, `'http://127.0.0.1:8007'` | yes | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/presence/ha_presence.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/system_stats.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_HA_CONTROL_SCOPE` | str | `'panel'` | - | `services/zoe-data/AGENTS.md` | `'panel'` | no | NO | `services/zoe-data/panel_principal.py` |
 | `ZOE_HA_EXPORT_CMD` | str | `''` | - | - | `(required)`, `-` | no | NO | `scripts/maintenance/zoe_host_snapshot.py` |
+| `ZOE_HA_PRESENCE` | str | `'off'` | `off`, `shadow`, `on` | `services/zoe-data/AGENTS.md` | `'off'` | yes | NO | `services/zoe-data/presence/ha_presence.py` |
 | `ZOE_HA_UI_GATE` | bool | `True` | - | `services/zoe-data/routers/AGENTS.md` | `True` | yes | NO | `services/zoe-data/routers/ha_ui.py` |
 | `ZOE_HA_UI_SECRET` | str | `''` | - | `services/zoe-data/routers/AGENTS.md` | `-` | yes | NO | `services/zoe-data/routers/ha_ui.py` |
 | `ZOE_HA_UI_TTL_S` | int | `28800` | - | `services/zoe-data/routers/AGENTS.md` | `28800` | yes | NO | `services/zoe-data/routers/ha_ui.py` |
@@ -473,7 +474,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MUSIC_SETUP_SECRET` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_MUSIC_SETUP_TTL_S` | int | `900` | - | `docs/research/zoe-abilities-connectors-2026-10.md` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_NIGHT_BUSY` | str | `'~/.zoe/agent-tools/night_busy.sh'` | - | - | `'~/.zoe/agent-tools/night_busy.sh'` | no | NO | `scripts/maintenance/harness_quiet.py` |
-| `ZOE_NIGHT_MIND` | str | `'off'` | `off`, `shadow`, `enforce` | `docs/knowledge/night-mind.md` | `''`, `-` | no | NO | `scripts/maintenance/zoe-night-mind.py`<br>`scripts/perf/zmb/arms/z0.py`<br>`services/zoe-data/night_mind.py` |
+| `ZOE_NIGHT_MIND` | str | `'off'` | `off`, `shadow`, `enforce`, `serve` | `docs/knowledge/night-mind.md` | `''`, `-` | no | NO | `scripts/maintenance/zoe-night-mind.py`<br>`scripts/perf/zmb/arms/z0.py`<br>`services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_CHUNK_TOKENS` | int | `0` | - | - | `0` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_CTX_TOKENS` | int | `0` | - | - | `0` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_DECODE_TOK_S` | float | `8.0` | - | `docs/knowledge/night-mind.md` | `8.0` | no | NO | `services/zoe-data/night_mind.py` |
@@ -634,6 +635,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_READINESS_CACHE_TTL_S` | float | `3.0` | - | - | `3.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_READINESS_TIMEOUT_S` | float | `4.0` | - | - | `4.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_RECALL_DURABLE_NO_DECAY` | bool | `True` | - | `docs/knowledge/zoe-memory-bench.md` | `'1'` | no | NO | `services/zoe-data/memory_service.py` |
+| `ZOE_RECALL_EVERY_TURN` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/recall-every-turn.md` | `'off'` | yes | NO | `services/zoe-data/recall_every_turn.py` |
+| `ZOE_RECALL_EVERY_TURN_HARNESS` | bool | `False` | - | `docs/knowledge/recall-every-turn.md` | `False` | yes | NO | `services/zoe-data/recall_every_turn.py` |
 | `ZOE_RECALL_EVIDENCE` | bool | `False` | - | `docs/knowledge/recall-gate.md` | `False` | yes | NO | `services/zoe-data/recall_evidence.py` |
 | `ZOE_RECALL_GATE` | str | `'shadow'` | `off`, `shadow`, `enforce` | `docs/knowledge/recall-gate.md` | `'shadow'` | yes | NO | `services/zoe-data/recall_gate.py` |
 | `ZOE_RECALL_PRESENT_STATE_SHAPES` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
@@ -661,7 +664,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_ROUTER_BASE_HF` | str | `'/home/zoe/models/lab/functiongemma-270m-it-hf'` | - | - | `'/home/zoe/models/lab/functiongemma-270m-it-hf'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_ENABLED` | bool | `True` | - | - | `'1'`, `dynamic` | no | NO | `scripts/perf/measure_first_sound.py`<br>`services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_EVENT_TIME_PRECEDENCE` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `-` | no | NO | `services/zoe-data/semantic_router.py` |
-| `ZOE_ROUTER_HEAD` | str | `'off'` | `off`, `shadow`, `active` | `docs/knowledge/two-stage-router-rollout.md` | `'off'` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_HEAD` | str | `'off'` | `off`, `shadow`, `shadow2`, `active` | `docs/knowledge/two-stage-router-rollout.md` | `'off'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEADS_BACKEND` | str | `'numpy'` | - | `docs/knowledge/numpy2-jetson-migration.md` | `'numpy'` | no | NO | `services/zoe-data/router_heads_numpy.py` |
 | `ZOE_ROUTER_HEAD_LOG` | str | `''` | - | `docs/research/failure-fed-proposals-2026-10-04.md` | `dynamic` | no | NO | `scripts/maintenance/router_struggle_retrain.py`<br>`services/zoe-data/local_text_logs.py` |
 | `ZOE_ROUTER_HEAD_MIN_CONF` | float | `0.7` | - | `docs/knowledge/two-stage-router-rollout.md` | `'0.70'` | no | NO | `services/zoe-data/router_two_stage.py` |

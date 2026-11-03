@@ -105,6 +105,9 @@
         "services/zoe-data/mcp_server.py": [
           "'http://127.0.0.1:8007'"
         ],
+        "services/zoe-data/presence/ha_presence.py": [
+          "'http://127.0.0.1:8007'"
+        ],
         "services/zoe-data/routers/ha_control.py": [
           "'http://127.0.0.1:8007'"
         ],
@@ -5380,6 +5383,7 @@
         "readers": [
           "services/zoe-data/intent_router.py",
           "services/zoe-data/mcp_server.py",
+          "services/zoe-data/presence/ha_presence.py",
           "services/zoe-data/routers/ha_control.py",
           "services/zoe-data/routers/stubs.py",
           "services/zoe-data/routers/system.py",
@@ -5438,6 +5442,29 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_HA_PRESENCE": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/presence/ha_presence.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_HA_UI_GATE": {
         "defaults": [
@@ -9100,7 +9127,8 @@
           "allowed": [
             "off",
             "shadow",
-            "enforce"
+            "enforce",
+            "serve"
           ],
           "default": "off",
           "divergent_ok": {},
@@ -12194,6 +12222,48 @@
         },
         "typed_env": false
       },
+      "ZOE_RECALL_EVERY_TURN": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/recall_every_turn.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "live: unset (code default in force)",
+          "owner_doc": "docs/knowledge/recall-every-turn.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_RECALL_EVERY_TURN_HARNESS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/recall_every_turn.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "measured bar runs only",
+          "owner_doc": "docs/knowledge/recall-every-turn.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_RECALL_EVIDENCE": {
         "defaults": [
           "False"
@@ -12737,6 +12807,7 @@
           "allowed": [
             "off",
             "shadow",
+            "shadow2",
             "active"
           ],
           "default": "off",

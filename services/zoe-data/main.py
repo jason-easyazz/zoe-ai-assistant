@@ -1428,6 +1428,16 @@ async def lifespan(app: FastAPI):
     except Exception as _pp_exc:
         logger.warning("Panel pairing token sweep not scheduled (non-fatal): %s", _pp_exc)
 
+    # HA presence reader (flag-dark ZOE_HA_PRESENCE=off|shadow|on): OBSERVED person/device_tracker rows; `off` registers nothing.
+    try:
+        from presence import ha_presence as _ha_presence
+        from proactive.scheduler import get_scheduler as _get_aps
+
+        if _ha_presence.register(_get_aps()):
+            logger.info("HA presence poll scheduled (mode=%s)", _ha_presence.mode())
+    except Exception as _hap_exc:
+        logger.warning("HA presence poll not scheduled (non-fatal): %s", _hap_exc)
+
     # Weekly music discovery — ephemeral digarr batch refreshing the
     # "Zoe Discovery" MA playlist (scripts/maintenance/music_discovery_batch.py;
     # the script owns its own memory + brain-idle gates and container cleanup).
@@ -2340,6 +2350,8 @@ app.include_router(phone_app_router)
 # Wake-up alarms (alarms, ZOE_ALARMS, default off = every route 404s): docs/architecture/alarms.md.
 from routers.alarms import router as alarms_router  # noqa: E402
 app.include_router(alarms_router)
+from routers.presence import router as presence_router  # noqa: E402  (flag-dark ZOE_HA_PRESENCE=on)
+app.include_router(presence_router)
 
 try:
     from routers.voice_livekit import router as voice_livekit_router

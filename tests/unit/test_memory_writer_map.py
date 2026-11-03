@@ -146,7 +146,7 @@ def test_control_a_raw_write_through_any_alias_of_a_collection_factory_is_seen(t
 # The methods of the REAL MemoryService that only read. Every other public method is a write and MUST be in the
 # scanner's name sets: a new writer added to the class turns this test red until it is classified.
 _READ_ONLY_METHODS = frozenset({
-    "load_for_prompt", "load_durable_for_hop", "load_recent_for_prompt", "search", "history", "list_by_status",
+    "load_for_prompt", "load_durable_for_hop", "recheck_durable", "load_recent_for_prompt", "search", "history", "list_by_status",
     "get", "export_user", "collection_sizes_by_user", "index_health", "list_by_entity",
 })
 
