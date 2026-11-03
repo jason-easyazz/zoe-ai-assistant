@@ -2,8 +2,11 @@
 
 This module names the memory layers so routes, docs, and future evals keep the
 same boring mental model: Postgres is truth, MemoryService gates writes,
-MemPalace recalls episodes, Hindsight reflects asynchronously, Graphiti models
-changing relationships, and Multica/review governs risky changes.
+MemPalace recalls episodes, Hindsight reflects asynchronously, the Postgres
+property graph (people + person_relationships; Graphiti was never adopted, see
+docs/adr/ADR-relationship-memory.md) models changing relationships, and
+Multica/review governs risky changes. ``MemoryBackend.GRAPHITI`` in
+``zoe_memory_router`` is the legacy NAME of that relational slot.
 """
 
 from __future__ import annotations
@@ -71,7 +74,7 @@ LAYER_POLICIES: tuple[MemoryLayerPolicy, ...] = (
     ),
     MemoryLayerPolicy(
         MemoryLayer.RELATIONAL_TEMPORAL_MEMORY,
-        owner="Graphiti-style graph",
+        owner="Postgres property graph (people + person_relationships)",
         hot_path=False,
         write_policy="evidence-backed changing relationships, supersession, causality, approvals",
         failure_policy="defer graph enrichment; keep canonical and episodic paths usable",
@@ -85,7 +88,7 @@ LAYER_POLICIES: tuple[MemoryLayerPolicy, ...] = (
     ),
     MemoryLayerPolicy(
         MemoryLayer.OBSERVATION_EVALUATION,
-        owner="Phoenix/evals or Zoe eval traces",
+        owner="Zoe eval traces",
         hot_path=False,
         write_policy="record retrieval latency, helpfulness, hallucination, contradiction, and fallback outcomes",
         failure_policy="drop eval trace before slowing user path",

@@ -1,6 +1,7 @@
 """Pins the brain unit's llama.cpp serving flags against the build it targets (B0.4).
 
-The template runs llama.cpp b11194 (``%h/llama.cpp-b11194/build-jetson``) with
+The template runs llama.cpp b11982 (``%h/llama.cpp-b11982/build-jetson``; moved from b11194, same flag
+spellings) with
 FlashAttention ON and a q8_0 K+V cache, replay-gated 2026-09-27. Three couplings
 break the brain at STARTUP rather than in any test, so they are pinned here:
 
@@ -15,7 +16,7 @@ break the brain at STARTUP rather than in any test, so they are pinned here:
   draft-mtp unit must run ONE slot. And ``--fit`` defaults ON, so ``--fit off``
   must be explicit for the written config to be the served config.
 * ExecStart and LD_LIBRARY_PATH must name the SAME build — mixing b9733 libs
-  with the b11194 binary (or vice versa) is an ABI mismatch.
+  with the b11982 binary (or vice versa) is an ABI mismatch.
 
 B6.6 (2026-09-27, docs/knowledge/brain-flags-tuning-2026-09.md) adds two sizing
 couplings that fail at RUNTIME, not startup:
@@ -278,6 +279,10 @@ def _service_section(unit: Path) -> str:
     return m.group(1)
 
 
+# Builds that spell the weight lock `--load-mode mmap+mlock` (b11194 removed `--mlock`; b11982 keeps that).
+NEW_FLAG_BUILDS = ("b11194", "b11982")
+
+
 def _router_mlock_problems(unit: Path) -> list[str]:
     """Every way the router's weight lock is missing or would fail at startup."""
     cmd = _exec_start(unit)
@@ -287,9 +292,9 @@ def _router_mlock_problems(unit: Path) -> list[str]:
     problems = []
     if not (has_old or has_new):
         problems.append("router ExecStart does not mlock its weights (A1)")
-    if "b11194" in binary and has_old:
-        problems.append(f"{binary} is the b11194 build, which removed --mlock")
-    if "b11194" not in binary and has_new:
+    if any(b in binary for b in NEW_FLAG_BUILDS) and has_old:
+        problems.append(f"{binary} is a b11194+ build, which removed --mlock")
+    if not any(b in binary for b in NEW_FLAG_BUILDS) and has_new:
         problems.append(f"{binary} predates --load-mode; use --mlock")
     if not re.search(r"^LimitMEMLOCK=infinity$", _service_section(unit), re.MULTILINE):
         problems.append("router [Service] lacks LimitMEMLOCK=infinity; a capped "
