@@ -2318,6 +2318,12 @@ async def warm_kv_prefix(member: str = "", *, yield_to_helpers: bool = False) ->
     queued or running (``skipped:busy``), at entry and again just before the slot is taken.
     """
     global _kv_warm_inflight
+    try:   # ZOE_RECALL_EVERY_TURN: build the likely speaker's recall index now, not on their first turn (no-op when off)
+        import recall_every_turn
+
+        recall_every_turn.prewarm(member)
+    except Exception:  # noqa: BLE001
+        pass
     if not kv_warm_enabled():
         return "skipped:off"
     if _kv_warm_inflight:
@@ -2715,6 +2721,19 @@ async def _run_flue_brain_streaming_turn(
     if not (recall_block or verify_block or continuity_block or continuity_turn or hop_block or offer_block
             or kwargs.get("raise_block") or kwargs.get("day_brief_block")):
         risk_block = await _risk_cue_block(message, uid, session_id)
+    # Household recall on every turn (ZOE_RECALL_EVERY_TURN, default OFF; recall_every_turn.py): a household member's turn that no
+    # other block claimed carries the member's own durable facts the turn's words actually touch (a cheap lexical gate, a token
+    # budget, private classes / mutes / forgotten rows excluded). After the user's words like the hop block, so the cached prefix
+    # and the wake warm are untouched. Off => "" before any work; shadow => a background measurement, "" here.
+    # The other blocks that fired are passed as ``claimed_by``: then nothing is injected, but the selection still runs in the
+    # background so the RECALL_EVERY_TURN coverage line (memory existed / which block fired / injected) covers every household turn.
+    import recall_every_turn
+
+    _claimed = ",".join(k for k, b in (("recall", recall_block), ("verify", verify_block),
+                                       ("continuity", continuity_block or continuity_turn), ("hop", hop_block),
+                                       ("offer", offer_block), ("risk", risk_block), ("raise", raise_block),
+                                       ("brief", kwargs.get("day_brief_block"))) if b)
+    every_turn_block = await recall_every_turn.block_for(uid, message, claimed_by=_claimed)
     # Fast-path exchanges (reminder, "what do you know about me", ...) the brain never saw (flue_fastpath_context.py): without them a
     # follow-up like "thank you" / "no" reached the brain with nothing to follow. Context beside the other blocks, same session + member only.
     import flue_fastpath_context
@@ -2750,6 +2769,8 @@ async def _run_flue_brain_streaming_turn(
         brain_message = f"{brain_message}\n{hop_block}"
     if risk_block:   # after the user's words, like the hop block (the two are never both present)
         brain_message = f"{brain_message}\n{risk_block}"
+    if every_turn_block:   # after the user's words; never beside another memory block (gated above)
+        brain_message = f"{brain_message}\n{every_turn_block}"
     # First-turn day brief (brief_first_turn, default OFF): same position as the
     # continuity block — after the user's words, inside the latest user message.
     day_block = str(kwargs.get("day_brief_block") or "")
@@ -2769,7 +2790,7 @@ async def _run_flue_brain_streaming_turn(
         # ZOE_TRIVIA_HEDGE (default OFF): a world-fact question with a date /
         # number / winner gets one line telling the brain to hedge an unchecked
         # answer and offer to look it up. Never beside a memory block.
-        hedge_block = _trivia_hedge_block(message, bool(recall_block or continuity_block))
+        hedge_block = _trivia_hedge_block(message, bool(recall_block or continuity_block or every_turn_block))
         if hedge_block:
             brain_message = f"{brain_message}\n{hedge_block}"
     outbound_message = _wrap_message_with_identity(brain_message, uid)
