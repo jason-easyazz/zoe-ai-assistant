@@ -1286,16 +1286,8 @@ async def lifespan(app: FastAPI):
         logger.info("Background task watchdog started")
     except Exception as _wd_exc:
         logger.warning("Task watchdog not started (non-fatal): %s", _wd_exc)
-    # Zoe Agent: warm Gemma's KV cache in background so first real query is fast.
-    # Unconditional: the HERMES_FAST_PATH / JETSON_AGENT_MODE gates were pinned to
-    # the Zoe-Agent side on the only host that exists (B3, 2026-10-18).
-    try:
-        from zoe_agent import warmup_kv_cache
-        asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
-        logger.info("Jetson Agent: Gemma KV cache warmup scheduled (fires in 8s)")
-    except Exception as _wup_exc:
-        logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
-
+    # No boot-time legacy KV warm: it filled the brain's one slot with prompts the Flue sidecar never sends. The prefix
+    # keeper below warms the household prefix the sidecar actually uses.
     # Keep the household's brain prefix resident in the one llama slot between conversations (re-warms it after a helper
     # batch / brain restart displaced it, so the next wake is a cache hit). ZOE_BRAIN_PREFIX_KEEPER (default on).
     try:

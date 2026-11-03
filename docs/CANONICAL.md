@@ -85,7 +85,7 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
     `labs/flue-zoe-brain-2x` on `:3579` (systemd user unit `flue-zoe-brain-2x.service`,
     token auth, wire 2 — since B6.5 also the client's in-code default, so
     `ZOE_FLUE_BRAIN_URL`/`ZOE_FLUE_WIRE` unset already mean `:3579`/wire 2),
-    reached via `ZOE_BRAIN_BACKEND=flue`. (The 1.x
+    reached via `ZOE_BRAIN_BACKEND=flue` (the code default). (The 1.x
     `labs/flue-zoe-brain` sidecar on `:3578` was retired 2026-08-10 — stopped,
     disabled and source-removed after the 2.x parity cutover.) It reimplements
     Zoe's persona + ability slot-shapes

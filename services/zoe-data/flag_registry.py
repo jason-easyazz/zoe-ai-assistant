@@ -130,7 +130,7 @@ _ENTRIES = (
     _f('ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED', 'bool', False, doc='docs/guides/MULTICA_HERMES_PR_LOOP.md'),
     _f('ZOE_BRAIN_ALLOW_WRITES', 'bool', False, doc='docs/knowledge/voice-pipeline.md'),
     _f('ZOE_BRAIN_API_KEY', 'str', 'local-no-key'),
-    _f('ZOE_BRAIN_BACKEND', 'str', 'core', doc='docs/knowledge/memory-pressure-profile.md'),
+    _f('ZOE_BRAIN_BACKEND', 'str', 'flue', doc='docs/knowledge/memory-pressure-profile.md'),
     _f('ZOE_BRAIN_BASE_URL', 'str', 'http://127.0.0.1:11434/v1'),
     _f('ZOE_BRAIN_CONTEXT_WINDOW', 'str', '', doc='docs/architecture/zoe-flue-integration.md'),
     _f('ZOE_BRAIN_DB', 'str', '', doc='docs/architecture/beat-the-bar-2026-program.md'),

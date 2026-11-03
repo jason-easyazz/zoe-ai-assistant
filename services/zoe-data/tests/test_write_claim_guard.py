@@ -793,7 +793,7 @@ def core_lane(monkeypatch):
     import zoe_core_client
 
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "true")
-    monkeypatch.delenv("ZOE_BRAIN_BACKEND", raising=False)
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")
     box = {"text": CALENDAR_CLAIM, "write": False}
 
     async def fake_stream(msg, sid, uid="", **kw):
