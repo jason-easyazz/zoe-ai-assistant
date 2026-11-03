@@ -189,8 +189,9 @@ _CANT_DO_POLICY = re.compile(
     r"(?:owner|member|admin))\b", re.IGNORECASE)
 _CANT_DO_NOT = re.compile(r"\bi can'?t (?:wait|believe|imagine|stop thinking|help but)\b|"
                           r"\bi don'?t know about you\b", re.IGNORECASE)
-#: the brain lane's degraded fallback (zoe_flue_client._FALLBACK_TEXT / voice_tts._FALLBACK_PHRASE): an ERROR, always
-_ERROR_RE = re.compile(r"had trouble reaching my brain|having trouble (?:thinking|connecting|reaching)|"
+#: the brain lane's degraded fallback: an ERROR, always. Every ``brain_fallback`` line in voice_phrases.json must match
+#: (pinned by tests/test_voice_phrases.py; this module stays pure, so the words are not read from the file here)
+_ERROR_RE = re.compile(r"had trouble reaching my brain|can'?t reach my brain|having trouble (?:thinking|connecting|reaching)|"
                        r"\bsomething went wrong\b", re.IGNORECASE)
 
 _OPEN_ENDED = re.compile(

@@ -167,6 +167,10 @@ not an excuse.
   context (8288 > 8192 tokens → HTTP 500 every turn, 2026-07-07). The flue client's
   brain-unreachable fallback text now classifies as **ERROR**, never OK — a dead brain lane can't
   silently pass the gate.
+- Fixed lines (fast-tier acks, fallbacks, errors, the LiveKit empty-transcript re-ask) come from ONE
+  phrase set, `services/zoe-data/voice_phrases.json`; the variant is a hash of the turn key, so a
+  replay hears the same words. `tests/test_voice_phrases.py` pins that the `brain_fallback` lines stay
+  ERROR (replay + struggle detector) and that no other line matches the replay's CANT_DO classifier.
 
 ### The corpus contract — auto-captured, so it needs curating
 

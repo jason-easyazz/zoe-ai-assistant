@@ -30,6 +30,7 @@ from typed_env import env_bool, env_float, env_int, env_list, env_str
 from user_filters import is_unidentified as _is_unidentified
 import voice_first_sound as _first_sound
 import voice_speculation as _speculation
+import voice_phrases as _vp
 import voice_stt_stream as _stt_stream
 import voice_utterance_shape as _utterance_shape
 from moonshine_vad_state import reset_silero_state, transcriber_lib
@@ -4057,7 +4058,7 @@ async def voice_command(
                         _field_reply_parts.append(f"Location set to {_fv}.")
                     else:
                         _field_reply_parts.append("Updated.")
-                _field_reply = " ".join(_field_reply_parts) or "Got it."
+                _field_reply = " ".join(_field_reply_parts) or _vp.say("ack", text)
                 _field_audio = await synthesize({"text": _field_reply}, caller=caller)
                 return {
                     "ok": True, "panel_id": panel_id, "reply": _field_reply,
@@ -4119,16 +4120,18 @@ async def voice_command(
                     slots=pending["slots"],
                     confidence=1.0,
                 )
+                # voice_phrases: the variant is keyed on what was confirmed (stable on replay), never random
+                _vp_key = f"{pending['intent_name']}:{pending.get('slots')!r}"
                 try:
                     from auth import get_current_user as _gcu
                     _uid = identified_user_id or pending.get("user_id", "voice-daemon")
                     result = await execute_intent(confirmed_intent, _uid)
-                    reply_text = result or "Done!"
+                    reply_text = result or _vp.say("done", _vp_key)
                     if confirmed_intent.name in {"calendar_create", "calendar_show", "daily_briefing"}:
                         await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
                 except Exception as exc:
                     logger.error("Confirmed intent execution failed: %s", exc)
-                    reply_text = "Sorry, that failed. Please try again."
+                    reply_text = _vp.say("action_failed", _vp_key)
                 try:
                     audio_resp = await synthesize({"text": reply_text}, caller=caller)
                     audio_b64_conf = base64.b64encode(audio_resp.body).decode("ascii")
@@ -4532,8 +4535,9 @@ async def voice_command(
         except Exception as _rd_exc:
             logger.debug("voice/command private read card failed (non-fatal): %s", _rd_exc)
 
-    # Fallback audio used when any part of the pipeline fails — panel never goes silent.
-    _FALLBACK_PHRASE = "Sorry, something went wrong. Please try again."
+    # Fallback audio used when any part of the pipeline fails — panel never goes silent. A one-variant sentinel in
+    # voice_phrases.json ("turn_failed"): samantha_bar and struggle_signals read it as "the brain did not answer".
+    _FALLBACK_PHRASE = _vp.say("turn_failed")
 
     async def _make_fallback_audio() -> tuple[Optional[str], str]:
         try:
@@ -5441,7 +5445,7 @@ async def voice_command(
                                 delta = "I can't run that kind of task any more, so I haven't started it."
                             except Exception as esc_exc:
                                 logger.warning("voice/command stream escalation failed: %s", esc_exc)
-                                delta = "I couldn't complete that advanced request right now. Please try again."
+                                delta = _vp.say("action_failed", text)
                         if _t_first_token is None:
                             _t_first_token = time.monotonic() - t_chat_start
                             try:
@@ -5570,7 +5574,7 @@ async def voice_command(
                         delta = "I can't run that kind of task any more, so I haven't started it."
                     except Exception as esc_exc:
                         logger.warning("voice/command escalation failed: %s", esc_exc)
-                        delta = "I couldn't complete that advanced request right now. Please try again."
+                        delta = _vp.say("action_failed", text)
                 if _t_first_token is None:
                     _t_first_token = time.monotonic() - t_chat_start
                     try:
