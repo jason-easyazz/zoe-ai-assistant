@@ -162,9 +162,15 @@ async def poll_once(db: Any = None, *, fetch: Optional[Fetch] = None, now: Optio
             from db_pool import get_db_ctx
 
             async with get_db_ctx() as owned:
-                await _write(owned)
+                # db_pool's asyncpg wrapper autocommits each statement: one explicit transaction makes the poll all rows or none
+                async with owned.transaction():
+                    await _write(owned)
         else:
-            await _write(db)
+            try:
+                await _write(db)
+            except Exception:
+                await db.rollback()  # a caller's connection keeps none of this poll's rows
+                raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("ha_presence: write failed (%s); nothing recorded", type(exc).__name__)
         return 0

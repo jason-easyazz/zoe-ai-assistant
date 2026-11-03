@@ -73,6 +73,47 @@ async def _rows(path):
             return await c.fetchall()
 
 
+async def _stored_times(path):
+    async with aiosqlite.connect(path) as db:
+        async with db.execute("SELECT observed_at FROM presence_observations ORDER BY id") as c:
+            got = [str(r[0]) for r in await c.fetchall()]
+    assert got and all(got)                                                    # a real, non-empty stored timestamp
+    return got
+
+
+def test_a_db_failure_mid_poll_keeps_no_rows_on_the_callers_connection(dbfile):
+    """Cross-review P1 (#2267): a failure AFTER a successful insert must leave nothing pending for the caller to commit later."""
+    payload = [{"entity_id": "person.a", "state": "home"}, {"entity_id": "person.b", "state": "home"}]
+
+    class FailSecondInsert:
+        def __init__(self, db):
+            self.db, self.n = db, 0
+
+        def execute(self, sql, params=()):
+            if sql.startswith("INSERT"):
+                self.n += 1
+                if self.n == 2:
+                    raise RuntimeError("db down mid-poll")
+            return self.db.execute(sql, params)
+
+        async def commit(self):
+            await self.db.commit()
+
+        async def rollback(self):
+            await self.db.rollback()
+
+    async def go():
+        async with aiosqlite.connect(dbfile) as db:
+            wrapped = FailSecondInsert(db)
+            n = await hp.poll_once(wrapped, fetch=_fake(payload), now=1.0)
+            await db.commit()                                                  # the caller's later commit must persist nothing
+            return n, wrapped.n
+
+    assert asyncio.run(go()) == (0, 2)                                         # non-vacuous: the first insert ran before the failure
+    assert asyncio.run(_rows(dbfile)) == []
+    assert hp._last_state == {}                                                # nothing recorded as written, so it is retried
+
+
 def test_poll_writes_hashed_observed_rows(dbfile):
     payload = [
         {"entity_id": "person.alex", "state": "home", "attributes": {"latitude": 1.0}},
@@ -180,13 +221,17 @@ def _client(dbfile, principal):
 def test_route_member_only_and_flag_gated(dbfile, monkeypatch):
     asyncio.run(_run(dbfile, [{"entity_id": "person.a", "state": "home"}], 1.0))
     member = {"user_id": "m1", "role": "member"}
-    monkeypatch.setenv("ZOE_HA_PRESENCE", "shadow")
-    assert _client(dbfile, member).get("/api/presence/observed").status_code == 404
+    guest = {"user_id": "guest", "role": "guest"}
+    for flag in ("shadow", "off"):                                             # flag-dark: 404 for EVERY caller, before auth or the DB
+        monkeypatch.setenv("ZOE_HA_PRESENCE", flag)
+        assert _client(dbfile, member).get("/api/presence/observed").status_code == 404
+        assert _client(dbfile, guest).get("/api/presence/observed").status_code == 404
     monkeypatch.setenv("ZOE_HA_PRESENCE", "on")
     r = _client(dbfile, member).get("/api/presence/observed")
     assert r.status_code == 200
+    stored = asyncio.run(_stored_times(dbfile))
     assert r.json() == {"observed": [{"entity_key": hashlib.sha256(b"person.a").hexdigest(), "state": "home",
-                                      "observed_at": r.json()["observed"][0]["observed_at"]}]}
+                                      "observed_at": stored[0]}]}
     for bad in ({"user_id": "guest", "role": "guest"}, {"user_id": "p", "role": "member", "panel_id": "x"},
                 {"user_id": "d", "role": "member", "device_token_role": "panel"}):
         assert _client(dbfile, bad).get("/api/presence/observed").status_code == 403
