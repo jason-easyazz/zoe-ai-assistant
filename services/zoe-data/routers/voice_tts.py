@@ -26,6 +26,7 @@ from database import get_db
 # Every per-turn UI push goes to the ORIGINATING panel's channel only (A11, 2026-10-18), never "all".
 from push import panel_channel as _panel_channel
 from stt_wake_strip import _strip_wake_word
+from log_redaction import utterance_tag as _utt_tag
 from typed_env import env_bool, env_float, env_int, env_list, env_str
 from user_filters import is_unidentified as _is_unidentified
 import voice_first_sound as _first_sound
@@ -3035,7 +3036,7 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
         logger.warning("STT capture failed: %s", exc)
         return
 
-    logger.info("STT_CAPTURE file=%s moonshine=%r", dst, (primary or "")[:90])
+    logger.info("STT_CAPTURE file=%s moonshine %s", dst, _utt_tag(primary or ""))
 
 
 async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str | None = None) -> str:
@@ -3571,7 +3572,7 @@ async def voice_command(
         raise HTTPException(status_code=400, detail="text is required")
     normalized_text = _normalize_voice_command_text(text)
     if normalized_text != text:
-        logger.info("voice/command normalized transcript %r -> %r", text[:80], normalized_text[:80])
+        logger.info("voice/command normalized transcript %s -> %s", _utt_tag(text), _utt_tag(normalized_text))
         text = normalized_text
 
     # Tier-1 semantic router (SHADOW by default): log what it would classify this
@@ -3590,15 +3591,16 @@ async def voice_command(
             _rr = (_pre_rr if isinstance(_pre_rr, dict) and (payload or {}).get("_router_text") == text
                    else await asyncio.to_thread(_sr.route, text))
             _router_decision = _rr
-            logger.warning("ROUTER_SHADOW text=%r -> routed=%s (best=%s %.2f) %.1fms scores=%s",
-                           text[:70], _rr["routed"], _rr["domain"], _rr["score"], _rr["ms"], _rr["scores"])
+            # hash + length only: the shadow log is keyed by the same digest, so nothing the family said is in the service log
+            logger.warning("ROUTER_SHADOW %s -> routed=%s (best=%s %.2f) %.1fms scores=%s",
+                           _utt_tag(text), _rr["routed"], _rr["domain"], _rr["score"], _rr["ms"], _rr["scores"])
             # A bare "what else?" names no topic: it follows the panel's previous turn, never a random fast domain.
             import turn_continuation as _turn_cont
 
             _router_decision = _turn_cont.follow(
                 str((payload or {}).get("session_id") or panel_id or ""), text, _rr)
             if (_router_decision or {}).get("continuation"):
-                logger.warning("ROUTER_CONTINUATION text=%r follows %s (router said %s)", text[:40],
+                logger.warning("ROUTER_CONTINUATION %s follows %s (router said %s)", _utt_tag(text),
                                _router_decision["routed"], _router_decision.get("continuation_of"))
     except Exception as _rexc:
         logger.debug("semantic router shadow failed: %s", _rexc)
@@ -5936,7 +5938,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
             pass
         return {"ok": True, "panel_id": panel_id, "text": "", "reply": "", "audio_base64": None}
 
-    logger.info("voice/turn panel=%s STT=%.1fs transcript=%r", panel_id, t_stt, transcript[:80])
+    logger.info("voice/turn panel=%s STT=%.1fs %s", panel_id, t_stt, _utt_tag(transcript))
 
     # The streaming request's blocking fallback carries ``window`` too: a no-wake-word turn whose voice the gate ran on and did
     # not confirm is dropped here exactly as on /turn_stream (empty reply: the daemon returns to wake mode).
@@ -6158,8 +6160,8 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         _gate = None
     if _gate is not None:
         _gate_kind = "incomplete" if _gate.get("incomplete") else "not_addressed"
-        logger.info("voice/turn_stream panel=%s %s (%s): %r", panel_id, _gate_kind,
-                    _gate.get("reason") or "trailing continuation word", transcript[:80])
+        logger.info("voice/turn_stream panel=%s %s (%s): %s", panel_id, _gate_kind,
+                    _gate.get("reason") or "trailing continuation word", _utt_tag(transcript))
         try:
             from voice_metrics import voice_turn_count
             voice_turn_count.labels(outcome=_gate_kind, path="turn_stream").inc()
@@ -6226,7 +6228,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         _mishear.forget(panel_id)
         _mc = None
 
-    logger.info("voice/turn_stream panel=%s STT=%.2fs transcript=%r", panel_id, t_stt, transcript[:80])
+    logger.info("voice/turn_stream panel=%s STT=%.2fs %s", panel_id, t_stt, _utt_tag(transcript))
     try:
         from push import broadcaster as _bc_t
         _warn_if_panel_deaf(panel_id)
@@ -6266,8 +6268,8 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         _fast_flags = {}
     if _fast_ack:
         logger.info(
-            "voice/turn_stream panel=%s conversation %s: %r",
-            panel_id, "OPENED" if _fast_flags.get("conversation_mode") else "ENDED", transcript[:60],
+            "voice/turn_stream panel=%s conversation %s: %s",
+            panel_id, "OPENED" if _fast_flags.get("conversation_mode") else "ENDED", _utt_tag(transcript),
         )
         _ack_audio = None
         try:
