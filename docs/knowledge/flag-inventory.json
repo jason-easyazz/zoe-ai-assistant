@@ -9138,7 +9138,8 @@
           "allowed": [
             "off",
             "shadow",
-            "enforce"
+            "enforce",
+            "serve"
           ],
           "default": "off",
           "divergent_ok": {},
@@ -12775,6 +12776,7 @@
           "allowed": [
             "off",
             "shadow",
+            "shadow2",
             "active"
           ],
           "default": "off",
@@ -19630,7 +19632,5 @@
       "typed_env": false
     }
   },
-  "registry_unread": [
-    "ZOE_COMPOSE_VOICE_BUDGET_S"
-  ]
+  "registry_unread": []
 }
