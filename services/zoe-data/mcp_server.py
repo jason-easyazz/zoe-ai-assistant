@@ -2010,23 +2010,6 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         except Exception as exc:
             return {"error": f"Web search failed: {exc}", "query": query}
 
-    elif name == "deep_web_research":
-        query = args.get("query", "")
-        if not query:
-            return {"error": "query is required"}
-        try:
-            # Full pipeline: CloakBrowser + Google Maps + postcode gate filling (~60s).
-            import sys as _sys, os as _os
-            _zd = _os.path.dirname(_os.path.abspath(__file__))
-            if _zd not in _sys.path:
-                _sys.path.insert(0, _zd)
-            from zoe_agent import _web_research  # type: ignore[import]
-            caller_user_id = user_id
-            result_text = await _web_research(query, user_id=caller_user_id)
-            return {"query": query, "raw": result_text}
-        except Exception as exc:
-            return {"error": f"Deep research failed: {exc}", "query": query}
-
     elif name == "a2a_delegate":
         agent_name = args.get("agent_name", "")
         task = args.get("task", "")

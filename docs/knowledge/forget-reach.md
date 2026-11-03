@@ -162,7 +162,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `ui_panel_sessions` | pg_table | metadata | out_of_scope | - | Which page a panel is on; ui_context can carry transient state, expires with the session. |
 | `push_subscriptions` | pg_table | metadata | out_of_scope | - | A browser push endpoint and keys. |
 | `auth_handoffs` | pg_table | metadata | out_of_scope | - | Short-lived hand-off tokens. |
-| `trust_audit` | pg_table | metadata | out_of_scope | - | Tool-call audit: tool name, allowed flag, reason. |
+| `trust_audit` | pg_table | metadata | out_of_scope | - | Never-built trust-gate audit log; never written, dropped by alembic 0064. |
 | `agent_cost_events` | pg_table | metadata | out_of_scope | - | Token counts and cost per call. |
 | `llm_call_log` | pg_table | metadata | out_of_scope | - | Latency and token counts per call. |
 | `ui_actions` | pg_table | words | gap | - | Action payloads (e.g. a typed list item) are kept; neither path reaches them. |
