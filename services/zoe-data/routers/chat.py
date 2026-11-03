@@ -1884,6 +1884,8 @@ async def chat_stream_generator(
                     response_text = await task
                 finally:
                     await _cancel_if_pending(task)
+                if (response_text or "").startswith(_ESCALATION_MARKERS):
+                    response_text = _NO_HANDOFF_REPLY  # nothing to escalate to (see _ESCALATION_MARKERS)
                 _, actions = _extract_ui_actions(response_text)
                 if actions:
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))

@@ -47,7 +47,19 @@ def test_requires_task(monkeypatch):
     assert "task" in resp.json()["detail"]
 
 
-@pytest.mark.parametrize("target", ["hermes", "openclaw", None])
+def test_rejects_non_sync_target(monkeypatch):
+    """Only the legacy ``hermes`` target was ever sync-delegatable; anything else is a 400."""
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    resp = TestClient(_app()).post(
+        "/api/system/delegate-sync",
+        json={"user_id": "jason", "task": "do it", "target": "openclaw"},
+        headers={"X-Internal-Token": "tok"},
+    )
+    assert resp.status_code == 400
+    assert "not sync-delegatable" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("target", ["hermes", "Hermes", None])
 def test_valid_request_is_answered_503_not_available(monkeypatch, target):
     """Hermes (the only target) is retired: a valid request gets an honest 503, never a
     fake completion, and nothing is dialled (the Hermes client module is gone)."""

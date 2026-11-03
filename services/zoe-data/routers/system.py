@@ -2564,6 +2564,9 @@ async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_inten
         raise HTTPException(status_code=400, detail="user_id required")
     if not (body.task or "").strip():
         raise HTTPException(status_code=400, detail="task required")
+    target = (body.target or "hermes").strip().lower()
+    if target != "hermes":
+        raise HTTPException(status_code=400, detail=f"target not sync-delegatable: {target}")
     raise HTTPException(status_code=503, detail="delegation is not available: no peer agent is configured")
 
 

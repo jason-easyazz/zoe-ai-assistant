@@ -380,3 +380,68 @@ async def test_save_chat_message_records_truncated_in_metadata(monkeypatch):
     insert = next((sql, p) for sql, p in executed if "INSERT INTO chat_messages" in sql)
     metadata = json.loads(insert[1][4])
     assert metadata == {"user_id": "jason", "truncated": True, "traffic_class": "household"}
+
+
+# ── A legacy hand-off sentinel is answered in place (OpenClaw / Hermes are removed) ──
+
+
+async def _drain(gen) -> str:
+    return "".join([chunk async for chunk in gen])
+
+
+@pytest.mark.asyncio
+async def test_escalation_sentinel_in_the_brain_stream_is_answered_in_place(monkeypatch):
+    _stub_brain_branch(monkeypatch)
+    saves: list[str] = []
+
+    async def fake_save(session_id, role, content, user_id=None, **_kw):
+        saves.append(content)
+        return True
+
+    async def sentinel_stream(*a, **k):
+        yield "__ESCALATE_HERMES__:deep work|do it"
+        yield "never streamed"
+
+    monkeypatch.setattr(chat_router, "_save_chat_message", fake_save)
+    monkeypatch.setattr(chat_router, "_brain_streaming", sentinel_stream)
+    out = await _drain(chat_router.chat_stream_generator("plan my week", "sess-esc", _user()))
+    assert "__ESCALATE" not in out and "never streamed" not in out
+    assert chat_router._NO_HANDOFF_REPLY in out
+    assert saves[-1] == chat_router._NO_HANDOFF_REPLY
+
+
+@pytest.mark.asyncio
+async def test_escalation_sentinel_from_the_intent_failed_fallback_is_answered_in_place(monkeypatch):
+    _quiet_common_gates(monkeypatch)
+    import fast_tiers
+    from intent_router import Intent
+
+    async def _none(*a, **k):
+        return None
+
+    async def _not_attempted(*a, **k):
+        return {"attempted": False}
+
+    async def _detect(*a, **k):
+        return Intent("weather", {})
+
+    async def _sentinel(*a, **k):
+        return "__ESCALATE__:browser|look it up"
+
+    saves: list[str] = []
+
+    async def fake_save(session_id, role, content, user_id=None, **_kw):
+        saves.append(content)
+        return True
+
+    monkeypatch.setattr(chat_router, "_INTENT_FAST_PATH_ENABLED", True)
+    monkeypatch.setattr(fast_tiers, "resolve", _none)
+    monkeypatch.setattr(fast_tiers, "keyword_intent_allowed", lambda *a, **k: True)
+    monkeypatch.setattr(chat_router, "_run_chat_pi_hybrid_lane", _not_attempted)
+    monkeypatch.setattr(chat_router, "detect_and_extract_intent", _detect)
+    monkeypatch.setattr(chat_router, "execute_intent", _none)
+    monkeypatch.setattr(chat_router, "_brain_oneshot", _sentinel)
+    monkeypatch.setattr(chat_router, "_save_chat_message", fake_save)
+    out = await _drain(chat_router.chat_stream_generator("weather please", "sess-esc2", _user()))
+    assert "__ESCALATE" not in out
+    assert chat_router._NO_HANDOFF_REPLY in out
