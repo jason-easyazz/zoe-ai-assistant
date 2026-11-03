@@ -323,11 +323,13 @@ def test_s8_any_failed_filler_turn_is_error_even_when_both_names_recalled():
 ZD = REPO / "services/zoe-data"
 
 
-def _source_const(rel, name):
-    import re as _re
-    m = _re.search(rf'^\s*{name}\s*=\s*"([^"\n]+)"', (ZD / rel).read_text(), _re.M)
-    assert m, f"{name} not found in {rel}"
-    return m.group(1)
+def _phrase_file_fallbacks():
+    """Every ``brain_fallback`` line in zoe-data's one phrase set (voice_phrases.json)."""
+    import json as _json
+    phrases = _json.loads((ZD / sb.SOURCE_PHRASE_FILE).read_text())["phrases"]
+    out = [v for e in phrases.values() if e.get("brain_fallback") for v in e["variants"]]
+    assert out, "voice_phrases.json lost its brain_fallback lines"
+    return out
 
 
 @pytest.fixture
@@ -340,9 +342,8 @@ def no_source_markers():
 def test_live_fallback_texts_are_errors_with_builtin_markers_alone(no_source_markers):
     """Drift guard: the exact texts zoe-data serves when the brain did not answer
     must hit a BUILT-IN marker, even before the run-time source read."""
-    for rel, name in sb.SOURCE_FALLBACK_CONSTANTS:
-        text = _source_const(rel, name)
-        assert sb.is_brain_fallback(text), (rel, name, text)
+    for text in _phrase_file_fallbacks():
+        assert sb.is_brain_fallback(text), text
     assert sb.is_brain_fallback("Sorry, I had trouble reaching my brain just now. Could you try again?")
     assert sb.is_brain_fallback("Sorry, something went wrong. Please try again.")
     assert sb.is_brain_fallback("Sorry, I had trouble with that.")
@@ -350,16 +351,18 @@ def test_live_fallback_texts_are_errors_with_builtin_markers_alone(no_source_mar
 
 
 def test_source_fallback_markers_are_read_from_the_checkout(no_source_markers, tmp_path):
-    (tmp_path / "routers").mkdir()
-    (tmp_path / "zoe_flue_client.py").write_text('x = 1\n_FALLBACK_TEXT = "Zorp is unavailable, sorry."\n')
-    (tmp_path / "routers" / "voice_tts.py").write_text('def f():\n    _FALLBACK_PHRASE = "Blip went wrong."\n')
+    (tmp_path / "voice_phrases.json").write_text(json.dumps({"phrases": {
+        "a": {"brain_fallback": True, "variants": ["Zorp is unavailable, sorry."]},
+        "b": {"brain_fallback": True, "variants": ["Blip went wrong."]},
+        "c": {"variants": ["Done."]}}}))   # not a fallback: never armed
     assert not sb.is_brain_fallback("zorp is unavailable, sorry.")
     assert sb.load_source_fallback_markers(tmp_path) == ["zorp is unavailable, sorry.", "blip went wrong."]
     assert sb.is_brain_fallback("ZORP is unavailable, sorry.") and sb.is_brain_fallback("Blip went wrong.")
     assert sb.load_source_fallback_markers(tmp_path / "missing") == []  # missing checkout: nothing armed
     assert sb.load_source_fallback_markers(None) == []
     live = sb.source_fallback_markers(ZD)
-    assert _source_const("zoe_flue_client.py", "_FALLBACK_TEXT").lower() in live
+    assert all(t.lower() in live for t in _phrase_file_fallbacks())
+    assert "done." not in sb.load_source_fallback_markers(tmp_path)
 
 
 def test_brain_fallback_is_never_a_reply():

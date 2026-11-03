@@ -6,10 +6,11 @@
 #   - the --model + --model-draft paths to your downloaded GGUFs
 # See HARDWARE_COMPATIBILITY.md and scripts/setup/download_gguf_models.sh.
 #
-# BUILD + FLAGS (B0.4, 2026-09-27 — llama.cpp b11194, commit 9f70b2cec):
+# BUILD + FLAGS (B0.4, 2026-09-27 on llama.cpp b11194; build moved to b11982, commit 8a199ad31, 2026-10-30,
+#   flags unchanged - A/B in docs/knowledge/llama-cpp-bump-b11982-ab.md; b11194 kept on disk for rollback):
 #   - Built from source with GGML_CUDA=ON, CMAKE_CUDA_ARCHITECTURES=87, GGML_CUDA_FA=ON,
 #     GGML_CUDA_GRAPHS=ON, GGML_NATIVE=ON, Release (the prebuilt arm64 asset is CUDA 13.x,
-#     not JetPack's 12.6 — source build is mandatory) into ~/llama.cpp-b11194/build-jetson.
+#     not JetPack's 12.6 — source build is mandatory) into ~/llama.cpp-b11982/build-jetson.
 #   - FlashAttention is ON with the MTP drafter. On the old b9733 build FA crashed in
 #     fattn.cu with draft-mtp (fixed upstream in #25148, 2026-06-30). FA on is what
 #     unlocks a quantized V cache: K AND V are both q8_0 here (a quantized V cache
@@ -28,7 +29,7 @@
 #     instead of running side by side, and the whole --ctx-size belongs to that one
 #     slot. Do NOT raise --parallel while --spec-type draft-mtp is set, until
 #     #28286 is fixed AND replay-gated here.
-#   - --fit off is explicit: b11194 (and b9733) default --fit ON, which adjusts unset
+#   - --fit off is explicit: b11194+ (and b9733) default --fit ON, which adjusts unset
 #     arguments to fit device memory. The B0.4 gate keeps it off, so the serving
 #     config is exactly what is written below.
 #
@@ -83,7 +84,7 @@ IOWeight=400
 # start timeout above it so systemd doesn't kill the unit at the 90s default first.
 TimeoutStartSec=180
 # Point LD_LIBRARY_PATH at the directory of your llama.cpp build.
-Environment=LD_LIBRARY_PATH=%h/llama.cpp-b11194/build-jetson/bin
+Environment=LD_LIBRARY_PATH=%h/llama.cpp-b11982/build-jetson/bin
 # The endpoint is unauthenticated. Default to loopback; the live Zoe host binds
 # 0.0.0.0 ONLY because it is fronted by Cloudflare Access + host firewalling. Do NOT
 # expose 0.0.0.0 without equivalent auth/firewalling.
@@ -140,7 +141,7 @@ Environment=LD_LIBRARY_PATH=%h/llama.cpp-b11194/build-jetson/bin
 #    so prompt-prefix stability stays load-bearing: see services/zoe-data/AGENTS.md
 #    ("mutate the tail, never the head"). Add --cache-reuse only as its own
 #    replay-gated experiment.
-ExecStart=%h/llama.cpp-b11194/build-jetson/bin/llama-server \
+ExecStart=%h/llama.cpp-b11982/build-jetson/bin/llama-server \
   --model %h/models/gemma4-e4b-qat/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf \
   --model-draft %h/models/gemma4-e4b-qat/mtp-gemma-4-E4B-it.gguf \
   --spec-type draft-mtp \
