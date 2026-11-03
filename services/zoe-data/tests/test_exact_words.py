@@ -760,3 +760,19 @@ def test_a_durable_ledger_hit_still_withholds_and_a_healthy_ledger_is_unchanged(
     mf.reset_state()                                                     # no overlay: the durable read decides
     assert ask("what exactly did I say about Dana's kids") == []
     assert [h.text for h in ask("what exactly did I say about the garage door")][0].startswith("I told Leo")
+
+
+def test_sibling_serve_guards_fail_closed_on_a_ledger_outage(svc):
+    """recall_every_turn._forgotten and MemoryService._names_forgotten document "fails CLOSED": an outage must say forgotten."""
+    import recall_every_turn
+    mf.set_backend(_DownLedger())
+    assert run(recall_every_turn._forgotten(USER, "Dana rang about the kids")) is True
+    assert run(svc._names_forgotten(USER, "Dana rang about the kids")) is True
+
+
+def test_control_sibling_serve_guards_with_the_old_lenient_lookup_leak(svc, monkeypatch):
+    import recall_every_turn
+    mf.set_backend(_DownLedger())
+    _lenient_active_hashes(monkeypatch)
+    assert run(recall_every_turn._forgotten(USER, "Dana rang about the kids")) is False
+    assert run(svc._names_forgotten(USER, "Dana rang about the kids")) is False
