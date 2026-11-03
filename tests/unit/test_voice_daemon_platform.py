@@ -406,7 +406,7 @@ def _turn_rig(d, monkeypatch):
     fallback = []
     monkeypatch.setattr(d.requests, "post", lambda *a, **k: _Resp(_stream_lines(d)), raising=False)
     monkeypatch.setattr(d, "_speaker_claim_for_turn", lambda _w: None)
-    monkeypatch.setattr(d, "_is_junk_transcript", lambda _t: False)
+    monkeypatch.setattr(d, "_is_junk_transcript", lambda _t, **_k: False)
     monkeypatch.setattr(d, "_tts_process", None)
     monkeypatch.setattr(d, "_tts_started_at", None)
     monkeypatch.setattr(d, "_do_single_turn", lambda *a, **k: fallback.append(1) or True)
