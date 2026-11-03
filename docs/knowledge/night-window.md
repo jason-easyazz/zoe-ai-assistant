@@ -135,6 +135,10 @@ to a live lander, a samantha bar, a voice probe or a held voice-harness lock; an
 Some lab/perf scripts still hard-code the old 01:50-04:55 span as a conservative refusal (`labs/relay`, `labs/p0-deroot`,
 `scripts/perf/measure_wake.py`, `scripts/perf/omi_voice_calibrate.py`); that is safe, only stricter than the pause.
 
+### No daytime 4B outside a person's turn (owner decision 2026-11-03)
+
+By day (07:00-22:00 household hours) the 4B is spent only inside a turn a person started: no idle-time, background or harness 4B calls on the household slot (one llama slot; a background call holds it ~8 s and evicts the panel prefix, a ~3.6 s penalty on the next turn, measured round 3). Code, bge-small and the FunctionGemma router may run any time off the reply path. The night window (4B always, 12B when it loads) owns consolidation, reflection, clustering and the self-evolution improver. Every escalation logs its reason and cost. Basis: `docs/research/samantha-initiative-2026-11-03.md` section 4 and `docs/research/samantha-initiative-2026-11-03/lane-D-cognitive-architecture.md` section 3.3; the harness half is the binding quiet-hours rule in `scripts/AGENTS.md`.
+
 ## 8. The first real attempts (2026-10-09 01:57-02:06) and why the 12B did not load
 
 Five `--trial` runs, each: preflight ok, four units stopped, RAM compacted, **12,220-12,383 MiB available, 12,647-12,757 MiB free**, the 12B started from the parked unit's command, healthy never reached, aborted, everything restored healthy in 55-67 s. Every one died the same way, about 13 s after the process started:

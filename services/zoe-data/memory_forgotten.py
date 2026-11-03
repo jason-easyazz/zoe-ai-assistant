@@ -323,14 +323,25 @@ def _invalidate(user_id: str) -> None:
     _fail_until.pop(user_id, None)
 
 
-async def active_hashes(user_id: str) -> frozenset[str]:
-    """The user's active forgotten-entity hashes (cached ``_CACHE_TTL_S``; DB failure -> last known set)."""
+class LedgerUnavailable(RuntimeError):
+    """The durable ledger could not be read and no fresh copy is cached (``strict`` lookups only). A SERVE path must treat
+    this as "forgotten" - forgotten means forever, so an outage withholds, it never serves."""
+
+
+async def active_hashes(user_id: str, *, strict: bool = False) -> frozenset[str]:
+    """The user's active forgotten-entity hashes (cached ``_CACHE_TTL_S``; DB failure -> last known set).
+
+    ``strict`` (the READ / serve paths): a DB failure, or the back-off after one, raises ``LedgerUnavailable`` instead of
+    answering from a stale or empty set - an outage must never let a forgotten name back out. The default stays lenient
+    for the WRITE guards, where a lookup failure must never lose a fact."""
     now = time.monotonic()
     hit = _cache.get(user_id)
     mem = frozenset(h for h, until in _overlay.get(user_id, {}).items() if until > _iso(_now()))
     if hit is not None and hit[0] > now:
         return hit[1] | mem
     if _fail_until.get(user_id, 0.0) > now:
+        if strict:
+            raise LedgerUnavailable("forget ledger unavailable (back-off)")
         return (hit[1] if hit else frozenset()) | mem
     gen = _gen
     try:
@@ -338,6 +349,8 @@ async def active_hashes(user_id: str) -> frozenset[str]:
     except Exception as exc:  # noqa: BLE001 - a lookup failure must never lose a fact
         _fail_until[user_id] = time.monotonic() + _FAIL_BACKOFF_S
         logger.debug("memory_forgotten: lookup failed (%s) - using the last known set", type(exc).__name__)
+        if strict:
+            raise LedgerUnavailable(f"forget ledger unavailable ({type(exc).__name__})") from exc
         return (hit[1] if hit else frozenset()) | mem
     if _gen == gen:  # nothing was written while we were reading
         _cache[user_id] = (time.monotonic() + _CACHE_TTL_S, fresh)
@@ -456,12 +469,13 @@ async def spans(user_id: str, text: str, *, near: bool = True) -> "list[tuple[in
     return fm.merge(exact + nr)
 
 
-async def matches(user_id: str, text: str, *, near: bool = False) -> bool:
+async def matches(user_id: str, text: str, *, near: bool = False, strict: bool = False) -> bool:
     """Does ``text`` mention an entity this user has forgotten (a whole word / phrase, case-blind)? With ``near`` (the write
-    guards) a near spelling of one counts too - and the owner is asked about it (``memory_forget_alias``)."""
+    guards) a near spelling of one counts too - and the owner is asked about it (``memory_forget_alias``). With ``strict``
+    (serve paths) a ledger outage raises ``LedgerUnavailable`` rather than answering "not forgotten"."""
     if not user_id or not text or not configured():
         return False
-    wanted = await active_hashes(user_id)
+    wanted = await active_hashes(user_id, strict=strict)
     if not wanted:
         return False
     exact, nr = spans_in(user_id, text, wanted, near=near)
