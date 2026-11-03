@@ -240,11 +240,48 @@ def test_an_empty_env_var_does_not_wipe_the_files_token(monkeypatch, tmp_path):
     assert sent and "/bot123:abc/" in sent[0], "the file's token must be used when the env var is blank"
 
 
-def test_a_nonempty_env_var_still_overrides(monkeypatch, tmp_path):
+def _send_with(monkeypatch, tmp_path, file_text: str, env_token: str | None) -> list:
+    envf = tmp_path / "tg.env"
+    envf.write_text(file_text)
+    monkeypatch.setattr(mod, "TELEGRAM_ENV", str(envf))
+    if env_token is None:
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", env_token)
+    monkeypatch.delenv("ZOE_ALERT_TELEGRAM_CHAT_IDS", raising=False)
+    sent: list = []
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda req, timeout=None: sent.append(req.full_url) or _Resp())
+    assert mod._telegram("x") is True
+    return sent
+
+
+def test_the_bot_files_token_beats_a_stale_env_token(monkeypatch, tmp_path):
+    """2026-10-27..11-03: zoe-data's unit loaded a retired agent's env file; its REVOKED token overrode the bot file's valid
+    one and every ops alert failed with 401. The bot file's token must win."""
+    sent = _send_with(monkeypatch, tmp_path, "TELEGRAM_BOT_TOKEN=123:abc\nZOE_ALERT_TELEGRAM_CHAT_IDS=42\n", "999:revoked")
+    assert "/bot123:abc/" in sent[0] and "999:revoked" not in sent[0]
+
+
+def test_env_token_is_the_fallback_when_the_file_has_none(monkeypatch, tmp_path):
+    sent = _send_with(monkeypatch, tmp_path, "ZOE_ALERT_TELEGRAM_CHAT_IDS=42\n", "999:zzz")
+    assert "/bot999:zzz/" in sent[0]
+
+
+def test_a_nonempty_env_recipient_still_overrides(monkeypatch, tmp_path):
     envf = tmp_path / "tg.env"
     envf.write_text("TELEGRAM_BOT_TOKEN=123:abc\nZOE_ALERT_TELEGRAM_CHAT_IDS=42\n")
     monkeypatch.setattr(mod, "TELEGRAM_ENV", str(envf))
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "999:zzz")
+    monkeypatch.setenv("ZOE_ALERT_TELEGRAM_CHAT_IDS", "77")
     sent: list = []
 
     class _Resp:
@@ -259,6 +296,6 @@ def test_a_nonempty_env_var_still_overrides(monkeypatch, tmp_path):
         def read(self):
             return b'{"ok":true}'
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda req, timeout=None: sent.append(req.full_url) or _Resp())
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda req, timeout=None: sent.append((req.full_url, req.data or b"")) or _Resp())
     assert mod._telegram("x") is True
-    assert "/bot999:zzz/" in sent[0]
+    assert "/bot123:abc/" in sent[0][0] and b"chat_id=77" in sent[0][1]

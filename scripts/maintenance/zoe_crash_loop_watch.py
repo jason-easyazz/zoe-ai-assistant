@@ -108,13 +108,16 @@ def _telegram(text: str, report=None) -> bool:
     except Exception as exc:
         report(f"crash-watch: cannot read telegram env ({exc}); alert NOT delivered")
         return False
-    # Environment wins over the file, so an operator can point alerts somewhere
-    # else without editing the bot's own env.
-    # An EMPTY variable is not an override: zoe-data's .env carries `TELEGRAM_BOT_TOKEN=` (blank) and loads it into
-    # os.environ, so in-process callers (the cold-first-turn alert) used to wipe the file's real token and fail silently.
-    env = {**env, **{k: v for k, v in os.environ.items()
-                     if k in ("ZOE_ALERT_TELEGRAM_CHAT_IDS", "TELEGRAM_BOT_TOKEN") and v.strip()}}
-    token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
+    # The BOT FILE's token wins; an environment token is only a fallback for a file that has none. The bot file is the one
+    # token that is provably live (the bot itself runs on it). The environment is whatever the calling process happened to
+    # load: from 2026-10-27 zoe-data's unit loaded a retired agent's env file whose revoked token overrode this file's valid
+    # one, and every in-process ops alert failed with HTTP 401 for a week.
+    # Recipients still honour a NON-EMPTY environment override, so an operator can point alerts elsewhere. An EMPTY variable
+    # is never an override: zoe-data's .env carries blank keys and loads them into os.environ.
+    file_token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
+    env_token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    env = {**env, **{k: v for k, v in os.environ.items() if k == "ZOE_ALERT_TELEGRAM_CHAT_IDS" and v.strip()}}
+    token = file_token or env_token
     users = _recipients(env)
     if not token or not users:
         report("crash-watch: NO ALERT RECIPIENT CONFIGURED — a crash loop would go "
