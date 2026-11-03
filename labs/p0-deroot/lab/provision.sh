@@ -50,7 +50,7 @@ printf '[Unit]\nDescription=P0 lab cells\nAfter=zoe-data.service flue-zoe-brain-
 
 # The filesystem the drop-ins expect: root-owned code/models/venvs under /srv, secrets root 0600 under /etc/zoe.
 install -d -m 0755 /srv/zoe/assistant/labs/flue-zoe-brain-2x/dist /srv/zoe/models /srv/zoe/venvs /srv/zoe/node \
-  /srv/zoe/llama.cpp-b11194 /etc/zoe/env
+  /srv/zoe/llama.cpp-b11982 /etc/zoe/env
 echo "# lab checkout" > /srv/zoe/assistant/README.md
 echo "// lab" > /srv/zoe/assistant/labs/flue-zoe-brain-2x/dist/server.mjs
 head -c 4096 /dev/urandom > /srv/zoe/models/lab.gguf
