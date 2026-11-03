@@ -94,6 +94,17 @@ def test_implement_brief_marks_issue_as_untrusted_data():
     assert "Do NOT merge" in brief and "ONE" in brief
 
 
+def test_implement_brief_never_builds_in_the_read_only_live_checkout():
+    # Incident 2026-11-02 (#2255): the container's /workspace is the LIVE checkout and is
+    # mounted read-only now; the brief must send the agent to ~/.worktrees, never into it.
+    brief = oie._implement_brief({"number": 7, "title": "T", "body": "b"})
+    assert "/workspace/.claude/worktrees" not in brief
+    assert "git -C /workspace" not in brief
+    assert "/home/zoe/.worktrees/omni-issue-7" in brief
+    assert "--no-write-fetch-head" in brief, "the shared FETCH_HEAD is read-only (and deploy-critical)"
+    assert "push -u" not in brief, "the shared .git/config is read-only in the container"
+
+
 def test_poll_returns_none_on_fatal_harness_error(monkeypatch):
     monkeypatch.setattr(oie, "_session_text", lambda sid: "[]")
     class P:
