@@ -112,22 +112,6 @@ async def health_check(db=Depends(get_db)):
         return {"status": "unhealthy", "database": str(e)}
 
 
-@router.get("/modules/enabled")
-async def get_enabled_modules():
-    return {
-        "modules": [
-            {"id": "calendar", "name": "Calendar", "enabled": True},
-            {"id": "lists", "name": "Lists", "enabled": True},
-            {"id": "reminders", "name": "Reminders", "enabled": True},
-            {"id": "notes", "name": "Notes", "enabled": True},
-            {"id": "journal", "name": "Journal", "enabled": True},
-            {"id": "weather", "name": "Weather", "enabled": True},
-            {"id": "people", "name": "People", "enabled": True},
-            {"id": "transactions", "name": "Transactions", "enabled": True},
-        ]
-    }
-
-
 @router.get("/status")
 async def get_system_status(
     user: dict = Depends(get_current_user),

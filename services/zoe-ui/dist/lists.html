@@ -2070,7 +2070,6 @@
                 { type: 'work', icon: '💼', name: 'New Work Tasks', desc: 'Create new work list' },
                 { type: 'personal', icon: '📝', name: 'New Personal', desc: 'Create new personal list' },
                 { type: 'bucket', icon: '🎯', name: 'New Bucket List', desc: 'Create new bucket list' },
-                { type: 'project', icon: '📋', name: 'New Project', desc: 'Create new project' },
                 { type: 'reminders', icon: '🔔', name: 'Reminders', desc: 'Reminders' },
                 { type: 'dynamic-list', icon: '📋', name: 'Custom List', desc: 'Create your own list' }
             ];
@@ -2127,19 +2126,6 @@
             widgetsUnavailableKinds = [];
             
             try {
-                // Fetch existing projects
-                const projectsResponse = await apiRequest('/api/projects');
-                if (projectsResponse.projects) {
-                    projectsResponse.projects.forEach(project => {
-                        widgets.push({
-                            type: 'project',
-                            id: project.id,
-                            icon: '📋',
-                            name: project.name,
-                            desc: `${project.stages?.length || 0} stages`
-                        });
-                    });
-                }
                 
                 // Lists with their items. `GET /api/lists/{type}` returns rows
                 // WITHOUT items, so the old `list.items?.length || 0` read
