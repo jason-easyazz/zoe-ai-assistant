@@ -263,12 +263,14 @@ export async function spawnOmnigentWorker(
       realBrief
         ? [
             `Working directory: ${task.work_dir ?? '(unset — stop and report failure)'}`,
-            // The runner is containerised with the live repo bind-mounted at
-            // /workspace; host worktree paths under ~/.worktrees are usually
-            // NOT visible in-container. Do not fail on that — self-provision.
-            'If that directory is not accessible in your environment, create your own fresh',
-            'git worktree (or clone) from the repo at /workspace on the branch the task names',
-            '(or a new branch off origin/main) and work there. Never work directly in /workspace.',
+            // The runner is containerised with the live repo bind-mounted
+            // READ-ONLY at /workspace and /home/zoe/assistant (incident
+            // 2026-11-02, #2255); ~/.worktrees is mounted rw at the same path.
+            // If the prepared work_dir is missing, self-provision THERE.
+            'If that directory is not accessible in your environment, create your own fresh worktree:',
+            '`git -C /home/zoe/assistant worktree add /home/zoe/.worktrees/<task-id>-self <branch or origin/main>`',
+            '(fetch with --no-write-fetch-head) and work there. /workspace and /home/zoe/assistant are the',
+            'LIVE production checkout, mounted read-only: never check out, reset or edit there.',
           ].join('\n')
         : '',
       realBrief ?? ctx.brief ?? 'No task brief was provided; treat this as a connectivity proof.',

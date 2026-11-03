@@ -29,9 +29,18 @@ _POLLY = _REPO_ROOT / "scripts" / "maintenance" / "cross_review_polly.sh"
 _CALLER = _REPO_ROOT / "services" / "zoe-data" / "pipeline_cross_review.py"
 
 _STUB_POLLY = r"""#!/usr/bin/env bash
-echo "polly $* T=${CROSS_REVIEW_TIMEOUT_S:-}" >> "$STUB_LOG"
+echo "polly $* T=${CROSS_REVIEW_TIMEOUT_S:-} D=${CROSS_REVIEW_DIR:-}" >> "$STUB_LOG"
+[ -f "${CROSS_REVIEW_DIR:-/nonexistent}/pr-head/pr_change.txt" ] && echo "polly-saw-pr-head" >> "$STUB_LOG"
+OK='REVIEWER-VENDOR: openai/codex\nblocking: none\nCLEAN\n'
 case "${STUB_POLLY:-ok}" in
-  ok)          printf 'REVIEWER-VENDOR: openai/codex\nblocking: none\nCLEAN\n' ;;
+  ok)          printf "$OK" ;;
+  # The 2026-11-02 incident, reproduced against the fixture's "live" checkout: the reviewer
+  # detaches the live HEAD (same commit, so ONLY the symbolic ref changes) ...
+  detach)      git -C "$STUB_LIVE" checkout -q --detach; printf "$OK" ;;
+  # ... or moves the checked-out branch onto the unmerged PR head (only the sha changes).
+  mainto_pr)   git -C "$STUB_LIVE" update-ref refs/heads/main "$(git -C "$CROSS_REVIEW_DIR/pr-head" rev-parse HEAD)"; printf "$OK" ;;
+  # A legitimate CD deploy fast-forwarding main to the commit on refs/zoe-deploy/main.
+  deploy_ff)   git -C "$STUB_LIVE" update-ref refs/heads/main refs/zoe-deploy/main; printf "$OK" ;;
   claude)      printf 'REVIEWER-VENDOR: anthropic/claude-opus-4-8\nCLEAN\n' ;;
   noattest)    printf 'looks fine to me, CLEAN\n' ;;
   # A VALID non-Anthropic attestation on purpose: only the sentinel may reject this report
@@ -44,6 +53,7 @@ esac
 
 _STUB_CODEX = r"""#!/usr/bin/env bash
 echo "codex $*" >> "$STUB_LOG"
+prev=""; for a in "$@"; do [ "$prev" = "-C" ] && [ -f "$a/pr-head/pr_change.txt" ] && echo "codex-saw-pr-head" >> "$STUB_LOG"; prev="$a"; done
 cat > "$STUB_DIR/codex.stdin"
 case "${STUB_CODEX:-ok}" in
   ok)    printf 'blocking: none\nnon-blocking: none\nVERDICT: CLEAN (codex)\npadding to clear the minimum report size ........................\n' ;;
@@ -76,8 +86,40 @@ PY
 """
 
 
+def _git(*args: str, cwd: Path | None = None) -> str:
+    return subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "init.defaultBranch=main", *args],
+        cwd=cwd, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def _make_live_checkout(tmp_path: Path) -> Path:
+    """A stand-in for /home/zoe/assistant: branch main checked out, an `origin` that serves
+    refs/pull/123/head (the PR, one commit past main), and refs/zoe-deploy/main one commit
+    past main as well (what the CD deploy would fast-forward to)."""
+    live = tmp_path / "live"
+    origin = tmp_path / "origin.git"
+    _git("init", "-q", "--bare", str(origin))
+    _git("init", "-q", str(live))
+    _git("commit", "-q", "--allow-empty", "-m", "base", cwd=live)
+    _git("remote", "add", "origin", str(origin), cwd=live)
+    base = _git("rev-parse", "HEAD", cwd=live)
+    (live / "pr_change.txt").write_text("the PR's change\n")
+    _git("add", "pr_change.txt", cwd=live)
+    _git("commit", "-q", "-m", "the PR", cwd=live)
+    _git("push", "-q", "origin", "HEAD:refs/pull/123/head", cwd=live)
+    _git("reset", "-q", "--hard", base, cwd=live)
+    _git("commit", "-q", "--allow-empty", "-m", "next main", cwd=live)
+    _git("update-ref", "refs/zoe-deploy/main", "HEAD", cwd=live)
+    _git("reset", "-q", "--hard", base, cwd=live)
+    return live
+
+
 @pytest.fixture()
 def rig(tmp_path):
+    live = _make_live_checkout(tmp_path)
+    wt_root = tmp_path / "worktrees"
+
     def stub(name: str, body: str) -> Path:
         p = tmp_path / name
         p.write_text(body)
@@ -94,18 +136,37 @@ def rig(tmp_path):
         "CROSS_REVIEW_CODEX_BIN": str(stub("codex", _STUB_CODEX)),
         "CROSS_REVIEW_PI_BIN": str(stub("pi", _STUB_PI)),
         "CROSS_REVIEW_GH_BIN": str(stub("gh", _STUB_GH)),
+        # NEVER the real /home/zoe/assistant: the tripwire and the review worktree run git
+        # against this, so every test gets its own throwaway "live" checkout.
+        "CROSS_REVIEW_LIVE_CHECKOUT": str(live),
+        "CROSS_REVIEW_WORKTREE_ROOT": str(wt_root),
+        "STUB_LIVE": str(live),
     }
 
     class Rig:
-        def run(self, **overrides):
+        live_dir = live
+        review_root = wt_root
+
+        def run(self, script: Path = _SCRIPT, **overrides):
             e = {**env, **{k: str(v) for k, v in overrides.items()}}
             return subprocess.run(
-                [str(_SCRIPT), "123", "The PR must not break X."],
+                [str(script), "123", "The PR must not break X."],
                 env=e, capture_output=True, text=True, timeout=120, check=False,
             )
 
         def calls(self) -> list[str]:
-            return [ln.split()[0] for ln in log.read_text().splitlines() if ln.strip()]
+            return [
+                ln.split()[0] for ln in log.read_text().splitlines()
+                if ln.strip() and not ln.startswith(("polly-saw", "codex-saw"))
+            ]
+
+        def log_text(self) -> str:
+            return log.read_text()
+
+        def live_head(self) -> tuple[str, str]:
+            sym = subprocess.run(["git", "-C", str(live), "symbolic-ref", "-q", "HEAD"],
+                                 capture_output=True, text=True, check=False).stdout.strip()
+            return _git("-C", str(live), "rev-parse", "HEAD"), sym
 
         def call_lines(self, who: str) -> list[str]:
             return [ln for ln in log.read_text().splitlines() if ln.startswith(who + " ")]
@@ -363,3 +424,132 @@ def test_newline_separated_backends_keep_pi_behind_codex(rig):
     assert r.returncode == 0, r.stderr
     assert "pi" not in rig.calls() and "codex" in rig.calls()
     assert "skipped: codex has not been tried yet" in r.stderr
+
+
+# ------------------------------- the live checkout is never touched (2026-11-02, #2255) ---
+# polly ran `cd /workspace && git fetch origin pull/2253/head; git checkout FETCH_HEAD` in
+# the then-writable live checkout: production HEAD detached onto an unmerged PR. The mount
+# is read-only now (pinned in tests/unit/modules/test_omnigent_live_checkout_readonly.py);
+# these pin the script half: reviewers get their own dir, and a moved live HEAD is an ALARM.
+
+def test_reviewers_get_a_per_review_dir_with_the_pr_head_never_the_live_checkout(rig):
+    r = rig.run(STUB_POLLY="authfail")
+    assert r.returncode == 0, r.stderr
+    polly_dir = re.search(r" D=(\S+)", rig.call_lines("polly")[0]).group(1)
+    codex_line = rig.call_lines("codex")[0]
+    codex_dir = re.search(r" -C (\S+)", codex_line).group(1)
+    for d in (polly_dir, codex_dir):
+        assert Path(d).parent == rig.review_root, d
+        assert re.fullmatch(r"review-123-\d+-[A-Za-z0-9]{6}", Path(d).name), d
+    assert "/workspace" not in codex_line and str(rig.live_dir) not in codex_line
+    # Both reviewers could actually SEE the PR head (it is not in the live checkout).
+    assert "polly-saw-pr-head" in rig.log_text() and "codex-saw-pr-head" in rig.log_text()
+    assert not (rig.live_dir / "pr_change.txt").exists()
+    # The prompt names the read-only live checkout, and the PR head as untrusted data.
+    prompt = rig.stdin_of("codex")
+    assert "NEVER run git checkout/switch/reset/fetch/commit" in prompt
+    assert f"{codex_dir}/pr-head" in prompt
+
+
+def test_review_dir_worktree_and_ref_are_removed_afterwards(rig):
+    r = rig.run(STUB_POLLY="authfail")
+    assert r.returncode == 0, r.stderr
+    assert list(rig.review_root.iterdir()) == [], "the per-review dir must not outlive the review"
+    worktrees = _git("-C", str(rig.live_dir), "worktree", "list", "--porcelain")
+    assert worktrees.count("worktree ") == 1, worktrees
+    assert _git("-C", str(rig.live_dir), "for-each-ref", "refs/zoe-review/") == ""
+
+
+def test_a_stale_review_dir_from_a_dead_run_is_swept_but_foreign_dirs_are_not(rig):
+    rig.review_root.mkdir()
+    gone = subprocess.Popen(["true"])
+    gone.wait()
+    dead = gone.pid                                            # a pid that has exited
+    alive = os.getpid()                                        # a pid that is running
+    stale = rig.review_root / f"review-99-{dead}-AbC123"
+    stale.mkdir()
+    (stale / ".zoe-cross-review").write_text("")
+    live_run = rig.review_root / f"review-97-{alive}-QrS456"   # a concurrent review: keep
+    live_run.mkdir()
+    (live_run / ".zoe-cross-review").write_text("")
+    unmarked = rig.review_root / f"review-98-{dead}-XyZ789"   # same shape, no marker: not ours
+    unmarked.mkdir()
+    foreign = rig.review_root / "wt-1234"                     # a Multica task worktree
+    foreign.mkdir()
+    r = rig.run(STUB_POLLY="ok")
+    assert r.returncode == 0, r.stderr
+    assert not stale.exists(), "a dead run's review dir must be swept"
+    assert live_run.exists() and unmarked.exists() and foreign.exists()
+
+
+@pytest.mark.parametrize("mode", ["detach", "mainto_pr"])
+def test_a_reviewer_that_moves_the_live_head_is_an_alarm_not_a_review(rig, mode):
+    before = rig.live_head()
+    r = rig.run(STUB_POLLY=mode)
+    assert r.returncode == 3, (r.returncode, r.stderr)
+    assert "ALARM: LIVE CHECKOUT MODIFIED" in r.stderr
+    assert "Live checkout moved" in r.stderr, "the alarm must point at the recovery runbook"
+    assert r.stdout == "", "a review during which the live checkout moved must not be reported"
+    # Detect, never repair: the moved state is left for the owner to inspect.
+    assert rig.live_head() != before
+
+
+def test_a_deploy_fast_forward_during_the_review_is_not_an_alarm(rig):
+    r = rig.run(STUB_POLLY="deploy_ff")
+    assert r.returncode == 0, r.stderr
+    assert "fast-forwarded by a deploy" in r.stderr
+    assert "REVIEWER-VENDOR: openai/codex" in r.stdout
+
+
+def test_the_tripwire_needs_a_readable_live_checkout(rig, tmp_path):
+    r = rig.run(CROSS_REVIEW_LIVE_CHECKOUT=str(tmp_path / "not-a-repo"))
+    assert r.returncode == 1
+    assert "cannot read the live checkout" in r.stderr
+    assert rig.calls() == [], "no backend may run without the tripwire armed"
+
+
+@pytest.mark.parametrize("root", ["{live}/.claude/worktrees", "/workspace/x", "/home/zoe/assistant/x",
+                                  "/home/zoe/.worktrees/../assistant"])
+def test_the_review_root_can_never_be_inside_the_live_checkout(rig, root):
+    r = rig.run(CROSS_REVIEW_WORKTREE_ROOT=root.format(live=rig.live_dir))
+    assert r.returncode == 1, (r.returncode, r.stderr)
+    assert "inside the live checkout" in r.stderr
+    assert rig.calls() == []
+
+
+def test_negative_control_without_the_tripwire_the_incident_passes_silently(rig, tmp_path):
+    """Executed negative control: neutralise assert_live_untouched and the detach scenario
+    goes green — so the alarm tests above are what catch a removed guard."""
+    src = _SCRIPT.read_text()
+    marker = "assert_live_untouched() {\n"
+    assert src.count(marker) == 1
+    mutated = tmp_path / "cross_review_no_guard.sh"
+    mutated.write_text(src.replace(marker, marker + "  return 0\n"))
+    mutated.chmod(0o755)
+    r = rig.run(script=mutated, STUB_POLLY="detach")
+    assert r.returncode == 0 and "LIVE CHECKOUT MODIFIED" not in r.stderr
+
+
+def test_no_script_uses_the_live_checkout_as_a_review_cwd():
+    for p in (_SCRIPT, _POLLY):
+        code = "\n".join(ln for ln in p.read_text().splitlines() if not ln.lstrip().startswith("#"))
+        assert "cd /workspace" not in code, f"{p.name} starts a reviewer in the live checkout"
+        assert "-C /workspace" not in code and "-C /home/zoe/assistant" not in code, p.name
+    polly = _POLLY.read_text()
+    assert re.search(r'sh -c "cd \$KICK_CWD && omnigent run', polly), "the kick cwd must be the review dir"
+    brief = re.search(r'^BRIEF="(.*)"$', polly, re.M).group(1)
+    assert "NEVER run git checkout, switch, reset, fetch or commit" in brief
+    assert "/workspace or /home/zoe/assistant" in brief
+
+
+@pytest.mark.parametrize("bad", ["/workspace", "/workspace/x", "/home/zoe/assistant/.claude/worktrees/x",
+                                 "/home/zoe/.worktrees/../assistant", "/tmp/x;rm -rf /", "relative/dir"])
+def test_polly_refuses_a_review_dir_in_the_live_checkout_or_with_shell_metachars(bad):
+    # Exits at validation, BEFORE any session is created (and no server is reachable here).
+    r = subprocess.run(
+        [str(_POLLY), "123", "contract"],
+        env={**os.environ, "CROSS_REVIEW_DIR": bad, "OMNIGENT_SERVER": "http://127.0.0.1:9"},
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert r.returncode == 1, (r.returncode, r.stderr)
+    assert "CROSS_REVIEW_DIR" in r.stderr
