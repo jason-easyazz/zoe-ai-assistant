@@ -62,7 +62,7 @@ SCHEMA = "zoe.bar_reliability/1"
 COMPARE_SCHEMA = "zoe.bar_reliability.compare/1"
 DEFAULT_K = 3
 VALID_STATUSES = ("ok", "partial", "regression")   # a run that produced a verdict per selected scenario
-LOCK = os.environ.get("ZOE_HARNESS_LOCK", "/tmp/zoe-voice-harness.lock")
+LOCK = "/tmp/zoe-voice-harness.lock"   # FIXED, like samantha_bar.LOCK: the steps it serialises lock this exact path
 CACHE = Path.home() / ".cache" / "zoe"
 DEFAULT_BASELINE = CACHE / "samantha_bar_reliability_baseline.json"
 REPO = Path(__file__).resolve().parents[2]
@@ -169,11 +169,18 @@ def load_json(path: Path) -> dict:
 
 
 def expand_inputs(paths: Iterable[Path]) -> list[Path]:
-    """Files as given; a directory contributes its ``run-*.json`` files in order."""
+    """Files as given; a directory contributes its ``run-*.json`` files in order. Each FILE counts once: one named twice
+    (a directory plus one of its runs, the same path repeated, a symlink to it) is dropped, so repeating a reference to
+    one run can never satisfy k."""
     out: list[Path] = []
+    seen: set[str] = set()
     for p in paths:
         p = Path(p)
-        out.extend(sorted(p.glob("run-*.json")) if p.is_dir() else [p])
+        for f in (sorted(p.glob("run-*.json")) if p.is_dir() else [p]):
+            key = os.path.realpath(f)
+            if key not in seen:
+                seen.add(key)
+                out.append(f)
     return out
 
 
@@ -428,6 +435,17 @@ def _harness_quiet():
     return mod
 
 
+def _typed_env():
+    """services/zoe-data/typed_env.py by FILE PATH (stdlib-only): flags are read through the registry, not os.environ."""
+    mod = sys.modules.get("typed_env")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("typed_env", REPO / "services" / "zoe-data" / "typed_env.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["typed_env"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
 def run_schedule(arms: list[str], k: int) -> list[tuple[int, str]]:
     """(round, arm) in run order: interleaved, the order alternating each round (ABBA...), so slow drift over the
     night (thermal, a growing cache, the hour) lands on both arms."""
@@ -564,7 +582,7 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
     plan = run_schedule(list(arms), args.k)
     out_dir = Path(args.out_dir)
     extra = [a for a in args.extra if a != "--"]
-    if not args.dry_run and os.environ.get("ZOE_PERF") != "1":
+    if not args.dry_run and _typed_env().env_str("ZOE_PERF") != "1":
         log("bar_reliability run: skipped - live runs require ZOE_PERF=1 (see --dry-run)")
         return EXIT_OK
     idents = {a: arm_identity(c, args.harness, extra) for a, c in arms.items()}
