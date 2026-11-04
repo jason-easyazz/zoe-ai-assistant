@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 806 prod flags; 218 read through `typed_env`.
+- 809 prod flags; 221 read through `typed_env`.
 - 758 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-806 flags; 755 not documented in `.env.example`.
+809 flags; 758 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -313,7 +313,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_INTENT_MISS_LOG` | str | `''` | - | `services/zoe-data/AGENTS.md` | `dynamic` | no | NO | `services/zoe-data/local_text_logs.py` |
 | `ZOE_INTENT_ROUTER_GATE` | bool | `True` | - | `docs/architecture/beat-the-bar-2026-program.md` | `'1'` | no | NO | `services/zoe-data/fast_tiers.py` |
 | `ZOE_INTERCOM` | bool | `False` | - | `docs/knowledge/lan-intercom.md` | `'off'` | yes | NO | `services/zoe-data/intercom.py` |
-| `ZOE_INTERNAL_TOKEN` | str | `''` | - | `docs/knowledge/incident-runbook.md` | `''`, `-`, `dynamic` | yes | yes | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/maintenance/zoe-nightly-dreaming.py`<br>`services/zoe-core/extensions/abilities.ts`<br>`services/zoe-core/extensions/memory.ts`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/auth_handoff.py`<br>`services/zoe-data/ma_ui_gate.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/music_jukebox.py`<br>`services/zoe-data/panel_kiosk_credential.py`<br>`services/zoe-data/routers/ha_ui.py`<br>`services/zoe-data/telegram_notify.py`<br>`services/zoe-data/traffic_class.py`<br>`services/zoe-data/zoe_core_client.py` |
+| `ZOE_INTERNAL_TOKEN` | str | `''` | - | `docs/knowledge/incident-runbook.md` | `''`, `-`, `dynamic` | yes | yes | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/maintenance/zoe-nightly-dreaming.py`<br>`services/zoe-core/extensions/abilities.ts`<br>`services/zoe-core/extensions/memory.ts`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/auth_handoff.py`<br>`services/zoe-data/ma_ui_gate.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/music_jukebox.py`<br>`services/zoe-data/panel_kiosk_credential.py`<br>`services/zoe-data/path_gate.py`<br>`services/zoe-data/routers/ha_ui.py`<br>`services/zoe-data/telegram_notify.py`<br>`services/zoe-data/traffic_class.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_JUKEBOX_SECRET` | str | `''` | - | - | `-` | yes | NO | `services/zoe-data/music_jukebox.py` |
 | `ZOE_JUKEBOX_TTL_S` | int | `7200` | - | `services/zoe-data/AGENTS.md` | `7200` | yes | NO | `services/zoe-data/music_jukebox.py` |
 | `ZOE_KANBAN_BACKEND` | str | `'executor'` | - | `docs/architecture/multica-executor-migration.md` | `'executor'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
@@ -460,6 +460,9 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MULTICA_POOL_MAX` | int | `4` | - | - | `'4'` | no | NO | `services/zoe-data/executors/executor_queue_backend.py` |
 | `ZOE_MULTICA_STALE_IN_PROGRESS_HOURS` | float | `6.0` | - | `docs/architecture/multica-retirement-gates.md` | `6.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_TRIAGE_JUDGE` | bool | `False` | - | `docs/PLANS.md` | `False` | yes | NO | `services/zoe-data/multica_triage_judge.py` |
+| `ZOE_MULTICA_UI_GATE` | bool | `True` | - | `docs/knowledge/multica-zoe-signin.md` | `True` | yes | NO | `services/zoe-data/multica_ui_gate.py` |
+| `ZOE_MULTICA_UI_SECRET` | str | `''` | - | `docs/knowledge/multica-zoe-signin.md` | `-` | yes | NO | `services/zoe-data/multica_ui_gate.py` |
+| `ZOE_MULTICA_UI_TTL_S` | int | `28800` | - | `docs/knowledge/multica-zoe-signin.md` | `28800` | yes | NO | `services/zoe-data/multica_ui_gate.py` |
 | `ZOE_MULTICA_WORKSPACE_ID` | str | `''` | - | - | `''` | no | NO | `services/zoe-data/executors/executor_queue_backend.py` |
 | `ZOE_MULTI_HOP_RECALL` | bool | `True` | - | `docs/knowledge/zoe-memory-bench.md` | `'on'` | no | NO | `services/zoe-data/multi_hop_recall.py` |
 | `ZOE_MUSIC_DISCOVERY` | str | `'off'` | `off`, `on` | `docs/knowledge/state-of-zoe-review-2026-09-25.md` | `'off'` | no | NO | `services/zoe-data/main.py` |

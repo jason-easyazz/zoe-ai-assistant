@@ -293,6 +293,41 @@ location ^~ /modules/music-assistant/ {
     proxy_send_timeout 3600s;
 }
 
+# SECURITY: the Multica board sits behind Zoe's own sign-in. Upstream Multica has no
+# generic OIDC login (checked to v0.6.3, 2026-10-19), and with no email backend its only
+# login is the dev verification code - so every request to /multica/, /multica-api/ and
+# /_next/ (HTTP and the WebSocket handshake) runs an auth_request to zoe-data first and is
+# proxied only on a 2xx. The gate (zoe-data multica_ui_gate.py) admits a signed-in ADULT
+# household member only: never a guest, a child, the wall panel or an anonymous caller.
+# A browser cannot attach Zoe's X-Session-ID bearer to a navigation, an asset load or a
+# WebSocket handshake, so /board.html trades it for a signed HttpOnly SameSite=Strict cookie
+# scoped to these three paths (POST /api/multica-ui/session). A gate that cannot answer
+# (zoe-data down) is a 5xx: closed. Rollback without an nginx change:
+# ZOE_MULTICA_UI_GATE=off on zoe-data. Agents never come this way: zoe-data, Cursor MCP and
+# populate_multica.py use 127.0.0.1:8080; the executor and Omnigent use the database.
+# The gate location is `internal` (a client asking for it directly gets 404), passes the
+# request headers (cookie, session id) but not the body, and blanks the internal-trust
+# headers so a caller cannot forge them.
+location = /_zoe/multica-gate {
+    internal;
+    proxy_pass http://host.docker.internal:8000/api/multica-ui/gate;
+    include /etc/nginx/zoe/ingress-headers.inc;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $zoe_real_ip;
+    proxy_set_header X-Forwarded-For $zoe_xff;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Internal-Token "";
+    proxy_set_header X-Zoe-User-Id "";
+    proxy_set_header Upgrade "";
+}
+# A refused board PAGE goes to the Zoe launcher, which signs in (or explains a refusal)
+# and mints the cookie; API and asset requests just get the 401/403.
+location @multica_signin {
+    return 302 /board.html?next=$request_uri;
+}
+
 # Multica (board) -- reached over zoe-network BY CONTAINER NAME, never through the host.
 # Both containers publish on 127.0.0.1 only (docker-compose.modules.yml), which the docker0
 # gateway (host.docker.internal) cannot reach; the nginx path is the only LAN route to the
@@ -305,6 +340,7 @@ resolver 127.0.0.11 valid=10s ipv6=off;
 
 location ^~ /multica-api/ {
     include /etc/nginx/zoe/lan-only.inc;
+    auth_request /_zoe/multica-gate;
     gzip off;
     set $multica_backend zoe-multica-backend:8080;
     rewrite ^/multica-api/(.*)$ /$1 break;
@@ -323,6 +359,7 @@ location ^~ /multica-api/ {
 # Next.js embeds root-relative /_next/ paths in its HTML when no basePath is configured.
 location ^~ /_next/ {
     include /etc/nginx/zoe/lan-only.inc;
+    auth_request      /_zoe/multica-gate;
     set $multica_web zoe-multica-web:3000;
     proxy_pass        http://$multica_web;
     include /etc/nginx/zoe/ingress-headers.inc;
@@ -332,6 +369,8 @@ location ^~ /_next/ {
 
 location ^~ /multica/ {
     include /etc/nginx/zoe/lan-only.inc;
+    auth_request      /_zoe/multica-gate;
+    error_page        401 403 = @multica_signin;
     set $multica_web zoe-multica-web:3000;
     rewrite ^/multica/(.*)$ /$1 break;
     proxy_pass        http://$multica_web;
