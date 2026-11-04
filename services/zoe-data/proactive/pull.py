@@ -297,6 +297,10 @@ async def pending_state(uid: str, now: datetime | None = None) -> dict:
         return state
     state["count"] = len(items)
     state["top"] = lines.klass_of(items[0].kind) if items else None
+    from proactive import policy_log
+
+    if policy_log.mode() == "log":      # lane F E3: record the rung the decision table WOULD pick; delivers nothing, never raises
+        await policy_log.observe(uid, items, now)
     return state
 
 

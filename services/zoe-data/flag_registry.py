@@ -655,6 +655,7 @@ _ENTRIES = (
     _f('ZOE_PROACTIVE_ARRIVAL_RESPONSE_S', 'str', '', doc='docs/knowledge/synthetic-users-and-proactive-recipients.md'),
     _f('ZOE_PROACTIVE_BRIEF_ON_ARRIVAL', 'str', '', doc='docs/knowledge/synthetic-users-and-proactive-recipients.md'),
     _f('ZOE_PROACTIVE_LEDGER', 'str', '', doc='docs/knowledge/person-half-enforce-pack-2026-10-09.md'),
+    _f('ZOE_PROACTIVE_POLICY_LOG', 'str', '', doc='docs/knowledge/proactive-policy-log.md'),
     _f('ZOE_PROACTIVE_RAISE_GAP_S', 'int', 7200, doc='docs/knowledge/synthetic-users-and-proactive-recipients.md'),
     _f('ZOE_PROACTIVE_RAISE_PER_DAY', 'int', 2, doc='docs/knowledge/synthetic-users-and-proactive-recipients.md'),
     _f('ZOE_PROACTIVE_SELECTOR', 'str', '', doc='docs/knowledge/samantha-bar.md'),
