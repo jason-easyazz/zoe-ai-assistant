@@ -286,9 +286,6 @@
         "services/zoe-data/proactive/triggers/evolution_weekly_digest.py": [
           "'Australia/Perth'"
         ],
-        "services/zoe-data/proactive/triggers/people_birthday.py": [
-          "'Australia/Perth'"
-        ],
         "services/zoe-data/proactive/triggers/people_health.py": [
           "'Australia/Perth'"
         ],
@@ -10879,6 +10876,25 @@
         },
         "typed_env": false
       },
+      "ZOE_PERSON_PROFILE_ANSWERS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/person_profile.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/contacts-people-memory.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_PERSON_RECALL_FLOOR": {
         "defaults": [
           "-"
@@ -15070,7 +15086,6 @@
           "services/zoe-data/proactive/triggers/emotional_followup.py",
           "services/zoe-data/proactive/triggers/evening_windown.py",
           "services/zoe-data/proactive/triggers/evolution_weekly_digest.py",
-          "services/zoe-data/proactive/triggers/people_birthday.py",
           "services/zoe-data/proactive/triggers/people_health.py",
           "services/zoe-data/proactive/triggers/reminder_scan.py",
           "services/zoe-data/routers/weather.py",
@@ -16953,7 +16968,6 @@
     "services/zoe-data/proactive/triggers/emotional_followup.py": 2,
     "services/zoe-data/proactive/triggers/evening_windown.py": 1,
     "services/zoe-data/proactive/triggers/evolution_weekly_digest.py": 1,
-    "services/zoe-data/proactive/triggers/people_birthday.py": 1,
     "services/zoe-data/proactive/triggers/people_health.py": 1,
     "services/zoe-data/proactive/triggers/reminder_scan.py": 2,
     "services/zoe-data/proactive/triggers/reminders.py": 1,
