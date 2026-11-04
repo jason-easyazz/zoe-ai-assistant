@@ -6003,6 +6003,7 @@
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/music_jukebox.py",
           "services/zoe-data/panel_kiosk_credential.py",
+          "services/zoe-data/path_gate.py",
           "services/zoe-data/routers/ha_ui.py",
           "services/zoe-data/telegram_notify.py",
           "services/zoe-data/traffic_class.py",
@@ -8836,6 +8837,63 @@
           "note": "",
           "owner_doc": "docs/PLANS.md",
           "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_MULTICA_UI_GATE": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_ui_gate.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/multica-zoe-signin.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_MULTICA_UI_SECRET": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_ui_gate.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/multica-zoe-signin.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_MULTICA_UI_TTL_S": {
+        "defaults": [
+          "28800"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_ui_gate.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 28800,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/multica-zoe-signin.md",
+          "type": "int"
         },
         "typed_env": true
       },
