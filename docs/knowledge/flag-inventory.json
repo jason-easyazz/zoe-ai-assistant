@@ -8886,8 +8886,15 @@
         "readers": [
           "services/zoe-data/multica_ui_gate.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/multica-zoe-signin.md",
+          "type": "bool"
+        },
         "typed_env": true
       },
       "ZOE_MULTICA_UI_SECRET": {
@@ -8898,8 +8905,15 @@
         "readers": [
           "services/zoe-data/multica_ui_gate.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/multica-zoe-signin.md",
+          "type": "str"
+        },
         "typed_env": true
       },
       "ZOE_MULTICA_UI_TTL_S": {
@@ -8910,8 +8924,15 @@
         "readers": [
           "services/zoe-data/multica_ui_gate.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 28800,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/multica-zoe-signin.md",
+          "type": "int"
+        },
         "typed_env": true
       },
       "ZOE_MULTICA_WORKSPACE_ID": {

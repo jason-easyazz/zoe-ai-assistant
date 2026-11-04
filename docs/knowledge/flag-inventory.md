@@ -30,7 +30,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 760 legacy direct read sites in prod code across 226 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
-- 3 flags read but not registered (CI fails on any).
+- 0 flags read but not registered (CI fails on any).
 - 313 prod flags with no owner doc yet.
 - 0 registered flags with no reader in the scanned sources.
 
@@ -462,9 +462,9 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MULTICA_POOL_MAX` | int | `4` | - | - | `'4'` | no | NO | `services/zoe-data/executors/executor_queue_backend.py` |
 | `ZOE_MULTICA_STALE_IN_PROGRESS_HOURS` | float | `6.0` | - | `docs/architecture/multica-retirement-gates.md` | `6.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_TRIAGE_JUDGE` | bool | `False` | - | `docs/PLANS.md` | `False` | yes | NO | `services/zoe-data/multica_triage_judge.py` |
-| `ZOE_MULTICA_UI_GATE` | **UNREGISTERED** | - | - | - | `True` | yes | NO | `services/zoe-data/multica_ui_gate.py` |
-| `ZOE_MULTICA_UI_SECRET` | **UNREGISTERED** | - | - | - | `-` | yes | NO | `services/zoe-data/multica_ui_gate.py` |
-| `ZOE_MULTICA_UI_TTL_S` | **UNREGISTERED** | - | - | - | `28800` | yes | NO | `services/zoe-data/multica_ui_gate.py` |
+| `ZOE_MULTICA_UI_GATE` | bool | `True` | - | `docs/knowledge/multica-zoe-signin.md` | `True` | yes | NO | `services/zoe-data/multica_ui_gate.py` |
+| `ZOE_MULTICA_UI_SECRET` | str | `''` | - | `docs/knowledge/multica-zoe-signin.md` | `-` | yes | NO | `services/zoe-data/multica_ui_gate.py` |
+| `ZOE_MULTICA_UI_TTL_S` | int | `28800` | - | `docs/knowledge/multica-zoe-signin.md` | `28800` | yes | NO | `services/zoe-data/multica_ui_gate.py` |
 | `ZOE_MULTICA_WORKSPACE_ID` | str | `''` | - | - | `''` | no | NO | `services/zoe-data/executors/executor_queue_backend.py` |
 | `ZOE_MULTI_HOP_RECALL` | bool | `True` | - | `docs/knowledge/zoe-memory-bench.md` | `'on'` | no | NO | `services/zoe-data/multi_hop_recall.py` |
 | `ZOE_MUSIC_DISCOVERY` | str | `'off'` | `off`, `on` | `docs/knowledge/state-of-zoe-review-2026-09-25.md` | `'off'` | no | NO | `services/zoe-data/main.py` |
