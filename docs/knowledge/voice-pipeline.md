@@ -1930,7 +1930,7 @@ the corpus gate with a planted-greedy negative control, the vocabulary drift pin
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
 **Not in the panel daemon (offline verdict 2026-11-04):** on 979 corpus turns every Smart Turn policy that cuts
-≥300 ms of lag cuts the speaker off 2-3x as often as the live 640deep/800 tail —
+≥300 ms of lag cuts the speaker off 1.3-3x as often as the live 640deep/800 tail —
 [smart-turn-offline-eval-2026-11-04.md](smart-turn-offline-eval-2026-11-04.md) (`scripts/perf/smart_turn_offline_eval.py`).
 
 `services/zoe-data/voice_turn.py` wraps pipecat's `smart-turn-v3.2-cpu.onnx`

@@ -167,3 +167,18 @@ def test_real_endpointer_min_guard_counts_the_preroll(ev, daemon):
     # the policy arm's guard is the same frame rule
     pts = ev.check_points([S] + [Q] * 6, 0.35, 160, 160, 800, min_chunks=max(0, 6 - 20))
     assert pts[0] == 2
+
+
+def test_quiet_lock_rechecks_the_box_after_taking_the_lock(ev, tmp_path):
+    # free before the lock, busy once it is held (a night window began during the wait),
+    # then free: release, wait and re-acquire - never run a batch on the stale check.
+    answers = iter([None, "night window", None, None])
+    calls = []
+
+    def busy(_mem):
+        calls.append(1)
+        return next(answers)
+
+    fh = ev.acquire_quiet_lock(tmp_path / "lane.lock", 1500, "t", busy=busy, wait_s=0)
+    assert fh is not None and len(calls) == 4
+    fh.close()

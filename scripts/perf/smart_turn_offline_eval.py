@@ -32,11 +32,11 @@ Writes ONLY aggregate numbers (--work-dir: per-clip numbers, no names/audio/text
 outside the repo). No transcription. Changes nothing live. Limits and results:
 docs/knowledge/smart-turn-offline-eval-2026-11-04.md.
 
-Resource discipline (run it like this; it competes with tests):
+Reproduce the recorded run (defaults = its full sweep; it competes with tests):
     nice -n 10 python3 scripts/perf/smart_turn_offline_eval.py \
         --work-dir /tmp/st_eval --lock /tmp/zoe-test-lane.lock --json /tmp/st_eval/summary.json
-Each batch takes the lock, checks MemAvailable, the night window and the backup, and
-resumes from ``--work-dir`` if interrupted.
+Each batch takes the lock and re-checks MemAvailable, the night window, the backup and a
+voice landing after taking it (unknown = wait); resumes from ``--work-dir``.
 """
 from __future__ import annotations
 
@@ -471,28 +471,55 @@ def mem_available_mb() -> int:
     return 0
 
 
-def _unit_active(unit: str) -> bool:
-    try:
-        r = subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True, text=True, timeout=5)
-    except Exception:
-        return False
-    return r.stdout.strip() in ("active", "activating", "deactivating")
-
-
 def box_busy(min_mem_mb: int) -> str | None:
     """Why this batch must wait, or None. Mirrors scripts/landing/night_busy.sh `test`
-    (night window or backup running) + a voice landing + the RAM floor."""
+    (night window or backup running) + a voice landing + the RAM floor. Fails CLOSED: a
+    probe that cannot answer is a reason to wait, never a green light."""
     for unit in ("zoe-night-window.service", "zoe-backup.service"):
-        if _unit_active(unit):
-            return f"{unit} active"
-    with contextlib.suppress(Exception):
+        try:
+            r = subprocess.run(["systemctl", "--user", "is-active", unit],
+                               capture_output=True, text=True, timeout=5)
+        except Exception as exc:  # noqa: BLE001
+            return f"cannot probe {unit} ({exc})"
+        state = r.stdout.strip()
+        if state in ("active", "activating", "deactivating"):
+            return f"{unit} {state}"
+        if state not in ("inactive", "failed", "unknown"):
+            return f"cannot read {unit} state ({state or r.returncode})"
+    try:
         r = subprocess.run(["pgrep", "-f", r"^bash .*/land_voice_pr\.sh"], capture_output=True, timeout=5)
-        if r.returncode == 0:
-            return "voice landing running"
-    mem = mem_available_mb()
+    except Exception as exc:  # noqa: BLE001
+        return f"cannot probe for a voice landing ({exc})"
+    if r.returncode != 1:          # 0 = found, >1 = pgrep error: both wait
+        return "voice landing running" if r.returncode == 0 else f"pgrep failed ({r.returncode})"
+    try:
+        mem = mem_available_mb()
+    except OSError as exc:
+        return f"cannot read MemAvailable ({exc})"
     if mem < min_mem_mb:
         return f"MemAvailable {mem} MB < {min_mem_mb} MB"
     return None
+
+
+def acquire_quiet_lock(lock_path: Path | None, min_mem_mb: int, label: str,
+                       busy=box_busy, wait_s: float = 60.0):
+    """Take the lock, then RE-CHECK the box: the lock wait can be long, and a night window,
+    backup, landing or RAM dip that began during it must still stop the batch. Returns the
+    held lock file (None when no lock was asked for)."""
+    while True:
+        if (why := busy(min_mem_mb)):
+            print(f"{label}: waiting ({why})", file=sys.stderr, flush=True)
+            time.sleep(wait_s)
+            continue
+        fh = open(lock_path, "a") if lock_path else None  # noqa: SIM115
+        if fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        if not (why := busy(min_mem_mb)):
+            return fh
+        if fh:
+            fh.close()                 # release for others while we wait
+        print(f"{label}: waiting after lock ({why})", file=sys.stderr, flush=True)
+        time.sleep(wait_s)
 
 
 # ── aggregation + CLI ─────────────────────────────────────────────────────────────
@@ -540,16 +567,16 @@ def main() -> int:
     ap.add_argument("--lock", type=Path, help="flock this file per batch (e.g. /tmp/zoe-test-lane.lock)")
     ap.add_argument("--min-mem-mb", type=int, default=1500)
     ap.add_argument("--gt-threshold", type=float, default=0.35)
-    ap.add_argument("--first-ms", default="160,320", help="Smart Turn first-check quiet (ms)")
+    ap.add_argument("--first-ms", default="160,320,480", help="Smart Turn first-check quiet (ms)")
     ap.add_argument("--recheck-ms", type=int, default=160)
-    ap.add_argument("--thresholds", default="0.3,0.5,0.7,0.85")
+    ap.add_argument("--thresholds", default="0.3,0.5,0.7,0.85,0.95")
     ap.add_argument("--caps", default="800,1600", help="Smart Turn fallback close (ms of quiet)")
     ap.add_argument("--long-pause-ms", type=int, default=600)
     ap.add_argument("--preroll-chunks", type=int, default=-1,
                     help="chunks the endpointer never sees: -1 = infer per clip (20 = wake pre-roll "
                          "when command speech follows it, else 4 = follow-up lookback); 0 = whole clip")
     ap.add_argument("--synthetic-gaps", default="1000,2000", help="inserted mid-utterance pauses (ms); '' = off")
-    ap.add_argument("--synthetic-every", type=int, default=4, help="synthetic arm on every Nth clip")
+    ap.add_argument("--synthetic-every", type=int, default=2, help="synthetic arm on every Nth clip")
     ap.add_argument("--threads", type=int, default=2, help="ORT threads for Smart Turn (1..4)")
     ap.add_argument("--no-smart-turn", action="store_true", help="fixed arms only (negative control)")
     ap.add_argument("--json", type=Path, help="write the aggregate summary here")
@@ -599,13 +626,8 @@ def main() -> int:
         if data is not None and data.get("fingerprint") != fingerprint:
             data = None        # a batch from a different configuration is never reused
         if data is None:
-            while (why := box_busy(args.min_mem_mb)):
-                print(f"batch {b0}: waiting ({why})", file=sys.stderr, flush=True)
-                time.sleep(60)
-            lock_fh = open(args.lock, "a") if args.lock else None  # noqa: SIM115
+            lock_fh = acquire_quiet_lock(args.lock, args.min_mem_mb, f"batch {b0}")
             try:
-                if lock_fh:
-                    fcntl.flock(lock_fh, fcntl.LOCK_EX)
                 data = {"rows": [], "synth": {str(g): [] for g in gaps}, "st_ms": [], "skipped": 0,
                         "fingerprint": fingerprint}
                 for i, path in enumerate(files[b0:b0 + args.batch_size], start=b0):

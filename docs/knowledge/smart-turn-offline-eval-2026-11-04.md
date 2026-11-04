@@ -13,7 +13,7 @@ Lane E, experiment E1 of the [Samantha Initiative](../research/samantha-initiati
 - **Kill:** under 80 % correct, or more cut-offs than today.
 
 **Result: NOT YET.** Two facts decide it:
-- Every Smart Turn policy that saves 300 ms or more of median lag cuts the speaker off **2 to 3 times as often as today** (9.9-15.0 % of turns against 4.7 %). That trips the kill rule.
+- Every Smart Turn policy that saves 300 ms or more of median lag cuts the speaker off **more often than today**: 1.7-3.2x (8.1-15.0 % of turns against 4.7 %) with the 800 ms cap, and the 1.6 s-cap variants get down to 6.3 % (1.3x) only by over-waiting on 17-18 % of turns. That trips the kill rule.
 - The Smart Turn policy with the fewest cut-offs saves only 240 ms of median lag (p50), and it still cuts more than today.
 
 Smart Turn also costs about 120 ms of CPU per check on this box, which the lag figures below leave out. A retuned fixed tail (`480deep/800`) gets a similar saving with no model and fewer added cuts. Offline only: nothing live was changed.
@@ -30,26 +30,13 @@ Instrument: `scripts/perf/smart_turn_offline_eval.py` (its docstring is the full
 
 **Room tone.** Each clip is extended with its own trailing room tone, not digital zeros. Zeros score as maximally deep silence and would flatter the deep-quiet rule.
 
-**Fixed arms.** The real daemon `_Endpointer` from `scripts/setup/zoe_voice_daemon.py` is driven with scripted chunk probabilities (each chunk takes the max over its hops, as `_VadStream.feed` does). Live config, verified on zoe-pi `.env.voice` on 2026-11-04:
-- `VAD_ENDPOINT_ENABLED=1`
-- `VAD_ENDPOINT_SILENCE_S=0.8`
-- `ZOE_VAD_TAIL_MS=640`
+**Fixed arms.** The real daemon `_Endpointer` from `scripts/setup/zoe_voice_daemon.py` is driven with scripted chunk probabilities (each chunk takes the max over its hops, as `_VadStream.feed` does). Live config, verified on zoe-pi `.env.voice` on 2026-11-04: `VAD_ENDPOINT_ENABLED=1`, `VAD_ENDPOINT_SILENCE_S=0.8`, `ZOE_VAD_TAIL_MS=640`.
 
-**Smart Turn arms.** These use the real `voice_turn` scorer, `smart-turn-v3.2-cpu.onnx`, already on the box in `~/models`.
-- After S ms of quiet that follows speech, the scorer reads the capture so far.
-- If P(complete) is at or above T, the turn ends.
-- Otherwise it re-checks every 160 ms of continued quiet, and closes anyway at H ms of quiet.
+**Smart Turn arms.** These use the real `voice_turn` scorer, `smart-turn-v3.2-cpu.onnx`, already on the box in `~/models`. After S ms of quiet that follows speech, the scorer reads the capture so far. If P(complete) is at or above T, the turn ends; otherwise it re-checks every 160 ms of continued quiet, and closes anyway at H ms of quiet.
 
-**Definitions.**
-- **Cut:** the turn closed before the true end of speech.
-- **Lag:** time from the true end to the close.
-- **Over-wait:** lag over 1 s.
-- **Correct:** neither a cut nor an over-wait.
+**Definitions.** A **cut** is a close before the true end of speech. **Lag** is the time from the true end to the close. An **over-wait** is lag over 1 s. **Correct** means neither a cut nor an over-wait.
 
-**Run.** 2026-11-04, 20:37-22:11 AWST, `nice -n 10`, with `/tmp/zoe-test-lane.lock` taken per batch.
-- **Coverage:** 1,100 of the 1,701 clips in name order. 979 were scored; 121 were skipped for having no speech after the pre-roll, or the wrong format.
-- **Why it stopped there:** MemAvailable stayed under the 1,500 MB floor (about 950 MB, with the live brain, Kokoro and zoe-data resident). The aggregates had already been stable from n = 563 to n = 979, within about 1 point.
-- **Re-run:** the run resumes from `--work-dir`.
+**Run.** 2026-11-04, 20:37-22:11 AWST, `nice -n 10`, with `/tmp/zoe-test-lane.lock` taken per batch. It covered 1,100 of the 1,701 clips in name order: 979 scored, 121 skipped (no speech after the pre-roll, or the wrong format). It stopped there because MemAvailable stayed under the 1,500 MB floor (about 950 MB, with the live brain, Kokoro and zoe-data resident); the aggregates had already been stable within about 1 point from n = 563 to n = 979. The run resumes from `--work-dir`.
 
 ## Results — natural clips (n = 979)
 
@@ -70,7 +57,7 @@ Instrument: `scripts/perf/smart_turn_offline_eval.py` (its docstring is the full
 | ST S320 T0.95 H1600 | 62 (6.3 %) | 76.3 % | 622 / 368 / 1616 | 169 |
 | ST S480 T0.95 H1600 | 44 (4.5 %) | 77.3 % | 737 / 528 / 1616 | 177 |
 
-The full sweep is T ∈ {0.3, 0.5, 0.7, 0.85, 0.95}, S ∈ {160, 320, 480} and H ∈ {800, 1600}. It reproduces with the command in the script's docstring.
+The full sweep is T ∈ {0.3, 0.5, 0.7, 0.85, 0.95}, S ∈ {160, 320, 480} and H ∈ {800, 1600}. It reproduces with the command in the script's docstring (its defaults are this sweep).
 - **Threshold matters less than the first check.** At a fixed S, moving T from 0.3 to 0.95 removes only 2-4 points of cut-offs.
 - **Smart Turn often calls short in-utterance pauses complete.** In this household's speech it frequently scores those pauses at 0.95 or higher.
 
@@ -120,7 +107,7 @@ As an "extend when unsure" signal, Smart Turn holds about a third of real-soundi
 ## Recommendation
 
 1. **Do not put Smart Turn in the daemon as the closer.** No threshold meets the initiative's bar.
-   - Every policy that saves 300 ms or more has 2-3x today's cut-offs.
+   - Every policy that saves 300 ms or more cuts more than today: 1.7-3.2x with the 800 ms cap, 1.3x at best with the 1.6 s cap (and 17 % over-waits).
    - The closest, S480 T0.95 H800, saves 240 ms of median lag (p50) for +1.5 points of cut-offs. After about 120 ms of inference that is roughly a 120 ms real gain.
    - The fixed `480deep/800` saves 160 ms of median lag (p50) for +0.6 points, with no model.
 2. **Do not retune the fixed tail on this alone.** `ZOE_VAD_TAIL_MS=480` is the cheapest lag lever measured: -133 ms mean lag for +6 cut-offs in 979 turns. The owner's pains include cut-ins, so it is an ear-test candidate, not a default.
