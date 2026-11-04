@@ -228,9 +228,9 @@ def test_flag_on_works_even_when_vector_search_empty(monkeypatch, _relational):
     import zoe_agent
 
     async def _dump(user_id, limit=20):
-        return "## SHOULD NOT BE USED"
+        return [_Ref("SHOULD NOT BE USED")]
 
-    monkeypatch.setattr(zoe_agent, "_mempalace_load_user_facts", _dump)
+    monkeypatch.setattr(zoe_agent, "_mempalace_user_fact_refs", _dump)
     block = _run(v._voice_recall_packet("tell me about my sister Sara", "jason"))
     assert block is not None
     assert "SHOULD NOT BE USED" not in block

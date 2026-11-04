@@ -81,6 +81,32 @@ relational "People and important dates" block (only built when the owner asks). 
 (`exact_words.lookup` -> `restraint.filter_extra`: the guest wall and the mutes; the owner asking "what exactly did I say about ..." is
 the pull). The always-present user-model **card** is filtered at serve time (next section).
 
+## 2b. The voice recall packet (`surface=voice_packet`, the privacy wall)
+
+The voice brain's own recall packet (`routers/voice_tts._voice_recall_packet`: the searched facts, the composed relational lines and
+the `_voice_recall_fallback` dump, built on the core lane and on a Flue failover hop) passes the SAME `restraint.apply_to_packet` with
+`surface=restraint.VOICE_SURFACE`. The panel is a shared room, so it adds the person-centred memory D6 wall
+(`docs/architecture/person-centred-memory.md`: private classes are counted, never read, unless pulled by name and only by a verified
+owner) on top of the packet rule:
+
+* a **private** class (`restraint.PRIVATE` = health, money, family_conflict, grief, affect; = `panel_review_cards.OFF_THE_WALL`) is read
+  only when the speaker gate **verified this voice** (`current_verdict() is True`; `None` - a PIN-bound panel, no gate - is NOT verified)
+  **and** the words pull it by name: a topic overlap, or a class other than `affect` named ("what medication am I on"). An open
+  question ("what's up?") and a mood statement are not pulls here;
+* the turn is THIS turn's words and verdict (`make_turn`), never a `note_turn` mark another turn left;
+* those withholds (`Decision.wall`) bite in **every** `ZOE_RESTRAINT` mode, `off` included (`off` only skips the mute read); everything
+  else (`other_member`, mutes) follows the mode exactly as the chat packet does;
+* it fails **closed**: a filter that cannot judge returns no rows (the brain answers with no recall that turn);
+* rows with no id (the relational lines) are judged by their text, never passed unjudged.
+
+**The filing is private whatever the words say**: `row_classes` unions `_filed_classes` - a curated row's `curated_category`
+(`health` / `medication` -> health, `money` -> money; caregiver curation, #2158), a `curated_sensitive` flag with no known category
+(-> health), and `memory_type=health` - into the stored label or the fresh classification, so no label can clear it. Absent or
+malformed fields add nothing. This reaches every surface that reads `row_classes` (the chat packet included, in enforce).
+
+Pinned by `services/zoe-data/tests/test_voice_packet_privacy_wall.py` (each wall test has a bypass twin showing the fixture reaches
+the packet without the wall).
+
 ## 2c. The user-model card (`surface=card`)
 
 The card (`user_model_card.py`) is in front of the model on every turn, so no pull could ever release a line of it. In enforce,

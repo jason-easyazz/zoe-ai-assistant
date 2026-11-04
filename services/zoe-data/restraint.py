@@ -70,7 +70,14 @@ logger = logging.getLogger(__name__)
 ENV = "ZOE_RESTRAINT"
 VERSION = 3  # the classifier version: bump it and every stored class is invalid (read as unstored). 3 = the semantic head joined the union
 CLASSES = ("health", "money", "family_conflict", "grief", "other_member", "affect")
-SURFACES = ("packet", "brief", "raise_greeting", "raise_cue", "card")
+#: The voice brain's recall packet (``routers/voice_tts._voice_recall_packet``): the panel is a shared room, so it carries the
+#: STRICTER wall below (person-centred memory D6) on top of the chat packet's rule.
+VOICE_SURFACE = "voice_packet"
+SURFACES = ("packet", "brief", "raise_greeting", "raise_cue", "card", VOICE_SURFACE)
+#: The PRIVATE classes (the wall's own list, = ``panel_review_cards.OFF_THE_WALL``): on a voice turn they are counted, never read,
+#: unless a VERIFIED voice pulls them by name (D6, ``docs/architecture/person-centred-memory.md``). ``other_member`` is not one of
+#: them (who someone is to the member is ordinary voice recall); it keeps the chat packet's rule.
+PRIVATE = ("health", "money", "family_conflict", "grief", "affect")
 
 _OFF = frozenset({"0", "false", "no", "off", "disabled"})
 _ENFORCE = frozenset({"enforce", "1", "true", "yes", "on"})
@@ -321,16 +328,42 @@ def stamp(md: dict, text: Any) -> None:
         logger.debug("restraint: stamp skipped: %r", exc)
 
 
+#: A curated row's category (``memory_curation``, the caregiver curation of #2158) -> the class it is private as. The category is the
+#: curator's FILING, so it holds whatever the note's words say ("Takes the blue tablet at 8" names no illness).
+_CURATED_CLASSES = {"health": "health", "medication": "health", "money": "money"}
+
+
+def _filed_classes(meta: dict) -> set[str]:
+    """The classes a row's STRUCTURED filing declares, whatever its words: a curated category (``curated_category``), a curated
+    row marked sensitive (``curated_sensitive``) and a ``memory_type`` of ``health`` (``provenance_answers.sensitive_classes`` reads
+    the same type). Read defensively: a field that is absent or malformed adds nothing, a sensitive flag with no known category is
+    still private (``health``, the conservative reading). Pure."""
+    out: set[str] = set()
+    cat = str(meta.get("curated_category") or "").strip().lower()
+    if cat in _CURATED_CLASSES:
+        out.add(_CURATED_CLASSES[cat])
+    flag = meta.get("curated_sensitive")
+    if (flag is True or str(flag).strip().lower() in ("1", "true", "yes")) and not out:
+        out.add("health")
+    if str(meta.get("memory_type") or "").strip().lower() == "health":
+        out.add("health")
+    return out
+
+
 def row_classes(meta: Optional[dict], text: Any) -> tuple[str, ...]:
     """The classes of a stored memory row: the STORED label while its version and text hash still
     match (a label for other words, or from another classifier, is invalid and ignored, never
-    deleted), else a fresh classification. Pure."""
+    deleted), else a fresh classification; UNIONED with what the row's filing declares
+    (``_filed_classes``: a curated category, a curated sensitive flag), which no label can remove. Pure."""
     meta = meta or {}
     if (meta.get("sensitivity_v") == VERSION and meta.get("sensitivity_h") == text_hash(text)
             and "sensitivity" in meta):
-        return _parse_csv(meta.get("sensitivity"))
-    return classify(text, memory_type=meta.get("memory_type"), affect=meta.get("candidate_affect"),
-                    entity_type=meta.get("entity_type"), tags=meta.get("tags"))
+        found = set(_parse_csv(meta.get("sensitivity")))
+    else:
+        found = set(classify(text, memory_type=meta.get("memory_type"), affect=meta.get("candidate_affect"),
+                             entity_type=meta.get("entity_type"), tags=meta.get("tags")))
+    found |= _filed_classes(meta)
+    return tuple(c for c in CLASSES if c in found)
 
 
 # ── the turn: who is speaking and what the owner just asked (pure) ───────────
@@ -441,8 +474,9 @@ def muted(text: Any, source_ref: str, mutes: Iterable[Mute]) -> bool:
 @dataclass(frozen=True)
 class Decision:
     allow: bool
-    reason: str = ""             # "" | "guest" | "sensitive" | "muted"
+    reason: str = ""             # "" | "guest" | "unverified" | "sensitive" | "muted"
     classes: tuple = ()
+    wall: bool = False           # the voice privacy wall withheld it: enforced in EVERY mode (``apply_to_packet``)
 
 
 def decide(text: Any, classes: Iterable[str], turn: Turn, mutes: Iterable[Mute] = (), *,
@@ -455,11 +489,23 @@ def decide(text: Any, classes: Iterable[str], turn: Turn, mutes: Iterable[Mute] 
     * sensitive: delivered only on a pull. ``raise_cue`` IS a topic pull (the owner's words matched the
       candidate's anchors); the brief and a greeting raise need an open question; the packet also takes a
       topic overlap, a named class, or (affect rows only) a mood statement.
+    * ``VOICE_SURFACE`` (the voice recall packet, a shared room; D6): a PRIVATE class is read only to a voice
+      the speaker gate VERIFIED this turn (``verdict is True``; no verdict = not verified) and only when the
+      owner's words pull it BY NAME (a topic overlap, or a class other than ``affect`` named) - never on an
+      open question or a mood statement. Those withholds are the wall (``Decision.wall``). ``other_member`` keeps the packet rule.
     """
     cls = tuple(c for c in CLASSES if c in set(classes))
     if cls and turn.verdict is False:
-        return Decision(False, "guest", cls)
+        return Decision(False, "guest", cls, wall=surface == VOICE_SURFACE and bool(set(cls) & set(PRIVATE)))
     topic = bool(turn.stems & stems(text))
+    if surface == VOICE_SURFACE:
+        private = set(cls) & set(PRIVATE)
+        if private and turn.verdict is not True:
+            return Decision(False, "unverified", cls, wall=True)
+        # a class named in the words pulls it; a mood statement ("I'm feeling down") classes as affect but names no PAST feeling
+        if private and not (topic or (set(turn.classes) - {"affect"}) & private):
+            return Decision(False, "sensitive", cls, wall=True)
+        surface = "packet"       # past the wall: the chat packet's rule (mutes, other_member)
     if muted(text, source_ref, mutes):
         if surface == "packet" and topic:
             return Decision(True, "", cls)
@@ -506,44 +552,72 @@ def _meta_text(ref: Any) -> tuple[dict, str]:
     return (getattr(ref, "metadata", None) or {}), str(getattr(ref, "text", "") or "")
 
 
+def _row_key(ref: Any, voice: bool) -> str:
+    """The key a packet row is judged and dropped by: its id. On the voice surface a row with no id (a composed relational line)
+    is keyed by the object itself, so nothing reaches the voice brain unjudged."""
+    if not voice:
+        return str(getattr(ref, "id", ""))      # the chat packet's key, unchanged
+    return str(getattr(ref, "id", "") or "") or f"@{id(ref)}"
+
+
+def _tally(decs: Iterable[Decision]) -> tuple[int, dict[str, int], dict[str, int]]:
+    n, reasons, classes = 0, {}, {}
+    for dec in decs:
+        n += 1
+        reasons[dec.reason] = reasons.get(dec.reason, 0) + 1
+        for c in dec.classes:
+            classes[c] = classes.get(c, 0) + 1
+    return n, reasons, classes
+
+
 async def apply_to_packet(user_id: str, message: Any, facts: list, hits: list,
-                          recent: Optional[list] = None, *, mood: bool = False) -> tuple[list, list, Optional[list]]:
+                          recent: Optional[list] = None, *, mood: bool = False,
+                          surface: str = "packet") -> tuple[list, list, Optional[list]]:
     """Filter the three row lists ``routers.memories.memory_for_prompt`` hands the packet builder.
-    ``off`` and ``shadow`` return them unchanged (shadow logs what enforce would remove). Never raises."""
+    ``off`` and ``shadow`` return them unchanged (shadow logs what enforce would remove). Never raises.
+
+    ``surface=VOICE_SURFACE`` is the voice recall packet (``routers/voice_tts``): the same rule plus the privacy wall
+    (``decide``), judged on THIS turn's words and the speaker gate's verdict for it (never a mark another turn left). The
+    wall bites in every mode, ``off`` included (it is privacy, not restraint's tuning; ``off`` only skips the mute read), and
+    it fails CLOSED: a filter that cannot judge returns no rows, so the voice brain answers without recall."""
+    voice = surface == VOICE_SURFACE
     m = mode()
-    if m == "off" or not (facts or hits or recent):
+    if (m == "off" and not voice) or not (facts or hits or recent):
         return facts, hits, recent
     try:
-        turn = turn_for(user_id, message, mood=mood)
-        mutes = await list_mutes(user_id)
+        turn = make_turn(message, verdict=current_verdict()) if voice else turn_for(user_id, message, mood=mood)
+        mutes = await list_mutes(user_id) if m != "off" else []
         drop: dict[str, Decision] = {}
         seen: set[str] = set()
-        for ref in list(recent or []) + list(hits) + list(facts):
-            rid = str(getattr(ref, "id", ""))
-            if not rid or rid in seen:
+        for ref in list(recent or []) + list(hits or []) + list(facts or []):
+            key = _row_key(ref, voice)
+            if not key or key in seen:
                 continue
-            seen.add(rid)
+            seen.add(key)
             meta, text = _meta_text(ref)
-            dec = decide(text, row_classes(meta, text), turn, mutes, surface="packet", source_ref=f"memory:{rid}")
+            rid = str(getattr(ref, "id", "") or "")
+            dec = decide(text, row_classes(meta, text), turn, mutes, surface=surface,
+                         source_ref=f"memory:{rid}" if rid else "")
             if not dec.allow:
-                drop[rid] = dec
+                drop[key] = dec
         if not drop:
             return facts, hits, recent
-        reasons: dict[str, int] = {}
-        classes: dict[str, int] = {}
-        for dec in drop.values():
-            reasons[dec.reason] = reasons.get(dec.reason, 0) + 1
-            for c in dec.classes:
-                classes[c] = classes.get(c, 0) + 1
-        _note(user_id, "packet", len(drop), reasons, classes, m == "enforce")
-        if m != "enforce":
+        enforced = {k for k, d in drop.items() if m == "enforce" or d.wall}
+        for keys, bites in ((enforced, True), (set(drop) - enforced, False)):
+            if keys:
+                n, reasons, classes = _tally(drop[k] for k in keys)
+                _note(user_id, surface, n, reasons, classes, bites)
+        if not enforced:
             return facts, hits, recent
 
         def keep(rows: Optional[list]) -> Optional[list]:
-            return None if rows is None else [r for r in rows if str(getattr(r, "id", "")) not in drop]
+            return None if rows is None else [r for r in rows if _row_key(r, voice) not in enforced]
 
         return keep(facts) or [], keep(hits) or [], keep(recent)
     except Exception as exc:  # noqa: BLE001 — restraint must never break a turn
+        if voice:
+            logger.warning("restraint: voice packet wall failed (no recall this turn): %r", exc)
+            return [], [], (None if recent is None else [])
         logger.warning("restraint: packet filter failed (no restraint this turn): %r", exc)
         return facts, hits, recent
 
