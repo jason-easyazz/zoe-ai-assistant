@@ -274,6 +274,22 @@ async def test_a_weaker_source_never_overwrites_a_stronger_one(env):
 
 
 @pytest.mark.asyncio
+async def test_precedence_is_one_atomic_statement_and_equal_strength_goes_by_event_time(env):
+    db = env["db"]
+    await oe.open_edge(db, user_id=MEMBER, source_ref="open_loops:1", kind="open_loop", touch_point="raise", now=NOW)
+    t1, t2 = NOW + timedelta(seconds=10), NOW + timedelta(seconds=20)
+    before = db.calls
+    assert await oe.set_outcome(db, user_id=MEMBER, source_ref="open_loops:1", outcome="acted", source="tap", now=t2) == 1
+    assert db.calls - before == 1                      # read-free: nothing a concurrent writer can slip between
+    # an OLDER tap processed late does not replace the newer one; a newer one does
+    assert await oe.set_outcome(db, user_id=MEMBER, source_ref="open_loops:1", outcome="dismissed", source="tap", now=t1) == 0
+    assert _edges(env)[0][3:5] == ("acted", "tap")
+    assert await oe.set_outcome(db, user_id=MEMBER, source_ref="open_loops:1", outcome="dismissed", source="tap",
+                                now=t2 + timedelta(seconds=5)) == 1
+    assert _edges(env)[0][3:5] == ("dismissed", "tap")
+
+
+@pytest.mark.asyncio
 async def test_sweep_resolves_a_raised_loop_and_expires_the_undecided(env):
     db = env["db"]
     _loop(env, 1, "2026-09-30 15:00:00", resolved=True, resolved_at="2026-09-30 09:00:00")
@@ -437,3 +453,17 @@ async def test_logs_carry_no_item_text(env, caplog):
         await lines.record_tap(MEMBER, "not_now", now=NOW)
     logged = " ".join(r.getMessage() for r in caplog.records)
     assert "fixture text" not in logged and "OUTCOME_" in logged
+
+
+@pytest.mark.asyncio
+async def test_no_production_write_path_stores_item_text_or_an_utterance(env):
+    _loop(env, 1, "2026-09-30 15:00:00", resolved=True, resolved_at="2026-09-30 09:00:00")
+    _cand(env, "open_loops:1", "open_loop", 0.8)
+    raised = await sel.prepare("I wonder about the interview secret-utterance-marker", MEMBER, "s1")
+    assert raised is not None
+    await sel.settle(raised, produced=True)
+    await pull.pull(MEMBER, "s2", channel="chat", now=NOW)
+    await lines.record_tap(MEMBER, "not_now", now=NOW + timedelta(seconds=5))
+    await oe.sweep(now=NOW + timedelta(hours=2))
+    dump = " ".join(str(v) for row in env["db"].rows(f"SELECT * FROM {TABLE}") for v in row if v is not None)
+    assert dump and "fixture text" not in dump and "secret-utterance-marker" not in dump and "interview" not in dump

@@ -138,18 +138,18 @@ async def set_outcome(db, *, user_id: str, source_ref: str, outcome: str, source
     n = 0
     try:
         marks = ",".join("?" for _ in touch_points)
-        async with db.execute(
-            "SELECT id, outcome_source FROM proactive_outcome_edges WHERE user_id = ? AND item_id = ? "
-            f"AND local_day = ? AND touch_point IN ({marks})",
-            (user_id, source_ref, day or _day(now), *touch_points)) as cur:
-            rows = [tuple(r) for r in await cur.fetchall()]
-        for rid, have in rows:
-            if have is not None and SOURCE_RANK.get(str(have), -1) > SOURCE_RANK[source]:
-                continue
-            cur = await db.execute(
-                "UPDATE proactive_outcome_edges SET outcome = ?, outcome_at = ?, outcome_source = ? WHERE id = ?",
-                (outcome, _iso(now), source, rid))
-            n += 1 if (getattr(cur, "rowcount", 1) or 0) > 0 else 0
+        # The precedence lives IN the UPDATE (one atomic statement per edge): an edge decided by a stronger
+        # source, or by an equal one at a LATER event time, is never overwritten, whatever order events are
+        # processed in. Source names come from the closed SOURCE_RANK map, never from input.
+        rank_sql = "CASE outcome_source " + " ".join(f"WHEN '{k}' THEN {v}" for k, v in SOURCE_RANK.items()) + " ELSE -1 END"
+        cur = await db.execute(
+            "UPDATE proactive_outcome_edges SET outcome = ?, outcome_at = ?, outcome_source = ? "
+            "WHERE user_id = ? AND item_id = ? AND local_day = ? "
+            f"AND touch_point IN ({marks}) AND (outcome_source IS NULL OR {rank_sql} < ? "
+            f"OR ({rank_sql} = ? AND (outcome_at IS NULL OR outcome_at <= ?)))",
+            (outcome, _iso(now), source, user_id, source_ref, day or _day(now), *touch_points,
+             SOURCE_RANK[source], SOURCE_RANK[source], _iso(now)))
+        n = int(getattr(cur, "rowcount", 0) or 0)
     except Exception as exc:  # noqa: BLE001
         logger.warning("outcome-edges: set failed user=%s: %r", user_id, exc)
         return 0
