@@ -133,3 +133,32 @@ def test_a_forgotten_name_is_not_re_added_by_voice_and_the_reply_never_repeats_i
     assert say("remember that Juno\x27s swimming is on Tuesdays", PARENT) == mc.FORGOTTEN_DETAIL
     assert not rows_of(env, KID)
     assert say("remember that Rafe\x27s swimming is on Tuesdays", PARENT) == "Okay, I\x27ll remember that for Rafe."  # control
+
+
+def test_a_medication_note_is_never_filed_under_an_enabled_health_switch(env):
+    c = as_(env, PARENT, "admin")
+    c.put(f"/api/memories/curation/members/{KID}/sensitive/health", json=dict(on=True), headers=H)
+    out = say("remember that Juno takes her inhaler before sport", PARENT)
+    assert out == "Medication notes for Juno are off. Turn them on first." and "inhaler" not in out
+    assert not rows_of(env, KID)
+    c.put(f"/api/memories/curation/members/{KID}/sensitive/medication", json=dict(on=True), headers=H)
+    assert say("remember that Juno takes her inhaler before sport", PARENT) == "Okay, I\x27ll remember that for Juno."  # control
+    assert rows_of(env, KID)[0].metadata["curated_category"] == "medication"
+
+
+def test_two_children_with_one_first_name_are_asked_about_never_guessed(env):
+    for sql, args in (("INSERT INTO users VALUES (?, ?, ?)", ("demo_bar_0000000f", "member", "Juno Other")),
+                      ("INSERT INTO auth_users VALUES (?, ?)", ("demo_bar_0000000f", "child"))):
+        env.db.conn.execute(sql, args)
+    env.db.conn.commit()
+    assert say("remember that Juno\x27s swimming is on Tuesdays", PARENT) == mc.AMBIGUOUS_REPLY.format(name="Juno")
+    assert not rows_of(env, KID) and not rows_of(env, "demo_bar_0000000f")
+    assert say("remember that Rafe\x27s swimming is on Tuesdays", PARENT) == "Okay, I\x27ll remember that for Rafe."  # control
+
+
+def test_flag_off_then_on_with_the_same_words(env, monkeypatch):
+    text = "remember that Juno\x27s swimming is on Tuesdays"
+    monkeypatch.delenv("ZOE_MEMORIES_CURATORS")
+    assert say(text, PARENT) is None and not rows_of(env, KID)
+    monkeypatch.setenv("ZOE_MEMORIES_CURATORS", "1")
+    assert say(text, PARENT) == "Okay, I\x27ll remember that for Juno." and len(rows_of(env, KID)) == 1   # control

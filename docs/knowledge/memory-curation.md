@@ -35,8 +35,11 @@ Memories list labelled "Added for you by <name>", and cannot forget or correct t
 "Zoe, remember that Juno's swimming is on Tuesdays" from a curator in THEIR OWN panel identity (`extra_ctx['scope_user']`: a
 verified voice session or a fresh PIN) writes the same curated note (`curated_via="voice"`) through `memory_curation.by_voice`,
 called first in `memories_voice.tier` (inside `fast_tiers._provenance_tier`). The category is guessed from the words (health /
-medication / money by the classifiers, refused aloud unless opted in; then school, dates, routines, likes, people, other). Zoe says
-"Okay, I'll remember that for Juno." and never repeats the note. A guest, a child, a non-admin, a speaker the gate rejected
+medication / money by the classifiers, refused aloud unless opted in - a medication word is always Medication, never downgraded to
+an enabled Health switch; then school, dates, routines, likes, people, other; deterministic, no model: D1). Zoe says
+"Okay, I'll remember that for Juno." and never repeats the note; a note naming anything forgotten (by the child, or a child the
+curator forgot) is refused aloud with a fixed sentence that never repeats it. D6: nobody verified on the panel (`scope_user` None),
+a guest id, the panel id itself and a non-panel turn get nothing. A guest, a child, a non-admin, a speaker the gate rejected
 (`speaker_verified is False`), the chat lane, a dry turn, a name that is none of the curator's people, or "remember that I ..."
 fall through untouched (the existing teach path). Two curatable people with the same first name: "Add it on your phone".
 Pinned by `tests/test_memories_curation_voice.py`.

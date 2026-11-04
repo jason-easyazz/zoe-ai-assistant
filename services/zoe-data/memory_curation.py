@@ -571,12 +571,16 @@ def parse_voice(text: str) -> Optional[tuple]:
 
 
 def guess_category(sentence: str, pol: Policy) -> str:
-    """The category a spoken note goes under: health / medication / money by the words (refused unless opted in), else by topic."""
+    """The category a spoken note goes under: medication / health / money by the words (refused unless opted in), else by topic.
+    A medication word is ALWAYS medication: never downgraded to an enabled Health switch when Medication is off (no human picks
+    the category on this path, so the per-member medication switch stays an independent wall). ``pol`` is unused on purpose."""
     import provenance_answers as pa
 
+    if _MEDS_RE.search(sentence):
+        return "medication"
     found = _sensitive_of(sentence)
-    if "health" in found or _MEDS_RE.search(sentence):
-        return "medication" if (_MEDS_RE.search(sentence) and "medication" in pol.allowed) or "health" not in found else "health"
+    if "health" in found:
+        return "health"
     if "money" in found:
         return "money"
     for cat, rx in (("school", _SCHOOL_RE), ("dates", _DATES_RE), ("routines", pa._ROUTINE_RE), ("likes", pa._PREF_RE),
