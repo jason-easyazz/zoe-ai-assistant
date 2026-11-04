@@ -2584,6 +2584,8 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
                          "(judged, selector and hook halves are carried over unchanged); no network")
     ap.add_argument("--teardown-only", action="store_true")
     ap.add_argument("--service-dir", default=None)
+    ap.add_argument("--require-bound", action="store_true",
+                    help="refuse to run unless the result can be attributed to a commit (see samantha_bar.evidence_binding)")
     ap.add_argument("--results", type=Path, default=DEFAULT_RESULTS)
     ap.add_argument("--trend", type=Path, default=DEFAULT_TREND)
     ap.add_argument("--pending", type=Path, default=DEFAULT_PENDING)
@@ -2657,6 +2659,9 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = sb.resolve_service_dir(args.service_dir)
     revision = sb.service_revision(sb.code_checkout_dir())  # the checkout actually served
+    binding = sb.evidence_binding(revision, sb.harness_revision())
+    if args.require_bound and not binding["bound"]:
+        return _refuse(args.results, f"--require-bound: unbound evidence - {binding['reason']}", revision)
     if not proof["ok"] or proof["pairing_problems"]:
         return _refuse(args.results, "the instrument proof failed - fix the controls first: "
                        + "; ".join((proof["problems"] + proof["pairing_problems"])[:3]), revision)
@@ -2746,20 +2751,24 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "n_cap": args.n_cap, "judge_samples": args.samples,
-               "revision": revision, "flags": flags, "prereg_sha256": PREREG_SHA256, "scratch": stack.public(),
+               "revision": revision, "evidence": binding, "prompt_size": sb.prompt_size_summary(live),
+               "flags": flags, "prereg_sha256": PREREG_SHA256, "scratch": stack.public(),
                "judge_prompt_sha256": JUDGE_PROMPT_SHA256, "bank_sha256": bank.BANK_SHA256,
                "p12_sessions": args.p12_sessions,
                "instrument_proof": {"ok": proof["ok"], "arms": {a: d.get("still_green") for a, d in proof["arms"].items()}},
                "summary": summary, **body, "teardown": td}
     sb.write_json(args.results, payload)
-    args.trend.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.trend, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"ts": payload["finished_at"], "status": status,
-                             "commit": (revision or {}).get("commit"), "partial": partial,
-                             "cells": {a: {c: v["verdict"] for c, v in r["cells"].items()}
-                                       for a, r in arm_results.items()},
-                             "teardown_proven": td["proven"], "duration_s": payload["duration_s"]},
-                            sort_keys=True) + "\n")
+    trend_file = sb.record_trend(
+        args.trend,
+        {"ts": payload["finished_at"], "status": status,
+         "commit": (revision or {}).get("commit"), "partial": partial,
+         "cells": {a: {c: v["verdict"] for c, v in r["cells"].items()}
+                   for a, r in arm_results.items()},
+         "teardown_proven": td["proven"], "duration_s": payload["duration_s"]},
+        binding, payload["prompt_size"])
+    if not binding["bound"]:
+        log(f"EVIDENCE UNBOUND: {binding['reason']} - logged to {trend_file.name}, NOT the trend; "
+            "run scripts/maintenance/samantha_weekly.sh (a clean checkout of the deployed commit) for a result that counts")
     for a, r in arm_results.items():
         print("\n" + render_markdown(a, r))
     if summary.get("unexercised_halves"):
@@ -2768,6 +2777,8 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
     if args.record_baseline:
         why = bench_baseline.record_problem(revision, status=status, partial=partial, verdicts=live_cells,
                                             cells=CELLS)
+        if not why and not binding["bound"]:
+            why = f"the evidence is unbound ({binding['reason']}): only a result attributable to a commit can be the bar"
         if not why and not proof["ok"]:
             why = "the instrument proof is not green"
         if not why and (summary.get("errored_halves") or summary.get("unexercised_halves")):

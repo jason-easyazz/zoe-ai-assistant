@@ -6,7 +6,7 @@ tags: [memory, caregiving, children, privacy, provenance, authority, forget, fla
 timestamp: 2026-10-19T00:00:00+08:00
 ---
 
-# Caregiver curation (`memory_curation.py`, `routers/memories_curation.py`, `js/memories-curation.js`, migration 0061)
+# Caregiver curation (`memory_curation.py`, `routers/memories_curation.py`, `js/memories-curation.js`, migration 0066)
 
 Design: [memories-space.md](../architecture/memories-space.md) 2.3, 9 (P7 build status) and 11 (owner answers 2026-10-19).
 Authority wall: [memory-authority.md](memory-authority.md).
@@ -49,7 +49,7 @@ Memories list labelled "Added for you by <name>", and cannot forget or correct t
 
 ## Operator steps
 
-1. Run the migration (0061; the coordinator re-points `down_revision` onto the latest pending head at landing).
+1. Run the migration (0066).
 2. Set `ZOE_MEMORIES_CURATORS=1` in zoe-data's env and restart zoe-data (the flag is read per request; the routes are always
    mounted and answer 404 while it is off).
 3. Make sure each child account has the `child` role (or a `kid` / minor `member_modes` row) in zoe-auth: an account that is

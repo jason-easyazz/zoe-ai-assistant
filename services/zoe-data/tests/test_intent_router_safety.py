@@ -59,8 +59,6 @@ def test_identity_param_defaults_fail_open_to_guest():
     (ci_safe: pure signature/attribute inspection — no DB, no model loads.)"""
     import inspect
 
-    from routers.chat import chat_inject_background, run_openclaw_agent
-
-    for fn in (execute_intent, detect_and_extract_intent, run_openclaw_agent, chat_inject_background):
+    for fn in (execute_intent, detect_and_extract_intent):
         default = inspect.signature(fn).parameters["user_id"].default
         assert default == "guest", f"{fn.__name__} user_id default must be 'guest', got {default!r}"

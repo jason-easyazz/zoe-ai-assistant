@@ -540,10 +540,11 @@ async def test_an_insert_paused_across_a_forget_cannot_resurrect_the_words(fresh
     gate, entered = asyncio.Event(), asyncio.Event()
     real = memory_forgotten.matches
 
-    async def slow_matches(uid, text):
+    async def slow_matches(uid, text, *, strict=False):
+        assert strict, "the keep-words guard must use the fail-closed lookup"
         entered.set()
         await gate.wait()                 # the write is parked between its words check and its insert
-        return await real(uid, text)
+        return await real(uid, text, strict=strict)
 
     monkeypatch.setattr(memory_forgotten, "matches", slow_matches)
     q = "will marlowe need an umbrella this afternoon"
@@ -564,7 +565,8 @@ async def test_an_insert_paused_across_a_user_delete_leaves_nothing(fresh, monke
 
     gate, entered = asyncio.Event(), asyncio.Event()
 
-    async def slow_matches(uid, text):
+    async def slow_matches(uid, text, *, strict=False):
+        assert strict, "the keep-words guard must use the fail-closed lookup"
         entered.set()
         await gate.wait()
         return False

@@ -253,13 +253,16 @@ async def process_text_llm(
         "stream": False,
     }
 
+    async def _llm() -> str:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            resp = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+
     try:
-        # Post-turn pass on the brain's ONE slot: waits out a hot conversation (brain_slot_guard) so it cannot evict it.
-        async with brain_slot_guard.background_slot("person_extractor_llm"):
-            async with httpx.AsyncClient(timeout=25.0) as client:
-                resp = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
-                resp.raise_for_status()
-                raw = resp.json()["choices"][0]["message"]["content"].strip()
+        # Post-turn pass on the brain's ONE slot: waits out a hot conversation and yields to a household turn that starts
+        # while it runs (brain_slot_guard.run_background) so it can neither evict nor delay the conversation.
+        raw = await brain_slot_guard.run_background("person_extractor_llm", _llm)
     except Exception as exc:
         logger.debug("person_extractor_llm: LLM call failed: %s", exc)
         return 0

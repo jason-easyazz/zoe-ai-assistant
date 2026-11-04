@@ -1325,6 +1325,8 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
                     help="a PARTIAL run of the personalisation-hop asks only (S9a,S9b / 9a,9b): seeds just their "
                          "facts, asks just them, status=partial, never complete (default mode only)")
     ap.add_argument("--service-dir", default=None)
+    ap.add_argument("--require-bound", action="store_true",
+                    help="refuse to run unless the result can be attributed to a commit (see samantha_bar.evidence_binding)")
     ap.add_argument("--results", type=Path, default=DEFAULT_RESULTS)
     ap.add_argument("--trend", type=Path, default=DEFAULT_TREND)
     ap.add_argument("--pending", type=Path, default=DEFAULT_PENDING)
@@ -1363,6 +1365,9 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = sb.resolve_service_dir(args.service_dir)
     revision = sb.service_revision(sb.code_checkout_dir())  # the checkout actually served
+    binding = sb.evidence_binding(revision, sb.harness_revision())
+    if args.require_bound and not binding["bound"]:
+        return _refuse(args.results, f"--require-bound: unbound evidence - {binding['reason']}", revision, mode)
     sb.load_source_fallback_markers(sb.code_checkout_dir())
     lock_fd = sb._acquire_lock()  # noqa: F841 — held for the process lifetime
     try:
@@ -1458,7 +1463,8 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
-               "revision": revision, "criteria_sha256": CRITERIA_SHA256, "scratch": stack.public(),
+               "revision": revision, "evidence": binding, "prompt_size": sb.prompt_size_summary(live),
+               "criteria_sha256": CRITERIA_SHA256, "scratch": stack.public(),
                "plan": day_plan(mode, dt.date.today()), "overall": summary, "compare": cmp,
                "baseline_ref": {"path": str(args.baseline), "commit": (cmp or {}).get("baseline_commit")},
                **week, "teardown": td}
@@ -1466,6 +1472,8 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
     if args.record_baseline:
         why = bench_baseline.record_problem(revision, status=status, partial=bool(only), verdicts=verdicts,
                                             cells=ASK_IDS)
+        if not why and not binding["bound"]:
+            why = f"the evidence is unbound ({binding['reason']}): only a result attributable to a commit can be the bar"
         if not why and summary["errors"]:
             why = f"{summary['errors']} ask(s) ERRORED: an errored ask is the instrument, not a result"
         if why:
@@ -1475,13 +1483,16 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
                 "samantha_day_sim", HARNESS_VERSION, verdicts, revision, mode=mode, samples=args.samples,
                 criteria_sha256=CRITERIA_SHA256))
             log(f"baseline recorded: {args.baseline} (mode {mode}, commit {revision.get('commit', '?')[:10]})")
-    args.trend.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.trend, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"ts": payload["finished_at"], "status": status, "mode": mode,
-                             "commit": (revision or {}).get("commit"), "overall": summary["verdict"],
-                             "verdicts": {a["id"]: a["verdict"] for a in asks},
-                             "teardown_proven": td["proven"], "duration_s": payload["duration_s"]},
-                            sort_keys=True) + "\n")
+    trend_file = sb.record_trend(
+        args.trend,
+        {"ts": payload["finished_at"], "status": status, "mode": mode,
+         "commit": (revision or {}).get("commit"), "overall": summary["verdict"],
+         "verdicts": {a["id"]: a["verdict"] for a in asks},
+         "teardown_proven": td["proven"], "duration_s": payload["duration_s"]},
+        binding, payload["prompt_size"])
+    if not binding["bound"]:
+        log(f"EVIDENCE UNBOUND: {binding['reason']} - logged to {trend_file.name}, NOT the trend; "
+            "run scripts/maintenance/samantha_weekly.sh (a clean checkout of the deployed commit) for a result that counts")
     for a in asks:
         log(f"  {a['id']:<4} {a['verdict']:<5} {a['title']}")
     log(f"overall={summary['verdict']} scored={summary['scored']} skipped={summary['skipped']} "

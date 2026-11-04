@@ -2,7 +2,6 @@
 
 Runs as Phase 5 of the dreaming cycle (Sunday 3am) and is also callable via:
   - POST /api/system/agent-sync
-  - MCP tool: zoe_sync_knowledge
 
 Generates:
   - ~/.openclaw/workspace/ZOE_SELF.md (full version, capped at 6000 chars)

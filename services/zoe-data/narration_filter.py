@@ -17,17 +17,27 @@ Kept (never stripped):
   * anything not at the very start of the reply, and anything that is not one of
     the lookup-announcing shapes below.
 
+UNKEPT PROMISE (live 2026-11-03): a reply that is ONLY the announcement ("Let me check that for you right now.") in a
+turn that called NO tool is a promise nothing will keep - the turn is over and nothing was looked up. The stream form
+(``filter_stream``) speaks ``UNKEPT_PROMISE_REPLY`` in its place and logs ``NARRATION_UNKEPT``; with a tool sentinel in the
+turn the announcement stands as before. The pure ``strip_leading_narration`` cannot see sentinels and is unchanged.
+
 At most two leading narration sentences are dropped. Stdlib only. The stream
 form buffers just far enough to see the first sentence, passes tool/thinking
 sentinels straight through, and never reorders or loses text.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import AsyncIterator, Optional
 
+logger = logging.getLogger(__name__)
+
 ENV_FLAG = "ZOE_STRIP_NARRATION"
+# Spoken instead of a lookup announcement that ends a turn in which no tool ran: honest, and it hands the turn back.
+UNKEPT_PROMISE_REPLY = "Sorry, I didn't actually check that. What would you like me to look at?"
 _MAX_DROPPED = 2
 _MAX_SENTENCE_CHARS = 140  # a longer first "sentence" is content, not an announcement
 _PROBE_LIMIT = 200  # decide by here even if no sentence end has arrived
@@ -38,7 +48,7 @@ def enabled() -> bool:
     return (os.environ.get("ZOE_STRIP_NARRATION") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-_FILLER = r"(?:(?:ok(?:ay)?|sure|alright|right|hmm+|um+|well|so|yes|yeah|of\s+course|certainly|absolutely)[\s,.!…-]+)?"
+_FILLER = r"(?:(?:ok(?:ay)?|sure|alright|right|hmm+|um+|well|so|yes|yeah|oh|sorry|of\s+course|certainly|absolutely)[\s,.!…-]+)?"
 _LEAD = (
     r"(?:i(?:['’]ll|\s+will|['’]m\s+going\s+to|\s+am\s+going\s+to|\s+shall|['’]ll\s+just|\s+will\s+just|"
     r"['’]m\s+just\s+going\s+to)"
@@ -121,7 +131,7 @@ def is_narration(sentence: str) -> bool:
 
 
 _FILLER_ONLY_RE = re.compile(
-    r"^\W*(?:ok(?:ay)?|sure|alright|right|hmm+|um+|well|so|yes|yeah|of\s+course|certainly|absolutely)\W*$",
+    r"^\W*(?:ok(?:ay)?|sure|alright|right|hmm+|um+|well|so|yes|yeah|oh|sorry|of\s+course|certainly|absolutely)\W*$",
     re.IGNORECASE,
 )
 
@@ -209,7 +219,7 @@ def strip_leading_narration(text: str) -> str:
 # stream loop ~0.9 s (median) after the sidecar sent it. A sentence can only be an announcement if it STARTS
 # like one, so once the buffered prefix cannot grow into a match of _NARRATION_RE it is released at once:
 # same text, same order, same strips (tests/test_first_sound_narration_early.py proves it), earlier.
-_FILLERS = frozenset({"ok", "okay", "sure", "alright", "right", "well", "so", "yes", "yeah", "of", "course",
+_FILLERS = frozenset({"ok", "okay", "sure", "alright", "right", "well", "so", "yes", "yeah", "oh", "sorry", "of", "course",
                       "certainly", "absolutely"})
 _GERUNDS = frozenset({"checking", "looking", "searching", "digging", "pulling", "having", "taking"})
 _ADV = frozenset({"quickly", "just", "first", "now", "also", "try"})
@@ -281,6 +291,7 @@ class NarrationStripper:
         self._held: list[str] = []  # narration sentences waiting for an answer
         self._dropped = 0
         self._passing = False
+        self.ended_on_narration = False  # finish() returned announcement(s) that nothing followed
 
     def _resolve(self, final: bool) -> str:
         out = ""
@@ -314,6 +325,7 @@ class NarrationStripper:
                 if final:  # the stream ended on the announcement: it IS the reply
                     out += "".join(self._held)
                     self._held, self._passing = [], True
+                    self.ended_on_narration = True
                 break
             out += "".join(self._held) + self._buf
             self._held, self._buf, self._passing = [], "", True
@@ -346,21 +358,33 @@ class NarrationStripper:
 async def filter_stream(
     deltas: AsyncIterator[str],
     sentinel_prefixes: tuple[str, ...] = ("__TOOL__:", "__THINKING__:"),
+    *,
+    tools_visible: bool = True,
 ) -> AsyncIterator[str]:
     """Wrap a brain delta stream: text deltas pass through a
     :class:`NarrationStripper`; tool / thinking sentinels pass through untouched
     and immediately. ``aclose`` is forwarded so an early consumer exit closes
-    the inner turn deterministically."""
+    the inner turn deterministically.
+
+    ``tools_visible`` = the lane streams ``__TOOL__`` sentinels, so "no sentinel" means "no tool ran" and an announcement-only
+    reply is replaced (``UNKEPT_PROMISE_REPLY``). A lane that hides them (Flue without Seam-A streaming) passes False: the
+    absence of a sentinel then proves nothing, and the reply is left as it was."""
     stripper = NarrationStripper()
+    tool_seen = False
     try:
         async for delta in deltas:
             if delta.startswith(sentinel_prefixes):
+                tool_seen = tool_seen or delta.startswith("__TOOL__:")
                 yield delta
                 continue
             out = stripper.feed(delta)
             if out:
                 yield out
         tail = stripper.finish()
+        if tools_visible and stripper.ended_on_narration and not tool_seen and tail.strip():
+            # The whole reply announced a lookup and the turn called no tool: an unkept promise. Say so instead.
+            logger.info("NARRATION_UNKEPT chars=%d", len(tail))
+            tail = UNKEPT_PROMISE_REPLY
         if tail:
             yield tail
     finally:

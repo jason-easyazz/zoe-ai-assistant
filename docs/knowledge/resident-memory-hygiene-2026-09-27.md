@@ -34,6 +34,8 @@ Which libraries the LIVE process holds was read from `/proc/<pid>/maps` (zero co
 | `scipy` / `numpy` | 22 / 20 MB | — | yes |
 | `import main` | **~64 MB total** | *none of the above* | — |
 
+> **2026-10-29: the speaker-ID finding below is HISTORY.** Resemblyzer + torch were retired from zoe-data (server embeds no audio); the first-use cost it measured (+568 MB RSS, 6.1 s) can no longer be paid. Live `ZOE_SPEAKER_MODEL=resnet34` never mapped `libtorch` (checked on the running process).
+
 **Findings.**
 
 - `import main` loads **no** heavy library at all — numpy, torch, resemblyzer, sklearn and

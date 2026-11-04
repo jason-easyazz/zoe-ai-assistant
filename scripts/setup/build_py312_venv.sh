@@ -9,18 +9,11 @@
 # its /usr/bin/python3 ExecStart until an operator applies the systemd DROP-IN
 # described in docs/knowledge/python-312-venv-migration.md.
 #
-# Two-phase install, on purpose. Resemblyzer 0.1.4 declares `webrtcvad` (an
-# sdist whose module imports pkg_resources, gone from setuptools 84 — it builds
-# and then fails to import), the py2 `typing` backport, and an unbounded torch
-# (the PyPI aarch64 wheel is a 454 MB CUDA-13 bundle from 2.9). So the manifest
-# carries webrtcvad-wheels + the exact CPU torch wheel + librosa/scipy, and
-# Resemblyzer itself goes in afterwards with --no-deps.
-#
 # Usage:
 #   scripts/setup/build_py312_venv.sh --dry-run    # print the plan, resolve only, install nothing
 #   scripts/setup/build_py312_venv.sh              # build / converge the venv (idempotent; sync removes strays)
 #   scripts/setup/build_py312_venv.sh --check      # verify an existing venv: interpreter, drift (incl. extraneous), imports
-#   scripts/setup/build_py312_venv.sh --refresh    # deploy.yml: additive install of both phases into an EXISTING venv only
+#   scripts/setup/build_py312_venv.sh --refresh    # deploy.yml: additive install of the manifest into an EXISTING venv only
 # Env: ZOE_PY312_VENV (venv dir), ZOE_PY312_PYTHON (default 3.12),
 #      ZOE_PY312_MIN_MEM_MB (refuse to install below this MemAvailable; default 500).
 set -euo pipefail
@@ -39,8 +32,6 @@ PY_MM="$(sed -nE 's/^([0-9]+\.[0-9]+)(\.[0-9]+)?$/\1/p' <<<"$PY_VERSION")"
 PY_MM="${PY_MM:-$PY_VERSION}"
 MIN_MEM_MB="${ZOE_PY312_MIN_MEM_MB:-500}"
 REQ_FILE="$REPO_ROOT/services/zoe-data/requirements-py312.txt"
-# Phase 2 (see header). Keep in step with the Resemblyzer block of the manifest.
-PHASE2_NO_DEPS=("resemblyzer==0.1.4")
 PLATFORM="aarch64-manylinux_2_31"   # Ubuntu 22.04 / glibc 2.35; wheels tagged 2_28/2_31 both fit
 NICE=(nice -n 15)
 
@@ -82,7 +73,7 @@ step("python", lambda: sys.version.split()[0])
 for m in ("fastapi", "pydantic", "sqlalchemy", "apscheduler", "tzlocal", "pytz", "psycopg2", "asyncpg",
           "alembic", "jwt", "chromadb", "mempalace", "moonshine_voice", "fastembed", "transformers",
           "av", "aiortc", "livekit.rtc", "edge_tts", "pywebpush", "segno", "ddgs", "cloakbrowser", "yaml",
-          "prometheus_client", "webrtcvad", "resemblyzer"):
+          "prometheus_client"):
     step(m, lambda m=m: getattr(importlib.import_module(m), "__version__", "imported"))
 def ws():
     from uvicorn.protocols.websockets.auto import AutoWebSocketsProtocol
@@ -93,9 +84,6 @@ def ws():
     assert mod.endswith("websockets_sansio_impl"), mod
     return mod
 step("uvicorn --ws auto -> websockets-sansio impl", ws)
-def torch_cpu():
-    import torch; assert not torch.cuda.is_available(); return torch.__version__
-step("torch (CPU build, no CUDA)", torch_cpu)
 def head():
     import joblib, numpy as np
     h = joblib.load(os.path.join(root, "services/zoe-data/models/router_head_logreg.joblib"))
@@ -125,7 +113,6 @@ step "B0.7 zoe-data Python $PY_VERSION venv"
 log "uv:        $UV ($("$UV" --version))"
 log "manifest:  $REQ_FILE ($(grep -cvE '^\s*(#|$)' "$REQ_FILE") requirement lines)"
 log "venv:      $VENV_DIR (current: ${VENV_PY} -> $(venv_version | sed 's/^$/absent/'))"
-log "phase 2:   uv pip install --no-deps ${PHASE2_NO_DEPS[*]}"
 log "memory:    $(mem_available_mb) MB available (floor $MIN_MEM_MB)"
 
 case "$MODE" in
@@ -136,7 +123,6 @@ case "$MODE" in
     echo "    $UV venv $VENV_DIR --python $PY_VERSION            # only if absent or not $PY_VERSION"
     echo "    $UV pip compile $REQ_FILE --python $VENV_PY -o <lock>   # resolved closure, installed pins preferred"
     echo "    $UV pip sync --python $VENV_PY <lock>                  # converge: removes anything not in the lock"
-    echo "    $UV pip install --python $VENV_PY --no-deps ${PHASE2_NO_DEPS[*]}"
     echo "  then the import smoke, then (operator, separately) the systemd drop-in."
     step "resolving the manifest for cp$PY_VERSION / $PLATFORM (wheel metadata only)"
     tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
@@ -146,19 +132,6 @@ case "$MODE" in
     else
       die "manifest does NOT resolve for cp$PY_VERSION $PLATFORM — see docs/knowledge/python-312-venv-migration.md"
     fi
-    # Phase 2 is not in the manifest, so the resolve above never sees it; resolve it
-    # on its own, --no-deps, for the same target — otherwise an unavailable pin
-    # passes this dry-run (and CI's deps-resolvable) and fails the real build (#1706).
-    step "resolving phase 2 (--no-deps) for cp$PY_VERSION / $PLATFORM"
-    # (-o a real file, not /dev/null: uv writes via a temp file BESIDE its output.)
-    p2="$(mktemp)"; p2_out="$(mktemp)"; trap 'rm -f "$tmp" "$p2" "$p2_out"' EXIT
-    printf '%s\n' "${PHASE2_NO_DEPS[@]}" >"$p2"
-    if "${NICE[@]}" "$UV" pip compile "$p2" --no-deps --python-version "$PY_VERSION" --python-platform "$PLATFORM" \
-         --no-header --quiet -o "$p2_out"; then
-      ok "phase 2 resolvable: ${PHASE2_NO_DEPS[*]}"
-    else
-      die "phase 2 (${PHASE2_NO_DEPS[*]}) does NOT resolve for cp$PY_VERSION $PLATFORM"
-    fi
     ;;
   check)
     step "check"
@@ -167,25 +140,21 @@ case "$MODE" in
     ok "interpreter $("$VENV_PY" -c 'import sys; print(sys.version.split()[0], sys.executable)')"
     # Drift is FATAL here: most smoke imports assert no version, so a warning would
     # let --check certify a knowingly drifted venv right before cutover (#1706).
-    # The checker also verifies the torch direct-URL pin (version + PEP 610 source).
+    # The checker also verifies any direct-URL pin (version + PEP 610 source).
     drift="$REPO_ROOT/scripts/maintenance/requirements_drift_check.py"
     [[ -f "$drift" ]] || die "drift checker missing: $drift"
-    # Phase 2 is installed from PHASE2_NO_DEPS, not the manifest, so it is passed as
-    # --no-deps: version-checked, allowed, its declared deps NOT walked (#1706).
-    # --extraneous: anything installed that neither phase asks for is drift too —
-    # a leftover (e.g. the un-importable webrtcvad sdist, or pytest from gate 1)
+    # --extraneous: anything installed that the manifest does not ask for is drift too —
+    # a leftover (e.g. torch/resemblyzer from before they were retired, or pytest from gate 1)
     # would otherwise be certified, since the smoke cannot see it (#1706).
-    phase2_req="$(mktemp)"; trap 'rm -f "$phase2_req"' EXIT
-    printf '%s\n' "${PHASE2_NO_DEPS[@]}" >"$phase2_req"
-    log "drift (manifest + phase 2 vs venv, extraneous included):"
-    "${NICE[@]}" "$VENV_PY" "$drift" "$REQ_FILE" --no-deps "$phase2_req" --extraneous --quiet \
+    log "drift (manifest vs venv, extraneous included):"
+    "${NICE[@]}" "$VENV_PY" "$drift" "$REQ_FILE" --extraneous --quiet \
       || die "venv drift (MISMATCH / MISSING / EXTRANEOUS / DAMAGED above) — rebuild (no args) to converge"
     log "import smoke:"
     smoke && ok "smoke passed" || die "smoke FAILED"
     ;;
   refresh)
     # The deploy path (.github/workflows/deploy.yml, once the service runs this
-    # venv): the same two install phases as a build, ADDITIVE (`uv pip install`,
+    # venv): the same manifest install as a build, ADDITIVE (`uv pip install`,
     # not the build's freeze→compile→sync), and nothing else. Additive on purpose:
     # a deploy installs or moves the manifest's pins but never uninstalls from the
     # live interpreter — pruning strays is the operator's build (no args), whose
@@ -195,12 +164,12 @@ case "$MODE" in
     # deploy should paper over by building 1.9 GB. No memory floor — the deploy
     # job's own headroom gate owns that, and an already-satisfied manifest is a
     # no-op audit. No import smoke — the deploy's /health loop after the restart
-    # is the runtime proof, and the smoke's torch/chromadb imports are a memory
+    # is the runtime proof, and the smoke's chromadb imports are a memory
     # transient the live box should not pay on every deploy.
     step "refresh (deploy)"
     [[ -x "$VENV_PY" ]] || die "no venv at $VENV_DIR — build it first (no args); --refresh never creates one"
     v="$(venv_version)"; [[ "$v" == "$PY_MM" ]] || die "venv is Python $v, expected $PY_MM"
-    # --offline FIRST, measured: without it uv re-fetches the torch direct-URL
+    # --offline FIRST, measured: without it uv re-fetches any direct-URL
     # wheel on every run even when that exact wheel is already installed (a dead
     # network fails an otherwise no-op deploy), while --offline audits the
     # installed set in milliseconds. Only when the offline pass cannot satisfy
@@ -212,10 +181,8 @@ case "$MODE" in
         || { log "offline pass could not satisfy the pins — installing from the network"
              "${NICE[@]}" "$UV" pip install --python "$VENV_PY" "$@"; }
     }
-    log "phase 1: manifest"
+    log "manifest"
     refresh_phase -r "$REQ_FILE"
-    log "phase 2: ${PHASE2_NO_DEPS[*]} --no-deps"
-    refresh_phase --no-deps "${PHASE2_NO_DEPS[@]}"
     # WARM the semantic router's embedding model while the deploy still has
     # network. fastembed 0.8.1 re-resolves `BAAI/bge-small-en-v1.5` to the
     # canonical repo id, whose cache dir differs in CASE from 0.8.0's, so without
@@ -284,7 +251,7 @@ PY
       "${NICE[@]}" "$UV" venv "$VENV_DIR" --python "$PY_VERSION"
       ok "created $VENV_DIR"
     fi
-    # Phase 1 CONVERGES, it does not just add: `uv pip install -r` never removes a
+    # The build CONVERGES, it does not just add: `uv pip install -r` never removes a
     # distribution, so a package dropped from the manifest (or left by an earlier
     # experiment) would keep importing. `uv pip sync` removes everything not in its
     # input — but sync installs its input LITERALLY (no dependency resolution), so
@@ -294,7 +261,7 @@ PY
     # installed unless the manifest moved) -> sync that lock.
     lock="$(mktemp)"; damaged_out="$(mktemp)"; trap 'rm -f "$lock" "$damaged_out"' EXIT
     "${NICE[@]}" "$UV" pip freeze --python "$VENV_PY" >"$lock"
-    log "phase 1: resolve the manifest for this interpreter, then sync to it"
+    log "resolve the manifest for this interpreter, then sync to it"
     "${NICE[@]}" "$UV" pip compile "$REQ_FILE" --python "$VENV_PY" --no-header --quiet -o "$lock"
     "${NICE[@]}" "$UV" pip sync --python "$VENV_PY" "$lock"
     # Removing a distribution deletes every path in ITS RECORD — including paths
@@ -312,10 +279,6 @@ PY
       reinstall=(); for d in "${damaged[@]}"; do reinstall+=(--reinstall-package "$d"); done
       "${NICE[@]}" "$UV" pip sync --python "$VENV_PY" "${reinstall[@]}" "$lock"
     fi
-    # ORDER MATTERS: phase 2 goes in AFTER the sync, because sync removes anything
-    # outside the lock — including resemblyzer itself.
-    log "phase 2: ${PHASE2_NO_DEPS[*]} --no-deps"
-    "${NICE[@]}" "$UV" pip install --python "$VENV_PY" --no-deps "${PHASE2_NO_DEPS[@]}"
     log "import smoke:"
     smoke && ok "smoke passed" || die "smoke FAILED — the venv is built but NOT fit to run zoe-data"
     ok "venv ready: $VENV_PY  ($(du -sh "$VENV_DIR" | cut -f1))"

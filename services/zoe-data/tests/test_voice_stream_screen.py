@@ -65,6 +65,7 @@ def _wire(monkeypatch, agent):
     monkeypatch.setitem(sys.modules, "skybridge_service", types.SimpleNamespace(resolve_skybridge_request=none))
     monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", none)
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")   # route to the mocked zoe_agent
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASE", "Let me check.")
     monkeypatch.setitem(sys.modules, "zoe_agent", types.SimpleNamespace(run_zoe_agent_streaming=agent))
     return bc

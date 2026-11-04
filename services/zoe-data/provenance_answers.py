@@ -1052,11 +1052,12 @@ async def evidence_for_row(user_id: str, row_id: str, *, svc: Any = None) -> Evi
     try:
         import memory_forgotten
 
-        if await memory_forgotten.matches(user_id, ref.text or ""):
+        if await memory_forgotten.matches(user_id, ref.text or "", strict=True):
             ev.refusal = FORGOTTEN_REPLY
             return ev
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - fail CLOSED (incl. LedgerUnavailable): a source we cannot vet is not quoted
+        ev.refusal = FORGOTTEN_REPLY
+        return ev
     if not _owns(meta, user_id):
         ev.refusal = NOT_YOURS_REPLY
         return ev
@@ -1094,10 +1095,10 @@ async def evidence_for_turn(user_id: str, turn_id: str) -> Evidence:
     try:
         import memory_forgotten
 
-        if await memory_forgotten.matches(user_id, text):
+        if await memory_forgotten.matches(user_id, text, strict=True):
             return Evidence(refusal=FORGOTTEN_REPLY)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - fail CLOSED (incl. LedgerUnavailable): a quote we cannot vet is not served
+        return Evidence(refusal=FORGOTTEN_REPLY)
     return Evidence(turn_id=turn_id, quote=trim(text, QUOTE_MAX_CHARS), said_at=float(said_at), wording=text,
                     sensitive=sensitive_class(text))
 
@@ -1528,6 +1529,46 @@ async def _own_names(user_id: str) -> frozenset:
         return frozenset()
 
 
+# ── "what do you know about <contact>" (person_profile, ZOE_PERSON_PROFILE_ANSWERS, default OFF) ──────────────────────────
+
+_TELL_ABOUT_RE = re.compile(
+    rf"^\s*{_LEAD}(?:(?:can|could|will|would)\s+you\s+)?tell\s+me\s+(?:a\s+(?:bit|little)\s+|more\s+)?about\s+"
+    rf"(?P<name>[A-Za-z][A-Za-z'’\-]{{1,30}}(?:\s+[A-Za-z][A-Za-z'’\-]{{1,30}})?){_TAIL}", re.IGNORECASE)
+
+
+async def person_answer(name: str, user_id: str, *, channel: Optional[str] = None, speaker_verified: Optional[bool] = None,
+                        svc: Any = None, refuse_unverified: bool = True) -> Optional[str]:
+    """The profile answer for one of the asker's OWN contacts, or None (flag off, nobody by that name: the brain answers as
+    before). Exact / whole-token names only, never a prefix guess; two people by that name -> one question. A speaker the voice
+    gate rejected is answered BEFORE the roster is read (refused for the explicit "what do you know about X", left to the brain
+    for "tell me about X"), so the reply never says whether a name is a contact. NEVER raises."""
+    try:
+        import person_profile as pp
+
+        if not pp.enabled():
+            return None
+        if speaker_verified is False:
+            return UNVERIFIED_SPEAKER_REPLY if refuse_unverified else None
+        from db_pool import get_db_ctx  # type: ignore[import]
+        import people_graph as pg
+
+        async with get_db_ctx() as db:
+            res = await pg.resolve_person(db, user_id, name, allow_prefix=False)
+            if res.status == "none":
+                return None
+            if res.ambiguous:
+                return pp.ambiguous_reply([m.name for m in res.matches])
+            try:
+                prof = await pp.compose(db, user_id, res.person_id, svc=svc)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("provenance_answers: profile read failed (%s)", type(exc).__name__)
+                return STORE_DOWN_REPLY
+        return None if prof is None else pp.render(prof, voice=(channel or "") in VOICE_CHANNELS)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("provenance_answers: person answer failed (non-fatal): %s", type(exc).__name__)
+        return None
+
+
 # ── the entry point ───────────────────────────────────────────────────────────
 
 async def handle(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None,
@@ -1578,6 +1619,11 @@ async def handle(text: str, user_id: str, session_id: str = "", *, channel: Opti
 
         ask = parse_stateless(t)
         if ask is None:
+            m = _TELL_ABOUT_RE.match(t)
+            # "tell me about <name>": answered only for one of the asker's own contacts (else the brain, as before)
+            if m and not guest:
+                return await person_answer(m.group("name").strip(), uid, channel=channel, speaker_verified=speaker_verified,
+                                           svc=svc, refuse_unverified=False)
             return None
         if guest:
             return GUEST_ABOUT_OTHER_REPLY if ask.kind == "know_other" else GUEST_REPLY
@@ -1591,7 +1637,7 @@ async def handle(text: str, user_id: str, session_id: str = "", *, channel: Opti
             elif first in await account_names() and first != "zoe":
                 return OTHER_MEMBER_REPLY
             else:
-                return None
+                return await person_answer(ask.name, uid, channel=channel, speaker_verified=speaker_verified, svc=svc)
         if speaker_verified is False:
             return UNVERIFIED_SPEAKER_REPLY
         if ask.kind == "explain":

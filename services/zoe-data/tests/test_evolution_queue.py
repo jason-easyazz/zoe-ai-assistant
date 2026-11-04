@@ -511,18 +511,12 @@ def test_the_legacy_routes_move_through_the_queue(client, db):
 
 def test_approve_is_a_decision_and_a_retry_reopens(client, db, monkeypatch):
     """Approving changes no status (a decision on an open row); a rejected (board-cancelled) proposal comes back only with the
-    explicit ``retry: true``, as a REOPEN through the queue. Nothing reaches Multica or Hermes (both faked)."""
-    import routers.system as system
-
+    explicit ``retry: true``, as a REOPEN through the queue. Nothing reaches Multica (faked)."""
     async def no_board(*_a, **_k):
         return None
 
-    async def reviewed(_proposal):
-        return True, "APPROVED"
-
     monkeypatch.setitem(sys.modules, "multica_client", types.SimpleNamespace(
         sync_evolution_proposal_to_multica=no_board, update_multica_issue_on_proposal_status_change=no_board))
-    monkeypatch.setattr(system, "_hermes_review_proposal", reviewed)
     pid = new(db, change_class="code", component="chat", source="evolution_notice:user_issue_report")
     act = lambda body: client.post(f"/api/agent/evolution/proposals/{pid}/action", json=body)
     assert act({"action": "approve"}).status_code == 200

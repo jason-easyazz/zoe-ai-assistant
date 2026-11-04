@@ -101,7 +101,7 @@ zpid=$(ss -tlnp 2>/dev/null | awk '/:8000 /{print $NF}' | grep -oE 'pid=[0-9]+' 
 if [ -n "${zpid:-}" ] && [ -r "/proc/$zpid/environ" ]; then
   env_of() { tr '\0' '\n' < "/proc/$zpid/environ" 2>/dev/null | grep "^$1=" | cut -d= -f2-; }
   be=$(env_of ZOE_BRAIN_BACKEND); dim "zoe-data pid=$zpid"
-  ok "ZOE_BRAIN_BACKEND=${be:-<unset→'core' default>}"
+  ok "ZOE_BRAIN_BACKEND=${be:-<unset→'flue' default>}"
   for f in ZOE_ROUTER_HEAD ZOE_EXPERT_MODE ZOE_FLUE_STREAM_ENABLED ZOE_MULTICA \
            ZOE_INTENT_DISPATCH_REQUIRE_TOKEN ZOE_SEAM_RECALL_INJECT ZOE_SEAM_CONTINUITY_INJECT \
            ZOE_ROUTER_SELFTRAIN; do

@@ -216,7 +216,7 @@
                     const updating = installing.has(id);
                     const updateAvail = !!c.update_available;
                     const tile = document.createElement('div');
-                    const isHighlighted = highlight === id || (highlight === 'openclaw' && id === 'openclaw');
+                    const isHighlighted = highlight === id;
                     tile.className = 'tile' + (isHighlighted ? ' highlight' : '');
                     const action = canInstall(c)
                         ? (updateAvail

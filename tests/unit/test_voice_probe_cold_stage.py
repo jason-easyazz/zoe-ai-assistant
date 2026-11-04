@@ -39,6 +39,24 @@ _ENV_AT_IMPORT = {k: os.environ.get(k) for k in _DIRECT_ENV_WRITES}
 
 
 @pytest.fixture(autouse=True)
+def _isolate_warm_speaker(monkeypatch):
+    """measure() runs the real warm_speaker.reset(), which clears its module globals; give every test its own copies
+    (monkeypatch restores the originals) so no later test depends on execution order."""
+    try:
+        import warm_speaker
+    except Exception:  # noqa: BLE001 - not importable in this lane: nothing to isolate
+        yield
+        return
+    for name in ("_mem", "_last_written"):
+        if isinstance(getattr(warm_speaker, name, None), dict):
+            monkeypatch.setattr(warm_speaker, name, dict(getattr(warm_speaker, name)))
+    for name in ("_loaded", "_save_failed"):
+        if hasattr(warm_speaker, name):
+            monkeypatch.setattr(warm_speaker, name, getattr(warm_speaker, name))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _restore_direct_env_writes():
     """measure() / main() set these with os.environ directly; snapshot and restore them around EVERY test so a later
     test in the lane never inherits streaming-on or a probe traffic class (test-order independence)."""
@@ -52,7 +70,7 @@ def _restore_direct_env_writes():
             else:
                 os.environ[k] = v
 
-HIT = {"status": "ok", "warm": "warmed", "first_prompt_n": 120, "first_cache_n": 3400, "cache_frac": 0.966,
+HIT = {"status": "ok", "warm": "warmed", "memo_restart": True, "first_prompt_n": 120, "first_cache_n": 3400, "cache_frac": 0.966,
        "ttft_ms": 1300.0}
 MISS = {**HIT, "first_prompt_n": 3500, "first_cache_n": 0, "cache_frac": 0.0, "ttft_ms": 6100.0}
 BASE = {"cold_first_turn": {"ttft_ms": 1250.0}}
@@ -321,6 +339,38 @@ def test_the_quiet_gate_keeps_the_landing_exemption(monkeypatch):
     monkeypatch.delenv("ZOE_HARNESS_LANDING")
     assert not hq.check("measure_cold_first_turn", now=noon, panel=lambda: True).allowed
     assert mcf._quiet_gate.__code__.co_names.count("check") == 1   # the stage asks THIS gate, not a copy
+
+
+def test_the_cold_warm_gets_its_member_from_the_persisted_memo_not_the_argument(monkeypatch):
+    """2026-10-28: the stage told the warm the member explicitly, so it could not see a speaker memo that did not survive a
+    restart. The warm's member now comes only from a simulated-restart read of the memo (warm_speaker), never from --user."""
+    import warm_speaker
+
+    order = _fake_service(monkeypatch, prompt_n=100, cache_n=3400)
+    seen = []
+    real_get = warm_speaker.get
+    monkeypatch.setattr(warm_speaker, "get", lambda panel, **k: seen.append(panel) or real_get(panel, **k))
+    saved = os.environ.get("ZOE_WARM_SPEAKER_STATE")
+    r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
+    assert seen == [mcf.PROBE_PANEL] and r["memo_restart"] is True and "warm:jason" in order
+    assert _judge(r)["status"] == "pass"
+    assert os.environ.get("ZOE_WARM_SPEAKER_STATE") == saved, "the throwaway state override must not leak"
+
+
+def test_negative_control_a_memo_that_does_not_survive_the_restart_is_an_error_and_warms_nothing(monkeypatch):
+    import warm_speaker
+
+    order = _fake_service(monkeypatch, prompt_n=100, cache_n=3400)
+    monkeypatch.setattr(warm_speaker, "get", lambda panel, **k: "")        # the persistence is broken
+    r = asyncio.run(mcf.measure("jason", 0.0, 0.0))
+    assert r["status"] == "error" and "did not survive" in r["reason"]
+    assert not any(o.startswith("warm:") for o in order) and "turn" not in order
+    assert _judge(r)["status"] == "error"
+
+
+def test_a_measurement_that_skipped_the_restart_simulation_is_not_a_pass():
+    assert _judge({k: v for k, v in HIT.items() if k != "memo_restart"})["status"] == "error"
+    assert _judge({**HIT, "memo_restart": False})["status"] == "error"
 
 
 def test_zz_no_direct_env_write_leaks_past_a_measurement():

@@ -287,6 +287,41 @@ did not take — check `docker exec zoe-omnigent id` before anything else.
 If omnigent cannot write any of the four state dirs, that volume's chown was missed —
 revert by removing `user:` and restarting while it is investigated.
 
+## The live checkout is mounted READ-ONLY (since 2026-11-03)
+
+After the 2026-11-02 incident (a cross-review `git checkout FETCH_HEAD`'d an unmerged PR in
+the then-rw `/workspace`, which IS `/home/zoe/assistant`; ledger #2255), the container sees
+the live checkout read-only at both `/workspace` and `/home/zoe/assistant`; only
+`.git/{objects,refs,logs,worktrees}` are re-mounted rw, which is what work in a linked
+worktree under `~/.worktrees` needs. Agents build ONLY in `~/.worktrees/<name>`
+(`git -C /home/zoe/assistant worktree add …`, fetch with `--no-write-fetch-head`). Contract,
+evidence and costs: [docs/knowledge/omnigent-cross-review.md](../../docs/knowledge/omnigent-cross-review.md)
+→ *The live checkout is read-only*.
+
+Precondition: the four `.git` bind sources must EXIST before `up`, or docker creates them
+root-owned. On the live checkout they always do; on a fresh clone:
+`mkdir -p "$REPO/.git/worktrees" "$REPO/.git/logs"`.
+
+Apply / re-apply (a compose-only change: recreate, no image rebuild; it kills any session in
+flight, so do it between reviews):
+
+```bash
+docker compose -p omnigent --env-file /home/zoe/assistant/.env \
+  -f /home/zoe/assistant/modules/omnigent/docker-compose.module.yml up -d --force-recreate omnigent
+```
+
+Verify — the mounts, then the behaviour (both writes MUST fail):
+
+```bash
+docker inspect zoe-omnigent --format '{{range .Mounts}}{{.Destination}} rw={{.RW}}{{"\n"}}{{end}}' \
+  | grep -E '^/workspace|^/home/zoe/assistant'
+#   expect: /workspace rw=false, /home/zoe/assistant rw=false, /workspace/.mcp.json rw=false,
+#           and rw=true ONLY for /home/zoe/assistant/.git/{objects,refs,logs,worktrees}
+docker exec zoe-omnigent sh -c 'touch /workspace/.rotest' 2>&1 | grep -q 'Read-only' && echo "/workspace ro ok"
+docker exec zoe-omnigent sh -c 'touch /home/zoe/assistant/.git/HEAD.rotest' 2>&1 | grep -q 'Read-only' && echo ".git root ro ok"
+docker exec zoe-omnigent sh -c 'touch /home/zoe/.worktrees/.rwtest && rm /home/zoe/.worktrees/.rwtest' && echo "worktrees rw ok"
+```
+
 ## Auth — OAuth subscriptions (not API keys)
 The harnesses authenticate with the **subscription logins** (Claude Pro/Max, ChatGPT/Codex,
 Cursor), not metered API keys.

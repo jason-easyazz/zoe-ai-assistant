@@ -70,7 +70,7 @@ class _Sqlite:
 
 
 def _migration():
-    spec = importlib.util.spec_from_file_location("mig_0061", SVC / "alembic/versions/0061_memory_curation.py")
+    spec = importlib.util.spec_from_file_location("mig_0066", SVC / "alembic/versions/0066_memory_curation.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -558,5 +558,5 @@ def test_migration_runs_twice_on_sqlite_and_chains_onto_one_head():
             revs.add(r.group(1))
         if d:
             downs.add(d.group(1))
-    assert mod.revision == "0061" and mod.down_revision in revs
+    assert mod.revision == "0066" and mod.down_revision in revs
     assert len(revs - downs) == 1

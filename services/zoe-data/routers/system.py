@@ -21,7 +21,6 @@ from auth import (
     require_internal_token,
 )
 from database import get_db
-from hermes_http import hermes_auth_headers
 from research_evidence import (
     WEB_LOOKUP_ERROR,
     WEB_SEARCH_TOOL_DEADLINE_S,
@@ -32,16 +31,6 @@ from research_evidence import (
     web_lookup_status,
     web_search_tool_enabled,
     web_search_tool_payload,
-)
-from openclaw_maintenance import (
-    fetch_gateway_status,
-    fetch_npm_latest_version,
-    maybe_create_update_notification,
-    notify_users_with_notify_preference,
-    process_auto_update_users,
-    read_installed_version_sync,
-    run_npm_upgrade_openclaw,
-    version_newer,
 )
 from system_updates import (
     build_updates_snapshot,
@@ -108,7 +97,7 @@ async def get_platform():
     return {
         "platform": "zoe-data",
         "version": "1.0.0",
-        "engine": "hermes",
+        "engine": "flue",
         "architecture": "aarch64",
     }
 
@@ -121,22 +110,6 @@ async def health_check(db=Depends(get_db)):
         return {"status": "healthy", "database": "ok"}
     except Exception as e:
         return {"status": "unhealthy", "database": str(e)}
-
-
-@router.get("/modules/enabled")
-async def get_enabled_modules():
-    return {
-        "modules": [
-            {"id": "calendar", "name": "Calendar", "enabled": True},
-            {"id": "lists", "name": "Lists", "enabled": True},
-            {"id": "reminders", "name": "Reminders", "enabled": True},
-            {"id": "notes", "name": "Notes", "enabled": True},
-            {"id": "journal", "name": "Journal", "enabled": True},
-            {"id": "weather", "name": "Weather", "enabled": True},
-            {"id": "people", "name": "People", "enabled": True},
-            {"id": "transactions", "name": "Transactions", "enabled": True},
-        ]
-    }
 
 
 @router.get("/status")
@@ -208,7 +181,7 @@ async def get_system_status(
         "llama_model": llama_model,
         "ha_bridge": ha_bridge_status,
         "platform": "aarch64",
-        "engine": "hermes",
+        "engine": "flue",
         "ui_orchestrator": {
             "pending_actions": ui_actions_pending,
             "online_panels_30s": panels_online,
@@ -392,320 +365,6 @@ async def post_pi_hybrid_production_label(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-def _load_skills_and_cron():
-    skills = []
-    skills_dir = os.path.expanduser("~/.openclaw/workspace/skills")
-    if os.path.isdir(skills_dir):
-        for entry in sorted(os.listdir(skills_dir)):
-            skill_path = os.path.join(skills_dir, entry)
-            if os.path.isdir(skill_path):
-                skill_file = None
-                for name in ("SKILL.md", "skill.md"):
-                    p = os.path.join(skill_path, name)
-                    if os.path.exists(p):
-                        skill_file = p
-                        break
-                desc = ""
-                if skill_file:
-                    with open(skill_file, "r", encoding="utf-8", errors="replace") as f:
-                        lines = f.readlines()
-                        for line in lines[1:6]:
-                            line = line.strip()
-                            if line and not line.startswith("#"):
-                                desc = line
-                                break
-                skills.append({"id": entry, "description": desc})
-
-    cron_jobs = []
-    cron_path = os.path.expanduser("~/.openclaw/cron/jobs.json")
-    if os.path.exists(cron_path):
-        with open(cron_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            for job in data.get("jobs", []):
-                state = job.get("state", {})
-                cron_jobs.append(
-                    {
-                        "name": job.get("name"),
-                        "enabled": job.get("enabled", False),
-                        "schedule": job.get("schedule", {}).get("expr"),
-                        "last_status": state.get("lastRunStatus"),
-                        "last_error": state.get("lastError"),
-                        "consecutive_errors": state.get("consecutiveErrors", 0),
-                    }
-                )
-    return skills, cron_jobs
-
-
-_DEFAULT_OPENCLAW_PREFS = {"openclaw_auto_update": "notify"}
-
-
-class HermesProfilesRequest(BaseModel):
-    profiles: list[dict[str, Any]]
-    confirm_paid_auto: bool = False
-
-
-class HermesProfilesApplyRequest(BaseModel):
-    profiles: list[dict[str, Any]] | None = None
-    confirm_paid_auto: bool = False
-    restart: bool = False
-    force_restart: bool = False
-
-
-class HermesProfilesRollbackRequest(BaseModel):
-    backup_dir: str | None = None
-
-
-def _hermes_profile_error(exc: Exception) -> HTTPException:
-    if isinstance(exc, RuntimeError):
-        status = 409
-    elif isinstance(exc, OSError):
-        status = 503
-    else:
-        status = 400
-    return HTTPException(status_code=status, detail=str(exc))
-
-
-@router.get("/hermes/model-profiles/status")
-async def get_hermes_model_profiles_status(user: dict = Depends(require_admin)):
-    from hermes_model_profiles import count_running_workers, draft_path
-
-    try:
-        return {
-            "ok": True,
-            "running_workers": count_running_workers(),
-            "draft_exists": draft_path().exists(),
-        }
-    except OSError as exc:
-        raise _hermes_profile_error(exc) from exc
-
-
-@router.get("/hermes/model-profiles")
-async def get_hermes_model_profiles(user: dict = Depends(require_admin)):
-    from hermes_model_profiles import count_running_workers, list_profiles, load_draft
-
-    try:
-        draft = load_draft()
-        profiles = list_profiles()
-        running_workers = count_running_workers()
-    except (ValueError, TypeError, OSError) as exc:
-        raise _hermes_profile_error(exc) from exc
-    return {
-        "profiles": profiles,
-        "draft": draft,
-        "running_workers": running_workers,
-    }
-
-
-@router.put("/hermes/model-profiles/draft")
-async def put_hermes_model_profiles_draft(
-    body: HermesProfilesRequest,
-    user: dict = Depends(require_admin),
-):
-    from hermes_model_profiles import save_draft
-
-    try:
-        return save_draft(body.profiles, confirm_paid_auto=body.confirm_paid_auto)
-    except (ValueError, TypeError, OSError) as exc:
-        raise _hermes_profile_error(exc) from exc
-
-
-@router.post("/hermes/model-profiles/validate")
-async def post_hermes_model_profiles_validate(
-    body: HermesProfilesRequest,
-    user: dict = Depends(require_admin),
-):
-    from hermes_model_profiles import build_diff
-
-    try:
-        return build_diff(body.profiles, confirm_paid_auto=body.confirm_paid_auto)
-    except (ValueError, TypeError, OSError) as exc:
-        raise _hermes_profile_error(exc) from exc
-
-
-@router.post("/hermes/model-profiles/apply")
-async def post_hermes_model_profiles_apply(
-    body: HermesProfilesApplyRequest,
-    user: dict = Depends(require_admin),
-):
-    from hermes_model_profiles import apply_profiles
-
-    actor = str(user.get("user_id") or user.get("username") or "unknown")
-    try:
-        return apply_profiles(
-            body.profiles,
-            actor=actor,
-            confirm_paid_auto=body.confirm_paid_auto,
-            restart=body.restart,
-            force_restart=body.force_restart,
-        )
-    except (RuntimeError, ValueError, TypeError, OSError) as exc:
-        raise _hermes_profile_error(exc) from exc
-
-
-@router.post("/hermes/model-profiles/rollback")
-async def post_hermes_model_profiles_rollback(
-    body: HermesProfilesRollbackRequest,
-    user: dict = Depends(require_admin),
-):
-    from hermes_model_profiles import rollback_profiles
-
-    actor = str(user.get("user_id") or user.get("username") or "unknown")
-    try:
-        return rollback_profiles(body.backup_dir, actor=actor)
-    except (ValueError, TypeError, OSError) as exc:
-        raise _hermes_profile_error(exc) from exc
-
-
-@router.get("/openclaw/preferences")
-async def get_openclaw_preferences(
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    user_id = user["user_id"]
-    cursor = await db.execute(
-        "SELECT prefs FROM user_preferences WHERE user_id = ?",
-        (user_id,),
-    )
-    row = await cursor.fetchone()
-    merged = dict(_DEFAULT_OPENCLAW_PREFS)
-    if row:
-        try:
-            raw = row["prefs"]
-            parsed = json.loads(raw) if isinstance(raw, str) else raw
-            if isinstance(parsed, dict):
-                merged.update(parsed)
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return {"prefs": merged}
-
-
-@router.put("/openclaw/preferences")
-async def put_openclaw_preferences(
-    request: Request,
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    body = await request.json()
-    incoming = body.get("prefs") if isinstance(body.get("prefs"), dict) else body
-    if not isinstance(incoming, dict):
-        raise HTTPException(status_code=400, detail="Expected JSON object with prefs")
-
-    user_id = user["user_id"]
-    cursor = await db.execute(
-        "SELECT prefs FROM user_preferences WHERE user_id = ?",
-        (user_id,),
-    )
-    row = await cursor.fetchone()
-    merged = dict(_DEFAULT_OPENCLAW_PREFS)
-    if row:
-        try:
-            raw = row["prefs"]
-            parsed = json.loads(raw) if isinstance(raw, str) else raw
-            if isinstance(parsed, dict):
-                merged.update(parsed)
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    if "openclaw_auto_update" in incoming:
-        mode = incoming["openclaw_auto_update"]
-        if mode not in ("off", "notify", "auto"):
-            raise HTTPException(status_code=400, detail="openclaw_auto_update must be off, notify, or auto")
-        merged["openclaw_auto_update"] = mode
-
-    await db.execute(
-        """INSERT INTO user_preferences (user_id, prefs, updated_at)
-           VALUES (?, ?, NOW())
-           ON CONFLICT(user_id) DO UPDATE SET prefs = excluded.prefs, updated_at = NOW()""",
-        (user_id, json.dumps(merged)),
-    )
-    await db.commit()
-    return {"prefs": merged}
-
-
-@router.post("/openclaw/upgrade")
-async def post_openclaw_upgrade(
-    request: Request,
-    user: dict = Depends(require_admin),
-):
-    if os.environ.get("OPENCLAW_UPGRADE_ENABLED", "true").lower() != "true":
-        raise HTTPException(status_code=403, detail="OpenClaw upgrades are disabled on this server")
-
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
-    if not body.get("confirm"):
-        raise HTTPException(status_code=400, detail='Set {"confirm": true} to run the upgrade')
-
-    ok, log_tail = await run_npm_upgrade_openclaw()
-    new_ver = read_installed_version_sync()
-    if not ok:
-        raise HTTPException(status_code=500, detail={"message": "Upgrade failed", "log": log_tail[-12000:]})
-    return {"ok": True, "installed_version": new_ver, "log": log_tail[-12000:]}
-
-
-@router.get("/openclaw")
-async def get_openclaw_info(
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-    check_latest: bool = Query(False),
-):
-    """OpenClaw brain info: skills, cron, gateway, versions."""
-    skills, cron_jobs = _load_skills_and_cron()
-    gateway_status, gateway_model = await fetch_gateway_status()
-    installed = read_installed_version_sync()
-
-    latest_version = None
-    update_available = False
-    if check_latest:
-        latest_version = await fetch_npm_latest_version()
-        if latest_version and installed:
-            update_available = version_newer(latest_version, installed)
-        elif latest_version and not installed:
-            update_available = True
-
-        if check_latest and latest_version and update_available:
-            await maybe_create_update_notification(db, user["user_id"], installed, latest_version)
-
-    return {
-        "skills": skills,
-        "cron_jobs": cron_jobs,
-        "gateway_status": gateway_status,
-        "model": gateway_model,
-        "gateway_model": gateway_model,
-        "installed_version": installed,
-        "latest_version": latest_version if check_latest else None,
-        "update_available": update_available if check_latest else None,
-    }
-
-
-async def run_scheduled_openclaw_version_check():
-    """Background: daily npm check, notify users, optional auto-upgrade."""
-    try:
-        # get_db_ctx, not `async for db in get_db()`: the `break` leaked the
-        # pooled connection (#953 / the 2026-07-03 pool drain).
-        from db_pool import get_db_ctx
-
-        async with get_db_ctx() as db:
-            latest = await fetch_npm_latest_version()
-            if latest:
-                await notify_users_with_notify_preference(db, latest)
-                await process_auto_update_users(db, latest)
-    except Exception:
-        logger.exception("run_scheduled_openclaw_version_check failed")
-
-
-async def openclaw_background_loop():
-    """First check after 3 minutes, then every 24 hours."""
-    await asyncio.sleep(180)
-    while True:
-        await run_scheduled_openclaw_version_check()
-        await asyncio.sleep(86400)
-
-
-def start_openclaw_background_tasks():
-    if os.environ.get("OPENCLAW_BACKGROUND_VERSION_CHECK", "false").lower() != "true":
-        return None
-    return asyncio.create_task(openclaw_background_loop(), name="openclaw_version_check")
 
 
 # ── Nightly memory digest background loop ────────────────────────────────────
@@ -1974,49 +1633,6 @@ async def get_evolution_proposals(
     }
 
 
-async def _hermes_review_proposal(proposal: dict) -> tuple[bool, str]:
-    """Ask Hermes to review an evolution proposal before implementation is queued.
-
-    Returns (approved: bool, feedback: str).
-    Fails open — caller must catch all exceptions and proceed if Hermes is unavailable.
-    """
-    hermes_url = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642")
-    hermes_model = os.environ.get("HERMES_MODEL", "hermes-agent")
-    prompt = (
-        "Review this Zoe evolution proposal for implementation readiness.\n"
-        "Reply with APPROVED on the first line if safe to proceed, or REJECT if not.\n"
-        "If you have concerns, include a CONCERNS: section with concise actionable feedback.\n\n"
-        f"Title: {proposal.get('title', '')}\n\n"
-        f"Description: {proposal.get('description', '')}\n\n"
-        f"Evidence: {proposal.get('evidence', '')}"
-    )
-    headers = {"Content-Type": "application/json", **hermes_auth_headers()}
-    async with httpx.AsyncClient(timeout=90) as client:
-        async with client.stream(
-            "POST",
-            f"{hermes_url}/v1/chat/completions",
-            json={
-                "model": hermes_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": True,
-            },
-            headers=headers,
-        ) as resp:
-            resp.raise_for_status()
-            content = ""
-            async for line in resp.aiter_lines():
-                if line.startswith("data: ") and "[DONE]" not in line:
-                    try:
-                        chunk = json.loads(line[6:])
-                        content += chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                    except Exception:
-                        pass
-    feedback = content.strip()
-    upper = feedback.upper()
-    approved = "APPROVED" in upper and "REJECT" not in upper and "CONCERNS:" not in upper
-    return approved, feedback
-
-
 @_agent_card_router.post("/evolution/proposals/{proposal_id}/action")
 async def evolution_proposal_action(
     proposal_id: str,
@@ -2032,10 +1648,10 @@ async def evolution_proposal_action(
     unauthenticated default identity) could persist status='approved'.
 
     On approve (conditional, decided by may_auto_execute):
-      * review-only proposals — sync/update a Multica DISPLAY issue and run the
-        Hermes proposal pre-review; nothing is executed.
+      * review-only proposals — sync/update a Multica DISPLAY issue; nothing is
+        executed.
       * admin-approved EXECUTABLE proposals (autonomy contract allows it) — skip
-        the display sync and Hermes pre-review entirely and bridge the proposal
+        the display sync entirely and bridge the proposal
         to the board runner's lane (todo issue -> Omnigent -> gated PR -> merge).
         Re-approval NEVER re-enqueues: any prior board issue (even a failed one)
         is returned as-is unless the body carries an explicit `retry: true`, and
@@ -2174,47 +1790,6 @@ async def evolution_proposal_action(
                         await _eq.decide(db, proposal_id, "approved", actor=_actor)
                 except _eq.Conflict as exc:
                     raise HTTPException(status_code=409, detail=str(exc)) from exc
-            # Hermes PROPOSAL pre-review gate — REVIEW-ONLY proposals only.
-            # An auto-executing proposal is skipped here: it is already authorized
-            # (admin + execution gate) and the CODE it produces is reviewed
-            # downstream by the board lane (focused tests + review gate + greploop
-            # before merge). Running this gate for auto-exec proposals is both
-            # redundant AND unsafe — on a re-approve it could revert the proposal
-            # to 'pending' and return early while an already-live board issue keeps
-            # running (proposal says human-review-needed, board says implementing).
-            # Fails open — if Hermes is unavailable we proceed normally.
-            if not _allowed:
-                try:
-                    _h_approved, _h_feedback = await _hermes_review_proposal(proposal)
-                    if not _h_approved and re.search(r"CONCERNS:|REJECT", _h_feedback, re.IGNORECASE):
-                        logger.info(
-                            "evolution_approve: Hermes flagged concerns for proposal %s", proposal_id
-                        )
-                        if multica_issue_id:
-                            try:
-                                from multica_client import get_multica_client  # type: ignore[import]
-                                _mc = get_multica_client()
-                                if _mc.is_configured():
-                                    async with httpx.AsyncClient(timeout=30) as _hc:
-                                        _cur_desc = proposal.get("description", "")
-                                        await _hc.put(
-                                            f"{_mc._base}/api/issues/{multica_issue_id}",
-                                            json={"description": f"{_cur_desc}\n\nHermes review:\n{_h_feedback}"},
-                                            headers=_mc._headers(),
-                                        )
-                            except Exception as _exc:
-                                logger.warning(
-                                    "evolution_approve: could not append Hermes feedback to Multica issue: %s", _exc
-                                )
-                        await _eq.decide(db, proposal_id, "", actor="hermes:review", note="review concerns")
-                        return {"ok": True, "action": "hermes_review_required", "feedback": _h_feedback}
-                    logger.info("evolution_approve: Hermes cleared proposal %s", proposal_id)
-                except Exception as exc:
-                    logger.warning(
-                        "evolution_approve: Hermes review failed — proceeding without review for proposal %s: %s",
-                        proposal_id, exc,
-                    )
-
             # Land the approved proposal on the board runner's PROVEN lane.
             # The old executor_registry.dispatch_issue path went to the Kanban
             # PHASE pipeline whose consumer (Hermes / the Flue live-runner) is
@@ -2486,8 +2061,6 @@ async def post_install_component(
             detail=f"Component '{component}' is not installable. "
                    f"Installable: {', '.join(installable_components())}",
         )
-    if component == "openclaw" and os.environ.get("OPENCLAW_UPGRADE_ENABLED", "true").lower() != "true":
-        raise HTTPException(status_code=403, detail="OpenClaw upgrades are disabled on this server")
     if not body.get("confirm"):
         raise HTTPException(status_code=400, detail='Set {"confirm": true} to run the install')
     try:
@@ -2956,13 +2529,6 @@ async def web_search(body: _WebSearchBody, _: None = Depends(require_intent_disp
     return web_search_tool_payload(outcome)
 
 
-# Synchronous delegation targets the zoe-core brain may invoke in-turn. Hermes
-# only: it owns web browsing / Telegram / the harness, and returns a completion
-# we can fold into the chat answer. OpenClaw stays explicit-opt-in (see the
-# async A2A /api/agent/delegate endpoint), so it is intentionally NOT here.
-_SYNC_DELEGATE_TARGETS = frozenset({"hermes"})
-
-
 class _DelegateSyncBody(BaseModel):
     user_id: str
     task: str
@@ -2971,44 +2537,21 @@ class _DelegateSyncBody(BaseModel):
 
 @router.post("/delegate-sync")
 async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_intent_dispatch_auth)):
-    """Synchronously delegate one task to a peer agent and return its completion.
+    """Synchronous peer-agent delegation for the zoe-core brain: NOT AVAILABLE.
 
-    Internal/service endpoint — how the zoe-core Pi brain delegates work it can't
-    do natively yet (web research, complex tasks) to Hermes and folds the answer
-    into its turn, the synchronous parity of the legacy __ESCALATE_HERMES__ path.
-    Fails closed on unknown user or non-allowlisted target.
+    Its only target was Hermes, which is retired and removed, so there is no peer to
+    hand a task to. The route stays (zoe-core's ``abilities/delegate.ts`` still calls
+    it) and answers 503 honestly after validating the request, instead of a 502 from
+    a dead gateway. Same internal gate as intent-dispatch (body ``user_id``).
     """
-    user_id = (body.user_id or "").strip()
-    task = (body.task or "").strip()
-    target = (body.target or "hermes").strip().lower()
-    if not user_id:
+    if not (body.user_id or "").strip():
         raise HTTPException(status_code=400, detail="user_id required")
-    if not task:
+    if not (body.task or "").strip():
         raise HTTPException(status_code=400, detail="task required")
-    if target not in _SYNC_DELEGATE_TARGETS:
+    target = (body.target or "hermes").strip().lower()
+    if target != "hermes":
         raise HTTPException(status_code=400, detail=f"target not sync-delegatable: {target}")
-    try:
-        # Lazy import: routers.chat owns the Hermes client; importing at module
-        # load would be circular (chat imports system-side helpers too).
-        from routers.chat import _hermes_completion, _mempalace_load_user_facts, _safe_load_portrait
-
-        # Attach the same user context the legacy __ESCALATE_HERMES__ path sent,
-        # so delegated answers stay personalized (preferences + memory), not generic.
-        portrait, facts = await asyncio.gather(
-            _safe_load_portrait(user_id),
-            _mempalace_load_user_facts(user_id),
-        )
-        result = await _hermes_completion(
-            task,
-            session_id=f"delegate-{user_id}",
-            user_id=user_id,
-            portrait=portrait or "",
-            facts=facts or "",
-        )
-    except Exception as exc:
-        logger.warning("delegate-sync failed target=%s: %s", target, exc)
-        raise HTTPException(status_code=502, detail="delegation failed") from exc
-    return {"target": target, "ok": bool(result), "result": result or ""}
+    raise HTTPException(status_code=503, detail="delegation is not available: no peer agent is configured")
 
 
 # ─── Telegram account linking (resolve a verified telegram_id → Zoe user) ─────

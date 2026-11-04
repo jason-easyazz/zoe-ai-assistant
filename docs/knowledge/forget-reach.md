@@ -66,6 +66,21 @@ Forget cannot rewrite a tarball or a Postgres dump, so the rule is: **backups ag
   restore from before the forget has neither.
 - Off-box backups do not exist yet (deep dive finding 5); when they do, they inherit this rule and the 35-day bound.
 
+## Stores outside the per-member inventory
+
+The inventory below covers every table with a `user_id` column or a reference to one (`forget_reach.discover_user_tables`); a
+`STORES` entry for any other table fails `test_no_inventory_entry_names_a_table_that_no_migration_creates`. Household tables with no
+member column are therefore recorded here instead, each with why neither forget path applies and what bounds it:
+
+- `presence_observations` (alembic `0064`, `presence/ha_presence.py`, flag `ZOE_HA_PRESENCE`, default off): one row per debounced
+  home / away / unknown change of an HA `person` / `device_tracker` entity - `sha256(entity_id)`, the state, the time, `ttl_s` 180.
+  No words, no member id, no GPS or attributes (the poller keeps only `state`). Not reachable by the ENTITY forget (no text to match
+  a name against) or the MEMBER erase (no mapping from an HA entity to a Zoe member is stored). The hash is unsalted, so a key is a
+  pseudonym a reader could reverse from the HA entity name, not anonymous: the bound is retention - while the flag is `shadow` / `on`
+  the poller deletes rows older than 14 days (`RETENTION_S`). With the flag `off` nothing runs, prune included: retiring the reader
+  means `DELETE FROM presence_observations` (or the `0064` downgrade). Revisit (an inventory entry, or a salted key) the day a member
+  id or an inferred-presence table joins it.
+
 ## Adding a store
 
 Add a `Store` to `forget_reach.py` (`TABLES` for a Postgres table, `OTHER` for anything else): `reached` with the eraser(s), `out_of_scope` with a one-line
@@ -78,7 +93,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-105 stores: 34 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+107 stores: 36 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -149,6 +164,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `speaker_profiles` | pg_table | biometric | out_of_scope | - | Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days). |
 | `face_profiles` | pg_table | biometric | out_of_scope | - | Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days). |
 | `enrollment_offers` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
+| `alarms` | pg_table | words | reached | member: `alarms.forget_user` | - |
 | `phone_devices` | pg_table | metadata | out_of_scope | - | A paired phone (phone_app.py): member id, a display name, the platform, a credential hash and public key - no household words. The member or an admin revokes it (phone_app.revoke_device), which deletes its push tokens. |
 | `user_preferences` | pg_table | config | out_of_scope | - | Preference flags; no household words. |
 | `weather_preferences` | pg_table | config | out_of_scope | - | A city and units. |
@@ -161,7 +177,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `ui_panel_sessions` | pg_table | metadata | out_of_scope | - | Which page a panel is on; ui_context can carry transient state, expires with the session. |
 | `push_subscriptions` | pg_table | metadata | out_of_scope | - | A browser push endpoint and keys. |
 | `auth_handoffs` | pg_table | metadata | out_of_scope | - | Short-lived hand-off tokens. |
-| `trust_audit` | pg_table | metadata | out_of_scope | - | Tool-call audit: tool name, allowed flag, reason. |
+| `trust_audit` | pg_table | metadata | out_of_scope | - | Never-built trust-gate audit log; never written, dropped by alembic 0065. |
 | `agent_cost_events` | pg_table | metadata | out_of_scope | - | Token counts and cost per call. |
 | `llm_call_log` | pg_table | metadata | out_of_scope | - | Latency and token counts per call. |
 | `ui_actions` | pg_table | words | gap | - | Action payloads (e.g. a typed list item) are kept; neither path reaches them. |
@@ -177,12 +193,13 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `voice_stt_log` | file | words | gap | - | ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, no retention, outside the cascade. Rotated by size only. |
 | `voice_sample_corpus` | corpus | biometric | gap | - | ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. |
 | `router_retrain_texts` | file | words | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | The struggle-fed router retrain run's work dir (~/.zoe/router_retrain/work/<stamp>/*.texts.jsonl) holds the failed turns' words for one run; forget tombstones the examples and deletes any leftover text files (router_retrain_ledger.forget, via struggle_proposals.forget_user / forget_events). The ledger itself holds hashes only. |
+| `warm_speaker_memo` | file | metadata | reached | member: `warm_speaker.forget_user` | ~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker (a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member. |
 | `omi_audio_files` | file | biometric | reached | member: `omi_recordings.forget_user` / entity: `omi_recordings.erase_entity` | Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files). |
 | `device_audit_logs` | file | metadata | out_of_scope | - | Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words. |
 | `pi_intent_evidence` | file | words | gap | - | ~/.zoe/data/pi-*.jsonl: intent-miss evidence and shadow labels (text with names/emails masked). Flag-gated (ZOE_PI_INTENT_*), outside the cascade, no retention. |
 | `engineering_pipeline_runs` | file | metadata | out_of_scope | - | Engineering pipeline run records (tickets/PRs), not member memory. |
 | `sqlite_dev_db` | file | metadata | out_of_scope | - | database.py's zoe.db is the legacy SQLite fallback for dev; production is Postgres. |
-| `app_logs` | file | words | gap | - | ~/.zoe-logs/zoe-data.*: the service log. Message text is logged at INFO in a few places (e.g. intent_miss: <text>); rotated by size (50 MB x4), not by age, outside the cascade. |
+| `app_logs` | file | words | gap | - | ~/.zoe-logs/zoe-data.*: the service log. Utterances are logged as len + hash only since 2026-11-03 (intent_miss: len=N utt=<hash>); lines written before then hold text until the size rotation drops them; rotated by size (50 MB x4), not by age, outside the cascade. |
 | `backup_postgres` | backup | words | gap | - | Nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within BACKUP_MAX_AGE_DAYS (35) - WHILE the nightly job succeeds: it prunes by count after a new dump, so a job that keeps failing keeps its old dumps (an age alarm is the fix; a time prune must never delete the last good copy). Forget cannot rewrite a dump; biometric table data is excluded from them. Restore => re-issue the forget. |
 | `backup_palace_tar` | backup | words | gap | - | Nightly MemPalace tarball, 7 kept (<= 7 days WHILE the nightly job succeeds: it prunes by count after a new tarball, so a failing job keeps its old ones). Not rewritten; the JSON exports beside it are redacted by the ledger (redact_backups.py). |
 | `backup_json_exports` | backup | words | reached | entity: `forget_redact.redact_export` | Palace JSON exports and compaction backups are redacted by the forget ledger (forget_redact.redact_export, scripts/maintenance/redact_backups.py). |

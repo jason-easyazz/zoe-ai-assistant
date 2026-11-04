@@ -1,0 +1,60 @@
+#!/usr/sbin/nft -f
+# Zoe Jetson - host firewall (nftables table inet zoe_host_fw). Owner checklist + every listener's decision:
+# docs/knowledge/host-firewall-2026-11-03.md. Pinned by tests/unit/test_host_firewall_ruleset.py.
+#
+# Shape: policy ACCEPT with an explicit CLOSED list, not policy drop. Music Assistant runs with host networking and its
+# AirPlay / stream / discovery traffic uses ports that are not fixed, so a default-drop would silently cut household audio.
+# Instead every listener on the box has a written decision; the ones nothing on the LAN needs are closed here, to anything
+# that is not loopback or a docker bridge. Outbound is untouched.
+#
+#   input   - host-native listeners (zoe-data, the Flue sidecars, rpcbind, CUPS, the shared Serena on a bridge address) AND
+#             docker-published ports reached over IPv6 (docker's userland proxy answers [::]:port on the host, so those
+#             packets hit INPUT, not FORWARD).
+#   forward - docker-published ports reached over IPv4 (DNAT to the container, so FORWARD). Matched on the post-DNAT
+#             destination port: each closed container listens on the same port it publishes. All are below the ephemeral
+#             range, so a container's outbound replies are never matched.
+#
+# OWN TABLE ONLY: never `flush ruleset` (Docker's iptables and any tailscale table keep theirs). A packet must be accepted
+# by every base chain on a hook, so this table can only narrow what is already allowed.
+# No `counter` and no `ct` expressions: this Tegra kernel rejects both (`nft -c` -> "No such file or directory"); the
+# file was checked with `sudo nft -c -f` on the box on 2026-11-03.
+
+table inet zoe_host_fw
+delete table inet zoe_host_fw
+
+table inet zoe_host_fw {
+	# host-native and IPv6-proxied ports closed to the LAN:
+	#   111 rpcbind, 631 CUPS (nothing in Zoe uses either), 3579 Flue brain, 3582 Flue Telegram bot, 8000 zoe-data
+	#   (nginx, Home Assistant and Multica reach it over the docker bridges), 9121 shared Serena (bound to a bridge address),
+	#   and the docker-published 139/445 SMB drop, 3000/8080 Multica board, 8002 zoe-auth (reached through nginx).
+	set closed_tcp {
+		type inet_service
+		elements = { 111, 139, 445, 631, 3000, 3579, 3582, 8000, 8002, 8080, 9121 }
+	}
+	set closed_udp {
+		type inet_service
+		elements = { 111, 631 }
+	}
+	# docker-published (IPv4 DNAT) ports closed to the LAN. NOT here, on purpose: 80/443 (nginx, the household's door) and
+	# 8123 (Home Assistant: the companion app on phones).
+	set closed_published_tcp {
+		type inet_service
+		elements = { 139, 445, 3000, 8002, 8080 }
+	}
+
+	chain input {
+		type filter hook input priority filter; policy accept;
+		iif "lo" accept
+		iifname "docker0" accept
+		iifname "br-*" accept
+		tcp dport @closed_tcp drop
+		udp dport @closed_udp drop
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+		iifname "docker0" accept
+		iifname "br-*" accept
+		tcp dport @closed_published_tcp drop
+	}
+}

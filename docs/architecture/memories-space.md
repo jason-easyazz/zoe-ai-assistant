@@ -814,7 +814,7 @@ learned_voiceprint_segments (                              -- each contribution,
 omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_confirmed'))
              + suggested_person_id text NULL, suggested_score real NULL     -- a suggestion, never a tag
 
--- P7 (caregiving, built as migration 0061): memory_curation_optins (member, category, opted_in_by, revoked_at) +
+-- P7 (caregiving, built as migration 0066): memory_curation_optins (member, category, opted_in_by, revoked_at) +
 --   memory_curation_audit (ids, action, category, row hash; never text). No grant table (D7).
 ```
 
@@ -881,7 +881,7 @@ exact words behind a row ("Where's this from?") need a fresh PIN too (D13); a fa
 entry (the ledger holds names).
 
 **Build status (2026-10-19): P7 (caregiver curation) is built, flag-dark** (`ZOE_MEMORIES_CURATORS`; `memory_curation.py`,
-`routers/memories_curation.py`, `js/memories-curation.js`, migration 0061; record [memory-curation.md](../knowledge/memory-curation.md)).
+`routers/memories_curation.py`, `js/memories-curation.js`, migration 0066; record [memory-curation.md](../knowledge/memory-curation.md)).
 It follows the owner answers of 2026-10-19 (section 11) and differs from 2.3 on purpose: NO `memory_curators` grant table (D7: every
 adult admin is the implicit curator of every child); an adult is curated only in a category that adult opted in themself
 (`memory_curation_optins`, D9; the carer-without-consent case, D8, is not built); the curated authority is a new class `curated`
@@ -901,7 +901,7 @@ Each phase is one PR (or a small workstream), flag-dark, with its tests, and say
 | P4b | learned voices (`ZOE_OMI_LEARN_VOICES`): segment embeddings, voiceprints from tags, suggestions, the "Voices I've learned" list, the forget step | P4 | "this sounds like Sam, right?" |
 | P5 | **backend built flag-dark (Phase 1 of the day review, migration 0054: `omi_day_review.py`, `omi_review_apply.py`, `routers/omi_day_review.py`; kinds add `person` and `owner_fact`, statuses pending / approved / dismissed, the omi_segments speaker vocabulary)**; day analysis (`ZOE_OMI_DAY_REVIEW=shadow`), candidates on the desktop Pendant tab with approve / edit / skip and real writes **on approval** | P2 (P4 for the full form) | "Zoe found these in your day" on the computer |
 | P6 | **raise / pull / orb + the crowded-room phone send built flag-dark (`day_review_raise.py`, `ZOE_DAY_REVIEW_RAISE`; record [day-review-raise.md](../knowledge/day-review-raise.md)): the raise rides the first-turn brief, not `[RAISE]` / `proactive_candidates`; a crowded raise is not made; snooze after two ignored raises or one decline.** The private card is #2129's. Not built: the voice dialogue tier (`omi_review_dialog`) | P5, the voice session live | "I went through your day ..." on the next turn |
-| P7 | caregiver curation: **built flag-dark (API + desktop/phone UI, migration 0061)**; the spoken curator intent is a separate voice-path PR | owner decisions D7, D9, D10 (answered 2026-10-19) | a parent can add memories for a child |
+| P7 | caregiver curation: **built flag-dark (API + desktop/phone UI, migration 0066)**; the spoken curator intent is a separate voice-path PR | owner decisions D7, D9, D10 (answered 2026-10-19) | a parent can add memories for a child |
 | P8 | 12B night lane; naming consented household members in tags; linking tags to `person_directory` | identity Phase 4, omi plan §5 consent | quality, people layer |
 
 ## 10. Tests and lab cells (each with its negative control)

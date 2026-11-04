@@ -60,7 +60,7 @@ GUEST_ADMITTING = frozenset({"get_current_user"})
 # body: the role matrix, an owner check, the fridge rule, or "guests may do this"). Shrink it; never grow it without review.
 GUEST_ADMITTING_BASELINE = {
     "routers/auth.py": {"logout"},
-    "routers/chat.py": {"cancel_latest_run", "create_session", "delete_session", "resume_run", "save_message", "submit_feedback", "whatsapp_connect"},
+    "routers/chat.py": {"cancel_latest_run", "create_session", "delete_session", "resume_run", "save_message", "submit_feedback"},
     "routers/dashboard.py": {"add_widgets", "remove_widget", "save_layout"},
     "routers/ha_ui.py": {"session"},  # panel_principal.member_or_panel in the body: a member or the strictly registered panel, else 403
     "routers/journal.py": {"create_entry", "delete_entry", "update_entry"},
@@ -77,7 +77,7 @@ GUEST_ADMITTING_BASELINE = {
     "routers/reminders.py": {"acknowledge_reminder", "create_reminder", "delete_reminder", "mark_notification_delivered", "snooze_reminder", "update_reminder"},
     "routers/skybridge.py": {"cancel_skybridge_timer", "resolve_skybridge_command"},
     "routers/stubs.py": {"create_project", "save_intelligence_settings"},
-    "routers/system.py": {"board_review", "post_display_brightness", "post_display_volume", "put_display_preferences", "put_openclaw_preferences", "trigger_agent_sync", "trigger_memory_consolidation", "trigger_memory_digest", "trigger_run_digest"},
+    "routers/system.py": {"board_review", "post_display_brightness", "post_display_volume", "put_display_preferences", "trigger_agent_sync", "trigger_memory_consolidation", "trigger_memory_digest", "trigger_run_digest"},
     "routers/transactions.py": {"create_transaction", "delete_transaction", "toggle_transaction_status", "update_transaction"},
     "routers/ui_actions.py": {"ack_ui_action", "bind_panel", "close_action_form", "confirm_action_form", "create_ui_action", "open_action_form", "requeue_stale_actions", "retry_ui_action", "sync_ui_state"},
     "routers/user_profile.py": {"analyze_profile", "create_telegram_link_token", "set_telegram_link"},

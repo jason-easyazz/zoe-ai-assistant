@@ -80,6 +80,15 @@ with the mandatory gate never running — a gate that can silently not-run is no
   real-model check — [voice-pipeline.md](voice-pipeline.md) → *The VAD stage*). **Non-voice diffs are a no-op pass**, so
   ordinary deploys are frictionless. The check only *reads* the artifact; it never runs the ~2.3 GB
   Kokoro harness on the runner.
+- **Deploy never reads `FETCH_HEAD` (since 2026-10-30).** Incident: deploy run 40924021148 (01:43 AWST)
+  ran `git fetch origin main` then `git rev-parse FETCH_HEAD` on the box's shared `.git`; `FETCH_HEAD` is
+  ONE file, and the voice lander's `git fetch origin fix/retire-resemblyzer` rewrote it in between, so
+  the deploy targeted an UNMERGED branch commit (`fa8952ef9`) instead of `main`. The voice gate refused
+  it (fail-closed), but a non-voice branch would have been reset onto the live checkout and restarted.
+  Now `deploy.yml` (and `deploy_live.sh`) fetch `+refs/heads/main:refs/zoe-deploy/main` with
+  `--no-write-fetch-head`, require that ref to equal `git ls-remote origin refs/heads/main` (retrying
+  if main advanced mid-fetch), and refuse any target that is not a descendant of the live HEAD
+  (`merge-base --is-ancestor`). Pinned by `tests/unit/test_deploy_never_reads_fetch_head.py`.
 - **The artifact is BOUND to the deployed tree (`--expect-tree-of`, since 2026-09-28).** Incident:
   #1745 (chromadb 1.5.9 pins in `requirements-py312.txt`) was expected to be refused until a replay
   for that commit existed, and was not — the gate checked only freshness + status, and a replay from
@@ -117,6 +126,7 @@ with the mandatory gate never running — a gate that can silently not-run is no
   immediately before `systemctl --user restart`, so a window that opens mid-deploy is not restarted beside either
   (it deliberately does NOT take `/tmp/zoe-brain-window.lock`, which benches and landings hold for hours; the
   remaining race is the instant between that check and the restart). Pinned by `tests/unit/test_deploy_night_window_wait.py`.
+- **A deploy waits for a quiet household.** The step before "Restart zoe-data" runs `scripts/maintenance/wait_household_quiet.sh`: it holds while zoe-data `/health` reports a panel voice turn in the last 10 min (`last_voice_turn_age_s`), up to 60 min, then deploys anyway with a log line (fail open; an unreadable signal fails open after 60 s; docs-only deploys skip it). Night-window rules (`night_busy.sh deploy`) are never failed open. Knobs: `ZOE_DEPLOY_QUIET_*` (see the script header). Pinned by `tests/unit/test_deploy_wait_household_quiet.py`. It also holds (bounded, then fails open, logged) while a voice replay probe holds `/tmp/zoe-voice-harness.lock` or `/tmp/zoe-brain-window.lock` (`ZOE_DEPLOY_PROBE_LOCKS`, `ZOE_DEPLOY_PROBE_WAIT_MAX_MIN`, default 45) so a restart never lands mid-probe.
 - **Not every gated file is equally evidenced, and the LiveKit lane is the weak one.** The replay
   corpus is replayed over `POST /api/voice/transcribe` (the HTTP lane) and **never traverses**
   `livekit_aiortc.py` / `routers/voice_livekit.py` / `services/livekit/config.yaml`. For a diff

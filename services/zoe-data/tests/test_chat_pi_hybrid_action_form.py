@@ -47,9 +47,6 @@ async def test_chat_pi_hybrid_action_form_broadcasts_without_tool_memory_side_ef
     async def fake_broadcast(intent, panel_id=None):
         broadcasts.append({"intent": intent.name, "slots": intent.slots, "panel_id": panel_id})
 
-    async def fail_background(*args, **kwargs):
-        raise AssertionError("action-form Pi hybrid should not inject background tool results")
-
     async def fail_memory(*args, **kwargs):
         raise AssertionError("action-form Pi hybrid should not persist fulfillment memory")
 
@@ -64,7 +61,6 @@ async def test_chat_pi_hybrid_action_form_broadcasts_without_tool_memory_side_ef
         run_states.append(kwargs)
 
     monkeypatch.setattr(chat, "_broadcast_intent_nav", fake_broadcast)
-    monkeypatch.setattr(chat, "chat_inject_background", fail_background)
     monkeypatch.setattr(chat, "_persist_memory_candidates", fail_memory)
     monkeypatch.setattr(chat, "_save_chat_message", fake_save)
     monkeypatch.setattr(chat, "_record_run_state", fake_record_run_state)

@@ -32,7 +32,12 @@ This index gives every record one status.
 | [MEMORY_HALLUCINATION_ANALYSIS.md](MEMORY_HALLUCINATION_ANALYSIS.md) | 2025-11-18 | absorbed 2026-10-18 | November 2025 memory-hallucination study; long superseded; retire by 2026-11-17 |
 | [README.md](README.md) | 2025-11-18 | absorbed 2026-10-18 | index of the November 2025 study only; replaced by this index; retire by 2026-11-17 |
 | [agent-sessions-off-box-2026-10-04.md](agent-sessions-off-box-2026-10-04.md) | 2026-10-04 | absorbed 2026-10-18 | engineering-off-box.md in knowledge; retire by 2026-11-17 |
-| [architecture-deep-dive-2026-10-18.md](architecture-deep-dive-2026-10-18.md) | 2026-10-18 | open | task list A-D still being worked; ROADMAP derives from it |
+| [architecture-deep-dive-2026-10-18.md](architecture-deep-dive-2026-10-18.md) | 2026-10-18 | absorbed 2026-11-02 | task list A-D still being worked; ROADMAP derives from it; retire by 2026-12-02 |
+| [samantha-initiative-2026-11-03.md](samantha-initiative-2026-11-03.md) | 2026-11-03 | open | the Samantha Initiative: current state vs code, frontier report (7 lanes), gap analysis, next-gen architecture, roadmap, top ten, experiments, metrics; plan of record for the Samantha direction |
+| [architecture-deep-dive-2-2026-10-19.md](architecture-deep-dive-2-2026-10-19.md) | 2026-11-02 | absorbed 2026-11-02 | round 2 (security, traffic, panel, data, tests, iPhone app); task list in the ledger and the modernization queue; retire by 2026-12-02 |
+| [stack-currency-and-field-2026-10-27.md](stack-currency-and-field-2026-10-27.md) | 2026-11-02 | absorbed 2026-11-02 | every component vs latest + the four-tier upgrade plan; in the ledger and the queue; retire by 2026-12-02 |
+| [synthesis-deep-dive-2026-10-29.md](synthesis-deep-dive-2026-10-29.md) | 2026-11-02 | absorbed 2026-11-02 | the diagnosis and the thirty-day order; sections 2, 5, 7 are in the owner pack; retire by 2026-12-02 |
+| [completeness-and-issues-2026-11-02.md](completeness-and-issues-2026-11-02.md) | 2026-11-02 | open | round 4: unfinished inventory, half-built surfaces, code and live issues (sensitive lanes held privately), the TV panel, natural conversation |
 | [arousal-detection-licence-scope-2026-10-04.md](arousal-detection-licence-scope-2026-10-04.md) | 2026-10-04 | open | licence decision before any build |
 | [tone-of-voice-deep-dive-2026-10-26.md](tone-of-voice-deep-dive-2026-10-26.md) | 2026-10-26 | open | tone-of-voice options and phased plan; owner decisions pending |
 | [omi-data-to-teach-zoe-2026-10-26.md](omi-data-to-teach-zoe-2026-10-26.md) | 2026-10-26 | open | pendant data as a teacher: ranked use cases, night-window budget, AU recording law (WA worked example), phased plan; sister of the tone record; owner decisions pending |
@@ -42,7 +47,7 @@ This index gives every record one status.
 | [bakeoff-run-20261008-1805.md](bakeoff-run-20261008-1805.md) | 2026-10-08 | absorbed 2026-10-18 | run record; verdict in 10-08 decision; retire by 2026-11-17 |
 | [bakeoff-setup-verification-2026-10-06.md](bakeoff-setup-verification-2026-10-06.md) | 2026-10-06 | absorbed 2026-10-18 | instrument check; done; retire by 2026-11-17 |
 | [barge-in-duck-decide-resume-2026-10-04.md](barge-in-duck-decide-resume-2026-10-04.md) | 2026-10-04 | open | Pi lab outstanding |
-| [best-ideas-register-2026-10-09.md](best-ideas-register-2026-10-09.md) | 2026-10-09 | open | ranked borrow list, items still being picked |
+| [best-ideas-register-2026-10-09.md](best-ideas-register-2026-10-09.md) | 2026-10-09 | absorbed 2026-11-03 | borrow list carried into the Samantha Initiative record (frontier report + top ten); retire by 2026-12-03 |
 | [brain-extraction-stack-best-practice-2026-10-05.md](brain-extraction-stack-best-practice-2026-10-05.md) | 2026-10-05 | absorbed 2026-10-18 | findings fixed or in open-problems; retire by 2026-11-17 |
 | [common-questions-ha-intents-2026-10.md](common-questions-ha-intents-2026-10.md) | 2026-10-14 | open | everyday-command follow-ups open |
 | [communication-preferences-2026-10.md](communication-preferences-2026-10.md) | 2026-10-16 | open | design only |
@@ -68,14 +73,14 @@ This index gives every record one status.
 | [panel-anywhere-2026-10.md](panel-anywhere-2026-10.md) | 2026-10-17 | open | design only; relay lab flag-dark |
 | [panel-remote-access-2026-10.md](panel-remote-access-2026-10.md) | 2026-10-16 | open | design only; away P1 landed, link home not built |
 | [people-graph-temporal-model-2026-10-05.md](people-graph-temporal-model-2026-10-05.md) | 2026-10-05 | absorbed 2026-10-18 | ADR-relationship-memory; retire by 2026-11-17 |
-| [person-likeness-2026-10-09.md](person-likeness-2026-10-09.md) | 2026-10-09 | open | restraint/person half partly shadow |
+| [person-likeness-2026-10-09.md](person-likeness-2026-10-09.md) | 2026-10-09 | absorbed 2026-11-03 | restraint/salience rules carried into the Samantha Initiative record (lane F); retire by 2026-12-03 |
 | [personality-identity-layer-2026-10-04.md](personality-identity-layer-2026-10-04.md) | 2026-10-04 | absorbed 2026-10-18 | persona layer phase 0 built; retire by 2026-11-17 |
 | [presence-without-sensors-2026-10-04.md](presence-without-sensors-2026-10-04.md) | 2026-10-04 | open | not built |
 | [pull-not-push-inbox-2026-10-04.md](pull-not-push-inbox-2026-10-04.md) | 2026-10-04 | absorbed 2026-10-18 | proactive/pull.py and lines.py contract bullets; retire by 2026-11-17 |
 | [samantha-context-engineering-2026-09-29.md](samantha-context-engineering-2026-09-29.md) | 2026-09-29 | absorbed 2026-10-18 | context manager built and live; retire by 2026-11-17 |
 | [samantha-flags-ab-2026-10-06.md](samantha-flags-ab-2026-10-06.md) | 2026-10-06 | absorbed 2026-10-18 | A/B done; flags flipped; retire by 2026-11-17 |
-| [samantha-gap-register-2026-10-09.md](samantha-gap-register-2026-10-09.md) | 2026-10-09 | open | ranked gaps still drive the memory work |
-| [samantha-mind-layer-2026-10-07.md](samantha-mind-layer-2026-10-07.md) | 2026-10-08 | open | mind-layer items partly open |
+| [samantha-gap-register-2026-10-09.md](samantha-gap-register-2026-10-09.md) | 2026-10-09 | absorbed 2026-11-03 | ranked gaps carried into the Samantha Initiative record (gap analysis, section 3); retire by 2026-12-03 |
+| [samantha-mind-layer-2026-10-07.md](samantha-mind-layer-2026-10-07.md) | 2026-10-08 | absorbed 2026-11-03 | scorecard + loop definition carried into the Samantha Initiative record (lane D); retire by 2026-12-03 |
 | [scout-companion-voice-persona-2026-10-07.md](scout-companion-voice-persona-2026-10-07.md) | 2026-10-08 | absorbed 2026-10-18 | folded into what-gets-us-closer / best-ideas; retire by 2026-11-17 |
 | [scout-memory-cognition-2026-10-07.md](scout-memory-cognition-2026-10-07.md) | 2026-10-08 | absorbed 2026-10-18 | folded into what-gets-us-closer / best-ideas; retire by 2026-11-17 |
 | [scout-setups-inference-hardware-2026-10-07.md](scout-setups-inference-hardware-2026-10-07.md) | 2026-10-08 | absorbed 2026-10-18 | folded into what-gets-us-closer / best-ideas; retire by 2026-11-17 |

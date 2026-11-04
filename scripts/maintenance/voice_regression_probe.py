@@ -1145,6 +1145,10 @@ def judge_cold_start(measured: dict[str, Any] | None, baseline: dict[str, Any] |
     warm = m.get("warm")
     fields = {"warm": warm, "first_prompt_n": m.get("first_prompt_n"), "first_cache_n": m.get("first_cache_n"),
               "cache_frac": m.get("cache_frac"), "ttft_ms": m.get("ttft_ms"), "wait_s": m.get("wait_s")}
+    if m.get("memo_restart") is not True:
+        return _cold_block("error", "the cold measurement did not start from a restarted process's speaker memo (memo_restart "
+                                    "missing): it would pass on a warm that was told the member, which is not the panel's wake",
+                           **fields)
     if warm != "warmed":
         return _cold_block("error", f"the wake prewarm did not run (outcome {warm!r}), so the first turn is not the "
                                     "panel's path - re-run when nothing else is warming the slot", **fields)

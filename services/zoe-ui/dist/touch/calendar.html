@@ -1774,6 +1774,7 @@
     <script src="/js/sw-registration.js" defer></script>
 </head>
 <body>
+<script>function zoeEsc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}</script>
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
@@ -2541,11 +2542,11 @@
             
             container.innerHTML = filteredTasks.map(task => `
                 <div class="task-item ${task.category} ${selectedTasks.includes(task.id) ? 'selected' : ''}" 
-                     draggable="true" data-task-id="${task.id}">
+                     draggable="true" data-task-id="${zoeEsc(task.id)}">
                     <input type="checkbox" class="task-checkbox" 
                            ${selectedTasks.includes(task.id) ? 'checked' : ''}
-                           onclick="toggleTaskSelection('${task.id}', event)">
-                    <div class="task-text">${task.text}</div>
+                           onclick="toggleTaskSelection('${zoeEsc(task.id)}', event)">
+                    <div class="task-text">${zoeEsc(task.text)}</div>
                         </div>
             `).join('') + (selectedList !== 'all' ? `
                 <div class="task-item add-new ${selectedList}">
@@ -3836,8 +3837,8 @@
                 <div class="linked-task-item ${task.completed ? 'completed' : ''}">
                     <input type="checkbox" class="task-complete-checkbox" 
                            ${task.completed ? 'checked' : ''}
-                           onchange="toggleTaskCompletion(${event.id}, '${task.id}')">
-                    ${task.text}
+                           onchange="toggleTaskCompletion(${Number(event.id) || 0}, '${zoeEsc(task.id)}')">
+                    ${zoeEsc(task.text)}
                 </div>
             `).join('');
         }
@@ -4322,7 +4323,7 @@
                             <option value="2880" ${reminder.offset_minutes === 2880 ? 'selected' : ''}>2 days before</option>
                         </select>
                         <input type="text" class="form-input" placeholder="Custom message (optional)" 
-                               value="${reminder.message}" 
+                               value="${zoeEsc(reminder.message)}" 
                                onchange="updateReminder(${reminder.id}, 'message', this.value)">
                     </div>
                     <button class="btn-remove" onclick="removeReminderRow(${reminder.id})">Remove</button>
@@ -4379,7 +4380,7 @@
                 <div class="prep-item ${item.completed ? 'completed' : ''}">
                     <div class="prep-info" style="flex: 1;">
                         <input type="text" class="form-input" placeholder="Prep item description" 
-                               value="${item.text}" 
+                               value="${zoeEsc(item.text)}" 
                                onchange="updatePrepItem(${item.id}, 'text', this.value)"
                                style="margin-bottom: 5px;">
                         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px;">

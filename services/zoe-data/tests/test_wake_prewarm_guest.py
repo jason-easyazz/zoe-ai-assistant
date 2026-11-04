@@ -66,7 +66,7 @@ def wake(monkeypatch):
     monkeypatch.setattr(zfc, "warm_kv_prefix", _kv)
     import voice_session as _vs
     monkeypatch.setattr(_vs, "observe_turn", lambda **kw: calls["observe"].append(kw))
-    monkeypatch.delenv("ZOE_BRAIN_BACKEND", raising=False)
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")
     monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
     return calls
 

@@ -137,3 +137,58 @@ def test_one_truth_table_ends_the_use_core_brain_divergence(monkeypatch):
     for raw in ("1", "yes", "true", "on"):
         monkeypatch.setenv(K, raw)
         assert env_bool(K, default=False) is True, raw
+
+
+# ── flag(): the registry-driven read ─────────────────────────────────────────
+
+import flag_registry  # noqa: E402  (pure data module, stdlib only)
+
+
+@pytest.fixture
+def _fake_flags(monkeypatch):
+    """Register throwaway flags so the tests never depend on a real flag's live default."""
+    monkeypatch.setattr(flag_registry, "FLAGS", dict(flag_registry.FLAGS))
+    flag_registry._f("TEST_FLAG_BOOL", "bool", True)
+    flag_registry._f("TEST_FLAG_INT", "int", 7)
+    flag_registry._f("TEST_FLAG_FLOAT", "float", 1.5)
+    flag_registry._f("TEST_FLAG_LIST", "list", ("a", "b"))
+    flag_registry._f("TEST_FLAG_STR", "str", "dflt")
+    flag_registry._f("TEST_FLAG_MODE", "str", "shadow", allowed=("off", "shadow", "enforce"))
+    for n in ("BOOL", "INT", "FLOAT", "LIST", "STR", "MODE"):
+        monkeypatch.delenv(f"TEST_FLAG_{n}", raising=False)
+
+
+def test_flag_returns_the_declared_default_when_unset(_fake_flags):
+    assert typed_env.flag("TEST_FLAG_BOOL") is True
+    assert typed_env.flag("TEST_FLAG_INT") == 7
+    assert typed_env.flag("TEST_FLAG_FLOAT") == 1.5
+    assert typed_env.flag("TEST_FLAG_LIST") == ("a", "b")
+    assert typed_env.flag("TEST_FLAG_STR") == "dflt"
+    assert typed_env.flag("TEST_FLAG_MODE") == "shadow"
+
+
+def test_flag_reads_at_call_time_with_the_canonical_bool_rule(_fake_flags, monkeypatch):
+    monkeypatch.setenv("TEST_FLAG_BOOL", "off")
+    assert typed_env.flag("TEST_FLAG_BOOL") is False
+    monkeypatch.setenv("TEST_FLAG_BOOL", "YES")
+    assert typed_env.flag("TEST_FLAG_BOOL") is True
+    monkeypatch.setenv("TEST_FLAG_BOOL", "")  # present-but-empty is off, as env_bool
+    assert typed_env.flag("TEST_FLAG_BOOL") is False
+    monkeypatch.setenv("TEST_FLAG_INT", "12")
+    assert typed_env.flag("TEST_FLAG_INT") == 12
+    monkeypatch.setenv("TEST_FLAG_INT", "nope")  # unparseable -> the declared default
+    assert typed_env.flag("TEST_FLAG_INT") == 7
+
+
+def test_flag_mode_values_are_validated_against_allowed(_fake_flags, monkeypatch, caplog):
+    monkeypatch.setenv("TEST_FLAG_MODE", " ENFORCE ")
+    assert typed_env.flag("TEST_FLAG_MODE") == "enforce"
+    monkeypatch.setenv("TEST_FLAG_MODE", "enfroce")  # typo: default + a warning, never a silent flip
+    with caplog.at_level(logging.WARNING, logger="typed_env"):
+        assert typed_env.flag("TEST_FLAG_MODE") == "shadow"
+    assert any("enfroce" in r.getMessage() for r in caplog.records)
+
+
+def test_flag_refuses_an_unregistered_name(_fake_flags):
+    with pytest.raises(KeyError, match="not in the flag registry"):
+        typed_env.flag("TEST_FLAG_NOT_DECLARED")

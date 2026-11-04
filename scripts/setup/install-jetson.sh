@@ -57,7 +57,7 @@ OPTIONAL_UNITS=(flue-executor flue-zoe-brain-2x)
 # stale copy in ~/.config/systemd/user pointing at a deleted WorkingDirectory — a
 # boot-time restart loop if it was left enabled. Clean these on every install.
 RETIRED_UNITS=(flue-zoe-brain)
-LLAMA_BIN="${HOME}/llama.cpp-b11194/build-jetson/bin/llama-server"  # = llama-server.service ExecStart (B0.4)
+LLAMA_BIN="${HOME}/llama.cpp-b11982/build-jetson/bin/llama-server"  # = llama-server.service ExecStart (B0.4)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -137,7 +137,6 @@ else
   env_set "$ROOT_ENV" POSTGRES_PASSWORD "$db_pass"
   env_set "$ROOT_ENV" POSTGRES_URL "$pg_url"
   env_set "$ROOT_ENV" POSTGRES_APSCHEDULER_URL "$aps_url"
-  env_set "$ROOT_ENV" OPENCLAW_GATEWAY_TOKEN "$(gen_secret 24)"
   env_set "$ROOT_ENV" KEEPER_AUTH_TOKEN "$(gen_secret 24)"
   env_set "$ROOT_ENV" ZOE_INTERNAL_TOKEN "$(gen_secret 32)"
   ok "generated root .env with fresh DB password + service tokens"
@@ -211,7 +210,7 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   case "$llama_mode" in
     skip-missing-binary)
       warn "NOT installing llama-server.service: the binary its ExecStart names is missing."
-      warn "Build llama.cpp b11194 first (recipe: docs/knowledge/voice-pipeline.md,"
+      warn "Build llama.cpp b11982 first (recipe: docs/knowledge/voice-pipeline.md,"
       warn "  \"Brain build + flags — B0.4\"), then re-run this installer." ;;
     keep-existing)
       warn "NOT replacing the installed llama-server.service: it differs from the template."

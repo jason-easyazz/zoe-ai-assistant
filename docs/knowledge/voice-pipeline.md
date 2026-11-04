@@ -167,6 +167,10 @@ not an excuse.
   context (8288 > 8192 tokens → HTTP 500 every turn, 2026-07-07). The flue client's
   brain-unreachable fallback text now classifies as **ERROR**, never OK — a dead brain lane can't
   silently pass the gate.
+- Fixed lines (fast-tier acks, fallbacks, errors, the LiveKit empty-transcript re-ask) come from ONE
+  phrase set, `services/zoe-data/voice_phrases.json`; the variant is a hash of the turn key, so a
+  replay hears the same words. `tests/test_voice_phrases.py` pins that the `brain_fallback` lines stay
+  ERROR (replay + struggle detector) and that no other line matches the replay's CANT_DO classifier.
 
 ### The corpus contract — auto-captured, so it needs curating
 
@@ -532,8 +536,9 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
 The replay is warm, so it cannot see a first reply that re-prefills its whole prompt (6 s vs ~1.2 s; shipped three
 times when the wake warm stopped matching the real first turn). After the replay the probe runs
 `scripts/perf/measure_cold_first_turn.py` in the service interpreter: evict the single slot with an unrelated request,
-wait a fixed 47 s (`--cold-wait-s`; deliberately NOT `quiet_s()+2` - the child never takes the guard, so the wait only simulates a conversational pause, and tracking the 180 s quiet window would make every gate run 3 minutes longer), call `zoe_flue_client.warm_kv_prefix(member)` (the panel's wake
-prewarm), then send ONE replay-isolated, `probe`-class first turn. The run **fails** when `cache_n/(cache_n+prompt_n)`
+wait a fixed 47 s (`--cold-wait-s`; deliberately NOT `quiet_s()+2` - the child never takes the guard, so the wait only simulates a conversational pause, and tracking the 180 s quiet window would make every gate run 3 minutes longer), call `zoe_flue_client.warm_kv_prefix(likely)` (the panel's wake
+prewarm; `likely` is read from the persisted speaker memo as a restarted process would - in-process memos emptied, only
+`warm_speaker`'s file left - never passed in from `--user`, so a memo that does not survive a restart errors the stage), then send ONE replay-isolated, `probe`-class first turn. The run **fails** when `cache_n/(cache_n+prompt_n)`
 < 80 % or the brain TTFT is `--warn-ratio`/`--warn-ms` worse than the baseline's `cold_first_turn.ttft_ms` (the baseline
 records it on `--update-baseline`; without one only the cache floor is judged). A wake warm that did not run, or a sidecar
 that reports no `prompt_cache`, is an **error**, never a pass. The artifact/trend carry `cold_first_turn_stage` and a
@@ -1016,7 +1021,11 @@ produces a "Job failed" that looks like a hard failure while the service is actu
 
 ## Brain build + flags — B0.4: llama.cpp b11194, FlashAttention on, q8_0 K+V (2026-09-27)
 
-The tracked template `scripts/setup/systemd/llama-server.service` targets **llama.cpp b11194**
+> **Build moved 2026-10-30 to b11982** (`~/llama.cpp-b11982/build-jetson`, commit `8a199ad31`; same flags, same cmake set;
+> +6% prompt processing, otherwise equal - [A/B](llama-cpp-bump-b11982-ab.md), [switch runbook](llama-cpp-b11982-switch-runbook.md)).
+> The recipe below is the b11194 record; for b11982 substitute the tag. b11194 stays on disk for rollback.
+
+The tracked template `scripts/setup/systemd/llama-server.service` targeted **llama.cpp b11194** at B0.4
 (`~/llama.cpp-b11194/build-jetson`, commit `9f70b2cec`; built `GGML_CUDA=ON`,
 `CMAKE_CUDA_ARCHITECTURES=87`, `GGML_CUDA_FA=ON`, `GGML_CUDA_GRAPHS=ON`, `GGML_NATIVE=ON`,
 Release) with `--flash-attn on --cache-type-k q8_0 --cache-type-v q8_0` beside the MTP drafter.

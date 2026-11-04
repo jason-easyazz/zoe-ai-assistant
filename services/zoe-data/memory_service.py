@@ -1103,9 +1103,15 @@ def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
 
 
 def is_guest_memory_user(user_id: str | None) -> bool:
-    """Return True for unauthenticated identities that must not receive prompt memory."""
+    """Return True for unauthenticated identities that must not receive prompt memory.
 
-    return str(user_id or "").strip().lower() in {"", "guest", "anonymous", "voice-guest"}
+    ONE predicate (``user_filters.is_unidentified``): the sentinel set incl. ``voice-daemon`` and the per-session
+    ``guest-<id>`` principal zoe-auth mints. This copy knew neither (2026-11-02), so a device-token turn and a LAN guest
+    session were handed the household's prompt memory."""
+
+    from user_filters import is_unidentified
+
+    return is_unidentified(user_id)
 
 
 def _memory_status_visible(metadata: Mapping[str, Any]) -> bool:
@@ -1778,11 +1784,23 @@ class MemoryService:
             logger.warning("memory_service: load_durable_for_hop failed user=%s: %s", user_id, exc)
             return []
 
-    def _durable_rows_sync(self, user_id: str) -> list[MemoryRef]:
+    async def recheck_durable(self, user_id: str, ids: list[str]) -> list[MemoryRef]:
+        """The subset of ``ids`` that are, read FRESH by id now, still this owner's durable rows by exactly the rules of
+        ``load_durable_for_hop`` (``recall_every_turn`` selects from a cached index and re-verifies its few picks here, so a
+        row superseded, retired or deleted since the index was built never enters). A failed read RAISES: the caller fails
+        closed."""
+        if is_guest_memory_user(user_id) or not ids:
+            return []
+        self._require(user_id, "user_id is required")
+        return await self._run_sync(self._durable_rows_sync, user_id, [str(i) for i in ids])
+
+    def _durable_rows_sync(self, user_id: str, ids: Optional[list[str]] = None) -> list[MemoryRef]:
         now = datetime.datetime.now(datetime.timezone.utc)
         uid = str(user_id).strip().lower()
         out: list[MemoryRef] = []
-        for ref in self._visible_rows(user_id, now):
+        rows = (self._visible_rows(user_id, now) if ids is None else
+                self._filter_visible(self._collection().get(ids=ids, include=["documents", "metadatas"]), user_id, now))
+        for ref in rows:
             md = ref.metadata or {}
             if str(md.get("status") or "approved").strip().lower() != "approved":
                 continue
@@ -1952,7 +1970,7 @@ class MemoryService:
         optional, so an error hides the row rather than risk showing a forgotten name."""
         try:
             from memory_tombstones import matching_tombstone
-            return bool(matching_tombstone(user_id, text) or await _forgotten.matches(user_id, text))
+            return bool(matching_tombstone(user_id, text) or await _forgotten.matches(user_id, text, strict=True))
         except Exception:  # noqa: BLE001
             return True
 
@@ -2043,6 +2061,12 @@ class MemoryService:
                 await restraint.erase_user(user_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
+            # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
+            try:
+                import warm_speaker
+                await asyncio.to_thread(warm_speaker.forget_user, user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
             needles: list[str] = []
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
@@ -2093,6 +2117,11 @@ class MemoryService:
                 await omi_recordings.forget_user(user_id)
             except Exception as exc:  # noqa: BLE001
                 pendant_failure = exc
+            try:   # ... and their alarms (migration 0063): the labels are their words. Fail closed, like the night mind.
+                import alarms
+                await alarms.forget_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: alarm erasure failed ({type(exc).__name__})") from exc
             try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
                 import contacts_store
                 await contacts_store.forget_user(user_id)

@@ -1255,6 +1255,24 @@
   ],
   "examples": ["how are you", "how are you today", "how are you going", "how's it going", "hi there how are you", "hey zoe how are you?", "hello how are you today", "I want to know how you are", "I just want to know how you are doing", "can I ask how you are", "are you okay", "tell me about yourself", "what are you up to"]
  },
+ "turn_continuation": {
+  "_note": "conversation_cues.turn_continuation: a short CONTEXT-FREE continuation ('what else', 'and?', 'tell me more', 'anything else', 'go on'). It carries no topic of its own, so it follows the previous turn's domain (same panel, recent window) instead of being routed by its own meaningless embedding. The WHOLE utterance (after 'lead_ins' and 'fillers' are taken off both ends) must match one of 'patterns' (regex fragments, full match). A language with no section contributes nothing.",
+  "reviewed": true,
+  "lead_ins": ["okay", "ok", "um", "uh", "so", "well", "hey", "zoe", "and"],
+  "fillers": ["please", "zoe", "then", "for me", "to me"],
+  "patterns": [
+   "(?:and )?(?:what|anything|something|anyone|anybody) else",
+   "what else (?:is there|do you have|can you (?:tell|say)(?: me)?)",
+   "and(?: then)?",
+   "(?:and )?(?:what|how) about (?:that|it|the rest|the others?)",
+   "(?:tell|give) me (?:some )?more(?: (?:about|on) (?:that|it|this))?",
+   "(?:go|carry|keep) (?:on|going)",
+   "is that (?:all|everything)",
+   "what (?:other|more)(?: things)?"
+  ],
+  "examples": ["what else", "What else?", "and?", "tell me more", "anything else", "anything else?", "go on", "okay, what else", "and what else", "keep going", "is that all"],
+  "not_continuations": ["what else do you know about me", "what's on the shopping list", "add milk and eggs", "what time is it", "anything else on my calendar today", "turn on the light", ""]
+ },
  "calendar_followup": {
   "_note": "conversation_cues.calendar_followup: a short question about the calendar answer Zoe JUST gave ('what is it', 'what are they', 'what's the one event', 'which one'). The WHOLE utterance (after 'lead_ins' and 'fillers' are taken off both ends) must match one of 'patterns' (regex fragments, full match). The caller supplies the freshness window and the member-scoped read; a language with no section contributes nothing.",
   "reviewed": true,
