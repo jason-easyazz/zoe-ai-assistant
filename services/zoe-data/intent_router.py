@@ -3696,6 +3696,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                     ),
                 },
                 fallback,
+                in_turn=True,
             )
         except (ImportError, RuntimeError, TypeError, ValueError) as _e:
             logger.warning("good_evening composer failed: %s", _e)
@@ -4645,7 +4646,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "portrait_refresh":
         try:
             from user_portrait import run_portrait_synthesis  # type: ignore[import]
-            result = await run_portrait_synthesis(user_id)
+            import brain_scheduler
+            with brain_scheduler.declare("turn:portrait_refresh"):   # the person asked for it: a turn call
+                result = await run_portrait_synthesis(user_id)
             status = result.get("status", "unknown")
             if status == "ok":
                 chars = result.get("chars", 0)

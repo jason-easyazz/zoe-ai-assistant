@@ -1288,6 +1288,14 @@ async def lifespan(app: FastAPI):
         logger.warning("Task watchdog not started (non-fatal): %s", _wd_exc)
     # No boot-time legacy KV warm: it filled the brain's one slot with prompts the Flue sidecar never sends. The prefix
     # keeper below warms the household prefix the sidecar actually uses.
+    # Reasoning scheduler (ZOE_BRAIN_SCHEDULER, default log-only): one httpx choke point that counts/refuses a daytime 4B call
+    # made outside a person's turn. Installed before any background loop can reach the brain.
+    try:
+        import brain_scheduler
+
+        brain_scheduler.install()
+    except Exception as _bs_exc:
+        logger.warning("Brain scheduler not installed (non-fatal): %s", _bs_exc)
     # Keep the household's brain prefix resident in the one llama slot between conversations (re-warms it after a helper
     # batch / brain restart displaced it, so the next wake is a cache hit). ZOE_BRAIN_PREFIX_KEEPER (default on).
     try:

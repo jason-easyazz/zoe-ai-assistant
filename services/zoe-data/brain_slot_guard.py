@@ -39,6 +39,8 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Awaitable, Callable, Optional, TypeVar
 
+import brain_scheduler
+
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
@@ -157,6 +159,14 @@ def starts() -> int:
     return _starts
 
 
+def last_turn_age_s() -> Optional[float]:
+    """Seconds since a household turn last started or ended (None = none yet in this process). ``brain_scheduler`` uses it
+    to tell a post-turn pass (derived from a turn that just finished) from an idle call."""
+    if _last_activity <= 0.0:
+        return None
+    return max(0.0, _clock() - _last_activity)
+
+
 def waiters() -> int:
     """Background calls waiting on (or holding) the gate right now. A batch is still draining while this is > 0."""
     return _waiters
@@ -250,7 +260,8 @@ async def run_background(label: str, call: "Callable[[], Awaitable[T]]") -> "T":
             # No await between the gate's release check and this registration: a turn cannot slip in between.
             preempt = asyncio.get_running_loop().create_future()
             _holders.add(preempt)
-            task = asyncio.ensure_future(call())
+            with brain_scheduler.declare(label):   # the scheduler's choke point names this call (the task copies the context)
+                task = asyncio.ensure_future(call())
             try:
                 await asyncio.wait({task, preempt}, return_when=asyncio.FIRST_COMPLETED)
             except BaseException:

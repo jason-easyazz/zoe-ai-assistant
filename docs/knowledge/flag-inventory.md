@@ -32,7 +32,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 245 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 0 registered flags with no reader in the scanned sources.
+- 4 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -1167,3 +1167,9 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZMB_ORT_THREADS` | `'2'` | no | NO | `scripts/perf/zmb/embed_shim.py` |
 | `ZMB_PROBE_NEEDLE` | `''` | no | NO | `scripts/perf/zmb/arms/mempalace_verbatim.py` |
 | `ZMB_REAL_HOME` | `dynamic` | no | NO | `scripts/perf/zmb/arms/mpa_palace.py` |
+
+## Registered but not read by any scanned source
+
+Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
+
+`ZOE_BRAIN_SCHEDULER`, `ZOE_BRAIN_SCHEDULER_ALLOW`, `ZOE_BRAIN_SCHEDULER_DAY`, `ZOE_BRAIN_SCHEDULER_POST_TURN_S`
