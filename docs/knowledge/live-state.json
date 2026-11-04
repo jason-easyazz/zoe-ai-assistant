@@ -1187,13 +1187,6 @@
    "kind": "bool",
    "readers": 1
   },
-  "ZOE_ENABLE_OPENCLAW_EXECUTION": {
-   "defaults": [
-    "off"
-   ],
-   "kind": "bool",
-   "readers": 1
-  },
   "ZOE_ENGINEERING_MODE": {
    "defaults": [
     "interactive"
@@ -3826,6 +3819,13 @@
     "unset"
    ],
    "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_PROACTIVE_POLICY_LOG": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
    "readers": 1
   },
   "ZOE_PROACTIVE_RAISE_GAP_S": {

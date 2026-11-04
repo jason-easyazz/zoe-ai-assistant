@@ -27,12 +27,12 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 ## Summary
 
 - 809 prod flags; 221 read through `typed_env`.
-- 758 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
+- 758 legacy direct read sites in prod code across 226 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
-- 311 prod flags with no owner doc yet.
-- 1 registered flags with no reader in the scanned sources.
+- 310 prod flags with no owner doc yet.
+- 0 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -230,7 +230,6 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_EMBEDDING_MODEL_VERSION` | str | `'minilm-v1'` | - | - | `'minilm-v1'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_EMOTIONAL_FOLLOWUP_ENABLED` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `''` | no | NO | `services/zoe-data/proactive/triggers/emotional_followup.py` |
 | `ZOE_EMOTIONAL_RECALL_ENABLED` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `''` | no | NO | `services/zoe-data/routers/memories.py` |
-| `ZOE_ENABLE_OPENCLAW_EXECUTION` | bool | `False` | - | - | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_ENGINEERING_MODE` | str | `'interactive'` | - | `docs/guides/MULTICA_HERMES_PR_LOOP.md` | `'interactive'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_ENROLL_DECLINE_DAYS` | int | `60` | - | `docs/knowledge/zoe-driven-voice-enrollment.md` | `60` | yes | NO | `services/zoe-data/enrollment_state.py` |
 | `ZOE_ENROLL_MODE_ENABLED` | bool | `True` | - | `docs/knowledge/zoe-driven-voice-enrollment.md` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -605,6 +604,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_LEDGER` | str | `''` | - | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `''` | no | NO | `services/zoe-data/proactive/ledger.py` |
+| `ZOE_PROACTIVE_POLICY_LOG` | str | `''` | - | `docs/knowledge/proactive-policy-log.md` | `''` | no | NO | `services/zoe-data/proactive/policy_log.py` |
 | `ZOE_PROACTIVE_RAISE_GAP_S` | int | `7200` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `7200` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_RAISE_PER_DAY` | int | `2` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `2` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_SELECTOR` | str | `''` | - | `docs/knowledge/samantha-bar.md` | `''` | no | NO | `services/zoe-data/proactive/selector.py` |
@@ -1168,9 +1168,3 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZMB_ORT_THREADS` | `'2'` | no | NO | `scripts/perf/zmb/embed_shim.py` |
 | `ZMB_PROBE_NEEDLE` | `''` | no | NO | `scripts/perf/zmb/arms/mempalace_verbatim.py` |
 | `ZMB_REAL_HOME` | `dynamic` | no | NO | `scripts/perf/zmb/arms/mpa_palace.py` |
-
-## Registered but not read by any scanned source
-
-Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
-
-`ZOE_PROACTIVE_POLICY_LOG`

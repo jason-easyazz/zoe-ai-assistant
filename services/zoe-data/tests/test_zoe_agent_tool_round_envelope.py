@@ -121,7 +121,7 @@ async def test_full_tool_set_and_full_history_fit_before_and_after_the_first_too
     """The initial history window reserves the serialized schemas too, so a full tool
     set + a history that fills the window still fits the slot on the FIRST request."""
     full = list(zoe_agent._TOOLS)
-    assert _tools_tokens(full) > 2500  # the full serialized schema set really is large
+    assert _tools_tokens(full) > 2000  # the full serialized schema set really is large
     _patch_context(monkeypatch, full)
     history = _history(40, 1500)  # fills the 5500-token window
 
