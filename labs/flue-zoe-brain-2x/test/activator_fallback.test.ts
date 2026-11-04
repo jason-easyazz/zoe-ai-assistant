@@ -108,7 +108,7 @@ test('agent instructions contain the derived group catalogue (GROUP_SUMMARY)', (
 
 test('activator doctrine is imperative: MUST activate first, NEVER fabricate', () => {
   assert.ok(ZOE_INSTRUCTIONS.includes(ACTIVATOR_DOCTRINE));
-  assert.match(ACTIVATOR_DOCTRINE, /NO weather, calendar, list, timer, reminder/);
+  assert.match(ACTIVATOR_DOCTRINE, /NO weather, calendar, list, timer, alarm, reminder/);
   assert.match(ACTIVATOR_DOCTRINE, /MUST use a tool FIRST/);
   assert.match(ACTIVATOR_DOCTRINE, /activate_abilities/);
   assert.match(ACTIVATOR_DOCTRINE, /NEVER claim/);

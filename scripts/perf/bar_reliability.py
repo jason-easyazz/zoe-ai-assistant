@@ -71,7 +71,7 @@ SCHEMA = "zoe.bar_reliability/1"
 COMPARE_SCHEMA = "zoe.bar_reliability.compare/1"
 DEFAULT_K = 3
 VALID_STATUSES = ("ok", "partial", "regression")   # a run that produced a verdict per selected scenario
-LOCK = os.environ.get("ZOE_HARNESS_LOCK", "/tmp/zoe-voice-harness.lock")
+LOCK = "/tmp/zoe-voice-harness.lock"   # FIXED, like samantha_bar.LOCK: the steps it serialises lock this exact path
 CACHE = Path.home() / ".cache" / "zoe"
 DEFAULT_BASELINE = CACHE / "samantha_bar_reliability_baseline.json"
 REPO = Path(__file__).resolve().parents[2]
@@ -234,11 +234,18 @@ def load_json(path: Path) -> dict:
 
 
 def expand_inputs(paths: Iterable[Path]) -> list[Path]:
-    """Files as given; a directory contributes its ``run-*.json`` files in order."""
+    """Files as given; a directory contributes its ``run-*.json`` files in order. Each FILE counts once: one named twice
+    (a directory plus one of its runs, the same path repeated, a symlink to it) is dropped, so repeating a reference to
+    one run can never satisfy k."""
     out: list[Path] = []
+    seen: set[str] = set()
     for p in paths:
         p = Path(p)
-        out.extend(sorted(p.glob("run-*.json")) if p.is_dir() else [p])
+        for f in (sorted(p.glob("run-*.json")) if p.is_dir() else [p]):
+            key = os.path.realpath(f)
+            if key not in seen:
+                seen.add(key)
+                out.append(f)
     return out
 
 
@@ -506,6 +513,17 @@ def _harness_quiet():
     return mod
 
 
+def _typed_env():
+    """services/zoe-data/typed_env.py by FILE PATH (stdlib-only): flags are read through the registry, not os.environ."""
+    mod = sys.modules.get("typed_env")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("typed_env", REPO / "services" / "zoe-data" / "typed_env.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["typed_env"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
 def run_schedule(arms: list[str], k: int) -> list[tuple[int, str]]:
     """(round, arm) in run order: interleaved, the order alternating each round (ABBA...), so slow drift over the
     night (thermal, a growing cache, the hour) lands on both arms."""
@@ -649,7 +667,7 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
     plan = run_schedule(list(arms), args.k)
     out_dir = Path(args.out_dir)
     extra = [a for a in args.extra if a != "--"]
-    if not args.dry_run and os.environ.get("ZOE_PERF") != "1":
+    if not args.dry_run and _typed_env().env_str("ZOE_PERF") != "1":
         log("bar_reliability run: skipped - live runs require ZOE_PERF=1 (see --dry-run)")
         return EXIT_OK
     idents = {a: arm_identity(c, args.harness, extra, arm_envs.get(a)) for a, c in arms.items()}
@@ -791,9 +809,34 @@ def _cmd_score(args, log) -> int:
     return EXIT_OK if agg["status"] == "ok" and not agg["summary"]["errored"] else EXIT_UNMEASURED
 
 
+def saved_declared_arm_env(path: Path, agg: dict[str, Any]) -> dict[str, str]:
+    """The override an arm was ASKED to run with, recovered from what ``run`` saved: a directory's ``identity-*.json`` files (they
+    must agree; a disagreement matches no recorded env) or a saved aggregate's ``arm_identity``. A directory with no identity
+    files declares nothing (``{}``), so an arm that recorded an override nobody declared is not comparable. A hand-made
+    aggregate file with no identity falls back to its own record (nothing to check it against)."""
+    p = Path(path)
+    if p.is_dir():
+        seen: list[dict[str, str]] = []
+        for f in sorted(p.glob("identity-*.json")):
+            try:
+                seen.append(dict(load_json(f).get("arm_env") or {}))
+            except (OSError, ValueError):
+                seen.append({"<unreadable identity>": f.name})
+        if not seen:
+            return {}
+        return seen[0] if all(e == seen[0] for e in seen) else {"<inconsistent identity>": "arm_env"}
+    ident = agg.get("arm_identity")
+    if isinstance(ident, dict):
+        return dict(ident.get("arm_env") or {})
+    return dict(agg.get("arm_env") or {})
+
+
 def _cmd_compare(args, log) -> int:
-    cmp = compare(as_aggregate(args.control, k=args.k, label="control"),
-                  as_aggregate(args.candidate, k=args.k, label="candidate"))
+    control = as_aggregate(args.control, k=args.k, label="control")
+    candidate = as_aggregate(args.candidate, k=args.k, label="candidate")
+    declared = {"control": saved_declared_arm_env(args.control, control),
+                "candidate": saved_declared_arm_env(args.candidate, candidate)}
+    cmp = compare(control, candidate, declared=declared)
     if args.out:
         write_json(args.out, cmp)
     log(json.dumps(cmp, indent=2, sort_keys=True) if args.json else

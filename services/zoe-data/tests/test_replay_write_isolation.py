@@ -303,6 +303,7 @@ def test_the_env_flip_alternative_would_have_reddened_the_gate():
 _BARE_DISPATCH_READS = {
     "weather", "reminder_list", "calendar_show", "list_show",
     "note_search", "journal_prompt", "journal_streak", "people_search",
+    "alarm_list",
 }
 _BARE_DISPATCH_REPLAY_GATED = {"timer_create"}
 

@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-04T00:00:00Z
+timestamp: 2026-11-05T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-04T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-04. The table body is deterministic (sorted, no
+Last generated: 2026-11-05. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -26,12 +26,12 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 809 prod flags; 221 read through `typed_env`.
-- 758 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
+- 808 prod flags; 222 read through `typed_env`.
+- 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
-- 311 prod flags with no owner doc yet.
+- 310 prod flags with no owner doc yet.
 - 0 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-809 flags; 758 not documented in `.env.example`.
+808 flags; 757 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -230,7 +230,6 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_EMBEDDING_MODEL_VERSION` | str | `'minilm-v1'` | - | - | `'minilm-v1'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_EMOTIONAL_FOLLOWUP_ENABLED` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `''` | no | NO | `services/zoe-data/proactive/triggers/emotional_followup.py` |
 | `ZOE_EMOTIONAL_RECALL_ENABLED` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `''` | no | NO | `services/zoe-data/routers/memories.py` |
-| `ZOE_ENABLE_OPENCLAW_EXECUTION` | bool | `False` | - | - | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_ENGINEERING_MODE` | str | `'interactive'` | - | `docs/guides/MULTICA_HERMES_PR_LOOP.md` | `'interactive'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_ENROLL_DECLINE_DAYS` | int | `60` | - | `docs/knowledge/zoe-driven-voice-enrollment.md` | `60` | yes | NO | `services/zoe-data/enrollment_state.py` |
 | `ZOE_ENROLL_MODE_ENABLED` | bool | `True` | - | `docs/knowledge/zoe-driven-voice-enrollment.md` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -553,7 +552,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PANEL_REVIEW_CARDS` | bool | `False` | - | `docs/knowledge/day-review-raise.md` | `False` | yes | NO | `services/zoe-data/panel_review_cards.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | int | `900` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PANEL_TOKEN_VIA_CF` | str | `'guest'` | - | `services/zoe-data/AGENTS.md` | `'guest'` | no | NO | `services/zoe-data/panel_principal.py` |
-| `ZOE_PERF` | str | `''` | - | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `-` | no | NO | `scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_cold_first_turn.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
+| `ZOE_PERF` | str | `''` | - | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `-` | yes | NO | `scripts/perf/bar_reliability.py`<br>`scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_cold_first_turn.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_PERSONALISATION_HOP` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONALISATION_HOP_PLACEMENT` | str | `'block'` | - | `docs/knowledge/samantha-bar.md` | `'block'` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONALISATION_HOP_WORDING` | str | `'natural'` | - | `docs/knowledge/samantha-bar.md` | `'natural'` | yes | NO | `services/zoe-data/personalisation_hop.py` |

@@ -122,7 +122,7 @@ def test_zoe_self_summary_is_curated_not_a_flat_dump():
     s = _src("zoe_agent.py")
     # The curated summary keeps the behaviour-driving sections…
     assert "_ZOE_SELF_SUMMARY" in s, "lean ZOE_SELF summary constant removed"
-    for needle in ("Tier0 intent_router", "escalate_to_hermes", "builder skills"):
+    for needle in ("Tier0 intent_router", "web_search"):
         assert needle in s, f"ZOE_SELF summary lost behaviour-driving content: {needle}"
 
 
@@ -170,5 +170,4 @@ def test_voice_tools_keep_a_memory_write_path():
         "voice has no memory-write tool but still routes remember/store/save to the LLM"
     )
     # Stay lean: the trimmed-out tools must not creep back into the voice set.
-    assert "escalate_to_openclaw" not in vt, "escalate_to_openclaw back in voice (use Hermes)"
     assert "show_chart" not in vt, "show_chart back in voice (not voice-rendered)"

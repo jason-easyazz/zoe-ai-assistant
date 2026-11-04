@@ -19,6 +19,10 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def _load(name: str, rel: str):
+    # Reuse a module another test file already imported: replacing sys.modules["samantha_bar"] would leave modules bound
+    # to the OLD copy (samantha_day_sim's ``sb``) while later tests monkeypatch the NEW one - their patches then miss.
+    if name in sys.modules:
+        return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, REPO / rel)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
@@ -334,6 +338,20 @@ def test_cli_score_baseline_record_and_compare(tmp_path):
     e = _write_runs(tmp_path / "b", rows)
     assert br.main(["score", str(e), "--compare-baseline", "--baseline", str(base)], log=quiet) == 1
     assert br.main(["score", str(d), "--compare-baseline", "--baseline", str(base)], log=quiet) == 0
+
+
+def test_one_run_referenced_k_times_is_one_run_not_k(tmp_path):
+    """A directory plus one of its runs, a repeated path, or a symlink must not count the same measurement twice."""
+    base = tmp_path / "b.json"
+    quiet = lambda *_: None  # noqa: E731
+    one = _write_runs(tmp_path / "one", same(ALL_PASS, 1)) / "run-1.json"
+    (tmp_path / "link.json").symlink_to(one)
+    assert len(br.expand_inputs([one, one, tmp_path / "link.json", one.parent])) == 1
+    assert br.main(["score", str(one), str(one), str(tmp_path / "link.json"), "--record-baseline",
+                    "--baseline", str(base)], log=quiet) == 2
+    assert not base.exists()
+    d = _write_runs(tmp_path / "three", same(ALL_PASS))
+    assert len(br.expand_inputs([d, d / "run-1.json"])) == 3
 
 
 def test_baseline_refuses_unbound_or_errored_runs(tmp_path):
@@ -774,3 +792,23 @@ def test_a_recorded_override_is_compared_as_recorded_never_coerced():
     for forged in ({"ZOE_X": 1}, {"ZOE_X": True}, ["ZOE_X"], "ZOE_X=1"):
         bad = br.aggregate([{**env_run(None), "scratch": {"arm_env": forged}} for _ in range(3)], k=3, label="candidate")
         assert br.compare(ctl, bad, declared=declared)["measurable"] is False, forged
+
+
+def test_offline_compare_enforces_the_declared_override(tmp_path):
+    """Review P1: `compare --admissible` on saved dirs must hold each arm to the override its identity files declared."""
+    def arm_dir(name: str, recorded: dict, declared: dict) -> Path:
+        d = tmp_path / name
+        d.mkdir()
+        for i in (1, 2, 3):
+            (d / f"run-{i}.json").write_text(json.dumps(env_run(recorded)))
+            (d / f"identity-{i}.json").write_text(json.dumps({"arm_env": declared}))
+        return d
+
+    quiet = lambda *_: None  # noqa: E731
+    ctl = arm_dir("ctl", {}, {})
+    ok = arm_dir("ok", FLAG, FLAG)
+    ignored = arm_dir("ignored", {}, FLAG)          # asked for the flag, the checkout ignored it
+    undeclared = arm_dir("undeclared", FLAG, {})    # recorded an override nobody declared
+    assert br.main(["compare", "--control", str(ctl), "--candidate", str(ok), "--admissible"], log=quiet) == 0
+    for bad in (ignored, undeclared):
+        assert br.main(["compare", "--control", str(ctl), "--candidate", str(bad), "--admissible"], log=quiet) == 2
