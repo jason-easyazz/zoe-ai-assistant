@@ -402,6 +402,15 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
         summary["totals"] = {**totals([mt]), "members": 0, "wall_s": round(time.monotonic() - t0, 2)}      # the counters of every call the cells made, aggregated
         return 0, summary
     res = await run_members(args, cfg, mode)
+    if mode == "enforce" and not args.transcript_file:
+        # tonight's threads into tomorrow's now card (services/zoe-data/now_card.py; deterministic, a no-op while ZOE_MEMORY_NOW_CARD is off)
+        try:
+            import now_card
+
+            built = await now_card.rebuild_all([m.get("user_id") for m in res["members"] if m.get("user_id")])
+            print(f"NOW_CARD_REBUILD members={len(built)} ok={sum(1 for v in built.values() if v == 'ok')}", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 - the card is a derived view; the night's own result stands
+            print(f"NOW_CARD_REBUILD failed ({type(exc).__name__})", file=sys.stderr)
     if res.get("setup_error"):
         summary["setup_error"] = res["setup_error"]
     summary["members"] = res["members"]

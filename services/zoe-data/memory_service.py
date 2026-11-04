@@ -2037,6 +2037,12 @@ class MemoryService:
                 await night_mind.delete_user(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: night-mind erasure failed ({type(exc).__name__})") from exc
+            # ... and the now card (quotes of the same words, by key) - same rule, fail closed
+            try:
+                import now_card
+                await now_card.forget_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: now-card erasure failed ({type(exc).__name__})") from exc
             # ... and the struggle detector's rows (summaries of the same words) - same rule, fail closed
             try:
                 import struggle_detector

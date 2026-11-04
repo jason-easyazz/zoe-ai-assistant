@@ -93,7 +93,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-107 stores: 36 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+108 stores: 37 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -101,6 +101,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `night_observations` | pg_table | words | reached | member: `night_mind.delete_user` / entity: `night_mind.erase_entity` | - |
 | `night_threads` | pg_table | words | reached | member: `night_mind.delete_user` / entity: `night_mind.erase_entity` | - |
 | `night_runs` | pg_table | metadata | reached | member: `night_mind.delete_user` | - |
+| `now_cards` | pg_table | derived | reached | member: `now_card.forget_user` / entity: `now_card.erase_entity` | - |
 | `struggle_events` | pg_table | derived | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | - |
 | `struggle_proposal_events` | pg_table | derived | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | - |
 | `turn_outcomes` | pg_table | derived | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | - |

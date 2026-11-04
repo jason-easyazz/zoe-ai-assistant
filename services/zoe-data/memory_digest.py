@@ -3297,6 +3297,17 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
 
         result["user_model_card"] = await rebuild_user_model_card(user_id, db=db)
 
+    # Nightly: the now card (now_card.py; deterministic, no LLM; a no-op while ZOE_MEMORY_NOW_CARD is off). The night-mind CLI rebuilds it
+    # again after tonight's pass, so tonight's threads reach tomorrow's card; this one covers a night the window does not run.
+    try:
+        import now_card
+
+        built = await now_card.rebuild(user_id)
+        if built.get("status") != "off":
+            result["now_card"] = built
+    except Exception as exc:
+        logger.warning("dreaming: now card failed user=%s: %s", user_id, type(exc).__name__)
+
     # Opt-in, report-only Lint pass (default OFF via ZOE_MEMORY_LINT_IN_DREAMING).
     # Lint never mutates stored memory; it only emits a structured report of
     # contradictions / stale / orphan / duplicate rows for human review.
