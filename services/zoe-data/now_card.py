@@ -322,7 +322,7 @@ def invalidate(uid: Optional[str] = None) -> None:
 
 
 def _no_table(exc: BaseException) -> bool:
-    """No 0066 table, or a process that NEVER had a database (a lab, a bare test). One that had a pool and lost it is a fault."""
+    """No 0067 table, or a process that NEVER had a database (a lab, a bare test). One that had a pool and lost it is a fault."""
     text = f"{type(exc).__name__} {exc}".lower()
     if "undefinedtable" in text or "does not exist" in text or "no such table" in text:
         return True
@@ -424,6 +424,9 @@ async def _live(uid: str, lines: list, svc: Any = None) -> list:
     import restraint
 
     mutes = await restraint.list_mutes(uid)
+    # the WHOLE source text of each line, freshly read: a stored line is cut for display (FACT_CHARS / QUOTE_CHARS), and a mute or
+    # a forget named after the cut must still drop it
+    whole: dict = {}
     obs_ids: Optional[set] = None
     if any(k == "thread" for k, _t, _r in lines):
         try:
@@ -432,6 +435,7 @@ async def _live(uid: str, lines: list, svc: Any = None) -> list:
             if night_mind.enabled():
                 _thr, obs = await night_mind.snapshot(uid, use_cache=True, all_threads=True)
                 obs_ids = {f"night_observations:{o['id']}" for o in obs}
+                whole.update((f"night_observations:{o['id']}", str(o.get("quote") or "")) for o in obs)
         except Exception:  # noqa: BLE001
             obs_ids = None
     facts: Optional[set] = None
@@ -442,7 +446,9 @@ async def _live(uid: str, lines: list, svc: Any = None) -> list:
                 from memory_service import get_memory_service
 
                 svc = get_memory_service()
-            facts = {f"memory:{r.id}" for r in await svc.recheck_durable(uid, mem)}
+            fresh = await svc.recheck_durable(uid, mem)
+            facts = {f"memory:{r.id}" for r in fresh}
+            whole.update((f"memory:{r.id}", str(getattr(r, "text", "") or "")) for r in fresh)
         except Exception:  # noqa: BLE001
             facts = None
     out = []
@@ -451,8 +457,12 @@ async def _live(uid: str, lines: list, svc: Any = None) -> list:
             continue
         if kind == "fact" and (facts is None or ref not in facts):
             continue
-        if kind != "speaker" and (restraint.muted(text, ref, mutes) or await _forgotten(uid, text)):
-            continue
+        if kind != "speaker":
+            texts = [t for t in dict.fromkeys((text, whole.get(ref, ""))) if t]
+            if any(restraint.muted(t, ref, mutes) for t in texts):
+                continue
+            if any([await _forgotten(uid, t) for t in texts]):
+                continue
         out.append([kind, text, ref])
     return out if any(k != "speaker" for k, _t, _r in out) else []
 

@@ -611,3 +611,77 @@ def test_the_harness_switch_builds_and_serves_harness_ids_only(lab, monkeypatch,
     monkeypatch.setenv("ZOE_MEMORY_NOW_CARD_HARNESS", "1")
     assert serve(uid) == ""                                                # the first turn starts the build, never waits for it
     assert (("Juniper" in serve(uid)) is admitted) and ((uid in st.rows) is admitted)
+
+
+# ── Codex #2281: a mute named after the display cut; the night-mind CLI's pool lifetime ──────────────────
+
+LONG = ("User restores old oak furniture in the back shed every weekend, sanding, staining and refinishing the chairs "
+        "for the Saturday markets near Pinehaven.")
+
+
+def test_a_mute_after_the_build_is_checked_against_the_whole_fact(lab, monkeypatch):
+    assert len(LONG) > nc.FACT_CHARS and LONG.index("Pinehaven") > nc.FACT_CHARS
+    st, _svc = _built(lab, monkeypatch, svc=FakeSvc([row("m01", LONG)]))
+    stored = st.rows[UID][1]
+    assert "oak furniture" in stored and "Pinehaven" not in stored          # the stored line is cut before the muted word
+    mute = restraint.Mute(id="mu1", stems=frozenset(restraint.stems("Pinehaven")))
+    line = next(t for k, t, _r in json.loads(st.rows[UID][0])["lines"] if k == "fact")
+    assert not restraint.muted(line, "memory:m01", [mute])                   # control: the cut line alone never matches the mute
+    assert restraint.muted(LONG, "memory:m01", [mute])
+
+    async def mutes(_uid):
+        return [mute]
+
+    monkeypatch.setattr(restraint, "list_mutes", mutes)
+    out = serve()
+    assert out and "oak furniture" not in out and "Mia" in out
+
+
+def test_the_night_mind_cli_rebuilds_the_cards_before_it_closes_its_pool(monkeypatch):
+    """Codex #2281: run_members closed the pool in its finally, then the CLI rebuilt the cards - every SqlStore write had no pool."""
+    import importlib.util
+    import sys as _sys
+
+    import db_pool
+
+    spec = importlib.util.spec_from_file_location(
+        "zoe_night_mind_cli_nowcard", Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "zoe-night-mind.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    pool = {"open": False, "events": []}
+
+    async def init_pool():
+        pool["open"] = True
+        pool["events"].append("init")
+
+    async def close_pool():
+        pool["open"] = False
+        pool["events"].append("close")
+
+    async def probe(_cfg):
+        return True, ""
+
+    async def reflect(uid, *_a, **_k):
+        return {"user_id": uid, "status": "ran"}
+
+    async def rebuild_all(uids):
+        pool["events"].append(("rebuild", pool["open"], tuple(uids)))
+        return {u: "ok" for u in uids}
+
+    import memory_service
+
+    monkeypatch.setattr(db_pool, "init_pool", init_pool)
+    monkeypatch.setattr(db_pool, "close_pool", close_pool)
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: None)
+    monkeypatch.setattr(night_mind, "probe_model", probe)
+    monkeypatch.setattr(cli, "reflect_member", reflect)
+    monkeypatch.setattr(nc, "rebuild_all", rebuild_all)
+    monkeypatch.setitem(_sys.modules, "now_card", nc)
+    code, _summary = asyncio.run(cli.amain(["--user", "zed_uid", "--model-url", "http://127.0.0.1:1/v1"]))
+    assert ("rebuild", True, ("zed_uid",)) in pool["events"], pool["events"]
+    assert pool["events"].index(("rebuild", True, ("zed_uid",))) < pool["events"].index("close")
+    # control: a shadow (dry) pass never rebuilds
+    pool["events"].clear()
+    asyncio.run(cli.amain(["--user", "zed_uid", "--model-url", "http://127.0.0.1:1/v1", "--dry-run"]))
+    assert not [e for e in pool["events"] if isinstance(e, tuple)]
+

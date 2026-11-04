@@ -1,4 +1,4 @@
-"""0066 - ``now_cards``: the per-member "now card" (``now_card.py``, flag ``ZOE_MEMORY_NOW_CARD``).
+"""0067 - ``now_cards``: the per-member "now card" (``now_card.py``, flag ``ZOE_MEMORY_NOW_CARD``).
 
 One row per member, built by the night pass (dreaming, then the night-mind CLI) and read BY KEY on a household turn. ``card_json``
 holds the lines with their source pointers (``memory:<id>``, ``night_observations:<id>``, ``person:<id>``) so a serve can drop a line
@@ -9,8 +9,8 @@ it (``now_card.forget_user`` / ``now_card.erase_entity``) and the next night reb
 
 from alembic import op
 
-revision = "0066"
-down_revision = "0065"
+revision = "0067"
+down_revision = "0066"  # 0066 = memory_curation (#2158), which lands first
 branch_labels = None
 depends_on = None
 

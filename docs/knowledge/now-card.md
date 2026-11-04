@@ -62,7 +62,7 @@ The card changes at most nightly, so the system prompt wins. The wake warm (`_kv
 
 ## Owner steps
 
-1. **Merge and deploy** (migration `0066` runs with the deploy; the sidecar is rebuilt). Voice path: lands through the replay gate (`zoe_flue_client.py`, the sidecar).
+1. **Merge and deploy** (migration `0067` runs with the deploy; the sidecar is rebuilt). Voice path: lands through the replay gate (`zoe_flue_client.py`, the sidecar).
 2. **Shadow** (no prompt changes; the night builds cards): `ZOE_MEMORY_NOW_CARD=shadow` in `services/zoe-data/.env` (the night window and dreaming read the same file), restart zoe-data, poll `/health`. Next morning: `grep NOW_CARD_BUILD ~/.zoe-logs/zoe-data.app.log ~/.zoe/night-window/logs/*.log` (one `ok` line per member with a card; `errors=-`), then a few days of `grep "NOW_CARD " ~/.zoe-logs/zoe-data.app.log`: `skipped=` mix (expect mostly `-` on member turns, `unverified` rare), `tokens` <= 180, `ms` well under 400. Read a member's own card only privately (it holds their words), never into a transcript.
 3. **Bar run, off vs on** (prepared, not run; household-quiet hours only, the night gate first):
    ```

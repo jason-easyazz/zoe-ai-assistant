@@ -206,10 +206,25 @@ async def run_members(args, cfg, mode: str) -> dict:
             members.append({k: v for k, v in res.items() if isinstance(v, (int, float, str, bool)) and k != "mood"})
             if res.get("status") == "llm_unreachable":
                 break
+        if mode == "enforce" and db_ctx is not None:
+            # INSIDE the pool's lifetime: now_card.SqlStore writes through get_db_ctx, and the finally below closes the pool
+            await rebuild_now_cards(members)
     finally:
         if db_ctx is not None:
             await db_ctx[1]()
     return {"members": members}
+
+
+async def rebuild_now_cards(members: "list[dict]") -> None:
+    """Tonight's threads into tomorrow's now card (services/zoe-data/now_card.py; deterministic, a no-op while ZOE_MEMORY_NOW_CARD is
+    off). The card is a derived view: a failure is printed, the night's own result stands."""
+    try:
+        import now_card
+
+        built = await now_card.rebuild_all([m.get("user_id") for m in members if m.get("user_id")])
+        print(f"NOW_CARD_REBUILD members={len(built)} ok={sum(1 for v in built.values() if v == 'ok')}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"NOW_CARD_REBUILD failed ({type(exc).__name__})", file=sys.stderr)
 
 
 def totals(members: "list[dict]") -> dict:
@@ -401,16 +416,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
         mt = summary["cells"].get("model_totals") or {}
         summary["totals"] = {**totals([mt]), "members": 0, "wall_s": round(time.monotonic() - t0, 2)}      # the counters of every call the cells made, aggregated
         return 0, summary
-    res = await run_members(args, cfg, mode)
-    if mode == "enforce" and not args.transcript_file:
-        # tonight's threads into tomorrow's now card (services/zoe-data/now_card.py; deterministic, a no-op while ZOE_MEMORY_NOW_CARD is off)
-        try:
-            import now_card
-
-            built = await now_card.rebuild_all([m.get("user_id") for m in res["members"] if m.get("user_id")])
-            print(f"NOW_CARD_REBUILD members={len(built)} ok={sum(1 for v in built.values() if v == 'ok')}", file=sys.stderr)
-        except Exception as exc:  # noqa: BLE001 - the card is a derived view; the night's own result stands
-            print(f"NOW_CARD_REBUILD failed ({type(exc).__name__})", file=sys.stderr)
+    res = await run_members(args, cfg, mode)      # rebuilds the now cards itself, while its pool is still open
     if res.get("setup_error"):
         summary["setup_error"] = res["setup_error"]
     summary["members"] = res["members"]
