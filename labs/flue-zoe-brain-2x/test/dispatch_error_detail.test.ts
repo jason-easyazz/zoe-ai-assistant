@@ -1,7 +1,7 @@
 /**
  * dispatchIntent passes a fulfilment VERDICT through, and the `alarm` tool (LAB-ONLY, offline; fetch is stubbed).
  *
- * QA 2026-11-05: "remind me on the 15th of December at 10am to book Felix in at the dentist" came back 422 from
+ * QA 2026-11-05: "remind me on the 15th of December at 10am to book the car in for a service" came back 422 from
  * /api/system/intent-dispatch twice (reminder_service rejected the time "10am"). The tool told the brain only "couldn't
  * reach the reminder service (it returned 422)", so the reply blamed the service ("having some trouble right now") and
  * the user could not tell what to change. A 422 / 404 `detail` is now passed through, flattened to one short line; every
@@ -49,7 +49,7 @@ async function withFetch(status: number, body: unknown, fn: (calls: Call[]) => P
   }
 }
 
-const REMINDER = { title: 'book Felix in at the dentist', date: '15th of December', time: '10am' };
+const REMINDER = { title: 'book the car in for a service', date: '15th of December', time: '10am' };
 const DETAIL = "due_time '10am' is not a clock time; use HH:MM (00-23:00-59), optionally with AM/PM";
 
 test('a 422 verdict reaches the brain: what was wrong, nothing saved, never "done"', async () => {

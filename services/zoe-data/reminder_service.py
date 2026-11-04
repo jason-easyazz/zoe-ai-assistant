@@ -110,7 +110,7 @@ _NAMED_TIMES = {"noon": "12:00", "midday": "12:00", "midnight": "00:00"}
 def _canonical_spoken_time(text: str) -> str | None:
     """'HH:MM' (24 h) for a spoken clock time the strict parser rejects, else None.
 
-    Live 2026-11-04: "remind me on the 15th of December at 10am to book Felix in at the dentist" failed twice on the chat
+    Live 2026-11-04: "remind me on the 15th of December at 10am to book the car in for a service" failed twice on the chat
     lane - the brain's `add_reminder` dispatch came back 422 (only 'HH:MM' / 'HH:MM AM' counted as clock times, so the
     user's own "10am" did not), and the reply said the reminder service was "having trouble". An hour with am/pm must be
     1-12; no meridiem and no minutes ("10") stays a 422 - "7" could be morning or evening, and a reminder must not guess."""

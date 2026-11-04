@@ -1,6 +1,6 @@
 """The brain's reminder, said the way people say it, is created - and when a dispatch is refused, the log says why.
 
-QA 2026-11-05 (typed chat): "remind me on the 15th of December at 10am to book Felix in at the dentist" -> the chat lane
+QA 2026-11-05 (typed chat; the reminder subject is anonymised here, the date/time words are verbatim): "remind me on the 15th of December at 10am to book the car in for a service" -> the chat lane
 deferred the write to the brain (``EXPERT_DEFER_WRITE``), the brain called ``add_reminder``, and
 ``/api/system/intent-dispatch`` answered **422** both times (the zoe-data request log shows it). The reply opened "I can
 certainly set that reminder for you." and then apologised for a "hiccup"; a retry said the reminder service was "having some
@@ -33,7 +33,7 @@ from reminder_service import normalize_due_date, normalize_due_time
 
 pytestmark = pytest.mark.ci_safe
 
-TITLE = "book Felix in at the dentist"
+TITLE = "book the car in for a service"
 # The slots the brain builds from the QA sentence (the add_reminder tool passes date / time through as the model wrote them).
 QA_SLOTS = {"title": TITLE, "date": "15th of December", "time": "10am"}
 HONEST_EN = "I didn't manage to add that; want me to try again?"
@@ -188,7 +188,7 @@ async def test_a_refused_dispatch_logs_status_and_reason_but_no_text(dispatch_en
     assert "status=422 ok=0 reason=due_date_past" in lines[1]
     assert "status=422 ok=0 reason=due_time_not_a_time" in lines[2]
     logged = caplog.text.lower()
-    for private in ("felix", "dentist", "decembr", "half ten", "qa-user-1", "2001"):
+    for private in ("the car", "car in for", "decembr", "half ten", "qa-user-1", "2001"):
         assert private not in logged, private
 
 
@@ -197,14 +197,14 @@ async def test_an_unexpected_failure_logs_the_error_class_only(dispatch_env, mon
     caplog.set_level(logging.INFO, logger="routers.system")
 
     async def _boom(intent, user_id="guest"):
-        raise RuntimeError("db exploded while writing book Felix in")
+        raise RuntimeError("db exploded while writing book the car in")
 
     monkeypatch.setattr(intent_router, "execute_intent", _boom)
     with pytest.raises(HTTPException) as exc:
         await _dispatch(QA_SLOTS)
     assert exc.value.status_code == 500
     assert "status=500 ok=0 reason=error_RuntimeError" in caplog.text
-    assert "felix" not in caplog.text.lower()
+    assert "the car" not in caplog.text.lower()
 
 
 @pytest.mark.parametrize("detail,slug", [
@@ -213,7 +213,7 @@ async def test_an_unexpected_failure_logs_the_error_class_only(dispatch_env, mon
     ("due_time 'half ten' is not a clock time; use HH:MM", "due_time_not_a_time"),
     ("recurring_pattern 'every 53 days' is not a supported recurrence", "recurring_pattern_unsupported"),
     ("alarms are not switched on in this home", "alarm_off"),
-    ("Felix's dentist could not be booked", "rejected"),
+    ("the car could not be booked in", "rejected"),
 ])
 def test_the_reason_slug_is_a_fixed_vocabulary(detail, slug):
     assert system._dispatch_reason(detail) == slug
