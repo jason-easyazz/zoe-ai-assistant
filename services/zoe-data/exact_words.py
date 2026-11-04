@@ -303,19 +303,18 @@ def _cap(text: str) -> str:
 
 
 async def _shielded(user_id: str, text: str) -> bool:
-    """Does the text name an entity the owner asked Zoe to forget (the 300 s tombstone or the durable ledger)? Fail-open
-    on a lookup failure only for the ledger (the row's own erase is the first wall)."""
+    """Does the text name an entity the owner asked Zoe to forget (the 300 s tombstone or the durable ledger)? Fails CLOSED:
+    forgotten means forever, so a ledger outage (or any lookup error) counts as shielded and the turn is not indexed - the
+    nightly backfill picks it up once the ledger answers. The warning carries the error type only, never a name."""
     try:
         from memory_tombstones import matching_tombstone
         if matching_tombstone(user_id, text):
             return True
-    except Exception:  # noqa: BLE001
-        pass
-    try:
         import memory_forgotten
-        return bool(await memory_forgotten.matches(user_id, text))
-    except Exception:  # noqa: BLE001
-        return False
+        return bool(await memory_forgotten.matches(user_id, text, strict=True))
+    except Exception as exc:  # noqa: BLE001 - includes memory_forgotten.LedgerUnavailable
+        logger.warning("exact_words: forget check unavailable (%s) - withholding", type(exc).__name__)
+        return True
 
 
 async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None, turn_id: Optional[str] = None,
@@ -392,16 +391,14 @@ async def lookup(user_id: str, question: str, *, k: int = DEFAULT_K) -> list[Hit
         rows = await asyncio.wait_for(get_backend().candidates(user_id, q, MAX_CANDIDATES), READ_TIMEOUT_S)
         if not rows:
             return []
-        try:
+        try:   # fail CLOSED: forgotten means forever, so a ledger outage serves no exact words (error type only in the log)
             import memory_forgotten
-            rows, _dropped = await memory_forgotten.keep_unforgotten(user_id, rows, text_of=lambda r: r[1])
-        except Exception:  # noqa: BLE001
-            pass
-        try:
+            rows, _dropped = await memory_forgotten.keep_unforgotten(user_id, rows, text_of=lambda r: r[1], strict=True)
             from memory_tombstones import matching_tombstone
             rows = [r for r in rows if not matching_tombstone(user_id, r[1])]
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001 - includes memory_forgotten.LedgerUnavailable
+            logger.warning("exact_words: forget check unavailable (%s) - serving nothing", type(exc).__name__)
+            return []
         import own_words
         safe: list[Row] = []
         for r in rows:

@@ -194,7 +194,6 @@ _ENTRIES = (
     _f('ZOE_COMPOSE_STREAM_BUDGET_S', 'int', 6),
     _f('ZOE_COMPOSE_TIMEOUT_S', 'int', 14),
     _f('ZOE_COMPOSE_UI', 'str', '', doc='docs/knowledge/state-of-zoe-review-2026-09-25.md'),
-    _f('ZOE_COMPOSE_VOICE_BUDGET_S', 'int', 8, doc='docs/knowledge/feature-audit-2026-09-25.md'),
     _f('ZOE_CONTACTS_API', 'str', '', doc='docs/architecture/contacts-data-model.md'),
     _f('ZOE_CONTACTS_CONVERSATIONAL', 'str', '', doc='docs/knowledge/contacts-conversation.md'),
     _f('ZOE_CONTACT_BACKFILL_ENABLED', 'str', '', doc='docs/knowledge/relationship-memory-flag-enable.md'),

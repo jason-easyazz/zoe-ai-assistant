@@ -158,7 +158,7 @@ async def _forgotten(user_id: str, text: str) -> bool:
         import memory_forgotten
         from memory_tombstones import matching_tombstone
 
-        return bool(matching_tombstone(user_id, text) or await memory_forgotten.matches(user_id, text))
+        return bool(matching_tombstone(user_id, text) or await memory_forgotten.matches(user_id, text, strict=True))
     except Exception:  # noqa: BLE001
         return True
 

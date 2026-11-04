@@ -1043,11 +1043,12 @@ async def evidence_for_row(user_id: str, row_id: str, *, svc: Any = None) -> Evi
     try:
         import memory_forgotten
 
-        if await memory_forgotten.matches(user_id, ref.text or ""):
+        if await memory_forgotten.matches(user_id, ref.text or "", strict=True):
             ev.refusal = FORGOTTEN_REPLY
             return ev
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - fail CLOSED (incl. LedgerUnavailable): a source we cannot vet is not quoted
+        ev.refusal = FORGOTTEN_REPLY
+        return ev
     if not _owns(meta, user_id):
         ev.refusal = NOT_YOURS_REPLY
         return ev
@@ -1085,10 +1086,10 @@ async def evidence_for_turn(user_id: str, turn_id: str) -> Evidence:
     try:
         import memory_forgotten
 
-        if await memory_forgotten.matches(user_id, text):
+        if await memory_forgotten.matches(user_id, text, strict=True):
             return Evidence(refusal=FORGOTTEN_REPLY)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - fail CLOSED (incl. LedgerUnavailable): a quote we cannot vet is not served
+        return Evidence(refusal=FORGOTTEN_REPLY)
     return Evidence(turn_id=turn_id, quote=trim(text, QUOTE_MAX_CHARS), said_at=float(said_at), wording=text,
                     sensitive=sensitive_class(text))
 
