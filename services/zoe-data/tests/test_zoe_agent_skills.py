@@ -127,9 +127,6 @@ class TestBuildTools:
         names = self._names(tools)
         for t in zoe_agent._TOOLS:
             name = t["function"]["name"]
-            if name == "escalate_to_openclaw":
-                assert name not in names
-                continue
             assert name in names
 
     def test_tool_count_is_reasonable(self):
@@ -137,21 +134,8 @@ class TestBuildTools:
         tools = zoe_agent._build_tools({"weather"})
         names = self._names(tools)
         assert len(tools) < len(zoe_agent._TOOLS)
-        # weather tools + web/reporting defaults + Hermes when available.
+        # weather tools + web/reporting defaults.
         assert len(tools) <= 6
-        assert "escalate_to_openclaw" not in names
-
-    def test_openclaw_manual_only_unless_operator_enabled(self, monkeypatch):
-        """OpenClaw should not execute unless explicitly enabled for manual fallback."""
-        monkeypatch.delenv("ZOE_ENABLE_OPENCLAW_EXECUTION", raising=False)
-        default_names = self._names(zoe_agent._build_tools(set()))
-        fallback_names = self._names(zoe_agent._build_tools({"openclaw-fallback"}))
-        assert "escalate_to_openclaw" not in default_names
-        assert "escalate_to_openclaw" not in fallback_names
-
-        monkeypatch.setenv("ZOE_ENABLE_OPENCLAW_EXECUTION", "true")
-        fallback_names = self._names(zoe_agent._build_tools({"openclaw-fallback"}))
-        assert "escalate_to_openclaw" in fallback_names
 
 
 # ── _build_prompt ─────────────────────────────────────────────────────────────

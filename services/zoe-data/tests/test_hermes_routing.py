@@ -1,9 +1,9 @@
 """Hermes / OpenClaw are retired: the guards that keep them gone.
 
-The chat-side Hermes stream, the forced-agent lanes and the zoe_agent escalation
-tools were deleted (OpenClaw/Hermes removal, slice 2). What remains pinned here:
-the voice escalation-marker parser (voice path, untouched), and the A2A / system
-delegation surfaces that must refuse a retired agent.
+The chat-side Hermes stream, the forced-agent lanes, the zoe_agent escalation
+tools and the voice escalation-marker parser were deleted (OpenClaw/Hermes removal,
+slices 2 and 3). What remains pinned here: the A2A / system delegation surfaces
+that must refuse a retired agent.
 """
 import os
 import sys
@@ -14,31 +14,9 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import mcp_server
-from routers import system, voice_tts
+from routers import system
 
 pytestmark = pytest.mark.ci_safe
-
-
-def test_voice_hermes_marker_stays_foreground():
-    is_background, reason, prompt = voice_tts._parse_voice_escalation_delta(
-        "__ESCALATE_HERMES__:deep work|Use Hermes",
-        "fallback prompt",
-    )
-
-    assert is_background is False
-    assert reason == "deep work"
-    assert prompt == "Use Hermes"
-
-
-def test_voice_background_marker_queues_work():
-    is_background, reason, prompt = voice_tts._parse_voice_escalation_delta(
-        "__ESCALATE_BG__:long task|Run later",
-        "fallback prompt",
-    )
-
-    assert is_background is True
-    assert reason == "long task"
-    assert prompt == "Run later"
 
 
 @pytest.mark.asyncio
