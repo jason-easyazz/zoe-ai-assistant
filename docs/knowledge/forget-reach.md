@@ -93,7 +93,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-107 stores: 36 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+108 stores: 37 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -164,6 +164,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `speaker_profiles` | pg_table | biometric | out_of_scope | - | Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days). |
 | `face_profiles` | pg_table | biometric | out_of_scope | - | Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days). |
 | `enrollment_offers` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
+| `member_register` | pg_table | words | reached | member: `member_register.forget_user` | - |
 | `alarms` | pg_table | words | reached | member: `alarms.forget_user` | - |
 | `phone_devices` | pg_table | metadata | out_of_scope | - | A paired phone (phone_app.py): member id, a display name, the platform, a credential hash and public key - no household words. The member or an admin revokes it (phone_app.revoke_device), which deletes its push tokens. |
 | `user_preferences` | pg_table | config | out_of_scope | - | Preference flags; no household words. |

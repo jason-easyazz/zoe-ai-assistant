@@ -19641,5 +19641,8 @@
       "typed_env": false
     }
   },
-  "registry_unread": []
+  "registry_unread": [
+    "ZOE_MEMBER_REGISTER",
+    "ZOE_MEMBER_REGISTER_KIDS"
+  ]
 }

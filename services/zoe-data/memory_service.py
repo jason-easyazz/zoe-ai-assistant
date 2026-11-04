@@ -2118,6 +2118,11 @@ class MemoryService:
                 await alarms.forget_user(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: alarm erasure failed ({type(exc).__name__})") from exc
+            try:   # ... and their speaking register (migration 0066): liked topics are their words. Fail closed.
+                import member_register
+                await member_register.forget_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: register erasure failed ({type(exc).__name__})") from exc
             try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
                 import contacts_store
                 await contacts_store.forget_user(user_id)
