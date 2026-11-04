@@ -26,11 +26,19 @@ CLI:
                        [--compare-baseline] [--record-baseline] [--baseline F]
     bar_reliability.py compare --control A --candidate B [--k 3] [--out cmp.json] [--admissible]
     bar_reliability.py run --out-dir D --arm control=CHECKOUT [--arm candidate=CHECKOUT] [--k 3]
+                       [--arm-env ARM:ZOE_FLAG=value,ZOE_FLAG2=value ...]
                        [--harness bar|day-sim] [--step-min 35] [--dry-run] [-- extra harness args]
 
 Exit codes: ``score`` 0 ok / 1 regression vs the reliability baseline / 2 incomplete, errored or refused;
 ``compare --admissible`` and ``run`` with two arms: 0 admissible / 1 measured and NOT admissible / 2 not measurable
 (incomplete arm, an ERROR cell, arms not comparable, a refused gate).
+
+``--arm-env`` is a per-arm flag override for an A/B whose candidate only turns a FLAG on (the scratch stack otherwise copies
+the live flags into every arm): it is layered ON TOP of the copied flags inside THAT arm's scratch stack only
+(``harness_scratch.validate_arm_env``: ``ZOE_*`` names only; never ``ZOE_HARNESS*``, a secret, a location or an isolation pin;
+names only in logs), recorded in each run's JSON (``scratch.arm_env``) and in the aggregate (``arm_env``), and the two arms
+may then differ ONLY in the declared override + checkout: a run that recorded a different override than the one declared makes the
+arms not comparable (exit 2).
 
 ``run`` is a NIGHT job (scripts/AGENTS.md): it refuses in harness quiet hours, asks the measured night pause
 (``harness_quiet.night_pause_verdict``, ``night_busy.sh voice`` via ``ZOE_NIGHT_BUSY``, the fixed 01:50-04:55 window as
@@ -50,6 +58,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -148,6 +157,59 @@ def run_backdate(payload: dict) -> str:
     return "yes" if flag is True else "no" if flag is False else "unknown"
 
 
+def run_arm_env(payload: dict) -> dict:
+    """The per-arm flag overrides a run's scratch stack recorded ({} = none, or a writer that predates them)."""
+    env = (payload.get("scratch") or {}).get("arm_env")
+    return {str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {}
+
+
+def _hs():
+    mod = sys.modules.get("harness_scratch")
+    if mod is None:   # by FILE PATH, like harness_quiet (stdlib only; the one validator of what an arm may override)
+        spec = importlib.util.spec_from_file_location("harness_scratch", Path(__file__).resolve().parent / "harness_scratch.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["harness_scratch"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def parse_arm_env(specs: Iterable[str], arms: Iterable[str]) -> dict[str, dict[str, str]]:
+    """``ARM:NAME=value,NAME=value`` (repeatable) -> {arm: {NAME: value}}, validated by ``harness_scratch.validate_arm_env``.
+    ValueError (names only, never a value) on an unknown arm, a malformed pair, a duplicate, or a refused name/value."""
+    hs = _hs()
+    known = list(arms)
+    out: dict[str, dict[str, str]] = {}
+    for spec in specs:
+        arm, sep, rest = spec.partition(":")
+        if not sep or arm not in known:
+            raise ValueError(f"--arm-env must be ARM:NAME=value,... with ARM one of {known}")
+        pairs: dict[str, str] = out.setdefault(arm, {})
+        for item in filter(None, rest.split(",")):
+            name, eq, value = item.partition("=")
+            if not eq or not name:
+                raise ValueError(f"--arm-env {arm}: {name or item[:20]!r} is not NAME=value")
+            if name in pairs:
+                raise ValueError(f"--arm-env {arm}: {name} given twice")
+            pairs[name] = value
+        try:
+            out[arm] = hs.validate_arm_env(pairs)
+        except hs.Refused as exc:
+            raise ValueError(str(exc)) from None
+    return out
+
+
+def show_value(value: str) -> str:
+    """A flag value for the dry-run plan: only a short plain word (on / shadow / 1 / 0.5); anything else (a long or token-shaped
+    string) is shown as its length, never its content."""
+    return value if re.fullmatch(r"[A-Za-z0-9_.-]{1,12}", value) and not re.fullmatch(r"[0-9a-fA-F]{10,}", value) \
+        else f"<{len(value)} chars>"
+
+
+def show_arm_env(env: dict[str, str]) -> str:
+    """Names only for a log line (a value is shown nowhere but the run JSON)."""
+    return ",".join(sorted(env)) or "none"
+
+
 def run_problem(payload: dict) -> str | None:
     """Why a results payload cannot count as a run (None = it counts)."""
     if "status" not in payload:   # a baseline: a recorded verdict map, already proven when it was recorded
@@ -228,6 +290,7 @@ def aggregate(payloads: list[dict], *, k: int = DEFAULT_K, label: str = "run",
     samples = _one("samples", [p.get("samples", 1) for _, p in valid])
     rubric = _one("judge/criteria digest", [rubric_digest(p) for _, p in valid])
     kind = _one("harness", [run_kind(p) for _, p in valid])
+    arm_env = _one("arm env override", [run_arm_env(p) for _, p in valid]) or {}
     coverage = _one("coverage (full vs --only/--axis)", [run_coverage(p) for _, p in valid])
     backdate = _one("backdate (--no-backdate is diagnostic)", [run_backdate(p) for _, p in valid])
     codes = [code_identity(p) for _, p in valid]
@@ -251,7 +314,7 @@ def aggregate(payloads: list[dict], *, k: int = DEFAULT_K, label: str = "run",
     return {
         "schema": SCHEMA, "label": label, "harness": kind, "k": k, "n_runs": n, "status": status,
         "coverage": coverage, "backdate": backdate, "problems": problems, "rejected_runs": rejected, "sources": [s for s, _ in valid],
-        "samples": samples, "rubric_sha256": rubric, "code": code,
+        "samples": samples, "rubric_sha256": rubric, "code": code, "arm_env": arm_env,
         "all_runs_bound": bool(bound) and all(bound) and len(bound) == n,
         "summary": {
             "scenarios": len(ids),
@@ -285,9 +348,17 @@ def as_aggregate(path: Path, *, k: int, label: str) -> dict[str, Any]:
 # Candidate vs control
 # ─────────────────────────────────────────────────────────────────────────────
 
-def compare(control: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
-    """Collateral damage and the admissibility verdict (module docstring). Pure."""
+def compare(control: dict[str, Any], candidate: dict[str, Any],
+            declared: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
+    """Collateral damage and the admissibility verdict (module docstring). Pure. ``declared`` = the per-arm overrides the run
+    was asked to apply ({arm label: {NAME: value}}): an arm whose runs recorded anything else is not comparable."""
     unmeasured: list[str] = []
+    if declared is not None:
+        for arm in (control, candidate):
+            want, got = declared.get(arm.get("label"), {}), arm.get("arm_env") or {}
+            if want != got:
+                unmeasured.append(f"{arm.get('label')}: recorded arm env override {show_arm_env(got)} is not the declared "
+                                  f"{show_arm_env(want)} - the arms may differ only in the declared override + checkout")
     for arm in (control, candidate):
         if arm.get("coverage") != "full":
             unmeasured.append(f"{arm.get('label')}: coverage {arm.get('coverage')!r} - only a full bar is a complete arm")
@@ -348,6 +419,8 @@ def compare(control: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any
         "net_no_collateral": bool(measurable and net == "better" and not regressions),
         "measurable": measurable, "admissible": admissible, "reasons": reasons,
         "same_code": bool(control.get("code")) and control.get("code") == candidate.get("code"),
+        "arm_env": {"control": control.get("arm_env") or {}, "candidate": candidate.get("arm_env") or {}},
+        "arm_env_differs": (control.get("arm_env") or {}) != (candidate.get("arm_env") or {}),
     }
 
 
@@ -401,6 +474,8 @@ def baseline_record_problem(agg: dict[str, Any]) -> str | None:
         return f"status {agg['status']}"
     if agg["summary"]["errored"]:
         return f"ERROR cells: {', '.join(agg['summary']['errored'])}"
+    if agg.get("arm_env"):
+        return f"arm env override ({show_arm_env(agg['arm_env'])}): a flag-overridden arm is a candidate, never the bar"
     if not agg.get("all_runs_bound"):
         return "not every run is commit-bound (evidence.bound) - run from a clean checkout of the deployed commit"
     return None
@@ -454,10 +529,10 @@ def _git(root: Path, *args: str, runner: Callable[..., Any] = subprocess.run) ->
     return r.stdout.strip() if r.returncode == 0 else None
 
 
-def arm_identity(checkout: str, harness: str, extra: list[str], *,
+def arm_identity(checkout: str, harness: str, extra: list[str], arm_env: dict[str, str] | None = None, *,
                  runner: Callable[..., Any] = subprocess.run) -> dict[str, Any]:
     """WHAT an arm measures: the checkout's commit + tree (+ the tracked diff when dirty) and the exact harness and
-    args. A cached run is reused only for an identical identity. When git cannot vouch for the checkout the identity
+    args and per-arm flag overrides. A cached run is reused only for an identical identity. When git cannot vouch for the checkout the identity
     carries a per-invocation nonce, so no earlier run can ever match it (fail closed: re-run, never reuse)."""
     root = Path(checkout).resolve()
     tree = _git(root, "rev-parse", "HEAD^{tree}", runner=runner)
@@ -470,7 +545,7 @@ def arm_identity(checkout: str, harness: str, extra: list[str], *,
     verified = bool(tree and commit) and tracked is not None and (not tracked or diff_sha is not None)
     ident: dict[str, Any] = {"checkout": str(root), "commit": commit, "tree": tree, "diff_sha256": diff_sha,
                              "harness": harness, "script": HARNESS_SCRIPTS[harness], "args": list(extra),
-                             "verified": verified}
+                             "arm_env": dict(arm_env or {}), "verified": verified}
     if not verified:
         ident["nonce"] = os.urandom(8).hex()
     return ident
@@ -523,10 +598,16 @@ def step_gate(name: str, step_min: int, *, hq=None, runner: Callable[..., Any] =
 BYPASS_ENV = ("ZOE_HARNESS_FORCE", "ZOE_HARNESS_LANDING")
 
 
-def child_env(base: dict) -> dict:
+def child_env(base: dict, arm_env: dict[str, str] | None = None) -> dict:
     """The env each harness step runs with: ZOE_PERF=1, and NEVER the quiet-hours bypasses (the lander-only exemption and
-    the owner's force) - inherited from an operator shell they would let the child bar skip its own gate."""
-    return {**{k: v for k, v in base.items() if k not in BYPASS_ENV}, "ZOE_PERF": "1"}
+    the owner's force) - inherited from an operator shell they would let the child bar skip its own gate. The per-arm flag
+    overrides ride in ``harness_scratch.ARM_ENV_VAR`` for THAT step only; an inherited one is dropped (an operator shell must
+    not leak one arm's flags into another)."""
+    var = _hs().ARM_ENV_VAR
+    env = {**{k: v for k, v in base.items() if k not in BYPASS_ENV and k != var}, "ZOE_PERF": "1"}
+    if arm_env:
+        env[var] = json.dumps(arm_env, sort_keys=True)
+    return env
 
 
 def _lock(wait_s: int, sleep: Callable[[float], None] = time.sleep) -> int | None:
@@ -560,6 +641,7 @@ def _run_step(cmd: list[str], deadline_s: int, env: dict, log) -> int:
 
 def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
     arms = dict(a.split("=", 1) for a in args.arm)
+    arm_envs = parse_arm_env(getattr(args, "arm_env", None) or [], arms)
     script = HARNESS_SCRIPTS[args.harness]
     plan = run_schedule(list(arms), args.k)
     out_dir = Path(args.out_dir)
@@ -567,7 +649,7 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
     if not args.dry_run and os.environ.get("ZOE_PERF") != "1":
         log("bar_reliability run: skipped - live runs require ZOE_PERF=1 (see --dry-run)")
         return EXIT_OK
-    idents = {a: arm_identity(c, args.harness, extra) for a, c in arms.items()}
+    idents = {a: arm_identity(c, args.harness, extra, arm_envs.get(a)) for a, c in arms.items()}
     todo = [(i, arm) for i, arm in plan
             if not done(run_file(out_dir, arm, i), identity_problem(out_dir, arm, i, idents[arm]))]
     stale = [(i, arm) for i, arm in todo if run_file(out_dir, arm, i).exists()]
@@ -582,7 +664,11 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
         log(f"plan: {len(plan)} step(s), {len(todo)} still to run, ~{args.step_min} min each, harness {args.harness}")
         for i, arm in plan:
             mark = "redo" if (i, arm) in stale else "todo" if (i, arm) in todo else "done"
-            log(f"  [{mark}] round {i} {arm:<10} {' '.join(cmd_for(i, arm))}")
+            ov = f"  env[{show_arm_env(arm_envs[arm])}]" if arm_envs.get(arm) else ""
+            log(f"  [{mark}] round {i} {arm:<10} {' '.join(cmd_for(i, arm))}{ov}")
+        for arm, ov in arm_envs.items():
+            log(f"  arm {arm} overrides (on top of the copied live flags, this arm only): "
+                + ", ".join(f"{k}={show_value(v)}" for k, v in ov.items()))
         return EXIT_OK
     for arm, checkout in arms.items():
         if not (Path(checkout) / script).is_file():
@@ -592,7 +678,8 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
         log(f"round {i} {arm}: cached run refused "
             f"({identity_problem(out_dir, arm, i, idents[arm]) or 'not a valid run'}) - it will be re-run")
     hq = hq or _harness_quiet()
-    env = child_env(os.environ)
+    for arm, ov in arm_envs.items():
+        log(f"arm {arm}: flag override(s) {show_arm_env(ov)}")
     for i, arm in todo:
         why = gate("bar_reliability", args.step_min, hq=hq)
         if why:
@@ -613,8 +700,8 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
             run_file(out_dir, arm, i).unlink(missing_ok=True)
             identity_file(out_dir, arm, i).unlink(missing_ok=True)
             log(f"== {dt.datetime.now().isoformat(timespec='seconds')} round {i} {arm}")
-            rc = _run_step(cmd_for(i, arm), deadline, env, log)
-            moved = _arm_moved(arms[arm], args.harness, extra, idents[arm])
+            rc = _run_step(cmd_for(i, arm), deadline, child_env(os.environ, arm_envs.get(arm)), log)
+            moved = _arm_moved(arms[arm], args.harness, extra, idents[arm], arm_envs.get(arm))
             if moved:      # the checkout changed under the step: what it measured is no arm's evidence
                 run_file(out_dir, arm, i).unlink(missing_ok=True)
                 log(f"stopping: arm {arm} checkout changed during round {i} ({moved}) - that run is discarded")
@@ -629,9 +716,10 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
     return finish(out_dir, list(arms), args.k, log, identities=idents)
 
 
-def _arm_moved(checkout: str, harness: str, extra: list[str], identity: dict[str, Any]) -> str | None:
+def _arm_moved(checkout: str, harness: str, extra: list[str], identity: dict[str, Any],
+               arm_env: dict[str, str] | None = None) -> str | None:
     """Which identity fields changed since the night began (None = none; the unverified nonce is not a field)."""
-    now = arm_identity(checkout, harness, extra)
+    now = arm_identity(checkout, harness, extra, arm_env)
     changed = sorted(k for k in set(now) | set(identity) if k != "nonce" and now.get(k) != identity.get(k))
     return ", ".join(changed) or None
 
@@ -661,8 +749,9 @@ def arm_aggregate(out_dir: Path, arm: str, k: int, identity: dict[str, Any]) -> 
 
 def finish(out_dir: Path, arms: list[str], k: int, log=print, *, identities: dict[str, dict[str, Any]]) -> int:
     aggs = {a: arm_aggregate(Path(out_dir), a, k, identities[a]) for a in arms}
-    cmp = compare(aggs[arms[0]], aggs[arms[1]]) if len(arms) == 2 else None
-    write_json(Path(out_dir) / "reliability.json", {"arms": aggs, "compare": cmp})
+    declared = {a: dict(identities[a].get("arm_env") or {}) for a in arms}
+    cmp = compare(aggs[arms[0]], aggs[arms[1]], declared=declared) if len(arms) == 2 else None
+    write_json(Path(out_dir) / "reliability.json", {"arms": aggs, "compare": cmp, "declared_arm_env": declared})
     for a in arms:
         log(summary_text(aggs[a], cmp if (cmp and a == arms[-1]) else None))
     log(f"result: {Path(out_dir) / 'reliability.json'}")
@@ -740,6 +829,8 @@ def main(argv: list[str] | None = None, log=print) -> int:
     r.add_argument("--out-dir", type=Path, required=True)
     r.add_argument("--arm", action="append", required=True, metavar="NAME=CHECKOUT",
                    help="an arm and the checkout whose code it serves (1 or 2; the first is the control)")
+    r.add_argument("--arm-env", action="append", default=[], metavar="ARM:NAME=value,...",
+                   help="flag overrides for ONE arm's scratch stack, on top of the copied live flags (ZOE_* names only; repeatable)")
     r.add_argument("--k", type=int, default=DEFAULT_K)
     r.add_argument("--harness", choices=sorted(HARNESS_SCRIPTS), default="bar")
     r.add_argument("--step-min", type=int, default=35, help="budget per harness run, minutes (gates the start)")
@@ -757,6 +848,10 @@ def main(argv: list[str] | None = None, log=print) -> int:
     names = [a.split("=", 1)[0] for a in args.arm]
     if len(set(names)) != len(names) or any(not n or "/" in n for n in names):
         ap.error("arm names must be distinct, non-empty and contain no '/'")
+    try:
+        parse_arm_env(args.arm_env, names)
+    except ValueError as exc:
+        ap.error(str(exc))
     return run_arms(args, log)
 
 

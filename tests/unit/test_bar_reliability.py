@@ -283,12 +283,12 @@ def test_day_sim_asks_shape_is_read():
 # ── JSON + CLI ─────────────────────────────────────────────────────────────
 
 AGG_KEYS = {"schema", "label", "harness", "k", "n_runs", "status", "coverage", "backdate", "problems", "rejected_runs", "sources",
-            "samples",
+            "samples", "arm_env",
             "rubric_sha256", "code", "all_runs_bound", "summary", "single_run_verdicts", "verdicts", "scenarios"}
 SUMMARY_KEYS = {"scenarios", "pass_hat_k", "pass_at_k", "pass_rate", "single_run_passed", "all_k_pass", "flaky", "errored"}
 SCENARIO_KEYS = {"runs", "passes", "verdicts", "verdict", "flaky", "errors", "pass_hat_k", "pass_at_k", "pass_rate"}
 COMPARE_KEYS = {"schema", "control", "candidate", "k", "pass_hat_k_delta", "net", "regressions", "weakened",
-                "improvements", "net_no_collateral", "measurable", "admissible", "reasons", "same_code"}
+                "improvements", "net_no_collateral", "measurable", "admissible", "reasons", "same_code", "arm_env", "arm_env_differs"}
 
 
 def test_json_schema_is_stable_and_serialisable():
@@ -579,3 +579,181 @@ def test_no_backdate_arms_are_not_comparable_and_never_admissible():
 def test_mixed_backdate_runs_in_one_arm_are_an_error():
     mixed = br.aggregate([run(ALL_PASS), run(ALL_PASS, backdate=False), run(ALL_PASS)], k=3, label="m")
     assert mixed["status"] == "error" and any("backdate" in p for p in mixed["problems"])
+
+
+# ── per-arm flag overrides (--arm-env) ───────────────────────────────────────────────────────────────────────────────
+
+FLAG = {"ZOE_RECALL_EVERY_TURN": "on", "ZOE_RECALL_EVERY_TURN_HARNESS": "1"}
+ARM_ENV_SPEC = "candidate:ZOE_RECALL_EVERY_TURN=on,ZOE_RECALL_EVERY_TURN_HARNESS=1"
+
+
+def env_run(arm_env: dict[str, str] | None, verdicts=ALL_PASS) -> dict:
+    """A run as the scratch stack records it: ``scratch.arm_env`` (public() of the stack)."""
+    return {**run(verdicts), "scratch": {"tag": "t", "arm_env": dict(arm_env or {})}}
+
+
+def env_arm(label: str, arm_env: dict[str, str] | None, n: int = 3) -> dict:
+    return br.aggregate([env_run(arm_env) for _ in range(n)], k=3, label=label)
+
+
+def test_parse_arm_env_builds_per_arm_overrides():
+    assert br.parse_arm_env([ARM_ENV_SPEC], ["control", "candidate"]) == {"candidate": FLAG}
+    assert br.parse_arm_env([], ["control"]) == {}
+    assert br.parse_arm_env(["control:ZOE_A=1", "candidate:ZOE_A=2"], ["control", "candidate"]) == {
+        "control": {"ZOE_A": "1"}, "candidate": {"ZOE_A": "2"}}
+
+
+@pytest.mark.parametrize("spec", [
+    "candidate:PATH=/bin",                      # not ZOE_*
+    "candidate:ZOE_HARNESS_FORCE=1",            # the bypasses
+    "candidate:ZOE_HARNESS_LANDING=1",
+    "candidate:ZOE_WEBHOOK_SECRET=x",           # secret-looking name
+    "candidate:ZOE_LOG_DIR=/tmp/x",             # location
+    "candidate:ZOE_X=http://h/x",               # URL value
+    "ghost:ZOE_X=1",                            # undeclared arm
+    "candidate",                                # no overrides
+    "candidate:ZOE_X",                          # no value
+    "candidate:ZOE_X=1,ZOE_X=2",                # duplicate
+])
+def test_parse_arm_env_refuses_bad_input_without_echoing_a_value(spec):
+    with pytest.raises(ValueError) as exc:
+        br.parse_arm_env([spec], ["control", "candidate"])
+    assert "/tmp/x" not in str(exc.value) and "http://h" not in str(exc.value)
+
+
+def test_the_cli_refuses_a_forbidden_override_before_anything_runs(tmp_path):
+    for spec in ("candidate:ZOE_HARNESS_FORCE=1", "candidate:HOME=/x"):
+        with pytest.raises(SystemExit):
+            br.main(["run", "--out-dir", str(tmp_path), "--arm", f"control={REPO}", "--arm", f"candidate={REPO}",
+                     "--arm-env", spec, "--dry-run"], log=lambda *_: None)
+
+
+def test_child_env_carries_the_override_to_its_arm_only_and_drops_an_inherited_one():
+    var = br._hs().ARM_ENV_VAR
+    base = {"PATH": "/bin", "ZOE_HARNESS_FORCE": "1", var: json.dumps({"ZOE_LEAKED": "1"})}
+    ctl, cand = br.child_env(base), br.child_env(base, FLAG)
+    assert var not in ctl and "ZOE_HARNESS_FORCE" not in ctl and ctl["ZOE_PERF"] == "1"     # nothing inherited reaches control
+    assert json.loads(cand[var]) == FLAG and "ZOE_HARNESS_FORCE" not in cand
+
+
+def test_dry_run_shows_the_overrides(tmp_path, monkeypatch):
+    monkeypatch.setattr(br.subprocess, "Popen", _only_vcs(br.subprocess.Popen, "dry run started a process"))
+    lines: list[str] = []
+    rc = br.main(["run", "--out-dir", str(tmp_path), "--arm", f"control={REPO}", "--arm", f"candidate={REPO}",
+                  "--arm-env", ARM_ENV_SPEC, "--k", "1", "--dry-run"], log=lines.append)
+    text = "\n".join(lines)
+    assert rc == 0
+    assert "arm candidate overrides" in text and "ZOE_RECALL_EVERY_TURN=on" in text
+    assert [ln for ln in lines if "round 1 control" in ln and "env[" in ln] == []            # control carries none
+    assert [ln for ln in lines if "round 1 candidate" in ln and "env[ZOE_RECALL_EVERY_TURN" in ln]
+
+
+def test_the_dry_run_never_prints_a_long_or_token_shaped_value(tmp_path):
+    secret = "ab12cd34ef56ab12cd34ef56ab12cd34"
+    lines: list[str] = []
+    br.main(["run", "--out-dir", str(tmp_path), "--arm", f"control={REPO}", "--arm", f"candidate={REPO}",
+             "--arm-env", f"candidate:ZOE_SOME_FLAG={secret}", "--dry-run"], log=lines.append)
+    assert secret not in "\n".join(lines) and "ZOE_SOME_FLAG=<32 chars>" in "\n".join(lines)
+
+
+def test_aggregate_records_the_overrides_the_runs_measured():
+    assert env_arm("candidate", FLAG)["arm_env"] == FLAG
+    assert env_arm("control", None)["arm_env"] == {}
+    assert arm([ALL_PASS] * 3, "legacy")["arm_env"] == {}                                    # a writer that predates them
+
+
+def test_runs_with_different_overrides_are_not_repeats_of_one_arm():
+    mixed = br.aggregate([env_run(FLAG), env_run(FLAG), env_run(None)], k=3, label="candidate")
+    assert mixed["status"] == "error" and any("arm env override" in p for p in mixed["problems"])
+
+
+def test_differing_overrides_are_the_declared_difference_not_a_comparability_problem():
+    ctl, cand = env_arm("control", None), env_arm("candidate", FLAG)
+    cmp = br.compare(ctl, cand, declared={"control": {}, "candidate": FLAG})
+    assert cmp["measurable"] and cmp["admissible"]
+    assert cmp["arm_env"] == {"control": {}, "candidate": FLAG} and cmp["arm_env_differs"] is True
+    assert br.compare(ctl, env_arm("candidate", None))["arm_env_differs"] is False          # same flags: no declared difference
+
+
+def test_a_run_that_recorded_other_than_the_declared_override_is_not_comparable():
+    ctl = env_arm("control", None)
+    # the candidate was declared with the flag but its runs recorded none (the override never reached the stack)
+    cmp = br.compare(ctl, env_arm("candidate", None), declared={"control": {}, "candidate": FLAG})
+    assert cmp["measurable"] is False and not cmp["admissible"]
+    assert any("not the declared" in r for r in cmp["reasons"])
+    # ... or recorded a different value / an extra flag
+    for got in ({"ZOE_RECALL_EVERY_TURN": "shadow", "ZOE_RECALL_EVERY_TURN_HARNESS": "1"}, {**FLAG, "ZOE_EXTRA": "1"}):
+        assert br.compare(ctl, env_arm("candidate", got), declared={"control": {}, "candidate": FLAG})["measurable"] is False
+    # ... and the control may not carry an undeclared one either
+    assert br.compare(env_arm("control", FLAG), env_arm("candidate", FLAG),
+                      declared={"control": {}, "candidate": FLAG})["measurable"] is False
+    # negative control: exactly the declared override is comparable
+    assert br.compare(ctl, env_arm("candidate", FLAG), declared={"control": {}, "candidate": FLAG})["measurable"] is True
+
+
+def test_other_differences_between_arms_stay_not_comparable_with_an_override_declared():
+    ctl = env_arm("control", None)
+    cand = br.aggregate([{**env_run(FLAG), "samples": 5} for _ in range(3)], k=3, label="candidate")
+    cmp = br.compare(ctl, cand, declared={"control": {}, "candidate": FLAG})
+    assert cmp["measurable"] is False and any("samples" in r for r in cmp["reasons"])
+
+
+def test_an_overridden_arm_never_records_the_bar():
+    agg = br.aggregate([env_run(FLAG) for _ in range(3)], k=3, label="run")
+    assert agg["status"] == "ok" and "arm env override" in (br.baseline_record_problem(agg) or "")
+
+
+@pytest.fixture
+def env_runner(tmp_path, monkeypatch):
+    """run_arms with gates open and a fake step that records, like the scratch stack, the override it was handed."""
+    monkeypatch.setenv("ZOE_PERF", "1")
+    monkeypatch.setattr(br, "LOCK", str(tmp_path / "harness.lock"))
+    seen: list[tuple[list[str], dict]] = []
+
+    def fake_step(cmd, deadline, env, log):
+        got = json.loads(env[br._hs().ARM_ENV_VAR]) if br._hs().ARM_ENV_VAR in env else {}
+        seen.append((cmd, got))
+        Path(cmd[cmd.index("--results") + 1]).write_text(json.dumps(env_run(got)))
+        return 0
+    monkeypatch.setattr(br, "_run_step", fake_step)
+
+    def invoke(arm_env: list[str], *, k=2) -> int:
+        args = br.argparse.Namespace(arm=[f"control={REPO}", f"candidate={REPO}"], arm_env=arm_env, harness="bar", k=k,
+                                     out_dir=tmp_path / "out", extra=[], dry_run=False, step_min=35)
+        return br.run_arms(args, lambda *_: None, gate=lambda *a, **kw: None, hq=_HQ())
+    return invoke, seen, tmp_path / "out"
+
+
+def test_the_override_reaches_only_its_arms_steps_and_is_in_each_runs_json(env_runner):
+    invoke, seen, out = env_runner
+    assert invoke([ARM_ENV_SPEC]) == br.EXIT_OK
+    assert len(seen) == 4
+    for cmd, got in seen:
+        arm_name = Path(cmd[cmd.index("--results") + 1]).parent.name
+        assert got == (FLAG if arm_name == "candidate" else {}), arm_name
+    for arm_name, want in (("control", {}), ("candidate", FLAG)):
+        for i in (1, 2):
+            assert json.loads((out / arm_name / f"run-{i}.json").read_text())["scratch"]["arm_env"] == want
+    rel = json.loads((out / "reliability.json").read_text())
+    assert rel["declared_arm_env"] == {"control": {}, "candidate": FLAG}
+    assert rel["compare"]["measurable"] and rel["compare"]["arm_env_differs"] is True
+
+
+def test_a_cached_run_is_not_reused_for_a_different_override(env_runner):
+    invoke, seen, _ = env_runner
+    assert invoke([ARM_ENV_SPEC]) == br.EXIT_OK and len(seen) == 4
+    assert invoke([ARM_ENV_SPEC]) == br.EXIT_OK and len(seen) == 4                  # same override: reused
+    assert invoke(["candidate:ZOE_RECALL_EVERY_TURN=shadow"]) == br.EXIT_OK and len(seen) == 6   # only the candidate re-runs
+
+
+def test_an_override_the_stack_did_not_record_makes_the_run_unmeasured(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_PERF", "1")
+    monkeypatch.setattr(br, "LOCK", str(tmp_path / "harness.lock"))
+
+    def fake_step(cmd, deadline, env, log):        # a harness that ignored the override (records none)
+        Path(cmd[cmd.index("--results") + 1]).write_text(json.dumps(env_run(None)))
+        return 0
+    monkeypatch.setattr(br, "_run_step", fake_step)
+    args = br.argparse.Namespace(arm=[f"control={REPO}", f"candidate={REPO}"], arm_env=[ARM_ENV_SPEC], harness="bar", k=2,
+                                 out_dir=tmp_path / "out", extra=[], dry_run=False, step_min=35)
+    assert br.run_arms(args, lambda *_: None, gate=lambda *a, **kw: None, hq=_HQ()) == br.EXIT_UNMEASURED
