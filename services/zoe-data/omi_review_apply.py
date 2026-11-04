@@ -429,7 +429,7 @@ async def _floors(user_id: str, c: dict) -> None:
         raise ApplyError("sensitive", 409)       # D11 about another person, re-checked: the owner's edit may have added it
     try:
         import memory_forgotten as mf
-        hit = bool(await mf.spans(user_id, text))
+        hit = bool(await mf.spans(user_id, text, strict=True))
     except Exception:  # noqa: BLE001
         raise ApplyError("forget_ledger_unavailable", 503)
     if hit:
