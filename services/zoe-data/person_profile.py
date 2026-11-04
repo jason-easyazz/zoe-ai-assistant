@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Optional
 
+from person_age import person_may_be_child
+
 logger = logging.getLogger(__name__)
 
 ENV = "ZOE_PERSON_PROFILE_ANSWERS"
@@ -208,8 +210,6 @@ def _line(ref: Any, user_id: str, child: bool) -> tuple:
 async def compose(db, user_id: str, person_id: str, *, svc: Any = None, today: Optional[date] = None) -> Optional[Profile]:
     """The profile of one of ``user_id``'s own live people, or None (not theirs, deleted, or forgotten). Raises on a memory-store
     failure (the caller says so); a missing satellite table is an empty facet."""
-    import omi_voices
-
     got = await _rows(db, "SELECT id, name, relationship, birthday, how_we_met FROM people "
                           "WHERE id = ? AND user_id = ? AND COALESCE(deleted, 0) = 0", (person_id, user_id))
     if not got:
@@ -220,7 +220,7 @@ async def compose(db, user_id: str, person_id: str, *, svc: Any = None, today: O
     pid, name, rel, legacy_bday, met = (str(x or "").strip() for x in got[0])
     if not name or await _forgotten(user_id, name):
         return None
-    prof = Profile(pid, name, rel, met, child=omi_voices.person_may_be_child({"relationship": rel, "birthday": legacy_bday}))
+    prof = Profile(pid, name, rel, met, child=person_may_be_child({"relationship": rel, "birthday": legacy_bday}))
     today = today or date.today()
 
     # dates: person_important_dates first, the legacy column only when no birthday row exists
