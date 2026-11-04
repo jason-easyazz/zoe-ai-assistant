@@ -446,7 +446,7 @@ _PORTRAIT_REVEAL_RE = re.compile(
     r"(?:how\s+well\s+do\s+you\s+know\s+me"
     r"|what\s+do\s+you\s+(?:really\s+)?(?:understand|think)\s+about\s+me"
     r"|what'?s?\s+your\s+understanding\s+of\s+me"
-    r"|describe\s+(?:me|who\s+i\s+am)\s+(?:to\s+me|back\s+to\s+me)?"
+    r"|describe\s+(?:me|who\s+i\s+am)(?:\s+(?:to\s+me|back\s+to\s+me))?"
     r"|how\s+would\s+you\s+describe\s+me"
     r"|what\s+am\s+i\s+like"
     r"|(?:your|the)\s+(?:picture|portrait|impression)\s+of\s+me"

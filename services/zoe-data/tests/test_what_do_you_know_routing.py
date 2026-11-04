@@ -42,7 +42,7 @@ def test_plain_know_about_me_routes_to_facts(text):
 
 
 @pytest.mark.parametrize("text", [
-    "how would you describe me", "what am I like", "what's your picture of me", "how well do you know me",
+    "describe me", "describe me to me", "how would you describe me", "what am I like", "what's your picture of me", "how well do you know me",
     "what do you understand about me",
 ])
 def test_explicit_portrait_asks_stay_portrait(text):
