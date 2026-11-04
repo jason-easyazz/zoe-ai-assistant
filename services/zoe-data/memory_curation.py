@@ -58,7 +58,9 @@ SENSITIVE = ("health", "medication", "money")
 ALL_CATEGORIES = CATEGORIES + SENSITIVE
 LABELS = {"routines": "Routines", "people": "People", "school": "School", "dates": "Important dates", "likes": "Likes",
           "other": "Other", "health": "Health", "medication": "Medication", "money": "Money"}
-#: classes a curator never files for someone else (feelings are the member own; conflict and grief are not notes)
+#: classes a curator never files for someone else (feelings are the member own; conflict and grief are not notes; owner D10,
+#: 2026-10-19). This is NOT an affect-off rule for anyone: the member's OWN affective memory (children included) is untouched
+#: (emotional-safety-note section 4, owner decision 2026-11-03) - only a third party's note about their feelings is refused.
 NEVER = frozenset({"affect", "family_conflict", "grief", "mood"})
 TEXT_MAX = 280
 ADMIN_ROLES = frozenset({"admin", "family-admin"})
@@ -75,6 +77,12 @@ class CurationRefused(Exception):
 def enabled() -> bool:
     """``ZOE_MEMORIES_CURATORS`` - default OFF, read per call."""
     return env_bool("ZOE_MEMORIES_CURATORS", default=False)
+
+
+def _require_enabled() -> None:
+    """Flag-dark in the SERVICE layer too, not only at the routes: an internal caller with the flag off changes nothing."""
+    if not enabled():
+        raise CurationRefused(404, "Not Found")
 
 
 def _now() -> str:
@@ -146,7 +154,12 @@ class Policy:
 
 async def policy(db, curator: Account, member_id: str) -> Policy:
     """What ``curator`` may curate for ``member_id``. A child: every ordinary category, plus the sensitive ones a curator turned
-    on. An adult: only what that adult opted in THEMSELF. Refuses yourself, a non-member and an adult with no opt-in."""
+    on. An adult: only what that adult opted in THEMSELF. Refuses yourself, a non-member and an adult with no opt-in. The curator
+    is re-read from the account here (never trusted from the caller's ``Account``), so a forged one curates nothing."""
+    _require_enabled()
+    real = await account(db, curator.user_id)
+    if real.role not in ADMIN_ROLES or real.kind != "adult":
+        raise CurationRefused(403, "Only a grown-up household admin can add memories for someone.")
     if member_id == curator.user_id:
         raise CurationRefused(400, "These are your own memories: add them on your own Memories page.")
     member = await account(db, member_id)
@@ -305,9 +318,14 @@ async def refuse_forgotten(curator: Account, member: Account, clean: str, stored
     import memory_forgotten
     from memory_tombstones import matching_tombstone
 
-    checks = ((member.user_id, stored), (member.user_id, clean), (curator.user_id, clean))
+    # the curator's ledger is asked about the MEMBER too (their account name), so a note that never names a forgotten child is
+    # still refused for that child
+    checks = ((member.user_id, stored), (member.user_id, clean), (curator.user_id, clean),
+              (curator.user_id, member.name), (curator.user_id, (member.name or "").split(" ")[0]))
     try:
         for uid, words in checks:
+            if not words:
+                continue
             if matching_tombstone(uid, words) or await memory_forgotten.matches(uid, words, near=True, strict=True):
                 raise CurationRefused(409, FORGOTTEN_DETAIL)
     except CurationRefused:
@@ -452,6 +470,7 @@ def _category_list(keys) -> list:
 
 async def set_child_sensitive(db, curator: Account, child_id: str, category: str, on: bool) -> dict:
     """A curator turns a sensitive category on / off for a CHILD (D10: off by default)."""
+    _require_enabled()
     cat = str(category or "").lower()
     if cat not in SENSITIVE:
         raise CurationRefused(422, "Only health, medication and money are switched on separately.")
@@ -469,6 +488,7 @@ async def set_child_sensitive(db, curator: Account, child_id: str, category: str
 
 async def my_settings(db, user_id: str) -> dict:
     """The member own view: which categories are opted in (an adult may change them; a child sees what a grown-up turned on)."""
+    _require_enabled()
     me = await account(db, user_id)
     if me.kind not in ("adult", "child"):
         raise CurationRefused(403, "Sign in to see this.")
@@ -480,6 +500,7 @@ async def my_settings(db, user_id: str) -> dict:
 async def set_my_optin(db, user_id: str, category: str, on: bool, *, svc: Any = None) -> dict:
     """An ADULT opts one of their own categories in to (or out of) curation. Out releases the curated rows of that category
     (restamped ``user_stated``: their own word wins again); back in protects them again."""
+    _require_enabled()
     cat = str(category or "").lower()
     if cat not in ALL_CATEGORIES:
         raise CurationRefused(422, "Pick a category.")
