@@ -650,6 +650,12 @@ async def resolve_smart_home(
             "actions": [],
         }
 
+    # "turn the light" with no on / off: nothing to do yet, so ask (live 2026-10-29: it fell through to the brain twice).
+    if action == "clarify_state":
+        return _result("On or off?", {"component": "status", "props": {
+            "title": "On or off?", "body": "Say turn on or turn off, and the device.", "status": "Needs context",
+            "tone": "warn", "wide": True}}, action)
+
     # "Add a device" is answerable even if the hub is momentarily unreachable — it
     # just shows a QR for the owner's phone, so resolve it before the hub read.
     if action == "add_device":

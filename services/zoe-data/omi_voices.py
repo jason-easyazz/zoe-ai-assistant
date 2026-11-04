@@ -32,6 +32,7 @@ from typing import Any, Iterable, Optional
 
 import numpy as np
 
+from person_age import CHILD_WORDS, person_may_be_child  # noqa: F401  (re-exported: omi_day_review + tests use these names)
 from typed_env import env_bool, env_float, env_int
 
 logger = logging.getLogger(__name__)
@@ -51,8 +52,6 @@ REJECT_STEP = 0.02            # each "no, that isn't them" raises that voice's m
 LOW_MARGIN = 0.10             # an ``unsure`` segment is learnable only this far below the wearer's bar
 MIN_LEARN_MS = 2000
 LOO_TAU = 0.30                # leave-one-out outlier rule of the panel's 5-clip enrolment (#2024)
-CHILD_WORDS = frozenset({"child", "kid", "son", "daughter", "baby", "toddler", "grandson", "granddaughter", "grandchild",
-                         "stepson", "stepdaughter", "boy", "girl", "infant", "teen", "teenager", "minor"})
 NOT_PERSON_KINDS = ("zoe", "tv", "radio", "media")
 _SEG_COLS = ("id", "recording_id", "seq", "start_ms", "end_ms", "text", "speaker", "score", "windows", "owner_label", "not_person",
              "tagged_person_id", "tag_source", "suggested_person_id", "suggested_score", "voice_cluster_id")
@@ -143,19 +142,6 @@ async def may_learn(db, user_id: str) -> bool:
         return False
     import manner_block
     return await manner_block.eligible(user_id, db=db)
-
-
-def person_may_be_child(person: dict, today: Optional[date] = None) -> bool:
-    words = set(re.findall(r"[a-z]+", str(person.get("relationship") or "").lower()))
-    if words & CHILD_WORDS:
-        return True
-    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", str(person.get("birthday") or ""))
-    if m:
-        t = today or date.today()
-        y, mo, d = (int(g) for g in m.groups())
-        if y > 1900 and (t.year - y - ((t.month, t.day) < (mo, d))) < 18:
-            return True
-    return False
 
 
 async def wearer_profile(db, user_id: str, model_id: str) -> Optional[np.ndarray]:

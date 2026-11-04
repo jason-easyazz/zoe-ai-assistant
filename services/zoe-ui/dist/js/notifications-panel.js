@@ -149,23 +149,6 @@
                 font-size: 16px;
             }
             .zoe-np-empty-icon { font-size: 48px; margin-bottom: 12px; }
-            .zoe-np-install-btn {
-                background: #7B61FF;
-                color: #fff;
-                border: none;
-                padding: 12px 20px;
-                border-radius: 10px;
-                cursor: pointer;
-                font-size: 16px;
-                font-weight: 700;
-                margin-top: 12px;
-                width: 100%;
-                display: block;
-                text-align: center;
-                -webkit-tap-highlight-color: transparent;
-                min-height: 44px;
-            }
-            .zoe-np-install-btn:active { opacity: 0.8; transform: scale(0.97); }
             .zoe-notif-item.has-action { border-left-width: 6px; }
             .zoe-np-action-btn {
                 background: rgba(0,0,0,0.05);
@@ -242,21 +225,6 @@
         return null;
     }
 
-    function maybeToastOpenClawUpdate() {
-        const oc = notificationsData.find(function(n) {
-            const d = parseNotifData(n);
-            return d && d.kind === 'openclaw_update';
-        });
-        if (!oc || typeof showNotification !== 'function') return;
-        const d = parseNotifData(oc);
-        const key = 'zoe_oc_toast_' + (d && d.latest ? d.latest : 'x');
-        try {
-            if (sessionStorage.getItem(key)) return;
-            sessionStorage.setItem(key, '1');
-        } catch (e) {}
-        showNotification('OpenClaw ' + (d.latest || 'update') + ' available. Open notifications to install.', 'info');
-    }
-
     async function loadNotifications() {
         ensurePanel();
         try {
@@ -264,7 +232,6 @@
             notificationsData = result.notifications || [];
             renderNotifications();
             updateBadge();
-            maybeToastOpenClawUpdate();
         } catch (e) {
             console.error('Failed to load notifications:', e);
         }
@@ -306,9 +273,8 @@
         notificationsData.forEach(function(n) {
             const dp = parseNotifData(n);
             const item = document.createElement('div');
-            const hasInstall = dp && dp.kind === 'openclaw_update';
             const hasZoeUpdate = dp && dp.kind === 'zoe_update';
-            const hasAction = hasInstall || hasZoeUpdate;
+            const hasAction = hasZoeUpdate;
             item.className = 'zoe-notif-item' + (hasAction ? ' has-action' : '');
             item.style.borderLeftColor = getTypeColor(n.type);
 
@@ -316,8 +282,6 @@
                 <div class="zoe-notif-text">
                     <div class="zoe-notif-title">${escapeHtmlNotif(n.title || 'Notification')}</div>
                     <div class="zoe-notif-msg">${escapeHtmlNotif(n.message || '')}</div>
-                    ${hasInstall ? `<button class="zoe-np-install-btn" data-nid="${n.id}">⬇️ Install Update</button>` : ''}
-                    ${hasInstall ? `<button class="zoe-np-action-btn" data-open-updates="${n.id}">Open Updates Page</button>` : ''}
                     ${hasZoeUpdate ? `<button class="zoe-np-action-btn" data-open-zoe-updates="${n.id}">Open Updates Page</button>` : ''}
                     <div class="zoe-notif-time">${formatTime(n.created_at)}</div>
                 </div>
@@ -328,30 +292,6 @@
                 e.stopPropagation();
                 dismiss(n.id);
             });
-
-            if (hasInstall) {
-                const installHandler = function(e) {
-                    e.stopPropagation();
-                    installOpenClawUpdate(n.id);
-                };
-                item.querySelector('.zoe-np-install-btn')?.addEventListener('click', installHandler);
-                item.querySelector('.zoe-np-install-btn')?.addEventListener('touchend', function(e) {
-                    e.preventDefault();
-                    installHandler(e);
-                });
-                const openBtn = item.querySelector('[data-open-updates]');
-                if (openBtn) {
-                    const openHandler = function(e) {
-                        e.stopPropagation();
-                        close();
-                        // Desktop is desktop, touch is touch: only a touch surface deep-links into
-                        // the panel's updates page; on desktop the panel itself is the updates view.
-                        if (IS_TOUCH_SURFACE) location.href = '/touch/updates.html?highlight=openclaw';
-                    };
-                    openBtn.addEventListener('click', openHandler);
-                    openBtn.addEventListener('touchend', function(e) { e.preventDefault(); openHandler(e); });
-                }
-            }
 
             if (hasZoeUpdate) {
                 const openZoeBtn = item.querySelector('[data-open-zoe-updates]');
@@ -368,28 +308,6 @@
 
             list.appendChild(item);
         });
-    }
-
-    async function installOpenClawUpdate(notificationId) {
-        try {
-            if (typeof showNotification === 'function')
-                showNotification('Installing OpenClaw update…', 'info');
-            await apiRequest('/api/system/updates/install/openclaw', {
-                method: 'POST',
-                body: JSON.stringify({ confirm: true }),
-            });
-            if (typeof showNotification === 'function')
-                showNotification('OpenClaw updated.', 'success');
-            await dismiss(notificationId);
-            // Also clear any sibling openclaw_update notifs (cross-device dedup).
-            notificationsData.filter(function(n) {
-                const d = parseNotifData(n);
-                return d && d.kind === 'openclaw_update';
-            }).forEach(function(n) { dismiss(n.id); });
-        } catch (e) {
-            const msg = (e && e.message) ? e.message : 'Upgrade failed.';
-            if (typeof showNotification === 'function') showNotification(msg, 'error');
-        }
     }
 
     function updateBadge() {
@@ -504,7 +422,6 @@
         refresh: loadNotifications,
         getCount: getCount,
         updateBadge: updateBadge,
-        installOpenClawUpdate: installOpenClawUpdate,
     };
 
     // Legacy alias

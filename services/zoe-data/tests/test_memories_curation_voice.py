@@ -1,4 +1,4 @@
-"""Caregiver curation BY VOICE (memories-space P7): "Zoe, remember that Mia\x27s swimming is on Tuesdays" from a curator in their OWN
+"""Caregiver curation BY VOICE (memories-space P7): "Zoe, remember that Juno\x27s swimming is on Tuesdays" from a curator in their OWN
 panel identity (``memories_voice._curate`` -> ``memory_curation.by_voice``). VOICE-PATH (inside ``fast_tiers._provenance_tier``).
 
 Synthetic members only (the fixture of ``test_memory_curation``). Walls, each with a control: a child, a guest, a rejected speaker,
@@ -30,7 +30,7 @@ def say(text, member, *, verified=None, channel="voice", allow_writes=True, pane
 
 
 def test_a_curator_adds_a_note_for_a_child_by_voice(env):
-    assert say("Zoe, remember that Mia\x27s swimming is on Tuesdays", PARENT) == "Okay, I\x27ll remember that for Mia."
+    assert say("Zoe, remember that Juno\x27s swimming is on Tuesdays", PARENT) == "Okay, I\x27ll remember that for Juno."
     (row,) = rows_of(env, KID)
     md = row.metadata
     assert row.text == "User\x27s swimming is on Tuesdays" and md["origin"] == "curator"
@@ -39,7 +39,7 @@ def test_a_curator_adds_a_note_for_a_child_by_voice(env):
 
 
 def test_a_child_a_guest_a_rejected_voice_chat_and_a_dry_turn_never_curate(env):
-    text = "remember that Leo\x27s swimming is on Tuesdays"
+    text = "remember that Rafe\x27s swimming is on Tuesdays"
     assert say(text, KID) is None                                     # a child: their own teach path, unchanged
     assert say(text, None) is None                                    # nobody identified on the panel
     assert say(text, PARENT, verified=False) is None                  # the speaker gate said not the curator
@@ -47,17 +47,17 @@ def test_a_child_a_guest_a_rejected_voice_chat_and_a_dry_turn_never_curate(env):
     assert say(text, PARENT, allow_writes=False) is None              # a dry turn writes nothing
     assert say(text, ADULT) is None                                   # an adult, not an admin
     assert not rows_of(env, KID2)
-    assert say(text, PARENT) == "Okay, I\x27ll remember that for Leo."  # control: the curator
+    assert say(text, PARENT) == "Okay, I\x27ll remember that for Rafe."  # control: the curator
     assert len(rows_of(env, KID2)) == 1
 
 
 def test_a_sensitive_note_is_refused_aloud_without_the_opt_in(env):
-    out = say("remember that Mia is allergic to peanuts", PARENT)
-    assert out == "Health notes for Mia are off. Turn them on first."
+    out = say("remember that Juno is allergic to peanuts", PARENT)
+    assert out == "Health notes for Juno are off. Turn them on first."
     assert not rows_of(env, KID)
     as_(env, PARENT, "admin").put(f"/api/memories/curation/members/{KID}/sensitive/health", json=dict(on=True), headers=H)
-    out = say("remember that Mia is allergic to peanuts", PARENT)
-    assert out == "Okay, I\x27ll remember that for Mia." and "peanut" not in out
+    out = say("remember that Juno is allergic to peanuts", PARENT)
+    assert out == "Okay, I\x27ll remember that for Juno." and "peanut" not in out
     assert rows_of(env, KID)[0].metadata["curated_category"] == "health"
 
 
@@ -69,25 +69,67 @@ def test_not_a_curation_turn_falls_through(env):
 
 
 def test_an_adult_only_by_their_own_opt_in(env):
-    assert say("remember that Robin\x27s bins go out on Monday night", PARENT) is None      # not curatable: the teach path runs
+    assert say("remember that Wren\x27s bins go out on Monday night", PARENT) is None      # not curatable: the teach path runs
     as_(env, ADULT, "user").put("/api/memories/curation/me/routines", json=dict(on=True), headers=H)
-    assert say("remember that Robin\x27s bins go out every Monday night", PARENT) == "Okay, I\x27ll remember that for Robin."
+    assert say("remember that Wren\x27s bins go out every Monday night", PARENT) == "Okay, I\x27ll remember that for Wren."
     # opted in to routines only: a note of another category is not curation at all (the teach path runs, nothing spoken)
-    assert say("remember that Robin\x27s teacher is Ms Lee", PARENT) is None
-    assert say("remember that Robin is allergic to peanuts", PARENT) is None
+    assert say("remember that Wren\x27s teacher is Ms Lee", PARENT) is None
+    assert say("remember that Wren is allergic to peanuts", PARENT) is None
     assert len(rows_of(env, ADULT)) == 1
 
 
 def test_flag_off_is_inert(env, monkeypatch):
     monkeypatch.delenv("ZOE_MEMORIES_CURATORS")
-    assert say("remember that Mia\x27s swimming is on Tuesdays", PARENT) is None
+    assert say("remember that Juno\x27s swimming is on Tuesdays", PARENT) is None
     assert not rows_of(env, KID)
 
 
 def test_parse_and_category_are_pure():
-    assert mc.parse_voice("Hey Zoe, can you remember that Mia’s teacher is Ms Lee.") == ("Mia", "Mia’s teacher is Ms Lee")
+    assert mc.parse_voice("Hey Zoe, can you remember that Juno’s teacher is Ms Lee.") == ("Juno", "Juno’s teacher is Ms Lee")
     assert mc.parse_voice("remember that I like tea") is None
-    pol = mc.Policy(mc.Account("k", "Mia", "child", "child"), frozenset(mc.CATEGORIES))
-    assert mc.guess_category("Mia\x27s teacher is Ms Lee", pol) == "school"
-    assert mc.guess_category("Mia takes ventolin before sport", pol) == "medication"
-    assert mc.guess_category("Mia is allergic to peanuts", pol) == "health"
+    pol = mc.Policy(mc.Account("k", "Juno", "child", "child"), frozenset(mc.CATEGORIES))
+    assert mc.guess_category("Juno\x27s teacher is Ms Lee", pol) == "school"
+    assert mc.guess_category("Juno takes ventolin before sport", pol) == "medication"
+    assert mc.guess_category("Juno is allergic to peanuts", pol) == "health"
+
+
+# -- person-centred memory D6 / D7 / forgotten-means-forever (accepted 2026-11-03) ---------------------------------------------
+
+def _raw(text, ctx):
+    out = asyncio.run(mv.tier(text, "guest", "s-voice", channel="voice", extra_ctx=ctx, allow_writes=True))
+    return out.reply if out is not None else None
+
+
+def test_d6_an_unverified_or_guest_voice_gets_nothing(env):
+    text = "remember that Juno\x27s swimming is on Tuesdays"
+    assert _raw(text, dict(panel_id=PANEL, scope_user=None)) is None              # the lane's shape: key present, nobody verified
+    assert _raw(text, dict(panel_id=PANEL, scope_user="guest")) is None
+    assert _raw(text, dict(panel_id=PANEL, scope_user=PANEL)) is None             # the panel itself is never a member
+    assert _raw(text, dict(scope_user=PARENT)) is None                            # not a panel turn
+    assert not rows_of(env, KID)
+    assert _raw(text, dict(panel_id=PANEL, scope_user=PARENT, speaker_verified=True)) == "Okay, I\x27ll remember that for Juno."
+
+
+@pytest.fixture
+def ledger(env, monkeypatch):
+    import memory_forgotten as mf
+    import memory_tombstones
+
+    monkeypatch.setenv(mf.SALT_ENV, "curation-voice-test-salt-0123456789")
+    monkeypatch.delenv(mf.SHIELD_DAYS_ENV, raising=False)
+    mf.set_backend(mf.MemoryBackend())
+    memory_tombstones.clear_all()
+    yield mf
+    mf.set_backend(None)
+    memory_tombstones.clear_all()
+
+
+def test_a_forgotten_name_is_not_re_added_by_voice_and_the_reply_never_repeats_it(env, ledger):
+    asyncio.run(ledger.add(KID, "Ms Lee", actor=KID))
+    out = say("remember that Juno\x27s teacher is Ms Lee", PARENT)
+    assert out == mc.FORGOTTEN_DETAIL and "Lee" not in out
+    assert not rows_of(env, KID) and not rows_of(env, PARENT)
+    asyncio.run(ledger.add(PARENT, "Juno", actor=PARENT))                          # the curator forgot the child
+    assert say("remember that Juno\x27s swimming is on Tuesdays", PARENT) == mc.FORGOTTEN_DETAIL
+    assert not rows_of(env, KID)
+    assert say("remember that Rafe\x27s swimming is on Tuesdays", PARENT) == "Okay, I\x27ll remember that for Rafe."  # control

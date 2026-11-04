@@ -2006,8 +2006,7 @@
                 { type: 'shopping', icon: '🛒', name: 'New Shopping List', desc: 'Create new shopping list' },
                 { type: 'work', icon: '💼', name: 'New Work Tasks', desc: 'Create new work list' },
                 { type: 'personal', icon: '📝', name: 'New Personal', desc: 'Create new personal list' },
-                { type: 'bucket', icon: '🎯', name: 'New Bucket List', desc: 'Create new bucket list' },
-                { type: 'project', icon: '📋', name: 'New Project', desc: 'Create new project' }
+                { type: 'bucket', icon: '🎯', name: 'New Bucket List', desc: 'Create new bucket list' }
             ];
             
             // Build HTML
@@ -2052,19 +2051,6 @@
             const widgets = [];
             
             try {
-                // Fetch existing projects
-                const projectsResponse = await apiRequest('/api/projects');
-                if (projectsResponse.projects) {
-                    projectsResponse.projects.forEach(project => {
-                        widgets.push({
-                            type: 'project',
-                            id: project.id,
-                            icon: '📋',
-                            name: project.name,
-                            desc: `${project.stages?.length || 0} stages`
-                        });
-                    });
-                }
                 
                 // Fetch existing shopping lists
                 const shoppingResponse = await apiRequest('/api/lists/shopping');

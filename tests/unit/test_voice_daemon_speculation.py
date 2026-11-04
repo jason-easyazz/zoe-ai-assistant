@@ -292,7 +292,7 @@ def test_committed_speculative_stream_plays(daemon, monkeypatch):
         json.dumps({"done": True, "reply": "Noon."}).encode(),
     ]
     _, played = _wire(daemon, monkeypatch, lines)
-    monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t: False)
+    monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t, **_k: False)
     ok = daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", prompt_on_empty=False, speculation=spec)
     assert ok is True and spec.cancelled is False and spec.gated is True
     assert played == [b"RIFFnoon"]
@@ -313,7 +313,7 @@ def test_audio_without_gated_ack_means_server_is_not_gating(daemon, monkeypatch)
         json.dumps({"done": True, "reply": "Noon."}).encode(),
     ]
     _, played = _wire(daemon, monkeypatch, lines)
-    monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t: False)
+    monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t, **_k: False)
     monkeypatch.setattr(daemon, "ZOE_SPECULATIVE_TURN", True)
     monkeypatch.setattr(daemon, "VOICE_STREAM_ENABLED", True)
     daemon._speculation_disabled.clear()

@@ -331,7 +331,6 @@ class Rig:
         monkeypatch.setattr(chat_mod, "_ensure_user_and_chat_session", noop)
         monkeypatch.setattr(chat_mod, "_record_run_state", noop)
         monkeypatch.setattr(chat_mod, "_persist_memory_candidates", noop)
-        monkeypatch.setattr(chat_mod, "chat_inject_background", noop)
         monkeypatch.setattr(chat_mod, "_check_frustration", lambda *a, **k: None)
 
         # the brain: the REAL dispatch and the REAL Flue seam (verify-on-challenge, recall, offer and identity blocks) run;

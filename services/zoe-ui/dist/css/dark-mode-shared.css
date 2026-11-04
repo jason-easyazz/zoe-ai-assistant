@@ -244,12 +244,6 @@ label {
         height: 52px !important;
     }
 
-    /* OpenClaw toggle in chat */
-    .openclaw-toggle-btn {
-        min-width: 44px !important;
-        min-height: 44px !important;
-    }
-
     /* Prevent iOS font-size zoom (must be ≥ 16 px) */
     .input-field,
     input[type="text"],

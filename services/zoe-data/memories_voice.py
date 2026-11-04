@@ -18,7 +18,7 @@ tap-to-"that" bridge. No SQL on a memory table, no delete of its own.
     "what do you remember about Sam?" (Sam is in MY people)          Sam's facts (at most two spoken) + Sam's card
     "what do you know about my health?" (on the wall)                never said aloud on the panel: "ask me on your phone"
     "forget that I like jazz"                                        forgets the ONE row that says it (voice and chat)
-    "remember that Mia's swimming is on Tuesdays" (a curator)      a curated note for that child (P7, ZOE_MEMORIES_CURATORS;
+    "remember that Juno's swimming is on Tuesdays" (a curator)      a curated note for that child (P7, ZOE_MEMORIES_CURATORS;
                                                                      ``memory_curation.by_voice``; anyone else falls through)
     tap "That's wrong", then say "it's on Saturday" / "forget it"    corrects / forgets THAT row (the next turn, same member,
                                                                      same panel, within ``TAP_TTL_S``)
@@ -797,7 +797,7 @@ async def answer(text: str, user_id: str, session_id: str = "", *, channel: str,
 
 
 async def _curate(text: str, user_id: str, extra_ctx: Optional[dict], allow_writes: bool) -> Optional[str]:
-    """Caregiver curation by voice (memories-space P7, ``ZOE_MEMORIES_CURATORS``): "remember that Mia's swimming is on Tuesdays" from
+    """Caregiver curation by voice (memories-space P7, ``ZOE_MEMORIES_CURATORS``): "remember that Juno's swimming is on Tuesdays" from
     a curator in THEIR OWN panel identity (``scope_user``: a verified voice session or a fresh PIN; never the panel binding, never a
     speaker the gate rejected). A guest, a child or any other member falls through untouched (their own teach path)."""
     import memory_curation as mc

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import json
 import logging
 import os
 import re
@@ -15,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import alarm_voice
+import alarms
 import command_shapes
 import conversation_cues
 import panel_principal
@@ -25,6 +29,7 @@ from card_service import card_service
 from database import get_db_ctx
 from people_utils import row_to_person
 from time_utils import today_for_zoe_tz
+from typed_env import env_str
 from weather_speech import WeatherAsk, classify_weather_ask, speak_weather
 
 logger = logging.getLogger(__name__)
@@ -39,11 +44,13 @@ class SkybridgeIntent:
     end_date: date | None = None
     query: str = ""
     list_type: str = ""
+    list_type_explicit: bool = False  # the user NAMED a list type (``list_type`` is otherwise the "shopping" default)
     context: str = ""
     circle: str = ""
     item_text: str = ""
     list_name: str = ""
     target_time: str = ""
+    end_time: str = ""  # calendar/create_event: the END of a spoken range ("from 9am to 6pm"), HH:MM; "" = no end said
     all_day: bool = False
     title: str = ""
     target_text: str = ""
@@ -57,14 +64,17 @@ class SkybridgeIntent:
     entity_id: str = ""  # exact HA entity a smart_home TILE tap targets (never fuzzy)
     entity_ids: tuple[str, ...] = ()  # exact HA entities a smart_home FOLLOW-UP ("turn it back on") targets: what the last command controlled
     radio_mode: bool = False  # music/play: "play <x> radio" → MA endless station
+    alarm: Any = None  # alarm/*: the parsed alarm_voice.AlarmCommand (docs/architecture/alarms.md)
 
 
 # ── Timers ───────────────────────────────────────────────────────────────────
 # A REAL countdown timer (not the old speak-only stub). The store is the
 # authoritative source for spoken "how long left" / "cancel" queries; the panel
 # ticks and rings from the absolute expires_at so firing is immediate and
-# survives a reload. In-memory is intentional: timers are short-lived and the
-# panel persists its own copy, so a service restart losing one is acceptable.
+# survives a reload. The registry is snapshotted to a small JSON file on every
+# change and reloaded on first use, so a zoe-data restart (several a day on this
+# box) no longer drops a running timer. The panel does NOT keep its own copy: it
+# learns timers only by polling ``GET /api/skybridge/timers``.
 
 # The number vocabulary and the duration parser live in command_shapes (shared with
 # intent_router, so the two matchers never disagree about a duration).
@@ -72,21 +82,127 @@ _WORD_NUMBERS = command_shapes.WORD_NUMBERS
 _COMPOUND_WORD_NUMBERS = command_shapes.COMPOUND_WORD_NUMBERS
 
 MAX_TIMER_SECONDS = 24 * 3600
+# A finished timer stays listed to the PANEL ("ringing") until it is dismissed (cancel-by-id) or this long passes: the
+# kiosk learns timers by polling every 15 s and every voice turn reloads its page, so a timer that ended between polls
+# (or just after a reload) must still ring. Spoken queries ("how long left", "cancel") only ever see running timers.
+TIMER_RING_GRACE_S = 90
+
+
+def _timer_store_path() -> Path:
+    """Where running timers are snapshotted (``ZOE_TIMER_STORE``; default ``~/.zoe/timers.json``)."""
+    raw = env_str("ZOE_TIMER_STORE", "")
+    return Path(raw).expanduser() if raw else Path.home() / ".zoe" / "timers.json"
 
 
 class _TimerStore:
-    """Process-local registry of active countdown timers, keyed by owner."""
+    """Registry of active countdown timers, keyed by owner, snapshotted to disk so it survives a restart."""
 
     def __init__(self) -> None:
         self._by_owner: dict[str, list[dict[str, Any]]] = {}
+        self._loaded = False
+        # Disk writes (two fsyncs) run on ONE background worker, never on the event loop (services/zoe-data/AGENTS.md:
+        # no blocking main-thread I/O): a slow disk must not stall unrelated requests or voice streams. One worker =
+        # writes land in submission order, and every write is a full snapshot taken on the caller's thread, so the
+        # last submitted state always wins.
+        self._writer: "concurrent.futures.ThreadPoolExecutor | None" = None
+        self._last_write: "concurrent.futures.Future[None] | None" = None
+
+    def _load(self) -> None:
+        """Reload the snapshot ONCE per process, on first use (never at import). Expired timers are dropped."""
+        if self._loaded:
+            return
+        try:
+            raw = json.loads(_timer_store_path().read_text())
+            now = time.time()
+            by_owner = raw.get("by_owner") if isinstance(raw, dict) else None
+            for owner, timers in (by_owner.items() if isinstance(by_owner, dict) else []):
+                live = []
+                for t in (timers if isinstance(timers, list) else []):
+                    try:  # normalise: a wrongly-typed record is dropped here, never allowed to reach _prune()
+                        t = dict(t)
+                        t["expires_at"] = float(t["expires_at"])
+                        t["duration_seconds"] = int(t["duration_seconds"])
+                        t["set_seconds"] = int(t.get("set_seconds", t["duration_seconds"]))
+                        t["created_at"] = float(t.get("created_at", now))
+                        t["label"] = str(t.get("label") or "Timer")
+                        t["timer_id"] = str(t["timer_id"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if t["expires_at"] > now - TIMER_RING_GRACE_S:
+                        live.append(t)
+                if live and not self._by_owner.get(str(owner)):
+                    self._by_owner[str(owner)] = live
+        except FileNotFoundError:
+            pass
+        except Exception as exc:  # noqa: BLE001 - a corrupt snapshot must never break the voice path
+            logger.warning("timer store: could not reload %s (%s)", _timer_store_path(), type(exc).__name__)
+        self._loaded = True  # only once the registry is complete (zoe-data is one asyncio worker; no await in here)
+
+    def _save(self) -> None:
+        """Queue an atomic snapshot write. The JSON is built HERE (cheap, in memory, consistent with the registry at
+        this instant); only the file I/O moves to the single background writer."""
+        try:
+            payload = json.dumps({"by_owner": self._by_owner})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("timer store: could not serialise (%s)", type(exc).__name__)
+            return
+        if self._writer is None:
+            self._writer = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="timer-store")
+        self._last_write = self._writer.submit(self._write_snapshot, _timer_store_path(), payload)
+
+    def wait_saved(self, timeout: float = 5.0) -> None:
+        """Block until the most recent queued snapshot has been written (tests, shutdown)."""
+        fut = self._last_write
+        if fut is not None:
+            concurrent.futures.wait([fut], timeout=timeout)
+
+    @staticmethod
+    def _write_snapshot(path: Path, payload: str) -> None:
+        """Atomic snapshot (tmp + rename, 0600). Best-effort: a full disk costs durability, never the timer itself."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")  # per-process: never a shared scratch name
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+            dfd = os.open(path.parent, os.O_RDONLY)  # make the rename itself durable
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("timer store: could not save %s (%s)", path, type(exc).__name__)
 
     def _prune(self, owner: str) -> None:
+        self._load()
         now = time.time()
-        live = [t for t in self._by_owner.get(owner, []) if t["expires_at"] > now]
+        before = self._by_owner.get(owner, [])
+        live = [t for t in before if t["expires_at"] > now - TIMER_RING_GRACE_S]
         if live:
             self._by_owner[owner] = live
         else:
             self._by_owner.pop(owner, None)
+        if len(live) != len(before):
+            self._save()
+
+    def all_live(self) -> list[dict[str, Any]]:
+        """Every running OR ringing (finished, within the grace) timer of every owner, soonest first."""
+        self._load()
+        for owner in list(self._by_owner):
+            self._prune(owner)
+        return sorted((t for ts in self._by_owner.values() for t in ts), key=lambda t: t["expires_at"])
+
+    def cancel_any(self, timer_id: str) -> dict[str, Any] | None:
+        """Cancel a timer by id whoever owns it (the panel's per-card tap-cancel)."""
+        self._load()
+        for owner in list(self._by_owner):
+            hit = self.cancel_by_id(owner, timer_id)
+            if hit is not None:
+                return hit
+        return None
 
     def create(self, owner: str, label: str, seconds: int) -> dict[str, Any]:
         self._prune(owner)
@@ -100,16 +216,18 @@ class _TimerStore:
             "expires_at": now + int(seconds),
         }
         self._by_owner.setdefault(owner, []).append(timer)
+        self._save()
         write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
         return timer
 
     def list(self, owner: str) -> list[dict[str, Any]]:
         self._prune(owner)
-        return sorted(self._by_owner.get(owner, []), key=lambda t: t["expires_at"])
+        now = time.time()  # RUNNING timers only: a ringing one is the panel's business (all_live)
+        return sorted((t for t in self._by_owner.get(owner, []) if t["expires_at"] > now), key=lambda t: t["expires_at"])
 
     def cancel(self, owner: str, label: str | None = None) -> dict[str, Any] | None:
         self._prune(owner)
-        timers = self._by_owner.get(owner, [])
+        timers = self.list(owner)
         if not timers:
             return None
         target = None
@@ -118,9 +236,7 @@ class _TimerStore:
             target = next((t for t in timers if t["label"].lower() == wanted), None)
         if target is None:  # no name (or no match) → cancel the soonest-expiring
             target = min(timers, key=lambda t: t["expires_at"])
-        timers.remove(target)
-        self._prune(owner)
-        return target
+        return self.cancel_by_id(owner, target["timer_id"])
 
     def find(self, owner: str, label: str = "", start_seconds: int = 0) -> tuple[dict[str, Any] | None, str]:
         """The ONE running timer a command means, or (None, why): ``none`` (nothing running), ``no_match`` (the
@@ -157,11 +273,12 @@ class _TimerStore:
         """Move a running timer's end by ``delta_seconds`` (negative = shorter). The panel reads ``expires_at`` from
         ``GET /api/skybridge/timers`` (``active_timers_for``), so the new end reaches it on its next poll."""
         self._prune(owner)
-        timer = next((t for t in self._by_owner.get(owner, []) if t["timer_id"] == timer_id), None)
+        timer = next((t for t in self.list(owner) if t["timer_id"] == timer_id), None)
         if timer is None:
             return None
         timer["expires_at"] += int(delta_seconds)
         timer["duration_seconds"] = int(timer["duration_seconds"]) + int(delta_seconds)
+        self._save()
         write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
         return timer
 
@@ -172,10 +289,17 @@ class _TimerStore:
         if target is not None:
             timers.remove(target)
             self._prune(owner)
+            self._save()
         return target
 
 
 _timers = _TimerStore()
+
+
+async def preload_timers() -> None:
+    """Read the timer snapshot on a worker thread (startup, before serving) so the first timer request never does
+    that file read on the event loop. ``_load`` stays the lazy fallback for any caller that runs before this."""
+    await asyncio.to_thread(_timers._load)
 
 
 def _parse_timer_duration(text: str) -> int:
@@ -277,6 +401,18 @@ def _timer_card(timer: dict[str, Any], *, status: str = "running") -> dict[str, 
 def active_timers_for(owner: str) -> list[dict[str, Any]]:
     """Public helper for the reload-resume endpoint: the panel's authoritative set."""
     return [_timer_card(t)["props"] for t in _timers.list(owner or "guest")]
+
+
+def all_active_timers() -> list[dict[str, Any]]:
+    """Every timer in the house as card props, finished-but-unacknowledged ones flagged ``ringing`` - what the WALL PANEL
+    sees (it is not a person)."""
+    now = time.time()
+    return [_timer_card(t, status="running" if t["expires_at"] > now else "ringing")["props"] for t in _timers.all_live()]
+
+
+def cancel_any_timer(timer_id: str) -> dict[str, Any] | None:
+    """Cancel one timer by id whoever set it (the wall panel's per-card tap-cancel)."""
+    return _timers.cancel_any(timer_id)
 
 
 def cancel_timer_by_id(owner: str, timer_id: str) -> dict[str, Any] | None:
@@ -866,12 +1002,35 @@ _LIST_NAME_RE = (
 )
 
 
+# STT renders a leading "Add" as "And" / "At" / "Ad" ("And eggs to the shopping list", live 2026-10-29: answered with a list READ).
+# Only the WHOLE-sentence shape "<lead> <item> to (the|my|our) <list>" is an add; "and what's on the list?" has no "to <list>" tail and
+# a question / navigation word as the item is refused, so real queries stay queries.
+_STT_ADD_LEAD_RE = re.compile(
+    rf"^\s*(?:and|at|ad|add)\s+(?P<item>.+?)\s+to\s+(?:the\s+|my\s+|our\s+){_LIST_NAME_RE}\s*[.!?]*\s*$", re.IGNORECASE)
+_NOT_AN_ITEM_LEAD = frozenset({"what", "what's", "whats", "which", "who", "where", "how", "when", "why", "is", "are", "do", "does",
+                               "go", "take", "show", "read", "tell", "give", "can", "could", "i", "we", "you",
+                               "navigate", "head", "open", "bring", "switch", "jump", "scroll"})
+
+
+def _stt_lead_list_add(message: str) -> tuple[str, str] | None:
+    match = _STT_ADD_LEAD_RE.match(message or "")
+    if not match:
+        return None
+    from list_service import clean_item_text, is_plausible_item
+
+    item = clean_item_text(_clean_action_text(match.group("item")))
+    if not is_plausible_item(item) or item.split()[0].lower().strip(",;:") in _NOT_AN_ITEM_LEAD:
+        return None
+    list_phrase = f" {re.sub(r'[- ]+', ' ', match.group('list').lower())} "
+    return item, _list_type_from_text(list_phrase) or ("shopping" if "grocery" in list_phrase else "") or "shopping"
+
+
 def _list_add_from_text(message: str) -> tuple[str, str] | None:
     """"add X to (the|my) <list>" / "put X on (the|my) <list>" - X cleaned (stutter, fillers, punctuation) and only ever a
     plausible ITEM: a sentence is not an item (see ``list_service.is_plausible_item``)."""
     head = _command_shaped(message, "add|put")
     if head is None:
-        return None
+        return _stt_lead_list_add(message)
     verb = head.group(0).lower()
     glue = r"to|into" if verb == "add" else r"on|onto|in|into|to"
     match = re.search(
@@ -921,6 +1080,12 @@ def _list_target(match: "re.Match[str]") -> tuple[str, str]:
     return (_list_type_from_text(phrase) or ("shopping" if "grocery" in phrase else "")), ""
 
 
+def _effective_list_type(list_type: str, list_name: str) -> tuple[str, bool]:
+    """(effective type, explicit?) for a parsed list target: nothing named = the "shopping" default, but explicit=False so the
+    resolver can still prefer the card in context; a NAMED list ("my chores list") carries no type default."""
+    return (list_type or ("" if list_name else "shopping")), bool(list_type)
+
+
 def _list_remove_from_text(message: str) -> tuple[str, str, str] | None:
     """(item, list_type, list_name) for "take/remove/delete X off|from|out of <list>", and - ending the turn - for
     "delete X in <list>" / "remove X on <list>" (HA's phrasings; they used to be answered with a list READ). A question
@@ -942,7 +1107,7 @@ def _list_remove_from_text(message: str) -> tuple[str, str, str] | None:
     if not item or item.lower() in _POINTING_ITEMS or not command_shapes.plain_list_item(item):
         return None
     list_type, list_name = _list_target(match)
-    return item, (list_type or ("" if list_name else "shopping")), list_name
+    return item, list_type, list_name   # "" = no list named (a card in context, else the default list, decides)
 
 
 # "is milk on the shopping list" / "do we have eggs on the list": a YES/NO question about one item, not a list read.
@@ -1002,7 +1167,7 @@ def _list_complete_from_text(message: str) -> tuple[str, str, bool, str] | None:
         if not item or item.lower() in _POINTING_ITEMS or not command_shapes.plain_list_item(item):
             return None
         list_type, list_name = _list_target(match)
-        return item, (list_type or ("" if list_name else "shopping")), completed, list_name
+        return item, list_type, completed, list_name
 
     # Restore / un-check FIRST so "uncheck X" is never read as "check X".
     match = re.search(r"\b(?:uncheck|un-?tick|unmark|undo|put back)\s+(?P<item>.+?)" + on_tail, message, re.IGNORECASE)
@@ -1126,6 +1291,126 @@ def _list_edit_from_text(message: str, context: dict[str, Any] | None) -> tuple[
         return None
     _list_id, list_type = _context_list_hint(context)
     return item, list_type or "shopping"
+
+
+# ── Correcting a list item: "change noodles to rice noodles", "that should be X, not Y", "spell it X" ─────────────────────
+# Words that make "change the <noun> to <value>" a command about something else (a timer, a light, a setting), not a list item.
+_NOT_LIST_NOUNS = frozenset({
+    "timer", "timers", "alarm", "alarms", "light", "lights", "lamp", "volume", "brightness", "temperature", "thermostat", "music",
+    "song", "track", "playlist", "radio", "channel", "name", "voice", "reminder", "reminders", "event", "meeting", "appointment",
+    "calendar", "time", "date", "day", "setting", "settings", "password", "pin", "mode", "colour", "color", "speaker", "fan", "tv",
+    "heating", "cooling", "ac", "aircon", "wallpaper", "background", "theme", "language", "wake", "word", "scene", "input", "source",
+    "address", "number", "email", "birthday", "schedule", "it", "that", "this", "everything", "all",
+})
+_VALUE_LIKE_RE = re.compile(r"^\W*\d|\b(?:minutes?|mins?|hours?|seconds?|degrees?|percent|am|pm|o'?clock)\b|%", re.IGNORECASE)
+_NO_PREPOSITION_TAIL_RE = re.compile(r"\b(?:on|in|from|at|for|with)\s+(?:the|my|our|a|an)\b", re.IGNORECASE)
+_RENAME_RE = re.compile(
+    rf"\b(?:change|rename|correct)\s+(?P<old>.+?)\s+(?:to|into)\s+(?P<new>.+?)(?:\s+(?:on|in|from)\s+{_LIST_TARGET_RE})?\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+_SHOULD_BE_NOT_RE = re.compile(
+    # ANCHORED at the start (after polite lead-ins): "are you sure that should be X, not Y" / "she said it should be X, not Y"
+    # are questions and reported speech, not commands.
+    rf"^\W*(?:(?:please|hey|zoe|no|nope|oops|sorry|actually|wait|and|but|so|well|ok|okay)\W+)*(?:it|that|this)\s+should\s+(?:be|say|read)\s+(?P<new>.+?)[,\s]+not\s+(?P<old>.+?)"
+    rf"(?:\s+(?:on|in|from)\s+{_LIST_TARGET_RE})?\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+# "no, rice noodles" / "no, it's rice noodles": a correction ONLY of the item just added AND only when it resembles it (guard).
+_CORRECT_NO_RE = re.compile(
+    r"^\W*(?:no|nope|oops|sorry|wait|actually)\b[\s,.!]*(?:(?:it'?s|its|that'?s|thats|it\s+is|i\s+meant|i\s+mean|i\s+said)\s+)?(?P<new>.+?)\s*[.!?]*$",
+    re.IGNORECASE,
+)
+# Explicit phrasings need no resemblance: nothing else says "spell it" / "I meant" about a list.
+_CORRECT_EXPLICIT_RE = re.compile(
+    r"^\W*(?:i\s+(?:meant|mean)|spell\s+(?:it|that|this)|(?:it|that|this)\s+should\s+(?:be|say|read)|make\s+(?:it|that)\s+say)\s+"
+    r"(?P<new>.+?)\s*[.!?]*$",
+    re.IGNORECASE,
+)
+_CORRECT_STOP_LEADS = frozenset({
+    "thanks", "thank", "that's", "thats", "nothing", "nope", "stop", "cancel", "never", "nevermind", "not", "please", "wait",
+    "sorry", "ok", "okay", "yes", "yeah", "no", "don't", "dont", "do", "i", "i'm", "im", "you", "what", "why", "how", "where",
+    "when", "who", "go", "turn", "set", "play", "add", "remove", "delete", "take", "show", "tell", "open", "close", "pause",
+    "resume", "skip", "call", "to", "it", "it's", "its", "that", "this", "the", "a", "an", "my", "we", "he", "she", "they",
+})
+
+
+def _clean_rename_text(value: str) -> str:
+    """:func:`_clean_action_text` that keeps a leading possessive "my" (only the/a/an are dropped)."""
+    text = re.sub(r"\s+", " ", value or "").strip(" .")
+    return re.sub(r"^(?:the|a|an)\s+", "", text, flags=re.IGNORECASE).strip()
+
+
+def _rename_item_operands(old_raw: str, new_raw: str, *, list_named: bool) -> tuple[str, str] | None:
+    from list_service import clean_item_text, is_plausible_item
+
+    # A possessive is part of the item's words ("my passport" is not "passport"): kept here, and the store tries the exact form first
+    # and only then the stripped one (``list_service.rename_item_on_list``).
+    old = clean_item_text(_clean_rename_text(re.sub(r"^(?:the\s+)?item\s+", "", old_raw.strip(), flags=re.IGNORECASE)))
+    new = clean_item_text(_clean_rename_text(new_raw))
+    if not old or not new or not is_plausible_item(new) or not command_shapes.plain_list_item(old) \
+            or not command_shapes.plain_list_item(new) or old.lower() in _POINTING_ITEMS:
+        return None
+    if not list_named:
+        # No list was named: be sure this is about a LIST item, not "change the timer to ten minutes".
+        if set(re.findall(r"[a-z']+", f"{old} {new}".lower())) & _NOT_LIST_NOUNS \
+                or _VALUE_LIKE_RE.search(new) or _NO_PREPOSITION_TAIL_RE.search(new):
+            return None
+    return old, new
+
+
+_TRAILING_POLITENESS_RE = re.compile(r"(?:[\s,;]+(?:please|zoe|thanks|thank\s+you|for\s+me|if\s+you\s+can))+\s*[.!?]*\s*$", re.IGNORECASE)
+
+
+def _strip_trailing_politeness(message: str) -> str:
+    """"change milk to oat milk, please" -> "change milk to oat milk": a courtesy tail is not part of the item."""
+    return _TRAILING_POLITENESS_RE.sub("", message.strip()) or message.strip()
+
+
+def _list_rename_from_text(message: str) -> tuple[str, str, str, str] | None:
+    """(old, new, list_type, list_name) for "change|rename|correct X to Y [on the <list>]" and "that should be Y, not X". A
+    question or statement ABOUT changing ("can I change milk to oat milk?", "what did I change") writes nothing."""
+    if command_shapes.asks_or_mentions(message, destructive=True):
+        return None
+    message = _strip_trailing_politeness(message)
+    head = _command_shaped(message, "change|rename|correct")
+    match = _RENAME_RE.search(message[head.start():]) if head is not None else None
+    if match is None:
+        match = _SHOULD_BE_NOT_RE.match(message)
+    if match is None:
+        return None
+    groups = match.groupdict()
+    list_type, list_name = _list_target(match) if (groups.get("list") or groups.get("lname")) else ("", "")
+    operands = _rename_item_operands(groups["old"], groups["new"], list_named=bool(list_type or list_name))
+    if operands is None:
+        return None
+    return operands[0], operands[1], list_type, list_name
+
+
+def _list_correct_last_from_text(message: str) -> tuple[str, bool] | None:
+    """(new_text, guarded) for a correction of the item JUST ADDED: "spell it X", "I meant X", "that should be X", "no, X".
+    Needs a recent add by someone (the resolver re-checks for the speaker); ``guarded`` = a bare "no, X", which also has to
+    resemble the item just added."""
+    from list_service import any_recent_add, clean_item_text, is_plausible_item
+
+    if not any_recent_add():
+        return None
+    msg = _strip_trailing_politeness(message)
+    match = _CORRECT_EXPLICIT_RE.match(msg)
+    # Only "spell it X" is unambiguous about a list; "I meant X" / "that should be X" are ordinary speech ("I meant tomorrow"),
+    # so they too must resemble the item just added.
+    guarded = match is None or re.match(r"^\W*spell\b", msg, re.IGNORECASE) is None
+    if match is None:
+        match = _CORRECT_NO_RE.match(msg)
+    if match is None:
+        return None
+    new = clean_item_text(_clean_rename_text(match.group("new")))     # a possessive is part of the item ("my passport")
+    words = new.lower().split()
+    # "my passport" is an item (the possessive is kept); a bare "my ..." lead is otherwise ordinary speech, so judge the word after it.
+    lead = words[1] if len(words) > 1 and words[0] == "my" else (words[0] if words else "")
+    if not new or len(words) > 4 or not is_plausible_item(new) or lead.strip(",;:") in _CORRECT_STOP_LEADS \
+            or not command_shapes.plain_list_item(new):
+        return None
+    return new, guarded
 
 
 def _calendar_edit_from_text(message: str, context: dict[str, Any] | None) -> str | None:
@@ -1291,10 +1576,149 @@ def _resolve_daypart_time(raw_time: str, parsed: str, text: str) -> tuple[str, i
     return (f"{hour:02d}:{minute:02d}", 0) if hour < 12 else None
 
 
+# ── Time RANGES: "add work to my calendar from 9am to 6pm" (live 2026-11-03: booked ALL-DAY and read back "Added work to your
+# calendar today." - the timed parser needs "at|for <time>", so the no-time fallback took the title and dropped the range).
+# A range atom also accepts a bare hour ("9 to 5", "from nine till six"): the PAIR is the evidence a single bare "at 9" lacks.
+_RANGE_ATOM = (
+    r"(?:\d{1,2}(?::\d{2})?(?:\s*(?:a\.?m\.?|p\.?m\.?|o'?\s?clock))?"
+    rf"|(?:{_HOUR_WORD_RE})(?:\s+(?:thirty|fifteen|forty[- ]?five))?(?:\s*(?:o'?\s?clock|a\.?m\.?|p\.?m\.?))?"
+    r"|noon|midday)"
+)
+_RANGE_RE = (
+    rf"(?:\b(?P<lead>from|between)\s+)?(?<![\w:])(?P<t1>{_RANGE_ATOM})(?![\w:])\s*"
+    rf"(?P<sep>-|–|—|\bto\b|\btill\b|\btil\b|\buntil\b|\bthrough\b|\band\b)\s*(?P<t2>{_RANGE_ATOM})(?![\w:])"
+)
+_CALENDAR_DEST_RE = r"(?:to|on|in|into)\s+(?:my\s+|the\s+)?(?:calendar|schedule|diary|agenda)"
+RANGE_END_BEFORE_START = "range_end_before_start"
+
+
+def _range_atom(raw: str) -> tuple[int, int, str] | None:
+    """(hour, minute, meridiem) for one range end: meridiem "am" / "pm" / "noon" / "" (not said; o'clock says nothing about it)."""
+    s = re.sub(r"\s+", " ", (raw or "").strip().lower().replace(".", ""))
+    if s in ("noon", "midday"):
+        return 12, 0, "noon"
+    mer = ""
+    m = re.search(r"\s?(am|pm)$", s)
+    if m:
+        mer, s = m.group(1), s[:m.start()].strip()
+    s = re.sub(r"\s?o'? ?clock$", "", s).strip()
+    m = re.match(rf"^(?P<h>{_HOUR_WORD_RE})(?: (?P<mw>thirty|fifteen|forty[- ]?five))?$", s)
+    if m:
+        hour = _HOUR_WORDS[m.group("h")]
+        minute = {"thirty": 30, "fifteen": 15}.get(m.group("mw") or "", 45 if m.group("mw") else 0)
+    else:
+        m = re.match(r"^(\d{1,2})(?::(\d{2}))?$", s)
+        if not m:
+            return None
+        hour, minute = int(m.group(1)), int(m.group(2) or 0)
+    if hour > 23 or minute > 59 or (mer and not 1 <= hour <= 12):
+        return None
+    return hour, minute, mer
+
+
+def _range_explicit(hour: int, mer: str) -> int | None:
+    """The 24-hour hour when the words fix it (am/pm, noon, or a 24-hour clock), else None."""
+    if mer == "noon":
+        return 12
+    if mer == "pm":
+        return hour % 12 + 12
+    if mer == "am":
+        return hour % 12
+    return hour if hour == 0 or hour > 12 else None
+
+
+def _resolve_time_range(raw1: str, raw2: str, text: str) -> tuple[str, str] | str | None:
+    """("HH:MM", "HH:MM") for a spoken range, RANGE_END_BEFORE_START when the words put the end at or before the start, None when
+    an end cannot be read. A side without am/pm takes the reading that fits the other: "9am to 6" ends at 18:00, "9 to 6pm" starts
+    at 09:00. Neither said: a day-part word decides the start ("from 7 to 9 tonight"), else the way appointments go (7-11
+    morning, 12 noon, 1-6 afternoon), and the end is the first reading after it ("9 to 5" is 09:00-17:00)."""
+    a, b = _range_atom(raw1), _range_atom(raw2)
+    if a is None or b is None:
+        return None
+    (h1, m1, mer1), (h2, m2, mer2) = a, b
+    s, e = _range_explicit(h1, mer1), _range_explicit(h2, mer2)
+    if s is None and e is not None:
+        fits = [c for c in (h1 % 12, h1 % 12 + 12) if c * 60 + m1 < e * 60 + m2]
+        if not fits:
+            return RANGE_END_BEFORE_START
+        s = max(fits)
+    elif s is None:
+        night, evening, morning = bool(_NIGHT_RE.search(text)), bool(_EVENING_RE.search(text)), bool(_MORNING_RE.search(text))
+        if sum((night, evening, morning)) > 1:
+            return None
+        if night or evening:
+            s = h1 % 12 + 12
+        elif morning:
+            s = h1 % 12
+        else:
+            s = h1 if 7 <= h1 <= 12 else h1 % 12 + 12
+    if e is None:
+        later = [c for c in (h2 % 12, h2 % 12 + 12) if c * 60 + m2 > s * 60 + m1 and c < 24]
+        if not later:
+            return RANGE_END_BEFORE_START
+        e = min(later)
+    if e * 60 + m2 <= s * 60 + m1:
+        return RANGE_END_BEFORE_START
+    return f"{s:02d}:{m1:02d}", f"{e:02d}:{m2:02d}"
+
+
+def _calendar_range_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str, str] | None:
+    """"add/schedule/book X (to my calendar) from <t1> to <t2>" (also "9 to 5", "9am-6pm", "between 9 and 5", "from 9 till 6")
+    -> (title, start, end), with end RANGE_END_BEFORE_START when the range runs backwards. None claims nothing."""
+    text = _strip_trailing_politeness(re.sub(r"\s+", " ", message or "").strip().rstrip(".!?"))
+    if _context_domain(context) != "calendar" and not re.search(
+            r"\b(calendar|schedule|diary|agenda|event|appointment|meeting)\b", text, re.IGNORECASE):
+        return None
+    head = _command_shaped(text, _CREATE_VERBS)
+    if head is None or _NOT_A_CALENDAR_EVENT_RE.search(text):
+        return None
+    match = re.search(rf"\b(?:{_CREATE_VERBS})\s+(?P<title>.+?)\s+{_RANGE_RE}(?P<tail>.*)$", text[head.start():], re.IGNORECASE)
+    if not match:
+        return None
+    if match.group("sep").lower() == "and" and (match.group("lead") or "").lower() != "between":
+        return None                                        # "and" joins a range only after "between"
+    tail = re.sub(rf"^\W*{_CALENDAR_DEST_RE}\b", "", match.group("tail") or "", flags=re.IGNORECASE)
+    tail = re.sub(rf"\s*\b{_CALENDAR_DEST_RE}\b", "", _DAY_PHRASE_RE.sub("", tail), flags=re.IGNORECASE)
+    if re.search(r"\d", tail):
+        return None                                        # a date / time we would not read: not ours to drop
+    # the date is read by the caller from the same words; it is not part of the title ("work on 14 November")
+    raw_title = re.sub(rf"\s*\b(?:on\s+)?(?:the\s+)?\d{{1,2}}(?:st|nd|rd|th)?(?:\s+of)?\s+(?:{MONTH_PATTERN})\b(?:\s+\d{{4}})?",
+                       "", match.group("title"), flags=re.IGNORECASE)
+    title = _event_title(raw_title, tail)
+    resolved = _resolve_time_range(match.group("t1"), match.group("t2"), text)
+    if not title or resolved is None:
+        return None
+    if resolved == RANGE_END_BEFORE_START:
+        return title, "", RANGE_END_BEFORE_START
+    return title, resolved[0], resolved[1]
+
+
+# A clock time in words the all-day fallback did not read: "at half past nine", "from 9 to 5", "9am", "noon", "six o'clock".
+_CLOCK_LOOKING_RE = re.compile(
+    rf"\b\d{{1,2}}:\d{{2}}\b|\b\d{{1,2}}\s*(?:a\.?m\b\.?|p\.?m\b\.?)|\bo'?\s?clock\b|\b(?:noon|midday|midnight)\b"
+    rf"|\b(?:half|quarter)\s+(?:past|to)\b|\b(?:at|from|between|until|till|til)\s+(?:\d|(?:{_HOUR_WORD_RE})\b)"
+    rf"|\b\d{{1,2}}\s*(?:-|–|to|till|until)\s*\d{{1,2}}\b"
+    rf"|\b(?:morning|afternoon|evening)\b",
+    re.IGNORECASE,
+)
+_DATE_LOOKING_RE = re.compile(rf"\b\d{{1,2}}(?:st|nd|rd|th)?\b|\b(?:{MONTH_PATTERN})\b", re.IGNORECASE)
+
+
+def _unread_when(title: str, remainder: str) -> bool:
+    """True when the words carry a time (or a date) the all-day fallback would silently drop. Booking "work" all day and saying
+    "Added work to your calendar today." to "add work to my calendar from 9am to 6pm" is a wrong record read back as a success;
+    the turn goes on to the brain instead, which can ask."""
+    if _CLOCK_LOOKING_RE.search(title) or _CLOCK_LOOKING_RE.search(remainder):
+        return True
+    rest = _DAY_PHRASE_RE.sub(" ", remainder)
+    return bool(_DATE_LOOKING_RE.search(rest)) and _calendar_date_from_text(f" {remainder.lower().strip()} ", _today()) is None
+
+
 def _calendar_create_notime_from_text(message: str, context: dict[str, Any] | None) -> str | None:
     """A calendar add with NO time → an all-day event. Extract the title WITHOUT the
     trailing "to my/the calendar" so "add work to my calendar" is "work", not the
-    whole phrase (the bug Jason hit). Requires a calendar cue to avoid hijacking."""
+    whole phrase. Requires a calendar cue to avoid hijacking. Claims NOTHING when the
+    words carry a time or date it did not read (``_unread_when``)."""
     if _context_domain(context) != "calendar" and not re.search(r"\bcalendar\b", message, re.IGNORECASE):
         return None
     match = re.search(
@@ -1313,6 +1737,8 @@ def _calendar_create_notime_from_text(message: str, context: dict[str, Any] | No
     title = _clean_action_text(match.group("title"))
     # belt-and-suspenders: strip any leftover "to/on my calendar" tail
     title = re.sub(r"\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?calendar\s*$", "", title, flags=re.IGNORECASE).strip()
+    if _unread_when(title, message[match.end():]):
+        return None
     return title or None
 
 
@@ -1594,6 +2020,12 @@ def classify_skybridge_intent(
     if person_fact:
         name, fact, birthday = person_fact
         return SkybridgeIntent(domain="people", action="remember_fact", person_name=name, fact_text=fact, birthday=birthday)
+    # Alarms (flag-dark ZOE_ALARMS): "wake me at 7", "set an alarm for 6:30", "snooze". Before timers/calendar, which would
+    # otherwise read "set an alarm for 7" as an event; the grammar is narrow and refuses questions and other kinds of alarm.
+    if alarms.enabled():
+        alarm_cmd = alarm_voice.parse(raw_message)
+        if alarm_cmd is not None:
+            return SkybridgeIntent(domain="alarm", action=alarm_cmd.action, target_time=alarm_cmd.time_hhmm, alarm=alarm_cmd)
     # Timers claim the phrase early so "set a 5 minute timer" isn't misread as a
     # calendar event ("set ... at a time").
     if re.search(r"\btimers?\b|\bcountdowns?\b", text):
@@ -1660,13 +2092,25 @@ def classify_skybridge_intent(
     list_complete = _list_complete_from_text(raw_message)
     if list_complete:
         item, list_type, completed, list_name = list_complete
+        list_type, explicit = _effective_list_type(list_type, list_name)
         return SkybridgeIntent(domain="lists", action="complete_item", item_text=item, list_type=list_type,
-                               completed=completed, list_name=list_name)
+                               list_type_explicit=explicit, completed=completed, list_name=list_name)
     list_remove = _list_remove_from_text(raw_message)
     if list_remove:
         item, list_type, list_name = list_remove
+        list_type, explicit = _effective_list_type(list_type, list_name)
         return SkybridgeIntent(domain="lists", action="remove_item", item_text=item, list_type=list_type,
-                               list_name=list_name)
+                               list_type_explicit=explicit, list_name=list_name)
+    list_rename = _list_rename_from_text(raw_message)
+    if list_rename:
+        old_item, new_item, list_type, list_name = list_rename
+        list_type, explicit = _effective_list_type(list_type, list_name)
+        return SkybridgeIntent(domain="lists", action="rename_item", item_text=old_item, target_text=new_item,
+                               list_type=list_type, list_type_explicit=explicit, list_name=list_name)
+    list_correct = _list_correct_last_from_text(raw_message)
+    if list_correct:
+        new_item, guarded = list_correct
+        return SkybridgeIntent(domain="lists", action="correct_last_item", item_text=new_item, query="guard" if guarded else "")
     list_contains = _list_contains_from_text(text)
     if list_contains:
         item, list_type, list_name = list_contains
@@ -1694,6 +2138,17 @@ def classify_skybridge_intent(
     calendar_edit = _calendar_edit_from_text(raw_message, context)
     if calendar_edit:
         return SkybridgeIntent(domain="calendar", action="edit_event", target_text=calendar_edit)
+    calendar_range = _calendar_range_from_text(raw_message, context)
+    if calendar_range:
+        title, target_time, end_time = calendar_range
+        parsed_range = _calendar_date_from_text(text, _today())
+        start = parsed_range[1] if parsed_range else _context_calendar_date(context)
+        if end_time == RANGE_END_BEFORE_START:
+            # Read the words, but they run backwards ("from 6pm to 9am"): ask, never book a guess.
+            return SkybridgeIntent(domain="calendar", action="create_event", title=title, query=RANGE_END_BEFORE_START,
+                                   range_label=start.isoformat(), start_date=start, end_date=start)
+        return SkybridgeIntent(domain="calendar", action="create_event", title=title, target_time=target_time,
+                               end_time=end_time, range_label=start.isoformat(), start_date=start, end_date=start)
     calendar_create = _calendar_create_from_text(raw_message, context)
     if calendar_create:
         title, target_time, day_offset = calendar_create
@@ -1879,8 +2334,8 @@ def _looks_like_list_name(message: str) -> bool:
 
 
 _READ_ACTIONS = frozenset({"show", "overview", "forecast", "current", "today"})
-_WRITE_ACTIONS = frozenset({"add_item", "remove_item", "complete_item", "edit_item", "create_list", "create_event",
-                            "update_time", "edit_event", "delete_event", "remember_fact", "create"})
+_WRITE_ACTIONS = frozenset({"add_item", "remove_item", "complete_item", "edit_item", "rename_item", "correct_last_item",
+                            "create_list", "create_event", "update_time", "edit_event", "delete_event", "remember_fact", "create"})
 # Domains holding the household's personal data: the only ones the unsure floor applies to (music / smart-home / timers
 # keep the garbled-STT recovery - their worst case is a wrong song, not a wrong record).
 _UNSURE_FLOOR_DOMAINS = frozenset({"calendar", "lists", "people"})
@@ -1927,6 +2382,10 @@ def _head_names_calendar(decision: dict[str, Any]) -> bool:
     (timers, music, people ...) is not "unsure about the calendar"."""
     shortlist = decision.get("shortlist") if isinstance(decision.get("shortlist"), (list, tuple)) else ()
     return str(decision.get("head_top") or "") == "calendar" or "calendar" in {str(c) for c in shortlist}
+
+
+# semantic_router's question-shape re-points (EVIDENCE_REASON / EVENT_TIME_REASON / OWN_FACT_REASON): never overridden by a noun.
+_QUESTION_PRECEDENCE_REASONS = frozenset({"evidence_question", "event_time_question", "own_fact_question"})
 
 
 def skybridge_router_gate(
@@ -1977,6 +2436,16 @@ def skybridge_router_gate(
         return "allow", "no_router_class", router_domain, conf
     if agrees:
         return "allow", "router_agrees", router_domain, conf
+    if (
+        not decision.get("gated")
+        and str(decision.get("reason") or "") not in _QUESTION_PRECEDENCE_REASONS
+        and command_shapes.named_domain_overrides(message, _ROUTER_AGREEING_DOMAINS[intent.domain], router_domain)
+    ):
+        # The words NAME this intent's domain and no other ("do I have anything on my CALENDAR today", live 2026-11-03: the
+        # router said lists @ 0.70, the veto sent the turn on and the lists expert read the shopping list aloud). A confident
+        # OTHER domain does not outrank the noun the user said. A chat verdict still vetoes (below), and so does a question-
+        # shape re-point (evidence / event-time / own-fact: the question is about memory, whatever noun it mentions).
+        return "allow", "named_domain", router_domain, conf
     if (
         router_domain == "chat"
         and decision.get("gated")
@@ -2114,6 +2583,15 @@ async def resolve_skybridge_request(
                 },
             }
 
+    if intent.domain == "lists" and intent.action == "correct_last_item":
+        # "no, X" / "spell it X" is a list command only for someone who just ADDED something (the panel counts as one speaker);
+        # an unknown guest, or anyone with no recent add, is just talking - never a sign-in challenge, never a hijacked sentence.
+        if _is_guest_user(user_id) and not panel_principal.in_panel_turn():
+            return _not_a_list_command()
+        from list_service import recent_add
+
+        if recent_add(panel_principal.HOUSEHOLD_VIEWER if _is_guest_user(user_id) else user_id) is None:
+            return _not_a_list_command()
     try:  # failure capture (ZOE_STRUGGLE_OUTCOMES, default off): Skybridge takes this user's turn - a deque append, never raises
         import struggle_detector
 
@@ -2149,6 +2627,9 @@ async def resolve_skybridge_request(
 
     if intent.domain == "clock":
         return _attach_skybridge_context(_resolve_clock(intent))
+
+    if intent.domain == "alarm":
+        return _attach_skybridge_context(await alarm_voice.resolve(intent.alarm, user_id))
 
     if intent.domain == "timer":
         return _attach_skybridge_context(_resolve_timer(intent, user_id))
@@ -2243,7 +2724,8 @@ def _audit_list_item(op: str, user_id: str, list_id: str, item_id: str) -> None:
 
 
 # What a panel guest may do to the household list; everything else on a list (edit text, create a list) needs a member.
-_GUEST_HOUSEHOLD_LIST_ACTIONS = frozenset({"show", "overview", "contains", "add_item", "remove_item", "complete_item"})
+_GUEST_HOUSEHOLD_LIST_ACTIONS = frozenset({"show", "overview", "contains", "add_item", "remove_item", "complete_item",
+                                           "rename_item", "correct_last_item"})
 
 
 def skybridge_intent_requires_identity(intent: SkybridgeIntent | None) -> bool:
@@ -2375,6 +2857,10 @@ def _remember_smart_home_target(intent: "SkybridgeIntent", out: dict[str, Any]) 
     target is what the resolver actually SELECTED (``out["controlled_entities"]`` - the room-disambiguated light, the fuzzy match),
     never the words of the command: a follow-up must switch the very device that was switched."""
     ctx = out.get("skybridge_context")
+    if out.get("handled") and isinstance(ctx, dict) and intent.action == "clarify_state" and intent.query:
+        # "turn the bedroom lamp" -> "On or off?": the NAMED device waits for the one-word answer ("on" / "turn it on").
+        ctx[_SMART_HOME_TARGET_KEY] = {"action": "clarify_state", "query": intent.query, "entity_ids": [], "ts": time.time()}
+        return
     entities = [str(e) for e in out.get("controlled_entities") or [] if e]
     if out.get("handled") and isinstance(ctx, dict) and intent.action in ("turn_on", "turn_off") and entities:
         ctx[_SMART_HOME_TARGET_KEY] = {
@@ -2385,12 +2871,17 @@ def _remember_smart_home_target(intent: "SkybridgeIntent", out: dict[str, Any]) 
 def _smart_home_followup_intent(raw_message: str, context: dict[str, Any] | None) -> "SkybridgeIntent | None":
     """A bare pronoun command ("turn it back on again", "switch them off", "turn it back") about the device just controlled."""
     mem = context.get(_SMART_HOME_TARGET_KEY) if isinstance(context, dict) else None
-    if not isinstance(mem, dict) or mem.get("action") not in ("turn_on", "turn_off"):
+    if not isinstance(mem, dict) or mem.get("action") not in ("turn_on", "turn_off", "clarify_state"):
         return None
-    from conversation_cues import smart_home_followup, smart_home_followup_ttl_s
+    from conversation_cues import smart_home_followup, smart_home_followup_ttl_s, smart_home_state_answer
 
     if time.time() - float(mem.get("ts") or 0.0) > smart_home_followup_ttl_s():
         return None
+    if mem.get("action") == "clarify_state":
+        answer = smart_home_state_answer(raw_message)
+        if answer is None or not mem.get("query"):
+            return None
+        return SkybridgeIntent(domain="smart_home", action="turn_on" if answer == "on" else "turn_off", query=str(mem["query"]))
     verdict = smart_home_followup(raw_message)
     if verdict is None:
         return None
@@ -2481,7 +2972,50 @@ def _original_parse_stands(intent: "SkybridgeIntent") -> bool:
     return q.split()[0] not in _FRAME_LEAD_WORDS and not any(q == t or q.endswith(" " + t) for t in _FRAME_TAILS)
 
 
+# Moonshine's usual mishearings of the device noun in a switch frame ("turn on the watch", "turned off the lies" - live
+# 2026-11-01, three tries before the light came on). Only an AFFIRMATIVE command shape is repaired: the switch verb must open
+# the utterance / a sentence (after optional polite filler), so "I already turned off the lies" (a report) and "Don't turn
+# off the watch" (a negation) are untouched and never become a light command.
+_LIGHT_MISHEAR_RE = re.compile(
+    r"(?P<lead>(?:^\s*|[.!?]\s+)(?:(?:hey|ok|okay|zoe|please|kindly|just|go ahead and|can you|could you|would you|will you)[,\s]+)*)"
+    r"\b(?:turn|switch|flip)(?:ed|ped)?\s+(?P<onoff>on|off)\s+(?:the\s+)?(?P<noun>watch|lite|lye|lies|lice)\b", re.IGNORECASE)
+_RETRACTION_RE = re.compile(
+    r"\b(?:don'?t|do not|never\s*mind|nevermind|cancel|stop|wait|actually|no|not|undo|scratch that|forget (?:it|that))\b", re.IGNORECASE)
+_CONTROL_ACTIONS = frozenset({"turn_on", "turn_off", "set_brightness"})
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s*(?=[A-Za-z])")
+
+
+def _repair_light_mishear(value: str) -> str:
+    def _fix(m: "re.Match[str]") -> str:
+        return f"{m.group('lead')}turn {m.group('onoff')} the {'lights' if m.group('noun').lower() in ('lies', 'lice') else 'light'}"
+
+    return _LIGHT_MISHEAR_RE.sub(_fix, value)
+
+
 def _classify_home(raw_message: str, text: str) -> "SkybridgeIntent | None":
+    """The smart-home parse, with two live-failure repairs on top of ``_classify_home_parse``: the device noun after a
+    switch verb is repaired when Moonshine misheard it, and a control command that swallowed the sentences spoken AFTER it
+    ("Turn on the light. <other talk>": the device query ran to the end of the string and no device matched) is re-parsed
+    from the sentence that holds the command."""
+    raw_message = _repair_light_mishear(raw_message)
+    text = _repair_light_mishear(text)
+    intent = _classify_home_parse(raw_message, text)
+    if intent is not None and intent.action in _CONTROL_ACTIONS and re.search(r"[.!?]", intent.query or ""):
+        sentences = _SENTENCE_SPLIT_RE.split(raw_message.strip())
+        for i, sentence in enumerate(sentences):
+            lead = f" {re.sub(r'[.!?,;:]+$', '', sentence.lower().strip())} "
+            sub = _classify_home_parse(sentence, lead)
+            if sub is not None and sub.action == intent.action and not re.search(r"[.!?]", sub.query or ""):
+                trailing = " ".join(sentences[i + 1:])
+                if _RETRACTION_RE.search(trailing):
+                    return None  # later speech retracts / qualifies the command: do not act on the first sentence
+                if _HOME_DEVICE_NOUN.search(trailing.lower()):
+                    return intent  # later speech names the device ("... The bedroom light."): keep the whole-utterance parse
+                return sub
+    return intent
+
+
+def _classify_home_parse(raw_message: str, text: str) -> "SkybridgeIntent | None":
     """The smart-home parse: the original text first (so every command that already worked keeps its exact result), and the
     filler-stripped text only when the original parse failed or kept the polite frame in its device query."""
     original = _classify_smart_home(text)
@@ -2560,6 +3094,13 @@ def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     if m and has_device:
         action = "turn_on" if m.group(2) == "on" else "turn_off"
         return SkybridgeIntent(domain="smart_home", action=action, query=_clean_device(m.group(1)))
+    # A control verb + a device but NO on / off / level ("turn the light", "let's switch the lamp"): ask, never guess. Anything else
+    # that already parsed returned above; this only claims the bare verb-device shape.
+    m = re.search(r"\b(?:turn|switch|flip)\s+(?:the\s+|my\s+|our\s+)?([a-z' ]*?)\s*$", text)
+    if (m and has_device and _HOME_DEVICE_NOUN.fullmatch((m.group(1) or "").split()[-1] if (m.group(1) or "").split() else "")
+            and len((m.group(1) or "").split()) <= 3
+            and not re.search(r"\b(?:on|off|of|up|down|to|into|around|over|back|all|status|brighter|dimmer)\b", text)):
+        return SkybridgeIntent(domain="smart_home", action="clarify_state", query=_clean_device(m.group(1)))
     # Overview: "smart home", "show me the devices", "control the lights".
     if re.search(r"\bsmart\s*home\b|\bdevices?\b", text):
         return SkybridgeIntent(domain="smart_home", action="status")
@@ -2603,6 +3144,10 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
             return await _resolve_list_remove_item(intent, user_id, db, context)
         if intent.action == "complete_item":
             return await _resolve_list_complete_item(intent, user_id, db, context)
+        if intent.action == "rename_item":
+            return await _resolve_list_rename_item(intent, user_id, db, context)
+        if intent.action == "correct_last_item":
+            return await _resolve_list_correct_last(intent, user_id, db, context)
         if intent.action == "edit_item":
             return await _resolve_list_edit_item(intent, user_id, db, context)
         if intent.action == "create_list":
@@ -2904,6 +3449,16 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
             "actions": [],
         }
     start = intent.start_date or _today()
+    if intent.query == RANGE_END_BEFORE_START:
+        # "from 6pm to 9am": the end is before the start. Nothing is written; Zoe says so and asks.
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": f"That time for {intent.title} ends before it starts, so I haven't added it. What times should I use?",
+            "cards": [_status_card("Not added", "The end time was before the start time. Nothing was changed.",
+                                   status="Not added")],
+            "actions": [],
+        }
     event_id = str(uuid.uuid4())
     await db.execute(
         """
@@ -2919,7 +3474,7 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
         start.isoformat(),
         None if intent.all_day else intent.target_time,
         start.isoformat(),
-        None,
+        None if intent.all_day else (intent.end_time or None),
         None,
         "general",
         None,
@@ -2936,6 +3491,8 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
     when = _spoken_when(start)
     refreshed["spoken_summary"] = (
         f"Added {intent.title} to your calendar {when}." if intent.all_day
+        else f"Added {intent.title} to your calendar {when} from {_spoken_clock(intent.target_time)} to "
+             f"{_spoken_clock(intent.end_time)}." if intent.end_time
         else f"Added {intent.title} {when} at {_spoken_clock(intent.target_time)}."
     )
     refreshed["actions"] = [{"type": "created", "domain": "calendar", "id": event_id}]
@@ -3302,7 +3859,7 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
     }
 
 
-async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
+async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any, *, ensure_defaults: bool = True) -> dict[str, Any]:
     if user_id in {"guest", "voice-guest"}:
         card = card_service.build_shopping_list_card(
             {
@@ -3320,7 +3877,8 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
             "cards": [card_service.convert_emit(card, target_major=1)],
         }
 
-    await _ensure_default_lists(user_id, db)
+    if ensure_defaults:      # a correction's reply re-reads only: it must never create the default lists as a side effect
+        await _ensure_default_lists(user_id, db)
     lists = await _fetch_list_catalog(user_id, db)
     list_ids = [list_row["id"] for list_row in lists]
     items_by_list: dict[Any, list[dict[str, Any]]] = {list_id: [] for list_id in list_ids}
@@ -3349,6 +3907,10 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
 
     list_type = intent.list_type
     selected = None if intent.action == "overview" else _select_list(lists, list_type, intent.list_name)
+    if selected is None and intent.action == "show" and not list_type and not intent.list_name:
+        # "what's on the list" / "what's on my list now" names no list: read the one that has anything on it (live 2026-10-31:
+        # three asks answered "Lists has 4 items." with the items never named).
+        selected = _only_populated_list(lists)
     contains_answer = ""
     if intent.action == "contains":
         contains_answer, found_in = _list_contains_answer(intent, lists, items_by_list)
@@ -3495,6 +4057,16 @@ async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
     for item in catalog:
         item.pop("n_items", None)  # a tiebreak for the dedupe above, not part of the list contract
     return catalog
+
+
+def _only_populated_list(lists: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The list a nameless "what's on the list" means: the single list that has items, else the shopping list when several
+    do (the household default), else None (the caller keeps the per-list counts)."""
+    populated = [lst for lst in lists if int(lst.get("item_count") or 0) > 0]
+    if len(populated) == 1:
+        return populated[0]
+    shopping = [lst for lst in populated if lst.get("list_type") == "shopping"]
+    return shopping[0] if len(shopping) == 1 else None
 
 
 def _select_list(lists: list[dict[str, Any]], list_type: str = "", list_name: str = "") -> dict[str, Any] | None:
@@ -3694,40 +4266,73 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     # created_at is a TEXT column — cast before the timestamp comparison, or
     # `created_at > now() - interval` throws `operator does not exist:
     # text > timestamp` on Postgres and breaks the skybridge fast path.
-    recent_dup = await db.fetchrow(
-        """
-        SELECT id FROM list_items
-        WHERE list_id = $1 AND lower(text) = lower($2) AND deleted = 0
-          AND created_at::timestamptz > now() - interval '10 seconds'
-        """,
-        list_id,
-        intent.item_text,
-    )
-    if recent_dup is not None:
-        # Answer as if the add just succeeded (it did) and point the card's
-        # "recent" highlight at the original row.
-        item_id = str(recent_dup["id"])
-        logger.info("skybridge list add: duplicate %r within 10s on list %s — replay skipped", intent.item_text, list_id)
-    else:
-        item_id = str(uuid.uuid4())
-        await db.execute(
-            """
-            INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            """,
-            item_id,
-            list_id,
-            intent.item_text,
-            "normal",
-            "",
-            "",
-            None,
-            None,
-        )
+    # An item ALREADY open on the list (case-, plural- and punctuation-insensitive) is never added twice: it is named in the
+    # reply instead ("Milk's already on the shopping list."). A spoken add may name several items ("eggs and milk").
+    from list_service import add_reply, find_matching_item, normalize_item_text, split_items
+
+    added: list[str] = []
+    already: list[str] = []
+    new_ids: list[str] = []
+    item_id = ""
+    from list_service import list_write_txn
+
+    # ONE transaction + per-list advisory lock around the read-check-insert loop: overlapping adds serialise, a failed item
+    # rolls the whole add back.
+    async with list_write_txn(db, list_id):
+        open_rows = [dict(r) for r in await db.fetch(
+            "SELECT id, text FROM list_items WHERE list_id = $1 AND deleted = 0 AND (completed IS NULL OR completed = 0)", list_id)]
+        for part in (split_items(intent.item_text) if list_type == "shopping" else [normalize_item_text(intent.item_text)]) or [intent.item_text]:
+            recent_dup = await db.fetchrow(
+                """
+                SELECT id FROM list_items
+                WHERE list_id = $1 AND lower(text) = lower($2) AND deleted = 0
+                  AND created_at::timestamptz > now() - interval '10 seconds'
+                """,
+                list_id,
+                part,
+            )
+            if recent_dup is not None:
+                # Answer as if the add just succeeded (it did) and point the card's "recent" highlight at the original row.
+                new_ids.append(str(recent_dup["id"]))
+                added.append(part)
+                logger.info("skybridge list add: duplicate %r within 10s on list %s — replay skipped", part, list_id)
+                continue
+            have = find_matching_item(open_rows, part)
+            if have is not None:
+                already.append(normalize_item_text(have["text"]))
+                if not item_id:
+                    item_id = str(have["id"])
+                continue
+            new_id = str(uuid.uuid4())
+            await db.execute(
+                """
+                INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                new_id,
+                list_id,
+                normalize_item_text(part) or part,
+                "normal",
+                "",
+                "",
+                None,
+                None,
+            )
+            open_rows.append({"id": new_id, "text": part})
+            new_ids.append(new_id)
+            added.append(normalize_item_text(part) or part)
+    if new_ids:
         await _maybe_commit(db)
+        item_id = new_ids[0]
     # The item is on the list now (inserted, or already there from a replayed add): the receipt the write-claim guard reads.
-    write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", item_id, "skybridge:add_item")
-    _audit_list_item("add", user_id, list_id, item_id)
+    if new_ids:
+        from list_service import note_recent_add
+
+        note_recent_add(user_id, list_id, new_ids[-1])      # what "no, X" / "spell it X" corrects for the next couple of minutes
+    for _rid in (new_ids or [item_id]):
+        write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", _rid, "skybridge:add_item")
+        if _rid in new_ids:
+            _audit_list_item("add", user_id, list_id, _rid)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
     card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
     items = card_content.get("items")
@@ -3754,8 +4359,8 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
         items.sort(key=lambda row: 0 if isinstance(row, dict) and str(row.get("id") or "") == item_id else 1)
         card_content["recent_item_id"] = item_id
     refreshed["intent"] = {"domain": "lists", "action": "add_item", "list_type": list_type, "item_id": item_id}
-    refreshed["spoken_summary"] = f"Added {intent.item_text} to the {list_type} list."
-    refreshed["actions"] = [{"type": "created", "domain": "lists", "id": item_id, "list_id": list_id}]
+    refreshed["spoken_summary"] = add_reply(added, already, f"the {list_type} list")
+    refreshed["actions"] = [{"type": "created", "domain": "lists", "id": rid, "list_id": list_id} for rid in new_ids]
     return refreshed
 
 
@@ -3767,6 +4372,13 @@ def _match_list_items_by_text(items: list[dict[str, Any]], wanted: str) -> list[
     exact = [item for item in items if str(item.get("text") or "").strip().lower() == target]
     if exact:
         return exact
+    # Tolerant of the STT artefact ("noodles? Noodles") and of case / plural / punctuation: the same ITEM by list_service.item_key.
+    from list_service import item_key
+
+    want = item_key(target)
+    same = [item for item in items if want and item_key(str(item.get("text") or "")) == want]
+    if same:
+        return same
     if re.search(r"\b(?:and|or)\b|&", target):
         # "milk and eggs" is ONE item only if an item is literally called that; a substring guess would act on one of
         # two things the user named.
@@ -3777,8 +4389,11 @@ def _match_list_items_by_text(items: list[dict[str, Any]], wanted: str) -> list[
 async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> tuple[str, str] | None:
     """Locate an existing list (never create) for a removal, mirroring _find_or_create_list's lookups."""
     hinted_id, hinted_type = _context_list_hint(context)
-    list_type = intent.list_type or hinted_type or "shopping"
+    named_type = intent.list_type if intent.list_type_explicit else ""
+    list_type = named_type or hinted_type or "shopping"
     if hinted_id and not intent.list_name:
+        # The card in context is the target only when the user did not name a list TYPE ("change milk to oat milk on the shopping
+        # list" with a personal list showing edits the shopping list); ``list_type_explicit`` tells a named type from the default.
         rows = await db.fetch(
             """
             SELECT id, name, list_type
@@ -3792,7 +4407,8 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         )
         if rows:
             row = dict(rows[0])
-            return str(row["id"]), str(row.get("list_type") or list_type)
+            if not named_type or str(row.get("list_type") or "") == named_type:
+                return str(row["id"]), str(row.get("list_type") or list_type)
     if intent.list_name:
         # A list the user NAMED ("my chores list"): that list or none - never the default shopping list instead.
         rows = await db.fetch(
@@ -3904,13 +4520,95 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
         refreshed["actions"] = []
         return refreshed
     await _maybe_commit(db)
-    item_text = str(target_item.get("text") or intent.item_text)
+    from list_service import normalize_item_text
+
+    item_text = normalize_item_text(str(target_item.get("text") or intent.item_text))
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     _audit_list_item("remove", user_id, list_id, item_id)
     refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Removed {item_text} from the {list_type} list."
     refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": item_id, "list_id": list_id}]
     return refreshed
+
+
+def _not_a_list_command() -> dict[str, Any]:
+    """The answer for words that LOOKED like a list correction but are not one for this speaker (nothing of theirs was just
+    added, or a bare "no, X" that does not resemble it): not handled, so the turn falls through exactly as if unclassified."""
+    return {"handled": False, "intent": None, "spoken_summary": "", "cards": []}
+
+
+async def _rename_and_answer(
+    intent: SkybridgeIntent, user_id: str, db: Any, *, list_id: str, list_type: str, old_text: str, new_text: str, item_id: str = "",
+) -> dict[str, Any]:
+    """The one write+reply for both correction paths: ``list_service.rename_item_on_list`` (per-list lock, one transaction,
+    receipt after commit), then the authoritative re-read card like add/remove."""
+    from list_service import rename_item_on_list, rename_reply
+
+    result = await rename_item_on_list(db, user_id=user_id, list_id=list_id, old_text=old_text, new_text=new_text, item_id=item_id)
+    status = str(result.get("status") or "")
+    if status in {"renamed", "merged"}:
+        await _maybe_commit(db)
+        _audit_list_item("rename" if status == "renamed" else "rename_merge", user_id, list_id, str(result.get("item_id") or ""))
+    refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name),
+                                     user_id, db, ensure_defaults=False)
+    where = f"the {intent.list_name} list" if intent.list_name else f"the {list_type} list"
+    spoken = rename_reply(result, where)
+    refreshed["intent"] = {"domain": "lists", "action": "rename_item", "list_type": list_type, "status": status,
+                           "item_id": result.get("item_id") or ""}
+    refreshed["spoken_summary"] = spoken
+    if status == "renamed":
+        refreshed["actions"] = [{"type": "updated", "domain": "lists", "id": result.get("item_id"), "list_id": list_id}]
+    elif status == "merged":
+        refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": result.get("removed_id"), "list_id": list_id}]
+    else:
+        refreshed["cards"] = [_status_card("Nothing changed", spoken)] + list(refreshed.get("cards") or [])
+        refreshed["actions"] = []
+    return refreshed
+
+
+async def _resolve_list_rename_item(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    """"change X to Y [on the <list>]": rename one item on an EXISTING list (never creates one). The old item is matched by
+    ``item_key``; missing = said so, nothing touched; the new text already there = the old row is retired instead."""
+    if user_id in {"guest", "voice-guest"}:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "List changes are not available for guest sessions.",
+            "cards": [_status_card("Sign in to change lists", "Zoe needs to know who is speaking before editing list items.")],
+            "actions": [],
+        }
+    list_target = await _find_list_for_remove(intent, user_id, db, context)
+    if not list_target:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I could not find that list, so nothing changed.",
+            "cards": [_status_card("Which list should I use?", "I could not find that list. Show your lists again or name the list to update.")],
+            "actions": [],
+        }
+    list_id, list_type = list_target
+    return await _rename_and_answer(intent, user_id, db, list_id=list_id, list_type=list_type,
+                                    old_text=intent.item_text, new_text=intent.target_text)
+
+
+async def _resolve_list_correct_last(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    """"no, X" / "I meant X" / "spell it X" within the correction window of an add: fix the row this speaker just added."""
+    from list_service import looks_like_correction_of, recent_add
+
+    recent = recent_add(user_id)
+    if recent is None:
+        return _not_a_list_command()
+    list_id, item_id = recent
+    rows = await db.fetch("SELECT id, text, completed FROM list_items WHERE list_id = $1 AND deleted = 0", list_id)
+    current = next((dict(r) for r in rows if str(dict(r).get("id")) == item_id), None)
+    if current is None or current.get("completed"):
+        return _not_a_list_command()     # ticked off / removed since: there is nothing "just added" to fix
+    if intent.query == "guard" and not looks_like_correction_of(str(current.get("text") or ""), intent.item_text):
+        return _not_a_list_command()     # a bare "no, <something else>" is not about the item
+    list_rows = await db.fetch("SELECT list_type FROM lists WHERE id = $1 AND deleted = 0", list_id)
+    list_type = str(dict(list_rows[0]).get("list_type") or "shopping") if list_rows else "shopping"
+    return await _rename_and_answer(intent, user_id, db, list_id=list_id, list_type=list_type,
+                                    old_text=str(current.get("text") or ""), new_text=intent.item_text, item_id=item_id)
 
 
 async def _resolve_list_complete_item(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:

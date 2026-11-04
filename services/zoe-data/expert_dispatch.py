@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import voice_phrases
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -158,6 +159,11 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
     score = float(ctx.get("score") or 0.0)
     if score < threshold_for(domain):
         return None
+    if _names_another_domain(domain, text):
+        # The words NAME a different domain ("do I have anything on my calendar today?" routed to lists, live 2026-11-03: the
+        # lists expert read the shopping list aloud). Never answer one domain's question with another domain's data.
+        logger.info("EXPERT_NAMED_MISMATCH domain=%s score=%.2f → brain", domain, score)
+        return None
     user_id = str(ctx.get("user_id") or "guest")
     session_id = str(ctx.get("session_id") or "")
     t0 = time.monotonic()
@@ -242,6 +248,26 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
     logger.info("EXPERT_ACTIVE domain=%s score=%.2f intent=%s %.0fms reply_chars=%d",
                 domain, score, intent_name, (time.monotonic() - t0) * 1000.0, len(reply))
     return DispatchResult(domain=domain, reply=reply, intent=intent_name, ui=_ui_for(domain))
+
+
+# The record-domain experts and the named nouns each may answer for (command_shapes.named_domains).
+_NAMED_FAMILY = {
+    "lists": frozenset({"lists"}),
+    "calendar": frozenset({"calendar", "reminders"}),
+    "reminders": frozenset({"reminders", "calendar"}),
+    "timers": frozenset({"timers"}),
+}
+
+
+def _names_another_domain(domain: str, text: str) -> bool:
+    """True when ``domain``'s expert is about to answer words that name ONLY other domains' nouns. Pure."""
+    family = _NAMED_FAMILY.get(domain)
+    if family is None:
+        return False
+    import command_shapes
+
+    named = command_shapes.named_domains(text)
+    return bool(named) and not (named & family)
 
 
 def _calendar_qualifier(text: str) -> str:
@@ -652,9 +678,8 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         if correctionish:
             # A correction the extractor resolved — never echo the raw
             # negation ("I'll remember No Caitlin is…") back as a teach.
-            return "Got it — I've updated that."
-        echo = _echo_fact(text)
-        return f"Got it — I'll remember {echo}." if echo else "Got it — I'll remember that."
+            return voice_phrases.say("memory_updated")
+        return _saved_reply(text)
     if correctionish:
         # Correction shape but the correction path produced nothing: NEVER
         # fall through to the verbatim ingest of the RAW text (QA F8). The
@@ -708,8 +733,7 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         # write must never be answered with "Got it — I'll remember…" (and
         # deferring to the brain risks the same false confirmation). Be honest.
         logger.warning("store_fact ingest failed (%s) → honest no-save reply", exc)
-        return ("Hmm — I couldn't save that just now. "
-                "Mind telling me again in a moment?")
+        return voice_phrases.say("memory_save_failed")
     if outcome == "dropped":
         # The store refused the write (e.g. PII scrub). Nothing landed —
         # don't claim it did, and don't invite a retry that would re-reject.
@@ -730,8 +754,13 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         _tomb_clear(user_id, text)
     except Exception:
         pass
+    return _saved_reply(text)
+
+
+def _saved_reply(text: str) -> str:
+    """The teach confirmation (voice_phrases.json): echoes what landed so the person can correct it."""
     echo = _echo_fact(text)
-    return f"Got it — I'll remember {echo}." if echo else "Got it — I'll remember that."
+    return voice_phrases.say("memory_saved", fact=echo) if echo else voice_phrases.say("memory_saved_plain")
 
 
 async def _run_expert(domain: str, text: str, user_id: str, session_id: str) -> Optional[str]:

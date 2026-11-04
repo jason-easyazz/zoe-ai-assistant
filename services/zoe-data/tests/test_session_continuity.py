@@ -191,9 +191,10 @@ def test_a_lookup_failure_mints_instead_of_failing_the_turn():
 CHAT_PY = (Path(__file__).resolve().parents[1] / "routers" / "chat.py").read_text()
 
 
-def test_chat_and_whatsapp_entry_points_use_the_resolver_and_none_mints_inline():
+def test_the_chat_entry_point_uses_the_resolver_and_none_mints_inline():
+    # /api/chat/ is the only entry point left (the WhatsApp-connect route was removed with the Hermes lane).
     assert 'body.get("session_id", f"web_' not in CHAT_PY
-    assert CHAT_PY.count("await resolve_session_id(") == 2
+    assert CHAT_PY.count("await resolve_session_id(") == 1
     assert "channel=req_channel" in CHAT_PY
 
 

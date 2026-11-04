@@ -148,6 +148,7 @@ TABLES: tuple[Store, ...] = (
     _t("face_profiles", BIOMETRIC, OUT_OF_SCOPE, "Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member "
        "un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days)."),
     _t("enrollment_offers", METADATA, OUT_OF_SCOPE, _NOWORDS),
+    _t("alarms", WORDS, REACHED, member="alarms.forget_user"),                 # the label is the member's words
     _t("phone_devices", METADATA, OUT_OF_SCOPE, "A paired phone (phone_app.py): member id, a display name, the platform, a credential hash and "
        "public key - no household words. The member or an admin revokes it (phone_app.revoke_device), which deletes its push tokens."),
     # --- config, ids and infrastructure ---
@@ -162,7 +163,7 @@ TABLES: tuple[Store, ...] = (
     _t("ui_panel_sessions", METADATA, OUT_OF_SCOPE, "Which page a panel is on; ui_context can carry transient state, expires with the session."),
     _t("push_subscriptions", METADATA, OUT_OF_SCOPE, "A browser push endpoint and keys."),
     _t("auth_handoffs", METADATA, OUT_OF_SCOPE, "Short-lived hand-off tokens."),
-    _t("trust_audit", METADATA, OUT_OF_SCOPE, "Tool-call audit: tool name, allowed flag, reason."),
+    _t("trust_audit", METADATA, OUT_OF_SCOPE, "Never-built trust-gate audit log; never written, dropped by alembic 0065."),
     _t("agent_cost_events", METADATA, OUT_OF_SCOPE, "Token counts and cost per call."),
     _t("llm_call_log", METADATA, OUT_OF_SCOPE, "Latency and token counts per call."),
     _t("ui_actions", WORDS, GAP, "Action payloads (e.g. a typed list item) are kept; neither path reaches them."),
@@ -196,6 +197,9 @@ OTHER: tuple[Store, ...] = (
           "holds the failed turns' words for one run; forget tombstones the examples and deletes any leftover text files "
           "(router_retrain_ledger.forget, via struggle_proposals.forget_user / forget_events). The ledger itself holds hashes only.",
           member="struggle_detector.delete_user", entity="struggle_detector.erase_entity", markers=(".texts.jsonl",)),
+    Store("warm_speaker_memo", "file", METADATA, REACHED, "~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker "
+          "(a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member.",
+          member="warm_speaker.forget_user", markers=("warm-speaker.json",)),
     Store("omi_audio_files", "file", BIOMETRIC, REACHED, "Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files).",
           member=_OMI_M, entity="omi_recordings.erase_entity", markers=("omi-audit.jsonl",)),
     Store("device_audit_logs", "file", METADATA, OUT_OF_SCOPE, "Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words.",
@@ -208,7 +212,8 @@ OTHER: tuple[Store, ...] = (
           markers=("engineering_pipeline_runs.jsonl", "pipeline_runs.jsonl")),
     Store("sqlite_dev_db", "file", METADATA, OUT_OF_SCOPE, "database.py's zoe.db is the legacy SQLite fallback for dev; production is Postgres.",
           markers=("zoe.db",)),
-    Store("app_logs", "file", WORDS, GAP, "~/.zoe-logs/zoe-data.*: the service log. Message text is logged at INFO in a few places (e.g. intent_miss: <text>); "
+    Store("app_logs", "file", WORDS, GAP, "~/.zoe-logs/zoe-data.*: the service log. Utterances are logged as len + hash only since 2026-11-03 (intent_miss: len=N utt=<hash>); "
+          "lines written before then hold text until the size rotation drops them; "
           "rotated by size (50 MB x4), not by age, outside the cascade.", markers=("intent_miss:",)),
     Store("backup_postgres", "backup", WORDS, GAP, "Nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within "
           "BACKUP_MAX_AGE_DAYS (35) - WHILE the nightly job succeeds: it prunes by count after a new dump, so a job that keeps failing "

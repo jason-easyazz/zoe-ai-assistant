@@ -524,7 +524,7 @@ def load_model(spec: str, threads: int, models_dir: Path, scratch: Path):
         from resemblyzer import VoiceEncoder, preprocess_wav
 
         torch.set_num_threads(threads)
-        enc = VoiceEncoder(device="cpu", verbose=False)  # exactly services/zoe-data/voice_speaker_id.py
+        enc = VoiceEncoder(device="cpu", verbose=False)  # as the panel daemon builds it (lab only)
 
         def f(w):
             pw = preprocess_wav(w)  # webrtcvad trim + volume normalise, as the daemon does

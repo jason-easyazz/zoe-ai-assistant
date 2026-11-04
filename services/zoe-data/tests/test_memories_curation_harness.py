@@ -55,7 +55,7 @@ def test_curation_harness_passes():
      "        acts.appendChild(button('Remove', 'am-danger', () => {\n            api('POST', path(m.user_id, '/rows/' + "
      "encodeURIComponent(r.id) + '/forget'));\n            clear(acts);"),                                    # remove before the yes
     ("            state.members = null;                        // not a curator (403): that part never appears",
-     "            state.members = [{ user_id: 'kid/1', name: 'Mia' }];"),                         # family part for a non-curator
+     "            state.members = [{ user_id: 'kid/1', name: 'Juno' }];"),                         # family part for a non-curator
 ])
 def test_curation_negative_controls(tmp_path, old, new):
     src = MOD.read_text()

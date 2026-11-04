@@ -701,3 +701,78 @@ def test_a_rejected_voice_is_not_handed_a_health_quote_and_the_owner_is(monkeypa
     finally:
         restraint.bind_verdict(None)
         restraint._reset_state()
+
+
+# ── forgotten means forever: a ledger outage serves nothing (fails CLOSED) ───
+
+class _DownLedger(mf.MemoryBackend):
+    async def active_hashes(self, user_id, now_iso):
+        raise RuntimeError("ledger down Dana")          # the message must never reach the log
+
+
+def _lenient_active_hashes(monkeypatch):
+    """The OLD behaviour: a ledger read failure answers from the last known (here empty) set."""
+    async def lenient(user_id, *, strict=False):
+        return frozenset()
+    monkeypatch.setattr(mf, "active_hashes", lenient)
+
+
+def test_a_ledger_outage_serves_no_exact_words(index, caplog):
+    say(SENTENCE)
+    assert [h.text for h in ask("what exactly did I say about Dana's kids")] == [SENTENCE]    # healthy: served
+    run(mf.add(USER, "Dana", actor=USER))
+    mf.reset_state()
+    mf.set_backend(_DownLedger())
+    with caplog.at_level("WARNING", logger="exact_words"):
+        assert ask("what exactly did I say about Dana's kids") == []
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "LedgerUnavailable" in logged
+    assert "Dana" not in logged                                          # the error type only, never a name
+
+
+def test_control_with_the_old_lenient_lookup_an_outage_leaks_the_forgotten_turn(index, monkeypatch):
+    say(SENTENCE)
+    run(mf.add(USER, "Dana", actor=USER))
+    mf.reset_state()
+    mf.set_backend(_DownLedger())
+    _lenient_active_hashes(monkeypatch)
+    assert [h.text for h in ask("what exactly did I say about Dana's kids")] == [SENTENCE]    # the instrument sees the leak
+
+
+def test_a_ledger_outage_does_not_index_a_turn(index, caplog):
+    mf.set_backend(_DownLedger())
+    with caplog.at_level("WARNING", logger="exact_words"):
+        assert say(SENTENCE) is False
+    assert len(index.rows) == 0
+    assert "Dana" not in " ".join(r.getMessage() for r in caplog.records)
+
+
+def test_control_with_the_old_lenient_lookup_an_outage_indexes_the_turn(index, monkeypatch):
+    mf.set_backend(_DownLedger())
+    _lenient_active_hashes(monkeypatch)
+    assert say(SENTENCE) is True                                         # the instrument sees the old fail-open
+
+
+def test_a_durable_ledger_hit_still_withholds_and_a_healthy_ledger_is_unchanged(index):
+    say(SENTENCE)
+    say("I told Leo the garage door is fixed now and he can come round on Friday.")
+    run(mf.add(USER, "Dana", actor=USER))
+    mf.reset_state()                                                     # no overlay: the durable read decides
+    assert ask("what exactly did I say about Dana's kids") == []
+    assert [h.text for h in ask("what exactly did I say about the garage door")][0].startswith("I told Leo")
+
+
+def test_sibling_serve_guards_fail_closed_on_a_ledger_outage(svc):
+    """recall_every_turn._forgotten and MemoryService._names_forgotten document "fails CLOSED": an outage must say forgotten."""
+    import recall_every_turn
+    mf.set_backend(_DownLedger())
+    assert run(recall_every_turn._forgotten(USER, "Dana rang about the kids")) is True
+    assert run(svc._names_forgotten(USER, "Dana rang about the kids")) is True
+
+
+def test_control_sibling_serve_guards_with_the_old_lenient_lookup_leak(svc, monkeypatch):
+    import recall_every_turn
+    mf.set_backend(_DownLedger())
+    _lenient_active_hashes(monkeypatch)
+    assert run(recall_every_turn._forgotten(USER, "Dana rang about the kids")) is False
+    assert run(svc._names_forgotten(USER, "Dana rang about the kids")) is False

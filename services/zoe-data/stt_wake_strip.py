@@ -27,6 +27,10 @@ import re
 #     real wake ("hey so", "ok zo"), mirroring _WAKE_GREETING_NAME_RE inline.
 # A leading wake prefix on a line that ALSO carries the command (strip the prefix
 # only). Requires a following word (?=\S) so a bare name that IS the command stays.
+# Moonshine's NON-WORD renderings of "Hey Zoe" run together ("Azoi, turn the light" 2026-10-29: "Hey" + "Zoe" -> "Azoi"). Each is
+# a token no real command starts with, so they join the unambiguous family; "a zoe" / "a zo" are NOT here (real words follow "a").
+_MISHEARD_WAKE = r"azoi|azoie|azoe|azoey|a\s+zoi|a\s+zoie|a\s+zoey|zoi"
+
 _WAKE_PREFIX_RE = re.compile(
     r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
     # Inline strip uses ONLY unambiguous non-word wake variants. Real names/words
@@ -34,7 +38,7 @@ _WAKE_PREFIX_RE = re.compile(
     # they would corrupt a real command ("Joe wants the weather", "so, add milk").
     # As a whole wake-only line they are caught ONLY with a leading greeting
     # (_GREETING_WEAK_WAKE_LINE_RE); a bare one is the user's word and is kept.
-    r"(?:zoe|zoey|zoie|zoee|zo|sewey)"
+    rf"(?:{_MISHEARD_WAKE}|zoe|zoey|zoie|zoee|zo|sewey)"
     r"[\s,.!?-]+(?=\S)",
     re.IGNORECASE,
 )
@@ -72,7 +76,7 @@ _BARE_GREETING_RE = re.compile(r"^\s*(?:hey|hi|ok|okay)\s*[,.!?…]*\s*$", re.IG
 # unambiguous wake variant. The ambiguous real-name homophones (joe/joey/josie)
 # are excluded here for the same reason they are excluded from _WAKE_PREFIX_RE —
 # "Hey" / "Joe wants the weather" must not lose its subject.
-_WAKE_NAME_START_RE = re.compile(r"^\s*(?:zoe|zoey|zoie|zoee|zo|sewey)\b", re.IGNORECASE)
+_WAKE_NAME_START_RE = re.compile(rf"^\s*(?:{_MISHEARD_WAKE}|zoe|zoey|zoie|zoee|zo|sewey)\b", re.IGNORECASE)
 # Pre-roll junk that Moonshine renders as a short standalone line. Whole-line
 # match only (the `$` anchor), so a real command that merely STARTS with one of
 # these words ("So, add milk to my list") can never be treated as filler.
@@ -91,7 +95,7 @@ _MAX_FILLER_LOOKAHEAD = 2
 # eating the line before it ("Well" / "so" / "what now").
 _STRONG_WAKE_LINE_RE = re.compile(
     r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
-    r"(?:zoe|zoey|zoie|zoee|sewey)"
+    rf"(?:{_MISHEARD_WAKE}|zoe|zoey|zoie|zoee|sewey)"
     r"[\s,.!?]*$",
     re.IGNORECASE,
 )

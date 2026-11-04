@@ -654,7 +654,7 @@ async def _may_keep_words(turn: sig.Turn, *texts: str) -> bool:
         import memory_forgotten
 
         for t in texts:
-            if t and await memory_forgotten.matches(turn.user_id, t):
+            if t and await memory_forgotten.matches(turn.user_id, t, strict=True):
                 return False
     except Exception:  # noqa: BLE001
         return False

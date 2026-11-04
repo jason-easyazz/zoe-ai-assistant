@@ -30,6 +30,7 @@ import memory_authority as ma
 import memory_extractor
 import memory_service
 import routers.voice_tts as v
+import speaker_models
 from memory_service import MemoryService
 from test_memory_authority import _Col
 from test_voice_identity_persistence import PANEL_ID, SESSION_ID, UTTERANCE, _wire_voice_command_fakes
@@ -37,6 +38,7 @@ from test_voice_identity_persistence import PANEL_ID, SESSION_ID, UTTERANCE, _wi
 pytestmark = pytest.mark.ci_safe
 
 DEVICE = {"source": "device", "panel_id": "zoe-touch-pi", "user_id": "voice-daemon"}
+R34 = speaker_models.RESNET34_MODEL_ID      # the only speaker model the server acts on (Resemblyzer was retired)
 SESSION_CALLER = {"source": "session", "user_id": "casey"}
 UID = "casey"
 
@@ -84,11 +86,14 @@ def test_only_a_device_token_can_report_a_verdict():
 
 def test_the_speaker_block_alone_carries_a_claim_for_the_existing_gate():
     """A daemon that sends only `speaker` (no flat pair) is still gated by the server's threshold."""
-    assert v._accept_panel_voice_claim({"speaker": {"member": "casey", "score": 0.9}}, DEVICE) == "casey"
-    assert v._accept_panel_voice_claim({"speaker": {"member": "casey", "score": 0.5}}, DEVICE) is None
+    assert v._accept_panel_voice_claim({"speaker": {"member": "casey", "score": 0.9, "model_id": R34}}, DEVICE) == "casey"
+    assert v._accept_panel_voice_claim({"speaker": {"member": "casey", "score": 0.1, "model_id": R34}}, DEVICE) is None
+    # a claim naming no model is the retired Resemblyzer one: never honoured
+    assert v._accept_panel_voice_claim({"speaker": {"member": "casey", "score": 0.9}}, DEVICE) is None
     # the flat pair wins when both are present (older daemons)
     assert v._accept_panel_voice_claim(
-        {"voice_user_id": "dana", "voice_score": 0.9, "speaker": {"member": "casey", "score": 0.1}}, DEVICE) == "dana"
+        {"voice_user_id": "dana", "voice_score": 0.9, "voice_model_id": R34,
+         "speaker": {"member": "casey", "score": 0.1, "model_id": R34}}, DEVICE) == "dana"
 
 
 # ── 2. voice_command hands it to the memory passes ───────────────────────────
@@ -117,9 +122,9 @@ async def _turn(monkeypatch, payload, caller=None, *, consented=True):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("payload, expected", [
     ({"voice_user_id": "casey", "voice_score": 0.93,
-      "speaker": {"verified": None, "member": "casey", "score": 0.93}}, True),
-    ({"voice_user_id": "casey", "voice_score": 0.40,
-      "speaker": {"verified": None, "member": "casey", "score": 0.40}}, False),
+      "speaker": {"verified": None, "member": "casey", "score": 0.93, "model_id": R34}}, True),
+    ({"voice_user_id": "casey", "voice_score": 0.10,
+      "speaker": {"verified": None, "member": "casey", "score": 0.10, "model_id": R34}}, False),
     ({"speaker": {"verified": False, "member": None, "score": None}}, False),
     ({}, None),                                                       # gate off / shadow: no block
     ({"speaker": {"verified": True, "member": None, "score": None}}, None),   # the panel's word is not a verdict
@@ -132,7 +137,7 @@ async def test_voice_command_carries_the_verdict_to_the_memory_passes(monkeypatc
 @pytest.mark.asyncio
 async def test_a_claim_without_consent_is_unverified(monkeypatch):
     """The member's profile consent was revoked after the panel cached it: not identified, and said so."""
-    got = await _turn(monkeypatch, {"voice_user_id": "casey", "voice_score": 0.95}, consented=False)
+    got = await _turn(monkeypatch, {"voice_user_id": "casey", "voice_score": 0.95, "voice_model_id": R34}, consented=False)
     assert got["speaker_verified"] is False
 
 

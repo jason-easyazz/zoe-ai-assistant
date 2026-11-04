@@ -72,9 +72,9 @@ def test_zoe_data_recognises_the_fence_as_a_whole_line_only():
     assert data.untrusted_source_in(None) is None
 
 
-# The decision line names whichever gate constant chat.py currently uses (_ALL_TOOLS_ENABLED before B3, _INTENT_FAST_PATH_ENABLED
-# after) - match the shape, not the constant, so a rename cannot silently zero the count and skip the pin.
-_FAST_PATH_DECISION = r"use_intent_fast_path = \(not force_openclaw\) and \w+"
+# The decision line names whichever gate constant chat.py currently uses (_INTENT_FAST_PATH_ENABLED since the OpenClaw
+# lane went) - match the shape, not the constant, so a rename cannot silently zero the count and skip the pin.
+_FAST_PATH_DECISION = r"use_intent_fast_path = _?[A-Z][A-Z_]*\b"
 
 
 def _fence_veto_violations(src: str) -> list[str]:
@@ -107,7 +107,7 @@ def test_the_fence_veto_pin_catches_a_missing_or_misplaced_veto():
     no_effect = src[:first] + guard + "\n            pass\n" + src[src.index("use_intent_fast_path = False", first) + len("use_intent_fast_path = False"):]
     assert _fence_veto_violations(no_effect), "a veto that no longer disables the fast path must be flagged"
     # a path whose decision line is renamed away (the exact B3 failure mode) must not pass vacuously
-    assert _fence_veto_violations(src.replace("use_intent_fast_path = (not force_openclaw)", "fast = (not force_openclaw)")), "zero decisions must be flagged"
+    assert _fence_veto_violations(src.replace("use_intent_fast_path = _INTENT_FAST_PATH_ENABLED", "fast = _INTENT_FAST_PATH_ENABLED")), "zero decisions must be flagged"
     # veto placed after the fast path runs
     late = src.replace(guard, "if False:", 1)
     assert _fence_veto_violations(late), "a missing veto must be flagged"

@@ -24,7 +24,7 @@ from routers import chat as chat_router
 
 def _quiet_common_gates(monkeypatch):
     """Neutralise everything between the generator's entry and the no-match
-    brain/openclaw branch so the test reaches the code under test deterministically
+    brain branch so the test reaches the code under test deterministically
     with no real DB / network / model I/O."""
     async def _anoop(*a, **k):
         return None
@@ -54,19 +54,28 @@ def _user():
 @pytest.mark.asyncio
 async def test_client_disconnect_cancels_agent_task(monkeypatch):
     """When the SSE generator is closed mid-flight (client disconnect), the
-    long-running agent task must be cancelled — not left running orphaned holding
-    the brain slot. Drives the no-match OpenClaw branch (run_openclaw_agent)."""
+    long-running brain task must be cancelled — not left running orphaned holding
+    the brain slot. Drives the matched-intent-failed branch, which runs the brain as
+    a task behind heartbeats (_brain_oneshot)."""
     _quiet_common_gates(monkeypatch)
-    # OpenClaw branch (not the local-brain streaming branch).
-    monkeypatch.setattr(chat_router, "_USE_LOCAL_BRAIN", False)
+    import fast_tiers
+    from intent_router import Intent
 
-    async def _empty(*a, **k):
-        return ""
+    async def _none(*a, **k):
+        return None
 
-    monkeypatch.setattr(chat_router, "_safe_load_portrait", _empty)
-    monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", _empty)
-    monkeypatch.setattr(chat_router, "_build_memory_context", _empty)
-    monkeypatch.setattr(chat_router, "openclaw_user_message", lambda intent, msg: msg)
+    async def _not_attempted(*a, **k):
+        return {"attempted": False}
+
+    async def _detect(*a, **k):
+        return Intent("weather", {})
+
+    monkeypatch.setattr(chat_router, "_INTENT_FAST_PATH_ENABLED", True)
+    monkeypatch.setattr(fast_tiers, "resolve", _none)
+    monkeypatch.setattr(fast_tiers, "keyword_intent_allowed", lambda *a, **k: True)
+    monkeypatch.setattr(chat_router, "_run_chat_pi_hybrid_lane", _not_attempted)
+    monkeypatch.setattr(chat_router, "detect_and_extract_intent", _detect)
+    monkeypatch.setattr(chat_router, "execute_intent", _none)
 
     started = asyncio.Event()
     cancelled = {"v": False}
@@ -74,17 +83,17 @@ async def test_client_disconnect_cancels_agent_task(monkeypatch):
     async def fake_agent(*a, **k):
         started.set()
         try:
-            await asyncio.sleep(100)  # multi-minute browser/agent run
+            await asyncio.sleep(100)  # a long brain turn
         except asyncio.CancelledError:
             cancelled["v"] = True
             raise
         return "should never finish"
 
-    monkeypatch.setattr(chat_router, "run_openclaw_agent", fake_agent)
+    monkeypatch.setattr(chat_router, "_brain_oneshot", fake_agent)
 
     # Fast heartbeats so the generator parks at the outer `yield hb` (task created
     # and running) within milliseconds instead of the production 4s cadence.
-    async def fast_heartbeats(emit, task, *, phase_label="OpenClaw"):
+    async def fast_heartbeats(emit, task, *, phase_label="Zoe"):
         while not task.done():
             await asyncio.sleep(0.01)
             if task.done():
@@ -371,3 +380,68 @@ async def test_save_chat_message_records_truncated_in_metadata(monkeypatch):
     insert = next((sql, p) for sql, p in executed if "INSERT INTO chat_messages" in sql)
     metadata = json.loads(insert[1][4])
     assert metadata == {"user_id": "jason", "truncated": True, "traffic_class": "household"}
+
+
+# ── A legacy hand-off sentinel is answered in place (OpenClaw / Hermes are removed) ──
+
+
+async def _drain(gen) -> str:
+    return "".join([chunk async for chunk in gen])
+
+
+@pytest.mark.asyncio
+async def test_escalation_sentinel_in_the_brain_stream_is_answered_in_place(monkeypatch):
+    _stub_brain_branch(monkeypatch)
+    saves: list[str] = []
+
+    async def fake_save(session_id, role, content, user_id=None, **_kw):
+        saves.append(content)
+        return True
+
+    async def sentinel_stream(*a, **k):
+        yield "__ESCALATE_HERMES__:deep work|do it"
+        yield "never streamed"
+
+    monkeypatch.setattr(chat_router, "_save_chat_message", fake_save)
+    monkeypatch.setattr(chat_router, "_brain_streaming", sentinel_stream)
+    out = await _drain(chat_router.chat_stream_generator("plan my week", "sess-esc", _user()))
+    assert "__ESCALATE" not in out and "never streamed" not in out
+    assert chat_router._NO_HANDOFF_REPLY in out
+    assert saves[-1] == chat_router._NO_HANDOFF_REPLY
+
+
+@pytest.mark.asyncio
+async def test_escalation_sentinel_from_the_intent_failed_fallback_is_answered_in_place(monkeypatch):
+    _quiet_common_gates(monkeypatch)
+    import fast_tiers
+    from intent_router import Intent
+
+    async def _none(*a, **k):
+        return None
+
+    async def _not_attempted(*a, **k):
+        return {"attempted": False}
+
+    async def _detect(*a, **k):
+        return Intent("weather", {})
+
+    async def _sentinel(*a, **k):
+        return "__ESCALATE__:browser|look it up"
+
+    saves: list[str] = []
+
+    async def fake_save(session_id, role, content, user_id=None, **_kw):
+        saves.append(content)
+        return True
+
+    monkeypatch.setattr(chat_router, "_INTENT_FAST_PATH_ENABLED", True)
+    monkeypatch.setattr(fast_tiers, "resolve", _none)
+    monkeypatch.setattr(fast_tiers, "keyword_intent_allowed", lambda *a, **k: True)
+    monkeypatch.setattr(chat_router, "_run_chat_pi_hybrid_lane", _not_attempted)
+    monkeypatch.setattr(chat_router, "detect_and_extract_intent", _detect)
+    monkeypatch.setattr(chat_router, "execute_intent", _none)
+    monkeypatch.setattr(chat_router, "_brain_oneshot", _sentinel)
+    monkeypatch.setattr(chat_router, "_save_chat_message", fake_save)
+    out = await _drain(chat_router.chat_stream_generator("weather please", "sess-esc2", _user()))
+    assert "__ESCALATE" not in out
+    assert chat_router._NO_HANDOFF_REPLY in out

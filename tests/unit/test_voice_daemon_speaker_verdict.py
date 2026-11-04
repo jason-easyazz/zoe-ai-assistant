@@ -191,3 +191,58 @@ def test_the_scored_no_match_is_only_produced_by_a_non_shadow_scored_turn(daemon
     assert daemon._speaker_claim_for_turn(b"w") is None
     _gate(daemon, monkeypatch, enabled=False)
     assert daemon._speaker_claim_for_turn(b"w") is None
+
+
+# -- the window rides the blocking turn too (greptile P1, #2242) --------------------------------------------------------
+
+@pytest.mark.parametrize("window", ["followup", "conversation"])
+def test_the_blocking_turn_forwards_the_window(daemon, monkeypatch, window):
+    _gate(daemon, monkeypatch, source="local", result=("casey", 0.30))
+    assert _blocking_payload(daemon, monkeypatch, window=window)["window"] == window
+
+
+def test_a_wake_turn_or_a_bogus_window_sends_no_window_key(daemon, monkeypatch):
+    _gate(daemon, monkeypatch, source="local", result=("casey", 0.30))
+    assert "window" not in _blocking_payload(daemon, monkeypatch)
+    assert "window" not in _blocking_payload(daemon, monkeypatch, window="bogus")
+
+
+def test_the_stream_failure_fallback_keeps_the_window_and_the_claim(daemon, monkeypatch):
+    """The streaming request dying before a response falls back to the blocking turn: it must still say which window it was."""
+    _gate(daemon, monkeypatch, source="local", result=("casey", 0.30))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("no response")
+
+    monkeypatch.setattr(daemon.requests, "post", boom, raising=False)
+    got = {}
+    monkeypatch.setattr(daemon, "_do_single_turn", lambda *a, **k: got.update(k) or True)
+    daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", prompt_on_empty=False, window="followup")
+    assert got.get("window") == "followup" and got.get("voice_claim") == ("casey", 0.30), got
+
+
+# -- the blocking reply's end flag reaches the conversation loop (codex P2, #2242) ---------------------------------------------
+
+def _blocking_reply(daemon, monkeypatch, resp):
+    monkeypatch.setattr(daemon, "_api_post", lambda path, body, **_k: resp)
+    monkeypatch.setattr(daemon, "VOICE_ROUTE_MODE", "direct", raising=False)
+    monkeypatch.setattr(daemon, "_play_buffer_phrase", lambda: None)
+    monkeypatch.setattr(daemon, "_speaker_claim_to_attach", lambda w: None)
+    monkeypatch.setattr(daemon, "play_follow_up_beep", lambda: None)
+    return daemon._do_single_turn(None, b"RIFFwav", prompt_on_empty=False, conversation=True, window="conversation")
+
+
+def test_a_dropped_voice_on_the_blocking_turn_closes_the_conversation(daemon, monkeypatch):
+    monkeypatch.setattr(daemon, "_last_turn_flags", {})
+    dropped = {"ok": True, "text": "", "reply": "", "audio_base64": None, "skipped": "not_addressed",
+               "reason": "voice_mismatch", "conversation_end": True}
+    assert _blocking_reply(daemon, monkeypatch, dropped) is False
+    assert daemon._last_turn_flags.get("conversation_end") is True
+
+
+def test_a_normal_blocking_reply_clears_a_stale_end_flag(daemon, monkeypatch):
+    monkeypatch.setattr(daemon, "_last_turn_flags", {"conversation_end": True})
+    monkeypatch.setattr(daemon, "play_audio_b64", lambda *a, **k: True)
+    ok = {"ok": True, "text": "what time is it", "reply": "r", "audio_base64": "AAAA", "content_type": "audio/wav"}
+    assert _blocking_reply(daemon, monkeypatch, ok) is True
+    assert "conversation_end" not in daemon._last_turn_flags

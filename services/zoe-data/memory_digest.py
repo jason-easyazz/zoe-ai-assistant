@@ -950,12 +950,15 @@ async def run_turn_digest(
 
         try:
             _t_llm = time.monotonic()
-            # Post-turn pass on the brain's ONE slot: waits out a hot conversation (brain_slot_guard) so it cannot evict it.
-            async with brain_slot_guard.background_slot("turn_digest"):
+            async def _llm() -> str:
                 async with httpx.AsyncClient(timeout=_llm_timeout(20.0 if _max_tokens == 256 else _CLAIM_TIMEOUT_S)) as client:
                     resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
                     resp.raise_for_status()
-                    raw = resp.json()["choices"][0]["message"]["content"].strip()
+                    return resp.json()["choices"][0]["message"]["content"].strip()
+
+            # Post-turn pass on the brain's ONE slot: waits out a hot conversation and yields to a household turn that starts
+            # while it runs (brain_slot_guard.run_background) so it can neither evict nor delay the conversation.
+            raw = await brain_slot_guard.run_background("turn_digest", _llm)
             if _max_tokens != 256:
                 # the claim row costs output tokens on the brain's one slot: log the call so the delta is measurable
                 logger.info("STRUCTURAL_EXTRACT lane=%s ms=%d max_tokens=%d", source, int((time.monotonic() - _t_llm) * 1000), _max_tokens)

@@ -153,6 +153,7 @@ aider_env/
 *.sh
 !scripts/maintenance/*.sh
 !scripts/night/*.sh
+!scripts/landing/*.sh
 !scripts/deploy/*.sh
 !scripts/permanent/*.sh
 !scripts/setup/*.sh
@@ -197,6 +198,7 @@ credentials/
 !.zoe/manifest.json
 !.greptile/config.json
 !.greptile/files.json
+!services/zoe-data/voice_phrases.json
 !.mcp.json
 # The desktop UI's two load-bearing manifests. Both were caught by the blanket
 # *.json rule above and existed ONLY as untracked files on the live box: the PWA
@@ -482,6 +484,10 @@ modules/omnigent/wheels/
 # The ResNet34 speaker embedder's PUBLIC artifacts (cohort centring vector from LibriSpeech, self-test reference of a synthetic signal):
 # the panel daemon refuses to run without it, so it must be tracked. No voiceprint, no household data.
 !scripts/setup/zoe_speaker_resnet34_artifacts.json
+# the flag legacy-read ratchet - plain data read by a ci_safe test, no secrets
+!docs/knowledge/flag-ratchet.json
+# the memory writer-map role notes - plain data read by a ci_safe test, no secrets
+!docs/knowledge/memory-writer-notes.json
 
 # Relay listener (panel-anywhere R1): the household CA / leaf and the rendered nginx listener live on the box only.
 ssl/relay/

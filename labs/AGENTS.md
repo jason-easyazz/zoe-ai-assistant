@@ -177,8 +177,8 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   abort-on-cancel and first-chunk/stall deadlines (`src/turn-guard.ts`); Flue aborts
   whole INSTANCES, so never abort without the guard's latest-submission check.
   `Zoe.durability` is bounded (2 attempts / 120 s) (`test/abort_guard.test.ts`).
-  Reached from prod via the `ZOE_BRAIN_BACKEND=flue` seam — shipped default-OFF
-  (`core`) but production-reachable and **live on this deployment**; supervised
+  Reached from prod via the `ZOE_BRAIN_BACKEND=flue` seam — the code default (rollback: `core`)
+  and **live on this deployment**; supervised
   via the opt-in unit template `scripts/setup/systemd/flue-zoe-brain-2x.service`
   on **`:3579`** (see Forbidden above). Its memory caps (`MemorySwapMax=0` /
   `MemoryLow=512M` / `MemoryMax=2G`) are pinned by
@@ -491,6 +491,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   nginx listener are the next PR (interface in its README). `RUNBOOK-R1.md` is the
   docs-only plan for the the411 relay host (nothing in it has been run there). README
   and RUNBOOK are records, not contracts. Unit net: `labs/relay/run.sh unit` (Python 3.12).
+- `multica-signin-gate/` — **the Multica board behind Zoe's sign-in** (`docs/knowledge/multica-zoe-signin.md`): one INTERNAL docker network with the LIVE Multica backend + web images by digest, a tmpfs Postgres (the `multica` DB plus the two tables the adults-only check reads, synthetic people), the REAL zoe-data gate router from the worktree (with a zoe-auth stand-in for `/api/auth/user`), the repo's REAL nginx conf + `dist/` (only upstream hosts re-pointed), a negative-control nginx with the three `auth_request` lines removed, and a stdlib driver. Cells A (anonymous: no board, code login unreachable), B (adult member: cookie, board, Multica's own login as the second step), C (child / minor / unknown role / guest refused), D (cookie key / purpose / expiry), E (gate down = closed), N (control). Hand-run via `run.sh` (`MemAvailable` >= 2000 MB, `night_busy.sh test`, `flock /tmp/zoe-test-lane.lock`, every container capped, asserts its own teardown). README is the record.
 - `p0-deroot/` — **P0 de-root lab** (`docs/architecture/p0-deroot.md` section 6): one
   no-network container booting systemd 249 (not `--privileged`) with the deliverables
   of `scripts/setup/p0-deroot/` installed verbatim, three stand-in services probing

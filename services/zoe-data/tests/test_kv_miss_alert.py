@@ -22,6 +22,7 @@ def sent(monkeypatch, tmp_path):
     monkeypatch.setattr(kma, "_alerted_day", "")
     monkeypatch.setattr(kma, "_inflight", set())
     monkeypatch.setattr(kma, "_attempts", {})
+    monkeypatch.setattr(zf, "_panel_kv_prev", {})
     return out
 
 
@@ -152,3 +153,61 @@ def test_a_send_that_crosses_midnight_does_not_free_the_next_days_claim(sent, mo
     kma.note_first_miss(3400, 0, now=DAY1, sync=True)                # yesterday's worker clears ITS day only
     assert kma._today(DAY2) in kma._inflight, "yesterday's worker must not free today's in-flight claim"
     assert kma.note_first_miss(3400, 0, now=DAY2 + 60, sync=True) is None   # no second alert for today
+
+
+def test_a_partial_prefix_hit_that_still_reprefilled_a_lot_is_a_first_miss_and_alerts(sent, monkeypatch):
+    """2026-10-28 18:54: first_prompt_n=1087 with first_cache_n=2154 (a wrong-envelope warm) is a miss: the classification keys
+    on the RE-PREFILLED tokens, never on the cached count. Negative control: a small re-prefill with the same cache is a hit."""
+    calls: list = []
+    monkeypatch.setattr(kma, "note_first_miss", lambda p, c, **k: calls.append((p, c)))
+    assert zf._panel_kv_alarm("voice-panel-partial-1", 1087, 2154, "household", now=1000.0) == "first"
+    assert calls == [(1087, 2154)]
+    assert zf._panel_kv_alarm("voice-panel-partial-2", 499, 2154, "household", now=1000.0) is None      # at/below threshold: a hit
+    assert zf._panel_kv_alarm("voice-panel-partial-3", 500, 2154, "household", now=1000.0) is None
+    assert zf._panel_kv_alarm("voice-panel-partial-4", 501, 2154, "household", now=1000.0) == "first"
+    assert len(calls) == 2
+
+
+def test_an_undelivered_alert_logs_why(monkeypatch, caplog, tmp_path):
+    """The 2026-10-28 alert logged only 'not delivered'; the sender's reason (and never the bot token) must reach the log."""
+    monkeypatch.setenv("ZOE_KV_MISS_ALERT_STATE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(kma, "_alerted_day", "")
+    monkeypatch.setattr(kma, "_inflight", set())
+    monkeypatch.setattr(kma, "_attempts", {})
+    monkeypatch.setattr(kma, "_last_failure", "")
+
+    def sender(text):
+        kma._last_failure = kma._redact("crash-watch: telegram send failed: <urlopen error timed out> /bot123:SECRET-tok/sendMessage")
+        assert kma._redact("recipient jason@example.com chat_id=123456 failed") == "other", "free text never reaches the log"
+        assert kma._redact("crash-watch: telegram send failed: HTTP Error 403: Forbidden") == "http_403"
+        return False
+
+    caplog.set_level("WARNING", logger="kv_miss_alert")
+    kma.note_first_miss(1087, 2154, now=DAY1, send=sender, sync=True)
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "not delivered" in msgs and "timeout" in msgs
+    assert "SECRET-tok" not in msgs and "123" not in msgs.replace("2026", "")
+
+
+def test_the_ops_send_failure_reason_does_not_redirect_the_process_stderr(monkeypatch):
+    """The sender reports its failure through a callback: sys.stderr is never swapped, so unrelated output is not swallowed."""
+    import sys
+    import types
+
+    seen = {}
+
+    def fake_telegram(text, report=None):
+        seen["stderr_untouched"] = sys.stderr is real_stderr
+        report("crash-watch: telegram send failed: HTTP Error 403: Forbidden")
+        return False
+
+    real_stderr = sys.stderr
+    fake = types.SimpleNamespace(_telegram=fake_telegram)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(kma.importlib.util, "spec_from_file_location",
+                        lambda *a, **k: types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda m: None)))
+    monkeypatch.setattr(kma.importlib.util, "module_from_spec", lambda spec: fake)
+    monkeypatch.setattr(kma, "_last_failure", "")
+    assert kma._ops_send("x") is False
+    assert seen["stderr_untouched"] is True
+    assert kma._last_failure == "http_403"

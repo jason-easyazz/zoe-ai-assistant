@@ -14,7 +14,7 @@ Inputs
                   generated Kokoro clips, bake-off clips another agent prepared. Their embeddings never enter the
                   adapter except in the explicit poisoning section.
 
-Embeddings are computed with ``voice_speaker_id`` (resemblyzer, **CPU only** - the module pins it). The encoder pulls
+Embeddings are computed with resemblyzer's ``VoiceEncoder`` (**CPU only**; LAB ONLY - zoe-data no longer ships resemblyzer, so run this from a scratch venv that has it). The encoder pulls
 torch (~400 MB), so the script REFUSES to load it unless ``MemAvailable`` clears ``--min-avail-mb`` (default 1500) and
 holds ``/tmp/zoe-voice-harness.lock`` (the voice harness lock) for the whole run. The floor applies before ANY encoder
 load: a cold cache, a partial miss (a new ``--impostors`` arm, one replaced clip) and a stale cache all count.
@@ -243,9 +243,11 @@ def embed_dir(paths: Sequence[Path], *, limit: Optional[int] = None) -> list:
     avail = _mem_available_mb()
     if avail < MIN_AVAIL_MB:
         raise HeadroomError(f"MemAvailable {avail:.0f} MB < {MIN_AVAIL_MB:.0f} MB")
-    import voice_speaker_id as vsi  # lazy: pulls resemblyzer/torch
-    enc = vsi._get_voice_encoder()
-    from resemblyzer import preprocess_wav  # type: ignore
+    try:  # lazy: pulls resemblyzer/torch. LAB ONLY - zoe-data no longer ships either (retired 2026-10); install them in a scratch venv.
+        from resemblyzer import VoiceEncoder, preprocess_wav  # type: ignore
+    except ImportError as exc:
+        raise SystemExit(f"resemblyzer is not installed ({exc}); this legacy-scale harness needs it in a scratch venv, not zoe-data's")
+    enc = VoiceEncoder(device="cpu", verbose=False)
     out = []
     for p in list(paths)[:limit]:
         try:

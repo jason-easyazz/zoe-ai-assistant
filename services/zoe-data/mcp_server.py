@@ -410,15 +410,6 @@ TOOLS = [
         },
     },
     {
-        "name": "zoe_sync_knowledge",
-        "description": (
-            "Regenerate ZOE_SELF.md and distribute to all agents (OpenClaw workspace, "
-            "Hermes SOUL.md, compact context file). Call this after adding new tools or "
-            "making architectural changes so all agents learn about them immediately."
-        ),
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
         "name": "a2a_delegate",
         "description": (
             "Delegate a task to a named peer agent via A2A federation. "
@@ -1556,11 +1547,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {"lists": list(lists_map.values())}
 
     elif name == "list_add_item":
-        from list_service import add_item_to_list, default_visibility
+        from list_service import add_items_to_list, add_reply, default_visibility
 
         lt = args["list_type"]
         ln = args.get("list_name", lt.capitalize())
-        outcome = await add_item_to_list(
+        outcome = await add_items_to_list(
             db,
             user_id=user_id,
             list_type=lt,
@@ -1572,8 +1563,14 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         )
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
-        result = {"item_id": item_id, "list": ln, "list_id": list_id, "text": args["text"], "status": "added"}
-        await _notify_ui("lists", "list_updated", {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": args["text"]}})
+        result = {"item_id": item_id, "list": ln, "list_id": list_id, "text": args["text"],
+                  "status": "added" if outcome["added"] else "already_on_list"}
+        if outcome["already"]:
+            # the brain relays this sentence: an item already on the list is never added twice
+            result["already_on_list"] = outcome["already"]
+            result["reply"] = add_reply(outcome["added"], outcome["already"], f"the {lt.replace('_', ' ')} list")
+        if outcome["added"]:
+            await _notify_ui("lists", "list_updated", {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": args["text"]}})
         return result
 
     elif name == "list_remove_item":
@@ -2013,23 +2010,6 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         except Exception as exc:
             return {"error": f"Web search failed: {exc}", "query": query}
 
-    elif name == "deep_web_research":
-        query = args.get("query", "")
-        if not query:
-            return {"error": "query is required"}
-        try:
-            # Full pipeline: CloakBrowser + Google Maps + postcode gate filling (~60s).
-            import sys as _sys, os as _os
-            _zd = _os.path.dirname(_os.path.abspath(__file__))
-            if _zd not in _sys.path:
-                _sys.path.insert(0, _zd)
-            from zoe_agent import _web_research  # type: ignore[import]
-            caller_user_id = user_id
-            result_text = await _web_research(query, user_id=caller_user_id)
-            return {"query": query, "raw": result_text}
-        except Exception as exc:
-            return {"error": f"Deep research failed: {exc}", "query": query}
-
     elif name == "a2a_delegate":
         agent_name = args.get("agent_name", "")
         task = args.get("task", "")
@@ -2063,14 +2043,6 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return result
         except Exception as exc:
             return {"error": f"Agent delegation failed: {exc}"}
-
-    elif name == "zoe_sync_knowledge":
-        try:
-            from agent_sync import run_agent_sync  # type: ignore[import]
-            result = await run_agent_sync()
-            return result
-        except Exception as exc:
-            return {"error": f"Agent sync failed: {exc}"}
 
     elif name == "greptile_pr_status":
         try:

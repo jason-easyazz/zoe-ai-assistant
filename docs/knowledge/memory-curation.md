@@ -3,13 +3,14 @@ type: Reference
 title: Caregiver curation - a parent adds memories for a child (memories-space phase 7)
 description: Flag ZOE_MEMORIES_CURATORS (default off). Every adult household admin is the implicit curator of every child (D7) and adds, fixes or removes notes about them from the phone or desktop Memories page ("Family memories"). Curated rows carry provenance and a new authority class above the child's own passing statements (D9); a contradicting remark is held for the curator. Health, medication and money need a per-child opt-in (D10). An adult is curated only in categories they opted in themself. Sensitive curated rows never reach the wall (D11). Security model, operator steps, rollback, what is unproven.
 tags: [memory, caregiving, children, privacy, provenance, authority, forget, flag-dark]
-timestamp: 2026-10-19T00:00:00+08:00
+timestamp: 2026-11-04T00:00:00+08:00
 ---
 
-# Caregiver curation (`memory_curation.py`, `routers/memories_curation.py`, `js/memories-curation.js`, migration 0061)
+# Caregiver curation (`memory_curation.py`, `routers/memories_curation.py`, `js/memories-curation.js`, migration 0066)
 
 Design: [memories-space.md](../architecture/memories-space.md) 2.3, 9 (P7 build status) and 11 (owner answers 2026-10-19).
-Authority wall: [memory-authority.md](memory-authority.md).
+Authority wall: [memory-authority.md](memory-authority.md). Person-centred memory owner decisions D1 / D6 / D7 (accepted
+2026-11-03): [person-centred-memory.md](../architecture/person-centred-memory.md) section 6.
 
 ## What a parent can do
 
@@ -17,7 +18,7 @@ On the phone or computer, Memories page, **Family memories** (shown only when th
 
 - pick a child; see ONLY the notes added for that child (by any adult admin), never the child's other memories;
 - **add** a note: one sentence + a category (Routines, People, School, Important dates, Likes, Other; Health, Medication,
-  Money once switched on). "Mia's teacher is Ms Lee" is stored on Mia's account as "User's teacher is Ms Lee";
+  Money once switched on). "Juno's teacher is Ms Lee" is stored on Juno's account as "User's teacher is Ms Lee";
 - **fix** or **remove** a note (remove asks first; it is the audited forget, with the physical erase);
 - switch **health / medication / money** on or off for a child (off by default);
 - answer the **held notes**: when the child said something different ("my teacher is Mr Brown"), keep the note or use what
@@ -31,11 +32,11 @@ Memories list labelled "Added for you by <name>", and cannot forget or correct t
 
 ## By voice at the panel (VOICE-PATH, replay-gated)
 
-"Zoe, remember that Mia's swimming is on Tuesdays" from a curator in THEIR OWN panel identity (`extra_ctx['scope_user']`: a
+"Zoe, remember that Juno's swimming is on Tuesdays" from a curator in THEIR OWN panel identity (`extra_ctx['scope_user']`: a
 verified voice session or a fresh PIN) writes the same curated note (`curated_via="voice"`) through `memory_curation.by_voice`,
 called first in `memories_voice.tier` (inside `fast_tiers._provenance_tier`). The category is guessed from the words (health /
 medication / money by the classifiers, refused aloud unless opted in; then school, dates, routines, likes, people, other). Zoe says
-"Okay, I'll remember that for Mia." and never repeats the note. A guest, a child, a non-admin, a speaker the gate rejected
+"Okay, I'll remember that for Juno." and never repeats the note. A guest, a child, a non-admin, a speaker the gate rejected
 (`speaker_verified is False`), the chat lane, a dry turn, a name that is none of the curator's people, or "remember that I ..."
 fall through untouched (the existing teach path). Two curatable people with the same first name: "Add it on your phone".
 Pinned by `tests/test_memories_curation_voice.py`.
@@ -57,10 +58,13 @@ Pinned by `tests/test_memories_curation_voice.py`.
 | only `memory_curation` writes as the `curator` writer | static test |
 | every action audited BEFORE it runs (no audit row, no change) and when it finished; ids, category, a row-id hash, never text | `memory_curation_audit` |
 | a sensitive curated row is private by its category, so the panel counts it and never shows or speaks it | `provenance_answers.sensitive_classes` |
+| **D1 / D7** (person-centred memory, accepted 2026-11-03): a curated note is the guardian's OWN statement - approved at once, `authority=user_stated`, author `curated_by` = the curator's verified identity; no model in the path (static scan); no mood / feelings class ever | `memory_authority.authority_of`, `memory_curation` (`NEVER`) |
+| **D7**: a child never sees or edits another member's entries - the curation routes are curator-only (403 for a child, its own notes included) and a curated row on the child's own list cannot be edited or forgotten by them | `require_curator`, `memory_space.curated_locked` |
+| **forgotten means forever**: a note naming anything the member forgot, or anything the curator forgot (a forgotten child), is refused (409) before a word is written; a forget-ledger outage refuses too (503, strict lookups); the curator path is never an explicit re-teach | `memory_curation.refuse_forgotten`, `memory_forgotten.EXPLICIT_RETEACH_WRITERS` |
 
 ## Operator steps
 
-1. Run the migration (0061; the coordinator re-points `down_revision` onto the latest pending head at landing).
+1. Run the migration (0066).
 2. Set `ZOE_MEMORIES_CURATORS=1` in zoe-data's env and restart zoe-data (the flag is read per request; the routes are always
    mounted and answer 404 while it is off).
 3. Make sure each child account has the `child` role (or a `kid` / minor `member_modes` row) in zoe-auth: an account that is

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import struct
 import sys
 import types
 
@@ -299,7 +300,9 @@ def _inserts(db, table):
 
 
 def _voice_payload(**over):
-    p = {"audio_base64": base64.b64encode(b"RIFF....").decode(), "user_id": "jason", "display_name": "Jason", "consent": True}
+    unit = struct.pack("<256f", *([1.0 / 16.0] * 256))        # 256 floats, unit norm: a finished panel-built ResNet34 profile
+    p = {"embedding_base64": base64.b64encode(unit).decode(),
+         "model_id": "wespeaker_resnet34+i8qdq-u8s8+c1", "user_id": "jason", "display_name": "Jason", "consent": True}
     p.update(over)
     return p
 

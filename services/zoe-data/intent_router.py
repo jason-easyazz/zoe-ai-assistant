@@ -28,6 +28,7 @@ import command_shapes
 import contacts_conversation as _cc
 import panel_principal
 import traffic_class
+from log_redaction import utterance_tag as _utt_tag
 from list_service import HouseholdListUnavailable
 from time_utils import today_for_zoe_tz
 from typed_env import env_str
@@ -1457,6 +1458,20 @@ def detect_intent(
             lst = m.group(2).strip() if m.lastindex >= 2 else "shopping"
             return Intent("list_remove", {"item": item, "list_type": _normalize_list(lst)})
 
+    # --- LIST RENAME ("change noodles to rice noodles [on the shopping list]") ---
+    # ONE parser, shared with Skybridge (questions about changing, and "change the timer to ..." are not list writes there).
+    if re.match(r"^\W*(?:(?:please|hey|zoe)\W+)*(?:change|rename|correct)\b", t):
+        try:
+            from skybridge_service import _list_rename_from_text
+
+            renamed = _list_rename_from_text(t)
+        except Exception:  # noqa: BLE001 - a parser import failure must never break intent detection
+            renamed = None
+        if renamed:
+            old_item, new_item, rn_type, rn_name = renamed
+            return Intent("list_rename", {"item": old_item, "new_item": new_item,
+                                          "list_type": rn_type or "shopping", "list_name": rn_name})
+
     # === MUSIC / MEDIA CONTROLS ===
     _MUSIC_PLAY_RE = re.compile(
         r"^(?:play|put on|play me|play some|start playing)\s+(.+)$", re.IGNORECASE
@@ -1715,7 +1730,7 @@ def detect_intent(
                 return hit
 
     if log_miss:
-        logger.info("intent_miss: %s", text)
+        logger.info("intent_miss: %s", _utt_tag(text))
         try:
             # Write to intent-misses file for weekly self-review (PII stripped)
             import re as _re, json as _json, pathlib as _pathlib
@@ -2317,7 +2332,7 @@ async def detect_and_extract_intent(
     if intent is not None and await ack_answers_offer(intent, user_id):
         # "Sounds good" to "...how about the history of coffee?" ACCEPTS the offer: the canned "Okay." would swallow it and the
         # offer would never be delivered. No intent -> both lanes fall through to the brain, which has the conversation.
-        logger.info("ack_after_offer: acknowledgement %r answers Zoe's last offer -> brain", (text or "")[:40])
+        logger.info("ack_after_offer: acknowledgement %s answers Zoe's last offer -> brain", _utt_tag(text or ""))
         return None
     if intent is None:
         routed_intent, pi_classified = await _try_pi_governor()
@@ -2699,10 +2714,10 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     actor = panel_principal.household_actor({"user_id": user_id})  # the member, or "panel" for an unidentified guest
     try:
         from database import get_db_ctx
-        from list_service import add_item_to_list, default_visibility
+        from list_service import add_items_to_list, add_reply, default_visibility
 
         async with get_db_ctx() as db:
-            outcome = await add_item_to_list(
+            outcome = await add_items_to_list(
                 db,
                 user_id=user_id,
                 list_type=lt,
@@ -2716,18 +2731,25 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 # already done instead of inserting a duplicate.
                 dedup_window_s=10,
             )
-        logger.info("list_item_audit op=add actor=%s list=%s item=%s", actor, outcome["list_id"], outcome["item_id"])
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
-        if outcome["deduped"]:
-            logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
-        await _notify_lists_ui(
-            "list_updated",
-            {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}, "actor": actor},
-        )
+        # One audit line + one UI notification per item that really went onto the list: an item already there writes nothing.
+        for one in outcome["outcomes"]:
+            if one["deduped"]:       # already there, or a 10 s replay of the same turn: nothing was inserted, nothing to report
+                if not one.get("already"):
+                    logger.info("list add: duplicate %r within 10s on list %s — replay skipped", one["_text"], list_id)
+                continue
+            logger.info("list_item_audit op=add actor=%s list=%s item=%s", actor, one["list_id"], one["item_id"])
+            await _notify_lists_ui(
+                "list_updated",
+                {"action": "item_added", "list_id": list_id, "item": {"id": one["item_id"], "text": one["_text"]}, "actor": actor},
+            )
+        friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
         return _format_response(
             intent,
-            json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item, "status": "added"}),
+            json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item,
+                        "status": "already" if not outcome["added"] else "added",
+                        "reply": add_reply(outcome["added"], outcome["already"], f"your {friendly}")}),
         )
     except HouseholdListUnavailable:
         return f"There isn't a household {lt.replace('_', ' ')} list yet, and I can only start a shopping list from here."
@@ -2770,6 +2792,18 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
                 )
                 row = await cursor.fetchone()
             if not row:
+                # Same ITEM spelled differently (plural / case / STT punctuation): list_service.item_key decides.
+                from list_service import find_matching_item
+
+                cursor = await db.execute(
+                    "SELECT li.id, li.list_id, li.text FROM list_items li JOIN lists l ON li.list_id = l.id"
+                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=?"
+                    " AND li.deleted=0 AND l.deleted=0 AND (li.completed IS NULL OR li.completed=0)"
+                    " ORDER BY l.created_at ASC, li.id ASC",
+                    (user_id, lt),
+                )
+                row = find_matching_item(await cursor.fetchall(), item)
+            if not row:
                 # Not on the list is a clean success, not a failure.
                 friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
                 return f"{item} wasn't on your {friendly}."
@@ -2788,6 +2822,46 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
         )
     except Exception as exc:
         logger.warning("list_remove direct execution unavailable: %s", exc)
+        return None
+
+
+async def _execute_list_rename_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Correct one item's text on an EXISTING list ("change noodles to rice noodles"): the same audited write as the Skybridge
+    path (``list_service.rename_item_on_list``: per-list lock, one transaction, receipt after commit). Never creates a list; a
+    panel guest reaches the household list only. Returns the reply, None only on genuine failure."""
+    slots = intent.slots or {}
+    old, new = str(slots.get("item") or "").strip(), str(slots.get("new_item") or "").strip()
+    if not old or not new:
+        return None
+    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
+    actor = panel_principal.household_actor({"user_id": user_id})  # BEFORE the viewer swap: the sentinel would read as a member
+    if _is_guest_identity(user_id):
+        user_id = panel_principal.HOUSEHOLD_VIEWER
+    try:
+        from database import get_db_ctx
+        from list_service import find_list_id, find_named_list_id, rename_item_on_list, rename_reply
+
+        named = str(slots.get("list_name") or "").strip()
+        friendly = "shopping list" if lt == "shopping" and not named else f"{(named or lt).replace('_', ' ')} list"
+        async with get_db_ctx() as db:
+            # A list the user NAMED is that list or none (never the household list of the default type instead).
+            if named:
+                list_id = await find_named_list_id(db, user_id=user_id, name=named)
+            else:
+                list_id = await find_list_id(db, user_id=user_id, list_type=lt, name=ln)
+            if list_id is None:
+                return f"I couldn't find your {friendly}, so nothing changed."
+            result = await rename_item_on_list(db, user_id=user_id, list_id=list_id, old_text=old, new_text=new)
+        if result["status"] in {"renamed", "merged"}:
+            logger.info("list_item_audit op=rename actor=%s list=%s item=%s", actor, list_id, result["item_id"])
+            await _notify_lists_ui(
+                "list_updated",
+                {"action": "item_updated", "list_id": list_id, "item": {"id": result["item_id"], "text": result["text"]}, "actor": actor},
+            )
+        return rename_reply(result, f"your {friendly}")
+    except Exception as exc:
+        logger.warning("list_rename direct execution unavailable: %s", exc)
         return None
 
 
@@ -3485,7 +3559,7 @@ async def _contact_facts(user_id: str, person: dict, limit: int = 2) -> list[str
 # ask 2026-07-13: "make chat require sign-in like voice"). Reminders and
 # memory writes are included: both persist personal data under the identity.
 _GUEST_GATED_INTENTS = (
-    "list_add", "list_remove", "list_show",
+    "list_add", "list_remove", "list_show", "list_rename",
     "calendar_create", "calendar_show",
     "people_", "person_",
     "reminder_create", "reminder_list",
@@ -3497,7 +3571,7 @@ _GUEST_GATED_INTENTS = (
 
 
 # The list intents a PANEL guest may run (on household lists only); every other gated intent still needs a signed-in member.
-_GUEST_HOUSEHOLD_INTENTS = frozenset({"list_add", "list_remove", "list_show"})
+_GUEST_HOUSEHOLD_INTENTS = frozenset({"list_add", "list_remove", "list_show", "list_rename"})
 
 
 def _is_guest_identity(user_id: str | None) -> bool:
@@ -3584,6 +3658,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         direct = {
             "list_add": _execute_list_add_direct,
             "list_remove": _execute_list_remove_direct,
+            "list_rename": _execute_list_rename_direct,
             "list_show": _execute_list_show_direct,
         }[intent.name]
         return (await direct(intent, user_id)) or "I couldn't reach the household list just now, so nothing has changed."
@@ -4662,6 +4737,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if direct_result:
             return direct_result
 
+    if intent.name == "list_rename":
+        direct_result = await _execute_list_rename_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
     if intent.name == "calendar_show":
         direct_result = await _execute_calendar_show_direct(intent, user_id)
         if direct_result:
@@ -5570,6 +5650,8 @@ def _format_response(intent: Intent, raw_output: str) -> str:
         return f"Sorry, that didn't work: {data['error']}"
 
     if intent.name == "list_add":
+        if isinstance(data, dict) and data.get("reply"):
+            return str(data["reply"])
         item = s.get("item", "something")
         lt = s.get("list_type", "shopping")
         friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
