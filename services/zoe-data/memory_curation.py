@@ -588,6 +588,24 @@ _DATES_RE = re.compile(r"\b(?:birthday|anniversary|born\s+on|due\s+date)\b", re.
 _MEDS_RE = re.compile(r"\b(?:medicine|medication|tablets?|pills?|inhaler|puffer|ventolin|epipen|dose)\b", re.IGNORECASE)
 SAVED_REPLY = "Okay, I\x27ll remember that for {name}."
 AMBIGUOUS_REPLY = "I know more than one {name}. Add it on your phone, in Family memories."
+OFF_RECORD_REPLY = "Okay, that's off the record, so I won't keep it."
+
+
+def _off_record(speaker_id: str, text: str, sentence: str) -> bool:
+    """Did the SPEAKER put this turn off the record? ``fast_tiers._provenance_tier`` claims the turn against the speaker's id, but the
+    curated note is written under the MEMBER's id, so the ingest choke point (which checks the member's marks) would not see it:
+    the curator path asks the speaker's marks itself, before anything is written. A cue in these very words counts too. Fails CLOSED
+    (a broken check keeps nothing)."""
+    try:
+        import memory_provenance as mp
+
+        if not mp.enabled():
+            return False
+        return bool(mp.parse_off_record(text) is not None or mp.is_off_record(speaker_id, text)
+                    or mp.blocks_write(speaker_id, sentence, text))
+    except Exception:  # noqa: BLE001
+        logger.warning("memory_curation: off-the-record check failed - nothing written")
+        return True
 
 
 def parse_voice(text: str) -> Optional[tuple]:
@@ -640,6 +658,8 @@ async def by_voice(text: str, member_id: str, *, svc: Any = None) -> Optional[st
             return None
         if len(matches) > 1:
             return AMBIGUOUS_REPLY.format(name=name)
+        if _off_record(member_id, text, sentence):
+            return OFF_RECORD_REPLY                      # the curator asked not to keep it: no note for anyone
         try:
             pol = await policy(db, me, matches[0]["user_id"])
             cat = guess_category(sentence, pol)

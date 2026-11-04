@@ -162,3 +162,26 @@ def test_flag_off_then_on_with_the_same_words(env, monkeypatch):
     assert say(text, PARENT) is None and not rows_of(env, KID)
     monkeypatch.setenv("ZOE_MEMORIES_CURATORS", "1")
     assert say(text, PARENT) == "Okay, I\x27ll remember that for Juno." and len(rows_of(env, KID)) == 1   # control
+
+
+def test_the_curator_off_the_record_turn_writes_nothing(env):
+    """Codex #2159: the turn is marked off the record against the CURATOR's id (fast_tiers._provenance_tier), but the note is written
+    under the CHILD's id, so the ingest wall (which reads the child's marks) let it through. The curator path asks the speaker."""
+    import memory_provenance as mp
+
+    text = "remember that Juno\x27s swimming is on Tuesdays"
+    mp.reset()
+    try:
+        assert mp.claim_turn(PARENT, "off the record") is False                   # a bare cue arms the curator's next turn
+        assert mp.claim_turn(PARENT, text) is True                                 # what fast_tiers does before this tier
+        assert say(text, PARENT) == mc.OFF_RECORD_REPLY
+        assert not rows_of(env, KID) and not rows_of(env, PARENT)
+        mp.reset()
+        # a cue in the same words counts too
+        assert say(text + ", off the record", PARENT) == mc.OFF_RECORD_REPLY
+        assert not rows_of(env, KID)
+        mp.reset()
+        # control: a curator turn nobody put off the record is saved
+        assert say(text, PARENT) == "Okay, I\x27ll remember that for Juno." and len(rows_of(env, KID)) == 1
+    finally:
+        mp.reset()
