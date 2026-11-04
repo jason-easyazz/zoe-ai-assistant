@@ -26,6 +26,7 @@ from typing import Any, Optional
 
 import alarms
 import command_shapes
+import write_receipts
 
 _HOURS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
           "twelve": 12}
@@ -311,6 +312,8 @@ async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
         a = await alarms.create_alarm(
             db, v.owner_id, time_hhmm=cmd.time_hhmm, repeat=cmd.repeat, once_date=cmd.once_date.isoformat() if cmd.once_date else None,
             label=cmd.label, sound_kind=cmd.sound_kind, sound_id=cmd.sound_id, sound_name=cmd.sound_name)
+        # The receipt the write-claim guard checks "I've set your alarm" against (an alarm is a "timer" kind there).
+        write_receipts.record(v.user_id or "guest", "timer", a.get("id", ""), "alarm_voice:set")
         spoken = f"Alarm set for {alarms.when_phrase(a['next_fire_at'], now)}"
         spoken += f", {alarms.repeat_phrase(a['repeat_rule'])}." if a["repeat_rule"] != "once" else "."
         if a["sound_kind"] == "music":
@@ -376,3 +379,33 @@ async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
         return _result(cmd, f"Turned off your {_name(a)} alarm.", "Alarm off")
     b = await alarms.update_alarm(db, a, {"enabled": True})
     return _result(cmd, f"Your {_name(a)} alarm is back on, {alarms.when_phrase(b['next_fire_at'], now)}.", "Alarm on")
+
+
+# ── the brain's `alarm` tool (POST /api/system/intent-dispatch: alarm_set / alarm_list) ───────────────────────────────────────
+
+_BRAIN_REQUEST_MAX = 160
+_BRAIN_HINT = "say it like 'set an alarm for 6:30 am tomorrow' or 'wake me at 7 every weekday'"
+
+
+async def run_brain_intent(intent_name: str, slots: dict, user_id: str) -> str:
+    """Run the brain's alarm request through THIS grammar and resolver - the same words, the same rules as a spoken one.
+
+    QA 2026-11-05: asked "can you do alarms?", the brain said it had no alarm function, while ``ZOE_ALARMS`` was on and "set an
+    alarm for 6:30" worked by voice - the brain simply had no tool. ``alarm_set`` takes the request in words (``request``) and
+    acts only when the grammar reads it as a SET: a request the grammar reads as cancel / off / on / snooze is refused here,
+    so a model-written phrase can never delete or silence an alarm (those stay on voice and the panel). ``alarm_list`` reads.
+    Flag off = 404, like every ``/api/alarms`` route. Returns the spoken line; a refusal is an HTTPException the caller passes
+    through, so the brain's tool can say what was wrong."""
+    from fastapi import HTTPException
+
+    if not alarms.enabled():
+        raise HTTPException(status_code=404, detail="alarms are not switched on in this home")
+    if intent_name == "alarm_list":
+        return (await resolve(AlarmCommand("list"), user_id))["spoken_summary"]
+    request = re.sub(r"\s+", " ", str((slots or {}).get("request") or "")).strip()[:_BRAIN_REQUEST_MAX]
+    if request and not _ALARM_WORD.search(" " + request.lower() + " "):
+        request = f"set an alarm for {request}"      # the model passed only the time ("6:30 am tomorrow")
+    cmd = parse(request) if request else None
+    if cmd is None or cmd.action != "set":
+        raise HTTPException(status_code=422, detail=f"alarm request not understood as setting an alarm; {_BRAIN_HINT}")
+    return (await resolve(cmd, user_id))["spoken_summary"]
