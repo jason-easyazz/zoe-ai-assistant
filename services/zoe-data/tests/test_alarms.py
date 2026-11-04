@@ -1077,3 +1077,62 @@ def test_voice_weekday_ranges_expand_inclusively_and_wrap():
     assert alarm_voice.parse("set an alarm for 7 every tuesday through thursday", NIGHT).repeat == "days:2,3,4"
     assert alarm_voice.parse("set an alarm for 7 every friday to monday", NIGHT).repeat == "days:1,5,6,7"
     assert alarm_voice.parse("set an alarm for 7 every monday and every saturday", NIGHT).repeat == "days:1,6"
+
+
+# ── the brain's `alarm` tool: /api/system/intent-dispatch alarm_set / alarm_list (QA 2026-11-05) ─────────────────────────────
+# "can you do alarms?" got "I don't have a specific 'alarm' function" while ZOE_ALARMS was on. The brain now dispatches its
+# request WORDS through this grammar; only a SET acts. Negative control (run by hand): drop the ``cmd.action != "set"`` check in
+# ``run_brain_intent`` -> test_brain_alarm_never_cancels_or_silences goes red (the gym alarm is cancelled / switched off).
+
+
+def _brain(intent, slots=None, uid=ANN):
+    return run(alarm_voice.run_brain_intent(intent, slots or {}, uid))
+
+
+def test_brain_alarm_set_and_list_go_through_the_voice_grammar(voice, monkeypatch):
+    import write_receipts
+
+    monkeypatch.setenv("ZOE_ALARMS", "on")
+    write_receipts.reset()
+    started = write_receipts.begin()
+    out = _brain("alarm_set", {"request": "set an alarm for 6:30 am tomorrow"})
+    assert out.startswith("Alarm set for") and "6:30 am" in out
+    assert write_receipts.has(ANN, started, "timer"), "the write-claim guard needs a receipt for 'I've set your alarm'"
+    assert "one alarm" in _brain("alarm_list")
+    # the model passed only the time: read as "set an alarm for ..."
+    assert _brain("alarm_set", {"request": "7 am every weekday"}).startswith("Alarm set for")
+    assert "2 alarms" in _brain("alarm_list")
+
+
+@pytest.mark.parametrize("request_words", ["cancel all my alarms", "turn off the alarm", "snooze", "delete the gym alarm",
+                                           "7 and cancel all my alarms", "should I set an alarm?", ""])
+def test_brain_alarm_never_cancels_or_silences(voice, monkeypatch, request_words):
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("ZOE_ALARMS", "on")
+    say("set an alarm for 6:30 called gym")
+    with pytest.raises(HTTPException) as exc:
+        _brain("alarm_set", {"request": request_words})
+    assert exc.value.status_code == 422 and "setting an alarm" in exc.value.detail
+    assert "one alarm" in say("what alarms do I have")["spoken_summary"], "a refused request must change nothing"
+
+
+def test_brain_alarm_is_404_when_alarms_are_off(voice, monkeypatch):
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("ZOE_ALARMS", "off")
+    for intent, slots in (("alarm_set", {"request": "set an alarm for 7"}), ("alarm_list", {})):
+        with pytest.raises(HTTPException) as exc:
+            _brain(intent, slots)
+        assert exc.value.status_code == 404 and "not switched on" in exc.value.detail
+
+
+def test_brain_alarm_through_the_dispatch_endpoint(voice, monkeypatch):
+    import routers.system as system
+
+    monkeypatch.setenv("ZOE_ALARMS", "on")
+    out = run(system.intent_dispatch(system._IntentDispatchBody(user_id=ANN, intent="alarm_set",
+                                                                slots={"request": "wake me at 7"}), None))
+    assert out["ok"] is True and out["result"].startswith("Alarm set for"), out
+    out = run(system.intent_dispatch(system._IntentDispatchBody(user_id=ANN, intent="alarm_list"), None))
+    assert out["ok"] is True and "one alarm" in out["result"]
