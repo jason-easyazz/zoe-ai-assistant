@@ -446,9 +446,9 @@ _PORTRAIT_REVEAL_RE = re.compile(
     r"(?:how\s+well\s+do\s+you\s+know\s+me"
     r"|what\s+do\s+you\s+(?:really\s+)?(?:understand|think)\s+about\s+me"
     r"|what'?s?\s+your\s+understanding\s+of\s+me"
-    r"|describe\s+(?:me|who\s+i\s+am)(?:\s+(?:to\s+me|back\s+to\s+me))?"
-    r"|how\s+would\s+you\s+describe\s+me"
-    r"|what\s+am\s+i\s+like"
+    r"|describe\s+(?:me|who\s+i\s+am)\b(?:\s+(?:to\s+me|back\s+to\s+me))?"
+    r"|how\s+would\s+you\s+describe\s+me\b"
+    r"|what\s+am\s+i\s+like\b"
     r"|(?:your|the)\s+(?:picture|portrait|impression)\s+of\s+me"
     r"|how\s+well\s+(?:do\s+you\s+)?understand\s+me"
     r"|what\s+do\s+you\s+see\s+when\s+you\s+think\s+of\s+me)",
@@ -4650,7 +4650,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         # never a refusal that tells the user to ask what they just asked.
         try:
             import provenance_answers as _pa  # type: ignore[import]
-            facts = await _pa.handle("what do you know about me", user_id)
+            facts = await _pa.handle("what do you know about me", user_id, allow_writes=False)
         except Exception as exc:
             logger.debug("portrait_reveal: facts summary failed: %s", exc)
             facts = None

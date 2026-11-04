@@ -108,3 +108,23 @@ def test_in_flight_line_on_empty_summary_too():
 def test_of_these_grammar(n, expect):
     out = pa.render_summary(_known(n=4, inferred=n), voice=False, now=NOW)
     assert expect in out and "theses" not in out
+
+
+@pytest.mark.parametrize("text", [
+    "Describe Melbourne", "describe memory consolidation", "What am I likely to need for my trip?",
+])
+def test_portrait_patterns_have_word_boundaries(text):
+    i = ir.detect_intent(text)
+    assert i is None or i.name != "portrait_reveal"
+
+
+def test_facts_fallback_is_read_only_so_it_cannot_enter_the_correction_flow(monkeypatch):
+    seen = {}
+
+    async def fake_handle(text, uid, *a, **k):
+        seen.update(k)
+        return "FACTS"
+    monkeypatch.setitem(sys.modules, "user_portrait", types.SimpleNamespace(load_portrait=lambda uid: _coro("")))
+    monkeypatch.setattr(pa, "handle", fake_handle)
+    asyncio.run(ir.execute_intent(ir.Intent("portrait_reveal", {"facts": True}), UID))
+    assert seen.get("allow_writes") is False
