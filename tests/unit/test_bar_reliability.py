@@ -33,9 +33,11 @@ IDS = ("S1", "S2", "S3", "S4", "S5", "S6")
 
 
 def run(verdicts: dict[str, str], *, status="ok", proven=True, tree="t0", samples=1, bound=True,
-        partial: bool | None = False) -> dict:
+        partial: bool | None = False, backdate: bool | None = True) -> dict:
     """A results payload shaped like samantha_bar.py --results writes it (``partial=None``: a writer without it)."""
     extra = {} if partial is None else {"partial": partial}
+    if backdate is not None:
+        extra["backdate"] = backdate
     return {"harness_version": sb.HARNESS_VERSION, "status": status, "samples": samples, **extra,
             "judge_prompt_sha256": sb.JUDGE_PROMPT_SHA256,
             "revision": {"commit": "c" * 40, "tree": tree}, "evidence": {"bound": bound, "tree": tree},
@@ -280,7 +282,7 @@ def test_day_sim_asks_shape_is_read():
 
 # ── JSON + CLI ─────────────────────────────────────────────────────────────
 
-AGG_KEYS = {"schema", "label", "harness", "k", "n_runs", "status", "coverage", "problems", "rejected_runs", "sources",
+AGG_KEYS = {"schema", "label", "harness", "k", "n_runs", "status", "coverage", "backdate", "problems", "rejected_runs", "sources",
             "samples",
             "rubric_sha256", "code", "all_runs_bound", "summary", "single_run_verdicts", "verdicts", "scenarios"}
 SUMMARY_KEYS = {"scenarios", "pass_hat_k", "pass_at_k", "pass_rate", "single_run_passed", "all_k_pass", "flaky", "errored"}
@@ -546,3 +548,34 @@ def test_an_unverifiable_checkout_never_reuses_a_cached_run(tmp_path):
     a = br.arm_identity(str(plain), "bar", [])
     b = br.arm_identity(str(plain), "bar", [])
     assert a["verified"] is False and a != b                                     # a nonce: nothing can match
+
+
+# ── backdate: a --no-backdate diagnostic run never records or compares as the bar (codex review, #2278) ──
+
+def test_no_backdate_and_unknown_backdate_runs_never_record_a_baseline(tmp_path):
+    for bd, want in ((False, "no"), (None, "unknown")):
+        a = arm(same(ALL_PASS), "control", backdate=bd)
+        assert a["backdate"] == want and a["status"] == "ok"
+        assert "backdate" in br.baseline_record_problem(a)
+        base = tmp_path / f"b{want}.json"
+        d = _write_runs(tmp_path / f"r{want}", same(ALL_PASS), backdate=bd)
+        assert br.main(["score", str(d), "--record-baseline", "--baseline", str(base)], log=lambda *_: None) == 2
+        assert not base.exists()
+    # negative control: the same runs with the backdate recorded are accepted
+    ok = arm(same(ALL_PASS), "control")
+    assert ok["backdate"] == "yes" and br.baseline_record_problem(ok) is None
+
+
+def test_no_backdate_arms_are_not_comparable_and_never_admissible():
+    normal = arm(same(ALL_PASS), "control")
+    diag = arm(same(ALL_PASS), "candidate", backdate=False)
+    for c, d in ((normal, diag), (diag, normal), (diag, arm(same(ALL_PASS), "x", backdate=False))):
+        cmp = br.compare(c, d)
+        assert cmp["measurable"] is False and cmp["admissible"] is False
+        assert any("backdate" in r for r in cmp["reasons"])
+    assert br.compare(normal, arm(same(ALL_PASS), "candidate"))["admissible"] is True
+
+
+def test_mixed_backdate_runs_in_one_arm_are_an_error():
+    mixed = br.aggregate([run(ALL_PASS), run(ALL_PASS, backdate=False), run(ALL_PASS)], k=3, label="m")
+    assert mixed["status"] == "error" and any("backdate" in p for p in mixed["problems"])

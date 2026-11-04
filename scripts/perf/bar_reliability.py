@@ -138,6 +138,16 @@ def run_coverage(payload: dict) -> str:
     return "unknown"     # e.g. a ``regression`` status from a writer that does not record ``partial``
 
 
+def run_backdate(payload: dict) -> str:
+    """``yes`` (the day-1 -> day-2 backdate ran), ``no`` (a ``--no-backdate`` DIAGNOSTIC run: the multi-day scenarios
+    never saw a day boundary) or ``unknown`` (a bar payload that does not record it - fail closed). Baselines (already
+    proven when recorded) and day-sim payloads have no such flag and count as ``yes``."""
+    if "status" not in payload or run_kind(payload) == "day-sim":
+        return "yes"
+    flag = payload.get("backdate")
+    return "yes" if flag is True else "no" if flag is False else "unknown"
+
+
 def run_problem(payload: dict) -> str | None:
     """Why a results payload cannot count as a run (None = it counts)."""
     if "status" not in payload:   # a baseline: a recorded verdict map, already proven when it was recorded
@@ -219,6 +229,7 @@ def aggregate(payloads: list[dict], *, k: int = DEFAULT_K, label: str = "run",
     rubric = _one("judge/criteria digest", [rubric_digest(p) for _, p in valid])
     kind = _one("harness", [run_kind(p) for _, p in valid])
     coverage = _one("coverage (full vs --only/--axis)", [run_coverage(p) for _, p in valid])
+    backdate = _one("backdate (--no-backdate is diagnostic)", [run_backdate(p) for _, p in valid])
     codes = [code_identity(p) for _, p in valid]
     code = _one("code (tree + diff)", [c for c in codes if c is not None]) if any(codes) else None
     bound = [bool((p.get("evidence") or {}).get("bound")) for _, p in valid if "status" in p]
@@ -239,7 +250,7 @@ def aggregate(payloads: list[dict], *, k: int = DEFAULT_K, label: str = "run",
         problems.append("no valid run")
     return {
         "schema": SCHEMA, "label": label, "harness": kind, "k": k, "n_runs": n, "status": status,
-        "coverage": coverage, "problems": problems, "rejected_runs": rejected, "sources": [s for s, _ in valid],
+        "coverage": coverage, "backdate": backdate, "problems": problems, "rejected_runs": rejected, "sources": [s for s, _ in valid],
         "samples": samples, "rubric_sha256": rubric, "code": code,
         "all_runs_bound": bool(bound) and all(bound) and len(bound) == n,
         "summary": {
@@ -280,6 +291,9 @@ def compare(control: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any
     for arm in (control, candidate):
         if arm.get("coverage") != "full":
             unmeasured.append(f"{arm.get('label')}: coverage {arm.get('coverage')!r} - only a full bar is a complete arm")
+        if arm.get("backdate") != "yes":   # samantha_bar refuses --no-backdate in both baseline modes; so do we
+            unmeasured.append(f"{arm.get('label')}: backdate {arm.get('backdate')!r} - a --no-backdate (diagnostic) or "
+                              "backdate-unrecorded run skipped the day boundary, so it is not a complete arm")
         if arm.get("status") != "ok":
             unmeasured.append(f"{arm.get('label')}: status {arm.get('status')} "
                               f"({arm.get('n_runs')} valid run(s), k={arm.get('k')}; {'; '.join(arm.get('problems') or []) or 'no problem named'})")
@@ -380,6 +394,9 @@ def baseline_record_problem(agg: dict[str, Any]) -> str | None:
     """A reliability baseline is complete, instrument-clean, full (not partial) and commit-bound (T-4's rule)."""
     if agg.get("coverage") != "full":
         return f"coverage {agg.get('coverage')!r}: a partial (--only/--axis) or unknown-coverage run never records the bar"
+    if agg.get("backdate") != "yes":
+        return (f"backdate {agg.get('backdate')!r}: a --no-backdate (diagnostic) or backdate-unrecorded run never records "
+                "the bar (samantha_bar refuses --no-backdate with --record-baseline)")
     if agg["status"] != "ok":
         return f"status {agg['status']}"
     if agg["summary"]["errored"]:
