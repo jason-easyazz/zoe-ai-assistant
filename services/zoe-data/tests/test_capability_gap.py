@@ -127,6 +127,14 @@ def test_resolver_reads_hash_back():
 
 # ── de-duplication, windows ──────────────────────────────────────────────────────────────────────────────────────────────────
 
+def test_same_words_from_two_members_keep_both_and_order_does_not_matter():
+    a = cg.Event(NOW - DAY, cg.SRC_INTENT_MISS, "m1", text="Dim the lights", utt=cg.utterance_hash("Dim the lights"))
+    b = cg.Event(NOW - DAY, cg.SRC_INTENT_MISS, "m2", text="Dim the lights", utt=cg.utterance_hash("Dim the lights"))
+    assert len(cg.dedupe([a, b])) == 2
+    assert cg.cluster_events([a, b], now=NOW)[0].members == {"m1", "m2"}
+    assert [e.member for e in cg.dedupe([a, b])] == [e.member for e in cg.dedupe([b, a])]
+
+
 def test_same_utterance_same_day_counts_once_other_day_twice():
     a = ev(text="Dim the lights", age_days=1.0)
     b = ev(text="Dim the lights", age_days=1.0 - 0.01)
@@ -227,6 +235,8 @@ def test_public_summary_is_aggregate_only():
     for w in SECRET_WORDS + ["garden", "shed", "timer for"]:
         assert w not in s
     assert "Lists - add" in s and "Smart home control - Zoe said she could not" in s
+    header = [l for l in s.splitlines() if l.startswith("| #")][0]
+    assert header == "| # | Capability cluster | Events | Last 7d |"          # counts only: no score, no member cardinality
 
 
 def test_public_summary_drops_small_rows_and_puts_residual_last():
@@ -264,6 +274,8 @@ def test_script_end_to_end(tmp_path):
     stt = tmp_path / "stt.jsonl"
     stt.write_text(json.dumps({"transcript": "set a timer please"}) + "\nnot json\n")
     out, pub = tmp_path / "private.md", tmp_path / "public.md"
+    out.write_text("stale")
+    os.chmod(out, 0o644)                  # a pre-existing world-readable report must be tightened, not just new ones
     rc = sc.main(["--app-log", str(app), "--shadow-log", str(tmp_path / "none.jsonl"), "--misses", str(tmp_path / "none2.jsonl"),
                   "--stt-log", str(stt), "--out", str(out), "--public-out", str(pub), "--days", "7"])
     assert rc == 0
@@ -271,6 +283,7 @@ def test_script_end_to_end(tmp_path):
     priv = out.read_text()
     assert "Zanzibar pancakes" in priv and "set a timer please" in priv              # hash read back privately
     assert "Zanzibar" not in pub.read_text() and "timer please" not in pub.read_text()
+    assert "stale" not in priv
 
 
 def test_script_exit_2_when_nothing_readable(tmp_path):

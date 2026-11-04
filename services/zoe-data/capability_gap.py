@@ -290,20 +290,20 @@ class Cluster:
 
 
 def dedupe(events: Iterable[Event]) -> list:
-    """One event per (utterance hash, day): a replayed or repeated utterance is one request. Hash-less events collapse per burst.
+    """One event per (utterance hash, member, day): a replayed or repeated utterance is one request. Hash-less events collapse per burst.
 
     Among duplicates the one carrying words wins, then the heavier source."""
     best: dict = {}
     out = []
     last: dict = {}
-    for ev in sorted(events, key=lambda e: e.ts):
+    for ev in sorted(events, key=lambda e: (e.ts, e.source, e.member or "", e.note)):
         if not ev.utt:
             k = (ev.source, ev.member, ev.area, ev.note)
             if ev.ts - last.get(k, -1e18) > BURST_S:      # a burst of the same signal is one incident (probe / replay runs)
                 out.append(ev)
             last[k] = ev.ts
             continue
-        k = (ev.utt, datetime.fromtimestamp(ev.ts).strftime("%Y-%m-%d"))
+        k = (ev.utt, ev.member, datetime.fromtimestamp(ev.ts).strftime("%Y-%m-%d"))
         cur = best.get(k)
         if cur is None or (bool(ev.text), SOURCE_WEIGHTS[ev.source]) > (bool(cur.text), SOURCE_WEIGHTS[cur.source]):
             best[k] = ev
@@ -427,8 +427,8 @@ def public_summary(clusters: list, *, now: float, days: float, top: int = 15) ->
     rows = sorted((m for m in merged.values() if m["count"] >= PUBLIC_MIN_COUNT),
                   key=lambda m: (m["label"] == AREA_LABELS["uncategorised"], -m["score"], -m["count"], m["label"]))   # residual last
     out = [f"# Capability-gap backlog - aggregate summary ({datetime.fromtimestamp(now).strftime('%Y-%m-%d')}, last {days:g} days)", "",
-           f"Aggregate only: cluster labels come from a fixed vocabulary; no utterances, names or ids. Rows under {PUBLIC_MIN_COUNT} events are omitted. The uncategorised row is the unranked residual and is always last.", "",
-           "| # | Capability cluster | Events | Last 7d | Distinct members | Score |", "|---|---|---|---|---|---|"]
+           f"Aggregate only: cluster labels come from a fixed vocabulary; counts only (rows are ordered by an internal rank); no utterances, names or ids. Rows under {PUBLIC_MIN_COUNT} events are omitted. The uncategorised row is the unranked residual and is always last.", "",
+           "| # | Capability cluster | Events | Last 7d |", "|---|---|---|---|"]
     for i, m in enumerate(rows[:top], 1):
-        out.append(f"| {i} | {m['label']} | {m['count']} | {m['last7']} | {len(m['members']) or 'n/a'} | {m['score']:.1f} |")
+        out.append(f"| {i} | {m['label']} | {m['count']} | {m['last7']} |")
     return "\n".join(out) + "\n"

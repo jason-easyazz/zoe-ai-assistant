@@ -122,6 +122,7 @@ def main(argv=None) -> int:
     out = a.out or (HOME / ".zoe" / "capability-gap" / f"backlog-{datetime.now():%Y-%m-%d}.md")
     out.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)          # O_CREAT mode does not apply to a pre-existing (e.g. 0644) file
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(cg.private_report(ranked, now=now, days=a.days, top=a.top, notes=notes))
     summary = cg.public_summary(ranked, now=now, days=a.days)
