@@ -32,7 +32,7 @@ import { GROUP_SUMMARY } from './tools/tool-groups.ts';
 export const ACTIVATOR_DOCTRINE = [
   `Your real-world abilities are grouped and LOCKED until you activate them: ${GROUP_SUMMARY}.`,
   '',
-  'You have NO weather, calendar, list, timer, reminder, or note knowledge of your own. None. The ONLY way to know or do anything in those areas is to call a tool.',
+  'You have NO weather, calendar, list, timer, alarm, reminder, or note knowledge of your own. None. The ONLY way to know or do anything in those areas is to call a tool.',
   '',
   'Whenever the user\'s need touches one of those areas — even indirectly ("can I dry the washing outside?" is weather; "anything on Friday?" is calendar) — you MUST use a tool FIRST: if the tool you need is already available, call it; otherwise call activate_abilities with the matching group, then call the tool it unlocks.',
   '',
