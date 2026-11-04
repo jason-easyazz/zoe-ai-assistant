@@ -643,11 +643,18 @@ at least once, the candidate never). A smaller drop on a scenario control was al
 `weakened`: reported, not blocking (with k=3 it is inside the noise). `net` is `better` / `equal` /
 `worse` on overall pass^k; `net_no_collateral` is true only for `better` with zero regressions.
 
-**Admissible** (`compare --admissible`, `bar_reliability.admissible()`): both arms complete (`ok`),
-no ERROR cell in either, comparable (same scenario set, k, samples, rubric, harness), candidate
+**Admissible** (`compare --admissible`, `bar_reliability.admissible()`): both arms complete (`ok`)
+and FULL coverage, no ERROR cell in either, comparable (same scenario set, k, samples, rubric, harness), candidate
 pass^k NOT worse than control's, and ZERO regressions. Exit 0 admissible / 1 measured and not / 2 not
 measurable. The negative control is pinned: a candidate that fixes S5 and S6 but breaks S4 wins
 overall (pass^3 4/6 -> 5/6) and is NOT admissible.
+
+**Coverage.** Every aggregate carries `coverage`: `full`, `partial` (the runs were `--only` / `--axis`
+selections: the run's `partial` flag or `status: partial`, so a red partial run that the harness
+re-labelled `regression` is still partial) or `unknown` (a payload that does not say). k partial runs
+aggregate to `status: partial`, never `ok`: they cannot record the reliability baseline and are never
+admissible, not even against an identical selection - three PASS-only S1 runs never exercised the
+rest of the bar. Runs of mixed coverage are not repeats (`error`).
 
 **k=1 is today's bar.** One run's verdicts come through unchanged, pass^1 = pass@1 = the pass rate,
 and the regressions equal `samantha_bar.compare_baseline`'s (pinned). A bar baseline file
@@ -680,6 +687,12 @@ inherited `ZOE_HARNESS_FORCE` cannot open the hours for the runner or the bar it
 `harness_quiet.lock_wait_s` allows, re-checks inside the lock, and kills a step (TERM, KILL 60 s later)
 at `harness_quiet.deadline_s`. Arms interleave, the order alternating each round, so drift over the
 night lands on both. Finished run files are kept: a night cut short resumes with the same command.
+A kept run is reused ONLY for the same arm identity, recorded beside it as `<arm>/identity-<i>.json`:
+the checkout's commit + tree (+ the tracked-diff sha when dirty), the harness and the exact extra
+args. A changed checkout or other args re-runs that slot (the stale file is deleted first), and the
+final aggregate reads exactly `run-1..k` of the requested identity: a mismatched file is a rejected
+run, never the new candidate's evidence. A checkout that changes while a step runs discards that run
+and stops the night; a checkout git cannot vouch for never reuses a cached run.
 Each step is the bar with its own gates (`ZOE_PERF=1`, scratch stack, proven teardown). Each arm is a
 CHECKOUT (the scratch stack serves that checkout's code), with the Flue sidecar built in it. Do NOT set
 `ZOE_HARNESS_LANDING` (the lander-only exemption) or `ZOE_HARNESS_FORCE`. Six bar runs at `--samples 3`

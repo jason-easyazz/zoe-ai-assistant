@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
+import hashlib
 import importlib.util
 import json
 import math
@@ -125,6 +126,18 @@ def code_identity(payload: dict) -> str | None:
     return f"{tree}+{diff}" if diff else tree
 
 
+def run_coverage(payload: dict) -> str:
+    """``full`` (the whole scenario set was selected), ``partial`` (``--only`` / ``--axis``) or ``unknown`` (a payload
+    that does not say - fail closed: never counted as full). A bar baseline is full: only a full run records one."""
+    if "status" not in payload:
+        return "full"
+    if payload.get("partial") or payload.get("status") == "partial":
+        return "partial"
+    if payload.get("partial") is False or payload.get("status") == "ok":
+        return "full"
+    return "unknown"     # e.g. a ``regression`` status from a writer that does not record ``partial``
+
+
 def run_problem(payload: dict) -> str | None:
     """Why a results payload cannot count as a run (None = it counts)."""
     if "status" not in payload:   # a baseline: a recorded verdict map, already proven when it was recorded
@@ -174,15 +187,18 @@ def stable_verdict(verdicts: list[str]) -> str:
 
 
 def aggregate(payloads: list[dict], *, k: int = DEFAULT_K, label: str = "run",
-              sources: list[str] | None = None) -> dict[str, Any]:
+              sources: list[str] | None = None, rejected: list[dict] | None = None) -> dict[str, Any]:
     """Aggregate n results payloads of ONE arm. Invalid runs (refused, errored, teardown unproven) are listed and
-    not counted. Status: ``ok`` (n >= k valid, consistent runs) / ``incomplete`` (fewer than k) / ``error`` (the
-    runs disagree on scenario set, samples, rubric or code - they are not repeats of one thing)."""
+    not counted. Status: ``ok`` (n >= k valid, consistent, FULL-coverage runs) / ``incomplete`` (fewer than k) /
+    ``partial`` (k runs of a ``--only`` / ``--axis`` selection, or of unknown coverage: never a baseline, never
+    admissible - they did not exercise the rest of the bar) / ``error`` (the runs disagree on scenario set, coverage,
+    samples, rubric or code - they are not repeats of one thing). ``rejected`` adds runs the caller already refused
+    (the night runner: a cached run measured for a different arm identity)."""
     if k < 1:
         raise ValueError("k must be >= 1")
     sources = sources or [f"#{i + 1}" for i in range(len(payloads))]
     valid: list[tuple[str, dict]] = []
-    rejected: list[dict] = []
+    rejected = list(rejected or [])
     for src, p in zip(sources, payloads):
         why = run_problem(p)
         if why:
@@ -202,6 +218,7 @@ def aggregate(payloads: list[dict], *, k: int = DEFAULT_K, label: str = "run",
     samples = _one("samples", [p.get("samples", 1) for _, p in valid])
     rubric = _one("judge/criteria digest", [rubric_digest(p) for _, p in valid])
     kind = _one("harness", [run_kind(p) for _, p in valid])
+    coverage = _one("coverage (full vs --only/--axis)", [run_coverage(p) for _, p in valid])
     codes = [code_identity(p) for _, p in valid]
     code = _one("code (tree + diff)", [c for c in codes if c is not None]) if any(codes) else None
     bound = [bool((p.get("evidence") or {}).get("bound")) for _, p in valid if "status" in p]
@@ -216,12 +233,13 @@ def aggregate(payloads: list[dict], *, k: int = DEFAULT_K, label: str = "run",
                           "pass_hat_k": pass_hat_k(n, c, k), "pass_at_k": pass_at_k(n, c, k),
                           "pass_rate": round(c / n, 4) if n else None}
     first = maps[0] if maps else {}
-    status = "error" if (problems or not valid) else ("incomplete" if n < k else "ok")
+    status = "error" if (problems or not valid) else (
+        "incomplete" if n < k else "ok" if coverage == "full" else "partial")
     if not valid:
         problems.append("no valid run")
     return {
         "schema": SCHEMA, "label": label, "harness": kind, "k": k, "n_runs": n, "status": status,
-        "problems": problems, "rejected_runs": rejected, "sources": [s for s, _ in valid],
+        "coverage": coverage, "problems": problems, "rejected_runs": rejected, "sources": [s for s, _ in valid],
         "samples": samples, "rubric_sha256": rubric, "code": code,
         "all_runs_bound": bool(bound) and all(bound) and len(bound) == n,
         "summary": {
@@ -260,6 +278,8 @@ def compare(control: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any
     """Collateral damage and the admissibility verdict (module docstring). Pure."""
     unmeasured: list[str] = []
     for arm in (control, candidate):
+        if arm.get("coverage") != "full":
+            unmeasured.append(f"{arm.get('label')}: coverage {arm.get('coverage')!r} - only a full bar is a complete arm")
         if arm.get("status") != "ok":
             unmeasured.append(f"{arm.get('label')}: status {arm.get('status')} "
                               f"({arm.get('n_runs')} valid run(s), k={arm.get('k')}; {'; '.join(arm.get('problems') or []) or 'no problem named'})")
@@ -358,6 +378,8 @@ def summary_text(agg: dict[str, Any], cmp: dict[str, Any] | None = None) -> str:
 
 def baseline_record_problem(agg: dict[str, Any]) -> str | None:
     """A reliability baseline is complete, instrument-clean, full (not partial) and commit-bound (T-4's rule)."""
+    if agg.get("coverage") != "full":
+        return f"coverage {agg.get('coverage')!r}: a partial (--only/--axis) or unknown-coverage run never records the bar"
     if agg["status"] != "ok":
         return f"status {agg['status']}"
     if agg["summary"]["errored"]:
@@ -402,7 +424,58 @@ def run_file(out_dir: Path, arm: str, i: int) -> Path:
     return Path(out_dir) / arm / f"run-{i}.json"
 
 
-def done(path: Path) -> bool:
+def identity_file(out_dir: Path, arm: str, i: int) -> Path:
+    """The arm identity a cached run was measured for (not ``run-*.json``: never read as a run)."""
+    return Path(out_dir) / arm / f"identity-{i}.json"
+
+
+def _git(root: Path, *args: str, runner: Callable[..., Any] = subprocess.run) -> str | None:
+    try:
+        r = runner(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def arm_identity(checkout: str, harness: str, extra: list[str], *,
+                 runner: Callable[..., Any] = subprocess.run) -> dict[str, Any]:
+    """WHAT an arm measures: the checkout's commit + tree (+ the tracked diff when dirty) and the exact harness and
+    args. A cached run is reused only for an identical identity. When git cannot vouch for the checkout the identity
+    carries a per-invocation nonce, so no earlier run can ever match it (fail closed: re-run, never reuse)."""
+    root = Path(checkout).resolve()
+    tree = _git(root, "rev-parse", "HEAD^{tree}", runner=runner)
+    commit = _git(root, "rev-parse", "HEAD", runner=runner)
+    tracked = _git(root, "status", "--porcelain", "--untracked-files=no", runner=runner)
+    diff_sha = None
+    if tracked:
+        diff = _git(root, "diff", "HEAD", "--binary", runner=runner)
+        diff_sha = None if diff is None else hashlib.sha256(diff.encode("utf-8", "replace")).hexdigest()[:16]
+    verified = bool(tree and commit) and tracked is not None and (not tracked or diff_sha is not None)
+    ident: dict[str, Any] = {"checkout": str(root), "commit": commit, "tree": tree, "diff_sha256": diff_sha,
+                             "harness": harness, "script": HARNESS_SCRIPTS[harness], "args": list(extra),
+                             "verified": verified}
+    if not verified:
+        ident["nonce"] = os.urandom(8).hex()
+    return ident
+
+
+def identity_problem(out_dir: Path, arm: str, i: int, identity: dict[str, Any]) -> str | None:
+    """Why the cached run slot (arm, i) does not belong to ``identity`` (None = it does)."""
+    try:
+        recorded = load_json(identity_file(out_dir, arm, i))
+    except (OSError, ValueError):
+        return "no arm identity recorded for this run"
+    if recorded != identity:
+        changed = sorted(k for k in set(recorded) | set(identity) if recorded.get(k) != identity.get(k))
+        return f"measured for a different arm identity ({', '.join(changed)} changed)"
+    return None
+
+
+def done(path: Path, identity_why: str | None = None) -> bool:
+    """A finished run that may be reused: valid verdicts, proven teardown AND measured for the requested arm
+    (``identity_why`` = ``identity_problem`` for the slot)."""
+    if identity_why is not None:
+        return False
     try:
         return run_problem(load_json(path)) is None
     except (OSError, ValueError):
@@ -474,7 +547,13 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
     plan = run_schedule(list(arms), args.k)
     out_dir = Path(args.out_dir)
     extra = [a for a in args.extra if a != "--"]
-    todo = [(i, arm) for i, arm in plan if not done(run_file(out_dir, arm, i))]
+    if not args.dry_run and os.environ.get("ZOE_PERF") != "1":
+        log("bar_reliability run: skipped - live runs require ZOE_PERF=1 (see --dry-run)")
+        return EXIT_OK
+    idents = {a: arm_identity(c, args.harness, extra) for a, c in arms.items()}
+    todo = [(i, arm) for i, arm in plan
+            if not done(run_file(out_dir, arm, i), identity_problem(out_dir, arm, i, idents[arm]))]
+    stale = [(i, arm) for i, arm in todo if run_file(out_dir, arm, i).exists()]
 
     def cmd_for(i: int, arm: str) -> list[str]:
         f = run_file(out_dir, arm, i)
@@ -485,16 +564,16 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
     if args.dry_run:
         log(f"plan: {len(plan)} step(s), {len(todo)} still to run, ~{args.step_min} min each, harness {args.harness}")
         for i, arm in plan:
-            mark = "todo" if (i, arm) in todo else "done"
+            mark = "redo" if (i, arm) in stale else "todo" if (i, arm) in todo else "done"
             log(f"  [{mark}] round {i} {arm:<10} {' '.join(cmd_for(i, arm))}")
-        return EXIT_OK
-    if os.environ.get("ZOE_PERF") != "1":
-        log("bar_reliability run: skipped - live runs require ZOE_PERF=1 (see --dry-run)")
         return EXIT_OK
     for arm, checkout in arms.items():
         if not (Path(checkout) / script).is_file():
             log(f"REFUSED: arm {arm}: {Path(checkout) / script} does not exist")
             return EXIT_UNMEASURED
+    for i, arm in stale:
+        log(f"round {i} {arm}: cached run refused "
+            f"({identity_problem(out_dir, arm, i, idents[arm]) or 'not a valid run'}) - it will be re-run")
     hq = hq or _harness_quiet()
     env = child_env(os.environ)
     for i, arm in todo:
@@ -513,19 +592,58 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
                 log(f"stopping before round {i} {arm}: {why or 'no time left before the brain window'}")
                 break
             run_file(out_dir, arm, i).parent.mkdir(parents=True, exist_ok=True)
+            # a stale run (another identity, or invalid) must not survive a step that writes nothing
+            run_file(out_dir, arm, i).unlink(missing_ok=True)
+            identity_file(out_dir, arm, i).unlink(missing_ok=True)
             log(f"== {dt.datetime.now().isoformat(timespec='seconds')} round {i} {arm}")
             rc = _run_step(cmd_for(i, arm), deadline, env, log)
+            moved = _arm_moved(arms[arm], args.harness, extra, idents[arm])
+            if moved:      # the checkout changed under the step: what it measured is no arm's evidence
+                run_file(out_dir, arm, i).unlink(missing_ok=True)
+                log(f"stopping: arm {arm} checkout changed during round {i} ({moved}) - that run is discarded")
+                break
+            write_json(identity_file(out_dir, arm, i), idents[arm])   # whatever it wrote was measured for THIS arm
             log(f"   round {i} {arm} exit {rc}")
         finally:
             os.close(fd)
         if rc not in (0, 1):   # 0 ran / 1 ran with a regression vs ITS baseline: both are runs. 2/3 = refused
             log(f"stopping: round {i} {arm} was refused or errored (exit {rc}) - see {run_file(out_dir, arm, i)}")
             break
-    return finish(out_dir, list(arms), args.k, log)
+    return finish(out_dir, list(arms), args.k, log, identities=idents)
 
 
-def finish(out_dir: Path, arms: list[str], k: int, log=print) -> int:
-    aggs = {a: as_aggregate(Path(out_dir) / a, k=k, label=a) for a in arms}
+def _arm_moved(checkout: str, harness: str, extra: list[str], identity: dict[str, Any]) -> str | None:
+    """Which identity fields changed since the night began (None = none; the unverified nonce is not a field)."""
+    now = arm_identity(checkout, harness, extra)
+    changed = sorted(k for k in set(now) | set(identity) if k != "nonce" and now.get(k) != identity.get(k))
+    return ", ".join(changed) or None
+
+
+def arm_aggregate(out_dir: Path, arm: str, k: int, identity: dict[str, Any]) -> dict[str, Any]:
+    """Aggregate exactly the planned slots run-1..k of ``arm``: a run measured for another arm identity (a changed
+    checkout, other harness args) is REJECTED, and leftovers beyond k are not read."""
+    payloads, sources, rejected = [], [], []
+    for i in range(1, k + 1):
+        f = run_file(out_dir, arm, i)
+        if not f.exists():
+            continue
+        why = identity_problem(out_dir, arm, i, identity)
+        if why:
+            rejected.append({"source": str(f), "reason": why})
+            continue
+        try:
+            payloads.append(load_json(f))
+        except (OSError, ValueError) as exc:
+            rejected.append({"source": str(f), "reason": f"unreadable: {exc}"})
+            continue
+        sources.append(str(f))
+    agg = aggregate(payloads, k=k, label=arm, sources=sources, rejected=rejected)
+    agg["arm_identity"] = identity
+    return agg
+
+
+def finish(out_dir: Path, arms: list[str], k: int, log=print, *, identities: dict[str, dict[str, Any]]) -> int:
+    aggs = {a: arm_aggregate(Path(out_dir), a, k, identities[a]) for a in arms}
     cmp = compare(aggs[arms[0]], aggs[arms[1]]) if len(arms) == 2 else None
     write_json(Path(out_dir) / "reliability.json", {"arms": aggs, "compare": cmp})
     for a in arms:

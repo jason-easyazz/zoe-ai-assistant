@@ -32,9 +32,11 @@ sb = _load("samantha_bar", "scripts/perf/samantha_bar.py")
 IDS = ("S1", "S2", "S3", "S4", "S5", "S6")
 
 
-def run(verdicts: dict[str, str], *, status="ok", proven=True, tree="t0", samples=1, bound=True) -> dict:
-    """A results payload shaped like samantha_bar.py --results writes it."""
-    return {"harness_version": sb.HARNESS_VERSION, "status": status, "samples": samples,
+def run(verdicts: dict[str, str], *, status="ok", proven=True, tree="t0", samples=1, bound=True,
+        partial: bool | None = False) -> dict:
+    """A results payload shaped like samantha_bar.py --results writes it (``partial=None``: a writer without it)."""
+    extra = {} if partial is None else {"partial": partial}
+    return {"harness_version": sb.HARNESS_VERSION, "status": status, "samples": samples, **extra,
             "judge_prompt_sha256": sb.JUDGE_PROMPT_SHA256,
             "revision": {"commit": "c" * 40, "tree": tree}, "evidence": {"bound": bound, "tree": tree},
             "scenarios": [{"id": k, "verdict": v} for k, v in verdicts.items()],
@@ -278,7 +280,8 @@ def test_day_sim_asks_shape_is_read():
 
 # ── JSON + CLI ─────────────────────────────────────────────────────────────
 
-AGG_KEYS = {"schema", "label", "harness", "k", "n_runs", "status", "problems", "rejected_runs", "sources", "samples",
+AGG_KEYS = {"schema", "label", "harness", "k", "n_runs", "status", "coverage", "problems", "rejected_runs", "sources",
+            "samples",
             "rubric_sha256", "code", "all_runs_bound", "summary", "single_run_verdicts", "verdicts", "scenarios"}
 SUMMARY_KEYS = {"scenarios", "pass_hat_k", "pass_at_k", "pass_rate", "single_run_passed", "all_k_pass", "flaky", "errored"}
 SCENARIO_KEYS = {"runs", "passes", "verdicts", "verdict", "flaky", "errors", "pass_hat_k", "pass_at_k", "pass_rate"}
@@ -341,13 +344,22 @@ def test_baseline_refuses_unbound_or_errored_runs(tmp_path):
 
 # ── the night runner (never starts a harness here) ────────────────────────
 
+def _only_vcs(real, why: str):
+    """A Popen that allows only the read-only arm-identity probe (``git -C <checkout> ...``) - never a harness."""
+    def popen(cmd, *a, **k):
+        if not (isinstance(cmd, list) and cmd[:2] == ["git", "-C"]):
+            pytest.fail(why)
+        return real(cmd, *a, **k)
+    return popen
+
+
 def test_schedule_interleaves_and_alternates():
     assert br.run_schedule(["control", "candidate"], 3) == [
         (1, "control"), (1, "candidate"), (2, "candidate"), (2, "control"), (3, "control"), (3, "candidate")]
 
 
 def test_run_dry_run_prints_the_plan_and_runs_nothing(tmp_path, monkeypatch):
-    monkeypatch.setattr(br.subprocess, "Popen", lambda *a, **k: pytest.fail("dry run started a process"))
+    monkeypatch.setattr(br.subprocess, "Popen", _only_vcs(br.subprocess.Popen, "dry run started a process"))
     lines: list[str] = []
     rc = br.main(["run", "--out-dir", str(tmp_path), "--arm", f"control={REPO}", "--arm", f"candidate={REPO}",
                   "--k", "2", "--dry-run", "--", "--samples", "3"], log=lines.append)
@@ -359,7 +371,7 @@ def test_run_dry_run_prints_the_plan_and_runs_nothing(tmp_path, monkeypatch):
 
 def test_run_stops_at_a_closed_gate_and_reports_unmeasured(tmp_path, monkeypatch):
     monkeypatch.setenv("ZOE_PERF", "1")
-    monkeypatch.setattr(br.subprocess, "Popen", lambda *a, **k: pytest.fail("a closed gate started a process"))
+    monkeypatch.setattr(br.subprocess, "Popen", _only_vcs(br.subprocess.Popen, "a closed gate started a process"))
     args = br.argparse.Namespace(arm=[f"control={REPO}", f"candidate={REPO}"], harness="bar", k=3, out_dir=tmp_path,
                                  extra=[], dry_run=False, step_min=35)
     lines: list[str] = []
@@ -395,3 +407,142 @@ def test_step_gate_consults_quiet_hours_night_pause_and_landers():
     assert br.step_gate("x", 35, hq=HQ(night=False), runner=no_lander) == "night pause"
     assert "land_voice_pr" in br.step_gate("x", 35, hq=HQ(), runner=lander)
     assert br.step_gate("x", 35, hq=HQ(), runner=no_lander) is None
+
+
+# ── coverage: a --only / --axis run is never a complete arm (codex review, #2278) ──
+
+S1_ONLY = {"S1": "PASS"}
+
+
+def test_repeated_partial_runs_are_not_promoted_to_a_complete_arm(tmp_path):
+    part = arm(same(S1_ONLY), "control", status="partial", partial=True)
+    assert part["status"] == "partial" and part["coverage"] == "partial" and part["n_runs"] == 3
+    cand = arm(same(S1_ONLY), "candidate", status="partial", partial=True)
+    cmp = br.compare(part, cand)
+    assert cmp["measurable"] is False and cmp["admissible"] is False
+    assert any("coverage 'partial'" in r for r in cmp["reasons"])
+    assert "coverage" in br.baseline_record_problem(part)
+    base = tmp_path / "b.json"
+    d = _write_runs(tmp_path / "p", same(S1_ONLY), status="partial", partial=True)
+    assert br.main(["score", str(d), "--record-baseline", "--baseline", str(base)], log=lambda *_: None) == 2
+    assert not base.exists()
+    # negative control: the SAME one-scenario verdicts from full-coverage runs are a complete, admissible arm
+    full_c, full_d = arm(same(S1_ONLY), "control"), arm(same(S1_ONLY), "candidate")
+    assert full_c["status"] == "ok" and full_c["coverage"] == "full"
+    assert br.compare(full_c, full_d)["admissible"] is True and br.baseline_record_problem(full_c) is None
+
+
+def test_a_red_partial_run_stays_partial_and_unknown_coverage_is_not_full():
+    red = arm(same(S1_ONLY), "x", status="regression", partial=True)        # the bar's red --only run
+    assert red["coverage"] == "partial" and red["status"] == "partial"
+    unknown = arm(same(ALL_PASS), "x", status="regression", partial=None)   # a writer that does not say
+    assert unknown["coverage"] == "unknown" and unknown["status"] == "partial"
+    assert arm(same(ALL_PASS), "x", status="regression")["status"] == "ok"  # a full red run is a full run
+    mixed = br.aggregate([run(ALL_PASS), run(ALL_PASS), run(ALL_PASS, status="partial", partial=True)], k=3)
+    assert mixed["status"] == "error" and any("coverage" in p for p in mixed["problems"])
+
+
+def test_a_bar_baseline_reads_as_full_coverage(tmp_path):
+    f = tmp_path / "samantha_bar_baseline.json"
+    f.write_text(json.dumps({"scenarios": dict(ALL_PASS)}))
+    assert br.as_aggregate(f, k=1, label="baseline")["coverage"] == "full"
+
+
+# ── resume: a cached run is reused only for the SAME arm identity (codex review, #2278) ──
+
+def _vcs(path: Path, *cmd: str) -> None:
+    import subprocess
+    subprocess.run(["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@e", *cmd],
+                   check=True, capture_output=True)
+
+
+def _checkout(path: Path) -> Path:
+    (path / "scripts" / "perf").mkdir(parents=True)
+    (path / "scripts" / "perf" / "samantha_bar.py").write_text("# stand-in\n")
+    _vcs(path, "init", "-q")
+    _vcs(path, "add", "-A")
+    _vcs(path, "commit", "-qm", "base")
+    return path
+
+
+def _commit(path: Path, text: str) -> None:
+    (path / "scripts" / "perf" / "samantha_bar.py").write_text(text)
+    _vcs(path, "add", "-A")
+    _vcs(path, "commit", "-qm", "change")
+
+
+class _HQ:
+    def lock_wait_s(self, *a, **k):
+        return 0
+
+    def deadline_s(self):
+        return 100
+
+
+@pytest.fixture
+def runner(tmp_path, monkeypatch):
+    """run_arms with every gate open and a fake step that writes an all-PASS run; returns (invoke, steps)."""
+    monkeypatch.setenv("ZOE_PERF", "1")
+    monkeypatch.setattr(br, "LOCK", str(tmp_path / "harness.lock"))
+    steps: list[list[str]] = []
+
+    def fake_step(cmd, deadline, env, log):
+        steps.append(cmd)
+        Path(cmd[cmd.index("--results") + 1]).write_text(json.dumps(run(ALL_PASS)))
+        return 0
+    monkeypatch.setattr(br, "_run_step", fake_step)
+
+    def invoke(arms: list[str], *, k=2, extra=(), gate=lambda *a, **kw: None) -> int:
+        args = br.argparse.Namespace(arm=arms, harness="bar", k=k, out_dir=tmp_path / "out", extra=list(extra),
+                                     dry_run=False, step_min=35)
+        return br.run_arms(args, lambda *_: None, gate=gate, hq=_HQ())
+    return invoke, steps
+
+
+def test_resume_reuses_a_cached_run_only_for_the_same_checkout_and_args(tmp_path, runner):
+    invoke, steps = runner
+    ck = _checkout(tmp_path / "ck")
+    assert invoke([f"control={ck}"]) == br.EXIT_OK and len(steps) == 2
+    assert invoke([f"control={ck}"]) == br.EXIT_OK and len(steps) == 2          # negative control: same arm = reused
+    _commit(ck, "# the next candidate\n")
+    assert invoke([f"control={ck}"]) == br.EXIT_OK and len(steps) == 4          # a changed checkout re-runs
+    rel = json.loads((tmp_path / "out" / "reliability.json").read_text())
+    assert rel["arms"]["control"]["arm_identity"]["commit"] == br._git(ck, "rev-parse", "HEAD")
+    assert invoke([f"control={ck}"], extra=["--samples", "3"]) == br.EXIT_OK and len(steps) == 6   # other args re-run
+    assert all("--samples" in s for s in steps[4:])
+
+
+def test_stale_cached_runs_are_rejected_not_reported_as_the_new_candidate(tmp_path, runner):
+    invoke, steps = runner
+    ctl, cand = _checkout(tmp_path / "ctl"), _checkout(tmp_path / "cand")
+    assert invoke([f"control={ctl}", f"candidate={cand}"]) == br.EXIT_OK and len(steps) == 4   # admissible
+    _commit(cand, "# a different candidate, never measured\n")
+    closed = lambda *a, **kw: "night_busy.sh voice says pause"  # noqa: E731
+    assert invoke([f"control={ctl}", f"candidate={cand}"], gate=closed) == br.EXIT_UNMEASURED and len(steps) == 4
+    rel = json.loads((tmp_path / "out" / "reliability.json").read_text())
+    assert rel["compare"]["admissible"] is False
+    assert rel["arms"]["candidate"]["n_runs"] == 0
+    assert all("different arm identity" in r["reason"] for r in rel["arms"]["candidate"]["rejected_runs"])
+    assert rel["arms"]["control"]["status"] == "ok"                              # the unchanged arm keeps its runs
+
+
+def test_a_checkout_that_changes_during_a_step_discards_that_run(tmp_path, runner, monkeypatch):
+    invoke, steps = runner
+    ck = _checkout(tmp_path / "ck")
+
+    def step_then_move(cmd, deadline, env, log):
+        steps.append(cmd)
+        Path(cmd[cmd.index("--results") + 1]).write_text(json.dumps(run(ALL_PASS)))
+        _commit(ck, f"# moved during step {len(steps)}\n")
+        return 0
+    monkeypatch.setattr(br, "_run_step", step_then_move)
+    assert invoke([f"control={ck}"]) == br.EXIT_UNMEASURED and len(steps) == 1
+    assert not br.run_file(tmp_path / "out", "control", 1).exists()
+
+
+def test_an_unverifiable_checkout_never_reuses_a_cached_run(tmp_path):
+    plain = tmp_path / "not-a-checkout"
+    plain.mkdir()
+    a = br.arm_identity(str(plain), "bar", [])
+    b = br.arm_identity(str(plain), "bar", [])
+    assert a["verified"] is False and a != b                                     # a nonce: nothing can match
