@@ -1406,7 +1406,7 @@ async def _forgotten(user_id: str, text: str) -> bool:
     unconfigured ledger (no salt: nothing can have been forgotten) is a clean no."""
     try:
         import memory_forgotten as mf
-        return bool(await mf.spans(user_id, text))
+        return bool(await mf.spans(user_id, text, strict=True))
     except Exception as exc:  # noqa: BLE001
         raise LedgerUnavailable(type(exc).__name__) from exc
 

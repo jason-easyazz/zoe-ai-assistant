@@ -915,7 +915,12 @@ async def run_turn_digest(
         result["skipped_reason"] = "pronoun_subject_no_context"
         return result
     # A turn naming an entity the user asked Zoe to forget is not mined (and saves the model call).
-    if not await _skip_forgotten_turns(user_id, [user_message], "turn_digest"):
+    try:
+        _kept_turn = await _skip_forgotten_turns(user_id, [user_message], "turn_digest")
+    except _forget_ledger_unavailable():
+        result["skipped_reason"] = "forget_ledger_unavailable"   # fail-closed; the nightly digest re-reads the day
+        return result
+    if not _kept_turn:
         result["skipped_reason"] = "forgotten_entity"
         return result
 
@@ -1324,7 +1329,12 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                 continue
             # A fact about an entity the user asked Zoe to forget is dropped HERE, before the
             # contradiction pass below: that branch WRITES via review(edit), not ingest (ZMB F3).
-            if not await _skip_forgotten_turns(user_id, [fact], "digest_fact"):
+            try:
+                _fact_kept = await _skip_forgotten_turns(user_id, [fact], "digest_fact")
+            except _forget_ledger_unavailable():
+                _count_drop("digest", "forget_ledger_unavailable", gate=False)   # fail-closed: deferred to a later run
+                continue
+            if not _fact_kept:
                 _count_drop("digest", "forgotten_entity", gate=False)
                 continue
             # Token-level, per stored fact (memory_overlap): never skips a fact that holds a new
@@ -1829,18 +1839,33 @@ async def _redact_forgotten_transcript(user_id: str, db=None) -> None:
         logger.debug("memory_digest: forget cascade retry unavailable (%s)", type(exc).__name__)
 
 
+def _forget_ledger_unavailable():
+    """The exception class ``_skip_forgotten_turns`` raises on a ledger outage (lazy: memory_forgotten is imported on use)."""
+    import memory_forgotten
+    return memory_forgotten.LedgerUnavailable
+
+
 async def _skip_forgotten_turns(user_id: str, turns: list, reader: str) -> list:
     """``turns`` without the ones that name an entity the user asked Zoe to forget (the durable
     ``memory_forgotten`` ledger). The chat rows are not erased, so without this every transcript reader
     (nightly digest, idle consolidation, open loops) re-mines the forgotten turns once the 300 s tombstone
-    has expired and the name comes back (ZMB F3). Skipped, not re-mined; logs a COUNT only. Fail-open: a
-    ledger failure keeps the turns (the ingest chokepoint is the second wall)."""
+    has expired and the name comes back (ZMB F3). Skipped, not re-mined; logs a COUNT only.
+
+    FAIL-CLOSED (forgotten means forever): the lookup is ``strict``. A ledger outage - or any failure to consult it -
+    raises ``memory_forgotten.LedgerUnavailable`` (the error TYPE is logged, never a name) instead of reading as
+    "nothing is forgotten", because the ingest guard behind this one is also lenient on an outage. Each caller defers
+    the affected turns to a later run rather than mining them: the transcript readers surface it as a
+    ``TranscriptLoadError`` (the existing retried-next-run path), idle consolidation leaves its watermark un-advanced,
+    and the per-fact / per-loop / per-turn callers drop the item for this run."""
+    import memory_forgotten
     try:
-        import memory_forgotten
-        kept, dropped = await memory_forgotten.keep_unforgotten(user_id, turns)
+        kept, dropped = await memory_forgotten.keep_unforgotten(user_id, turns, strict=True)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("memory_digest: forgotten-turn filter unavailable (%s)", type(exc).__name__)
-        return turns
+        logger.warning("memory_digest: %s forget ledger unavailable (%s) - turns deferred to a later run",
+                       reader, type(exc).__name__)
+        if isinstance(exc, memory_forgotten.LedgerUnavailable):
+            raise
+        raise memory_forgotten.LedgerUnavailable(f"forgotten-turn filter failed ({type(exc).__name__})") from exc
     if dropped:
         logger.info("memory_digest: %s skipped %d turn(s) naming a forgotten entity user=%s",
                     reader, dropped, user_id)
@@ -3142,7 +3167,11 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
         if not loop_is_concrete(text):
             result["discarded_meta"] += 1
             continue
-        if not await _skip_forgotten_turns(user_id, [f"{text} {hint}"], "open_loops"):
+        try:
+            _loop_kept = await _skip_forgotten_turns(user_id, [f"{text} {hint}"], "open_loops")
+        except _forget_ledger_unavailable():
+            continue  # fail-closed: not stored this run
+        if not _loop_kept:
             continue  # a loop about a forgotten entity is not stored
         candidates.append((
             text,
