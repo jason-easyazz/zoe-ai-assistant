@@ -125,6 +125,12 @@ class _Lang:
     implied_cues: tuple = ()                  # "now" / "for you": an untargeted in-progress claim stands for a DEFERRED write's kind
     progressive_aux: frozenset = frozenset()  # "am" / "are" between a subject and a progressive verb ("I am adding")
     promise_blockers: frozenset = frozenset() # blockers that are a promise's own auxiliary ("will" in "I will add … now")
+    # ASSURANCE claims: "I can certainly set that reminder for you" answers a write request as if it were being done. A promise
+    # verb led by an assurance subject ("I can") counts as an IN-PROGRESS claim only with an assurance word in its unit
+    # ("certainly", "absolutely") AND either a write the fast path deferred to this turn or an immediacy word - so "I can add it"
+    # and "Can you do reminders?" -> "I can certainly set reminders for you!" stay offers / descriptions.
+    assurance_subjects: frozenset = frozenset()
+    assurance_words: tuple = ()
 
     def is_modifier(self, tok: str, *, by_suffix: bool = False) -> bool:
         if tok in self.adverbs or tok in self.modifiers:
@@ -189,6 +195,7 @@ def _langs() -> tuple:
             promise_subjects=words("promise_subjects"), immediacy=phrases("immediacy"),
             implied_cues=phrases("implied_cues"), progressive_aux=words("progressive_aux"),
             promise_blockers=words("promise_blockers"),
+            assurance_subjects=words("assurance_subjects"), assurance_words=phrases("assurance_words"),
         ))
     return tuple(out)
 
@@ -261,7 +268,9 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional
             return None
     if not tokenize(text):
         return None
+    unit_padded = " " + " ".join(tokenize(text)) + " "
     for lang in _langs():
+        assured = any(_has_phrase(unit_padded, w) for w in lang.assurance_words)
         # Blockers (negation, irrealis, future) and target nouns are judged in the CLAUSE of the claim verb only: "I've added
         # milk to your list, but I'm not sure about eggs" and "… as you wanted" still claim the milk (review, #2004).
         found: list = []            # (kinds, in_progress) for each claiming clause
@@ -285,7 +294,9 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional
                 if offset + i >= LEAD_TOKENS:
                     break               # streaming cannot see past here before it must release the unit (module docstring)
                 promise = (lang.promise_verbs or {}).get(tok)
-                if promise is not None and not conditional and _promised_now(toks, i, padded, lang):
+                if promise is not None and not conditional and (
+                        _promised_now(toks, i, padded, lang)
+                        or (assured and _assured_now(toks, i, padded, lang, implied_kind))):
                     # "I'll add that to your list right now": a write promised for THIS turn. Never with an "if" anywhere in the
                     # unit ("I'll add it now if you like" is an offer).
                     kinds = _named_kinds(padded, lang)
@@ -363,6 +374,24 @@ def _promised_now(toks: list, i: int, padded: str, lang: "_Lang") -> bool:
     for j in range(i - 1, max(-1, i - 1 - _SUBJECT_REACH), -1):
         tok = toks[j]
         if tok in lang.promise_subjects or (j > 0 and f"{toks[j - 1]} {tok}" in lang.promise_subjects):
+            return True
+        if not (tok in lang.openers or lang.is_modifier(tok, by_suffix=True)):
+            return False
+    return False
+
+
+def _assured_now(toks: list, i: int, padded: str, lang: "_Lang", implied_kind: Optional[str]) -> bool:
+    """The promise verb at ``toks[i]`` is led by an assurance subject ("I can") through nothing but openers and modifiers, in a turn
+    whose write was deferred to the brain or with an immediacy word in its clause (the caller has already found an assurance word in
+    the unit): "I can certainly set that reminder for you" said in answer to "remind me …" - QA 2026-11-05, where the tool then
+    failed and the reply read as done before its apology."""
+    if not lang.assurance_subjects:
+        return False
+    if not implied_kind and not any(_has_phrase(padded, w) for w in lang.immediacy):
+        return False
+    for j in range(i - 1, max(-1, i - 1 - _SUBJECT_REACH), -1):
+        tok = toks[j]
+        if j > 0 and f"{toks[j - 1]} {tok}" in lang.assurance_subjects:
             return True
         if not (tok in lang.openers or lang.is_modifier(tok, by_suffix=True)):
             return False

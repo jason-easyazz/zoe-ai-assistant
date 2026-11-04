@@ -31,8 +31,9 @@ const { currentUserId, wrapMessageWithIdentity } = await import('../src/request-
 const { wrapMessageWithReplay } = await import('../src/replay-mode.ts');
 const { estimateTextTokens } = await import('../src/context-window.ts');
 
-// sha256 of ZOE_INSTRUCTIONS on main before the split (9,326 chars): the flag-off bytes.
-const GOLDEN_SHA256 = '48fc2030ad9556ad710ef1a4ebfcd211fcbb7aa61cc26c21124c3767683f38d4';
+// sha256 of ZOE_INSTRUCTIONS, the flag-off bytes (first pinned before the soul split; re-pinned 2026-11-05 when the alarms group
+// and the word "alarm" joined the activator doctrine - a deliberate catalogue change, not drift).
+const GOLDEN_SHA256 = '3a4f2577d7531da2122970bb9d8f15dd887351de0f6a9629053b2083eb3a0255';
 
 const LEAD =
   'You are Zoe, genuinely present and not a task executor; you care about the people you talk with. ' +
