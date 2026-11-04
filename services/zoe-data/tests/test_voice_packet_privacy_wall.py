@@ -135,6 +135,24 @@ def test_open_question_or_mood_is_not_a_pull_on_voice(monkeypatch, text):
         assert private not in block
 
 
+def test_mood_turn_sharing_topic_words_does_not_pull_a_feelings_row(monkeypatch):
+    # the boundary the cross-review raised: the mood turn SHARES words with the feelings row ("worried", "exam")
+    _search(monkeypatch, _rows())
+    assert "affect" in restraint.make_turn("I'm worried about the exam").classes
+    assert restraint.make_turn("I'm worried about the exam").stems & restraint.stems(FEELING), "fixture must overlap"
+    block = _packet("I'm worried about the exam", True)
+    assert FEELING not in block
+
+
+def test_a_plain_topic_question_by_a_verified_voice_pulls_the_feelings_row(monkeypatch):
+    # not a mood statement: the member asks about the exam itself, so the topic overlap is a pull by name
+    _search(monkeypatch, _rows())
+    assert "affect" not in restraint.make_turn("what happened before the exam").classes
+    block = _packet("what happened before the exam", True)
+    assert FEELING in block
+    assert HEALTH not in block and MONEY not in block
+
+
 @pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
 def test_the_wall_bites_in_every_restraint_mode(monkeypatch, mode):
     monkeypatch.setenv("ZOE_RESTRAINT", mode)

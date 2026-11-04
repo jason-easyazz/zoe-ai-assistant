@@ -492,7 +492,7 @@ def decide(text: Any, classes: Iterable[str], turn: Turn, mutes: Iterable[Mute] 
     * ``VOICE_SURFACE`` (the voice recall packet, a shared room; D6): a PRIVATE class is read only to a voice
       the speaker gate VERIFIED this turn (``verdict is True``; no verdict = not verified) and only when the
       owner's words pull it BY NAME (a topic overlap, or a class other than ``affect`` named) - never on an
-      open question or a mood statement. Those withholds are the wall (``Decision.wall``). ``other_member`` keeps the packet rule.
+      open question or a mood statement (on a mood turn a topic overlap does not pull a row with ``affect``). Those withholds are the wall (``Decision.wall``). ``other_member`` keeps the packet rule.
     """
     cls = tuple(c for c in CLASSES if c in set(classes))
     if cls and turn.verdict is False:
@@ -502,8 +502,12 @@ def decide(text: Any, classes: Iterable[str], turn: Turn, mutes: Iterable[Mute] 
         private = set(cls) & set(PRIVATE)
         if private and turn.verdict is not True:
             return Decision(False, "unverified", cls, wall=True)
-        # a class named in the words pulls it; a mood statement ("I'm feeling down") classes as affect but names no PAST feeling
-        if private and not (topic or (set(turn.classes) - {"affect"}) & private):
+        # a class named in the words pulls it; a mood statement ("I'm feeling down") classes as affect but names no PAST feeling,
+        # and its topic words do not pull a feelings row either ("I'm scared about the exam" never reads back "felt scared before
+        # the exam" to the room): on a mood turn a row with affect needs a non-affect class named
+        named = (set(turn.classes) - {"affect"}) & private
+        by_topic = topic and not ("affect" in turn.classes and "affect" in private)
+        if private and not (by_topic or named):
             return Decision(False, "sensitive", cls, wall=True)
         surface = "packet"       # past the wall: the chat packet's rule (mutes, other_member)
     if muted(text, source_ref, mutes):
