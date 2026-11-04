@@ -30,6 +30,7 @@ import os
 import re
 import voice_phrases
 import time
+import write_receipts
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -149,6 +150,7 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
     write needs LLM slot-extraction anyway (never sub-50ms) and we'd rather not
     run that extraction speculatively only to fall through. Reads/expert-recall
     are unaffected."""
+    write_receipts.note_deferred_write(None)     # a new turn: no write deferred yet
     if not is_enabled():
         return None
     domain = (domain or "").strip().lower()
@@ -183,6 +185,8 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
     # the brain BEFORE paying for slot extraction. Reads/expert-recall continue.
     if kind in ("write", "direct") and not write_ok:
         logger.info("EXPERT_DEFER_WRITE domain=%s intent=%s (write_ok=False) → brain", domain, intent_name)
+        # The brain turn that answers this must not claim the write unless it made it (write_claim_guard, implied_kind).
+        write_receipts.note_deferred_write((_ui_for(domain) or {}).get("kind"))
         return None
 
     # 2) Decide whether we may ACT: active mode, domain allow-listed, and for

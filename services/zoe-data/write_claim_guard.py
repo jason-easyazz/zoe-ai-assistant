@@ -25,6 +25,14 @@ every delta cut - however the text is cut, the same units are judged on the same
 and is not a claim (only "is added" is, ``state_claim`` in the lexicon). Flag ``ZOE_WRITE_CLAIM_GUARD`` = ``enforce`` (default) | ``shadow`` (log only) |
 ``off``. The replay harness (``replay_isolation``) is never guarded - its writes are deliberately not committed.
 
+In-progress claims (live 2026-11-04: typed "add balloons, blue streamers and goldfish crackers to the shopping list" was answered
+"Adding balloons, blue streamers, and goldfish crackers to your shopping list now." and nothing was written): "Adding X to your
+list now", "I'm setting a reminder", "I'll put that on your calendar right away" say the write is happening THIS turn. The brain
+may say that just before its tool call, so such a unit is judged at the END of the turn (``guard_stream`` holds it until a
+receipt lands or the turn ends). When the fast path DEFERRED a write to the brain (``write_receipts.take_deferred_write``, the
+chat lane's ``EXPERT_DEFER_WRITE``), the request already named the target, so an in-progress claim with none of its own ("Adding
+those now.") claims that kind.
+
 Stdlib only; never raises into a turn.
 """
 from __future__ import annotations
@@ -86,7 +94,7 @@ class _Lang:
     second_person: frozenset
     openers: frozenset
     adverbs: frozenset
-    verbs: dict           # token -> (kind, needs_target, state_claim)
+    verbs: dict           # token -> (kind, needs_target, state_claim, progressive)
     targets: dict         # kind -> tuple of phrases
     other_targets: tuple
     blockers: tuple
@@ -107,6 +115,14 @@ class _Lang:
     ellipsis_objects: frozenset = frozenset() # what may follow a sentence-opening claim verb in a completion ellipsis ("Added THE milk")
     modifiers: frozenset = frozenset()        # ordinary adverbs that may sit before a claim verb ("definitely", "again")
     modifier_suffixes: tuple = ()             # a word ending in one is an adverb too ("-ly", "-mente"), once a subject stands before it
+    # IN-PROGRESS claims, judged at the END of the turn (``Claim.in_progress``): "I'm adding …" / "Adding … now" (a ``progressive``
+    # claim verb, whose extra subjects are these) and "I'll add that to your list right now" (a promise verb: counts ONLY after a
+    # promise subject AND with an immediacy word in its clause - a bare "I'll add it" stays a promise, "Shall I add it?" an offer).
+    progressive_subjects: frozenset = frozenset()
+    promise_verbs: dict = None                # base form -> (kind, needs_target)
+    promise_subjects: frozenset = frozenset()
+    immediacy: tuple = ()
+    implied_cues: tuple = ()                  # "now" / "for you": an untargeted in-progress claim stands for a DEFERRED write's kind
 
     def is_modifier(self, tok: str, *, by_suffix: bool = False) -> bool:
         if tok in self.adverbs or tok in self.modifiers:
@@ -145,7 +161,12 @@ def _langs() -> tuple:
             tok = _phrase(verb)
             if tok:
                 verbs[tok] = (str((spec or {}).get("kind") or "any"), bool((spec or {}).get("needs_target")),
-                              bool((spec or {}).get("state_claim")))
+                              bool((spec or {}).get("state_claim")), (spec or {}).get("form") == "progressive")
+        promise_verbs = {}
+        for verb, spec in (lex.get("promise_verbs") or {}).items():
+            tok = _phrase(verb)
+            if tok:
+                promise_verbs[tok] = (str((spec or {}).get("kind") or "any"), bool((spec or {}).get("needs_target")))
         targets = {kind: phrases_ for kind, phrases_ in ((k, tuple(p for p in (_phrase(x) for x in v) if p))
                                                           for k, v in (lex.get("targets") or {}).items())}
         temporals = tuple(sorted((tuple(p.split()) for p in phrases("clause_temporals")), key=len, reverse=True))
@@ -162,6 +183,9 @@ def _langs() -> tuple:
             temporals=temporals, temporal_firsts=frozenset(t[0] for t in temporals),
             temporal_clause_starts=tuple(sorted((tuple(p.split()) for p in phrases("temporal_clause_starts")), key=len, reverse=True)),
             discourse=words("discourse_openers"),
+            progressive_subjects=words("progressive_subjects"), promise_verbs=promise_verbs,
+            promise_subjects=words("promise_subjects"), immediacy=phrases("immediacy"),
+            implied_cues=phrases("implied_cues"),
         ))
     return tuple(out)
 
@@ -175,6 +199,9 @@ class Claim:
     kinds: tuple          # known target kinds the sentence names; () = a generic "I've added it"
     lang: str
     honest: str
+    # Every claim in the unit says the write is happening NOW ("Adding milk to your list now", "I'll put it on your calendar right
+    # away"): the brain may say that just BEFORE its tool call, so it is judged at the end of the turn, not when it is spoken.
+    in_progress: bool = False
 
 
 # What may stand between a statement and its tag: , ; : and the dashes (em, en, and a SPACED hyphen or double hyphen -
@@ -216,9 +243,12 @@ def _completion_ellipsis(rest: list, has_target: bool, lang: "_Lang") -> bool:
     return has_target and not any(t in copulas for t in rest)
 
 
-def find_claim(sentence: str) -> Optional[Claim]:
+def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional[Claim]:
     """The write this sentence CLAIMS to have made, or None. Pure. Every claim clause of the unit counts: the Claim names the
-    kinds of ALL of them, so a receipt for one cannot vouch for another."""
+    kinds of ALL of them, so a receipt for one cannot vouch for another.
+
+    ``implied_kind``: this turn is a write the fast path DEFERRED to the brain (``write_receipts.take_deferred_write``), so the
+    request already named its target - an in-progress claim with no target noun of its own ("Adding those now.") claims THAT kind."""
     text = (sentence or "").strip()
     if not text:
         return None
@@ -231,7 +261,8 @@ def find_claim(sentence: str) -> Optional[Claim]:
     for lang in _langs():
         # Blockers (negation, irrealis, future) and target nouns are judged in the CLAUSE of the claim verb only: "I've added
         # milk to your list, but I'm not sure about eggs" and "… as you wanted" still claim the milk (review, #2004).
-        found: list = []            # the kinds each claiming clause names
+        found: list = []            # (kinds, in_progress) for each claiming clause
+        conditional = any(t in lang.conditionals for t in tokenize(text))
         prev_claimed = False        # did the clause just before this one claim a write?
         for offset, toks, temporal_tail, head in _clauses(text, lang):
             if head and prev_claimed:
@@ -246,37 +277,81 @@ def find_claim(sentence: str) -> Optional[Claim]:
             for i, tok in enumerate(toks):
                 if offset + i >= LEAD_TOKENS:
                     break               # streaming cannot see past here before it must release the unit (module docstring)
+                promise = (lang.promise_verbs or {}).get(tok)
+                if promise is not None and not conditional and _promised_now(toks, i, padded, lang):
+                    # "I'll add that to your list right now": a write promised for THIS turn. Never with an "if" anywhere in the
+                    # unit ("I'll add it now if you like" is an offer).
+                    kinds = _named_kinds(padded, lang)
+                    if not kinds:
+                        if any(_has_phrase(padded, o) for o in lang.other_targets):
+                            continue
+                        if implied_kind:
+                            kinds = (implied_kind,)     # _promised_now already required an immediacy word
+                        elif promise[1]:
+                            continue
+                        else:
+                            kinds = () if promise[0] == "any" else (promise[0],)
+                    found.append((kinds, True))
+                    prev_claimed = True
+                    break
                 spec = lang.verbs.get(tok)
                 if spec is None:
                     continue
-                verb_kind, needs_target, state_claim = spec
+                verb_kind, needs_target, state_claim, progressive = spec
                 pre = toks[max(0, i - 4):i]
-                aux = _passive_aux(pre, lang)
+                aux = "" if progressive else _passive_aux(pre, lang)       # "I was adding …" is no passive
                 passive = aux in lang.passive_done or aux in lang.passive_past or (state_claim and aux in lang.passive_state)
                 if temporal_tail and aux in lang.passive_state:
                     continue            # "Milk is added once you tap Done": a pending form described, not a write reported
                 if not passive and any(p in lang.second_person for p in pre):
                     continue            # "you added it" - the user did it ("The milk you mentioned has been added": you is not the writer)
-                active = all(p in lang.hold_words or p in lang.modifiers for p in pre) or _subject_then_modifiers(toks, i, lang)
+                extra = lang.progressive_subjects if progressive else frozenset()
+                active = (all(p in lang.hold_words or p in lang.modifiers or p in extra for p in pre)
+                          or _subject_then_modifiers(toks, i, lang, extra))
                 if not (active or passive):
                     continue
-                kinds = tuple(kind for kind, phrases_ in lang.targets.items() if any(_has_phrase(padded, p) for p in phrases_))
-                if not pre and not _completion_ellipsis(toks[i + 1:], bool(kinds), lang):
+                kinds = _named_kinds(padded, lang)
+                implied = bool(progressive and implied_kind and any(_has_phrase(padded, c) for c in lang.implied_cues))
+                if not pre and not _completion_ellipsis(toks[i + 1:], bool(kinds) or implied, lang):
                     continue
                 if not kinds:
-                    if needs_target or any(_has_phrase(padded, o) for o in lang.other_targets):
+                    if any(_has_phrase(padded, o) for o in lang.other_targets):
                         continue
-                    if not active and aux not in lang.passive_done and verb_kind != "any":
+                    if implied:
+                        kinds = (implied_kind,)
+                    elif needs_target:
+                        continue
+                    elif not active and aux not in lang.passive_done and verb_kind != "any":
                         continue        # "The restaurant was booked solid": a past passive with no target noun claims no write
-                    kinds = () if verb_kind == "any" else (verb_kind,)
-                found.append(kinds)
+                    else:
+                        kinds = () if verb_kind == "any" else (verb_kind,)
+                found.append((kinds, progressive))
                 prev_claimed = True
                 break                   # one claim per clause: its target nouns are already all in ``kinds``
         if found:
-            specific = {k for kinds in found for k in kinds}
+            specific = {k for kinds, _ in found for k in kinds}
             ordered = tuple(k for k in lang.targets if k in specific) + tuple(sorted(specific - set(lang.targets)))
-            return Claim(kinds=ordered, lang=lang.code, honest=lang.honest)
+            return Claim(kinds=ordered, lang=lang.code, honest=lang.honest, in_progress=all(p for _, p in found))
     return None
+
+
+def _named_kinds(padded: str, lang: "_Lang") -> tuple:
+    """The known target kinds a clause names ("… to your shopping list" -> ("list",))."""
+    return tuple(kind for kind, phrases_ in lang.targets.items() if any(_has_phrase(padded, p) for p in phrases_))
+
+
+def _promised_now(toks: list, i: int, padded: str, lang: "_Lang") -> bool:
+    """The promise verb at ``toks[i]`` is led by a promise subject ("I'll", "we'll") through nothing but openers and modifiers, and
+    its clause says NOW ("now", "right away"): "I'll add that to your list right now" - not "I'll add it later", "I can add it"."""
+    if not lang.promise_subjects or not any(_has_phrase(padded, w) for w in lang.immediacy):
+        return False
+    for j in range(i - 1, max(-1, i - 1 - _SUBJECT_REACH), -1):
+        tok = toks[j]
+        if tok in lang.promise_subjects:
+            return True
+        if not (tok in lang.openers or lang.is_modifier(tok, by_suffix=True)):
+            return False
+    return False
 
 
 def _passive_aux(pre: list, lang: "_Lang") -> str:
@@ -293,14 +368,14 @@ def _passive_aux(pre: list, lang: "_Lang") -> str:
 _SUBJECT_REACH = 6      # how far back from the claim verb a first-person subject may stand ("I have now definitely gone ahead and added")
 
 
-def _subject_then_modifiers(toks: list, i: int, lang: "_Lang") -> bool:
+def _subject_then_modifiers(toks: list, i: int, lang: "_Lang", extra_subjects: frozenset = frozenset()) -> bool:
     """True when the claim verb at ``toks[i]`` is led by a first-person subject through nothing but openers, claim words and
     modifiers - listed ones or any adverb by suffix ("I've definitely added", "we have quietly set"). The subject is what makes a
     suffix word safe to trust: "Emily added the milk" has none and stays someone else's write; "I think Mum added" is cut by
     "think", which is neither a hold word nor a modifier."""
     for j in range(i - 1, max(-1, i - 1 - _SUBJECT_REACH), -1):
         tok = toks[j]
-        if tok in lang.subjects:
+        if tok in lang.subjects or tok in extra_subjects:
             return True
         if not (tok in lang.hold_words or lang.is_modifier(tok, by_suffix=True)):
             return False
@@ -344,8 +419,9 @@ def _clauses(text: str, lang: "_Lang") -> list:
         if tok in ";:—–":
             close()
         elif tok == ",":
-            nxt = next((t for t in items[i + 1:] if t not in ",;:—–"), "")
-            if nxt in starts or nxt in lang.joiner_firsts:
+            j = next((k for k in range(i + 1, len(items)) if items[k] not in ",;:—–"), len(items))
+            nxt = items[j] if j < len(items) else ""
+            if nxt in starts or _comma_joiner(items, j, lang, starts):
                 close()
         else:
             if tok in lang.conditionals and cur:
@@ -381,6 +457,17 @@ def _clauses(text: str, lang: "_Lang") -> list:
         i += 1
     close()
     return clauses
+
+
+def _comma_joiner(items: list, j: int, lang: "_Lang", starts: frozenset) -> bool:
+    """A comma followed by a joiner opens a new clause - "…, but I'm not sure about eggs", "…, and then …", "…, and I've set a
+    reminder". An Oxford-comma "and" before the LAST ITEM of a list ("balloons, streamers, and crackers to your list") is only the
+    first word of a longer joiner ("and then"), with no new subject after it: the items stay in the clause of their verb."""
+    if j >= len(items) or items[j] not in lang.joiner_firsts:
+        return False
+    if any(items[j:j + len(jn)] == list(jn) for jn in lang.joiners):
+        return True
+    return j + 1 < len(items) and items[j + 1] in starts
 
 
 def _temporal_at(items: list, i: int, lang: "_Lang") -> int:
@@ -488,7 +575,7 @@ def _could_become_claim(unit_so_far: str) -> bool:
     if len(toks) < LEAD_TOKENS or _TAIL_PUNCT_RE.search(unit_so_far):
         return True
     head = toks[:LEAD_TOKENS]
-    return any(t in lang.verbs for lang in _langs() for t in head)
+    return any(t in lang.verbs or t in (lang.promise_verbs or {}) for lang in _langs() for t in head)
 
 
 # ── the guard ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -501,15 +588,17 @@ def _replacement(sentence: str, claim: Claim) -> str:
     return lead + claim.honest + trail
 
 
-def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text: str = "", lane: str = "brain") -> str:
-    """The reply with every unsupported write claim replaced by the honest line (once). Unchanged when off / no claims."""
+def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text: str = "", lane: str = "brain",
+               implied_kind: Optional[str] = None) -> str:
+    """The reply with every unsupported write claim replaced by the honest line (once). Unchanged when off / no claims. The
+    reply is whole, so the turn is over: an in-progress claim is judged like any other."""
     m = mode()
     if m == "off" or not (reply or "").strip():
         return reply
     try:
         out, replaced = [], False
         for sentence in split_sentences(reply):
-            claim = find_claim(sentence)
+            claim = find_claim(sentence, implied_kind=implied_kind)
             if claim is None or supported(claim, user_id, started, user_text=user_text):
                 out.append(sentence)
                 continue
@@ -526,10 +615,14 @@ def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text:
 
 
 async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], started: float, *, user_text: str = "",
-                       lane: str = "brain") -> AsyncIterator[str]:
+                       lane: str = "brain", implied_kind: Optional[str] = None) -> AsyncIterator[str]:
     """Pass ``inner`` through, replacing an unsupported write-claim sentence. Sentinels pass untouched; text is held back only
     while a unit could still become a claim (``_could_become_claim``). The output equals ``guard_text`` of the whole reply however
-    the deltas are cut."""
+    the deltas are cut.
+
+    An IN-PROGRESS claim ("Adding milk to your list now.") is often spoken just BEFORE the tool call that makes it true, so it is
+    not judged when it ends: it - and everything after it - is held until a receipt backs it (re-checked on every delta and
+    sentinel, so a tool that lands releases it at once) or the turn ends, when it is judged like ``guard_text`` judges it."""
     m = mode()
     if m == "off":
         async for delta in inner:
@@ -538,16 +631,14 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
     held: list = []     # the deltas not yet released, as they arrived (an unchanged sentence goes out in the SAME pieces)
     head = ""           # the part of the CURRENT unit already released (it holds >= LEAD_TOKENS claim-free words)
     replaced = False
+    unit_clear = False  # the current unit is already known claim-free (its first LEAD_TOKENS words held no claim verb)
+    cleared = 0         # leading characters of ``held`` already judged clean (released once a whole piece is clean)
+    pending = None      # (claim, end): an unsupported in-progress claim unit ending at ``held`` offset ``end``, awaiting a receipt
+    finishing = False   # the turn is over: nothing is pending any more
 
-    def judge(sentence: str) -> Optional[str]:
-        """None = release the sentence untouched; a string = release that instead (may be empty)."""
-        nonlocal replaced, head, unit_clear
-        whole = head + sentence
-        head = ""
-        unit_clear = False
-        claim = find_claim(whole)
-        if claim is None or supported(claim, user_id, started, user_text=user_text):
-            return None
+    def block(sentence: str, claim: Claim) -> Optional[str]:
+        """An unsupported claim: None = release the sentence untouched (shadow); else the text to release instead."""
+        nonlocal replaced
         _log_blocked(claim, user_id, lane, "shadow" if m == "shadow" else "replaced")
         if m == "shadow":
             return None
@@ -556,57 +647,107 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
         replaced = True
         return _replacement(sentence, claim)
 
+    def judge(sentence: str):
+        """None = release the sentence untouched; a string = release that instead (may be empty); a Claim = an in-progress
+        claim to hold until a receipt or the end of the turn."""
+        nonlocal head, unit_clear
+        whole = head + sentence
+        head = ""
+        unit_clear = False
+        claim = find_claim(whole, implied_kind=implied_kind)
+        if claim is None or supported(claim, user_id, started, user_text=user_text):
+            return None
+        if claim.in_progress and not finishing:
+            return claim
+        return block(sentence, claim)
+
+    def advance() -> list:
+        """Judge every unit that is complete, and return the pieces that may go out now."""
+        nonlocal head, unit_clear, cleared, pending
+        out: list = []
+        if pending is not None:
+            claim, end = pending
+            if supported(claim, user_id, started, user_text=user_text):
+                pending, cleared = None, end
+            elif finishing:
+                pending = None
+                buf = "".join(held)
+                verdict = block(buf[cleared:end], claim)
+                if verdict is None:
+                    cleared = end
+                else:
+                    text = buf[:cleared] + verdict
+                    held[:] = [buf[end:]] if buf[end:] else []
+                    cleared = 0
+                    if text:
+                        out.append(text)
+            else:
+                return out                  # still waiting for the write it promised
+        while True:
+            buf = "".join(held)
+            # The released head of the unit counts too: where a unit ends (its word count) is then the same however the text
+            # is cut.
+            end = _sentence_end(head + buf, len(head) + cleared, 0 if head else cleared)
+            if end is None:
+                break
+            end -= len(head)
+            verdict = judge(buf[cleared:end])
+            if verdict is None:
+                cleared = end            # clean: stays in its ORIGINAL pieces
+                continue
+            if isinstance(verdict, Claim):
+                pending = (verdict, end)
+                break
+            # An unsupported claim: release what was already clean, then the honest line in the sentence's place.
+            text = buf[:cleared] + verdict
+            held[:] = [buf[end:]] if buf[end:] else []
+            cleared = 0
+            if text:
+                out.append(text)
+        while held and len(held[0]) <= cleared:     # whole clean pieces go out exactly as they arrived
+            piece = held.pop(0)
+            cleared -= len(piece)
+            if pending is not None:
+                pending = (pending[0], pending[1] - len(piece))      # its end is an offset into ``held``
+            out.append(piece)
+        if pending is not None or finishing:
+            return out
+        tail = "".join(held)[cleared:]
+        if tail and not (_TAIL_PUNCT_RE.search(tail) or (not unit_clear and _could_become_claim(head + tail))):
+            # Known claim-free: the unit's first LEAD_TOKENS words hold no claim verb, so nothing later in it can be a
+            # claim. (A tail that ends in punctuation is held: the boundary's whitespace may be one delta away.)
+            unit_clear = True
+            head += tail
+            out.extend(held)
+            held.clear()
+            cleared = 0
+        return out
+
     def flush() -> list:
-        """The pieces still held, judged as the final (possibly unfinished) unit of the stream."""
+        """The turn is over: settle a pending claim, then judge what is still held as the final (possibly unfinished) unit."""
+        nonlocal finishing, cleared
+        finishing = True
+        pieces = advance()
         buf = "".join(held)
         if not buf:
-            return []
+            return pieces
         verdict = judge(buf[cleared:]) if cleared < len(buf) else None
-        pieces = list(held) if verdict is None else [buf[:cleared] + verdict]
+        pieces.extend(list(held) if verdict is None else [buf[:cleared] + verdict])
         held.clear()
+        cleared = 0
         return pieces
-
-    unit_clear = False  # the current unit is already known claim-free (its first LEAD_TOKENS words held no claim verb)
-    cleared = 0         # leading characters of ``held`` already judged clean (released once a whole piece is clean)
 
     try:
         async for delta in inner:
             if delta.startswith(_SENTINEL_PREFIXES):
                 yield delta
+                if pending is not None:         # a tool may just have landed the write the held claim promised
+                    for piece in advance():
+                        yield piece
                 continue
             held.append(delta)
-            while True:
-                buf = "".join(held)
-                # The released head of the unit counts too: where a unit ends (its word count) is then the same however the text
-                # is cut.
-                end = _sentence_end(head + buf, len(head) + cleared, 0 if head else cleared)
-                if end is None:
-                    break
-                end -= len(head)
-                verdict = judge(buf[cleared:end])
-                if verdict is None:
-                    cleared = end            # clean: stays in its ORIGINAL pieces
-                    continue
-                # An unsupported claim: release what was already clean, then the honest line in the sentence's place.
-                out = buf[:cleared] + verdict
-                held[:] = [buf[end:]] if buf[end:] else []
-                cleared = 0
-                if out:
-                    yield out
-            while held and len(held[0]) <= cleared:     # whole clean pieces go out exactly as they arrived
-                piece = held.pop(0)
-                cleared -= len(piece)
+            for piece in advance():
                 yield piece
-            tail = "".join(held)[cleared:]
-            if tail and not (_TAIL_PUNCT_RE.search(tail) or (not unit_clear and _could_become_claim(head + tail))):
-                # Known claim-free: the unit's first LEAD_TOKENS words hold no claim verb, so nothing later in it can be a
-                # claim. (A tail that ends in punctuation is held: the boundary's whitespace may be one delta away.)
-                unit_clear = True
-                head += tail
-                for piece in held:
-                    yield piece
-                held.clear()
-                cleared = 0
         for piece in flush():
             yield piece
     except Exception:

@@ -1,5 +1,5 @@
 {
-  "_doc": "Per-language WORDS for write_claim_guard.py: how a reply CLAIMS it saved something (a list item, a calendar event, a reminder, a note, a timer). Data, not code: a new language or phrasing is a new row here, never a new regex. A claim verb counts in the active (I've added) and the completed passive (passive_done: has been added; passive_past: was added, which also needs a target noun unless the verb is added); a present-tense passive (passive_state: is scheduled for Friday) describes the calendar and is a claim only for a verb marked state_claim (is added). Every word is matched after NFKC + casefold + diacritic stripping (so 'anadi' == 'añadí'), against whole tokens. 'reviewed' = read by a native speaker; en is, es is not yet (E6 in docs/research/structural-floors-2026-10-09.md). clause_temporals (after, when, once, before): a TRAILING one opens a clause of its own, so a completed claim before it still counts (I have added milk, after you asked me to); a LEADING one blocks its own clause; a present-tense passive before one (is added once you tap Done) stays a description.",
+  "_doc": "Per-language WORDS for write_claim_guard.py: how a reply CLAIMS it saved something (a list item, a calendar event, a reminder, a note, a timer). Data, not code: a new language or phrasing is a new row here, never a new regex. A claim verb counts in the active (I've added) and the completed passive (passive_done: has been added; passive_past: was added, which also needs a target noun unless the verb is added); a present-tense passive (passive_state: is scheduled for Friday) describes the calendar and is a claim only for a verb marked state_claim (is added). Every word is matched after NFKC + casefold + diacritic stripping (so 'anadi' == 'añadí'), against whole tokens. 'reviewed' = read by a native speaker; en is, es is not yet (E6 in docs/research/structural-floors-2026-10-09.md). clause_temporals (after, when, once, before): a TRAILING one opens a clause of its own, so a completed claim before it still counts (I have added milk, after you asked me to); a LEADING one blocks its own clause; a present-tense passive before one (is added once you tap Done) stays a description. IN-PROGRESS claims (a claim verb with form 'progressive' - Adding X to your list now, I'm setting a reminder - or a promise_verbs base form, which counts ONLY after a promise_subjects word AND with an immediacy word in its clause - I'll add that to your list right now) say the write is happening in THIS turn: they are judged at the END of the turn (the brain may narrate just before its tool call), and blocked only if no receipt landed by then. A bare 'I'll add it' / 'Shall I add it?' / 'I can add it' stays a promise or an offer, never a claim. In a turn whose write the fast path DEFERRED to the brain, an in-progress claim with no target noun ('Adding those now.') claims the deferred kind, but only with one of implied_cues in its clause ('Adding salt makes it better' is no claim).",
   "en": {
     "reviewed": true,
     "enabled": true,
@@ -30,7 +30,19 @@
       "saved": {"kind": "any", "needs_target": true},
       "logged": {"kind": "any", "needs_target": true},
       "jotted": {"kind": "note", "needs_target": false},
-      "noted": {"kind": "any", "needs_target": true}
+      "noted": {"kind": "any", "needs_target": true},
+      "adding": {"kind": "any", "needs_target": true, "form": "progressive"},
+      "putting": {"kind": "any", "needs_target": true, "form": "progressive"},
+      "popping": {"kind": "any", "needs_target": true, "form": "progressive"},
+      "setting": {"kind": "any", "needs_target": true, "form": "progressive"},
+      "saving": {"kind": "any", "needs_target": true, "form": "progressive"},
+      "creating": {"kind": "any", "needs_target": true, "form": "progressive"},
+      "logging": {"kind": "any", "needs_target": true, "form": "progressive"},
+      "scheduling": {"kind": "calendar", "form": "progressive"},
+      "booking": {"kind": "calendar", "form": "progressive"},
+      "pencilling": {"kind": "calendar", "form": "progressive"},
+      "penciling": {"kind": "calendar", "form": "progressive"},
+      "jotting": {"kind": "note", "needs_target": false, "form": "progressive"}
     },
     "targets": {
       "list": ["list", "lists", "shopping", "grocery", "groceries", "to-do", "todo", "todos", "to do", "tasks", "task"],
@@ -48,6 +60,21 @@
     "discourse_openers": ["okay", "ok", "so", "well", "right", "alright", "hmm", "hm", "oh", "um", "uh", "now", "then", "and", "but", "sure", "wait", "hey", "actually", "ah"],
     "clause_starts": ["it", "it's", "that", "that's", "this", "they", "there", "he", "she", "i'm", "i'll", "you'll", "let's", "please", "don't", "won't", "no"],
     "recap_cues": ["did you", "have you", "has it", "was it", "is it on", "is it in", "did it", "are they on", "are they in", "you added", "you said you", "did that", "is that on", "did we"],
+    "promise_verbs": {
+      "add": {"kind": "any", "needs_target": true},
+      "put": {"kind": "any", "needs_target": true},
+      "pop": {"kind": "any", "needs_target": true},
+      "set": {"kind": "any", "needs_target": true},
+      "save": {"kind": "any", "needs_target": true},
+      "create": {"kind": "any", "needs_target": true},
+      "schedule": {"kind": "calendar", "needs_target": true},
+      "book": {"kind": "calendar", "needs_target": true},
+      "jot": {"kind": "note", "needs_target": true}
+    },
+    "progressive_subjects": ["i'm", "im", "we're"],
+    "promise_subjects": ["i'll", "we'll"],
+    "immediacy": ["now", "right now", "right away", "straight away", "immediately"],
+    "implied_cues": ["now", "right now", "right away", "straight away", "immediately", "for you", "in there", "on there"],
     "honest": "I didn't manage to add that; want me to try again?"
   },
   "es": {

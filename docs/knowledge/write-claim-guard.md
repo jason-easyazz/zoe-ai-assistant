@@ -76,6 +76,25 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
   leading temporal word stripped and needs its own receipt (the first claim's receipt does not vouch for it), while a tail after a promise
   or denial ("I'll tell you after I've added it") stays blocked; a temporal word followed by nothing or by another temporal ("once before") splits nothing; a temporal word that starts a CLAUSE (`temporal_clause_starts` data: a subject such as "you" / "I've", es "de que" / "lo") splits, while one that starts a time PHRASE ("after lunch", "before dinner") is neither a split nor a blocker, so "I've put the dentist after lunch in your calendar" keeps its target (the skipped words stay as placeholders so word positions, and with them the 12-word streaming bound, do not move); and a
   present-tense passive before one ("Milk is added once you tap Done") stays a description of a pending form, not a claim.
+* **In-progress claims** (live 2026-11-04, typed chat: "Adding balloons, blue streamers, and goldfish crackers to your shopping
+  list now." with no tool call and no write - the past-tense-only lexicon missed it, and the Oxford comma before "and goldfish"
+  split the target noun off the verb's clause). A claim verb with `"form": "progressive"` ("adding", "setting", "putting",
+  "saving", "scheduling"…; extra subjects `progressive_subjects`: "I'm", "we're") or a `promise_verbs` base form ("add", "put",
+  "set"…) that counts ONLY after a `promise_subjects` word ("I'll", "we'll") AND with an `immediacy` word in its clause ("now",
+  "right away"), and never with an "if" anywhere in the unit, says the write is happening in THIS turn. The brain may say that
+  just BEFORE its tool call, so such a claim (`Claim.in_progress`) is judged at the END of the turn: `guard_stream` holds that
+  unit - and everything after it - until a receipt backs it (re-checked on every delta and sentinel, so a tool that lands
+  releases it at once) or the turn ends; `guard_text` sees the whole reply anyway. A bare "I'll add it", "Shall I add it?",
+  "I can add it", "I was adding…", "Adding salt makes it better" stay non-claims. A comma before a joiner's first word splits
+  the clause only when the whole joiner follows or a new subject follows it ("…, and I'm not sure about eggs"), so a list's last
+  item keeps its verb's target.
+* **Deferred writes**: the chat lane does not let the fast path write (`fast_tiers` `"chat": allow_writes False`), so
+  `expert_dispatch` logs `EXPERT_DEFER_WRITE` and leaves the write to the brain. It also calls
+  `write_receipts.note_deferred_write(kind)` (a context-bound marker, cleared at every dispatch, taken once, 60 s), and
+  `brain_dispatch` passes the taken kind to the guard as `implied_kind`: an in-progress claim with no target noun of its own
+  ("Sure, adding those for you now.") then claims that kind - only with an `implied_cues` word ("now", "for you") in its clause.
+  So a deferred write that ends with no matching receipt never reaches the user as done; it is replaced by the honest line.
+  (Re-asking the brain with the tool required was not chosen: a second 4B turn costs seconds and still cannot force the call.)
 * **Verdict**: a claim naming kinds needs a receipt of every kind since the turn began (calendar and reminder back each
   other; a recap question - "did you add the milk?" - may stand on a write from the last 30 min). A claim naming no target
   ("I've added it") is backed by any receipt - and only a receipt. A tool's NAME is not evidence: the stream's `phase=start` /
@@ -130,4 +149,5 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
 ## Open (see `open-problems.md`, "False write claims")
 
 The brain still sometimes skips an offered write tool - the guard makes that visible and honest, it does not make the model
-call the tool. The change touches the voice path (`voice_tts.py`, `brain_dispatch.py`): it must be replay-gated before deploy.
+call the tool. On the chat lane every add is deferred to the brain (`allow_writes` False); letting chat's fast path write, as
+voice and Telegram do, is a separate decision. The change touches the voice path (`voice_tts.py`, `brain_dispatch.py`): it must be replay-gated before deploy.
