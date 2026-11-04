@@ -136,10 +136,12 @@ describe('the history window keeps the conversation in progress', () => {
 
   it('settles: while the floor binds the head creeps over a few SHORT histories, then holds still', () => {
     const heads: number[] = [];
+    process.env.ZOE_BRAIN_KEEP_TURNS = '3'; // this plateau arithmetic was written for the 3-turn floor (default is now 8)
     for (let turns = 20; turns <= 34; turns++) {
       const h = windowHeadIndex(make(turns));
       heads.push(h === null ? 0 : h / 2); // "how many OLDEST turns are dropped"
     }
+    delete process.env.ZOE_BRAIN_KEEP_TURNS;
     // the plateau is the quantised head; the creep before it only ever re-prefills the (short) kept history
     let run = 1;
     let best = 1;
