@@ -142,7 +142,6 @@ OpenClaw is being **fully retired** (operator decision 2026-07-22). These files
 are deliberately EXCLUDED from the never-delete list above:
 
 ```
-├── openclaw_ws.py               # OpenClaw CLI client — deletion target
 ```
 
 They are removable **only** via the gated retirement PRs in

@@ -1116,25 +1116,6 @@
         },
         "typed_env": false
       },
-      "ZOE_ACP_DELIVERY_MODE": {
-        "defaults": [
-          "'live'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/zoe_acp_client.py"
-        ],
-        "registered": true,
-        "spec": {
-          "allowed": null,
-          "default": "live",
-          "divergent_ok": {},
-          "note": "",
-          "owner_doc": "",
-          "type": "str"
-        },
-        "typed_env": false
-      },
       "ZOE_ADHOC_BACKUP_DIR": {
         "defaults": [
           "-",
@@ -8393,25 +8374,6 @@
           "type": "str"
         },
         "typed_env": true
-      },
-      "ZOE_MIRROR_INTENTS_TO_OPENCLAW": {
-        "defaults": [
-          "'false'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/routers/chat.py"
-        ],
-        "registered": true,
-        "spec": {
-          "allowed": null,
-          "default": false,
-          "divergent_ok": {},
-          "note": "",
-          "owner_doc": "",
-          "type": "bool"
-        },
-        "typed_env": false
       },
       "ZOE_MISHEAR_CLARIFY": {
         "defaults": [
@@ -17040,7 +17002,7 @@
     "services/zoe-data/router_two_stage.py": 5,
     "services/zoe-data/routers/auth.py": 1,
     "services/zoe-data/routers/autoresearch.py": 1,
-    "services/zoe-data/routers/chat.py": 6,
+    "services/zoe-data/routers/chat.py": 5,
     "services/zoe-data/routers/contacts.py": 1,
     "services/zoe-data/routers/face_id.py": 2,
     "services/zoe-data/routers/ha_control.py": 1,
@@ -17086,7 +17048,6 @@
     "services/zoe-data/worktree_bootstrap.py": 1,
     "services/zoe-data/write_claim_guard.py": 1,
     "services/zoe-data/ytmusic_signin.py": 10,
-    "services/zoe-data/zoe_acp_client.py": 1,
     "services/zoe-data/zoe_agent.py": 10,
     "services/zoe-data/zoe_core_client.py": 12,
     "services/zoe-data/zoe_flue_client.py": 15,
@@ -17183,17 +17144,6 @@
       "readers": [
         "scripts/maintenance/check_emotional_thread.py",
         "scripts/maintenance/palace_drill_check.py"
-      ],
-      "typed_env": false
-    },
-    "API_SERVER_KEY": {
-      "defaults": [
-        "-"
-      ],
-      "in_env_example": false,
-      "readers": [
-        "services/zoe-data/chat_hermes_stream.py",
-        "services/zoe-data/hermes_http.py"
       ],
       "typed_env": false
     },
@@ -18022,28 +17972,6 @@
       ],
       "typed_env": false
     },
-    "HERMES_API_KEY": {
-      "defaults": [
-        "dynamic"
-      ],
-      "in_env_example": true,
-      "readers": [
-        "services/zoe-data/chat_hermes_stream.py",
-        "services/zoe-data/hermes_http.py"
-      ],
-      "typed_env": false
-    },
-    "HERMES_API_URL": {
-      "defaults": [
-        "'http://127.0.0.1:8642'"
-      ],
-      "in_env_example": false,
-      "readers": [
-        "services/zoe-data/chat_hermes_stream.py",
-        "services/zoe-data/routers/system.py"
-      ],
-      "typed_env": false
-    },
     "HERMES_HOME": {
       "defaults": [
         "'~/.hermes'"
@@ -18061,17 +17989,6 @@
       "in_env_example": false,
       "readers": [
         "scripts/maintenance/reset_engineering_boards.py"
-      ],
-      "typed_env": false
-    },
-    "HERMES_MODEL": {
-      "defaults": [
-        "'hermes-agent'"
-      ],
-      "in_env_example": false,
-      "readers": [
-        "services/zoe-data/chat_hermes_stream.py",
-        "services/zoe-data/routers/system.py"
       ],
       "typed_env": false
     },
@@ -18868,38 +18785,6 @@
       "in_env_example": false,
       "readers": [
         "scripts/maintenance/reap_stale_omnigent_runners.py"
-      ],
-      "typed_env": false
-    },
-    "OPENCLAW_AGENT_TIMEOUT_S": {
-      "defaults": [
-        "'900'"
-      ],
-      "in_env_example": true,
-      "readers": [
-        "services/zoe-data/openclaw_ws.py",
-        "services/zoe-data/zoe_acp_client.py"
-      ],
-      "typed_env": false
-    },
-    "OPENCLAW_GATEWAY_TOKEN": {
-      "defaults": [
-        "''"
-      ],
-      "in_env_example": true,
-      "readers": [
-        "services/zoe-data/openclaw_ws.py",
-        "services/zoe-data/zoe_acp_client.py"
-      ],
-      "typed_env": false
-    },
-    "OPENCLAW_UPGRADE_ENABLED": {
-      "defaults": [
-        "'true'"
-      ],
-      "in_env_example": true,
-      "readers": [
-        "services/zoe-data/routers/system.py"
       ],
       "typed_env": false
     },
