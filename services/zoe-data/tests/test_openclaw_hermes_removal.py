@@ -91,7 +91,6 @@ _SKIP_FILES = ("services/zoe-data/tests/test_openclaw_hermes_removal.py",)
 _ALLOWED = {
     "scripts/maintenance/zoe_ground_truth.sh": "inverse check: reports if a Hermes gateway is unexpectedly LISTENING on :8642 (ss, no connect)",
     "services/zoe-data/agents_registry.yml": "legacy peer-agent registry: /agent/registry lists base_url but never dials it (status comes from _RUNTIME_HEALTH, which no longer holds these agents); follow-up: drop the retired entries",
-    "services/zoe-data/zoe_agent.py": "docstring/comment prose and a self-summary string (not a connection)",
     "services/zoe-data/tests/test_nginx_security_headers_helper.py": "nginx fixture text for the security-header helper",
 }
 
@@ -211,15 +210,60 @@ def test_runtime_health_tracks_only_the_local_llm():
     assert set(_RUNTIME_HEALTH) == {"local_llm"}
 
 
-def test_hermes_is_never_an_escalation_target(monkeypatch):
+_RETIRED_WORDS = ("escalate", "openclaw", "hermes")
+
+
+def test_no_escalation_or_retired_agent_tool_is_defined_or_offered():
+    """The fallback brain has no tool named escalate*/openclaw*/hermes*, anywhere it could be offered."""
     import zoe_agent
 
-    # Even with every legacy opt-in set, there is nothing to escalate to.
-    monkeypatch.setenv("ZOE_HERMES_AUTO_ESCALATE", "true")
-    monkeypatch.setenv("HERMES_FAST_PATH", "true")
-    assert zoe_agent._hermes_available() is False
-    names = {t["function"]["name"] for t in zoe_agent._build_tools({"discovery"})}
-    assert "escalate_to_hermes" not in names
+    offered = {t["function"]["name"] for t in zoe_agent._TOOLS}
+    for skills in (set(), set(zoe_agent._SKILL_TOOLS)):
+        offered |= {t["function"]["name"] for t in zoe_agent._build_tools(skills)}
+    for needs_tools in (True, False):
+        offered |= {t["function"]["name"] for t in zoe_agent._build_voice_tools(needs_tools)}
+    for skill_tools in zoe_agent._SKILL_TOOLS.values():
+        offered |= set(skill_tools)
+    bad = {n for n in offered if any(w in n.lower() for w in _RETIRED_WORDS)}
+    assert not bad, f"retired-agent tool(s) back in the fallback brain: {bad}"
+    assert not [k for k in zoe_agent._SKILL_TOOLS if any(w in k for w in _RETIRED_WORDS)]
+    assert not [k for k in zoe_agent._SKILL_KEYWORDS if any(w in k for w in _RETIRED_WORDS)]
+    # every tool a skill group names must exist (no dangling names)
+    defined = {t["function"]["name"] for t in zoe_agent._TOOLS}
+    for skill, names in zoe_agent._SKILL_TOOLS.items():
+        assert set(names) <= defined, f"skill {skill!r} names an undefined tool"
+
+
+def test_dispatch_never_emits_an_escalation_marker():
+    import asyncio
+
+    import zoe_agent
+
+    for name in ("escalate_to_hermes", "escalate_to_openclaw", "list_openclaw_skills", "list_openclaw_plugins"):
+        out = asyncio.run(zoe_agent._dispatch_tool(name, {"reason": "x", "task": "y"}, user_id="u"))
+        assert not str(out).startswith("__ESCALATE"), f"{name} still emits an escalation marker"
+        assert "__UI__" not in str(out)
+
+
+def test_brain_prompts_do_not_mention_the_retired_agents():
+    import zoe_agent
+
+    texts = {
+        "soul_static": zoe_agent._ZOE_SOUL_STATIC,
+        "soul_voice": zoe_agent._ZOE_SOUL_VOICE,
+        "self_summary": zoe_agent._ZOE_SELF_SUMMARY,
+    }
+    for label, text in texts.items():
+        low = text.lower()
+        for word in (*_RETIRED_WORDS, "agent team"):
+            assert word not in low, f"{label} still mentions {word!r}"
+
+
+def test_voice_has_no_escalation_marker_parser():
+    from routers import voice_tts
+
+    assert not hasattr(voice_tts, "_parse_voice_escalation_delta")
+    assert not hasattr(voice_tts, "_VOICE_ESCALATION_MARKERS")
 
 
 # -- the env gates are gone; the live behaviour is the default ------------------------------
