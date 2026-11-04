@@ -185,6 +185,36 @@ record; a list of names with no stated roles must not be assigned roles.
   fix, and the reply states the change ("Fixed: … is 7 August 1991.").
 - Bar scenarios S20 (dates, a real gate), S21 and S22 (flag-dark targets) in [samantha-bar.md](samantha-bar.md).
 
+## Person profiles and the birthday fix (person-centred memory phase 1, slice 1; 2026-11-03)
+
+Design: `docs/architecture/person-centred-memory.md` (PR #2248; owner accepted D1-D12 on 2026-11-03). This slice is the
+READ half of phase 1 plus the birthday fix (D12). No schema change.
+
+- **`services/zoe-data/person_profile.py`** - the per-person profile read-model, composed (never copied) from the `people`
+  row, `person_important_dates` (+ legacy `people.birthday` read-through, D9), `person_gift_ideas`, current
+  `person_relationships` edges and the memory rows linked by `entity_id` (`people.id` or the stub's `slug:<name>`). Each
+  fact line carries its authority (`user_stated` / `user_confirmed` / `inferred`), writer and day, and a deterministic
+  facet (`likes` / `life_now` / none). Rules: approved rows only (D1: a pending row is never served; an unanchored inferred
+  row is counted "to check", never said; an approved inferred row is labelled "I think"); private classes counted, never
+  read (D6); a child's profile keeps only what the owner said or confirmed - no inference, no health or mood row (not
+  even counted), no model-proposed gift (D7); a forgotten name answers nothing.
+- **The answer** - `provenance_answers.person_answer`, flag **`ZOE_PERSON_PROFILE_ANSWERS`** (bool, default OFF): "what
+  do you know about <name>?" and "tell me about <name>" for one of the asker's OWN contacts (exact / whole-token match,
+  never a prefix) answer from the profile - voice: who they are to you, one life-now item, the next date, "Want more?";
+  chat: the grouped card with authority chips. Unknown name = the brain, as before (the named-person recall floor still
+  applies); two people by that name = one question; a guest / another member's account / an unverified speaker get the
+  existing refusals. Flag off = byte-identical to before. Pinned by `services/zoe-data/tests/test_person_profile.py`.
+- **The birthday fix** (`proactive/triggers/people_birthday.py`, unflagged - it never had data to fire on): 8am local,
+  ONCE per person per day (in-process memo + a `proactive_pending` read; before, the 5-minute slow loop could fire it
+  twelve times in the hour), on the lead days of D3 - default 7 days before and the day itself; `inner` / `family`
+  circle 14, 3 and the day; a per-date `reminder_days_before` other than the column default 7 overrides - reading both
+  `person_important_dates` and the legacy `people.birthday`. Pinned by `tests/test_people_birthday_trigger.py`.
+- **Owner steps** - turn the answer on: set `ZOE_PERSON_PROFILE_ANSWERS=1` in `services/zoe-data/.env` and restart
+  zoe-data. Turn birthday capture on after this lands (D2): `ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED=1`, same file, restart.
+- **Not in this slice (phase 1 remainder)**: write-time subject resolution at `MemoryService.ingest` (`subject_basis`,
+  persisted `facet` metadata), the night backfill of unlinked rows (unique whole-name only), the re-shaped "about me"
+  sections, "tell me more" paging; phase 2 (date-lead + gift candidates into the pull queue) and later phases.
+
 ## Cleanup
 
 Test contacts accumulate in the live `people` table under synthetic `zoe-*` user_ids.

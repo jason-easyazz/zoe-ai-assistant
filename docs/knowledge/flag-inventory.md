@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 810 prod flags; 220 read through `typed_env`.
-- 761 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
+- 811 prod flags; 221 read through `typed_env`.
+- 760 legacy direct read sites in prod code across 226 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
 - 3 flags read but not registered (CI fails on any).
 - 313 prod flags with no owner doc yet.
-- 1 registered flags with no reader in the scanned sources.
+- 0 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-810 flags; 759 not documented in `.env.example`.
+811 flags; 760 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -568,6 +568,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PERSON_LLM_CONFIDENCE_MIN` | float | `0.4` | - | `docs/knowledge/contacts-people-memory.md` | `'0.4'` | no | NO | `services/zoe-data/person_extractor_llm.py` |
 | `ZOE_PERSON_LLM_PREFILTER` | str | `''` | - | `docs/research/brain-extraction-stack-best-practice-2026-10-05.md` | `''` | no | NO | `services/zoe-data/person_extractor_llm.py` |
 | `ZOE_PERSON_MERGE_ENABLED` | str | `''` | - | `docs/knowledge/relationship-memory-flag-enable.md` | `''` | no | NO | `services/zoe-data/person_merge.py` |
+| `ZOE_PERSON_PROFILE_ANSWERS` | bool | `False` | - | `docs/knowledge/contacts-people-memory.md` | `False` | yes | NO | `services/zoe-data/person_profile.py` |
 | `ZOE_PERSON_RECALL_FLOOR` | str | `''` | - | `docs/knowledge/samantha-bar.md` | `-` | no | NO | `services/zoe-data/memory_gate.py` |
 | `ZOE_PERSON_SUGGEST_ENABLED` | str | `''` | - | `docs/knowledge/relationship-memory-flag-enable.md` | `''` | no | NO | `services/zoe-data/pending_suggestions.py` |
 | `ZOE_PHONE_APP` | bool | `False` | - | `docs/architecture/zoe-iphone-app.md` | `'off'` | yes | NO | `services/zoe-data/phone_app.py` |
@@ -783,7 +784,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_TEMPORAL_RELATIONSHIPS_ENABLED` | str | `''` | - | `docs/knowledge/relationship-memory-flag-enable.md` | `''` | no | NO | `services/zoe-data/person_extractor.py` |
 | `ZOE_TEXT_LOG_RETENTION_DAYS` | str | `''` | - | `docs/knowledge/forget-reach.md` | `-` | no | NO | `services/zoe-data/local_text_logs.py` |
 | `ZOE_TIMER_STORE` | str | `''` | - | `services/zoe-data/AGENTS.md` | `''` | yes | NO | `services/zoe-data/skybridge_service.py` |
-| `ZOE_TIMEZONE` | str | `'Australia/Perth'` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''`, `'Australia/Perth'` | no | NO | `services/zoe-data/calendar_ical.py`<br>`services/zoe-data/identity_facts.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/multica_autopilot_sync.py`<br>`services/zoe-data/proactive/arrival.py`<br>`services/zoe-data/proactive/engine.py`<br>`services/zoe-data/proactive/triggers/emotional_followup.py`<br>`services/zoe-data/proactive/triggers/evening_windown.py`<br>`services/zoe-data/proactive/triggers/evolution_weekly_digest.py`<br>`services/zoe-data/proactive/triggers/people_birthday.py`<br>`services/zoe-data/proactive/triggers/people_health.py`<br>`services/zoe-data/proactive/triggers/reminder_scan.py`<br>`services/zoe-data/routers/weather.py`<br>`services/zoe-data/time_utils.py`<br>`services/zoe-data/voice_greeting.py` |
+| `ZOE_TIMEZONE` | str | `'Australia/Perth'` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''`, `'Australia/Perth'` | no | NO | `services/zoe-data/calendar_ical.py`<br>`services/zoe-data/identity_facts.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/multica_autopilot_sync.py`<br>`services/zoe-data/proactive/arrival.py`<br>`services/zoe-data/proactive/engine.py`<br>`services/zoe-data/proactive/triggers/emotional_followup.py`<br>`services/zoe-data/proactive/triggers/evening_windown.py`<br>`services/zoe-data/proactive/triggers/evolution_weekly_digest.py`<br>`services/zoe-data/proactive/triggers/people_health.py`<br>`services/zoe-data/proactive/triggers/reminder_scan.py`<br>`services/zoe-data/routers/weather.py`<br>`services/zoe-data/time_utils.py`<br>`services/zoe-data/voice_greeting.py` |
 | `ZOE_TOUCH_PANEL_OFFLINE_CACHE` | bool | `False` | - | `docs/knowledge/ui-deep-review-2026-10-04.md` | `'0'` | no | NO | `services/zoe-auth/touch_panel/quick_auth.py` |
 | `ZOE_TOUCH_PROBE_DEVICE_TOKEN` | str | `''` | - | - | `''` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |
 | `ZOE_TOUCH_PROBE_PANEL_ID` | str | `'zoe-touch-pi'` | - | - | `'zoe-touch-pi'` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |
@@ -1143,7 +1144,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `SPEAKER_SHADOW_WARMUP` | `'3'` | no | NO | `scripts/voice/speaker_shadow_embed.py` |
 | `SQLITE_PATH` | `'./data/zoe.db'` | no | NO | `scripts/setup/migrate_auth_data.py` |
 | `TAVILY_API_KEY` | `''` | yes | yes | `services/zoe-data/web_search_provider.py` |
-| `TELEGRAM_BOT_TOKEN` | `-` | yes | NO | `services/zoe-data/auth_handoff.py` |
+| `TELEGRAM_BOT_TOKEN` | `-` | yes | NO | `scripts/maintenance/zoe_crash_loop_watch.py`<br>`services/zoe-data/auth_handoff.py` |
 | `TOKENIZERS_PARALLELISM` | `dynamic` | no | NO | `scripts/perf/speaker_bakeoff.py` |
 | `TRANSFORMERS_OFFLINE` | `dynamic` | no | NO | `scripts/perf/zmb/embed_shim.py` |
 | `VAD_ENDPOINT_ENABLED` | `'false'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -1176,9 +1177,3 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZMB_ORT_THREADS` | `'2'` | no | NO | `scripts/perf/zmb/embed_shim.py` |
 | `ZMB_PROBE_NEEDLE` | `''` | no | NO | `scripts/perf/zmb/arms/mempalace_verbatim.py` |
 | `ZMB_REAL_HOME` | `dynamic` | no | NO | `scripts/perf/zmb/arms/mpa_palace.py` |
-
-## Registered but not read by any scanned source
-
-Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
-
-`ZOE_COMPOSE_VOICE_BUDGET_S`

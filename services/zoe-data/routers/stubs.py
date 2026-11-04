@@ -1,6 +1,8 @@
 """
-Stub routers for frontend endpoints that don't have full implementations yet.
-Returns empty/default data so the frontend doesn't get 404 errors.
+Stub reads for frontend surfaces that have no backend yet, plus ``/api/settings``.
+
+A stub may only answer a READ with the truth ("no projects", "no collections"). A write
+to a feature that is not built answers 501 - never a 200 that pretends it worked.
 """
 import json
 import logging
@@ -22,7 +24,8 @@ async def list_projects(user: dict = Depends(get_current_user)):
 @router.post("/api/projects")
 @router.post("/api/projects/")
 async def create_project(user: dict = Depends(get_current_user)):
-    return {"error": "Projects feature coming soon", "status": "not_implemented"}
+    # Was a 200 {"error": "...coming soon"}: a success status for a write that did nothing.
+    raise HTTPException(status_code=501, detail="Projects are not available yet")
 
 
 @router.get("/api/collections")

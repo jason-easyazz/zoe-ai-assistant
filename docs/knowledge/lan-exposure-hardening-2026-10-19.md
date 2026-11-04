@@ -42,6 +42,8 @@ address. The firewall rule in 3a keeps `:8000` to loopback + docker instead, wit
 
 ### 3a. Jetson host firewall (nftables INPUT) - covers :8000, :3579, :3582 at once
 
+**Superseded 2026-11-03** (3a and 3b): use [host-firewall-2026-11-03.md](host-firewall-2026-11-03.md) - one reviewed table that also covers the docker-published ports over IPv6 and the forward path. Kept below for the record.
+
 Its own table; never `flush ruleset` (Docker and tailscale keep theirs). Policy stays `accept`: it drops only the
 host-native service ports from anything that is not loopback or a docker bridge, so SSH, nginx (docker-published, which goes
 through FORWARD, not INPUT) and everything else are untouched.

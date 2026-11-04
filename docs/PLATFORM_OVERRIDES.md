@@ -34,7 +34,7 @@ The base `docker-compose.yml` contains **all shared configuration**:
 
 Platform-specific overrides add:
 - **Jetson**: GPU runtime settings (`runtime: nvidia`)
-- **Pi**: CPU optimizations (`OLLAMA_NUM_THREADS`, `WHISPER_DEVICE=cpu`)
+- **Pi**: CPU optimizations (`OLLAMA_NUM_THREADS`)
 
 ## File Structure
 
@@ -48,13 +48,11 @@ docker-compose.pi.yml           # CPU overrides (Pi only)
 
 ### Jetson (GPU)
 - `zoe-ollama`: Uses NVIDIA GPU runtime
-- `zoe-whisper`: Uses CUDA for transcription
 - `zoe-tts`: Uses GPU for text-to-speech
 - `zoe-litellm`: Uses GPU for LLM proxy
 
 ### Pi (CPU)
 - `zoe-ollama`: Uses CPU threads (4 threads optimized)
-- `zoe-whisper`: Uses CPU for transcription
 - `zoe-tts`: Uses CPU for text-to-speech
 - `zoe-litellm`: Uses CPU for LLM proxy
 

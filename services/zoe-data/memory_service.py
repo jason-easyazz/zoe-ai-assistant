@@ -1966,7 +1966,7 @@ class MemoryService:
         optional, so an error hides the row rather than risk showing a forgotten name."""
         try:
             from memory_tombstones import matching_tombstone
-            return bool(matching_tombstone(user_id, text) or await _forgotten.matches(user_id, text))
+            return bool(matching_tombstone(user_id, text) or await _forgotten.matches(user_id, text, strict=True))
         except Exception:  # noqa: BLE001
             return True
 

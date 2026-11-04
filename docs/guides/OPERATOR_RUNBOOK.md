@@ -150,12 +150,10 @@ journalctl --user -u zoe-voice -f
 ```
 
 ### Voice STT returns 503 (`/api/voice/transcribe`)
-Jetson must run **whisper.cpp** with paths set on **zoe-data** (host or container env):
+STT is **Moonshine v2 Medium**, loaded in-process by **zoe-data** (see `docs/CANONICAL.md`); there is no whisper.cpp binary to configure. A 503 means the model is not loaded yet or failed to load:
 ```bash
-# Example (adjust paths):
-export ZOE_WHISPER_CPP_BIN=/home/zoe/whisper.cpp/build/bin/whisper-cli
-export ZOE_WHISPER_MODEL=/path/to/ggml-base.en.bin
-systemctl --user restart zoe-data
+curl -s http://127.0.0.1:8000/readyz   # Moonshine, brain and TTS readiness
+tail -n 100 ~/.zoe-logs/zoe-data.log   # zoe-data logs to ~/.zoe-logs/, not journald
 ```
 The Pi daemon POSTs base64 WAV with header **`X-Device-Token`**. After issuing a new device token, restart **zoe-data** so the in-memory token cache reloads (or rely on cache update from the issue-token API).
 

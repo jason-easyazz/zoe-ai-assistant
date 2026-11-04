@@ -84,7 +84,7 @@ import type { Context, Message, Tool } from '@earendil-works/pi-ai';
  * llama-server's SLOT size — `--ctx-size 8192 --parallel 1`, i.e. ONE 8192-token
  * slot shared by every brain request (scripts/setup/systemd/llama-server.service;
  * single slot since B6.6 because draft-MTP is unsafe with `--parallel > 1`, and
- * `--cache-ram 2048` is what keeps prompt prefixes warm across requests).
+ * `--cache-ram 1024` is what keeps prompt prefixes warm across requests).
  * Exported because the provider needs the same number as its reply-cap fallback
  * when windowing is disabled; two private copies would drift silently if the
  * slot ever changed.

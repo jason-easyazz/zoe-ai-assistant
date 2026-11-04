@@ -494,14 +494,14 @@ async def _ask_about(user_id: str, text: str, nr: "list[tuple[int, int]]") -> No
 
 
 async def keep_unforgotten(user_id: str, items: Iterable[Any], *,
-                           text_of: Any = str, near: bool = True) -> tuple[list[Any], int]:
+                           text_of: Any = str, near: bool = True, strict: bool = False) -> tuple[list[Any], int]:
     """``items`` without the ones whose text (``text_of(item)``) names a forgotten entity - or a near spelling of one - and how many
     were dropped. Used by the transcript loaders (nightly digest, idle consolidation, open loops): a turn that names a forgotten
-    entity is skipped, not re-mined."""
+    entity is skipped, not re-mined. With ``strict`` (serve paths) a ledger outage raises ``LedgerUnavailable``."""
     rows = list(items)
     if not rows or not configured() or not user_id:
         return rows, 0
-    wanted = await active_hashes(user_id)
+    wanted = await active_hashes(user_id, strict=strict)
     if not wanted:
         return rows, 0
     kept = []
