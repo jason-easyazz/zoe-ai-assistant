@@ -1187,13 +1187,6 @@
    "kind": "bool",
    "readers": 1
   },
-  "ZOE_ENABLE_OPENCLAW_EXECUTION": {
-   "defaults": [
-    "off"
-   ],
-   "kind": "bool",
-   "readers": 1
-  },
   "ZOE_ENGINEERING_MODE": {
    "defaults": [
     "interactive"
@@ -3363,6 +3356,13 @@
     "unset"
    ],
    "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_OUTCOME_EDGES": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
    "readers": 1
   },
   "ZOE_OWN_FACT_PRECEDENCE": {
