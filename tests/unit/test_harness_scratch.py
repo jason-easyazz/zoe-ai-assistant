@@ -609,3 +609,22 @@ def test_the_arm_env_is_recorded_in_the_public_state_without_a_secret():
     st.state = {"tag": "t", "dsn": "postgresql://secret", "token": "tok", "arm_env": {"ZOE_RECALL_EVERY_TURN": "on"}}
     pub = st.public()
     assert pub["arm_env"] == {"ZOE_RECALL_EVERY_TURN": "on"} and "dsn" not in pub and "token" not in pub
+
+
+@pytest.mark.parametrize("name", ["ZOE_APIKEY", "ZOE_DATABASE", "ZOE_FILENAME", "ZOE_X_KEY", "ZOE_AUTH_MODE", "ZOE_DB",
+                                  "ZOE_STATE_DIRECTORY", "ZOE_PG_DSN", "ZOE_SESSION_COOKIE", "ZOE_BEARER_X"])
+def test_arm_env_refuses_the_spellings_the_copied_flag_filter_alone_would_miss(name):
+    with pytest.raises(hs.Refused):
+        hs.validate_arm_env({name: "abc"})
+
+
+@pytest.mark.parametrize("name", ["ZOE_RECALL_EVERY_TURN", "ZOE_RECALL_EVERY_TURN_HARNESS", "ZOE_MEMORY_NOW_CARD",
+                                  "ZOE_RESTRAINT", "ZOE_VOICE_KEYTERMS_MODE"])
+def test_arm_env_still_accepts_ordinary_flag_names(name):
+    assert hs.validate_arm_env({name: "on"}) == {name: "on"}
+
+
+@pytest.mark.parametrize("value", ["/tmp/x", "/etc/passwd", "a b", "~/x", "a;b"])
+def test_arm_env_refuses_path_and_shell_shaped_values(value):
+    with pytest.raises(hs.Refused):
+        hs.validate_arm_env({"ZOE_RECALL_EVERY_TURN": value})

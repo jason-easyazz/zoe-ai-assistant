@@ -82,7 +82,13 @@ _LOCAL_HOSTS = frozenset(("localhost", "127.0.0.1", "::1", "0.0.0.0", "zoe-datab
 #: and ``_serve`` layers ON TOP of the copied live flags, in this stack's zoe-data env only
 ARM_ENV_VAR = "ZOE_HARNESS_ARM_ENV"
 ARM_ENV_NAME_RE = re.compile(r"^ZOE_[A-Z0-9_]+$")
-ARM_ENV_VALUE_RE = re.compile(r"^[A-Za-z0-9_.,:+@%/ -]{0,64}$")
+ARM_ENV_VALUE_RE = re.compile(r"^[A-Za-z0-9_.,:+@%-]{0,64}$")      # plain: no path separator, space or shell character
+#: stricter than ``SECRET_RE`` / ``LOCATION_RE`` (which only filter the COPIED flags): an override is the one ingress for a
+#: name those already dropped, so it also refuses the spellings with no underscore (APIKEY, FILENAME, DATABASE ...)
+ARM_ENV_SECRETISH_RE = re.compile(r"(TOKEN|SECRET|PASSW|PWD|CREDENTIAL|COOKIE|PRIVATE|SALT|SIGNING|BEARER|CERT|AUTH|DSN|APIKEY"
+                                  r"|(^|_)KEYS?(_|$))")
+ARM_ENV_LOCATIONISH_RE = re.compile(r"(^|_)(URL|URI|HOST|PORT|DIR|PATH|FILE|DB|DATABASE|ROOT|HOME|SOCKET|ADDR|ENDPOINT|FOLDER)S?(_|$)"
+                                    r"|(DIRECTORY|FILENAME|DATABASE|ENDPOINT)")
 
 
 class Refused(RuntimeError):
@@ -175,7 +181,8 @@ def validate_arm_env(overrides: dict) -> dict:
             raise Refused(f"arm env override {str(name)[:40]!r}: only ZOE_* names are allowed")
         if name.startswith("ZOE_HARNESS"):
             raise Refused(f"arm env override {name}: ZOE_HARNESS* names are never overridable (quiet-hours bypasses / isolation pins)")
-        if name in pinned or SECRET_RE.search(name) or LOCATION_RE.search(name):
+        if (name in pinned or SECRET_RE.search(name) or LOCATION_RE.search(name)
+                or ARM_ENV_SECRETISH_RE.search(name) or ARM_ENV_LOCATIONISH_RE.search(name)):
             raise Refused(f"arm env override {name}: a secret, location, endpoint or isolation pin is never overridable")
         if not isinstance(value, str) or not ARM_ENV_VALUE_RE.match(value) or "://" in value:
             raise Refused(f"arm env override {name}: the value must be a short plain flag value (no URL, no control characters)")

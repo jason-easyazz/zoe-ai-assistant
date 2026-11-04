@@ -160,7 +160,11 @@ def run_backdate(payload: dict) -> str:
 def run_arm_env(payload: dict) -> dict:
     """The per-arm flag overrides a run's scratch stack recorded ({} = none, or a writer that predates them)."""
     env = (payload.get("scratch") or {}).get("arm_env")
-    return {str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {}
+    if env is None:
+        return {}
+    if isinstance(env, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+        return dict(env)        # AS RECORDED: never coerced (a recorded 1 is not the declared "1")
+    return {"<malformed arm_env>": type(env).__name__}   # matches no declaration: the arm is not comparable
 
 
 def _hs():
@@ -199,10 +203,9 @@ def parse_arm_env(specs: Iterable[str], arms: Iterable[str]) -> dict[str, dict[s
 
 
 def show_value(value: str) -> str:
-    """A flag value for the dry-run plan: only a short plain word (on / shadow / 1 / 0.5); anything else (a long or token-shaped
-    string) is shown as its length, never its content."""
-    return value if re.fullmatch(r"[A-Za-z0-9_.-]{1,12}", value) and not re.fullmatch(r"[0-9a-fA-F]{10,}", value) \
-        else f"<{len(value)} chars>"
+    """A flag value for the dry-run plan: only a short lowercase word or a plain number (on / shadow / 1 / 0.5); anything else (a
+    mixed-case, underscored, hex or long token-shaped string) is shown as its length, never its content."""
+    return value if re.fullmatch(r"[a-z]{1,12}|[0-9]{1,6}(\.[0-9]{1,4})?", value) else f"<{len(value)} chars>"
 
 
 def show_arm_env(env: dict[str, str]) -> str:

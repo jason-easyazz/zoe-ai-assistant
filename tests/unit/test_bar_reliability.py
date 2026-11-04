@@ -757,3 +757,20 @@ def test_an_override_the_stack_did_not_record_makes_the_run_unmeasured(tmp_path,
     args = br.argparse.Namespace(arm=[f"control={REPO}", f"candidate={REPO}"], arm_env=[ARM_ENV_SPEC], harness="bar", k=2,
                                  out_dir=tmp_path / "out", extra=[], dry_run=False, step_min=35)
     assert br.run_arms(args, lambda *_: None, gate=lambda *a, **kw: None, hq=_HQ()) == br.EXIT_UNMEASURED
+
+
+@pytest.mark.parametrize("value", ["ghp_ABC12345", "AKIAIOSFODNN", "Sup3rSecret", "abcdef012345", "x" * 40])
+def test_the_dry_run_shows_only_plain_words_and_numbers(value):
+    assert br.show_value(value) == f"<{len(value)} chars>"
+    for plain in ("on", "shadow", "1", "0.5", "enforce"):
+        assert br.show_value(plain) == plain
+
+
+def test_a_recorded_override_is_compared_as_recorded_never_coerced():
+    declared = {"control": {}, "candidate": {"ZOE_X": "1"}}
+    ctl = env_arm("control", None)
+    good = br.aggregate([{**env_run(None), "scratch": {"arm_env": {"ZOE_X": "1"}}} for _ in range(3)], k=3, label="candidate")
+    assert br.compare(ctl, good, declared=declared)["measurable"] is True
+    for forged in ({"ZOE_X": 1}, {"ZOE_X": True}, ["ZOE_X"], "ZOE_X=1"):
+        bad = br.aggregate([{**env_run(None), "scratch": {"arm_env": forged}} for _ in range(3)], k=3, label="candidate")
+        assert br.compare(ctl, bad, declared=declared)["measurable"] is False, forged
