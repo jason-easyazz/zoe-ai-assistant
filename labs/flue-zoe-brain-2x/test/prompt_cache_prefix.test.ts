@@ -2,7 +2,7 @@
  * llama-server prompt-cache reuse, end to end on the REAL sidecar (LAB-ONLY,
  * offline: in-process runtime, mock model on an ephemeral port).
  *
- * Why this exists: llama-server (`--parallel 1`, `--cache-ram 2048`) reuses only
+ * Why this exists: llama-server (`--parallel 1`, `--cache-ram 1024`) reuses only
  * a byte-identical PROMPT PREFIX. Gemma's chat template renders the system
  * prompt, THEN the tool declarations, THEN the history — so anything that varies
  * turn-to-turn in the system prompt or the tool block re-prefills the whole

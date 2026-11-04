@@ -1,0 +1,19 @@
+# Zoe Jetson host firewall (nftables table inet zoe_host_fw). Loads /etc/zoe-host-fw/ruleset.nft at boot.
+# Install + verify + rollback: docs/knowledge/host-firewall-2026-11-03.md (enable only after a day of normal use).
+# Rollback: sudo systemctl disable --now zoe-host-fw   (ExecStop deletes the table)
+[Unit]
+Description=Zoe host firewall (nftables table inet zoe_host_fw)
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+ConditionPathExists=/etc/zoe-host-fw/ruleset.nft
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/zoe-host-fw/ruleset.nft
+ExecStop=-/usr/sbin/nft delete table inet zoe_host_fw
+
+[Install]
+WantedBy=sysinit.target
