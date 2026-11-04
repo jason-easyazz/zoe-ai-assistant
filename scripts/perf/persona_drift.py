@@ -220,9 +220,29 @@ RULES: dict[str, Any] = {   # name -> fn(reply, kind) -> True | False | None (no
 }
 RULE_NAMES = tuple(RULES)
 ALL_CELLS = tuple(f"{r}@{p}" for r in RULES for p in ("T1", "T20", "T60", "mid"))
+
+
+def _scoring_definitions() -> dict[str, Any]:
+    """What the verdicts are computed FROM: every rule's source (named functions and lambdas) and the helpers they call, plus every
+    module-level compiled regex (pattern + flags). Hashing only the rule NAMES let a flipped predicate or an edited regex keep the
+    same fingerprint, so a baseline recorded under other criteria still compared."""
+    import inspect
+    srcs: dict[str, str] = {}
+    for name, fn in RULES.items():
+        try:
+            srcs[name] = inspect.getsource(fn)
+        except (OSError, TypeError):
+            srcs[name] = repr(getattr(fn, "__code__", fn).co_code if hasattr(fn, "__code__") else fn)
+    for helper in (words, sentences, n_questions, _foreign_identity):
+        srcs[helper.__name__] = inspect.getsource(helper)
+    pats = {k: [v.pattern, v.flags] for k, v in sorted(globals().items()) if isinstance(v, re.Pattern)}
+    return {"rule_sources": srcs, "patterns": pats}
+
+
 RULES_SHA256 = hashlib.sha256(json.dumps(
     {"turns": [(t["turn"], t["kind"], t["user"]) for t in BATTERY], "rules": list(RULES), "bands": BANDS,
-     "tol": TOL, "mid_min": MID_MIN, "v": HARNESS_VERSION}, sort_keys=True).encode()).hexdigest()
+     "tol": TOL, "mid_min": MID_MIN, "v": HARNESS_VERSION, "scoring": _scoring_definitions()},
+    sort_keys=True).encode()).hexdigest()
 
 
 def score_reply(reply: str, kind: str) -> dict[str, bool | None]:
@@ -385,9 +405,40 @@ def _refuse(path: Path, reason: str, revision: dict | None) -> int:
     return 2
 
 
+NIGHT_BUDGET_MIN = 45        # a generous estimate of one 60-turn run, for the measured pause's budget
+_TURN_GATE = None            # set by a live run to ``night_gate``; None = offline (tests, --controls)
+
+
+def _harness_quiet():
+    """scripts/maintenance/harness_quiet.py by FILE PATH (like bar_reliability: scripts/maintenance shadows service modules)."""
+    import importlib.util
+    mod = sys.modules.get("harness_quiet")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(
+            "harness_quiet", HERE.parent / "maintenance" / "harness_quiet.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["harness_quiet"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def night_gate(budget_min: int = NIGHT_BUDGET_MIN) -> str | None:
+    """Why the battery may NOT start / continue (None = it may): the measured night pause (``night_busy.sh voice``, the fixed window
+    as its fallback), which the scratch-stack gates do not consult. An unreadable gate refuses (fail-closed)."""
+    try:
+        v = _harness_quiet().night_pause_verdict("persona_drift", budget_min=budget_min, kind="voice")
+    except Exception as exc:  # noqa: BLE001
+        return f"night pause unreadable ({type(exc).__name__}) - refusing rather than risk the night window"
+    return None if v.allowed else v.reason
+
+
 def run_battery(live: Any, user: str, log) -> list[dict[str, Any]]:
     out, streak = [], 0
     for spec in BATTERY:
+        if _TURN_GATE is not None:
+            why = _TURN_GATE(10)       # between turns: the pause may begin mid-run; stop and let teardown run
+            if why:
+                raise RuntimeError(f"night pause: {why}")
         r = live.chat(user, "drift", spec["user"])
         out.append({**spec, "reply": r["reply"], "error": r["error"], "ms": r["ms"]})
         streak = streak + 1 if r["error"] else 0
@@ -413,6 +464,10 @@ def _preflight(args, live: Any, log, service_dir: Path, revision: dict | None) -
         baseline, problem = bench_baseline.load(args.baseline, CELL_VERDICTS)
         if not problem and baseline.get("rules_sha256") != RULES_SHA256:
             problem = "the battery or the rules changed since the baseline (rules_sha256) - re-record it"
+        if not problem:
+            missing = bench_baseline.missing_cells(baseline, ALL_CELLS)
+            if missing:
+                problem = f"the baseline lacks {len(missing)} scored cell(s) (e.g. {missing[0]}) - re-record it"
         if problem:
             return None, f"--compare-baseline: {problem}"
     if args.record_baseline:
@@ -493,6 +548,11 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
     if not proof["ok"]:
         return _refuse(args.results, "the instrument proof failed: " + "; ".join(proof["problems"][:3]), revision)
     sb.load_source_fallback_markers(sb.code_checkout_dir())
+    paused = night_gate()
+    if paused:
+        return _refuse(args.results, f"night pause: {paused}", revision)
+    global _TURN_GATE
+    _TURN_GATE = night_gate
     lock_fd = sb._acquire_lock()  # noqa: F841 - held for the process lifetime
     try:
         cur = os.nice(0)

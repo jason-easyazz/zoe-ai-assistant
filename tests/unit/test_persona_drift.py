@@ -312,3 +312,52 @@ def test_preflight_exception_becomes_a_refused_run_not_a_crash(monkeypatch, tmp_
     text = SRC.read_text()
     assert "baseline, refusal = None, f\"preflight failed" in text
     assert text.index("_preflight(args, live, log, service_dir, revision)") < text.index("run_battery(live, user, log)")
+
+
+def test_fingerprint_covers_scoring_definitions_not_just_rule_names(monkeypatch):
+    base = pd._scoring_definitions()
+    flipped = dict(pd.RULES, no_exclaim=lambda r, k: "!" in r)
+    monkeypatch.setattr(pd, "RULES", flipped)
+    assert pd._scoring_definitions() != base, "a reversed predicate under the same name must change the fingerprint input"
+    monkeypatch.undo()
+    assert pd._scoring_definitions()["patterns"], "module-level regexes are part of the fingerprint"
+    assert len(pd.RULES_SHA256) == 64
+
+
+def test_preflight_refuses_a_baseline_missing_a_cell(monkeypatch, tmp_path):
+    import types
+    cells = {c: "PASS" for c in pd.ALL_CELLS}
+    cells.pop(next(iter(cells)))
+    monkeypatch.setattr(pd.bench_baseline, "load", lambda path, verdicts: ({"cells": cells, "rules_sha256": pd.RULES_SHA256}, None))
+    args = types.SimpleNamespace(compare_baseline=True, record_baseline=False, baseline=tmp_path / "b.json")
+    baseline, why = pd._preflight(args, object(), lambda m: None, tmp_path, None)
+    assert baseline is None and "lacks 1 scored cell" in why
+
+
+def test_night_gate_refuses_during_the_pause_and_fails_closed(monkeypatch):
+    import types
+    hq = types.SimpleNamespace(night_pause_verdict=lambda name, **k: types.SimpleNamespace(allowed=False, reason="paused"))
+    monkeypatch.setattr(pd, "_harness_quiet", lambda: hq)
+    assert pd.night_gate() == "paused"
+    hq.night_pause_verdict = lambda name, **k: types.SimpleNamespace(allowed=True, reason="")
+    assert pd.night_gate() is None
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+
+    hq.night_pause_verdict = boom
+    assert "refusing" in pd.night_gate()
+
+
+def test_battery_stops_between_turns_when_the_night_pause_begins(monkeypatch):
+    calls = []
+    monkeypatch.setattr(pd, "_TURN_GATE", lambda budget: "paused" if len(calls) >= 2 else None)
+
+    class Live:
+        def chat(self, user, sess, text):
+            calls.append(text)
+            return {"reply": "ok", "error": None, "ms": 1}
+
+    with pytest.raises(RuntimeError, match="night pause"):
+        pd.run_battery(Live(), "u", lambda m: None)
+    assert len(calls) == 2
