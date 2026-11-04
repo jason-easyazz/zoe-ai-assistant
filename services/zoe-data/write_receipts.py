@@ -77,6 +77,35 @@ def begin() -> TurnStart:
     return started
 
 
+# A write the fast path DEFERRED to the brain in this context (``expert_dispatch``: the chat lane's EXPERT_DEFER_WRITE): the kind
+# the request asked for, and when. The brain turn that follows takes it (``take_deferred_write``) so the write-claim guard knows
+# what an untargeted "Adding those now." claims. Bound to the request's context like ``_CURRENT_TURN``; stale after a minute.
+_DEFERRED_WRITE: "contextvars.ContextVar[tuple]" = contextvars.ContextVar("zoe_deferred_write", default=())
+_DEFERRED_TTL_S = 60.0
+
+
+def note_deferred_write(kind: Optional[str]) -> None:
+    """The fast path left a write of ``kind`` for the brain (None / unknown kind clears it). Never raises."""
+    try:
+        k = (kind or "").strip().lower()
+        _DEFERRED_WRITE.set((k, now()) if k in KINDS else ())
+    except Exception:  # noqa: BLE001
+        return
+
+
+def take_deferred_write() -> Optional[str]:
+    """The kind of the write deferred to the brain in this context (once: it is cleared), or None."""
+    try:
+        val = _DEFERRED_WRITE.get()
+        if not val:
+            return None
+        _DEFERRED_WRITE.set(())
+        kind, at = val
+        return kind if now() - at <= _DEFERRED_TTL_S else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def record(user_id: Optional[str], kind: str, row_id: object = "", source: str = "") -> None:
     """A write landed. Never raises (a bookkeeping failure must not fail the write that already happened)."""
     try:
