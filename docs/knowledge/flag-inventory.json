@@ -10622,6 +10622,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/bar_reliability.py",
           "scripts/perf/engine_bench.py",
           "scripts/perf/hop_placement_ab.py",
           "scripts/perf/kokoro_first_chunk_probe.py",
@@ -10647,7 +10648,7 @@
           "owner_doc": "docs/knowledge/person-half-enforce-pack-2026-10-09.md",
           "type": "str"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_PERSONALISATION_HOP": {
         "defaults": [
