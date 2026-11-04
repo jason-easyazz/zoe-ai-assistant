@@ -30,7 +30,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
-- 0 flags read but not registered (CI fails on any).
+- 1 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
 - 0 registered flags with no reader in the scanned sources.
 
@@ -873,7 +873,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Lab flags (`labs/` — not prod)
 
-38 flags; 36 not documented in `.env.example`.
+39 flags; 37 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -884,6 +884,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_CONTEXT_WINDOW` | str | `''` | - | `docs/architecture/zoe-flue-integration.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/context-window.ts` |
 | `ZOE_BRAIN_DB` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `dynamic` | no | NO | `labs/flue-zoe-brain-2x/src/db.ts` |
 | `ZOE_BRAIN_ELIDE_STALE_BLOCKS` | str | `''` | - | `docs/knowledge/user-model-ab.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/context-blocks.ts` |
+| `ZOE_BRAIN_KEEP_TURNS` | **UNREGISTERED** | - | - | - | `''` | no | NO | `labs/flue-zoe-brain-2x/src/context-window.ts` |
 | `ZOE_BRAIN_MAX_TOOL_ITERS` | str | `''` | - | `docs/research/flue-and-agent-runtimes-2026-10-03.md` | `-` | no | NO | `labs/flue-zoe-brain-2x/src/providers/capped-completions.ts` |
 | `ZOE_BRAIN_OPEN` | str | `''` | - | - | `-` | no | NO | `labs/flue-zoe-brain-2x/src/auth.ts` |
 | `ZOE_BRAIN_PROGRESSIVE_TOOLS` | bool | `True` | - | `docs/architecture/zoe-flue-integration.md` | `'true'` | no | NO | `labs/flue-zoe-brain-2x/src/tools/tool-groups.ts` |

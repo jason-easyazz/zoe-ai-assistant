@@ -467,6 +467,18 @@
         },
         "typed_env": false
       },
+      "ZOE_BRAIN_KEEP_TURNS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain-2x/src/context-window.ts"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": false
+      },
       "ZOE_BRAIN_MAX_TOOL_ITERS": {
         "defaults": [
           "-"
