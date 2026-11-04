@@ -352,7 +352,10 @@ def test_an_approved_follow_up_becomes_a_quiet_open_loop(env, monkeypatch):
     import omi_review_apply as apply
     import user_erase_gate
 
-    async def no_spans(user_id, text):
+    seen = []
+
+    async def no_spans(user_id, text, **kw):
+        seen.append(kw)
         return []
     monkeypatch.setattr(memory_forgotten, "spans", no_spans)
     user_erase_gate.reset()
@@ -362,6 +365,7 @@ def test_an_approved_follow_up_becomes_a_quiet_open_loop(env, monkeypatch):
     env.db.conn.commit()
     out = asyncio.run(apply.approve(A, "cand-1", via="panel_touch"))
     assert out["status"] == "approved" and out["written_ref"].startswith("open_loops:")
+    assert seen and all(kw.get("strict") is True for kw in seen)      # the write-time forget check reads the ledger fail-CLOSED
     (row,) = env.db.rows("SELECT loop_text, context FROM open_loops WHERE user_id = ?", (A,))
     assert row == {"loop_text": "Call the plumber", "context": "pendant:cand-1"}
     assert "plumber" in say("what's on my plate", A)                  # and it is on the plate

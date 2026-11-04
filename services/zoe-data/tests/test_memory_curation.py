@@ -435,6 +435,60 @@ def test_a_forget_whose_erase_failed_is_retryable(env):
     assert as_(env, PARENT, "admin").post(f"/api/memories/curation/members/{KID}/rows/{other.id}/forget", headers=H).status_code == 404
 
 
+def test_a_curated_note_older_than_a_page_of_newer_rows_is_still_reachable(env):
+    """Codex #2158: the page limit was applied BEFORE the curated filter, so 1,000 newer approved rows hid an older curated note
+    (edit / forget 404, the child could not remove it either)."""
+    rid = _curated_teacher(env)
+    doc, md = env.col.rows[rid]
+    for n in range(1001):                                    # newer, ordinary approved rows of the same child
+        other = dict(md, origin="chat_regex", source="chat_regex", added_at="2099-01-01T00:00:%02d.%06dZ" % (n % 60, n))
+        other.pop("authority_class", None)
+        env.col.rows["filler-%04d" % n] = ("User likes thing number %d." % n, other)
+    # control: a page of 1,000 approved rows does not reach the curated note
+    assert rid not in [r.id for r in run(env.svc.list_by_status(user_id=KID, status="approved", limit=1000))]
+    c = as_(env, PARENT, "admin")
+    assert [r["id"] for r in c.get(f"/api/memories/curation/members/{KID}/rows", headers=H).json()["rows"]] == [rid]
+    assert c.post(f"/api/memories/curation/members/{KID}/rows/{rid}/forget", headers=H).status_code == 200
+    assert env.col.rows[rid][1]["status"] == "rejected"
+
+
+def test_forgetting_an_edited_note_erases_its_earlier_revisions(env):
+    """Codex #2158: an edit keeps the old wording as a superseded row; forgetting the note must erase that too."""
+    rid = _curated_teacher(env)
+    c = as_(env, PARENT, "admin")
+    r = c.post(f"/api/memories/curation/members/{KID}/rows/{rid}/edit", json=dict(text="Juno's teacher is Ms Park"), headers=H)
+    assert r.status_code == 200
+    new_id = r.json()["id"]
+    assert new_id != rid and env.col.rows[rid][1]["status"] == "superseded"
+    r = c.post(f"/api/memories/curation/members/{KID}/rows/{new_id}/edit", json=dict(text="Juno's teacher is Ms Holt"), headers=H)
+    newest = r.json()["id"]
+    # an unrelated superseded row of the child is NOT part of the chain
+    own = run(env.svc.ingest("User likes dinosaurs.", user_id=KID, source="chat_regex", status="approved"))
+    env.col.rows[own.id][1]["status"] = "superseded"
+    assert c.post(f"/api/memories/curation/members/{KID}/rows/{newest}/forget", headers=H).status_code == 200
+    ((uid, ids, actor),) = env.erased
+    assert uid == KID and actor == PARENT and ids[0] == newest
+    assert sorted(ids) == sorted([newest, new_id, rid]), "every earlier curated revision is erased with the note"
+
+
+def test_editing_a_released_sensitive_note_keeps_it_private(env):
+    """Codex #2158: a released medication note edited by its adult lost curated_category, so the new wording went public."""
+    assert as_(env, ADULT, "user").put("/api/memories/curation/me/medication", json=dict(on=True), headers=H).json()["on"] is True
+    assert curate(env, "Wren takes ventolin before sport", "medication", member=ADULT).status_code == 200
+    assert as_(env, ADULT, "user").put("/api/memories/curation/me/medication", json=dict(on=False), headers=H).json()["rows"] == 1
+    (row,) = rows_of(env, ADULT)
+    edited = run(env.svc.review(row.id, decision="edit", edits=row.text.replace("before", "after"), actor=ADULT))
+    assert edited is not None and "after" in edited.text
+    md = env.col.rows[edited.id][1]
+    assert md.get("curated_category") == "medication", "the privacy category rides the edit"
+    assert not md.get("curated_by") and not md.get("curated_by_name"), "the attribution does not: the adult wrote this one"
+    assert "health" in pa.sensitive_classes(edited.text, md)
+    view = run(memory_space.read_view(ADULT, svc=env.svc))
+    assert "ventolin" not in str(view["groups"]) and view["private"].get("health") == 1
+    # control: without the carried category the edited wording would be public
+    assert "health" not in pa.sensitive_classes(edited.text, dict((k, v) for k, v in md.items() if k != "curated_category"))
+
+
 def test_an_accept_that_failed_to_close_the_note_stays_visible_and_retryable(env):
     rid = _curated_teacher(env)
     run(env.svc.ingest("User's teacher is Mr Brown.", user_id=KID, source="chat_regex", status="approved"))
