@@ -136,6 +136,7 @@ export const TOOL_GROUPS = {
   weather: ['get_weather'],
   lists: ['shopping_list_add', 'add_to_list', 'list_remove', 'show_list'],
   timers: ['set_timer'],
+  alarms: ['alarm'],
   reminders: ['list_reminders', 'add_reminder'],
   calendar: ['show_calendar', 'add_calendar_event'],
   notes: ['create_note', 'note_search'],
@@ -161,6 +162,7 @@ export const GROUP_PURPOSES: Record<AbilityGroup, string> = {
   weather: 'current weather / forecast',
   lists: 'add to, remove from, or show shopping/task lists',
   timers: 'countdown timers',
+  alarms: 'set or list wake-up alarms',
   reminders: 'list or create reminders',
   calendar: 'show or add events',
   notes: 'save or search notes',
@@ -198,6 +200,7 @@ const GROUP_TRIGGERS: Record<AbilityGroup, RegExp> = {
     /\b(weather|temperature|forecast|rain|raining|rainy|snow|sunny|wind|windy|umbrella|jacket|degrees|hot|cold|washing|laundry|outside)\b/i,
   lists: /\b(lists?|shopping|grocer(?:y|ies)|to-?dos?|tasks?)\b/i,
   timers: /\b(timers?|countdown)\b/i,
+  alarms: /\balarms?\b|\bwake (?:me|us)\b/i,
   reminders: /\bremind(?:er|ers)?\b/i,
   calendar:
     // Direct nouns; "anything/what's on|for|planned|happening … <day-word>";

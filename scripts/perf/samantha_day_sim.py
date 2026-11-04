@@ -1460,6 +1460,7 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
         if status in ("ok", "partial") and cmp["red"]:
             status = "regression"
     payload = {"harness_version": HARNESS_VERSION, "status": status, "mode": mode, "run_error": run_error,
+               "partial": bool(only),     # kept when a red compare turns the status to ``regression`` (bar_reliability)
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,

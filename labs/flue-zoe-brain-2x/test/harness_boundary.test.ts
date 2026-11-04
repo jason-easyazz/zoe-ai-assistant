@@ -125,6 +125,7 @@ describe('the overlay schema never touches a code-held concern', () => {
           'list_remove',
           'show_list',
           'set_timer',
+          'alarm',
           'list_reminders',
           'add_reminder',
           'show_calendar',
