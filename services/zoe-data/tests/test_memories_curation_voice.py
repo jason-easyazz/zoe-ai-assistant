@@ -93,6 +93,17 @@ def test_parse_and_category_are_pure():
     assert mc.guess_category("Juno is allergic to peanuts", pol) == "health"
 
 
+def test_plural_and_colloquial_medication_words_are_medication_never_health():
+    """Codex #2159 P1: plurals slipped past _MEDS_RE and were filed as health when Health was on and Medication off."""
+    pol = mc.Policy(mc.Account("k", "Juno", "child", "child"), frozenset(mc.CATEGORIES))
+    for s in ("Juno takes two medications every day", "Juno has some medicines in her bag", "Juno needs her meds at lunch",
+              "Juno has her pills at night", "Juno has three prescriptions", "Juno forgot her inhalers"):
+        assert mc.guess_category(s, pol) == "medication", s
+    # negative control: a non-medication health note still files as health, and "medal" is not "meds"
+    assert mc.guess_category("Juno is allergic to peanuts", pol) == "health"
+    assert mc.guess_category("Juno won a medal at sports day", pol) != "medication"
+
+
 # -- person-centred memory D6 / D7 / forgotten-means-forever (accepted 2026-11-03) ---------------------------------------------
 
 def _raw(text, ctx):

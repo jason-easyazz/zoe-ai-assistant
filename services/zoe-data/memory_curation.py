@@ -585,7 +585,7 @@ _NOT_A_NAME = frozenset(("i", "im", "me", "my", "we", "our", "us", "you", "your"
                          "they", "he", "she", "his", "her", "a", "an", "when", "where", "what", "how", "if", "about", "everything"))
 _SCHOOL_RE = re.compile(r"\b(?:school|teacher|class(?:room)?|homework|kindy|kindergarten|daycare|bus|uniform)\b", re.IGNORECASE)
 _DATES_RE = re.compile(r"\b(?:birthday|anniversary|born\s+on|due\s+date)\b", re.IGNORECASE)
-_MEDS_RE = re.compile(r"\b(?:medicine|medication|tablets?|pills?|inhaler|puffer|ventolin|epipen|dose)\b", re.IGNORECASE)
+_MEDS_RE = re.compile(r"\b(?:medicines?|medications?|meds?|tablets?|pills?|prescriptions?|inhalers?|puffers?|ventolin|epipens?|doses?)\b", re.IGNORECASE)
 SAVED_REPLY = "Okay, I\x27ll remember that for {name}."
 AMBIGUOUS_REPLY = "I know more than one {name}. Add it on your phone, in Family memories."
 OFF_RECORD_REPLY = "Okay, that's off the record, so I won't keep it."
