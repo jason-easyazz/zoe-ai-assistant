@@ -9,15 +9,12 @@ Model: Gemma 4 E4B-QAT (llama.cpp)
   - KV-cache warmup at startup so first real query skips re-processing the system prompt
   - Smart background memory: Gemma classifier fires AFTER response delivery (non-blocking)
   - Selective reasoning: hard queries (code, analysis) get more tokens
-  - Escalation: complex reasoning/development repair to Hermes; browser-heavy workflows to OpenClaw
 
 Tools inside the loop:
   1. mempalace_search      — recall memories by semantic query
   2. mempalace_add         — store a fact/preference/name explicitly
   3. ha_control            — control Home Assistant entities (lights, switches, media)
   4. bash                  — safe self-extension (install packages, check system status)
-  5. escalate_to_hermes    — hand off to Hermes for complex reasoning, review, and development repair
-  6. escalate_to_openclaw  — explicit/manual fallback; Hermes is the default escalation route
 
 Fine-tuning target: once the Gemma LoRA checkpoint is trained on Zoe's voice,
 the _ZOE_SOUL system prompt can be shrunk to ~10 tokens (saving ~500ms prefill).
@@ -89,38 +86,12 @@ _MAX_TOOL_ITERS   = env_int("ZOE_AGENT_MAX_TOOL_ITERS", 5)
 _LLM_TIMEOUT      = float(os.environ.get("ZOE_AGENT_LLM_TIMEOUT", "120.0"))
 _TOOL_TIMEOUT     = float(os.environ.get("ZOE_AGENT_TOOL_TIMEOUT", "10.0"))
 _DDG_SEARCH_HTML_MAX_BYTES = 5 * 1024 * 1024
-def _hermes_available() -> bool:
-    """Hermes is retired (no gateway on :8642), so it is never an escalation target.
-
-    This used to probe :8642 (and read main._RUNTIME_HEALTH["hermes"]); both probes
-    went with the Hermes removal (B3, 2026-10-18). The function stays only so the
-    tool-list builders keep one place that says "no Hermes tool" until the
-    escalate_to_hermes tool itself is deleted.
-    """
-    return False
-
-
-def _openclaw_execution_enabled() -> bool:
-    """OpenClaw is available, but not selected unless the operator opts in."""
-    return os.environ.get("ZOE_ENABLE_OPENCLAW_EXECUTION", "false").lower() == "true"
-
-
 # ── Agent registry — loaded from zoe_agent_registry.py ───────────────────────
 from zoe_agent_registry import (  # type: ignore[import]
     load_agent_registry as _load_agent_registry,
-    build_agent_team_prompt as _build_agent_team_prompt_fn,
-    registry_tool_description as _registry_tool_description_fn,
 )
 
 _AGENT_REGISTRY = _load_agent_registry()
-
-
-def _build_agent_team_prompt() -> str:
-    return _build_agent_team_prompt_fn(_AGENT_REGISTRY)
-
-
-def _registry_tool_description(agent_id: str, fallback: str) -> str:
-    return _registry_tool_description_fn(_AGENT_REGISTRY, agent_id, fallback)
 
 
 def _llm_timeout_s(*, voice_mode: bool = False) -> float:
@@ -204,34 +175,32 @@ TOOL ROUTING — call proactively, don't ask for clarification first:
 - show_chart — a chart/graph or data to visualise. Render it, don't describe it.
 - show_action_menu — to offer 2-5 next steps after a multi-step task or at a decision point. Not after simple one-shot answers.
 - open_touch_page — "open/show/bring up" a Zoe page (weather, calendar, reminders, lists).
-- list_openclaw_plugins — plugins/add-ons/extensions.
-- list_openclaw_skills — skills, capabilities, "what can you do". When you can't do something a skill would enable, call it with highlight=<skill-name> (never omit highlight) and say so — e.g. "send me a Discord notification" → list_openclaw_skills(highlight="discord"), "I can't yet — the Discord skill would enable it."
 
-SELF-BUILDING: For a NEW widget/page/capability, don't refuse — call list_openclaw_skills with the builder highlight ("zoe-widget-builder", "zoe-page-builder", or "zoe-capability-extender"), then offer to escalate to Hermes to build it. Before saying "I can't do X", check the ZOE_SELF context below for what Zoe actually has.
+When you can't do something, say so plainly. Before saying "I can't do X", check the ZOE_SELF context below for what Zoe actually has.
 
-WEB SEARCH & ESCALATION — pick the tier:
+WEB SEARCH — pick the tier:
 - web_search (~3-5s): current events, today's news, a single factual lookup (scores, prices, exchange rates), one product at one named retailer. Build a tight 4-8 word query — expand abbreviations ("macca's"→"McDonald's"), add product type and location/year when relevant.
 - deep_web_research (~60s, native): anything local or multi-source — prices/comparison, events, places, services, hours, jobs, accommodation, transport, reviews, "near me", in-stock. Always include full location (city + state + postcode if known) and tell the user first ("Looking up prices across stores in [location]…").
-- escalate_to_hermes: complex reasoning, architecture, code review, planning, development repair, and browser/session work (via CloakBrowser). OpenClaw is an explicit fallback, not the default.
-- DO NOT escalate for general knowledge, maths, history, recipes, definitions, or simple web lookups — answer or search those yourself.
+- Don't search for general knowledge, maths, history, recipes, or definitions — answer those yourself.
+- There is no other agent to hand a task off to. If something needs one (code changes, long engineering work), say so plainly instead of promising it.
 
-TOUCH PANELS — physical kiosk screens. Default panel zoe-touch-pi; never hardcode IPs, use the panel_* tools (panel_navigate / panel_clear / panel_announce / panel_set_mode / panel_show_smart_home / panel_show_media). panel_ssh_exec(panel_id, command) for diagnostics (status, logs, config, restart) — try it before escalating. For the Zoe server from a panel use the LAN IP {ZOE_HOST_LAN_IP}, never zoe.the411.life (Cloudflare blocks it). For code changes, escalate."""
+TOUCH PANELS — physical kiosk screens. Default panel zoe-touch-pi; never hardcode IPs, use the panel_* tools (panel_navigate / panel_clear / panel_announce / panel_set_mode / panel_show_smart_home / panel_show_media). panel_ssh_exec(panel_id, command) for diagnostics (status, logs, config, restart) — try it before saying you can't. For the Zoe server from a panel use the LAN IP {ZOE_HOST_LAN_IP}, never zoe.the411.life (Cloudflare blocks it). You can't make code changes — say so plainly."""
 
 
 # Compact, behaviour-driving summary of Zoe's shared architecture. The full
 # generated ZOE_SELF.md is a ~1,500-token flat dump of MCP-tool / skill / page /
 # port / A2A names the model never needs verbatim (it can only call the tools in
-# _TOOLS). We keep the tier table + capabilities + escalation guidance — the
+# _TOOLS). We keep the tier table + capabilities — the
 # parts that drive behaviour and capability-gap awareness — and drop the raw
 # name dumps. ~258 tok vs ~1,497. Do NOT hand-edit the generated ZOE_SELF.md;
 # this loader is where the trim lives.
-_ZOE_SELF_SUMMARY = """Tiers: Tier0 intent_router (regex, <10ms); Tier1 Zoe Agent (local Gemma, tool loop); Tier1.5 Hermes (engineering/reasoning @ :8642); Tier2 OpenClaw (fallback only).
+_ZOE_SELF_SUMMARY = """Tiers: Tier0 intent_router (regex, <10ms); Tier1 Zoe Agent (local Gemma, tool loop).
 
-Core capabilities: calendar, reminders, lists, notes, people (Postgres, user-scoped); Home Assistant control; memory = MemPalace (semantic) + user portrait; voice (Whisper STT + TTS); push notifications + proactive engine; panel display (show_map, show_chart, open_touch_page); web search (web_search / deep_web_research); builder skills (zoe-widget-builder, zoe-page-builder, zoe-capability-extender); Hermes engineering loop.
+Core capabilities: calendar, reminders, lists, notes, people (Postgres, user-scoped); Home Assistant control; memory = MemPalace (semantic) + user portrait; voice (Whisper STT + TTS); push notifications + proactive engine; panel display (show_map, show_chart, open_touch_page); web search (web_search / deep_web_research).
 
-Escalation: web_search for live facts; escalate_to_hermes is the default for complex/engineering/planning/review/board/Greptile work; escalate_to_openclaw is a manual fallback only.
+Live facts: web_search. There is no other agent to hand a task off to.
 
-If asked for a capability you don't see in your tools, don't assume it's impossible — Zoe has builder skills and a Hermes escalation path; surface them via list_openclaw_skills or escalate_to_hermes rather than refusing."""
+If asked for a capability you don't see in your tools, say plainly that you can't do it yet."""
 
 
 def _load_zoe_self_summary() -> str:
@@ -241,7 +210,7 @@ def _load_zoe_self_summary() -> str:
     MCP-tool / skill / page / port name dumps cost ~1,500 tok per turn and never
     drive behaviour (the model can only call the tools in _TOOLS). We ship a
     curated ~258-tok summary covering the tier table, capabilities, and
-    escalation paths, which is what actually preserves capability-gap awareness.
+    plain-refusal guidance, which is what actually preserves capability-gap awareness.
     """
     return (
         "\n\n--- ZOE_SELF (shared architecture) ---\n"
@@ -257,7 +226,6 @@ _ZOE_HOST_LAN_IP = env_str("ZOE_HOST_LAN_IP", "192.168.1.218")
 _ZOE_SOUL_STATIC = (
     _ZOE_SOUL_BASE.replace("{ZOE_HOST_LAN_IP}", _ZOE_HOST_LAN_IP)
     + _load_zoe_self_summary()
-    + _build_agent_team_prompt()
 )
 
 # Legacy alias — code that imports _ZOE_SOUL directly still works
@@ -272,7 +240,7 @@ Answer everyday questions — recipes, science, history, maths — from your own
 
 Zoe can do weather, calendar (show/create), reminders (show/create), shopping/personal lists, memory, and smart-home control. When a request matches, call the right tool first, then say the outcome in a sentence — don't claim you can't until a tool actually fails. For open/show a page (weather, calendar, reminders, lists), call open_touch_page.
 
-VOICE ESCALATION: For complex tasks (research, browsing, multi-step work, code), escalate with background=True where supported — prefer Hermes — say "I'll work on that and let you know," and never block voice more than 5s."""
+There is no other agent to hand a task off to: if a request is beyond your tools (code, long multi-step work), say so in a short sentence, never promise to work on it later."""
 
 # Persona layer (flag-dark ZOE_PERSONA_LAYER, persona_layer.py): the fixed PERSONA paragraphs
 # of each soul, the swap points for the rendered household persona. SLICED from the souls
@@ -282,9 +250,8 @@ _ZOE_PERSONA_FIXED_VOICE = _ZOE_SOUL_VOICE.split(" This is spoken:", 1)[0]
 
 # Voice-mode tool subset for recovery when intent routing misses.
 # Compact for latency: only the tools a spoken turn can actually reach. The long
-# tail (OpenClaw browser automation, capability-gap builds) goes through
-# escalate_to_hermes. Dropped vs the old 20-tool set: escalate_to_openclaw,
-# show_chart (not voice-rendered), show_map (router handles place intent) — see
+# tail (browser automation, capability-gap builds) is not offered. Dropped vs
+# the old 20-tool set: show_chart (not voice-rendered), show_map (router handles place intent) — see
 # the prefill audit. mempalace_add stays: _VOICE_ACTION_WORDS includes
 # remember/store/save/forget, so a missed memory-write intent must still have a
 # write path on the LLM fallback.
@@ -303,11 +270,9 @@ _VOICE_TOOLS = [
     "weather_forecast",
     "open_touch_page",
     "web_search",
-    "escalate_to_hermes",
-    "list_openclaw_skills",
     "report_issue",
 ]
-_VOICE_ALWAYS_TOOLS = ["escalate_to_hermes"]
+_VOICE_ALWAYS_TOOLS: list[str] = []
 
 # Keywords that indicate the voice query needs a tool call.
 # Pure-conversational queries (recipes, facts, explanations) skip the 614-token
@@ -323,7 +288,7 @@ _VOICE_ACTION_WORDS = frozenset({
     "lock", "unlock", "door", "camera",
     "look up", "search", "find out", "research",
     "what can you do", "capabilities", "skills", "what can zoe do",
-    "hermes", "openclaw", "open claw", "agent", "show menu",
+    "agent", "show menu",
     "do you know", "what do you know", "did i tell", "have i told",
 })
 
@@ -691,26 +656,6 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "escalate_to_openclaw",
-            "description": _registry_tool_description(
-                "openclaw",
-                "OpenClaw is available as an explicit fallback, but Hermes and Zoe CloakBrowser "
-                "tools are the default route for agentic/browser work.",
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {"type": "string", "description": "Why this needs OpenClaw"},
-                    "task": {"type": "string", "description": "Full enriched task description for OpenClaw"},
-                    "background": {"type": "boolean", "description": "Set true if user wants the task done in background and to be notified when complete"},
-                },
-                "required": ["reason", "task"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "show_map",
             "description": "Show an interactive map of named locations (places, addresses, directions).",
             "parameters": {
@@ -793,35 +738,6 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "list_openclaw_plugins",
-            "description": "Show the OpenClaw plugin manager so the user can install, remove, or browse available plugins.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_openclaw_skills",
-            "description": (
-                "Show the OpenClaw skills manager (browse/install/update/remove), or when asked what Zoe can do. "
-                "If a skill would enable something you can't yet do, call with highlight='<skill-name>' "
-                "(e.g. 'discord') — never omit highlight in that proactive case."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "highlight": {
-                        "type": "string",
-                        "description": "Optional skill name to pre-select/highlight in the manager (e.g. 'discord')",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "proactive_schedule",
             "description": (
                 "Schedule a proactive push notification at a future time (notify/remind/message later). "
@@ -861,31 +777,6 @@ _TOOLS = [
     },
 ]
 
-# Always define escalate_to_hermes in the master list; whether it's offered to
-# the model is determined dynamically by _hermes_available() in _build_tools.
-_HERMES_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "escalate_to_hermes",
-        "description": _registry_tool_description(
-            "hermes",
-            "Escalate to Hermes for complex multi-step reasoning, architectural analysis, "
-                "planning, code review, and development repair that don't require browser or bash. "
-            "Do NOT use if OpenClaw browser automation is needed.",
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "reason": {"type": "string", "description": "Why this needs Hermes"},
-                "task": {"type": "string", "description": "Full task description for Hermes"},
-            },
-            "required": ["reason", "task"],
-        },
-    },
-}
-_TOOLS.append(_HERMES_TOOL)
-_ALWAYS_ON_TOOLS_HERMES: list[str] = ["escalate_to_hermes"]
-
 # After Gemma LoRA fine-tuning on Zoe's voice, _ZOE_SOUL shrinks to ~10 tokens.
 
 # ── Skills registry ───────────────────────────────────────────────────────────
@@ -897,7 +788,6 @@ _ALWAYS_ON_TOOLS_HERMES: list[str] = ["escalate_to_hermes"]
 # Tools in _ALWAYS_ON_TOOLS are always sent regardless of skill selection.
 
 _SKILL_TOOLS: dict[str, list[str]] = {
-    "hermes-default": ["escalate_to_hermes"],
     "memory":     ["mempalace_search", "mempalace_add", "memory_update"],
     "smart-home": ["ha_control"],
     "calendar":   ["calendar_today", "calendar_list_events", "calendar_create_event"],
@@ -907,12 +797,10 @@ _SKILL_TOOLS: dict[str, list[str]] = {
     "touch":      ["open_touch_page"],
     "bash":       ["bash"],
     "visual":     ["show_map", "show_chart"],
-    "discovery":  ["list_openclaw_plugins", "list_openclaw_skills", "show_action_menu"],
-    "openclaw-fallback": ["escalate_to_openclaw"],
+    "discovery":  ["show_action_menu"],
 }
 
-# Always included regardless of query. Hermes escalation is added dynamically
-# when healthy; OpenClaw is loaded only for explicit fallback/browser cases.
+# Always included regardless of query.
 _ALWAYS_ON_TOOLS: list[str] = ["web_search", "web_browse", "deep_web_research", "report_issue"]
 
 # Max tool-list size that still forces tool_choice="required" on the first turn.
@@ -979,13 +867,8 @@ _SKILL_KEYWORDS: dict[str, list[str]] = {
     "discovery": [
         "plugin", "skill", "capability", "what can you do", "what can zoe do",
         "capabilities", "install skill", "telegram", "discord", "notification",
-        "openclaw", "open claw", "what can", "can you ", "is there a",
+        "what can", "can you ", "is there a",
         "how do i", "can zoe",
-    ],
-    "openclaw-fallback": [
-        "openclaw", "open claw", "browser automation", "login session",
-        "authenticated session", "persistent session", "form fill",
-        "screenshot", "playwright", "home assistant setup",
     ],
 }
 
@@ -1010,7 +893,7 @@ def _select_skills(message: str) -> set[str]:
 
     Falls back to loading all skills when FORCE_FULL_CONTEXT=true (rollback escape hatch).
     Returns 'discovery' as a minimal fallback when no specific skill matches, so the
-    model always has list_openclaw_skills available to communicate capability gaps.
+    model always has the discovery group (show_action_menu) available.
 
     Also reads the [Intent hint: ...] prefix injected by Tier 0.5 classifier to pre-load
     the correct skill groups without keyword scanning.
@@ -1043,27 +926,16 @@ def _select_skills(message: str) -> set[str]:
 
 def _build_tools(skills: set[str]) -> list[dict]:
     """Build filtered tool list: always-on tools + tools for selected skill groups.
-
-    escalate_to_hermes is gated dynamically — only included when Hermes is healthy
-    (checked via _hermes_available() which reads _RUNTIME_HEALTH from main.py).
     """
     tool_names: set[str] = set(_ALWAYS_ON_TOOLS)
-    if _hermes_available():
-        tool_names.update(_ALWAYS_ON_TOOLS_HERMES)
     for skill in skills:
         tool_names.update(_SKILL_TOOLS.get(skill, []))
-    if not _openclaw_execution_enabled():
-        tool_names.discard("escalate_to_openclaw")
     return [t for t in _TOOLS if t["function"]["name"] in tool_names]
 
 
 def _build_voice_tools(needs_tools: bool) -> list[dict]:
-    """Build the compact voice tool list while respecting Hermes health."""
+    """Build the compact voice tool list."""
     tool_names = set(_VOICE_TOOLS if needs_tools else _VOICE_ALWAYS_TOOLS)
-    if not _hermes_available():
-        tool_names.discard("escalate_to_hermes")
-    if not _openclaw_execution_enabled():
-        tool_names.discard("escalate_to_openclaw")
     return [t for t in _TOOLS if t["function"]["name"] in tool_names]
 
 
@@ -2783,7 +2655,7 @@ _VERIFY_DIRECTIVE = (
 async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> str:
     """Zoe-NATIVE page read: open a URL in CloakBrowser and return its text.
 
-    This is the browse tier the Flue brain calls DIRECTLY — no Hermes/OpenClaw
+    This is the browse tier the Flue brain calls DIRECTLY — no other agent
     escalation. Use it after web_search to actually read a page (prices, opening
     hours, an article) when a snippet isn't enough.
 
@@ -3018,7 +2890,7 @@ def _cap_tool_result(tool_name: str, result: str) -> str:
     Tools like ambient_search and deep_web_research can return 10k-15k chars
     in a single call, silently overwhelming ZOE_CONTEXT_TOKEN_BUDGET.
     We apply per-tool limits here — at the single point where results enter
-    messages[] — rather than at the MCP layer, so OpenClaw and the intent
+    messages[] — rather than at the MCP layer, so the intent
     fast-path are unaffected.
     """
     if tool_name == "ambient_search":
@@ -3169,19 +3041,6 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "guest") -> 
     if tool_name == "deep_web_research":
         return await _web_research(args.get("query", ""), user_id=user_id)
 
-    if tool_name == "escalate_to_hermes":
-        reason = args.get("reason", "complex task")
-        task = args.get("task", "")
-        return f"__ESCALATE_HERMES__:{reason}|{task}"
-
-    if tool_name == "escalate_to_openclaw":
-        reason = args.get("reason", "complex task")
-        task = args.get("task", "")
-        background = args.get("background", False)
-        if background:
-            return f"__ESCALATE_BG__:{reason}|{task}"
-        return f"__ESCALATE__:{reason}|{task}"
-
     if tool_name == "show_map":
         payload = {
             "component": "map_embed",
@@ -3212,35 +3071,6 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "guest") -> 
                 "prompt": args.get("prompt", ""),
                 "options": args.get("options", []),
             },
-        }
-        return f"__UI__:{json.dumps(payload)}"
-
-    if tool_name == "list_openclaw_plugins":
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                base_url = _zoe_base_url()
-                r = await client.get(f"{base_url}/api/openclaw/plugins")
-                plugin_data = r.json() if r.status_code == 200 else {"plugins": []}
-        except Exception:
-            plugin_data = {"plugins": []}
-        payload = {
-            "component": "openclaw_manager",
-            "props": plugin_data,
-        }
-        return f"__UI__:{json.dumps(payload)}"
-
-    if tool_name == "list_openclaw_skills":
-        try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                base_url = _zoe_base_url()
-                r = await client.get(f"{base_url}/api/openclaw/skills")
-                skill_data = r.json() if r.status_code == 200 else {"skills": []}
-        except Exception:
-            skill_data = {"skills": []}
-        highlight = args.get("highlight", "")
-        payload = {
-            "component": "skills_manager",
-            "props": {**skill_data, "highlight": highlight},
         }
         return f"__UI__:{json.dumps(payload)}"
 
@@ -3945,12 +3775,6 @@ async def run_zoe_agent(
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
             logger.debug("zoe_agent: tool_result=%s", tool_result[:200])
 
-            # Escalation signal — return immediately for chat.py to handle.
-            if tool_result.startswith(("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")):
-                logger.info("zoe_agent: escalation triggered — %s", tool_result[:80])
-                _fire_memory_capture(message, response_text, user_id=user_id)
-                return tool_result
-
             # Append tool call + result in OpenAI tool_calls format for context
             messages.append({
                 "role": "assistant",
@@ -3970,8 +3794,8 @@ async def run_zoe_agent(
             # will be empty — surface an explicit step-limit message instead of silence.
             if not response_text and tool_name:
                 response_text = (
-                    "I've used all my steps on that — let me hand it off. "
-                    "One moment while I escalate this for you."
+                    "I ran out of steps on that before I could finish it. "
+                    "Try asking again, a bit more simply."
                 )
                 logger.warning(
                     "zoe_agent: hit iter limit with pending tool=%s, returning step-limit message",
@@ -4412,13 +4236,6 @@ async def run_zoe_agent_streaming(
             logger.info("zoe_agent streaming: iter=%d tool=%s args=%s",
                         iteration, tool_name, json.dumps(tool_args)[:120])
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
-
-            # Escalation signal — yield marker and stop; chat.py handles routing.
-            if tool_result.startswith(("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")):
-                logger.info("zoe_agent streaming: escalation triggered — %s", tool_result[:80])
-                _fire_memory_capture(message, collected, user_id=user_id)
-                yield tool_result
-                return
 
             # UI component — yield marker so chat.py can emit zoe.ui_component event;
             # fall through to append tool messages and let the model produce follow-up text

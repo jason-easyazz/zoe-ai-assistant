@@ -272,7 +272,6 @@ _ENTRIES = (
     _f('ZOE_EMBEDDING_MODEL_VERSION', 'str', 'minilm-v1'),
     _f('ZOE_EMOTIONAL_FOLLOWUP_ENABLED', 'str', '', doc='docs/knowledge/feature-audit-2026-09-25.md'),
     _f('ZOE_EMOTIONAL_RECALL_ENABLED', 'str', '', doc='docs/knowledge/feature-audit-2026-09-25.md'),
-    _f('ZOE_ENABLE_OPENCLAW_EXECUTION', 'bool', False),
     _f('ZOE_ENGINEERING_MODE', 'str', 'interactive', doc='docs/guides/MULTICA_HERMES_PR_LOOP.md'),
     _f('ZOE_ENROLL_DECLINE_DAYS', 'int', 60, doc='docs/knowledge/zoe-driven-voice-enrollment.md'),
     _f('ZOE_ENROLL_MODE_ENABLED', 'bool', True, doc='docs/knowledge/zoe-driven-voice-enrollment.md'),
