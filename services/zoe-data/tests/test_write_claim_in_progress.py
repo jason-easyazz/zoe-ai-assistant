@@ -63,10 +63,13 @@ IN_PROGRESS_CLAIMS = [
     ("Sure, adding eggs to the shopping list for you.", ("list",)),
     ("I'm adding oat milk to your shopping list.", ("list",)),
     ("I'm just setting a reminder for five o'clock.", ("reminder",)),
-    ("Setting a timer for ten minutes.", ("timer",)),
+    ("Setting a timer for ten minutes now.", ("timer",)),
+    ("I am setting a reminder for five o'clock.", ("reminder",)),         # cross-review: the full form of "I'm"
+    ("We are adding bread to the shopping list.", ("list",)),
+    ("I will add that to your shopping list right now.", ("list",)),
     ("Putting that on your calendar now.", ("calendar",)),
     ("Saving that to your notes for you.", ("note",)),
-    ("Scheduling the physio for Friday at ten.", ("calendar",)),
+    ("Scheduling the physio for Friday at ten for you.", ("calendar",)),
     ("We're adding bread to the shopping list.", ("list",)),
     ("I'll add that to your shopping list right now.", ("list",)),
     ("I'll put the dentist on your calendar straight away.", ("calendar",)),
@@ -90,6 +93,15 @@ NOT_IN_PROGRESS_CLAIMS = [
     "Add milk to your shopping list by tapping the plus.",           # an instruction, not my write
     "Adding milk to your shopping list is easy.",
     "Setting the table is the kids' job.",
+    # cross-review: a bare progressive with a real target noun is an instruction or a description, not Zoe's write
+    "Adding milk to your shopping list by tapping the plus.",
+    "Adding milk to your shopping list lets you track it.",
+    "Setting a timer for ten minutes helps you focus.",
+    "They are adding milk to your list.",
+    "Are we adding milk to your list?",
+    "I will add it to your list.",
+    "I will add milk to your list now if you want.",
+    "I will definitely not add it now.",
 ]
 
 
@@ -168,10 +180,31 @@ def test_in_progress_claim_with_a_tool_that_wrote_nothing_is_replaced_at_the_end
     assert "".join(d for d in out if not d.startswith("__TOOL__:")) == f"{HONEST_EN} Anything else?"
 
 
+def test_a_unit_with_a_completed_and_an_in_progress_claim_waits_for_the_end_of_the_turn():
+    """Cross-review: "I've added milk…, and I'm setting a reminder now." must not be judged before the reminder can land."""
+    started = wr.begin()
+    reply = "I've added milk to your shopping list, and I'm setting a reminder now. "
+    claim = g.find_claim(reply)
+    assert claim.kinds == ("list", "reminder") and claim.in_progress
+    wr.record("jason", "list", "i", "t")
+
+    async def inner():
+        yield reply
+        wr.record("jason", "reminder", "r", "tool")       # lands AFTER the sentence was spoken
+        yield "Anything else?"
+
+    assert "".join(_run(g.guard_stream(inner(), "jason", started))) == reply + "Anything else?"
+    started2 = wr.begin()
+    wr.record("jason", "list", "i2", "t")                  # the reminder never lands this time
+    assert "".join(_run(g.guard_stream(_stream(reply, "Anything else?"), "jason", started2))) == f"{HONEST_EN} Anything else?"
+
+
 IN_PROGRESS_CORPUS = [
     INCIDENT,
     "Sure thing. Adding milk to your shopping list now. Anything else?",
     "I'm setting a reminder for five o'clock. The weather is fine today.",
+    "I've added milk to your shopping list, and I'm setting a reminder now. Anything else?",
+    "I will add that to your shopping list right now.",
     "Okay, I'll add that to your shopping list right now - anything else?",
     "Adding milk to your shopping list now. I've added eggs to your shopping list.",
     "Shall I add balloons to your shopping list? I can do it now.",
@@ -280,6 +313,14 @@ def core_lane(monkeypatch):
     monkeypatch.setattr(zoe_core_client, "run_zoe_core_streaming", fake_stream)
     monkeypatch.setattr(zoe_core_client, "run_zoe_core", fake_oneshot)
     return box
+
+
+def test_a_replay_turn_still_consumes_the_deferred_marker():
+    """Cross-review: the replay exemption returns before guarding, but must not leave the marker for a later turn."""
+    wr.note_deferred_write("list")
+    inner = _stream("x")
+    assert bd._claim_guarded(inner, "x", "jason", {"replay_isolation": True}) is inner
+    assert wr.take_deferred_write() is None
 
 
 @pytest.mark.asyncio

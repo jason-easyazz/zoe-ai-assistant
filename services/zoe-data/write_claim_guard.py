@@ -123,6 +123,8 @@ class _Lang:
     promise_subjects: frozenset = frozenset()
     immediacy: tuple = ()
     implied_cues: tuple = ()                  # "now" / "for you": an untargeted in-progress claim stands for a DEFERRED write's kind
+    progressive_aux: frozenset = frozenset()  # "am" / "are" between a subject and a progressive verb ("I am adding")
+    promise_blockers: frozenset = frozenset() # blockers that are a promise's own auxiliary ("will" in "I will add … now")
 
     def is_modifier(self, tok: str, *, by_suffix: bool = False) -> bool:
         if tok in self.adverbs or tok in self.modifiers:
@@ -185,7 +187,8 @@ def _langs() -> tuple:
             discourse=words("discourse_openers"),
             progressive_subjects=words("progressive_subjects"), promise_verbs=promise_verbs,
             promise_subjects=words("promise_subjects"), immediacy=phrases("immediacy"),
-            implied_cues=phrases("implied_cues"),
+            implied_cues=phrases("implied_cues"), progressive_aux=words("progressive_aux"),
+            promise_blockers=words("promise_blockers"),
         ))
     return tuple(out)
 
@@ -272,7 +275,11 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional
                 toks, offset = toks[head:], offset + head
             prev_claimed = False
             padded = " " + " ".join(toks) + " "
-            if any(_has_phrase(padded, b) for b in lang.blockers):
+            blocked = {b for b in lang.blockers if _has_phrase(padded, b)}
+            # "I will add that to your list right now": the future word that blocks every other claim is the promise's own
+            # auxiliary, so such a clause may still hold a PROMISE claim (and only that).
+            promise_only = bool(blocked) and blocked <= lang.promise_blockers
+            if blocked and not promise_only:
                 continue
             for i, tok in enumerate(toks):
                 if offset + i >= LEAD_TOKENS:
@@ -295,7 +302,7 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional
                     prev_claimed = True
                     break
                 spec = lang.verbs.get(tok)
-                if spec is None:
+                if spec is None or promise_only:
                     continue
                 verb_kind, needs_target, state_claim, progressive = spec
                 pre = toks[max(0, i - 4):i]
@@ -306,12 +313,18 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional
                 if not passive and any(p in lang.second_person for p in pre):
                     continue            # "you added it" - the user did it ("The milk you mentioned has been added": you is not the writer)
                 extra = lang.progressive_subjects if progressive else frozenset()
+                aux_ok = lang.progressive_aux if progressive else frozenset()
                 active = (all(p in lang.hold_words or p in lang.modifiers or p in extra for p in pre)
-                          or _subject_then_modifiers(toks, i, lang, extra))
+                          or _subject_then_modifiers(toks, i, lang, extra, aux_ok))
                 if not (active or passive):
                     continue
+                cued = any(_has_phrase(padded, c) for c in lang.implied_cues)
+                if progressive and not cued and not _has_subject_before(toks, i, lang, extra, aux_ok):
+                    # A bare "Adding milk to your shopping list by tapping +" / "Setting a timer helps you focus" is an instruction or a
+                    # description; only "now" / "for you" (or a first-person subject: "I'm adding") makes it Zoe's own write.
+                    continue
                 kinds = _named_kinds(padded, lang)
-                implied = bool(progressive and implied_kind and any(_has_phrase(padded, c) for c in lang.implied_cues))
+                implied = bool(progressive and implied_kind and cued)
                 if not pre and not _completion_ellipsis(toks[i + 1:], bool(kinds) or implied, lang):
                     continue
                 if not kinds:
@@ -331,7 +344,9 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional
         if found:
             specific = {k for kinds, _ in found for k in kinds}
             ordered = tuple(k for k in lang.targets if k in specific) + tuple(sorted(specific - set(lang.targets)))
-            return Claim(kinds=ordered, lang=lang.code, honest=lang.honest, in_progress=all(p for _, p in found))
+            # ANY in-progress clause defers the whole unit to the end of the turn (a reminder "I'm setting now" may land after the
+            # sentence); judged then, every kind still needs its own receipt.
+            return Claim(kinds=ordered, lang=lang.code, honest=lang.honest, in_progress=any(p for _, p in found))
     return None
 
 
@@ -347,7 +362,7 @@ def _promised_now(toks: list, i: int, padded: str, lang: "_Lang") -> bool:
         return False
     for j in range(i - 1, max(-1, i - 1 - _SUBJECT_REACH), -1):
         tok = toks[j]
-        if tok in lang.promise_subjects:
+        if tok in lang.promise_subjects or (j > 0 and f"{toks[j - 1]} {tok}" in lang.promise_subjects):
             return True
         if not (tok in lang.openers or lang.is_modifier(tok, by_suffix=True)):
             return False
@@ -368,7 +383,13 @@ def _passive_aux(pre: list, lang: "_Lang") -> str:
 _SUBJECT_REACH = 6      # how far back from the claim verb a first-person subject may stand ("I have now definitely gone ahead and added")
 
 
-def _subject_then_modifiers(toks: list, i: int, lang: "_Lang", extra_subjects: frozenset = frozenset()) -> bool:
+def _has_subject_before(toks: list, i: int, lang: "_Lang", extra_subjects: frozenset, aux: frozenset) -> bool:
+    """A first-person subject leads the verb at ``toks[i]`` ("I'm adding", "I am now adding")."""
+    return _subject_then_modifiers(toks, i, lang, extra_subjects, aux)
+
+
+def _subject_then_modifiers(toks: list, i: int, lang: "_Lang", extra_subjects: frozenset = frozenset(),
+                            aux: frozenset = frozenset()) -> bool:
     """True when the claim verb at ``toks[i]`` is led by a first-person subject through nothing but openers, claim words and
     modifiers - listed ones or any adverb by suffix ("I've definitely added", "we have quietly set"). The subject is what makes a
     suffix word safe to trust: "Emily added the milk" has none and stays someone else's write; "I think Mum added" is cut by
@@ -377,6 +398,8 @@ def _subject_then_modifiers(toks: list, i: int, lang: "_Lang", extra_subjects: f
         tok = toks[j]
         if tok in lang.subjects or tok in extra_subjects:
             return True
+        if tok in aux and j > 0 and toks[j - 1] in lang.subjects:
+            return True                 # "I am adding", "we are setting": the progressive's own auxiliary after its subject
         if not (tok in lang.hold_words or lang.is_modifier(tok, by_suffix=True)):
             return False
     return False

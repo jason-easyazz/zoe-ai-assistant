@@ -912,13 +912,13 @@ def _claim_guarded(inner: AsyncIterator[str], message: str, user_id: str, kwargs
     only when a write really landed this turn, else it becomes an honest line. EVERY brain turn - voice, chat, Telegram,
     LiveKit - ends here, so this is the one place the rule holds on every lane. The replay harness is never guarded (its writes
     are deliberately not committed, so its success-shaped replies have no receipts)."""
+    implied = _take_deferred_write()     # taken (cleared) on EVERY turn, replay included, so it never outlives its turn
     if kwargs.get("replay_isolation"):
         return inner
     try:
         import write_claim_guard
         import write_receipts
 
-        implied = write_receipts.take_deferred_write()      # a write the fast path left for this turn (EXPERT_DEFER_WRITE)
         if write_claim_guard.mode() == "off":
             return inner
         return write_claim_guard.guard_stream(inner, user_id, write_receipts.begin(), user_text=message, implied_kind=implied)

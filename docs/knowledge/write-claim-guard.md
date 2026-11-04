@@ -79,9 +79,12 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
 * **In-progress claims** (live 2026-11-04, typed chat: "Adding balloons, blue streamers, and goldfish crackers to your shopping
   list now." with no tool call and no write - the past-tense-only lexicon missed it, and the Oxford comma before "and goldfish"
   split the target noun off the verb's clause). A claim verb with `"form": "progressive"` ("adding", "setting", "putting",
-  "saving", "scheduling"…; extra subjects `progressive_subjects`: "I'm", "we're") or a `promise_verbs` base form ("add", "put",
-  "set"…) that counts ONLY after a `promise_subjects` word ("I'll", "we'll") AND with an `immediacy` word in its clause ("now",
-  "right away"), and never with an "if" anywhere in the unit, says the write is happening in THIS turn. The brain may say that
+  "saving", "scheduling"…; extra subjects `progressive_subjects`: "I'm", "we're", and "I am" / "we are" via `progressive_aux`;
+  a bare sentence-opening one needs an `implied_cues` word - "now", "for you" - since "Adding milk to your list by tapping +" is
+  an instruction) or a `promise_verbs` base form ("add", "put", "set"…) that counts ONLY after a `promise_subjects` word ("I'll",
+  "I will": `promise_blockers` lets that "will" block only the other forms) AND with an `immediacy` word in its clause ("now",
+  "right away"), and never with an "if" anywhere in the unit, says the write is happening in THIS turn. A unit with ANY
+  in-progress clause waits for the end of the turn as a whole (each kind still needs its own receipt). The brain may say that
   just BEFORE its tool call, so such a claim (`Claim.in_progress`) is judged at the END of the turn: `guard_stream` holds that
   unit - and everything after it - until a receipt backs it (re-checked on every delta and sentinel, so a tool that lands
   releases it at once) or the turn ends; `guard_text` sees the whole reply anyway. A bare "I'll add it", "Shall I add it?",
