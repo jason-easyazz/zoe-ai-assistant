@@ -26,12 +26,12 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 809 prod flags; 221 read through `typed_env`.
-- 758 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
+- 808 prod flags; 221 read through `typed_env`.
+- 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
-- 311 prod flags with no owner doc yet.
+- 310 prod flags with no owner doc yet.
 - 0 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-809 flags; 758 not documented in `.env.example`.
+808 flags; 757 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -230,7 +230,6 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_EMBEDDING_MODEL_VERSION` | str | `'minilm-v1'` | - | - | `'minilm-v1'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_EMOTIONAL_FOLLOWUP_ENABLED` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `''` | no | NO | `services/zoe-data/proactive/triggers/emotional_followup.py` |
 | `ZOE_EMOTIONAL_RECALL_ENABLED` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `''` | no | NO | `services/zoe-data/routers/memories.py` |
-| `ZOE_ENABLE_OPENCLAW_EXECUTION` | bool | `False` | - | - | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_ENGINEERING_MODE` | str | `'interactive'` | - | `docs/guides/MULTICA_HERMES_PR_LOOP.md` | `'interactive'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_ENROLL_DECLINE_DAYS` | int | `60` | - | `docs/knowledge/zoe-driven-voice-enrollment.md` | `60` | yes | NO | `services/zoe-data/enrollment_state.py` |
 | `ZOE_ENROLL_MODE_ENABLED` | bool | `True` | - | `docs/knowledge/zoe-driven-voice-enrollment.md` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
