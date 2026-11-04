@@ -48,6 +48,14 @@ def test_control_unrelated_lines_and_a_too_short_turn_count_nothing():
     assert r["unparsed_lines"] == 1   # the traceback line; the blank line is not counted
 
 
+def test_an_unmatched_too_short_line_does_not_cancel_an_unrelated_turn():
+    # a "too short" with no counted recording before it (rotated log start) cancels nothing...
+    assert tm.count_events([L("Command too short, ignoring."), L(REC)])["turns"] == 1
+    # ...and a second one after the pair is spent cancels nothing either (never negative, never eats a later turn)
+    r = tm.count_events([L(REC), L("Command too short, ignoring."), L("Command too short, ignoring."), L(REC)])
+    assert r["turns"] == 1
+
+
 def test_control_an_empty_log_has_no_rate_rather_than_zero():
     r = tm.count_events([])
     assert r["turns"] == 0 and r["cutoffs_per_100"] is None and r["overwaits_per_100"] is None and r["meets_target"] is None
@@ -71,7 +79,10 @@ def test_cli_reads_a_file_and_reports_unreadable(tmp_path, capsys):
 
 def test_the_matched_phrases_still_exist_in_the_daemon():
     """A renamed daemon log line would silently turn every rate to zero: pin the phrases to the daemon source."""
+    import re
     src = (Path(__file__).resolve().parents[2] / "scripts" / "setup" / "zoe_voice_daemon.py").read_text()
-    for phrase in tm.TURN_PATTERNS + tm.CUTOFF_PATTERNS + tm.OVERWAIT_PATTERNS:
-        assert phrase.rstrip(":") in src, phrase
-    assert "Command too short" in src and "Follow-up too short" in src
+    for phrase in tm.TURN_PATTERNS + tm.CUTOFF_PATTERNS + tm.OVERWAIT_PATTERNS + tm.NOT_A_TURN:
+        # the phrase must open an actual log.info / log.warning call (a comment or dead constant does not count)
+        pat = r"log\.(?:info|warning)\(\s*\n?\s*\"" + re.escape(phrase.rstrip(":"))
+        assert re.search(pat, src), phrase
+    assert not re.search(r"log\.info\(\s*\"Renamed phrase", src)   # control: the pattern does not match everything

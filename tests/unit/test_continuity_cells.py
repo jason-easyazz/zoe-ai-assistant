@@ -77,6 +77,8 @@ def test_a_resolved_thread_carries_by_being_known_to_be_done():
     ("It is Marlow.", True),                                          # old value alone
     ("It is Harbourton now, no longer Marlow.", False),               # new value + superseding word
     ("Marlow or Harbourton, one of those.", True),                    # both, nothing says which is current
+    ("It is no longer Marlow.", False),                               # the old value, said as old
+    ("It is Marlow, it changed recently.", True),                     # asserts the old value despite a superseding word
     ("Nothing on that.", False),                                      # silence is not stale
 ])
 def test_stale_serve_on_a_changed_thread(reply, stale):
@@ -98,7 +100,8 @@ def test_a_live_thread_cannot_be_stale():
 
 @pytest.mark.parametrize("reply,retold", [
     ("What was it again?", True),
-    ("Tell me about the garden shed.", False),                         # no question mark: not a question
+    ("Could you remind me what the colour was.", True),               # a request without a question mark is still a re-tell
+    ("The shed is lovely this time of year.", False),                 # no question, no request
     ("The colour was sage, what else do you need?", False),           # holds the needle
     ("OK.", False),
 ])

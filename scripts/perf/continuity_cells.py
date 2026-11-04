@@ -19,8 +19,8 @@ Cells (the lane's C5 forget-completeness already exists as bar S25 / ZMB axis F 
                       when the reply holds the thread's CURRENT needle. Reported per horizon with a Wilson interval. Target >= 70% at 7 d.
   C3 stale serve      for threads whose fact changed (dormant) or finished (resolved): the reply asserts the OLD value without the new one
                       (or without a superseding word), or raises a finished thread as still open. Target < 2%.
-  C4 re-telling       the reply ASKS the member for a slot they already gave ("what was it again?") - a question, a request marker and no
-                      needle. A non-answer ("OK.") is NOT a re-tell: the cell is not the inverse of C1. Target < 10%.
+  C4 re-telling       the reply ASKS the member for a slot they already gave ("what was it again?") - a question or a request to say it
+                      again, and no needle. A non-answer ("OK.") is NOT a re-tell: the cell is not the inverse of C1. Target < 10%.
 
 The 12 threads (4 live, 4 dormant that change on day 2, 4 resolved on day 3) are fictional and neutral on purpose: this repo is public.
 ``run_controls()`` is the self-test: each cell must go the declared way on a system built to break exactly that cell. A cell whose
@@ -100,6 +100,8 @@ _OPEN_MARKERS = ("still need", "still have to", "still waiting", "still pending"
 _DONE_MARKERS = ("filed", "paid", "booked", "arrived", "done", "finished", "sorted", "settled", "resolved", "completed")
 _SUPERSEDE_MARKERS = ("instead", "changed", "moved", "used to", "was originally", "no longer", "not anymore", "rather than",
                       "switched", "previously", "updated")
+_NEGATING_MARKERS = ("no longer", "not anymore", "used to be", "was originally", "not any more")
+_REQUEST_MARKERS = ("remind me", "tell me", "could you tell", "can you tell", "say it again", "once more", "i need you to tell")
 _ASK_MARKERS = ("what was", "what is", "what's", "which", "remind me", "tell me", "could you tell", "can you tell", "who is",
                 "when is", "when was", "where is", "where was", "again")
 
@@ -135,7 +137,11 @@ def score_stale(th: Thread, reply: str) -> bool:
     Resolved: raised as still open. A live thread cannot be stale in this script (nothing changed)."""
     if th.state == "dormant":
         old, new = has(reply, th.old_needle), has(reply, th.needle)
-        return old and (not new or not any_marker(reply, _SUPERSEDE_MARKERS))
+        if not old:
+            return False
+        # The old value is only acceptable when the reply says it is OLD: a negation ("no longer Marlow"), or the new value beside a
+        # superseding word. "It is Marlow, it changed recently" still asserts the old value and stays stale.
+        return not (any_marker(reply, _NEGATING_MARKERS) or (new and any_marker(reply, _SUPERSEDE_MARKERS)))
     if th.state == "resolved":
         return any_marker(reply, _OPEN_MARKERS) and not any_marker(reply, _DONE_MARKERS)
     return False
@@ -144,7 +150,10 @@ def score_stale(th: Thread, reply: str) -> bool:
 def score_retell(th: Thread, reply: str) -> bool:
     """C4 (True = the member is made to tell it again): a question that asks for the slot and does not hold it."""
     t = reply or ""
-    return "?" in t and any_marker(t, _ASK_MARKERS) and not has(t, th.needle) and not has(t, th.old_needle)
+    if has(t, th.needle) or has(t, th.old_needle):
+        return False
+    # asked ("What was it again?") or requested ("Please remind me what the colour was."): meaning, not just punctuation
+    return ("?" in t and any_marker(t, _ASK_MARKERS)) or any_marker(t, _REQUEST_MARKERS)
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:

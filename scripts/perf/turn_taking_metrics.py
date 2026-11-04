@@ -43,6 +43,7 @@ TARGETS = {"cutoffs_per_100_max": 5.0, "overwaits_per_100_max": 5.0}
 def count_events(lines: Iterable[str], since: str | None = None, until: str | None = None) -> dict[str, Any]:
     """Count the event lines. Lines that do not match the daemon format (tracebacks, journal noise) are ignored and counted."""
     turns = cutoffs = overwaits = unparsed = 0
+    pending = False   # a counted "Recorded ..." line whose "too short" verdict has not been seen yet
     days: set[str] = set()
     for raw in lines:
         m = _LINE.match(raw.rstrip("\n"))
@@ -54,10 +55,14 @@ def count_events(lines: Iterable[str], since: str | None = None, until: str | No
         if (since and day < since) or (until and day > until):
             continue
         if msg.startswith(NOT_A_TURN):
-            turns -= 1   # the preceding "Recorded ..." line counted it; it never became a turn
+            # Only cancels the "Recorded ..." line just counted. An unmatched one (rotated log, --since boundary) cancels nothing.
+            if pending:
+                turns -= 1
+            pending = False
             continue
         if msg.startswith(TURN_PATTERNS):
             turns += 1
+            pending = True
             days.add(day)
         elif msg.startswith(CUTOFF_PATTERNS):
             cutoffs += 1
