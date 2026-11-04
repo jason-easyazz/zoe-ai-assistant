@@ -68,6 +68,8 @@ describe('the history floor is 8 turns by default, 3 on rollback', () => {
       process.env.ZOE_BRAIN_KEEP_TURNS = junk;
       assert.equal(minKeepTurns(), 8, `junk ${JSON.stringify(junk)}`);
     }
+    process.env.ZOE_BRAIN_KEEP_TURNS = '0'; // documented emergency setting: no floor, the budget alone decides
+    assert.equal(minKeepTurns(), 0);
     process.env.ZOE_BRAIN_KEEP_TURNS = '9999';
     assert.equal(minKeepTurns(), 64, 'capped');
   });
@@ -84,11 +86,18 @@ describe('the history floor is 8 turns by default, 3 on rollback', () => {
       for (const n of [10, 30, 60]) {
         const c = make(n, body);
         const head = windowHeadIndex(c);
-        const kept = head === null ? c.messages : c.messages.slice(head);
-        assert.equal(kept[kept.length - 1], c.messages[c.messages.length - 1], 'newest message survives');
-        if (head !== null && kept.length > 1) assert.ok(costOf(c, head) <= budget(), `${n}x${body}: ${costOf(c, head)} > ${budget()}`);
+        const lastUser = c.messages.length - 1;
+        // the head is a real index at or before the newest user message, and opens on a user turn
+        assert.ok(head === null || (head <= lastUser && c.messages[head].role === 'user'), `${n}x${body}: head ${head}`);
+        // unconditional: whenever the newest message alone fits under the fixed prefix, the whole prompt fits
+        const alone = costOf(c, lastUser);
+        if (alone <= budget()) assert.ok(costOf(c, head) <= budget(), `${n}x${body}: ${costOf(c, head)} > ${budget()}`);
       }
     }
+    // the single-message collapse is exercised explicitly: history of huge turns shrinks to the in-flight message only
+    const collapsed = make(30, 20000);
+    assert.equal(windowHeadIndex(collapsed), collapsed.messages.length - 1);
+    assert.ok(costOf(collapsed, collapsed.messages.length - 1) <= budget());
     // negative control: a floor honoured regardless of size would overflow here (8 such turns alone exceed the budget)
     const c = make(30, 3000);
     assert.ok((8 * 2 * 3000) / 4 > budget(), 'precondition: 8 such turns alone exceed the budget');
@@ -110,7 +119,7 @@ describe('the history floor is 8 turns by default, 3 on rollback', () => {
     process.env.ZOE_BRAIN_KEEP_TURNS = '3';
     const w3 = applyPolicies(c, '');
     assert.equal(w8.systemPrompt, w3.systemPrompt);
-    assert.deepEqual(w8.tools?.map((t) => t.name), w3.tools?.map((t) => t.name));
+    assert.equal(JSON.stringify(w8.tools), JSON.stringify(w3.tools), 'tool block byte-identical (names, descriptions, schemas, order)');
     assert.ok(w8.messages.length > w3.messages.length, 'wider history on the wire');
     assert.deepEqual(w8.messages.slice(w8.messages.length - w3.messages.length), w3.messages);
     delete process.env.ZOE_BRAIN_KEEP_TURNS;
