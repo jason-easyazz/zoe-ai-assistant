@@ -275,3 +275,23 @@ def test_the_fake_success_stubs_are_gone():
     assert ("POST", "/api/user/layout") not in routes(stubs.router)
     assert ("GET", "/api/user/layout") in routes(stubs.router)  # the honest read ("no layout") stays
     assert "/api/agent/board/cancel" not in (ROOT / "routers" / "chat.py").read_text()  # the card no longer links it
+
+
+def test_creating_a_project_is_an_honest_501_not_a_200():
+    """POST /api/projects used to answer 200 {"error": "...coming soon"}: a success status for a write that
+    did nothing, which the UI cannot tell from a real create. It is a 501 now; the read stays a truthful empty list."""
+    app = FastAPI()
+    app.include_router(stubs.router)
+    app.dependency_overrides[auth.get_current_user] = lambda: {"user_id": "jason", "role": "admin"}
+    client = TestClient(app)
+    resp = client.post("/api/projects", json={"name": "Garden", "stages": []})
+    assert resp.status_code == 501
+    assert "not available" in resp.json()["detail"]
+    assert client.get("/api/projects").json() == {"projects": [], "count": 0}
+
+
+def test_the_hardcoded_modules_list_is_gone():
+    """/api/system/modules/enabled was a hard-coded all-True list with no caller."""
+    paths = {(m, r.path) for r in system.router.routes for m in getattr(r, "methods", ())}
+    assert ("GET", "/api/system/modules/enabled") not in paths
+    assert ("GET", "/api/system/platform") in paths  # the neighbour it sat beside stays

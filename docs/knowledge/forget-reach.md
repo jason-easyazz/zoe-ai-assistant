@@ -66,6 +66,21 @@ Forget cannot rewrite a tarball or a Postgres dump, so the rule is: **backups ag
   restore from before the forget has neither.
 - Off-box backups do not exist yet (deep dive finding 5); when they do, they inherit this rule and the 35-day bound.
 
+## Stores outside the per-member inventory
+
+The inventory below covers every table with a `user_id` column or a reference to one (`forget_reach.discover_user_tables`); a
+`STORES` entry for any other table fails `test_no_inventory_entry_names_a_table_that_no_migration_creates`. Household tables with no
+member column are therefore recorded here instead, each with why neither forget path applies and what bounds it:
+
+- `presence_observations` (alembic `0064`, `presence/ha_presence.py`, flag `ZOE_HA_PRESENCE`, default off): one row per debounced
+  home / away / unknown change of an HA `person` / `device_tracker` entity - `sha256(entity_id)`, the state, the time, `ttl_s` 180.
+  No words, no member id, no GPS or attributes (the poller keeps only `state`). Not reachable by the ENTITY forget (no text to match
+  a name against) or the MEMBER erase (no mapping from an HA entity to a Zoe member is stored). The hash is unsalted, so a key is a
+  pseudonym a reader could reverse from the HA entity name, not anonymous: the bound is retention - while the flag is `shadow` / `on`
+  the poller deletes rows older than 14 days (`RETENTION_S`). With the flag `off` nothing runs, prune included: retiring the reader
+  means `DELETE FROM presence_observations` (or the `0064` downgrade). Revisit (an inventory entry, or a salted key) the day a member
+  id or an inferred-presence table joins it.
+
 ## Adding a store
 
 Add a `Store` to `forget_reach.py` (`TABLES` for a Postgres table, `OTHER` for anything else): `reached` with the eraser(s), `out_of_scope` with a one-line
@@ -162,7 +177,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `ui_panel_sessions` | pg_table | metadata | out_of_scope | - | Which page a panel is on; ui_context can carry transient state, expires with the session. |
 | `push_subscriptions` | pg_table | metadata | out_of_scope | - | A browser push endpoint and keys. |
 | `auth_handoffs` | pg_table | metadata | out_of_scope | - | Short-lived hand-off tokens. |
-| `trust_audit` | pg_table | metadata | out_of_scope | - | Tool-call audit: tool name, allowed flag, reason. |
+| `trust_audit` | pg_table | metadata | out_of_scope | - | Never-built trust-gate audit log; never written, dropped by alembic 0065. |
 | `agent_cost_events` | pg_table | metadata | out_of_scope | - | Token counts and cost per call. |
 | `llm_call_log` | pg_table | metadata | out_of_scope | - | Latency and token counts per call. |
 | `ui_actions` | pg_table | words | gap | - | Action payloads (e.g. a typed list item) are kept; neither path reaches them. |
