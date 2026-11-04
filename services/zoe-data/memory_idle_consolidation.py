@@ -326,11 +326,14 @@ async def consolidate_session(session_id: str, user_id: str,
         logger.debug("idle consolidation: own-words filter unavailable: %s", type(exc).__name__)
     # A turn naming an entity the user asked Zoe to forget is skipped, not re-mined (memory_forgotten, ZMB F3):
     # the chat rows are not erased, so without this the forgotten name returns at the next idle pass.
+    # FAIL-CLOSED: a ledger outage returns BEFORE the watermark moves, so these turns are re-read on the next sweep.
     try:
         from memory_digest import _skip_forgotten_turns
         user_turn_list = await _skip_forgotten_turns(user_id, user_turn_list, "idle_consolidation")
-    except Exception as exc:  # noqa: BLE001 - fail-open; MemoryService.ingest is the second wall
-        logger.debug("idle consolidation: forgotten-turn filter unavailable: %s", type(exc).__name__)
+    except Exception as exc:  # noqa: BLE001 - LedgerUnavailable (or any failure to consult the ledger): defer
+        logger.warning("idle consolidation: forget ledger unavailable session=%s (%s) - deferred, watermark kept",
+                       session_id, type(exc).__name__)
+        return 0
     user_turns = "\n".join(user_turn_list)
     transcript = user_turns
 
