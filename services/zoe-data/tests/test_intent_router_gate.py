@@ -267,7 +267,6 @@ def chat_lane(real_head, monkeypatch):
     monkeypatch.setattr(chat_router, "_USE_LOCAL_BRAIN", True, raising=False)
     monkeypatch.setattr(chat_router, "_safe_load_portrait", _noop)
     monkeypatch.setattr(chat_router, "_brain_oneshot", _brain)
-    monkeypatch.setattr(chat_router, "chat_inject_background", _noop)
     monkeypatch.setattr(chat_router, "_persist_memory_candidates", _noop)
     return chat_router, executed
 

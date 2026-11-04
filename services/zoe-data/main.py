@@ -1122,14 +1122,8 @@ async def lifespan(app: FastAPI):
 
     try:
         from runtime_env import bootstrap_runtime_env  # type: ignore[import]
-        from hermes_http import hermes_api_key  # type: ignore[import]
 
         bootstrap_runtime_env()
-        if not hermes_api_key():
-            logger.error(
-                "HERMES_API_KEY/API_SERVER_KEY missing after bootstrap — "
-                "engineering/Hermes background tasks may fail with 401"
-            )
     except Exception as _env_exc:
         logger.warning("runtime_env bootstrap (non-fatal): %s", _env_exc)
 

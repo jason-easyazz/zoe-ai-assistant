@@ -48,8 +48,6 @@ ALLOWED = {
         "a MATCHER for the sidecar's recall_memory error result, never spoken from here",
     ("routers/chat.py", "I had trouble fetching panel status. Check `/api/panels` for details."):
         "operator panel-status answer naming the endpoint, not a conversational seam",
-    ("routers/chat.py", "I couldn't reach Hermes right now. Please try again."):
-        "legacy Hermes escalation lane (retiring); names the backend that failed",
 }
 
 

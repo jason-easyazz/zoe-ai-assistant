@@ -29,7 +29,7 @@ for (const dead of ['cooking.html', 'smart-home.html', 'games.html', 'week_plann
 ok('the desktop stubs and the dead tier are gone from dist/');
 const panel = fs.readFileSync(path.join(root, 'js/notifications-panel.js'), 'utf8');
 const links = [...panel.matchAll(/location\.href = '\/touch\/updates\.html[^']*'/g)];
-assert(links.length === 2, 'expected the two touch deep links to still exist for touch surfaces');
+assert(links.length === 1, 'expected the one remaining touch deep link (zoe updates) to still exist for touch surfaces');
 for (const m of links) {
   const before = panel.slice(Math.max(0, m.index - 60), m.index);
   assert(/if \(IS_TOUCH_SURFACE\) $/.test(before), 'deep link is not gated to touch surfaces: ' + before.trim());

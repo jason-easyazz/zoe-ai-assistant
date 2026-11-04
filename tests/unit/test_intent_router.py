@@ -39,7 +39,6 @@ def _build_stubs() -> dict[str, types.ModuleType]:
         "database": mod("database", get_db=mock.MagicMock()),
         "db_pool": mod("db_pool", get_db_ctx=mock.MagicMock()),
         "zoe_agent": mod("zoe_agent", run_zoe_agent=mock.AsyncMock(return_value="ok")),
-        "openclaw_ws": mod("openclaw_ws", openclaw_cli=mock.AsyncMock(return_value="ok")),
         "multica_client": mod("multica_client", MULClient=mock.MagicMock()),
         "background_runner": mod("background_runner", enqueue_background_task=mock.AsyncMock()),
     }

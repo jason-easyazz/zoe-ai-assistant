@@ -89,7 +89,6 @@ def is_registered(name: str) -> bool:
 _ENTRIES = (
     _f('ZOE_A2A_CLIENT_TIMEOUT_S', 'int', 30),
     _f('ZOE_A2A_TOKEN', 'str', '', doc='docs/knowledge/feature-audit-2026-09-25.md'),
-    _f('ZOE_ACP_DELIVERY_MODE', 'str', 'live'),
     _f('ZOE_ADHOC_BACKUP_DIR', 'str', '', doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_AFFECT_CONSENT_GATE', 'str', '', doc='docs/knowledge/memory-authority.md'),
     _f('ZOE_AGENT_LLM_TIMEOUT', 'float', 120.0),
@@ -486,7 +485,6 @@ _ENTRIES = (
     _f('ZOE_MERGE_QUEUE_LABEL', 'str', 'auto-merge'),
     _f('ZOE_MERGE_QUEUE_MAX_CANDIDATES', 'int', 50),
     _f('ZOE_MIRROR_GUARD', 'str', 'shadow', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/converse-not-mirror.md', note='live .env: on'),
-    _f('ZOE_MIRROR_INTENTS_TO_OPENCLAW', 'bool', False),
     _f('ZOE_MISHEAR_CLARIFY', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/voice-pipeline.md', note='live: unset (code default in force)'),
     _f('ZOE_MODELS_LOCK', 'str', '', doc='docs/knowledge/offbox-backup.md'),
     _f('ZOE_MOONSHINE_ARCH', 'str', 'MEDIUM_STREAMING', doc='docs/knowledge/feature-audit-2026-09-25.md', note='live .env: MEDIUM_STREAMING', divergent_ok={'services/zoe-data/routers/voice_tts.py': "voice-path module, left untouched: the arch read defaults MEDIUM_STREAMING; two STT-backend LOG LABEL reads default 'v2' (cosmetic, label only)"}),

@@ -1,13 +1,8 @@
 """Repository path helpers.
 
-``zoe_repo_root()`` lived in ``hermes_http.py`` purely for historical reasons —
-it has no Hermes semantics whatsoever, it is ``Path(__file__).parents[2]`` with
-an env override. Its presence there made six modules (`worktree_bootstrap`, the
-four `pipeline_*` helpers, `kanban_adapter`) *look* Hermes-coupled when they only
-wanted a path, which inflated the apparent blast radius of retiring Hermes.
-
+``zoe_repo_root()`` is ``Path(__file__).parents[2]`` with an env override.
 Stdlib-only and dependency-free, so it can be imported from anywhere without
-pulling in ``runtime_env`` (which ``hermes_http`` imports at module scope).
+pulling in ``runtime_env``.
 """
 from __future__ import annotations
 
