@@ -1080,3 +1080,27 @@ session transcript and the sidecar's session; see `open-problems.md` (2026-10-09
 - **Nondeterministic brain.** Use `--samples 3` for a baseline you intend to gate on.
 - **Load.** One run is about 45 brain turns plus per-turn digests plus judge calls. That is
   roughly 15–30 minutes of brain slot, which is why it takes the harness lock.
+
+## Continuity cells, the full-bar baseline run and turn-taking counts (Initiative section 9, 2026-11-05)
+
+Three measurement instruments the Samantha Initiative record listed as missing. Nothing here touches the live brain until the launcher below is run by hand.
+
+- **Continuity cells** (`scripts/perf/continuity_cells.py`, tests `tests/unit/test_continuity_cells.py`). Lane C E3, built deterministic and offline: 12 neutral fictional
+  threads (4 live, 4 dormant whose fact changes on simulated day 2, 4 resolved on day 3), a simulated clock (plain day numbers), probes at 1 / 7 / 30 days, and scorers that match
+  needles and markers only (no judge, no network, no database). **C1 thread carry** per horizon with a Wilson interval (target >= 70% at 7 d); **C3 stale serve**
+  (old value served alone or without a superseding word, or a finished thread raised as still open; target < 2%); **C4 re-telling** (the reply asks for a slot already given;
+  a non-answer is NOT a re-tell; target < 10%). C5 forget-completeness already exists as S25 / axis F. Each cell has a control: `--selftest` runs a perfect, an amnesiac, a silent, a stale
+  and a decaying reference system and exits 1 unless each goes the declared way. **Not built:** a live adapter (chat API plus the bar's `Live.backdate`) - it needs the brain, so it is
+  queued behind the night window; until it exists these cells measure the INSTRUMENT, and the live carry / re-tell / stale numbers are still unmeasured.
+- **Baseline coverage: the "23 cells" figure is stale.** `SCENARIO_IDS` is 29 (S1-S8, S10-S16, S20-S33; S9 lives in the day-sim) and every one runs in a full `samantha_bar.py` run. The recorded baseline
+  (`~/.cache/zoe/samantha_bar_baseline.json`) still holds S1-S8 only; a full `--record-baseline` (inside `record_bench_baselines.sh`) writes all of them, and `--compare-baseline` already REFUSES
+  a baseline missing any scored cell. So the instrument is ready; what is missing is one clean, full, commit-bound run. `#2285` (`bar_reliability.py --arm-env`) was open when this was written
+  and is not used here: a baseline is a single unmodified arm.
+- **Launcher** `scripts/maintenance/bar_baseline_tonight.sh` (tests `tests/unit/test_bar_baseline_tonight.py`): refuses unless it is 22:00-01:05, `night_busy.sh voice` AND `night_busy.sh test` both exit
+  non-zero, no `land_voice_pr.sh` is alive, `/tmp/zoe-brain-window.lock` is free and the live checkout is clean; then `exec`s `record_bench_baselines.sh`. `--check` prints the verdict and runs nothing.
+  Nothing is scheduled. Exit 3 = not now, 4 = dirty live checkout.
+- **Turn-taking counts** (`scripts/perf/turn_taking_metrics.py`, tests `tests/unit/test_turn_taking_metrics.py`): cut-offs and over-waits per 100 turns from the panel daemon's `voice.log`, counts only.
+  Turns = `Recorded command:` / `Recorded follow-up:` lines minus the "too short" ones; cut-offs = `Continuation merged:` + `Recording ended on the hard cap mid-speech`; over-waits =
+  `No continuation - sending the held clip`. These are daemon-event PROXIES (target < 5 each per 100); a test pins the phrases to `zoe_voice_daemon.py` so a renamed log line cannot silently read as zero.
+  Run on the Pi's file copied or piped to the Jetson, e.g. `ssh zoe-pi 'cat ~/.zoe-voice/voice.log' | python3 scripts/perf/turn_taking_metrics.py - --since 2026-11-01`.
+
