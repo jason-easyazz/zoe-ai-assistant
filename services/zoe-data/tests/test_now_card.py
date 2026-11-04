@@ -117,7 +117,11 @@ def lab(monkeypatch):
     async def dates(_uid, _mutes=()):
         return tuple(DATES)
 
+    async def strict_mutes(uid):                  # the serve path reads the strict list: route it through whatever list_mutes a test set
+        return await restraint.list_mutes(uid)
+
     monkeypatch.setattr(restraint, "list_mutes", no_mutes)
+    monkeypatch.setattr(restraint, "list_mutes_strict", strict_mutes)
     monkeypatch.setattr(memory_forgotten, "matches", not_forgotten)
     monkeypatch.setattr(manner_block, "is_adult", adult)
     monkeypatch.setattr(nc, "_name", name)
@@ -684,4 +688,58 @@ def test_the_night_mind_cli_rebuilds_the_cards_before_it_closes_its_pool(monkeyp
     pool["events"].clear()
     asyncio.run(cli.amain(["--user", "zed_uid", "--model-url", "http://127.0.0.1:1/v1", "--dry-run"]))
     assert not [e for e in pool["events"] if isinstance(e, tuple)]
+
+
+def test_a_thread_muted_by_its_thread_ref_after_the_build_drops_out(lab, monkeypatch):
+    """Codex #2281: a thread mute is stored against ``night_threads:<id>``; the card line points at the observation. Different
+    wording, so only the observation -> thread mapping catches it."""
+    st, _svc = _built(lab, monkeypatch)
+    assert "shed roof" in st.rows[UID][1]
+    mute = restraint.Mute(id="mu2", stems=frozenset(restraint.stems("renovation project")), thread_ref="night_threads:th01")
+    obs_line = next(t for k, t, _r in json.loads(st.rows[UID][0])["lines"] if k == "thread")
+    assert not restraint.muted(obs_line, "night_observations:o_th01", [mute])     # control: neither the words nor the obs ref match
+
+    async def mutes(_uid):
+        return [mute]
+
+    monkeypatch.setattr(restraint, "list_mutes", mutes)
+    out = serve()
+    assert out and "shed roof" not in out and "Mia" in out
+
+
+def test_an_unreadable_mute_list_serves_no_line(lab, monkeypatch):
+    """Codex #2281: ``list_mutes`` reads a failed lookup as "nothing muted"; the serve path uses the strict read and withholds."""
+    _built(lab, monkeypatch)
+    assert serve()                                                              # control: readable mutes serve the card
+
+    async def down(_uid):
+        raise RuntimeError("mute table unreadable")
+
+    monkeypatch.setattr(restraint, "list_mutes_strict", down)
+    nc._ROWS.clear()
+    assert serve() == ""
+
+
+_REAL_LIST_MUTES, _REAL_LIST_MUTES_STRICT = restraint.list_mutes, restraint.list_mutes_strict     # before the lab fixture patches them
+
+
+def test_the_strict_mute_read_raises_where_the_lenient_one_says_none(monkeypatch):
+    import contextlib
+
+    import db_compat
+
+    monkeypatch.setattr(restraint, "list_mutes", _REAL_LIST_MUTES)
+    monkeypatch.setattr(restraint, "list_mutes_strict", _REAL_LIST_MUTES_STRICT)
+
+    @contextlib.asynccontextmanager
+    async def broken():
+        raise RuntimeError("db down")
+        yield
+
+    monkeypatch.setattr(db_compat, "get_compat_db", broken)
+    restraint._mute_cache.pop("zed_strict", None)
+    assert asyncio.run(restraint.list_mutes("zed_strict")) == []
+    with pytest.raises(RuntimeError):
+        asyncio.run(restraint.list_mutes_strict("zed_strict"))
+    assert "zed_strict" not in restraint._mute_cache, "a failed read is never cached"
 

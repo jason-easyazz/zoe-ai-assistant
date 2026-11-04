@@ -794,26 +794,32 @@ def _iso(dt: datetime) -> str:
 
 async def list_mutes(user_id: str) -> list[Mute]:
     """The member's ACTIVE mutes (cached 20 s, invalidated by every write here). Fail-open: a read that
-    fails is no mutes."""
+    fails is no mutes. A surface that must not serve on an unknown mute list uses ``list_mutes_strict``."""
+    try:
+        return await list_mutes_strict(user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("restraint: mute read failed (no mutes): %r", exc)
+        return []
+
+
+async def list_mutes_strict(user_id: str) -> list[Mute]:
+    """``list_mutes`` that RAISES when the read fails, so an outage is never read as "nothing is muted" (the now card, which
+    serves a stored card into the prompt, withholds its lines instead). Same cache; only a successful read is cached."""
     uid = (user_id or "").strip()
     if not uid:
         return []
     hit = _mute_cache.get(uid)
     if hit and time.monotonic() - hit[0] < _MUTE_CACHE_S:
         return hit[1]
-    try:
-        from db_compat import get_compat_db
+    from db_compat import get_compat_db
 
-        async with get_compat_db() as db:
-            async with db.execute(
-                "SELECT id, topic_key, thread_ref, created_at FROM restraint_mutes "
-                "WHERE user_id = ? AND status = 'active'", (uid,),
-            ) as cur:
-                rows = await cur.fetchall()
-        out = [Mute(str(r[0]), frozenset(str(r[1] or "").split()), str(r[2] or ""), str(r[3] or "")) for r in rows]
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("restraint: mute read failed (no mutes): %r", exc)
-        return []
+    async with get_compat_db() as db:
+        async with db.execute(
+            "SELECT id, topic_key, thread_ref, created_at FROM restraint_mutes "
+            "WHERE user_id = ? AND status = 'active'", (uid,),
+        ) as cur:
+            rows = await cur.fetchall()
+    out = [Mute(str(r[0]), frozenset(str(r[1] or "").split()), str(r[2] or ""), str(r[3] or "")) for r in rows]
     _mute_cache[uid] = (time.monotonic(), out)
     while len(_mute_cache) > _MARK_MAX:
         _mute_cache.pop(next(iter(_mute_cache)))

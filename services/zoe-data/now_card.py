@@ -423,10 +423,16 @@ async def _live(uid: str, lines: list, svc: Any = None) -> list:
     """The stored lines whose sources still stand now; each check fails closed (the line is dropped)."""
     import restraint
 
-    mutes = await restraint.list_mutes(uid)
+    try:
+        mutes = await restraint.list_mutes_strict(uid)
+    except Exception:  # noqa: BLE001 - an unknown mute list is not "nothing muted": serve no line this turn
+        logger.info("NOW_CARD user=%s mutes unreadable - no lines served", uid)
+        return []
     # the WHOLE source text of each line, freshly read: a stored line is cut for display (FACT_CHARS / QUOTE_CHARS), and a mute or
     # a forget named after the cut must still drop it
     whole: dict = {}
+    # a thread mute is stored against the THREAD (``night_threads:<id>``), the card line points at an observation: map it
+    thread_of: dict = {}
     obs_ids: Optional[set] = None
     if any(k == "thread" for k, _t, _r in lines):
         try:
@@ -436,6 +442,8 @@ async def _live(uid: str, lines: list, svc: Any = None) -> list:
                 _thr, obs = await night_mind.snapshot(uid, use_cache=True, all_threads=True)
                 obs_ids = {f"night_observations:{o['id']}" for o in obs}
                 whole.update((f"night_observations:{o['id']}", str(o.get("quote") or "")) for o in obs)
+                thread_of.update((f"night_observations:{o['id']}", f"night_threads:{o['thread_id']}")
+                                 for o in obs if o.get("thread_id"))
         except Exception:  # noqa: BLE001
             obs_ids = None
     facts: Optional[set] = None
@@ -459,7 +467,8 @@ async def _live(uid: str, lines: list, svc: Any = None) -> list:
             continue
         if kind != "speaker":
             texts = [t for t in dict.fromkeys((text, whole.get(ref, ""))) if t]
-            if any(restraint.muted(t, ref, mutes) for t in texts):
+            refs = [r for r in (ref, thread_of.get(ref, "")) if r]
+            if any(restraint.muted(t, r, mutes) for t in texts for r in refs):
                 continue
             if any([await _forgotten(uid, t) for t in texts]):
                 continue
