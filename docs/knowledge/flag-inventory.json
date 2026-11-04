@@ -4357,25 +4357,6 @@
         },
         "typed_env": false
       },
-      "ZOE_ENABLE_OPENCLAW_EXECUTION": {
-        "defaults": [
-          "'false'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/zoe_agent.py"
-        ],
-        "registered": true,
-        "spec": {
-          "allowed": null,
-          "default": false,
-          "divergent_ok": {},
-          "note": "",
-          "owner_doc": "",
-          "type": "bool"
-        },
-        "typed_env": false
-      },
       "ZOE_ENGINEERING_MODE": {
         "defaults": [
           "'interactive'"
@@ -17048,7 +17029,7 @@
     "services/zoe-data/worktree_bootstrap.py": 1,
     "services/zoe-data/write_claim_guard.py": 1,
     "services/zoe-data/ytmusic_signin.py": 10,
-    "services/zoe-data/zoe_agent.py": 10,
+    "services/zoe-data/zoe_agent.py": 9,
     "services/zoe-data/zoe_core_client.py": 12,
     "services/zoe-data/zoe_flue_client.py": 15,
     "services/zoe-data/zoe_memory_compose.py": 2,

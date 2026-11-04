@@ -804,16 +804,6 @@ def _log_voice_timing(
         pass
 
 
-_VOICE_ESCALATION_MARKERS = ("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")
-
-
-def _parse_voice_escalation_delta(delta: str, fallback_prompt: str) -> tuple[bool, str, str]:
-    """Return whether the voice escalation should be queued plus reason and task text."""
-    _, body = delta.split(":", 1)
-    reason, _, oc_task = body.partition("|")
-    return delta.startswith("__ESCALATE_BG__:"), reason, (oc_task or fallback_prompt).strip()
-
-
 # ── Voice text pre-processor ───────────────────────────────────────────────
 # Cleans LLM output for TTS synthesis: strips markdown, converts units,
 # expands abbreviations.  Run before ANY synthesis call on voice paths.
@@ -5437,17 +5427,6 @@ async def voice_command(
                                         async for out_chunk in _emit_sentence(_tool_line, record=False):
                                             yield out_chunk
                             continue
-                        if delta.startswith(_VOICE_ESCALATION_MARKERS):
-                            try:
-                                is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
-                                # Hermes is retired and the background executor is gone (it launched an
-                                # agent with auto-approve as the zoe user - deep dive S0-7): an escalation
-                                # is refused out loud, never queued.
-                                logger.info("voice/command stream escalation refused - no executor (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
-                                delta = "I can't run that kind of task any more, so I haven't started it."
-                            except Exception as esc_exc:
-                                logger.warning("voice/command stream escalation failed: %s", esc_exc)
-                                delta = _vp.say("action_failed", text)
                         if _t_first_token is None:
                             _t_first_token = time.monotonic() - t_chat_start
                             try:
@@ -5566,17 +5545,6 @@ async def voice_command(
                 # leading-audio gap to fill; we only strip the noise here).
                 if delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
                     continue
-                if delta.startswith(_VOICE_ESCALATION_MARKERS):
-                    try:
-                        is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
-                        # Hermes is retired and the background executor is gone (it launched an agent
-                        # with auto-approve as the zoe user - deep dive S0-7): an escalation is refused
-                        # out loud, never queued.
-                        logger.info("voice/command escalation refused - no executor (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
-                        delta = "I can't run that kind of task any more, so I haven't started it."
-                    except Exception as esc_exc:
-                        logger.warning("voice/command escalation failed: %s", esc_exc)
-                        delta = _vp.say("action_failed", text)
                 if _t_first_token is None:
                     _t_first_token = time.monotonic() - t_chat_start
                     try:
