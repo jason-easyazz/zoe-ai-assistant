@@ -120,9 +120,11 @@ PROTECTED = frozenset({USER_STATED, USER_CONFIRMED})
 
 
 def authority_of(cls: str) -> str:
-    if cls in (OPERATOR, USER_CONFIRMED, CURATED):
+    if cls in (OPERATOR, USER_CONFIRMED):
         return USER_CONFIRMED
-    if cls in (USER_STATED, USER_STATED_DERIVED):
+    # a curated row is the GUARDIAN's own statement (person-centred memory D1 / D7, 2026-11-03): stated, not confirmed by the
+    # member it is about; its author is ``curated_by``. Its RANK (who may change it) is separate and stays the curator's.
+    if cls in (USER_STATED, USER_STATED_DERIVED, CURATED):
         return USER_STATED
     return INFERRED
 

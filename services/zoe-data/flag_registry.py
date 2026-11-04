@@ -463,6 +463,7 @@ _ENTRIES = (
     _f('ZOE_MCP_USER_ID', 'str', ''),
     _f('ZOE_MCP_USER_ROLE', 'str', ''),
     _f('ZOE_MEMORIES_VOICE', 'bool', False, doc='docs/knowledge/memories-voice.md'),
+    _f('ZOE_MEMORIES_CURATORS', 'bool', False, doc='docs/knowledge/memory-curation.md'),
     _f('ZOE_MEMORY_AUDIT_COLLECTION', 'str', 'mempalace_audit'),
     _f('ZOE_MEMORY_AUTHORITY', 'str', 'enforce', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/memory-authority.md', note='live: unset (code default in force)'),
     _f('ZOE_MEMORY_COMPOSE_ENABLED', 'str', '', doc='docs/knowledge/relationship-memory-flag-enable.md'),

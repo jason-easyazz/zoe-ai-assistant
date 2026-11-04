@@ -1,6 +1,6 @@
 """memory_curation - caregiver curation (memories-space P7; owner decisions D7 / D9 / D10, 2026-10-19).
 
-A household admin adds and edits memories ABOUT a child ("Mia's teacher is Ms Lee", "swimming is on Tuesdays") from the desktop
+A household admin adds and edits memories ABOUT a child ("Juno's teacher is Ms Lee", "swimming is on Tuesdays") from the desktop
 or phone Memories page, so the child can ask Zoe later. The rules, each enforced here and pinned by ``tests/test_memory_curation.py``:
 
 * **Who curates (D7).** Every ADULT ADMIN is the implicit curator of every CHILD: no grant row. "Admin" is the session role AND the
@@ -21,6 +21,16 @@ or phone Memories page, so the child can ask Zoe later. The rules, each enforced
   ``memory_curation_audit`` BEFORE it runs (fail-closed) and again when it finished: ids and a category, never text.
 * **Never on the wall (D11).** A sensitive curated row is private by category (``provenance_answers.sensitive_classes``), so the
   panel counts it and never shows or speaks it. The curation routes refuse a panel outright.
+* **Guardian-stated, never inferred (person-centred memory D1 / D7, accepted 2026-11-03).** What a curator types or says is the
+  guardian's own statement: written at once, approved, with provenance ``authority=user_stated`` (``memory_authority.authority_of``
+  of the ``curated`` class) and the author the curator's VERIFIED identity (``curated_by``: the member session, or the curator's own
+  voice session / fresh PIN at the panel - never the panel binding). Nothing here asks a model: the category, the "User ..."
+  rewrite and the spoken parse are deterministic. A model-inferred fact about a child is never written through this module (it
+  stays approve-before-write in the confirm queue), and no mood / feelings class is ever filed (``NEVER``).
+* **Forgotten means forever.** A note that names something forgotten - in the member's ledger OR the curator's own (a forgotten
+  child) - is refused (409) before anything is written; a ledger outage refuses too (503, the strict lookups of
+  ``memory_forgotten``). The curator path is never an explicit re-teach (``memory_forgotten.EXPLICIT_RETEACH_WRITERS``): only the
+  person's own verified re-teach lifts a forget.
 * **Forget is audited.** A curator forget rejects the row through ``MemoryService.review`` (its audit row), then erases it for
   real when physical erase is on - the same steps as any forget. The child cannot forget or correct it (``memory_space``).
 
@@ -286,9 +296,31 @@ def _stamps(curator: Account, cat: str, sensitive: bool, via: str) -> dict:
                 curated_category=cat, curated_sensitive=bool(sensitive))
 
 
+FORGOTTEN_DETAIL = "That names something that was forgotten, so I won't add it back."
+
+
+async def refuse_forgotten(curator: Account, member: Account, clean: str, stored: str) -> None:
+    """Forgotten means forever: refuse a note naming anything the MEMBER forgot, or anything the CURATOR forgot (a forgotten child
+    included), before a word is written. Strict lookups (``memory_forgotten``): an outage refuses rather than risk a resurrection."""
+    import memory_forgotten
+    from memory_tombstones import matching_tombstone
+
+    checks = ((member.user_id, stored), (member.user_id, clean), (curator.user_id, clean))
+    try:
+        for uid, words in checks:
+            if matching_tombstone(uid, words) or await memory_forgotten.matches(uid, words, near=True, strict=True):
+                raise CurationRefused(409, FORGOTTEN_DETAIL)
+    except CurationRefused:
+        raise
+    except Exception as exc:  # noqa: BLE001 - LedgerUnavailable or any read failure: fail closed
+        logger.warning("memory_curation: forget ledger unavailable (%s) - nothing written", type(exc).__name__)
+        raise CurationRefused(503, "I can't check what was forgotten right now, so nothing was added.")
+
+
 async def add(db, curator: Account, member_id: str, text: str, category: str, *, via: str = "desktop", svc: Any = None) -> dict:
     pol = await policy(db, curator, member_id)
     clean, cat, sensitive = check_text(text, category, pol)
+    await refuse_forgotten(curator, pol.member, clean, _store_text(clean, pol.member))
     await _audited(db, curator.user_id, pol.member.user_id, "add", cat)
     ref = await _svc(svc).ingest(
         _store_text(clean, pol.member), user_id=pol.member.user_id, source=WRITER, origin=WRITER, memory_type="fact",
@@ -305,6 +337,7 @@ async def edit(db, curator: Account, member_id: str, row_id: str, text: str, *, 
     pol = await policy(db, curator, member_id)
     old = await _one(pol, row_id, svc)
     clean, cat, sensitive = check_text(text, str((old.metadata or dict()).get("curated_category") or "other"), pol)
+    await refuse_forgotten(curator, pol.member, clean, _store_text(clean, pol.member))
     await _audited(db, curator.user_id, pol.member.user_id, "edit", cat, old.id)
     ref = await _svc(svc).review(old.id, decision="edit", actor=curator.user_id, origin=WRITER,
                                  edits=_store_text(clean, pol.member), note="edited by a curator",

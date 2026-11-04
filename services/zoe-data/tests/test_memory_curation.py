@@ -105,8 +105,8 @@ def env(monkeypatch, tmp_path):
     db.conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY, role TEXT, name TEXT)")
     db.conn.execute("CREATE TABLE auth_users (user_id TEXT PRIMARY KEY, role TEXT)")
     db.conn.execute("CREATE TABLE member_modes (user_id TEXT PRIMARY KEY, mode TEXT, minor INTEGER)")
-    people = [(PARENT, "admin", "Sam Parker"), (PARENT2, "admin", "Alex Parker"), (KID, "child", "Mia Parker"),
-              (KID2, "child", "Leo Parker"), (ADULT, "user", "Robin Parker")]
+    people = [(PARENT, "admin", "Ash Quill"), (PARENT2, "admin", "Tam Quill"), (KID, "child", "Juno Quill"),
+              (KID2, "child", "Rafe Quill"), (ADULT, "user", "Wren Quill")]
     # the data-plane mirror says member for everyone (as live): roles come from auth_users only
     db.conn.executemany("INSERT INTO users VALUES (?, ?, ?)", [(u, "member", n) for u, _r, n in people])
     db.conn.executemany("INSERT INTO auth_users VALUES (?, ?)", [(u, r) for u, r, _n in people])
@@ -171,20 +171,22 @@ def test_flag_off_every_route_is_404(env, monkeypatch):
     assert c.get("/api/memories/curation/members", headers=H).status_code == 200      # control: on
     monkeypatch.delenv("ZOE_MEMORIES_CURATORS")
     assert c.get("/api/memories/curation/members", headers=H).status_code == 404
-    assert curate(env, "Mia likes dinosaurs", "likes").status_code == 404
+    assert curate(env, "Juno likes dinosaurs", "likes").status_code == 404
     assert c.get("/api/memories/curation/me", headers=H).status_code == 404
     assert not rows_of(env, KID)
 
 
 def test_a_parent_adds_a_memory_for_a_child_with_provenance(env):
-    r = curate(env, "Mia's teacher is Ms Lee", "school")
+    r = curate(env, "Juno's teacher is Ms Lee", "school")
     assert r.status_code == 200, r.text
-    assert r.json()["text"] == "Mia's teacher is Ms Lee" and r.json()["added_by"] == "Sam Parker"
+    assert r.json()["text"] == "Juno's teacher is Ms Lee" and r.json()["added_by"] == "Ash Quill"
     (row,) = rows_of(env, KID)
     md = row.metadata
     assert row.text == "User's teacher is Ms Lee"                       # the store convention: the child is the user
     assert md["origin"] == "curator" and md["authority_class"] == ma.CURATED and md["authority_basis"] == "curator"
-    assert md["curated_by"] == PARENT and md["curated_by_name"] == "Sam Parker" and md["curated_via"] == "desktop"
+    # D1 / D7 (person-centred memory, 2026-11-03): the guardian's own statement - written at once, provenance user_stated
+    assert md["status"] == "approved" and md["authority"] == "user_stated"
+    assert md["curated_by"] == PARENT and md["curated_by_name"] == "Ash Quill" and md["curated_via"] == "desktop"
     assert md["curated_category"] == "school" and md["curated_sensitive"] is False and md["curated_at"]
     assert not any(k.startswith("candidate_curated") for k in md), "curated stamps are first-class"
     got = curation_audit(env)
@@ -195,25 +197,25 @@ def test_a_parent_adds_a_memory_for_a_child_with_provenance(env):
 
 
 def test_every_adult_admin_curates_every_child_without_a_grant(env):
-    assert curate(env, "Leo's swimming is on Tuesdays", "routines", member=KID2, who=PARENT2).status_code == 200
+    assert curate(env, "Rafe's swimming is on Tuesdays", "routines", member=KID2, who=PARENT2).status_code == 200
     names = [m["user_id"] for m in as_(env, PARENT, "admin").get("/api/memories/curation/members", headers=H).json()["members"]]
     assert KID in names and KID2 in names and PARENT2 not in names and ADULT not in names
 
 
 def test_a_child_cannot_curate(env):
     c = as_(env, KID, "child")
-    r = c.post(f"/api/memories/curation/members/{KID2}/rows", json=dict(text="Leo likes trucks", category="likes"), headers=H)
+    r = c.post(f"/api/memories/curation/members/{KID2}/rows", json=dict(text="Rafe likes trucks", category="likes"), headers=H)
     assert r.status_code == 403
     assert c.get("/api/memories/curation/members", headers=H).status_code == 403
     # a child session that CLAIMS admin is still a child: the role comes from the account too
     r = as_(env, KID, "admin").post(f"/api/memories/curation/members/{KID2}/rows",
-                                    json=dict(text="Leo likes trucks", category="likes"), headers=H)
+                                    json=dict(text="Rafe likes trucks", category="likes"), headers=H)
     assert r.status_code == 403
     assert not rows_of(env, KID2)
 
 
 def test_a_guest_a_panel_and_a_non_admin_cannot_curate(env):
-    body = dict(text="Mia likes dinosaurs", category="likes")
+    body = dict(text="Juno likes dinosaurs", category="likes")
     url = f"/api/memories/curation/members/{KID}/rows"
     assert as_(env, "guest", "guest").post(url, json=body, headers=H).status_code in (401, 403)
     assert as_(env, PARENT, "admin").post(url, json=body).status_code == 401              # no session header
@@ -229,7 +231,7 @@ def test_a_guest_a_panel_and_a_non_admin_cannot_curate(env):
     env.db.conn.commit()
     assert as_(env, PARENT2, "admin").post(url, json=body, headers=H).status_code == 403    # the session claim alone is not enough
     assert not rows_of(env, KID)
-    assert curate(env, "Mia likes dinosaurs", "likes").status_code == 200                    # control: a real curator
+    assert curate(env, "Juno likes dinosaurs", "likes").status_code == 200                    # control: a real curator
 
 
 def test_curating_yourself_or_a_stranger_is_refused(env):
@@ -240,15 +242,15 @@ def test_curating_yourself_or_a_stranger_is_refused(env):
 # -- adults: their own word wins unless they opted the category in (D9) -------------------------------
 
 def test_a_curator_cannot_curate_an_adult_without_their_own_opt_in(env):
-    assert curate(env, "Robin's bins go out on Monday night", "routines", member=ADULT).status_code == 403
+    assert curate(env, "Wren's bins go out on Monday night", "routines", member=ADULT).status_code == 403
     assert not rows_of(env, ADULT)
     # an admin cannot opt an adult in on their behalf (D8 is a lawyer question, not a setting)
     r = as_(env, PARENT, "admin").put(f"/api/memories/curation/members/{ADULT}/sensitive/health", json=dict(on=True), headers=H)
     assert r.status_code == 403
     # the adult opts ONE category in, themself
     assert as_(env, ADULT, "user").put("/api/memories/curation/me/routines", json=dict(on=True), headers=H).json()["on"] is True
-    assert curate(env, "Robin's bins go out on Monday night", "routines", member=ADULT).status_code == 200
-    assert curate(env, "Robin's teacher is Ms Lee", "school", member=ADULT).status_code == 403     # not opted in
+    assert curate(env, "Wren's bins go out on Monday night", "routines", member=ADULT).status_code == 200
+    assert curate(env, "Wren's teacher is Ms Lee", "school", member=ADULT).status_code == 403     # not opted in
     (row,) = rows_of(env, ADULT)
     assert row.metadata["authority_class"] == ma.CURATED
     assert run(memory_space.forget_row(ADULT, row.id)) == "protected"     # opted in: the curated note stands
@@ -258,7 +260,7 @@ def test_a_curator_cannot_curate_an_adult_without_their_own_opt_in(env):
     (row,) = rows_of(env, ADULT)
     assert row.metadata["authority_class"] == ma.USER_STATED and row.metadata["authority_basis"] == "curated_released"
     assert row.metadata["origin"] == "curator"                            # provenance kept
-    assert curate(env, "Robin's bins go out on Tuesday night", "routines", member=ADULT).status_code == 403
+    assert curate(env, "Wren's bins go out on Tuesday night", "routines", member=ADULT).status_code == 403
     assert run(memory_space.forget_row(ADULT, row.id)) == "forgotten"
 
 
@@ -271,30 +273,30 @@ def test_a_child_cannot_change_their_own_opt_ins(env):
 # -- sensitive categories (D10) -----------------------------------------------------------------------
 
 def test_sensitive_curation_is_refused_without_an_opt_in(env):
-    r = curate(env, "Mia is allergic to peanuts", "health")
-    assert r.status_code == 403 and "Health notes for Mia are off" in r.json()["detail"]
-    r = curate(env, "Mia is allergic to peanuts", "routines")                     # health words under another category
+    r = curate(env, "Juno is allergic to peanuts", "health")
+    assert r.status_code == 403 and "Health notes for Juno are off" in r.json()["detail"]
+    r = curate(env, "Juno is allergic to peanuts", "routines")                     # health words under another category
     assert r.status_code == 422 and "health" in r.json()["detail"]
-    assert curate(env, "Mia gets 5 dollars pocket money each week", "likes").status_code == 422
+    assert curate(env, "Juno gets 5 dollars pocket money each week", "likes").status_code == 422
     assert not rows_of(env, KID)
     on = as_(env, PARENT, "admin").put(f"/api/memories/curation/members/{KID}/sensitive/health", json=dict(on=True), headers=H)
     assert on.status_code == 200 and on.json()["changed"] is True
-    r = curate(env, "Mia is allergic to peanuts", "health")
+    r = curate(env, "Juno is allergic to peanuts", "health")
     assert r.status_code == 200 and r.json()["sensitive"] is True
-    assert curate(env, "Mia gets 5 dollars pocket money each week", "money").status_code == 403    # money is still off
+    assert curate(env, "Juno gets 5 dollars pocket money each week", "money").status_code == 403    # money is still off
     assert [a[2] for a in curation_audit(env) if a[5] == "requested"] == ["sensitive_on", "add"]
 
 
 def test_a_sensitive_category_switched_off_again_hides_its_notes(env):
     c = as_(env, PARENT, "admin")
     c.put(f"/api/memories/curation/members/{KID}/sensitive/health", json=dict(on=True), headers=H)
-    assert curate(env, "Mia is allergic to peanuts", "health").status_code == 200
+    assert curate(env, "Juno is allergic to peanuts", "health").status_code == 200
     rid = rows_of(env, KID)[0].id
     c = as_(env, PARENT, "admin")
     c.put(f"/api/memories/curation/members/{KID}/sensitive/health", json=dict(on=False), headers=H)
     got = c.get(f"/api/memories/curation/members/{KID}/rows", headers=H).json()
     assert got["rows"] == [] and got["hidden"] == 1 and "peanut" not in str(got)
-    assert c.post(f"/api/memories/curation/members/{KID}/rows/{rid}/edit", json=dict(text="Mia is allergic to cats"),
+    assert c.post(f"/api/memories/curation/members/{KID}/rows/{rid}/edit", json=dict(text="Juno is allergic to cats"),
                   headers=H).status_code == 404
     assert env.col.rows[rid][1]["status"] == "approved"                  # still the child note, still protected
     c.put(f"/api/memories/curation/members/{KID}/sensitive/health", json=dict(on=True), headers=H)
@@ -302,7 +304,7 @@ def test_a_sensitive_category_switched_off_again_hides_its_notes(env):
 
 
 def test_feelings_and_family_conflict_are_never_curated(env):
-    r = curate(env, "Mia had a huge fight with her brother and they are not speaking", "people")
+    r = curate(env, "Juno had a huge fight with her brother and they are not speaking", "people")
     assert r.status_code == 422
     assert not rows_of(env, KID)
 
@@ -310,7 +312,7 @@ def test_feelings_and_family_conflict_are_never_curated(env):
 # -- the child cannot override a curated row (D9) -------------------------------------------------------
 
 def _curated_teacher(env):
-    assert curate(env, "Mia's teacher is Ms Lee", "school").status_code == 200
+    assert curate(env, "Juno's teacher is Ms Lee", "school").status_code == 200
     return rows_of(env, KID)[0].id
 
 
@@ -338,7 +340,7 @@ def test_control_authority_off_lets_the_child_remark_through(env, monkeypatch):
 
 def test_a_passing_denial_is_held_too(env):
     as_(env, PARENT, "admin").put(f"/api/memories/curation/members/{KID}/sensitive/health", json=dict(on=True), headers=H)
-    assert curate(env, "Mia is allergic to peanuts", "health").status_code == 200
+    assert curate(env, "Juno is allergic to peanuts", "health").status_code == 200
     ref = run(env.svc.ingest("User is not allergic to peanuts.", user_id=KID, source="chat_regex", status="approved"))
     assert ref.metadata["status"] == "disputed"
     assert ma.negation_flip("User is not allergic to peanuts.", "User is allergic to peanuts")
@@ -350,7 +352,7 @@ def test_the_curator_keeps_or_accepts_a_held_note(env):
     run(env.svc.ingest("User's teacher is Mr Brown.", user_id=KID, source="chat_regex", status="approved"))
     c = as_(env, PARENT2, "admin")                                      # any adult admin, not only the one who added it
     held = c.get(f"/api/memories/curation/members/{KID}/held", headers=H).json()["held"]
-    assert len(held) == 1 and held[0]["text"] == "Mia's teacher is Mr Brown." and held[0]["against"]["id"] == rid
+    assert len(held) == 1 and held[0]["text"] == "Juno's teacher is Mr Brown." and held[0]["against"]["id"] == rid
     assert c.get(f"/api/memories/curation/members/{KID}/rows", headers=H).json()["held"] == 1
     r = c.post(f"/api/memories/curation/members/{KID}/held/{held[0]['id']}", json=dict(action="keep"), headers=H)
     assert r.status_code == 200
@@ -370,7 +372,7 @@ def test_a_curator_sees_only_curated_rows_never_the_child_other_memories(env):
     run(env.svc.ingest("User likes dinosaurs and drawing.", user_id=KID, source="chat_regex", status="approved"))
     _curated_teacher(env)
     got = as_(env, PARENT, "admin").get(f"/api/memories/curation/members/{KID}/rows", headers=H).json()
-    assert [r["text"] for r in got["rows"]] == ["Mia's teacher is Ms Lee"]
+    assert [r["text"] for r in got["rows"]] == ["Juno's teacher is Ms Lee"]
     assert "dinosaurs" not in str(got)
 
 
@@ -456,7 +458,7 @@ def test_an_accept_that_failed_to_close_the_note_stays_visible_and_retryable(env
     assert again["id"] == note["id"]
     for i in range(7):                                    # more supersedes than any hop cap (each failed retry adds one)
         (cur,) = c.get(f"/api/memories/curation/members/{KID}/rows", headers=H).json()["rows"]
-        assert c.post(f"/api/memories/curation/members/{KID}/rows/{cur['id']}/edit", json=dict(text=f"Mia's teacher is Ms {chr(65 + i)}"),
+        assert c.post(f"/api/memories/curation/members/{KID}/rows/{cur['id']}/edit", json=dict(text=f"Juno's teacher is Ms {chr(65 + i)}"),
                       headers=H).status_code == 200
     (again,) = c.get(f"/api/memories/curation/members/{KID}/held", headers=H).json()["held"]
     assert again["id"] == note["id"]
@@ -468,7 +470,7 @@ def test_an_accept_that_failed_to_close_the_note_stays_visible_and_retryable(env
 def test_an_opt_out_that_cannot_list_rows_changes_nothing(env, monkeypatch):
     a = as_(env, ADULT, "user")
     assert a.put("/api/memories/curation/me/routines", json=dict(on=True), headers=H).status_code == 200
-    assert curate(env, "Robin's bins go out on Monday night", "routines", member=ADULT).status_code == 200
+    assert curate(env, "Wren's bins go out on Monday night", "routines", member=ADULT).status_code == 200
 
     async def down(**kw):
         raise memory_service.MemoryServiceError("store down")
@@ -502,12 +504,12 @@ def test_a_curator_cannot_forget_the_child_other_memories(env):
 def test_a_curated_sensitive_row_never_reaches_the_panel(env):
     as_(env, PARENT, "admin").put(f"/api/memories/curation/members/{KID}/sensitive/medication", json=dict(on=True), headers=H)
     # words the classifiers do not see as health: only the curated category keeps it off the wall
-    assert curate(env, "Mia takes ventolin before sport", "medication").status_code == 200
-    assert curate(env, "Mia's swimming is on Tuesdays", "routines").status_code == 200
+    assert curate(env, "Juno takes ventolin before sport", "medication").status_code == 200
+    assert curate(env, "Juno's swimming is on Tuesdays", "routines").status_code == 200
     view = run(memory_space.read_view(KID, svc=env.svc))
     shown = str(view["groups"])
     assert "ventolin" not in shown and view["private"].get("health") == 1
-    assert "swimming" in shown and "Added for you by Sam Parker" in shown
+    assert "swimming" in shown and "Added for you by Ash Quill" in shown
     # the curation routes refuse a panel outright, so the curator list cannot be read on a wall either
     panel = dict(H)
     panel["X-Device-Token"] = "panel-token"
@@ -516,7 +518,7 @@ def test_a_curated_sensitive_row_never_reaches_the_panel(env):
 
 def test_control_without_the_category_stamp_the_row_would_show(env):
     as_(env, PARENT, "admin").put(f"/api/memories/curation/members/{KID}/sensitive/medication", json=dict(on=True), headers=H)
-    assert curate(env, "Mia takes ventolin before sport", "medication").status_code == 200
+    assert curate(env, "Juno takes ventolin before sport", "medication").status_code == 200
     rid = rows_of(env, KID)[0].id
     doc, md = env.col.rows[rid]
     env.col.rows[rid] = (doc, dict((k, v) for k, v in md.items() if k != "curated_category"))
@@ -560,3 +562,87 @@ def test_migration_runs_twice_on_sqlite_and_chains_onto_one_head():
             downs.add(d.group(1))
     assert mod.revision == "0066" and mod.down_revision in revs
     assert len(revs - downs) == 1
+
+
+# -- person-centred memory D1 / D7 / forgotten-means-forever (accepted 2026-11-03) ------------------------------------------------
+
+@pytest.fixture
+def ledger(env, monkeypatch):
+    import memory_forgotten as mf
+    import memory_tombstones
+
+    monkeypatch.setenv(mf.SALT_ENV, "curation-test-salt-0123456789")
+    monkeypatch.delenv(mf.SHIELD_DAYS_ENV, raising=False)
+    mf.set_backend(mf.MemoryBackend())
+    memory_tombstones.clear_all()
+    yield mf
+    mf.set_backend(None)
+    memory_tombstones.clear_all()
+
+
+def test_a_name_the_child_forgot_is_not_re_added_by_a_curator(env, ledger):
+    assert curate(env, "Juno's coach is Ms Vale", "people").status_code == 200           # control: not forgotten -> written
+    run(ledger.add(KID, "Ms Lee", actor=KID))
+    r = curate(env, "Juno's teacher is Ms Lee", "school")
+    assert r.status_code == 409 and "Lee" not in r.text
+    assert [x.text for x in rows_of(env, KID)] == ["User's coach is Ms Vale"]
+    assert [a[2] for a in curation_audit(env)].count("add") == 2, "refused before the audit: the one earlier add only"
+
+
+def test_a_forgotten_child_is_not_re_added_by_the_curator_who_forgot_them(env, ledger):
+    run(ledger.add(PARENT, "Juno", actor=PARENT))
+    assert curate(env, "Juno likes dinosaurs", "likes").status_code == 409
+    assert not rows_of(env, KID)
+    assert curate(env, "Juno likes dinosaurs", "likes", who=PARENT2).status_code == 200  # control: another curator did not forget
+
+
+def test_an_edit_cannot_bring_a_forgotten_name_back(env, ledger):
+    rid = _curated_teacher(env)
+    run(ledger.add(KID, "Mr Brown", actor=KID))
+    r = as_(env, PARENT, "admin").post(f"/api/memories/curation/members/{KID}/rows/{rid}/edit",
+                                       json=dict(text="Juno's teacher is Mr Brown"), headers=H)
+    assert r.status_code == 409
+    assert [x.text for x in rows_of(env, KID)] == ["User's teacher is Ms Lee"]
+
+
+def test_a_ledger_outage_refuses_the_note(env, ledger, monkeypatch):
+    class Down(ledger.MemoryBackend):
+        async def active_hashes(self, user_id, now_iso):
+            raise RuntimeError("ledger down")
+
+    ledger.set_backend(Down())
+    assert curate(env, "Juno likes dinosaurs", "likes").status_code == 503             # strict: an outage never writes
+    assert not rows_of(env, KID)
+    ledger.set_backend(ledger.MemoryBackend())
+    assert curate(env, "Juno likes dinosaurs", "likes").status_code == 200             # control: the ledger back -> written
+
+
+def test_the_curator_path_is_never_an_explicit_re_teach():
+    import memory_forgotten as mf
+
+    assert mc.WRITER not in mf.EXPLICIT_RETEACH_WRITERS
+    assert not mf.is_explicit_reteach(mc.WRITER, user_id=KID, speaker_verified=True)
+    assert mf.is_explicit_reteach("voice_fact", user_id=KID, speaker_verified=True)       # control: the person's own re-teach
+
+
+_MODEL_IMPORTS = re.compile(r"^\s*(?:import|from)\s+(zoe_core_client|zoe_flue_client|brain_dispatch|expert_dispatch|"
+                            r"person_extractor_llm|memory_digest|llm\w*|openai|anthropic)\b", re.M)
+
+
+def test_d1_no_model_writes_a_curated_fact():
+    """D1: what the guardian states is written as stated; nothing in the curation path asks a model to infer a fact."""
+    src = (SVC / "memory_curation.py").read_text()
+    assert not _MODEL_IMPORTS.search(src)
+    assert _MODEL_IMPORTS.search("x = 1\n    import zoe_core_client\n")                  # control: the scan sees an import
+
+
+def test_d7_a_child_never_sees_or_edits_another_member_entries(env):
+    _curated_teacher(env)
+    run(env.svc.ingest("User likes trucks.", user_id=KID2, source="chat_regex", status="approved"))
+    c = as_(env, KID, "child")
+    assert c.get(f"/api/memories/curation/members/{KID2}/rows", headers=H).status_code == 403
+    assert c.get(f"/api/memories/curation/members/{KID}/rows", headers=H).status_code == 403
+    assert c.get(f"/api/memories/curation/members/{KID}/held", headers=H).status_code == 403
+    (row,) = rows_of(env, KID)
+    assert run(memory_space.curated_locked(KID, row.metadata)) is True                     # the child cannot edit or forget it
+    assert as_(env, PARENT, "admin").get(f"/api/memories/curation/members/{KID}/rows", headers=H).status_code == 200  # control

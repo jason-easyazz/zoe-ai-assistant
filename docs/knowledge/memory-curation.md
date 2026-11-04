@@ -3,13 +3,14 @@ type: Reference
 title: Caregiver curation - a parent adds memories for a child (memories-space phase 7)
 description: Flag ZOE_MEMORIES_CURATORS (default off). Every adult household admin is the implicit curator of every child (D7) and adds, fixes or removes notes about them from the phone or desktop Memories page ("Family memories"). Curated rows carry provenance and a new authority class above the child's own passing statements (D9); a contradicting remark is held for the curator. Health, medication and money need a per-child opt-in (D10). An adult is curated only in categories they opted in themself. Sensitive curated rows never reach the wall (D11). Security model, operator steps, rollback, what is unproven.
 tags: [memory, caregiving, children, privacy, provenance, authority, forget, flag-dark]
-timestamp: 2026-10-19T00:00:00+08:00
+timestamp: 2026-11-04T00:00:00+08:00
 ---
 
 # Caregiver curation (`memory_curation.py`, `routers/memories_curation.py`, `js/memories-curation.js`, migration 0066)
 
 Design: [memories-space.md](../architecture/memories-space.md) 2.3, 9 (P7 build status) and 11 (owner answers 2026-10-19).
-Authority wall: [memory-authority.md](memory-authority.md).
+Authority wall: [memory-authority.md](memory-authority.md). Person-centred memory owner decisions D1 / D6 / D7 (accepted
+2026-11-03): [person-centred-memory.md](../architecture/person-centred-memory.md) section 6.
 
 ## What a parent can do
 
@@ -17,7 +18,7 @@ On the phone or computer, Memories page, **Family memories** (shown only when th
 
 - pick a child; see ONLY the notes added for that child (by any adult admin), never the child's other memories;
 - **add** a note: one sentence + a category (Routines, People, School, Important dates, Likes, Other; Health, Medication,
-  Money once switched on). "Mia's teacher is Ms Lee" is stored on Mia's account as "User's teacher is Ms Lee";
+  Money once switched on). "Juno's teacher is Ms Lee" is stored on Juno's account as "User's teacher is Ms Lee";
 - **fix** or **remove** a note (remove asks first; it is the audited forget, with the physical erase);
 - switch **health / medication / money** on or off for a child (off by default);
 - answer the **held notes**: when the child said something different ("my teacher is Mr Brown"), keep the note or use what
@@ -46,6 +47,9 @@ Memories list labelled "Added for you by <name>", and cannot forget or correct t
 | only `memory_curation` writes as the `curator` writer | static test |
 | every action audited BEFORE it runs (no audit row, no change) and when it finished; ids, category, a row-id hash, never text | `memory_curation_audit` |
 | a sensitive curated row is private by its category, so the panel counts it and never shows or speaks it | `provenance_answers.sensitive_classes` |
+| **D1 / D7** (person-centred memory, accepted 2026-11-03): a curated note is the guardian's OWN statement - approved at once, `authority=user_stated`, author `curated_by` = the curator's verified identity; no model in the path (static scan); no mood / feelings class ever | `memory_authority.authority_of`, `memory_curation` (`NEVER`) |
+| **D7**: a child never sees or edits another member's entries - the curation routes are curator-only (403 for a child, its own notes included) and a curated row on the child's own list cannot be edited or forgotten by them | `require_curator`, `memory_space.curated_locked` |
+| **forgotten means forever**: a note naming anything the member forgot, or anything the curator forgot (a forgotten child), is refused (409) before a word is written; a forget-ledger outage refuses too (503, strict lookups); the curator path is never an explicit re-teach | `memory_curation.refuse_forgotten`, `memory_forgotten.EXPLICIT_RETEACH_WRITERS` |
 
 ## Operator steps
 
@@ -61,7 +65,7 @@ Rollback: unset the flag (404 everywhere). Curated rows already written stay ord
 ## Not built / unproven
 
 - **D8** (a carer acting for an adult who cannot consent) is a legal question; nothing acts for an adult without their own opt-in.
-- The spoken curator intent at the panel ("Zoe, remember that Mia's swimming is on Tuesdays", in the curator's own verified voice
+- The spoken curator intent at the panel ("Zoe, remember that Juno's swimming is on Tuesdays", in the curator's own verified voice
   session) is a separate voice-path PR (replay-gated).
 - Recall phrasing: the brain sees a curated row as an ordinary fact; the "Mum added a note" lexicon line of design 2.3 is not built.
 - Contradiction detection is the shared matcher (`conflict_kind`) plus the negation flip; a paraphrased contradiction it cannot

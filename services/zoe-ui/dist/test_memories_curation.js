@@ -54,8 +54,8 @@ function makeEnv(opts = {}) {
     ids.curationOpen.hidden = true;
     const doc = { createElement: (t) => new Node(t), getElementById: (id) => ids[id] || null };
     const calls = [];
-    const rows = [{ id: 'row/1', text: 'Mia’s teacher is Ms Lee', category: 'school', added_by: 'Sam' },
-                  { id: 'row-2', text: HOSTILE, category: 'routines', added_by: 'Sam' }];
+    const rows = [{ id: 'row/1', text: 'Juno’s teacher is Ms Lee', category: 'school', added_by: 'Ash' },
+                  { id: 'row-2', text: HOSTILE, category: 'routines', added_by: 'Ash' }];
     const fetch = async (url, o = {}) => {
         const method = (o.method || 'GET').toUpperCase();
         calls.push({ method, url, body: o.body === undefined ? undefined : JSON.parse(o.body) });
@@ -64,10 +64,10 @@ function makeEnv(opts = {}) {
         if (url === base + '/me') return opts.me === 404 ? reply(404, { detail: 'Not Found' })
             : reply(200, { kind: 'adult', categories: CATS, on: [], editable: true });
         if (url === base + '/members') return opts.members === 403 ? reply(403, { detail: 'Only a grown-up household admin' })
-            : reply(200, { members: [{ user_id: 'kid/1', name: 'Mia', kind: 'child', categories: CATS, sensitive_on: [],
+            : reply(200, { members: [{ user_id: 'kid/1', name: 'Juno', kind: 'child', categories: CATS, sensitive_on: [],
                                           sensitive_switchable: ['health', 'medication', 'money'] }] });
         if (url === base + '/members/kid%2F1/rows' && method === 'GET') return reply(200, { rows, categories: CATS, held: 0 });
-        if (url === base + '/members/kid%2F1/rows') return opts.addStatus ? reply(opts.addStatus, { detail: 'Health notes for Mia are off. Turn them on first.' })
+        if (url === base + '/members/kid%2F1/rows') return opts.addStatus ? reply(opts.addStatus, { detail: 'Health notes for Juno are off. Turn them on first.' })
             : reply(200, { id: 'row-3' });
         if (/\/forget$/.test(url)) { rows.splice(0, 1); return reply(200, { forgotten: true }); }
         return reply(404, { detail: 'not found' });
@@ -92,7 +92,7 @@ async function check(label, fn) {
 async function openMia(e) {
     await e.Z.init(e.doc);
     await e.ids.curationOpen.click();
-    await byText(e.ids.curation, 'Mia')[0].click();
+    await byText(e.ids.curation, 'Juno')[0].click();
 }
 
 (async () => {
@@ -110,14 +110,14 @@ async function openMia(e) {
         await e.ids.curationOpen.click();
         const txt = e.ids.curation.textContent;
         assert(txt.includes('Help with my memories'), 'own settings');
-        assert(!txt.includes('Memories for my family') && byText(e.ids.curation, 'Mia').length === 0, 'no family part');
+        assert(!txt.includes('Memories for my family') && byText(e.ids.curation, 'Juno').length === 0, 'no family part');
     });
 
     await check('the notes for a child are text only, with who added them', async () => {
         const e = makeEnv();
         await openMia(e);
         const txt = e.ids.curation.textContent;
-        assert(txt.includes('Mia’s teacher is Ms Lee') && txt.includes('added by Sam'), 'row + provenance');
+        assert(txt.includes('Juno’s teacher is Ms Lee') && txt.includes('added by Ash'), 'row + provenance');
         assert(txt.includes(HOSTILE), 'a hostile note is shown as text');
         assert.strictEqual(byText(e.ids.curation, 'Health: off').length, 1, 'sensitive switches for a child');
     });
@@ -126,21 +126,21 @@ async function openMia(e) {
         const e = makeEnv();
         await openMia(e);
         const input = e.ids.curation.all(n => n.tagName === 'INPUT')[0];
-        input.value = 'Mia’s swimming is on Tuesdays';
+        input.value = 'Juno’s swimming is on Tuesdays';
         e.ids.curation.all(n => n.tagName === 'SELECT')[0].value = 'routines';
         await byText(e.ids.curation, 'Add')[0].click();
         const p = posts(e.calls);
         assert.strictEqual(p.length, 1);
         assert.strictEqual(p[0].url, '/api/memories/curation/members/kid%2F1/rows', 'the member id is path-encoded');
-        assert.deepStrictEqual(p[0].body, { text: 'Mia’s swimming is on Tuesdays', category: 'routines' });
+        assert.deepStrictEqual(p[0].body, { text: 'Juno’s swimming is on Tuesdays', category: 'routines' });
     });
 
     await check('a refusal is said, not swallowed', async () => {
         const e = makeEnv({ addStatus: 403 });
         await openMia(e);
-        e.ids.curation.all(n => n.tagName === 'INPUT')[0].value = 'Mia is allergic to peanuts';
+        e.ids.curation.all(n => n.tagName === 'INPUT')[0].value = 'Juno is allergic to peanuts';
         await byText(e.ids.curation, 'Add')[0].click();
-        assert(e.ids.curation.textContent.includes('Health notes for Mia are off'));
+        assert(e.ids.curation.textContent.includes('Health notes for Juno are off'));
     });
 
     await check('Remove asks first, then sends the audited forget', async () => {

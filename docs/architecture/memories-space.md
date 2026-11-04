@@ -888,7 +888,7 @@ adult admin is the implicit curator of every child); an adult is curated only in
 (rank 6, changed only by a curator or an operator: the child's passing remark is held as a `disputed` note the curator keeps or
 accepts); an adult's opt-out releases their curated rows to `user_stated`. A curator sees all curated rows of the member (any
 curator's, so two parents share them), never the member's other memories. The spoken curator intent at the panel ("Zoe, remember
-that Mia's swimming is on Tuesdays") is a separate, replay-gated PR.
+that Juno's swimming is on Tuesdays") is a separate, replay-gated PR.
 
 Each phase is one PR (or a small workstream), flag-dark, with its tests, and says what changes for the family.
 
