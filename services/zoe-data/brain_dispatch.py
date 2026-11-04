@@ -104,7 +104,7 @@ import sys
 import threading
 import time
 import traffic_class
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -912,6 +912,7 @@ def _claim_guarded(inner: AsyncIterator[str], message: str, user_id: str, kwargs
     only when a write really landed this turn, else it becomes an honest line. EVERY brain turn - voice, chat, Telegram,
     LiveKit - ends here, so this is the one place the rule holds on every lane. The replay harness is never guarded (its writes
     are deliberately not committed, so its success-shaped replies have no receipts)."""
+    implied = _take_deferred_write()     # taken (cleared) on EVERY turn, replay included, so it never outlives its turn
     if kwargs.get("replay_isolation"):
         return inner
     try:
@@ -920,7 +921,7 @@ def _claim_guarded(inner: AsyncIterator[str], message: str, user_id: str, kwargs
 
         if write_claim_guard.mode() == "off":
             return inner
-        return write_claim_guard.guard_stream(inner, user_id, write_receipts.begin(), user_text=message)
+        return write_claim_guard.guard_stream(inner, user_id, write_receipts.begin(), user_text=message, implied_kind=implied)
     except Exception:  # noqa: BLE001 - bookkeeping must never stop a turn
         logger.warning("write-claim guard unavailable - reply not checked", exc_info=True)
         return inner
@@ -935,14 +936,26 @@ def _receipts_begin() -> float:
         return 0.0
 
 
-def _claim_guarded_text(reply: str, message: str, user_id: str, started: float, kwargs: dict[str, Any]) -> str:
+def _take_deferred_write() -> Optional[str]:
+    """The kind of a write the fast path deferred to this turn (``write_receipts.take_deferred_write``), or None."""
+    try:
+        import write_receipts
+
+        return write_receipts.take_deferred_write()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _claim_guarded_text(reply: str, message: str, user_id: str, started: float, kwargs: dict[str, Any],
+                        implied_kind: Optional[str] = None) -> str:
     """The one-shot form of ``_claim_guarded`` (same rule, same replay exemption)."""
     if kwargs.get("replay_isolation") or not reply:
         return reply
     try:
         import write_claim_guard
 
-        return write_claim_guard.guard_text(reply, user_id, started, user_text=message)
+        return write_claim_guard.guard_text(reply, user_id, started, user_text=message,
+                                            implied_kind=implied_kind)
     except Exception:  # noqa: BLE001
         logger.warning("write-claim guard unavailable - reply not checked", exc_info=True)
         return reply
@@ -978,18 +991,19 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
     token = _provenance_begin(user_id)
     reply = ""
     started = _receipts_begin()
+    implied = _take_deferred_write()
     try:
         if use_flue_brain():
             if failover_enabled():
                 reply = await _flue_oneshot_with_failover(message, session_id, user_id, **kwargs)
             else:
                 reply = await _flue_oneshot_labeled(message, session_id, user_id, **kwargs)
-            reply = _claim_guarded_text(reply, message, user_id, started, kwargs)
+            reply = _claim_guarded_text(reply, message, user_id, started, kwargs, implied)
             return reply
         lane = _fallback_lane()
         _log_lane(attempted=lane, served=lane, outcome="dispatched", session_id=session_id)
         reply = await _fallback_oneshot(message, session_id, user_id, **kwargs)
-        reply = _claim_guarded_text(reply, message, user_id, started, kwargs)
+        reply = _claim_guarded_text(reply, message, user_id, started, kwargs, implied)
         return reply
     finally:
         _provenance_commit(user_id, reply, message, session_id, token)

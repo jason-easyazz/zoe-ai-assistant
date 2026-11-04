@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-04T00:00:00Z
+timestamp: 2026-11-05T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-04T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-04. The table body is deterministic (sorted, no
+Last generated: 2026-11-05. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 810 prod flags; 223 read through `typed_env`.
+- 810 prod flags; 224 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -554,7 +554,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PANEL_REVIEW_CARDS` | bool | `False` | - | `docs/knowledge/day-review-raise.md` | `False` | yes | NO | `services/zoe-data/panel_review_cards.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | int | `900` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PANEL_TOKEN_VIA_CF` | str | `'guest'` | - | `services/zoe-data/AGENTS.md` | `'guest'` | no | NO | `services/zoe-data/panel_principal.py` |
-| `ZOE_PERF` | str | `''` | - | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `-` | no | NO | `scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_cold_first_turn.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
+| `ZOE_PERF` | str | `''` | - | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `-` | yes | NO | `scripts/perf/bar_reliability.py`<br>`scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_cold_first_turn.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_PERSONALISATION_HOP` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONALISATION_HOP_PLACEMENT` | str | `'block'` | - | `docs/knowledge/samantha-bar.md` | `'block'` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONALISATION_HOP_WORDING` | str | `'natural'` | - | `docs/knowledge/samantha-bar.md` | `'natural'` | yes | NO | `services/zoe-data/personalisation_hop.py` |
