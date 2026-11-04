@@ -438,7 +438,7 @@ async def pull(uid: str, session_id: str, *, channel: str = "chat",
     spoken = channel in _SPOKEN_CHANNELS
     try:
         from db_compat import get_compat_db
-        from proactive import ledger
+        from proactive import ledger, outcome_edges
 
         async with get_compat_db() as db:
             items = await pending_items(db, uid, now)
@@ -470,6 +470,9 @@ async def pull(uid: str, session_id: str, *, channel: str = "chat",
                     db, user_id=uid, candidate_id=i.id, kind=i.kind, source_ref=i.source_ref,
                     shape="pull", delivered_by="pull", session_id=session_id, cue_words=i.cues,
                     now=now, outcome="accepted", voiced=1)
+                await outcome_edges.open_edge(
+                    db, user_id=uid, source_ref=i.source_ref, kind=i.kind, touch_point=outcome_edges.PULL,
+                    now=now, outcome="acted", source="pull_ask")
                 await lines.record(
                     db, user_id=uid, line="pulled", kind=i.kind, source_ref=i.source_ref,
                     reason="asked", score=i.salience, shape="pull", channel=channel,

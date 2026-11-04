@@ -581,6 +581,15 @@ async def prepare(message: str, user_id: str, session_id: str, *,
     if not selector_enabled() or not uid or not sid or not _eligible(uid):
         return None
     try:
+        # The member's first turn of the local day: re-score today's due items before the pick
+        # (ZOE_OUTCOME_EDGES, proactive/outcome_edges.py; no I/O when off, once a day, never raises).
+        from proactive import outcome_edges
+
+        if outcome_edges.enabled():
+            try:
+                await asyncio.wait_for(outcome_edges.on_presence(uid, _now()), timeout=_PREPARE_TIMEOUT_S)
+            except Exception as exc:  # noqa: BLE001 - a slow re-score must not cost the turn its raise
+                logger.debug("proactive-selector: presence re-score skipped (non-fatal): %r", exc)
         return await asyncio.wait_for(_prepare(message or "", uid, sid, brief_active),
                                       timeout=_PREPARE_TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001 — a raise must never break a turn
@@ -624,6 +633,11 @@ async def _settle(raised: Raise, produced: bool) -> bool:
                     db, candidate_id=raised.candidate_id, user_id=raised.user_id,
                     session_id=raised.session_id, shape=raised.shape, now=now,
                     trigger=raised.trigger)
+                from proactive import outcome_edges  # flag-dark outcome edge (no I/O when off)
+
+                await outcome_edges.open_for_candidate(
+                    db, candidate_id=raised.candidate_id, user_id=raised.user_id,
+                    touch_point=outcome_edges.RAISE, now=now)
                 await lines.log_for_candidate(
                     db, line="raised", candidate_id=raised.candidate_id, user_id=raised.user_id,
                     reason="open_turn" if raised.shape == "greeting" else "cue",

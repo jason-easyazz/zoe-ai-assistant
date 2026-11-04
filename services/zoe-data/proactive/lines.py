@@ -291,6 +291,9 @@ async def record_tap(user_id: str, signal: str, *, target_id: str = "", channel:
                                 channel=channel, session_id=str(sid or ""), now=now,
                                 idem=f"{user_id}|welcome|{tid}"):
                     wrote += 1
+                from proactive import outcome_edges  # flag-dark: the tap decides the item's edge
+
+                await outcome_edges.on_tap(db, user_id, str(ref), signal, now)
     except Exception as exc:  # noqa: BLE001
         logger.warning("delivery-lines: tap failed user=%s: %r", user_id, exc)
         return 0

@@ -10363,6 +10363,18 @@
         },
         "typed_env": false
       },
+      "ZOE_OUTCOME_EDGES": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/outcome_edges.py"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": true
+      },
       "ZOE_OWN_FACT_PRECEDENCE": {
         "defaults": [
           "-"
