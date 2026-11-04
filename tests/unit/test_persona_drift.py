@@ -222,7 +222,8 @@ def test_live_run_goes_through_the_scratch_stack_and_quiet_hours_gates():
     text, src = _main_src()
     assert src.count("scratch_stack_for(") == 1
     assert src.index("scratch_stack_for(") < src.index("sb.Live(stack.token"), "no live client before the scratch stack"
-    assert "uma._gates(args, live, log)" in src, "nightly window + quiet hours + deploy + readiness + RAM"
+    assert "_preflight(args, live, log, service_dir, revision)" in src and src.index("sb.Live(stack.token") < src.index("_preflight(")
+    assert "uma._gates(args, live, log)" in text, "nightly window + quiet hours + deploy + readiness + RAM (in _preflight)"
     assert "_acquire_lock()" in src and "teardown(" in src
     assert 'env_file_value(service_dir, "POSTGRES_URL")' not in src and 'env_file_value(service_dir, "ZOE_INTERNAL_TOKEN")' not in src
     assert "close_scratch(ctx)" in text and "return _main(argv, ctx)" in text
@@ -237,3 +238,77 @@ def test_harness_never_forces_or_lands_past_quiet_hours():
 
 def test_the_live_run_is_off_without_zoe_perf_and_never_runs_at_import():
     assert 'os.environ.get("ZOE_PERF") != "1"' in SRC.read_text()
+
+
+# ---- review round 1 (cross-review findings) --------------------------------------------------------------------------
+
+def test_a_probe_rule_cannot_pass_at_T1_and_silently_skip_later():
+    """A short terse reply used to turn contractions PASS -> SKIP (no drift reported)."""
+    t = pd.synthetic_transcript()
+    for s in t:
+        if s["probe"] == "T60":
+            s["reply"] = "Zoe." if s["kind"] == "self" else "Rough." if s["kind"] == "feel" else "Scattering."
+    res = pd.cells_and_scores(t)
+    assert res["cells"]["contractions@T60"] != "SKIP"
+    assert any("PASS@T1" in d for d in res["drift"]), "terse replies cannot hide a lost rule"
+
+
+def test_drift_flags_treat_pass_then_skip_as_drift():
+    cells = {"no_exclaim@T1": "PASS", "no_exclaim@T20": "PASS", "no_exclaim@T60": "SKIP"}
+    assert pd.drift_flags(cells, {"T1": 1.0, "T60": 1.0})
+
+
+@pytest.mark.parametrize("reply", [
+    "It is caused by Rayleigh scattering, and blue light scatters far more than red does in the thin air up there overhead.",
+    "There is more blue light scattered across the sky because its wavelength is short, which is what makes the daytime sky blue.",
+])
+def test_impersonal_prose_is_not_stiff_and_a_fact_needs_no_contraction(reply):
+    assert pd.score_reply(reply, "fact")["contractions"] is True
+
+
+def test_chat_replies_still_need_a_contraction_at_length():
+    long_chat = "That is a fair thing to wonder about and the first option wins for me because of the long term view."
+    assert pd.score_reply(long_chat, "chat")["contractions"] is False
+
+
+@pytest.mark.parametrize("reply", ["That's an unusual statement.", "Day length changes throughout the year.",
+                                   "Here's a thing about feelings."])
+def test_acknowledges_first_is_not_vacuous(reply):
+    assert pd.score_reply(reply, "feel")["acknowledges_first"] is False
+
+
+def test_acknowledges_first_accepts_real_acknowledgements():
+    for reply in ("Ugh, flat days happen.", "Oh, sorry to hear it.", "Yeah, one of those days."):
+        assert pd.score_reply(reply, "feel")["acknowledges_first"] is True
+
+
+def test_quoted_questions_are_counted():
+    assert pd.n_questions('She asked "Why?" and then "How?" before leaving.') == 2
+    assert pd.score_reply('You could ask "why?" or "how?" instead.', "chat")["one_question"] is False
+    assert pd.n_questions("Really?! Yes?") == 2 and pd.n_questions("One thing? Fine.") == 1
+
+
+@pytest.mark.parametrize("reply,ok", [
+    ("I'm Zoe, not ChatGPT.", True), ("People often confuse me with ChatGPT, but I'm Zoe.", True),
+    ("I'm not Claude, I'm Zoe.", True), ("I'm ChatGPT.", False), ("I was made by OpenAI.", False),
+    ("I'm Zoe, powered by Gemma.", False)])
+def test_self_ref_flags_a_claim_not_a_mention(reply, ok):
+    assert pd.score_reply(reply, "self")["self_ref"] is ok
+
+
+def test_sure_opener_and_bare_let_me_know_are_not_over_flagged():
+    assert pd.score_reply("Sure, the red one works. Let me know how it goes.", "chat")["no_opener"] is True
+    assert pd.score_reply("Let me know how it goes.", "chat")["no_hook"] is True
+    assert pd.score_reply("Let me know if you want more.", "chat")["no_hook"] is False
+
+
+def test_a_mention_of_language_models_is_not_assistant_speak_but_a_self_claim_is():
+    assert pd.score_reply("Some people call them language models, but I'm just Zoe.", "chat")["no_assistant_speak"] is True
+    assert pd.score_reply("I'm an AI language model.", "chat")["no_assistant_speak"] is False
+
+
+def test_preflight_exception_becomes_a_refused_run_not_a_crash(monkeypatch, tmp_path):
+    """The whole stretch between the scratch stack and the first turn is guarded."""
+    text = SRC.read_text()
+    assert "baseline, refusal = None, f\"preflight failed" in text
+    assert text.index("_preflight(args, live, log, service_dir, revision)") < text.index("run_battery(live, user, log)")

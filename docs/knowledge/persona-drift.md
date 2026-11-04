@@ -32,7 +32,7 @@ Sources: the manner block (`services/zoe-data/lexicons_data/en.json` key `manner
 
 | rule | passes when |
 |---|---|
-| `contractions` | no stiff "I am / it is / do not ..." (an emphatic clause end is excused) and, at 20+ words, at least one contraction |
+| `contractions` | no stiff "I am / do not / is not / I would ..." (an emphatic clause end is excused; a `fact` reply may use plain "is not") and, for chat kinds at 20+ words, at least one contraction; never SKIP on a short reply |
 | `no_exclaim` | no `!` |
 | `no_retry` | no "please try again" / "something went wrong" family |
 | `one_question` | at most one question sentence |
@@ -40,7 +40,7 @@ Sources: the manner block (`services/zoe-data/lexicons_data/en.json` key `manner
 | `no_markdown` | no bullets, numbering, headings, bold, backticks |
 | `no_hook` / `no_flattery` / `no_opener` | no "want me to / let me know", no "great question", no stock opener |
 | `no_assistant_speak` | no "as an AI", "how can I assist", "is there anything else", "feel free to" family |
-| `self_ref` | no other identity or name claimed anywhere; the `self` probe names Zoe |
+| `self_ref` | no other identity CLAIMED ("I'm ChatGPT", "made by ..."; "I'm Zoe, not ChatGPT" is a mention and passes); the `self` probe names Zoe |
 | `acknowledges_first` (feel) | the first sentence acknowledges the feeling and is not task-first |
 | `voice_marker` (self, feel) | a stance ("I think", "honestly") or a real question |
 | `farewell_clean` (farewell) | no question, no hook, at most 30 words |
@@ -50,7 +50,7 @@ pass-rate of at least 0.90 (a 4B reply is noisy; a block of three is not). A dro
 
 ## Drift, and regression
 
-* **Drift (within one run, `status=drift`, exit 1):** a rule PASS at T1 that is not PASS at T20 or T60, or a position score
+* **Drift (within one run, `status=drift`, exit 1):** a rule PASS at T1 that is not PASS (FAIL, SKIP or ERROR) at T20 or T60, or a position score
   (mean rule pass-rate over the block) that fell more than `TOL` = 0.10 from T1.
 * **Regression (`--compare-baseline`, `status=regression`, exit 1):** a cell PASS in the baseline and not PASS now, or a
   position/mid score down more than `TOL` from the baseline's. A baseline missing a cell, or recorded under different

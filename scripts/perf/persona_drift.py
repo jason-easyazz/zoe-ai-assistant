@@ -109,31 +109,37 @@ assert len(BATTERY) == 60 and sum(1 for t in BATTERY if t["probe"]) == 9, "batte
 _WORD = re.compile(r"[A-Za-z0-9'’]+")
 _CONTRACTION = re.compile(r"\b\w+['’](?:s|m|re|ve|ll|d|t)\b", re.IGNORECASE)
 _STIFF = re.compile(
-    r"\b(?:i am|you are|we are|they are|it is|that is|there is|what is|do not|does not|did not|cannot|will not|"
-    r"i will|i have|let us)\b(?!\s*[.,!?;])", re.IGNORECASE)
+    r"\b(?:i am|you are|we are|they are|do not|does not|did not|cannot|will not|i will|i have|let us)\b(?!\s*[.,!?;])",
+    re.IGNORECASE)
+#: further uncontracted forms, held against conversational kinds only (a factual explanation may say "is not" in plain prose)
+_STIFF_CHAT = re.compile(r"\b(?:is not|are not|was not|were not|could not|would not|should not|have not|has not|"
+                         r"i would|you would|we would|they would|i had|you have)\b(?!\s*[.,!?;])", re.IGNORECASE)
 _RETRY = re.compile(r"please\s+try\s+again|try\s+again\s+(?:later|in)|something\s+went\s+wrong|"
                     r"i\s+(?:was\s+)?(?:unable|couldn['’]?t)\s+to\s+(?:process|complete)", re.IGNORECASE)
 _ASSISTANT = re.compile(
-    r"as\s+an?\s+(?:ai|artificial|language\s+model|virtual)|language\s+model|how\s+can\s+i\s+(?:assist|help)\s+you|"
+    r"as\s+an?\s+(?:ai|artificial|language\s+model|virtual)|i['’]?m\s+an?\s+(?:ai|artificial|language|virtual)|how\s+can\s+i\s+(?:assist|help)\s+you|"
     r"i['’]?m\s+here\s+to\s+(?:help|assist)|is\s+there\s+anything\s+else|feel\s+free\s+to|i\s+hope\s+this\s+helps|"
     r"i['’]?d\s+be\s+happy\s+to|let\s+me\s+know\s+if|as\s+your\s+(?:virtual\s+)?assistant|i\s+don['’]?t\s+have\s+personal|"
     r"i\s+apologi[sz]e\s+for|happy\s+to\s+assist|at\s+your\s+service", re.IGNORECASE)
-_OPENER = re.compile(r"^\W*(?:great|of\s+course|certainly|absolutely|sure\s+thing|sure|definitely|no\s+problem)\b[!,.]?",
+_OPENER = re.compile(r"^\W*(?:great|of\s+course|certainly|absolutely|sure\s+thing|definitely|no\s+problem)\b[!,.]?",
                      re.IGNORECASE)
 _FLATTERY = re.compile(r"great\s+question|good\s+question|what\s+an?\s+(?:great|wonderful|excellent|fascinating)|"
                        r"excellent\s+(?:question|point|choice)|you['’]?re\s+(?:so|absolutely|totally)\s+right|brilliant|"
                        r"amazing\s+question", re.IGNORECASE)
 _HOOK = re.compile(r"want\s+me\s+to|would\s+you\s+like(?:\s+me)?\s+to|shall\s+i|do\s+you\s+want\s+me|should\s+i\s+go\s+on|"
-                   r"i\s+can\s+also|let\s+me\s+know", re.IGNORECASE)
+                   r"i\s+can\s+also|let\s+me\s+know\s+if", re.IGNORECASE)
 _MARKDOWN = re.compile(r"(?m)^\s*(?:[-*•]\s+|\d+[.)]\s+|#{1,6}\s)|\*\*|__|`")
-_FOREIGN_ID = re.compile(r"\b(?:chatgpt|gpt-?\d*|openai|claude|anthropic|gemini|gemma|llama|qwen|alexa|siri|copilot|bard)\b",
-                         re.IGNORECASE)
+_FOREIGN_WORDS = r"(?:chatgpt|gpt-?\d*|openai|claude|anthropic|gemini|gemma|llama|qwen|alexa|siri|copilot|bard)"
+#: a CLAIM of a foreign identity ("I'm ChatGPT", "made by OpenAI", "powered by Gemma"), not a mention ("I'm Zoe, not ChatGPT")
+_FOREIGN_CLAIM = re.compile(
+    r"\b(?:i['’]?m|i\s+am|my\s+name\s+is|call\s+me|(?:was\s+)?(?:made|built|created|trained|developed)\s+by|powered\s+by|"
+    r"running\s+on)\s+((?:\w+\s+){0,2}?)" + _FOREIGN_WORDS + r"\b", re.IGNORECASE)
 _NAME_CLAIM = re.compile(r"\b(?i:i['’]?m|i\s+am|my\s+name\s+is|call\s+me)\s+([A-Z][a-z]+)\b")
 _NAME_OK = frozenset({"Zoe"})
 _NOT_NAMES = frozenset({"Sorry", "Glad", "Happy", "Here", "Not", "Still", "Just", "Really", "Always", "Pretty", "Quite",
                         "Sure", "Afraid", "Curious", "Fine", "Good", "Great", "Well", "Never", "Also", "Only"})
-_ACK = re.compile(r"\b(?:ugh|sorry|rough|flat|tough|hard|oh|mm+|hm+|yeah|that['’]?s|feel|day|those|happens)\b",
-                  re.IGNORECASE)
+_ACK = re.compile(r"\b(?:ugh|sorry|rough|tough|bummer|oh|mm+|hm+|yeah|fair\s+enough|those\s+days|one\s+of\s+those|"
+                  r"flat\s+(?:day|one)|happens|hard\s+(?:day|one)|off\s+day)\b", re.IGNORECASE)
 _VOICE = re.compile(r"\b(?:i\s+think|i\s+love|i\s+like|i\s+reckon|honestly|my\s+take|i['’]?d\s+say|i\s+wonder|"
                     r"i['’]?m\s+(?:curious|glad|sorry)|good\s+to|ugh|oh|mm+|hm+|yeah)\b", re.IGNORECASE)
 _TASKY_FIRST = re.compile(r"^\W*(?:here\s+are|here['’]?s\s+(?:a|some|how)|\d+[.)]|first,|step\s+1|to\s+(?:feel|cheer))",
@@ -151,21 +157,24 @@ def sentences(text: str) -> list[str]:
 
 
 def n_questions(text: str) -> int:
-    return sum(1 for s in sentences(text) if s.rstrip("\"'”’) ").endswith("?"))
+    """Question sentences: a ``?`` run closing a sentence, also inside quotes/brackets ("Why?" she said counts)."""
+    return len(re.findall(r"\?[?!]*[\"'”’)\]]*(?=\s|$)", text or ""))
 
 
 def _foreign_identity(reply: str) -> list[str]:
-    hits = [m.group(0).lower() for m in _FOREIGN_ID.finditer(reply)]
+    hits = [m.group(0).lower() for m in _FOREIGN_CLAIM.finditer(reply)
+            if not re.search(r"\bnot\b|n['’]t\b", m.group(1), re.IGNORECASE)]
     hits += [m.group(1) for m in _NAME_CLAIM.finditer(reply)
              if m.group(1) not in _NAME_OK and m.group(1) not in _NOT_NAMES]
     return hits
 
 
 def _rule_contractions(reply: str, kind: str) -> bool | None:
-    n = len(words(reply))
-    if kind == "farewell" or n < 8:
-        return None
-    return not _STIFF.search(reply) and (n < 20 or bool(_CONTRACTION.search(reply)))
+    if kind == "farewell":
+        return None                      # applicability depends only on the KIND, never on the reply (no PASS -> SKIP escape)
+    if _STIFF.search(reply) or (kind != "fact" and _STIFF_CHAT.search(reply)):
+        return False
+    return kind == "fact" or len(words(reply)) < 20 or bool(_CONTRACTION.search(reply))
 
 
 def _rule_self_ref(reply: str, kind: str) -> bool | None:
@@ -210,6 +219,7 @@ RULES: dict[str, Any] = {   # name -> fn(reply, kind) -> True | False | None (no
     "farewell_clean": _rule_farewell,
 }
 RULE_NAMES = tuple(RULES)
+ALL_CELLS = tuple(f"{r}@{p}" for r in RULES for p in ("T1", "T20", "T60", "mid"))
 RULES_SHA256 = hashlib.sha256(json.dumps(
     {"turns": [(t["turn"], t["kind"], t["user"]) for t in BATTERY], "rules": list(RULES), "bands": BANDS,
      "tol": TOL, "mid_min": MID_MIN, "v": HARNESS_VERSION}, sort_keys=True).encode()).hexdigest()
@@ -271,7 +281,7 @@ def drift_flags(cells: dict[str, str], scores: dict[str, float | None]) -> list[
         if cells.get(f"{name}@T1") != "PASS":
             continue
         for pos in ("T20", "T60"):
-            if cells.get(f"{name}@{pos}") not in ("PASS", "SKIP"):
+            if cells.get(f"{name}@{pos}") != "PASS":
                 out.append(f"{name}: PASS@T1 -> {cells.get(f'{name}@{pos}')}@{pos}")
     s1 = scores.get("T1")
     for pos in ("T20", "T60"):
@@ -282,7 +292,7 @@ def drift_flags(cells: dict[str, str], scores: dict[str, float | None]) -> list[
 
 def compare(current: dict[str, Any], baseline: dict[str, Any] | None) -> dict[str, Any]:
     """Regression vs a recorded baseline: ``bench_baseline.compare`` on the cells, plus a score fall past TOL."""
-    cmp = bench_baseline.compare(current["cells"], baseline, current["cells"])
+    cmp = bench_baseline.compare(current["cells"], baseline, ALL_CELLS)
     base_scores = (baseline or {}).get("scores") or {}
     falls = [f"{p}: {base_scores[p]:.2f} -> {current['scores'][p]:.2f}" for p in (*POSITIONS, "mid")
              if base_scores.get(p) is not None and current["scores"].get(p) is not None
@@ -394,6 +404,34 @@ def _flag_state(service_dir: Path, key: str) -> str:
     return "unset" if not v else (v if v in {"on", "off", "0", "1", "enforce", "shadow", "true", "false"} else "set")
 
 
+def _preflight(args, live: Any, log, service_dir: Path, revision: dict | None) -> tuple[dict | None, str | None]:
+    """Everything between the scratch stack coming up and the first turn: baseline load / record eligibility, the shared gates
+    (nightly window, quiet hours, deploy, readiness, RAM, forget teardown) and a previous run's pending teardown.
+    Returns (baseline, None) or (None, the refusal)."""
+    baseline = None
+    if args.compare_baseline:
+        baseline, problem = bench_baseline.load(args.baseline, CELL_VERDICTS)
+        if not problem and baseline.get("rules_sha256") != RULES_SHA256:
+            problem = "the battery or the rules changed since the baseline (rules_sha256) - re-record it"
+        if problem:
+            return None, f"--compare-baseline: {problem}"
+    if args.record_baseline:
+        why = bench_baseline.record_problem(revision, status="ok", partial=False,
+                                            verdicts={c: "PASS" for c in ALL_CELLS}, cells=ALL_CELLS)
+        if why:
+            return None, f"--record-baseline: {why}"
+    import user_model_ab as uma  # the shared gate: nightly window, quiet hours, deploy, readiness, RAM, teardown
+    refusal = uma._gates(args, live, log)
+    if refusal:
+        return None, refusal
+    if args.pending.exists():
+        import samantha_day_sim as ds
+        pend = ds._pending(live, args.pending, log)
+        if pend is not None and not pend["proven"]:
+            return None, f"a previous run's teardown is still unproven: {pend['problems']}"
+    return baseline, None
+
+
 def main(argv: list[str] | None = None) -> int:
     ctx: dict = {}
     try:
@@ -467,33 +505,16 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
         return _refuse(args.results, refusal, revision)
     live = sb.Live(stack.token, "", stack.dsn, True)
     live.admin = ""                     # a live admin session means nothing to the scratch instance
-    baseline = None
-    if args.compare_baseline:
-        baseline, problem = bench_baseline.load(args.baseline, CELL_VERDICTS)
-        if not problem and baseline.get("rules_sha256") != RULES_SHA256:
-            problem = "the battery or the rules changed since the baseline (rules_sha256) - re-record it"
-        if problem:
-            return _refuse(args.results, f"--compare-baseline: {problem}", revision)
-    if args.record_baseline:
-        why = bench_baseline.record_problem(revision, status="ok", partial=False,
-                                            verdicts={c: "PASS" for c in (f"{r}@{p}" for r in RULES for p in (*POSITIONS, 'mid'))},
-                                            cells=[f"{r}@{p}" for r in RULES for p in (*POSITIONS, "mid")])
-        if why:
-            return _refuse(args.results, f"--record-baseline: {why}", revision)
-    import user_model_ab as uma  # the shared gate: nightly window, quiet hours, deploy, readiness, teardown, RAM
-    refusal = uma._gates(args, live, log)
+    try:
+        baseline, refusal = _preflight(args, live, log, service_dir, revision)
+    except Exception as exc:  # noqa: BLE001 - an unexpected preflight failure is a refused (error) run, never a crash with no record
+        baseline, refusal = None, f"preflight failed: {type(exc).__name__}: {str(exc)[:200]}"
     if refusal:
         return _refuse(args.results, refusal, revision)
-    pend = None
-    if args.pending.exists():
-        import samantha_day_sim as ds
-        pend = ds._pending(live, args.pending, log)
-    if pend is not None and not pend["proven"]:
-        return _refuse(args.results, f"a previous run's teardown is still unproven: {pend['problems']}", revision)
 
     user = sb.new_demo_user()
     started, t0 = dt.datetime.now(dt.timezone.utc), time.monotonic()
-    flags = {k: _flag_state(service_dir, k) for k in ("ZOE_MANNER_BLOCK", "ZOE_MIRROR_GUARD")}
+    flags = {k: _flag_state(service_dir, k) for k in ("ZOE_MANNER_BLOCK", "ZOE_MIRROR_GUARD")}  # reads one env file; cannot raise
     log(f"persona_drift v{HARNESS_VERSION}: user={user} turns={len(BATTERY)} commit={(revision or {}).get('commit', '?')[:10]} "
         f"flags={json.dumps(flags)}")
 
