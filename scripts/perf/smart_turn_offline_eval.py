@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -522,6 +523,38 @@ def acquire_quiet_lock(lock_path: Path | None, min_mem_mb: int, label: str,
         time.sleep(wait_s)
 
 
+def guarded(lock_path: Path | None, min_mem_mb: int, label: str, work,
+            busy=box_busy, wait_s: float = 60.0):
+    """Run ``work()`` only while holding the quiet guard. Everything heavy (the Smart Turn ONNX
+    session) is created INSIDE ``work``, so a deferred run holds no model while it waits."""
+    fh = acquire_quiet_lock(lock_path, min_mem_mb, label, busy=busy, wait_s=wait_s)
+    try:
+        return work()
+    finally:
+        if fh:
+            fh.close()
+
+
+def batch_key(files: list[Path], b0: int, batch_size: int, every: int) -> str:
+    """The exact input a batch scored: its start, the batch geometry, and each clip's name and
+    size - hashed, so the work dir names no clip. A cached batch for any other slice (another
+    --limit, --corpus or --batch-size) is never reused."""
+    ident = [b0, batch_size, every, [[f.name, f.stat().st_size] for f in files]]
+    return hashlib.sha256(json.dumps(ident).encode()).hexdigest()
+
+
+def cached_batch(part: Path | None, fingerprint: str, key: str) -> dict[str, Any] | None:
+    if not part or not part.exists():
+        return None
+    try:
+        data = json.loads(part.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if data.get("fingerprint") != fingerprint or data.get("slice") != key:
+        return None        # another configuration or another slice of the corpus: recompute
+    return data
+
+
 # ── aggregation + CLI ─────────────────────────────────────────────────────────────
 
 def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -585,21 +618,14 @@ def main() -> int:
     os.environ["ZOE_SMART_TURN_THREADS"] = str(max(1, min(4, args.threads)))
     mod = load_daemon()
     vad_mod = load_path("_zoe_voice_vad_st_eval", VOICE_VAD)
-    det = None
-    if not args.no_smart_turn:
-        det = load_path("_zoe_voice_turn_st_eval", VOICE_TURN).get_smart_turn()
-        if det is None:
-            print("Smart Turn model or onnxruntime missing (ZOE_SMART_TURN_MODEL, default "
-                  "/home/zoe/models/smart-turn-v3.2-cpu.onnx) — refusing to report a fixed-only run "
-                  "as a comparison; pass --no-smart-turn to measure the fixed arms alone.", file=sys.stderr)
-            return 2
+    det_box: dict[str, Any] = {}       # Smart Turn, loaded lazily INSIDE the guard (first batch to score)
     firsts = [int(x) for x in args.first_ms.split(",") if x.strip()]
     caps = [int(x) for x in args.caps.split(",") if x.strip()]
     for f in firsts:
         if (f - firsts[0]) % args.recheck_ms:
             print("--first-ms values must share the --recheck-ms grid", file=sys.stderr)
             return 2
-    policies = [] if det is None else build_policies(
+    policies = [] if args.no_smart_turn else build_policies(
         firsts, [float(x) for x in args.thresholds.split(",") if x.strip()], caps, args.recheck_ms)
     gaps = [int(x) for x in args.synthetic_gaps.split(",") if x.strip()]
     kw = dict(gt_threshold=args.gt_threshold, speech_threshold=mod.VAD_ENDPOINT_THRESHOLD,
@@ -622,14 +648,17 @@ def main() -> int:
     skipped = 0
     for b0 in range(0, len(files), args.batch_size):
         part = args.work_dir / f"batch_{b0:05d}.json" if args.work_dir else None
-        data = json.loads(part.read_text(encoding="utf-8")) if part and part.exists() else None
-        if data is not None and data.get("fingerprint") != fingerprint:
-            data = None        # a batch from a different configuration is never reused
+        key = batch_key(files[b0:b0 + args.batch_size], b0, args.batch_size, args.synthetic_every)
+        data = cached_batch(part, fingerprint, key)
         if data is None:
-            lock_fh = acquire_quiet_lock(args.lock, args.min_mem_mb, f"batch {b0}")
-            try:
+            def score_batch(b0: int = b0, key: str = key) -> dict[str, Any] | None:
+                if not args.no_smart_turn and "det" not in det_box:
+                    det_box["det"] = load_path("_zoe_voice_turn_st_eval", VOICE_TURN).get_smart_turn()
+                det = det_box.get("det")
+                if det is None and not args.no_smart_turn:
+                    return None
                 data = {"rows": [], "synth": {str(g): [] for g in gaps}, "st_ms": [], "skipped": 0,
-                        "fingerprint": fingerprint}
+                        "fingerprint": fingerprint, "slice": key}
                 for i, path in enumerate(files[b0:b0 + args.batch_size], start=b0):
                     audio = read_wav_mono16(path)
                     r = None if audio is None else evaluate_stream(
@@ -643,9 +672,13 @@ def main() -> int:
                             s = evaluate_stream(mod, vad_mod, det, audio, insert_ms=g, **kw)
                             if s is not None:
                                 data["synth"][str(g)].append(s)
-            finally:
-                if lock_fh:
-                    lock_fh.close()
+                return data
+            data = guarded(args.lock, args.min_mem_mb, f"batch {b0}", score_batch)
+            if data is None:
+                print("Smart Turn model or onnxruntime missing (ZOE_SMART_TURN_MODEL, default "
+                      "/home/zoe/models/smart-turn-v3.2-cpu.onnx) — refusing to report a fixed-only run "
+                      "as a comparison; pass --no-smart-turn to measure the fixed arms alone.", file=sys.stderr)
+                return 2
             if part:
                 part.write_text(json.dumps(data), encoding="utf-8")
             print(f"batch {b0}: {len(data['rows'])} scored, {data['skipped']} skipped", file=sys.stderr, flush=True)

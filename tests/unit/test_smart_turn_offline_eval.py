@@ -182,3 +182,47 @@ def test_quiet_lock_rechecks_the_box_after_taking_the_lock(ev, tmp_path):
     fh = ev.acquire_quiet_lock(tmp_path / "lane.lock", 1500, "t", busy=busy, wait_s=0)
     assert fh is not None and len(calls) == 4
     fh.close()
+
+
+def test_guarded_creates_the_work_only_after_the_box_is_free_and_releases_the_lock(ev, tmp_path):
+    # the model is loaded inside ``work``: it must not exist while the guard is still waiting
+    answers = iter(["night window", "night window", None, None])
+    seen = []
+
+    def busy(_mem):
+        a = next(answers)
+        seen.append(a)
+        return a
+
+    def work():
+        assert seen == ["night window", "night window", None, None]   # every wait done first
+        return "scored"
+
+    lock = tmp_path / "lane.lock"
+    assert ev.guarded(lock, 1500, "t", work, busy=busy, wait_s=0) == "scored"
+    import fcntl
+    with open(lock, "a") as fh:                       # released: a second taker gets it at once
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_cached_batch_is_bound_to_its_exact_slice(ev, tmp_path):
+    corpus = tmp_path / "c"
+    corpus.mkdir()
+    clips = []
+    for n in range(4):
+        p = corpus / f"clip{n}.wav"
+        p.write_bytes(b"x" * (10 + n))
+        clips.append(p)
+    key = ev.batch_key(clips[:2], 0, 2, 2)
+    part = tmp_path / "batch_00000.json"
+    part.write_text('{"fingerprint": "F", "slice": "%s", "rows": []}' % key)
+    assert ev.cached_batch(part, "F", key) is not None
+    assert ev.cached_batch(part, "G", key) is None                         # another configuration
+    assert ev.cached_batch(part, "F", ev.batch_key(clips[2:], 0, 2, 2)) is None   # another --limit / corpus
+    assert ev.cached_batch(part, "F", ev.batch_key(clips[:1], 0, 1, 2)) is None   # another --batch-size
+    assert ev.cached_batch(part, "F", ev.batch_key(clips[:2], 0, 2, 3)) is None   # another synthetic stride
+    part.write_text('{"fingerprint": "F", "rows": []}')                   # a pre-binding batch: never reused
+    assert ev.cached_batch(part, "F", key) is None
+    part.write_text("{broken")
+    assert ev.cached_batch(part, "F", key) is None
+    assert "clip0" not in key
