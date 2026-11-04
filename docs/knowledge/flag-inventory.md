@@ -1141,7 +1141,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `SPEAKER_SHADOW_WARMUP` | `'3'` | no | NO | `scripts/voice/speaker_shadow_embed.py` |
 | `SQLITE_PATH` | `'./data/zoe.db'` | no | NO | `scripts/setup/migrate_auth_data.py` |
 | `TAVILY_API_KEY` | `''` | yes | yes | `services/zoe-data/web_search_provider.py` |
-| `TELEGRAM_BOT_TOKEN` | `-` | yes | NO | `services/zoe-data/auth_handoff.py` |
+| `TELEGRAM_BOT_TOKEN` | `-` | yes | NO | `scripts/maintenance/zoe_crash_loop_watch.py`<br>`services/zoe-data/auth_handoff.py` |
 | `TOKENIZERS_PARALLELISM` | `dynamic` | no | NO | `scripts/perf/speaker_bakeoff.py` |
 | `TRANSFORMERS_OFFLINE` | `dynamic` | no | NO | `scripts/perf/zmb/embed_shim.py` |
 | `VAD_ENDPOINT_ENABLED` | `'false'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
