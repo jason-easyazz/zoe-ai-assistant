@@ -79,8 +79,8 @@
  *     OTHER bare value (object, number, boolean, array, null) now THROWS at
  *     runtime. EVERY tool below returns a string, so none needed wrapping — but
  *     that is a property to keep, not a coincidence to rely on, so
- *     test/tool_shapes.test.ts asserts it table-driven across all 22 tools
- *     (the 21 domain tools plus the `activateAbilities` activator).
+ *     test/tool_shapes.test.ts asserts it table-driven across all 23 tools
+ *     (the 22 domain tools plus the `activateAbilities` activator).
  *
  * Read-ish by default. Writes are gated behind ZOE_BRAIN_ALLOW_WRITES
  * (default OFF → dry-run, so a parity run doesn't mutate Jason's real data).
@@ -190,6 +190,29 @@ function internalHeaders(extra?: Record<string, string>): Record<string, string>
 // Shape of the intent-dispatch response (routers/system.py: ok = result is not None).
 type DispatchResponse = { intent?: string; ok?: boolean; result?: string };
 
+// The statuses whose `detail` is a fulfilment VERDICT on the request (reminder_service's 422 for a date or time it cannot
+// fire; 404 for a capability switched off, e.g. ZOE_ALARMS) and so is worth saying. Every other status - 400 / 401 / 403
+// (the endpoint's own allowlist and auth), 5xx - stays the generic line: its detail is plumbing, not the user's business.
+const VERDICT_STATUSES = new Set([404, 422]);
+const ERROR_DETAIL_MAX = 180;
+
+/**
+ * The FastAPI `detail` of an error response, as one short single line, or '' when there is none / it is not a string (a
+ * pydantic 422 carries a list of internals - never echoed). Control characters and newlines are flattened so the detail
+ * cannot open a line of its own in the tool result.
+ */
+export async function errorDetail(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { detail?: unknown };
+    if (typeof body?.detail !== 'string') return '';
+    // eslint-disable-next-line no-control-regex
+    const flat = body.detail.replace(/[\x00-\x1f\x7f]+|\p{Zl}|\p{Zp}/gu, ' ').replace(/\s+/g, ' ').trim();
+    return flat.length > ERROR_DETAIL_MAX ? `${flat.slice(0, ERROR_DETAIL_MAX - 1)}…` : flat;
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Run one allowlisted intent via POST /api/system/intent-dispatch — the shared
  * mechanic behind every dispatch tool below (mirrors abilities/_dispatch.ts).
@@ -228,6 +251,19 @@ async function dispatchIntent(
       signal: fetchSignal(signal),
     });
     if (!res.ok) {
+      // A 422 / 404 from the fulfilment path is a VERDICT on what the model sent, not an outage. QA 2026-11-05: "the 15th
+      // of December at 10am" came back 422 twice and the brain, told only "couldn't reach … (422)", said the reminder
+      // service was "having some trouble". Pass the reason through so the reply can say what was wrong (and the model can
+      // retry once with a corrected value). Any other status, or an unreadable detail, stays the generic line.
+      const reason = VERDICT_STATUSES.has(res.status) ? await errorDetail(res) : '';
+      if (reason) {
+        return {
+          ok: false,
+          text: `The ${service} service did not accept that, so nothing was saved: ${reason}. ` +
+            'Tell the user briefly and plainly what was wrong (no technical words), or fix the value and try once more. ' +
+            'Do NOT say it was done.',
+        };
+      }
       return { ok: false, text: `I couldn't reach the ${service} service right now (it returned ${res.status}).` };
     }
     const data = (await res.json()) as DispatchResponse;
@@ -592,6 +628,36 @@ const addReminder = defineTool({
     if (time) slots.time = time;
     return runWrite('reminder_create', slots, 'reminder', `a reminder to "${title}"`,
       `Okay, I'll remind you to ${title}.`, signal);
+  },
+});
+
+/**
+ * alarm — wake-up alarms. action=set → alarm_set {request} (WRITE, gated like every write); action=list → alarm_list {}
+ * (read). QA 2026-11-05: "can you do alarms?" got "I don't have a specific 'alarm' function" while ZOE_ALARMS was on and
+ * "set an alarm for 6:30" worked by voice. zoe-data runs `request` through the SAME narrow spoken grammar the voice path
+ * uses (alarm_voice.run_brain_intent) and acts only on a SET: cancelling, turning off or snoozing an alarm stays on voice
+ * and the panel, so a model-written phrase can never delete or silence one. Alarms switched off (ZOE_ALARMS) answer 404,
+ * which dispatchIntent passes through as "not switched on".
+ */
+const alarm = defineTool({
+  name: 'alarm',
+  description:
+    'Wake-up alarms that ring at a clock time. action=set with request in plain words ("set an alarm for 6:30 am ' +
+    'tomorrow", "wake me at 7 every weekday", "alarm for 6 called gym"); action=list to say which alarms are set. ' +
+    'Cancelling or turning an alarm off is done by voice or on the kitchen panel. For a countdown use set_timer; ' +
+    'for a reminder about something use add_reminder.',
+  input: v.object({
+    action: v.picklist(['set', 'list']),
+    request: v.optional(v.string()),
+  }),
+  run: async ({ data, signal }) => {
+    if (data.action === 'list') {
+      const out = await dispatchIntent('alarm_list', {}, 'alarm', signal);
+      return out.text || "You don't have any alarms set.";
+    }
+    const request = String(data?.request ?? '').trim().slice(0, 160);
+    if (!request) return 'What time should I set the alarm for?';
+    return runWrite('alarm_set', { request }, 'alarm', `an alarm (${request})`, 'Alarm set.', signal);
   },
 });
 
@@ -1160,7 +1226,7 @@ const activateAbilities = defineTool({
  * OWN ZOE_WEB_SEARCH_TOOL=1 — a 404 here means that side is off, and the tool
  * says so. Read-only, no user identity needed (nothing is written as anyone).
  *
- * NOT in `zoeTools` (the 22-tool always-registered set): `optionalZoeTools()`
+ * NOT in `zoeTools` (the 23-tool always-registered set): `optionalZoeTools()`
  * appends it only when the flag is on, so the default brain is unchanged. It
  * is deliberately ungrouped in tool-groups.ts — an ungrouped tool is ALWAYS
  * disclosed, which is what "are you sure?" needs.
@@ -1241,8 +1307,8 @@ const webSearch = defineTool({
 
 /**
  * Flag-gated tools appended to `zoeTools` at agent render (src/agents/zoe.ts).
- * Empty under default env, so the always-registered set stays exactly 22
- * (21 domain tools plus `activateAbilities`); `web_search` makes it 23.
+ * Empty under default env, so the always-registered set stays exactly 23
+ * (22 domain tools plus `activateAbilities`); `web_search` makes it 24.
  */
 export function optionalZoeTools() {
   return webSearchToolEnabled() ? [webSearch] : [];
@@ -1279,6 +1345,8 @@ export const zoeTools = [
   rememberEmotionalMoment,
   // Quote-backed retirement: the chat lane's judge for a change of state (ZOE_QUOTE_RETIRE, shadow by default)
   memoryRetire,
+  // Wake-up alarms through the voice grammar (ZOE_ALARMS; set is write gated, cancel/off stay on voice + panel)
+  alarm,
   // Progressive disclosure — always-on activator for the grouped tools above
   activateAbilities,
 ];

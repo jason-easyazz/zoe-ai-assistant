@@ -338,7 +338,7 @@ def _agent():
 
 
 def test_fixed_souls_are_byte_identical_to_main():
-    """sha256 of the two literals as they stood on main before this change."""
+    """sha256 of the two literals; bump deliberately when the soul text changes (last: retire escalation prose)."""
     import ast
 
     tree = ast.parse((SVC / "zoe_agent.py").read_text())
@@ -348,8 +348,8 @@ def test_fixed_souls_are_byte_identical_to_main():
                 and n.targets[0].id in ("_ZOE_SOUL_BASE", "_ZOE_SOUL_VOICE"):
             got[n.targets[0].id] = hashlib.sha256(ast.literal_eval(n.value).encode()).hexdigest()
     assert got == {
-        "_ZOE_SOUL_BASE": "331e7fae7054f51e9afa5b06fddf42c459b2ce73eda503fe31be28ad6be2b38f",
-        "_ZOE_SOUL_VOICE": "b32583e491a4925c95b5e06592e94d3e0fe08a495a3f1378161cbd4163dd1ac5",
+        "_ZOE_SOUL_BASE": "9f4cef6298446a12c32f0da4c5b03ec35df5e93ab8a7ab28de39b4b5f9761927",
+        "_ZOE_SOUL_VOICE": "8491c4f61b9cf985041020c1593f928d33958d11c3c438c67d590007656ad74e",
     }
 
 

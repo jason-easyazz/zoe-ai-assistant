@@ -116,7 +116,12 @@ does NOT mutate real data and instructs the model not to claim success).
 | `show_list` | read | `list_show` | `list_type?` (shopping/tasks/personal/work/bucket) |
 | `shopping_list_add` | write | `list_add` | `item`, `list_type=shopping` |
 | `set_timer` | write | `timer_create` | `minutes`, `label?` |
-| `add_reminder` | write | `reminder_create` | `title`, `date?`, `time?` |
+| `add_reminder` | write | `reminder_create` | `title`, `date?`, `time?` (spoken forms such as "15th of December" / "10am" are normalised server-side) |
+| `alarm` | read+write | `alarm_set` / `alarm_list` (→ `alarm_voice.run_brain_intent`, the voice grammar; `ZOE_ALARMS` off = 404) | `action` (set/list), `request?` (the words, e.g. "set an alarm for 6:30 am tomorrow") — set is write-gated; only a SET acts, cancel/off/snooze stay on voice + panel |
+
+A dispatch refused with **422 / 404** (a fulfilment verdict, e.g. a date the reminder scan can never fire, or alarms switched
+off) reaches the model as "did not accept that, so nothing was saved: <detail>" (one flattened line, ≤180 chars), so the reply
+can say what was wrong; every other non-2xx stays the generic "couldn't reach the … service" line.
 | `add_calendar_event` | write | `calendar_create` | `title`, `date?`, `time?`, `category?` |
 | `create_note` | write | `note_create` | `content`, `title?` |
 | `note_search` | read | `note_search` | `query` |

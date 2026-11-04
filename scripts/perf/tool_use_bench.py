@@ -63,7 +63,7 @@ EXTRA = (
 CANON = {"weather": (("get_weather",), True), "lists": (("shopping_list_add", "add_to_list"), False), "timers": (("set_timer",), False),
          "reminders": (("add_reminder",), False), "calendar": (("show_calendar",), True), "notes": (("create_note",), False),
          "journal": (("journal",), False), "people": (("people",), True), "media": (("media",), False), "home": (("home",), False),
-         "memory": (("remember_fact",), False)}
+         "memory": (("remember_fact",), False), "alarms": (("alarm",), False)}
 UNAVAILABLE = (("lists", "add eggs to my shopping list", ("shopping_list_add", "add_to_list")),
                ("weather", "what's the weather like today?", ("get_weather",)),
                ("reminders", "remind me to water the plants tomorrow morning", ("add_reminder",)))
