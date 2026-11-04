@@ -457,12 +457,14 @@ def spans_in(user_id: str, text: str, wanted: "frozenset[str]", *, near: bool) -
     return exact, out
 
 
-async def spans(user_id: str, text: str, *, near: bool = True) -> "list[tuple[int, int]]":
+async def spans(user_id: str, text: str, *, near: bool = True, strict: bool = False) -> "list[tuple[int, int]]":
     """Every span of ``text`` that names a forgotten entity (exact, and with ``near`` the near spellings), merged. What a
-    redaction replaces; consults the ledger only (no name is needed)."""
+    redaction replaces; consults the ledger only (no name is needed). With ``strict`` (READ / serve / apply paths) a ledger
+    outage raises ``LedgerUnavailable`` rather than reading as "nothing forgotten"; redaction (a WRITE that must not lose
+    the text) stays lenient."""
     if not user_id or not text or not configured():
         return []
-    wanted = await active_hashes(user_id)
+    wanted = await active_hashes(user_id, strict=strict)
     if not wanted:
         return []
     exact, nr = spans_in(user_id, text, wanted, near=near)

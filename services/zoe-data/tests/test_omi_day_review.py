@@ -555,7 +555,7 @@ def test_a_forgotten_name_is_never_proposed_and_never_written(env, monkeypatch):
     import memory_forgotten
     by = {c["kind"]: c["id"] for c in cands(env)}
 
-    async def forgot_the_report(user_id, text):
+    async def forgot_the_report(user_id, text, **_kw):
         return [(0, 6)] if "project report" in text else []
     monkeypatch.setattr(memory_forgotten, "spans", forgot_the_report)   # forgotten AFTER the candidate was made
     with pytest.raises(apply.ApplyError) as exc:
@@ -563,7 +563,7 @@ def test_a_forgotten_name_is_never_proposed_and_never_written(env, monkeypatch):
     assert exc.value.code == "forgotten" and exc.value.status == 410
     assert env.db.rows("SELECT * FROM omi_day_candidates WHERE id = ?", (by["reminder"],)) == []    # forgotten means forever
 
-    async def ledger_down(user_id, text):
+    async def ledger_down(user_id, text, **_kw):
         raise RuntimeError("pool lost")
     monkeypatch.setattr(memory_forgotten, "spans", ledger_down)         # an unreadable ledger fails CLOSED at write time
     with pytest.raises(apply.ApplyError) as exc:
@@ -683,7 +683,7 @@ def test_an_unreadable_forget_ledger_stores_nothing_and_the_day_is_retried(env, 
     add_rec(env, "rec1", GOLDEN)
     dr.set_llm(fake_model(GOLDEN_RULES))
 
-    async def ledger_down(user_id, text):
+    async def ledger_down(user_id, text, **_kw):
         raise dr.LedgerUnavailable("RuntimeError")
     monkeypatch.setattr(dr, "_forgotten", ledger_down)
     res = review()
@@ -693,7 +693,7 @@ def test_an_unreadable_forget_ledger_stores_nothing_and_the_day_is_retried(env, 
 
     import memory_forgotten
 
-    async def spans_down(user_id, text):
+    async def spans_down(user_id, text, **_kw):
         raise RuntimeError("pool lost")
     monkeypatch.setattr(memory_forgotten, "spans", spans_down)
     with pytest.raises(dr.LedgerUnavailable):
