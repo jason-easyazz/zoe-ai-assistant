@@ -11,6 +11,13 @@ import pending_suggestions
 import routers.memories as mem
 
 
+@pytest.fixture(autouse=True)
+def _clear_offer_state():
+    mem._OFFER_STATE.clear()
+    yield
+    mem._OFFER_STATE.clear()
+
+
 def _base():
     return {"packet": "## What I know about you\n- likes tea [mem]", "refs": [], "count": 0}
 
@@ -40,7 +47,7 @@ async def test_on_folds_offers(monkeypatch):
     # F5b: the fold is now an explicit ask-this directive with the exact question,
     # not a soft "you may offer" hint the 4B model never acted on.
     assert '- Ask the user: "Would you like me to add Tanika (your niece) as a contact?" [pending-contact]' in pkt
-    assert '- Ask the user: "Would you like me to add Bob as a contact?" [pending-contact]' in pkt  # no "(None)"
+    assert "add Bob" not in pkt and pkt.count("[pending-contact]") == 1  # ONE offer per turn
     assert "word-for-word" in pkt                     # directive strength for the 4B brain
     assert "people_create tool" in pkt                # tells the brain how to act on yes
     assert "## What I know about you" in pkt          # original packet preserved
@@ -93,7 +100,7 @@ async def test_batch_flag_folds_one_enumerated_question(monkeypatch):
 
     monkeypatch.delenv("ZOE_CONTACT_OFFER_BATCH", raising=False)
     legacy = (await mem._fold_pending_contact_offers(_base(), "u1"))["packet"]
-    assert legacy.count("[pending-contact]") == 3 and "Pell" not in legacy  # per-offer, capped at 3
+    assert legacy.count("[pending-contact]") == 1 and "Rodrigo" in legacy  # ONE offer, the first
 
     monkeypatch.setenv("ZOE_CONTACT_OFFER_BATCH", "1")
     pkt = (await mem._fold_pending_contact_offers(_base(), "u1"))["packet"]

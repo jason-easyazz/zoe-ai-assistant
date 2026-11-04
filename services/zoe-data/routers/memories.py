@@ -774,7 +774,59 @@ def _safe_prompt_inline(s: str, cap: int = _PENDING_FIELD_CAP) -> str:
     return s[:cap]
 
 
-async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> dict[str, Any]:
+# One contact offer per turn, never on a forget / correction / decline turn, and
+# the same offer is not repeated on the next turns after it was voiced (ignored
+# or declined). Deterministic, in-process (zoe-data is one worker; a restart just
+# forgets the cooldown, which fails towards asking once more, never towards nagging).
+_OFFER_COOLDOWN_TURNS = 3
+_OFFER_STATE: dict[str, dict[str, Any]] = {}
+_OFFER_STATE_MAX_USERS = 256
+_NO_OFFER_TURN_RE = re.compile(
+    r"^\s*(?:(?:no|nope|nah|nay)\b(?!\s+(?:problem|worries|idea|doubt|wonder))|not\s+(?:right\s+)?now\b|never\s*mind\b|forget\b|stop\b)"
+    r"|\b(?:forget\s+(?:that|it|about)|never\s*mind|not\s+(?:right\s+)?now|"
+    r"that'?s\s+(?:not\s+(?:right|true|correct)|wrong)|i\s+(?:didn'?t|did\s+not)\s+(?:say|mean)|"
+    r"i\s+meant|no\s*,?\s+(?:i|it|that|she|he|they)\b|just\s+checking|don'?t\s+(?:ask|add))",
+    re.IGNORECASE,
+)
+
+
+def _no_offer_turn(message: str) -> bool:
+    """Forget / correction / decline / "not now" turns never carry an offer."""
+    return bool(_NO_OFFER_TURN_RE.search(message or ""))
+
+
+def _offer_cooldown_filter(user_id: str, message: str, pend: list[dict]) -> list[dict]:
+    """Drop offers voiced within the last ``_OFFER_COOLDOWN_TURNS`` distinct user
+    turns. A rebuild of the packet for the SAME message (several packet builders per
+    turn) is the same turn and still sees the offer."""
+    key = (message or "").strip().lower()
+    st = _OFFER_STATE.get(user_id)
+    if st is None:
+        if len(_OFFER_STATE) >= _OFFER_STATE_MAX_USERS:
+            _OFFER_STATE.pop(next(iter(_OFFER_STATE)))
+        st = _OFFER_STATE[user_id] = {"key": None, "turn": 0, "offered": {}}
+    if key != st["key"]:
+        st["key"] = key
+        st["turn"] += 1
+    turn = st["turn"]
+    return [p for p in pend
+            if (at := st["offered"].get(_offer_key(p))) is None
+            or at == turn or turn - at > _OFFER_COOLDOWN_TURNS]
+
+
+def _offer_key(p: dict) -> str:
+    return str(p.get("id") or p.get("name") or "")
+
+
+def _note_offered(user_id: str, offers: list[dict]) -> None:
+    st = _OFFER_STATE.get(user_id)
+    if st:
+        for p in offers:
+            st["offered"].setdefault(_offer_key(p), st["turn"])
+
+
+async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str,
+                                       message: str = "") -> dict[str, Any]:
     """Surface pending `person_create` proposals into the for-prompt packet so the
     brain (incl. flue) can OFFER them — the "Observe & Suggest" rung of the
     human-in-the-loop ladder (ADR-contacts-production-hardening P1).
@@ -793,6 +845,8 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
         )
         if not person_suggestions_enabled():
             return packet
+        if _no_offer_turn(message):
+            return packet  # deferred, not lost: not surfaced, so it does not age
         # Non-destructive read: surfacing marks the offer as seen; aging happens
         # once per real user turn (age_person_offers_on_user_turn), never here.
         import contacts_conversation as _cc
@@ -802,12 +856,16 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
     except Exception:
         logger.exception("memories: pending-contact offer fold failed (user=%s)", user_id)
         return packet
+    pend = _offer_cooldown_filter(user_id, message, pend)
+    if not pend:
+        return packet
     if batch:
         # ZOE_CONTACT_OFFER_BATCH: ONE enumerated question for the whole set
         # (a single yes then accepts all of it - intent_router batch matcher).
         q = _cc.offer_question(pend, _safe_prompt_inline)
         if not q:
             return packet
+        _note_offered(user_id, pend)
         _cc.record_asked(user_id, q, pend)  # the set a following yes/no may bind to
         section = (
             "## People mentioned recently (not contacts yet)\n"
@@ -825,17 +883,19 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
         name = _safe_prompt_inline(p.get("name") or "")
         if not name:
             continue
+        _note_offered(user_id, [p])
         rel = _safe_prompt_inline(p.get("relationship") or "")
         # Give the 4B model the exact question to voice — the earlier soft
         # "you may offer to add them" phrasing was never voiced in live review
         # (QA review F5b). One explicit ask-this line per offer.
         question = f"Would you like me to add {name}{f' (your {rel})' if rel else ''} as a contact?"
         bullets.append(f'- Ask the user: "{question}" [pending-contact]')
+        break  # at most ONE offer per turn
     if not bullets:
         return packet
     section = (
         "## People mentioned recently (not contacts yet)\n"
-        "IMPORTANT: In this reply, after answering the user, ask the FIRST question "
+        "IMPORTANT: In this reply, after answering the user, ask the question "
         "below word-for-word. If the user answers yes, the contact is saved for them "
         "automatically (you may also use the people_create tool); if they say no, "
         "drop it and don't ask again.\n"
@@ -1221,7 +1281,7 @@ async def memory_for_prompt(
     # message in relevance mode — decided by the one trigger predicate the seam
     # and the offer ager use (Greptile #1768).
     if not continuity and not _is_continuity_turn(message, user_id):
-        result = await _fold_pending_contact_offers(result, user_id)
+        result = await _fold_pending_contact_offers(result, user_id, message)
     return result
 
 
