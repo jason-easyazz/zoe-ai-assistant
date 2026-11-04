@@ -200,6 +200,35 @@ def test_incomparable_or_incomplete_arms_are_unmeasured_never_admissible(mutate,
     assert any(needle in r for r in cmp["reasons"])
 
 
+def test_unknown_rubric_on_one_arm_is_not_the_same_rubric():
+    control, candidate = arm(same(ALL_PASS), "control"), arm(same(ALL_PASS), "candidate")
+    candidate["rubric_sha256"] = None
+    cmp = br.compare(control, candidate)
+    assert cmp["measurable"] is False and any("rubric" in r for r in cmp["reasons"])
+
+
+def test_the_real_quiet_hours_gate_ignores_an_inherited_force(monkeypatch):
+    hq = br._harness_quiet()
+    monkeypatch.setenv("ZOE_HARNESS_FORCE", "1")
+    monkeypatch.setenv("ZOE_HARNESS_LANDING", "1")
+    noon = br.dt.datetime(2026, 11, 4, 12, 0)
+    v = hq.check("bar_reliability", force=False, landing=False, now=noon, panel=lambda: True)
+    assert v.allowed is False and v.kind == "hours"      # what step_gate asks: still refused at noon
+
+
+def test_child_env_strips_the_bypasses():
+    env = br.child_env({"ZOE_HARNESS_FORCE": "1", "ZOE_HARNESS_LANDING": "1", "PATH": "/bin"})
+    assert env == {"PATH": "/bin", "ZOE_PERF": "1"}
+
+
+def test_lander_pattern_matches_bash_and_direct_launches():
+    import re
+    pat = re.compile(br.LANDER_PATTERN)
+    assert pat.search("bash /home/zoe/assistant/scripts/landing/land_voice_pr.sh 2278")
+    assert pat.search("/home/zoe/.zoe/agent-tools/land_voice_pr.sh 2278")
+    assert not pat.search("python3 land_voice_pr.sh.bak")
+
+
 def test_an_instrument_error_makes_the_comparison_unmeasured():
     rows = same(ALL_PASS)
     rows[0]["S2"] = "ERROR"
@@ -351,7 +380,9 @@ def test_step_gate_consults_quiet_hours_night_pause_and_landers():
         def __init__(self, hours=True, night=True):
             self.h, self.n = hours, night
 
-        def check(self, name):
+        def check(self, name, *, force=None, landing=None):
+            # the bypasses are pinned OFF: an inherited ZOE_HARNESS_FORCE / _LANDING must not open the hours
+            assert force is False and landing is False
             return br.argparse.Namespace(allowed=self.h, reason="quiet hours")
 
         def night_pause_verdict(self, name, *, budget_min, kind):

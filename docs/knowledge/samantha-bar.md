@@ -674,7 +674,9 @@ results file), `<out-dir>/<arm>/trend.jsonl` (kept out of the weekly trend) and
 (scripts/AGENTS.md: harness quiet hours, the measured night pause, no daytime 4B outside a person's
 turn). Before EVERY step it asks `harness_quiet.check` (quiet hours + panel), the measured night pause
 (`night_busy.sh voice` via `ZOE_NIGHT_BUSY`; the fixed 01:50-04:55 window when that is unreadable) and
-`pgrep -f '^bash .*/land_voice_pr\.sh'`; it queues for `/tmp/zoe-voice-harness.lock` no longer than
+`pgrep` for a running `land_voice_pr.sh` (via bash or exec'd directly); the quiet-hours check is asked
+with the force and landing bypasses OFF, and both variables are stripped from every step's env, so an
+inherited `ZOE_HARNESS_FORCE` cannot open the hours for the runner or the bar it starts. It queues for `/tmp/zoe-voice-harness.lock` no longer than
 `harness_quiet.lock_wait_s` allows, re-checks inside the lock, and kills a step (TERM, KILL 60 s later)
 at `harness_quiet.deadline_s`. Arms interleave, the order alternating each round, so drift over the
 night lands on both. Finished run files are kept: a night cut short resumes with the same command.

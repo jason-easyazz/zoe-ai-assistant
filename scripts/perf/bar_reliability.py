@@ -66,7 +66,7 @@ CACHE = Path.home() / ".cache" / "zoe"
 DEFAULT_BASELINE = CACHE / "samantha_bar_reliability_baseline.json"
 REPO = Path(__file__).resolve().parents[2]
 HARNESS_SCRIPTS = {"bar": "scripts/perf/samantha_bar.py", "day-sim": "scripts/perf/samantha_day_sim.py"}
-LANDER_PATTERN = r"^bash .*/land_voice_pr\.sh"
+LANDER_PATTERN = r"(^|[ /])land_voice_pr\.sh( |$)"   # via bash or exec'd directly
 EXIT_OK, EXIT_RED, EXIT_UNMEASURED = 0, 1, 2
 
 
@@ -273,7 +273,7 @@ def compare(control: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any
     for key, what in (("k", "k"), ("samples", "samples per judged ask"), ("rubric_sha256", "judge/criteria rubric"),
                       ("harness", "harness")):
         a, b = control.get(key), candidate.get(key)
-        if a is not None and b is not None and a != b:
+        if a != b:   # unknown on one arm vs known on the other is NOT "the same" (fail closed)
             unmeasured.append(f"{what} differs: control {a!r} vs candidate {b!r}")
 
     regressions, weakened, improvements = [], [], []
@@ -419,7 +419,7 @@ def lander_running(runner: Callable[..., Any] = subprocess.run) -> bool:
 def step_gate(name: str, step_min: int, *, hq=None, runner: Callable[..., Any] = subprocess.run) -> str | None:
     """Why the next step may NOT start (None = it may). Quiet hours + panel, the measured night pause, a lander."""
     hq = hq or _harness_quiet()
-    v = hq.check(name)
+    v = hq.check(name, force=False, landing=False)   # an inherited ZOE_HARNESS_FORCE / _LANDING never opens the hours here
     if not v.allowed:
         return v.reason
     v = hq.night_pause_verdict(name, budget_min=step_min, kind="voice")
@@ -428,6 +428,15 @@ def step_gate(name: str, step_min: int, *, hq=None, runner: Callable[..., Any] =
     if lander_running(runner):
         return "a voice landing (land_voice_pr.sh) is running - it owns the brain slot"
     return None
+
+
+BYPASS_ENV = ("ZOE_HARNESS_FORCE", "ZOE_HARNESS_LANDING")
+
+
+def child_env(base: dict) -> dict:
+    """The env each harness step runs with: ZOE_PERF=1, and NEVER the quiet-hours bypasses (the lander-only exemption and
+    the owner's force) - inherited from an operator shell they would let the child bar skip its own gate."""
+    return {**{k: v for k, v in base.items() if k not in BYPASS_ENV}, "ZOE_PERF": "1"}
 
 
 def _lock(wait_s: int, sleep: Callable[[float], None] = time.sleep) -> int | None:
@@ -487,7 +496,7 @@ def run_arms(args, log=print, *, gate=step_gate, hq=None) -> int:
             log(f"REFUSED: arm {arm}: {Path(checkout) / script} does not exist")
             return EXIT_UNMEASURED
     hq = hq or _harness_quiet()
-    env = {**os.environ, "ZOE_PERF": "1"}
+    env = child_env(os.environ)
     for i, arm in todo:
         why = gate("bar_reliability", args.step_min, hq=hq)
         if why:
