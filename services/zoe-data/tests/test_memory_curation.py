@@ -331,6 +331,18 @@ def test_a_child_passing_remark_is_held_not_written_over_the_curated_row(env):
     assert env.col.rows[rid][1]["status"] == "approved"
 
 
+def test_a_child_cannot_edit_a_held_dispute_into_an_approved_row(env, monkeypatch):
+    """Codex #2158 P1: review(edit) on the HELD dispute skipped the approve-only standing check and published it as approved."""
+    rid = _curated_teacher(env)
+    ref = run(env.svc.ingest("User's teacher is Mr Brown.", user_id=KID, source="chat_regex", status="approved"))
+    assert ref.metadata["status"] == "disputed"
+    assert run(env.svc.review(ref.id, decision="edit", edits="User's teacher is Mr Brown.", actor=KID)) is None
+    assert env.col.rows[ref.id][1]["status"] == "disputed" and env.col.rows[rid][1]["status"] == "approved"
+    # negative control: with the authority wall off the same edit is applied
+    monkeypatch.setenv("ZOE_MEMORY_AUTHORITY", "off")
+    assert run(env.svc.review(ref.id, decision="edit", edits="User's teacher is Mr Brown.", actor=KID)) is not None
+
+
 def test_control_authority_off_lets_the_child_remark_through(env, monkeypatch):
     _curated_teacher(env)
     monkeypatch.setenv("ZOE_MEMORY_AUTHORITY", "off")

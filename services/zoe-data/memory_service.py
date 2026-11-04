@@ -2989,14 +2989,15 @@ class MemoryService:
         meta = current.metadata or {}
         status = str(meta.get("status") or "")
         kind, action, candidate = "", decision, False
+        if decision in ("approve", "edit") and (
+                status in ("pending", "disputed") and meta.get("contradicts_id")
+                and not _auth.may_override(_auth.RANK[_auth.writer_class(actor, user_id=user_id)], _auth.CURATED)
+                and await self._target_class(meta) == _auth.CURATED):
+            # a note HELD against a curated row (owner D9) is the curator to decide, never the member: approving OR editing it
+            # (an edit publishes the held text as approved) would leave two approved rows that disagree
+            _auth.log_blocked(actor, _auth.kind_of(current.text), user_id=user_id, action=decision)
+            return _auth.enabled()
         if decision == "approve":
-            # a note HELD against a curated row (owner D9) is the curator to decide, never the member: approving it would leave
-            # two approved rows that disagree (the curated one cannot be superseded by the member)
-            if (status in ("pending", "disputed") and meta.get("contradicts_id")
-                    and not _auth.may_override(_auth.RANK[_auth.writer_class(actor, user_id=user_id)], _auth.CURATED)
-                    and await self._target_class(meta) == _auth.CURATED):
-                _auth.log_blocked(actor, _auth.kind_of(current.text), user_id=user_id, action="approve")
-                return _auth.enabled()
             # a candidate raised AGAINST a row is that row's owner's to approve
             if not (status in ("pending", "disputed") and meta.get("contradicts_id")
                     and _auth.writer_is_inferred(actor, user_id=user_id)):
