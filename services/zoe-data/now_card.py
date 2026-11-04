@@ -210,7 +210,7 @@ async def _threads(uid: str, today: _dt.date, mutes: list) -> tuple:
     return tuple(out)
 
 
-async def _dates(uid: str) -> tuple:
+async def _dates(uid: str, mutes: list) -> tuple:
     from person_profile import parse_birthday
 
     out: dict = {}
@@ -226,7 +226,8 @@ async def _dates(uid: str) -> tuple:
         md = parse_birthday(raw)
         if md:
             out.setdefault((str(pid), "birthday"), (str(pid), f"{name}'s birthday", md[0], md[1]))
-    return tuple([out[k] for k in sorted(out) if not await _forgotten(uid, out[k][1])])
+    return tuple([out[k] for k in sorted(out) if _speakable(out[k][1], {}, f"person:{out[k][0]}", mutes)
+                  and not await _forgotten(uid, out[k][1])])
 
 
 async def _facts(uid: str, mutes: list, svc: Any) -> tuple:
@@ -267,11 +268,11 @@ async def gather(uid: str, today: _dt.date, svc: Any = None) -> "tuple[Inputs, l
 
         svc = get_memory_service()
     mutes = await restraint.list_mutes(uid)
-    adult = await manner_block.is_adult(uid)                 # not positively an adult = no night-mind thread (D7)
+    adult = await guard("adult", manner_block.is_adult(uid), False)    # not positively an adult (or unknown) = no night thread (D7)
     return Inputs(
         name=await guard("name", _name(uid), ""),
         threads=await guard("threads", _threads(uid, today, mutes), ()) if adult else (),
-        dates=await guard("dates", _dates(uid), ()),
+        dates=await guard("dates", _dates(uid, mutes), ()),
         facts=await guard("facts", _facts(uid, mutes, svc), ()),
     ), errors
 

@@ -114,7 +114,7 @@ def lab(monkeypatch):
     async def name(_uid):
         return "Zed"
 
-    async def dates(_uid):
+    async def dates(_uid, _mutes=()):
         return tuple(DATES)
 
     monkeypatch.setattr(restraint, "list_mutes", no_mutes)
@@ -209,6 +209,31 @@ def test_no_private_or_off_the_wall_fact(text):
     assert build(FakeSvc([row("m_x", text), row("m_walk", WALK, ts=1.0)])).facts == (("m_walk", WALK),)   # control
 
 
+def test_a_muted_or_private_date_never_enters(monkeypatch):
+    rows = [("p_mia", "Mia", "birthday", None, 11, 8), ("p_vet", "Rex", "other", "chemotherapy session", 11, 6)]
+
+    async def db_rows(sql, _params):
+        return [(pid, kind, label, m, d, name) for pid, name, kind, label, m, d in rows] if "person_important_dates" in sql else []
+
+    monkeypatch.undo()                                                     # the real _dates, over a fake database
+    monkeypatch.setattr(nc, "_db_rows", db_rows)
+    got = asyncio.run(nc._dates(UID, []))
+    assert [r[0] for r in got] == ["p_mia"]                                # a health label never enters
+    assert asyncio.run(nc._dates(UID, [restraint.Mute(id="m", stems=frozenset(restraint.stems("Mia birthday")))])) == ()
+
+
+def test_a_failed_age_lookup_means_no_night_thread(lab, monkeypatch):
+    _st, backend = lab
+    seed_thread(backend, "shed", "the shed roof is finally going up on Saturday")
+
+    async def down(_uid, db=None):
+        raise RuntimeError("auth db down")
+
+    monkeypatch.setattr(manner_block, "is_adult", down)
+    inp, errors = asyncio.run(nc.gather(UID, TODAY, FakeSvc([row("m_walk", WALK)])))
+    assert inp.threads == () and inp.facts == (("m_walk", WALK),) and errors == ["adult:RuntimeError"]
+
+
 def test_another_members_row_never_enters():
     assert build(FakeSvc([row("m_walk", WALK, uid="yan_uid")])).facts == ()
 
@@ -273,7 +298,7 @@ def test_a_failing_source_contributes_nothing_and_the_rest_stands(lab, monkeypat
     inp, _errors = asyncio.run(nc.gather(UID, TODAY, svc))
     assert inp.facts == () and inp.dates == tuple(DATES)
 
-    async def broken(_uid):
+    async def broken(_uid, _mutes=()):
         raise RuntimeError("people table down")
 
     monkeypatch.setattr(nc, "_dates", broken)
@@ -482,7 +507,7 @@ def test_on_adds_exactly_one_line_between_manner_and_identity(lab, monkeypatch, 
     on = sent("Good morning")
     line = zc._NOW_CARD_ENVELOPE_PREFIX + json.dumps(st.rows[UID][1], ensure_ascii=True) + "\n"
     assert on == line + off                                              # identity innermost; nothing else moved
-    assert zc.prefix_key(on) != zc.prefix_key(off) and zc.prefix_key(off) == zc.prefix_key(off.replace(line, ""))
+    assert zc.prefix_key(on) != zc.prefix_key(off) and zc.prefix_key(on.replace(line, "")) == zc.prefix_key(off)
     assert zc._NOW_CARD_ENVELOPE_PREFIX not in sent("Good morning", uid="guest")
 
 
