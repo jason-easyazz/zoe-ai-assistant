@@ -236,7 +236,7 @@ async def test_off_the_record_and_forgotten_turns_keep_no_words(monkeypatch, fre
 
     import memory_forgotten
 
-    async def names_it(_u, t):
+    async def names_it(_u, t, **_k):
         return "quillon" in t.lower()
 
     monkeypatch.setattr(memory_forgotten, "matches", names_it)

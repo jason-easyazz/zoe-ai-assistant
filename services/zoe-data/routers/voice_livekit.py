@@ -69,6 +69,7 @@ from fastapi.responses import JSONResponse
 # on. `routers.voice_tts` never imports this module at module level (only lazily,
 # inside a function), so there is no cycle; `main.py` imports voice_tts first.
 import panel_principal
+import voice_phrases
 from auth import get_current_user
 from routers.voice_tts import _validate_device_token
 
@@ -675,7 +676,8 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
         # same synthesize path as the reply TTS below; any failure degrades to
         # today's behaviour (silent ambient) — never crash the loop.
         try:
-            canned = "Sorry, I didn't catch that."
+            # One voice (voice_phrases.json "reask"): keyed on the capture's length, so a replayed clip hears the same line.
+            canned = voice_phrases.say("reask", f"{session_id}:{len(frames)}")
             from routers.voice_tts import synthesize as _synth
             tts_resp = await _synth(
                 {"text": canned}, caller={"source": "livekit", "user_id": user_id}
@@ -720,7 +722,7 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
         )
 
     # ── LLM (skipped when the fast tier answered) ────────────────────────────
-    response = "Sorry, I had trouble with that."
+    response = voice_phrases.say("turn_failed")
     llm_ok = True
     if _fast_reply is not None:
         response = _fast_reply
@@ -799,7 +801,7 @@ async def _run_text_pipeline(local_participant, message: str, user_id: str, sess
     await _send_data(local_participant, {"type": "state", "state": "thinking"})
     await _send_data(local_participant, {"type": "transcript", "role": "user", "text": message})
 
-    response = "Sorry, I had trouble with that."
+    response = voice_phrases.say("turn_failed")
     llm_ok = True
     stage_started = time.monotonic()
     _health_update(last_stage="llm", last_error=None)
@@ -1715,7 +1717,7 @@ async def livekit_audio(
         response_text = await brain_oneshot(transcript, sid, user_id, voice_mode=True)
     except Exception as exc:
         logger.error("LiveKit HTTP LLM error: %s", exc)
-        response_text = "Sorry, I had trouble processing that."
+        response_text = voice_phrases.say("turn_failed")
 
     if cancel_key in _pending_cancel:
         _pending_cancel.discard(cancel_key)

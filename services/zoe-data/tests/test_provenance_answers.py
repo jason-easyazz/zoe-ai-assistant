@@ -780,6 +780,30 @@ def test_a_verbatim_turn_naming_a_forgotten_entity_is_not_quoted(svc, monkeypatc
         memory_forgotten.reset_state()
 
 
+def test_a_ledger_outage_does_not_quote_a_verbatim_turn(svc, monkeypatch):
+    """Forgotten means forever: a ledger we cannot read withholds the quote (fail closed), it never serves it."""
+    import memory_forgotten
+
+    class Down(memory_forgotten.MemoryBackend):
+        async def active_hashes(self, user_id, now_iso):
+            raise RuntimeError("ledger down")
+
+    monkeypatch.setenv(memory_forgotten.SALT_ENV, "x" * 40)
+    memory_forgotten.set_backend(Down())
+    memory_forgotten.reset_state()
+    run(xw.get_backend().add(UID, "xw-9", NOW - 86400, GATE, xw.tokens_column(GATE), "chat"))
+    mp.note_user_turn(UID, "q", "s1")
+    token = mp.begin_turn(UID)
+    mp.note_served(UID, [], [("xw-9", NOW - 86400, GATE)])
+    mp.commit_brain_reply(UID, "You told Dana the gate code is green and she should use it after nine.", "q", "s1", token=token)
+    try:
+        mp.note_user_turn(UID, "why did you say that", "s1")
+        assert run(pa.explain(UID, svc=svc, now=NOW)) == pa.FORGOTTEN_REPLY
+    finally:
+        memory_forgotten.set_backend(None)
+        memory_forgotten.reset_state()
+
+
 def test_the_fix_needs_the_correction_path_and_says_so_when_it_is_off(svc):
     explained_state(svc)
     assert say("That's wrong, it's Tuesday") == pa.FIX_OFF_REPLY

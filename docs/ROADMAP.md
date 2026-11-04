@@ -1,7 +1,7 @@
 ---
 type: roadmap
 audience: Jason + every agent
-updated: 2026-10-19
+updated: 2026-11-03
 ---
 # Zoe roadmap
 
@@ -26,13 +26,12 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
 
 ## Now (this week, at most 5)
 
-1. **Close the unauthenticated surface the deep dive found (A2).** Router-level auth on `routers/music.py` (panel or member, so the panel music bar keeps working with its device
-   token); an allowlist for `GET /api/settings`; the Multica webhook secret checked before its UPDATE; delete the two fake-success endpoints; a CI test that every mutating route
-   declares an auth dependency from an allowlist. Owner: agent. Acceptance: that test, plus the panel music bar still works. The identity half already landed
-   (#2089, #2097, #2099; scope `[default ZOE_HA_CONTROL_SCOPE=panel]`). Record: deep dive A2.
-2. **Stop blocking the event loop in the turn path (A1).** `asyncio.to_thread` around the four synchronous `semantic_router.route` call sites, an event-loop-lag gauge on `/metrics`,
-   and a test that fails on a blocking call in the turn path. Owner: agent, voice replay gate (MANDATORY, `voice_tts.py` and `fast_tiers.py`). Acceptance: replay probe passes and per-stage
-   speed does not regress. Record: deep dive A1.
+**Samantha direction (2026-11-03):** the plan of record is [docs/research/samantha-initiative-2026-11-03.md](research/samantha-initiative-2026-11-03.md). Its first four opportunities are: push memory into every household turn (recall gate enforce, now card, history 8 rows); judged end of turn + duck-decide-resume live; one voice for every tier; night-mind readers to `serve` + the outcome edge. Owner decisions in its section 11.
+
+1. ~~**Close the unauthenticated surface the deep dive found (A2).**~~ ✅ landed: music writes (#2108) and reads (#2121) need a member or the panel, `GET /api/settings` is an allowlist,
+   the Multica webhook secret is checked first, and `services/zoe-data/tests/test_mutating_routes_declare_auth.py` fails a mutating route with no auth dependency. Identity half: #2089, #2097, #2099.
+2. ~~**Stop blocking the event loop in the turn path (A1).**~~ ✅ landed #2117: `semantic_router.route` runs off the loop (`tests/test_router_off_loop.py`), and
+   `zoe_event_loop_lag_seconds` is on `/metrics` (`event_loop_lag.py`).
 3. **Data safety: backups and forgetting (A5, A6, A7).** Off-box encrypted backups with a restore drill in `zoe-backup-verify` (owner picks the target and key); "forgotten" reaches every
    store that holds household words (router shadow log, training copy, retired agent session stores); delete the retired training timer and its duplicate corpus. Owner: owner decision
    for the target and the deletions, agent for the build. Acceptance: a restore drill that passes; an inventory test of where household text lives. Record: deep dive A5-A7.
@@ -50,8 +49,8 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
 
 1. ~~**A3** give every dispatchable intent a direct handler, delete the `mcporter` fallback, set `ZOE_MCP_STRICT_USER_ID=true` (replay).~~ ✅ merged #2127 (2026-10-19).
 2. ~~**A4** retire `/ws/voice/` and the orphaned `touch/voice.html`~~ ✅ merged #2127 (2026-10-19); remaining: extend the lane-parity rig to LiveKit and non-stream chat.
-3. **A9 + A10** Telegram token env name and a loopback notify route; LiveKit hygiene (pin the image, memory cap, per-session rooms). Both agent-started, not on `main` at the time of writing.
-4. **A11** server-side panel targeting: every voice UI event carries `panel_id`, `panelMatches` stops acting on unknown, a two-panel test (replay).
+3. ~~**A9 + A10** Telegram token env name and a loopback notify route; LiveKit hygiene (pin the image, memory cap, per-session rooms).~~ ✅ merged #2108 (pin, cap, Telegram via the bot) and #2117 (room per session).
+4. ~~**A11** server-side panel targeting: every voice UI event carries `panel_id`.~~ ✅ merged #2117.
 5. **B1** brain lanes: `flue` as the in-code default pinned by `test_canonical_invariants`; promote `labs/flue-zoe-brain-2x` and the bot out of `labs/`; decide core (delete or parity-test). Owner decision, agent build.
 6. **B3** finish the OpenClaw and Hermes removal, including the `~/.hermes/.env` loads and the root `AGENTS.md` "Hermes-first" section. Agent, DOX pass.
 7. **B4** resume the `voice_tts.py` split (leaves first), then a size ratchet test; plan the `intent_router.py` split. Agent, replay on every step.

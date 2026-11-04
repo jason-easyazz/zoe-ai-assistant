@@ -167,6 +167,10 @@ not an excuse.
   context (8288 > 8192 tokens → HTTP 500 every turn, 2026-07-07). The flue client's
   brain-unreachable fallback text now classifies as **ERROR**, never OK — a dead brain lane can't
   silently pass the gate.
+- Fixed lines (fast-tier acks, fallbacks, errors, the LiveKit empty-transcript re-ask) come from ONE
+  phrase set, `services/zoe-data/voice_phrases.json`; the variant is a hash of the turn key, so a
+  replay hears the same words. `tests/test_voice_phrases.py` pins that the `brain_fallback` lines stay
+  ERROR (replay + struggle detector) and that no other line matches the replay's CANT_DO classifier.
 
 ### The corpus contract — auto-captured, so it needs curating
 
@@ -1017,7 +1021,11 @@ produces a "Job failed" that looks like a hard failure while the service is actu
 
 ## Brain build + flags — B0.4: llama.cpp b11194, FlashAttention on, q8_0 K+V (2026-09-27)
 
-The tracked template `scripts/setup/systemd/llama-server.service` targets **llama.cpp b11194**
+> **Build moved 2026-10-30 to b11982** (`~/llama.cpp-b11982/build-jetson`, commit `8a199ad31`; same flags, same cmake set;
+> +6% prompt processing, otherwise equal - [A/B](llama-cpp-bump-b11982-ab.md), [switch runbook](llama-cpp-b11982-switch-runbook.md)).
+> The recipe below is the b11194 record; for b11982 substitute the tag. b11194 stays on disk for rollback.
+
+The tracked template `scripts/setup/systemd/llama-server.service` targeted **llama.cpp b11194** at B0.4
 (`~/llama.cpp-b11194/build-jetson`, commit `9f70b2cec`; built `GGML_CUDA=ON`,
 `CMAKE_CUDA_ARCHITECTURES=87`, `GGML_CUDA_FA=ON`, `GGML_CUDA_GRAPHS=ON`, `GGML_NATIVE=ON`,
 Release) with `--flash-attn on --cache-type-k q8_0 --cache-type-v q8_0` beside the MTP drafter.

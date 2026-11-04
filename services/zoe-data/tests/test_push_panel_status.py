@@ -148,6 +148,7 @@ async def test_a_real_voice_turn_warns_exactly_once(monkeypatch, caplog):
     monkeypatch.setitem(sys.modules, "skybridge_service", types.SimpleNamespace(resolve_skybridge_request=none))
     monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", none)
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     monkeypatch.setitem(sys.modules, "zoe_agent", types.SimpleNamespace(run_zoe_agent_streaming=agent))
 
     with caplog.at_level(logging.WARNING, logger="push"):

@@ -1292,16 +1292,8 @@ async def lifespan(app: FastAPI):
         logger.info("Background task watchdog started")
     except Exception as _wd_exc:
         logger.warning("Task watchdog not started (non-fatal): %s", _wd_exc)
-    # Zoe Agent: warm Gemma's KV cache in background so first real query is fast.
-    # Unconditional: the HERMES_FAST_PATH / JETSON_AGENT_MODE gates were pinned to
-    # the Zoe-Agent side on the only host that exists (B3, 2026-10-18).
-    try:
-        from zoe_agent import warmup_kv_cache
-        asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
-        logger.info("Jetson Agent: Gemma KV cache warmup scheduled (fires in 8s)")
-    except Exception as _wup_exc:
-        logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
-
+    # No boot-time legacy KV warm: it filled the brain's one slot with prompts the Flue sidecar never sends. The prefix
+    # keeper below warms the household prefix the sidecar actually uses.
     # Keep the household's brain prefix resident in the one llama slot between conversations (re-warms it after a helper
     # batch / brain restart displaced it, so the next wake is a cache hit). ZOE_BRAIN_PREFIX_KEEPER (default on).
     try:
@@ -1441,6 +1433,16 @@ async def lifespan(app: FastAPI):
         )
     except Exception as _pp_exc:
         logger.warning("Panel pairing token sweep not scheduled (non-fatal): %s", _pp_exc)
+
+    # HA presence reader (flag-dark ZOE_HA_PRESENCE=off|shadow|on): OBSERVED person/device_tracker rows; `off` registers nothing.
+    try:
+        from presence import ha_presence as _ha_presence
+        from proactive.scheduler import get_scheduler as _get_aps
+
+        if _ha_presence.register(_get_aps()):
+            logger.info("HA presence poll scheduled (mode=%s)", _ha_presence.mode())
+    except Exception as _hap_exc:
+        logger.warning("HA presence poll not scheduled (non-fatal): %s", _hap_exc)
 
     # Weekly music discovery — ephemeral digarr batch refreshing the
     # "Zoe Discovery" MA playlist (scripts/maintenance/music_discovery_batch.py;
@@ -2354,6 +2356,8 @@ app.include_router(phone_app_router)
 # Wake-up alarms (alarms, ZOE_ALARMS, default off = every route 404s): docs/architecture/alarms.md.
 from routers.alarms import router as alarms_router  # noqa: E402
 app.include_router(alarms_router)
+from routers.presence import router as presence_router  # noqa: E402  (flag-dark ZOE_HA_PRESENCE=on)
+app.include_router(presence_router)
 
 try:
     from routers.voice_livekit import router as voice_livekit_router

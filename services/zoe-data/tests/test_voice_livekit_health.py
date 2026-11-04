@@ -124,6 +124,7 @@ async def test_pipeline_emits_processing_ack_before_slow_response(monkeypatch):
     # Pipeline behaviour is brain-agnostic; pin the legacy brain so the dispatch
     # routes to the mocked zoe_agent (default is now zoe-core).
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")  # rollback lane; the code default is flue
     monkeypatch.setitem(sys.modules, "zoe_agent", types.SimpleNamespace(run_zoe_agent=_fake_agent))
     monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASE", "Let me check.")
     local = _LocalParticipant()
