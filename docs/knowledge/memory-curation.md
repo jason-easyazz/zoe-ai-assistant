@@ -45,11 +45,13 @@ Memories list labelled "Added for you by <name>", and cannot forget or correct t
 | a passing DENIAL ("I'm not allergic to peanuts") is held too | `memory_authority.negation_flip` (curated targets only) |
 | provenance on every row: `curated_by`, `curated_by_name`, `curated_at`, `curated_via`, `curated_category`, `curated_sensitive` | `memory_service.CURATED_KEYS` (first-class only for the `curator` writer) |
 | only `memory_curation` writes as the `curator` writer | static test |
+| flag-dark in the service layer too (an internal caller with the flag off changes nothing), and the curator is re-read from the account in `policy` (a forged `Account` curates nothing) | `memory_curation._require_enabled`, `policy` |
+| no affect-off rule: only a third party's note about someone's feelings is refused (`NEVER`, owner D10); the member's own affective memory, children included, is untouched (emotional-safety note section 4, 2026-11-03) | `check_text` |
 | every action audited BEFORE it runs (no audit row, no change) and when it finished; ids, category, a row-id hash, never text | `memory_curation_audit` |
 | a sensitive curated row is private by its category, so the panel counts it and never shows or speaks it | `provenance_answers.sensitive_classes` |
 | **D1 / D7** (person-centred memory, accepted 2026-11-03): a curated note is the guardian's OWN statement - approved at once, `authority=user_stated`, author `curated_by` = the curator's verified identity; no model in the path (static scan); no mood / feelings class ever | `memory_authority.authority_of`, `memory_curation` (`NEVER`) |
 | **D7**: a child never sees or edits another member's entries - the curation routes are curator-only (403 for a child, its own notes included) and a curated row on the child's own list cannot be edited or forgotten by them | `require_curator`, `memory_space.curated_locked` |
-| **forgotten means forever**: a note naming anything the member forgot, or anything the curator forgot (a forgotten child), is refused (409) before a word is written; a forget-ledger outage refuses too (503, strict lookups); the curator path is never an explicit re-teach | `memory_curation.refuse_forgotten`, `memory_forgotten.EXPLICIT_RETEACH_WRITERS` |
+| **forgotten means forever**: a note naming anything the member forgot, or anything the curator forgot - including a child the curator forgot, even when the note never names them (the member's account name is checked against the curator's ledger) - is refused (409) before a word is written; a forget-ledger outage refuses too (503, strict lookups); the curator path is never an explicit re-teach | `memory_curation.refuse_forgotten`, `memory_forgotten.EXPLICIT_RETEACH_WRITERS` |
 
 ## Operator steps
 

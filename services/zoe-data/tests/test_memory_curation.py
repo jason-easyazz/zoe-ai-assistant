@@ -560,7 +560,7 @@ def test_migration_runs_twice_on_sqlite_and_chains_onto_one_head():
             revs.add(r.group(1))
         if d:
             downs.add(d.group(1))
-    assert mod.revision == "0066" and mod.down_revision in revs
+    assert mod.revision == "0066" and mod.down_revision == "0065" and mod.down_revision in revs
     assert len(revs - downs) == 1
 
 
@@ -646,3 +646,36 @@ def test_d7_a_child_never_sees_or_edits_another_member_entries(env):
     (row,) = rows_of(env, KID)
     assert run(memory_space.curated_locked(KID, row.metadata)) is True                     # the child cannot edit or forget it
     assert as_(env, PARENT, "admin").get(f"/api/memories/curation/members/{KID}/rows", headers=H).status_code == 200  # control
+
+
+def test_a_note_that_never_names_a_forgotten_child_is_still_refused(env, ledger):
+    run(ledger.add(PARENT, "Juno", actor=PARENT))
+    assert curate(env, "Swimming is on Tuesdays", "routines").status_code == 409
+    assert not rows_of(env, KID)
+    assert curate(env, "Swimming is on Tuesdays", "routines", member=KID2).status_code == 200   # control: another child
+
+
+def test_the_service_layer_is_flag_dark_and_re_reads_the_curator(env, monkeypatch):
+    async def go(curator):
+        async with db_compat.get_compat_db() as db:
+            return await mc.add(db, curator, KID, "Juno likes dinosaurs", "likes")
+
+    forged = mc.Account(ADULT, "Wren Quill", "admin", "adult")          # claims admin; auth_users says "user"
+    with pytest.raises(mc.CurationRefused) as exc:
+        run(go(forged))
+    assert exc.value.status == 403
+    real = mc.Account(PARENT, "Ash Quill", "admin", "adult")
+    monkeypatch.delenv("ZOE_MEMORIES_CURATORS")
+    with pytest.raises(mc.CurationRefused) as exc:
+        run(go(real))
+    assert exc.value.status == 404 and not rows_of(env, KID)
+    monkeypatch.setenv("ZOE_MEMORIES_CURATORS", "1")
+    assert run(go(real))["text"] == "Juno likes dinosaurs"                # control: flag on, a real curator
+
+
+def test_no_affect_off_rule_for_a_child_own_feelings(env):
+    """Emotional-safety note section 4 (owner, 2026-11-03): affective memory stays on for children. Curation refuses only a THIRD
+    party's note about someone's feelings; the child's own feelings are stored as for anyone."""
+    assert curate(env, "Juno feels sad about the move", "other").status_code == 422
+    ref = run(env.svc.ingest("User feels sad about the move.", user_id=KID, source="chat_regex", status="approved"))
+    assert ref is not None and ref.metadata["status"] == "approved"
