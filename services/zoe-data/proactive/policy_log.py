@@ -166,9 +166,10 @@ async def observe(uid: str, items: list, now: datetime | None = None) -> dict | 
 
 async def _observe(uid: str, items: list, now: datetime) -> dict:
     from proactive.presence import TIER_BOUND_GUEST, TIER_OWNER
-    from proactive.pull import _quiet
+    from proactive.pull import _member, _quiet
     from time_utils import zoe_timezone
 
+    verified = _member(uid)          # a guest sentinel / unknown id is row 1, whatever the panel says
     tier = await _tier(uid)
     busy, rest = _busy(), _quiet(now)
     refs = await _night_raise_refs(uid, now)
@@ -187,7 +188,7 @@ async def _observe(uid: str, items: list, now: datetime) -> dict:
         kind = kind if kind in KINDS else "other"
         tally = _week.setdefault(wk, {"card": 0, "dot": 0})
         d = decide(Signals(
-            kind=kind, guest_present=tier == TIER_BOUND_GUEST, deny_class=sensitive, busy=busy, rest_window=rest,
+            kind=kind, verified=verified, guest_present=tier == TIER_BOUND_GUEST, deny_class=sensitive, busy=busy, rest_window=rest,
             panel_near=tier == TIER_OWNER, ignored_in_class=ignored.get(kind, 0),
             week_cards=tally["card"], week_dots=tally["dot"],
         ))
@@ -200,8 +201,8 @@ async def _observe(uid: str, items: list, now: datetime) -> dict:
         _seen.add(key)
         if d.action == "surface" and d.rung in ("card", "dot"):
             tally[d.rung] += 1
-        logger.info("PROACTIVE_POLICY user=%s item=%s kind=%s row=%d rung=%s action=%s reason=%s",
-                    me, item_id, kind, d.row, d.rung, d.action, d.reason)
+        logger.info("PROACTIVE_POLICY user=%s item=%s kind=%s row=%d rung=%s reason=%s",
+                    me, item_id, kind, d.row, d.rung, d.reason)
     logger.info("PROACTIVE_POLICY_PASS user=%s n=%d silent=%d dot=%d card=%d speak=%d",
                 me, len(rows), counts[SILENT], counts[DOT], counts[CARD], counts[SPEAK] + counts[SPEAK_ON_PULL])
     return counts

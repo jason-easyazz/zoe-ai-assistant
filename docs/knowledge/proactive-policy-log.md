@@ -55,7 +55,7 @@ is no presence sensor, so `absent` panel means "no card", never "away".
 
 ## The log
 
-`PROACTIVE_POLICY user=<8 hex of sha256> item=<candidate id> kind=<enum> row=<n> rung=<rung> action=<none|hold|suppress|surface|speak> reason=<code>`
+`PROACTIVE_POLICY user=<8 hex of sha256> item=<candidate id> kind=<enum> row=<n> rung=<rung> reason=<code>`
 and one `PROACTIVE_POLICY_PASS` counts line per poll. Logs go to `~/.zoe-logs/` (zoe-data), not journald. Item ids
 are opaque; the night raise is hashed. No text, names, or class names are logged.
 

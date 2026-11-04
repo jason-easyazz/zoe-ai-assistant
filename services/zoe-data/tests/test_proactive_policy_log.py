@@ -258,3 +258,32 @@ async def test_poll_observer_failure_never_breaks_the_poll(monkeypatch):
     monkeypatch.setattr(pl, "_tier", boom)
     state = await _poll(monkeypatch, [_item("open_loop", 1)])
     assert state["count"] == 1
+
+
+async def test_observer_level_fault_or_stall_never_breaks_the_poll(monkeypatch):
+    import asyncio
+
+    monkeypatch.setenv("ZOE_PROACTIVE_POLICY_LOG", "log")
+
+    async def boom(*a, **k):
+        raise RuntimeError("observer exploded")
+
+    monkeypatch.setattr(pl, "observe", boom)
+    assert (await _poll(monkeypatch, [_item("open_loop", 1)]))["count"] == 1
+
+    async def stall(*a, **k):
+        await asyncio.sleep(60)
+
+    real = asyncio.wait_for
+    monkeypatch.setattr(asyncio, "wait_for", lambda aw, timeout: real(aw, timeout=0.05))
+    monkeypatch.setattr(pl, "observe", stall)
+    assert (await _poll(monkeypatch, [_item("open_loop", 1)]))["count"] == 1
+
+
+async def test_unverified_member_is_row_1_through_the_observer(monkeypatch, caplog):
+    monkeypatch.setenv("ZOE_PROACTIVE_POLICY_LOG", "log")
+    _env(monkeypatch, tier="owner")
+    with caplog.at_level(logging.INFO, logger=pl.logger.name):
+        counts = await pl.observe("guest", [_item("open_loop", 1), _item("event", 2)], NOW)
+    assert counts["silent"] == 2 and counts["card"] == 0 and counts["dot"] == 0
+    assert all("row=1 " in r.getMessage() for r in caplog.records if "PROACTIVE_POLICY " in r.getMessage())
