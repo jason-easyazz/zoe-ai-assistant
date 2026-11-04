@@ -17,7 +17,7 @@ import hashlib
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +152,37 @@ async def _night_raise_refs(uid: str, now: datetime) -> list[str]:
         return []
 
 
+async def _ignored_by_kind(uid: str, now: datetime) -> dict[str, int]:
+    """Row 12 input from the ledger's recorded OUTCOMES (``outcome='ignored'``, last 14 days), per kind - not from the
+    pending queue, whose retention (expiry, MAX_SURFACED) would otherwise decide the result. {} on any fault."""
+    try:
+        from db_compat import get_compat_db
+
+        cutoff = (now - timedelta(days=14)).isoformat()
+        async with get_compat_db() as db:
+            async with db.execute(
+                "SELECT kind, COUNT(*) FROM proactive_deliveries WHERE user_id = ? AND outcome = 'ignored' "
+                "AND outcome_at >= ? GROUP BY kind", (uid, cutoff),
+            ) as cur:
+                return {str(r[0]): int(r[1]) for r in await cur.fetchall()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+async def _muted_item_ids(uid: str, items: list) -> set[str]:
+    """Ids of pending items the member muted ("don't bring that up"). Read independently of the pull queue, which keeps
+    muted items in ``ZOE_RESTRAINT=shadow``. Empty on any fault or when restraint is off."""
+    try:
+        import restraint
+
+        if restraint.mode() == "off" or not items:
+            return set()
+        mutes = await restraint.list_mutes(uid)
+        return {i.id for i in items if mutes and restraint.muted(i.text, i.source_ref, mutes)}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 async def observe(uid: str, items: list, now: datetime | None = None) -> dict | None:
     """Record the rung the table would choose for each of the member's pending candidates (+ the night raise).
     Log-only: returns a counts dict for tests; ``None`` when off. Never raises, never delivers anything."""
@@ -179,11 +210,9 @@ async def _observe(uid: str, items: list, now: datetime) -> dict:
     iso = local.isocalendar()
     wk = (me, f"{iso[0]}-{iso[1]}")
     counts = {r: 0 for r in RUNGS}
-    ignored: dict[str, int] = {}
-    for i in items:
-        if getattr(i, "surfaced", 0) >= 1:
-            ignored[i.kind] = ignored.get(i.kind, 0) + 1
-    rows = [(i.id, i.kind, bool(i.sensitivity)) for i in items] + [(f"night:{_h(r)}", "night_raise", False) for r in refs]
+    ignored = await _ignored_by_kind(uid, now)
+    muted_ids = await _muted_item_ids(uid, items)
+    rows = [(i.id, i.kind, bool(i.sensitivity) or i.id in muted_ids) for i in items] + [(f"night:{_h(r)}", "night_raise", False) for r in refs]
     for item_id, kind, sensitive in rows:
         kind = kind if kind in KINDS else "other"
         tally = _week.setdefault(wk, {"card": 0, "dot": 0})

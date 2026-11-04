@@ -287,3 +287,28 @@ async def test_unverified_member_is_row_1_through_the_observer(monkeypatch, capl
         counts = await pl.observe("guest", [_item("open_loop", 1), _item("event", 2)], NOW)
     assert counts["silent"] == 2 and counts["card"] == 0 and counts["dot"] == 0
     assert all("row=1 " in r.getMessage() for r in caplog.records if "PROACTIVE_POLICY " in r.getMessage())
+
+
+async def test_muted_item_is_row_2_and_ignored_count_comes_from_ledger(monkeypatch):
+    monkeypatch.setenv("ZOE_PROACTIVE_POLICY_LOG", "log")
+    _env(monkeypatch, tier="owner")
+    a, b = _item("open_loop", 1), _item("open_loop", 2)
+
+    async def _muted(uid, items):
+        return {a.id}
+
+    async def _none(uid, now):
+        return {}
+
+    monkeypatch.setattr(pl, "_muted_item_ids", _muted)
+    monkeypatch.setattr(pl, "_ignored_by_kind", _none)
+    counts = await pl.observe(MEMBER, [a, b], NOW)
+    assert counts["silent"] == 1, "the muted item is silent; the other is not"
+
+    async def _two(uid, now):
+        return {"open_loop": 2}
+
+    monkeypatch.setattr(pl, "_ignored_by_kind", _two)
+    pl._reset_state()
+    counts = await pl.observe(MEMBER, [b], NOW)
+    assert counts["silent"] == 1
