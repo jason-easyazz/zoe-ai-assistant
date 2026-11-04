@@ -278,6 +278,19 @@ def _view(ref: Any, member: Account) -> dict:
                 added_at=str(md.get("curated_at") or ""))
 
 
+async def _all_rows(svc: Any, user_id: str, status: str) -> list:
+    """EVERY row of ``user_id`` in ``status`` - never a page: a curated note older than the newest N rows must stay reachable for
+    edit / forget / held (a page limit applied BEFORE the curated filter silently hid it). A storage failure refuses (503) rather
+    than reading as an empty list."""
+    from memory_service import MemoryServiceError
+
+    try:
+        return list(await svc.list_all_by_status_strict(user_id=user_id, status=status))
+    except MemoryServiceError as exc:
+        logger.warning("memory_curation: rows not readable (%s) - nothing shown or changed", type(exc).__name__)
+        raise CurationRefused(503, "I can't read the notes right now, so nothing was changed.")
+
+
 async def curated_rows(pol: Policy, *, svc: Any = None, hidden: bool = False) -> list:
     """The curated rows of the member the curator may see and change: only in a category that is allowed NOW (a child sensitive
     category switched off again hides its notes until it is switched back on), and for an adult only the protected ones.
@@ -285,7 +298,7 @@ async def curated_rows(pol: Policy, *, svc: Any = None, hidden: bool = False) ->
     import memory_authority as auth
 
     out = []
-    for ref in await _svc(svc).list_by_status(user_id=pol.member.user_id, status="approved", limit=1000):
+    for ref in await _all_rows(_svc(svc), pol.member.user_id, "approved"):
         md = ref.metadata or dict()
         if not _is_curated(md, pol.member.user_id):
             continue
@@ -368,10 +381,24 @@ async def edit(db, curator: Account, member_id: str, row_id: str, text: str, *, 
 
 async def _rejected_curated(pol: Policy, row_id: str, svc: Any) -> Any:
     """A curated row already rejected by an earlier forget whose physical erase did not finish (retryable, never stranded)."""
-    for ref in await _svc(svc).list_by_status(user_id=pol.member.user_id, status="rejected", limit=100000):
+    for ref in await _all_rows(_svc(svc), pol.member.user_id, "rejected"):
         if ref.id == str(row_id or "") and _is_curated(ref.metadata or dict(), pol.member.user_id):
             return ref
     return None
+
+
+async def _earlier_revisions(pol: Policy, ref: Any, svc: Any) -> list:
+    """The ids of the earlier curated revisions of ``ref`` (an edit keeps the old text as a ``superseded`` row linked by
+    ``supersedes_id``): forgetting the note must erase them too, or the old wording - medical text included - stays on disk.
+    Only curated rows of this member; a cycle ends the walk."""
+    prior = dict((r.id, r) for r in await _all_rows(svc, pol.member.user_id, "superseded")
+                 if _is_curated(r.metadata or dict(), pol.member.user_id))
+    out: list = []
+    cur = str((ref.metadata or dict()).get("supersedes_id") or "")
+    while cur in prior and cur not in out:
+        out.append(cur)
+        cur = str((prior[cur].metadata or dict()).get("supersedes_id") or "")
+    return out
 
 
 async def forget(db, curator: Account, member_id: str, row_id: str, *, svc: Any = None) -> None:
@@ -394,7 +421,9 @@ async def forget(db, curator: Account, member_id: str, row_id: str, *, svc: Any 
     ok = rejected or await svc.review(old.id, decision="reject", actor=curator.user_id, origin=WRITER,
                                       note="removed by a curator") is not None
     if ok and hasattr(svc, "erase_rows") and physical_erase_enabled():
-        await svc.erase_rows(pol.member.user_id, [old.id], actor=curator.user_id, reason="curated note removed by a curator")
+        chain = await _earlier_revisions(pol, old, svc)
+        await svc.erase_rows(pol.member.user_id, [old.id, *chain], actor=curator.user_id,
+                             reason="curated note removed by a curator")
     await _finished(db, curator.user_id, pol.member.user_id, "forget", ok, cat, old.id)
     if not ok:
         raise CurationRefused(409, "I could not remove that one.")
@@ -408,10 +437,10 @@ async def held(db, curator: Account, member_id: str, *, svc: Any = None) -> list
     # An accept that edited the curated row but did not close the held note leaves the note pointing at the SUPERSEDED row:
     # follow it to the row that replaced it, so the note stays visible and a retry can close it.
     succ = dict((r.id, str((r.metadata or dict()).get("superseded_by_id") or ""))
-                for r in await svc.list_by_status(user_id=pol.member.user_id, status="superseded", limit=100000)
+                for r in await _all_rows(svc, pol.member.user_id, "superseded")
                 if _is_curated(r.metadata or dict(), pol.member.user_id))
     out = []
-    for ref in await svc.list_by_status(user_id=pol.member.user_id, status="disputed", limit=500):
+    for ref in await _all_rows(svc, pol.member.user_id, "disputed"):
         cid = str((ref.metadata or dict()).get("contradicts_id") or "")
         seen = set()
         while cid not in mine and cid in succ and cid not in seen:        # any number of failed accepts; a cycle ends it

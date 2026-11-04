@@ -1198,6 +1198,10 @@ def _stamp_claim(md: dict[str, Any], claim: Any) -> None:
 
 #: the provenance a CURATED row carries (``memory_curation``), first-class on rows written by the curator writer only
 CURATED_KEYS = ("curated_by", "curated_by_name", "curated_at", "curated_via", "curated_category", "curated_sensitive")
+#: of those, the WHO / WHEN / HOW stamps: they belong to the writer of a row, so an edit never inherits them. The category and its
+#: sensitivity are the note's PRIVACY (``provenance_answers.sensitive_classes``), not its attribution: they ride an edit by anyone,
+#: or a released medication note edited by its adult would become public text.
+CURATED_ATTRIBUTION_KEYS = ("curated_by", "curated_by_name", "curated_at", "curated_via")
 
 
 def _promote_event_metadata(md: dict[str, Any], extra: dict[str, Any]) -> None:
@@ -2560,8 +2564,9 @@ class MemoryService:
                 # edit from a high-stakes fact to ordinary text would keep a stale
                 # 0.9 boost.
                 "importance",
-                # the curated stamps belong to the writer of the NEW row (a curator edit stamps its own)
-                *CURATED_KEYS,
+                # the curated attribution belongs to the writer of the NEW row (a curator edit stamps its own); the category
+                # and sensitivity are carried (privacy, not authorship)
+                *CURATED_ATTRIBUTION_KEYS,
             } | _auth.PROVENANCE_KEYS
             for key, value in current.metadata.items():
                 if key in _EDIT_CARRY_FORWARD_SKIP or key in new_meta:
