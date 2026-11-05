@@ -327,6 +327,19 @@ def test_brain_request_carries_the_bridge_after_the_envelope_and_keeps_the_prefi
     assert with_bridge.rstrip().endswith("and what about the dressing")      # the user's words stay last
 
 
+def test_flag_off_outbound_is_byte_identical_to_no_bridge_state(monkeypatch):
+    """Flag off with a held exchange and a recorded rollover sends EXACTLY the bytes of a process that never heard of the
+    bridge (empty state, so ``block_for`` cannot contribute anything)."""
+    monkeypatch.setenv(vsb._ENV, "0")
+    legacy = _brain_request(monkeypatch, "and what about the dressing")
+    monkeypatch.setenv(vsb._ENV, "1")
+    vsb.note_exchange(OLD, ALICE, "what goes well with roast pumpkin", "Feta and toasted seeds.", True)
+    _rolled()
+    assert "roast pumpkin" in _brain_request(monkeypatch, "and what about the dressing")   # control: the state is live
+    monkeypatch.setenv(vsb._ENV, "0")
+    assert _brain_request(monkeypatch, "and what about the dressing") == legacy
+
+
 def test_brain_request_for_an_unconfirmed_voice_has_no_bridge(monkeypatch):
     vsb.note_exchange(OLD, ALICE, "what goes well with roast pumpkin", "Feta.", True)
     _rolled()

@@ -83,6 +83,12 @@ Why not simply raise `_VOICE_SESSION_TTL_S`:
 
 ## Owner steps
 
+**Precondition: the sidecar's `ZOE_BRAIN_ELIDE_STALE_BLOCKS` must be on** (it is set in
+`labs/flue-zoe-brain-2x/.env` as of 2026-11-05). With it off, a bridge block sent on an
+earlier turn stays in every later prompt of that session, so a name forgotten after it was
+sent could still reach the brain until the session rolls (cross-review finding on #2305).
+zoe-data cannot read the sidecar's env, so this is an owner check, not a code gate.
+
 Enable after the voice landing (replay gate) and a live check:
 
 ```
