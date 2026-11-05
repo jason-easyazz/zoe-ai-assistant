@@ -71,6 +71,10 @@ def normalize_due_date(raw: object, *, now_utc: datetime | None = None) -> str |
     from intent_router import _parse_date  # lazy: intent_router is the heavy module
 
     relative = text.lower()
+    # The spoken lead-ins a model copies from the request: "on the 15th of December" → "the 15th of december" (the grammar
+    # drops a leading "the"); "December the 15th" → "december 15th".
+    relative = re.sub(r"^on\s+", "", relative)
+    relative = re.sub(r"^([a-z]+)\s+the\s+(?=\d)", r"\1 ", relative)
     if relative.startswith("next "):
         relative = relative[5:].strip()  # "next friday" → the weekday grammar
     resolved = _parse_date(relative, today=today)
@@ -97,11 +101,44 @@ def normalize_due_date(raw: object, *, now_utc: datetime | None = None) -> str |
     )
 
 
+# Spoken clock forms the scanner's strict HH:MM parser does not read: "10am", "10 am", "10 a.m.", "10.30pm", "10:00:00".
+_SPOKEN_MERIDIEM_RE = re.compile(r"^(\d{1,2})(?:[:.](\d{2}))?\s*([ap])\.?\s*m\.?$")
+_CLOCK_SECONDS_RE = re.compile(r"^(\d{1,2}):(\d{2}):\d{2}$")
+_NAMED_TIMES = {"noon": "12:00", "midday": "12:00", "midnight": "00:00"}
+
+
+def _canonical_spoken_time(text: str) -> str | None:
+    """'HH:MM' (24 h) for a spoken clock time the strict parser rejects, else None.
+
+    Live 2026-11-04: "remind me on the 15th of December at 10am to book the car in for a service" failed twice on the chat
+    lane - the brain's `add_reminder` dispatch came back 422 (only 'HH:MM' / 'HH:MM AM' counted as clock times, so the
+    user's own "10am" did not), and the reply said the reminder service was "having trouble". An hour with am/pm must be
+    1-12; no meridiem and no minutes ("10") stays a 422 - "7" could be morning or evening, and a reminder must not guess."""
+    s = text.strip().lower()
+    if s in _NAMED_TIMES:
+        return _NAMED_TIMES[s]
+    m = _SPOKEN_MERIDIEM_RE.match(s)
+    if m:
+        hour, minute = int(m.group(1)), int(m.group(2) or 0)
+        if not (1 <= hour <= 12 and 0 <= minute <= 59):
+            return None
+        if m.group(3) == "p" and hour != 12:
+            hour += 12
+        elif m.group(3) == "a" and hour == 12:
+            hour = 0
+        return f"{hour:02d}:{minute:02d}"
+    m = _CLOCK_SECONDS_RE.match(s)
+    if m and 0 <= int(m.group(1)) <= 23 and 0 <= int(m.group(2)) <= 59:
+        return f"{int(m.group(1)):02d}:{m.group(2)}"
+    return None
+
+
 def normalize_due_time(raw: object) -> str | None:
     """Validate a reminder `due_time` at WRITE time: blank → None; a real clock
-    time ('08:42', '10:25 PM') → kept as given; anything the scanner's strict
-    parser rejects ('25:00', '09:99') → 422. Stored legacy rows are handled
-    leniently by the scan; new writes must not create more of them."""
+    time ('08:42', '10:25 PM') → kept as given; a spoken clock time the scan's
+    parser does not read ('10am', '10 a.m.', 'noon', '10:00:00') → canonical
+    'HH:MM'; anything else ('25:00', '09:99', a bare '10') → 422. Stored legacy
+    rows are handled leniently by the scan; new writes must not create more of them."""
     if raw is None:
         return None
     text = str(raw).strip()
@@ -110,6 +147,9 @@ def normalize_due_time(raw: object) -> str | None:
     from proactive.triggers.reminder_scan import _parse_due_time
 
     if _parse_due_time(text) is None:
+        spoken = _canonical_spoken_time(text)
+        if spoken is not None:
+            return spoken
         raise HTTPException(
             status_code=422,
             detail=f"due_time {text!r} is not a clock time; use HH:MM (00-23:00-59), optionally with AM/PM",

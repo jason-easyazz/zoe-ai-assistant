@@ -720,6 +720,29 @@ def test_an_unreadable_mute_list_serves_no_line(lab, monkeypatch):
     assert serve() == ""
 
 
+def test_a_member_marked_a_minor_after_the_build_stops_getting_thread_lines(lab, monkeypatch):
+    """Codex #2281: the adult check runs at build time only; an admin's later PUT /api/persona/modes marks the member a minor, and the
+    stored card must stop serving night-mind thread lines at once (a failed lookup drops them too). The non-thread lines stay."""
+    st, _svc = _built(lab, monkeypatch)
+    assert "shed roof" in serve()                                                # control: an adult is served the thread
+
+    async def child(_uid, db=None):
+        return False
+
+    monkeypatch.setattr(manner_block, "is_adult", child)
+    nc._ROWS.clear()
+    out = serve()
+    assert out and "shed roof" not in out and "Mia" in out
+
+    async def down(_uid, db=None):
+        raise RuntimeError("persona store unreadable")
+
+    monkeypatch.setattr(manner_block, "is_adult", down)
+    nc._ROWS.clear()
+    out = serve()
+    assert out and "shed roof" not in out and "Mia" in out
+
+
 _REAL_LIST_MUTES, _REAL_LIST_MUTES_STRICT = restraint.list_mutes, restraint.list_mutes_strict     # before the lab fixture patches them
 
 

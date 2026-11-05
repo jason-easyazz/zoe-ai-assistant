@@ -434,7 +434,17 @@ async def _live(uid: str, lines: list, svc: Any = None) -> list:
     # a thread mute is stored against the THREAD (``night_threads:<id>``), the card line points at an observation: map it
     thread_of: dict = {}
     obs_ids: Optional[set] = None
+    threads_ok = True
     if any(k == "thread" for k, _t, _r in lines):
+        # Adult eligibility is rechecked at SERVE time: a member an admin marked a minor after the nightly build keeps their stored
+        # card until it expires, so the stored thread lines must not outlive the mode change. A failed lookup drops them (D7).
+        try:
+            import manner_block
+
+            threads_ok = bool(await manner_block.is_adult(uid))
+        except Exception:  # noqa: BLE001
+            threads_ok = False
+    if threads_ok and any(k == "thread" for k, _t, _r in lines):
         try:
             import night_mind
 
@@ -461,7 +471,7 @@ async def _live(uid: str, lines: list, svc: Any = None) -> list:
             facts = None
     out = []
     for kind, text, ref in lines:
-        if kind == "thread" and (obs_ids is None or ref not in obs_ids):
+        if kind == "thread" and (not threads_ok or obs_ids is None or ref not in obs_ids):
             continue
         if kind == "fact" and (facts is None or ref not in facts):
             continue
