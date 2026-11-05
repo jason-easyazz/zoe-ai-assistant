@@ -42,14 +42,14 @@ def _clean(monkeypatch):
     monkeypatch.setattr(memory_forgotten, "keep_unforgotten", keep_all)
 
 
-def _say(uid, text, reply, *, sid=OLD, verified=True, at=T0):
-    vsb.note_exchange(sid, uid, text, reply, verified, now=at)
+def _say(uid, text, reply, *, sid=OLD, verified=True, now=T0):
+    vsb.note_exchange(sid, uid, text, reply, verified, now=now)
 
 
-def _block(uid=ALICE, *, verdict=True, sid=NEW, at=T0 + 600):
+def _block(uid=ALICE, *, verdict=True, sid=NEW, now=T0 + 600):
     async def run():
         restraint.bind_verdict(verdict)
-        return await vsb.block_for(uid, sid, now=at)
+        return await vsb.block_for(uid, sid, now=now)
 
     return asyncio.run(run())
 
@@ -62,7 +62,7 @@ def _rolled():
 def test_same_confirmed_speaker_gets_where_we_left_off():
     _say(ALICE, "what goes well with roast pumpkin", "Feta and toasted seeds work well.")
     _rolled()
-    out = _block()
+    out = _block(now=T0 + 600)               # the clock is injected: 10 minutes after the exchange
     assert "roast pumpkin" in out and "Feta and toasted seeds" in out
     assert out.startswith("[MEMORY CONTEXT") and out.endswith("[END MEMORY CONTEXT]")
     assert "10 minutes ago" in out
@@ -134,10 +134,10 @@ def test_only_confirmed_turns_are_held(verified):
 def test_bridge_expires_after_the_ttl():
     _say(ALICE, "what goes well with roast pumpkin", "Feta.")
     _rolled()
-    assert _block(at=T0 + vsb._DEFAULT_TTL_S + 1) == ""
+    assert _block(now=T0 + vsb._DEFAULT_TTL_S + 1) == ""
     vsb._YOUNG.clear()
-    assert "pumpkin" in _block(at=T0 + vsb._DEFAULT_TTL_S - 60)   # control: just inside it
-    assert "about 2 hours ago" in _block(at=T0 + vsb._DEFAULT_TTL_S - 60)
+    assert "pumpkin" in _block(now=T0 + vsb._DEFAULT_TTL_S - 60)   # control: just inside it
+    assert "about 2 hours ago" in _block(now=T0 + vsb._DEFAULT_TTL_S - 60)
 
 
 @pytest.mark.parametrize("raw,want", [("60", 300), ("999999", 14400), ("3600", 3600), ("junk", 7200)])
@@ -161,8 +161,8 @@ def test_a_forgotten_name_never_appears(monkeypatch):
         return kept, len(items) - len(kept)
 
     monkeypatch.setattr(memory_forgotten, "keep_unforgotten", keep)
-    _say(ALICE, "call Quillon about the boat", "I'll remind you to call Quillon.", at=T0)
-    _say(ALICE, "what goes well with roast pumpkin", "Feta.", at=T0 + 1)
+    _say(ALICE, "call Quillon about the boat", "I'll remind you to call Quillon.", now=T0)
+    _say(ALICE, "what goes well with roast pumpkin", "Feta.", now=T0 + 1)
     _rolled()
     out = _block()
     assert "Quillon" not in out and "boat" not in out
@@ -213,8 +213,8 @@ def test_a_live_tombstone_drops_the_exchange(monkeypatch):
     import memory_tombstones
 
     monkeypatch.setattr(memory_tombstones, "matching_tombstone", lambda uid, text: "quillon" if "Quillon" in text else None)
-    _say(ALICE, "call Quillon about the boat", "Okay.", at=T0)
-    _say(ALICE, "what goes well with roast pumpkin", "Feta.", at=T0 + 1)
+    _say(ALICE, "call Quillon about the boat", "Okay.", now=T0)
+    _say(ALICE, "what goes well with roast pumpkin", "Feta.", now=T0 + 1)
     _rolled()
     out = _block()
     assert "Quillon" not in out and "pumpkin" in out
@@ -222,11 +222,11 @@ def test_a_live_tombstone_drops_the_exchange(monkeypatch):
 
 @pytest.mark.parametrize("cue", ["forget that", "never mind what I said", "that's off the record", "scratch that"])
 def test_a_spoken_forget_cue_drops_everything_held_before_it(cue):
-    _say(ALICE, "call the dentist about the crown", "Okay.", at=T0)
-    _say(ALICE, cue, "Done.", at=T0 + 1)
+    _say(ALICE, "call the dentist about the crown", "Okay.", now=T0)
+    _say(ALICE, cue, "Done.", now=T0 + 1)
     _rolled()
     assert _block() == ""
-    _say(ALICE, "what goes well with roast pumpkin", "Feta.", at=T0 + 2)
+    _say(ALICE, "what goes well with roast pumpkin", "Feta.", now=T0 + 2)
     out = _block()
     assert "pumpkin" in out and "dentist" not in out and cue not in out
 
@@ -244,8 +244,8 @@ def test_off_record_turn_is_not_held(monkeypatch):
     import memory_provenance
 
     monkeypatch.setattr(memory_provenance, "is_off_record", lambda uid, text: "secret" in text)
-    _say(ALICE, "the secret plan is the surprise party", "Okay.", at=T0)
-    _say(ALICE, "what goes well with roast pumpkin", "Feta.", at=T0 + 1)
+    _say(ALICE, "the secret plan is the surprise party", "Okay.", now=T0)
+    _say(ALICE, "what goes well with roast pumpkin", "Feta.", now=T0 + 1)
     _rolled()
     out = _block()
     assert "surprise" not in out and "pumpkin" in out
@@ -254,7 +254,7 @@ def test_off_record_turn_is_not_held(monkeypatch):
 # ── bounded ────────────────────────────────────────────────────────────────────
 def test_token_cap_and_exchange_cap():
     for i in range(8):
-        _say(ALICE, f"question {i} " + "about the garden beds " * 30, f"answer {i} " + "with plenty of mulch " * 30, at=T0 + i)
+        _say(ALICE, f"question {i} " + "about the garden beds " * 30, f"answer {i} " + "with plenty of mulch " * 30, now=T0 + i)
     _rolled()
     out = _block()
     body = out.split("\n")[1:-1]

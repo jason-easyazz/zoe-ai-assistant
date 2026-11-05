@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 808 prod flags; 222 read through `typed_env`.
+- 810 prod flags; 224 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 2 registered flags with no reader in the scanned sources.
+- 0 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-808 flags; 757 not documented in `.env.example`.
+810 flags; 759 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -843,6 +843,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_VOICE_SAMPLE_DIR` | str | `'/home/zoe/.zoe-voice-samples'` | - | `docs/research/arousal-detection-licence-scope-2026-10-04.md` | `'/home/zoe/.zoe-voice-samples'`, `dynamic` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/router_struggle_retrain.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_corpus_strata.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/struggle_proposals.py` |
 | `ZOE_VOICE_SAVE_AUDIO` | bool | `False` | - | `docs/knowledge/voice-pipeline.md` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_SESSION` | bool | `False` | - | `docs/knowledge/voice-verified-session.md` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
+| `ZOE_VOICE_SESSION_BRIDGE` | bool | `False` | - | `docs/knowledge/voice-session-bridge.md` | `False` | yes | NO | `services/zoe-data/voice_session_bridge.py` |
+| `ZOE_VOICE_SESSION_BRIDGE_TTL_S` | int | `7200` | - | `docs/knowledge/voice-session-bridge.md` | `dynamic` | yes | NO | `services/zoe-data/voice_session_bridge.py` |
 | `ZOE_VOICE_SESSION_TTL_S` | int | `120` | - | `docs/knowledge/voice-verified-session.md` | `120` | yes | NO | `services/zoe-data/voice_session.py` |
 | `ZOE_VOICE_STITCH_ENABLED` | bool | `False` | - | `docs/knowledge/voice-pipeline.md` | `'0'` | no | NO | `services/zoe-data/main.py`<br>`services/zoe-data/voice_stitch.py` |
 | `ZOE_VOICE_STREAM` | bool | `True` | - | `docs/research/inference-speech-stack-2026-10-03.md` | `'1'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -1167,9 +1169,3 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZMB_ORT_THREADS` | `'2'` | no | NO | `scripts/perf/zmb/embed_shim.py` |
 | `ZMB_PROBE_NEEDLE` | `''` | no | NO | `scripts/perf/zmb/arms/mempalace_verbatim.py` |
 | `ZMB_REAL_HOME` | `dynamic` | no | NO | `scripts/perf/zmb/arms/mpa_palace.py` |
-
-## Registered but not read by any scanned source
-
-Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
-
-`ZOE_VOICE_SESSION_BRIDGE`, `ZOE_VOICE_SESSION_BRIDGE_TTL_S`
