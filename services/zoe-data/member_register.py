@@ -270,6 +270,13 @@ async def forget_user(user_id: str, db=None) -> int:
         text = str(exc).lower()
         if "no such table" in text or "does not exist" in text:
             return 0
+        # A process that never HAD a pool (a standalone memory test / script) has nothing to erase; a pool that was built and is
+        # now gone means the erasure did not happen, so it raises for the caller to retry (alarms.forget_user's rule).
+        if "not initialised" in text:
+            from db_pool import pool_ever_initialised
+
+            if not pool_ever_initialised():
+                return 0
         raise
 
 

@@ -624,3 +624,21 @@ def test_probe_line_stability_and_child_line_cleanliness(rdb, monkeypatch):
     put("mia_uid", "topic", "dinosaurs")
     assert p.child_line_clean(run(mr.line_for("mia_uid")), ["dinosaurs"])
     assert not p.child_line_clean("They like dinosaurs", ["dinosaurs"])        # negative control: a leak is seen
+
+
+def test_forget_user_with_a_never_initialised_pool_is_nothing_to_erase_but_a_lost_pool_raises(monkeypatch):
+    """Codex #2297: a standalone memory test / script that never built a pool has no register to erase, so MemoryService.delete_user
+    must not fail there; a pool that WAS built and is now gone means the erasure did not happen, and it raises."""
+    import db_pool
+
+    @asynccontextmanager
+    async def uninit(db=None):
+        raise RuntimeError("db_pool not initialised - call init_pool() first")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(pl, "_db", uninit)
+    monkeypatch.setattr(db_pool, "_ever_initialised", False)
+    assert run(mr.forget_user("ada_uid")) == 0
+    monkeypatch.setattr(db_pool, "_ever_initialised", True)         # negative control: a LOST pool is not "nothing to erase"
+    with pytest.raises(RuntimeError):
+        run(mr.forget_user("ada_uid"))
