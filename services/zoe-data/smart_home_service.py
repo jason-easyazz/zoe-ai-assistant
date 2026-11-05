@@ -594,6 +594,11 @@ def _offline_card() -> dict[str, Any]:
     }
 
 
+def _not_a_device_command() -> dict[str, Any]:
+    """The turn is not Zoe's: handled False, so the caller goes on exactly as for an unclassified utterance."""
+    return {"handled": False, "intent": None, "spoken_summary": "", "cards": [], "actions": []}
+
+
 def _result(spoken: str, card: dict[str, Any], action: str) -> dict[str, Any]:
     return {
         "handled": True,
@@ -637,9 +642,14 @@ async def resolve_smart_home(
     query = (getattr(intent, "query", "") or "").strip()
     entity_id = (getattr(intent, "entity_id", "") or "").strip()
 
+    # An UNVERIFIED device ("turn the kettle on": a noun Zoe has no word for) is hers only if the house has a device by that name.
+    unverified = bool(getattr(intent, "device_unverified", False))
+
     # Home control on a turn (2026-10-18): checked first, so the refusal is spoken (no read, no command, no setup QR).
     import panel_principal
 
+    if unverified and _turn_refused(f"smart_home {action}"):
+        return _not_a_device_command()    # a guess about a device is never answered with a refusal: the brain's own gate applies
     if _turn_refused(f"smart_home {action}"):
         return {
             "handled": True,
@@ -666,7 +676,19 @@ async def resolve_smart_home(
 
     devices = await list_devices()
     if devices is None:
+        if unverified:
+            return _not_a_device_command()
         return _result("I couldn't reach the home hub.", _offline_card(), action)
+    if unverified:
+        # Only a device the house really has, matched on WHOLE words of its name: "turn the wash on" must not wake "Washer
+        # lamp" by substring, and a thing that is no device ("the page") is not answered "I couldn't find it".
+        want = _tokens(query)
+        devices_by_word = [
+            d for d in devices
+            if want and all(w in set(_tokens(f"{d.get('name', '')} {d.get('entity_id', '')}")) for w in want)
+        ]
+        if not devices_by_word:
+            return _not_a_device_command()
     scenes = await list_scenes()
 
     if action == "activate_scene":
@@ -713,6 +735,8 @@ async def resolve_smart_home(
                     _home_card(devices, scenes, status="Home", summary="Device unavailable."),
                     action,
                 )
+        elif unverified:
+            targets, ambiguous = devices_by_word, len(devices_by_word) > 1
         else:
             targets, ambiguous = _select_targets(devices, query, action, room_eids)
         # A SPECIFIC command tied across several devices — ask rather than toggle

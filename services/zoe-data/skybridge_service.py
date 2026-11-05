@@ -65,6 +65,8 @@ class SkybridgeIntent:
     entity_ids: tuple[str, ...] = ()  # exact HA entities a smart_home FOLLOW-UP ("turn it back on") targets: what the last command controlled
     radio_mode: bool = False  # music/play: "play <x> radio" → MA endless station
     alarm: Any = None  # alarm/*: the parsed alarm_voice.AlarmCommand (docs/architecture/alarms.md)
+    device_unverified: bool = False  # smart_home: the device NOUN is not one Zoe knows ("the kettle"): the resolver must find a real
+    # device by that name or the turn is NOT hers (handled False -> the brain), never "I couldn't find ..."
 
 
 # ── Timers ───────────────────────────────────────────────────────────────────
@@ -780,6 +782,16 @@ def _calendar_date_from_text(text: str, today: date) -> tuple[str, date, date] |
         return "today", today, today
 
     return None
+
+
+def _calendar_weekend_range(text: str, today: date) -> tuple[str, date, date] | None:
+    """"this weekend" / "on the weekend" for a calendar READ: the coming Saturday and Sunday (what is left of Sunday on a Sunday)."""
+    if not re.search(r"\bweekend\b", text):
+        return None
+    if today.weekday() == 6:
+        return "today", today, today
+    sat = today + timedelta(days=(5 - today.weekday()) % 7)
+    return "this weekend", sat, sat + timedelta(days=1)
 
 
 def _list_type_from_text(text: str) -> str:
@@ -2194,9 +2206,11 @@ def classify_skybridge_intent(
     # parser above could not place is not a calendar READ either: the bare "schedule" keyword used to answer it with today's
     # events. It goes on to the brain, which can ask.
     create_led = _command_shaped(raw_message, _CREATE_VERBS) is not None
-    if not write_led and not create_led and _CALENDAR_KEYWORD_RE.search(text):
+    _cal_read = command_shapes.calendar_read_ask(raw_message) is not None
+    if (not write_led and not create_led and (_cal_read or _CALENDAR_KEYWORD_RE.search(text))
+            and not command_shapes.calendar_not_a_read(raw_message)):
         today = _today()
-        parsed_range = _calendar_date_from_text(text, today)
+        parsed_range = _calendar_weekend_range(text, today) or _calendar_date_from_text(text, today)
         if parsed_range is not None:
             label, start, end = parsed_range
             return SkybridgeIntent("calendar", "show", label, start, end)
@@ -2933,7 +2947,9 @@ def _calendar_followup_intent(raw_message: str, context: dict[str, Any] | None) 
 # Smart-home device anchors: a word clearly about a controllable household
 # device. A control verb ("turn on") is only treated as smart_home when paired
 # with one of these, so "turn on charm" / "turn off the news" never steal it.
-_HOME_DEVICE_NOUN = re.compile(r"\b(lights?|lamps?|switch(?:es)?|plugs?|outlets?|fans?)\b")
+_HOME_DEVICE_NOUN = re.compile(
+    r"\b(lights?|lamps?|switch(?:es)?|plugs?|outlets?|fans?|heaters?|kettles?|air\s?con(?:ditioner)?s?|diffusers?|humidifiers?"
+    r"|dehumidifiers?|lanterns?|fairy\s+lights?)\b")
 _NOT_BRIGHTNESS_RE = re.compile(r"\b(?:speed|position|volume|temperature|temp|colou?r|humidity|mode)\b")
 
 
@@ -2976,9 +2992,15 @@ def _original_parse_stands(intent: "SkybridgeIntent") -> bool:
 # 2026-11-01, three tries before the light came on). Only an AFFIRMATIVE command shape is repaired: the switch verb must open
 # the utterance / a sentence (after optional polite filler), so "I already turned off the lies" (a report) and "Don't turn
 # off the watch" (a negation) are untouched and never become a light command.
+_MISHEARD_LIGHT = r"watch|lite|lye|lies|lice|white|wite"
 _LIGHT_MISHEAR_RE = re.compile(
     r"(?P<lead>(?:^\s*|[.!?]\s+)(?:(?:hey|ok|okay|zoe|please|kindly|just|go ahead and|can you|could you|would you|will you)[,\s]+)*)"
-    r"\b(?:turn|switch|flip)(?:ed|ped)?\s+(?P<onoff>on|off)\s+(?:the\s+)?(?P<noun>watch|lite|lye|lies|lice)\b", re.IGNORECASE)
+    rf"\b(?:turn|switch|flip)(?:ed|ped)?\s+(?P<onoff>on|off)\s+(?:the\s+)?(?P<noun>{_MISHEARD_LIGHT})\b", re.IGNORECASE)
+# The same mishearing in the other word order ("turn the white on"): the particle comes AFTER the object, and the sentence must END
+# there (a trailing clause is a different request), so "turn the white on the shelf" is untouched.
+_LIGHT_MISHEAR_AFTER_RE = re.compile(
+    r"(?P<lead>(?:^\s*|[.!?]\s+)(?:(?:hey|ok|okay|zoe|please|kindly|just|go ahead and|can you|could you|would you|will you)[,\s]+)*)"
+    rf"\b(?:turn|switch|flip)(?:ed|ped)?\s+(?:the\s+)?(?P<noun>{_MISHEARD_LIGHT})\s+(?P<onoff>on|off)\s*(?=[.!?]|$)", re.IGNORECASE)
 _RETRACTION_RE = re.compile(
     r"\b(?:don'?t|do not|never\s*mind|nevermind|cancel|stop|wait|actually|no|not|undo|scratch that|forget (?:it|that))\b", re.IGNORECASE)
 _CONTROL_ACTIONS = frozenset({"turn_on", "turn_off", "set_brightness"})
@@ -2989,7 +3011,7 @@ def _repair_light_mishear(value: str) -> str:
     def _fix(m: "re.Match[str]") -> str:
         return f"{m.group('lead')}turn {m.group('onoff')} the {'lights' if m.group('noun').lower() in ('lies', 'lice') else 'light'}"
 
-    return _LIGHT_MISHEAR_RE.sub(_fix, value)
+    return _LIGHT_MISHEAR_AFTER_RE.sub(_fix, _LIGHT_MISHEAR_RE.sub(_fix, value))
 
 
 def _classify_home(raw_message: str, text: str) -> "SkybridgeIntent | None":
@@ -3094,6 +3116,13 @@ def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     if m and has_device:
         action = "turn_on" if m.group(2) == "on" else "turn_off"
         return SkybridgeIntent(domain="smart_home", action=action, query=_clean_device(m.group(1)))
+    # A switch verb + on/off + a thing Zoe has no noun for ("turn the kettle on", "switch off the heater"): a device command
+    # whose device only the HOUSE knows. Claimed as an UNVERIFIED device: the resolver finds a real device by that name or the
+    # turn goes on to the brain untouched (smart_home_service.resolve_smart_home), so "turn the page" can never be answered
+    # "I couldn't find page".
+    soft = _unverified_device_command(text)
+    if soft is not None:
+        return soft
     # A control verb + a device but NO on / off / level ("turn the light", "let's switch the lamp"): ask, never guess. Anything else
     # that already parsed returned above; this only claims the bare verb-device shape.
     m = re.search(r"\b(?:turn|switch|flip)\s+(?:the\s+|my\s+|our\s+)?([a-z' ]*?)\s*$", text)
@@ -3109,11 +3138,40 @@ def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     return None
 
 
+# Words that are never a household device in a switch frame: media / UI / pronouns / sweeps.
+_NOT_A_DEVICE_WORDS = frozenset({
+    "page", "pages", "tv", "television", "telly", "music", "radio", "volume", "sound", "song", "songs", "channel", "channels",
+    "timer", "timers", "alarm", "alarms", "news", "screen", "brightness", "it", "that", "this", "them", "those", "these",
+    "up", "down", "everything", "all", "anything", "something", "off", "on", "back", "around", "over", "out", "in",
+    "story", "card", "leaf", "corner", "tide", "heat", "table", "tables", "key", "wheel", "car", "engine", "head",
+    "speaker", "speakers", "stereo", "player", "spotify", "netflix", "youtube", "playlist", "album", "track", "mic",
+    "microphone", "wifi", "bluetooth", "airplane", "mode", "subtitles", "captions", "do", "not", "disturb",
+})
+_UNVERIFIED_BEFORE_RE = re.compile(r"^\s*(?:(?:please|zoe)\s+)*(?:turn|switch|flip)\s+(?P<onoff>on|off)\s+(?:the\s+|my\s+|our\s+)(?P<obj>[a-z']+(?:\s+[a-z']+){0,2})\s*$")
+_UNVERIFIED_AFTER_RE = re.compile(r"^\s*(?:(?:please|zoe)\s+)*(?:turn|switch|flip)\s+(?:the\s+|my\s+|our\s+)(?P<obj>[a-z']+(?:\s+[a-z']+){0,2})\s+(?P<onoff>on|off)\s*$")
+
+
+def _unverified_device_command(text: str) -> "SkybridgeIntent | None":
+    """"turn the <thing> on/off" / "switch off the <thing>" for a <thing> that is neither a known device noun nor a non-device
+    word. A determiner (the / my / our) is REQUIRED - "turn off everything", "turn it on" and "turn on music" keep their
+    other owners. The intent is ``device_unverified``: only the house's own device list can confirm it."""
+    m = _UNVERIFIED_BEFORE_RE.match(text) or _UNVERIFIED_AFTER_RE.match(text)
+    if not m:
+        return None
+    words = m.group("obj").split()
+    if any(w in _NOT_A_DEVICE_WORDS for w in words) or _HOME_DEVICE_NOUN.search(m.group("obj")):
+        return None
+    action = "turn_on" if m.group("onoff") == "on" else "turn_off"
+    return SkybridgeIntent(domain="smart_home", action=action, query=" ".join(words), device_unverified=True)
+
+
 def _clean_device(value: str) -> str:
     """Strip control VERBS/grammar so the device words survive for matching. The
     device-class noun (light/lamp/switch/…) and any "all"/room words are KEPT —
     the resolver needs them to tell a singular target from an all-class sweep."""
-    words = re.split(r"\s+", (value or "").strip().lower())
+    # A leading switch VERB goes whole ("switch the heater off" -> "heater"); "switch" stays when it is the device ("light switch").
+    value = re.sub(r"^\s*(?:turn|switch|flip|put)\s+(?=\S)", "", (value or "").strip().lower(), count=1)
+    words = re.split(r"\s+", value.strip())
     drop = {"turn", "flip", "put", "set", "dim", "dimmer", "brighten",
             "on", "off", "the", "a", "an", "my", "our", "to", "please",
             "show", "me", "see", "control", "manage", "is", "are", "what",

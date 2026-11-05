@@ -277,16 +277,9 @@ def _names_another_domain(domain: str, text: str) -> bool:
 def _calendar_qualifier(text: str) -> str:
     """Parse a date scope from a calendar query so 'tomorrow'/'this week' aren't
     lost when the show-intent comes through without slots (→ defaulted to today)."""
-    low = (text or "").lower()
-    if "tomorrow" in low:
-        return "tomorrow"
-    if "this month" in low:
-        return "this month"
-    if "this week" in low or "the week" in low or "weekend" in low:
-        return "this week"
-    if "today" in low or "tonight" in low:
-        return "today"
-    return ""
+    import command_shapes
+
+    return command_shapes.calendar_qualifier(text)
 
 
 def _plan(domain: str, text: str):
@@ -356,6 +349,19 @@ def _plan(domain: str, text: str):
         if det.name == "calendar_show" and not slots.get("qualifier"):
             slots["qualifier"] = _calendar_qualifier(text)
         return (det.name, slots, kind)
+
+    if domain == "calendar":
+        import command_shapes
+
+        # The calendar expert used to have NO plan for a calendar question the show-intent regexes missed ("have I got anything on
+        # today", "what am I doing friday", "can you see my calendar"): EXPERT_MISS, the brain answered. Read it.
+        ask = command_shapes.calendar_read_ask(text)
+        if ask is not None:
+            return ("calendar_show", {"qualifier": ask}, "read")
+        # A regex-recognised calendar WRITE whose slots still need extraction ("make an appointment with ..."): the create-cue
+        # list below misses wordings the intent regex catches, which dropped them to the brain with no plan.
+        if det and det.name == "calendar_create":
+            return ("calendar_create", {}, "write")
 
     table = {
         "lists": ("list_add", "list_show"),

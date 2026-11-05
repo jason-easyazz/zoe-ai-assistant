@@ -529,3 +529,123 @@ def named_domain_overrides(text: str, own: frozenset, router_domain: str) -> boo
     busy on Fridays" - is a memory, whatever noun it mentions); words naming the router's domain or a third one too."""
     named = named_domains(text)
     return bool(named) and named <= own and router_domain not in own and router_domain in _NAMED_DOMAIN_RES
+
+
+# ── Calendar READ asks ────────────────────────────────────────────────────────────────────────────────────────────────
+# "what's on my calendar", "do I have anything on tomorrow", "what am I doing friday", "can you see my calendar": a request to
+# HEAR the calendar. One reader for the three places that need it (intent_router's calendar_show, expert_dispatch's calendar
+# plan, skybridge's loose calendar keyword), so they cannot disagree about which words are a calendar question. A COMPLAINT
+# or statement about the calendar ("that's not my calendar", "why couldn't you see my calendar") and a question about TV
+# ("what's on tv") are not reads. Pure.
+_WEEKDAYS_RE = r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+_CAL_PERIOD = (
+    rf"(?:today|tonight|tomorrow|this\s+(?:morning|afternoon|evening|week|weekend|month)|next\s+week|the\s+(?:week|weekend)"
+    rf"|the\s+next\s+few\s+days|(?:on\s+|next\s+|this\s+)?{_WEEKDAYS_RE})"
+)
+_CAL_NOUN = r"(?:calendar|schedule|diary|agenda)"
+_CAL_FILLER_LEAD = re.compile(
+    r"^\s*(?:(?:hey|hi|ok|okay|so|um|uh|oh|well|zoe|zoey|please)\b[\s,.!?]*)*"
+    r"(?:(?:could|would|will)\s+you\s+(?:please\s+)?|can\s+you\s+(?:please\s+)?|i\s+(?:want|need)\s+(?:you\s+)?to\s+|i'?d\s+like\s+to\s+)?",
+    re.IGNORECASE,
+)
+# Not a request: a complaint / past-tense remark / a statement by the speaker.
+_CAL_NOT_A_READ = re.compile(
+    r"^(?:that|this|it)(?:'s|\s+is|\s+was)?\s+(?:not|isn'?t|wasn'?t)\b"
+    r"|^(?:how\s+come|why)\b"
+    r"|\b(?:couldn'?t|didn'?t|wouldn'?t|wasn'?t|weren'?t|hasn'?t|haven'?t|can'?t|won'?t)\b",
+    re.IGNORECASE,
+)
+# A statement by the speaker ("I have a meeting tomorrow"): reported, not asked.
+_CAL_STATEMENT = re.compile(r"^(?:i|i'?m|i'?ve|i'?ll|we|we'?re|we'?ve|you|you'?re|you'?ve|they|he|she)\b", re.IGNORECASE)
+_CAL_DEFINITION = re.compile(r"^(?:what|whats)(?:'s|\s+is|\s+are)?\s+(?:a|an|the\s+(?:meaning|definition|point))\b", re.IGNORECASE)
+_CAL_READ_FRAME = re.compile(
+    r"^(?:what(?:'s|s|\s+is|\s+are|\s+was)?|whats|which|do\s+(?:i|we)|have\s+(?:i|we)|am\s+i|are\s+we|is\s+there|are\s+there|"
+    r"is\s+my|are\s+my|how(?:'s|\s+is)\s+my|anything|any|show|check|see|read|tell|pull|open|look|let\s+me\s+see|give\s+me|"
+    r"is\s+(?:the|our)|are\s+(?:the|our))\b",
+    re.IGNORECASE,
+)
+# Plans frames that need a PERIOD ("what's on" alone could be the TV).
+_CAL_DAY_FRAME = re.compile(
+    r"^(?:what(?:'s|s|\s+is)\s+(?:on|happening|going\s+on|coming\s+up|planned|scheduled|the\s+plan)"
+    r"|what\s+(?:do|have)\s+(?:i|we)\s+(?:got|have)(?:\s+(?:on|planned|scheduled|coming\s+up))?"
+    r"|(?:do|have)\s+(?:i|we)\s+(?:got\s+|have\s+)?(?:anything|something|much|any\s+plans?|plans?)(?:\s+(?:on|planned|scheduled|for))?"
+    r"|(?:is\s+there|are\s+there)\s+(?:anything|something)(?:\s+(?:on|planned|scheduled|for))?"
+    r"|anything(?:\s+(?:on|planned|scheduled|for))?"
+    r"|what\s+(?:am|are)\s+(?:i|we)\s+doing|(?:am|are)\s+(?:i|we)\s+(?:free|busy|doing\s+anything|booked)"
+    r"|how(?:'s|\s+is)\s+(?:my|our)\s+(?:day|week|weekend)|what(?:'s|s|\s+is)\s+(?:my|our)\s+(?:day|week|weekend)"
+    r"|how\s+busy\s+(?:am|are)\s+(?:i|we))\b",
+    re.IGNORECASE,
+)
+# Frames that name appointments / events / meetings outright: no date needed.
+_CAL_PLAN_NOUN_FRAME = re.compile(
+    r"^(?:what\s+(?:appointments?|events?|meetings?|plans?)\s+(?:do|have)\s+(?:i|we)\b"
+    r"|(?:do|have)\s+(?:i|we)\s+(?:got\s+|have\s+)?(?:any\s+)?(?:appointments?|meetings?|events?)\b"
+    r"|(?:any|are\s+there\s+any|is\s+there\s+an?)\s+(?:appointments?|meetings?|events?)\b)",
+    re.IGNORECASE,
+)
+_CAL_WEEK_LIKE = re.compile(r"\b(?:my|our)\s+(?:day|week|weekend)\b", re.IGNORECASE)
+_CAL_NOT_TV = re.compile(
+    r"\bon\s+(?:the\s+)?(?:tv|telly|television|netflix|youtube|stan|disney|prime|foxtel|radio|channel\s*\d*|screen|speaker|stereo"
+    r"|music|spotify|news|sky|abc)\b",
+    re.IGNORECASE,
+)
+
+
+def calendar_not_a_read(text: str) -> bool:
+    """True when words that mention the calendar are a complaint ("that's not my calendar", "why couldn't you see my calendar"),
+    a definition ("what is a schedule") or a media question ("what's on tv") - never a request to read it out. The loose
+    keyword readers use this alone, since they accept a statement-shaped read when STT drops the wh-word. Pure."""
+    raw = re.sub(r"[.!?,;:]+$", "", (text or "").strip().lower())
+    t = _CAL_FILLER_LEAD.sub("", re.sub(r"\s+", " ", raw), count=1).strip()
+    return bool(_CAL_NOT_A_READ.search(t) or _CAL_DEFINITION.match(t) or _CAL_NOT_TV.search(t))
+
+
+def calendar_qualifier(text: str) -> str:
+    """The date scope a calendar question names, in the words ``intent_router._execute_calendar_show_direct`` reads: "today",
+    "tomorrow", "this week", "next week", "this weekend", "this month", a weekday name, or "" (none named). Pure."""
+    low = (text or "").lower()
+    if "tomorrow" in low:
+        return "tomorrow"
+    if re.search(r"\bnext\s+week\b", low):
+        return "next week"
+    if re.search(r"\bweekend\b", low):
+        return "this weekend"
+    if re.search(r"\bthis\s+month\b", low):
+        return "this month"
+    if re.search(r"\b(?:this|the)\s+week\b|\bnext\s+few\s+days\b|\bmy\s+week\b|\bour\s+week\b", low):
+        return "this week"
+    day = re.search(rf"\b{_WEEKDAYS_RE}\b", low)
+    if day:
+        return day.group(0)
+    if re.search(r"\b(?:today|tonight|this\s+(?:morning|afternoon|evening))\b", low):
+        return "today"
+    return ""
+
+
+def calendar_read_ask(text: str) -> Optional[str]:
+    """The qualifier ("" = none named) when ``text`` asks to HEAR the calendar, else None.
+
+    Two shapes: a read frame naming the calendar noun ("what's on my calendar", "is there anything on the schedule", "can you
+    see my calendar"), or a plans frame with a date ("do I have anything on tomorrow", "what am I doing friday", "am I free
+    this weekend", "what's my week like"). Never: a complaint or statement ("that's not my calendar", "why couldn't you see my
+    calendar"), a definition ("what is a schedule"), a media question ("what's on tv"), or a bare "what's on" with no date."""
+    raw = re.sub(r"[.!?,;:]+$", "", (text or "").strip().lower())
+    raw = re.sub(r"\s+", " ", raw)
+    if not raw:
+        return None
+    t = _CAL_FILLER_LEAD.sub("", raw, count=1).strip()
+    if not t or _CAL_STATEMENT.match(t) or calendar_not_a_read(raw):
+        return None
+    has_noun = re.search(rf"\b{_CAL_NOUN}\b", t) is not None
+    if has_noun and _CAL_READ_FRAME.match(t):
+        return calendar_qualifier(t)
+    if _CAL_PLAN_NOUN_FRAME.match(t):
+        return calendar_qualifier(t)
+    if _CAL_DAY_FRAME.match(t):
+        has_period = re.search(rf"\b{_CAL_PERIOD}\b", t) is not None
+        if has_period or _CAL_WEEK_LIKE.search(t):
+            # "what's on tonight" with no possessive / noun is as likely the TV as the calendar: left to the brain.
+            if re.match(r"^what(?:'s|s|\s+is)\s+on\s+(?:tonight|this\s+(?:evening|afternoon))$", t):
+                return None
+            return calendar_qualifier(t)
+    return None
