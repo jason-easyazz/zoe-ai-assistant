@@ -3015,7 +3015,21 @@ class MemoryService:
                 res = _auth.Resolved(_auth.writer_class(actor, user_id=user_id), "action")
             if _auth.may_override(res.power, _auth.row_class(meta, current.text)) and (
                     decision != "edit" or _auth.has_standing(res.power, res.basis)):
-                return False
+                if decision != "edit" or res.power >= _auth.RANK[_auth.OPERATOR]:
+                    return False
+                # an edit to an UNRELATED row must not publish text that contradicts a row that outranks the writer (a curated
+                # note): the same protected-conflict scan ``ingest`` runs. The edited row itself is not a clash.
+                clash = await self._protected_conflict(user_id, (edits or current.text).strip(), res.power)
+                if clash is None or clash[0].id == current.id:
+                    return False
+                _auth.log_blocked(actor, clash[1], user_id=user_id, action="edit")
+                if not _auth.enabled():
+                    return False
+                await self._write_candidate(
+                    (edits or current.text).strip(), user_id=user_id, writer=actor, contradicts=clash[0].id, kind=clash[1],
+                    session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
+                    entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res.cls, basis=res.basis)
+                return True
             if decision == "edit":
                 new_text = (edits or current.text).strip()
                 kind = _auth.conflict_kind(new_text, current.text) or ""
