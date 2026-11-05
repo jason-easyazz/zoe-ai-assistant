@@ -122,9 +122,9 @@ the owner's cough the way the shape does.
 Run 2026-11-05, `python3 scripts/perf/barge_policy_sim.py --lab --controls --fuzz 5000` (no model, no audio).
 
 - **Scripted barges:** 9 of 10 predicted correct; the one gap is #8 (a lone "stop" resumes).
-- **Stuck states:** 5000 random profiles (speech bursts, quiet, the VAD-failure sentinel, the reply ending mid-decision, `pactl` set failures, no sink-input) produced **0 violations**. Outcomes: 2144 commit, 834 resume, 148 ceiling, 157 ended, 1895 never fired, 168 hard-stop fallback (no sink-input), 301 failed restores recorded as a leak for the next-player heal.
-- **Negative controls:** each of the five checks (open episode, stuck mute, kill without commit, sentinel commit, multiple outcomes) flags a deliberately broken policy and is silent on the real one.
-- **Known edge, not a stuck state:** if `pactl` succeeds on the duck but fails on the restore while the reply keeps playing, that reply stays at -15 dB until it ends; the heal only fixes the NEXT player. Very unlikely, but it is the one way a mute can outlast a barge.
+- **Stuck states:** 5000 random profiles (speech bursts, quiet, the VAD-failure sentinel, the reply ending mid-decision, a `pactl` restore that fails after the duck lands, no sink-input) produced **0 unexpected violations** and **50 occurrences of the one known edge** below. Outcomes: 2144 commit, 834 resume, 148 ceiling, 157 ended, 1895 never fired, 168 hard-stop fallback (no sink-input).
+- **Negative controls:** each of the five checks (open episode, stuck mute, kill without commit, sentinel commit, multiple outcomes per episode) flags a deliberately broken policy and is silent on the real one.
+- **Known edge, a REAL stuck mute (low likelihood):** if `pactl` succeeds on the duck but fails on the restore while the reply keeps playing, that reply stays at -15 dB until it ends; the daemon's heal only fixes the NEXT player. The simulator reports it separately (never folded into "clean") and the lab counts it as a stuck mute if it ever happens. A cheap daemon fix would be a retry of the restore; it is not made here (voice-path change).
 - **Real Silero over the quarantine clips and the command clips** (`--corpus ~/.zoe-voice-samples --lock /tmp/zoe-voice-harness.lock`): NOT run yet - voice landings held the box for hours (the guard refuses while one runs). Run it in a quiet window and append the aggregates here.
 
 ## After the hour

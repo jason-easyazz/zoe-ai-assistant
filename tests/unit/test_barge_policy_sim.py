@@ -71,13 +71,51 @@ def test_resume_restores_the_volume_exactly_and_never_kills(sim, daemon):
 
 
 def test_duck_actually_dipped_the_stream(sim, daemon):
-    """The volume model is not vacuous: while ducked the stream sits at -15 dB (negative control
-    for 'restored to baseline' passing trivially)."""
+    """The REAL ducker dips the modelled stream while an episode is open (so 'restored to
+    baseline' after a resume is not vacuous), and the volume model itself is relative/absolute."""
     spy = sim.PactlSpy()
-    spy("set-sink-input-volume", "40", "-15.0dB")
-    assert spy.volume == pytest.approx(sim.BASELINE * 10 ** (-15 / 20), abs=1)
-    spy("set-sink-input-volume", "40", str(sim.BASELINE))
-    assert spy.volume == sim.BASELINE
+    proc = sim.FakeProc()
+    with sim._isolated(daemon, spy):
+        det = daemon._BargeDetector()
+        det.new_playback(1000.0)
+        ep = None
+        for i, p in enumerate([0.02] * 14 + [0.95] * 3):
+            if det.feed(p, 1000.0 + i * sim.CHUNK_S):
+                ep = daemon._BargeEpisode.open("sim", proc, det, p, 1000.0 + i * sim.CHUNK_S)
+                break
+        assert ep is not None and spy.volume == pytest.approx(sim.BASELINE * 10 ** (-15 / 20), abs=1)
+        ep.finish("resume", 1002.0)
+        assert spy.volume == sim.BASELINE
+    # negative control: a ducker that never ducks leaves the volume at baseline throughout
+    assert sim.PactlSpy().volume == sim.BASELINE
+
+
+def test_multi_outcome_means_two_lines_for_ONE_episode(sim, daemon):
+    """Two episodes with one line each are healthy (resume then commit); the double-report
+    mutation writes two lines for one episode and is flagged by the per-episode count."""
+    probs = sim.lab_profile([0.95] * 3 + [0.02] * 12 + [0.97] * 16)
+    r = sim.simulate(daemon, probs)
+    assert r["outcomes"] == ["resume", "commit"] and r["ep_lines"] == [1, 1]
+    assert "multi_outcome" not in sim.violations(daemon, r)
+    with sim.mutations(daemon)["multi_outcome"]():
+        bad = sim.simulate(daemon, probs)
+    assert bad["ep_lines"][0] == 2 and "multi_outcome" in sim.violations(daemon, bad)
+
+
+def test_failed_restore_with_a_live_reply_is_a_stuck_mute_and_is_reported_not_hidden(sim, daemon):
+    r = sim.simulate(daemon, sim.lab_profile([0.95] * 3), fail_sets=True)
+    assert r["volume"] < sim.BASELINE and not r["terminated"]
+    assert "stuck_mute" in sim.violations(daemon, r)
+    fz = sim.run_fuzz(daemon, 600, seed=4)
+    assert fz["known_edge_ducked_after_failed_restore"] > 0 and fz["violations"] == {}
+
+
+def test_sentinel_commit_is_judged_per_episode_not_per_profile(sim, daemon):
+    """Speech elsewhere in the profile must not excuse a sentinel-caused commit."""
+    probs = sim.CONTROL_PROFILES["sentinel_commit"]()
+    assert sum(1 for p in probs if p >= 0.5) >= 12            # plenty of speech in the profile overall
+    with sim.mutations(daemon)["sentinel_commit"]():
+        assert "sentinel_commit" in sim.violations(daemon, sim.simulate(daemon, probs))
 
 
 def test_sentinel_never_commits_and_resolves_at_the_ceiling(sim, daemon):

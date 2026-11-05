@@ -82,12 +82,13 @@ class FakeProc:
 
 class PactlSpy:
     """pactl with PulseAudio's volume model: ``set-sink-input-volume IDX Ndb`` is relative
-    (multiplies), ``IDX N`` is absolute. ``fail_sets`` makes every set fail (non-zero exit)."""
+    (multiplies), ``IDX N`` is absolute. ``fail_sets``: the duck lands, every later set fails (non-zero exit)."""
 
     def __init__(self, pid: int = PLAYER_PID, volume: int = BASELINE, fail_sets: bool = False,
                  no_sink: bool = False):
         self.pid, self.volume, self.fail_sets, self.no_sink = pid, volume, fail_sets, no_sink
         self.calls: list[tuple[str, ...]] = []
+        self.sets = 0
 
     def __call__(self, *args: str):
         self.calls.append(args)
@@ -96,7 +97,8 @@ class PactlSpy:
                 return ""
             return LISTING.format(idx=40, vol=self.volume, pct=round(100 * self.volume / BASELINE), pid=self.pid)
         if args and args[0] == "set-sink-input-volume":
-            if self.fail_sets:
+            self.sets += 1
+            if self.fail_sets and self.sets > 1:      # the duck lands; every RESTORE after it fails
                 return None
             v = args[2]
             if v.endswith("dB"):
@@ -154,6 +156,9 @@ def simulate(mod, probs: list[float], *, exit_at: int | None = None, fail_sets: 
         episode = None
         outcomes: list[str] = []
         fired = hard_stop = overdue = False
+        ep_lines: list[int] = []        # BARGE_DECIDE lines written per episode
+        ep_speech: list[float] = []     # speech_ms the decider had when each episode resolved
+        base = 0
         onset_i = None
         for i, prob in enumerate(probs):
             cap = t0 + i * CHUNK_S
@@ -162,12 +167,16 @@ def simulate(mod, probs: list[float], *, exit_at: int | None = None, fail_sets: 
                 proc.exited = True
                 if episode is not None:
                     episode.finish("ended", now)
+                    ep_lines.append(len(handler.decides) - base)
+                    ep_speech.append(episode.decider.speech_ms)
                     outcomes.append("ended")
                     episode = None
                 break
             if episode is not None:
                 out = episode.feed(prob, cap, now)
                 if out:
+                    ep_lines.append(len(handler.decides) - base)
+                    ep_speech.append(episode.decider.speech_ms)
                     outcomes.append(out)
                     episode = None
                     if out == "commit":
@@ -179,6 +188,7 @@ def simulate(mod, probs: list[float], *, exit_at: int | None = None, fail_sets: 
             if det.feed(prob, cap):
                 fired = True
                 onset_i = i if onset_i is None else onset_i
+                base = len(handler.decides)
                 episode = mod._BargeEpisode.open("sim", proc, det, prob, cap)
                 if episode is not None:
                     continue
@@ -188,6 +198,8 @@ def simulate(mod, probs: list[float], *, exit_at: int | None = None, fail_sets: 
         else:
             if episode is not None:       # the reply ended while still deciding
                 episode.finish("ended", t0 + len(probs) * CHUNK_S)
+                ep_lines.append(len(handler.decides) - base)
+                ep_speech.append(episode.decider.speech_ms)
                 outcomes.append("ended")
                 episode = None
         open_episode = episode is not None and not episode.done
@@ -198,7 +210,8 @@ def simulate(mod, probs: list[float], *, exit_at: int | None = None, fail_sets: 
             "open_episode": open_episode, "open_ms": elapsed_open, "overdue": overdue, "leak": mod._duck_leak,
             "commit_ms": [int(m.split(" ms=")[1].split()[0]) for m in handler.decides],
             "speech_chunks": sum(1 for p in probs if p >= mod.BARGE_IN_THRESHOLD),
-            "has_sentinel": any(p < 0 for p in probs),
+            "has_sentinel": any(p < 0 for p in probs), "ep_lines": ep_lines, "ep_speech_ms": ep_speech,
+            "fail_sets": fail_sets,
         }
 
 
@@ -216,12 +229,13 @@ def violations(mod, r: dict[str, Any]) -> list[str]:
         v.append("kill_without_commit")
     if committed and not r["terminated"]:
         v.append("commit_not_terminated")
-    if len(r["decides"]) > len(r["outcomes"]) or len(r["decides"]) != len(r["outcomes"]):
-        v.append("multi_outcome")
+    if any(n != 1 for n in r["ep_lines"]) or len(r["decides"]) != len(r["outcomes"]):
+        v.append("multi_outcome")          # exactly ONE BARGE_DECIDE line per episode
     if any(ms > ceiling_ms for ms, o in zip(r["commit_ms"], r["outcomes"]) if o != "ended"):
         v.append("late_outcome")
-    need = -(-mod.BARGE_COMMIT_SPEECH_MS // int(CHUNK_S * 1000))
-    if committed and r["speech_chunks"] < need:
+    # a COMMIT must be justified by the speech THIS episode's decider heard (a broken VAD, the
+    # -1.0 sentinel, is not speech) - not by speech elsewhere in the profile
+    if any(o == "commit" and ms < mod.BARGE_COMMIT_SPEECH_MS for o, ms in zip(r["outcomes"], r["ep_speech_ms"])):
         v.append("sentinel_commit")
     return v
 
@@ -304,19 +318,23 @@ def run_fuzz(mod, n: int, seed: int = 1) -> dict[str, Any]:
     rng = random.Random(seed)
     bad: dict[str, int] = {}
     outcomes: dict[str, int] = {}
+    known_edge = 0
     for _ in range(n):
         probs, opts = random_profile(rng)
         r = simulate(mod, probs, **opts)
         for o in (r["outcomes"] or (["hard_stop"] if r["hard_stop"] else ["no-fire"])):
             outcomes[o] = outcomes.get(o, 0) + 1
-        if opts.get("fail_sets") and r["leak"] is not None:
-            # a failed restore leaves the persisted duck: a KNOWN leak the next player heals
-            # (``_heal_duck_leak``) - counted separately, not stuck.
-            outcomes["leak_pending_heal"] = outcomes.get("leak_pending_heal", 0) + 1
+        found = violations(mod, r)
+        if opts.get("fail_sets") and found == ["stuck_mute"]:
+            # KNOWN EDGE (documented in the lab script): the duck succeeded but the restore's pactl
+            # failed while the reply keeps playing - it stays ducked until it ends. Reported
+            # separately, never folded into "clean"; any OTHER violation still counts below.
+            known_edge += 1
             continue
-        for name in violations(mod, r):
+        for name in found:
             bad[name] = bad.get(name, 0) + 1
-    return {"n": n, "seed": seed, "outcomes": outcomes, "violations": bad}
+    return {"n": n, "seed": seed, "outcomes": outcomes, "violations": bad,
+            "known_edge_ducked_after_failed_restore": known_edge}
 
 
 def mutations(mod) -> dict[str, Callable[[], contextlib.AbstractContextManager]]:
@@ -393,7 +411,7 @@ CONTROL_PROFILES = {
     "stuck_mute": lambda: lab_profile(_seg((0.95, 3))),
     "open_episode": lambda: lab_profile(_seg((0.95, 3))),
     "kill_without_commit": lambda: lab_profile(_seg((0.95, 3))),
-    "sentinel_commit": lambda: lab_profile(_seg((0.95, 3), (-1.0, 20))),
+    "sentinel_commit": lambda: lab_profile(_seg((0.95, 3), (-1.0, 20))) + [0.97] * 20,
     "multi_outcome": lambda: lab_profile(_seg((0.95, 3))),
 }
 
@@ -505,7 +523,8 @@ def main() -> int:
         rc |= not all(ctl.values())
     if args.fuzz:
         fz = summary["fuzz"] = run_fuzz(mod, args.fuzz)
-        print(f"Fuzz {fz['n']} profiles: outcomes {fz['outcomes']}  violations {fz['violations'] or 'none'}")
+        print(f"Fuzz {fz['n']} profiles: outcomes {fz['outcomes']}  violations {fz['violations'] or 'none'}  "
+              f"known edge (ducked after a failed restore): {fz['known_edge_ducked_after_failed_restore']}")
         rc |= bool(fz["violations"])
     if args.corpus:
         groups = corpus_groups(args.corpus, args.limit_speech)
