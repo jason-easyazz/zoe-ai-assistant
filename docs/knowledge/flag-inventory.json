@@ -11737,6 +11737,29 @@
         },
         "typed_env": false
       },
+      "ZOE_PROBLEM_LOOP": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/household_authority.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/authority-table.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_PROVENANCE_PERSIST": {
         "defaults": [
           "True"
@@ -16918,7 +16941,6 @@
     "scripts/perf/measure_voice.py": 1,
     "scripts/perf/person_half_enforce_ab.py": 2,
     "scripts/perf/person_half_replay.py": 1,
-    "scripts/perf/persona_drift.py": 1,
     "scripts/perf/recall_evidence_probe.py": 2,
     "scripts/perf/samantha_bar.py": 3,
     "scripts/perf/samantha_day_sim.py": 1,
