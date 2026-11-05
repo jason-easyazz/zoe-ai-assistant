@@ -856,12 +856,13 @@ def detect_intent(
             return Intent("memory_forget_entity", {"name": _entity})
 
     # Portrait intents — how well Zoe knows the user, and rebuilding understanding.
+    # Refresh first: "update/rebuild your portrait of me" also contains "your portrait of me".
+    if _PORTRAIT_REFRESH_RE.search(t):
+        return Intent("portrait_refresh", {})
     if _PORTRAIT_REVEAL_RE.search(t):
         return Intent("portrait_reveal", {})
     if _KNOW_ABOUT_ME_RE.search(t):
         return Intent("portrait_reveal", {"facts": True})
-    if _PORTRAIT_REFRESH_RE.search(t):
-        return Intent("portrait_refresh", {})
 
     # Zoe self-extension — always routes to OpenClaw (admin-gated in the skill).
     # Checked BEFORE list/reminder/etc so "add X widget" doesn't become list_add.

@@ -50,6 +50,14 @@ def test_explicit_portrait_asks_stay_portrait(text):
     assert i is not None and i.name == "portrait_reveal" and not i.slots.get("facts")
 
 
+@pytest.mark.parametrize("text", [
+    "update your portrait of me", "rebuild your portrait of me", "update your understanding of me",
+])
+def test_refresh_asks_beat_the_portrait_reveal(text):
+    i = ir.detect_intent(text)
+    assert i is not None and i.name == "portrait_refresh"
+
+
 def test_negative_control_unrelated_text_is_not_portrait():
     i = ir.detect_intent("what do you know about the weather")
     assert i is None or i.name != "portrait_reveal"
