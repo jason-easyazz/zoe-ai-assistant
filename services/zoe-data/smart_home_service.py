@@ -11,6 +11,8 @@ to a friendly "couldn't reach the home hub" card, never a broken turn.
 """
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import logging
 import os
 import re
@@ -20,7 +22,25 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT_S = 6.0
+# A turn's bridge-timeout markers: _ha_post appends here when a command timed out (outcome UNKNOWN, not a proven
+# failure). A ContextVar (not a parameter) so the set_device / _ha_post call shapes stay as they were.
+_TIMED_OUT: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar("zoe_ha_timed_out", default=None)
+_REFRESH_BUDGET_S = 2.0  # the post-command card refresh is cosmetic; never let it hold the spoken answer
+
+
+def _call_timeout_s() -> float:
+    """ZOE_HA_CALL_TIMEOUT_S - per bridge call (default 4s; was a flat 6s, so a slow bridge stacked ~13 sequential
+    calls into the 23.9s "turn off the light" of 2026-11-05)."""
+    from typed_env import flag  # registered float; unparseable -> the declared default
+
+    return max(0.5, min(30.0, float(flag("ZOE_HA_CALL_TIMEOUT_S"))))
+
+
+def turn_budget_s() -> float:
+    """ZOE_HA_TURN_BUDGET_S - the whole smart-home turn (default 9s)."""
+    from typed_env import flag
+
+    return max(1.0, min(60.0, float(flag("ZOE_HA_TURN_BUDGET_S"))))
 
 # Pure grammar — stripped before matching. Device-class nouns (light/lamp/…) are
 # DELIBERATELY kept: they carry the domain and singular-vs-plural, which is how we
@@ -54,7 +74,7 @@ async def _ha_get(path: str) -> Any:
     if _turn_refused(f"GET {path.split('?', 1)[0]}"):
         return None
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as c:
+        async with httpx.AsyncClient(timeout=_call_timeout_s()) as c:
             r = await c.get(f"{_ha_url()}{path}")
             if r.status_code != 200:
                 logger.debug("HA GET %s -> HTTP %s", path, r.status_code)
@@ -66,16 +86,23 @@ async def _ha_get(path: str) -> Any:
 
 
 async def _ha_post(path: str, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """POST a bridge command. Returns parsed JSON on success, None on any failure."""
+    """POST a bridge command. Returns parsed JSON on success, None on any failure.
+    A timeout is also noted in ``_TIMED_OUT``: the command may still have landed."""
     if _turn_refused(f"POST {path}"):
         return None
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as c:
+        async with httpx.AsyncClient(timeout=_call_timeout_s()) as c:
             r = await c.post(f"{_ha_url()}{path}", json=payload)
             if r.status_code != 200:
                 logger.debug("HA POST %s -> HTTP %s", path, r.status_code)
                 return None
             return r.json()
+    except httpx.TimeoutException as exc:
+        marks = _TIMED_OUT.get()
+        if marks is not None:
+            marks.append(path)
+        logger.warning("HA POST %s timed out after %.1fs: %s", path, _call_timeout_s(), type(exc).__name__)
+        return None
     except Exception as exc:  # noqa: BLE001 — HA is optional; never break Zoe
         logger.debug("HA POST %s unreachable: %s", path, exc)
         return None
@@ -212,9 +239,9 @@ async def list_devices() -> Optional[list[dict[str, Any]]]:
     simulated home. If EVERY source is unreachable the bridge is down; a reachable
     bridge with no devices returns [] (an inviting empty card, not the offline one).
     """
-    lights = await _ha_get("/lights")
-    switches = await _ha_get("/switches")
-    helpers = await _ha_get("/entities?domain=input_boolean")
+    # concurrent: three sequential reads were the bulk of the 23.9s turn on a slow bridge
+    lights, switches, helpers = await asyncio.gather(
+        _ha_get("/lights"), _ha_get("/switches"), _ha_get("/entities?domain=input_boolean"))
     if lights is None and switches is None and helpers is None:
         return None  # bridge unreachable — caller renders the offline card
     devices: list[dict[str, Any]] = []
@@ -664,10 +691,9 @@ async def resolve_smart_home(
             _add_device_card(), "add_device",
         )
 
-    devices = await list_devices()
+    devices, scenes = await asyncio.gather(list_devices(), list_scenes())
     if devices is None:
         return _result("I couldn't reach the home hub.", _offline_card(), action)
-    scenes = await list_scenes()
 
     if action == "activate_scene":
         # A scene chip tap carries the exact scene id — activate that one directly.
@@ -742,17 +768,32 @@ async def resolve_smart_home(
         targets = live
         ok_any = False
         controlled: list[str] = []
+        timed_out: list = []
+        _TIMED_OUT.set(timed_out)
         for d in targets:
             if await set_device(str(d.get("entity_id")), on, brightness_pct=pct if on else None):
                 ok_any = True
                 controlled.append(str(d.get("entity_id")))
-        refreshed = await list_devices() or devices
+        try:
+            refreshed = await asyncio.wait_for(list_devices(), _REFRESH_BUDGET_S) or devices
+        except asyncio.TimeoutError:
+            refreshed = devices
         label = "dimmed" if action == "set_brightness" else ("on" if on else "off")
         if len(targets) == 1:
             nm = targets[0].get("name") or "that"
-            spoken = f"Turned {nm} {label}." if ok_any else f"I couldn't reach {nm}."
+            if ok_any:
+                spoken = f"Turned {nm} {label}."
+            elif timed_out:
+                spoken = f"That's taking longer than usual, so I can't tell yet whether {nm} changed."
+            else:
+                spoken = f"I couldn't reach {nm}."
         else:
-            spoken = f"Turned {len(targets)} devices {label}." if ok_any else "I couldn't reach those devices."
+            if ok_any:
+                spoken = f"Turned {len(targets)} devices {label}."
+            elif timed_out:
+                spoken = "That's taking longer than usual, so I can't tell yet whether those changed."
+            else:
+                spoken = "I couldn't reach those devices."
         out = _result(spoken, _home_card(refreshed, scenes, status="Home", summary=spoken), action)
         if controlled:
             out["controlled_entities"] = controlled    # the ids the command really switched (a follow-up targets these)
@@ -762,3 +803,18 @@ async def resolve_smart_home(
     summary = _summarize(devices)
     climate = await get_climate()
     return _result(summary, _home_card(devices, scenes, status="Home", summary=summary, climate=climate), "status")
+
+
+async def resolve_smart_home_bounded(intent: Any, room_eids: set[str] | None = None) -> dict[str, Any]:
+    """``resolve_smart_home`` under ONE whole-turn budget (ZOE_HA_TURN_BUDGET_S). On expiry the answer is honest: the
+    command may or may not have landed, so it says so rather than "done" or "failed"."""
+    try:
+        return await asyncio.wait_for(resolve_smart_home(intent, room_eids), turn_budget_s())
+    except asyncio.TimeoutError:
+        action = getattr(intent, "action", "status")
+        logger.warning("smart_home %s exceeded the %.1fs turn budget", action, turn_budget_s())
+        return _result(
+            "That's taking longer than usual, so I can't confirm it went through. Give it a moment and check.",
+            {"component": "status", "props": {
+                "title": "Taking a while", "body": "The home hub is slow to answer.", "status": "Slow",
+                "tone": "warn", "wide": True}}, action)
