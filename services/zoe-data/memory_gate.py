@@ -655,20 +655,32 @@ def message_needs_emotional_recall(message: str) -> bool:
 # First-person only: "my sister is anxious" is not the user's feeling. Each
 # label maps the surface forms that express it; the label is what is rendered
 # ("felt anxious").
+#
+# Three idioms are NOT a feeling and were measured as false positives by the minor-affect cell
+# (scripts/perf/minor_affect_fp.py, fixture tests/fixtures/minor_affect_utterances.json, 2026-11-05):
+#   * "I'm afraid <clause>" - polite regret ("I'm afraid we're out of milk"); "afraid of / to / ." stays a feeling;
+#   * "I'm happy to <do something>" - willingness ("happy to drive"); "happy to be / see / hear ..." stays a feeling;
+#   * "down" as a place ("I was down the shops", "I got down from the tree"); "down the last / past / whole week"
+#     stays a feeling.
+_AFFECT_AFRAID = (r"afraid(?!\s+(?:i|i['’]m|we|we['’]re|you|it|it['’]s|the|they|there|so|not|this|these|"
+                  r"those|my|our|your)\b)")
+_AFFECT_HAPPY = r"happy(?!\s+to\s+(?!(?:be|see|hear|have|know|get|finally|meet|say)\b))"
+_AFFECT_DOWN = (r"down(?!\s+(?:for|to|with|here|there|at|in|on|by|from|into|onto|off|under|below|stairs|"
+                r"the\s+(?!(?:last|past|whole|entire)\b))\b)")
 _AFFECT_LABELS: tuple[tuple[str, str], ...] = (
     ("anxious", r"anxious|anxiety|nervous|on\s+edge|uneasy"),
     ("worried", r"worried|worrying|dreading"),
     ("stressed", r"stressed(?:\s+out)?|stressing|under\s+(?:a\s+lot\s+of\s+)?pressure"),
-    ("scared", r"scared|afraid|terrified|frightened"),
+    ("scared", r"scared|" + _AFFECT_AFRAID + r"|terrified|frightened"),
     ("overwhelmed", r"overwhelmed|swamped"),
-    ("sad", r"sad|down(?!\s+(?:for|to|with|here|there|at|in|on|by)\b)|low(?!\s+on\b)|"
+    ("sad", r"sad|" + _AFFECT_DOWN + r"|low(?!\s+on\b)|"
             r"miserable|heartbroken|gutted"),
     ("upset", r"upset"),
     ("lonely", r"lonely"),
     ("frustrated", r"frustrated|annoyed|fed\s+up"),
     ("exhausted", r"exhausted|drained|burnt\s+out|burned\s+out|worn\s+out"),
     ("excited", r"excited|thrilled|pumped"),
-    ("happy", r"happy|delighted|over\s+the\s+moon"),
+    ("happy", _AFFECT_HAPPY + r"|delighted|over\s+the\s+moon"),
     ("proud", r"proud"),
     ("relieved", r"relieved"),
 )
