@@ -439,3 +439,48 @@ def test_the_runner_refuses_a_non_demo_identity(monkeypatch):
     runner.close()
     with pytest.raises(ValueError):
         mab.Runner(zc, mab.sp.World(mab.sp.BASE_SEED), "alice", 100.0)
+
+
+# ── the self-improver's seam (scripts/perf/self_improver.py): variant files, a caller's own cache, the plan export ──────────
+
+def test_a_variant_file_registers_a_text_and_refuses_bad_ones(tmp_path, monkeypatch):
+    monkeypatch.setattr(mab, "VARIANTS", dict(mab.VARIANTS))
+    good = tmp_path / "c1.md"
+    good.write_text("Name a real problem first, kindly.", encoding="utf-8")
+    assert mab.register_variant_file(f"C1={good}") == "C1" and mab.variant_text("C1") == good.read_text()
+    with pytest.raises(ValueError, match="already an arm"):
+        mab.register_variant_file(f"C1={good}")                     # twice
+    for reserved in ("V0", "canary"):
+        with pytest.raises(ValueError, match="already an arm"):
+            mab.register_variant_file(f"{reserved}={good}")
+    with pytest.raises(ValueError, match="NAME=PATH"):
+        mab.register_variant_file(f"c2={good}")                     # name shape
+    long = tmp_path / "long.md"
+    long.write_text("x" * (mab.VARIANT_MAX_CHARS + 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="wire ceiling"):
+        mab.register_variant_file(f"C3={long}")
+    ctrl = tmp_path / "ctrl.md"
+    ctrl.write_text("a\tb", encoding="utf-8")
+    with pytest.raises(ValueError, match="control character"):
+        mab.register_variant_file(f"C4={ctrl}")
+
+
+def test_two_names_for_one_text_are_two_arms_with_two_fingerprints(tmp_path, monkeypatch):
+    """The sampling control: R0 and S1 carry the SAME text and must still be separate arms (separate draws)."""
+    monkeypatch.setattr(mab, "VARIANTS", dict(mab.VARIANTS))
+    f = tmp_path / "seed.md"
+    f.write_text("Seed text.", encoding="utf-8")
+    mab.register_variant_file(f"R0={f}")
+    mab.register_variant_file(f"S1={f}")
+    assert mab.fingerprint("on:R0", "d") != mab.fingerprint("on:S1", "d")
+
+
+def test_the_plan_export_carries_no_heldout_words():
+    plan = mab.export_plan(mab.sp.World(mab.sp.BASE_SEED))
+    blob = json.dumps(plan)
+    for msg, _needles, gold in mab.FLAWS_HELD:
+        assert msg not in blob and gold not in blob
+    for msg, gold in mab.GOODPLANS_HELD:
+        assert msg not in blob and gold not in blob
+    assert not any("H-" in a for a in plan["dev_asks"])
+    assert plan["split_digest"] == mab.SPLIT_DIGEST and plan["plans"]["heldout"]["flaw"]

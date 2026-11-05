@@ -54,6 +54,9 @@ Usage:
     ... --phase heldout --arms none,V0      # the verdict half (run ONCE per chosen variant)
     ... --phase regress --arms none,V0      # P2 / P5a / P5c / P6.b / P7 / P8 / bar sample
     ... --phase report --variant V0         # the table + decide() from what is on disk (no brain)
+    ... --variant-file C1=/path/manner.md --arms R0,C1 --cache-dir D --total-budget-s N   # a caller's own texts, rows + ledger
+                                            # (scripts/perf/self_improver.py, the nightly manner.md improver)
+    ... --export-plan plan.json             # half roles, DEV asks' words, planned (ask, sample) ids; no brain (held-out: ids only)
 Exit: 0 ran | 2 refused / error / selftest failed | 3 lock held / brain busy.
 """
 from __future__ import annotations
@@ -65,6 +68,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import secrets
 import socket
 import subprocess
@@ -143,6 +147,50 @@ VARIANTS: dict[str, str] = {
            "kindly, once; if it is fine, say it sounds good and why. A question or task: just answer. Never flatter, never advise unasked, "
            "one question at a time, never hint they should stay, and goodnight is just goodnight."),
 }
+
+#: ``--variant-file NAME=PATH`` (the self-improver's candidates, scripts/perf/self_improver.py): a text from a file, registered beside V1/V2.
+#: The name may not shadow a built-in arm; the text obeys the manner block's wire ceiling (manner_block.WIRE_MAX_CHARS, manner.ts) and
+#: carries no control character, so a variant is exactly what the live seam could send.
+VARIANT_NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9_-]{0,31}$")
+VARIANT_MAX_CHARS = 800
+RESERVED_VARIANTS = frozenset({"V0", "canary", "none"})
+EXPORT_REGRESS_SCALES = (0.5, 1.0)
+
+
+def register_variant_file(spec: str) -> str:
+    """Register ``NAME=PATH`` into ``VARIANTS``; returns the name. Raises ValueError on a bad name, a clash or a bad text."""
+    name, sep, path = spec.partition("=")
+    if not sep or not VARIANT_NAME_RE.match(name):
+        raise ValueError(f"--variant-file {spec!r}: want NAME=PATH, NAME like C1 / R0 (a capital, then letters, digits, _ -)")
+    if name in RESERVED_VARIANTS or name in VARIANTS:
+        raise ValueError(f"--variant-file: {name} is already an arm (built-in, or given twice)")
+    text = Path(path).read_text(encoding="utf-8")
+    if not text.strip() or text != text.strip():
+        raise ValueError(f"--variant-file {name}: empty, or leading/trailing whitespace")
+    if len(text) > VARIANT_MAX_CHARS:
+        raise ValueError(f"--variant-file {name}: {len(text)} chars, over the {VARIANT_MAX_CHARS} wire ceiling")
+    if any((ord(c) < 32 and c != "\n") or ord(c) == 127 for c in text):
+        raise ValueError(f"--variant-file {name}: control character")
+    VARIANTS[name] = text
+    return name
+
+
+def export_plan(world) -> dict:
+    """What a caller that may NOT import this rig needs (the self-improver runs on the slim stdlib lane): the half ids by role, the
+    violation halves (lower is better), the split digest, and the DEV asks' own words. NEVER the held-out asks, needles or golds."""
+    pool = manner_pool(world)
+
+    def words(ask) -> list[str]:
+        return [t.text if isinstance(t.text, str) else "(a follow-up that depends on the previous reply)" for t in ask.turns]
+
+    return {"schema": "zoe.manner_ab.plan/1", "harness_version": HARNESS_VERSION, "split_digest": split_digest(world),
+            "primary": list(PRIMARY), "manner_extra": list(MANNER_EXTRA), "regression": list(REGRESSION),
+            "violation_halves": sorted(VIOLATION_HALVES),
+            "dev_asks": {a.id: words(a) for key in ("P6", "flaw", "good", "P9") for a in pool["dev"][key]},
+            # the planned (ask id, sample) keys only - what a complete arm must have a row for; ids, never words
+            "plans": {"dev": {c: plan_keys(build_plan("dev", world, 1.0, (c,))) for c in DEFAULT_CELLS},
+                      "heldout": {c: plan_keys(build_plan("heldout", world, 1.0, (c,))) for c in DEFAULT_CELLS},
+                      "regress": {str(s): plan_keys(build_plan("regress", world, s)) for s in EXPORT_REGRESS_SCALES}}}
 
 
 def variant_text(name: str) -> str:
@@ -351,6 +399,7 @@ def ledger_spent() -> float:
 
 def ledger_add(dt: float, note: str) -> None:
     CACHE.mkdir(parents=True, exist_ok=True)
+    LEDGER.parent.mkdir(parents=True, exist_ok=True)
     data = {"spent_s": ledger_spent() + dt}
     try:
         data["log"] = json.loads(LEDGER.read_text()).get("log", []) + [{"s": round(dt, 1), "note": note}]
@@ -975,7 +1024,7 @@ def selftest() -> int:
     return 0 if ok else 2
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--phase", choices=("canary", "dev", "heldout", "regress", "report"), default="report")
@@ -985,7 +1034,33 @@ def main() -> int:
     ap.add_argument("--cells", default="P6,flaw,good,P9", help="dev/heldout: which manner cells to run")
     ap.add_argument("--scale", type=float, default=1.0, help="regress: multiply the ask counts")
     ap.add_argument("--brain-budget-s", type=float, default=900.0, help="this invocation's brain-time cap")
-    args = ap.parse_args()
+    ap.add_argument("--variant-file", action="append", default=[], metavar="NAME=PATH",
+                    help="register a variant from a file (repeatable), then name it in --arms")
+    ap.add_argument("--cache-dir", type=Path, default=None,
+                    help="rows + the brain-time ledger here instead of ~/.cache/zoe/manner_ab (a caller's own budget)")
+    ap.add_argument("--total-budget-s", type=float, default=None, help="the cumulative ledger's cap (default 1500 s)")
+    ap.add_argument("--export-plan", type=Path, default=None, metavar="PATH",
+                    help="write the half roles + the DEV asks' words as JSON (no brain, no flag) and exit")
+    args = ap.parse_args(argv)
+    return run_cli(args)
+
+
+def run_cli(args) -> int:
+    global CACHE, LEDGER, TOTAL_BUDGET_S
+    if args.cache_dir is not None:
+        CACHE, LEDGER = Path(args.cache_dir), Path(args.cache_dir) / "brain_time.json"
+    if args.total_budget_s is not None:
+        TOTAL_BUDGET_S = float(args.total_budget_s)
+    try:
+        for spec in args.variant_file:
+            register_variant_file(spec)
+    except (OSError, ValueError) as exc:
+        print(f"refused: {exc}")
+        return 2
+    if args.export_plan is not None:
+        Path(args.export_plan).write_text(json.dumps(export_plan(sp.World(sp.BASE_SEED)), indent=1, sort_keys=True) + "\n",
+                                          encoding="utf-8")
+        return 0
     return selftest() if args.selftest else live(args)
 
 
