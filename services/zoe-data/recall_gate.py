@@ -426,6 +426,8 @@ _SESSIONS: "OrderedDict[tuple, Session]" = OrderedDict()
 _CUR: dict = {}          # (uid, session id) -> (session key, message hash, owner words, noted at, noted by the seam?) - ONE per
 #                          conversation: a user's web turn and voice turn never share an entry
 _SESSION_CTX: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("recall_gate_session", default=None)
+#: the opt-in trace's forget-barrier epoch read when THIS task's turn was noted (before any of the turn's reads); None = no trace
+_TRACE_EP_CTX: "contextvars.ContextVar[Optional[int]]" = contextvars.ContextVar("recall_gate_trace_ep", default=None)
 _COUNTS: dict = {}
 _PENDING: set = set()
 
@@ -487,6 +489,7 @@ def note_turn(user_id: str, session_id: Optional[str], message: Any, *, now: Opt
         sid = (session_id or "").strip()
         _advance(uid, sid, str(message or "")[:512], time.monotonic() if now is None else now, noted=True)
         _SESSION_CTX.set(sid)      # task-local: the in-process recall / hop calls of THIS turn find their own session
+        _TRACE_EP_CTX.set(trace_epoch())   # the opt-in trace's barrier, read BEFORE the turn reads any row (None when the trace is off)
     except Exception:  # noqa: BLE001
         return
 
@@ -858,6 +861,8 @@ async def packet_surface(svc: Any, user_id: str, message: str, result: dict, *, 
             return result
         presented = [str(e.get("id")) for e in (result.get("refs") or []) if e.get("id")]
         sid = session_id if isinstance(session_id, str) else current_session()      # resolved HERE: a spawned shadow task keeps it
+        if trace_ep is None:       # the recall packet's caller reads its rows after the turn was noted: the noted barrier covers them
+            trace_ep = _TRACE_EP_CTX.get()
         kw = dict(facts=list(facts), hits=list(hits), recent=list(recent) if recent else None, presented=presented, mood=mood,
                   session_id=sid, trace_ep=trace_ep)
         if m == "shadow":

@@ -370,7 +370,7 @@ def test_an_eraser_failure_raises_so_the_forget_step_fails_closed(monkeypatch):
         tr.erase_all()
 
 
-# ── the callers read the barrier BEFORE their own row reads (codex #2303: a forget during the caller's awaits) ─────────────
+# ── the barrier is read BEFORE the turn's row reads (codex #2303): at note_turn for the packet, in build for the hop ──────
 
 class _FloorSvc:
     """What memory_for_prompt reads; ``erase_during_read`` completes a forget while the caller is reading its rows."""
@@ -407,7 +407,8 @@ async def test_a_forget_during_the_packet_callers_reads_keeps_those_rows_out_of_
     monkeypatch.setenv(tr.ENV, "1")
     svc = _FloorSvc([ref("zoe_demo_fill0000", FILLER), ref("zoe_demo_walk0001", WALK)], erase)
     monkeypatch.setattr(memories, "_svc", lambda: svc)
-    await memories.memory_for_prompt(user_id=UID, message="How is Juniper getting on?", limit=12, _=None)
+    rg.note_turn(UID, "s", "How is Juniper getting on?")     # the Flue seam notes the turn (and reads the barrier) before any read
+    await memories.memory_for_prompt(user_id=UID, message="How is Juniper getting on?", limit=12, _=None, session_id="s")
     await rg.drain()
     assert _live().exists() is (not erase)                  # negative control: no forget -> the decision IS traced
 
@@ -429,3 +430,14 @@ def test_the_test_suite_pins_the_trace_directory_away_from_home(monkeypatch):
     assert not str(d).startswith(os.path.expanduser("~/.zoe")), d     # the conftest pin (ZOE_RECALL_GATE_TRACE_DIR) holds
     monkeypatch.delenv("ZOE_RECALL_GATE_TRACE_DIR", raising=False)
     assert str(tr.trace_dir()) == os.path.expanduser(tr.DEFAULT_DIR)    # negative control: unpinned = the owner's real path
+
+
+async def test_an_un_noted_packet_turn_is_never_traced(monkeypatch):
+    """A recall call whose turn was never noted has no barrier reading taken before its reads: it is not traced (strict)."""
+    import routers.memories as memories
+
+    monkeypatch.setenv(tr.ENV, "1")
+    monkeypatch.setattr(memories, "_svc", lambda: _FloorSvc([ref("zoe_demo_walk0001", WALK)], False))
+    await memories.memory_for_prompt(user_id=UID, message="How is Juniper getting on?", limit=12, _=None)
+    await rg.drain()
+    assert not _live().exists()
