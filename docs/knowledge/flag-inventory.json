@@ -3655,6 +3655,25 @@
         },
         "typed_env": false
       },
+      "ZOE_DEVICE_MISHEAR_GUARD": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/skybridge_service.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "flag-dark 2026-11-06: fused on-verb + \"lot\" light mishear repair; lists-route device guard",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_DEVICE_TOKEN": {
         "defaults": [
           "dynamic"

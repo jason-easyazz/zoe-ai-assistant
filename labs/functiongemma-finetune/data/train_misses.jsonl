@@ -45,3 +45,8 @@
 {"text": "anything on my schedule tomorrow", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}, "source": "capability_gap_2026-11-05"}
 {"text": "are we busy on saturday", "tool": "show_calendar", "args": {"qualifier": "saturday"}, "source": "capability_gap_2026-11-05"}
 {"text": "what appointments do I have today", "tool": "show_calendar", "args": {"qualifier": "today"}, "source": "capability_gap_2026-11-05"}
+{"text": "shone the lots", "tool": "home", "args": {"action": "on"}, "source": "stt_mishear_2026-11-06"}
+{"text": "okay shown the light", "tool": "home", "args": {"action": "on"}, "source": "stt_mishear_2026-11-06"}
+{"text": "turn on the lot please", "tool": "home", "args": {"action": "on"}, "source": "stt_mishear_2026-11-06"}
+{"text": "switch the lots off", "tool": "home", "args": {"action": "off"}, "source": "stt_mishear_2026-11-06"}
+{"text": "turn on the lights in here", "tool": "home", "args": {"action": "on"}, "source": "stt_mishear_2026-11-06"}

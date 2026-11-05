@@ -236,6 +236,7 @@ _ENTRIES = (
     _f('ZOE_DELIVERY_LEDGER', 'str', 'shadow', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/synthetic-users-and-proactive-recipients.md', note='live: unset (code default in force)'),
     _f('ZOE_DEPLOY_STATE_DIR', 'str', ''),
     _f('ZOE_DEVICE_ID', 'str', ''),
+    _f('ZOE_DEVICE_MISHEAR_GUARD', 'bool', False, doc='docs/knowledge/voice-pipeline.md', note='flag-dark 2026-11-06: fused on-verb + "lot" light mishear repair; lists-route device guard'),
     _f('ZOE_DEVICE_TOKEN', 'str', '', doc='docs/knowledge/incident-runbook.md'),
     _f('ZOE_DEVICE_TOKEN_BINDS_MEMBER', 'str', '', doc='docs/architecture/panel-anywhere.md'),
     _f('ZOE_DEVICE_TOKEN_TTL_DAYS', 'str', '', doc='docs/guides/OPERATOR_RUNBOOK.md'),

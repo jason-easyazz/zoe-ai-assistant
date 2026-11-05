@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-05T00:00:00Z
+timestamp: 2026-11-06T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-05T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-05. The table body is deterministic (sorted, no
+Last generated: 2026-11-06. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 811 prod flags; 225 read through `typed_env`.
+- 812 prod flags; 226 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-811 flags; 760 not documented in `.env.example`.
+812 flags; 761 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -194,6 +194,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_DELIVERY_LEDGER` | str | `'shadow'` | `off`, `shadow`, `on` | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | yes | NO | `services/zoe-data/proactive/lines.py` |
 | `ZOE_DEPLOY_STATE_DIR` | str | `''` | - | - | `-` | yes | NO | `services/zoe-data/change_notices.py` |
 | `ZOE_DEVICE_ID` | str | `''` | - | - | `(required)` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
+| `ZOE_DEVICE_MISHEAR_GUARD` | bool | `False` | - | `docs/knowledge/voice-pipeline.md` | `False` | yes | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_DEVICE_TOKEN` | str | `''` | - | `docs/knowledge/incident-runbook.md` | `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_DEVICE_TOKEN_BINDS_MEMBER` | str | `''` | - | `docs/architecture/panel-anywhere.md` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_DEVICE_TOKEN_TTL_DAYS` | str | `''` | - | `docs/guides/OPERATOR_RUNBOOK.md` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
