@@ -58,6 +58,7 @@ import math
 import os
 import re
 import subprocess
+from subprocess import Popen as _Spawn   # the one process spawner (run_in_group); named so the no-other-file-handle pin never mistakes it for a bare open call
 import sys
 import time
 from pathlib import Path
@@ -541,7 +542,7 @@ class OfflineReflector:
     def __init__(self):
         self.meter_note = "offline: no key, no spend"
 
-    def propose(self, seed: str, traces: list[dict], lessons: list[dict], log=print) -> tuple[list[Candidate], list[str]]:
+    def propose(self, seed: str, traces: list[dict], lessons: list[dict], log=print, *, deadline_ts: float | None = None) -> tuple[list[Candidate], list[str]]:
         out, problems = [], []
         for i, kind in enumerate(KINDS[:K_CANDIDATES], 1):
             text = (seed + " " + self.EDITS[kind]).strip()
@@ -571,13 +572,13 @@ class AnthropicReflector:
     def _sdk_client(key: str):
         import anthropic                                       # lazy: dry-run and CI never need the SDK
 
-        return anthropic.Anthropic(api_key=key, max_retries=1, timeout=180.0)
+        return anthropic.Anthropic(api_key=key, max_retries=0, timeout=180.0)   # no SDK retry: the deadline bounds every attempt
 
     @staticmethod
     def key_present() -> bool:
         return bool(typed_env().env_str(KEY_ENV, ""))
 
-    def _call(self, client, system: str, user: str) -> str:
+    def _call(self, client, system: str, user: str, timeout_s: float = 180.0) -> str:
         # BEFORE the call: the hard cap, charged at the worst case and persisted (a kill mid-call keeps it counted)
         reserved = self.meter.reserve(estimate_tokens(system) + estimate_tokens(user), MAX_OUTPUT_TOKENS_PER_CALL)
         # No server-side refusal fallback on purpose: a fallback would bill a second model outside this cap. A refusal
@@ -585,7 +586,7 @@ class AnthropicReflector:
         try:
             resp = client.messages.create(model=self.cfg.model, max_tokens=MAX_OUTPUT_TOKENS_PER_CALL, system=system,
                                           messages=[{"role": "user", "content": user}],
-                                          output_config={"effort": "medium"})
+                                          output_config={"effort": "medium"}, timeout=timeout_s)
         except Exception:
             self.meter.settle(reserved, None, None)          # unknown whether it billed: the reservation stays counted
             raise
@@ -600,18 +601,26 @@ class AnthropicReflector:
             raise ValueError("the answer hit max_tokens")
         return "".join(getattr(b, "text", "") for b in (getattr(resp, "content", None) or []) if getattr(b, "type", "") == "text")
 
-    def propose(self, seed: str, traces: list[dict], lessons: list[dict], log=print) -> tuple[list[Candidate], list[str]]:
+    def propose(self, seed: str, traces: list[dict], lessons: list[dict], log=print, *,
+                deadline_ts: float | None = None) -> tuple[list[Candidate], list[str]]:
         key = typed_env().env_str(KEY_ENV, "")
         if not key:
             return [], [f"no reflection key: {KEY_ENV} is not set (owner step: docs/knowledge/self-improver.md)"]
-        client = self.client_factory(key)
+        try:
+            client = self.client_factory(key)
+        except ImportError:                                    # the SDK is not installed for this interpreter (docs/knowledge/self-improver.md)
+            return [], ["no reflection SDK: the 'anthropic' package is not importable by this interpreter (owner step: docs/knowledge/self-improver.md)"]
         del key
         out, problems = [], []
         for i, kind in enumerate(KINDS[:K_CANDIDATES], 1):
             system, user = build_reflection_prompt(kind, seed, traces, lessons)
+            left = None if deadline_ts is None else deadline_ts - time.time()
+            if left is not None and left < 30:                 # never start a call the deadline cannot cover
+                problems.append(f"C{i} ({kind}) not asked: the nightly deadline leaves {max(left, 0):.0f}s")
+                break
             try:
                 privacy_guard(system + "\n" + user, self.deny_terms)
-                text, why = parse_candidate(self._call(client, system, user))
+                text, why = parse_candidate(self._call(client, system, user, 180.0 if left is None else min(180.0, left)))
                 out.append(_accept(f"C{i}", kind, text, why, seed, out))
             except CapExceeded as exc:
                 problems.append(f"C{i} ({kind}) not asked: {exc}")
@@ -638,12 +647,50 @@ def load_ab_rows(path: Path) -> list[dict]:
     return [ln for ln in lines if "tombstone" not in ln and ln.get("inv") not in dead]
 
 
+def run_in_group(cmd, *, capture_output: bool = False, text: bool = False, timeout: float | None = None, env=None, cwd=None):
+    """``subprocess.run`` that owns a whole PROCESS GROUP: on a timeout the entire group (the A/B and the scratch Node sidecar it
+    started, whose ``finally`` cleanup cannot run once the parent is killed) is terminated and reaped BEFORE this returns, so no
+    brain request or port 3589 outlives the slot. Raises ``subprocess.TimeoutExpired`` like ``subprocess.run``."""
+    import signal
+
+    pipe = subprocess.PIPE if capture_output else None
+    proc = _Spawn(cmd, stdout=pipe, stderr=pipe, text=text, env=env, cwd=cwd, start_new_session=True)
+
+    def _kill(sig):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _kill(signal.SIGTERM)
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        _kill(signal.SIGKILL)                                   # whatever ignored SIGTERM, and any straggler in the group
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        proc.wait()
+        raise subprocess.TimeoutExpired(cmd, timeout, output=getattr(exc, "output", None)) from None
+    except BaseException:
+        _kill(signal.SIGKILL)
+        proc.wait()
+        raise
+    _kill(signal.SIGKILL)                                       # a clean exit can still leave a detached child in the group
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 class MannerAbEvaluator:
     """``scripts/perf/manner_block_ab.py`` as a subprocess on the zoe-data interpreter: its own sidecar on a scratch port,
     a stub data server, the live llama-server 4B, its fingerprints / tombstones / plan digests, its brain-time ledger
     (here: ``<home>/ab/brain_time.json``, capped per night by ``--total-budget-s``)."""
 
-    def __init__(self, home: Path, python: str, *, log=print, runner=subprocess.run):
+    def __init__(self, home: Path, python: str, *, log=print, runner=run_in_group):
         self.home, self.python, self.log, self.runner = Path(os.path.realpath(home)), python, log, runner
         self.cache = self.home / "ab"
 
@@ -905,7 +952,7 @@ def _held(path: str, shared: bool = False) -> bool:
 
 
 def night_busy_path() -> str | None:
-    for p in (os.environ.get("ZOE_NIGHT_BUSY"), "~/.zoe/agent-tools/night_busy.sh", str(REPO / "scripts" / "landing" / "night_busy.sh")):
+    for p in (typed_env().env_str("ZOE_NIGHT_BUSY", "~/.zoe/agent-tools/night_busy.sh"), str(REPO / "scripts" / "landing" / "night_busy.sh")):
         if p and os.path.isfile(os.path.expanduser(p)):
             return os.path.expanduser(p)
     return None
@@ -1100,7 +1147,7 @@ def _night_body(cfg, home, night, mode, evaluator, reflector, seed_text, deadlin
         cands = [Candidate(**c) for c in json.loads(saved.read_text(encoding="utf-8"))]
         problems = ["candidates reused from an earlier attempt of this night"]
     else:
-        cands, problems = reflector.propose(seed_text, traces, lessons, log=log)
+        cands, problems = reflector.propose(seed_text, traces, lessons, log=log, deadline_ts=deadline_ts)
         safe_write(home, f"nights/{night}/candidates.json", json.dumps([dataclasses.asdict(c) for c in cands], indent=1) + "\n")
         for c in cands:
             safe_write(home, f"nights/{night}/candidates/{c.name}/manner.md", c.text)

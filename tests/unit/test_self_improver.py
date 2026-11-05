@@ -584,3 +584,58 @@ def test_unanswerable_gates_fail_closed(_clear_box, runner, needle):
 def test_the_shipped_seed_passes_the_overlay_rules():
     text, src = si.current_manner(flue_env=Path("/nonexistent"), lexicon=REPO / "services" / "zoe-data" / "lexicons_data" / "en.json")
     assert si.validate_manner(text) == text and src.startswith("lexicon:")
+
+
+# ── deadline bounds (cross-review: the probe's process group, reflection time, SDK provisioning) ─────────────────────────
+
+def test_a_probe_timeout_kills_the_whole_process_group_including_a_grandchild(tmp_path):
+    import subprocess
+    import time
+
+    pidfile = tmp_path / "grandchild.pid"
+    script = f"import subprocess,sys,time;p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);open(r'{pidfile}','w').write(str(p.pid));time.sleep(60)"
+    with pytest.raises(subprocess.TimeoutExpired):
+        si.run_in_group([sys.executable, "-c", script], capture_output=True, text=True, timeout=2)
+    pid = int(pidfile.read_text())
+    deadline = time.time() + 5
+    alive = True
+    while time.time() < deadline and alive:
+        try:
+            os.kill(pid, 0)
+            time.sleep(0.1)
+        except ProcessLookupError:
+            alive = False
+    assert not alive                                          # negative control: plain subprocess.run would leave it running
+
+
+def test_reflection_is_not_started_past_the_nightly_deadline(monkeypatch):
+    import time
+
+    monkeypatch.setenv(si.KEY_ENV, SENTINEL)
+    client = FakeClient(["<manner>x</manner><why>y</why>"])
+    r, _ = _reflector(client)
+    cands, problems = r.propose(SEED, TRACES, [], deadline_ts=time.time() + 5)
+    assert cands == [] and client.calls == [] and any("deadline" in p for p in problems)
+
+
+def test_reflection_passes_the_remaining_time_as_the_request_timeout(monkeypatch):
+    import time
+
+    monkeypatch.setenv(si.KEY_ENV, SENTINEL)
+    client = FakeClient(["<manner>Name a real problem first, kindly.</manner><why>general</why>",
+                         "<manner>If a plan risks health, say so first.</manner><why>targeted</why>"])
+    r, _ = _reflector(client)
+    r.propose(SEED, TRACES, [], deadline_ts=time.time() + 100)
+    assert all(0 < c["timeout"] <= 100 for c in client.calls)
+
+
+def test_a_missing_sdk_is_a_recorded_problem_not_a_crash(monkeypatch):
+    monkeypatch.setenv(si.KEY_ENV, SENTINEL)
+
+    def boom(key):
+        raise ImportError("no anthropic")
+
+    cfg = _cfg()
+    r = si.AnthropicReflector(cfg, si.CostMeter(cfg.model, cfg.max_tokens_night, cfg.max_usd_night), client_factory=boom)
+    cands, problems = r.propose(SEED, TRACES, [])
+    assert cands == [] and any("SDK" in p for p in problems)
