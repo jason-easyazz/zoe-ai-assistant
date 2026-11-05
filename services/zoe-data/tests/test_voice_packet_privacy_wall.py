@@ -153,6 +153,30 @@ def test_a_plain_topic_question_by_a_verified_voice_pulls_the_feelings_row(monke
     assert HEALTH not in block and MONEY not in block
 
 
+@pytest.mark.parametrize("text", [
+    "What did I tell you about feeling worried before the exam?",
+    "what did i tell you about feeling worried before the exam",     # STT with no question mark
+    "do you remember how worried I was before the exam",
+])
+def test_a_question_about_a_past_feeling_by_a_verified_voice_pulls_it(monkeypatch, text):
+    # PR review: an explicit recall classes as affect too, but it is a question about the past, not a mood statement
+    _search(monkeypatch, _rows())
+    turn = restraint.make_turn(text)
+    assert "affect" in turn.classes and turn.recall
+    block = _packet(text, True)
+    assert FEELING in block
+    assert HEALTH not in block and MONEY not in block
+    assert FEELING not in _packet(text, None), "still only for a verified voice"
+
+
+@pytest.mark.parametrize("text,want", [
+    ("I'm worried about the exam", False), ("I am so worried about the exam", False), ("feeling low today", False),
+    ("what did I say about the exam", True), ("remind me what happened", True), ("is it raining?", True),
+])
+def test_is_recall_ask(text, want):
+    assert restraint.is_recall_ask(text) is want
+
+
 @pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
 def test_the_wall_bites_in_every_restraint_mode(monkeypatch, mode):
     monkeypatch.setenv("ZOE_RESTRAINT", mode)

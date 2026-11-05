@@ -405,12 +405,29 @@ class Turn:
     mood: bool = False           # a first-person mood statement: affect rows are pulled
     stems: frozenset = frozenset()
     classes: tuple = ()          # the sensitive classes the owner's own words name
+    recall: bool = False         # a question about the past (``is_recall_ask``), not a mood statement
+
+
+def is_recall_ask(message: Any) -> bool:
+    """True for a question about the past: the words end on a question mark, or open with a recall lead of the lexicon
+    (``recall_leads``: "what did i ...", "do you remember ...", "remind me ..."; the text's own language first, then the
+    others). Separates "what did I tell you about feeling worried before the exam" (a recall) from "I'm worried about the
+    exam" (a mood statement) on the voice surface. Pure."""
+    raw = str(message or "").strip()
+    if raw.endswith(("?", "？")):
+        return True
+    low = _norm(raw)
+    for p in _lex.packs_for(raw):
+        for lead in p.recall_leads:
+            if low == lead or low.startswith(lead if p.cjk else lead + " "):
+                return True
+    return False
 
 
 def make_turn(message: Any, *, verdict: Optional[bool] = None, mood: bool = False) -> Turn:
     msg = str(message or "")
     return Turn(message=msg, verdict=verdict, pull_all=is_pull(msg), mood=bool(mood),
-                stems=stems(msg), classes=classify(msg))
+                stems=stems(msg), classes=classify(msg), recall=is_recall_ask(msg))
 
 
 # Turn marks by user: the recall_memory TOOL call made during a turn carries only the model's query,
@@ -492,7 +509,8 @@ def decide(text: Any, classes: Iterable[str], turn: Turn, mutes: Iterable[Mute] 
     * ``VOICE_SURFACE`` (the voice recall packet, a shared room; D6): a PRIVATE class is read only to a voice
       the speaker gate VERIFIED this turn (``verdict is True``; no verdict = not verified) and only when the
       owner's words pull it BY NAME (a topic overlap, or a class other than ``affect`` named) - never on an
-      open question or a mood statement (on a mood turn a topic overlap does not pull a row with ``affect``). Those withholds are the wall (``Decision.wall``). ``other_member`` keeps the packet rule.
+      open question or a mood statement (on a mood turn a topic overlap does not pull a row with ``affect``; a question
+      about the past, ``is_recall_ask``, is not a mood turn). Those withholds are the wall (``Decision.wall``). ``other_member`` keeps the packet rule.
     """
     cls = tuple(c for c in CLASSES if c in set(classes))
     if cls and turn.verdict is False:
@@ -504,9 +522,11 @@ def decide(text: Any, classes: Iterable[str], turn: Turn, mutes: Iterable[Mute] 
             return Decision(False, "unverified", cls, wall=True)
         # a class named in the words pulls it; a mood statement ("I'm feeling down") classes as affect but names no PAST feeling,
         # and its topic words do not pull a feelings row either ("I'm scared about the exam" never reads back "felt scared before
-        # the exam" to the room): on a mood turn a row with affect needs a non-affect class named
+        # the exam" to the room): on a mood turn a row with affect needs a non-affect class named. A question about the past
+        # ("what did I tell you about feeling worried before the exam?", ``is_recall_ask``) is a recall, not a mood: its topic pulls.
         named = (set(turn.classes) - {"affect"}) & private
-        by_topic = topic and not ("affect" in turn.classes and "affect" in private)
+        mood_turn = "affect" in turn.classes and not turn.recall
+        by_topic = topic and not (mood_turn and "affect" in private)
         if private and not (by_topic or named):
             return Decision(False, "sensitive", cls, wall=True)
         surface = "packet"       # past the wall: the chat packet's rule (mutes, other_member)

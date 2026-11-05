@@ -93,7 +93,8 @@ owner) on top of the packet rule:
   only when the speaker gate **verified this voice** (`current_verdict() is True`; `None` - a PIN-bound panel, no gate - is NOT verified)
   **and** the words pull it by name: a topic overlap, or a class other than `affect` named ("what medication am I on"). An open
   question ("what's up?") and a mood statement are not pulls here, and on a mood turn a shared topic word does not pull a row with
-  `affect` either ("I'm worried about the exam" never reads back "felt worried before the exam"; "what happened before the exam" does);
+  `affect` either ("I'm worried about the exam" never reads back "felt worried before the exam"; "what happened before the exam" does, and so does a question about the past - "what did I tell you about feeling worried
+  before the exam" - which `restraint.is_recall_ask` tells from a mood statement: a question mark, or a lexicon `recall_leads` opening);
 * the turn is THIS turn's words and verdict (`make_turn`), never a `note_turn` mark another turn left;
 * those withholds (`Decision.wall`) bite in **every** `ZOE_RESTRAINT` mode, `off` included (`off` only skips the mute read); everything
   else (`other_member`, mutes) follows the mode exactly as the chat packet does;
