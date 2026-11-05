@@ -1331,11 +1331,28 @@
   // (the weather-star canvas twinkle and the Cover Flow spring). Live-tracked.
   var RM=false;try{var _rmq=window.matchMedia('(prefers-reduced-motion: reduce)');RM=!!_rmq.matches;if(_rmq.addEventListener)_rmq.addEventListener('change',function(e){RM=!!e.matches;});}catch(e){}
   var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=1280,H=720;cv.width=W;cv.height=H;
-  var stars=[],drops=[],wxOn=false,wxGlow=true,starA=1,rainOn=false; // wxGlow: warm dusk glow, off for clear night; starA: star brightness 0..1 (0 = no stars, daytime); rainOn: draw rain streaks
+  var stars=[],drops=[],wxOn=false,wxGlow=true,starA=1,rainOn=false,sunOn=false,moonOn=false,cloudN=0; // wxGlow: warm dusk glow, off for clear night; starA: star brightness 0..1 (0 = no stars, daytime); rainOn: draw rain streaks
   (function seed(){for(var i=0;i<26;i++)stars.push({x:Math.random()*W,y:Math.random()*H*.6,r:Math.random()*1.6+.3,tw:Math.random()*6.28});for(var j=0;j<70;j++)drops.push({x:Math.random()*W,y:Math.random()*H,l:10+Math.random()*14,v:.5+Math.random()*.5});})();
+  // Sun/moon/cloud sprites are drawn ONCE to offscreen canvases (no per-frame gradients: the Pi is CPU-poor).
+  var SKY_CLOUDS=[{x:700,y:196,s:1,ph:0},{x:830,y:128,s:.8,ph:2.1},{x:570,y:236,s:.7,ph:4.2}],_skySpr=null;
+  function skySprites(){if(_skySpr)return _skySpr;
+    function mk(w,h,fn){var c=document.createElement('canvas');c.width=w;c.height=h;fn(c.getContext('2d'));return c;}
+    function puffs(rgb){return function(x){x.shadowColor='rgba('+rgb+',.9)';x.shadowBlur=16;x.fillStyle='rgba('+rgb+',.96)';
+      [[80,72,36],[138,54,46],[204,66,40],[252,80,26],[50,82,22]].forEach(function(q){x.beginPath();x.arc(q[0],q[1],q[2],0,6.29);x.fill();});x.fillRect(50,76,206,24);};}
+    _skySpr={
+      sun:mk(360,360,function(x){var g=x.createRadialGradient(180,180,0,180,180,180);g.addColorStop(0,'rgba(255,246,208,1)');g.addColorStop(.25,'rgba(255,240,190,1)');g.addColorStop(.29,'rgba(255,214,120,.55)');g.addColorStop(.6,'rgba(255,200,110,.16)');g.addColorStop(1,'rgba(255,200,110,0)');x.fillStyle=g;x.fillRect(0,0,360,360);}),
+      moon:mk(240,240,function(x){var g=x.createRadialGradient(120,120,0,120,120,120);g.addColorStop(0,'rgba(210,222,255,.4)');g.addColorStop(.3,'rgba(190,205,255,.2)');g.addColorStop(1,'rgba(190,205,255,0)');x.fillStyle=g;x.fillRect(0,0,240,240);
+        x.fillStyle='#eaf0ff';x.beginPath();x.arc(120,120,34,0,6.29);x.fill();x.fillStyle='rgba(120,134,176,.22)';[[108,112,7],[132,128,9],[124,104,4]].forEach(function(q){x.beginPath();x.arc(q[0],q[1],q[2],0,6.29);x.fill();});}),
+      cloudD:mk(300,110,puffs('255,255,255')),
+      cloudN:mk(300,110,puffs('58,68,92'))};
+    return _skySpr;}
   function frame(t){ if(wxOn){ctx.clearRect(0,0,W,H);
       if(wxGlow){var s2=ctx.createRadialGradient(220,560,10,220,560,280);s2.addColorStop(0,'rgba(255,210,150,.6)');s2.addColorStop(1,'rgba(255,210,150,0)');ctx.fillStyle=s2;ctx.beginPath();ctx.arc(220,560,280,0,6.29);ctx.fill();}
       if(starA>0){ctx.fillStyle='#fff';stars.forEach(function(st){ctx.globalAlpha=starA*(RM?.72:(.5+.5*Math.sin(t/700+st.tw))*.9);ctx.beginPath();ctx.arc(st.x,st.y,st.r,0,6.29);ctx.fill();});ctx.globalAlpha=1;}
+      if(sunOn||moonOn){var sp=skySprites(),bx=700,by=170,nt=!sunOn;
+        ctx.drawImage(nt?sp.moon:sp.sun,bx-(nt?120:180),by-(nt?120:180));
+        for(var ci=0;ci<cloudN;ci++){var cc=SKY_CLOUDS[ci];ctx.globalAlpha=nt?.8:.92;ctx.drawImage(nt?sp.cloudN:sp.cloudD,cc.x-150*cc.s+wxDrift(t,cc.ph,RM),cc.y-55*cc.s,300*cc.s,110*cc.s);}
+        ctx.globalAlpha=1;}
       if(rainOn){ctx.strokeStyle='rgba(200,215,235,.45)';ctx.lineWidth=1.4;ctx.beginPath();drops.forEach(function(d){var y=RM?d.y:(d.y+t*d.v*.9)%H;ctx.moveTo(d.x,y);ctx.lineTo(d.x-d.l*.25,y+d.l);});ctx.stroke();}
     } if(RM){setTimeout(function(){requestAnimationFrame(frame);},1000);}else{requestAnimationFrame(frame);} }   // reduced motion: a still sky, repainted once a second
   requestAnimationFrame(frame);
@@ -1507,7 +1524,7 @@
     [].forEach.call(pick.querySelectorAll('button'),function(b){b.classList.toggle('sel',b.dataset.id===id);});
     if(f){
       cardwrap.classList.remove('on'); full.classList.add('on');
-      stage.style.background=f.bg; wxOn=!!f.canvas; starA=1; rainOn=false; cv.classList.toggle('on',!!f.canvas);
+      stage.style.background=f.bg; wxOn=!!f.canvas; starA=1; rainOn=false; sunOn=false; moonOn=false; cloudN=0; cv.classList.toggle('on',!!f.canvas);
       glow.style.background=f.glow||'none'; glow.classList.toggle('on',!!f.glow);
       home.classList.toggle('hide',f.home===false);
       full.innerHTML=f.html;
@@ -2056,10 +2073,17 @@
   function wxSky(code){var scene=wxScene(code),night=/n$/.test(code||'');
     var k=scene;if(scene==='cloud'||scene==='rain')k=night?scene:scene+'Day';
     var stars=0;if(scene==='night'||scene==='dusk')stars=1;else if(scene==='cloud'&&night)stars=.35;
-    return {scene:scene,key:k,bg:WXBG[k]||DUSK,light:(k==='day'||k==='cloudDay'||k==='rainDay'),overcast:(k==='cloudDay'||k==='rainDay'),stars:stars,rain:(scene==='rain'),glow:(scene==='dusk'),canvas:(scene!=='day'&&k!=='cloudDay')};}
+    var base=(code||'').slice(0,2),sun=false,moon=false,clouds=0;
+    if(scene==='day'){sun=true;}                                                  // 01d: the sun, no cloud
+    else if(!night&&(base==='02'||base==='03')){sun=true;clouds=base==='02'?2:3;}  // 02d/03d: sun partly behind drifting cloud
+    else if(night&&(base==='02'||base==='03')){moon=true;clouds=base==='02'?2:3;}  // 02n/03n: moon partly behind cloud (+ dim stars)
+    // 04 (overcast) and 50 (fog) stay sun-less.
+    var rain=(scene==='rain');
+    return {scene:scene,key:k,bg:WXBG[k]||DUSK,light:(k==='day'||k==='cloudDay'||k==='rainDay'),overcast:(k==='cloudDay'||k==='rainDay'),stars:stars,rain:rain,glow:(scene==='dusk'),sun:sun,moon:moon,clouds:clouds,canvas:(rain||stars>0||sun||moon||scene==='dusk')};}
+  function wxDrift(t,ph,rm){return rm?0:Math.sin(t/9000+ph)*45;}   // slow cloud drift (px); reduced motion = a static frame
   // WXSKY-END
   function wxApplySky(sky){stage.style.background=sky.bg;stage.classList.toggle('wxlight',sky.light);stage.classList.toggle('wxovc',sky.overcast);
-    wxGlow=sky.glow;starA=sky.stars;rainOn=sky.rain;wxOn=sky.canvas;cv.classList.toggle('on',sky.canvas);}
+    wxGlow=sky.glow;starA=sky.stars;rainOn=sky.rain;sunOn=sky.sun;moonOn=sky.moon;cloudN=sky.clouds;wxOn=sky.canvas;cv.classList.toggle('on',sky.canvas);}
   function fmtHour(iso){var m=/T(\d{2}):/.exec(iso||'');if(!m)return '';var h=+m[1],ap=h<12?'am':'pm',hr=h%12;if(hr===0)hr=12;return hr+' '+ap;}
   function loadWxScreen(){
     apiGet('/api/weather/current').then(function(w){if(_cur!=='weather'||!w)return;  // ignore if the user navigated away
