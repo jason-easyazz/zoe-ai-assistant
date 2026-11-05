@@ -1,0 +1,197 @@
+"""The recall gate's opt-in private trace (``recall_gate_trace.py``, ``ZOE_RECALL_GATE_TRACE``, default off).
+
+Synthetic data only (``demo_bar_*`` ids, invented names). Each property has a negative control: off by default (nothing written, no
+directory), on writes row text + the owner's words, 0700 / 0600 permissions (and a looser pre-existing file is tightened), rotation
+past the size cap, retention past the day cap, a skipped decision writes nothing, a write failure never reaches the gate, and the trace
+never touches the RECALL_GATE log line.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import stat
+import time
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe
+
+import recall_gate as rg
+import recall_gate_trace as tr
+import restraint
+from memory_service import MemoryRef
+
+UID = "demo_bar_00000001"
+T0 = 1_760_000_000.0
+WALK = "User walks their kelpie Juniper along the river every morning at 6am."
+BOOKS = "User is reading a long novel about lighthouse keepers."
+FILLER = "User had porridge with banana for breakfast."
+
+
+def ref(i, text):
+    md = {"status": "approved", "user_id": UID, "memory_type": "fact", "added_ts": T0, "authority_class": "user_stated"}
+    return MemoryRef(id=i, text=text, metadata=md)
+
+
+class Svc:
+    def __init__(self, pool):
+        self.pool = list(pool)
+
+    async def load_durable_for_hop(self, user_id):
+        return list(self.pool)
+
+
+@pytest.fixture(autouse=True)
+def clean(monkeypatch, tmp_path):
+    for k in (rg.ENV, tr.ENV, tr.DAYS_ENV, "ZOE_RESTRAINT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(tr, "TRACE_DIR", tmp_path / "trace")
+    rg._reset_state()
+    restraint._reset_state()
+
+    async def no_mutes(_uid):
+        return []
+
+    monkeypatch.setattr(restraint, "list_mutes", no_mutes)
+    monkeypatch.setattr(rg, "_off_record", lambda uid, text: False)
+    yield
+    rg._reset_state()
+
+
+def _live():
+    return tr.TRACE_DIR / tr.FILE_NAME
+
+
+async def _decide(message="How is Juniper getting on?", *, floor=(FILLER,)):
+    """A decision whose floor presented a filler row (dropped) and whose pool carries the Juniper row (added)."""
+    walk, books = ref("zoe_demo_walk0001", WALK), ref("zoe_demo_book0001", BOOKS)
+    fill = [ref(f"zoe_demo_fill{i:04d}", t) for i, t in enumerate(floor)]
+    return await rg.evaluate_packet(Svc([walk, books] + fill), UID, message, facts=fill, hits=[], recent=None,
+                                    presented=[r.id for r in fill], mood=False, now=T0)
+
+
+async def test_off_by_default_writes_nothing_and_creates_no_directory():
+    d = await _decide()
+    assert d.added and d.dropped                     # the decision itself is non-trivial: there WAS something to trace
+    assert not tr.enabled()
+    assert not tr.TRACE_DIR.exists()
+
+
+@pytest.mark.parametrize("value", ["0", "off", "false", "", "shadow", "enforce"])
+async def test_only_an_explicit_on_value_enables_it(monkeypatch, value):
+    monkeypatch.setenv(tr.ENV, value)
+    await _decide()
+    assert not tr.TRACE_DIR.exists()
+
+
+async def test_on_writes_the_owner_words_and_the_added_and_dropped_rows_text(monkeypatch):
+    monkeypatch.setenv(tr.ENV, "1")
+    d = await _decide()
+    lines = _live().read_text().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["user"] == UID and row["surface"] == "packet" and row["mode"] == "shadow"
+    assert row["owner_words"] == "How is Juniper getting on?"
+    assert {a["id"] for a in row["added"]} == set(d.added)
+    assert any(a["text"] == WALK for a in row["added"])
+    assert [x["text"] for x in row["dropped"]] == [FILLER]
+    assert row["selected"] == d.ids
+
+
+async def test_file_is_0600_and_directory_0700_and_a_looser_existing_file_is_tightened(monkeypatch):
+    monkeypatch.setenv(tr.ENV, "on")
+    tr.TRACE_DIR.mkdir(mode=0o755)
+    _live().write_text("")
+    os.chmod(_live(), 0o644)
+    os.chmod(tr.TRACE_DIR, 0o755)
+    await _decide()
+    assert stat.S_IMODE(os.stat(_live()).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(tr.TRACE_DIR).st_mode) == 0o700
+
+
+async def test_a_skipped_decision_writes_nothing(monkeypatch):
+    monkeypatch.setenv(tr.ENV, "1")
+    monkeypatch.setattr(rg, "_off_record", lambda uid, text: True)
+    d = await _decide()
+    assert d.skipped == "off_record"
+    assert not _live().exists()
+
+
+def _dec():
+    p = rg.Pick("zoe_demo_walk0001", WALK, 3.0, 4, "pool", (), 10)
+    return rg.Decision("packet", 1, (p,), ("zoe_demo_walk0001",), (), 10, 400)
+
+
+def test_rotation_past_the_size_cap_keeps_at_most_keep_files(monkeypatch):
+    monkeypatch.setenv(tr.ENV, "1")
+    monkeypatch.setattr(tr, "MAX_BYTES", 300)
+    for _ in range(40):
+        assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow")
+    names = sorted(p.name for p in tr.TRACE_DIR.iterdir())
+    assert names == [tr.FILE_NAME] + [f"{tr.FILE_NAME}.{i}" for i in range(1, tr.KEEP + 1)]
+    for p in tr.TRACE_DIR.iterdir():
+        assert p.stat().st_size < 300 + 600         # each file stopped growing at the cap (one line over, at most)
+    # negative control: an unlimited cap never rotates
+    monkeypatch.setattr(tr, "MAX_BYTES", 10**9)
+    for p in list(tr.TRACE_DIR.iterdir()):
+        p.unlink()
+    for _ in range(40):
+        tr.record(UID, _dec(), "how is Juniper", [], mode="shadow")
+    assert [p.name for p in tr.TRACE_DIR.iterdir()] == [tr.FILE_NAME]
+
+
+def test_retention_deletes_files_older_than_the_day_cap(monkeypatch):
+    monkeypatch.setenv(tr.ENV, "1")
+    monkeypatch.setenv(tr.DAYS_ENV, "2")
+    tr.TRACE_DIR.mkdir(mode=0o700)
+    old, fresh = tr.TRACE_DIR / f"{tr.FILE_NAME}.2", tr.TRACE_DIR / f"{tr.FILE_NAME}.1"
+    old.write_text("old\n")
+    fresh.write_text("fresh\n")
+    now = time.time()
+    os.utime(old, (now - 3 * 86400, now - 3 * 86400))
+    os.utime(fresh, (now - 1 * 86400, now - 1 * 86400))
+    tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", now=now)
+    assert not old.exists() and fresh.exists() and _live().exists()
+
+
+def test_an_abandoned_live_file_past_retention_is_replaced_not_appended(monkeypatch):
+    monkeypatch.setenv(tr.ENV, "1")
+    tr.TRACE_DIR.mkdir(mode=0o700)
+    _live().write_text('{"stale": true}\n')
+    now = time.time()
+    os.utime(_live(), (now - 30 * 86400, now - 30 * 86400))
+    tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", now=now)
+    assert "stale" not in _live().read_text()
+
+
+async def test_a_trace_failure_never_reaches_the_gate(monkeypatch):
+    monkeypatch.setenv(tr.ENV, "1")
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(tr, "_append", boom)
+    d = await _decide()
+    assert d.added and not d.skipped                  # the decision stands
+    assert tr.record(UID, _dec(), "x", [], mode="shadow") is False
+
+
+async def test_the_log_line_still_carries_no_text_when_the_trace_is_on(monkeypatch):
+    monkeypatch.setenv(tr.ENV, "1")
+    seen = []
+
+    class H(logging.Handler):
+        def emit(self, record):
+            seen.append(record.getMessage())
+
+    lg = logging.getLogger("recall_gate")
+    h, old = H(logging.DEBUG), lg.level
+    lg.addHandler(h)
+    lg.setLevel(logging.DEBUG)
+    try:
+        rg._log(UID, await _decide(), "shadow")
+    finally:
+        lg.removeHandler(h)
+        lg.setLevel(old)
+    assert seen and all("Juniper" not in m and "porridge" not in m for m in seen)

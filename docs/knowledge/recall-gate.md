@@ -201,6 +201,31 @@ JSON lands in `~/.cache/zoe/recall_gate_replay_last.json`).
    (most on two days), 28 adds over 7 distinct rows, every decision drops rows (floor median 20.5 -> gate 2) and 20% would be empty
    packets; budget never above 155 of 400. Add precision cannot be scored from this line (ids, no text) - it needs a private text
    read or an opt-in trace - so the verdict is **not yet**. Score the drops first, and consider `abstain=False` for a first enforce.
+   **Synthetic scoring 2026-11-05** (same record): over 72 asks on the replay's worlds plus the 29-ask stock replay, 24 adds scored,
+   15 relevant (**0.63**; first turn of a session 9/10, later turns 6/14 - every later-turn misfire is a row triggered on an
+   earlier turn carried into an unrelated one); over the 72 extended asks 655 drops, 2 harmful (**drop precision 0.997**), both leaving a targeted ask with an empty packet.
+   In the 0.6-0.8 band: the named fixes are the session carry-over (a held row should still share a key with the current turn) and the
+   paraphrase misses (item 4).
+
+## The opt-in private trace (`ZOE_RECALL_GATE_TRACE`, default off)
+
+The log line above never carries text, so live adds and drops cannot be hand-scored from it. `recall_gate_trace.py` is the owner's
+switch for collecting that, privately and for a bounded time. With `ZOE_RECALL_GATE_TRACE=1`, every gate decision (packet and hop,
+shadow or enforce; not skipped ones) appends one JSON line to `~/.zoe/recall-gate-trace/trace.jsonl`: time, user, surface, turn,
+mode, the owner's words (512 characters), the selected ids, and id + text of every row the gate would add and every row it would drop.
+
+- Directory 0700, file 0600 (a looser existing file is tightened on every write). Never the repo, never `~/.zoe-logs`, never stdout,
+  never the `RECALL_GATE` line, never the off-box backup (`zoe_offbox.py` `ZOE_TREE_EXCLUDES`, pinned by `test_zoe_offbox.py`).
+- Rotation at 2 MB (about 2,000 decisions) into `trace.jsonl.1`..`.3`; the oldest is deleted.
+- Retention `ZOE_RECALL_GATE_TRACE_DAYS` (default 7): older files are deleted on the next write, including an abandoned live file.
+- Off (default, or any value other than 1/true/yes/on) = one env read per decision, no directory, no file.
+- Turning it off stops writing; it does not delete. Delete `~/.zoe/recall-gate-trace/` when the scoring is done.
+- Tests: `services/zoe-data/tests/test_recall_gate_trace.py` (off by default, explicit-on only, perms, rotation, retention, skipped
+  decisions, a write failure never reaches the gate, the log line stays text-free).
+
+Owner steps: add `ZOE_RECALL_GATE_TRACE=1` to `services/zoe-data/.env` (the unit's `EnvironmentFile`), restart zoe-data (`systemctl --user restart zoe-data`, then poll
+`curl -fsS http://127.0.0.1:8000/health`), check `stat -c '%a' ~/.zoe/recall-gate-trace ~/.zoe/recall-gate-trace/trace.jsonl` reads
+`700` / `600` after the first recall turn, collect for the scoring window, then remove the line, restart, and delete the directory.
 2. **Calibrate the similarity floor on the live embedder.** `SIM_NEAR / SIM_BEST / SIM_MID` (0.69 / 0.80 / 0.90) were measured on
    the replay fixtures with Chroma's default MiniLM (answering row 0.46-0.69, irrelevant 0.70-1.05; one irrelevant row sat at 0.699).
    They belong to the embedder: re-measure from the live distribution (the log can carry it) before the flip.

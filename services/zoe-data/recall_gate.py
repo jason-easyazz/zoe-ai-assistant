@@ -689,6 +689,18 @@ def _log(user_id: str, d: Decision, m: str) -> None:
 
 # ── the surfaces ────────────────────────────────────────────────────────────────────────────
 
+def _trace(user_id: str, dec: Decision, owner: str, cands: Iterable) -> None:
+    """The owner's opt-in private trace (``ZOE_RECALL_GATE_TRACE``, default off; ``recall_gate_trace.py``): row text + the owner's words to
+    a 0600 file under ~/.zoe, never to the log line above. Off = one env read, nothing else. Never raises."""
+    try:
+        import recall_gate_trace
+
+        if recall_gate_trace.enabled():
+            recall_gate_trace.record(user_id, dec, owner, list(cands), mode=mode())
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _skip(surface: str, why: str, turn: int = 0) -> Decision:
     return Decision(surface=surface, turn=turn, skipped=why)
 
@@ -790,6 +802,7 @@ async def evaluate_packet(svc: Any, user_id: str, message: str, *, facts: list, 
             if str(ref.id) in ok:
                 cands[str(ref.id)] = _cand(ref, "pool")
         dec = decide(sess, turn, list(cands.values()), owner, extra=extra, cfg=cfg, surface="packet", presented=presented)
+        _trace(user_id, dec, owner, cands.values())
         sess.cache[key] = dec
         _forget_old(sess, turn)
         return dec
@@ -879,6 +892,7 @@ async def evaluate_hop(user_id: str, message: str, rows: list, hop_ids: list, ho
             c.topic = hop_topics.get(rid, "")
             cands.append(c)
         dec = decide(sess, turn, cands, owner, extra=extra, cfg=cfg, surface="hop", presented=hop_ids)
+        _trace(user_id, dec, owner, cands)
         sess.cache[key] = dec
         _forget_old(sess, turn)
         return dec

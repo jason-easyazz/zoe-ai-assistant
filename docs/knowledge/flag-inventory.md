@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 808 prod flags; 222 read through `typed_env`.
+- 810 prod flags; 224 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-808 flags; 757 not documented in `.env.example`.
+810 flags; 759 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -642,6 +642,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_RECALL_EVERY_TURN_HARNESS` | bool | `False` | - | `docs/knowledge/recall-every-turn.md` | `False` | yes | NO | `services/zoe-data/recall_every_turn.py` |
 | `ZOE_RECALL_EVIDENCE` | bool | `False` | - | `docs/knowledge/recall-gate.md` | `False` | yes | NO | `services/zoe-data/recall_evidence.py` |
 | `ZOE_RECALL_GATE` | str | `'shadow'` | `off`, `shadow`, `enforce` | `docs/knowledge/recall-gate.md` | `'shadow'` | yes | NO | `services/zoe-data/recall_gate.py` |
+| `ZOE_RECALL_GATE_TRACE` | str | `''` | - | `docs/knowledge/recall-gate.md` | `''` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
+| `ZOE_RECALL_GATE_TRACE_DAYS` | int | `7` | - | `docs/knowledge/recall-gate.md` | `7` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
 | `ZOE_RECALL_PRESENT_STATE_SHAPES` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_RELATIONSHIP_GRAPH_ENABLED` | str | `''` | - | `docs/knowledge/relationship-memory-flag-enable.md` | `''` | no | NO | `services/zoe-data/relationship_graph.py` |
 | `ZOE_RELAY_HOSTNAME` | str | `''` | - | `docs/knowledge/panel-relay-r1-box.md` | `''` | no | NO | `services/zoe-data/relay_ingress.py` |
