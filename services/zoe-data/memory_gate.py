@@ -658,12 +658,15 @@ def message_needs_emotional_recall(message: str) -> bool:
 #
 # Three idioms are NOT a feeling and were measured as false positives by the minor-affect cell
 # (scripts/perf/minor_affect_fp.py, fixture tests/fixtures/minor_affect_utterances.json, 2026-11-05):
-#   * "I'm afraid <clause>" - polite regret ("I'm afraid we're out of milk"); "afraid of / to / ." stays a feeling;
+#   * "I'm afraid <clause>" - polite regret about something settled ("I'm afraid we're out of milk", "I'm afraid I
+#     forgot"); a clause about what MAY happen ("I'm afraid I'll fail", "afraid my dad will die") and "afraid of / to /
+#     that / ." stay a feeling;
 #   * "I'm happy to <do something>" - willingness ("happy to drive"); "happy to be / see / hear ..." stays a feeling;
 #   * "down" as a place ("I was down the shops", "I got down from the tree"); "down the last / past / whole week"
 #     stays a feeling.
-_AFFECT_AFRAID = (r"afraid(?!\s+(?:i|i['’]m|we|we['’]re|you|it|it['’]s|the|they|there|so|not|this|these|"
-                  r"those|my|our|your)\b)")
+_AFFECT_AFRAID = (r"afraid(?!\s+(?:so|not)\b)"
+                  r"(?!\s+(?:i|we|you|it|he|she|the|they|there|this|these|those|my|our|your)\b"
+                  r"(?![^.!?,;]*(?:\b(?:will|might|may|could|would|going\s+to|gonna|won['’]?t)\b|['’]ll\b)))")
 _AFFECT_HAPPY = r"happy(?!\s+to\s+(?!(?:be|see|hear|have|know|get|finally|meet|say)\b))"
 _AFFECT_DOWN = (r"down(?!\s+(?:for|to|with|here|there|at|in|on|by|from|into|onto|off|under|below|stairs|"
                 r"the\s+(?!(?:last|past|whole|entire)\b))\b)")

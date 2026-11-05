@@ -82,6 +82,8 @@ def _rows(split=None):
 
 @pytest.mark.parametrize("text,label", [
     ("i'm afraid of the dark", "scared"), ("i'm afraid to go in there", "scared"), ("i'm afraid that it will hurt", "scared"),
+    ("i'm afraid my dad will die", "scared"), ("i'm afraid i'll fail the test", "scared"),
+    ("i'm afraid we won't make it", "scared"),
     ("i'm happy to be home", "happy"), ("i'm happy to see grandma", "happy"),
     ("i've been feeling down the last few days", "sad"), ("i was down the whole week", "sad"), ("i'm down about it", "sad"),
 ])
@@ -143,14 +145,12 @@ def test_b_the_affect_gate_refuses_every_guest_shape(svc, monkeypatch, mode, gue
     assert run(svc._affect_allowed(guest)) is False
 
 
-def test_b_the_affect_gate_still_keeps_a_child_and_an_adult_by_default(svc, monkeypatch):
-    _gate(monkeypatch, None)
-    assert run(svc._affect_allowed(MINOR)) is True and run(svc._affect_allowed(ME)) is True
-
-
 def test_control_b_a_sentinel_only_gate_lets_a_guest_principal_through(svc, monkeypatch):
-    """Break the fix: the gate's old predicate (sentinels only) allowed ``guest-<id>`` under the default household mode."""
+    """Break the fix: the gate's old predicate (sentinels only) allowed ``guest-<id>`` under the default household mode.
+    A child and an adult member are still kept by default."""
     from user_filters import GUEST_USERS
+
+    assert run(svc._affect_allowed(MINOR)) is True and run(svc._affect_allowed(ME)) is True
 
     monkeypatch.setattr(memory_service, "_is_unidentified", lambda u: (u or "").strip().lower() in GUEST_USERS)
     assert run(svc._affect_allowed("guest-3f9a1c")) is True
@@ -191,9 +191,8 @@ def _voice_felt(svc, who, verified):
 
 @pytest.mark.parametrize("who", [MINOR, ME])
 def test_b_an_unverified_voices_feeling_is_never_an_approved_row_on_the_member(svc, who):
-    """The PER-TURN voice lane: a guest talking at a panel bound to a child is attributed to the child with
-    ``speaker_verified=False``. The feeling may be held as a candidate the member (or a grown-up) confirms, but it is never an
-    approved, servable row about them."""
+    """PER-TURN voice lane: a guest at a child's panel is attributed to the child with ``speaker_verified=False``; the feeling
+    may be a candidate to confirm, never an approved, servable row about the child."""
     ref = _voice_felt(svc, who, False)
     assert ref is None or ref.metadata.get("status") != "approved", ref.metadata
     served = run(svc.load_for_prompt(who, limit=50))
@@ -212,8 +211,7 @@ DAY = [("i was so scared of the thunder last night", "m1", "2026-10-08T01:00:00+
 
 
 def _night_emotional_pass_reads(monkeypatch, rows=DAY):
-    """Run the NIGHTLY emotional pass over ``rows`` (the day's chat_messages, metadata last) and return what the model was
-    shown. The model call is faked; nothing is stored."""
+    """Run the NIGHTLY emotional pass over ``rows`` (chat_messages, metadata last); return what the (faked) model was shown."""
     import memory_digest as md
 
     seen: list[str] = []
@@ -229,18 +227,13 @@ def _night_emotional_pass_reads(monkeypatch, rows=DAY):
 
 
 def test_b_the_nightly_emotional_pass_never_reads_a_turn_the_speaker_gate_rejected(monkeypatch):
-    """The NIGHTLY lane re-reads the day's transcript and files ``emotional_moment`` rows as source ``digest`` (no per-turn
-    verdict reaches it). A turn the voice speaker gate rejected (``chat_messages.metadata.speaker_verified = false``: a guest or
-    a sibling at the child's panel) must not be what it reads - that stranger's feeling would become the child's."""
+    """The NIGHTLY lane files ``emotional_moment`` rows as ``digest`` with no per-turn verdict: a turn the speaker gate rejected
+    (a guest or sibling at the child's panel) must not be read, or that stranger's feeling becomes the child's."""
     transcript, shown = _night_emotional_pass_reads(monkeypatch)
     assert transcript.unverified == frozenset({"m2"})
     assert "thunder" in shown and "pancakes" in shown, "the member's own turns are still read"
     assert "best friend moved away" not in shown
-
-
-def test_b_a_day_of_only_rejected_turns_reads_nothing(monkeypatch):
-    _t, shown = _night_emotional_pass_reads(monkeypatch, rows=[DAY[1]])
-    assert shown == ""
+    assert _night_emotional_pass_reads(monkeypatch, rows=[DAY[1]])[1] == "", "a day of only rejected turns reads nothing"
 
 
 def test_control_b_without_the_filter_the_nightly_pass_reads_the_strangers_feeling(monkeypatch):
@@ -316,6 +309,8 @@ def test_c_one_call_corrects_a_minors_affect_row(env, monkeypatch):
     left = approved(env, OTHER)
     assert any("liked watching it" in t for t in left)
     assert not any("scared of the thunder last night" in t for t in left), "the old feeling is not served beside the fix"
+    rows = run(env.svc.list_by_status(user_id=OTHER, status="approved", limit=500))
+    assert not any(r.metadata.get("candidate_affect") == "scared" for r in rows), "nor in the twin that carried it"
 
 
 def test_c_nobody_else_can_forget_or_correct_a_minors_affect_row(env, monkeypatch):
@@ -326,24 +321,47 @@ def test_c_nobody_else_can_forget_or_correct_a_minors_affect_row(env, monkeypatc
     assert len(_affect_left(env)) == 2, "the child's rows are untouched"
 
 
-def test_c_a_guardian_forgets_or_corrects_one_affect_row_of_a_minor_in_one_call(env, monkeypatch):
-    """The admin review route (``POST /api/memories/{id}/review``, ``origin="admin"`` for another member's row) is the grown-up's
-    one step - a ``child`` role's own screen and voice forget are refused by design ("ask a grown-up")."""
-    a, b = _child(env, monkeypatch)
-    assert run(env.svc.review(a.id, decision="reject", actor=ME, origin="admin", note="guardian")) is not None
-    assert run(env.svc.get(a.id)).metadata["status"] == "rejected"
+def test_c_a_guardian_corrects_one_affect_row_of_a_minor_in_one_call(env, monkeypatch):
+    """A ``child`` role's own screen and voice forget/correct are refused by design ("ask a grown-up"): the admin edit is the
+    grown-up's one step to correct."""
+    _a, b = _child(env, monkeypatch)
     fixed = run(env.svc.review(b.id, decision="edit", edits="User watched the storm last night.", actor=ME, origin="admin"))
     assert fixed is not None and fixed.metadata.get("status") == "approved"
     assert run(env.svc.get(b.id)).metadata["status"] == "superseded"
 
 
-@pytest.mark.xfail(strict=True, reason="OPEN PROBLEM (docs/knowledge/open-problems.md, minor-affect cell c): the guardian's "
-                   "one call rejects ONE row; the twin the same utterance left keeps the feeling. The member's own forget "
-                   "(memory_space.forget_row) sweeps twins; the admin review route does not.")
-def test_c_a_guardians_one_call_also_clears_the_twin(env, monkeypatch):
+def _review_as(user, rid):
+    """``POST /api/memories/{id}/review`` (the real router) as ``user``, action reject."""
+    from test_memory_space import make_client
+
+    return make_client(lambda _r: dict(user)).post(f"/api/memories/{rid}/review", json={"action": "reject"})
+
+
+ADMIN = {"user_id": ME, "role": "admin", "username": "casey"}
+
+
+def test_c_a_guardians_one_call_forgets_the_row_and_its_twin(env, monkeypatch):
+    """The admin review route's reject of another member's approved row is ``memory_space.guardian_forget``: one call, the twin
+    carrying the feeling goes too, and every reject is the admin's (operator class), never the child's own word."""
+    a, b = _child(env, monkeypatch)
+    r = _review_as(ADMIN, a.id)
+    assert r.status_code == 200, r.text
+    assert _affect_left(env) == []
+    assert run(env.svc.get(b.id)).metadata["status"] == "rejected"
+    assert any(x.get("mem_id") == b.id and x.get("action") == "reject" for x in env.audit), "audited reject of the twin"
+
+
+def test_c_only_an_admin_takes_the_guardian_path(env, monkeypatch):
+    a, _b = _child(env, monkeypatch)
+    assert _review_as({"user_id": "demo_bar_00000009", "role": "user"}, a.id).status_code == 403
+    assert len(_affect_left(env)) == 2
+
+
+def test_control_c_the_old_single_row_reject_leaves_the_feeling_in_the_twin(env, monkeypatch):
+    """Break the fix: the plain per-row admin reject (the route before the guardian path) clears one row only."""
     a, _b = _child(env, monkeypatch)
     run(env.svc.review(a.id, decision="reject", actor=ME, origin="admin", note="guardian"))
-    assert _affect_left(env) == []
+    assert _affect_left(env) == ["User heard thunder last night."]
 
 
 def test_control_c_without_the_twin_sweep_the_feeling_survives_a_forget(env, monkeypatch):

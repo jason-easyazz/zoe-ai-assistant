@@ -3,117 +3,91 @@
   "dev": {
     "minor": {
       "neutral": [
-        "zoe what's the weather tomorrow", "can you play the dinosaur song", "um how many legs does a spider have",
-        "i got a gold star for my spelling today", "i'm going to my friend's house after school",
-        "i've been building a castle in the block game", "i was down at the park with the dog",
-        "i am nine and a half", "what's twelve times seven", "i got a new library book about sharks",
-        "i feel like pizza for dinner", "i'm low on lives in my game", "i'm down for playing tag",
-        "set a timer for ten minutes for my reading", "i got picked for the soccer team on saturday",
-        "how do you spell necessary", "i've been learning the recorder at school",
-        "i was at grandma's on the weekend", "tell me a joke about a penguin", "i'm in year four",
-        "i lost my tooth at lunch", "add chocolate milk to the shopping list", "i'm doing a project on volcanoes",
-        "i got my hair cut yesterday", "can we have tacos on friday", "i was the line leader today",
-        "i'm wearing my blue shoes", "i am drawing a cat with wings", "what time is swimming",
-        "i keep forgetting my hat at school", "i'm still on level three", "i got a splinter but mum got it out",
-        "i've been to the zoo two times", "i'm making slime", "i get the bus home on tuesdays",
-        "i feel like the movie was too long", "um i was wondering if dogs can see colours",
-        "i'm going down the slide", "i got down from the tree by myself",
+        "zoe what's the weather tomorrow", "can you play the dinosaur song", "um how many legs does a spider have", "i got a gold star for my spelling today",
+        "i'm going to my friend's house after school", "i've been building a castle in the block game", "i was down at the park with the dog",
+        "i am nine and a half", "what's twelve times seven", "i got a new library book about sharks", "i feel like pizza for dinner",
+        "i'm low on lives in my game", "i'm down for playing tag", "set a timer for ten minutes for my reading", "i got picked for the soccer team on saturday",
+        "how do you spell necessary", "i've been learning the recorder at school", "i was at grandma's on the weekend", "tell me a joke about a penguin",
+        "i'm in year four", "i lost my tooth at lunch", "add chocolate milk to the shopping list", "i'm doing a project on volcanoes",
+        "i got my hair cut yesterday", "can we have tacos on friday", "i was the line leader today", "i'm wearing my blue shoes",
+        "i am drawing a cat with wings", "what time is swimming", "i keep forgetting my hat at school", "i'm still on level three",
+        "i got a splinter but mum got it out", "i've been to the zoo two times", "i'm making slime", "i get the bus home on tuesdays",
+        "i feel like the movie was too long", "um i was wondering if dogs can see colours", "i'm going down the slide", "i got down from the tree by myself",
         "my brother has a lego set with a pirate ship"
       ],
       "hard_negative": [
-        "i'm afraid i forgot my homework", "i'm not worried about the test",
-        "my friend said she was sad because her fish died", "the dragon in my book was scared of mice",
-        "we watched a movie where the robot was lonely", "my sister is upset because she lost her bracelet",
-        "what does anxious mean", "the teacher said \"i'm so proud of everyone\"",
-        "can you play the happy birthday song", "i'm happy to set the table",
-        "in my story the girl gets lost and she is scared", "i was pretending to be a sad clown in the play",
-        "how do you spell excited", "the puppy looked lonely at the shelter",
-        "my friend thinks i'm grumpy but i'm not"
+        "i'm afraid i forgot my homework", "i'm not worried about the test", "my friend said she was sad because her fish died",
+        "the dragon in my book was scared of mice", "we watched a movie where the robot was lonely", "my sister is upset because she lost her bracelet",
+        "what does anxious mean", "the teacher said \"i'm so proud of everyone\"", "can you play the happy birthday song", "i'm happy to set the table",
+        "in my story the girl gets lost and she is scared", "i was pretending to be a sad clown in the play", "how do you spell excited",
+        "the puppy looked lonely at the shelter", "my friend thinks i'm grumpy but i'm not"
       ],
       "positive": [
-        "i'm really sad because nobody played with me at lunch", "i'm so excited for my birthday",
-        "i was scared of the thunder last night", "i feel lonely when everyone's busy",
-        "i'm nervous about the swimming carnival", "i'm proud of my drawing",
-        "i'm worried i'll get the spelling wrong", "i can't wait for the holidays",
-        "i got really upset when my tower fell down", "i'm a bit frustrated with my maths"
+        "i'm really sad because nobody played with me at lunch", "i'm so excited for my birthday", "i was scared of the thunder last night",
+        "i feel lonely when everyone's busy", "i'm nervous about the swimming carnival", "i'm proud of my drawing", "i'm worried i'll get the spelling wrong",
+        "i can't wait for the holidays", "i got really upset when my tower fell down", "i'm a bit frustrated with my maths"
       ]
     },
     "adult": {
       "neutral": [
-        "what's on the calendar tomorrow", "i'm picking up the kids at three", "i've been meaning to fix the gate",
-        "i was down the shops this morning", "remind me to call the plumber at nine", "i'm low on petrol",
-        "i feel like thai tonight", "i got the car serviced on monday", "i'm working from home on thursday",
-        "add dishwasher tablets to the list", "i was at the dentist for an hour",
-        "i'm under the house checking the pipes", "i've been running three times a week",
-        "play some quiet music in the kitchen", "i am heading out for half an hour"
+        "what's on the calendar tomorrow", "i'm picking up the kids at three", "i've been meaning to fix the gate", "i was down the shops this morning",
+        "remind me to call the plumber at nine", "i'm low on petrol", "i feel like thai tonight", "i got the car serviced on monday",
+        "i'm working from home on thursday", "add dishwasher tablets to the list", "i was at the dentist for an hour", "i'm under the house checking the pipes",
+        "i've been running three times a week", "play some quiet music in the kitchen", "i am heading out for half an hour"
       ],
       "hard_negative": [
-        "i'm afraid we're out of milk", "i'm not stressed about it at all",
-        "she said she's really anxious about the move", "i'm happy to drive on saturday",
+        "i'm afraid we're out of milk", "i'm not stressed about it at all", "she said she's really anxious about the move", "i'm happy to drive on saturday",
         "the article was about loneliness in older people", "remind me to send the kids a happy easter message"
       ],
       "positive": [
-        "honestly i'm pretty stressed about work this week", "i've been feeling really overwhelmed lately",
-        "i'm so relieved the results came back fine", "i'm exhausted after the long drive",
-        "i'm anxious about the interview on friday"
+        "honestly i'm pretty stressed about work this week", "i've been feeling really overwhelmed lately", "i'm so relieved the results came back fine",
+        "i'm exhausted after the long drive", "i'm anxious about the interview on friday"
       ]
     }
   },
   "held_out": {
     "minor": {
       "neutral": [
-        "zoe how far away is the moon", "i'm having cereal for breakfast", "i got a sticker from the doctor",
-        "i've been practising my cartwheels", "i was down by the creek catching tadpoles",
-        "i'm the goalie at lunchtime", "um what do koalas eat", "i got new pencils for school",
-        "i feel like playing outside", "i'm low on paper for my comic", "i keep my rocks in a shoebox",
-        "i'm going on an excursion to the museum", "i was reading under the blanket with a torch",
-        "play the song about the five little ducks", "i am ten on the fourth of june",
-        "i got to feed the class guinea pig", "i've been collecting leaves for science",
-        "i'm writing a letter to my cousin", "what rhymes with orange", "i got down the big hill on my scooter",
-        "i'm still in my pyjamas", "i was on the monkey bars all recess", "can you tell me a story about a fox",
-        "i have netball on wednesday", "i'm counting to a hundred in french", "i get pocket money on sundays",
-        "i feel like the bath is too cold", "i'm sharing a room with my brother this week",
-        "i was the first one to finish the puzzle", "um how do volcanoes make lava",
-        "i got a bit of paint on my shirt", "i'm going down to the basement to get my bike",
-        "i've been to the beach three times this summer", "i am building a fort with the couch cushions",
-        "i was sick on monday so i stayed home", "i'm learning to tie my shoelaces",
-        "what's the biggest animal in the world", "i'm on the blue team for sports day",
-        "i got my reader changed today", "i was down on the floor looking for my lego"
+        "zoe how far away is the moon", "i'm having cereal for breakfast", "i got a sticker from the doctor", "i've been practising my cartwheels",
+        "i was down by the creek catching tadpoles", "i'm the goalie at lunchtime", "um what do koalas eat", "i got new pencils for school",
+        "i feel like playing outside", "i'm low on paper for my comic", "i keep my rocks in a shoebox", "i'm going on an excursion to the museum",
+        "i was reading under the blanket with a torch", "play the song about the five little ducks", "i am ten on the fourth of june",
+        "i got to feed the class guinea pig", "i've been collecting leaves for science", "i'm writing a letter to my cousin", "what rhymes with orange",
+        "i got down the big hill on my scooter", "i'm still in my pyjamas", "i was on the monkey bars all recess", "can you tell me a story about a fox",
+        "i have netball on wednesday", "i'm counting to a hundred in french", "i get pocket money on sundays", "i feel like the bath is too cold",
+        "i'm sharing a room with my brother this week", "i was the first one to finish the puzzle", "um how do volcanoes make lava",
+        "i got a bit of paint on my shirt", "i'm going down to the basement to get my bike", "i've been to the beach three times this summer",
+        "i am building a fort with the couch cushions", "i was sick on monday so i stayed home", "i'm learning to tie my shoelaces",
+        "what's the biggest animal in the world", "i'm on the blue team for sports day", "i got my reader changed today",
+        "i was down on the floor looking for my lego"
       ],
       "hard_negative": [
-        "i'm afraid the cookies are all gone", "i'm not scared of spiders anymore",
-        "my friend told me she was lonely at her old school", "the bear in the cartoon was grumpy",
-        "my brother is stressed about his exams", "what does overwhelmed mean", "i'm happy to help with the dishes",
-        "can you play a sad song for my story", "in the game my character gets worried when it rains",
-        "the boy in the book was proud of his kite", "dad said he's exhausted from work",
-        "i drew a picture of a happy sun", "we learned a song called if you're happy and you know it",
+        "i'm afraid the cookies are all gone", "i'm not scared of spiders anymore", "my friend told me she was lonely at her old school",
+        "the bear in the cartoon was grumpy", "my brother is stressed about his exams", "what does overwhelmed mean", "i'm happy to help with the dishes",
+        "can you play a sad song for my story", "in the game my character gets worried when it rains", "the boy in the book was proud of his kite",
+        "dad said he's exhausted from work", "i drew a picture of a happy sun", "we learned a song called if you're happy and you know it",
         "i'm not upset i'm just thinking", "the kitten seemed nervous at the vet"
       ],
       "positive": [
-        "i'm scared of the dark when the light goes off", "i'm really happy because i made a new friend",
-        "i was so sad when the fish died", "i'm worried about the new school",
-        "i feel nervous about the test tomorrow", "i'm excited to see the fireworks",
-        "i'm upset that i can't go to the party", "i felt lonely at recess", "i'm proud i learned to swim",
-        "i'm frustrated because my brother broke my game"
+        "i'm scared of the dark when the light goes off", "i'm really happy because i made a new friend", "i was so sad when the fish died",
+        "i'm worried about the new school", "i feel nervous about the test tomorrow", "i'm excited to see the fireworks",
+        "i'm upset that i can't go to the party", "i felt lonely at recess", "i'm proud i learned to swim", "i'm frustrated because my brother broke my game"
       ]
     },
     "adult": {
       "neutral": [
-        "i'm taking the bins out", "i've been on hold with the bank for twenty minutes",
-        "i was down at the hardware store", "i feel like a walk after dinner", "i'm low on coffee pods",
-        "set an alarm for six thirty", "i got the quote for the fence", "i'm in the garage if anyone needs me",
-        "i am making a roast tonight", "i've been reading a book about bridges",
-        "i was out in the garden all afternoon", "i'm still waiting on the delivery", "turn the hallway light off",
-        "i get paid on the fifteenth", "i'm down for the barbecue on sunday"
+        "i'm taking the bins out", "i've been on hold with the bank for twenty minutes", "i was down at the hardware store", "i feel like a walk after dinner",
+        "i'm low on coffee pods", "set an alarm for six thirty", "i got the quote for the fence", "i'm in the garage if anyone needs me",
+        "i am making a roast tonight", "i've been reading a book about bridges", "i was out in the garden all afternoon", "i'm still waiting on the delivery",
+        "turn the hallway light off", "i get paid on the fifteenth", "i'm down for the barbecue on sunday"
       ],
       "hard_negative": [
-        "i'm afraid the meeting moved to four", "i'm not anxious about the flight",
-        "my colleague mentioned she's burnt out", "i'm happy to pick them up",
+        "i'm afraid the meeting moved to four", "i'm not anxious about the flight", "my colleague mentioned she's burnt out", "i'm happy to pick them up",
         "the podcast was about grief and recovery"
       ],
       "positive": [
-        "i'm really worried about my dad's surgery", "i've been feeling pretty low this week",
-        "i'm thrilled about the new job", "i'm drained after today", "i'm stressed about the renovation budget"
+        "i'm really worried about my dad's surgery", "i've been feeling pretty low this week", "i'm thrilled about the new job", "i'm drained after today",
+        "i'm stressed about the renovation budget"
       ]
     }
   }

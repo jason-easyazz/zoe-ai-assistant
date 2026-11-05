@@ -278,6 +278,36 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     return "forgotten"
 
 
+async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = None) -> str:
+    """An ADMIN forgets ONE approved row of ANOTHER member on their behalf - the grown-up's one step for a child, whose own
+    screen and voice forget are refused ("ask a grown-up"). The same steps as :func:`forget_row` (the row AND the twins one
+    utterance left, physical erase when on, the member's verbatim words), but every reject is the admin's
+    (``origin="admin"``, operator class), never the member's own. ``'forgotten'`` | ``'gone'`` (absent, not ``owner``'s, or
+    not approved). RAISES when a step could not finish; calling again finishes it. Minor-affect safety cell (c),
+    docs/governance/emotional-safety-note.md section 4.1: a feeling must not survive the guardian's forget in a twin."""
+    svc = svc or pa._svc_default()
+    rid = str(row_id or "").strip()
+    ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S) if rid else None
+    if ref is None or not pa._owns(ref.metadata or {}, owner):
+        return "gone"
+    if str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
+        return "gone"
+    twins = await pa.twins_of(owner, ref, svc=svc, strict=True)     # a failed lookup stops us BEFORE the forget
+    gone = []
+    for row in (ref, *twins):
+        if await svc.review(row.id, decision="reject", actor=actor, origin="admin", note="guardian_forget") is None:
+            raise RuntimeError("memory store refused the guardian's forget")
+        gone.append(row.id)
+    if hasattr(svc, "erase_rows"):
+        from memory_service import physical_erase_enabled
+
+        if physical_erase_enabled():
+            await svc.erase_rows(owner, gone, actor=actor, reason="forgotten by a guardian")
+    await pa._erase_words(owner, mp.Explained(seq=0, row_id=rid, ts=0.0, text=ref.text or ""), ref.text or "")
+    logger.info("MEMORY_SPACE_GUARDIAN_FORGET rows=%d", len(gone))
+    return "forgotten"
+
+
 async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: str = "", session_id: Optional[str] = None,
                       svc: Any = None) -> str:
     """Correct ONE of the caller's rows to ``new_text`` through the EXISTING correction path

@@ -1,38 +1,16 @@
 #!/usr/bin/env python3
-"""minor_affect_fp.py - safety cell (a) for affect about children: the false-positive rate of affect detection on
-speech-shaped utterances (owner decision 2026-11-03, docs/research/samantha-initiative-2026-11-03.md section 11 item 7;
-docs/governance/emotional-safety-note.md section 4).
+"""minor_affect_fp.py - minor-affect safety cell (a): false positives of affect detection on speech-shaped utterances
+(owner decision 2026-11-03; docs/governance/emotional-safety-note.md section 4.1). Offline: no network, service or database.
 
-Offline and reproducible: no network, no live service, no database.
+    python3 scripts/perf/minor_affect_fp.py [--json] [--corpus FILE]
 
-    python3 scripts/perf/minor_affect_fp.py                  # the table (repo fixture: invented, speech-shaped)
-    python3 scripts/perf/minor_affect_fp.py --json           # the same as JSON (counts and rates only)
-    python3 scripts/perf/minor_affect_fp.py --misses         # also list DEV misses (never held-out, never --corpus lines)
-    python3 scripts/perf/minor_affect_fp.py --corpus FILE    # an OPERATOR-held labelled corpus (same schema, kept off-repo)
-
-DETECTORS. Two deterministic detectors decide something about a feeling from what a person said:
-
-  * ``retained``  - ``memory_gate.extract_affect``: its label is STORED on the row (``candidate_affect``) by the per-turn digest,
-                    so a false positive is a feeling filed about a child that the child never had. This is the one the bar holds.
-  * ``cue``       - ``memory_gate.message_needs_emotional_recall``: a substring cue set that (a) decides when stored emotional rows
-                    are pulled into a reply and (b) inside ``memory_service.is_emotional_memory`` classifies a row as emotional by
-                    its text. Reported, not barred: it is a recall trigger built to over-fire, and its false positives on other
-                    people's feelings are recorded in docs/knowledge/open-problems.md.
-
-LABELS (fixture ``services/zoe-data/tests/fixtures/minor_affect_utterances.json``): ``neutral`` (no feeling of the speaker's own),
-``hard_negative`` (feeling words that are not the speaker's own feeling - idioms, someone else's feeling, negation, fiction,
-questions about a word), ``positive`` (the speaker's own feeling: the recall control - a detector that never fires cannot pass).
-A false positive is the detector firing on ``neutral`` or ``hard_negative``.
-
-THE BAR (cell a, provisional until real speech is measured): on the ``minor`` lines of EVERY split, the retained detector's
-false-positive rate is <= ``MAX_FP_RATE`` AND its recall on the positives is >= ``MIN_RECALL``. Exit 0 = pass, 1 = fail, 2 = error.
-
-HONEST LIMITS. The repo fixture is invented, speech-SHAPED text (lower case, fillers, no punctuation), not real speech: the
-decision asks for real (not acted) speech, which cannot live in a public repo. ``--corpus`` runs the same measurement over an
-operator-held file of real transcribed turns (same JSON schema), printing counts only. ``dev`` and ``held_out`` were written by
-one author in one sitting before any measurement; the idiom guards added to ``extract_affect`` were tuned on ``dev``, so
-``held_out`` is a check on the same author's phrasing, not a blind set. Pinned by
-``services/zoe-data/tests/test_minor_affect_safety_cells.py``.
+Detectors: ``retained`` = ``memory_gate.extract_affect`` (its label is STORED as ``candidate_affect``; the bar holds this one);
+``cue`` = ``memory_gate.message_needs_emotional_recall`` (recall trigger + ``is_emotional_memory``; reported, not barred).
+Labels: ``neutral`` / ``hard_negative`` (feeling words that are not the speaker's own) are negatives; ``positive`` is the recall
+control, so a never-firing detector cannot pass. Bar (provisional): on the ``minor`` lines of EVERY split, FP <= ``MAX_FP_RATE``
+and recall >= ``MIN_RECALL``; exit 0 pass / 1 fail / 2 error. Limits: the repo fixture is invented, speech-SHAPED text, not real
+speech; ``--corpus`` runs an operator-held real-speech file (same schema, kept off the repo, never printed). dev and held_out were
+written by one author before measuring; the idiom guards were tuned on dev, so held_out is not a blind set.
 """
 from __future__ import annotations
 
@@ -118,31 +96,26 @@ def measure(splits: dict[str, list[dict]]) -> dict:
     every = [r for rows in splits.values() for r in rows if r["speaker"] == "minor"]
     total = _cell(every, dets["retained"])
     reasons = []
-    if total["n_negative"] == 0 or total["n_positive"] == 0:
-        reasons.append("the corpus has no minor negatives or no minor positives: nothing can be claimed")
-    else:
-        if total["fp_rate"] > MAX_FP_RATE:
-            reasons.append(f"minor false-positive rate {total['fp_rate']:.1%} > {MAX_FP_RATE:.0%}")
-        if total["recall"] < MIN_RECALL:
-            reasons.append(f"minor recall {total['recall']:.1%} < {MIN_RECALL:.0%}")
+    # the bar holds on EVERY split, not only the pool: a strong dev split must not hide a held-out failure
+    for name, rows in splits.items():
+        c = _cell([r for r in rows if r["speaker"] == "minor"], dets["retained"])
+        if c["n_negative"] == 0 or c["n_positive"] == 0:
+            reasons.append(f"{name}: no minor negatives or no minor positives - nothing can be claimed")
+            continue
+        if c["fp_rate"] > MAX_FP_RATE:
+            reasons.append(f"{name}: minor false-positive rate {c['fp_rate']:.1%} > {MAX_FP_RATE:.0%}")
+        if c["recall"] < MIN_RECALL:
+            reasons.append(f"{name}: minor recall {c['recall']:.1%} < {MIN_RECALL:.0%}")
     out["minor_retained_all_splits"] = total
     out["status"] = "fail" if reasons else "pass"
     out["reasons"] = reasons
     return out
 
 
-def dev_misses(splits: dict[str, list[dict]]) -> list[str]:
-    fire = detectors()["retained"]
-    rows = splits.get("dev", [])
-    return [f"{r['label']:13s} {r['speaker']:5s} {r['text']}" for r in rows
-            if (r["label"] == "positive") != bool(fire(r["text"]))]
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Minor-affect safety cell (a): affect-detector false positives, offline.")
     ap.add_argument("--corpus", help="an operator-held labelled corpus (same schema); its lines are never printed")
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--misses", action="store_true", help="list DEV misses (repo fixture only)")
     args = ap.parse_args(argv)
     try:
         path = Path(args.corpus) if args.corpus else FIXTURE
@@ -169,9 +142,6 @@ def main(argv=None) -> int:
         for r in report["reasons"]:
             print(f"  - {r}")
         print("  (bar provisional: the repo corpus is invented; real speech is measured with --corpus)")
-    if args.misses and not args.corpus:
-        for line in dev_misses(splits):
-            print("DEV MISS", line)
     return 0 if report["status"] == "pass" else 1
 
 
