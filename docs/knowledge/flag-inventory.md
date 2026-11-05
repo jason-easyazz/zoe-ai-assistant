@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 815 prod flags; 230 read through `typed_env`.
+- 816 prod flags; 231 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-815 flags; 764 not documented in `.env.example`.
+816 flags; 765 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -614,6 +614,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PROACTIVE_SLOW_LOOP_S` | int | `300` | - | - | `'300'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | yes | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN_TRIGGERS` | str | `'morning_checkin'` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'morning_checkin'` | no | yes | `services/zoe-data/proactive/engine.py` |
+| `ZOE_PROBLEM_LOOP` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/authority-table.md` | `'off'` | yes | NO | `services/zoe-data/household_authority.py` |
 | `ZOE_PROVENANCE_PERSIST` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/reply_ledger.py` |
 | `ZOE_PROVISION_CODE_TTL_S` | int | `300` | - | `docs/architecture/panel-anywhere.md` | `'300'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
 | `ZOE_PROVISION_PICKUP_GRACE_S` | int | `120` | - | `services/zoe-data/routers/AGENTS.md` | `'120'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
