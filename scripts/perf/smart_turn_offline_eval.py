@@ -348,11 +348,23 @@ def load_path(name: str, path: Path) -> types.ModuleType:
     return mod
 
 
+class UnscoredClip(Exception):
+    """The VAD returned fewer hops than the audio owes: a clip is UNSCORED, never read as silence or as an early end of speech."""
+
+
+VAD_INCOMPLETE = [0]      # clips refused for a short hop sequence (per process; each batch records its own delta)
+
+
 def hop_probs_for(vad_mod: types.ModuleType, audio: np.ndarray) -> list[float]:
     vad = vad_mod.create_vad()
     if vad is None:
         raise RuntimeError("Silero VAD (voice_vad) unavailable — model file or onnxruntime missing")
-    return vad.process_hops(audio.astype(np.int16).tobytes())
+    probs = vad.process_hops(audio.astype(np.int16).tobytes())
+    # process_hops never raises: on an inference failure it stops and returns the completed PREFIX, which would read as
+    # "speech ended here" (and chunk_probs_from_hops would pad the rest with the last value). Short = unscored.
+    if len(probs) < len(audio) // HOP:
+        raise UnscoredClip(f"VAD returned {len(probs)} of {len(audio) // HOP} hops")
+    return probs
 
 
 def read_wav_mono16(path: Path) -> np.ndarray | None:
@@ -388,7 +400,16 @@ def auto_preroll(vad_mod, audio: np.ndarray, threshold: float) -> int:
     return FOLLOWUP_LOOKBACK_CHUNKS
 
 
-def evaluate_stream(mod, vad_mod, det, audio: np.ndarray, *, gt_threshold: float,
+def evaluate_stream(*args, **kw) -> dict[str, Any] | None:
+    """``_evaluate_stream``, with a clip whose VAD run came back short returned as None (unscored, counted in ``VAD_INCOMPLETE``)."""
+    try:
+        return _evaluate_stream(*args, **kw)
+    except UnscoredClip:
+        VAD_INCOMPLETE[0] += 1
+        return None
+
+
+def _evaluate_stream(mod, vad_mod, det, audio: np.ndarray, *, gt_threshold: float,
                     speech_threshold: float, policies: list[TurnPolicy], cap_max_ms: int,
                     first_ms_set: set[int], recheck_ms: int, long_pause_ms: int,
                     preroll_chunks: int = 0, insert_ms: int = 0,
@@ -645,7 +666,7 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     synth: dict[int, list[dict[str, Any]]] = {g: [] for g in gaps}
     st_times: list[float] = []
-    skipped = 0
+    skipped = vad_incomplete = 0
     for b0 in range(0, len(files), args.batch_size):
         part = args.work_dir / f"batch_{b0:05d}.json" if args.work_dir else None
         key = batch_key(files[b0:b0 + args.batch_size], b0, args.batch_size, args.synthetic_every)
@@ -659,6 +680,7 @@ def main() -> int:
                     return None
                 data = {"rows": [], "synth": {str(g): [] for g in gaps}, "st_ms": [], "skipped": 0,
                         "fingerprint": fingerprint, "slice": key}
+                inc0 = VAD_INCOMPLETE[0]
                 for i, path in enumerate(files[b0:b0 + args.batch_size], start=b0):
                     audio = read_wav_mono16(path)
                     r = None if audio is None else evaluate_stream(
@@ -672,6 +694,7 @@ def main() -> int:
                             s = evaluate_stream(mod, vad_mod, det, audio, insert_ms=g, **kw)
                             if s is not None:
                                 data["synth"][str(g)].append(s)
+                data["vad_incomplete"] = VAD_INCOMPLETE[0] - inc0
                 return data
             data = guarded(args.lock, args.min_mem_mb, f"batch {b0}", score_batch)
             if data is None:
@@ -684,11 +707,17 @@ def main() -> int:
             print(f"batch {b0}: {len(data['rows'])} scored, {data['skipped']} skipped", file=sys.stderr, flush=True)
         rows.extend(data["rows"])
         skipped += data["skipped"]
+        vad_incomplete += data.get("vad_incomplete", 0)
         st_times.extend(data["st_ms"])
         for g in gaps:
             synth[g].extend(data["synth"].get(str(g), []))
 
-    summary = {"corpus_clips": len(files), "skipped_no_speech_or_format": skipped,
+    if vad_incomplete:
+        print(f"WARNING: {vad_incomplete} clip(s) UNSCORED - the VAD returned fewer hops than the audio owes", file=sys.stderr)
+        if not rows:
+            print("every clip was unscored: the VAD cannot infer - refusing to report an empty run as a measurement", file=sys.stderr)
+            return 2
+    summary = {"corpus_clips": len(files), "skipped_no_speech_or_format": skipped, "unscored_vad_incomplete": vad_incomplete,
                "config": {k: (sorted(v) if isinstance(v, set) else v) for k, v in kw.items() if k != "policies"},
                "policies": [p.name for p in policies],
                "natural": aggregate(rows),

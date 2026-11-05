@@ -226,3 +226,32 @@ def test_cached_batch_is_bound_to_its_exact_slice(ev, tmp_path):
     part.write_text("{broken")
     assert ev.cached_batch(part, "F", key) is None
     assert "clip0" not in key
+
+
+def test_a_short_vad_hop_sequence_is_unscored_not_an_early_end_of_speech(ev):
+    """Codex #2280: process_hops never raises - on an inference failure it returns the completed prefix."""
+    audio = np.zeros(512 * 10, dtype=np.int16)
+
+    class _Vad:
+        def __init__(self, n):
+            self.n = n
+
+        def process_hops(self, _b):
+            return [0.9] * self.n
+
+    class _Mod:
+        n = 10
+
+        @classmethod
+        def create_vad(cls):
+            return _Vad(cls.n)
+
+    assert len(ev.hop_probs_for(_Mod, audio)) == 10                       # negative control: a complete run passes
+    _Mod.n = 4
+    with pytest.raises(ev.UnscoredClip):
+        ev.hop_probs_for(_Mod, audio)
+    before = ev.VAD_INCOMPLETE[0]
+    assert ev.evaluate_stream(None, _Mod, None, np.zeros(512 * 200, dtype=np.int16), gt_threshold=0.35, speech_threshold=0.35,
+                              policies=[], cap_max_ms=1000, first_ms_set=set(), recheck_ms=300, long_pause_ms=500,
+                              preroll_chunks=0) is None
+    assert ev.VAD_INCOMPLETE[0] == before + 1
