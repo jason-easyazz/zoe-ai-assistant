@@ -441,3 +441,43 @@ async def test_an_un_noted_packet_turn_is_never_traced(monkeypatch):
     await memories.memory_for_prompt(user_id=UID, message="How is Juniper getting on?", limit=12, _=None)
     await rg.drain()
     assert not _live().exists()
+
+
+@pytest.mark.parametrize("erase", [True, False])
+async def test_owner_words_noted_before_a_forget_are_not_traced_after_it(monkeypatch, erase):
+    """codex #2303: note_turn keeps the owner's words; a forget that completes before a later call of the same turn (a recall_memory
+    tool call) must keep those words out of the trace even when that call carries a fresh barrier reading."""
+    import local_text_logs as ltl
+
+    monkeypatch.setenv(tr.ENV, "1")
+    rg.note_turn(UID, "s", "How is Juniper getting on?")
+    if erase:
+        ltl._bump_epoch(+1)
+        ltl._bump_epoch(-1)
+    await rg.evaluate_packet(Svc([ref("zoe_demo_book0001", BOOKS)]), UID, "juniper", facts=[], hits=[], recent=None,
+                             presented=[], mood=False, session_id="s", trace_ep=rg.trace_epoch())
+    assert _live().exists() is (not erase)                  # negative control: no forget -> traced
+
+
+def test_a_busy_trace_lock_skips_the_write_without_waiting(monkeypatch):
+    import threading
+
+    monkeypatch.setenv(tr.ENV, "1")
+    held, release = threading.Event(), threading.Event()
+
+    def eraser():
+        with tr._LOCK:
+            held.set()
+            release.wait(5)
+
+    th = threading.Thread(target=eraser)
+    th.start()
+    held.wait(5)
+    try:
+        t0 = time.monotonic()
+        assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch()) is False
+        assert time.monotonic() - t0 < 0.1                  # did not block on the lock
+    finally:
+        release.set()
+        th.join(5)
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch()) is True   # negative control: lock free

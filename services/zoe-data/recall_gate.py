@@ -471,7 +471,7 @@ def _advance(uid: str, sid: str, message: str, now: float, *, noted: bool) -> Se
     same = cur is not None and cur[1] == h and now - cur[3] <= _TURN_FRESH_S
     if not same:
         sess.turn += 1
-    _CUR[key] = (key, h, message, now, noted)
+    _CUR[key] = (key, h, message, now, noted, trace_epoch() if noted else None)   # [5]: the trace barrier when these words were noted
     if len(_CUR) > 4 * _MAX_SESSIONS:
         for k in [k for k, v in _CUR.items() if now - v[3] > _SESSION_TTL_S]:
             _CUR.pop(k, None)
@@ -505,8 +505,11 @@ def _fresh_noted(key: tuple, now: float) -> bool:
     return cur is not None and bool(cur[4]) and now - cur[3] <= _TURN_FRESH_S and cur[0] in _SESSIONS
 
 
+_OWN_WORDS = object()      # _turn_context: the owner's words ARE the caller's message (nothing noted earlier to go stale)
+
+
 def _turn_context(uid: str, sid: Optional[str], message: str, now: float) -> Optional[tuple]:
-    """``(session, turn, owner_words, extra)`` for the conversation ``(uid, sid)`` - or None when the conversation cannot be told.
+    """``(session, turn, owner_words, extra, noted trace epoch | _OWN_WORDS)`` for the conversation ``(uid, sid)`` - or None when the conversation cannot be told.
 
     * ``sid`` given (the in-process caller knows its session: ``current_session()`` or an explicit argument): THAT conversation's
       fresh noted turn wins; with none, ``message`` IS the turn (a caller that never notes - each new message is a new turn).
@@ -524,9 +527,9 @@ def _turn_context(uid: str, sid: Optional[str], message: str, now: float) -> Opt
     if _fresh_noted(key, now):
         cur = _CUR[key]
         sess = _session(cur[0], now)
-        return sess, sess.turn, cur[2], (message if _text_hash(message) != cur[1] else "")
+        return sess, sess.turn, cur[2], (message if _text_hash(message) != cur[1] else ""), cur[5]
     sess = _advance(uid, sid, message[:512], now, noted=False)
-    return sess, sess.turn, message, ""
+    return sess, sess.turn, message, "", _OWN_WORDS
 
 
 def _auth_rank(meta: dict, text: str) -> int:
@@ -790,7 +793,9 @@ async def evaluate_packet(svc: Any, user_id: str, message: str, *, facts: list, 
         ctx = _turn_context(user_id, session_id, message, t)
         if ctx is None:
             return _skip("packet", "ambiguous_session")
-        sess, turn, owner, extra = ctx
+        sess, turn, owner, extra, noted_ep = ctx
+        if noted_ep is not _OWN_WORDS and noted_ep != trace_ep:
+            trace_ep = None        # the owner's words were noted before a forget that has since run: they are not traced
         if _off_record(user_id, owner):
             return _skip("packet", "off_record", turn)
         key = ("packet", turn, _text_hash(extra))
@@ -893,7 +898,9 @@ async def evaluate_hop(user_id: str, message: str, rows: list, hop_ids: list, ho
         ctx = _turn_context(user_id, session_id, message, t)
         if ctx is None:
             return _skip("hop", "ambiguous_session")
-        sess, turn, owner, extra = ctx
+        sess, turn, owner, extra, noted_ep = ctx
+        if noted_ep is not _OWN_WORDS and noted_ep != trace_ep:
+            trace_ep = None        # the owner's words were noted before a forget that has since run: they are not traced
         if _off_record(user_id, owner):
             return _skip("hop", "off_record", turn)
         key = ("hop", turn, _text_hash(extra))

@@ -151,9 +151,12 @@ def epoch() -> Optional[int]:
 
 
 def _append(line: str, now: float, ep: Optional[int] = None) -> bool:
-    """Append under the lock the erasers hold. Refused (False) while a forget runs, or when one ran since ``ep`` was captured: the
+    """Append under the lock the erasers hold, acquired WITHOUT waiting (the writer runs on the event loop; a busy lock = an erase in
+    progress = the line would be refused anyway). Refused (False) while a forget runs, or when one ran since ``ep`` was captured: the
     decision's words and rows may predate a forget that has already finished."""
-    with _LOCK:
+    if not _LOCK.acquire(blocking=False):      # an eraser holds it (disk work): skip, never stall the event loop waiting
+        return False
+    try:
         busy, cur = _erase_state()
         if busy or ep is None or cur != ep:
             return False
@@ -167,6 +170,8 @@ def _append(line: str, now: float, ep: Optional[int] = None) -> bool:
         finally:
             os.close(fd)
         return True
+    finally:
+        _LOCK.release()
 
 
 def _cut(s: Any, n: int) -> str:
