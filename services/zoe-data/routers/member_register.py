@@ -20,7 +20,15 @@ from auth import is_admin_role, require_signed_in
 from user_filters import GUEST_USERS, is_synthetic_user
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/member-register", tags=["member-register"])
+
+
+def _flag_on() -> None:
+    """Per-call flag: a process started with the flag on answers 404 the moment it is turned off."""
+    if not mr.enabled():
+        raise HTTPException(status_code=404, detail="not found")
+
+
+router = APIRouter(prefix="/api/member-register", tags=["member-register"], dependencies=[Depends(_flag_on)])
 
 
 def _target(user_id: str, user: dict) -> str:

@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 808 prod flags; 222 read through `typed_env`.
+- 810 prod flags; 224 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 2 registered flags with no reader in the scanned sources.
+- 0 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-808 flags; 757 not documented in `.env.example`.
+810 flags; 759 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -412,6 +412,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MCP_STRICT_USER_ID` | bool | `True` | - | `docs/research/zoe-abilities-connectors-2026-10.md` | `'true'` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_USER_ID` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_USER_ROLE` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/mcp_server.py` |
+| `ZOE_MEMBER_REGISTER` | str | `'off'` | `off`, `on` | `docs/knowledge/member-register.md` | `'off'` | yes | NO | `services/zoe-data/member_register.py` |
+| `ZOE_MEMBER_REGISTER_KIDS` | str | `'off'` | `off`, `on` | `docs/knowledge/member-register.md` | `'off'` | yes | NO | `services/zoe-data/member_register.py` |
 | `ZOE_MEMORIES_VOICE` | bool | `False` | - | `docs/knowledge/memories-voice.md` | `False` | yes | NO | `services/zoe-data/memories_voice.py` |
 | `ZOE_MEMORY_AUDIT_COLLECTION` | str | `'mempalace_audit'` | - | - | `'mempalace_audit'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_MEMORY_AUTHORITY` | str | `'enforce'` | `off`, `shadow`, `enforce` | `docs/knowledge/memory-authority.md` | `-` | no | NO | `services/zoe-data/memory_authority.py` |
@@ -1167,9 +1169,3 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZMB_ORT_THREADS` | `'2'` | no | NO | `scripts/perf/zmb/embed_shim.py` |
 | `ZMB_PROBE_NEEDLE` | `''` | no | NO | `scripts/perf/zmb/arms/mempalace_verbatim.py` |
 | `ZMB_REAL_HOME` | `dynamic` | no | NO | `scripts/perf/zmb/arms/mpa_palace.py` |
-
-## Registered but not read by any scanned source
-
-Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
-
-`ZOE_MEMBER_REGISTER`, `ZOE_MEMBER_REGISTER_KIDS`

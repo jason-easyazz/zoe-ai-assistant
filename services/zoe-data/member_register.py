@@ -154,7 +154,8 @@ def render(entries: list[Entry], now: Optional[datetime] = None) -> str:
         words = ENUM_KEYS[k].get(e.value, "") if e else ""
         if words:
             parts.append(words)
-    topics = sorted({e.value for e in live if e.key == "topic"})[:MAX_TOPICS]
+    # Re-validate on the way OUT: a row written by anything but ``set_entry`` (a manual insert, a future writer) must not carry text.
+    topics = sorted({e.value for e in live if e.key == "topic" and _TOPIC_RE.match(e.value)})[:MAX_TOPICS]
     if topics:
         parts.append(TOPICS_LEAD + ", ".join(topics))
     text = (LEAD + "; ".join(parts) + ".") if parts else ""

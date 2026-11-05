@@ -57,7 +57,10 @@ appends it to THAT turn's system prompt **after** the doctrines, persona and man
 Everything before it is the same bytes for every member (pinned through the real sidecar in the tests), so a member switch costs a
 re-prefill of the line's few tokens and the card, not the shared prefix. The wake warm carries the member's register line too
 (`_kv_warm_outbound`, `prefix_key`, `tests/test_first_turn_prefix_invariant.py`), so the first turn after a wake still matches.
-Wire 1 never gets the line; a typed `zoe-register:` first line is stripped.
+Wire 1 never gets the line; a typed `zoe-register:` first line is stripped, flag on or off, exactly as the persona and manner lines are (the
+seam is the only thing that may set a trusted envelope line; the cross-review's "flag-off byte identity" objection to this was declined
+for that reason). The wake warm renders the CURRENT register every time rather than replaying the member's last turn's line: the register
+is the one block a member edits or forgets between turns, and a forgotten entry must not reach even a throw-away warm.
 
 ## Routes (mounted only while the flag is on; absent = 404)
 

@@ -2194,7 +2194,7 @@ _LAST_TURN_MAX = 64
 
 def _leading_envelope_lines(message: str) -> "dict[str, str]":
     """The raw manner / persona envelope lines at the head of an outbound message ('' when absent)."""
-    out = {"manner": "", "persona": "", "register": ""}
+    out = {"manner": "", "persona": ""}
     rest = message or ""
     for _ in range(12):
         m = re.match(r"^ zoe-([a-z][a-z-]*):[^\n]*\n", rest)
@@ -2270,11 +2270,12 @@ async def _kv_warm_outbound(member: str) -> "tuple[str, str]":
     memo = _LAST_TURN.get(uid)
     if memo:
         manner_line, persona_line = memo.get("manner", ""), memo.get("persona", "")
-        register_line = memo.get("register", "")
     else:
         manner_line = _wrap_message_with_manner("", await _manner_context_block(uid, _KV_WARM_MESSAGE))
         persona_line = _wrap_message_with_persona("", await _persona_context_block(uid))
-        register_line = _wrap_message_with_register("", await _register_context_block(uid))
+    # The register is NEVER replayed from the memo: it is the one block a member edits or forgets between turns, so the warm renders
+    # the CURRENT line (a forgotten entry must not reach even a throw-away warm, and flag off must leave no line).
+    register_line = _wrap_message_with_register("", await _register_context_block(uid))
     msg = _wrap_message_with_identity(_KV_WARM_MESSAGE, uid)
     msg = persona_line + manner_line + register_line + msg
     msg = _wrap_message_with_replay(msg, True)

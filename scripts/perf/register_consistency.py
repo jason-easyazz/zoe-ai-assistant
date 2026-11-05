@@ -14,7 +14,8 @@ Checks (each a count a rater can reproduce):
   formality=formal   the reply has no contraction ("don't", "it's")
   humour=off         the reply has no joke marker ("haha", "lol", a laughing emoji)
   all                at most one question mark (the manner block's one-question rule)
-And two structural probes over the register LINE itself (``line_stable``, ``child_line_clean``).
+And two structural helpers over the register LINE itself (``line_stable``, ``child_line_clean``) for a harness that has the lines; the
+command line below runs the reply checks only.
 """
 from __future__ import annotations
 
