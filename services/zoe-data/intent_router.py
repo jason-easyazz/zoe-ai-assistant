@@ -2097,6 +2097,112 @@ async def _previous_assistant_message(user_id: str) -> Optional[str]:
         return None
 
 
+# --- A reply to Zoe's own pending ACTION offer ("want me to set a reminder for the pickup?" -> "yes please, 2:45") ---
+# The reply alone reads as a time question to the fast tiers ("It's 8:54 AM"). Bound only when ALL hold: flag on, the reply is
+# a short affirmative carrying a clock time, and Zoe's previous reply (a) is recent (TTL) and (b) ENDED in a reminder offer.
+_REMINDER_OFFER_RE = re.compile(r"\b(?:remind\s+you|(?:a|the|that)\s+(?:[\w']+\s+){0,3}reminder|reminder)\b", re.IGNORECASE)
+_OFFER_TIME_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?(?![\w:])", re.IGNORECASE)
+_OFFER_ACTION_FIRST = _OFFER_AFFIRM_FIRST | {"please"}
+_OFFER_ACTION_MAX_TOKENS = 12
+
+
+def offer_followup_binding_enabled() -> bool:
+    return str(os.environ.get("ZOE_OFFER_FOLLOWUP_BINDING") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _offer_followup_ttl_s() -> float:
+    try:
+        return max(30.0, float(os.environ.get("ZOE_OFFER_FOLLOWUP_TTL_S") or 600.0))
+    except ValueError:
+        return 600.0
+
+
+def _reminder_offer_title(previous: str) -> tuple[str, str]:
+    """(connector, title) read from Zoe's offer text; falls back to a neutral 'about that'."""
+    m = re.search(r"reminder\s+(for|to|about)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?.!]|\bat\b|\bso\b|$)", previous, re.IGNORECASE)
+    if m:
+        conn = "to" if m.group(1).lower() == "to" else "about"
+        return conn, m.group(2).strip()
+    m = re.search(r"\b(?:a|the)\s+([a-z' ]{2,30}?)\s+reminder\b", previous, re.IGNORECASE)
+    if m and m.group(1).strip().lower() not in {"quick", "simple", "gentle", "little"}:
+        return "about", m.group(1).strip()
+    return "about", "that"
+
+
+def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optional[float]) -> Optional[str]:
+    """Pure core: the rewritten 'remind me ...' sentence when ``text`` answers a pending reminder offer, else None.
+    ``previous`` is Zoe's last reply, ``age_s`` its age in seconds (unknown -> never binds)."""
+    if not previous or age_s is None or age_s > _offer_followup_ttl_s() or age_s < 0:
+        return None
+    tokens = [t for t in (text or "").strip().lower().split() if t]
+    if not tokens or len(tokens) > _OFFER_ACTION_MAX_TOKENS:
+        return None
+    if _OFFER_REPLY_PUNCT_RE.sub("", tokens[0]) not in _OFFER_ACTION_FIRST:
+        return None
+    if any(_OFFER_REPLY_PUNCT_RE.sub("", t) in ("no", "nope", "dont", "don't") for t in tokens[1:]):
+        return None
+    m = _OFFER_TIME_RE.search(" ".join(tokens[1:]))
+    if m is None or not (m.group(2) or m.group(3)):
+        return None  # a bare number is not a clock time
+    hour, minute, mer = int(m.group(1)), m.group(2), (m.group(3) or "").replace(".", "").lower()
+    if hour > 12 or (minute and int(minute) > 59) or (hour == 0 and not mer):
+        return None
+    try:
+        from conversation_cues import ends_with_offer
+
+        if not (ends_with_offer(previous) and _REMINDER_OFFER_RE.search(previous[-240:])):
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    if not mer and 1 <= hour <= 6:
+        mer = "pm"  # "2:45" to a pickup offer means the afternoon
+    when = f"{hour}:{minute}" if minute else str(hour)
+    conn, title = _reminder_offer_title(previous)
+    return f"remind me {conn} {title} at {when}{(' ' + mer) if mer else ''}"
+
+
+async def _previous_assistant_turn(user_id: str) -> tuple[Optional[str], Optional[float]]:
+    """(content, age in seconds) of the user's latest assistant message; (None, None) when unknown (fail closed)."""
+    try:
+        from datetime import datetime, timezone
+
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            cur = await db.execute(
+                "SELECT m.content, m.created_at FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id"
+                " WHERE s.user_id = ? AND m.role = 'assistant' ORDER BY m.created_at DESC LIMIT 1",
+                (user_id,),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None, None
+        ts = row["created_at"]
+        if not isinstance(ts, datetime):
+            ts = datetime.fromisoformat(str(ts).strip().replace(" ", "T", 1))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return str(row["content"] or "") or None, (datetime.now(timezone.utc) - ts).total_seconds()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_previous_assistant_turn: lookup failed: %s", type(exc).__name__)
+        return None, None
+
+
+async def reminder_offer_reply_text(text: str, user_id: str, previous: Optional[str] = None,
+                                    age_s: Optional[float] = None) -> Optional[str]:
+    """Flag-gated, cheap-shape-first wrapper: the rewritten reminder sentence, or None. Callers that already hold Zoe's last
+    reply (the voice session) pass ``previous``/``age_s``; otherwise the stored transcript is read."""
+    if not offer_followup_binding_enabled():
+        return None
+    tokens = [t for t in (text or "").strip().lower().split() if t]
+    if not tokens or len(tokens) > _OFFER_ACTION_MAX_TOKENS or \
+            _OFFER_REPLY_PUNCT_RE.sub("", tokens[0]) not in _OFFER_ACTION_FIRST:
+        return None
+    if previous is None:
+        previous, age_s = await _previous_assistant_turn(user_id)
+    return bind_reminder_offer_reply(text, previous, age_s)
+
+
 async def ack_answers_offer(intent: "Intent", user_id: str, previous: Optional[str] = None) -> bool:
     """True when ``intent`` is the canned "ok / sounds good" acknowledgement AND Zoe's previous reply ENDED in an offer
     (``conversation_cues.ends_with_offer``, lexicon data). Only the ``ack`` kind: "thanks" after an offer is a polite no.
@@ -2325,6 +2431,15 @@ async def detect_and_extract_intent(
         _offer_reply = None
     if _offer_reply is not None:
         return _offer_reply
+
+    try:
+        _rewritten = await reminder_offer_reply_text(text, user_id)
+    except Exception as _rem_exc:  # never let the offer path break routing
+        logger.debug("detect_and_extract_intent: reminder-offer binding failed: %s", _rem_exc)
+        _rewritten = None
+    if _rewritten:
+        logger.info("offer_followup: reply %s answers a pending reminder offer", _utt_tag(text or ""))
+        text = _rewritten
 
     started = time.perf_counter()
     intent = detect_intent(text, context=context, user_id=user_id)

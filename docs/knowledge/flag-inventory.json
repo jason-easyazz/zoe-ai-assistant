@@ -9555,6 +9555,30 @@
         },
         "typed_env": false
       },
+      "ZOE_OFFER_FOLLOWUP_BINDING": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": false
+      },
+      "ZOE_OFFER_FOLLOWUP_TTL_S": {
+        "defaults": [
+          "600.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": false
+      },
       "ZOE_OMI_AUDIO_DIR": {
         "defaults": [
           "''"
@@ -16918,7 +16942,7 @@
     "services/zoe-data/greploop_guard.py": 27,
     "services/zoe-data/greptile_client.py": 1,
     "services/zoe-data/identity_facts.py": 4,
-    "services/zoe-data/intent_router.py": 9,
+    "services/zoe-data/intent_router.py": 11,
     "services/zoe-data/kanban_phase_budget.py": 12,
     "services/zoe-data/live_store_guard.py": 2,
     "services/zoe-data/local_text_logs.py": 4,
