@@ -878,13 +878,37 @@ def _trivia_hedge_block(message: str, memory_block_present: bool) -> str:
 
 async def _identity_context_block(user_id: str) -> str:
     """``identity_facts.identity_block`` that can never fail the turn: "You are talking
-    to <name>, a member of this household in <city>, <region>, <country>." or ""."""
+    to <name>, a member of this household in <city>, <region>, <country>." or "" -
+    plus the household's conventions line (``_with_household_locale``)."""
     try:
         from identity_facts import identity_block
 
-        return await identity_block(user_id)
+        block = await identity_block(user_id)
     except Exception:  # noqa: BLE001 — a hint is optional; the turn is not
-        return ""
+        block = ""
+    return _with_household_locale(block)
+
+
+def _with_household_locale(identity_block: str) -> str:
+    """The household conventions line (units, oven heat, spelling, local words; ``household_locale``, ZOE_LOCALE_HINT,
+    default on) inside the ``[Today — household context]`` block: appended to the identity block when there is one, else a
+    block of its own, so EVERY turn carries it (a guest's and a child's too - it is about the house, not the person). Same
+    pinned block family, so older copies are elided from history; the sidecar's cached system prefix is untouched. No
+    country set / no data entry / flag off => the block is exactly what it was."""
+    try:
+        import household_locale
+        from identity_facts import BLOCK_CLOSE, BLOCK_OPEN
+
+        line = household_locale.prompt_line()
+    except Exception:  # noqa: BLE001
+        return identity_block
+    if not line:
+        return identity_block
+    if identity_block.endswith("\n" + BLOCK_CLOSE):
+        return f"{identity_block[: -len(BLOCK_CLOSE)]}{line}\n{BLOCK_CLOSE}"
+    if identity_block:  # an unexpected shape: leave it alone, add nothing
+        return identity_block
+    return f"{BLOCK_OPEN}\n{line}\n{BLOCK_CLOSE}"
 
 
 _OFFER_BLOCK_OPEN = "[PENDING CONTACT OFFER — do not mention this block]"
@@ -2500,7 +2524,13 @@ async def run_flue_brain_streaming(
         _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "restraint_mute")
         yield ack
         return
-    brief = await brief_first_turn.prepare(message, user_id, session_id)
+    # An emotional turn (emotional_turn_guard, ZOE_EMOTIONAL_TURN_GUARD=off|shadow|on, default off) carries nothing unrelated: no
+    # day brief (its weather / calendar would ride on the feeling; not prepared = not burned, the next turn gets it) and no
+    # contact-offer directive (the inner turn reads ``_emotional_hold``). The [RAISE] is kept: it is the person's own thread.
+    import emotional_turn_guard
+
+    emotional_hold = emotional_turn_guard.holds_extras(_spoken, user_id)
+    brief = None if emotional_hold else await brief_first_turn.prepare(message, user_id, session_id)
     raised = await proactive_selector.prepare(
         message, user_id, session_id, brief_active=brief is not None)
     # Roles are stated, never guessed (S22, ZOE_ROLE_GUESS_GUARD): the recall block fills this
@@ -2512,7 +2542,8 @@ async def run_flue_brain_streaming(
     code_reply: dict[str, bool] = {}
     turn = _run_flue_brain_streaming_turn(
         message, session_id, user_id, day_brief_block=brief.block if brief else "",
-        raise_block=raised.block if raised else "", _role_guard=role_guard, _code_reply=code_reply, **kwargs,
+        raise_block=raised.block if raised else "", _role_guard=role_guard, _code_reply=code_reply,
+        _emotional_hold=emotional_hold, **kwargs,
     )
     import role_guess_guard
 
@@ -2533,6 +2564,10 @@ async def run_flue_brain_streaming(
 
     if mirror_guard.mode() != "off":
         turn = mirror_guard.filter_stream(turn, _spoken)
+    # On an emotional turn, a later sentence carrying info the member did not ask for (weather, a contact offer, a "by the way"
+    # aside) is dropped (emotional_turn_guard, default off). off: nothing wraps the stream; a non-emotional turn is never held.
+    if emotional_turn_guard.mode() != "off":
+        turn = emotional_turn_guard.filter_stream(turn, _spoken, user_id)
     # A clean goodbye, a plain "are you there?", a silence never remarked on (clean_goodbye, ZOE_CLEAN_GOODBYE):
     # holds the reply ONLY on such a turn (a few anchored regexes on the user's words); every other turn streams
     # byte-identical. Outermost, so it cleans the text the owner would actually hear.
@@ -2715,6 +2750,9 @@ async def _run_flue_brain_streaming_turn(
     elif raise_block:  # one ask per turn, same evidence as continuity (S4 round 3)
         if _offer_inject_enabled():
             logger.info("SEAM_OFFER user=%s deferred=1 reason=raise", uid)
+    elif kwargs.get("_emotional_hold"):  # emotional_turn_guard: a feeling's reply carries no contact offer (the ager skips it too)
+        if _offer_inject_enabled():
+            logger.info("SEAM_OFFER user=%s deferred=1 reason=emotional", uid)
     elif "[pending-contact]" not in recall_block and not verify_block:
         offer_block = await _pending_offer_block(uid)
     # Risk cue (ZOE_RISK_CUES, default OFF): the problem in an adult's announced plan, named by code (risk_cues.py). Exclusive with every

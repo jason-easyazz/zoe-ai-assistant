@@ -197,8 +197,9 @@ model's mood, or an arousal score. The path:
   preferred to missing), tested with positive and negative fixtures, and replay-gated because it
   is on the voice path.
 
-Where the hand-off does not fire (a phrasing it does not know, or the flag off), Zoe's behaviour in these moments is the base model's and the existing
-"acknowledge it first" instruction, and **the persona layer does not reach any member who is a
+Where the hand-off does not fire (a phrasing it does not know, or the flag off), Zoe's behaviour in these moments is the base model's, the existing
+"acknowledge it first" instruction and the warmth doctrine (every member: no diagnosis, not a therapist, a possibly unsafe person is urged to
+reach someone they trust now - a trusted adult, for a child - or emergency help; [samantha-warmth.md](../knowledge/samantha-warmth.md)), and **the persona layer does not reach any member who is a
 minor** — that is the one place this note blocks a rollout, and it is enforced in code rather than
 left to the operator: `persona_layer.MINORS_GET_PERSONA` is `False`, so `block_for` returns `""` (the
 fixed persona stays) for a minor and the routes report `held_for_minor`. The constant is flipped only

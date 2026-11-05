@@ -171,7 +171,7 @@
         "unset"
       ],
       "sites": {
-        "services/zoe-data/distress_handoff.py": [
+        "services/zoe-data/household_locale.py": [
           "''"
         ],
         "services/zoe-data/identity_facts.py": [
@@ -258,6 +258,9 @@
       "sites": {
         "services/zoe-data/calendar_ical.py": [
           "'Australia/Perth'"
+        ],
+        "services/zoe-data/household_locale.py": [
+          "''"
         ],
         "services/zoe-data/identity_facts.py": [
           "''"
@@ -1030,6 +1033,7 @@
           "allowed": null,
           "default": "Australia/Perth",
           "divergent_ok": {
+            "services/zoe-data/household_locale.py": "'' = the zone was not set explicitly, so it is never a country hint for the conventions line",
             "services/zoe-data/identity_facts.py": "'' only feeds a region lookup; no timezone is asserted"
           },
           "note": "live .env: Australia/Perth",
@@ -4357,6 +4361,29 @@
         },
         "typed_env": false
       },
+      "ZOE_EMOTIONAL_TURN_GUARD": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/emotional_turn_guard.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/samantha-warmth.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_ENGINEERING_MODE": {
         "defaults": [
           "'interactive'"
@@ -5725,7 +5752,7 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/distress_handoff.py"
+          "services/zoe-data/household_locale.py"
         ],
         "registered": true,
         "spec": {
@@ -7243,6 +7270,44 @@
         },
         "typed_env": false
       },
+      "ZOE_LOCALE_FILE": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/household_locale.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/samantha-warmth.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_LOCALE_HINT": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/household_locale.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/samantha-warmth.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_LOCAL_BACKUP_ENCRYPT": {
         "defaults": [
           "''"
@@ -7332,7 +7397,7 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/distress_handoff.py",
+          "services/zoe-data/household_locale.py",
           "services/zoe-data/identity_facts.py",
           "services/zoe-data/routers/weather.py"
         ],
@@ -7342,6 +7407,7 @@
           "default": "AU",
           "divergent_ok": {
             "services/zoe-data/distress_handoff.py": "empty = no country-specific crisis line; the handoff stays neutral",
+            "services/zoe-data/household_locale.py": "empty = no conventions line from the country (the explicit-timezone fallback, else none); nothing is guessed",
             "services/zoe-data/identity_facts.py": "asserts no country unless configured"
           },
           "note": "live: unset (code default in force)",
@@ -15159,6 +15225,7 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/calendar_ical.py",
+          "services/zoe-data/household_locale.py",
           "services/zoe-data/identity_facts.py",
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/memory_digest.py",
@@ -15179,13 +15246,14 @@
           "allowed": null,
           "default": "Australia/Perth",
           "divergent_ok": {
+            "services/zoe-data/household_locale.py": "'' = the zone was not set explicitly, so it is never a country hint for the conventions line",
             "services/zoe-data/identity_facts.py": "'' only feeds a region lookup; no timezone is asserted"
           },
           "note": "live .env: Australia/Perth",
           "owner_doc": "docs/knowledge/synthetic-users-and-proactive-recipients.md",
           "type": "str"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_TOUCH_PANEL_OFFLINE_CACHE": {
         "defaults": [
