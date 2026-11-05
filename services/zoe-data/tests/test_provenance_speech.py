@@ -143,3 +143,10 @@ async def test_endpoint_flag_on_speaks_in_relevance_mode_only(svc, monkeypatch):
     monkeypatch.setenv(ps.ENV, "1")
     assert "(you told me on Tuesday)" in await _packet()
     assert "you told me" not in await _packet(mode="continuity")              # the continuity block is budgeted: untouched
+
+
+def test_a_confirmation_is_dated_from_the_review_not_the_capture():
+    iso = datetime.datetime.fromtimestamp(NOW - 1 * D, datetime.timezone.utc).isoformat()
+    meta = _m("user_confirmed", "review_ui", 30, reviewed_at=iso)          # captured 30 days ago, approved yesterday
+    assert ps.of(meta, now=NOW).clause() == "you confirmed it yesterday"
+    assert ps.of(_m("user_confirmed", "review_ui", 30, reviewed_at="not a date"), now=NOW).clause() == "you confirmed it"

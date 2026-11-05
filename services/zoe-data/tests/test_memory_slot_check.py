@@ -282,3 +282,15 @@ async def test_endpoint_flag_off_serves_both_and_on_holds_the_inference(svc, mon
     monkeypatch.setenv(sc.ENV, "on")
     on = await _packet()
     assert "[mem:keep0001]" in on and "[mem:held0001]" not in on
+
+
+def test_self_subject_keys_carry_the_row_owner():
+    a = sc.key_of({"user_id": "Ana"}, "User works at Acme")
+    b = sc.key_of({"user_id": "ben"}, "User works at Globex")
+    assert a == "self:ana" and b == "self:ben" and a != b
+    assert sc.key_of({"wing": "ana"}, "User works at Acme") == "self:ana"
+    rows = [{"id": "1", "text": "User works at Acme", "metadata": {"user_id": "ana", "added_ts": 1.0}},
+            {"id": "2", "text": "User works at Globex", "metadata": {"user_id": "ben", "added_ts": 2.0}}]
+    assert sc.conflicts(rows) == []                                          # two members' employers are not one contradiction
+    rows[1]["metadata"]["user_id"] = "ana"
+    assert len(sc.conflicts(rows)) == 1                                      # negative control: one owner, two employers

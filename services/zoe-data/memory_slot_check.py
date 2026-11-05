@@ -220,7 +220,10 @@ def key_of(meta: Optional[Mapping[str, Any]], text: str, slot: Optional[Slot] = 
     if s is None:
         return ""
     if s.subject in (_SELF_SUBJECTS if s.form == "verb" else _SELF_POSSESSORS):
-        return "self"
+        # "User ..." is about the ROW'S OWNER: family-visible rows of other members can sit in one packet, and their employers,
+        # cities or diets are different people's facts, never a contradiction of each other
+        owner = str((meta or {}).get("user_id") or (meta or {}).get("wing") or "").strip().lower()
+        return f"self:{owner}" if owner else "self"
     ent = str((meta or {}).get("entity_id") or "").strip()
     return f"person:{ent}" if ent else ""
 
@@ -310,7 +313,7 @@ def age(meta: Optional[Mapping[str, Any]], text: str, now: float) -> Age:
 
 @dataclass(frozen=True)
 class Conflict:
-    person: str        # "self" | "person:<entity_id>"
+    person: str        # "self" | "self:<owner>" | "person:<entity_id>"
     slot: str
     older_id: str
     newer_id: str

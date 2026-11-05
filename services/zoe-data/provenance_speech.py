@@ -89,6 +89,19 @@ def of(meta: Optional[Mapping[str, Any]], text: str = "", *, now: Optional[float
     day = ""
     if writer not in recall_evidence.BATCH_WRITERS:
         epoch = recall_evidence.row_epoch(meta)
+        if cls == ma.USER_CONFIRMED:
+            # "you confirmed it on <day>" dates the CONFIRMATION, not the original capture: approving a candidate captured weeks
+            # earlier stamps reviewed_at and keeps added_ts. A row with no review stamp was written as confirmed, so its capture
+            # time is its confirmation time; a stamp that will not parse says no day at all (never the older capture date).
+            stamp = str(meta.get("reviewed_at") or meta.get("confirmed_at") or "").strip()
+            if stamp:
+                try:
+                    import datetime as _dt
+
+                    d = _dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                    epoch = (d if d.tzinfo else d.replace(tzinfo=_dt.timezone.utc)).timestamp()
+                except (ValueError, OverflowError, OSError):
+                    epoch = None
         if epoch is not None:
             try:
                 import provenance_answers
