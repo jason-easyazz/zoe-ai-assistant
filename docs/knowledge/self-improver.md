@@ -57,15 +57,19 @@ runs an overlay (`ZOE_BRAIN_HARNESS_DIR` in the sidecar's `.env`), else the ship
 6. **Shadow-apply**: the winner is written to `~/.zoe/self-improver/nights/<night>/shadow/manner.md` and a
    `shadow-ledger.jsonl` row (`would_apply: true, applied: false`). Nothing else. The only write path (`safe_write`) refuses the
    repository, the live overlay root (`~/.zoe/brain-harness`, plus whatever `ZOE_BRAIN_HARNESS_DIR` names and its parent) and any
-   symlink out of the state directory; the tests prove a full winning night leaves the live overlay byte-identical.
+   planted symlink on the way (checked component by component before any directory is created; the bytes go to a fresh
+   `O_EXCL | O_NOFOLLOW` temp file, then an atomic rename); the tests prove a forced winning night leaves the live overlay
+   byte-identical. A regression phase the deadline cuts makes the night UNMEASURED, never a counted loss.
 
 **The fourteen-night stop rule (pre-registered).** Only live, measured nights count, in order; skipped, refused, unmeasured and
 dry-run nights never count. Ten wins in the first fourteen = Phase 1 passed. A fifth loss makes 10/14 impossible, so the loop
 stops early: `STOPPED` is written and every later live night refuses (exit 4). Resetting is an owner decision, never automatic.
 
-**The cost cap, in code.** Before EVERY reflection call the meter reserves the worst case (an estimated-high input + the full
-6000-token output allowance) and refuses the call if it would cross the night's token cap OR dollar cap; a re-run of the same
-night resumes the same meter. A model without a price in `PRICES_PER_MTOK` is refused. No server-side refusal fallback is sent
+**The cost cap, in code.** Before EVERY reflection call the meter takes the worst case - the prompt's UTF-8 byte count as the
+input bound (a byte-level token is at least one byte, so this can never under-count) plus the full 6000-token output allowance -
+refuses the call if that would cross the night's token cap OR dollar cap, and otherwise CHARGES it and writes it to
+`cost/<night>.json` before the request leaves; the billed usage replaces it afterwards. A process killed mid-call therefore keeps
+the worst case counted, and a re-run of the same night resumes the same meter. A model without a price in `PRICES_PER_MTOK` is refused. No server-side refusal fallback is sent
 (it would bill a second model outside the cap): a refusal yields no candidate and the night is unmeasured. Defaults: 40 000
 tokens and $0.40 a night (two calls normally cost a few cents on `claude-sonnet-5-5`).
 

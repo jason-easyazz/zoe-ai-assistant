@@ -360,25 +360,33 @@ def test_negative_control_without_the_guard_the_symlink_write_would_land_live(tm
     assert (si.LIVE_OVERLAY_ROOT / "current" / "manner.md").read_text() == "CANDIDATE"
 
 
+class _Winner(si.FakeEvaluator):
+    """Every candidate text scores high, the seed low: the night MUST be a win (so the shadow path is really exercised)."""
+
+    def _p(self, half, text):
+        return 0.15 if text == SEED else 0.97
+
+
 def test_a_winning_night_writes_only_its_shadow_and_never_the_live_overlay(tmp_path):
     home = tmp_path / "home"
     before = {p: p.read_bytes() for p in si.LIVE_OVERLAY_ROOT.rglob("*") if p.is_file()}
-    code, row = si.run_night(_cfg(), home=home, mode="dry-run", evaluator=si.FakeEvaluator(), reflector=si.OfflineReflector(),
+    code, row = si.run_night(_cfg(), home=home, mode="dry-run", evaluator=_Winner(), reflector=si.OfflineReflector(),
                              now=NIGHT, gate=lambda c, n: [], seed=(SEED, "t"), lock_path=None, window_lock_path=None, log=lambda *_: None)
-    assert code == si.EXIT_MEASURED and row["status"] == "measured"
+    assert code == si.EXIT_MEASURED and row["status"] == "measured" and row["win"] is True
     after = {p: p.read_bytes() for p in si.LIVE_OVERLAY_ROOT.rglob("*") if p.is_file()}
     assert after == before
     ledger = si.read_jsonl(home / "shadow-ledger.jsonl")
-    if row.get("win"):
-        assert ledger and all(x["applied"] is False and x["would_apply"] for x in ledger)
-        assert (home / "nights" / row["night"] / "shadow" / "manner.md").is_file()
+    assert ledger and all(x["applied"] is False and x["would_apply"] for x in ledger)
+    shadow = home / "nights" / row["night"] / "shadow" / "manner.md"
+    assert shadow.is_file() and shadow.read_text() != (si.LIVE_OVERLAY_ROOT / "current" / "manner.md").read_text()
     written = [p for p in tmp_path.rglob("*") if p.is_file() and not str(p).startswith(str(home)) and "live-overlay" not in str(p)]
     assert written == [], written
 
 
 def test_the_module_has_one_write_path_and_no_promotion_code():
     src = (REPO / "scripts" / "perf" / "self_improver.py").read_text(encoding="utf-8")
-    assert src.count(".write_text(") == 1 and "def safe_write" in src                 # only safe_write writes
+    assert ".write_text(" not in src and ".write_bytes(" not in src
+    assert src.count("os.write(") == 1 and src.count("os.O_NOFOLLOW") == 1 and "def safe_write" in src   # only safe_write writes
     assert "open(" not in src.replace("os.open(", "")                                # no other file handle
     for forbidden in ("harness-overlay.ts", "reloadHarness", "SIGHUP", "symlink_to", "os.symlink"):
         assert forbidden not in src
@@ -425,7 +433,7 @@ def _runner(nb_rc=1, vr="inactive", lander=1):
         if cmd[0] == "systemctl":
             return SimpleNamespace(returncode=0, stdout=vr + "\n")
         if cmd[0] == "pgrep":
-            return SimpleNamespace(returncode=0 if lander == 0 else 1, stdout="")
+            return SimpleNamespace(returncode=lander, stdout="")
         raise AssertionError(cmd)
     return run
 
@@ -510,6 +518,67 @@ def test_a_held_brain_window_lock_skips_the_night_and_a_free_one_is_taken_shared
     fd = os.open(win, os.O_RDWR)
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)                         # released after the night
     os.close(fd)
+
+
+def test_an_intermediate_symlink_is_refused_before_anything_is_created_through_it(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "nights").symlink_to(si.LIVE_OVERLAY_ROOT)
+    with pytest.raises(si.ShadowViolation):
+        si.safe_write(home, "nights/n1/shadow/manner.md", "CANDIDATE")
+    assert not (si.LIVE_OVERLAY_ROOT / "n1").exists()                     # no directory was created through the link
+    assert (si.LIVE_OVERLAY_ROOT / "current" / "manner.md").read_text() == "LIVE TEXT"
+
+
+def test_a_regression_phase_cut_short_is_unmeasured_never_a_counted_loss(tmp_path):
+    class Cut(_Winner):
+        def run(self, phase, arms, run_id, **kw):
+            rows = super().run(phase, arms, run_id, **kw)
+            return rows[: len(rows) // 3] if phase == "regress" else rows
+
+    home = tmp_path / "home"
+    code, row = si.run_night(_cfg(), home=home, mode="dry-run", evaluator=Cut(), reflector=si.OfflineReflector(), now=NIGHT,
+                             gate=lambda c, n: [], seed=(SEED, "t"), lock_path=None, window_lock_path=None, log=lambda *_: None)
+    assert code == si.EXIT_UNMEASURED and row["status"] == "unmeasured" and "regression phase incomplete" in row["reason"]
+    assert not si.read_jsonl(home / "shadow-ledger.jsonl")
+    assert si.stop_state([dict(row, mode="live")])["measured_nights"] == 0
+
+
+def test_a_call_killed_mid_flight_keeps_its_worst_case_reservation_on_disk(tmp_path, monkeypatch):
+    monkeypatch.setenv(si.KEY_ENV, SENTINEL)
+    home, cfg = tmp_path / "home", _cfg()
+    meter = si.CostMeter.for_night(home, "2026-11-06", cfg)
+
+    class Killed(BaseException):
+        pass
+
+    r, _ = _reflector(FakeClient([], raise_exc=Killed()), cfg, meter)
+    with pytest.raises(Killed):
+        r.propose(SEED, TRACES, [])
+    reloaded = si.CostMeter.for_night(home, "2026-11-06", cfg)            # what a re-run of the night would start from
+    assert reloaded.output_tokens == si.MAX_OUTPUT_TOKENS_PER_CALL and reloaded.input_tokens > 0
+
+
+def test_a_settled_call_counts_the_billed_usage_not_the_reservation(monkeypatch):
+    monkeypatch.setenv(si.KEY_ENV, SENTINEL)
+    r, meter = _reflector(FakeClient(["<manner>One.</manner>", "<manner>Two.</manner>"], usage=(900, 700)))
+    r.propose(SEED, TRACES, [])
+    assert (meter.input_tokens, meter.output_tokens, meter.calls) == (1800, 1400, 2)
+
+
+def test_the_input_bound_is_never_below_the_byte_count():
+    for text in ("plain ascii text", "émojis 😀😀 and ünïcödé", "x" * 5000):
+        assert si.estimate_tokens(text) >= len(text.encode("utf-8"))
+
+
+@pytest.mark.parametrize("runner, needle", [
+    (_runner(vr=""), "zoe-voice-regression is unknown"),
+    (_runner(vr="reloading"), "zoe-voice-regression is reloading"),
+    (_runner(lander=2), "cannot tell whether a voice landing runs"),
+])
+def test_unanswerable_gates_fail_closed(_clear_box, runner, needle):
+    why = si.live_gate(_cfg(), NIGHT, runner=runner, hq=_HQ())
+    assert any(needle in w for w in why), why
 
 
 def test_the_shipped_seed_passes_the_overlay_rules():

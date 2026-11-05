@@ -450,8 +450,8 @@ def test_a_variant_file_registers_a_text_and_refuses_bad_ones(tmp_path, monkeypa
     assert mab.register_variant_file(f"C1={good}") == "C1" and mab.variant_text("C1") == good.read_text()
     with pytest.raises(ValueError, match="already an arm"):
         mab.register_variant_file(f"C1={good}")                     # twice
-    for reserved in ("V0", "canary"):
-        with pytest.raises(ValueError, match="already an arm"):
+    for reserved in ("V0", "V1", "canary"):              # a built-in arm is refused (canary already by the name shape)
+        with pytest.raises(ValueError, match="already an arm|NAME=PATH"):
             mab.register_variant_file(f"{reserved}={good}")
     with pytest.raises(ValueError, match="NAME=PATH"):
         mab.register_variant_file(f"c2={good}")                     # name shape
@@ -484,3 +484,10 @@ def test_the_plan_export_carries_no_heldout_words():
         assert msg not in blob and gold not in blob
     assert not any("H-" in a for a in plan["dev_asks"])
     assert plan["split_digest"] == mab.SPLIT_DIGEST and plan["plans"]["heldout"]["flaw"]
+
+
+def test_the_plan_export_goes_to_stdout_and_writes_no_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert mab.main(["--export-plan"]) == 0
+    plan = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert plan["schema"] == "zoe.manner_ab.plan/1" and list(tmp_path.iterdir()) == []

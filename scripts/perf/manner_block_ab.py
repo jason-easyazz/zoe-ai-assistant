@@ -56,7 +56,7 @@ Usage:
     ... --phase report --variant V0         # the table + decide() from what is on disk (no brain)
     ... --variant-file C1=/path/manner.md --arms R0,C1 --cache-dir D --total-budget-s N   # a caller's own texts, rows + ledger
                                             # (scripts/perf/self_improver.py, the nightly manner.md improver)
-    ... --export-plan plan.json             # half roles, DEV asks' words, planned (ask, sample) ids; no brain (held-out: ids only)
+    ... --export-plan > plan.json           # half roles, DEV asks' words, planned (ask, sample) ids; no brain (held-out: ids only)
 Exit: 0 ran | 2 refused / error / selftest failed | 3 lock held / brain busy.
 """
 from __future__ import annotations
@@ -1039,8 +1039,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cache-dir", type=Path, default=None,
                     help="rows + the brain-time ledger here instead of ~/.cache/zoe/manner_ab (a caller's own budget)")
     ap.add_argument("--total-budget-s", type=float, default=None, help="the cumulative ledger's cap (default 1500 s)")
-    ap.add_argument("--export-plan", type=Path, default=None, metavar="PATH",
-                    help="write the half roles + the DEV asks' words as JSON (no brain, no flag) and exit")
+    ap.add_argument("--export-plan", action="store_true",
+                    help="print the half roles + the DEV asks' words + planned ids as JSON on stdout (no brain, no flag) and exit")
     args = ap.parse_args(argv)
     return run_cli(args)
 
@@ -1057,9 +1057,8 @@ def run_cli(args) -> int:
     except (OSError, ValueError) as exc:
         print(f"refused: {exc}")
         return 2
-    if args.export_plan is not None:
-        Path(args.export_plan).write_text(json.dumps(export_plan(sp.World(sp.BASE_SEED)), indent=1, sort_keys=True) + "\n",
-                                          encoding="utf-8")
+    if args.export_plan:                       # to STDOUT: this rig writes no file for it; the caller decides where it lands
+        sys.stdout.write(json.dumps(export_plan(sp.World(sp.BASE_SEED)), sort_keys=True) + "\n")
         return 0
     return selftest() if args.selftest else live(args)
 

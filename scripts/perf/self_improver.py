@@ -216,18 +216,40 @@ def safe_write(home: Path, rel: str | Path, text: str, *, extra_forbidden: Itera
     rel = Path(rel)
     if rel.is_absolute() or ".." in rel.parts:
         raise ShadowViolation(f"{rel}: not a plain relative path")
-    target = home_real / rel
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if not rel.parts:
+        raise ShadowViolation("empty path")
+    home_real.mkdir(parents=True, exist_ok=True)
+    # Walk the directories one component at a time WITHOUT following links: a planted symlink anywhere on the way is refused
+    # before anything is created through it.
+    cur = home_real
+    for part in rel.parts[:-1]:
+        cur = cur / part
+        if cur.is_symlink():
+            raise ShadowViolation(f"{rel}: {cur} is a symlink")
+        if not cur.exists():
+            cur.mkdir()
+        elif not cur.is_dir():
+            raise ShadowViolation(f"{rel}: {cur} is not a directory")
+    target = cur / rel.parts[-1]
     real_parent = Path(os.path.realpath(target.parent))
     if not _inside(real_parent, home_real):
         raise ShadowViolation(f"{rel}: resolves outside the state directory ({real_parent})")
     if target.is_symlink():
         raise ShadowViolation(f"{rel}: is a symlink")
     for root in forbidden_roots(extra_forbidden):
-        if _inside(Path(os.path.realpath(target.parent)), Path(os.path.realpath(root))):
+        if _inside(real_parent, Path(os.path.realpath(root))):
             raise ShadowViolation(f"{rel}: inside {root}")
-    tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    # A fresh, never-followed temp file (O_EXCL | O_NOFOLLOW: a planted ``*.tmp`` symlink cannot redirect the bytes), then an
+    # atomic rename onto the target (rename replaces a name, it never writes through one).
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        data = memoryview(text.encode("utf-8"))
+        while data:
+            data = data[os.write(fd, data):]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
     os.replace(tmp, target)
     return target
 
@@ -306,13 +328,22 @@ class CapExceeded(RuntimeError):
     pass
 
 
+#: per-message framing the API adds around the text (role markers, the system wrapper): generous on purpose
+FRAMING_TOKENS = 256
+
+
 def estimate_tokens(text: str) -> int:
-    """Deliberately HIGH (chars/3 + overhead): the reservation must never under-count what a call can cost."""
-    return math.ceil(len(text) / 3) + 200
+    """An UPPER BOUND on the input tokens of ``text``: a byte-level BPE token is at least one UTF-8 byte, so a text can never
+    be more tokens than it has bytes. Far above the real count (~4 chars a token in English) - deliberately: the reservation
+    must never under-count what a call can cost."""
+    return len(text.encode("utf-8")) + FRAMING_TOKENS
 
 
 @dataclasses.dataclass
 class CostMeter:
+    """Spend is charged at its WORST CASE before a call (``reserve``) and persisted at once, then settled to the billed usage
+    after it (``settle``). A process killed mid-call therefore leaves the reservation counted: a re-run of the night can never
+    spend the same allowance twice."""
     model: str
     max_tokens: int
     max_usd: float
@@ -320,6 +351,8 @@ class CostMeter:
     output_tokens: int = 0
     calls: int = 0
     refused: int = 0
+    home: Path | None = None
+    night: str | None = None
 
     def prices(self) -> tuple[float, float]:
         if self.model not in PRICES_PER_MTOK:
@@ -338,8 +371,9 @@ class CostMeter:
     def spent_usd(self) -> float:
         return self.usd(self.input_tokens, self.output_tokens)
 
-    def reserve(self, est_input: int, max_output: int) -> None:
-        """Refuse a call whose WORST case (all of max_output spent) would cross either cap. Called before every call."""
+    def reserve(self, est_input: int, max_output: int) -> tuple[int, int]:
+        """Refuse a call whose WORST case (the input bound + all of max_output) would cross either cap; otherwise CHARGE that
+        worst case now (and persist it) and return it for ``settle``. Called before every call."""
         if self.tokens + est_input + max_output > self.max_tokens:
             self.refused += 1
             raise CapExceeded(f"token cap: {self.tokens} spent + up to {est_input + max_output} > {self.max_tokens}")
@@ -347,11 +381,30 @@ class CostMeter:
             self.refused += 1
             raise CapExceeded(f"dollar cap: ${self.spent_usd:.4f} spent + up to ${self.usd(est_input, max_output):.4f} "
                               f"> ${self.max_usd:.2f}")
+        self.input_tokens += est_input
+        self.output_tokens += max_output
+        self.persist()
+        return est_input, max_output
+
+    def settle(self, reserved: tuple[int, int], inp: int | None, out: int | None) -> None:
+        """Replace a reservation with the billed usage. Unknown usage keeps the reservation; usage ABOVE it is counted in full."""
+        ri, ro = reserved
+        if inp is not None and out is not None:
+            self.input_tokens += int(inp) - ri
+            self.output_tokens += int(out) - ro
+        self.calls += 1
+        self.persist()
 
     def record(self, inp: int, out: int) -> None:
+        """Usage with no reservation (tests, an imported total)."""
         self.input_tokens += int(inp)
         self.output_tokens += int(out)
         self.calls += 1
+        self.persist()
+
+    def persist(self) -> None:
+        if self.home is not None and self.night is not None:
+            self.save(self.home, self.night)
 
     def public(self) -> dict:
         return {"model": self.model, "input_tokens": self.input_tokens, "output_tokens": self.output_tokens,
@@ -361,7 +414,7 @@ class CostMeter:
     @classmethod
     def for_night(cls, home: Path, night: str, cfg: Config) -> "CostMeter":
         """The night's meter, resumed from disk: a re-run of the same night shares ONE cap."""
-        m = cls(cfg.model, cfg.max_tokens_night, cfg.max_usd_night)
+        m = cls(cfg.model, cfg.max_tokens_night, cfg.max_usd_night, home=Path(home), night=night)
         path = Path(os.path.realpath(home)) / "cost" / f"{night}.json"
         if path.exists():
             d = json.loads(path.read_text(encoding="utf-8"))
@@ -525,14 +578,19 @@ class AnthropicReflector:
         return bool(typed_env().env_str(KEY_ENV, ""))
 
     def _call(self, client, system: str, user: str) -> str:
-        self.meter.reserve(estimate_tokens(system + user), MAX_OUTPUT_TOKENS_PER_CALL)    # BEFORE the call: hard cap
+        # BEFORE the call: the hard cap, charged at the worst case and persisted (a kill mid-call keeps it counted)
+        reserved = self.meter.reserve(estimate_tokens(system) + estimate_tokens(user), MAX_OUTPUT_TOKENS_PER_CALL)
         # No server-side refusal fallback on purpose: a fallback would bill a second model outside this cap. A refusal
         # simply yields no candidate.
-        resp = client.messages.create(model=self.cfg.model, max_tokens=MAX_OUTPUT_TOKENS_PER_CALL, system=system,
-                                      messages=[{"role": "user", "content": user}],
-                                      output_config={"effort": "medium"})
+        try:
+            resp = client.messages.create(model=self.cfg.model, max_tokens=MAX_OUTPUT_TOKENS_PER_CALL, system=system,
+                                          messages=[{"role": "user", "content": user}],
+                                          output_config={"effort": "medium"})
+        except Exception:
+            self.meter.settle(reserved, None, None)          # unknown whether it billed: the reservation stays counted
+            raise
         usage = getattr(resp, "usage", None)
-        self.meter.record(getattr(usage, "input_tokens", 0) or 0, getattr(usage, "output_tokens", 0) or 0)
+        self.meter.settle(reserved, getattr(usage, "input_tokens", None), getattr(usage, "output_tokens", None))
         meta = {"stop_reason": getattr(resp, "stop_reason", None),
                 "input_tokens": getattr(usage, "input_tokens", None), "output_tokens": getattr(usage, "output_tokens", None)}
         self.calls.append(meta)
@@ -590,12 +648,13 @@ class MannerAbEvaluator:
         self.cache = self.home / "ab"
 
     def plan(self) -> dict:
-        out = self.cache / "plan.json"
-        self.cache.mkdir(parents=True, exist_ok=True)
-        r = self.runner([self.python, str(AB_SCRIPT), "--export-plan", str(out)], capture_output=True, text=True, timeout=120)
-        if r.returncode != 0:
-            raise RuntimeError(f"manner_block_ab --export-plan failed (exit {r.returncode}): {(r.stdout + r.stderr)[-300:]}")
-        return json.loads(out.read_text(encoding="utf-8"))
+        r = self.runner([self.python, str(AB_SCRIPT), "--export-plan"], capture_output=True, text=True, timeout=120)
+        lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+        if r.returncode != 0 or not lines:
+            raise RuntimeError(f"manner_block_ab --export-plan failed (exit {r.returncode}): {((r.stdout or '') + (r.stderr or ''))[-300:]}")
+        plan = json.loads(lines[-1])
+        safe_write(self.home, "ab/plan.json", json.dumps(plan, indent=1, sort_keys=True) + "\n")
+        return plan
 
     def ledger_spent(self) -> float:
         try:
@@ -888,14 +947,17 @@ def live_gate(cfg: Config, now: dt.datetime, *, runner=subprocess.run, hq=None) 
         state = runner(["systemctl", "--user", "is-active", "zoe-voice-regression.service"], capture_output=True, text=True,
                        timeout=10).stdout.strip()
     except (OSError, subprocess.SubprocessError):
-        state = "unknown"
-    if state in ("active", "activating", "deactivating", "unknown"):
-        why.append(f"zoe-voice-regression is {state}")
+        state = ""
+    if state not in ("inactive", "failed"):              # ALLOW-list: only a unit that is provably not running clears
+        why.append(f"zoe-voice-regression is {state or 'unknown'} (only inactive / failed clear the gate)")
     try:
-        if runner(["pgrep", "-f", LANDER_PATTERN], capture_output=True, timeout=10).returncode == 0:
-            why.append("a voice landing (land_voice_pr.sh) is running")
+        rc = runner(["pgrep", "-f", LANDER_PATTERN], capture_output=True, timeout=10).returncode
     except (OSError, subprocess.SubprocessError):
-        why.append("cannot tell whether a voice landing runs (fail closed)")
+        rc = None
+    if rc == 0:
+        why.append("a voice landing (land_voice_pr.sh) is running")
+    elif rc != 1:                                          # pgrep: 1 = no match; anything else is an error, not "none"
+        why.append(f"cannot tell whether a voice landing runs (pgrep answered {rc!r}; fail closed)")
     if _held(BRAIN_WINDOW_LOCK, shared=True):
         why.append("the brain-window lock is held (a 12B window / training)")
     if mem_available_mb() < cfg.min_mem_mb:
@@ -1065,11 +1127,12 @@ def _night_body(cfg, home, night, mode, evaluator, reflector, seed_text, deadlin
                                  scale=cfg.regress_scale, budget_s=budget_left(), deadline_ts=deadline_ts)
         keys = [tuple(k) for k in plan["plans"]["regress"][str(cfg.regress_scale)]]
         cov = [p for a in ("R0", winner) if (p := coverage_problem(reg_rows, a, "regress", keys, plan["regression"]))]
-        if cov:
-            veto = [f"regression phase incomplete: {'; '.join(cov)}"]       # unconfirmed = not a win (conservative)
-        else:
-            veto = regression_veto(reg_rows, "R0", winner, plan["regression"], plan.get("violation_halves") or [])
-        row["regress"] = {"arms": ["R0", winner], "scale": cfg.regress_scale, "veto": veto}
+        row["regress"] = {"arms": ["R0", winner], "scale": cfg.regress_scale}
+        if cov:                       # an unconfirmed win is UNMEASURED - never a counted loss, never a win
+            row["regress"]["problems"] = cov
+            return finish(EXIT_UNMEASURED, "unmeasured", reason=f"regression phase incomplete: {'; '.join(cov)}"[:500])
+        veto = regression_veto(reg_rows, "R0", winner, plan["regression"], plan.get("violation_halves") or [])
+        row["regress"]["veto"] = veto
         win = not veto
 
     for c in cands:
