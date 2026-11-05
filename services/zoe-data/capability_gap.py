@@ -299,6 +299,32 @@ class Cluster:
     score: float = 0.0
 
 
+_REDACTED = re.compile(r"\[(?:NAME|NUMBER|EMAIL|URL)\]")
+REDACT_TWIN_S = 5.0          # the service-log line and the intent-misses.jsonl record of one miss are written back to back
+
+
+def _drop_redacted_twins(events: Iterable[Event]) -> list:
+    """``intent_router`` logs an utterance's hash but writes a PII-REDACTED copy ("[NAME]", "[EMAIL]") to intent-misses.jsonl, so
+    hashing the redacted text gives the same request a second identity and it would count twice. A redacted record that has an
+    un-redacted intent-miss twin written within ``REDACT_TWIN_S`` of it (one-to-one) is that same request: drop the redacted copy
+    and keep the twin (its hash can still be resolved to words from the local STT log). A redacted record with no twin is kept."""
+    evs = list(events)
+    twins = sorted((e for e in evs if e.source == SRC_INTENT_MISS and not (e.text and _REDACTED.search(e.text))), key=lambda e: e.ts)
+    used: set = set()
+    drop: set = set()
+    for r in sorted((e for e in evs if e.source == SRC_INTENT_MISS and e.text and _REDACTED.search(e.text)), key=lambda e: e.ts):
+        best = None
+        for i, t in enumerate(twins):
+            if i in used or abs(t.ts - r.ts) > REDACT_TWIN_S:
+                continue
+            if best is None or abs(t.ts - r.ts) < abs(twins[best].ts - r.ts):
+                best = i
+        if best is not None:
+            used.add(best)
+            drop.add(id(r))
+    return [e for e in evs if id(e) not in drop]
+
+
 def dedupe(events: Iterable[Event]) -> list:
     """One event per (utterance hash, member, day): a replayed or repeated utterance is one request. Hash-less events collapse per burst.
 
@@ -306,7 +332,7 @@ def dedupe(events: Iterable[Event]) -> list:
     best: dict = {}
     out = []
     last: dict = {}
-    for ev in sorted(events, key=lambda e: (e.ts, e.source, e.member or "", e.note)):
+    for ev in sorted(_drop_redacted_twins(events), key=lambda e: (e.ts, e.source, e.member or "", e.note)):
         if not ev.utt:
             k = (ev.source, ev.member, ev.area, ev.note)
             if ev.ts - last.get(k, -1e18) > BURST_S:      # a burst of the same signal is one incident (probe / replay runs)

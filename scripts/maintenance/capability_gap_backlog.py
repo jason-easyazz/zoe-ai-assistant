@@ -38,11 +38,12 @@ DEFAULT_STT = HOME / ".zoe-voice" / "voice_stt.jsonl"
 
 
 def _lines(path: str):
+    """The file's lines, or ``None`` when it could not be opened/read (a directory, a permission error): "exists" is not "read"."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            yield from fh
+            return fh.readlines()
     except OSError:
-        return
+        return None
 
 
 def _segments(base: Path) -> list:
@@ -53,41 +54,48 @@ def _segments(base: Path) -> list:
 
 
 def collect(app_log: Path, shadow: Path, misses: Path, stt: Path) -> tuple:
-    """(events, resolver, notes). Missing sources are reported in notes, not fatal."""
+    """(events, resolver, notes, readable). Missing sources are reported in notes, not fatal. ``readable`` counts sources
+    actually OPENED and read - an existing but unreadable file is a failure note, not a source."""
     events, notes, readable = [], [], 0
+
+    def read(path: str, label: str, counts: bool = True):
+        nonlocal readable
+        lines = _lines(path)
+        if lines is None:
+            notes.append(f"{label}: could not be read (unreadable) - skipped")
+            return []
+        readable += 1 if counts else 0          # the STT log only resolves hashes: it is not an event source
+        return lines
+
     for seg in _segments(app_log):
         n0 = len(events)
-        for line in _lines(seg):
+        for line in read(seg, f"service log {os.path.basename(seg)}"):
             if "intent_miss" in line or "STRUGGLE " in line or "WRITE_CLAIM" in line or "EXPERT_" in line or "no extractor" in line:
                 ev = cg.parse_log_line(line)
                 if ev:
                     events.append(ev)
-        readable += 1
         notes.append(f"service log {os.path.basename(seg)}: {len(events) - n0} events")
     for seg in _segments(shadow):
         n0 = len(events)
-        for line in _lines(seg):
+        for line in read(seg, f"router shadow {os.path.basename(seg)}"):
             try:
                 ev = cg.parse_shadow_record(json.loads(line))
             except ValueError:
                 continue
             if ev:
                 events.append(ev)
-        readable += 1
         notes.append(f"router shadow {os.path.basename(seg)}: {len(events) - n0} events")
     n0 = len(events)
-    for line in _lines(str(misses)):
+    for line in (read(str(misses), "intent-misses.jsonl") if misses.exists() else []):
         try:
             ev = cg.parse_miss_record(json.loads(line))
         except ValueError:
             continue
         if ev:
             events.append(ev)
-    if misses.exists():
-        readable += 1
     notes.append(f"intent-misses.jsonl: {len(events) - n0} events")
     transcripts = []
-    for line in _lines(str(stt)):
+    for line in (read(str(stt), "voice_stt.jsonl", counts=False) if stt.exists() else []):
         try:
             t = json.loads(line).get("transcript")
         except (ValueError, AttributeError):

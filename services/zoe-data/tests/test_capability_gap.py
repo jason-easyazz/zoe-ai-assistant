@@ -307,3 +307,31 @@ def test_every_non_household_class_is_excluded_at_each_input_boundary():
                                    "traffic": "household"}) is not None
     assert cg.parse_miss_record({"text": "Open the pod bay doors", "ts": NOW, "traffic_class": "household"}) is not None
     assert cg.parse_miss_record({"text": "Open the pod bay doors", "ts": NOW}) is not None
+
+
+def test_script_exit_2_when_every_existing_source_is_unreadable(tmp_path):
+    """Codex #2294: a directory passed as --app-log exists but cannot be read; it must not count as a source."""
+    sc = _script()
+    missing = tmp_path / "missing"
+    d = tmp_path / "adir"
+    d.mkdir()
+    assert sc.main(["--app-log", str(d), "--shadow-log", str(missing), "--misses", str(missing), "--stt-log", str(missing),
+                    "--out", str(tmp_path / "o.md")]) == 2
+    assert not (tmp_path / "o.md").exists()
+    ok = tmp_path / "app.log"
+    ok.write_text(L(datetime.now().timestamp() - 60, "intent_router: intent_miss: Add pancakes to the list") + "\n")
+    assert sc.main(["--app-log", str(ok), "--shadow-log", str(missing), "--misses", str(d), "--stt-log", str(missing),
+                    "--out", str(tmp_path / "o2.md")]) == 0                      # negative control: one readable source is enough
+
+
+def test_a_redacted_miss_record_and_its_log_line_are_one_request():
+    """Codex #2294: the log line carries the original hash, intent-misses.jsonl a [NAME]-redacted copy; they are one miss."""
+    log = cg.Event(NOW - DAY, cg.SRC_INTENT_MISS, None, utt=cg.utterance_hash("send a message to Ada Lovelace"))
+    red = cg.Event(NOW - DAY + 1.5, cg.SRC_INTENT_MISS, None, text="send a message to [NAME]", utt=cg.utterance_hash("send a message to [NAME]"))
+    kept = cg.dedupe([log, red])
+    assert len(kept) == 1 and kept[0] is log
+    ranked = cg.cluster_events([log, red], now=NOW, days=14, resolver={cg.utterance_hash("send a message to Ada Lovelace"): "send a message to Ada Lovelace"})
+    assert sum(c.count for c in ranked) == 1
+    far = cg.Event(NOW - DAY + 600, cg.SRC_INTENT_MISS, None, text="send a message to [NAME]", utt=cg.utterance_hash("send a message to [NAME]"))
+    assert len(cg.dedupe([log, far])) == 2                   # negative control: a redacted record with no nearby twin still counts
+    assert len(cg.dedupe([red])) == 1
