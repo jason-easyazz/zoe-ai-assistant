@@ -812,3 +812,25 @@ def test_offline_compare_enforces_the_declared_override(tmp_path):
     assert br.main(["compare", "--control", str(ctl), "--candidate", str(ok), "--admissible"], log=quiet) == 0
     for bad in (ignored, undeclared):
         assert br.main(["compare", "--control", str(ctl), "--candidate", str(bad), "--admissible"], log=quiet) == 2
+
+
+def test_offline_compare_of_saved_aggregates_with_custom_labels_still_enforces_the_declared_override(tmp_path):
+    """Codex #2285: a saved aggregate keeps the label it was scored under (`score --label flag_on`, default `run`); the declared
+    override is looked up by that label, so a custom label must not fall through to "nothing declared"."""
+    quiet = lambda *_: None  # noqa: E731
+
+    def saved(name: str, label: str, recorded: dict, declared: dict) -> Path:
+        agg = br.aggregate([{**env_run(None), "scratch": {"arm_env": recorded}} for _ in range(3)], k=3, label=label)
+        agg["arm_identity"] = {"arm_env": declared}
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(agg))
+        return path
+
+    ctl = saved("ctl", "baseline", {}, {})
+    for label in ("flag_on", "run", "baseline"):          # "baseline" = the same label as the control's
+        ok = saved(f"ok-{label}", label, FLAG, FLAG)
+        ignored = saved(f"ignored-{label}", label, {}, FLAG)             # declared the flag, the run recorded none
+        undeclared = saved(f"undeclared-{label}", label, FLAG, {})       # recorded an override nobody declared
+        assert br.main(["compare", "--control", str(ctl), "--candidate", str(ok), "--admissible"], log=quiet) == 0, label
+        for bad in (ignored, undeclared):
+            assert br.main(["compare", "--control", str(ctl), "--candidate", str(bad), "--admissible"], log=quiet) == 2, label

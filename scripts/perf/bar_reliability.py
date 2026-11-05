@@ -834,8 +834,13 @@ def saved_declared_arm_env(path: Path, agg: dict[str, Any]) -> dict[str, str]:
 def _cmd_compare(args, log) -> int:
     control = as_aggregate(args.control, k=args.k, label="control")
     candidate = as_aggregate(args.candidate, k=args.k, label="candidate")
-    declared = {"control": saved_declared_arm_env(args.control, control),
-                "candidate": saved_declared_arm_env(args.candidate, candidate)}
+    # ``compare`` looks a declaration up by the aggregate's OWN label, and a saved aggregate keeps the label it was scored under
+    # ("run", "flag_on", ...): key the declarations by those labels, so a custom label can never fall through to ``{}`` and pass an
+    # undeclared / unrecorded override. Two arms that share a label cannot be told apart by it: relabel them by role.
+    if control.get("label") == candidate.get("label"):
+        control, candidate = {**control, "label": "control"}, {**candidate, "label": "candidate"}
+    declared = {control.get("label"): saved_declared_arm_env(args.control, control),
+                candidate.get("label"): saved_declared_arm_env(args.candidate, candidate)}
     cmp = compare(control, candidate, declared=declared)
     if args.out:
         write_json(args.out, cmp)
