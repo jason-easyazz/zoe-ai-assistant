@@ -382,7 +382,16 @@ async def edit(db, curator: Account, member_id: str, row_id: str, text: str, *, 
 async def _rejected_curated(pol: Policy, row_id: str, svc: Any) -> Any:
     """A curated row already rejected by an earlier forget whose physical erase did not finish (retryable, never stranded)."""
     for ref in await _all_rows(_svc(svc), pol.member.user_id, "rejected"):
-        if ref.id == str(row_id or "") and _is_curated(ref.metadata or dict(), pol.member.user_id):
+        md = ref.metadata or dict()
+        if ref.id == str(row_id or "") and _is_curated(md, pol.member.user_id):
+            # rejection alone does not prove a curator forget was interrupted: re-apply what ``curated_rows`` applies NOW - the
+            # category must still be allowed, and an adult's released (opted-out) note is theirs, not the curator's
+            import memory_authority as auth
+
+            if pol.member.kind == "adult" and md.get("authority_class") != auth.CURATED:
+                return None
+            if str(md.get("curated_category") or "other") not in pol.allowed:
+                return None
             return ref
     return None
 

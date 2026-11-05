@@ -316,6 +316,38 @@ def _curated_teacher(env):
     return rows_of(env, KID)[0].id
 
 
+def test_a_child_cannot_edit_an_unrelated_row_into_a_contradiction_of_a_curated_row(env, monkeypatch):
+    """Codex #2158 P1: editing an ordinary approved row (no contradicts_id) skipped the protected-conflict scan ingest runs."""
+    rid = _curated_teacher(env)
+    other = run(env.svc.ingest("User likes dinosaurs.", user_id=KID, source="chat_regex", status="approved"))
+    assert other.metadata["status"] == "approved"
+    assert run(env.svc.review(other.id, decision="edit", edits="User's teacher is Mr Brown.", actor=KID)) is None
+    assert env.col.rows[other.id][1]["status"] == "approved" and env.col.rows[rid][1]["status"] == "approved"
+    assert "Brown" not in " ".join(r.text for r in rows_of(env, KID))                   # nothing contradicting was published
+    # controls: an edit that contradicts nothing still applies; with the authority wall off the contradiction goes through
+    assert run(env.svc.review(other.id, decision="edit", edits="User likes drawing.", actor=KID)) is not None
+    monkeypatch.setenv("ZOE_MEMORY_AUTHORITY", "off")
+    assert run(env.svc.review(other.id, decision="edit", edits="User's teacher is Mr Brown.", actor=KID)) is not None
+
+
+def test_a_released_adult_note_rejected_by_the_adult_cannot_be_forgotten_by_a_curator(env):
+    """Codex #2158 P1: the rejected-row retry fallback ignored the current category / released authority."""
+    as_(env, ADULT, "user").put("/api/memories/curation/me/routines", json=dict(on=True), headers=H)
+    as_(env, ADULT, "user").put("/api/memories/curation/me/likes", json=dict(on=True), headers=H)
+    assert curate(env, "Wren's bins go out on Monday night", "routines", member=ADULT).status_code == 200
+    (row,) = rows_of(env, ADULT)
+    out = as_(env, ADULT, "user").put("/api/memories/curation/me/routines", json=dict(on=False), headers=H)  # releases the note; likes stays on
+    assert out.json()["rows"] == 1, out.text
+    (row,) = rows_of(env, ADULT)
+    assert row.metadata["authority_basis"] == "curated_released", row.metadata
+    assert run(env.svc.review(row.id, decision="reject", actor=ADULT)) is not None          # the adult rejects it themself
+    assert env.col.rows[row.id][1]["status"] == "rejected"
+    url = f"/api/memories/curation/members/{ADULT}/rows/{row.id}/forget"
+    assert as_(env, PARENT, "admin").post(url, headers=H).status_code == 404
+    assert not env.erased
+    # control: a still-protected curated note rejected by an interrupted forget stays retryable (test_a_forget_whose_erase_failed_is_retryable)
+
+
 def test_a_child_passing_remark_is_held_not_written_over_the_curated_row(env):
     rid = _curated_teacher(env)
     ref = run(env.svc.ingest("User's teacher is Mr Brown.", user_id=KID, source="chat_regex", status="approved"))
