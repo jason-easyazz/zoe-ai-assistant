@@ -26,8 +26,8 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 812 prod flags; 225 read through `typed_env`.
-- 758 legacy direct read sites in prod code across 226 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
+- 813 prod flags; 227 read through `typed_env`.
+- 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-812 flags; 761 not documented in `.env.example`.
+813 flags; 762 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -604,13 +604,14 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_LEDGER` | str | `''` | - | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `''` | no | NO | `services/zoe-data/proactive/ledger.py` |
-| `ZOE_PROACTIVE_POLICY_LOG` | str | `''` | - | `docs/knowledge/proactive-policy-log.md` | `''` | no | NO | `services/zoe-data/proactive/policy_log.py` |
+| `ZOE_PROACTIVE_POLICY_LOG` | str | `''` | - | `docs/knowledge/proactive-policy-log.md` | `''` | yes | NO | `services/zoe-data/proactive/policy_log.py` |
 | `ZOE_PROACTIVE_RAISE_GAP_S` | int | `7200` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `7200` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_RAISE_PER_DAY` | int | `2` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `2` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_SELECTOR` | str | `''` | - | `docs/knowledge/samantha-bar.md` | `''` | no | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_SLOW_LOOP_S` | int | `300` | - | - | `'300'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | yes | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN_TRIGGERS` | str | `'morning_checkin'` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'morning_checkin'` | no | yes | `services/zoe-data/proactive/engine.py` |
+| `ZOE_PROBLEM_LOOP` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/authority-table.md` | `'off'` | yes | NO | `services/zoe-data/household_authority.py` |
 | `ZOE_PROVENANCE_PERSIST` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/reply_ledger.py` |
 | `ZOE_PROVISION_CODE_TTL_S` | int | `300` | - | `docs/architecture/panel-anywhere.md` | `'300'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
 | `ZOE_PROVISION_PICKUP_GRACE_S` | int | `120` | - | `services/zoe-data/routers/AGENTS.md` | `'120'` | no | NO | `services/zoe-data/routers/panel_provision.py` |

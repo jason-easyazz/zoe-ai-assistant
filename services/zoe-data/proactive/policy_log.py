@@ -242,17 +242,19 @@ async def _observe(uid: str, items: list, now: datetime) -> dict:
             week_cards=tally["card"] - (1 if mine == CARD else 0), week_dots=tally["dot"] - (1 if mine == DOT else 0),
         ))
         counts[d.rung] += 1
+        # budget accounting is independent of log de-duplication: returning to a rung already logged today (owner -> absent ->
+        # owner) must still reconcile the item's weekly charge, or the cap drifts
+        if d.action == "surface" and d.rung in ("card", "dot") and mine != d.rung:
+            if mine in ("card", "dot"):
+                tally[mine] -= 1              # it moved rung: release the old slot, charge the new one
+            tally[d.rung] += 1
+            charged[item_id] = d.rung
         key = (me, item_id, f"{d.row}:{d.rung}:{d.action}", day)
         if key in _seen:
             continue
         if len(_seen) >= _SEEN_MAX:
             _seen.clear()
         _seen.add(key)
-        if d.action == "surface" and d.rung in ("card", "dot") and mine != d.rung:
-            if mine in ("card", "dot"):
-                tally[mine] -= 1              # it moved rung: release the old slot, charge the new one
-            tally[d.rung] += 1
-            charged[item_id] = d.rung
         logger.info("PROACTIVE_POLICY user=%s item=%s kind=%s row=%d rung=%s reason=%s",
                     me, item_id, kind, d.row, d.rung, d.reason)
     logger.info("PROACTIVE_POLICY_PASS user=%s n=%d silent=%d dot=%d card=%d speak=%d",

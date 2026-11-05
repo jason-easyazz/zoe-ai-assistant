@@ -11639,7 +11639,7 @@
           "owner_doc": "docs/knowledge/proactive-policy-log.md",
           "type": "str"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_PROACTIVE_RAISE_GAP_S": {
         "defaults": [
@@ -11754,6 +11754,29 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_PROBLEM_LOOP": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/household_authority.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/authority-table.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_PROVENANCE_PERSIST": {
         "defaults": [
@@ -17041,7 +17064,6 @@
     "services/zoe-data/proactive/arrival.py": 3,
     "services/zoe-data/proactive/engine.py": 7,
     "services/zoe-data/proactive/ledger.py": 1,
-    "services/zoe-data/proactive/policy_log.py": 1,
     "services/zoe-data/proactive/presence.py": 1,
     "services/zoe-data/proactive/selector.py": 1,
     "services/zoe-data/proactive/triggers/emotional_followup.py": 2,

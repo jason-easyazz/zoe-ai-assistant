@@ -361,3 +361,18 @@ async def test_night_raise_refs_carry_the_members_current_mutes(monkeypatch):
     assert await pl._night_raise_refs(MEMBER, NOW) == [("night_threads:t1", True)]
     monkeypatch.setattr(restraint, "muted", lambda text, ref, ms: False)
     assert await pl._night_raise_refs(MEMBER, NOW) == [("night_threads:t1", False)]
+
+
+async def test_returning_to_a_logged_rung_still_reconciles_the_weekly_charge(monkeypatch):
+    """Codex #2283 r3: owner -> absent -> owner within a day. The third pass hits an already-logged decision, but the three
+    items must be charged as cards again, so a fourth new loop is held by the cap (three cards, never four)."""
+    monkeypatch.setenv("ZOE_PROACTIVE_POLICY_LOG", "log")
+    items = [_item("open_loop", n) for n in range(1, 4)]
+    _env(monkeypatch, tier="owner")
+    assert (await pl.observe(MEMBER, items, NOW))["card"] == 3
+    _env(monkeypatch, tier="absent")
+    assert (await pl.observe(MEMBER, items, NOW))["dot"] == 3
+    _env(monkeypatch, tier="owner")
+    assert (await pl.observe(MEMBER, items, NOW))["card"] == 3
+    fourth = await pl.observe(MEMBER, items + [_item("open_loop", 4)], NOW)
+    assert fourth["card"] == 3 and fourth["silent"] == 1
